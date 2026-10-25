@@ -5,6 +5,7 @@ import io
 import json
 import os
 import signal
+import sys
 from contextlib import redirect_stderr
 from datetime import datetime
 from unittest import mock
@@ -45,6 +46,13 @@ from delegate.tests.unit.runs import (
     said,
     turn,
 )
+
+
+class DeadStream(io.StringIO):
+    """stderr on a hung-up terminal."""
+
+    def write(self, _text):
+        raise OSError(errno.EIO, "Input/output error")
 
 
 class InProcess(Base):
@@ -563,6 +571,41 @@ class TuiPolicy(Base):
                 self.assertTrue(
                     self.last("result")["error"].startswith(f"stopped: {type(error).__name__}")
                 )
+
+    def killed(self, **kw):
+        """A tui run whose harness pane is killed at its first progress mark: stderr hung up,
+        then SIGHUP's Stopped(129); the error it raised.
+        """
+
+        def hangup(event):
+            if isinstance(event, Progress):
+                sys.stderr = DeadStream()
+                raise Stopped(128 + signal.SIGHUP)
+
+        with self.assertRaises(BaseException) as raised:
+            self.faked(turn(START), on_event=hangup, **kw)
+        return raised.exception
+
+    def assert_closed_as_stopped(self):
+        self.assertEqual(self.kinds()[-2:], ["result", "end"])
+        self.assertEqual(
+            (self.last("result")["error"], self.last("end")["rc"]), ("stopped: Stopped: 129", 129)
+        )
+
+    def test_a_killed_harness_with_its_stderr_gone_stops_the_tui_and_closes_the_run(self):
+        for stop_fail in (None, SessionError("tmux sessions unknown: tmux failed")):
+            with self.subTest(stop_fail=stop_fail):
+                self.fresh()
+                error = self.killed(stop_fail=stop_fail)
+                self.assertEqual((type(error), error.code), (Stopped, 129))
+                self.assertEqual(self.handle.calls, [("stop",)])
+                self.assert_closed_as_stopped()
+
+    def test_a_stop_that_raises_still_closes_the_run(self):
+        crash = RuntimeError("stop crashed")
+        self.assertIs(self.killed(stop_fail=crash), crash)
+        self.assertEqual(self.handle.calls, [("stop",)])
+        self.assert_closed_as_stopped()
 
     def test_a_failed_stop_is_printed_and_never_replaces_the_limit_or_stale_out_result(self):
         gone = SessionError("gone")

@@ -208,11 +208,13 @@ def execute(
         result = attempts.result()
         attempts.on_event(Finished(result))
     except BaseException as e:
-        if attempts.handle is not None:
-            attempts.stop(attempts.handle)
-        if not attempts.refused:
-            ended = stopped(e)
-            attempts.close({"error": ended.error}, ended.returncode)
+        try:
+            if attempts.handle is not None:
+                attempts.stop(attempts.handle)
+        finally:
+            if not attempts.refused:
+                ended = stopped(e)
+                attempts.close({"error": ended.error}, ended.returncode)
         raise
     closing = {"error": result.error}
     if result.outcome is not None:
