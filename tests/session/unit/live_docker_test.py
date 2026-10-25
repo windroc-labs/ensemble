@@ -52,10 +52,11 @@ def inspect(**changes):
             "CapDrop": ["ALL"],
             "SecurityOpt": ["no-new-privileges"],
             "Privileged": False,
-            "NetworkMode": "bridge",
+            "NetworkMode": "egress-workers",
             "PidMode": "",
             "IpcMode": "private",
         },
+        "NetworkSettings": {"Networks": {"egress-workers": {}}},
         "Mounts": [
             {"Type": "volume", "Name": "ensemble-ws-live", "Destination": CWD},
             {"Type": "bind", "Source": CLAUDE_DIR, "Destination": CLAUDE_DIR},
@@ -79,6 +80,83 @@ class AuditLinesTest(Case):
     def test_skips_blank_and_malformed_lines(self):
         text = "\n".join([json.dumps(line("start")), "", "{oops", "[1]", json.dumps(line("close"))])
         self.assertEqual([x["event"] for x in gate.audit_lines(text)], ["start", "close"])
+
+
+class GatewayTest(Case):
+    def setUp(self):
+        self.gateway = {
+            "Config": {
+                "Labels": {
+                    "windroc.egress.contract": "1",
+                    "windroc.egress.networks": "mini-op,workers",
+                    "windroc.egress.network.workers.name": "egress-workers",
+                    "windroc.egress.network.workers.proxy": "http://egress-proxy-workers:4750",
+                }
+            },
+            "State": {"Running": True, "Health": {"Status": "healthy"}},
+            "NetworkSettings": {"Networks": {"egress-workers": {}}},
+        }
+        self.network = {"Name": "egress-workers", "Internal": True}
+        proxy = "http://egress-proxy-workers:4750"
+        self.worker = {
+            "Config": {
+                "Env": [
+                    *(
+                        f"{k}={proxy}"
+                        for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")
+                    ),
+                    "NO_PROXY=localhost,127.0.0.1,::1",
+                    "no_proxy=localhost,127.0.0.1,::1",
+                ]
+            }
+        }
+
+    def check(self):
+        return gate.gateway_baseline(self.gateway, self.network, self.worker)
+
+    def test_valid_contract_and_environment(self):
+        self.assertEqual(self.check(), [])
+
+    def test_starting_and_stopped_are_rejected(self):
+        for state in ({"Running": False}, {"Running": True, "Health": {"Status": "starting"}}):
+            self.gateway["State"] = state
+            self.assertTrue(self.check())
+
+    def test_each_missing_label_is_rejected(self):
+        labels = self.gateway["Config"]["Labels"]
+        for key in list(labels):
+            value = labels.pop(key)
+            self.assertTrue(self.check(), key)
+            labels[key] = value
+
+    def test_network_must_be_internal_and_attached(self):
+        self.network["Internal"] = False
+        self.assertTrue(self.check())
+        self.network["Internal"] = True
+        self.gateway["NetworkSettings"]["Networks"] = {}
+        self.assertTrue(self.check())
+
+    def test_missing_proxy_variable_and_host_bypass_are_rejected(self):
+        self.worker["Config"]["Env"].pop(0)
+        self.assertTrue(self.check())
+        self.worker["Config"]["Env"] = ["NO_PROXY=host.docker.internal"]
+        self.assertTrue(self.check())
+
+    def test_probe_requires_proxy_decision_and_real_curl(self):
+        for kind, status, code in (
+            ("public", "200 200", 0),
+            ("denied", "407 000", 56),
+            ("direct", "000 000", 7),
+        ):
+            self.assertEqual(gate.probe_problems(kind, status, code), [])
+        for kind, status, code in (
+            ("public", "000 000", 0),
+            ("denied", "000 000", 7),
+            ("denied", "200 200", 0),
+            ("direct", "000 000", 125),
+            ("direct", "000 200", 0),
+        ):
+            self.assertTrue(gate.probe_problems(kind, status, code))
 
 
 class ReclaimedTest(Case):
@@ -210,7 +288,7 @@ class BaselineTest(Case):
             "user": inspect(Config__User="root"),
             "privileged": inspect(HostConfig__Privileged=True),
             "network": inspect(HostConfig__NetworkMode="host"),
-            "network not bridge": inspect(HostConfig__NetworkMode="none"),
+            "network none": inspect(HostConfig__NetworkMode="none"),
             "extra hosts": inspect(HostConfig__ExtraHosts=["host.docker.internal:host-gateway"]),
             "pid": inspect(HostConfig__PidMode="host"),
             "ipc": inspect(HostConfig__IpcMode="host"),
@@ -225,6 +303,12 @@ class BaselineTest(Case):
         for label, found in cases.items():
             with self.subTest(label):
                 self.assertEqual(len(self.check(found)), 1, self.check(found))
+
+    def test_bridge_and_extra_attached_networks_fail(self):
+        self.assertTrue(self.check(inspect(HostConfig__NetworkMode="bridge")))
+        for networks in ({}, {"bridge": {}}, {"egress-workers": {}, "bridge": {}}):
+            with self.subTest(networks=networks):
+                self.assertTrue(self.check(inspect(NetworkSettings={"Networks": networks})))
 
     def test_cwd_related_binds(self):
         volume = {"Type": "volume", "Name": "ensemble-ws-live", "Destination": CWD}

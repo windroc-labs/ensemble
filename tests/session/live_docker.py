@@ -18,6 +18,7 @@ line per generation, and exits 1 at the first failed check:
 """
 
 import fcntl
+import ipaddress
 import json
 import os
 import re
@@ -25,10 +26,13 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from ensemble.session.engine.config import read_config
 from ensemble.session.engine.types import SessionError
@@ -165,7 +169,9 @@ def _host_path(source: str) -> str:
     return source[len(prefix) - 1 :] if source.startswith(prefix) else source
 
 
-def baseline(inspect: dict, name: str, cwd: str, plan_mounts: list[str]) -> list[str]:
+def baseline(
+    inspect: dict, name: str, cwd: str, plan_mounts: list[str], network: str = "egress-workers"
+) -> list[str]:
     host, config = inspect.get("HostConfig") or {}, inspect.get("Config") or {}
     problems = []
     if "ALL" not in (host.get("CapDrop") or []):
@@ -176,8 +182,10 @@ def baseline(inspect: dict, name: str, cwd: str, plan_mounts: list[str]) -> list
         problems.append("Config.User is not agent")
     if host.get("Privileged"):
         problems.append("HostConfig.Privileged is true")
-    if host.get("NetworkMode") != "bridge":  # the broker's --network bridge
-        problems.append(f"HostConfig.NetworkMode is {host.get('NetworkMode')}, want bridge")
+    if host.get("NetworkMode") != network:
+        problems.append(f"HostConfig.NetworkMode is {host.get('NetworkMode')}, want {network}")
+    if set((inspect.get("NetworkSettings") or {}).get("Networks") or {}) != {network}:
+        problems.append(f"worker must attach only to {network}")
     if host.get("ExtraHosts"):
         problems.append(f"HostConfig.ExtraHosts is set: {host['ExtraHosts']}")
     problems += [f"HostConfig.{k} is host" for k in ("PidMode", "IpcMode") if host.get(k) == "host"]
@@ -196,6 +204,68 @@ def baseline(inspect: dict, name: str, cwd: str, plan_mounts: list[str]) -> list
     if not risky and sorted(_host_path(m.get("Source", "")) for m in binds) != sorted(plan_mounts):
         problems.append("bind mounts differ from the plan's mounts")
     return problems + risky
+
+
+def gateway_baseline(gateway: dict, network: dict, worker: dict) -> list[str]:
+    labels = (gateway.get("Config") or {}).get("Labels") or {}
+    name = labels.get("windroc.egress.network.workers.name", "")
+    proxy = labels.get("windroc.egress.network.workers.proxy", "")
+    state = gateway.get("State") or {}
+    problems = []
+    if labels.get("windroc.egress.contract") != "1":
+        problems.append("gateway contract must be 1")
+    if (
+        "workers" not in labels.get("windroc.egress.networks", "").split(",")
+        or not name
+        or not proxy
+    ):
+        problems.append("gateway lacks workers labels")
+    if state.get("Running") is not True or (state.get("Health") or {}).get("Status") != "healthy":
+        problems.append("gateway must be running and healthy")
+    attached = (gateway.get("NetworkSettings") or {}).get("Networks") or {}
+    if network.get("Internal") is not True or network.get("Name") != name or name not in attached:
+        problems.append("workers network must be internal and have the gateway attached")
+    env = dict(
+        item.split("=", 1) for item in (worker.get("Config") or {}).get("Env", []) if "=" in item
+    )
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        if env.get(key) != proxy:
+            problems.append(f"{key} differs from gateway label")
+    for key in ("NO_PROXY", "no_proxy"):
+        if set(env.get(key, "").split(",")) != {"localhost", "127.0.0.1", "::1"}:
+            problems.append(f"{key} must bypass only container loopback")
+    return problems
+
+
+def probe_problems(kind: str, status: str, code: int) -> list[str]:
+    valid = {
+        "public": code == 0 and status.strip() == "200 200",
+        "denied": code == 56 and status.strip() == "407 000",
+        "direct": code in (6, 7, 28) and status.strip() == "000 000",
+    }
+    return [] if valid[kind] else [f"{kind}: curl exit={code}, status={status.strip()!r}"]
+
+
+class ProbeHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, _format: str, *args: object) -> None:
+        pass
+
+
+@contextmanager
+def listener(host: str):
+    with HTTPServer((host, 0), ProbeHandler) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield server.server_port
+        finally:
+            server.shutdown()
+            thread.join()
 
 
 def loopback_only(lsof: str, port: int) -> list[str]:
@@ -597,13 +667,98 @@ class Worker:
         plan = load(os.path.join(state_dir(self.name), f"{start.generation}.plan.json"))
         (found,) = json.loads(call([self.docker, "inspect", container])[0])
         mounts = [m["path"] for m in plan["mounts"]]
-        passed(baseline(found, self.name, plan["workspace"]["path"], mounts), "security baseline")
+        ids = call(
+            [
+                self.docker,
+                "ps",
+                "-a",
+                "--filter",
+                "label=windroc.egress.contract",
+                "--format",
+                "{{.ID}}",
+            ]
+        )[0].split()
+        if len(ids) != 1:
+            raise SystemExit("FAIL gateway: expected exactly one gateway")
+        (gateway,) = json.loads(call([self.docker, "inspect", ids[0]])[0])
+        labels = gateway["Config"]["Labels"]
+        network_name = labels.get("windroc.egress.network.workers.name", "")
+        if not network_name:
+            raise SystemExit("FAIL gateway: missing workers network label")
+        (network,) = json.loads(call([self.docker, "network", "inspect", network_name])[0])
+        passed(gateway_baseline(gateway, network, found), "gateway and proxy settings")
+        passed(
+            baseline(found, self.name, plan["workspace"]["path"], mounts, network_name),
+            "security baseline",
+        )
+        self.network(container, labels["windroc.egress.network.workers.proxy"])
         for resource, command in UNREACHABLE.items():
             # grep -c exits 1 when it counts 0, the passing case
             counts = call([self.docker, "exec", container, "sh", "-c", f"{command}; true"])[0]
             if not zero_counts(counts):
                 raise SystemExit(f"FAIL cannot reach {resource}: {' '.join(counts.split())}")
             print(f"PASS cannot reach {resource}: {' '.join(counts.split())}", flush=True)
+
+    def network(self, container: str, proxy: str) -> None:
+        self.probe(container, proxy, "https://example.com", "public")
+        self.probe(container, "", "https://1.1.1.1", "direct")
+        route = call(["route", "-n", "get", "default"])[0]
+        interfaces = re.findall(r"^\s*interface:\s*(\S+)", route, re.MULTILINE)
+        if len(interfaces) != 1:
+            raise SystemExit("FAIL LAN control: no unique default interface")
+        lan = call(["ipconfig", "getifaddr", interfaces[0]])[0].strip()
+        address = ipaddress.ip_address(lan)
+        if address.version != 4 or not address.is_private or address.is_loopback:
+            raise SystemExit("FAIL LAN control: need this mini's private LAN IPv4 address")
+        for bind, target in (("127.0.0.1", "host.docker.internal"), (lan, lan)):
+            with listener(bind) as port:
+                control = call(
+                    [
+                        "curl",
+                        "--noproxy",
+                        "*",
+                        "-fsS",
+                        "-o",
+                        "/dev/null",
+                        "--max-time",
+                        "5",
+                        f"http://{bind}:{port}/",
+                    ]
+                )
+                del control
+                print(f"PASS host control: {bind}:{port} reachable", flush=True)
+                url = f"http://{target}:{port}/"
+                self.probe(container, proxy, url, "denied")
+                self.probe(container, "", url, "direct")
+
+    def probe(self, container: str, proxy: str, url: str, kind: str) -> None:
+        argv = [
+            self.docker,
+            "exec",
+            container,
+            "curl",
+            "-sS",
+            "-o",
+            "/dev/null",
+            "--connect-timeout",
+            "3",
+            "--max-time",
+            "10",
+            "-w",
+            "%{http_connect} %{http_code}",
+        ]
+        argv += (
+            ["--noproxy", "", "--proxytunnel", "--proxy", proxy] if proxy else ["--noproxy", "*"]
+        )
+        result = subprocess.run(
+            [*argv, url],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=20,
+            check=False,
+        )
+        passed(probe_problems(kind, result.stdout, result.returncode), f"network {kind}: {url}")
 
 
 class Checks:
