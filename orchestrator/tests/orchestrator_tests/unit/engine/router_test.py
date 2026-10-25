@@ -9,6 +9,7 @@ import io
 import json
 import os
 import re
+import tempfile
 import urllib.error
 import urllib.request
 import uuid
@@ -88,6 +89,7 @@ from orchestrator_tests.router_fixtures import (
 from orchestrator_tests.unit.board_ids import HARNESS_IDENTITY, HEADER, TASK_GROUP, TEAM, role_id
 from orchestrator_tests.unit.board_ids import STATES as IDS_BY_KEY
 from orchestrator_tests.unit.board_ids import role as role_table
+from orchestrator_tests.unit.clock import logs_at
 from orchestrator_tests.unit.delegate_fixture import provider
 from orchestrator_tests.unit.keychain_fixtures import SECRET as APP_SECRET
 from orchestrator_tests.unit.keychain_fixtures import Endpoint, Keychain, record, token_http_error
@@ -2360,6 +2362,127 @@ class LocalBoard(TickBase):
     def connect(self, gql, cfg, *, say):
         self.connects.append(cfg.tracker)
         return BrokenBoard()
+
+    def reassigned_run(self, pm_client="a"):
+        self.write_config(
+            LOCAL.replace(
+                OVERLAY, f'[core]\nclient = "a"\n[core.roles.pm]\nclient = "{pm_client}"\n'
+            )
+        )
+        board = tempfile.mkdtemp(dir=self.tmp)
+        os.environ[config.BOARD_ENV] = board
+        original = os.path.join(board, "researcher", "running", "LOC-1 Reassigned.md")
+        current = os.path.join(board, "pm", "running", "LOC-1 Reassigned.md")
+        self.write(
+            original,
+            "---\nid: LOC-1\ntitle: Reassigned\ncreated: 2026-09-01T00:00:00Z\ntask: product-design\n---\n### Description\nWrite the design.\n",
+        )
+        os.makedirs(os.path.dirname(current), exist_ok=True)
+        os.replace(original, current)
+        moved = (NOW - timedelta(minutes=61)).timestamp()
+        os.utime(current, (moved, moved))
+        cfg, sid = self.cfg(), self.sid("reassigned")
+        self.write(cfg.runs_log, "")
+        runs.note(
+            cfg.runs_log,
+            "start",
+            now=lambda: NOW - timedelta(minutes=60),
+            issue="LOC-1",
+            sid=sid,
+            role="researcher",
+            client="a",
+            delegate_kind="harness",
+            uuid="LOC-1",
+            project=None,
+            target=None,
+        )
+        self.api.records[sid] = {"cwd": cfg.issue_workdir("LOC-1")}
+        self.api.statuses[sid] = SessionStatus(
+            "yes", (NOW - timedelta(minutes=40)).timestamp(), "resume reassigned"
+        )
+        return cfg, sid
+
+    def test_reassigned_local_resumption_uses_current_role_task_and_client(self):
+        for pm_client in ("a", "b"):
+            with self.subTest(pm_client=pm_client):
+                cfg, sid = self.reassigned_run(pm_client)
+                board = router.Board(
+                    None,
+                    runs.parse_log(cfg.runs_log),
+                    cfg,
+                    now=NOW,
+                    dry=False,
+                    keychain=self.keychain,
+                    wiring=cli.TRACKERS[TrackerKind.LOCAL],
+                )
+                [issue] = board.tracker.assigned(IssueState.RUNNING)
+                spec = board.resumption(issue, sid, self.sid("fresh"))
+                self.assertEqual((spec.role, spec.client), ("pm", pm_client))
+                self.assertEqual(
+                    (spec.mode, spec.task),
+                    ("resume", None) if pm_client == "a" else ("new", "product-design"),
+                )
+
+    def test_reassigned_local_outer_keeps_current_role_and_prompt(self):
+        cfg, sid = self.reassigned_run()
+        wiring = cli.TRACKERS[TrackerKind.LOCAL]
+        [issue] = wiring.connect(None, cfg).assigned(IssueState.RUNNING)
+        spec = Spec.from_issue(issue, role="pm", mode="resume", sid=sid, task=None, client="a")
+        with logs_at(cfg.logs_dir):
+            self.assertEqual(
+                router.outer(
+                    spec,
+                    cfg,
+                    gql=None,
+                    run=mock.Mock(return_value=ok("[]")),
+                    keychain=self.keychain,
+                    wiring=wiring,
+                    now=lambda: NOW,
+                ),
+                0,
+            )
+        role, launched, _ = self.api.detached[-1]
+        self.assertEqual(
+            (role, launched.client, launched.sid, launched.resume), ("pm", "a", sid, True)
+        )
+        self.assertIn("## Brief\n\nReassigned\n\nWrite the design.", launched.input)
+        self.assertNotIn("## Question", launched.input)
+        self.assertEqual(runs.parse_log(cfg.runs_log)[-1].role, "pm")
+        self.assertEqual(self.keychain_calls, [])
+
+    def test_local_recovery_keeps_reassignment_guard_without_app_preflight(self):
+        for explicit in (False, True):
+            with self.subTest(explicit=explicit):
+                cfg, _ = self.reassigned_run()
+                identity = mock.Mock(side_effect=AssertionError("local recovery read app identity"))
+                wiring = replace(cli.TRACKERS[TrackerKind.LOCAL], identity=identity)
+                with logs_at(cfg.logs_dir):
+                    if explicit:
+                        self.assertEqual(
+                            router.run_issue(
+                                {"issue": "LOC-1", "dry": False},
+                                cfg,
+                                None,
+                                Start(),
+                                keychain=self.keychain,
+                                wiring=wiring,
+                                clock=lambda: NOW,
+                            ),
+                            2,
+                        )
+                    else:
+                        board = router.Board(
+                            None,
+                            runs.parse_log(cfg.runs_log),
+                            cfg,
+                            now=NOW,
+                            dry=False,
+                            keychain=self.keychain,
+                            wiring=wiring,
+                        )
+                        self.assertEqual(board.recover(), [])
+                identity.assert_not_called()
+                self.assertEqual(wiring.reader(None, cfg).read("LOC-1").state, IssueState.REVIEW)
 
     def test_cycle_diagnostic_is_once_and_leaves_a_healthy_issue_schedulable(self):
         ready = os.path.join(self.tmp, "board", "researcher", "ready")

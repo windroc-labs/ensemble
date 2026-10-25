@@ -373,7 +373,12 @@ class Board:
         return [
             (issue, sid)
             for issue, sid in mine
-            if not self.credential_error(role_of(self.entries, sid) if sid else self.role(issue))
+            if (
+                self.cfg.tracker is not TrackerKind.LINEAR
+                or not self.credential_error(
+                    role_of(self.entries, sid) if sid else self.role(issue)
+                )
+            )
             and self.settle(issue, sid)
         ]
 
@@ -532,7 +537,9 @@ class Board:
         """
         ident, role, resumed = (
             issue["identifier"],
-            role_of(self.entries, sid),
+            role_of(self.entries, sid)
+            if self.cfg.tracker is TrackerKind.LINEAR
+            else self.role(issue),
             client_of(self.entries, sid),
         )
         if role not in self.cfg.roles:
@@ -745,7 +752,7 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
     if reason := a.identity_error():
         print(f"router.py: {reason}", file=sys.stderr)
         return 2
-    if a.mode == "resume":
+    if a.mode == "resume" and cfg.tracker is TrackerKind.LINEAR:
         a = replace(a, role=role_of(parse_log(cfg.runs_log), a.sid))
     role = a.role
     if role is not None and role not in cfg.roles:
@@ -1111,7 +1118,9 @@ def run_issue(opts, cfg, gql, start, *, keychain, wiring, clock=datetime.now, la
             None,
         ):
             sid = board.current_sid(issue)
-            if board.credential_error(role_of(entries, sid) if sid else board.role(issue)):
+            if cfg.tracker is TrackerKind.LINEAR and board.credential_error(
+                role_of(entries, sid) if sid else board.role(issue)
+            ):
                 return stop
             if not board.settle(issue, sid, wait=False):
                 return 0 if board.replays.get(ident) else stop
