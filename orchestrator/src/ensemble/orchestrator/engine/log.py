@@ -93,6 +93,13 @@ def config_error(src, e, *, dry=False, now=datetime.now):
     return 2
 
 
+def token_error(src, *, dry=False):
+    """A client.use report: a failed renewal of a still usable app token, as a token-error line."""
+    return lambda identity, reason: log(
+        src, "token-error", dry=dry, identity=identity, reason=reason
+    )
+
+
 def linear_error(src, e, *, dry=False, now=datetime.now):
     return _stop(
         src,

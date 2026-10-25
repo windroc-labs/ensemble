@@ -1,22 +1,61 @@
-"""Linear GraphQL transport and Keychain access."""
+"""Linear GraphQL transport and Keychain access: a personal key sent as is, an OAuth app's token as
+Bearer, renewed before the call when due (missing, undated, expired or under RENEW_BEFORE left)."""
 
 import http.client
 import json
 import re
 import subprocess
+import sys
 import urllib.error
+import urllib.parse
 import urllib.request
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 from ensemble.orchestrator.engine.types import (
     GraphQLErrors,
     KeychainError,
+    LinearApp,
     LinearError,
     Unavailable,
 )
 from ensemble.utils import one_line
 
 URL = "https://api.linear.app/graphql"
+TOKEN_URL = "https://api.linear.app/oauth/token"
 SECURITY = "/usr/bin/security"  # absolute: no PATH entry stands in for the Keychain
+RENEW_BEFORE = timedelta(days=5)
+SERVICE = re.compile(r"[A-Za-z0-9._@+][A-Za-z0-9._@+-]*")
+ACCOUNT = re.compile(r'^\s*"acct"<blob>="([^"]*)"$', re.M)
+
+
+def _stderr_report(identity, reason):
+    print(f"ensemble-orchestrator: token-error: {identity}: {reason}", file=sys.stderr)
+
+
+@dataclass(frozen=True)
+class Policy:
+    """renew: a due token may be renewed (false: a dry run); report(identity, reason): a failed
+    renewal of a still usable token."""
+
+    renew: bool = True
+    report: Callable[[str, str], None] = _stderr_report
+
+
+_policy = Policy()
+_failed: dict[str, str] = {}  # token service: why its renewal failed in this process
+
+
+def use(*, renew=True, report=None):
+    """This process's renewal policy; forgets earlier failed renewals."""
+    global _policy
+    _policy = Policy(renew, report or _stderr_report)
+    _failed.clear()
+
+
+def _now():
+    return datetime.now(UTC)
 
 
 def operation(query):
@@ -25,8 +64,12 @@ def operation(query):
 
 
 def linear_gql(query, *, identity, timeout=30, **variables):
-    # naming only service: urllib's header error would echo it
-    auth = _key(identity, timeout)
+    # a clean secret only: urllib's header error would echo it
+    if isinstance(identity, LinearApp):
+        secret = _token(identity, timeout)
+        auth = f"Bearer {secret}"
+    else:
+        secret = auth = _key(identity, timeout)
     req = urllib.request.Request(
         URL,
         data=json.dumps({"query": query, "variables": variables}).encode(),
@@ -43,7 +86,7 @@ def linear_gql(query, *, identity, timeout=30, **variables):
         elif e.code == 400 and _rate_limited(errors):
             reason = "RATELIMITED"
         else:
-            detail = one_line("; ".join(messages(errors, secret=auth)))
+            detail = one_line("; ".join(messages(errors, secret=secret)))
             detail = detail[:1000] + "…" if len(detail) > 1000 else detail
             suffix = f": {detail}" if detail else ""
             raise LinearError(
@@ -60,7 +103,7 @@ def linear_gql(query, *, identity, timeout=30, **variables):
     if not isinstance(body, dict):
         raise Unavailable(operation(query), reason="response not a GraphQL object")
     if body.get("errors"):
-        raise GraphQLErrors(body["errors"])
+        raise GraphQLErrors(_scrub(body["errors"], secret))
     if not isinstance(body.get("data"), dict):
         raise Unavailable(operation(query), reason="response has no GraphQL data")
     return body["data"]
@@ -123,6 +166,203 @@ def _key(identity, timeout):
     if not _clean(found):
         raise KeychainError(f"Linear key of {service}: empty, not printable or holds whitespace")
     return found
+
+
+def _scrub(value, secret):
+    """value with secret replaced in every string it holds."""
+    if isinstance(value, str):
+        return value.replace(secret, "[redacted]")
+    if isinstance(value, list):
+        return [_scrub(v, secret) for v in value]
+    if isinstance(value, dict):
+        return {_scrub(k, secret): _scrub(v, secret) for k, v in value.items()}
+    return value
+
+
+@dataclass(frozen=True)
+class _Held:
+    """A token entry as read: token None when missing, expires None when undated."""
+
+    token: str | None
+    expires: datetime | None
+
+    def usable(self, now):
+        return self.token is not None and (self.expires is None or self.expires > now)
+
+    def due(self, now):
+        return self.expires is None or self.expires - now < RENEW_BEFORE
+
+
+class _RenewalFailed(Exception):
+    pass
+
+
+def _token(app, timeout):
+    """app's token, renewed first when due and the policy allows; KeychainError when none usable."""
+    held, now = _read(app.token_service, timeout), _now()
+    if held.token is not None and not held.due(now):
+        return held.token
+    reason = _failed.get(app.token_service) or (None if _policy.renew else "dry run: no renewal")
+    if reason is None:
+        try:
+            return _renew(app, held, now, timeout)
+        except _RenewalFailed as e:
+            reason = _failed[app.token_service] = str(e)
+            if held.usable(now):
+                _policy.report(app.name, reason)
+    if held.usable(now):
+        return held.token
+    state = "token expired" if held.token is not None else "has no token"
+    raise KeychainError(
+        f"Linear {app.name} app {state} and renewal failed: {reason}; fix: check "
+        f"{app.table}.client_id and the client secret in Keychain service {app.secret_service} "
+        "(rotated: store the new secret), then rerun",
+        identity=app.name,
+    )
+
+
+def _read(service, timeout):
+    found = _security(["find-generic-password", "-s", service, "-w"], timeout)
+    return _parse(found.stdout.strip()) if found.returncode == 0 else _Held(None, None)
+
+
+def _parse(value):
+    try:
+        record = json.loads(value)
+    except ValueError:
+        record = None
+    if not isinstance(record, dict):
+        return _Held(value, None) if _clean(value) else _Held(None, None)
+    token = record.get("access_token")
+    if not isinstance(token, str) or not _clean(token):
+        return _Held(None, None)
+    try:
+        expires = datetime.fromisoformat(record.get("expires_at"))
+    except (TypeError, ValueError):
+        expires = None
+    return _Held(token, expires if expires and expires.tzinfo else None)
+
+
+def _renew(app, held, now, timeout):
+    """A new token for app, written to its token entry; _RenewalFailed with a reason holding no
+    secret or token."""
+    secret = None
+    try:
+        secret = _secret(app, timeout)
+        token, expires_in = _request_token(app, secret, timeout)
+        record = {"access_token": token, "expires_at": (now + expires_in).isoformat()}
+        _write(app.token_service, json.dumps(record, separators=(",", ":")), timeout)
+    except _RenewalFailed as e:
+        reason = one_line(str(e))
+        for hidden in filter(None, (secret, held.token)):
+            reason = reason.replace(hidden, "[redacted]")
+        raise _RenewalFailed(reason[:300] + "…" if len(reason) > 300 else reason) from None
+    return token
+
+
+def _secret(app, timeout):
+    service = app.secret_service
+    try:
+        found = _security(["find-generic-password", "-s", service, "-w"], timeout)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise _RenewalFailed(f"client secret read: {type(e).__name__}") from None
+    secret = found.stdout.strip() if found.returncode == 0 else ""
+    if not _clean(secret):
+        raise _RenewalFailed(
+            f"no client secret in Keychain service {service}; fix: "
+            f"security add-generic-password -s {service} -a {service} -w"
+        )
+    return secret
+
+
+def _request_token(app, secret, timeout):
+    """(token, its lifetime) from a client_credentials request with app's fixed scopes."""
+    form = {
+        "grant_type": "client_credentials",
+        "client_id": app.client_id,
+        "client_secret": secret,
+        "scope": app.scopes,
+    }
+    req = urllib.request.Request(
+        TOKEN_URL,
+        data=urllib.parse.urlencode(form).encode(),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as e:  # a URLError: before it
+        detail = _oauth_error(e)
+        e.close()
+        raise _RenewalFailed(f"HTTP {e.code}" + (f": {detail}" if detail else "")) from None
+    except (OSError, http.client.HTTPException) as e:
+        cause = e.reason if isinstance(e, urllib.error.URLError) else e
+        raise _RenewalFailed(one_line(cause)) from None
+    try:
+        body = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise _RenewalFailed("response not JSON") from None
+    body = body if isinstance(body, dict) else {}
+    token, expires_in = body.get("access_token"), body.get("expires_in")
+    if token is None:
+        raise _RenewalFailed("no access_token")
+    if not isinstance(token, str) or not _clean(token):
+        raise _RenewalFailed("bad access_token")
+    if not isinstance(expires_in, int) or isinstance(expires_in, bool) or expires_in <= 0:
+        raise _RenewalFailed("bad expires_in")
+    return token, timedelta(seconds=expires_in)
+
+
+def _oauth_error(e):
+    """An OAuth error body's error and error_description, else ""."""
+    try:
+        body = json.loads(e.read())
+    except (OSError, http.client.HTTPException, json.JSONDecodeError, UnicodeDecodeError):
+        return ""
+    body = body if isinstance(body, dict) else {}
+    return ": ".join(
+        v for v in (body.get("error"), body.get("error_description")) if isinstance(v, str)
+    )
+
+
+def _write(service, value, timeout):
+    """value as service's password: its command on security -i's stdin, never in argv, then
+    re-read, since security -i can exit 0 when its command fails."""
+    attrs = _security(["find-generic-password", "-s", service], timeout)
+    found = ACCOUNT.search(attrs.stdout or "") if attrs.returncode == 0 else None
+    account = found[1] if found and SERVICE.fullmatch(found[1]) else service
+    command = f"add-generic-password -U -s {service} -a {account} -X {value.encode().hex()}\n"
+    try:
+        wrote = subprocess.run(
+            [SECURITY, "-i"], input=command, capture_output=True, text=True, timeout=timeout
+        )
+        stored = _security(["find-generic-password", "-s", service, "-w"], timeout)
+    except (OSError, subprocess.SubprocessError):
+        wrote = stored = None
+    if (
+        not (wrote and wrote.returncode == 0 and stored.returncode == 0)
+        or stored.stdout.strip() != value
+    ):
+        raise _RenewalFailed(f"Keychain write of {service} failed")
+
+
+def _security(args, timeout):
+    return subprocess.run(
+        [SECURITY, *args], capture_output=True, text=True, timeout=timeout, check=False
+    )
+
+
+def status(app):
+    """app's token as a dry run reports it, read only: {"days_left": n.n} or {"state": missing,
+    no expiry or expired}."""
+    held, now = _read(app.token_service, 30), _now()
+    if held.token is None:
+        return {"state": "missing"}
+    if held.expires is None:
+        return {"state": "no expiry"}
+    if held.expires <= now:
+        return {"state": "expired"}
+    return {"days_left": round((held.expires - now) / timedelta(days=1), 1)}
 
 
 def has_key(identity):

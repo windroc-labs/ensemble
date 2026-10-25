@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any, Literal
 
 from ensemble import delegate
@@ -49,9 +50,47 @@ class TrackerKind(StrEnum):
 
 @dataclass(frozen=True)
 class LinearKey:
-    """A personal API key, by the Keychain service holding it: who a Linear call is made as."""
+    """A personal API key, by the Keychain service holding it (roles, manager)."""
 
     service: str
+
+
+class AppKind(StrEnum):
+    """Which of ensemble's Linear OAuth apps: its token request's scopes."""
+
+    HARNESS = "harness"
+    ROLE = "role"
+    MANAGER = "manager"
+
+
+SCOPES = MappingProxyType(
+    {
+        AppKind.HARNESS: "read,write",
+        AppKind.ROLE: "read,write,app:assignable,app:mentionable",
+        AppKind.MANAGER: "read,write,app:assignable",
+    }
+)
+
+
+@dataclass(frozen=True)
+class LinearApp:
+    """A Linear OAuth app: name in messages and logs, table its config table (fix messages),
+    secret_service and token_service the Keychain services of its client secret and token record."""
+
+    name: str
+    kind: AppKind
+    table: str
+    client_id: str
+    secret_service: str
+    token_service: str
+    user_id: str
+
+    @property
+    def scopes(self) -> str:
+        return SCOPES[self.kind]
+
+
+LinearIdentity = LinearKey | LinearApp  # who a Linear call is made as
 
 
 @dataclass(frozen=True)
@@ -293,7 +332,12 @@ class LinearError(Exception):
 
 
 class KeychainError(LinearError):
-    """The harness_key Keychain item holds no usable key."""
+    """A Keychain item, or an app's token renewal, left no usable credential; identity: the app's
+    name when it is an app's."""
+
+    def __init__(self, msg: str, identity: str | None = None):
+        super().__init__(msg)
+        self.identity = identity
 
 
 class GraphQLErrors(LinearError):
