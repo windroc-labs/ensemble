@@ -190,7 +190,7 @@ class CliTest(CliCase):
 
 
 class Launch(CliCase):
-    def start(self, *arguments, code=0, output=None):
+    def start(self, *arguments, code=0, output=None, stderr="layer message\n"):
         self.calls = []
 
         def run(argv, **options):
@@ -201,7 +201,7 @@ class Launch(CliCase):
             )
             text = record.to_line() + "\n" if output is None else output
             os.write(options["stdout"].fileno(), text.encode())
-            return SimpleNamespace(returncode=code, stderr="layer message\n")
+            return SimpleNamespace(returncode=code, stderr=stderr)
 
         with mock.patch("subprocess.Popen", side_effect=answered(run)):
             return self.invoke(*arguments)
@@ -322,6 +322,18 @@ class Launch(CliCase):
                 self.assertEqual((result, stdout), (2, ""))
                 self.assertIn("layer message", stderr)
                 self.assertEqual(self.roster.entries(), {})
+
+    def test_a_refused_launch_prints_its_layers_reason(self):
+        reason = "router.py: pick-none TASK-12 reason=not a Todo issue assigned to a role account"
+        for verb, key in (("issue", "TASK-12"), ("role", "pm"), ("worker", "w1")):
+            with self.subTest(verb=verb):
+                result, stdout, stderr = self.start(
+                    verb, "--manager", "mgr", key, code=2, output="", stderr=f"{reason}\n"
+                )
+                self.assertEqual((result, stdout, self.roster.entries()), (2, "", {}))
+                [line] = stderr.splitlines()
+                self.assertTrue(line.startswith("crew: ensemble-"), line)
+                self.assertTrue(line.endswith(f": {reason}"), line)
 
     def test_other_failures_keep_lost_and_generic_run_keeps_exit_two(self):
         for arguments, code, output in (

@@ -294,7 +294,8 @@ class Router(TmuxFlow):
     def outage(self, *argv):
         self.fake.fail("linear.Q_TEAM", "503")
         res = self.router(*argv)
-        self.assertEqual((res.returncode, res.stdout, res.stderr), (1, "", ""))
+        err = "router.py: Linear unavailable: teams: HTTP 503\n" if "--issue" in argv else ""
+        self.assertEqual((res.returncode, res.stdout, res.stderr), (1, "", err))
         self.assertEqual(
             [(r.op, r.account, r.result) for r in self.requests()],
             [("linear.Q_TEAM", HARNESS_EMAIL, "503")],
