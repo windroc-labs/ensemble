@@ -103,6 +103,43 @@ class Log(Logs):
         )
         self.assertEqual(len(self.lines()), 2)
 
+    def test_captured_keeps_each_line_with_whether_stderr_showed_it(self):
+        self.log("router", "pick", "TASK-0", queue=1)
+        with log.captured() as said:
+            self.log("router", "pick", "TASK-1", queue=1)
+            self.log("router", "pick", "TASK-2", tty=True, queue=1)
+            self.log("router", "skip", "TASK-3", told=True, reason="busy")
+            for _ in range(2):
+                self.log("router", "blocked", "TASK-4", once=True, by=["TASK-5"])
+            with log.captured() as inner:
+                self.log("router", "pick", "TASK-6", queue=1)
+        self.log("router", "pick", "TASK-7", queue=1)
+        self.assertEqual(
+            [(line["kind"], line["issue"], shown, text) for line, shown, text in said],
+            [
+                ("pick", "TASK-1", False, None),
+                ("pick", "TASK-2", True, None),
+                ("skip", "TASK-3", True, None),
+                ("blocked", "TASK-4", False, None),
+                ("blocked", "TASK-4", False, None),
+            ],
+        )
+        self.assertEqual([line["issue"] for line, _, _ in inner], ["TASK-6"])
+        self.assertIsNone(log.CAPTURED)
+        self.assertEqual(len(self.lines()), 7)
+
+    def test_a_captured_stop_carries_its_own_stderr_text(self):
+        for tty in (False, True):
+            with self.subTest(tty=tty), log.captured() as said:
+                err = self.stderr(
+                    lambda: log.config_error("router", ConfigError("bad key")), tty=tty
+                )[1]
+                [(line, shown, text)] = said
+                self.assertEqual(
+                    (line["kind"], shown, text), ("config-error", tty, "router.py: bad key")
+                )
+                self.assertEqual(err.endswith("router.py: bad key\n"), tty)
+
     def test_once_dedups_on_src_kind_issue_entry_and_reason(self):
         base = dict(
             src="router",

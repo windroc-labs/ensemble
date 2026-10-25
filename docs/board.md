@@ -146,7 +146,7 @@ bin/ensemble-orchestrator router --issue <ID> --tui   # the same, attended in a 
 bin/ensemble-orchestrator status <ID>                 # alive: its run; once that ends, state is its open TUI's (done, working, blocked), gone once none is open
 bin/ensemble-orchestrator attach-command <ID>         # the command that shows its agent run
 bin/ensemble-orchestrator close <ID>                  # end the run and its TUI; the issue stays In Progress for Recover
-bin/ensemble-orchestrator resume <ID>                 # resume an attended run where it was shown
+bin/ensemble-orchestrator resume <ID>                 # resume an interrupted attended run where it was shown; no answer to a needs_input run
 tmux ls                                         # running agent runs
 ```
 

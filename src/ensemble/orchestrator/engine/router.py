@@ -45,6 +45,8 @@ Exit conditions:
   already live or unclaimable; 0 if an ended outcome was written back. Otherwise
   launch result: 0 detached/bounced, 1 launch failure, 2 issue config error,
   3 transient error. --dry-run: 0 for the plan; setup failures still apply.
+  A nonzero --issue (not --dry-run) also prints its orchestrator.jsonl lines about
+  the issue that stderr did not show, e.g. router.py: pick-none TASK-1 reason=...
   ENSEMBLE_SID is read once and removed: new run identity, or must match a
   resumed run (mismatch: 2; dry-run: 0). ENSEMBLE_AGENT_SESSION blocks tick and
   --issue execution with 2; --dry-run and --brake remain available.
@@ -73,6 +75,7 @@ import contextlib
 import fcntl
 import functools
 import itertools
+import json
 import os
 import re
 import subprocess
@@ -133,6 +136,7 @@ from ensemble.utils import (
     exhausted,
     nested_start,
     one_line,
+    printable,
     summary,
 )
 
@@ -1045,7 +1049,7 @@ def run_issue(opts, cfg, gql, start, *, keychain, wiring, clock=datetime.now, la
     stop = 0 if dry else 2
     with lock(runs, dry) as free:
         if not free:
-            log("router", "skip", ident, reason=BUSY)
+            log("router", "skip", ident, reason=BUSY, told=True)
             print(f"router.py: {BUSY}; try again", file=sys.stderr)
             return stop
         entries = parse_log(runs)
@@ -1190,12 +1194,52 @@ def main(
         print(f"router.py: bad ${SID_ENV}: {launch_sid}", file=sys.stderr)
         return 2
     os.environ["PATH"] = config.path()
-    try:
-        cfg = config.load(path=config_path)
-    except ConfigError as error:
-        config.report_error("router", error, dry=opts["dry"])
-        return 2
-    event_log.use_logs(cfg.logs_dir)
+    with event_log.captured() as said:
+        try:
+            cfg = config.load(path=config_path)
+        except ConfigError as error:
+            config.report_error("router", error, dry=opts["dry"])
+            rc = 2
+        else:
+            event_log.use_logs(cfg.logs_dir)
+            rc = _route(
+                opts,
+                cfg,
+                launch_sid,
+                trackers=trackers,
+                now=now,
+                gql=gql,
+                run=run,
+                keychain=keychain,
+                start=start,
+                delegate_cls=delegate_cls,
+            )
+    if opts["issue"] is not None and rc and not opts["dry"]:
+        why_refused(opts["issue"], said)
+    return rc
+
+
+def why_refused(ident, said):
+    """Why an --issue run started nothing: its logged lines about ident, or about no issue, past
+    the walk's plan and pick, that stderr did not show (not a tty, or deduped), as their logger's
+    own text, else `router.py: <kind> [<issue>] <field>=<value>…`.
+    """
+    for line, shown, text in said:
+        if shown or line["kind"] in ("plan", "pick") or line.get("issue") not in (None, ident):
+            continue
+        if text is None:
+            fields = [
+                f"{k}={v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)}"
+                for k, v in line.items()
+                if k not in ("ts", "src", "kind", "issue", "traceback")
+            ]
+            words = [line["kind"], *([line["issue"]] if "issue" in line else []), *fields]
+            text = f"router.py: {' '.join(words)}"
+        with contextlib.suppress(OSError):  # a gone tmux pane's EIO
+            print(printable(text), file=sys.stderr, flush=True)
+
+
+def _route(opts, cfg, launch_sid, *, trackers, now, gql, run, keychain, start, delegate_cls):
     if delegate_cls is not None:
         cfg = replace(cfg, delegates={**cfg.delegates, cfg.delegate_kind: delegate_cls})
     wiring = trackers[cfg.tracker]

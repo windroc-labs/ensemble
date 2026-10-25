@@ -52,7 +52,7 @@ def _query_help(command):
         "hide": "Hide each run's view while its work continues.",
         "close": "Terminate each selected run; keep its files and recorded identity.",
         "attach-command": "Print one command per live showable run for manual attachment.",
-        "resume": "Recover exactly one recorded run and print its Record JSON line.",
+        "resume": "Restart exactly one interrupted recorded run; print its Record JSON line.",
         "content": "Print exactly one recorded run's current content to stdout.",
     }
     details = {
@@ -71,10 +71,12 @@ def _query_help(command):
         ),
         "resume": (
             "Live or completed runs retain their identity; interrupted runs restart.\n"
-            "A completed run starts nothing and says so on stderr; to continue its\n"
-            "conversation: ensemble-crew reopen --help.\n"
+            "A completed run starts nothing and says so on stderr: resume delivers no\n"
+            "answer to a needs_input run. Send the answer to its open TUI session\n"
+            "(ensemble-session send); that gone, continue its conversation:\n"
+            "ensemble-crew reopen --help.\n"
             "A usage gate may block restart; wait for its reset before retrying.\n"
-            "--input is rejected: put pipeline answers on the issue board, then resume.\n"
+            "--input is rejected: record answers on the issue board.\n"
             "Run outside an agent session. ENSEMBLE_SID, if supplied, must match\n"
             "the recorded session and is read once and removed.\n"
             "For a new board-driven attempt: ensemble-orchestrator router --help"

@@ -1064,10 +1064,33 @@ class RouterEntry(OuterBase):
                 self.todo.update(change)
                 self.assertEqual(self.entry("--issue", ID), 2)
                 self.assertIn(said, self.said())
+                self.assertIn(f"router.py: {said}", self.err.splitlines())
                 self.assertEqual(
                     (self.todo["state"], self.state, self.api.order), (state, "", SESSIONS)
                 )
         self.assertEqual(self.api.detached, [])
+
+    def test_a_refusal_names_its_reason_on_stderr_once_even_when_the_log_dedupes_it(self):
+        self.todo["inverseRelations"] = {"nodes": [blocker("TASK-9")]}
+        said = 'router.py: blocked TASK-7 by=["TASK-9"]'
+        # A tty shows the logged line itself; a deduped line is logged and shown nowhere else.
+        for tty, echoed in ((True, False), (True, True), (False, True)):
+            with self.subTest(tty=tty, echoed=echoed):
+                self.assertEqual(self.entry("--issue", ID, tty=tty), 2)
+                lines = self.err.splitlines()
+                shown = [line for line in lines if '"kind": "blocked"' in line]
+                self.assertEqual((lines.count(said), len(shown)), (1, 0) if echoed else (0, 1))
+
+    def test_a_refusal_prints_its_reason_and_a_launch_prints_nothing(self):
+        self.todo["state"] = "In Review"
+        self.assertEqual(self.entry("--issue", ID), 2)
+        self.assertEqual(
+            self.err,
+            "router.py: pick-none TASK-7 reason=not a Todo issue assigned to a role account\n",
+        )
+        self.todo["state"] = "Todo"
+        self.assertEqual(self.entry("--issue", ID), 0)
+        self.assertEqual(self.err, "")
 
     def test_a_bad_session_config_is_a_launch_error_that_starts_nothing(self):
         with open(self.local, "a") as f:
@@ -1091,7 +1114,9 @@ class RouterEntry(OuterBase):
         self.assertEqual(self.todo["state"], "In Progress")
         self.assertFalse(os.path.lexists(self.rd))
 
-    def test_a_config_error_exits_2_logged_once_a_day_and_printed_on_a_terminal(self):
+    def test_a_config_error_exits_2_logged_once_a_day_and_printed_on_a_terminal_or_for_issue(
+        self,
+    ):
         for text, reason in (
             ("bogus = 1\n" + OUTER, "orchestrator/config.toml: unknown keys: bogus"),
             (
@@ -1102,7 +1127,8 @@ class RouterEntry(OuterBase):
             self.write_config(text)
             self.logs = None
             for argv in ([], ["--issue", ID]):
-                for tty, err in ((False, ""), (True, f"router.py: {reason}\n")):
+                said = f"router.py: {reason}\n"
+                for tty, err in ((False, said if argv else ""), (True, said)):
                     with self.subTest(reason=reason, argv=argv, tty=tty):
                         self.assertEqual(self.entry(*argv, tty=tty), 2)
                         self.assertEqual(self.err, err)
@@ -1693,9 +1719,11 @@ class RouterOutages(TickBase):
                     for again in (False, True):
                         gql = failing(error)
                         self.assertEqual(self.tick(gql, *argv, again=again), 1)
-                        self.assertEqual(
-                            (self.said(), self.raw), ([] if again else [self.SAID[name]], "")
-                        )
+                        self.assertEqual(self.said(), [] if again else [self.SAID[name]])
+                        if argv:
+                            self.assertRegex(self.raw, r"\Arouter\.py: Linear unavailable: .+\n\Z")
+                        else:
+                            self.assertEqual(self.raw, "")
                         self.assertEqual(
                             gql.failed, [(ops.Q_TEAM, {"service": HARNESS, "t": TEAM})]
                         )
@@ -1714,7 +1742,8 @@ class RouterOutages(TickBase):
                 for again in (False, True):
                     self.assertEqual(self.tick(failing(unauthorized), *argv, again=again), 2)
                     said = [] if again else [logged]
-                    self.assertEqual((self.said(), self.raw), (said, ""))
+                    err = "router.py: linear api error: teams: HTTP 401\n" if argv else ""
+                    self.assertEqual((self.said(), self.raw), (said, err))
                     self.assertEqual((self.start.launches, self.state), ([], ""))
 
     def test_a_dry_run_prints_it_and_writes_nothing(self):
