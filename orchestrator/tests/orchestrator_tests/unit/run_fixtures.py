@@ -18,7 +18,7 @@ from ensemble.orchestrator.trackers.linear import (
     ops,
 )
 from orchestrator_tests.case import Case
-from orchestrator_tests.unit.board_ids import HEADER, STATE_NAMES, STATES, role
+from orchestrator_tests.unit.board_ids import HEADER, STATE_NAMES, STATES, comment_id, role
 
 from utils.tests.case import local_section
 
@@ -32,7 +32,7 @@ ENGINEER, RESEARCHER = "engineer@agents.test", "researcher@agents.test"
 
 HARNESS, KEY = "linear-api-key", "linear-api-key-engineer"
 
-SESSION = ops.client_id(SID, "session")
+SESSION = comment_id("harness", SID, "session")
 
 NOT_FOUND = LinearError("linear api error: [{'message': 'Entity not found: Comment'}]")
 

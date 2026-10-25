@@ -40,7 +40,14 @@ from ensemble.utils import parse_time
 from orchestrator_tests.case import Case
 from orchestrator_tests.integration import fake_linear
 from orchestrator_tests.integration.fake_transport import install, refuse_keychain
-from orchestrator_tests.unit.board_ids import HARNESS_IDENTITY, STATES, TASK_GROUP, TEAM
+from orchestrator_tests.unit.board_ids import (
+    HARNESS_IDENTITY,
+    STATES,
+    TASK_GROUP,
+    TEAM,
+    role_app,
+    role_id,
+)
 from orchestrator_tests.unit.issue_fixtures import (
     CLIENT_GROUP,
     CLIENT_LABELS,
@@ -71,7 +78,9 @@ class ServerCase(Case):
     def setUp(self):
         self.fake = fake = fake_linear.FakeLinear(harness=HARNESS)
         self.harness = fake.user(HARNESS_EMAIL, "Harness", HARNESS, app=True)
-        self.engineer = fake.user(ENGINEER_EMAIL, "Engineer", ENGINEER)
+        self.engineer = fake.user(
+            ENGINEER_EMAIL, "Engineer", ENGINEER, app=True, uid=role_id("engineer")
+        )
         self.human = fake.user("Me@X.com", "Me")
         fake.issue(
             "Session registry",
@@ -89,7 +98,7 @@ class ServerCase(Case):
         transport = install(os.environ["FAKE_LINEAR_TRANSPORT"])
         self.addCleanup(transport.close)
         self.gql = functools.partial(client.linear_gql, identity=HARNESS_IDENTITY)
-        self.eng = functools.partial(client.linear_gql, identity=LinearKey(ENGINEER))
+        self.eng = functools.partial(client.linear_gql, identity=role_app("engineer"))
 
     def log(self):
         return [(r.op, r.account, r.result) for r in self.fake.requests]
@@ -244,7 +253,7 @@ class GraphQLProjection(ServerCase):
     def test_each_failure_kind_as_the_caller_sees_it(self):
         for name, eng in (
             ("http", self.eng),
-            ("in process", functools.partial(self.fake, identity=LinearKey(ENGINEER))),
+            ("in process", functools.partial(self.fake, identity=role_app("engineer"))),
         ):
             with self.subTest(name):
                 self.fake.requests.clear()
@@ -495,7 +504,7 @@ class GraphQLProjection(ServerCase):
                 {
                     "createdAt": done,
                     "toStateId": STATES["done"],
-                    "actor": {"email": HARNESS_EMAIL, "isMe": True},
+                    "actor": {"id": self.harness, "email": HARNESS_EMAIL, "isMe": True},
                     "botActor": None,
                 }
             ],
@@ -825,7 +834,12 @@ class GraphQLQueries(ServerCase):
                         {
                             "body": "Build it.",
                             "createdAt": said,
-                            "user": {"email": "Me@X.com", "name": "Me", "isMe": False},
+                            "user": {
+                                "id": self.human,
+                                "email": "Me@X.com",
+                                "name": "Me",
+                                "isMe": False,
+                            },
                         }
                     ]
                 },

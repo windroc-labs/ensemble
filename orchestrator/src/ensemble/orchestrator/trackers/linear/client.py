@@ -370,7 +370,11 @@ def _status(held, now):
 
 
 def has_key(identity):
-    # no -w: its secret is never read
+    """Preflight an app through the same renewal policy as a call; discard its token."""
+    if isinstance(identity, LinearApp):
+        _token(identity, 30)
+        return True
+    # The manager's legacy key only needs an existence check.
     return (
         subprocess.run(
             [SECURITY, "find-generic-password", "-s", identity.service],

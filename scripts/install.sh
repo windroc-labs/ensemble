@@ -1824,8 +1824,7 @@ if not stages or not all(isinstance(v, str) and names.fullmatch(v) for stage in 
 print("\n".join(f"{role}\t{input_}" for role, input_ in stages))' "$config" "$pkg/orchestrator/src/ensemble/orchestrator/engine/flow/workflow.toml"
 }
 
-# linear_slots <stages>: "<slot>\t<service>\t<account>" for each Linear key: harness, manager, then each stage role. Its
-# service is config.local.toml's, else linear-<slot>; its account the role's account there, else the service.
+# linear_slots <stages>: slot, token service and secret service for apps; manager keeps its key service/account.
 linear_slots() {
   python3 -I -c '
 import os, re, sys, tomllib
@@ -1836,66 +1835,106 @@ if os.path.exists(config):
         linear = tomllib.load(f).get("orchestrator", {}).get("linear", {})
 def text(value):
     return value if isinstance(value, str) else ""
-slots = [("harness", text(linear.get("harness_key")), ""), ("manager", text(linear.get("manager_key")), "")]
+if "harness_key" in linear:
+    sys.exit("install.sh: config.local.toml: unknown keys in [linear]: harness_key")
+def app(slot, found):
+    if not isinstance(found, dict) or set(found) - {"client_id", "secret_service", "token_service", "user_id"}:
+        sys.exit(f"install.sh: config.local.toml: unknown app keys for {slot}")
+    if any(not isinstance(value, str) for value in found.values()):
+        sys.exit(f"install.sh: config.local.toml: {slot} app fields must be strings")
+    return (slot, text(found.get("token_service")) or f"linear-app-{slot}-token",
+            text(found.get("secret_service")) or f"linear-app-{slot}-secret")
+manager = text(linear.get("manager_key")) or "linear-manager"
+slots = [app("harness", linear.get("harness", {})), ("manager", manager, manager)]
 for role in roles:
     found = linear.get("roles", {}).get(role, {})
-    slots.append((role, text(found.get("key")), text(found.get("account"))))
+    slots.append(app(role, found))
+used = set()
 for slot, service, account in slots:
-    service = service or f"linear-{slot}"
-    account = account or service
     if not all(re.fullmatch(r"[A-Za-z0-9._@+][A-Za-z0-9._@+-]*", v) for v in (service, account)):
         sys.exit(f"install.sh: config.local.toml: {slot} key {service!r}: not a plain keychain name")
+    names = [service] if slot == "manager" else [service, account]
+    for value in names:
+        if value in used:
+            sys.exit(f"install.sh: config.local.toml: duplicate credential service {value}")
+        used.add(value)
     print(f"{slot}\t{service}\t{account}")' "$config" "$1"
 }
 
-# Python for Linear's GraphQL API: linear(service, query, variables) is the answer's data, with the key in keychain
-# item <service>; LinearError says why not. The key stays in that process: curl gets it on stdin (-K -), -q first so
-# no .curlrc prints it.
+# GraphQL reads app token records or the manager key from Keychain; curl gets authorization on stdin (-K -).
 linear_client='
 import json, subprocess, sys
 class LinearError(Exception):
     pass
 def shown(text):
     return text if text.isprintable() else repr(text)
-def linear(service, query, variables):
+def linear(service, query, variables, *, app=True):
     found = subprocess.run(["security", "find-generic-password", "-s", service, "-w"], stdin=subprocess.DEVNULL,
                            capture_output=True, text=True)
     key = found.stdout.strip()
-    if found.returncode or not key or not key.isprintable() or any(c.isspace() or c in "\"\\" for c in key):
+    if app:
+        try:
+            key = json.loads(key)["access_token"]
+        except (ValueError, KeyError, TypeError):
+            raise LinearError(f"no usable app token in keychain item {service}") from None
+    if found.returncode or not isinstance(key, str) or not key or not key.isprintable() or any(c.isspace() or c in "\"\\" for c in key):
         raise LinearError(f"no usable key in keychain item {service}")
+    authorization = f"Bearer {key}" if app else key
     body = json.dumps({"query": query, "variables": variables})
     sent = subprocess.run(["curl", "-q", "-fsS", "--connect-timeout", "10", "--max-time", "30", "-K", "-",
                            "--data-binary", body, "-H", "Content-Type: application/json",
                            "https://api.linear.app/graphql"],
-                          input=f"header = \"Authorization: {key}\"\n", capture_output=True, text=True)
+                          input=f"header = \"Authorization: {authorization}\"\n", capture_output=True, text=True)
     if sent.returncode:
-        raise LinearError(shown(sent.stderr.strip()))
+        raise LinearError("Linear request failed")
     try:
         answer = json.loads(sent.stdout)
     except json.JSONDecodeError:
         raise LinearError("not a JSON answer") from None
     errors = answer.get("errors") if isinstance(answer, dict) else None
     if errors or not isinstance(answer, dict) or not isinstance(answer.get("data"), dict):
-        first = errors[0].get("message") if isinstance(errors, list) and errors and isinstance(errors[0], dict) else None
-        raise LinearError(shown(first) if isinstance(first, str) else "no data")
+        raise LinearError("Linear returned errors or no data")
     return answer["data"]
 '
 
-# linear_api <service> <query>: Linear's answer to <query> (its data, one JSON line) with the key in item <service>.
+# linear_api <service> <query>: validate the manager key without exposing it.
 linear_api() {
   python3 -I -c "$linear_client"'
 try:
-    print(json.dumps(linear(sys.argv[1], sys.argv[2], {})))
+    print(json.dumps(linear(sys.argv[1], sys.argv[2], {}, app=False)))
 except LinearError as error:
     sys.exit(f"install.sh: Linear: {error}")' "$@"
 }
 
 linear_keys() {
-  local list=$1 slot service account
-  step "Linear keys"
+  local list=$1 slot service account new_secret new_token
+  step "Linear credentials"
   linear_wanted || return 0
+  mkdir -p "$state_dir"
+  printf '{}\n' >"$state_dir/linear-apps.json"
   while IFS=$'\t' read -r slot service account; do
     [ -n "$service" ] || continue
+    if [ "$slot" != manager ]; then
+      new_secret=no new_token=no
+      if security find-generic-password -s "$account" </dev/null >/dev/null 2>&1; then
+        skip "$account in the keychain"
+      else
+        ledger_add keychain "$account" "$account"
+        say "Linear app $slot: paste its client secret at security's prompt (nothing echoes)"
+        security add-generic-password -s "$account" -a "$account" -w <&3 >&3 2>&3
+        new_secret=yes
+      fi
+      if ! security find-generic-password -s "$service" </dev/null >/dev/null 2>&1; then
+        ledger_add keychain "$service" "$service"
+        new_token=yes
+      fi
+      if ! python3 -I "$pkg/scripts/install_linear_app.py" "$config" "$slot" "$service" "$account" "$state_dir/linear-apps.json"; then
+        if [ "$new_secret" = yes ]; then security delete-generic-password -s "$account" </dev/null >/dev/null 2>&1 || true; fi
+        if [ "$new_token" = yes ]; then security delete-generic-password -s "$service" </dev/null >/dev/null 2>&1 || true; fi
+        exit 1
+      fi
+      continue
+    fi
     if security find-generic-password -s "$service" </dev/null >/dev/null 2>&1; then
       skip "$service in the keychain"
       continue
@@ -1925,9 +1964,11 @@ def set_(node, *keys):
     for key in keys:
         node = node.get(key) if isinstance(node, dict) else None
     return isinstance(node, str) and node != ""
-required = [("team",), ("harness_key",), ("manager_key",), ("task_label_group",)]
+app_keys = ("client_id", "secret_service", "token_service", "user_id")
+required = [("team",), ("manager_key",), ("task_label_group",)]
+required += [("harness", key) for key in app_keys]
 required += [("states", state) for state in ("backlog", "todo", "in_progress", "in_review", "handoff", "done", "canceled")]
-required += [("roles", role, key) for role, _ in stages for key in ("account", "key")]
+required += [("roles", role, key) for role, _ in stages for key in app_keys]
 def published(role):
     output = delegate.get("roles", {}).get(role, {}).get("output") or delegate.get("output", {})
     return output.get("type") == "github" and set_(output, "repo") and set_(output, "branch")
@@ -1942,7 +1983,9 @@ sys.exit(0 if orchestrator.get("tracker") == "linear" and docs and all(set_(line
 board_plan() {
   python3 -I -c "$linear_client"'
 import os, re, tomllib
-config, out, slot_lines, stage_lines, charters = sys.argv[1:]
+config, out, slot_lines, stage_lines, charters, app_file = sys.argv[1:]
+with open(app_file, encoding="utf-8") as f:
+    apps = json.load(f)
 slots = [line.split("\t") for line in slot_lines.splitlines()]
 stages = [line.split("\t") for line in stage_lines.splitlines()]
 service = {slot: name for slot, name, _ in slots}
@@ -1972,7 +2015,7 @@ def nodes(node, *keys):
     return [n for n in found if isinstance(n, dict)] if isinstance(found, list) else []
 def fetch(slot, query, variables=None):
     try:
-        return linear(service[slot], query, variables or {})
+        return linear(service[slot], query, variables or {}, app=slot != "manager")
     except LinearError as error:
         print(f"install.sh: Linear: {error}", file=sys.stderr)
         stop(f"Linear refused the key in {service[slot]}, or cannot be reached: fix that keychain item, then rerun")
@@ -1985,12 +2028,7 @@ def ask(question):
             stop("no answer on the terminal")
         line += chunk
     return line.decode(errors="replace").strip()
-emails, seen = {}, {}
-for slot in ["harness", "manager", *roles]:
-    emails[slot] = email(dig(fetch(slot, "{ viewer { email } }"), "viewer", "email"), f"{slot} account email")
-    if emails[slot].lower() in seen:
-        stop(f"the keys in {service[seen[emails[slot].lower()]]} and {service[slot]} are the same Linear account")
-    seen[emails[slot].lower()] = slot
+email(dig(fetch("manager", "{ viewer { email } }"), "viewer", "email"), "manager account email")
 linear_config = dig(data, "orchestrator", "linear") or {}
 team = linear_config.get("team")
 if team:
@@ -2002,7 +2040,7 @@ else:
         ident = uid(found.get("id"), "team id")
         teams.append((ident, name(found.get("key"), "team key", ident)))
     if not teams:
-        stop("the harness key sees no Linear team (docs/credentials.md#linear-presets)")
+        stop("the harness app sees no Linear team (docs/credentials.md#linear-presets)")
     team = teams[0][0]
     if len(teams) > 1:
         keys = {key: ident for ident, key in teams}
@@ -2038,13 +2076,11 @@ def children(parent):
 tasks = linear_config.get("task_label_group") or group("Tasks")
 if not tasks:
     stop(f"Linear team {team_key} has no Tasks label group (docs/credentials.md#linear-presets)")
-accounts = {emails[slot].lower() for slot in ["harness", *roles]}
 humans = []
 for found in nodes(detail, "members"):
     if found.get("active") is True:
         member = email(found.get("email"), "member email")
-        if member.lower() not in accounts:
-            humans.append(member)
+        humans.append(member)
 plan = []
 def fill(table, key, value):
     if dig(data, *table.split("."), key) in (None, "", [], {}):
@@ -2052,7 +2088,10 @@ def fill(table, key, value):
 if dig(data, "orchestrator", "tracker") != "linear":
     plan.append(("orchestrator", "tracker", "linear"))
 fill("orchestrator.linear", "team", team)
-fill("orchestrator.linear", "harness_key", service["harness"])
+for slot, fields in apps.items():
+    table = "orchestrator.linear.harness" if slot == "harness" else f"orchestrator.linear.roles.{slot}"
+    for key, value in fields.items():
+        fill(table, key, value)
 fill("orchestrator.linear", "manager_key", service["manager"])
 fill("orchestrator.linear", "task_label_group", tasks)
 if humans:
@@ -2085,9 +2124,6 @@ if agent and children(agent) and not linear_config.get("agent_label_group") and 
     fill("orchestrator.linear", "agent_label_group", agent)
     for client, ident in children(agent).items():
         fill("orchestrator.linear.agent_labels", client, ident)
-for role in roles:
-    fill(f"orchestrator.linear.roles.{role}", "account", emails[role])
-    fill(f"orchestrator.linear.roles.{role}", "key", service[role])
 repos = linear_config.get("project_repos") or {}
 slug = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9._][A-Za-z0-9._-]{0,99}")
 for found in nodes(detail, "projects"):
@@ -2121,7 +2157,7 @@ if unpublished:
                            ("dir", "Research/" if input_ == "research" else "Product Design/")):
             fill(table, key, value)
 with open(out, "w", encoding="utf-8") as f:
-    json.dump(plan, f)' "$config" "$1" "$2" "$3" "$pkg/delegate/src/ensemble/delegate/team/roles"
+    json.dump(plan, f)' "$config" "$1" "$2" "$3" "$pkg/delegate/src/ensemble/delegate/team/roles" "$state_dir/linear-apps.json"
 }
 
 local_board_setup() {

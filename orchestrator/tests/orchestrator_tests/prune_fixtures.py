@@ -31,6 +31,7 @@ from orchestrator_tests.unit.board_ids import (
     FINISHED,
     HARNESS_IDENTITY,
     TEAM,
+    role_id,
     team_node,
 )
 from orchestrator_tests.unit.board_ids import STATES as IDS_BY_KEY
@@ -60,9 +61,9 @@ STATE_IDS = {
 
 
 ROLES = {
-    "u-researcher": "researcher",
-    "u-pm": "pm",
-    "u-engineer": "engineer",
+    role_id("researcher"): "researcher",
+    role_id("pm"): "pm",
+    role_id("engineer"): "engineer",
     "u-dummy-tester": "dummy-tester",
 }
 
@@ -450,7 +451,7 @@ class PruneScenario(Case):
         fake.moved("DR-1", 30, "Handoff", frm=tp.STATES["In Review"])
 
         def gql(query, **v):
-            if query in (ops.Q_SETUP, ops.Q_TEAM, ops.Q_USER):
+            if query in (ops.Q_TEAM, ops.Q_USER):
                 self.setup_queries.append(query)
             return (prune_gql if query in PRUNE_QUERIES else fake)(query, **v)
 

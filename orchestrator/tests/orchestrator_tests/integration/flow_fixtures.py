@@ -48,9 +48,9 @@ _LINEAR = _CFG["linear"]
 
 ROLES = tuple(_CFG["roles"])
 
-ACCOUNTS = {r: _LINEAR["roles"][r]["account"] for r in ROLES}
+ACCOUNTS = {r: board_ids.ACCOUNTS[r] for r in ROLES}
 
-KEYS = {r: _LINEAR["roles"][r]["key"] for r in ROLES}
+KEYS = {r: _LINEAR["roles"][r]["token_service"] for r in ROLES}
 
 [HUMAN] = _LINEAR["human_members"]
 
@@ -149,7 +149,9 @@ class Flow(Case):
         self.fake = fake_linear.FakeLinear(harness=HARNESS)
         self.ids = {HARNESS_EMAIL: self.fake.user(HARNESS_EMAIL, "Harness", HARNESS, app=True)}
         for r in ROLES:
-            self.ids[ACCOUNTS[r]] = self.fake.user(ACCOUNTS[r], r.title(), KEYS[r])
+            self.ids[ACCOUNTS[r]] = self.fake.user(
+                ACCOUNTS[r], r.title(), KEYS[r], app=True, uid=_LINEAR["roles"][r]["user_id"]
+            )
         self.ids[HUMAN] = self.fake.user(HUMAN, "Me")
         self.fake.label_group(board_ids.TASK_GROUP, "Tasks", {LIGHT_RESEARCH: "Light Research"})
         self.seam = fake_linear.seam(self, self.fake, fake_linear.serve(self, self.fake))

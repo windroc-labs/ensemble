@@ -79,7 +79,7 @@ class RunToReview(BinFlow):
         res = self.router("--issue", ID)
         self.assertEqual((res.returncode, res.stdout), (0, ""), (res.stderr, self.said()))
         [row] = self.runs()
-        self.assertEqual((row["uuid"], row["key"], row["role"]), (ID, None, "researcher"))
+        self.assertEqual((row["uuid"], row["role"]), (ID, "researcher"))
         self.wait_end(row["sid"], ID, role="researcher")
         return row["sid"]
 

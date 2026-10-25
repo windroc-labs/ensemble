@@ -110,6 +110,7 @@ from ensemble.orchestrator.engine.runs import (
     latest,
     note,
     parse_log,
+    role_of,
     started_task,
     trim,
 )
@@ -119,6 +120,7 @@ from ensemble.orchestrator.engine.types import (
     ConfigError,
     InputError,
     Invalid,
+    KeychainError,
     LinearError,
     Spec,
     TrackerFileError,
@@ -245,6 +247,7 @@ class Board:
         self.say: Callable[..., None] = say or functools.partial(log, "router", dry=dry)
         self.ready, self.blocked, self.live, self.statuses = None, {}, set(), {}
         self.status_errors, self.replays = {}, {}
+        self.credential_errors = {}
         self.failures = failures(cfg.runs_log)
         self.tracker = wiring.connect(gql, cfg, say=self.say)
 
@@ -270,6 +273,24 @@ class Board:
 
     def role(self, issue):
         return self.tracker.role(issue)
+
+    def credential_error(self, role):
+        """Check a role once per tick; one unavailable app cannot abort the board walk."""
+        if role not in self.credential_errors:
+            error = None
+            if role not in self.cfg.roles:
+                error = f"role {role!r} is not configured"
+            else:
+                try:
+                    identity = self.wiring.identity(self.cfg, role)
+                    if identity is not None and not self.keychain(identity):
+                        error = f"no Keychain item for role key {identity.service}"
+                except KeychainError as exc:
+                    error = one_line(exc)
+            self.credential_errors[role] = error
+            if error:
+                self.say("config-error", identity=role, reason=error)
+        return self.credential_errors[role]
 
     def available(self, issue, full):
         return issue["identifier"] not in self.live and self.role(issue) not in full
@@ -349,7 +370,17 @@ class Board:
                 first_line_time(self.entries, p[1]) if p[1] else self.now,
             )
         )
-        return [(issue, sid) for issue, sid in mine if self.settle(issue, sid)]
+        return [
+            (issue, sid)
+            for issue, sid in mine
+            if (
+                self.cfg.tracker is not TrackerKind.LINEAR
+                or not self.credential_error(
+                    role_of(self.entries, sid) if sid else self.role(issue)
+                )
+            )
+            and self.settle(issue, sid)
+        ]
 
     def recent_session(self, ident):
         latest = latest_sid(self.entries, ident)
@@ -504,7 +535,15 @@ class Board:
         the client the issue chooses when that differs, as a session resumes only in its own
         client. An invalid task or client choice keeps the resume.
         """
-        ident, role, resumed = issue["identifier"], self.role(issue), client_of(self.entries, sid)
+        ident, role, resumed = (
+            issue["identifier"],
+            role_of(self.entries, sid)
+            if self.cfg.tracker is TrackerKind.LINEAR
+            else self.role(issue),
+            client_of(self.entries, sid),
+        )
+        if role not in self.cfg.roles:
+            raise ConfigError(f"{ident}: session {sid}'s role {role!r} is not configured")
         current = self.tracker.recheck(issue["id"])
         task, task_error = task_for(
             current.task,
@@ -585,12 +624,8 @@ class Board:
             skip = f"{role} is full"
         elif current.refused:
             skip = current.refused
-        elif (
-            (identity := self.wiring.identity(self.cfg, role))
-            and identity.service
-            and not self.keychain(identity)
-        ):
-            skip = f"no Keychain item for role key {identity.service}"
+        elif reason := self.credential_error(role):
+            skip = reason
         else:
             skip = None
         if skip:
@@ -649,9 +684,9 @@ def begin(cfg, spec: Spec) -> Spec:
     return spec
 
 
-def record(cfg, spec: Spec, *, role, key, now, target=None) -> str:
+def record(cfg, spec: Spec, *, role, now, target=None) -> str:
     """The run's runs.jsonl row, an attempt toward CAP: a start row holds the claim's context (issue
-    uuid, project, target, the role's key), which its write-back reads, and its task, which picks
+    uuid, project, target, role), which its write-back reads, and its task, which picks
     a resume's tier; returns its Delegate kind.
     """
     if spec.mode == "new":
@@ -661,7 +696,6 @@ def record(cfg, spec: Spec, *, role, key, now, target=None) -> str:
                 "uuid": spec.uuid,
                 "project": spec.project,
                 "target": target,
-                "key": key,
                 "task": spec.task,
             },
         )
@@ -718,16 +752,23 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
     if reason := a.identity_error():
         print(f"router.py: {reason}", file=sys.stderr)
         return 2
+    if a.mode == "resume" and cfg.tracker is TrackerKind.LINEAR:
+        a = replace(a, role=role_of(parse_log(cfg.runs_log), a.sid))
     role = a.role
+    if role is not None and role not in cfg.roles:
+        return fail(a.issue, "config-error", f"role {role!r} is not configured", 2)
     tasks = cfg.roles[role].tasks if role is not None else ()
     reason = a.role_error(role, tasks)
     if role is None or reason:
         return fail(a.issue, "config-error", reason, 2)
     identity = wiring.identity(cfg, role)
     key = identity.service if identity is not None else None
-    kind = record(cfg, a, role=role, key=key, now=now) if a.mode == "resume" else cfg.delegate_kind
-    if key is not None and not keychain(identity):
-        return fail(a.issue, "config-error", f"no Keychain item for role key {key}", 2)
+    kind = record(cfg, a, role=role, now=now) if a.mode == "resume" else cfg.delegate_kind
+    try:
+        if identity is not None and not keychain(identity):
+            return fail(a.issue, "config-error", f"no Keychain item for role key {key}", 2)
+    except KeychainError as error:
+        return fail(a.issue, "config-error", one_line(error), 2)
     if a.mode == "resume":
         try:
             st = LinearRun.attach(a.issue, cfg=cfg, sid=a.sid).delegate.session_status()
@@ -833,7 +874,7 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
                 return _label_client_error(a, ctx, error)
             raise
         if a.mode == "new":
-            record(cfg, a, role=role, key=key, target=slug, now=now)
+            record(cfg, a, role=role, target=slug, now=now)
         detached = linear_run.detach()
     except (ConfigError, delegate.ConfigError, delegate.SessionError) as e:
         log("router", "launch-error", a.issue, error=one_line(e))
@@ -1077,6 +1118,10 @@ def run_issue(opts, cfg, gql, start, *, keychain, wiring, clock=datetime.now, la
             None,
         ):
             sid = board.current_sid(issue)
+            if cfg.tracker is TrackerKind.LINEAR and board.credential_error(
+                role_of(entries, sid) if sid else board.role(issue)
+            ):
+                return stop
             if not board.settle(issue, sid, wait=False):
                 return 0 if board.replays.get(ident) else stop
             spec = board.resumption(issue, sid, launch_sid or str(uuid.uuid4()))

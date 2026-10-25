@@ -4,7 +4,7 @@ a name the configuration lacks is IssueError naming the configured ones.
 
 from ensemble.orchestrator.engine.flow.types import IssueState
 from ensemble.orchestrator.engine.types import IssueError
-from ensemble.orchestrator.trackers.linear import issue_names, ops
+from ensemble.orchestrator.trackers.linear import issue_names
 from orchestrator_tests.case import Case
 from orchestrator_tests.unit.board_ids import ACCOUNTS, STATES
 from orchestrator_tests.unit.issue_fixtures import (
@@ -38,12 +38,12 @@ class StateId(Case):
 
 
 class Assignee(Case):
-    def test_a_role_is_its_account_user(self):
+    def test_a_role_is_its_configured_app_user(self):
         gql = Routes(users=role_users)
         self.assertEqual(
             issue_names.assignee(gql, names_cfg(), "engineer"), ROLE_USERS[ACCOUNTS["engineer"]]
         )
-        self.assertEqual(gql.calls, [(ops.Q_USER, {"e": ACCOUNTS["engineer"]})])
+        self.assertEqual(gql.calls, [])
 
     def test_me_is_the_viewer_and_unassigned_none(self):
         gql = Routes(viewer=VIEWER)
@@ -61,13 +61,6 @@ class Assignee(Case):
                 f"--role {spec}: not a role: researcher, pm, engineer, me, unassigned",
             )
             self.assertEqual(gql.calls, [])
-
-    def test_an_account_linear_does_not_know_names_it(self):
-        gql = Routes(users={"nodes": []})
-        with self.assertRaises(IssueError) as cm:
-            issue_names.assignee(gql, names_cfg(), "pm")
-        self.assertIn(ACCOUNTS["pm"], str(cm.exception))
-        self.assertIn("--role pm", str(cm.exception))
 
 
 class Labels(Case):

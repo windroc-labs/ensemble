@@ -3,9 +3,11 @@ import hashlib
 import os
 import shutil
 import tempfile
+import uuid
 from importlib.resources import files
 
 from ensemble.orchestrator.engine.types import AppKind, LinearApp
+from ensemble.orchestrator.trackers.linear import ops
 
 TEAM = "00000000-0000-4000-8000-000000000001"
 STATES = {
@@ -81,10 +83,34 @@ def workflow_line(text):
     return f'workflow = "{workflow_file(text)}"\n'
 
 
+def role_app(name):
+    return LinearApp(
+        name,
+        AppKind.ROLE,
+        f"linear.roles.{name}",
+        f"client-{name}",
+        f"linear-api-key-{name}-secret",
+        f"linear-api-key-{name}",
+        role_id(name),
+    )
+
+
+def role_id(name):
+    return str(uuid.uuid5(uuid.NAMESPACE_OID, name))
+
+
+def comment_id(role, sid, *parts):
+    app = HARNESS_IDENTITY if role == "harness" else role_app(role)
+    return ops.client_id(app.user_id, sid, *parts)
+
+
 def role(name, *lines):
-    """[linear.roles.<name>]'s account and key, then [roles.<name>] holding `lines`."""
+    """The stage's app table, then its board run settings."""
+    app = role_app(name)
+    fields = ("client_id", "secret_service", "token_service", "user_id")
     return (
-        f'[linear.roles.{name}]\naccount = "{name}@agents.test"\nkey = "linear-api-key-{name}"\n'
+        f"[linear.roles.{name}]\n"
+        + "".join(f'{k} = "{getattr(app, k)}"\n' for k in fields)
         + f"[roles.{name}]\n"
         + "".join(f"{x}\n" for x in lines)
     )

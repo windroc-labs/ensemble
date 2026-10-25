@@ -36,7 +36,7 @@ from orchestrator_tests.prune_fixtures import (
     write,
 )
 from orchestrator_tests.unit import promote_fixtures as tp
-from orchestrator_tests.unit.board_ids import FINISHED, HARNESS_IDENTITY
+from orchestrator_tests.unit.board_ids import FINISHED, HARNESS_IDENTITY, role_id
 from orchestrator_tests.unit.keychain_fixtures import SECRET as APP_SECRET
 from orchestrator_tests.unit.keychain_fixtures import Endpoint, Keychain, record, token_http_error
 from orchestrator_tests.unit.run_fixtures import CORE_LOCAL, logged, show
@@ -247,7 +247,7 @@ class RepositoryCleanup(PruneScenario):
         clone = self.fake_clone()
         self.record("TASK-7", SID, [A])
         wt = self.mkg("TASK-7")
-        gql = gql_for({"TASK-7": ("Done", [(30, "Done")])}, owners={"TASK-7": "u-pm"})
+        gql = gql_for({"TASK-7": ("Done", [(30, "Done")])}, owners={"TASK-7": role_id("pm")})
         with mock.patch.object(PruneDelegate, "clean", side_effect=AssertionError("cleaned")):
             code, out = self.prune(gql, dry=True, writable=(self.work,))
         self.assertEqual(
@@ -285,10 +285,10 @@ class RetentionCleanup(PruneScenario):
                 "TASK-4": ("Canceled", [(2, "Canceled")]),
             },
             owners={
-                "TASK-1": "u-pm",
-                "TASK-2": "u-pm",
-                "TASK-3": "u-engineer",
-                "TASK-4": "u-engineer",
+                "TASK-1": role_id("pm"),
+                "TASK-2": role_id("pm"),
+                "TASK-3": role_id("engineer"),
+                "TASK-4": role_id("engineer"),
             },
         )
         code, out = self.prune(gql)
@@ -318,12 +318,12 @@ class RetentionCleanup(PruneScenario):
             },
             owners={
                 "TASK-1": None,
-                "TASK-2": "u-researcher",
+                "TASK-2": role_id("researcher"),
                 "TASK-3": "u-other",
                 "TASK-4": None,
                 "TASK-5": None,
-                "TASK-6": "u-researcher",
-                "TASK-8": "u-researcher",
+                "TASK-6": role_id("researcher"),
+                "TASK-8": role_id("researcher"),
                 "TASK-9": None,
             },
             children={"TASK-6": {"TASK-7": "started"}},
@@ -352,7 +352,7 @@ class RetentionCleanup(PruneScenario):
                 "TASK-3": ("Duplicate", []),
                 "TASK-4": ("Canceled", [(30, "Canceled")]),
             },
-            owners={"TASK-2": "u-pm"},
+            owners={"TASK-2": role_id("pm")},
             stamps={
                 "TASK-1": {"canceledAt": 30},
                 "TASK-2": {"completedAt": 30},
@@ -388,11 +388,11 @@ class RetentionCleanup(PruneScenario):
                 "TASK-7": done,
             },
             owners={
-                "TASK-1": "u-pm",
-                "TASK-2": "u-engineer",
-                "TASK-3": "u-pm",
-                "TASK-4": "u-pm",
-                "TASK-5": "u-researcher",
+                "TASK-1": role_id("pm"),
+                "TASK-2": role_id("engineer"),
+                "TASK-3": role_id("pm"),
+                "TASK-4": role_id("pm"),
+                "TASK-5": role_id("researcher"),
                 "TASK-6": "u-other",
                 "TASK-7": None,
             },
@@ -404,7 +404,7 @@ class RetentionCleanup(PruneScenario):
             out.splitlines(), ["prune-skip TASK-3 reason=archive: finish time unknown"]
         )
         (v,) = gql.finished
-        self.assertEqual(sorted(v["a"]), ["u-engineer", "u-pm"])
+        self.assertEqual(sorted(v["a"]), [role_id("engineer"), role_id("pm")])
         self.assertEqual(v["d"], [STATE_IDS["Done"]])
         self.assertEqual(sorted(v["s"]), sorted(FINISHED - {STATE_IDS["Done"]}))
 
@@ -412,7 +412,7 @@ class RetentionCleanup(PruneScenario):
         done = ("Done", [(30, "Done")])
         gql = gql_for(
             {"TASK-1": done, "TASK-2": done, "TASK-3": done},
-            owners=dict.fromkeys(("TASK-1", "TASK-2", "TASK-3"), "u-pm"),
+            owners=dict.fromkeys(("TASK-1", "TASK-2", "TASK-3"), role_id("pm")),
             fail={"TASK-1"},
             refuse={"TASK-2"},
         )
@@ -432,7 +432,7 @@ class RetentionCleanup(PruneScenario):
         done = ("Done", [(30, "Done")])
         idents = ("TASK-1", "TASK-2", "TASK-3")
         gql = gql_for(
-            dict.fromkeys(idents, done), owners=dict.fromkeys(idents, "u-engineer"), page=2
+            dict.fromkeys(idents, done), owners=dict.fromkeys(idents, role_id("engineer")), page=2
         )
         self.assertEqual(self.prune(gql)[0], 0)
         self.assertEqual(gql.archived, ["id-TASK-1", "id-TASK-2", "id-TASK-3"])
@@ -447,7 +447,7 @@ class RetentionCleanup(PruneScenario):
             with self.subTest(dry=dry):
                 gql = gql_for(
                     {"TASK-1": done, "TASK-4": done},
-                    owners={"TASK-1": "u-pm", "TASK-4": "u-pm"},
+                    owners={"TASK-1": role_id("pm"), "TASK-4": role_id("pm")},
                     children={"TASK-1": {"TASK-2": "completed", "TASK-3": "started"}},
                 )
                 code, out = self.prune(gql, dry=dry)
@@ -461,7 +461,7 @@ class RetentionCleanup(PruneScenario):
     def test_finished_or_archived_sub_issues_let_the_parent_go(self):
         gql = gql_for(
             {"TASK-1": ("Done", [(30, "Done")])},
-            owners={"TASK-1": "u-engineer"},
+            owners={"TASK-1": role_id("engineer")},
             children={
                 "TASK-1": {"TASK-2": "completed", "TASK-3": "canceled", "TASK-5": "duplicate"}
             },
@@ -472,7 +472,7 @@ class RetentionCleanup(PruneScenario):
     def test_an_open_grandchild_keeps_its_done_grandparent(self):
         gql = gql_for(
             {"TASK-1": ("Done", [(30, "Done")])},
-            owners={"TASK-1": "u-pm"},
+            owners={"TASK-1": role_id("pm")},
             children={"TASK-1": {"TASK-2": "completed"}, "TASK-2": {"TASK-3": "started"}},
         )
         self.assertEqual(
@@ -495,7 +495,7 @@ class RetentionCleanup(PruneScenario):
                 with self.subTest(name, dry=dry):
                     gql = gql_for(
                         {"TASK-1": ("Done", [(30, "Done")])},
-                        owners={"TASK-1": "u-pm"},
+                        owners={"TASK-1": role_id("pm")},
                         children=children,
                     )
                     self.assertEqual(
@@ -505,7 +505,7 @@ class RetentionCleanup(PruneScenario):
                     self.assertEqual(gql.archived, [])
         gql = gql_for(
             {"TASK-1": ("Done", [(30, "Done")])},
-            owners={"TASK-1": "u-pm"},
+            owners={"TASK-1": role_id("pm")},
             children={"TASK-1": many},
         )
         self.assertEqual(self.prune(gql), (0, "prune-archived TASK-1"))
@@ -517,7 +517,7 @@ class RetentionCleanup(PruneScenario):
             with self.subTest(dry=dry):
                 gql = gql_for(
                     {"TASK-1": ("Done", [(30, "Done")])},
-                    owners={"TASK-1": "u-pm"},
+                    owners={"TASK-1": role_id("pm")},
                     children={"TASK-1": {"TASK-2": "completed"}},
                     reread={"TASK-1": "In Progress"},
                 )
@@ -533,7 +533,7 @@ class RetentionCleanup(PruneScenario):
             with self.subTest(dry=dry):
                 gql = gql_for(
                     {"TASK-1": done, "TASK-2": done},
-                    owners=dict.fromkeys(("TASK-1", "TASK-2"), "u-pm"),
+                    owners=dict.fromkeys(("TASK-1", "TASK-2"), role_id("pm")),
                 )
                 code, out = self.prune(gone_on_reread(gql, "id-TASK-1"), dry=dry)
                 self.assertEqual(
@@ -647,7 +647,9 @@ class RetentionCleanup(PruneScenario):
                 kept = [self.mkc("TASK-49"), self.mkc("TASK-49", "p", "q")]
                 self.record("TASK-49", SID, [A])
                 self.unknown = True
-                gql = gql_for({"TASK-49": ("Done", [(30, "Done")])}, owners={"TASK-49": "u-pm"})
+                gql = gql_for(
+                    {"TASK-49": ("Done", [(30, "Done")])}, owners={"TASK-49": role_id("pm")}
+                )
                 code, out = self.prune(gql, dry=dry)
                 self.assertEqual(
                     (code, out.splitlines()),
@@ -733,11 +735,11 @@ class RetentionCleanup(PruneScenario):
         self.assertNotIn(skip, self.prune(gql)[1].splitlines())
 
     def test_promote_tick_archives_with_its_roles(self):
-        gql = gql_for({"TASK-1": ("Done", [(30, "Done")])}, owners={"TASK-1": "u-pm"})
+        gql = gql_for({"TASK-1": ("Done", [(30, "Done")])}, owners={"TASK-1": role_id("pm")})
         code, _, out = self.tick(gql)
         self.assertEqual((code, gql.archived), (0, ["id-TASK-1"]))
         self.assertIn("prune-archived TASK-1", out)
-        self.assertEqual(self.setup_queries, [ops.Q_SETUP])
+        self.assertEqual(self.setup_queries, [ops.Q_TEAM])
 
     def test_promote_tick_closes_recorded_runs_through_the_delegate(self):
         self.record("TASK-7", SID, [A])
@@ -771,13 +773,14 @@ class RetentionCleanup(PruneScenario):
         self.assertTrue(all(os.path.isdir(c) for c in clones))
 
     def test_an_outage_reading_the_finished_issues_stops_prune(self):
-        issues = gql_for({"TASK-1": ("Done", [(30, "Done")])}, owners={"TASK-1": "u-pm"})
+        issues = gql_for({"TASK-1": ("Done", [(30, "Done")])}, owners={"TASK-1": role_id("pm")})
         self.outage("issues", issues, [(linear_tracker.Q_FINISHED, mock.ANY)])
 
     def test_an_outage_archiving_stops_prune(self):
         done = ("Done", [(30, "Done")])
         issues = gql_for(
-            {"TASK-1": done, "TASK-2": done}, owners={"TASK-1": "u-pm", "TASK-2": "u-pm"}
+            {"TASK-1": done, "TASK-2": done},
+            owners={"TASK-1": role_id("pm"), "TASK-2": role_id("pm")},
         )
         self.outage(
             "issueArchive",
@@ -1140,7 +1143,7 @@ class PruneCommand(PruneScenario):
 
     def test_a_tick_deletes_finished_checkouts_and_archives(self):
         clone = self.mkc("TASK-49")
-        gql = gql_for({"TASK-49": ("Done", [(30, "Done")])}, owners={"TASK-49": "u-pm"})
+        gql = gql_for({"TASK-49": ("Done", [(30, "Done")])}, owners={"TASK-49": role_id("pm")})
         self.assertEqual(self.command(gql)[:3], (0, "", ""))
         self.assertFalse(os.path.exists(clone))
         self.assertEqual(gql.archived, ["id-TASK-49"])
@@ -1150,7 +1153,7 @@ class PruneCommand(PruneScenario):
         clone = self.mkc("TASK-49")
         gql = gql_for(
             {"TASK-49": ("Duplicate", [(30, "In Progress"), (2, "Duplicate")])},
-            owners={"TASK-49": "u-pm"},
+            owners={"TASK-49": role_id("pm")},
         )
         self.assertEqual(self.command(gql)[:3], (0, "", ""))
         self.assertFalse(os.path.exists(clone))
@@ -1158,7 +1161,7 @@ class PruneCommand(PruneScenario):
 
     def test_a_dry_run_plans_and_changes_nothing(self):
         clone = self.mkc("TASK-49")
-        gql = gql_for({"TASK-49": ("Done", [(30, "Done")])}, owners={"TASK-49": "u-pm"})
+        gql = gql_for({"TASK-49": ("Done", [(30, "Done")])}, owners={"TASK-49": role_id("pm")})
         code, out, err, said = self.command(gql, "--dry-run")
         self.assertEqual((code, out, err), (0, "", ""))
         self.assertTrue(os.path.isdir(os.path.join(clone, ".git")))
@@ -1381,7 +1384,7 @@ class RequestBound(Bound):
                     os.remove(self.cache())
                 issues = self.dirs(2, state=("Done", [(1, "Done")]), start=7)
                 issues["TASK-8"] = ("In Review", [(2, "In Review")])
-                inner = gql_for(issues, owners={"TASK-9": "u-pm"}, changed="since")
+                inner = gql_for(issues, owners={"TASK-9": role_id("pm")}, changed="since")
                 self.tick(inner)
                 self.assertEqual(self.synced(), NOW - timedelta(hours=1))
                 if case == "a":
@@ -1555,7 +1558,7 @@ class ArchiveBound(Bound):
 
     def candidates(self, n, start=1000):
         idents = [f"TASK-{start + k}" for k in range(n)]
-        return dict.fromkeys(idents, self.done), dict.fromkeys(idents, "u-pm")
+        return dict.fromkeys(idents, self.done), dict.fromkeys(idents, role_id("pm"))
 
     def test_a_cold_tick_stays_within_the_bound(self):
         bound = prune.SYNC_PAGES + prune.READ_REQUESTS + prune.ARCHIVE_REQUESTS
@@ -1588,7 +1591,7 @@ class ArchiveBound(Bound):
         children = {"TASK-1": big} | {c: {f"LEAF-{c}": "completed"} for c in big}
         gql = gql_for(
             {"TASK-1": self.done, "TASK-2": self.done},
-            owners={"TASK-1": "u-pm", "TASK-2": "u-pm"},
+            owners={"TASK-1": role_id("pm"), "TASK-2": role_id("pm")},
             children=children,
             changed=(),
         )
@@ -1608,7 +1611,10 @@ class ArchiveBound(Bound):
                 if os.path.exists(self.cache()):
                     os.remove(self.cache())
                 gql = gql_for(
-                    {"TASK-1": self.done}, owners={"TASK-1": "u-pm"}, children=children, changed=()
+                    {"TASK-1": self.done},
+                    owners={"TASK-1": role_id("pm")},
+                    children=children,
+                    changed=(),
                 )
                 self.assertEqual(
                     self.tick(gql, dry=dry), (0, f"prune-skip TASK-1 reason={prune.TOO_BIG}")
@@ -1630,7 +1636,7 @@ class ArchiveBound(Bound):
     def test_a_refused_candidate_is_replanned_only_on_change(self):
         gql = gql_for(
             {"TASK-1": self.done, "TASK-3": ("In Progress", [])},
-            owners={"TASK-1": "u-pm"},
+            owners={"TASK-1": role_id("pm")},
             children={"TASK-1": {"TASK-2": "completed", "TASK-3": "started"}},
             changed=(),
         )
@@ -1652,7 +1658,7 @@ class ArchiveBound(Bound):
         issues = {"TASK-1": self.done, "TASK-3": ("In Progress", [(0.1, "In Progress")])}
         gql = gql_for(
             issues,
-            owners={"TASK-1": "u-pm"},
+            owners={"TASK-1": role_id("pm")},
             children={"TASK-1": {"TASK-3": "started"}},
             changed="since",
         )
@@ -1667,7 +1673,7 @@ class ArchiveBound(Bound):
     def test_a_now_finished_sub_issue_lets_the_parent_go(self):
         children = {"TASK-1": {"TASK-3": "started"}}
         gql = gql_for(
-            {"TASK-1": self.done}, owners={"TASK-1": "u-pm"}, children=children, changed=()
+            {"TASK-1": self.done}, owners={"TASK-1": role_id("pm")}, children=children, changed=()
         )
         self.tick(gql)
         children["TASK-1"]["TASK-3"] = "completed"
@@ -1677,7 +1683,7 @@ class ArchiveBound(Bound):
     def test_an_invalidated_refusal_is_replanned_after_a_cut_short_tick(self):
         children = {"TASK-1": {"TASK-3": "started"}}
         gql = gql_for(
-            {"TASK-1": self.done}, owners={"TASK-1": "u-pm"}, children=children, changed=()
+            {"TASK-1": self.done}, owners={"TASK-1": role_id("pm")}, children=children, changed=()
         )
         self.tick(gql)
         children["TASK-1"]["TASK-3"] = "completed"
@@ -1719,7 +1725,7 @@ class ArchiveBound(Bound):
                 config_path=path,
                 pruner=self.pruner,
             )
-        self.assertEqual(setup, [ops.Q_SETUP])
+        self.assertEqual(setup, [ops.Q_TEAM])
         self.assertLessEqual(len(prune_gql.calls) + len(setup), 34)
 
 

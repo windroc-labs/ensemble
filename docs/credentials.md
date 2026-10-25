@@ -84,19 +84,26 @@ The harness is a Linear OAuth app, `[linear.harness]`: its client secret and its
 | Lifetime | no expiry documented |
 | Revoke | delete the key in Linear › Settings › Account › Security & Access, then `security delete-generic-password -s <service>` |
 
-### Linear role keys
+### Linear role apps
 
-One per role: `linear.roles.researcher.key` for `linear.roles.researcher.account`, `linear.roles.pm.key` for
-`linear.roles.pm.account`, `linear.roles.engineer.key` for `linear.roles.engineer.account`.
+Each `[orchestrator.linear.roles.<role>]` holds `client_id`, `secret_service`, `token_service` and
+`user_id`. All four are required; `account` and `key` are unknown keys. `user_id` is the installed app's
+Linear user id; runtime role discovery needs no role token or email lookup.
 
 | Field | Value |
 |---|---|
-| Purpose | write-back as the role: comments, state moves, subscribing `linear.human_members`, attachments, retitles; the router checks the item exists before a claim |
-| Minimum permission | a personal API key of the role account limited to the team, with Read, Write and Create comments; not live-tested |
-| Stored at | a login keychain item whose service is `linear.roles.<role>.key` |
-| Readers | as the manager key |
-| Lifetime | as the manager key |
-| Revoke | as the manager key |
+| Purpose | role write-back: comments, state moves, subscriptions, attachments and retitles; resume and Recover resolve the run's recorded role against current configuration, ignoring old start-row credentials |
+| Permission | fixed `read,write,app:assignable,app:mentionable`; restrict each app to the team |
+| Stored at | client secret in `secret_service`; token and expiry in `token_service`, both login Keychain entries |
+| Readers | any process running as the user |
+| Lifetime | renewed through the shared transport when missing, undated, expired or under 5 days remain; dry-run never renews |
+| Failure | an expired token whose renewal fails skips only that role's claims and resumes; write-back reports refusal for Recover |
+| Revoke | revoke the app's tokens in Linear, then remove its token and secret entries from Keychain |
+
+Changing an app's client secret revokes its tokens: store the new secret and delete the token entry so
+the next call requests one. New runs record the role, never a credential service; existing run rows stay unchanged.
+Deterministic comments use the current app user id as their namespace. If an old member's comment landed
+before its write-back ledger was saved, Recover leaves it intact and posts the missing step as the app.
 
 ### Claude Code login
 
@@ -179,10 +186,11 @@ shows.
 | `ensemble-revocations` | `pending` | — | tokens awaiting revocation | `<B> close`, `refresh` failures | the broker |
 | `ensemble-codex` | `auth` | — | the full Codex login | `<B> login codex`; renewals at `start`, `refresh` | the broker |
 | `ensemble-opencode` | provider name | `[session.clients.opencode.providers.<name>]` | that OpenCode provider's API key | `<B> login opencode <name>` | the broker |
-| the `linear.harness.secret_service` value | any | `linear.harness.secret_service` | harness app client secret | the user ([Linear presets](#linear-presets)) | any process running as the user |
-| the `linear.harness.token_service` value | the existing item's, else the service | `linear.harness.token_service` | harness app token and expiry | router, promote, prune, write-back | any process running as the user |
-| the `linear.manager_key` value | the manager's account | `linear.manager_key` | manager Linear API key | the user ([Linear presets](#linear-presets)) | any process running as the user |
-| each `linear.roles.<role>.key` value | the role's account | `linear.roles.<role>.key` | role Linear API key | the user | any process running as the user |
+| the `linear.harness.secret_service` value | any | `linear.harness.secret_service` | harness app client secret | installer or the user ([Linear presets](#linear-presets)) | any process running as the user |
+| the `linear.harness.token_service` value | the existing item's, else the service | `linear.harness.token_service` | harness app token and expiry | installer, router, promote, prune, write-back | any process running as the user |
+| the `linear.manager_key` value | the manager's account | `linear.manager_key` | manager Linear API key | installer or the user ([Linear presets](#linear-presets)) | any process running as the user |
+| each `linear.roles.<role>.secret_service` value | any | `linear.roles.<role>.secret_service` | role app client secret | installer or the user | any process running as the user |
+| each `linear.roles.<role>.token_service` value | the existing item's, else the service | `linear.roles.<role>.token_service` | role app token and expiry | installer, router, write-back, Recover | any process running as the user |
 | Claude Code's own | — | — | local Claude login | Claude Code `/login` | Claude Code; service name not documented |
 | `gh`'s own | — | — | host `gh` token | `gh auth login` | `gh`; see `gh auth status` |
 | Codex's own, keyring mode only | — | — | local Codex login | `codex login` | Codex; service name not documented |
@@ -251,10 +259,14 @@ container's own tmux socket is not Docker's, so the socket search names `docker`
 
 ## Linear presets
 
-With `--board linear`, `scripts/install.sh` stores the keys and fills the ids itself ([Setup](board.md#setup)); the table
+With `--board linear`, `scripts/install.sh` asks for each harness/role app's Client ID and hidden client secret,
+stores its secret and first token with expiry in Keychain, and fills the app user ids ([Setup](board.md#setup)).
+Default services are `linear-app-<slot>-secret` and `linear-app-<slot>-token`; configured services are preserved.
+Reruns reuse valid tokens with over five days left. Cleanup removes only the credential items this installer created.
+The manager still supplies its separate API key. The table
 lists what it needs in Linear. By hand: create these in the Linear team, then put each id in `~/.ensemble/config.local.toml`: a `linear.<key>` under
-`[orchestrator.linear]` (`linear.states.todo` is `todo` in `[orchestrator.linear.states]`, `linear.roles.pm.key` is
-`key` in `[orchestrator.linear.roles.pm]`), `local_clones` under `[orchestrator]` ([Setup](board.md#setup)).
+`[orchestrator.linear]` (`linear.states.todo` is `todo` in `[orchestrator.linear.states]`, `linear.roles.pm.client_id` is
+`client_id` in `[orchestrator.linear.roles.pm]`), `local_clones` under `[orchestrator]` ([Setup](board.md#setup)).
 
 | Create in Linear | Config key |
 |---|---|
@@ -263,13 +275,12 @@ lists what it needs in Linear. By hand: create these in the Linear team, then pu
 | a `Tasks` label group, its id from `issueLabels { nodes { id name isGroup } }` | `linear.task_label_group` |
 | one label per task under `Tasks` (`build`, `light-build`, …), optional | `linear.task_labels` |
 | an `Agent` label group and one label per client, optional; set both or neither | `linear.agent_label_group`, `linear.agent_labels` |
-| one member account per role, a plus-alias such as `you+pm@example.com` | `linear.roles.researcher.account`, `linear.roles.pm.account`, `linear.roles.engineer.account` |
+| one OAuth app per role, Client credentials on, Public and Webhooks off, access restricted to the team | `linear.roles.<role>.client_id`, `secret_service`, `token_service`, `user_id` |
 | the humans subscribed on In Review | `linear.human_members` |
 | the Linear project of each product repo, optional | `linear.project_repos` |
 | — (local clones of target repos, optional) | `local_clones` |
 | the harness's OAuth app (below): its Client ID, its client secret's and token's Keychain items, its Linear user id | `linear.harness.client_id`, `linear.harness.secret_service`, `linear.harness.token_service`, `linear.harness.user_id` |
 | the manager's API key, of an account neither the harness nor a role (yours, or one more member), a Keychain item (below) | `linear.manager_key` |
-| each role account's API key, a Keychain item (below) | `linear.roles.researcher.key`, `linear.roles.pm.key`, `linear.roles.engineer.key` |
 
 The harness app:
 
@@ -281,22 +292,16 @@ The harness app:
    security add-generic-password -s <linear.harness.secret_service> -a <linear.harness.secret_service> -w
    ```
 
-3. Its Linear user id → `linear.harness.user_id`; the first command as the harness requests and stores its token.
+3. Its Linear user id → `linear.harness.user_id`; when configuring by hand, the first non-dry command as the harness
+   requests and stores its token. The installer obtains both the token and user id during setup.
 
-Keys, one per account:
+For each role app, use the same secret-storage steps as the harness with its role table's service
+names. Fill `user_id` from the app's viewer during setup; runtime commands do not fetch it. The first
+non-dry call requests its token. The manager still uses its separate `linear.manager_key` until its
+integration migration lands; store that account's personal key in its configured service.
 
-1. Linear › Settings › Members: invite each role account; open the invite in a private window and choose
-   **Continue with email**.
-2. As each role account and the manager's, create a personal API key in Settings › Account › Security & Access,
-   limited to the team ([Linear API keys]).
-3. Store each in the login keychain, then paste the key (nothing echoes):
-
-   ```sh
-   security add-generic-password -s <linear.roles.<role>.key> -a <linear.roles.<role>.account> -w   # each role
-   security add-generic-password -s <linear.manager_key> -a <manager account> -w
-   ```
-
-4. `bin/ensemble-orchestrator router --dry-run` and `bin/ensemble-orchestrator promote --dry-run` report no config error.
+`bin/ensemble-orchestrator router --dry-run` and `bin/ensemble-orchestrator promote --dry-run` should
+report no configuration error once every app has a usable token.
 
 ## Live checks
 

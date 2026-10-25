@@ -11,6 +11,7 @@ import threading
 import time
 import tomllib
 from collections import namedtuple
+from datetime import UTC, datetime
 from pathlib import Path
 
 from ensemble.orchestrator.engine import config as orchestrator_config
@@ -156,6 +157,22 @@ def uuid(n):
     return f"00000000-0000-4000-8000-{n:012d}"
 
 
+def app_config(slot):
+    return {
+        "client_id": f"client-{slot}",
+        "secret_service": f"linear-app-{slot}-secret",
+        "token_service": f"linear-app-{slot}-token",
+        "user_id": uuid(100 + (*SLOTS, "reviewer").index(slot)),
+    }
+
+
+def app_table(slot):
+    table = "harness" if slot == "harness" else f"roles.{slot}"
+    return f"\n[orchestrator.linear.{table}]\n" + "".join(
+        f'{key} = "{value}"\n' for key, value in app_config(slot).items()
+    )
+
+
 def label(n, name, parent=None):
     return {
         "id": uuid(n),
@@ -166,7 +183,16 @@ def label(n, name, parent=None):
 
 
 LINEAR = {
-    "keys": {f"k-SENTINEL-{slot}": f"{slot}@example.com" for slot in SLOTS},
+    "keys": {"k-SENTINEL-manager": "manager@example.com"},
+    "apps": {
+        f"client-{slot}": {
+            "secret": f"k-SENTINEL-{slot}",
+            "access_token": f"t-SENTINEL-{slot}",
+            "user_id": app_config(slot)["user_id"],
+        }
+        for slot in (*SLOTS, "reviewer")
+        if slot != "manager"
+    },
     "teams": [
         {
             "id": uuid(1),
@@ -174,11 +200,6 @@ LINEAR = {
             "name": "Engineering",
             "states": [{"id": uuid(10 + i), "name": name} for i, name in enumerate(STATES)],
             "members": [
-                *(
-                    {"email": f"{slot}@example.com", "active": True}
-                    for slot in SLOTS
-                    if slot != "manager"
-                ),
                 {"email": "me@example.com", "active": True},
                 {"email": "gone@example.com", "active": False},
             ],
@@ -201,17 +222,10 @@ BOARD = ((PROJECT_Q, "acme/widget"), *DOCS, (WRITE_Q, "y"), (WRITE_Q, "y"))
 STATE_KEYS = ("backlog", "todo", "in_progress", "in_review", "handoff", "done", "canceled")
 HAND_CONFIG = (
     f'[orchestrator]\ntracker = "linear"\n\n[orchestrator.linear]\nteam = "{uuid(1)}"\n'
-    f'harness_key = "linear-harness"\nmanager_key = "linear-manager"\ntask_label_group = "{uuid(40)}"\n\n'
+    f'manager_key = "linear-manager"\ntask_label_group = "{uuid(40)}"\n\n'
     "[orchestrator.linear.states]\n"
     + "".join(f'{key} = "{uuid(10 + i)}"\n' for i, key in enumerate(STATE_KEYS))
-    + "".join(
-        f'\n[orchestrator.linear.roles.{role}]\naccount = "{account}"\nkey = "linear-{role}"\n'
-        for role, account in (
-            ("researcher", "researcher@example.com"),
-            ("pm", "me+pm@example.com"),
-            ("engineer", "engineer@example.com"),
-        )
-    )
+    + "".join(app_table(slot) for slot in SLOTS if slot != "manager")
     + "".join(
         f'\n[delegate.roles.{role}.output]\ntype = "github"\nrepo = "acme/docs"\nbranch = "main"\ndir = "{d}"\n'
         for role, d in (("researcher", "Research/"), ("pm", "Product Design/"))
@@ -310,6 +324,11 @@ class InstallTest(Case):
         (self.fakes / "commit").write_text(OLD)
         (self.root / "dev").mkdir(parents=True)
         self.pkg_src = self.fakes / "pkg-src"
+        (self.pkg_src / "scripts").mkdir(parents=True)
+        shutil.copyfile(
+            Path(REPO, "scripts/install_linear_app.py"),
+            self.pkg_src / "scripts/install_linear_app.py",
+        )
         executable(self.pkg_src / "broker/install.sh", BROKER_INSTALL)
         self.versions = self.pkg_src / "broker/internal/codex/versions.go"
         self.versions.parent.mkdir(parents=True)
@@ -476,9 +495,24 @@ class InstallTest(Case):
         """The fake Linear workspace: LINEAR with `changes`."""
         (self.fakes / "linear.json").write_text(json.dumps({**LINEAR, **changes}))
 
-    def keys(self, *slots):
-        """The answers pasting each slot's key at security's prompt."""
-        return [(KEY_Q, f"k-SENTINEL-{slot}") for slot in slots]
+    def keys(self, *slots, config=None):
+        """Hidden credentials, then each missing public OAuth Client ID."""
+        if config is None:
+            config = self.config().read_text() if self.config().exists() else ""
+        data = tomllib.loads(config)
+        linear = data.get("orchestrator", {}).get("linear", {})
+        answers = []
+        for slot in slots:
+            answers.append((KEY_Q, f"k-SENTINEL-{slot}"))
+            if slot != "manager":
+                app = (
+                    linear.get("harness", {})
+                    if slot == "harness"
+                    else linear.get("roles", {}).get(slot, {})
+                )
+                if not app.get("client_id"):
+                    answers.append((f"Linear OAuth Client ID for {slot}:", f"client-{slot}"))
+        return answers
 
     def configured(self, text, then=(), board="linear"):
         """A first run with Board ticked over a config.local.toml of `text` that already has the
@@ -714,7 +748,7 @@ class InstallTest(Case):
         )
         self.assertIn("  [ ] Board: local or Linear", result.tty)
         self.assertIn("==> board launchd jobs\n    skip: board not chosen", result.stderr)
-        self.assertIn("==> Linear keys\n    skip: board not chosen", result.stderr)
+        self.assertIn("==> Linear credentials\n    skip: board not chosen", result.stderr)
 
     def test_checklist_skipped_by_flags(self):
         result = self.fresh("--clients", "claude", "--no-docker", "--no-board")
@@ -2495,11 +2529,21 @@ exec /bin/rm "$@"
             answers=[*self.keys("harness", "researcher", "pm", "engineer"), (WRITE_Q, "y")],
         )
         self.assert_ok(result)
-        self.assertEqual((self.fakes / "keychain/linear-harness").read_text(), "k-SENTINEL-harness")
-        self.assertEqual((self.fakes / "keychain/linear-pm").read_text(), "k-SENTINEL-pm")
+        self.assertEqual(
+            (self.fakes / "keychain/linear-app-harness-secret").read_text(), "k-SENTINEL-harness"
+        )
+        self.assertEqual(
+            (self.fakes / "keychain/linear-app-pm-secret").read_text(), "k-SENTINEL-pm"
+        )
         calls = self.calls()
-        self.assertIn("security add-generic-password -s linear-pm -a me+pm@example.com -w", calls)
-        self.assertIn("security add-generic-password -s linear-harness -a linear-harness -w", calls)
+        self.assertIn(
+            "security add-generic-password -s linear-app-pm-secret -a linear-app-pm-secret -w",
+            calls,
+        )
+        self.assertIn(
+            "security add-generic-password -s linear-app-harness-secret -a linear-app-harness-secret -w",
+            calls,
+        )
         self.assertIn("skip: linear-manager in the keychain", result.stderr)
         self.assertIn(
             "==> linear board configuration\n    skip: has the Linear board configuration",
@@ -2522,7 +2566,7 @@ exec /bin/rm "$@"
                 f"launchctl bootstrap gui/501 {agents}/com.windroc.ensemble.{job}.plist", calls
             )
         self.assertTrue(Path(self.ensemble, "logs").is_dir())
-        self.assert_secret_free("k-SENTINEL", result=result)
+        self.assert_secret_free("k-SENTINEL", "t-SENTINEL", result=result)
         result = self.again()
         self.assert_ok(result)
         self.assertNotIn("exists; remove it", result.stderr)
@@ -2543,20 +2587,45 @@ exec /bin/rm "$@"
         result = self.fresh("--board", "linear", "--launchd", then=[*self.keys(*SLOTS), *BOARD])
         self.assert_ok(result)
         for slot in SLOTS:
+            if slot == "manager":
+                self.assertEqual(
+                    (self.fakes / "keychain/linear-manager").read_text(), "k-SENTINEL-manager"
+                )
+                continue
             self.assertEqual(
-                (self.fakes / f"keychain/linear-{slot}").read_text(), f"k-SENTINEL-{slot}"
+                (self.fakes / f"keychain/linear-app-{slot}-secret").read_text(),
+                f"k-SENTINEL-{slot}",
             )
+            held = json.loads((self.fakes / f"keychain/linear-app-{slot}-token").read_text())
+            self.assertEqual(held["access_token"], f"t-SENTINEL-{slot}")
+            self.assertGreater(datetime.fromisoformat(held["expires_at"]), datetime.now(UTC))
+            for kind in ("secret", "token"):
+                self.assertIn(
+                    f"keychain\tlinear-app-{slot}-{kind}\tlinear-app-{slot}-{kind}", self.ledger()
+                )
         calls = self.calls()
-        self.assertIn("security add-generic-password -s linear-pm -a linear-pm -w", calls)
         self.assertIn(
-            "Linear key linear-pm (pm account): paste its API key at security's prompt (nothing echoes)",
+            "security add-generic-password -s linear-app-pm-secret -a linear-app-pm-secret -w",
+            calls,
+        )
+        self.assertIn(
+            "Linear app pm: paste its client secret at security's prompt (nothing echoes)",
             result.stderr,
         )
         viewers = [c for c in calls if c.startswith("curl -q ") and "viewer" in c]
-        self.assertEqual(len(viewers), 2 * len(SLOTS))  # each new key's check, then the plan's
-        self.assertIn("keychain\tlinear-pm\tlinear-pm", self.ledger())
-        self.assert_secret_free("k-SENTINEL", result=result)
+        self.assertEqual(
+            len(viewers), len(SLOTS) + 1
+        )  # app ids; the manager's new key and plan check
+        tokens = [
+            c
+            for c in calls
+            if c.startswith("curl -q ") and c.endswith("https://api.linear.app/oauth/token")
+        ]
+        self.assertEqual(len(tokens), len(SLOTS) - 1)
+        self.assertIn("keychain\tlinear-manager\tlinear-manager", self.ledger())
+        self.assert_secret_free("k-SENTINEL", "t-SENTINEL", result=result)
         self.assertNotIn("k-SENTINEL", result.tty)
+        self.assertNotIn("t-SENTINEL", result.tty)
 
     def test_board_refused_key_is_deleted(self):
         self.linear()
@@ -2564,17 +2633,23 @@ exec /bin/rm "$@"
             "--board",
             "linear",
             "--launchd",
-            then=[*self.keys("harness", "manager"), (KEY_Q, "k-SENTINEL-wrong")],
+            then=[
+                *self.keys("harness", "manager"),
+                (KEY_Q, "k-SENTINEL-wrong"),
+                ("Linear OAuth Client ID for researcher:", "client-researcher"),
+            ],
         )
         self.assertNotEqual(result.code, 0)
         self.assertIn(
-            "Linear refused the key in linear-researcher, or cannot be reached: rerun to paste it again",
+            "install.sh: Linear researcher: token request failed",
             result.stderr,
         )
-        self.assertFalse((self.fakes / "keychain/linear-researcher").exists())
+        self.assertFalse((self.fakes / "keychain/linear-app-researcher-secret").exists())
+        self.assertFalse((self.fakes / "keychain/linear-app-researcher-token").exists())
         self.assertTrue((self.fakes / "keychain/linear-manager").exists())
-        self.assert_secret_free("k-SENTINEL", result=result)
+        self.assert_secret_free("k-SENTINEL", "t-SENTINEL", result=result)
         self.assertNotIn("k-SENTINEL", result.tty)
+        self.assertNotIn("t-SENTINEL", result.tty)
 
     def assert_no_linear(self, result, *, keychain=True):
         self.assertNotRegex(result.tty, KEY_Q)
@@ -2739,9 +2814,15 @@ exec /bin/rm "$@"
 
     def test_board_switch_from_local_to_linear(self):
         self.linear()
+        existing = HAND_CONFIG.replace('tracker = "linear"', 'tracker = "local"')
         result = self.configured(
-            HAND_CONFIG.replace('tracker = "linear"', 'tracker = "local"'),
-            then=[*self.keys(*SLOTS), (PROJECT_Q, "acme/widget"), (WRITE_Q, "y"), (WRITE_Q, "y")],
+            existing,
+            then=[
+                *self.keys(*SLOTS, config=existing),
+                (PROJECT_Q, "acme/widget"),
+                (WRITE_Q, "y"),
+                (WRITE_Q, "y"),
+            ],
         )
         self.assert_ok(result)
         self.assertEqual(
@@ -2749,7 +2830,7 @@ exec /bin/rm "$@"
         )
         orchestrator_config.load()
         self.assert_jobs(installed=True)
-        self.assert_secret_free("k-SENTINEL", result=result)
+        self.assert_secret_free("k-SENTINEL", "t-SENTINEL", result=result)
 
     def test_board_local_initialization_declined(self):
         result = self.fresh(
@@ -2855,11 +2936,13 @@ exec /bin/rm "$@"
         runtime = board / ".state/router.json"
         runtime.parent.mkdir()
         runtime.write_text("{}")
-        key = self.fakes / "keychain/linear-pm"
+        key = self.fakes / "keychain/linear-app-pm-secret"
         key.parent.mkdir(exist_ok=True)
         key.write_text("fake key")
         ledger = Path(self.ensemble, "install/added")
-        ledger.write_text(ledger.read_text() + "keychain\tlinear-pm\tlinear-pm\n")
+        ledger.write_text(
+            ledger.read_text() + "keychain\tlinear-app-pm-secret\tlinear-app-pm-secret\n"
+        )
         self.assertIn(f"board-dir\t{board}", self.ledger())
         self.assertIn(f"dir\t{self.ensemble}/bin", self.ledger())
         self.assertIn(f"dir\t{self.ensemble}/logs", self.ledger())
@@ -2870,7 +2953,10 @@ exec /bin/rm "$@"
         for directory in (board, data.parent):
             self.assertEqual(result.stderr.count(f"kept {directory}: not empty"), 1)
         self.assertFalse(key.exists())
-        self.assertIn("security delete-generic-password -s linear-pm -a linear-pm", self.calls())
+        self.assertIn(
+            "security delete-generic-password -s linear-app-pm-secret -a linear-app-pm-secret",
+            self.calls(),
+        )
         self.assertIn("claude plugin uninstall ensemble@windroc", self.calls())
         self.assertFalse(self.config().exists())
         self.assertEqual(self.ledger(), [f"dir\t{self.ensemble}"])
@@ -2929,7 +3015,7 @@ exec /bin/rm "$@"
         )
         orchestrator_config.load()
         self.assert_jobs(installed=False)
-        self.assert_secret_free("k-SENTINEL", result=result)
+        self.assert_secret_free("k-SENTINEL", "t-SENTINEL", result=result)
         result = self.again()
         self.assert_ok(result)
         self.assert_jobs(installed=False)
@@ -2999,7 +3085,7 @@ exec /bin/rm "$@"
         )
         orchestrator_config.load()
         self.assert_jobs(installed=True)
-        self.assert_secret_free("k-SENTINEL", result=result)
+        self.assert_secret_free("k-SENTINEL", "t-SENTINEL", result=result)
         result = self.again()
         self.assert_ok(result)
         self.assertNotIn("Board tracker [local/linear]", result.tty)
@@ -3136,7 +3222,6 @@ exec /bin/rm "$@"
 
     def test_board_custom_workflow_roles(self):
         self.linear(
-            keys={**LINEAR["keys"], "k-SENTINEL-reviewer": "reviewer@example.com"},
             labels=[*LINEAR["labels"], label(46, "foreign-task", 40)],
         )
         Path(self.home, "wf.toml").write_text(
@@ -3152,21 +3237,18 @@ exec /bin/rm "$@"
         )
         self.assert_ok(result)
         self.assertEqual(
-            (self.fakes / "keychain/linear-reviewer").read_text(), "k-SENTINEL-reviewer"
+            (self.fakes / "keychain/linear-app-reviewer-secret").read_text(), "k-SENTINEL-reviewer"
         )
-        self.assertFalse([c for c in self.calls() if "linear-pm" in c])
+        self.assertFalse([c for c in self.calls() if "linear-app-pm" in c])
         roles = self.board_config()["roles"]
         self.assertEqual(sorted(roles), ["engineer", "researcher", "reviewer"])
-        self.assertEqual(
-            roles["reviewer"], {"account": "reviewer@example.com", "key": "linear-reviewer"}
-        )
+        self.assertEqual(roles["reviewer"], app_config("reviewer"))
         self.assertEqual(
             self.board_config()["task_labels"], {"build": uuid(41), "light-build": uuid(42)}
         )
 
     def test_board_tasks_from_team_dirs_charter(self):
         self.linear(
-            keys={**LINEAR["keys"], "k-SENTINEL-reviewer": "reviewer@example.com"},
             labels=[*LINEAR["labels"], label(46, "triage", 40)],
         )
         team = Path(self.home, "custom-team")
@@ -3205,7 +3287,7 @@ exec /bin/rm "$@"
         self.assertIn(f"install.sh: {said}", result.stderr)
         self.assertNotIn("[orchestrator", self.config().read_text())
         self.assertFalse([c for c in self.calls() if c.startswith("launchctl")])
-        self.assert_secret_free("k-SENTINEL", result=result)
+        self.assert_secret_free("k-SENTINEL", "t-SENTINEL", result=result)
 
     def test_board_fresh_install(self):
         """Keys, the config from Linear (shown before writing) and the jobs; a rerun redoes none of it."""
@@ -3221,13 +3303,13 @@ exec /bin/rm "$@"
         self.assertEqual(linear["task_labels"], {"build": uuid(41), "light-build": uuid(42)})
         self.assertEqual(linear["agent_label_group"], uuid(43))
         self.assertEqual(linear["agent_labels"], {"claude": uuid(44)})
-        self.assertEqual(
-            (linear["harness_key"], linear["manager_key"]), ("linear-harness", "linear-manager")
-        )
+        self.assertEqual(linear["harness"], app_config("harness"))
+        self.assertEqual(linear["manager_key"], "linear-manager")
+        self.assertNotIn("harness_key", linear)
         self.assertEqual(linear["human_members"], ["me@example.com"])
         self.assertEqual(
             linear["roles"],
-            {r: {"account": f"{r}@example.com", "key": f"linear-{r}"} for r in SLOTS[2:]},
+            {r: app_config(r) for r in SLOTS[2:]},
         )
         self.assertEqual(linear["project_repos"], {uuid(30): "acme/widget"})
         self.assertIn(
@@ -3249,13 +3331,15 @@ exec /bin/rm "$@"
                 f"launchctl bootstrap gui/501 {agents}/com.windroc.ensemble.{job}.plist",
                 self.calls(),
             )
-        self.assert_secret_free("k-SENTINEL", result=result)
+        self.assert_secret_free("k-SENTINEL", "t-SENTINEL", result=result)
         self.assertNotIn("k-SENTINEL", result.tty)
+        self.assertNotIn("t-SENTINEL", result.tty)
         config = self.config().read_text()
         result = self.again()
         self.assert_ok(result)
         for slot in SLOTS:
-            self.assertIn(f"skip: linear-{slot} in the keychain", result.stderr)
+            service = "linear-manager" if slot == "manager" else f"linear-app-{slot}-secret"
+            self.assertIn(f"skip: {service} in the keychain", result.stderr)
         for said in ("has the Linear board configuration", "router installed", "promote installed"):
             self.assertIn(f"skip: {said}", result.stderr)
         changing = ("curl -q", "security add", "launchctl")
@@ -3277,14 +3361,17 @@ exec /bin/rm "$@"
     def test_board_fills_only_missing(self):
         self.linear()
         mine = (
-            f'[orchestrator.linear]\nteam = "{uuid(1)}"\nharness_key = "my-harness"\n\n'
+            f'[orchestrator.linear]\nteam = "{uuid(1)}"\n\n'
+            '[orchestrator.linear.harness]\nsecret_service = "my-harness"\n\n'
             f'[orchestrator.linear.task_labels]\nbuild = "{uuid(99)}"\n'
         )
         result = self.configured(mine, then=[*self.keys(*SLOTS), *BOARD])
         self.assert_ok(result)
         self.assertEqual((self.fakes / "keychain/my-harness").read_text(), "k-SENTINEL-harness")
         linear = self.board_config()
-        self.assertEqual((linear["team"], linear["harness_key"]), (uuid(1), "my-harness"))
+        self.assertEqual(
+            (linear["team"], linear["harness"]["secret_service"]), (uuid(1), "my-harness")
+        )
         self.assertEqual(linear["task_labels"], {"build": uuid(99), "light-build": uuid(42)})
         self.assertFalse([c for c in self.calls() if "teams(" in c])
 
@@ -3329,22 +3416,37 @@ exec /bin/rm "$@"
         )
 
     def test_board_same_account_stops(self):
-        self.linear(keys={**LINEAR["keys"], "k-SENTINEL-pm": "researcher@example.com"})
-        result = self.fresh("--board", "linear", "--launchd", then=self.keys(*SLOTS))
+        self.linear(
+            apps={
+                **LINEAR["apps"],
+                "client-pm": {
+                    **LINEAR["apps"]["client-pm"],
+                    "user_id": app_config("researcher")["user_id"],
+                },
+            }
+        )
+        result = self.fresh("--board", "linear", "--launchd", then=self.keys(*SLOTS[:-1]))
         self.assert_board_stopped(
-            result, "the keys in linear-researcher and linear-pm are the same Linear account"
+            result, "Linear pm: the apps for researcher and pm are the same Linear app"
         )
 
     def test_board_existing_bad_key_kept(self):
         (self.fakes / "keychain").mkdir()
-        (self.fakes / "keychain/linear-harness").write_text("k-SENTINEL-stale")
+        (self.fakes / "keychain/linear-app-harness-secret").write_text("k-SENTINEL-stale")
         self.linear()
-        result = self.fresh("--board", "linear", "--launchd", then=self.keys(*SLOTS[1:]))
+        result = self.fresh(
+            "--board",
+            "linear",
+            "--launchd",
+            then=[("Linear OAuth Client ID for harness:", "client-harness")],
+        )
         self.assert_board_stopped(
             result,
-            "Linear refused the key in linear-harness, or cannot be reached: fix that keychain item, then rerun",
+            "Linear harness: token request failed",
         )
-        self.assertEqual((self.fakes / "keychain/linear-harness").read_text(), "k-SENTINEL-stale")
+        self.assertEqual(
+            (self.fakes / "keychain/linear-app-harness-secret").read_text(), "k-SENTINEL-stale"
+        )
 
     def test_board_hostile_linear_names_stop(self):
         """Linear's strings are checked before they reach the terminal or the config."""
@@ -3355,7 +3457,13 @@ exec /bin/rm "$@"
         self.assert_board_stopped(result, f"Linear returned an invalid project name ({uuid(30)})")
         members = [*team["members"], {"email": "x\x1b[2J@example.com", "active": True}]
         self.linear(teams=[{**team, "members": members}])
-        again = self.again()
+        again = self.again(
+            answers=[
+                (f"Linear OAuth Client ID for {slot}:", f"client-{slot}")
+                for slot in SLOTS
+                if slot != "manager"
+            ]
+        )
         self.assert_board_stopped(again, "Linear returned an invalid member email")
         for text in (result.stdout, result.stderr, result.tty, again.stderr, again.tty):
             self.assertNotIn("\x1b]52", text)
@@ -3823,7 +3931,7 @@ exec /bin/rm "$@"
         first = self.run_calls()
         linear = (
             '\n[orchestrator]\ntracker = "linear"\n\n[orchestrator.linear]\n'
-            'harness_key = "linear-harness"\nmanager_key = "linear-manager"\n'
+            'manager_key = "linear-manager"\n'
         )
         self.config().write_text(self.config().read_text() + linear)
         self.linear()

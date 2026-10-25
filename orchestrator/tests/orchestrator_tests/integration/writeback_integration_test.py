@@ -10,7 +10,6 @@ import subprocess
 import unittest
 
 from ensemble.orchestrator.engine import runs
-from ensemble.orchestrator.trackers.linear import ops
 from orchestrator_tests.case import PY
 from orchestrator_tests.integration.flow_fixtures import (
     ACCOUNTS,
@@ -20,6 +19,7 @@ from orchestrator_tests.integration.flow_fixtures import (
     TIMEOUT,
     Flow,
 )
+from orchestrator_tests.unit.board_ids import comment_id
 from orchestrator_tests.unit.run_fixtures import ID, SESSION, SID, UUID
 from orchestrator_tests.unit.writeback_fixtures import DOC
 
@@ -88,7 +88,7 @@ class BegunAndProgress(Writeback):
         researcher = ACCOUNTS["researcher"]
         self.assertEqual(
             self.stored(),
-            [(HARNESS_EMAIL, SESSION), (researcher, ops.client_id(SID, "start"))],
+            [(HARNESS_EMAIL, SESSION), (researcher, comment_id("researcher", SID, "start"))],
         )
         self.assertEqual(self.comments(ID)[-1], (researcher, f"Research started: {PICK}"))
         self.assertEqual(self.ledger(ID), {SID: ["running:1", "start"]})
@@ -101,10 +101,12 @@ class BegunAndProgress(Writeback):
             ],
         )
 
-    def test_a_changed_role_account_does_not_move_a_running_claim(self):
-        self.claim(key=KEYS["pm"])
+    def test_an_old_start_row_key_writes_as_the_current_role_app(self):
+        self.claim(key="deleted-member-key")
         self.ok("progress", name="start", text=PICK)
-        self.assertEqual(self.stored(), [(ACCOUNTS["pm"], ops.client_id(SID, "start"))])
+        self.assertEqual(
+            self.stored(), [(ACCOUNTS["researcher"], comment_id("researcher", SID, "start"))]
+        )
 
     def test_no_start_row_exits_2_and_writes_nothing(self):
         res = self.feed("begun")
@@ -135,7 +137,7 @@ class Finished(Writeback):
         researcher = ACCOUNTS["researcher"]
         self.assertEqual(
             self.stored(),
-            [(HARNESS_EMAIL, SESSION), (researcher, ops.client_id(SID, "comment"))],
+            [(HARNESS_EMAIL, SESSION), (researcher, comment_id("researcher", SID, "comment"))],
         )
         self.assertEqual(self.comments(ID)[-1], (researcher, f"Three queues compared.\n\n{DOC}"))
         [session] = [b for _, b in self.comments(ID) if b.startswith(f"Run {SID}")]
@@ -209,7 +211,7 @@ class Limit(Writeback):
         )
         self.assertEqual(
             self.stored(),
-            [(HARNESS_EMAIL, SESSION), (researcher, ops.client_id(SID, "limit"))],
+            [(HARNESS_EMAIL, SESSION), (researcher, comment_id("researcher", SID, "limit"))],
         )
         self.assertEqual(self.limit_rows(), [row, {**row, "attempt": 2}])
 

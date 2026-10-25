@@ -9,6 +9,7 @@ import io
 import json
 import os
 import re
+import tempfile
 import urllib.error
 import urllib.request
 import uuid
@@ -85,9 +86,10 @@ from orchestrator_tests.router_fixtures import (
     pr_search,
     who,
 )
-from orchestrator_tests.unit.board_ids import HARNESS_IDENTITY, HEADER, TASK_GROUP, TEAM
+from orchestrator_tests.unit.board_ids import HARNESS_IDENTITY, HEADER, TASK_GROUP, TEAM, role_id
 from orchestrator_tests.unit.board_ids import STATES as IDS_BY_KEY
 from orchestrator_tests.unit.board_ids import role as role_table
+from orchestrator_tests.unit.clock import logs_at
 from orchestrator_tests.unit.delegate_fixture import provider
 from orchestrator_tests.unit.keychain_fixtures import SECRET as APP_SECRET
 from orchestrator_tests.unit.keychain_fixtures import Endpoint, Keychain, record, token_http_error
@@ -373,7 +375,7 @@ class IssueClaims(Base):
         flt = next(v["f"] for q, v in fake.queries if "issues(filter" in q)
         self.assertEqual(
             (flt["team"], flt["project"], sorted(flt["assignee"]["id"]["in"])),
-            ({"id": {"eq": TEAM}}, {"null": False}, sorted(f"u-{r}" for r in ROLE)),
+            ({"id": {"eq": TEAM}}, {"null": False}, sorted(role_id(r) for r in ROLE)),
         )
 
     def test_claim_only_moves_to_in_progress(self):
@@ -408,7 +410,7 @@ class IssueClaims(Base):
             (fake.issues["TASK-1"]["state"], "comments" in fake.issues["TASK-1"]), ("Todo", False)
         )
         flt = next(v["f"] for q, v in fake.queries if "issues(filter" in q)
-        self.assertEqual(sorted(flt["assignee"]["id"]["in"]), sorted(f"u-{r}" for r in ROLE))
+        self.assertEqual(sorted(flt["assignee"]["id"]["in"]), sorted(role_id(r) for r in ROLE))
 
     def test_capped_todo_goes_to_review(self):
         self.write_config(HUMANS + CONFIG)
@@ -737,8 +739,8 @@ class RouterEntry(OuterBase):
                 self.assertEqual(self.detached(), self.expected(sid=sid))
                 row = json.loads(self.state.splitlines()[-1])
                 self.assertEqual(
-                    [row[k] for k in ("uuid", "project", "target", "key", "delegate_kind")],
-                    [UUID, PROJECT, "Acme/Ensemble", KEY, "harness"],
+                    [row[k] for k in ("uuid", "project", "target", "delegate_kind")],
+                    [UUID, PROJECT, "Acme/Ensemble", "harness"],
                 )
                 self.assertEqual(
                     self.said()[-2 - len(said) :],
@@ -2361,6 +2363,127 @@ class LocalBoard(TickBase):
         self.connects.append(cfg.tracker)
         return BrokenBoard()
 
+    def reassigned_run(self, pm_client="a"):
+        self.write_config(
+            LOCAL.replace(
+                OVERLAY, f'[core]\nclient = "a"\n[core.roles.pm]\nclient = "{pm_client}"\n'
+            )
+        )
+        board = tempfile.mkdtemp(dir=self.tmp)
+        os.environ[config.BOARD_ENV] = board
+        original = os.path.join(board, "researcher", "running", "LOC-1 Reassigned.md")
+        current = os.path.join(board, "pm", "running", "LOC-1 Reassigned.md")
+        self.write(
+            original,
+            "---\nid: LOC-1\ntitle: Reassigned\ncreated: 2026-09-01T00:00:00Z\ntask: product-design\n---\n### Description\nWrite the design.\n",
+        )
+        os.makedirs(os.path.dirname(current), exist_ok=True)
+        os.replace(original, current)
+        moved = (NOW - timedelta(minutes=61)).timestamp()
+        os.utime(current, (moved, moved))
+        cfg, sid = self.cfg(), self.sid("reassigned")
+        self.write(cfg.runs_log, "")
+        runs.note(
+            cfg.runs_log,
+            "start",
+            now=lambda: NOW - timedelta(minutes=60),
+            issue="LOC-1",
+            sid=sid,
+            role="researcher",
+            client="a",
+            delegate_kind="harness",
+            uuid="LOC-1",
+            project=None,
+            target=None,
+        )
+        self.api.records[sid] = {"cwd": cfg.issue_workdir("LOC-1")}
+        self.api.statuses[sid] = SessionStatus(
+            "yes", (NOW - timedelta(minutes=40)).timestamp(), "resume reassigned"
+        )
+        return cfg, sid
+
+    def test_reassigned_local_resumption_uses_current_role_task_and_client(self):
+        for pm_client in ("a", "b"):
+            with self.subTest(pm_client=pm_client):
+                cfg, sid = self.reassigned_run(pm_client)
+                board = router.Board(
+                    None,
+                    runs.parse_log(cfg.runs_log),
+                    cfg,
+                    now=NOW,
+                    dry=False,
+                    keychain=self.keychain,
+                    wiring=cli.TRACKERS[TrackerKind.LOCAL],
+                )
+                [issue] = board.tracker.assigned(IssueState.RUNNING)
+                spec = board.resumption(issue, sid, self.sid("fresh"))
+                self.assertEqual((spec.role, spec.client), ("pm", pm_client))
+                self.assertEqual(
+                    (spec.mode, spec.task),
+                    ("resume", None) if pm_client == "a" else ("new", "product-design"),
+                )
+
+    def test_reassigned_local_outer_keeps_current_role_and_prompt(self):
+        cfg, sid = self.reassigned_run()
+        wiring = cli.TRACKERS[TrackerKind.LOCAL]
+        [issue] = wiring.connect(None, cfg).assigned(IssueState.RUNNING)
+        spec = Spec.from_issue(issue, role="pm", mode="resume", sid=sid, task=None, client="a")
+        with logs_at(cfg.logs_dir):
+            self.assertEqual(
+                router.outer(
+                    spec,
+                    cfg,
+                    gql=None,
+                    run=mock.Mock(return_value=ok("[]")),
+                    keychain=self.keychain,
+                    wiring=wiring,
+                    now=lambda: NOW,
+                ),
+                0,
+            )
+        role, launched, _ = self.api.detached[-1]
+        self.assertEqual(
+            (role, launched.client, launched.sid, launched.resume), ("pm", "a", sid, True)
+        )
+        self.assertIn("## Brief\n\nReassigned\n\nWrite the design.", launched.input)
+        self.assertNotIn("## Question", launched.input)
+        self.assertEqual(runs.parse_log(cfg.runs_log)[-1].role, "pm")
+        self.assertEqual(self.keychain_calls, [])
+
+    def test_local_recovery_keeps_reassignment_guard_without_app_preflight(self):
+        for explicit in (False, True):
+            with self.subTest(explicit=explicit):
+                cfg, _ = self.reassigned_run()
+                identity = mock.Mock(side_effect=AssertionError("local recovery read app identity"))
+                wiring = replace(cli.TRACKERS[TrackerKind.LOCAL], identity=identity)
+                with logs_at(cfg.logs_dir):
+                    if explicit:
+                        self.assertEqual(
+                            router.run_issue(
+                                {"issue": "LOC-1", "dry": False},
+                                cfg,
+                                None,
+                                Start(),
+                                keychain=self.keychain,
+                                wiring=wiring,
+                                clock=lambda: NOW,
+                            ),
+                            2,
+                        )
+                    else:
+                        board = router.Board(
+                            None,
+                            runs.parse_log(cfg.runs_log),
+                            cfg,
+                            now=NOW,
+                            dry=False,
+                            keychain=self.keychain,
+                            wiring=wiring,
+                        )
+                        self.assertEqual(board.recover(), [])
+                identity.assert_not_called()
+                self.assertEqual(wiring.reader(None, cfg).read("LOC-1").state, IssueState.REVIEW)
+
     def test_cycle_diagnostic_is_once_and_leaves_a_healthy_issue_schedulable(self):
         ready = os.path.join(self.tmp, "board", "researcher", "ready")
         os.makedirs(ready)
@@ -3211,6 +3334,22 @@ class ScheduledTaskSelection(TickBase):
 
 
 class RunLaunching(OuterBase):
+    def test_resume_keeps_recorded_role_and_current_app(self):
+        runs.note(
+            self.runs,
+            "start",
+            issue=ID,
+            sid=SID,
+            role="engineer",
+            client="a",
+            delegate_kind="harness",
+            key="deleted-member-key",
+        )
+        self.assertEqual(self.outer(mode="resume", role="pm"), 0)
+        self.assertEqual(self.detached(), self.expected(resume=True))
+        self.assertEqual(self.keychain_calls, [KEY])
+        self.assertEqual(runs.parse_log(self.runs)[-1].role, "engineer")
+
     """FR-45, FR-47's resume check: the outer reads the issue, checks its repo, renders its input,
     records the run and detaches its LinearRun (FR-25).
     """
@@ -3295,7 +3434,6 @@ class RunLaunching(OuterBase):
                 "uuid": UUID,
                 "project": PROJECT,
                 "target": "Acme/Ensemble",
-                "key": KEY,
                 "task": None,
             },
         )
@@ -3473,7 +3611,7 @@ class RunLaunching(OuterBase):
             ),
         ):
             with self.subTest(reason=reason):
-                self.assertEqual(self.outer(mode="resume", **kw), 2)
+                self.assertEqual(self.outer(**kw), 2)
                 self.assertEqual(
                     (self.said(), self.err), ([f"config-error TASK-7 reason={reason}"], "")
                 )
@@ -3722,7 +3860,6 @@ class RunStartRecords(Base):
                     uuid=UUID,
                 ),
                 role="researcher",
-                key=cfg.linear.roles["researcher"].key,
                 target=None,
                 now=lambda: datetime.fromisoformat(stamp),
             )
@@ -3734,8 +3871,7 @@ class RunStartRecords(Base):
             '"delegate_kind": "harness"'
         )
         claim = (
-            f'"uuid": "{UUID}", "project": "{IDS[DR]}", "target": null, '
-            f'"key": "{cfg.linear.roles["researcher"].key}", "task": "light-research"'
+            f'"uuid": "{UUID}", "project": "{IDS[DR]}", "target": null, "task": "light-research"'
         )
         with open(cfg.runs_log) as f:
             self.assertEqual(
@@ -3744,9 +3880,7 @@ class RunStartRecords(Base):
                 f'{{"ts": "{stamp}", "kind": "resume", {common}}}\n',
             )
         self.assertEqual([e.kind for e in runs.parse_log(cfg.runs_log)], ["start", "resume"])
-        self.assertEqual(
-            runs.claim(cfg.runs_log, "TASK-1", "s1").key, cfg.linear.roles["researcher"].key
-        )
+        self.assertEqual(runs.claim(cfg.runs_log, "TASK-1", "s1").role, "researcher")
 
 
 class ExplicitIssueRuns(TickBase):
@@ -4663,7 +4797,7 @@ class RunPlanning(Base):
                     "self",
                     [
                         move(380, AGENT),
-                        move(375, "u-pm"),
+                        move(375, role_id("pm")),
                         move(372, None, "Done"),
                         move(371, None),
                         move(368, BOT),
@@ -5013,23 +5147,70 @@ class Picks(Base):
         )
 
 
-class RoleKeys(Base):
-    """A role with no key needs no Keychain item; pm's key here is empty."""
+class RoleAppTokens(TickBase):
+    def setUp(self):
+        super().setUp()
+        apps = self.cfg().linear.roles
+        self.items = Keychain(
+            {
+                **{a.token_service: record(days=10) for a in apps.values()},
+                **{a.secret_service: APP_SECRET for a in apps.values()},
+                apps["engineer"].token_service: record(days=-1),
+            }
+        )
+        self.endpoint = Endpoint(token_http_error(401))
+        self.keychain = client.has_key
+        self.enterContext(mock.patch("subprocess.run", self.items))
+        self.enterContext(mock.patch("urllib.request.urlopen", self.endpoint))
 
-    def cfg(self):
-        cfg = super().cfg()
-        roles = {**cfg.linear.roles, "pm": replace(cfg.linear.roles["pm"], key="")}
-        return replace(cfg, linear=replace(cfg.linear, roles=roles))
+    def test_expired_engineer_does_not_block_pm_claim(self):
+        fake = self.fake(
+            issue("TASK-1", "Todo", "engineer", priority=1),
+            issue("TASK-2", "Todo", "pm", priority=2),
+        )
+        self.assertEqual(self.tick(fake), 0)
+        self.assertEqual(self.launched(), "TASK-2")
+        self.assertTrue(any("config-error" in line and "engineer" in line for line in self.said()))
+        self.assertEqual(
+            [r["scope"] for r in self.endpoint.tokens],
+            ["read,write,app:assignable,app:mentionable"],
+        )
+
+    def test_expired_engineer_does_not_resume_or_block_pm(self):
+        self.resumable("TASK-1", "eng", 40, role="engineer")
+        fake = self.fake(issue("TASK-1", "In Progress", "engineer"), issue("TASK-2", "Todo", "pm"))
+        self.assertEqual(self.tick(fake), 0)
+        self.assertEqual(self.launched_runs(), [("TASK-2", "new")])
+
+    def test_explicit_engineer_reports_config_error(self):
+        fake = self.fake(issue("TASK-1", "Todo", "engineer"))
+        self.assertEqual(self.tick(fake, "--issue", "TASK-1"), 2)
+        self.assertEqual(self.start.launches, [])
+        self.assertTrue(any("config-error" in line and "engineer" in line for line in self.said()))
+
+    def test_dry_run_reports_expired_engineer_and_renews_none(self):
+        fake = self.fake(issue("TASK-1", "Todo", "engineer"), issue("TASK-2", "Todo", "pm"))
+        before = dict(self.items.items)
+        self.assertEqual(self.tick(fake, "--dry-run"), 0)
+        self.assertEqual(self.endpoint.tokens, [])
+        self.assertEqual(self.items.items, before)
+        self.assertTrue(
+            any("identity=engineer" in line and "expired" in line for line in self.said())
+        )
+
+
+class RoleKeys(Base):
+    """An unavailable app affects its role; a local tracker needs no credentials."""
 
     def test_the_keychain_is_checked_only_for_a_role_key(self):
-        key = self.cfg().linear.roles["researcher"].key
+        key = self.cfg().linear.roles["researcher"].token_service
         self.missing = {key, ""}
         self.assertEqual(self.claim(two()), f"TASK-2 https://linear.app/x/TASK-2 {PD}")
-        self.assertEqual(self.keychain_calls, [key])
+        self.assertEqual(self.keychain_calls, [key, self.cfg().linear.roles["pm"].token_service])
         self.assertIn(f"claim-skip TASK-1 reason=no Keychain item for role key {key}", self.said())
 
     def test_a_tracker_without_role_keys_checks_no_keychain(self):
-        self.missing = {self.cfg().linear.roles["researcher"].key, ""}
+        self.missing = {self.cfg().linear.roles["researcher"].token_service, ""}
         self.wiring = replace(cli.TRACKERS[TrackerKind.LINEAR], identity=lambda *_: None)
         self.assertEqual(self.claim(two()), "TASK-1 https://linear.app/x/TASK-1 Deep Research")
         self.assertEqual(self.keychain_calls, [])
@@ -5346,7 +5527,7 @@ class ScheduledRuns(TickScenario):
         flts = [v["f"] for q, v in fake.queries if "issues(filter" in q]
         self.assertEqual(
             {tuple(sorted(f["assignee"]["id"]["in"])) for f in flts},
-            {tuple(sorted(f"u-{r}" for r in ROLE))},
+            {tuple(sorted(role_id(r) for r in ROLE))},
         )
 
     def test_full_role_resume_not_launched(self):
@@ -5383,7 +5564,7 @@ class ScheduledRuns(TickScenario):
         self.assertEqual((self.api.order, self.api.usage_calls), (SESSIONS, []))
         self.assertEqual(
             [v["e"] for q, v in fake.queries if "users(filter" in q],
-            [ROLE["researcher"], ROLE["pm"], ROLE["engineer"]],
+            [],
         )
         self.assertEqual(fake.mutations, [])
 
@@ -5585,7 +5766,7 @@ class RecoverWriteBack(TickBase):
         super().setUp()
         self.moved("TASK-1", 61)
         start = json.loads(self.row("start", "TASK-1", "a", "researcher", minutes=60))
-        key = self.cfg().linear.roles["researcher"].key
+        key = "deleted-member-key"
         self.lines.append(
             json.dumps(start | {"uuid": self.ISSUE, "project": IDS[DR], "target": None, "key": key})
         )
@@ -5614,6 +5795,8 @@ class RecoverWriteBack(TickBase):
         self.assertEqual(self.linear.issues["TASK-1"]["state"], "In Review")
         self.assertIsNone(self.linear.issues["TASK-1"].get("comments"))
         self.assertEqual(self.steps(), ["comment", "move:in_review", "outcome"])
+        self.assertNotIn("deleted-member-key", self.linear.services)
+        self.assertIn(self.cfg().linear.roles["researcher"].token_service, self.linear.services)
         recovered = [show(e) for e in logged(self.logs) if e["kind"] == "recover"]
         self.assertEqual(self.unmap("\n".join(recovered)), "recover TASK-1 to=writeback sid=a")
         mutations = list(self.linear.mutations)
@@ -5656,7 +5839,7 @@ class RecoverWriteBack(TickBase):
         self.assertFalse(done)
         [(kind, reason)] = said
         self.assertEqual(kind, ("recover-skip", "TASK-1"))
-        self.assertIn(f"session {sid}'s start row key:", reason)
+        self.assertIn(f"session {sid}'s start row uuid:", reason)
         self.assertEqual(self.steps(), ["comment"])
 
     def test_a_dry_run_writes_nothing(self):

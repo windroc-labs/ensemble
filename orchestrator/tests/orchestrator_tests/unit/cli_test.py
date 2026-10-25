@@ -17,7 +17,6 @@ from ensemble.orchestrator.engine import log as event_log
 from ensemble.orchestrator.engine.types import (
     Claim,
     ConfigError,
-    LinearKey,
     State,
     TrackerKind,
 )
@@ -54,7 +53,7 @@ class Wirings(run_fixtures.Base):
         gql = mock.Mock(return_value={})
         linear = cli.TRACKERS[TrackerKind.LINEAR]
         identity = linear.identity(cfg, "engineer")
-        self.assertEqual(identity, LinearKey(run_fixtures.KEY))
+        self.assertEqual(identity, cfg.linear.roles["engineer"])
         accounts = linear.accounts(gql, cfg, identity)
         self.assertEqual(
             (accounts.states, accounts.humans, accounts.repos),
@@ -66,13 +65,15 @@ class Wirings(run_fixtures.Base):
         )
         gql.return_value = {"comment": None}
         accounts.tracker.find_comment(ISSUE, (SID, "start"))
-        gql.assert_called_with(ops.Q_COMMENT, identity=identity, c=ops.client_id(SID, "start"))
+        gql.assert_called_with(
+            ops.Q_COMMENT, identity=identity, c=ops.client_id(identity.user_id, SID, "start")
+        )
         accounts.harness.find_comment(ISSUE, (SID, "session"))
         gql.assert_called_with(
             ops.Q_COMMENT,
             identity=HARNESS_IDENTITY,
             timeout=run_comments.LIMIT,
-            c=ops.client_id(SID, "session"),
+            c=ops.client_id(HARNESS_IDENTITY.user_id, SID, "session"),
         )
 
     def test_linear_reads_a_run_as_the_harness_app(self):
@@ -151,16 +152,14 @@ class Wirings(run_fixtures.Base):
         board = os.path.realpath(os.path.join(self.work, "board"))
         linear_cfg = config.load()
         local_cfg = replace(linear_cfg, tracker=TrackerKind.LOCAL, linear=None, board=board)
-        row = Claim("TASK-1", SID, "engineer", ISSUE, None, None, run_fixtures.KEY, "a", "fake")
-        local_row = replace(row, issue="LOC-1", uuid="LOC-1", key=None)
+        row = Claim("TASK-1", SID, "engineer", ISSUE, None, None, "a", "fake")
+        local_row = replace(row, issue="LOC-1", uuid="LOC-1")
         linear, local = cli.TRACKERS[TrackerKind.LINEAR], cli.TRACKERS[TrackerKind.LOCAL]
         writes = linear.claimed(mock.Mock(), linear_cfg, row).tracker
-        self.assertEqual(writes.gql.keywords, {"identity": LinearKey(run_fixtures.KEY)})
+        self.assertEqual(writes.gql.keywords, {"identity": linear_cfg.linear.roles["engineer"]})
         self.assertIsInstance(local.claimed(None, local_cfg, local_row).tracker, LocalTracker)
         for wiring, cfg, claim, field, value in (
-            (linear, linear_cfg, replace(row, key=None), "key", None),
             (linear, linear_cfg, replace(row, uuid="TASK-1"), "uuid", "TASK-1"),
-            (local, local_cfg, replace(local_row, key="k"), "key", "k"),
             (local, local_cfg, replace(local_row, uuid="LOC-2"), "uuid", "LOC-2"),
             (local, local_cfg, replace(local_row, uuid=ISSUE), "uuid", ISSUE),
         ):

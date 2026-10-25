@@ -30,7 +30,14 @@ from ensemble.orchestrator.trackers.linear import (
 from ensemble.session import SessionStatus
 from ensemble.utils import EVENTS_ENV, SHORT, SID_ENV
 from orchestrator_tests.unit import run_fixtures
-from orchestrator_tests.unit.board_ids import ACCOUNTS, HEADER, STATE_NAMES, TEAM, team_node
+from orchestrator_tests.unit.board_ids import (
+    ACCOUNTS,
+    HEADER,
+    STATE_NAMES,
+    TEAM,
+    role_id,
+    team_node,
+)
 from orchestrator_tests.unit.board_ids import STATES as IDS_BY_KEY
 from orchestrator_tests.unit.board_ids import role as role_table
 from orchestrator_tests.unit.clock import logs_at
@@ -85,7 +92,7 @@ ACTORS = {
     USER: {"email": "Me@X.com", "isMe": False},
     MANAGER: {"email": "manager@x.com", "isMe": False},
     BOT: {"email": "Me@X.com", "isMe": False},
-    **{f"u-{r}": {"email": a, "isMe": False} for r, a in ACCOUNTS.items()},
+    **{role_id(r): {"id": role_id(r), "email": a, "isMe": False} for r, a in ACCOUNTS.items()},
 }
 
 
@@ -121,7 +128,7 @@ NO = SessionStatus("no", None, "")
 RESUME = ["ts", "kind", "issue", "sid", "role", "client", "delegate_kind"]
 
 
-START = [*RESUME, "uuid", "project", "target", "key", "task"]
+START = [*RESUME, "uuid", "project", "target", "task"]
 
 
 def ago(**kw):
@@ -129,7 +136,7 @@ def ago(**kw):
 
 
 def who(role):
-    return None if role is None else {"id": f"u-{role}", "email": ROLE.get(role, f"{role}@x.com")}
+    return None if role is None else {"id": role_id(role), "email": ROLE.get(role, f"{role}@x.com")}
 
 
 def op(query):
@@ -280,7 +287,7 @@ class FakeLinear:
             users = {
                 "me@x.com": USER,
                 "b@x.com": "user-b",
-                **{a.lower(): f"u-{r}" for r, a in ROLE.items()},
+                **{a.lower(): role_id(r) for r, a in ROLE.items()},
             }
             return {
                 "users": {"nodes": [{"id": u} for e, u in users.items() if v["e"].lower() == e]}

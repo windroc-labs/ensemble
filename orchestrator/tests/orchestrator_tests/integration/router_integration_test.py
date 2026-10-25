@@ -19,7 +19,6 @@ from orchestrator_tests.integration.flow_fixtures import (
     ACCOUNTS,
     HARNESS_EMAIL,
     HUMAN,
-    KEYS,
     PROJECT,
     REPO,
     TIMEOUT,
@@ -53,7 +52,6 @@ LONG = "\n".join(f"Requirement {n}: the registry keeps session {n} → its run."
 HARNESS_OPS = {
     "linear.Q_TEAM",
     "linear.Q_TASK_GROUP",
-    "linear.Q_USER",
     "router.issues",
     "router.issues+relations",
     "router.Q_RECHECK",
@@ -186,7 +184,6 @@ class Router(TmuxFlow):
                     "uuid": self.issue(ID)["id"],
                     "project": PROJECT["id"],
                     "target": REPO,
-                    "key": KEYS["engineer"],
                     "task": None,
                 }
             ],

@@ -1643,7 +1643,7 @@ class ResumedComments(Base):
 
 RUN_ISSUE = "TASK-1"
 
-CLAIM_KEY = "ensemble-engineer-at-claim"
+ROLE_SERVICE = "linear-api-key-engineer"
 
 STARTED, RESTARTED = "2026-10-14T09:00:00+08:00", "2026-10-14T10:00:00+08:00"
 BEFORE = datetime.fromisoformat(STARTED) - timedelta(hours=1)  # a row, then its run's Begun
@@ -1652,7 +1652,7 @@ LATER, LATEST = "2026-10-14T11:00:00+08:00", "2026-10-14T12:00:00+08:00"
 
 RESUME_COMMAND = f"cd /run && fake --resume {RUN_SID}"
 
-RUN_SESSION = ops.client_id(RUN_SID, "session")
+RUN_SESSION = board_ids.comment_id("harness", RUN_SID, "session")
 TURN_FAILED = "the client's turn failed: ContextOverflowError (compacting)"
 
 CLAIM = Claim(
@@ -1662,7 +1662,6 @@ CLAIM = Claim(
     uuid=UUID,
     project="p1",
     target=("acme", "ensemble"),
-    key=CLAIM_KEY,
     client="fake",
     delegate_kind="fake",
 )
@@ -1770,7 +1769,7 @@ class Events(RunCase):
             uuid=UUID,
             project="p1",
             target="acme/ensemble",
-            **{"key": CLAIM_KEY, **fields},
+            **{"key": "deleted-engineer-member-key", **fields},
         )
 
     def accounts(self):
@@ -1858,14 +1857,16 @@ class RunningEvents(Events):
                     self.assertTrue(self.deliver(delegate_event("begun", attempt)))
                     calls = self.linear.calls[n:]
                     self.assertEqual(self.linear.state, self.cfg.linear.states["in_progress"])
-                    self.assertIn((CLAIM_KEY, "reread", {"i": UUID}), calls)
+                    self.assertIn(
+                        (self.cfg.linear.roles[role].token_service, "reread", {"i": UUID}), calls
+                    )
                     moved = [c for c in calls if c[1] == "state"]
                     expected = (
                         []
                         if state == self.cfg.linear.states["in_progress"]
                         else [
                             (
-                                CLAIM_KEY,
+                                self.cfg.linear.roles[role].token_service,
                                 "state",
                                 {"i": UUID, "s": self.cfg.linear.states["in_progress"]},
                             )
@@ -1874,7 +1875,10 @@ class RunningEvents(Events):
                     self.assertEqual(moved, expected)
                     if moved:
                         self.assertLess(
-                            calls.index((CLAIM_KEY, "reread", {"i": UUID})), calls.index(moved[0])
+                            calls.index(
+                                (self.cfg.linear.roles[role].token_service, "reread", {"i": UUID})
+                            ),
+                            calls.index(moved[0]),
                         )
 
     def test_limit_resume_returns_to_work_and_the_next_limit_ends_it_again(self):
@@ -1932,7 +1936,7 @@ class BegunEvents(Events):
             [
                 (harness, "update", {"c": RUN_SESSION, "b": body}),
                 (harness, "comment", {"c": RUN_SESSION, "i": RUN_ISSUE, "b": body}),
-                (CLAIM_KEY, "reread", {"i": UUID}),
+                (ROLE_SERVICE, "reread", {"i": UUID}),
             ],
         )
         self.assertEqual(
@@ -2002,23 +2006,23 @@ class ProgressEvents(Events):
         self.assertEqual(
             self.linear.calls,
             [
-                (CLAIM_KEY, "reread", {"i": UUID}),
-                (CLAIM_KEY, "find", {"c": ops.client_id(RUN_SID, "start")}),
+                (ROLE_SERVICE, "reread", {"i": UUID}),
+                (ROLE_SERVICE, "find", {"c": board_ids.comment_id("engineer", RUN_SID, "start")}),
                 (
-                    CLAIM_KEY,
+                    ROLE_SERVICE,
                     "comment",
                     {
-                        "c": ops.client_id(RUN_SID, "start"),
+                        "c": board_ids.comment_id("engineer", RUN_SID, "start"),
                         "i": UUID,
                         "b": "Build started: light-build: a tweak",
                     },
                 ),
-                (CLAIM_KEY, "find", {"c": ops.client_id(RUN_SID, digest)}),
+                (ROLE_SERVICE, "find", {"c": board_ids.comment_id("engineer", RUN_SID, digest)}),
                 (
-                    CLAIM_KEY,
+                    ROLE_SERVICE,
                     "comment",
                     {
-                        "c": ops.client_id(RUN_SID, digest),
+                        "c": board_ids.comment_id("engineer", RUN_SID, digest),
                         "i": UUID,
                         "b": "Progress (tests): 12 passing",
                     },
@@ -2034,17 +2038,20 @@ class ProgressEvents(Events):
             self.assertFalse(self.deliver(start))
         self.assertTrue(self.deliver(start))
         posts = [v["c"] for _, op, v in self.linear.calls if op == "comment"]
-        self.assertEqual(posts, [RUN_SESSION, ops.client_id(RUN_SID, "start")])
+        self.assertEqual(posts, [RUN_SESSION, board_ids.comment_id("engineer", RUN_SID, "start")])
         self.assertEqual(self.ledger()[RUN_SID]["steps"], ["running:1", "start"])
 
     def test_a_resumed_attempt_finds_a_start_whose_ledger_write_was_lost(self):
-        self.linear.comments[ops.client_id(RUN_SID, "start")] = {"body": "x", "service": CLAIM_KEY}
+        self.linear.comments[board_ids.comment_id("engineer", RUN_SID, "start")] = {
+            "body": "x",
+            "service": ROLE_SERVICE,
+        }
         self.assertTrue(self.deliver(delegate_event("progress", attempt=2, name="start", text="x")))
         self.assertEqual(
             self.linear.calls,
             [
-                (CLAIM_KEY, "reread", {"i": UUID}),
-                (CLAIM_KEY, "find", {"c": ops.client_id(RUN_SID, "start")}),
+                (ROLE_SERVICE, "reread", {"i": UUID}),
+                (ROLE_SERVICE, "find", {"c": board_ids.comment_id("engineer", RUN_SID, "start")}),
             ],
         )
 
@@ -2057,6 +2064,42 @@ class ProgressEvents(Events):
 
 
 class RefusedEvents(Events):
+    def test_current_namespace_keeps_the_author_check(self):
+        cid = board_ids.comment_id("engineer", RUN_SID, "start")
+        held = {"body": "someone else's comment", "service": "other-app"}
+        self.linear.comments[cid] = held.copy()
+        self.assertFalse(self.deliver(delegate_event("progress", 2, name="start", text="x")))
+        self.assertEqual(self.linear.comments[cid], held)
+        self.assertEqual(self.linear.writes("comment"), [])
+
+    def test_resume_preserves_old_author_comment_after_lost_ledger_write(self):
+        old = ops.client_id(RUN_SID, "start")
+        held = {"body": "old member's progress", "service": "deleted-member-key"}
+        self.linear.comments[old] = held.copy()
+        self.assertTrue(self.deliver(delegate_event("progress", 2, name="start", text="new app")))
+        self.assertEqual(self.linear.comments[old], held)
+        self.assertEqual(len(self.linear.writes("comment")), 1)
+        self.assertNotEqual(self.linear.writes("comment")[0][1]["c"], old)
+        self.assertTrue(self.deliver(delegate_event("progress", 2, name="start", text="new app")))
+        self.assertEqual(len(self.linear.writes("comment")), 1)
+
+    def test_recover_preserves_old_author_completion_after_lost_ledger_write(self):
+        old = ops.client_id(RUN_SID, "comment")
+        held = {"body": "old member's completion", "service": "deleted-member-key"}
+        self.linear.comments[old] = held.copy()
+        outcome = Outcome(status="failed", title="x", summary="run failed")
+        self.assertTrue(
+            writeback.replay(self.cfg, RUN_ISSUE, RUN_SID, outcome, accounts=self.accounts())
+        )
+        self.assertEqual(self.linear.comments[old], held)
+        posts = self.linear.writes("comment")
+        self.assertEqual(posts[0][0], ROLE_SERVICE)
+        self.assertNotEqual(posts[0][1]["c"], old)
+        self.assertIsNone(
+            writeback.replay(self.cfg, RUN_ISSUE, RUN_SID, outcome, accounts=self.accounts())
+        )
+        self.assertEqual(self.linear.writes("comment"), posts)
+
     def test_what_cannot_be_written_raises_before_any_write(self):
         other = "9c1d2e3f-4a5b-4c6d-8e7f-a0b1c2d3e4f5"
         for name, kwargs, e, error in (
@@ -2074,32 +2117,17 @@ class RefusedEvents(Events):
         self.assertEqual(self.linear.calls, [])
         self.assertFalse(os.path.exists(os.path.join(self.workdir, writeback.LEDGER)))
 
-    def test_a_start_row_key_that_does_not_fit_the_tracker_raises_before_any_write(self):
-        other = "9c1d2e3f-4a5b-4c6d-8e7f-a0b1c2d3e4f5"
-        self.claim(sid=other, key=None)
-        local = replace(self.cfg, tracker=TrackerKind.LOCAL, linear=None, board=self.dir)
-        done = Outcome(status="done", summary="x", title="x")
-
-        def accounts(cfg):
-            return functools.partial(cli.TRACKERS[cfg.tracker].claimed, self.linear, cfg)
-
-        def deliver(cfg, sid):
-            event = delegate_event("begun", sid=sid)
-            return writeback.deliver(cfg, RUN_ISSUE, self.workdir, event, accounts=accounts(cfg))
-
-        def replay(cfg, sid):
-            return writeback.replay(cfg, RUN_ISSUE, sid, done, accounts=accounts(cfg))
-
-        for cfg, sid, key in ((self.cfg, other, None), (local, RUN_SID, CLAIM_KEY)):
-            for call in (deliver, replay):
-                with self.subTest(call.__name__, tracker=cfg.tracker):
-                    with self.assertRaises(ConfigError) as cm:
-                        call(cfg, sid)
-                    self.assertEqual(
-                        str(cm.exception), f"{RUN_ISSUE}: session {sid}'s start row key: {key!r}"
-                    )
+    def test_removed_role_refuses_before_writing(self):
+        self.cfg = replace(self.cfg, linear=replace(self.cfg.linear, roles={}))
+        with self.assertRaisesRegex(ConfigError, "role 'engineer' has no configured Linear app"):
+            self.deliver(delegate_event("begun"))
         self.assertEqual(self.linear.calls, [])
-        self.assertFalse(os.path.exists(os.path.join(self.workdir, writeback.LEDGER)))
+
+    def test_current_app_replaces_the_old_start_row_credential(self):
+        app = replace(self.cfg.linear.roles["engineer"], token_service="new-engineer-token")
+        self.cfg = replace(self.cfg, linear=replace(self.cfg.linear, roles={"engineer": app}))
+        self.assertTrue(self.deliver(delegate_event("progress", name="start", text="x")))
+        self.assertEqual({service for service, _, _ in self.linear.calls}, {"new-engineer-token"})
 
     def test_a_claimed_role_without_write_back_raises(self):
         other = "9c1d2e3f-4a5b-4c6d-8e7f-a0b1c2d3e4f5"
@@ -2139,20 +2167,20 @@ class FinishedEvents(Events):
         self.assertEqual(
             self.linear.calls[n:],
             [
-                (CLAIM_KEY, "read", {"i": UUID}),
-                (CLAIM_KEY, "find", {"c": ops.client_id(RUN_SID, "comment")}),
+                (ROLE_SERVICE, "read", {"i": UUID}),
+                (ROLE_SERVICE, "find", {"c": board_ids.comment_id("engineer", RUN_SID, "comment")}),
                 (
-                    CLAIM_KEY,
+                    ROLE_SERVICE,
                     "comment",
                     {
-                        "c": ops.client_id(RUN_SID, "comment"),
+                        "c": board_ids.comment_id("engineer", RUN_SID, "comment"),
                         "i": UUID,
                         "b": "Build ready:\nAgent report before delivery:\n\n> Ready.",
                     },
                 ),
-                (CLAIM_KEY, "attach", {"i": UUID, "u": PR, "t": "TASK-1: x"}),
-                (CLAIM_KEY, "reread", {"i": UUID}),
-                (CLAIM_KEY, "state", {"i": UUID, "s": states["in_review"]}),
+                (ROLE_SERVICE, "attach", {"i": UUID, "u": PR, "t": "TASK-1: x"}),
+                (ROLE_SERVICE, "reread", {"i": UUID}),
+                (ROLE_SERVICE, "state", {"i": UUID, "s": states["in_review"]}),
                 (harness, "update", {"c": RUN_SESSION, "b": ended}),
                 (harness, "find", {"c": RUN_SESSION}),
             ],
@@ -2187,7 +2215,7 @@ class FinishedEvents(Events):
             for _, op, v in self.linear.calls
             if op == "comment" and "i" in v and v["i"] == UUID
         ]
-        self.assertEqual(posts, [ops.client_id(RUN_SID, "comment")])
+        self.assertEqual(posts, [board_ids.comment_id("engineer", RUN_SID, "comment")])
         self.assertEqual(len(self.linear.writes("state")), 1)
         self.assertEqual(self.ledger()[RUN_SID]["steps"][-2:], ["move:in_review", "outcome"])
 
@@ -2229,7 +2257,9 @@ class FinishedEvents(Events):
         )
         self.assertEqual(self.linear.state, self.cfg.linear.states["in_review"])
         self.assertEqual(
-            self.linear.comments[ops.client_id(RUN_SID, "no-outcome:1:comment")]["body"],
+            self.linear.comments[board_ids.comment_id("engineer", RUN_SID, "no-outcome:1:comment")][
+                "body"
+            ],
             "Build failed: the agent run returned no outcome",
         )
 
@@ -2249,9 +2279,9 @@ class FinishedEvents(Events):
                 self.assertTrue(self.deliver(event))
                 self.assertEqual(self.linear.state, self.cfg.linear.states["in_review"])
                 self.assertEqual(
-                    self.linear.comments[ops.client_id(RUN_SID, f"no-outcome:{attempt}:comment")][
-                        "body"
-                    ],
+                    self.linear.comments[
+                        board_ids.comment_id("engineer", RUN_SID, f"no-outcome:{attempt}:comment")
+                    ]["body"],
                     f"Build failed: {error}",
                 )
                 calls = len(self.linear.calls)
@@ -2264,19 +2294,19 @@ class FinishedEvents(Events):
         self.assertTrue(self.deliver(self.finished(0, error=TURN_FAILED)))
         harness, states = self.cfg.linear.harness.service, self.cfg.linear.states
         ended = session_body(f"no outcome · #2 · {STARTED} → {RESTARTED} · exit 0")
-        comment = ops.client_id(RUN_SID, "no-outcome:1:comment")
+        comment = board_ids.comment_id("engineer", RUN_SID, "no-outcome:1:comment")
         self.assertEqual(
             self.linear.calls[n:],
             [
-                (CLAIM_KEY, "read", {"i": UUID}),
-                (CLAIM_KEY, "find", {"c": comment}),
+                (ROLE_SERVICE, "read", {"i": UUID}),
+                (ROLE_SERVICE, "find", {"c": comment}),
                 (
-                    CLAIM_KEY,
+                    ROLE_SERVICE,
                     "comment",
                     {"c": comment, "i": UUID, "b": f"Build failed: {TURN_FAILED}"},
                 ),
-                (CLAIM_KEY, "reread", {"i": UUID}),
-                (CLAIM_KEY, "state", {"i": UUID, "s": states["in_review"]}),
+                (ROLE_SERVICE, "reread", {"i": UUID}),
+                (ROLE_SERVICE, "state", {"i": UUID, "s": states["in_review"]}),
                 (harness, "update", {"c": RUN_SESSION, "b": ended}),
                 (harness, "find", {"c": RUN_SESSION}),
             ],
@@ -2314,9 +2344,11 @@ class FinishedEvents(Events):
                 self.assertTrue(self.deliver(event))
                 self.assertEqual(self.linear.state, self.cfg.linear.states[state])
                 self.assertEqual(
-                    self.linear.comments[ops.client_id(OTHER_SID, f"no-outcome:{attempt}:comment")][
-                        "body"
-                    ],
+                    self.linear.comments[
+                        board_ids.comment_id(
+                            "researcher", OTHER_SID, f"no-outcome:{attempt}:comment"
+                        )
+                    ]["body"],
                     TURN_FAILED,
                 )
 
@@ -2329,7 +2361,7 @@ class FinishedEvents(Events):
         self.linear.fail = lambda _op, _v: None
         self.assertTrue(self.deliver(self.finished(outcome=outcome_data(), attempt=2)))
         self.assertEqual(
-            self.linear.comments[ops.client_id(RUN_SID, "comment")]["body"],
+            self.linear.comments[board_ids.comment_id("engineer", RUN_SID, "comment")]["body"],
             "Build ready:\nAgent report before delivery:\n\n> Ready.",
         )
         self.assertEqual(self.linear.state, self.cfg.linear.states["in_review"])
@@ -2341,10 +2373,12 @@ class FinishedEvents(Events):
     def test_a_failed_turn_with_a_limit_or_an_outcome_is_not_rewritten(self):
         self.assertTrue(self.deliver(self.finished(1, error=TURN_FAILED, outcome=outcome_data())))
         self.assertEqual(
-            self.linear.comments[ops.client_id(RUN_SID, "comment")]["body"],
+            self.linear.comments[board_ids.comment_id("engineer", RUN_SID, "comment")]["body"],
             "Build ready:\nAgent report before delivery:\n\n> Ready.",
         )
-        self.assertNotIn(ops.client_id(RUN_SID, "no-outcome:1:comment"), self.linear.comments)
+        self.assertNotIn(
+            board_ids.comment_id("engineer", RUN_SID, "no-outcome:1:comment"), self.linear.comments
+        )
 
     def test_a_finished_without_begun_starts_its_session_then(self):
         self.assertTrue(self.deliver(self.finished(1, error="launch failed")))
@@ -2424,18 +2458,18 @@ class LimitEvents(Events):
         self.assertEqual(
             self.linear.calls[n:],
             [
-                (CLAIM_KEY, "find", {"c": ops.client_id(RUN_SID, "limit")}),
+                (ROLE_SERVICE, "find", {"c": board_ids.comment_id("engineer", RUN_SID, "limit")}),
                 (
-                    CLAIM_KEY,
+                    ROLE_SERVICE,
                     "comment",
                     {
-                        "c": ops.client_id(RUN_SID, "limit"),
+                        "c": board_ids.comment_id("engineer", RUN_SID, "limit"),
                         "i": UUID,
                         "b": "Usage limit, resets at 2026-10-11T18:00:00+08:00.",
                     },
                 ),
-                (CLAIM_KEY, "reread", {"i": UUID}),
-                (CLAIM_KEY, "state", {"i": UUID, "s": states["in_review"]}),
+                (ROLE_SERVICE, "reread", {"i": UUID}),
+                (ROLE_SERVICE, "state", {"i": UUID, "s": states["in_review"]}),
                 (harness, "update", {"c": RUN_SESSION, "b": ended}),
                 (harness, "find", {"c": RUN_SESSION}),
             ],
@@ -2474,7 +2508,7 @@ class LimitEvents(Events):
                 self.claim(sid)
                 event = delegate_event("finished", sid=sid, returncode=-9, outcome=None)
                 self.assertTrue(self.deliver(replace(event, limit={"resets_at": resets_at})))
-                body = self.linear.comments[ops.client_id(sid, "limit")]["body"]
+                body = self.linear.comments[board_ids.comment_id("engineer", sid, "limit")]["body"]
                 self.assertEqual(body, "Usage limit, reset time unknown.")
                 self.linear.state = self.cfg.linear.states["in_progress"]
 
@@ -2492,13 +2526,13 @@ class LimitEvents(Events):
 
         self.linear.fail = fail
         self.assertTrue(self.deliver(self.limited()))
-        mine = [(op, v) for service, op, v in self.linear.calls if service == CLAIM_KEY]
+        mine = [(op, v) for service, op, v in self.linear.calls if service == ROLE_SERVICE]
         self.assertEqual(
             [op for op, _ in mine], ["subscribe", "subscribe", "find", "comment", "reread", "state"]
         )
         self.assertEqual([v["e"] for op, v in mine if op == "subscribe"], list(HUMANS))
         self.assertEqual(
-            self.linear.comments[ops.client_id(RUN_SID, "limit")]["body"],
+            self.linear.comments[board_ids.comment_id("engineer", RUN_SID, "limit")]["body"],
             "Usage limit, resets at 2026-10-11T18:00:00+08:00.\n\n"
             "Could not subscribe ann@example.com: LinearError: issueSubscribe: success: false",
         )
@@ -2524,7 +2558,7 @@ class LimitEvents(Events):
             LinearError("commentCreate: success: false") if op == "comment" else None
         )
         self.assertFalse(self.deliver(self.limited()))
-        mine = [op for service, op, _ in self.linear.calls if service == CLAIM_KEY]
+        mine = [op for service, op, _ in self.linear.calls if service == ROLE_SERVICE]
         self.assertEqual(mine, ["find", "comment"])
         self.assertIn(
             f"writeback step-error {RUN_ISSUE} sid={RUN_SID} step=limit "
@@ -2547,13 +2581,15 @@ class LimitEvents(Events):
                 )
                 event = delegate_event("finished", sid=sid, returncode=-9, outcome=None)
                 ok = self.deliver(replace(event, limit={"resets_at": T}))
-                session = ops.client_id(sid, "session")
+                session = board_ids.comment_id("harness", sid, "session")
                 self.assertIn("· limit · ", self.linear.comments[session]["body"])
                 if op == "subscribe":
                     self.assertTrue(ok)
                     self.assertIn(
                         "Could not subscribe",
-                        self.linear.comments[ops.client_id(sid, "limit")]["body"],
+                        self.linear.comments[board_ids.comment_id("engineer", sid, "limit")][
+                            "body"
+                        ],
                     )
                 else:
                     self.assertFalse(ok)
@@ -2581,7 +2617,7 @@ class LimitEvents(Events):
         n = len(self.linear.calls)
         self.assertTrue(self.deliver(self.limited(attempt=2)))
         self.assertEqual(
-            [op for service, op, _ in self.linear.calls[n:] if service == CLAIM_KEY],
+            [op for service, op, _ in self.linear.calls[n:] if service == ROLE_SERVICE],
             ["reread", "state"],
         )
         self.assertEqual(len([c for c in self.linear.comments if c != RUN_SESSION]), 1)
@@ -2617,7 +2653,7 @@ class LimitEvents(Events):
         self.assertEqual(results, [True])
         self.assertEqual(self.rows(), [self.row()])
         self.assertEqual(self.ledger()[RUN_SID]["steps"], ["limit", "limit-move:1", "limit-row:1"])
-        limit = ops.client_id(RUN_SID, "limit")
+        limit = board_ids.comment_id("engineer", RUN_SID, "limit")
         self.assertEqual(len([v for _, v in self.linear.writes("comment") if v["c"] == limit]), 1)
 
     def test_a_ledger_write_lost_after_the_row_records_one_row_on_redelivery(self):

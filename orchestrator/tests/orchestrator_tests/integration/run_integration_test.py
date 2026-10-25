@@ -11,20 +11,18 @@ import shlex
 import unittest
 from datetime import UTC, datetime, timedelta
 
-from ensemble.orchestrator.trackers.linear import ops
 from orchestrator_tests.integration.flow_fixtures import (
     ACCOUNTS,
     ENTRY,
     HARNESS_EMAIL,
     HUMAN,
-    KEYS,
     LAUNCH,
     PROJECT,
     UPDRAFT,
     TmuxFlow,
     steps,
 )
-from orchestrator_tests.unit.board_ids import STATES
+from orchestrator_tests.unit.board_ids import STATES, comment_id
 from orchestrator_tests.unit.run_fixtures import ID, SESSION, SID, UUID
 from orchestrator_tests.unit.writeback_fixtures import APPROVE_MAPPED, DOC, PR, PRD
 
@@ -52,12 +50,12 @@ REREAD = ("linear.Q_ISSUE_STATE", {"i": UUID})
 TO_REVIEW = ("linear.M_STATE", {"i": UUID, "s": STATES["in_review"]})
 
 
-def cid(step):
-    return ops.client_id(SID, step)
+def cid(step, role="researcher"):
+    return comment_id(role, SID, step)
 
 
-def post(step, body):
-    return ("linear.M_COMMENT_ID", {"c": cid(step), "i": UUID, "b": body})
+def post(step, body, role="researcher"):
+    return ("linear.M_COMMENT_ID", {"c": cid(step, role), "i": UUID, "b": body})
 
 
 def find(step):
@@ -166,7 +164,7 @@ class Done(Run):
         ledger = ["running:1", *ledger]
         self.seed(role)
         self.launch([mark("start", PICK), block(outcome)])
-        self.assertEqual(self.wrote(), self.framed(post("start", f"{start} {PICK}"), *calls))
+        self.assertEqual(self.wrote(), self.framed(post("start", f"{start} {PICK}", role), *calls))
         self.assertEqual(self.ledger(ID), {SID: ledger})
         self.assertEqual(
             [line for line in self.said() if line.startswith("writeback ")], steps(*ledger)
@@ -177,7 +175,11 @@ class Done(Run):
         account = ACCOUNTS[role]
         self.assertEqual(
             self.stored(),
-            [(HARNESS_EMAIL, SESSION), (account, cid("start")), (account, cid("comment"))],
+            [
+                (HARNESS_EMAIL, SESSION),
+                (account, cid("start", role)),
+                (account, cid("comment", role)),
+            ],
         )
         self.assertEqual(self.state(ID), "in_review")
         self.assertEqual(self.issue(ID)["subscribers"], [HUMAN])
@@ -241,7 +243,7 @@ class Done(Run):
                 READ,
                 ("writeback.M_TITLE", {"i": UUID, "t": "PRD: Session Registry"}),
                 SUBSCRIBE,
-                post("comment", f"PRD for the registry.\n\n{PRD}\n\n{APPROVE_MAPPED}"),
+                post("comment", f"PRD for the registry.\n\n{PRD}\n\n{APPROVE_MAPPED}", "pm"),
                 attach(PRD, "Session Registry"),
                 REREAD,
                 TO_REVIEW,
@@ -268,6 +270,7 @@ class Done(Run):
                 post(
                     "comment",
                     "Build ready:\nAgent report before delivery:\n\n> Adds the registry.\n> Verify: python3 -m unittest",
+                    "engineer",
                 ),
                 attach(PR, title),
                 REREAD,
@@ -285,10 +288,14 @@ class Undone(Run):
         self.assertEqual(
             self.wrote(),
             self.framed(
-                post("start", f"Build started: {PICK}"),
+                post("start", f"Build started: {PICK}", "engineer"),
                 READ,
                 SUBSCRIBE,
-                post("no-outcome:1:comment", "Build failed: the agent run returned no outcome"),
+                post(
+                    "no-outcome:1:comment",
+                    "Build failed: the agent run returned no outcome",
+                    "engineer",
+                ),
                 REREAD,
                 TO_REVIEW,
                 end=UNDONE,
@@ -360,7 +367,6 @@ class Undone(Run):
             "uuid": UUID,
             "project": PROJECT["id"],
             "target": None,
-            "key": KEYS["researcher"],
             "task": None,
         }
         self.assertEqual(self.runs(), [start, note])

@@ -33,7 +33,14 @@ from ensemble.orchestrator.engine.flow.types import (
     Snapshot,
     SubIssue,
 )
-from ensemble.orchestrator.engine.types import MOVES, UUID_RE, IssueError, LinearError, State
+from ensemble.orchestrator.engine.types import (
+    MOVES,
+    UUID_RE,
+    IssueError,
+    LinearApp,
+    LinearError,
+    State,
+)
 from ensemble.orchestrator.trackers.linear import ops
 from ensemble.orchestrator.trackers.linear.ops import DONE, HISTORY, call, client_id, last_move
 from ensemble.utils import LOCAL, one_line, parse_time
@@ -105,7 +112,7 @@ Q_DETAIL = (
   """
     + HISTORY
     + """
-  comments(first: 250) { nodes { body createdAt user { email name isMe } } }
+  comments(first: 250) { nodes { body createdAt user { id email name isMe } } }
   relations(first: 250) { nodes { relatedIssue { id } } }
   inverseRelations(first: 250) { nodes { issue { id } } } } }"""
 )
@@ -135,7 +142,7 @@ Q_RECHECK = (
 Q_HISTORY = (
     "query($i: String!, $after: String) { issue(id: $i) { "
     "history(first: 250, after: $after, orderBy: createdAt) { "
-    "nodes { createdAt toStateId actor { email isMe } botActor { type } } "
+    "nodes { createdAt toStateId actor { id email isMe } botActor { type } } "
     "pageInfo { hasNextPage endCursor } } } }"
 )
 _NODES = (
@@ -163,7 +170,7 @@ GROUP_BY_TYPE = {
 }
 Q_READ = """query($i: String!) { issue(id: $i) { id identifier url title description createdAt
   project { id }
-  comments(first: 250) { nodes { body createdAt user { email name isMe } } }
+  comments(first: 250) { nodes { body createdAt user { id email name isMe } } }
   attachments(first: 50) { nodes { url } }
   labels(first: 50) { nodes { id } }
   relations(first: 50) { nodes { relatedIssue { identifier title state { name } } } }
@@ -236,11 +243,11 @@ def _quiet(*_, **__):
 
 
 def _selves(roles):
-    return frozenset(r.account.lower() for r in roles.values())
+    return frozenset(r.user_id for r in roles.values())
 
 
 def _origin(user, selves) -> Origin:
-    return "self" if user.get("isMe") or (user.get("email") or "").lower() in selves else "other"
+    return "self" if user.get("isMe") or user.get("id") in selves else "other"
 
 
 def _move_origin(node, selves) -> Origin:
@@ -252,13 +259,11 @@ def _move_origin(node, selves) -> Origin:
 
 class LinearTracker(Tracker):
     """states: {State key: state id}; team_id; finished: ops.Team.finished; roles: {user id: role};
-    humans: human_members emails, subscribed on notify; selves: the role accounts' emails, lowercased;
-    say: the caller's logger. A method needing one not given raises TypeError. identity: who each call is made as,
-    with timeout when given; None: gql as given. A comment's ref: its client id's parts. A home is a Linear
-    project; a note's account its user's email. Origin self: the harness app (isMe: router,
-    promote and the run reader query as linear.harness), a role account or Linear automation;
-    other: any other user. A comment with no user (an integration's, such as GitHub's) is not
-    returned. task_group, agent_group: the task and Agent label groups; label_tasks,
+    humans: human_members emails, subscribed on notify; selves: the role apps' user ids;
+    say: caller's logger; missing method dependencies raise TypeError. identity and timeout bind
+    gql; None leaves it as given. Comment refs are client id parts; home is a project.
+    Origin self: harness (isMe), configured role app ids or automation; other: other users.
+    Userless comments are omitted. task_group, agent_group: label groups; label_tasks,
     label_clients: {label id: task or client}, which recheck's picks read."""
 
     batch = SNAPSHOT_BATCH
@@ -281,6 +286,7 @@ class LinearTracker(Tracker):
         agent_group=None,
         label_clients=None,
     ):
+        self.comment_namespace = (identity.user_id,) if isinstance(identity, LinearApp) else ()
         if identity is not None:
             bound = {"identity": identity} | ({} if timeout is None else {"timeout": timeout})
             gql = functools.partial(gql, **bound)
@@ -310,7 +316,7 @@ class LinearTracker(Tracker):
 
     @classmethod
     def connect(cls, gql, cfg, *, say):
-        """Checks the team and task label group, then reads the role accounts; keeps the task and
+        """Checks the team and task label group, then uses configured role app ids; keeps the task and
         Agent label maps. Calls gql as linear.harness."""
         linear = config.linear_settings(cfg, "router")
         gql = functools.partial(gql, identity=linear.harness)
@@ -321,7 +327,7 @@ class LinearTracker(Tracker):
             states=found.states,
             team_id=found.id,
             finished=found.finished,
-            roles=ops.role_ids(gql, linear.roles),
+            roles=ops.role_ids(linear.roles),
             humans=linear.human_members,
             selves=_selves(linear.roles),
             say=say,
@@ -712,7 +718,9 @@ class LinearTracker(Tracker):
         )
 
     def comment(self, key, body, ref=None):
-        ops.comment(self.gql, key, body, None if ref is None else client_id(*ref))
+        ops.comment(
+            self.gql, key, body, None if ref is None else client_id(*self.comment_namespace, *ref)
+        )
 
     def move(self, key, to, *, frm=None):
         _need("states", self.state_ids)
@@ -761,10 +769,10 @@ class LinearTracker(Tracker):
         call(self.gql, M_UNARCHIVE, "issueUnarchive", i=key)
 
     def find_comment(self, key, ref):
-        return ops.find_comment(self.gql, client_id(*ref), key)
+        return ops.find_comment(self.gql, client_id(*self.comment_namespace, *ref), key)
 
     def put_comment(self, key, body, ref):
-        cid = client_id(*ref)
+        cid = client_id(*self.comment_namespace, *ref)
         try:
             done = self.gql(M_UPDATE, c=cid, b=body)["commentUpdate"]
         except LinearError as e:
