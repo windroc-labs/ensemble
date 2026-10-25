@@ -72,7 +72,7 @@ BASE = {
     # its state's type and updatedAt
     "Q_ISSUE": "176947979d752d5bbfd43f0a6fae9d57b76222c1d68b91c67fc4db0ecf00bb52",
     # updatedAt
-    "Q_FINISHED": "f85255549025f0ccbfd2cd450dcf6b041e41d9c2baf838fd4a7a3d9a451e6633",
+    "Q_FINISHED": "f8be6e566b829a2e8276129335ec9b75690d4561539f9d2d0b46e461bc7ec51f",
     # each sub-issue's first child, so a leaf is not read, and updatedAt
     "Q_ARCHIVE": "0a19726cff83adff30e527ac21e2832ea2ed120ec6880e03772006c3b899a209",
     "Q_CHILDREN": "91955ba5094f94357fc88a229f81f5b6f79249d3d3154a460514a787f610b7c5",

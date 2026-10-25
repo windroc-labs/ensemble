@@ -94,7 +94,7 @@ Q_CHILDREN = (
 )
 Q_FINISHED = (
     """query($t: ID, $d: [ID!], $s: [ID!], $a: [ID!], $c: String, $after: String) {
-  issues(filter: { team: { id: { eq: $t } }, or: [{ state: { id: { in: $d } }, assignee: { id: { in: $a } } },
+  issues(filter: { team: { id: { eq: $t } }, or: [{ state: { id: { in: $d } }, delegate: { id: { in: $a } } },
   { state: { id: { in: $s } } }] }, first: 50, after: $c) {
   nodes { id identifier updatedAt """
     + STAMPS

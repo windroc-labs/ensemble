@@ -389,6 +389,10 @@ class GraphQLProjection(ServerCase):
         )["identifier"]
         ops.call(self.gql, linear_tracker.M_ARCHIVE, "issueArchive", i=archived)
         self.fake.issue("Someone else's", state="done", assignee=self.human)
+        self.fake.issue("Role assignee only", state="done", assignee=self.engineer)
+        self.fake.issue(
+            "Foreign delegate", state="done", delegate=self.human, assignee=self.engineer
+        )
         pages, cursor = [], None
         while True:
             page = self.gql(
