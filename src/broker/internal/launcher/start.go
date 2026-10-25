@@ -147,6 +147,14 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		defer func() {
 			if cleanup := h.releaseMutex(ctx, mutex); cleanup != nil {
 				if retErr == nil {
+					if m.GitHubApp != "" {
+						rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+						revoked := h.GitHub.Revoke(rctx, c)
+						cancel()
+						if revoked != nil {
+							cleanup.Message += " " + injected(revoked, protocol.KeychainFailed, "Revoking the GitHub tokens failed; retry their pending revocation.").Message
+						}
+					}
 					h.rollback(ctx, c, cleanup)
 					if held && cleanup.Cleanup == protocol.Removed && clientKind(m.Client) != "" {
 						h.Audit.Add(c, audit.Credential{Kind: clientKind(m.Client), Result: audit.Withdrawn}, "")

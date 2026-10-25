@@ -554,3 +554,60 @@ func TestMutexCleanup(t *testing.T) {
 		})
 	}
 }
+
+func TestMutexFailureRevokesIssuedTokens(t *testing.T) {
+	for _, revocationFails := range []bool{false, true} {
+		t.Run(fmt.Sprintf("revocation_fails_%t", revocationFails), func(t *testing.T) {
+			w := newLockWorld()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			w.fail = func(a []string) error {
+				if a[0] == "rm" && a[len(a)-1] != container {
+					cancel()
+					return fmt.Errorf("cannot remove mutex")
+				}
+				return nil
+			}
+			h, _, _ := w.host(t, "worker_1", 1000)
+			tokens := &fakeTokens{}
+			if revocationFails {
+				tokens.revoke = protocol.New(protocol.KeychainFailed, "revocation queued for retry")
+			}
+			tokens.onRevoke = func() {
+				w.mu.Lock()
+				defer w.mu.Unlock()
+				if !slices.ContainsFunc(tokens.calls, func(c string) bool { return strings.HasPrefix(c, "issue ") }) {
+					t.Error("revoked before issuance")
+				}
+				found := false
+				for _, c := range w.objects {
+					if c.name == container {
+						found = true
+					}
+				}
+				if !found {
+					t.Error("removed run before revoking its tokens")
+				}
+			}
+			h.GitHub = tokens
+			path := editedManifest(t, func(f map[string]any) {
+				f["lock"], f["lock_owner"] = "dummy", "worker_1"
+				f["github"] = map[string]any{"app": "ensemble-bot", "permissions": map[string]string{"contents": "read"}}
+			})
+			got, err := h.Start(ctx, path)
+			e := protoErr(t, err)
+			if e.Code != protocol.StartFailed || e.Cleanup != protocol.Removed || got.Container != "" {
+				t.Fatalf("%+v %+v", got, e)
+			}
+			if !slices.Equal(tokens.calls, []string{"ready ensemble-bot", "user ensemble-bot", "retry", "issue ensemble-bot " + container, "revoke " + container}) {
+				t.Fatalf("%q", tokens.calls)
+			}
+			if len(tokens.revokeContexts) != 1 || tokens.revokeContexts[0] != nil {
+				t.Fatalf("revocation used cancelled context: %v", tokens.revokeContexts)
+			}
+			if revocationFails && !strings.Contains(e.Message, "revocation queued for retry") {
+				t.Fatalf("revocation failure hidden: %+v", e)
+			}
+		})
+	}
+}
