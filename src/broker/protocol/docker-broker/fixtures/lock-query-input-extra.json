@@ -1,0 +1,8 @@
+{
+  "argv": [
+    "lock-query",
+    "--lock",
+    "x",
+    "extra"
+  ]
+}
