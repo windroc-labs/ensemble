@@ -26,6 +26,7 @@ jobs:
     outputs:
       full: ${{ steps.scope.outputs.full }}
       docs: ${{ steps.scope.outputs.docs }}
+      broker: ${{ steps.scope.outputs.broker }}
       projects: ${{ steps.scope.outputs.projects }}
     steps:
       - name: Check out
@@ -316,6 +317,7 @@ jobs:
 
   broker:
     name: Broker ${{ matrix.os }}
+    needs: [changes]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -331,11 +333,14 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
+        # Keep both required checks reporting success when Go work is out of scope.
+        if: ${{ needs.changes.outputs.broker == 'true' }}
         uses: actions/setup-go@v7.0.0
         with:
           go-version-file: broker/go.mod
           cache: false
       - name: Gofmt
+        if: ${{ needs.changes.outputs.broker == 'true' }}
         run: |
           unformatted=$(sh with-go-state.sh gofmt -l .)
           if [[ -n "$unformatted" ]]; then
@@ -343,22 +348,25 @@ jobs:
             exit 1
           fi
       - name: Go vet
+        if: ${{ needs.changes.outputs.broker == 'true' }}
         run: sh with-go-state.sh go vet ./...
       - name: Staticcheck
+        if: ${{ needs.changes.outputs.broker == 'true' }}
         run: sh with-go-state.sh go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
       - name: Go test
+        if: ${{ needs.changes.outputs.broker == 'true' }}
         run: sh with-go-state.sh go test ./...
       - name: Go build
-        if: ${{ runner.os == 'Linux' }}
+        if: ${{ needs.changes.outputs.broker == 'true' && runner.os == 'Linux' }}
         run: sh with-go-state.sh go build -trimpath -o "$RUNNER_TEMP/ensemble-broker" .
       - name: Build darwin/arm64 binary with cgo
-        if: ${{ runner.os == 'macOS' }}
+        if: ${{ needs.changes.outputs.broker == 'true' && runner.os == 'macOS' }}
         env:
           GOOS: darwin
           GOARCH: arm64
         run: sh build.sh "$RUNNER_TEMP/ensemble-broker-darwin-arm64"
       - name: Upload darwin/arm64 binary
-        if: ${{ runner.os == 'macOS' }}
+        if: ${{ needs.changes.outputs.broker == 'true' && runner.os == 'macOS' }}
         uses: actions/upload-artifact@v7.0.2
         with:
           name: ensemble-broker-darwin-arm64

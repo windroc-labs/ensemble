@@ -72,7 +72,10 @@ The Go broker (`broker/`, Go from `broker/go.mod`): `sh with-go-state.sh gofmt -
 `sh with-go-state.sh go vet ./...`, `sh with-go-state.sh go test ./...`,
 `sh with-go-state.sh go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...` in `broker/`; run every
 Go tool through `broker/with-go-state.sh` (state in `.cache/go/`). CI's `Broker` jobs run them on
-Linux and macOS and build the darwin/arm64 binary.
+Linux and macOS and build the darwin/arm64 binary for full scope, including changes to
+`broker/**`, `protocol/docker-broker/**`, `.github/workflows/test.yml`, and every push to
+`main`. Docs-only and upper-layer-only PRs skip Go setup, checks, builds and artifact
+upload; both `Broker` jobs still report success, like the required `Worker image` check.
 
 Integration jobs upload `integration-<run-id>-<attempt>-<job>` artifacts containing
 the discovered IDs, assigned IDs, expected load, Python/tmux versions, runner type, supervised
@@ -116,6 +119,7 @@ flowchart LR
     S[Contract-based path scope] --> U
     S --> I
     S --> R[Repository tests when full]
+    S --> B
     L[Lint groups] --> CI[Required CI aggregate]
     U[Unit: 2 jobs x 4 processes] --> C[Combine every coverage shard]
     C --> G[85% diff coverage gate]
@@ -123,7 +127,7 @@ flowchart LR
     U --> CI
     I[Integration: 8 jobs x 4 processes] --> CI
     R --> CI
-    B[Broker: Linux and macOS] --> CI
+    B[Broker: Linux and macOS when full] --> CI
 ```
 Unit shards use sorted test IDs; integration shards use recorded durations. Every ID
 occurs exactly once. Coverage applies to pull requests; `CI` requires every applicable result.
@@ -141,7 +145,9 @@ other path selects the full suite. Renames consider both endpoints. `TEST_PROJEC
 passes the selected group to discovery. Static lint remains required; `Lint style` checks
 unit import boundaries on every change. `CI` accepts a skipped repository job only for
 the upper-only decision, and rejects failures,
-cancellation or unexpected skips.
+cancellation or unexpected skips. The explicit `broker` output controls Go steps;
+`CI` validates it against full and docs scope and always requires the `broker` job's
+result to be success, even when its Go steps are intentionally skipped.
 
 ```bash
 python3 .github/ci_scope.py --event pull_request --paths manager/skills/manage/SKILL.md

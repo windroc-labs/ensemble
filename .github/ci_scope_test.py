@@ -105,7 +105,13 @@ class Repository(unittest.TestCase):
         )
         self.assertEqual(
             docs,
-            {"full": False, "docs": True, "projects": PROJECTS[:2], "reason": "Docs-only changes"},
+            {
+                "full": False,
+                "docs": True,
+                "broker": False,
+                "projects": PROJECTS[:2],
+                "reason": "Docs-only changes",
+            },
         )
         for paths, event, full in (
             (["README.md", "session/src/ensemble/session/cli.py"], "pull_request", True),
@@ -124,6 +130,23 @@ class Repository(unittest.TestCase):
 
     def test_the_checked_inventory_is_never_docs_only(self):
         self.assertIn(INVENTORY, scope.CHECKED_DOCS)
+
+    def test_broker_scope_for_docs_python_broker_protocol_and_workflow(self):
+        for paths, event, broker in (
+            (["README.md", "docs/tests.md"], "pull_request", False),
+            (["manager/src/ensemble/manager/main.py"], "pull_request", False),
+            (["orchestrator/src/ensemble/orchestrator/main.py"], "pull_request", False),
+            (["session/src/ensemble/session/cli.py"], "pull_request", True),
+            (["broker/main.go"], "pull_request", True),
+            (["protocol/docker-broker/request.schema.json"], "pull_request", True),
+            ([".github/workflows/test.yml"], "pull_request", True),
+            (["README.md", "broker/go.mod"], "pull_request", True),
+            ([], "pull_request", True),
+            (["README.md"], "push", True),
+            (["manager/a.py"], "workflow_dispatch", True),
+        ):
+            with self.subTest(paths=paths, event=event):
+                self.assertIs(scope.classify(self.root, paths, event)["broker"], broker)
 
     def test_unsafe_or_non_normal_paths_are_full(self):
         for path in (
@@ -276,7 +299,7 @@ class Repository(unittest.TestCase):
         self.assertEqual(json.loads(out.getvalue())["projects"], PROJECTS[:2])
         self.assertEqual(
             destination.read_text(),
-            'existing=value\nfull=false\ndocs=false\nprojects=["manager", "orchestrator"]\n',
+            'existing=value\nfull=false\ndocs=false\nbroker=false\nprojects=["manager", "orchestrator"]\n',
         )
 
     def test_cli_pr_uses_diff_but_push_needs_no_diff(self):
@@ -316,7 +339,11 @@ class Aggregate(unittest.TestCase):
                 "broker",
             )
         }
-        result["changes"]["outputs"] = {"full": str(full).lower(), "docs": str(docs).lower()}
+        result["changes"]["outputs"] = {
+            "full": str(full).lower(),
+            "docs": str(docs).lower(),
+            "broker": str(full).lower(),
+        }
         result["repository"]["result"] = "success" if full else "skipped"
         result["coverage"]["result"] = "success" if event == "pull_request" else "skipped"
         result["integration"]["result"] = "skipped" if docs else "success"
@@ -372,6 +399,34 @@ class Aggregate(unittest.TestCase):
                 self.assertTrue(scope.gate(needs, "pull_request"))
         self.assertTrue(scope.gate(self.needs(full=False, event="push"), "push"))
         self.assertTrue(scope.gate(self.needs(), "workflow_dispatch"))
+
+    def test_invalid_or_inconsistent_broker_output_fails(self):
+        for value in (None, True, False, "", "TRUE", "unknown"):
+            needs = self.needs(full=False)
+            needs["changes"]["outputs"]["broker"] = value
+            with self.subTest(broker=value):
+                self.assertIn(
+                    "changes.outputs.broker must be exactly true or false",
+                    scope.gate(needs, "pull_request"),
+                )
+        for full, docs, broker, event in (
+            (True, False, "false", "pull_request"),
+            (True, False, "false", "push"),
+            (False, True, "true", "pull_request"),
+        ):
+            needs = self.needs(full=full, docs=docs, event=event)
+            needs["changes"]["outputs"]["broker"] = broker
+            with self.subTest(full=full, docs=docs, broker=broker, event=event):
+                self.assertTrue(scope.gate(needs, event))
+
+    def test_broker_check_must_report_success_even_when_go_steps_are_skipped(self):
+        for docs in (False, True):
+            needs = self.needs(full=False, docs=docs)
+            self.assertEqual(scope.gate(needs, "pull_request"), [])
+            needs["broker"]["result"] = "skipped"
+            self.assertIn(
+                "broker: expected success, got 'skipped'", scope.gate(needs, "pull_request")
+            )
 
     def test_cli_gate_uses_environment_and_reports_diagnostics(self):
         for needs, expected in ((self.needs(), 0), (self.needs(full=False), 0), ({}, 1), (None, 1)):

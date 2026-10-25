@@ -32,8 +32,27 @@ class BrokerJob(Case):
         ):
             self.assertIn(name, names)
         self.assertEqual(names.index("Staticcheck"), names.index("Go vet") + 1)
-        self.assertEqual(found["Staticcheck"].strip(), f"run: {STATICCHECK}")
+        self.assertIn(f"        run: {STATICCHECK}\n", found["Staticcheck"])
         self.assertNotIn("continue-on-error", job("test.yml", "broker"))
+
+    def test_broker_jobs_report_without_running_go_outside_scope(self):
+        block = job("test.yml", "broker")
+        self.assertIn("    needs: [changes]\n", block)
+        self.assertNotRegex(block, r"(?m)^    if:")
+        self.assertIn("os: [ubuntu-24.04, macos-15]", block)
+        self.assertIn("broker: ${{ steps.scope.outputs.broker }}", job("test.yml", "changes"))
+        found = steps(block)
+        for name, body in found.items():
+            if name in ("Check out", "Require unchanged checkout"):
+                continue
+            with self.subTest(step=name):
+                self.assertIn("needs.changes.outputs.broker == 'true'", body)
+        for name, runner in (
+            ("Go build", "Linux"),
+            ("Build darwin/arm64 binary with cgo", "macOS"),
+            ("Upload darwin/arm64 binary", "macOS"),
+        ):
+            self.assertIn(f"&& runner.os == '{runner}'", found[name])
 
     def test_macos_build_step_builds_and_signs_with_build_script(self):
         step = steps(job("test.yml", "broker"))["Build darwin/arm64 binary with cgo"]
