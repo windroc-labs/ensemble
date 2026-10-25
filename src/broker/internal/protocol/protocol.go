@@ -30,6 +30,7 @@ const (
 	RefreshFailed     Code = "refresh_failed"
 	EgressUnavailable Code = "egress_unavailable"
 	InternalError     Code = "internal_error"
+	Busy              Code = "busy"
 )
 
 var exits = map[Code]int{
@@ -37,7 +38,7 @@ var exits = map[Code]int{
 	DockerUnreachable: 7, BuildFailed: 8, StartFailed: 9, CloseFailed: 10, KeychainFailed: 11,
 	WorkspaceDirty: 12, WorkspaceRejected: 13, WorkspaceFailed: 14, GitHubFailed: 15, RefreshFailed: 16,
 	EgressUnavailable: 17,
-	InternalError:     70,
+	InternalError:     70, Busy: 75,
 }
 
 func Exit(c Code) int {
@@ -76,13 +77,19 @@ type CodexStatus struct {
 	Repair    string `json:"repair"`
 }
 
+type Holder struct {
+	Container string `json:"container"`
+	Owner     string `json:"owner"`
+}
+
 type Error struct {
-	Code         Code   `json:"code"`
-	Message      string `json:"message"`
-	Cleanup      string `json:"cleanup"`
-	Cause        string `json:"cause,omitempty"`
-	CleanupError string `json:"cleanup_error,omitempty"`
-	Container    string `json:"container,omitempty"`
+	Code         Code    `json:"code"`
+	Message      string  `json:"message"`
+	Cleanup      string  `json:"cleanup"`
+	Cause        string  `json:"cause,omitempty"`
+	CleanupError string  `json:"cleanup_error,omitempty"`
+	Container    string  `json:"container,omitempty"`
+	Holder       *Holder `json:"holder,omitempty"`
 }
 
 func New(code Code, message string) *Error {

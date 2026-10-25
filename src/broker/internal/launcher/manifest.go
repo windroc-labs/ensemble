@@ -22,6 +22,7 @@ type Manifest struct {
 	GitHubPermissions                                                                           map[string]string // the repository permissions each of its tokens is limited to; nil: github null
 	OpencodeProviders                                                                           []string          // the providers whose API keys an opencode container gets
 	ClaudeAccount                                                                               string            // the account whose setup-token a claude container gets; "" for other clients
+	Lock, LockOwner                                                                             string            // optional lock name and readable owner
 }
 
 // A workspace volume's labels: its kind (always kind) and its mount point.
@@ -30,8 +31,6 @@ const (
 	kind           = "ws"
 	workspaceLabel = "ensemble.workspace"
 	maxProviders   = 32
-	// egressPrefix: the egress gateway's labels; a worker carrying one would count as a second gateway.
-	egressPrefix = "windroc.egress."
 )
 
 var (
@@ -40,12 +39,15 @@ var (
 	imagePattern      = regexp.MustCompile(`^ensemble-worker:[0-9a-f]{64}$`)
 	labelKeyPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 	appPattern        = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	lockPattern       = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,62}$`)
 	// An OpenCode provider's name: its keychain account and its key file's name, <name>.key.
 	providerPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 	// A Claude account's name: its setup-token item's keychain account. Lowercase only, so the keychain's case
 	// handling cannot merge two names.
 	claudeAccountPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 )
+
+func ValidLock(name string) bool { return lockPattern.MatchString(name) }
 
 // ValidProvider is whether name can be a listed OpenCode provider; ollama needs no key.
 func ValidProvider(name string) bool { return providerPattern.MatchString(name) && name != "ollama" }
@@ -133,7 +135,7 @@ func ParseManifest(data []byte) (Manifest, error) {
 	var m Manifest
 	targets := map[string]*string{"name": &m.Name, "generation": &m.Generation, "image": &m.Image,
 		"cwd": &m.CWD, "workspace": &m.Workspace, "client": &m.Client, "claude_dir": &m.ClaudeDir, "codex_dir": &m.CodexDir,
-		"opencode_dir": &m.OpencodeDir, "hook_path": &m.HookPath}
+		"opencode_dir": &m.OpencodeDir, "hook_path": &m.HookPath, "lock": &m.Lock, "lock_owner": &m.LockOwner}
 	for key, raw := range fields {
 		if key == "labels" || key == "github" || key == "opencode_providers" || key == "claude_account" {
 			continue
@@ -176,6 +178,11 @@ func ParseManifest(data []byte) (Manifest, error) {
 		return reject("paths must be absolute")
 	}
 	m.CWD = filepath.Clean(m.CWD) // Docker mounts at the cleaned target
+	_, hasLock := fields["lock"]
+	_, hasOwner := fields["lock_owner"]
+	if hasLock != hasOwner || hasLock && (!ValidLock(m.Lock) || strings.TrimSpace(m.LockOwner) == "") {
+		return reject("lock requires a valid lock name and nonempty lock_owner")
+	}
 	if raw := fields["github"]; string(raw) != "null" {
 		var github map[string]json.RawMessage
 		if len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &github) != nil || len(github) != 2 {
@@ -228,7 +235,7 @@ func ParseManifest(data []byte) (Manifest, error) {
 	m.Labels = map[string]string{}
 	for key, raw := range labels {
 		value, ok := str(raw)
-		if !ok || !labelKeyPattern.MatchString(key) || strings.HasPrefix(key, "ensemble.") || strings.HasPrefix(key, egressPrefix) {
+		if !ok || !labelKeyPattern.MatchString(key) || strings.HasPrefix(key, "ensemble.") || strings.HasPrefix(key, "windroc.") {
 			return reject("invalid label %q", key)
 		}
 		m.Labels[key] = value

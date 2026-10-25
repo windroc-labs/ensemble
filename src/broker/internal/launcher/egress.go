@@ -18,6 +18,7 @@ import (
 // The egress gateway's label contract, version 1 (windroc/egress-proxy docs/label-contract.md): the broker finds the
 // gateway and its workers network only through these labels and Docker health, and never probes the gateway.
 const (
+	egressPrefix    = "windroc.egress."
 	contractLabel   = egressPrefix + "contract"
 	contractVersion = "1"
 	networksLabel   = egressPrefix + "networks"
@@ -27,11 +28,8 @@ const (
 	egressHint      = " Start the egress gateway (./start.sh in its egress-proxy checkout, docs/docker-host.md#egress-gateway), then retry."
 )
 
-var (
-	containerIDPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	// A Docker network name; never a flag.
-	networkPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
-)
+// networkPattern is a Docker network name; never a flag.
+var networkPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
 // egress is the gateway check's result: the network a client container joins and the proxy URL it uses there.
 type egress struct{ Network, Proxy string }
