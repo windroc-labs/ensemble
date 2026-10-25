@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from ensemble.orchestrator.engine.types import (
+    KEYCHAIN_NAME,
     GraphQLErrors,
     KeychainError,
     LinearApp,
@@ -26,7 +27,6 @@ URL = "https://api.linear.app/graphql"
 TOKEN_URL = "https://api.linear.app/oauth/token"
 SECURITY = "/usr/bin/security"  # absolute: no PATH entry stands in for the Keychain
 RENEW_BEFORE = timedelta(days=5)
-SERVICE = re.compile(r"[A-Za-z0-9._@+][A-Za-z0-9._@+-]*")
 ACCOUNT = re.compile(r'^\s*"acct"<blob>="([^"]*)"$', re.M)
 
 
@@ -330,7 +330,7 @@ def _write(service, value, timeout):
     re-read, since security -i can exit 0 when its command fails."""
     attrs = _security(["find-generic-password", "-s", service], timeout)
     found = ACCOUNT.search(attrs.stdout or "") if attrs.returncode == 0 else None
-    account = found[1] if found and SERVICE.fullmatch(found[1]) else service
+    account = found[1] if found and KEYCHAIN_NAME.fullmatch(found[1]) else service
     command = f"add-generic-password -U -s {service} -a {account} -X {value.encode().hex()}\n"
     try:
         wrote = subprocess.run(

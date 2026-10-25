@@ -15,7 +15,7 @@ from unittest import mock
 from ensemble import delegate, utils
 from ensemble.orchestrator.engine import config
 from ensemble.orchestrator.engine.flow import workflow
-from ensemble.orchestrator.engine.types import State, TrackerKind
+from ensemble.orchestrator.engine.types import AppKind, LinearApp, State, TrackerKind
 from ensemble.utils import temp_dirs
 from orchestrator_tests.case import REPO, ROOTS, Case
 from orchestrator_tests.config_fixtures import (
@@ -31,6 +31,8 @@ from orchestrator_tests.config_fixtures import (
 )
 from orchestrator_tests.process_fixtures import DEVNULL, CompletedProcess
 from orchestrator_tests.unit.board_ids import (
+    HARNESS_APP,
+    HARNESS_LINE,
     HEADER,
     PACKAGED_FLOW,
     STATES,
@@ -154,10 +156,11 @@ class CatalogDelegate(FakeDelegate):
         )
 
 
+HARNESS = LinearApp("harness", AppKind.HARNESS, "linear.harness", **HARNESS_APP)
+
 LINEAR_DEFAULTS = {
-    **dict.fromkeys(
-        ("team", "harness_key", "manager_key", "task_label_group", "agent_label_group"), ""
-    ),
+    **dict.fromkeys(("team", "manager_key", "task_label_group", "agent_label_group"), ""),
+    "harness": dict.fromkeys(("client_id", "secret_service", "token_service", "user_id"), ""),
     "states": dict.fromkeys(State, ""),
     "human_members": [],
     **dict.fromkeys(("task_labels", "agent_labels", "project_repos"), {}),
@@ -281,12 +284,49 @@ class ConfigurationLoading(ConfigFile, Case):
                 }.items()
             ],
             (
-                BASE.replace('linear.harness_key = "linear-api-key"\n', ""),
-                missing("linear.harness_key"),
+                BASE.replace(HARNESS_LINE, ""),
+                missing(
+                    "linear.harness.client_id, linear.harness.secret_service, "
+                    "linear.harness.token_service, linear.harness.user_id"
+                ),
+            ),
+            *[
+                (
+                    BASE.replace(f'{key} = "{HARNESS_APP[key]}"', f'{key} = ""'),
+                    missing(f"linear.harness.{key}"),
+                )
+                for key in HARNESS_APP
+            ],
+            (
+                BASE.replace(
+                    HARNESS_LINE, 'linear.harness_key = "linear-api-key"\n' + HARNESS_LINE
+                ),
+                "unknown keys in [linear]: harness_key",
             ),
             (
-                BASE.replace('harness_key = "linear-api-key"', "harness_key = 1"),
-                "linear.harness_key must be a Keychain service name: 1",
+                BASE.replace('user_id = "', 'typo = 1, user_id = "'),
+                "[linear.harness] has unknown keys: typo",
+            ),
+            (
+                BASE.replace(HARNESS_LINE, 'linear.harness = "x"\n'),
+                "[linear.harness] must be a table",
+            ),
+            *[
+                (
+                    BASE.replace(f'{key} = "{HARNESS_APP[key]}"', f"{key} = {value}"),
+                    f"linear.harness.{key} must be {what}: {shown}",
+                )
+                for key, value, shown, what in (
+                    ("client_id", '"a b"', "'a b'", "a Linear OAuth app Client ID"),
+                    ("client_id", "1", "1", "a Linear OAuth app Client ID"),
+                    ("secret_service", '"x -s y"', "'x -s y'", "a Keychain service name"),
+                    ("token_service", '"-x"', "'-x'", "a Keychain service name"),
+                    ("user_id", '"harness"', "'harness'", "a Linear user id (UUID)"),
+                )
+            ],
+            (
+                BASE.replace('"linear-api-key-secret"', '"linear-api-key"'),
+                "linear.harness.secret_service 'linear-api-key' is also linear.harness.token_service",
             ),
             (
                 BASE.replace(TEAM, "Acme's Agents"),
@@ -297,7 +337,9 @@ class ConfigurationLoading(ConfigFile, Case):
             (
                 'tracker = "linear"\n' + HEADER[HEADER.index("delegates = ") :] + body,
                 missing(
-                    "linear.team, linear.harness_key, linear.task_label_group, linear.states.todo, "
+                    "linear.team, linear.harness.client_id, linear.harness.secret_service, "
+                    "linear.harness.token_service, linear.harness.user_id, "
+                    "linear.task_label_group, linear.states.todo, "
                     "linear.states.in_progress, linear.states.in_review, linear.states.handoff, "
                     "linear.states.done, linear.states.canceled, linear.states.backlog"
                 ),
@@ -325,7 +367,7 @@ class ConfigurationLoading(ConfigFile, Case):
                 missing("linear.states.backlog"),
             ),
             (
-                BASE.replace(" }\n", ', triage = "x" }\n', 1),
+                BASE.replace(STATES_LINE, STATES_LINE.replace(" }\n", ', triage = "x" }\n')),
                 "[linear.states] has unknown keys: triage",
             ),
             (
@@ -397,11 +439,15 @@ class ConfigurationLoading(ConfigFile, Case):
             ),
             (
                 PIPELINE.replace("linear-api-key-engineer", "linear-api-key"),
-                "[linear.roles.engineer] key 'linear-api-key' is linear.harness_key",
+                "[linear.roles.engineer] key 'linear-api-key' is linear.harness.token_service",
             ),
             (
                 'linear.manager_key = "linear-api-key"\n' + PIPELINE,
-                "linear.manager_key 'linear-api-key' is linear.harness_key",
+                "linear.manager_key 'linear-api-key' is linear.harness.token_service",
+            ),
+            (
+                PIPELINE.replace("linear-api-key-pm", "linear-api-key-secret"),
+                "[linear.roles.pm] key 'linear-api-key-secret' is linear.harness.secret_service",
             ),
             (
                 'linear.manager_key = "linear-api-key-pm"\n' + PIPELINE,
@@ -491,10 +537,10 @@ class ConfigurationLoading(ConfigFile, Case):
             (
                 cfg.linear.team,
                 cfg.linear.states,
-                cfg.linear.harness_key,
+                cfg.linear.harness,
                 cfg.linear.task_label_group,
             ),
-            (TEAM, STATES, "linear-api-key", TASK_GROUP),
+            (TEAM, STATES, HARNESS, TASK_GROUP),
         )
         pm = cfg.linear.roles["pm"]
         self.assertEqual(
@@ -957,7 +1003,9 @@ class CommittedConfiguration(Case):
             str(cm.exception),
             "orchestrator/config.toml: "
             + missing(
-                "linear.team, linear.harness_key, linear.task_label_group, linear.states.todo, "
+                "linear.team, linear.harness.client_id, linear.harness.secret_service, "
+                "linear.harness.token_service, linear.harness.user_id, "
+                "linear.task_label_group, linear.states.todo, "
                 "linear.states.in_progress, linear.states.in_review, linear.states.handoff, "
                 "linear.states.done, linear.states.canceled, linear.states.backlog, "
                 "linear.roles.researcher.account, "
@@ -1010,7 +1058,8 @@ class CommittedConfiguration(Case):
             + "[orchestrator.client_max_runs]\nopencode = 1\n"
             + "[orchestrator.roles.engineer]\nmax_runs = 2\n"
             + f'[orchestrator.linear]\nteam = "{TEAM}"\nhuman_members = ["me@x.com"]\n'
-            + f'harness_key = "linear-api-key"\ntask_label_group = "{TASK_GROUP}"\n'
+            + HARNESS_LINE.replace("linear.harness", "harness")
+            + f'task_label_group = "{TASK_GROUP}"\n'
             + f'agent_label_group = "{AGENT_GROUP}"\n'
             + "[orchestrator.linear.states]\n"
             + "".join(f'{k} = "{v}"\n' for k, v in STATES.items())
@@ -1024,11 +1073,11 @@ class CommittedConfiguration(Case):
             (
                 cfg.linear.team,
                 cfg.linear.human_members,
-                cfg.linear.harness_key,
+                cfg.linear.harness,
                 cfg.linear.task_label_group,
                 cfg.linear.states,
             ),
-            (TEAM, ("me@x.com",), "linear-api-key", TASK_GROUP, STATES),
+            (TEAM, ("me@x.com",), HARNESS, TASK_GROUP, STATES),
         )
         self.assertEqual(
             (
@@ -1212,8 +1261,8 @@ class TrackerChoice(ConfigFile, Case):
         linear = cfg.linear
         self.assertIsInstance(linear, config.LinearSettings)
         self.assertEqual(
-            (linear.team, linear.states, linear.harness_key, linear.task_label_group),
-            (TEAM, STATES, "linear-api-key", TASK_GROUP),
+            (linear.team, linear.states, linear.harness, linear.apps, linear.task_label_group),
+            (TEAM, STATES, HARNESS, (HARNESS,), TASK_GROUP),
         )
         self.assertEqual(
             (linear.human_members, linear.task_labels, linear.agent_label_group),
@@ -1248,7 +1297,10 @@ class TrackerChoice(ConfigFile, Case):
                 self.assertIsNone(e.logs_dir)
 
     def test_local_config_has_no_linear_settings(self):
-        cfg = self.load(LOCAL_BOARD + '[linear]\nteam = "not-a-uuid"\nharness_key = ""\n')
+        cfg = self.load(
+            LOCAL_BOARD
+            + '[linear]\nteam = "not-a-uuid"\nharness = { client_id = "a b", user_id = "x" }\n'
+        )
         self.assertIsNone(cfg.linear)
         self.assertEqual(list(cfg.roles), ["researcher", "pm", "engineer"])
         self.fails(
@@ -1997,9 +2049,9 @@ class LocalOverlay(ConfigFile, Case):
                 "orchestrator/config.toml: linear.states.done must be a Linear workflow state id (UUID): 'Done'",
             ),
             (
-                "linear.harness_key = 1\n",
+                'linear.harness.token_service = "a b"\n',
                 BASE,
-                "orchestrator/config.toml: linear.harness_key must be a Keychain service name: 1",
+                "orchestrator/config.toml: linear.harness.token_service must be a Keychain service name: 'a b'",
             ),
             (
                 'linear = "x"\n',
@@ -2025,7 +2077,7 @@ class LocalOverlay(ConfigFile, Case):
                 )
                 for key, flat in (
                     ("team", f'team = "{TEAM}"\n'),
-                    ("harness_key", 'harness_key = "linear-api-key"\n'),
+                    ("harness", '[harness]\nclient_id = "client-harness"\n'),
                     ("human_members", 'human_members = ["a@x.com"]\n'),
                     ("states", f'[states]\ndone = "{STATES["done"]}"\n'),
                     ("task_labels", f'[task_labels]\nbuild = "{LABEL1}"\n'),

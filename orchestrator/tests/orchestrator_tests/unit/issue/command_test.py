@@ -35,7 +35,7 @@ from ensemble.orchestrator.trackers.local.issues import LocalIssues
 from orchestrator_tests.case import Case
 from orchestrator_tests.process_fixtures import CalledProcessError, CompletedProcess, TimeoutExpired
 from orchestrator_tests.unit import promote_fixtures as tp
-from orchestrator_tests.unit.board_ids import ACCOUNTS, STATES, TASK_GROUP
+from orchestrator_tests.unit.board_ids import ACCOUNTS, HARNESS_LINE, STATES, TASK_GROUP
 from orchestrator_tests.unit.issue_fixtures import (
     CLIENT_LABELS,
     CONFIG,
@@ -1008,10 +1008,12 @@ class Failures(IssueCase):
 
     def test_configuration_errors_exit_two(self):
         with open(self.config, "w") as f:
-            f.write(CONFIG.replace('linear.harness_key = "linear-api-key"\n', ""))
+            f.write(CONFIG.replace(HARNESS_LINE, ""))
         code, out, err = self.run_main(["read", "TASK-2"], Gql(issue_node()))
         self.assertEqual((code, out), (2, b""))
-        self.assertIn("required, unset: linear.harness_key:", err)
+        self.assertIn(
+            "required, unset: linear.harness.client_id, linear.harness.secret_service", err
+        )
 
     def test_unset_manager_key_exits_two_before_any_call(self):
         with open(self.config, "w") as f:

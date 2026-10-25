@@ -16,11 +16,11 @@ from ensemble.orchestrator.engine import config, promote, prune
 from ensemble.orchestrator.engine import log as event_log
 from ensemble.orchestrator.engine.flow import workflow
 from ensemble.orchestrator.engine.flow.types import IssueState
-from ensemble.orchestrator.engine.types import IssueError, LinearError, LinearKey
+from ensemble.orchestrator.engine.types import IssueError, LinearError
 from ensemble.orchestrator.trackers.linear import linear_tracker, ops
 from ensemble.orchestrator.trackers.local.local_tracker import LocalTracker
 from orchestrator_tests.case import Case
-from orchestrator_tests.unit.board_ids import FINISHED, TEAM
+from orchestrator_tests.unit.board_ids import FINISHED, HARNESS_IDENTITY, TEAM
 from orchestrator_tests.unit.board_ids import STATES as IDS_BY_KEY
 from orchestrator_tests.unit.board_ids import role as role_table
 from orchestrator_tests.unit.outage import FAILURES, FIELDS, failing
@@ -311,7 +311,7 @@ class PromotionOutages(Base):
                 self.assertIn((linear_tracker.Q_DETAIL, {"i": "DR-1"}), fake.calls)
                 self.assertEqual(
                     down.failed,
-                    [(linear_tracker.Q_DETAIL, {"identity": LinearKey(HARNESS), "i": "DR-2"})],
+                    [(linear_tracker.Q_DETAIL, {"identity": HARNESS_IDENTITY, "i": "DR-2"})],
                 )
                 self.assertEqual(
                     (first["state"], later["state"], fake.mutations), ("Handoff", "Handoff", [])
@@ -390,7 +390,7 @@ class PromotionCleanup(Base):
         self.assertIsInstance(tracker.gql, functools.partial)
         self.assertEqual(
             (tracker.gql.func, tracker.gql.keywords),
-            (self.fake, {"identity": LinearKey(HARNESS)}),
+            (self.fake, {"identity": HARNESS_IDENTITY}),
         )
         self.assertEqual(
             (tracker.team_id, tracker.state_ids, tracker.finished_ids),

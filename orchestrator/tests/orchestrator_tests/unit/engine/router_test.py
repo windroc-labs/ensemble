@@ -31,7 +31,6 @@ from ensemble.orchestrator.engine import gate as quota
 from ensemble.orchestrator.engine.flow.types import IssueState, Pick
 from ensemble.orchestrator.engine.types import (
     LinearError,
-    LinearKey,
     Spec,
     TrackerFileError,
     TrackerKind,
@@ -85,7 +84,7 @@ from orchestrator_tests.router_fixtures import (
     pr_search,
     who,
 )
-from orchestrator_tests.unit.board_ids import HEADER, TASK_GROUP, TEAM
+from orchestrator_tests.unit.board_ids import HARNESS_IDENTITY, HEADER, TASK_GROUP, TEAM
 from orchestrator_tests.unit.board_ids import STATES as IDS_BY_KEY
 from orchestrator_tests.unit.board_ids import role as role_table
 from orchestrator_tests.unit.delegate_fixture import provider
@@ -1699,7 +1698,7 @@ class RouterOutages(TickBase):
                         )
                         self.assertEqual(
                             gql.failed,
-                            [(ops.Q_TEAM, {"identity": LinearKey(HARNESS), "t": TEAM})],
+                            [(ops.Q_TEAM, {"identity": HARNESS_IDENTITY, "t": TEAM})],
                         )
                         self.assertEqual((self.start.launches, self.state), ([], ""))
                     fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])

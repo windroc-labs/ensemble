@@ -54,7 +54,7 @@ KEYS = {r: _LINEAR["roles"][r]["key"] for r in ROLES}
 
 [HUMAN] = _LINEAR["human_members"]
 
-HARNESS, HARNESS_EMAIL = _LINEAR["harness_key"], "harness@agents.test"
+HARNESS, HARNESS_EMAIL = _LINEAR["harness"]["token_service"], "harness@agents.test"
 
 PROJECT = {"id": run_fixtures.PROJECT, "name": "Widgets"}
 

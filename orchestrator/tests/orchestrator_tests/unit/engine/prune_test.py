@@ -17,7 +17,6 @@ from ensemble.orchestrator.engine.flow.types import IssueState, Snapshot
 from ensemble.orchestrator.engine.types import (
     Entry,
     LinearError,
-    LinearKey,
     PruneState,
     Unavailable,
 )
@@ -35,8 +34,8 @@ from orchestrator_tests.prune_fixtures import (
     write,
 )
 from orchestrator_tests.unit import promote_fixtures as tp
-from orchestrator_tests.unit.board_ids import FINISHED
-from orchestrator_tests.unit.run_fixtures import CORE_LOCAL, HARNESS, logged, show
+from orchestrator_tests.unit.board_ids import FINISHED, HARNESS_IDENTITY
+from orchestrator_tests.unit.run_fixtures import CORE_LOCAL, logged, show
 
 from delegate.tests.workdir import checkout_path
 
@@ -762,7 +761,7 @@ class RetentionCleanup(PruneScenario):
         self.outage(
             "issues",
             issues,
-            [(linear_tracker.Q_SNAPSHOTS, {"identity": LinearKey(HARNESS), "f": mock.ANY})],
+            [(linear_tracker.Q_SNAPSHOTS, {"identity": HARNESS_IDENTITY, "f": mock.ANY})],
         )
         self.assertEqual(issues.calls, [])
         self.assertTrue(all(os.path.isdir(c) for c in clones))
@@ -779,7 +778,7 @@ class RetentionCleanup(PruneScenario):
         self.outage(
             "issueArchive",
             issues,
-            [(linear_tracker.M_ARCHIVE, {"identity": LinearKey(HARNESS), "i": "id-TASK-1"})],
+            [(linear_tracker.M_ARCHIVE, {"identity": HARNESS_IDENTITY, "i": "id-TASK-1"})],
         )
 
 

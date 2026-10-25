@@ -26,6 +26,7 @@ from ensemble.utils import SID_ENV, Record, Status
 from orchestrator_tests.case import REPO, Case
 from orchestrator_tests.linear_run_case import SID, ReadyDelegate, RunCase
 from orchestrator_tests.unit import run_fixtures
+from orchestrator_tests.unit.board_ids import HARNESS_IDENTITY
 from orchestrator_tests.unit.run_fixtures import logged
 from orchestrator_tests.unit.streams import Stderr
 
@@ -65,7 +66,7 @@ class Wirings(run_fixtures.Base):
         accounts.harness.find_comment(ISSUE, (SID, "session"))
         gql.assert_called_with(
             ops.Q_COMMENT,
-            identity=LinearKey(run_fixtures.HARNESS),
+            identity=HARNESS_IDENTITY,
             timeout=run_comments.LIMIT,
             c=ops.client_id(SID, "session"),
         )
@@ -76,7 +77,7 @@ class Wirings(run_fixtures.Base):
         self.assertEqual(
             (reader.gql.keywords, reader.state_ids, reader.team_id),
             (
-                {"identity": LinearKey(run_fixtures.HARNESS)},
+                {"identity": HARNESS_IDENTITY},
                 cfg.linear.states,
                 cfg.linear.team,
             ),

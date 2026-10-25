@@ -7,6 +7,7 @@ from ensemble.orchestrator.engine import runs
 from ensemble.orchestrator.engine.linear_run import LinearRun
 from ensemble.orchestrator.engine.types import Config, Docs, LinearSettings, TrackerKind
 from ensemble.utils import load_class
+from orchestrator_tests.unit.board_ids import HARNESS_IDENTITY
 
 from delegate.tests.fakes.harness_session import HarnessSession, RecordingHost, harness_launches
 from delegate.tests.harness import SID, HarnessCase
@@ -28,7 +29,7 @@ class HarnessRun(HarnessCase):
             team="",
             states={},
             human_members=(),
-            harness_key="",
+            harness=HARNESS_IDENTITY,
             manager_key="",
             task_label_group="",
             task_labels={},

@@ -5,6 +5,8 @@ import shutil
 import tempfile
 from importlib.resources import files
 
+from ensemble.orchestrator.engine.types import AppKind, LinearApp
+
 TEAM = "00000000-0000-4000-8000-000000000001"
 STATES = {
     k: f"00000000-0000-4000-8000-0000000000{i:02d}"
@@ -28,10 +30,22 @@ FINISHED = frozenset({STATES["done"], STATES["canceled"], DUPLICATE})
 TASK_GROUP = "00000000-0000-4000-8000-000000000002"
 # The Linear tracker, then dotted keys and inline tables: fixtures may append top-level keys (a
 # Linear one as linear.<key>) or tables ([linear.<table>] included) after it.
+HARNESS_USER = "00000000-0000-4000-8000-000000000201"
+# The harness app: its token entry is "linear-api-key", what a fake transport keys the harness by.
+HARNESS_APP = {
+    "client_id": "client-harness",
+    "secret_service": "linear-api-key-secret",
+    "token_service": "linear-api-key",
+    "user_id": HARNESS_USER,
+}
+HARNESS_IDENTITY = LinearApp("harness", AppKind.HARNESS, "linear.harness", **HARNESS_APP)
+HARNESS_LINE = "linear.harness = {{ {} }}\n".format(
+    ", ".join(f'{k} = "{v}"' for k, v in HARNESS_APP.items())
+)
 HEADER = (
     'tracker = "linear"\n'
-    + 'linear.team = "{}"\nlinear.harness_key = "linear-api-key"\nlinear.states = {{ {} }}\n'.format(
-        TEAM, ", ".join(f'{k} = "{v}"' for k, v in STATES.items())
+    + 'linear.team = "{}"\n{}linear.states = {{ {} }}\n'.format(
+        TEAM, HARNESS_LINE, ", ".join(f'{k} = "{v}"' for k, v in STATES.items())
     )
     + f'linear.task_label_group = "{TASK_GROUP}"\n'
     + 'delegates = { default = "harness", harness = { implementation = "ensemble.delegate:HarnessDelegate" } }\n'

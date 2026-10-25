@@ -89,6 +89,11 @@ class LinearApp:
     def scopes(self) -> str:
         return SCOPES[self.kind]
 
+    @property
+    def service(self) -> str:
+        """The Keychain service of what its calls send, as LinearKey.service."""
+        return self.token_service
+
 
 LinearIdentity = LinearKey | LinearApp  # who a Linear call is made as
 
@@ -110,7 +115,7 @@ class LinearSettings:
     team: str
     states: Mapping[str, str]
     human_members: tuple[str, ...]
-    harness_key: str
+    harness: LinearApp
     manager_key: str
     task_label_group: str
     task_labels: Mapping[str, str]
@@ -120,8 +125,9 @@ class LinearSettings:
     roles: Mapping[str, LinearRole]
 
     @property
-    def harness(self) -> LinearKey:
-        return LinearKey(self.harness_key)
+    def apps(self) -> tuple[LinearApp, ...]:
+        """The configured OAuth apps."""
+        return (self.harness,)
 
     @property
     def manager(self) -> LinearKey:
@@ -445,6 +451,7 @@ class Target:
     host: str = "github.com"
 
 
+KEYCHAIN_NAME = re.compile(r"[A-Za-z0-9._@+][A-Za-z0-9._@+-]*")  # safe on a security -i line
 UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
