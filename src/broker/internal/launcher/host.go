@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"time"
 
 	"ensemble/broker/internal/audit"
 	"ensemble/broker/internal/codex"
@@ -63,6 +64,7 @@ type Host struct {
 	Progress io.Writer                         // nil: none; build's notes on older images, after Docker's progress; start's phase times
 	Lock     func() (unlock func(), err error) // the image lock: build's lease and inspect, and prune
 	Audit    *audit.Recorder                   // nil: none; start, refresh and close name their container and add the client credential
+	Now      func() time.Time                  // nil: host clock; mutex expiry tests supply a clock
 }
 
 // NewHost wires the real filesystem; tests build Host with fakes. rec is the command's audit recorder, the one tokens

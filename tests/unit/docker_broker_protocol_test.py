@@ -71,6 +71,8 @@ class DockerBrokerProtocol(Case):
             "build_output",
             "start_input",
             "start_output",
+            "lock_query_input",
+            "lock_query_output",
             "refresh_input",
             "refresh_output",
             "close_input",
