@@ -16,7 +16,7 @@ the installed ensemble plugin directory.
 
 Needs Docker Desktop (running) and `gh` (logged in).
 
-`scripts/install.sh` installs and starts Docker Desktop.
+`scripts/install.sh --docker` installs and starts Docker Desktop and the [egress gateway](#egress-gateway).
 
 **Rosetta** stays off and `scripts/install.sh` never installs it: the worker image is arm64. For an amd64-only base image in
 your Dockerfile, run `softwareupdate --install-rosetta`, then turn on Docker Desktop › Settings › General › **Use Rosetta
@@ -38,6 +38,46 @@ To upgrade, rerun it (your Dockerfile is never overwritten), then [log in](#log-
 the image. The image pins `gh`, Codex and OpenCode; rebuild an image whose client is below the broker's minimum version.
 A worker runs only that Codex, `/opt/ensemble/bin/codex`, first on `PATH`: a Codex your Dockerfile installs is never run,
 so drop it to shrink the image (a Dockerfile seeded before this change has `@openai/codex` in its `npm install -g` line).
+
+### Egress gateway
+
+Selecting Docker in `scripts/install.sh` also fetches private `windroc/egress-proxy` using your logged-in `gh`
+access, pinned to commit `225409bd04954ff1ea81d66e5339c812a519b4f7` (label contract 1). It installs under
+`~/.egress/versions/<commit>`, runs that version's `start.sh`, and waits up to 120 seconds for
+`egress-gateway` to become healthy. `~/.egress/current` points to the installed version. It does not follow
+a branch or tag. No Docker selection means no gateway installation.
+
+The installer creates `~/.egress/config.local.yaml` only when absent, with just `workers` in denylist mode;
+an existing config is kept byte for byte. A healthy same-version rerun keeps the checkout, config and container.
+The gateway is shared with other caller networks: uninstalling ensemble keeps `~/.egress` and the gateway.
+The pinned [gateway README](https://github.com/windroc/egress-proxy/blob/225409bd04954ff1ea81d66e5339c812a519b4f7/README.md)
+and `config.example.yaml` in the installed version define the config.
+
+| Operation | Command |
+| --- | --- |
+| Start, add or remove a caller section | `~/.egress/current/start.sh` (before the first successful install, rerun `scripts/install.sh --docker`) |
+| Apply a policy edit within existing sections; after the Mac changes networks | `docker restart egress-gateway` |
+| Health in the status column | `docker ps --filter name=egress-gateway` |
+| Detailed health | `docker inspect --format '{{json .State.Health}}' egress-gateway` |
+| Startup/config errors | `docker logs egress-gateway` |
+
+`start.sh` builds locally and renders caller networks from the local config before `docker compose up -d`;
+bare compose lacks those attachments. The gateway uses `restart: unless-stopped`, including after Docker Desktop
+restarts; after a Mac reboot, Docker Desktop must start at login. Any policy restart disconnects in-flight
+connections on **every** caller network. Running workers keep their proxy settings and need no restart.
+An edited config without a gateway restart makes health `unhealthy`; new workers are refused while it is
+missing, stopped, starting or unhealthy. Fix the config/startup error, wait for healthy, then start or resume again.
+
+New workers join only the internal network advertised by the `workers` label (`egress-workers` in contract 1).
+Both cases of `HTTP_PROXY` and `HTTPS_PROXY` point to `http://egress-proxy-workers:4750`; only container loopback
+(`localhost`, `127.0.0.1`, `::1`) bypasses the proxy. The gateway allows public destinations and denies private
+ranges, the Mac and LAN, including `host.docker.internal`, unless a specific `host:port` exception applies.
+Without the gateway there is no worker egress. Tools that ignore proxy variables cannot reach external services
+(including direct SSH, raw TCP/UDP and external DNS). Same-network containers can reach each other directly.
+
+The gateway cannot discover the Mac's public IPv4 address or global IPv6 LAN prefix: add those to `deny_ranges`
+in the local config. Restart after changing Wi-Fi or another host network. The policy's limits and defaults
+are in the pinned README. Image builds still use their existing network and can reach the Mac and LAN.
 
 ## Log in
 
@@ -209,7 +249,7 @@ It prints the container name (`C` below) and client versions.
 
 ## What a container gets
 
-- User `agent`, all capabilities dropped, `no-new-privileges`, bridge network; no Docker socket.
+- User `agent`, all capabilities dropped, `no-new-privileges`, only the gateway's internal `workers` network; no Docker socket.
 - A workspace volume at cwd; Claude and OpenCode have their own client-state bind, Codex only its session history.
 - Credentials on tmpfs, readable by the container's processes ([Credentials](credentials.md)).
 - Tools from your `~/.ensemble/docker/worker/Dockerfile`, plus ensemble, clients, plugins and credential wrappers.
@@ -380,14 +420,17 @@ An unregistered account, an account selected for Codex or OpenCode, or a registe
 OpenCode sessions run the host's Ollama models, or a configured provider's ([OpenCode sessions](sessions.md#opencode-sessions)).
 Ollama needs no login; each configured provider's API key comes from the broker ([Log in](#log-in)), which writes it
 to the container's `/run/ensemble/secrets/opencode/<name>.key` at start ([Credentials](credentials.md#who-logs-in)).
-A provider is reached at its `base_url` from the container's bridge network, which Docker Desktop routes through the
-Mac: a LAN address such as `http://10.0.0.5:8080/v1` works as on the Mac, `localhost` is the container itself. The
-first worker to reach a LAN address makes macOS ask **Allow Docker to find devices on local networks?**: allow it (later:
-System Settings › Privacy & Security › Local Network › Docker), or the provider is unreachable. An
-`http://` `base_url` sends the key in plaintext: anyone on the LAN can capture it ([Risks](#risks)). Once, on the Mac:
+A provider is reached through the [gateway](#egress-gateway). Add the `host:port` of each local or LAN provider's
+`base_url` to `networks.workers.exceptions` in `~/.egress/config.local.yaml`, then `docker restart egress-gateway`.
+Use the URL's default port (80 or 443) when omitted. For example, `http://10.0.0.5:8080/v1` needs `10.0.0.5:8080`;
+Ollama needs `host.docker.internal:11434` (or your configured `ollama_port`). `localhost` is the container itself.
+The installer does not add these exceptions. They allow that host and port for **every worker**, including Claude
+and Codex; other ports and LAN destinations remain denied. Host-side `probe-provider` does not use the gateway,
+so it can pass while a worker still lacks its exception. Docker may also need macOS Local Network permission.
+An `http://` `base_url` sends the key in plaintext on the permitted path ([Risks](#risks)). Once, on the Mac:
 
-1. Keep Ollama on `127.0.0.1` (its default; leave `OLLAMA_HOST` unset): the container reaches it through
-   `host.docker.internal` ([Risks](#risks)).
+1. Keep Ollama on `127.0.0.1` (its default; leave `OLLAMA_HOST` unset): add its exception above so the gateway can
+   reach it through `host.docker.internal`.
 2. Set its context length to at least 65536, or tool calls fail: for the Ollama app,
    `launchctl setenv OLLAMA_CONTEXT_LENGTH 65536`, then quit and reopen it; for `ollama serve`, start it with
    `OLLAMA_CONTEXT_LENGTH=65536`. A larger one: set `[session.clients.opencode] ollama_context` to it, or
@@ -546,17 +589,26 @@ secrets in environments that need it.
 
 ## Live acceptance
 
-`tests/session/live_docker.py` checks the critical path on Docker Desktop, run by hand from
-the repo root with `PYTHONPATH` as in [Tests](tests.md). It needs the broker installed and
+Run `tests/session/live_docker.py` only through mini-op on the test Mac mini, from the repo root with
+`PYTHONPATH` as in [Tests](tests.md). Never run real-machine acceptance on a developer's Mac.
+It needs a healthy [gateway](#egress-gateway), the broker installed and
 logged in ([Install](#install), [Log in](#log-in)), for Codex also `install-codex` and
 `login codex` ([Codex](#codex)), for OpenCode the host's Ollama on `127.0.0.1` with the
 tier model pulled and `OLLAMA_CONTEXT_LENGTH` ≥ 65536, `[session.hosts] default =
 "docker"` and `[delegate.delegates] harness_host = "tmux"` ([Run workers](#run-workers),
 [Role runs](#role-runs)), and an authorized test repo with the App installed.
 
+Run `worker` once per client (Claude, Codex, OpenCode). It verifies the contract labels, gateway health,
+internal `workers` network, the worker's sole network attachment and both cases of proxy variables; public HTTPS
+must pass via the proxy and direct public IP access must fail. It starts temporary empty HTTP listeners on
+the mini's loopback and private LAN IPv4 address, proves each is reachable on the host, then requires a proxy
+407 denial and failed direct access from the worker. It prints no response body. A NAS already refusing the
+mini is not an isolation control. Allow a local-network/firewall prompt for these temporary listeners if needed.
+These gateway checks have not yet been run on the mini; the earlier bridge results do not validate them.
+
 | Command | Checks |
 |---|---|
-| `python3 tests/session/live_docker.py worker --client claude\|codex\|opencode CWD [NAME]`, from a manager session | a second build reuses the image; with no `--host`, the worker runs in a container; its security flags (`--cap-drop ALL`, network `bridge`, no extra hosts) and mounts match the plan, and the [unreachable](credentials.md#what-a-container-cannot-reach) resources stay so; a supervisor killed mid-turn delivers its event once; restart, close then resume, and `docker rm -f` then resume each answer a prompt; every close revokes the generation's GitHub tokens and withdraws its client credential; no revocation stays pending but the removed container's, whose tokens it reports; for OpenCode also: the first turn leaves `~/.ensemble/docker-state/<NAME>/opencode/opencode/opencode.db`, Ollama listens on `127.0.0.1` only (`lsof`), the container holds only GitHub secrets and each configured provider's key (`find /run/ensemble/secrets`), and each resume continues the same OpenCode session |
+| `python3 tests/session/live_docker.py worker --client claude\|codex\|opencode CWD [NAME]`, from a manager session | a second build reuses the image; with no `--host`, the worker runs in a container; its security flags (`--cap-drop ALL`, only the gateway workers network, no extra hosts) and mounts match the plan, and the [unreachable](credentials.md#what-a-container-cannot-reach) resources stay so; a supervisor killed mid-turn delivers its event once; restart, close then resume, and `docker rm -f` then resume each answer a prompt; every close revokes the generation's GitHub tokens and withdraws its client credential; no revocation stays pending but the removed container's, whose tokens it reports; for OpenCode also: the first turn leaves `~/.ensemble/docker-state/<NAME>/opencode/opencode/opencode.db`, Ollama listens on `127.0.0.1` only (`lsof`), the container holds only GitHub secrets and each configured provider's key (`find /run/ensemble/secrets`), and each resume continues the same OpenCode session |
 | `python3 tests/session/live_docker.py role --repo OWNER/NAME [--timeout S] [NAME]` | a headless engineer run on the test repo gets one forced token refresh, opens a draft PR as `windroc-bot[bot]` after it, and its close reclaims its credentials |
 | `python3 tests/session/live_docker.py pr URL` | the PR, such as an unattended board run's, was opened as a draft by `windroc-bot[bot]` |
 
@@ -591,11 +643,8 @@ the first failed check. The keychain, Linear preset and board-run checks stay ma
   pauses the board for that client until its reset time, as a forged transcript record can for a TUI run.
 - A harness killed with `kill -9` leaves its headless client running, with its token, until the next Docker start or
   close.
-- Every container, Claude, Codex and OpenCode workers included, reaches through `host.docker.internal` the Mac's services that
-  listen only on `127.0.0.1`: on 2026-10-18 a worker-like container (bridge, `--cap-drop ALL`, no mounts or
-  credentials) got Ollama's `/api/version` while Ollama listened only on `127.0.0.1:11434`. The host side of such a
-  connection belongs to `com.docker.backend`, running as you, so pf cannot tell container traffic apart
-  ([Docker networking](https://docs.docker.com/desktop/features/networking/)); the Mac has no Docker gateway address
-  to listen on instead: docker0 lives inside the VM
-  ([Docker networking how-tos](https://docs.docker.com/desktop/features/networking/networking-how-tos/)). The user
-  accepted this risk on 2026-10-18: no forwarder, firewall or Docker Business.
+- A `workers` exception exposes that host and port to every worker, including an injected agent. Keep the list
+  narrow. Other local/LAN access is denied by the [gateway](#egress-gateway); same-network peers can still connect
+  directly. Older running `bridge` workers keep their previous access until restarted ([Upgrading](upgrading.md#egress-gateway)).
+- A gateway restart breaks connections on every caller network; a bad policy section can make the whole gateway
+  unhealthy and prevent new workers. Image builds remain outside this restriction.

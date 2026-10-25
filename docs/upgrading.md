@@ -1,5 +1,24 @@
 # Upgrading
 
+## Egress gateway
+
+Ship the installer and worker gateway enforcement (WDRC-139) in the same release. After updating the plugin,
+rerun `scripts/install.sh --docker`: it installs the pinned private `windroc/egress-proxy` with your `gh` access,
+creates `~/.egress/config.local.yaml` only if absent, starts the gateway and waits for healthy. Existing configs
+are preserved. Add Ollama and local/LAN provider exceptions before starting their workers
+([Gateway operations](docker-host.md#egress-gateway)).
+
+An already running worker stays on `bridge` during the upgrade; it is not forcibly migrated or stopped.
+Its next start, restart or resume creates a container on the gateway's internal `workers` network.
+List running broker workers still on `bridge`:
+
+```sh
+docker ps --filter network=bridge --filter label=ensemble.session
+```
+
+This filters out containers without the broker's session label. Restart or close/resume a listed worker when
+its current work can be interrupted. Until then, it retains its old local/LAN network access.
+
 ## Unified source layout
 
 After updating the plugin to the `src/ensemble/` layout, refresh the launchers once:

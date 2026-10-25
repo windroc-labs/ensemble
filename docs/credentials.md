@@ -226,10 +226,25 @@ A read that returns bytes fails this check unless the user accepts it: mark the 
 - Its workspace volume `ensemble-ws-<name>` at its cwd.
 - Its own client state: Claude and OpenCode's read-write binds; Codex's volatile home and bound `sessions/` history.
 - Its credentials on tmpfs ([Credentials](#credentials)).
-- The network, LAN providers included, and through `host.docker.internal` Mac services listening only on `127.0.0.1` ([accepted risk](docker-host.md#risks)).
+- Public destinations through the [egress gateway](docker-host.md#egress-gateway), plus explicitly configured
+  `workers` exceptions for a local or LAN provider; other containers on the same worker network directly.
 - Every repo of every App installation.
 
 Every container runs as `agent`, with all capabilities dropped and `no-new-privileges`.
+
+New workers attach only to the internal network advertised for `workers` (`egress-workers` in contract 1).
+They cannot directly reach the public network, external DNS, the Mac or LAN. The gateway denies private ranges
+and `host.docker.internal` unless a `host:port` exception applies; its config, checkout and Docker socket are
+not mounted into workers. Only container loopback bypasses the proxy. See [gateway operations](docker-host.md#egress-gateway)
+for the installer, policy and network-change restart commands, health checks, and public IPv4/global IPv6 limits.
+
+Ollama's `host.docker.internal:11434` and every local/LAN provider `base_url` host and port must be listed in
+`networks.workers.exceptions` in `~/.egress/config.local.yaml`. The installer preserves an existing config and
+does not add provider exceptions. Every worker gets the exception, including Claude and Codex, so a permitted
+provider still receives the requests and credentials its own permissions allow. Host-side provider probes can
+pass before the worker's exception exists. Same-network peers remain directly reachable; image builds keep
+their existing network access. Existing running `bridge` workers retain old access until their next
+start, restart or resume ([Upgrading](upgrading.md#egress-gateway)).
 
 ## What a container cannot reach
 
@@ -286,7 +301,14 @@ Keys, one per account:
 
 ## Live checks
 
-For the manager and the user, on macOS with Docker Desktop; write each result in this page. Last run 2026-10-18.
+For the manager and the user, through mini-op on the test Mac mini with Docker Desktop. Never run real-machine
+acceptance on a developer's Mac. The 2026-10-18 results below predate the gateway.
+
+- [ ] Fresh `scripts/install.sh --docker` ends with `egress-gateway` healthy; rerunning keeps the gateway's ID
+  and start time, pinned checkout, and config bytes, mode and modification time. Repeat with an existing config.
+- [ ] `worker --client claude`, `worker --client codex`, `worker --client opencode` pass the gateway checks in
+  [Live acceptance](docker-host.md#live-acceptance). Their local/LAN negative controls use temporary reachable
+  listeners; the mini's NAS already rejects it and proves no gateway isolation.
 
 - [x] [Measured readers](#measured-readers): six services, manager and shell.
 - [x] [What a container cannot reach](#what-a-container-cannot-reach): four commands, a Claude and a Codex worker
