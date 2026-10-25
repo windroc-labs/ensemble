@@ -17,6 +17,8 @@ opencode_prefix=$HOME/.ensemble/opencode
 opencode_executable=$opencode_prefix/bin/opencode
 opencode_min=
 ref=main
+# Label contract v1; update only after checking the pinned repo's docs/label-contract.md.
+egress_commit=225409bd04954ff1ea81d66e5339c812a519b4f7
 clients_flag=
 clients=
 docker_flag=
@@ -1606,13 +1608,10 @@ broker_install() {
   local source
   source=$(broker_source)
   if [ -x "$broker" ] && [ "$(state_get broker_source)" = "$source" ]; then
-    step "Docker Desktop running"
-    skip "broker current"
     step broker
     skip "installed from this plugin"
     return
   fi
-  docker_running
   step broker
   [ -e "$root/usr/local/libexec/ensemble" ] || ledger_add broker
   record_dir "$HOME/.ensemble/docker"
@@ -1758,16 +1757,72 @@ broker_logins() {
   fi
 }
 
+egress_ready() {
+  local status
+  status=$(docker inspect --format '{{.State.Running}} {{if .State.Health}}{{.State.Health.Status}}{{end}} {{index .Config.Labels "windroc.egress.contract"}} {{index .Config.Labels "windroc.egress.network.workers.name"}} {{index .Config.Labels "windroc.egress.network.workers.proxy"}}' egress-gateway </dev/null 2>/dev/null) || return 1
+  [ "$status" = 'true healthy 1 egress-workers http://egress-proxy-workers:4750' ]
+}
+
+# Download to a sibling directory so a failed fetch never leaves a usable partial version.
+egress_download() (
+  local versions=$HOME/.egress/versions tmp
+  tmp=$(mktemp -d "$versions/.download.XXXXXX")
+  trap 'rm -rf "$tmp"' EXIT
+  gh api "repos/windroc/egress-proxy/tarball/$egress_commit" </dev/null >"$tmp/source.tar.gz" \
+    || die "cannot fetch pinned windroc/egress-proxy $egress_commit; check gh auth status and repository access, then rerun"
+  mkdir "$tmp/source"
+  tar -xzf "$tmp/source.tar.gz" --strip-components=1 -C "$tmp/source" \
+    || die "cannot unpack pinned windroc/egress-proxy $egress_commit"
+  [ -x "$tmp/source/start.sh" ] || die "pinned egress version has no executable start.sh"
+  printf '%s\n' "$egress_commit" >"$tmp/source/COMMIT"
+  mv "$tmp/source" "$versions/$egress_commit"
+)
+
+egress_install() {
+  local dir=$HOME/.egress version=$HOME/.egress/versions/$egress_commit tries=0
+  step "egress gateway"
+  mkdir -p "$dir/versions"
+  if [ ! -e "$dir/config.local.yaml" ] && [ ! -L "$dir/config.local.yaml" ]; then
+    (umask 077; set -o noclobber; printf 'version: 1\nnetworks:\n  workers:\n    mode: denylist\n' >"$dir/config.local.yaml") \
+      || die "cannot create $dir/config.local.yaml; existing config was kept"
+  fi
+  [ -f "$dir/config.local.yaml" ] && [ -r "$dir/config.local.yaml" ] \
+    || die "$dir/config.local.yaml is not a readable file; existing path was kept"
+  if [ ! -e "$version" ]; then egress_download; fi
+  [ -x "$version/start.sh" ] && [ "$(cat "$version/COMMIT")" = "$egress_commit" ] \
+    || die "incomplete egress checkout $version; keep your config and repair that version directory"
+  if [ "$(state_get egress_commit)" = "$egress_commit" ] && egress_ready; then
+    skip "pinned egress gateway healthy"
+    return
+  fi
+  EGRESS_CONFIG_DIR="$dir" bash "$version/start.sh" </dev/null >&2 \
+    || die "egress-gateway start failed: run $version/start.sh; inspect docker logs egress-gateway"
+  while ! egress_ready; do
+    [ "$tries" -lt 60 ] \
+      || die "egress-gateway not healthy after 120 seconds: docker logs egress-gateway; rerun $version/start.sh"
+    tries=$((tries + 1))
+    sleep 2
+  done
+  if [ -e "$dir/current" ] || [ -L "$dir/current" ]; then
+    [ -L "$dir/current" ] || die "$dir/current is not an installer symlink; kept it"
+    rm "$dir/current"
+  fi
+  ln -s "$version" "$dir/current"
+  state_set egress_commit "$egress_commit"
+}
+
 docker_steps() {
   local name
   if [ "$docker" != yes ]; then
-    for name in "Docker Desktop running" broker "broker login: Claude" "broker login: GitHub" \
+    for name in "Docker Desktop running" "egress gateway" broker "broker login: Claude" "broker login: GitHub" \
       "broker Codex install" "broker login: Codex"; do
       step "$name"
       skip "Docker not chosen"
     done
     return
   fi
+  docker_running
+  egress_install
   broker_install
   docker_cli
   broker_logins

@@ -49,6 +49,8 @@ REAL = (
     "mktemp",
     "mkfifo",
     "stty",
+    "tar",
+    "ln",
 )
 FAKED = ("uname", "id", "sudo", "curl", "security", "open", "launchctl", "shasum")
 FAKED += ("xcode-select", "ps", "sw_vers", "lipo", "pgrep", "pkill", "defaults")
@@ -103,6 +105,7 @@ RELOAD = (
 )
 DOCKER_STEPS = (
     "Docker Desktop running",
+    "egress gateway",
     "broker",
     "broker login: Claude",
     "broker login: GitHub",
@@ -967,6 +970,76 @@ class InstallTest(Case):
             "brew install go",
         ):
             self.assertNotIn(absent, calls)
+        self.assertFalse(Path(self.home, ".egress").exists())
+
+    def test_gateway_pinned_and_healthy_rerun_changes_nothing(self):
+        self.assert_ok(self.fresh("--clients", "claude", "--docker"))
+        egress = Path(self.home, ".egress")
+        sha = "225409bd04954ff1ea81d66e5339c812a519b4f7"
+        checkout = egress / "versions" / sha
+        self.assertEqual((egress / "current").resolve(), checkout)
+        config = egress / "config.local.yaml"
+        self.assertEqual(
+            config.read_text(), "version: 1\nnetworks:\n  workers:\n    mode: denylist\n"
+        )
+        before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in checkout.iterdir()}
+        before[config] = (config.read_bytes(), config.stat().st_mtime_ns)
+        self.assertIn(f"gh api repos/windroc/egress-proxy/tarball/{sha}", self.calls())
+        self.assertIn("docker egress-start", self.calls())
+        self.assert_ok(self.again("--clients", "claude", "--docker"))
+        self.assertEqual({p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before}, before)
+        self.assertNotIn("docker egress-start", self.calls())
+        self.assertFalse(any("tarball/" in c for c in self.calls()))
+
+    def test_gateway_existing_config_and_symlink_preserved(self):
+        egress = Path(self.home, ".egress")
+        egress.mkdir()
+        target = Path(self.home, "my-egress.yaml")
+        target.write_text("# user policy\nversion: 1\nnetworks:\n  workers:\n    mode: denylist\n")
+        target.chmod(0o600)
+        config = egress / "config.local.yaml"
+        config.symlink_to(target)
+        before = (target.read_bytes(), target.stat())
+        self.assert_ok(self.fresh("--clients", "claude", "--docker"))
+        self.assertTrue(config.is_symlink())
+        self.assertEqual((target.read_bytes(), target.stat()), before)
+
+    def test_gateway_bad_config_paths_are_not_replaced(self):
+        egress = Path(self.home, ".egress")
+        egress.mkdir()
+        config = egress / "config.local.yaml"
+        config.symlink_to(egress / "absent")
+        result = self.fresh("--clients", "claude", "--docker", logins=[])
+        self.assertEqual(result.code, 1)
+        self.assertTrue(config.is_symlink())
+        self.assertIn("config.local.yaml is not a readable file", result.stderr)
+        self.assertNotIn("docker egress-start", self.calls())
+
+    def test_gateway_download_failure_is_retryable(self):
+        (self.fakes / "fail").write_text("gh api repos/windroc/egress-proxy/tarball/")
+        result = self.fresh("--clients", "claude", "--docker", logins=[])
+        self.assertEqual(result.code, 1)
+        self.assertIn("cannot fetch pinned windroc/egress-proxy", result.stderr)
+        versions = Path(self.home, ".egress/versions")
+        self.assertEqual(list(versions.iterdir()), [])
+        self.assert_ok(
+            self.again("--clients", "claude", "--docker", answers=DOCKER_LOGINS + ((WRITE_Q, "y"),))
+        )
+
+    def test_gateway_start_and_health_failures_stop_before_broker_logins(self):
+        (self.fakes / "fail").write_text("docker egress-start")
+        result = self.fresh("--clients", "claude", "--docker", logins=[])
+        self.assertEqual(result.code, 1)
+        self.assertIn("egress-gateway", result.stderr)
+        self.assertIn("docker logs egress-gateway", result.stderr)
+        self.assertNotIn("ensemble-broker login claude", self.calls())
+        (self.fakes / "egress_unhealthy").touch()
+        (self.bin / "sleep").unlink()
+        executable(self.bin / "sleep", "#!/bin/sh\n")
+        result = self.again("--clients", "claude", "--docker")
+        self.assertEqual(result.code, 1)
+        self.assertIn("not healthy after 120 seconds", result.stderr)
+        self.assertNotIn("ensemble-broker login claude", self.calls())
 
     def test_branch_broker_is_built(self):
         result = self.fresh(
