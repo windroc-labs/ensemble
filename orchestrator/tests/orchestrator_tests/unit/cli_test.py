@@ -12,7 +12,13 @@ from unittest import mock
 
 from ensemble.orchestrator import cli
 from ensemble.orchestrator.engine import config, prune, router, run_comments, runs
-from ensemble.orchestrator.engine.types import Claim, ConfigError, State, TrackerKind
+from ensemble.orchestrator.engine.types import (
+    Claim,
+    ConfigError,
+    LinearIdentity,
+    State,
+    TrackerKind,
+)
 from ensemble.orchestrator.trackers.linear import ops
 from ensemble.orchestrator.trackers.linear.linear_tracker import LinearTracker
 from ensemble.orchestrator.trackers.local.local_tracker import LocalTracker
@@ -42,9 +48,9 @@ class Wirings(run_fixtures.Base):
         cfg = config.load()
         gql = mock.Mock(return_value={})
         linear = cli.TRACKERS[TrackerKind.LINEAR]
-        key = linear.key(cfg, "engineer")
-        self.assertEqual(key, run_fixtures.KEY)
-        accounts = linear.accounts(gql, cfg, key)
+        identity = linear.identity(cfg, "engineer")
+        self.assertEqual(identity, LinearIdentity(run_fixtures.KEY))
+        accounts = linear.accounts(gql, cfg, identity)
         self.assertEqual(
             (accounts.states, accounts.humans, accounts.repos),
             (cfg.linear.states, ("me@x.com",), {run_fixtures.PROJECT: "acme/ensemble"}),
@@ -55,11 +61,11 @@ class Wirings(run_fixtures.Base):
         )
         gql.return_value = {"comment": None}
         accounts.tracker.find_comment(ISSUE, (SID, "start"))
-        gql.assert_called_with(ops.Q_COMMENT, service=key, c=ops.client_id(SID, "start"))
+        gql.assert_called_with(ops.Q_COMMENT, identity=identity, c=ops.client_id(SID, "start"))
         accounts.harness.find_comment(ISSUE, (SID, "session"))
         gql.assert_called_with(
             ops.Q_COMMENT,
-            service=run_fixtures.HARNESS,
+            identity=LinearIdentity(run_fixtures.HARNESS),
             timeout=run_comments.LIMIT,
             c=ops.client_id(SID, "session"),
         )
@@ -69,14 +75,18 @@ class Wirings(run_fixtures.Base):
         reader = cli.TRACKERS[TrackerKind.LINEAR].reader(mock.Mock(), cfg)
         self.assertEqual(
             (reader.gql.keywords, reader.state_ids, reader.team_id),
-            ({"service": run_fixtures.HARNESS}, cfg.linear.states, cfg.linear.team),
+            (
+                {"identity": LinearIdentity(run_fixtures.HARNESS)},
+                cfg.linear.states,
+                cfg.linear.team,
+            ),
         )
 
     def test_a_local_board_writes_as_one_tracker_with_no_keys(self):
         board = os.path.realpath(os.path.join(self.work, "board"))
         cfg = replace(config.load(), tracker=TrackerKind.LOCAL, linear=None, board=board)
         local = cli.TRACKERS[TrackerKind.LOCAL]
-        self.assertIsNone(local.key(cfg, "engineer"))
+        self.assertIsNone(local.identity(cfg, "engineer"))
         accounts = local.accounts(None, cfg, None)
         self.assertIs(accounts.tracker, accounts.harness)
         self.assertIsInstance(accounts.tracker, LocalTracker)
@@ -98,7 +108,7 @@ class Wirings(run_fixtures.Base):
         local_row = replace(row, issue="LOC-1", uuid="LOC-1", key=None)
         linear, local = cli.TRACKERS[TrackerKind.LINEAR], cli.TRACKERS[TrackerKind.LOCAL]
         writes = linear.claimed(mock.Mock(), linear_cfg, row).tracker
-        self.assertEqual(writes.gql.keywords, {"service": run_fixtures.KEY})
+        self.assertEqual(writes.gql.keywords, {"identity": LinearIdentity(run_fixtures.KEY)})
         self.assertIsInstance(local.claimed(None, local_cfg, local_row).tracker, LocalTracker)
         for wiring, cfg, claim, field, value in (
             (linear, linear_cfg, replace(row, key=None), "key", None),

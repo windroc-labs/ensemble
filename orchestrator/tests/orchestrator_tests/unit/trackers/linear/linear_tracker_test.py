@@ -48,7 +48,7 @@ from ensemble.orchestrator.engine.flow.types import (
     Snapshot,
     SubIssue,
 )
-from ensemble.orchestrator.engine.types import IssueError, LinearError, Unavailable
+from ensemble.orchestrator.engine.types import IssueError, LinearError, LinearIdentity, Unavailable
 from ensemble.orchestrator.trackers.linear import (
     linear_tracker,
     ops,
@@ -769,17 +769,22 @@ class Account(Case):
         LinearTracker(gql, **kw).find_comment("id-TASK-7", REF)
         return seen
 
-    def test_service_and_timeout_bind_each_call(self):
+    def test_identity_and_timeout_bind_each_call(self):
         self.assertEqual(
-            self.calls(service="linear-api-key", timeout=10),
-            [(ops.Q_COMMENT, {"service": "linear-api-key", "timeout": 10, "c": CID})],
+            self.calls(identity=LinearIdentity("linear-api-key"), timeout=10),
+            [
+                (
+                    ops.Q_COMMENT,
+                    {"identity": LinearIdentity("linear-api-key"), "timeout": 10, "c": CID},
+                )
+            ],
         )
         self.assertEqual(
-            self.calls(service="linear-api-key-engineer"),
-            [(ops.Q_COMMENT, {"service": "linear-api-key-engineer", "c": CID})],
+            self.calls(identity=LinearIdentity("linear-api-key-engineer")),
+            [(ops.Q_COMMENT, {"identity": LinearIdentity("linear-api-key-engineer"), "c": CID})],
         )
 
-    def test_no_service_calls_gql_as_given(self):
+    def test_no_identity_calls_gql_as_given(self):
         self.assertEqual(self.calls(), [(ops.Q_COMMENT, {"c": CID})])
 
 
@@ -955,7 +960,7 @@ def board_linear():
         agent_label_group="agents",
         agent_labels={"b": "label-b"},
         human_members=("human@x.test",),
-        harness_key="linear-api-key",
+        harness=LinearIdentity("linear-api-key"),
         roles={"pm": SimpleNamespace(account="pm@agents.test")},
     )
 
@@ -973,7 +978,7 @@ class Connect(Case):
         found, gql = connected(Q_USER=users("u-pm"))
         self.assertEqual(gql.names(), ["Q_TEAM", "Q_TASK_GROUP", "Q_USER"])
         self.assertEqual(
-            [{k: x for k, x in v.items() if k != "service"} for _, v in gql.calls],
+            [{k: x for k, x in v.items() if k != "identity"} for _, v in gql.calls],
             [{"t": TEAM}, {"i": TASK_GROUP}, {"e": "pm@agents.test"}],
         )
         self.assertEqual((found.team_id, found.state_ids), (TEAM, STATES))
@@ -1000,11 +1005,13 @@ class Connect(Case):
             with self.subTest(message=message), self.assertRaisesRegex(LinearError, message):
                 connected(**replies)
 
-    def test_connect_binds_harness_service(self):
+    def test_connect_binds_harness_identity(self):
         found, gql = connected(Q_USER=users("u-pm"), Q_UPSTREAM={"issue": None})
         found.description("TASK-1")
         self.assertEqual(gql.names()[-1], "Q_UPSTREAM")
-        self.assertEqual([v.get("service") for _, v in gql.calls], ["linear-api-key"] * 4)
+        self.assertEqual(
+            [v.get("identity") for _, v in gql.calls], [LinearIdentity("linear-api-key")] * 4
+        )
 
 
 class OfTeam(Case):
@@ -1020,14 +1027,16 @@ class OfTeam(Case):
         linear = SimpleNamespace(
             states=STATES,
             team=TEAM,
-            harness_key="linear-api-key",
+            harness=LinearIdentity("linear-api-key"),
             roles={"pm": SimpleNamespace(account="PM@agents.test")},
         )
         gql = Gql(Q_UPSTREAM={"issue": None})
         found = LinearTracker.reader(gql, linear)
         self.assertEqual((found.state_ids, found.team_id, found.selves), (STATES, TEAM, SELVES))
         found.description("TASK-1")
-        self.assertEqual([v.get("service") for _, v in gql.calls], ["linear-api-key"])
+        self.assertEqual(
+            [v.get("identity") for _, v in gql.calls], [LinearIdentity("linear-api-key")]
+        )
 
     def test_classifying_reads_need_selves(self):
         with self.assertRaisesRegex(TypeError, "LinearTracker needs selves"):

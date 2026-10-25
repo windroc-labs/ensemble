@@ -4,6 +4,7 @@ import urllib.request
 from types import SimpleNamespace
 from unittest import mock
 
+from ensemble.orchestrator.engine.types import LinearIdentity
 from ensemble.orchestrator.trackers.linear import client
 
 FAILURES = {  # factories: a fresh exception per use
@@ -30,7 +31,7 @@ def failing(error, gql=None, ops=None):
             mock.patch.object(urllib.request, "urlopen", side_effect=error()),
             mock.patch("subprocess.run", return_value=SimpleNamespace(stdout="lin_api_outage\n")),
         ):
-            return client.linear_gql(query, **{"service": "linear-api-key", **v})
+            return client.linear_gql(query, **{"identity": LinearIdentity("linear-api-key"), **v})
 
     call.failed = failed
     return call

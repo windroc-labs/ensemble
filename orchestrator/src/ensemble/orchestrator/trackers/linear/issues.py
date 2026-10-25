@@ -1,4 +1,4 @@
-"""The issue command's Backend over the issue_* modules, gql bound to linear.manager_key's service."""
+"""The issue command's Backend over the issue_* modules, gql bound to linear.manager."""
 
 import contextlib
 import subprocess

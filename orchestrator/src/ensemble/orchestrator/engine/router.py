@@ -583,8 +583,12 @@ class Board:
             skip = f"{role} is full"
         elif current.refused:
             skip = current.refused
-        elif (key := self.wiring.key(self.cfg, role)) and not self.keychain(key):
-            skip = f"no Keychain item for role key {key}"
+        elif (
+            (identity := self.wiring.identity(self.cfg, role))
+            and identity.service
+            and not self.keychain(identity)
+        ):
+            skip = f"no Keychain item for role key {identity.service}"
         else:
             skip = None
         if skip:
@@ -717,9 +721,10 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
     reason = a.role_error(role, tasks)
     if role is None or reason:
         return fail(a.issue, "config-error", reason, 2)
-    key = wiring.key(cfg, role)
+    identity = wiring.identity(cfg, role)
+    key = identity.service if identity is not None else None
     kind = record(cfg, a, role=role, key=key, now=now) if a.mode == "resume" else cfg.delegate_kind
-    if key is not None and not keychain(key):
+    if key is not None and not keychain(identity):
         return fail(a.issue, "config-error", f"no Keychain item for role key {key}", 2)
     if a.mode == "resume":
         try:
@@ -736,7 +741,7 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
     except writeback.ERRORS as e:
         return fail(a.issue, "transient", f"issue read: {one_line(e)}", 3)
     a = replace(a, uuid=issue.id)
-    accounts = wiring.accounts(gql, cfg, key)
+    accounts = wiring.accounts(gql, cfg, identity)
     ctx = writeback.for_run(cfg, role, a, accounts)
     workdir = cfg.issue_workdir(a.issue)
     delegate_cls = LinearRun.kind_cls(cfg, kind)

@@ -31,6 +31,7 @@ from ensemble.orchestrator.engine import gate as quota
 from ensemble.orchestrator.engine.flow.types import IssueState, Pick
 from ensemble.orchestrator.engine.types import (
     LinearError,
+    LinearIdentity,
     Spec,
     TrackerFileError,
     TrackerKind,
@@ -1697,7 +1698,8 @@ class RouterOutages(TickBase):
                             (self.said(), self.raw), ([] if again else [self.SAID[name]], "")
                         )
                         self.assertEqual(
-                            gql.failed, [(ops.Q_TEAM, {"service": HARNESS, "t": TEAM})]
+                            gql.failed,
+                            [(ops.Q_TEAM, {"identity": LinearIdentity(HARNESS), "t": TEAM})],
                         )
                         self.assertEqual((self.start.launches, self.state), ([], ""))
                     fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
@@ -4984,7 +4986,7 @@ class RoleKeys(Base):
 
     def test_a_tracker_without_role_keys_checks_no_keychain(self):
         self.missing = {self.cfg().linear.roles["researcher"].key, ""}
-        self.wiring = replace(cli.TRACKERS[TrackerKind.LINEAR], key=lambda *_: None)
+        self.wiring = replace(cli.TRACKERS[TrackerKind.LINEAR], identity=lambda *_: None)
         self.assertEqual(self.claim(two()), "TASK-1 https://linear.app/x/TASK-1 Deep Research")
         self.assertEqual(self.keychain_calls, [])
 
