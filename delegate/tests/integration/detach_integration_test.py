@@ -134,12 +134,19 @@ class Detach(Case):
     def live(self, name: str) -> bool:
         return self.server.tmux("has-session", "-t", f"={name}").returncode == 0
 
-    def until(self, check, what: str):
+    def until(self, check, what: str, *, diagnostics=None):
+        """diagnostics: a timeout's AssertionError ends with its text."""
+
         def poked():
             self.poke()
             return check()
 
-        return live_tmux.wait(poked, WAIT, what=what)
+        try:
+            return live_tmux.wait(poked, WAIT, what=what)
+        except AssertionError as timeout:
+            if diagnostics is None:
+                raise
+            raise AssertionError(f"{timeout}; {diagnostics()}") from None
 
     def ended(self, turn_ends: int = 0) -> list[str]:
         """The events file's lines, shaped, once they hold the harness's exited line and turn_ends
@@ -301,7 +308,13 @@ class Tui(Detach):
         shown = self.server.tmux("display-message", "-p", "-t", f"={HARNESS}:", "#{pane_pid}")
         pid = int(shown.stdout)
         self.assertEqual(self.server.tmux("kill-session", "-t", f"={HARNESS}").returncode, 0)
-        self.until(lambda: not self.live(TUI), f"{TUI} stopped")
+        self.until(
+            lambda: not self.live(TUI),
+            f"{TUI} stopped",
+            diagnostics=lambda: (
+                f"harness ({pid}) running: {running(pid)}; run.jsonl: {self.records()}"
+            ),
+        )
         self.until(lambda: not running(pid), f"the harness ({pid}) ended")
         outcomes = [s for s in shape(live_tmux.events(self.events)) if s.startswith("outcome")]
         self.assertEqual(outcomes, ["outcome error"])
