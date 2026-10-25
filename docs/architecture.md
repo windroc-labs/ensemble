@@ -99,7 +99,7 @@ Solid arrow: an import, the only direction allowed, or a file read (`reads`); it
 | `src/ensemble/session/hosts/docker/`、`src/broker/`、`src/broker/protocol/` | Docker 适配、hook relay、worker 镜像、容器与凭据注入 | Host、Docker Desktop、broker；broker 使用 macOS Keychain | 整块替换 | 向上保留 Host；保留 broker 时同时遵守 protocol 的 JSON schema（模式定义）、版本、退出码与 fixtures（共享样例） |
 | `src/ensemble/manager/`、`skills/manage/`、`hooks/` | Crew、Roster、事件游标与 commander 会话 | utils；通过命令调用各层 | 照搬调度逻辑；本机显示和客户端 hook 随环境适配 | Record 的 ctl、resume 命令及 CLI 输出；导入关系见上图 |
 | `src/ensemble/utils/` | 配置叠加、共享类型、路径、进程控制等基础工具 | Python 标准库 | 照搬；保留所用操作系统进程能力 | 各层公共导出和共享数据格式 |
-| 外部 `windroc-labs/egress` | egress（出口服务），不在本仓库 | 当前源码无调用方 | 独立组件；本分支尚未接入 | 当前 broker 未实现 WDRC-107 的 Docker label + health 约定，无法从本分支给出调用方网络契约 |
+| 外部 `windroc/egress-proxy` | egress（出口服务），不在本仓库 | Docker labels 与 health；ensemble 尚未接入 | 整块替换独立服务 | 保持 [docs/label-contract.md](https://github.com/windroc/egress-proxy/blob/f5aed5f/docs/label-contract.md) 的版本、label 含义和健康语义 |
 | `src/broker/internal/broker/keychain_darwin.go` | 从 macOS Keychain 读取凭据，经 broker 注入容器 | macOS Security；`keychain.go` 的存储接口 | 凭据来源整块替换 | `launcher/host.go` 的 Credentials、CodexCredentials、ProviderKeys、Tokens；凭据读者、生命周期见 [Credentials](credentials.md) |
 
 **Host 边界**由 [`hosts/base.py`](../src/ensemble/session/hosts/base.py) 定义；
@@ -107,9 +107,10 @@ Solid arrow: an import, the only direction allowed, or a file read (`reads`); it
 选择实现，`[hosts] default` 选择宿主。实现保持这些能力、返回类型和错误语义，上层会话、delegate 与 orchestrator 无需更改。
 客户端适配仍在 `clients/`，不由宿主替代。
 
-**egress 边界**当前不存在于本分支的调用链：[`launcher/start.go`](../src/broker/internal/launcher/start.go)
-启动容器时没有 egress 的服务发现、label 或 health 检查，协议 schema 也未声明它们。
-因此不能把外部服务的网络约定写成本分支已守住的边界；更换它而上层不改的条件，在当前源码中尚无可核验实现。
+**egress 边界**定义在外部仓库的 [docs/label-contract.md（f5aed5f）](https://github.com/windroc/egress-proxy/blob/f5aed5f/docs/label-contract.md)：
+调用方只依赖网关容器的 `windroc.egress.*` labels 和 Docker health，按网络 key 的 `.name` 与 `.proxy`
+选择内部网络和代理地址；替换网关须保留所消费的契约版本、label 含义及健康语义，完整启动校验规则见该契约。
+当前 [`launcher/start.go`](../src/broker/internal/launcher/start.go) 尚未接入；接线属于 WDRC-139，本 PR 不实施。
 
 ```mermaid
 flowchart TB
