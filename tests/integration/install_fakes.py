@@ -571,11 +571,11 @@ def broker(args):
         )
         claude = (FAKES / "keychain/ensemble-claude").exists()
         claude = claude and not (FAKES / "src/broker/claude_unusable").exists()
-        out(
-            json.dumps(
-                {"revocations": [], "codex": state or default, "claude": {"default": claude}}
-            )
-        )
+        response = {"revocations": [], "codex": state or default, "claude": {"default": claude}}
+        warning = FAKES / "src/broker/audit_warning.json"
+        if warning.exists():
+            response["audit_warning"] = load(warning, None)
+        out(json.dumps(response))
         return 0
     if args[:1] in (["install-codex"], ["update-codex"]):
         if os.environ.get("FAKE_SUDO") != "1":

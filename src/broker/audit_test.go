@@ -20,6 +20,33 @@ func (s *failedAudit) Append(...[]byte) error {
 	return errors.New("AUDIT_SECRET_SENTINEL disk full")
 }
 
+type successfulAudit struct{ calls int }
+
+func (s *successfulAudit) Append(...[]byte) error {
+	s.calls++
+	return nil
+}
+
+func TestSuccessfulAuditDoesNotMaskRecoveryFailure(t *testing.T) {
+	const container = "ensemble-worker_1-0123456789abcdef0123456789abcdef"
+	sink := &successfulAudit{}
+	rec := &audit.Recorder{Command: "start", Container: container, Log: sink}
+	failure := protocol.New(protocol.KeychainFailed, "Recovery persistence failed.")
+	failure.Container, failure.Cleanup, failure.CleanupError = container, protocol.Failed, "Container removal failed."
+	failure.Cause = "safe persistence diagnostic"
+	a := app{start: func(context.Context, string, io.Writer) (any, error) {
+		return withAudit(rec, func() (any, error) { return nil, failure })
+	}}
+	code, out, errOut := invoke(a, "start", "--manifest", "/manifest")
+	var got struct {
+		AuditWarning string `json:"audit_warning"`
+		Error        protocol.Error
+	}
+	if err := json.Unmarshal([]byte(errOut), &got); err != nil || code != 11 || out != "" || got.Error != *failure || got.AuditWarning != "" || sink.calls != 1 {
+		t.Fatalf("audit success masked recovery failure: %d %q %q, writes=%d, err=%v", code, out, errOut, sink.calls, err)
+	}
+}
+
 func TestAuditWarningKeepsOperationOutcome(t *testing.T) {
 	const container = "ensemble-worker_1-0123456789abcdef0123456789abcdef"
 	for _, command := range []string{"start", "refresh", "close", "status"} {
