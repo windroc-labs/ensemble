@@ -150,9 +150,9 @@ class ConfigLayout(Command):
                 self.assertNotEqual(done.returncode, 0)
                 self.assertNotIn("orchestrator/config.toml:", done.stdout + done.stderr)
                 self.assertNotIn("config.local.toml:", done.stdout + done.stderr)
-        # the fake's "no item" (44); a real security would be missing on Linux (FileNotFoundError)
-        self.assertIn("'/usr/bin/security', 'find-generic-password'", router.stderr)
-        self.assertIn("non-zero exit status 44", router.stderr)
+        # the fake's "no item": the harness app has no token, and a dry run requests none
+        self.assertEqual(router.returncode, 2)
+        self.assertIn("Linear harness app has no token and renewal failed", router.stderr)
         self.assertEqual((issue.returncode, issue.stdout), (2, ""))
         self.assertIn("linear.manager_key Keychain service 'linear-manager'", issue.stderr)
 

@@ -407,8 +407,7 @@ class Messages(Case):
 
 
 class AppToken(Case):
-    """An app identity's call: Bearer, renewal and its failures, over a fake Keychain and
-    token endpoint."""
+    """An app's call: Bearer, renewal and its failures."""
 
     def call(self, keychain, endpoint=None, *, query=VIEWER, app=HARNESS, **kw):
         endpoint = endpoint or Endpoint(data={"viewer": {"id": "v"}})

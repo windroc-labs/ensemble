@@ -40,7 +40,7 @@ from ensemble.utils import parse_time
 from orchestrator_tests.case import Case
 from orchestrator_tests.integration import fake_linear
 from orchestrator_tests.integration.fake_transport import install, refuse_keychain
-from orchestrator_tests.unit.board_ids import STATES, TASK_GROUP, TEAM
+from orchestrator_tests.unit.board_ids import HARNESS_IDENTITY, STATES, TASK_GROUP, TEAM
 from orchestrator_tests.unit.issue_fixtures import (
     CLIENT_GROUP,
     CLIENT_LABELS,
@@ -88,7 +88,7 @@ class ServerCase(Case):
         self.addCleanup(env.stop)
         transport = install(os.environ["FAKE_LINEAR_TRANSPORT"])
         self.addCleanup(transport.close)
-        self.gql = functools.partial(client.linear_gql, identity=LinearKey(HARNESS))
+        self.gql = functools.partial(client.linear_gql, identity=HARNESS_IDENTITY)
         self.eng = functools.partial(client.linear_gql, identity=LinearKey(ENGINEER))
 
     def log(self):
@@ -353,7 +353,7 @@ class GraphQLProjection(ServerCase):
     def test_a_bad_body_is_a_logged_400(self):
         send, key = (
             urllib.request.build_opener(urllib.request.ProxyHandler({})).open,
-            self.fake.keys()[HARNESS],
+            f"Bearer {fake_linear._key(HARNESS)}",
         )
         for body in (b"not json", b"[]", b'{"variables": {}}', b'{"query": "q", "variables": []}'):
             with self.subTest(body), self.assertRaises(urllib.error.HTTPError) as cm:

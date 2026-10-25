@@ -260,7 +260,7 @@ def _renew(app, held, now, timeout):
     except _RenewalFailed as e:
         reason = one_line(str(e))
         for hidden in filter(None, (secret, held.token)):
-            reason = _scrub(reason, hidden)
+            reason = reason.replace(hidden, "[redacted]")
         raise _RenewalFailed(reason[:300] + "…" if len(reason) > 300 else reason) from None
 
 

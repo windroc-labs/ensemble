@@ -47,10 +47,9 @@ def renewed(case, value, since):
 
 
 class Keychain:
-    """services: {service: (account, value)}; calls: each security (argv, stdin); fail_write: an
-    -i write leaves the entry as it was; race: the value another process writes over an -i write;
-    raises: an exception each attribute lookup (no -w) raises. Any other subprocess: system_probe.
-    """
+    """items: {service: (account, value)}; calls: each (argv, stdin); fail_write: -i writes
+    nothing; race: the value another process writes over ours; raises: what lookups without -w
+    raise. Other subprocesses: system_probe."""
 
     def __init__(self, entries=None, *, fail_write=False, race=None, raises=None):
         self.items = {s: (s, v) for s, v in (entries or {}).items()}
@@ -91,9 +90,8 @@ class Keychain:
 
 
 class Endpoint:
-    """urlopen for the token endpoint (answer: a dict, bytes, or an exception) and GraphQL (data, or
-    data(query, variables) answering each); tokens: each token request's form fields; graphql: each
-    GraphQL request."""
+    """urlopen: the token endpoint answers answer (dict, bytes or exception), GraphQL data or
+    data(query, variables); tokens, graphql: the requests made."""
 
     def __init__(self, answer=None, data=None):
         self.answer = {"access_token": NEW, "expires_in": 30 * 86400} if answer is None else answer
