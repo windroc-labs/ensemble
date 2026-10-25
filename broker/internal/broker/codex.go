@@ -188,6 +188,8 @@ func (c Codex) Login(ctx context.Context, out io.Writer) (result error) {
 	secure := func() error {
 		err := secureItem(codexService, codexAccount, "retry "+codexLoginCommand, c.keychain, password.get)
 		switch {
+		case errors.Is(err, ErrInvalidOwnerEdit):
+			return err
 		case errors.Is(err, errAccessUnread):
 			return errors.New("cannot inspect Codex keychain access")
 		case err != nil:
@@ -248,7 +250,10 @@ func (c Codex) Login(ctx context.Context, out io.Writer) (result error) {
 	if ctx.Err() != nil {
 		return errors.New("Codex login canceled")
 	}
-	if c.keychain.WriteCodex(data) != nil {
+	if err := c.keychain.WriteCodex(data); err != nil {
+		if errors.Is(err, ErrInvalidOwnerEdit) {
+			return ownershipError(codexService, codexAccount, err)
+		}
 		return errors.New("cannot save Codex login; retry " + codexLoginCommand)
 	}
 	if c.trusted() != nil || !c.matches(data) {

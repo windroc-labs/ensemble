@@ -52,9 +52,15 @@ var (
 	ErrAuthFailed = errors.New("keychain status -25293")
 	// ErrNeedsDialog is errSecInteractionNotAllowed: a no-dialog read that would have asked the user.
 	ErrNeedsDialog = errors.New("keychain status -25308")
+	// ErrInvalidOwnerEdit means another process owns the item's access controls.
+	ErrInvalidOwnerEdit = errors.New("keychain status -25244")
 	// errAccessUnread is secureItem's first access read failing, before it changed anything.
 	errAccessUnread = errors.New("reading its access failed")
 )
+
+func ownershipError(service, account string, err error) error {
+	return fmt.Errorf("keychain item %s/%s belongs to another process (%w); delete this item from the login keychain in Keychain Access, then rerun install.sh (or the broker login command)", service, account, err)
+}
 
 // AppKeyService is the item of the one GitHub App's private key (account its App ID) and login github's argument;
 // the App's own slug, whatever it is, comes from GitHub at login.
@@ -381,6 +387,9 @@ func secureItem(item, account, rerun string, k ItemTrust, password func() ([]byt
 		}
 		erase(pw)
 		if err != nil {
+			if errors.Is(err, ErrInvalidOwnerEdit) {
+				return ownershipError(item, account, err)
+			}
 			if err := incomplete(item, account, rerun, k, before, err); err != nil {
 				return err
 			}

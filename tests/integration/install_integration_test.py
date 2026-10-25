@@ -2312,6 +2312,36 @@ exec /bin/rm "$@"
         self.assertIn(login, self.calls())
         self.assertNotIn("opencode auth login", self.calls())
         self.assertEqual((self.fakes / "keychain/ensemble-opencode").read_text(), KEY)
+
+    def test_opencode_foreign_keychain_item_stops_retry_and_names_recovery(self):
+        self.assert_ok(self.fresh(clients="opencode", docker="y", opencode=PROVIDER_ANSWERS))
+        state = Path(self.ensemble, "install/state")
+        state.write_text(re.sub(r"(?m)^login_opencode=.*\n", "", state.read_text()))
+        (self.fakes / "keychain/foreign-ensemble-opencode").touch()
+        result = self.again()
+        self.assertEqual(result.code, 0, result.stderr)
+        self.assertIn("ensemble-opencode/lan", result.tty)
+        self.assertIn("delete this item", result.tty)
+        self.assertIn("rerun install.sh", result.tty)
+        self.assertNotIn("Try again?", result.tty)
+        self.assertEqual(
+            sum(c.startswith("ensemble-broker login opencode") for c in self.calls()), 1
+        )
+        self.assertNotIn("login_opencode", self.state())
+        self.assert_secret_free(KEY, PASSWORD, result=result)
+
+    def test_codex_unavailable_foreign_keychain_item_names_recovery(self):
+        self.assert_ok(self.fresh(docker="y"))
+        codex = self.broker_path().parent / "codex/state.json"
+        saved = json.loads(codex.read_text())
+        codex.write_text(json.dumps({**saved, "state": "login_unavailable", "repair": "login"}))
+        (self.fakes / "keychain/foreign-ensemble-codex").touch()
+        result = self.again()
+        self.assertEqual(result.code, 1, result.stderr)
+        self.assertIn("ensemble-codex/auth", result.stderr + result.tty)
+        self.assertIn("delete this item", result.stderr + result.tty)
+        self.assertIn("rerun install.sh", result.stderr + result.tty)
+        self.assertEqual(self.calls().count("ensemble-broker login codex"), 1)
         self.assert_secret_free(KEY, PASSWORD, result=result)
 
     def test_opencode_docker_key_from_stdin(self):

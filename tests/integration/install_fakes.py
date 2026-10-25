@@ -553,6 +553,17 @@ def shasum(args):
 def broker(args):
     codex_file = BROKER.parent / "codex/state.json"
     state = load(codex_file, None)
+    if args[:2] in (["login", "opencode"], ["login", "codex"]):
+        service = "ensemble-" + args[1]
+        if (FAKES / "keychain" / ("foreign-" + service)).exists():
+            account = "auth" if args[1] == "codex" else args[2]
+            out(
+                f"ensemble-broker: keychain item {service}/{account} belongs to another process"
+                " (keychain status -25244); delete this item from the login keychain in Keychain"
+                " Access, then rerun install.sh\n",
+                sys.stderr,
+            )
+            return 11
     if args == ["status"]:
         default = {"state": "installation_invalid", "version": ""}
         default["repair"] = (

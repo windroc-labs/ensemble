@@ -1443,7 +1443,11 @@ except BaseException:
 
 # Runs login command "$@" on the terminal until it succeeds (exit 0), or the user stops (exit 1).
 key_login() {
+  local rc
   until "$@" <&3 >&3 2>&3; do
+    rc=$?
+    # Broker exit 11 with an ownership diagnostic needs deletion, not another login attempt.
+    [ "$rc" != 11 ] || return 1
     ask_yn "No $provider key stored. Try again?" || return 1
   done
 }
@@ -1744,7 +1748,12 @@ broker_logins() {
       skip "logged in"
     else
       record_item ensemble-codex auth
-      "$broker" login codex <&3 >&3 2>&3
+      if ! "$broker" login codex <&3 >&3 2>&3; then
+        if security find-generic-password -s ensemble-codex -a auth </dev/null >/dev/null 2>&1; then
+          say "ensemble-codex/auth is unavailable to this broker. If another process created it, delete this item from the login keychain in Keychain Access, then rerun install.sh."
+        fi
+        return 1
+      fi
     fi
   fi
 }

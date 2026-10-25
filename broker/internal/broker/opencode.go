@@ -44,6 +44,9 @@ func LoginOpencode(provider string, read, password func() ([]byte, error), k Ope
 	}
 	item, rerun := opencodeService+" "+provider, "rerun ensemble-broker login opencode "+provider
 	if err := k.PutSecret(opencodeService, provider, key); err != nil {
+		if errors.Is(err, ErrInvalidOwnerEdit) {
+			return ownershipError(opencodeService, provider, err)
+		}
 		return fmt.Errorf("keychain item %s: saving it failed: %w; %s", item, err, rerun)
 	}
 	if err := secureItem(opencodeService, provider, rerun+" to finish", k, password); err != nil {
