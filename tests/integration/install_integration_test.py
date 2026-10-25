@@ -1382,7 +1382,7 @@ class InstallTest(Case):
                 *[(WRITE_Q, "y")] * 3,
                 *provider_answers,
                 (WRITE_Q, "y"),
-                (WRITE_Q, path_answer),
+                *([(WRITE_Q, path_answer)] if path_answer is not None else []),
             ],
         )
 
@@ -1398,6 +1398,64 @@ class InstallTest(Case):
             ".cache/opencode/packages/ensemble@git+https:/github.com/windroc-labs/ensemble.git#main",
             "node_modules/ensemble",
         )
+
+    def test_opencode_reuses_stable_path_binary_and_preserves_it_on_cleanup(self):
+        for version in ("1.19.3", "1.20.0", "2.0.0"):
+            with self.subTest(version=version):
+                external = self.bin / "opencode"
+                shutil.copy(self.fakes / "apps/opencode", external)
+                (self.fakes / "opencode_version").write_text(version)
+                before = external.read_bytes()
+                self.assert_ok(self.opencode_only(path_answer=None))
+                self.assertEqual(
+                    tomllib.loads(self.config().read_text())["session"]["clients"]["opencode"][
+                        "executable"
+                    ],
+                    str(external),
+                )
+                self.assertFalse(Path(self.ensemble, "opencode").exists())
+                self.assertFalse(any(c.startswith("npm install") for c in self.calls()))
+                self.assertNotIn("brew install node", self.calls())
+                self.assertNotIn(".ensemble/opencode/bin", Path(self.home, ".zprofile").read_text())
+                self.assert_ok(self.opencode_rerun())
+                self.assertFalse(any("auth login" in c for c in self.calls()))
+                self.assert_ok(self.cleanup("--yes"))
+                self.assertEqual(external.read_bytes(), before)
+
+    def test_opencode_unusable_path_binary_falls_back_to_private_install(self):
+        for version in ("1.19.2", "1.9.9", "1.20.0-beta.1", "garbage", ""):
+            with self.subTest(version=version):
+                shutil.copy(self.fakes / "apps/opencode", self.bin / "opencode")
+                (self.fakes / "opencode_version").write_text(version)
+                self.assert_ok(self.opencode_only())
+                private = Path(self.ensemble, "opencode/bin/opencode")
+                self.assertTrue(private.exists())
+                self.assertIn("opencode-ai@1.19.3", "\n".join(self.calls()))
+                self.assert_ok(self.cleanup("--yes"))
+
+    def test_opencode_failed_path_version_falls_back_to_private_install(self):
+        shutil.copy(self.fakes / "apps/opencode", self.bin / "opencode")
+        (self.fakes / "opencode_version").write_text("1.20.0")
+        (self.fakes / "fail").write_text("opencode --version")
+        self.assert_ok(self.opencode_only())
+        self.assertTrue(Path(self.ensemble, "opencode/bin/opencode").exists())
+
+    def test_opencode_rerun_migrates_private_default_to_path_with_spaces(self):
+        self.assert_ok(self.opencode_only())
+        external_dir = Path(self.home, "my tools")
+        external_dir.mkdir()
+        external = external_dir / "opencode"
+        shutil.copy(self.fakes / "apps/opencode", external)
+        (self.fakes / "opencode_version").write_text("1.20.0")
+        self.env["PATH"] = str(external_dir) + os.pathsep + self.env["PATH"]
+        self.assert_ok(self.opencode_rerun((WRITE_Q, "y")))
+        self.assertEqual(
+            tomllib.loads(self.config().read_text())["session"]["clients"]["opencode"][
+                "executable"
+            ],
+            str(external),
+        )
+        self.assertFalse(any(c.startswith("npm install") for c in self.calls()))
 
     def test_opencode_only(self):
         result = self.opencode_only()

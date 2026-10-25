@@ -14,6 +14,8 @@ state_file=$state_dir/state
 ledger=$state_dir/added
 config=$HOME/.ensemble/config.local.toml
 opencode_prefix=$HOME/.ensemble/opencode
+opencode_executable=$opencode_prefix/bin/opencode
+opencode_min=
 ref=main
 clients_flag=
 clients=
@@ -756,7 +758,7 @@ if not scoped and harness and get(data, "delegate.delegates", "harness_host") in
     wanted.append(("delegate.delegates", "harness_host", harness))
 if name and not scoped:
     target, before = f"{name}/{model}", f"{prev_name}/{prev_model}" if prev_name else None
-    if get(data, "session.clients.opencode", "executable") in (None, ""):
+    if get(data, "session.clients.opencode", "executable") in (None, "", os.path.expanduser("~/.ensemble/opencode/bin/opencode")):
         want("session.clients.opencode", "executable", exe)
     def ours(value):
         return value is None or (isinstance(value, str) and (value.startswith("ollama/") or value == before))
@@ -820,7 +822,7 @@ if any(get(edited, table, key) != value for table, key, value in wanted):
 with open(out, "w", encoding="utf-8") as f:
     f.write(result)
 sys.exit(3)' "$config" "$1" "$wanted_default" "$wanted_harness" "$wanted_client" \
-    "$opencode_prefix/bin/opencode" "$provider" "$url" "$model" "$context" \
+    "$opencode_executable" "$provider" "$url" "$model" "$context" \
     "$prev_provider" "$prev_url" "$prev_model" "$prev_context" "$only" "$board_file"
 }
 
@@ -1094,6 +1096,35 @@ opencode_version() {
   printf '%s' "$value"
 }
 
+# Only a stable X.Y.Z version at or above $2 qualifies; failed --version calls never qualify.
+opencode_usable() {
+  local found major minor patch want_major want_minor want_patch
+  local stable='^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$'
+  found=$("$1" --version </dev/null 2>/dev/null) || return 1
+  [[ $found =~ $stable ]] || return 1
+  IFS=. read -r major minor patch <<<"$found"
+  IFS=. read -r want_major want_minor want_patch <<<"$2"
+  [ "$major" -gt "$want_major" ] || { [ "$major" -eq "$want_major" ] && {
+    [ "$minor" -gt "$want_minor" ] || { [ "$minor" -eq "$want_minor" ] && [ "$patch" -ge "$want_patch" ]; }
+  }; }
+}
+
+# Select before config_file so the config, plugin installer and login all use the same executable.
+opencode_select() {
+  local candidate
+  has opencode || return 0
+  opencode_min=$(opencode_version)
+  record_dir "${XDG_DATA_HOME:-$HOME/.local/share}/opencode"
+  record_dir "${XDG_DATA_HOME:-$HOME/.local/share}/opentui"
+  record_dir "${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
+  record_dir "${XDG_STATE_HOME:-$HOME/.local/state}/opencode"
+  record_dir "${XDG_CACHE_HOME:-$HOME/.cache}/opencode"
+  if candidate=$(command -v opencode) && opencode_usable "$candidate" "$opencode_min"; then
+    case $candidate in /*) ;; *) candidate=$PWD/$candidate ;; esac
+    opencode_executable=$candidate
+  fi
+}
+
 opencode_install() {
   local version found=
   step "OpenCode install"
@@ -1101,20 +1132,14 @@ opencode_install() {
     skip "OpenCode not chosen"
     return
   fi
-  version=$(opencode_version)
-  formula node
-  record_dir "$opencode_prefix"
-  record_dir "${XDG_DATA_HOME:-$HOME/.local/share}/opencode"
-  record_dir "${XDG_DATA_HOME:-$HOME/.local/share}/opentui"
-  record_dir "${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
-  record_dir "${XDG_STATE_HOME:-$HOME/.local/state}/opencode"
-  record_dir "${XDG_CACHE_HOME:-$HOME/.cache}/opencode"
-  if [ -x "$opencode_prefix/bin/opencode" ]; then
-    found=$("$opencode_prefix/bin/opencode" --version </dev/null 2>/dev/null || true)
-  fi
-  if [ "$found" = "$version" ]; then
+  version=$opencode_min
+  if [ "$opencode_executable" != "$opencode_prefix/bin/opencode" ]; then
+    skip "OpenCode $version or newer at $opencode_executable"
+  elif opencode_usable "$opencode_executable" "$version"; then
     skip "OpenCode $version in $opencode_prefix"
   else
+    formula node
+    record_dir "$opencode_prefix"
     npm install -g --prefix "$opencode_prefix" --cache "$opencode_prefix/.npm-cache" "opencode-ai@$version" </dev/null >&2
     # npm's allowScripts skips opencode-ai's postinstall, which puts the platform binary in place of a stub.
     node "$opencode_prefix/lib/node_modules/opencode-ai/postinstall.mjs" </dev/null >&2
@@ -1197,7 +1222,7 @@ opencode_plugin() {
   record_dir "${XDG_CACHE_HOME:-$HOME/.cache}/opencode/packages"
   record_dir "${XDG_CACHE_HOME:-$HOME/.cache}/opencode/packages/${spec%%//*}"
   rm -rf -- "$dir"
-  "$opencode_prefix/bin/opencode" plugin -g -f "$spec" </dev/null >&2
+  "$opencode_executable" plugin -g -f "$spec" </dev/null >&2
   [ -d "$dir/node_modules/ensemble" ] || die "OpenCode did not download $spec"
   state_set opencode_plugin_commit "$commit"
 }
@@ -1425,7 +1450,7 @@ key_login() {
 
 # OpenCode's own login, which stores the key in auth.json; exit 1 when no $provider key landed there.
 opencode_login() {
-  "$opencode_prefix/bin/opencode" auth login && opencode_has_auth "$provider" api
+  "$opencode_executable" auth login && opencode_has_auth "$provider" api
 }
 
 opencode_key() {
@@ -1443,7 +1468,7 @@ opencode_key() {
       opencode_store_key
     else
       say "In opencode auth login pick Other, enter $provider, then paste its API key"
-      later="rerun install.sh, or run $opencode_prefix/bin/opencode auth login"
+      later="rerun install.sh, or run \"$opencode_executable\" auth login"
       if ! key_login opencode_login; then
         skip "no $provider key: $later"
         return
@@ -1489,7 +1514,7 @@ ctmux_install() {
     skip "launchers in ~/.ensemble/bin"
   fi
   profile_line 'export PATH="$HOME/.ensemble/bin:$PATH"' "$HOME/.ensemble/bin"
-  if has opencode; then
+  if has opencode && [ "$opencode_executable" = "$opencode_prefix/bin/opencode" ]; then
     profile_line 'export PATH="$HOME/.ensemble/opencode/bin:$PATH"' "$opencode_prefix/bin"
   fi
 }
@@ -2293,6 +2318,7 @@ main() {
   dependencies
   if [ -z "$answered" ]; then answers; fi
   ref_check
+  opencode_select
   config_file
   apps
   client_logins
