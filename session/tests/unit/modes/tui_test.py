@@ -1593,6 +1593,34 @@ class CloseStopTest(Base):
         mode._terminal.calls.close.assert_called_once_with()
         self.assertNoSessionDir()
 
+    def test_a_stop_whose_holder_lookup_fails_raises_and_a_later_stop_closes_the_session(self):
+        mode = self.started()
+        self.host.calls.list.side_effect = SessionError("tmux sessions unknown: tmux failed")
+        with self.assertRaisesRegex(SessionError, r"\Atmux sessions unknown: tmux failed\Z"):
+            mode.stop()
+        mode._terminal.calls.close.assert_not_called()
+        self.assertTrue(os.path.isdir(self.dir))
+        self.host.calls.list.side_effect = None
+        mode.stop()
+        mode._terminal.calls.close.assert_called_once_with()
+        self.assertNoSessionDir()
+        self.assertEqual((mode.poll(0), mode.returncode(0)), (([], True), -signal.SIGHUP))
+
+    def test_a_sid_bound_stop_whose_sid_read_fails_raises_and_a_later_stop_closes_it(self):
+        terminal = self.started()._terminal
+        mode = tui.TuiMode.attach(
+            NAME, tui.TuiMode.snapshot(NAME), self.client, host=self.host, sid=SID
+        )
+        terminal.calls.session_identity.side_effect = SessionError("tmux session w1: tmux failed")
+        with self.assertRaisesRegex(SessionError, r"\Atmux session w1: tmux failed\Z"):
+            mode.stop()
+        terminal.calls.close.assert_not_called()
+        self.assertTrue(os.path.isdir(self.dir))
+        terminal.calls.session_identity.side_effect = None
+        mode.stop()
+        terminal.calls.close.assert_called_once_with()
+        self.assertNoSessionDir()
+
     def test_close_and_stop_remove_the_names_lock_unless_another_holds_the_name(self):
         lock = os.path.join(self.root, f"{NAME}.lock")
         self.started()
