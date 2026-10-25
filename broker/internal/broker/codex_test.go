@@ -171,7 +171,11 @@ func codexFixture(t *testing.T) (Codex, *fakeCodexNative, *fakeCodexKeychain) {
 	t.Helper()
 	n := &fakeCodexNative{data: codexAuth(codexNow.Add(time.Hour).Unix())}
 	k := &fakeCodexKeychain{native: n, missing: true}
-	root := t.TempDir()
+	// macOS's /var is a symlink, and revisionDirectory refuses any symlinked component.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	return Codex{native: n, keychain: k, tempRoot: root, revisionDir: filepath.Join(root, "codex-coordination"), now: func() time.Time { return codexNow }, uid: func() int { return 501 }, password: func() ([]byte, error) { return []byte(keychainPass), nil }}, n, k
 }
 
