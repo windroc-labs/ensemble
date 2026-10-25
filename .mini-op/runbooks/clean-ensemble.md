@@ -1,0 +1,10 @@
+---
+when: cleaning ensemble off the mini after an install test, or checking the mini's login and launch items against the baseline
+---
+
+# Clean ensemble off the mini
+
+Rules, waiting and answering: mini-op's rules (`/mini-op:run` loads them). Gotchas for this environment: `gotchas.md` beside this runbook.
+
+1. Cleanup: `~/mini-op-projects/ensemble/clean-ensemble/clean-test` (PR #547's `install-cleanup.sh --yes --password-stdin`). Homebrew's own uninstaller prints "Warning: This script will remove" and a list of not-deleted dirs: harmless. Afterwards check for leftovers (files, `.zprofile`, keychain items). Keep the test accounts' keychain items, the Strata key's item (both lists: the request or the mini's `~/.ensemble/config.local.toml`) and git's `github.com` internet password for the test GitHub user (the user 2026-10-23).
+2. Check the mini's login and launch items (TASK-892), after every test once mini-op is closed (`ensemble-session close mini-op`), against the same check saved before the test (and once before the first test, as the baseline). Read-only, over ssh from the user's Mac, each output saved to a file on that Mac outside any repo: `ssh -F ~/.mini-op/ssh_config mini 'find /Library/LaunchAgents /Library/LaunchDaemons ~/Library/LaunchAgents -type f -exec shasum -a 256 {} +'`, `ssh -F ~/.mini-op/ssh_config mini 'launchctl print gui/$(id -u)'`, `ssh -F ~/.mini-op/ssh_config mini 'launchctl print system'`, `ssh -F ~/.mini-op/ssh_config mini 'ps -axo pid,ppid,user,command'`, and `sfltool dumpbtm` as root, the user typing the mini's password at sudo's prompt (mini-op is closed, so nothing pipes the password): `ssh -F ~/.mini-op/ssh_config -t mini 'sudo sfltool dumpbtm'`. Every new or changed launch agent, daemon, login or background item and process must match what this test installed. Anything else, or a check that failed or lacked permission, is an anomaly: keep mini-op closed, tell the user, and do not take it as the new baseline (erase: mini-op's `return-mini` runbook). A clean result is no proof the mini is clean.

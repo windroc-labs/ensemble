@@ -1,0 +1,20 @@
+#!/usr/bin/env zsh
+usage='lq <service> <account> <json-body-file>   send that GraphQL body to the Linear API; the key in
+the keychain item <service>/<account> (the manager key: the mini'"'"'s ~/.ensemble/config.local.toml or
+the request) goes to curl as its Authorization header through stdin. Prints the reply. Exits 0, 1
+(the file is unreadable, the key is not in the keychain, or curl failed) or 2 (usage error).'
+[[ $# -eq 1 && $1 == -h ]] && { print -r -- $usage; exit 0; }
+name='^[A-Za-z0-9][A-Za-z0-9._@+:-]*$'
+[[ $# -eq 3 && $1 =~ $name && $2 =~ $name && -n $3 && $3 != -* ]] ||
+  { print -u2 -r -- 'lq: usage: lq <service> <account> <json-body-file>'; exit 2; }
+[[ -f $3 && -r $3 ]] || { print -u2 -r -- "lq: cannot read $3"; exit 1; }
+source ~/apm/lib/keychain.zsh || exit 1
+s=$1; a=$2
+keychain_has "$s" "$a" || { print -u2 -r -- "lq: no $s/$a key in the keychain"; exit 1; }
+keychain_read "$s" "$a" |
+  sed "s/^/Authorization: /" |
+  curl -s https://api.linear.app/graphql -H @- -H "Content-Type: application/json" \
+    --data-binary @"$3"
+st=($pipestatus)
+(( st[1] == 0 )) || { print -u2 -r -- "lq: cannot read $s/$a from the keychain"; exit 1; }
+(( st[3] == 0 )) || { print -u2 -r -- "lq: curl exited $st[3]"; exit 1; }

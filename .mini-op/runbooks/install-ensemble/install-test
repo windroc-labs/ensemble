@@ -1,0 +1,35 @@
+#!/usr/bin/env zsh
+usage='install-test [-- <install.sh flags>]   run install.sh from windroc-labs/ensemble as a user would, in
+this Terminal; its sudo password is typed at its prompt (mini pw from mini-op). REF=<ref> (default
+main) picks the branch or commit, CLIENTS=<list> adds --clients <list>, OC=1 adds the Strata
+OpenCode flags, their URL, model and context from $STRATA_CONF (default
+~/.mini-op-local/ensemble/strata.conf, made from strata.conf.example); flags after -- go to
+install.sh unchanged. Prints "install.sh exited <rc>"; exits 0
+(it exited 0), 1 (strata.conf lacks a setting, the download failed, or it exited non-zero) or 2
+(usage error).'
+[[ $# -eq 1 && $1 == -h ]] && { print -r -- $usage; exit 0; }
+[[ $# -eq 0 || $1 == -- ]] ||
+  { print -u2 -r -- 'install-test: usage: install-test [-- <install.sh flags>]'; exit 2; }
+shift $(( $# > 0 ))
+conf=${STRATA_CONF:-$HOME/.mini-op-local/ensemble/strata.conf}; oc=()
+if [[ -n $OC ]]; then
+  typeset -A strata
+  [[ -r $conf ]] || { print -u2 -r -- "install-test: $conf cannot be read; ran nothing"; exit 1; }
+  while IFS== read -r k v || [[ -n $k ]]; do [[ $k == [a-z]* ]] && strata[$k]=$v; done < $conf
+  for k in url model context; do
+    [[ -n $strata[$k] ]] || { print -u2 -r -- "install-test: $conf has no $k; ran nothing"; exit 1; }
+    oc+=(--opencode-$k $strata[$k])
+  done
+  oc=(--opencode-provider strata $oc)
+fi
+ref=${REF:-main}
+url=https://raw.githubusercontent.com/windroc-labs/ensemble/$ref/scripts/install.sh
+script=$(curl -fsSL $url) ||
+  { print -u2 -r -- "install-test: cannot fetch $url; ran nothing"; exit 1; }
+bash -c "$script" install.sh --ref $ref \
+    ${=CLIENTS:+--clients $CLIENTS} \
+    $oc \
+    "$@"
+rc=$?
+echo "install.sh exited $rc"
+(( rc == 0 ))
