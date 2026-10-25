@@ -31,7 +31,15 @@ from ensemble.orchestrator.trackers.linear import (
 )
 from orchestrator_tests.case import Case
 from orchestrator_tests.unit import promote_fixtures as tp
-from orchestrator_tests.unit.board_ids import ACCOUNTS, HEADER, STATES, TASK_GROUP, TEAM
+from orchestrator_tests.unit.board_ids import (
+    ACCOUNTS,
+    HEADER,
+    STATES,
+    TASK_GROUP,
+    TEAM,
+    role_app,
+    role_id,
+)
 from orchestrator_tests.unit.run_fixtures import CORE_LOCAL
 
 OTHER_TEAM = "00000000-0000-4000-8000-0000000000f2"
@@ -47,7 +55,7 @@ TASK_LABELS = {"build": uid(0xB1), "light-build": uid(0xB2)}
 CLIENT_GROUP = uid(0xC0)
 CLIENT_LABELS = {"codex": uid(0xC1), "claude": uid(0xC2)}
 # each role's account's Linear user id
-ROLE_USERS = {account: uid(0xA0 + n) for n, account in enumerate(ACCOUNTS.values())}
+ROLE_USERS = {a: role_id(r) for r, a in ACCOUNTS.items()}
 CONFIG = f'linear.manager_key = "{MANAGER_KEY}"\n' + tp.CONFIG.replace(
     HEADER,
     HEADER
@@ -64,7 +72,7 @@ def names_cfg(**fields):
     cfg = {
         "team": TEAM,
         "states": dict(STATES),
-        "roles": {r: SimpleNamespace(account=a) for r, a in ACCOUNTS.items()},
+        "roles": {r: role_app(r) for r in ACCOUNTS},
         "task_label_group": TASK_GROUP,
         "task_labels": dict(TASK_LABELS),
         "agent_label_group": CLIENT_GROUP,

@@ -85,7 +85,7 @@ from orchestrator_tests.router_fixtures import (
     pr_search,
     who,
 )
-from orchestrator_tests.unit.board_ids import HARNESS_IDENTITY, HEADER, TASK_GROUP, TEAM
+from orchestrator_tests.unit.board_ids import HARNESS_IDENTITY, HEADER, TASK_GROUP, TEAM, role_id
 from orchestrator_tests.unit.board_ids import STATES as IDS_BY_KEY
 from orchestrator_tests.unit.board_ids import role as role_table
 from orchestrator_tests.unit.delegate_fixture import provider
@@ -373,7 +373,7 @@ class IssueClaims(Base):
         flt = next(v["f"] for q, v in fake.queries if "issues(filter" in q)
         self.assertEqual(
             (flt["team"], flt["project"], sorted(flt["assignee"]["id"]["in"])),
-            ({"id": {"eq": TEAM}}, {"null": False}, sorted(f"u-{r}" for r in ROLE)),
+            ({"id": {"eq": TEAM}}, {"null": False}, sorted(role_id(r) for r in ROLE)),
         )
 
     def test_claim_only_moves_to_in_progress(self):
@@ -408,7 +408,7 @@ class IssueClaims(Base):
             (fake.issues["TASK-1"]["state"], "comments" in fake.issues["TASK-1"]), ("Todo", False)
         )
         flt = next(v["f"] for q, v in fake.queries if "issues(filter" in q)
-        self.assertEqual(sorted(flt["assignee"]["id"]["in"]), sorted(f"u-{r}" for r in ROLE))
+        self.assertEqual(sorted(flt["assignee"]["id"]["in"]), sorted(role_id(r) for r in ROLE))
 
     def test_capped_todo_goes_to_review(self):
         self.write_config(HUMANS + CONFIG)
@@ -4663,7 +4663,7 @@ class RunPlanning(Base):
                     "self",
                     [
                         move(380, AGENT),
-                        move(375, "u-pm"),
+                        move(375, role_id("pm")),
                         move(372, None, "Done"),
                         move(371, None),
                         move(368, BOT),
@@ -5346,7 +5346,7 @@ class ScheduledRuns(TickScenario):
         flts = [v["f"] for q, v in fake.queries if "issues(filter" in q]
         self.assertEqual(
             {tuple(sorted(f["assignee"]["id"]["in"])) for f in flts},
-            {tuple(sorted(f"u-{r}" for r in ROLE))},
+            {tuple(sorted(role_id(r) for r in ROLE))},
         )
 
     def test_full_role_resume_not_launched(self):

@@ -335,7 +335,7 @@ def _linear_claimed(gql, cfg, claim):
 
 
 def _linear_identity(cfg, role):
-    return cfg.linear.roles[role].identity
+    return cfg.linear.roles[role]
 
 
 def _linear_board_factory(gql, cfg):

@@ -50,7 +50,7 @@ class TrackerKind(StrEnum):
 
 @dataclass(frozen=True)
 class LinearKey:
-    """A personal API key, by the Keychain service holding it (roles, manager)."""
+    """The manager's personal API key, by its Keychain service."""
 
     service: str
 
@@ -96,16 +96,6 @@ class LinearApp:
 
 
 @dataclass(frozen=True)
-class LinearRole:
-    account: str
-    key: str
-
-    @property
-    def identity(self) -> LinearKey:
-        return LinearKey(self.key)
-
-
-@dataclass(frozen=True)
 class LinearSettings:
     """[orchestrator.linear]: a Linear board's entities and keys, by id."""
 
@@ -119,7 +109,7 @@ class LinearSettings:
     agent_label_group: str
     agent_labels: Mapping[str, str]
     project_repos: Mapping[str, str]
-    roles: Mapping[str, LinearRole]
+    roles: Mapping[str, LinearApp]
 
     @property
     def manager(self) -> LinearKey:
@@ -214,9 +204,9 @@ class Wiring:
 
     connect: Connect  # the router's board
     reader: Callable[[Any, Config], Tracker]  # a run's issue read and Related-work search
-    accounts: Callable[[Any, Config, LinearKey | None], Accounts]  # write-back accounts
+    accounts: Callable[[Any, Config, LinearApp | None], Accounts]  # write-back accounts
     claimed: Callable[[Any, Config, Claim], Accounts]
-    identity: Callable[[Config, str], LinearKey | None]  # a role's; None: none to check
+    identity: Callable[[Config, str], LinearApp | None]  # a role's; None: none to check
     board: Callable[[Any, Config], Callable[[Any], Tracker]]
     # (cfg, src, *, dry): command src's token renewal policy; dry: show each app's token, renew none
     credentials: Callable[..., None]

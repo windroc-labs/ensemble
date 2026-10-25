@@ -39,6 +39,8 @@ from orchestrator_tests.unit.board_ids import (
     TASK_GROUP,
     TEAM,
     role,
+    role_app,
+    role_id,
     workflow_line,
 )
 
@@ -70,15 +72,15 @@ def old_key(key):
 
 ROLES = {
     "researcher": (
-        "researcher@agents.test",
+        role_id("researcher"),
         "linear-api-key-researcher",
         ("deep-research", "research", "light-research"),
         1,
         "pm",
     ),
-    "pm": ("pm@agents.test", "linear-api-key-pm", ("product-design",), 1, "engineer"),
+    "pm": (role_id("pm"), "linear-api-key-pm", ("product-design",), 1, "engineer"),
     "engineer": (
-        "engineer@agents.test",
+        role_id("engineer"),
         "linear-api-key-engineer",
         ("build", "light-build"),
         1,
@@ -91,7 +93,8 @@ def fields(cfg):
     """Each role's account, key, tasks, max_runs and its stage's next (None: the last)."""
     return {
         r: (
-            *dataclasses.astuple(cfg.linear.roles[r]),
+            cfg.linear.roles[r].user_id,
+            cfg.linear.roles[r].token_service,
             x.tasks,
             x.max_runs,
             config.TASKS[r].next or None,
@@ -164,7 +167,7 @@ LINEAR_DEFAULTS = {
     "states": dict.fromkeys(State, ""),
     "human_members": [],
     **dict.fromkeys(("task_labels", "agent_labels", "project_repos"), {}),
-    "roles": dict.fromkeys(("researcher", "pm", "engineer"), {"account": "", "key": ""}),
+    "roles": dict.fromkeys(("researcher", "pm", "engineer"), dict.fromkeys(config.AppKey, "")),
 }
 
 
@@ -198,6 +201,38 @@ A = "engineer-TASK-12-0b6f2c1e"
 
 
 class ConfigurationLoading(ConfigFile, Case):
+    def test_role_apps_require_all_four_fields_and_reject_member_keys(self):
+        app = {
+            "client_id": "client-dummy",
+            "secret_service": "dummy-secret",
+            "token_service": "dummy-token",
+            "user_id": "00000000-0000-4000-8000-000000000301",
+        }
+
+        def text(fields):
+            return (
+                BARE
+                + "[linear.roles.dummy-tester]\n"
+                + "".join(f"{k} = {json.dumps(v)}\n" for k, v in fields.items())
+            )
+
+        found = self.load(text(app)).linear.roles["dummy-tester"]
+        self.assertEqual(found.scopes, "read,write,app:assignable,app:mentionable")
+        self.assertEqual(found.user_id, app["user_id"])
+        for key in app:
+            for fields in ({k: v for k, v in app.items() if k != key}, app | {key: ""}):
+                with (
+                    self.subTest(key=key, fields=fields),
+                    self.assertRaisesRegex(config.ConfigError, f"linear.roles.dummy-tester.{key}"),
+                ):
+                    self.load(text(fields))
+        for key in ("account", "key"):
+            with (
+                self.subTest(key=key),
+                self.assertRaisesRegex(config.ConfigError, f"has unknown keys: {key}"),
+            ):
+                self.load(text(app | {key: "old"}))
+
     def test_stage_order(self):
         self.assertEqual(self.load(PIPELINE).stages, {"researcher": 0, "pm": 1, "engineer": 2})
         researcher_last = workflow_line(PACKAGED_FLOW.replace('next = "pm"\n', ""))
@@ -213,7 +248,6 @@ class ConfigurationLoading(ConfigFile, Case):
         upper = "ABCDEF00-0000-4000-8000-000000000021"
         solo = role("dummy-tester")
         x = BARE + "[roles.dummy-tester]\n[linear.roles.dummy-tester]\n"
-        account = "linear.roles.dummy-tester.account"
         cases = [
             (
                 HEADER
@@ -234,27 +268,10 @@ class ConfigurationLoading(ConfigFile, Case):
                 BASE.replace(solo, role("dummy-tester", 'tasks = ["x"]', "read_only = []")),
                 "[roles.dummy-tester] has unknown keys: read_only, tasks",
             ),
-            # a stage needs no [roles.<role>] table, but its account and key
-            (BARE, missing(f"{account}, linear.roles.dummy-tester.key")),
-            (BARE + "[roles.dummy-tester]\n", missing(f"{account}, linear.roles.dummy-tester.key")),
-            (x + 'key = "k-x"\n', missing(account)),
-            (x + 'account = ""\nkey = "k-x"\n', missing(account)),
+            (BARE, missing(", ".join(f"linear.roles.dummy-tester.{k}" for k in config.AppKey))),
+            (x + "max_runs = 2\n", "[linear.roles.dummy-tester] has unknown keys: max_runs"),
             (
-                x + 'account = 5\nkey = "k-x"\n',
-                "[linear.roles.dummy-tester] account must be the role's Linear email: 5",
-            ),
-            (x + 'account = "x@agents.test"\n', missing("linear.roles.dummy-tester.key")),
-            (x + 'account = "x@agents.test"\nkey = ""\n', missing("linear.roles.dummy-tester.key")),
-            (
-                x + 'account = "x@agents.test"\nkey = ["k"]\n',
-                "[linear.roles.dummy-tester] key must be a Keychain service name: ['k']",
-            ),
-            (
-                x + 'account = "x@agents.test"\nkey = "k-x"\nmax_runs = 2\n',
-                "[linear.roles.dummy-tester] has unknown keys: max_runs",
-            ),
-            (
-                BASE + '[linear.roles.ghost]\naccount = "g@agents.test"\nkey = "k-g"\n',
+                BASE + '[linear.roles.ghost]\nclient_id = "g"\n',
                 "[linear.roles.ghost] names no stage of the workflow",
             ),
             (BASE + "[roles.ghost]\n", "[roles.ghost] names no stage of the workflow"),
@@ -304,7 +321,7 @@ class ConfigurationLoading(ConfigFile, Case):
                 "unknown keys in [linear]: harness_key",
             ),
             (
-                BASE.replace('user_id = "', 'typo = 1, user_id = "'),
+                BASE.replace('user_id = "', 'typo = 1, user_id = "', 1),
                 "[linear.harness] has unknown keys: typo",
             ),
             (
@@ -435,11 +452,11 @@ class ConfigurationLoading(ConfigFile, Case):
             ),
             (
                 PIPELINE.replace("linear-api-key-pm", "linear-api-key-researcher"),
-                "[linear.roles.pm] key 'linear-api-key-researcher' is also [linear.roles.researcher]'s",
+                "linear.roles.pm.secret_service 'linear-api-key-researcher-secret' is also linear.roles.researcher.secret_service",
             ),
             (
                 PIPELINE.replace("linear-api-key-engineer", "linear-api-key"),
-                "[linear.roles.engineer] key 'linear-api-key' is linear.harness.token_service",
+                "linear.roles.engineer.secret_service 'linear-api-key-secret' is also linear.harness.secret_service",
             ),
             (
                 'linear.manager_key = "linear-api-key"\n' + PIPELINE,
@@ -447,11 +464,11 @@ class ConfigurationLoading(ConfigFile, Case):
             ),
             (
                 PIPELINE.replace("linear-api-key-pm", "linear-api-key-secret"),
-                "[linear.roles.pm] key 'linear-api-key-secret' is linear.harness.secret_service",
+                "linear.roles.pm.token_service 'linear-api-key-secret' is also linear.harness.secret_service",
             ),
             (
                 'linear.manager_key = "linear-api-key-pm"\n' + PIPELINE,
-                "linear.manager_key 'linear-api-key-pm' is [linear.roles.pm]'s key",
+                "linear.manager_key 'linear-api-key-pm' is linear.roles.pm.token_service",
             ),
             (
                 "linear.manager_key = 1\n" + PIPELINE,
@@ -544,8 +561,8 @@ class ConfigurationLoading(ConfigFile, Case):
         )
         pm = cfg.linear.roles["pm"]
         self.assertEqual(
-            (pm.account, pm.key, cfg.roles["pm"].max_runs),
-            ("pm@agents.test", "linear-api-key-pm", 1),
+            (pm.user_id, pm.token_service, cfg.roles["pm"].max_runs),
+            (role_id("pm"), "linear-api-key-pm", 1),
         )
         self.assertEqual(
             (
@@ -1008,9 +1025,7 @@ class CommittedConfiguration(Case):
                 "linear.task_label_group, linear.states.todo, "
                 "linear.states.in_progress, linear.states.in_review, linear.states.handoff, "
                 "linear.states.done, linear.states.canceled, linear.states.backlog, "
-                "linear.roles.researcher.account, "
-                "linear.roles.pm.account, linear.roles.engineer.account, linear.roles.researcher.key, "
-                "linear.roles.pm.key, linear.roles.engineer.key"
+                + ", ".join(f"linear.roles.{r}.{k}" for k in config.AppKey for r in ROLES)
             ),
         )
 
@@ -1047,7 +1062,7 @@ class CommittedConfiguration(Case):
 
     def test_every_linear_key_under_orchestrator_linear_loads(self):
         accounts = "".join(
-            f'[orchestrator.linear.roles.{r}]\naccount = "{r}@agents.test"\nkey = "linear-api-key-{r}"\n'
+            role(r).split(f"[roles.{r}]")[0].replace("[linear.", "[orchestrator.linear.")
             for r in ("researcher", "pm", "engineer")
         )
         write(
@@ -1271,7 +1286,7 @@ class TrackerChoice(ConfigFile, Case):
         self.assertEqual((linear.agent_labels, linear.project_repos), ({}, {P1: "acme/x"}))
         self.assertEqual(
             dict(linear.roles),
-            {r: config.LinearRole(account, key) for r, (account, key, *_) in ROLES.items()},
+            {r: role_app(r) for r in ROLES},
         )
         self.assertIs(config.linear_settings(cfg, "promote"), linear)
 
@@ -1586,8 +1601,7 @@ class RunnableRoles(ConfigFile, Case):
 
     def test_a_stage_without_role_table_runs_one(self):
         accounts = "".join(
-            f'[linear.roles.{r}]\naccount = "{r}@agents.test"\nkey = "linear-api-key-{r}"\n'
-            for r in ("researcher", "pm", "engineer")
+            role(r).split(f"[roles.{r}]")[0] for r in ("researcher", "pm", "engineer")
         )
         roles = self.runs(HEADER + accounts + "[roles.pm]\nmax_runs = 2\n")
         self.assertEqual(
@@ -2008,13 +2022,13 @@ class LocalOverlay(ConfigFile, Case):
             fields(cfg),
             {
                 "researcher": (
-                    "researcher@agents.test",
+                    role_id("researcher"),
                     "linear-api-key-researcher",
                     ROLES["researcher"][2],
                     2,
                     "pm",
                 ),
-                "pm": ("pm@agents.test", "linear-api-key-pm", ROLES["pm"][2], 1, None),
+                "pm": (role_id("pm"), "linear-api-key-pm", ROLES["pm"][2], 1, None),
             },
         )
         self.assertEqual(cfg.linear.project_repos, {P1: "acme/x", P2: "acme/y"})

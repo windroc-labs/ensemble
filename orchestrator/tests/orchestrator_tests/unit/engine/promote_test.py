@@ -21,7 +21,7 @@ from ensemble.orchestrator.engine.types import IssueError, LinearError
 from ensemble.orchestrator.trackers.linear import client, linear_tracker, ops
 from ensemble.orchestrator.trackers.local.local_tracker import LocalTracker
 from orchestrator_tests.case import Case
-from orchestrator_tests.unit.board_ids import FINISHED, HARNESS_IDENTITY, TEAM
+from orchestrator_tests.unit.board_ids import FINISHED, HARNESS_IDENTITY, TEAM, role_id
 from orchestrator_tests.unit.board_ids import STATES as IDS_BY_KEY
 from orchestrator_tests.unit.board_ids import role as role_table
 from orchestrator_tests.unit.keychain_fixtures import (
@@ -286,7 +286,7 @@ class PromotionOutages(Base):
                     self.assertEqual((self.out, self.err, FakePruner.calls), (said, "", []))
                     self.assertEqual(
                         [(q, v["identity"].service, v["t"]) for q, v in gql.failed],
-                        [(ops.Q_SETUP, HARNESS, TEAM)],
+                        [(ops.Q_TEAM, HARNESS, TEAM)],
                     )
         self.assertEqual(self.fake.calls, [])
         self.assertEqual((self.run_main(), src["state"]), (0, "Done"))
@@ -412,7 +412,7 @@ class PromotionCleanup(Base):
             (tracker.team_id, tracker.state_ids, tracker.finished_ids),
             (TEAM, dict(IDS_BY_KEY), FINISHED),
         )
-        self.assertEqual(tracker.roles, {f"u-{role}": role for role in ROLE})
+        self.assertEqual(tracker.roles, {role_id(role): role for role in ROLE})
 
     def test_prune_error_does_not_break_promote(self):
         class Boom:
@@ -454,7 +454,7 @@ class HandoffPromotion(Base):
                 child["priority"],
                 child["teamId"],
             ),
-            ("p-dr", "u-pm", STATES["Todo"], 2, TEAM),
+            ("p-dr", role_id("pm"), STATES["Todo"], 2, TEAM),
         )
         self.assertEqual(child["title"], "PRD: Title DR-1")
         self.assertEqual(
@@ -681,7 +681,7 @@ class HandoffPromotion(Base):
             (src["state"], src["assignee"], src["subscribers"], src["posted"]),
             (
                 "In Review",
-                {"id": "u-researcher"},
+                {"id": role_id("researcher")},
                 ["me@x.com", "b@x.com"],
                 [promote.NO_INSTRUCTIONS.format(state="In Review")],
             ),
@@ -895,7 +895,7 @@ class PromotionScope(Base):
                 (child,) = self.fake.children.values()
                 self.assertEqual(
                     (child["projectId"], child["assigneeId"], child["title"]),
-                    ("p-dr", "u-engineer", want),
+                    ("p-dr", role_id("engineer"), want),
                 )
                 self.assertEqual(
                     instructions(child["description"]), f"## Instructions\nMe, {ago(45)}:\nbuild X"
@@ -921,7 +921,7 @@ class PromotionScope(Base):
         self.assertEqual(
             self.fake.handoff_vars, {"t": TEAM, "s": IDS_BY_KEY["handoff"], "a": mock.ANY}
         )
-        self.assertEqual(sorted(self.fake.handoff_vars["a"]), sorted(f"u-{r}" for r in ROLE))
+        self.assertEqual(sorted(self.fake.handoff_vars["a"]), sorted(role_id(r) for r in ROLE))
         self.assertIn("team: { id: { eq: $t } }", linear_tracker.Q_HANDOFF)
         self.assertIn("state: { id: { eq: $s } }", linear_tracker.Q_HANDOFF)
         self.assertIn("project: { null: false }", linear_tracker.Q_HANDOFF)
@@ -1073,7 +1073,7 @@ class LocalBoardPromotion(Base):
         )
 
 
-SETUP_REQUESTS = {"ops.Q_SETUP": 1}
+SETUP_REQUESTS = {"ops.Q_TEAM": 1}
 PROMOTION = {  # one Handoff issue promoted
     "linear_tracker.Q_DETAIL": 1,
     "linear_tracker.Q_CHILD": 1,

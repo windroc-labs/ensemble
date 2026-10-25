@@ -3,7 +3,7 @@
 # file owns is a real line below: a required one you set locally has the placeholder "" (router, run and promote stop
 # while one is still "" or missing), a local-only one its empty default; a `# local:` line shows a value to copy there,
 # uncommented. [roles.<role>] holds only the board keys below; a role's run keys go in [core] (the overlay), its Linear
-# account and key in [linear.roles.<role>]. [linear], at the end, holds the Linear tracker's entities and keys, required
+# app in [linear.roles.<role>]. [linear], at the end, holds the Linear tracker's entities and keys, required
 # only with tracker = "linear".
 
 #   tracker   local: where issues live: "local", a local board, the directory $ENSEMBLE_BOARD_DIR (default
@@ -172,30 +172,41 @@ canceled = ""
 # local: [orchestrator.linear.agent_labels]
 # local: "<client>" = "00000000-0000-4000-8000-000000000102"
 
-# Each stage role's Linear account: one table per workflow stage, and no other.
-#   account  local, required for each role: the role's Linear account (email)
-#   key      local, required: Keychain service of that account's API key
+# Each stage role's OAuth app: four required fields, one table per workflow stage.
+# Store secrets and token records in Keychain; user_id is the app user id from installation.
 [linear.roles.researcher]
-account = ""
-key = ""
+client_id = ""
+secret_service = ""
+token_service = ""
+user_id = ""
 
 [linear.roles.pm]
-account = ""
-key = ""
+client_id = ""
+secret_service = ""
+token_service = ""
+user_id = ""
 
 [linear.roles.engineer]
-account = ""
-key = ""
+client_id = ""
+secret_service = ""
+token_service = ""
+user_id = ""
 
 # local: [orchestrator.linear.roles.researcher]
-# local: account = "you+researcher@example.com"
-# local: key = "linear-researcher"
+# local: client_id = "00000000000000000000000000000001"
+# local: secret_service = "linear-app-researcher-secret"
+# local: token_service = "linear-app-researcher-token"
+# local: user_id = "00000000-0000-4000-8000-000000000000"
 # local: [orchestrator.linear.roles.pm]
-# local: account = "you+pm@example.com"
-# local: key = "linear-pm"
+# local: client_id = "00000000000000000000000000000002"
+# local: secret_service = "linear-app-pm-secret"
+# local: token_service = "linear-app-pm-token"
+# local: user_id = "00000000-0000-4000-8000-000000000000"
 # local: [orchestrator.linear.roles.engineer]
-# local: account = "you+engineer@example.com"
-# local: key = "linear-engineer"
+# local: client_id = "00000000000000000000000000000003"
+# local: secret_service = "linear-app-engineer-secret"
+# local: token_service = "linear-app-engineer-token"
+# local: user_id = "00000000-0000-4000-8000-000000000000"
 
 # Project repos; optional.
 #   "<project id>"  local: "<owner>/<name>": target repo of the Linear project's Engineering, research or

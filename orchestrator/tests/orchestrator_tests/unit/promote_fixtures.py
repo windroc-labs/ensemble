@@ -17,6 +17,7 @@ from orchestrator_tests.unit.board_ids import (
     HEADER,
     PACKAGED_FLOW,
     STATE_NAMES,
+    role_id,
     team_node,
     workflow_line,
 )
@@ -41,7 +42,11 @@ ROLE = ACCOUNTS
 HUMAN = {"email": "me@x.com", "name": "Me"}
 
 # a role account's: self, as the harness's
-AGENT = {"email": "Researcher@agents.test", "name": "researcher@agents.test"}
+AGENT = {
+    "id": role_id("researcher"),
+    "email": "Researcher@agents.test",
+    "name": "researcher@agents.test",
+}
 
 # not in human_members, not a role or the harness: other, as the user's
 MANAGER = {"email": "manager@x.com", "name": "Manager"}
@@ -93,7 +98,7 @@ class FakeLinear:
             relations=[],
             inverse=[],
             attachments=[],
-            assignee=role and {"id": f"u-{role}"},
+            assignee=role and {"id": role_id(role)},
             project=project and {"id": PROJECTS[project], "name": project},
         )
         self.issues[ident].update(kw)
@@ -133,12 +138,8 @@ class FakeLinear:
     def _identity(self, query, v):
         if query == ops.Q_TEAM:
             return {"teams": {"nodes": [team_node(self.state_ids)]}}
-        if query == ops.Q_SETUP:
-            emails = {f["email"]["eqIgnoreCase"].lower() for f in v["u"]["or"]}
-            nodes = [{"id": f"u-{r}", "email": a} for r, a in ROLE.items() if a.lower() in emails]
-            return {"teams": {"nodes": [team_node(self.state_ids)]}, "users": {"nodes": nodes}}
         if query == ops.Q_USER:
-            users = {a.lower(): f"u-{r}" for r, a in ROLE.items()}
+            users = {a.lower(): role_id(r) for r, a in ROLE.items()}
             return {
                 "users": {
                     "nodes": [{"id": users[v["e"].lower()]}] if v["e"].lower() in users else []

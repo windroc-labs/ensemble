@@ -105,7 +105,7 @@ Q_DETAIL = (
   """
     + HISTORY
     + """
-  comments(first: 250) { nodes { body createdAt user { email name isMe } } }
+  comments(first: 250) { nodes { body createdAt user { id email name isMe } } }
   relations(first: 250) { nodes { relatedIssue { id } } }
   inverseRelations(first: 250) { nodes { issue { id } } } } }"""
 )
@@ -135,7 +135,7 @@ Q_RECHECK = (
 Q_HISTORY = (
     "query($i: String!, $after: String) { issue(id: $i) { "
     "history(first: 250, after: $after, orderBy: createdAt) { "
-    "nodes { createdAt toStateId actor { email isMe } botActor { type } } "
+    "nodes { createdAt toStateId actor { id email isMe } botActor { type } } "
     "pageInfo { hasNextPage endCursor } } } }"
 )
 _NODES = (
@@ -163,7 +163,7 @@ GROUP_BY_TYPE = {
 }
 Q_READ = """query($i: String!) { issue(id: $i) { id identifier url title description createdAt
   project { id }
-  comments(first: 250) { nodes { body createdAt user { email name isMe } } }
+  comments(first: 250) { nodes { body createdAt user { id email name isMe } } }
   attachments(first: 50) { nodes { url } }
   labels(first: 50) { nodes { id } }
   relations(first: 50) { nodes { relatedIssue { identifier title state { name } } } }
@@ -236,11 +236,11 @@ def _quiet(*_, **__):
 
 
 def _selves(roles):
-    return frozenset(r.account.lower() for r in roles.values())
+    return frozenset(r.user_id for r in roles.values())
 
 
 def _origin(user, selves) -> Origin:
-    return "self" if user.get("isMe") or (user.get("email") or "").lower() in selves else "other"
+    return "self" if user.get("isMe") or user.get("id") in selves else "other"
 
 
 def _move_origin(node, selves) -> Origin:
@@ -252,7 +252,7 @@ def _move_origin(node, selves) -> Origin:
 
 class LinearTracker(Tracker):
     """states: {State key: state id}; team_id; finished: ops.Team.finished; roles: {user id: role};
-    humans: human_members emails, subscribed on notify; selves: the role accounts' emails, lowercased;
+    humans: human_members emails, subscribed on notify; selves: the role apps' user ids;
     say: the caller's logger. A method needing one not given raises TypeError. identity: who each call is made as,
     with timeout when given; None: gql as given. A comment's ref: its client id's parts. A home is a Linear
     project; a note's account its user's email. Origin self: the harness app (isMe: router,
@@ -310,7 +310,7 @@ class LinearTracker(Tracker):
 
     @classmethod
     def connect(cls, gql, cfg, *, say):
-        """Checks the team and task label group, then reads the role accounts; keeps the task and
+        """Checks the team and task label group, then uses configured role app ids; keeps the task and
         Agent label maps. Calls gql as linear.harness."""
         linear = config.linear_settings(cfg, "router")
         gql = functools.partial(gql, identity=linear.harness)
@@ -321,7 +321,7 @@ class LinearTracker(Tracker):
             states=found.states,
             team_id=found.id,
             finished=found.finished,
-            roles=ops.role_ids(gql, linear.roles),
+            roles=ops.role_ids(linear.roles),
             humans=linear.human_members,
             selves=_selves(linear.roles),
             say=say,

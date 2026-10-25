@@ -57,7 +57,14 @@ from ensemble.orchestrator.trackers.linear.linear_tracker import LinearTracker
 from ensemble.utils import one_line
 from orchestrator_tests.case import Case
 from orchestrator_tests.prune_fixtures import NOW, ROLES, TEAM_OBJ
-from orchestrator_tests.unit.board_ids import DUPLICATE, STATES, TASK_GROUP, TEAM, team_node
+from orchestrator_tests.unit.board_ids import (
+    DUPLICATE,
+    STATES,
+    TASK_GROUP,
+    TEAM,
+    role_id,
+    team_node,
+)
 
 # sha256 of each query's text (orchestrator-revamped's but the archive rule's): the fake Linear
 # pairs queries by text
@@ -77,11 +84,11 @@ BASE = {
     "Q_ID": "339eb6885dd45c62cfae3c2f1d2bbdcdf6995a2e008079832d405f3019f5adf9",
     "M_UPDATE": "95eaa4a0cccf407f93c0137e32a54edfd12fcc68a35f4c94b2ad407ad59377dd",
     "Q_HANDOFF": "d5f85ca23fbe967486bc4ddfab203a172d029c0533575e9ea5d74a5a92e141b9",
-    "Q_DETAIL": "b2e26faf4a8f91935fd12b5c84aa12b6bd23ed8781de3db8d13214e5cff469a5",
+    "Q_DETAIL": "444ae6ce6852a4319966f4ed0aa28ac76a23e611152d090abb1974c87c8577bf",
     "Q_CHILD": "4fa2b83d88ba5fc7dd9a33223140644eb8647521ac24c8c19ba044602dbca7a1",
     "M_CREATE": "a67ba5a98ce64a1689f6842fca53f944e76ab2437837d95c7c5ce1940911b430",
     "M_RELATE": "6672d8a892ce59d43f46f25990e6867358dff5cf5e8f79438d77d09bb1e587d5",
-    "Q_READ": "a94647460768537b760c88ed1ac21bbfb27f3bcd1f6c52280e6a04fd90a03173",
+    "Q_READ": "562b027e6fd2e18f092584b85cf6d8b1b30e985a3ef677b6edf76d2ea5edac00",
     "Q_SEARCH": "bda2e9a29af014b08f88961462a759452ec79f9c0a411933db1ec264595256ca",
     "Q_SEARCH_IDS": "054d541ce9250a347a2c489c69ed5c6e7580f1244c43b79d71c01bad0cc741e0",
     "Q_IDS": "fd0f74d3cdd0d0a34ba9f12805652c7ecedebd4d75e003bece27d4d9912f9b95",
@@ -97,7 +104,7 @@ ROUTER = {
     "Q_RELATIONS": "c271398e2c19c59eb040a3f5988e3ddf0d7787ae9dbd824e63541dd45a4afc53",
     "Q_RECHECK": "585cff398cb172d48816a2e46fe7fa611ed917ddae67fe1cf0678c9d42080572",
     # its nodes' actor and botActor
-    "Q_HISTORY": "94ed56d855233bdac06aa95986139dc4ed05aa3d50d442ed2cdd12777b61a463",
+    "Q_HISTORY": "e07e42dff6752b712c71a4f96777c02097b5373a29f06aaaa86d99a6185b49df",
 }
 LISTS = {
     "": "497ec35294c8fc0894d43e9f3925801b8dcfe6af7a961e18b39f92e03fdec959",
@@ -110,7 +117,7 @@ NEW = ("Q_SNAPSHOTS", "Q_CHANGED", "Q_STATE_NAME")
 # ops queries the adapter delegates to
 OPS = {getattr(ops, n): n for n in ("M_COMMENT", "M_STATE", "M_SUBSCRIBE", "Q_ISSUE_STATE")}
 HUMANS = ("Me@X.com", "you@x.com")
-SELVES = frozenset({"pm@agents.test"})
+SELVES = frozenset({role_id("pm")})
 RULES = (
     gate,
     inputs,
@@ -474,7 +481,7 @@ class FinishedIssues(Case):
             "t": TEAM,
             "d": [STATES["done"]],
             "s": sorted({STATES["canceled"], DUPLICATE}),
-            "a": ["u-pm", "u-engineer"],
+            "a": [role_id("pm"), role_id("engineer")],
         }
         self.assertEqual(
             gql.calls,
@@ -516,8 +523,8 @@ class FinishedIssues(Case):
 
     def test_owners_map_to_user_ids(self):
         for owners, ids in (
-            (("pm", "engineer"), ["u-pm", "u-engineer"]),
-            (("researcher",), ["u-researcher"]),
+            (("pm", "engineer"), [role_id("pm"), role_id("engineer")]),
+            (("researcher",), [role_id("researcher")]),
             ((), []),
         ):
             with self.subTest(owners=owners):
@@ -961,7 +968,7 @@ def board_linear():
         agent_labels={"b": "label-b"},
         human_members=("human@x.test",),
         harness=LinearKey("linear-api-key"),
-        roles={"pm": SimpleNamespace(account="pm@agents.test")},
+        roles={"pm": SimpleNamespace(user_id=role_id("pm"))},
     )
 
 
@@ -975,14 +982,14 @@ def connected(**replies):
 
 class Connect(Case):
     def test_reads_in_order(self):
-        found, gql = connected(Q_USER=users("u-pm"))
-        self.assertEqual(gql.names(), ["Q_TEAM", "Q_TASK_GROUP", "Q_USER"])
+        found, gql = connected(Q_USER=users(role_id("pm")))
+        self.assertEqual(gql.names(), ["Q_TEAM", "Q_TASK_GROUP"])
         self.assertEqual(
             [{k: x for k, x in v.items() if k != "identity"} for _, v in gql.calls],
-            [{"t": TEAM}, {"i": TASK_GROUP}, {"e": "pm@agents.test"}],
+            [{"t": TEAM}, {"i": TASK_GROUP}],
         )
         self.assertEqual((found.team_id, found.state_ids), (TEAM, STATES))
-        self.assertEqual(found.roles, {"u-pm": "pm"})
+        self.assertEqual(found.roles, {role_id("pm"): "pm"})
         self.assertEqual(
             (found.task_group, found.label_tasks, found.agent_group, found.label_clients),
             (TASK_GROUP, {"label-1": "light-research"}, "agents", {"label-b": "b"}),
@@ -990,27 +997,23 @@ class Connect(Case):
 
     def test_connect_reads_no_human_ids(self):
         """human_members only subscribe: one not in Linear stops nothing."""
-        found, gql = connected(Q_USER=users("u-pm"))
+        found, gql = connected(Q_USER=users(role_id("pm")))
         self.assertNotIn("human@x.test", [v.get("e") for _, v in gql.calls])
         self.assertEqual((found.humans, found.selves), (("human@x.test",), SELVES))
 
     def test_errors_propagate(self):
         for replies, message in (
             ({"Q_TEAM": {"teams": {"nodes": []}}}, f"linear.team {TEAM} not found"),
-            (
-                {"Q_USER": users(None)},
-                r"\[linear.roles.pm\]: account 'pm@agents.test' not found",
-            ),
         ):
             with self.subTest(message=message), self.assertRaisesRegex(LinearError, message):
                 connected(**replies)
 
     def test_connect_binds_harness_identity(self):
-        found, gql = connected(Q_USER=users("u-pm"), Q_UPSTREAM={"issue": None})
+        found, gql = connected(Q_USER=users(role_id("pm")), Q_UPSTREAM={"issue": None})
         found.description("TASK-1")
         self.assertEqual(gql.names()[-1], "Q_UPSTREAM")
         self.assertEqual(
-            [v.get("identity") for _, v in gql.calls], [LinearKey("linear-api-key")] * 4
+            [v.get("identity") for _, v in gql.calls], [LinearKey("linear-api-key")] * 3
         )
 
 
@@ -1028,7 +1031,7 @@ class OfTeam(Case):
             states=STATES,
             team=TEAM,
             harness=LinearKey("linear-api-key"),
-            roles={"pm": SimpleNamespace(account="PM@agents.test")},
+            roles={"pm": SimpleNamespace(user_id=role_id("pm"))},
         )
         gql = Gql(Q_UPSTREAM={"issue": None})
         found = LinearTracker.reader(gql, linear)
@@ -1147,7 +1150,7 @@ class Ready(Case):
 
 ACTORS = {
     "harness": {"email": "h@x.test", "isMe": True},
-    "pm": {"email": "PM@agents.test", "isMe": False},
+    "pm": {"id": role_id("pm"), "email": "PM@agents.test", "isMe": False},
     "manager": {"email": "manager@x.test", "isMe": False},
     "human": {"email": "me@x.com", "isMe": False},
 }
@@ -1219,7 +1222,10 @@ def rechecked(state, *, assignee=None, project=None, labels=()):
     return {"issue": issue | {"labels": {"nodes": list(labels)}}}
 
 
-PM, PROJECT = {"id": "u-pm", "email": "pm@agents.test"}, {"id": "p-1", "name": "Deep Research"}
+PM, PROJECT = (
+    {"id": role_id("pm"), "email": "pm@agents.test"},
+    {"id": "p-1", "name": "Deep Research"},
+)
 AGENTS = "00000000-0000-4000-8000-000000000081"
 CONFIGURED = "~/.ensemble/config.local.toml's [orchestrator.linear"
 
@@ -1352,7 +1358,7 @@ class Rechecks(Case):
 
 class Role(Case):
     def test_by_assignee_id(self):
-        self.assertEqual(tracker(Gql()).role({"assignee": {"id": "u-pm"}}), "pm")
+        self.assertEqual(tracker(Gql()).role({"assignee": {"id": role_id("pm")}}), "pm")
 
 
 class Interface(Case):
@@ -1413,7 +1419,7 @@ class ApprovedList(Case):
             "priority": 2,
             "createdAt": CREATED,
             "project": {"id": "p-dr", "name": "Deep Research"},
-            "assignee": {"id": "u-pm"},
+            "assignee": {"id": role_id("pm")},
             "attachments": {
                 "nodes": [
                     {"title": "Report", "url": "https://x/report"},
@@ -1431,7 +1437,7 @@ class ApprovedList(Case):
                     {
                         "t": TEAM,
                         "s": STATES["handoff"],
-                        "a": ["u-researcher", "u-pm", "u-engineer"],
+                        "a": [role_id("researcher"), role_id("pm"), role_id("engineer")],
                     },
                 )
             ],
@@ -1472,7 +1478,7 @@ class DetailRead(Case):
                     {
                         "body": "role",
                         "createdAt": "c2",
-                        "user": node(email="pm@AGENTS.test", name="PM"),
+                        "user": node(id=role_id("pm"), email="PM@agents.test", name="PM"),
                     },
                     {
                         "body": "manager",
@@ -1539,7 +1545,7 @@ class DetailRead(Case):
                     {
                         "body": "as the role",
                         "createdAt": "c6",
-                        "user": node(email="PM@agents.test", name="PM"),
+                        "user": node(id=role_id("pm"), email="PM@agents.test", name="PM"),
                     },
                 ]
             },
@@ -1592,7 +1598,7 @@ class NextIssue(Case):
             "id": key,
             "teamId": TEAM,
             "projectId": "p-dr",
-            "assigneeId": "u-engineer",
+            "assigneeId": role_id("engineer"),
             "stateId": STATES["todo"],
             "priority": 3,
             "title": "ENG: T",
@@ -1688,7 +1694,12 @@ def run_issue(**over):
                 {
                     "body": "as the role",
                     "createdAt": "2026-09-02T12:00:00.000Z",
-                    "user": {"email": "PM@agents.test", "name": "PM", "isMe": False},
+                    "user": {
+                        "id": role_id("pm"),
+                        "email": "PM@agents.test",
+                        "name": "PM",
+                        "isMe": False,
+                    },
                 },
                 {
                     "body": f"Run {SID} · started",
