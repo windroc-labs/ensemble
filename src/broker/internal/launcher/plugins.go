@@ -25,6 +25,9 @@ var (
 
 const pluginRoot = "/opt/ensemble/plugins/"
 
+// imagePluginRoot holds the plugins a stage-1 image carries, one directory per plugin name.
+const imagePluginRoot = "/opt/windroc/plugins/"
+
 type pluginSource struct {
 	Name         string `json:"name"`
 	Repo         string `json:"repo"`
@@ -33,13 +36,14 @@ type pluginSource struct {
 	PluginCommit string `json:"plugin_commit,omitempty"`
 }
 
-// stagePlugins records repository sources, never host client installation state.
-func stagePlugins(names []string, dir string) ([]string, error) {
+// stagePlugins records repository sources, never host client installation state, and returns Claude Code's plugin
+// directories: the sources' installations, then imagePlugins', each sorted by name.
+func stagePlugins(names, imagePlugins []string, dir string) (string, error) {
 	sources := []pluginSource{}
 	for _, value := range names {
 		match := PluginSourcePattern.FindStringSubmatch(value)
 		if match == nil {
-			return nil, protocol.New(protocol.BuildFailed, "Plugin "+value+": use name@owner/repo#40-hex-commit, optionally followed by ::marketplace-owner/repo#40-hex-commit.")
+			return "", protocol.New(protocol.BuildFailed, "Plugin "+value+": use name@owner/repo#40-hex-commit, optionally followed by ::marketplace-owner/repo#40-hex-commit.")
 		}
 		name, repo, commit := match[1], match[2], match[3]
 		source := pluginSource{Name: name, Repo: repo, Commit: commit}
@@ -49,40 +53,46 @@ func stagePlugins(names []string, dir string) ([]string, error) {
 		}
 		for _, previous := range sources {
 			if previous.Name == name {
-				return nil, protocol.New(protocol.BuildFailed, "Plugin "+name+": duplicate plugin name.")
+				return "", duplicatePlugin(name)
 			}
 			previousRepo, previousCommit := previous.Repo, previous.Commit
 			if previous.PluginRepo != "" {
 				previousRepo, previousCommit = previous.PluginRepo, previous.PluginCommit
 			}
 			if previousRepo == repo && previousCommit != commit {
-				return nil, protocol.New(protocol.BuildFailed, "Plugin "+name+": conflicting commits for "+repo+".")
+				return "", protocol.New(protocol.BuildFailed, "Plugin "+name+": conflicting commits for "+repo+".")
 			}
 			if previous.Repo == source.Repo && previous.Commit != source.Commit {
-				return nil, protocol.New(protocol.BuildFailed, "Plugin "+name+": conflicting commits for marketplace "+source.Repo+".")
+				return "", protocol.New(protocol.BuildFailed, "Plugin "+name+": conflicting commits for marketplace "+source.Repo+".")
 			}
 		}
 		sources = append(sources, source)
 	}
 	slices.SortFunc(sources, func(a, b pluginSource) int { return strings.Compare(a.Name, b.Name) })
+	dirs := []string{}
+	for _, source := range sources {
+		dirs = append(dirs, pluginRoot+source.Name)
+	}
+	for _, name := range imagePlugins {
+		if !PluginNamePattern.MatchString(name) {
+			return "", protocol.New(protocol.BuildFailed, "In-image plugin "+name+": use the name of its directory under "+imagePluginRoot+".")
+		}
+		if slices.Contains(dirs, pluginRoot+name) || slices.Contains(dirs, imagePluginRoot+name) {
+			return "", duplicatePlugin(name)
+		}
+		dirs = append(dirs, imagePluginRoot+name)
+	}
+	slices.Sort(dirs[len(sources):])
 	data, err := json.Marshal(sources)
 	if err == nil {
 		err = os.WriteFile(filepath.Join(dir, "plugin-sources.json"), data, 0o644)
 	}
 	if err != nil {
-		return nil, protocol.New(protocol.BuildFailed, "Cannot stage plugin sources.")
+		return "", protocol.New(protocol.BuildFailed, "Cannot stage plugin sources.")
 	}
-	staged := make([]string, len(sources))
-	for i, source := range sources {
-		staged[i] = source.Name
-	}
-	return staged, nil
+	return strings.Join(dirs, ":"), nil
 }
 
-func pluginDirs(names []string) string {
-	dirs := make([]string, len(names))
-	for i, name := range names {
-		dirs[i] = pluginRoot + name
-	}
-	return strings.Join(dirs, ":")
+func duplicatePlugin(name string) *protocol.Error {
+	return protocol.New(protocol.BuildFailed, "Plugin "+name+": duplicate plugin name.")
 }

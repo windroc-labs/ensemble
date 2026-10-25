@@ -404,7 +404,7 @@
       "type": "object",
       "properties": {
         "argv": {
-          "$comment": "Then any --plugin NAME pairs, then an optional --max-age SECONDS; JSON Schema cannot pair repeated tokens, so the broker checks the order (usage).",
+          "$comment": "Then any --plugin SOURCE pairs, then any --image-plugin NAME pairs, then an optional --max-age SECONDS; JSON Schema cannot pair repeated tokens, so the broker checks the order (usage).",
           "type": "array",
           "prefixItems": [
             {
@@ -422,11 +422,15 @@
               {
                 "enum": [
                   "--plugin",
+                  "--image-plugin",
                   "--max-age"
                 ]
               },
               {
                 "$ref": "#/$defs/plugin"
+              },
+              {
+                "$ref": "#/$defs/plugin_name"
               },
               {
                 "type": "string",
@@ -1278,6 +1282,11 @@
     "plugin": {
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}@[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}#[a-f0-9]{40}(?:::[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}#[a-f0-9]{40})?$"
+    },
+    "plugin_name": {
+      "$comment": "An in-image plugin: its directory under /opt/windroc/plugins in the stage-1 image.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
     },
     "codex_status": {
       "type": "object",
