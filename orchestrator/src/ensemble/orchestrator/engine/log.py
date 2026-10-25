@@ -1,6 +1,7 @@
 """Orchestrator event logging, rotated to orchestrator.jsonl.1 at LOG_MAX, and bounded outage
 reporting."""
 
+import contextlib
 import json
 import os
 import sys
@@ -10,6 +11,7 @@ from ensemble.orchestrator.engine.types import ConfigError, LinearError
 from ensemble.utils import append_line, file_lock, one_line, printable, timestamp
 
 LOGS_DIR = None
+CAPTURED = None
 
 
 def use_logs(path):
@@ -17,18 +19,44 @@ def use_logs(path):
     LOGS_DIR = path
 
 
+@contextlib.contextmanager
+def captured():
+    """Each line logged inside, a dedupe-skipped one too, as (line, shown, said): whether stderr
+    showed it, and the logger's own stderr text for it (else None).
+    """
+    global CAPTURED
+    outer, CAPTURED = CAPTURED, []
+    try:
+        yield CAPTURED
+    finally:
+        CAPTURED = outer
+
+
 ONCE = ("src", "kind", "issue", "entry", "reason")
 WINDOW = timedelta(hours=24)
 LOG_MAX = 10 << 20
 
 
-def log(src, kind, issue=None, *, once=False, dry=False, quiet=False, now=datetime.now, **fields):
+def log(
+    src,
+    kind,
+    issue=None,
+    *,
+    once=False,
+    dry=False,
+    quiet=False,
+    told=False,
+    now=datetime.now,
+    **fields,
+):
+    """told: the caller says it on stderr itself."""
     _log(
         _line(src, kind, issue, now=now, **fields),
         LOGS_DIR,
         once=once,
         dry=dry,
         quiet=quiet,
+        told=told,
         now=now,
     )
 
@@ -47,9 +75,10 @@ def _line(src, kind, issue=None, *, now=datetime.now, **fields):
     }
 
 
-def _log(line, logs, *, once, dry, quiet=False, now=datetime.now):
+def _log(line, logs, *, once, dry, quiet=False, told=False, said=None, now=datetime.now):
     path, key = os.path.join(logs, "orchestrator.jsonl") if logs else None, _key(line)
     if once and not dry and path and key in _recent_keys(path, now=now):
+        _capture(line, told, said)
         return
     text = json.dumps(line, ensure_ascii=False)
     try:
@@ -59,11 +88,19 @@ def _log(line, logs, *, once, dry, quiet=False, now=datetime.now):
             append_line(path, text + "\n")
     except OSError:
         pass
+    shown = told
     try:
         if dry or not quiet and sys.stderr.isatty():
             print(printable(text), file=sys.stderr, flush=True)
+            shown = True
     except OSError:  # a gone tmux pane's EIO
         pass
+    _capture(line, shown, said)
+
+
+def _capture(line, shown, said):
+    if CAPTURED is not None:
+        CAPTURED.append((line, shown, said))
 
 
 def _rotate(path):
@@ -108,10 +145,19 @@ def linear_error(src, e, *, dry=False, now=datetime.now):
 
 
 def _stop(src, kind, message, dry, *, logs, now=datetime.now, **fields):
-    _log(_line(src, kind, now=now, **fields), logs, once=True, dry=dry, now=now)
+    said, tty = f"{src}.py: {message}", sys.stderr.isatty() and not dry
+    _log(
+        _line(src, kind, now=now, **fields),
+        logs,
+        once=True,
+        dry=dry,
+        told=tty,
+        said=said,
+        now=now,
+    )
     try:
-        if sys.stderr.isatty() and not dry:  # under a scheduler stderr is the log
-            print(f"{src}.py: {message}", file=sys.stderr, flush=True)
+        if tty:  # under a scheduler stderr is the log
+            print(said, file=sys.stderr, flush=True)
     except OSError:
         pass
     return 1
