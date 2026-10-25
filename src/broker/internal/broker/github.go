@@ -239,12 +239,11 @@ func (g GitHub) discard(ctx context.Context, container string, entries []tokenEn
 	ran := false
 	err := g.locked(func() error {
 		ran = true
+		var recordErr error
 		if whole {
 			rec, found, err := g.readRecord(container)
-			if err != nil {
-				return err
-			}
-			if found {
+			recordErr = err
+			if err == nil && found {
 				in := tokenIn(entries)
 				entries = append(slices.Clone(entries), slices.DeleteFunc(rec.Tokens, func(e tokenEntry) bool { return in(e.Token) })...)
 			}
@@ -262,6 +261,9 @@ func (g GitHub) discard(ctx context.Context, container string, entries []tokenEn
 			g.note(container, audit.Pending, "queued for revocation", e, nil)
 		}
 		if whole {
+			if recordErr != nil {
+				return recordErr // keep unknown original material; explicit entries are safely queued
+			}
 			return g.Keychain.DeleteSecret(tokensService, container)
 		}
 		rec, found, err := g.readRecord(container)

@@ -55,6 +55,8 @@ type recoveryAPI struct {
 func (a *recoveryAPI) RoundTrip(req *http.Request) (*http.Response, error) {
 	status, body := http.StatusNoContent, ""
 	switch {
+	case req.Method == http.MethodGet && req.URL.Path == "/app/installations":
+		status, body = http.StatusOK, `[{"id":1,"account":{"login":"acme"}}]`
 	case req.Method == http.MethodDelete && req.URL.Path == "/installation/token":
 		token := strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
 		a.calls = append(a.calls, token)
@@ -252,5 +254,43 @@ func TestRetryInvalidExpiryStaysTracked(t *testing.T) {
 	got, err := recoveryLifecycle(t, store, remote).Retry(context.Background())
 	if err != nil || len(got) != 1 || len(remote.calls) != 1 {
 		t.Fatalf("invalid expiry must remain pending after failed revoke: pending=%d calls=%d err=%v", len(got), len(remote.calls), err)
+	}
+}
+
+func TestIssueRollbackWithUnreadableRecord(t *testing.T) {
+	for _, revokeFails := range []bool{false, true} {
+		t.Run(fmt.Sprint(revokeFails), func(t *testing.T) {
+			store, remote := recoverySeed(t, recoveryEntry("ghs_existing"))
+			original := slices.Clone(store.items[tokensService+"/"+ctr])
+			store.readFail = tokensService
+			remote.fail = func(string) bool { return revokeFails }
+			g := recoveryLifecycle(t, store, remote)
+			_, err := g.Issue(context.Background(), "ensemble-bot", perms, ctr, func([]string, []byte) error {
+				t.Fatal("an unrecorded token must never reach the container")
+				return nil
+			})
+			wantCode(t, err, protocol.KeychainFailed)
+			if !slices.Equal(store.items[tokensService+"/"+ctr], original) {
+				t.Fatal("rollback changed the unreadable original record")
+			}
+			if revokeFails {
+				var backlog []pending
+				if err := json.Unmarshal(store.items[revocationsService+"/"+revocationsAccount], &backlog); err != nil ||
+					len(backlog) != 1 || backlog[0].Token != "ghs_replacement_1" {
+					t.Fatal("unrecorded issued token was not durably queued after failed revoke")
+				}
+			} else if !slices.Contains(remote.revoked, "ghs_replacement_1") {
+				t.Fatal("unrecorded issued token was not revoked after record read failure")
+			}
+			store.readFail, remote.fail = "", nil
+			if err := recoveryLifecycle(t, store, remote).Revoke(context.Background(), ctr); err != nil {
+				t.Fatal(err)
+			}
+			for _, token := range []string{"ghs_existing", "ghs_replacement_1"} {
+				if !slices.Contains(remote.revoked, token) {
+					t.Fatal("reconstructed lifecycle could not finish issuance rollback")
+				}
+			}
+		})
 	}
 }
