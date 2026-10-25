@@ -13,6 +13,7 @@ const (
 	ClaudeSetupToken = "claude-setup-token"
 	CodexAccessToken = "codex-access-token"
 	GitHubToken      = "github-installation-token"
+	EnvSecret        = "env-secret"
 
 	Issued           = "issued"
 	Renewed          = "renewed"
@@ -59,6 +60,7 @@ type Credential struct {
 	Reason       string // pending only
 	ExpiresAt    *string
 	Account      string // GitHub only
+	Item         string // environment secrets only: the keychain reference, never the value
 	Installation int64  // GitHub; 0 when unknown
 	Repos        *Repositories
 }
@@ -80,11 +82,12 @@ func (c Credential) MarshalJSON() ([]byte, error) {
 		Reason              *string         `json:"reason,omitempty"`
 		ExpiresAt           *string         `json:"expires_at"`
 		Account             string          `json:"account,omitempty"`
+		Item                string          `json:"item,omitempty"`
 		Installation        int64           `json:"installation,omitempty"`
 		RepositorySelection json.RawMessage `json:"repository_selection,omitempty"`
 		Repositories        json.RawMessage `json:"repositories,omitempty"`
 		RepositoriesError   string          `json:"repositories_error,omitempty"`
-	}{Kind: c.Kind, Result: c.Result, ExpiresAt: c.ExpiresAt, Account: c.Account, Installation: c.Installation}
+	}{Kind: c.Kind, Result: c.Result, ExpiresAt: c.ExpiresAt, Account: c.Account, Item: c.Item, Installation: c.Installation}
 	if c.Result == Pending {
 		reason := c.Reason
 		if reason == "" {
