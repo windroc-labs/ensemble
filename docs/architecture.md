@@ -85,46 +85,49 @@ flowchart TB
 
 Solid arrow: an import, the only direction allowed, or a file read (`reads`); its label names the package imported, by its `__all__`. Dotted: runs a command or process. Dashed: shared modules, their imports not drawn.
 
-## 模块与可替换边界
+## Modules and replacement boundaries
 
-**模块边界**以本分支源码为准；层内调用关系见上图，导入契约见 `AGENTS.md` 的 Import rules。
-“照搬”以保留 Python、客户端和命令协议为前提；**Host（运行宿主）**的进程能力由具体实现提供。
+Layer interactions are shown above; import contracts are in `AGENTS.md` › Import rules.
+Keeping a module assumes Python, the clients and their command protocols remain available.
+Each Host implementation supplies its process capabilities.
 
-| 路径 | 职责 | 依赖 | 换运行环境 | 替换时守住的边界 |
+| Path | Responsibility | Dependencies | Environment change | Replacement boundary |
 |---|---|---|---|---|
-| `src/ensemble/orchestrator/` | 看板调度、状态与回写 | delegate、utils | 照搬 | delegate 公共接口；tracker 契约见 `engine/flow/tracker.py` |
-| `src/ensemble/delegate/` | 提示词、运行计划、harness 与结果协议 | session、utils | 照搬 | session 公共接口与 `event/` 的进度、结果格式 |
-| `src/ensemble/session/engine/`、`modes/`、`clients/` | 会话生命周期、运行模式、客户端适配 | Host、utils；各客户端命令 | 照搬会话与客户端逻辑 | `hosts/base.py` 的 Host、Process、Interactive、Piped 能力及 `engine/types.py` 的数据类型；tmux 操作仍归 `engine/tmux_cli.py` 和 `viewer/` |
-| `src/ensemble/session/hosts/tmux/` | `TmuxHost` 的本机进程与 tmux 会话 | Host、`engine/tmux_cli.py`、utils、本机 tmux | 环境不提供本机 tmux 时整块替换 | Host 的启动、枚举、状态、输入、关闭语义；显示层边界见上图 |
-| `src/ensemble/session/hosts/docker/`、`src/broker/`、`src/broker/protocol/` | Docker 适配、hook relay、worker 镜像、容器与凭据注入 | Host、Docker Desktop、broker；broker 使用 macOS Keychain | 整块替换 | 向上保留 Host；保留 broker 时同时遵守 protocol 的 JSON schema（模式定义）、版本、退出码与 fixtures（共享样例） |
-| `src/ensemble/manager/`、`skills/manage/`、`hooks/` | Crew、Roster、事件游标与 commander 会话 | utils；通过命令调用各层 | 照搬调度逻辑；本机显示和客户端 hook 随环境适配 | Record 的 ctl、resume 命令及 CLI 输出；导入关系见上图 |
-| `src/ensemble/utils/` | 配置叠加、共享类型、路径、进程控制等基础工具 | Python 标准库 | 照搬；保留所用操作系统进程能力 | 各层公共导出和共享数据格式 |
-| 外部 `windroc/egress-proxy` | egress（出口服务），不在本仓库 | Docker labels 与 health；ensemble 尚未接入 | 整块替换独立服务 | 保持 [docs/label-contract.md](https://github.com/windroc/egress-proxy/blob/f5aed5f/docs/label-contract.md) 的版本、label 含义和健康语义 |
-| `src/broker/internal/broker/keychain_darwin.go` | 从 macOS Keychain 读取凭据，经 broker 注入容器 | macOS Security；`keychain.go` 的存储接口 | 凭据来源整块替换 | `launcher/host.go` 的 Credentials、CodexCredentials、ProviderKeys、Tokens；凭据读者、生命周期见 [Credentials](credentials.md) |
+| `src/ensemble/orchestrator/` | Board scheduling, state and write-back | delegate, utils | Keep | Public delegate API; tracker contract in `engine/flow/tracker.py` |
+| `src/ensemble/delegate/` | Prompts, run plans, harness and result protocol | session, utils | Keep | Public session API and `event/` progress and outcome formats |
+| `src/ensemble/session/engine/`, `modes/`, `clients/` | Session lifecycle, run modes and client adapters | Host, utils, client commands | Keep session and client logic | Host, Process, Interactive and Piped capabilities in `hosts/base.py` and data types in `engine/types.py`; tmux operations remain in `engine/tmux_cli.py` and `viewer/` |
+| `src/ensemble/session/hosts/tmux/` | Local processes and tmux sessions through `TmuxHost` | Host, `engine/tmux_cli.py`, utils, local tmux | Replace as a unit if local tmux is unavailable | Host start, enumeration, status, input and close semantics; display boundary shown above |
+| `src/ensemble/session/hosts/docker/`, `src/broker/`, `src/broker/protocol/` | Docker adaptation, hook relay, worker image, containers and credential injection | Host, Docker Desktop, broker; broker uses macOS Keychain | Replace as a unit | Preserve Host for callers; retaining the broker also requires its protocol JSON schemas, versions, exit codes and shared fixtures |
+| `src/ensemble/manager/`, `skills/manage/`, `hooks/` | Crew, Roster, event cursors and commander sessions | utils; commands to other layers | Keep scheduling logic; adapt local display and client hooks | Record ctl and resume commands, CLI output; import relationships shown above |
+| `src/ensemble/utils/` | Configuration overlays, shared types, paths and process control | Python standard library | Keep, with the required OS process capabilities | Public exports and shared data formats |
+| External `windroc/egress-proxy` | Egress service, outside this repository | Docker labels and health; ensemble is not integrated | Replace the independent service as a unit | Versions, label meanings and health semantics in [docs/label-contract.md](https://github.com/windroc/egress-proxy/blob/f5aed5f/docs/label-contract.md) |
+| `src/broker/internal/broker/keychain_darwin.go` | Read credentials from macOS Keychain for broker injection into containers | macOS Security; storage interface in `keychain.go` | Replace the credential source as a unit | Credentials, CodexCredentials, ProviderKeys and Tokens in `launcher/host.go`; credential readers and lifecycle in [Credentials](credentials.md) |
 
-**Host 边界**由 [`hosts/base.py`](../src/ensemble/session/hosts/base.py) 定义；
-[`config.toml`](../src/ensemble/session/config.toml) 的 `[hosts.<name>] implementation = "module.path:Class"`
-选择实现，`[hosts] default` 选择宿主。实现保持这些能力、返回类型和错误语义，上层会话、delegate 与 orchestrator 无需更改。
-客户端适配仍在 `clients/`，不由宿主替代。
+The **Host boundary** is defined by [`hosts/base.py`](../src/ensemble/session/hosts/base.py).
+In [`config.toml`](../src/ensemble/session/config.toml), `[hosts.<name>] implementation = "module.path:Class"`
+selects an implementation and `[hosts] default` selects the host. Preserving its capabilities,
+return types and error semantics keeps upper session, delegate and orchestrator code unchanged.
+Client adaptation remains in `clients/`.
 
-**egress 边界**定义在外部仓库的 [docs/label-contract.md（f5aed5f）](https://github.com/windroc/egress-proxy/blob/f5aed5f/docs/label-contract.md)：
-调用方只依赖网关容器的 `windroc.egress.*` labels 和 Docker health，按网络 key 的 `.name` 与 `.proxy`
-选择内部网络和代理地址；替换网关须保留所消费的契约版本、label 含义及健康语义，完整启动校验规则见该契约。
-当前 [`launcher/start.go`](../src/broker/internal/launcher/start.go) 尚未接入；接线属于 WDRC-139，本 PR 不实施。
+The **egress boundary** is defined by the external [docs/label-contract.md (f5aed5f)](https://github.com/windroc/egress-proxy/blob/f5aed5f/docs/label-contract.md).
+Callers depend only on gateway `windroc.egress.*` labels and Docker health, selecting an internal
+network and proxy address from the network key's `.name` and `.proxy`. A replacement gateway preserves
+the consumed contract version, label meanings and health semantics; the contract lists the complete
+startup validation rules. [`launcher/start.go`](../src/broker/internal/launcher/start.go) is not integrated.
 
 ```mermaid
 flowchart TB
-  M[manager] -. 命令 .-> O[orchestrator]
-  O --> D[delegate] --> S[session 核心与 clients]
-  M -. 命令 .-> D
-  M -. 命令 .-> S
-  S --> H[Host 接口]
+  M[manager] -. command .-> O[orchestrator]
+  O --> D[delegate] --> S[session core and clients]
+  M -. command .-> D
+  M -. command .-> S
+  S --> H[Host interface]
   H --> T[TmuxHost]
-  H --> A[Docker host 适配层]
+  H --> A[Docker host adapter]
   A --> P[protocol]
   P --> B[broker]
   B --> K[macOS Keychain]
-  B -. 当前未接入 .-> E[egress 外部服务]
+  B -. not integrated .-> E[external egress service]
 ```
 
-实线表示调用或数据契约；虚线按标注表示命令调用或尚不存在的接入，不能作为现有依赖。
+Solid arrows show calls or data contracts. Dotted arrows distinguish commands from the absent egress integration by their labels.
