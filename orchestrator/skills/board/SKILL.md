@@ -106,7 +106,7 @@ On a local board (`$ENSEMBLE_BOARD_DIR`), the commands write as `other`, a perso
 
 ## Linear
 
-On Linear (`[orchestrator.linear]`), the commands act as the `manager_key` account (Keychain), neither the harness nor a role account, so your comments and moves count as the user's; `me` is that account, a role is its `[orchestrator.linear.roles.<role>]` account, a task or client is its label in `task_labels` or `agent_labels`, and a state is its `[orchestrator.linear.states]` id. `read` and `list` show Linear's state names; finished means a state of type completed, canceled or duplicate. These exist only on Linear:
+On Linear (`[orchestrator.linear]`), the commands act as the `manager_key` account (Keychain), separate from the harness and role apps, so your comments and moves count as the user's; `me` is that account, a role is its app's `[orchestrator.linear.roles.<role>] user_id`, a task or client is its label in `task_labels` or `agent_labels`, and a state is its `[orchestrator.linear.states]` id. `read` and `list` show Linear's state names; finished means a state of type completed, canceled or duplicate. These exist only on Linear:
 
 ```bash
 ensemble-orchestrator issue lookup states
