@@ -84,7 +84,7 @@ from tests.orchestrator.router_fixtures import (
     pr_search,
     who,
 )
-from tests.orchestrator.unit.board_ids import HEADER, TASK_GROUP, TEAM
+from tests.orchestrator.unit.board_ids import HEADER, PACKAGED_FLOW, TASK_GROUP, TEAM, workflow_line
 from tests.orchestrator.unit.board_ids import STATES as IDS_BY_KEY
 from tests.orchestrator.unit.board_ids import role as role_table
 from tests.orchestrator.unit.delegate_fixture import provider
@@ -5723,3 +5723,50 @@ class RouterLinear(Base):
             [n for n in tree.body if isinstance(n, ast.ImportFrom) and n.module.endswith(".ops")],
             [],
         )
+
+
+class StageKeyChecks(OuterBase):
+    """An engineer stage with ref and mapped_only: a failed check bounces before the attempt."""
+
+    def setUp(self):
+        super().setUp()
+        flow = PACKAGED_FLOW.replace(
+            'failed = "Build failed:"\n',
+            'failed = "Build failed:"\nref = true\nmapped_only = true\n',
+        )
+        self.write_config(HEADER + workflow_line(flow) + OUTER.removeprefix(HEADER))
+
+    def bounced(self, description, reason, *, line="Repo"):
+        """A new run on description bounces with reason: comment, In Review, no attempt."""
+        self.gql = Gql(issue=node(description=description, comments=[USER_NOTE]))
+        self.assertEqual(self.outer(), 0)
+        self.assertEqual(
+            self.gql.calls,
+            [
+                ("issue", HARNESS, {"i": ID}),
+                ("subscribe", KEY, {"i": UUID, "e": "me@x.com"}),
+                (
+                    "post",
+                    KEY,
+                    {
+                        "i": UUID,
+                        "b": (
+                            f"Question: repo check failed: {reason}. Fix the description's "
+                            f"`{line}:` line, then move this issue back to Todo."
+                        ),
+                    },
+                ),
+                ("reread", KEY, {"i": UUID}),
+                ("state", KEY, {"i": UUID, "s": IDS_BY_KEY["in_review"]}),
+            ],
+        )
+        self.assertEqual(self.said(), [f"bounce TASK-7 reason={reason}"])
+        self.assertEqual(self.api.detached, [])
+        self.assertNotIn(ID, {e.issue for e in runs.parse_log(self.runs)})
+
+    def test_an_unmapped_repo_line_bounces_without_a_command(self):
+        self.bounced(
+            "Repo: acme/other",
+            "acme/other: this stage takes only its project's mapped repo acme/ensemble",
+        )
+        self.assertEqual(self.run_.calls, [])

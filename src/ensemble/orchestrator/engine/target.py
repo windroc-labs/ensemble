@@ -167,9 +167,36 @@ def _branches(ident, o, n, *, run, delegate, workdir, roles, host):
     ]
 
 
+def _mapped_only(repo, issue, repos) -> Invalid | None:
+    """Why a Repo: line's repo, or an issue without a project mapping, is refused, else None."""
+    if issue.home not in repos:
+        return Invalid(
+            f"this stage takes only its project's mapped repo, and project {issue.home!r} has none",
+            mapped=True,
+        )
+    mapping = repo_slug(repos[issue.home])
+    if isinstance(repo, Invalid) or not mapping:
+        return None
+    if (repo[0].lower(), repo[1].lower()) != (mapping[0].lower(), mapping[1].lower()):
+        return Invalid(
+            f"{repo[0]}/{repo[1]}: this stage takes only its project's mapped repo "
+            f"{mapping[0]}/{mapping[1]}"
+        )
+    return None
+
+
 def check(
-    issue, repos, *, run=None, delegate, workdir, roles, host="github.com"
+    issue,
+    repos,
+    *,
+    run=None,
+    delegate,
+    workdir,
+    roles,
+    host="github.com",
+    mapped_only=False,
 ) -> Target | Invalid | Transient:
+    """mapped_only: the stage's key (workflow.toml)."""
     if run is None:
         run = config.shell
     repo = parse_repo(issue.description, host=host)
@@ -179,6 +206,8 @@ def check(
         repo = repo_slug(repos[issue.home]) or Invalid(
             f"{MAPPED}{str(repos[issue.home])[:80]!r}: not <owner>/<name>", mapped=True
         )
+    if mapped_only and not mapped:
+        repo = _mapped_only(repo, issue, repos) or repo
     if isinstance(repo, Invalid):
         return repo
     asked = f"{tag}{repo[0]}/{repo[1]}"

@@ -615,3 +615,89 @@ class TargetValidation(Case):
         self.assertEqual(
             self.argvs()[-1][-2:], ("https://github.com/Acme/Ensemble-2.git", "TASK-26-*")
         )
+
+
+class StageKeys(Case):
+    """target.check with a stage's ref and mapped_only keys."""
+
+    REPOS = {PROJ: "acme/ensemble"}
+    BRANCHES = (
+        "git",
+        "-c",
+        "credential.helper=",
+        "-c",
+        "credential.helper=!gh auth git-credential",
+        "ls-remote",
+        "--heads",
+    )
+
+    def check(self, desc, *, project: str | None = PROJ, repos=REPOS, api_=None, **keys):
+        self.run_ = FakeRun(
+            [
+                (("gh", "api"), api_ or api()),
+                (self.BRANCHES, ok("")),
+            ]
+        )
+        return target.check(
+            issue(desc, project=project),
+            repos,
+            run=self.run_,
+            delegate=FakeDelegate,
+            workdir=os.path.join(self.home, "TASK-26"),
+            roles=roles(),
+            **keys,
+        )
+
+    def argvs(self):
+        return [c[0] for c in self.run_.calls]
+
+    def test_mapped_only_rejects_an_unmapped_repo_line_before_any_command(self):
+        for line, named in (
+            ("Repo: acme/other", "acme/other"),
+            ("Repo: https://github.com/other/ensemble", "other/ensemble"),
+        ):
+            with self.subTest(line=line):
+                got = self.check(line, api_=api(named), mapped_only=True)
+                self.assertEqual(
+                    got,
+                    target.Invalid(
+                        f"{named}: this stage takes only its project's mapped repo acme/ensemble"
+                    ),
+                )
+                self.assertEqual(self.argvs(), [])
+
+    def test_mapped_only_rejects_a_project_without_mapping(self):
+        for desc, project, repos in (
+            ("Repo: acme/ensemble", "other", self.REPOS),
+            ("no repo here", "other", self.REPOS),
+            ("Repo: acme/ensemble", None, self.REPOS),
+            ("Repo: acme/ensemble", PROJ, {}),
+        ):
+            with self.subTest(desc=desc, project=project, repos=repos):
+                got = self.check(desc, project=project, repos=repos, mapped_only=True)
+                self.assertEqual(
+                    got,
+                    target.Invalid(
+                        "this stage takes only its project's mapped repo, and project "
+                        f"{project!r} has none",
+                        mapped=True,
+                    ),
+                )
+                self.assertEqual(self.argvs(), [])
+
+    def test_mapped_only_accepts_the_mapping(self):
+        for desc, asked in (
+            ("no repo here", "acme/ensemble"),
+            ("Repo: acme/ensemble", "acme/ensemble"),
+            ("Repo: ACME/Ensemble", "ACME/Ensemble"),
+            ("Repo: https://github.com/acme/ensemble", "acme/ensemble"),
+        ):
+            with self.subTest(desc=desc):
+                got = self.check(desc, mapped_only=True)
+                self.assertEqual(got, target.Target("acme", "ensemble", "TASK-26-session-registry"))
+                self.assertEqual(self.argvs()[0], ("gh", "api", f"repos/{asked}"))
+
+    def test_keys_unset_accept_a_pushable_repo_line(self):
+        got = self.check("Repo: acme/other", api_=api("acme/other"))
+        self.assertEqual(got, target.Target("acme", "other", "TASK-26-session-registry"))
+        self.assertEqual(self.argvs()[0], ("gh", "api", "repos/acme/other"))
