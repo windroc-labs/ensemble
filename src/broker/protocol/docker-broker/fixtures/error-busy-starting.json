@@ -1,0 +1,13 @@
+{
+  "exit_code": 75,
+  "error": {
+    "command": "start",
+    "code": "busy",
+    "message": "Lock held by windroc-lock-dummy-lock (starting).",
+    "cleanup": "not_needed",
+    "holder": {
+      "container": "windroc-lock-dummy-lock",
+      "owner": "starting"
+    }
+  }
+}

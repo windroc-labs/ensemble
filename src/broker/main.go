@@ -26,7 +26,7 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | build --ensemble DIR [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--max-age SECONDS] | start --manifest FILE | refresh --container NAME --manifest FILE | close --container NAME | status | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force]"
+const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | build --ensemble DIR [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--max-age SECONDS] | start --manifest FILE | lock-query --lock NAME | refresh --container NAME --manifest FILE | close --container NAME | status | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force]"
 
 var containerPattern = regexp.MustCompile(`^ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}$`)
 var secondsPattern = regexp.MustCompile(`^[0-9]{1,9}$`)
@@ -41,6 +41,7 @@ type app struct {
 	start, close  step
 	refresh       func(ctx context.Context, container, manifest string) (any, error)
 	status        func(ctx context.Context) (any, error)
+	lockQuery     func(ctx context.Context, name string) (any, error)
 	probeOpencode func(ctx context.Context, provider, base string) (any, error)
 	workspaceRm   func(ctx context.Context, volume string, force bool) (any, error)
 	login         func(account string, out io.Writer) error                                // login claude [NAME]
@@ -143,7 +144,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 				}
 				return emit(stdout, result)
 			}
-		case "version", "build", "start", "refresh", "close", "status", "workspace-rm", "probe-provider":
+		case "version", "build", "start", "refresh", "close", "status", "workspace-rm", "probe-provider", "lock-query":
 			command = args[0]
 		case "login":
 			var login func() error
@@ -207,6 +208,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 		}, args[2]
 	case command == "status" && len(args) == 1:
 		s = func(ctx context.Context, _ string, _ io.Writer) (any, error) { return a.status(ctx) }
+	case command == "lock-query" && len(args) == 3 && args[1] == "--lock" && launcher.ValidLock(args[2]):
+		s, arg = func(ctx context.Context, lock string, _ io.Writer) (any, error) { return a.lockQuery(ctx, lock) }, args[2]
 	case command == "probe-provider" && len(args) == 5 && args[1] == "--provider" && launcher.ValidProvider(args[2]) && args[3] == "--base-url" && broker.ValidOpencodeURL(args[4]):
 		s = func(ctx context.Context, _ string, _ io.Writer) (any, error) {
 			return a.probeOpencode(ctx, args[2], args[4])
@@ -307,6 +310,9 @@ func tokens(home string, rec *audit.Recorder) broker.GitHub {
 
 func system() app {
 	return app{
+		lockQuery: func(ctx context.Context, lock string) (any, error) {
+			return withHost("lock-query", "", nil, func(h launcher.Host) (any, error) { return h.LockQuery(ctx, lock) })
+		},
 		probeOpencode: func(ctx context.Context, provider, base string) (any, error) {
 			home, err := accountHome()
 			if err != nil {
