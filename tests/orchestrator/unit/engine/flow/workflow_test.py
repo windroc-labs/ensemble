@@ -30,6 +30,8 @@ def stage(role, input_, **fields):
         "approve": False,
         "files": False,
         "hint": "",
+        "ref": False,
+        "mapped_only": False,
     }
     return Stage(role=role, input=input_, **{**base, **fields})
 
@@ -110,6 +112,23 @@ class StageDefaults(Case):
         got = workflow.stage({"role": "a", "input": "build", "done": "", "first_failure": "ready"})
         self.assertEqual((got.done, got.first_failure, got.failed), ("", "ready", "a failed:"))
 
+    def test_ref_and_mapped_only_are_off_unless_set(self):
+        got = workflow.stage({"role": "v", "input": "build", "ref": True, "mapped_only": True})
+        self.assertEqual((got.ref, got.mapped_only), (True, True))
+        got = workflow.stage({"role": "v", "input": "build"})
+        self.assertEqual((got.ref, got.mapped_only), (False, False))
+        self.assertTrue(all(not s.ref and not s.mapped_only for s in workflow.Workflow().values()))
+
+    def test_ref_and_mapped_only_are_only_for_build_stages(self):
+        for key in ("ref", "mapped_only"):
+            for input_ in ("research", "design"):
+                with self.subTest(key=key, input=input_):
+                    with self.assertRaises(ValueError) as cm:
+                        workflow.stage({"role": "v", "input": input_, key: True})
+                    self.assertEqual(str(cm.exception), f'stage v: {key}: only for input = "build"')
+                    got = workflow.stage({"role": "v", "input": input_, key: False})
+                    self.assertFalse(getattr(got, key))
+
 
 class WorkflowFile(Case):
     def write(self, text):
@@ -171,6 +190,9 @@ class WorkflowFile(Case):
             (GOOD + 'retitle = "yes"\n', "stage pm: retitle: want a bool: 'yes'"),
             (GOOD + "hint = true\n", "stage pm: hint: want a str: True"),
             (GOOD + "next = 1\n", "stage pm: next: want a str: 1"),
+            (GOOD + "ref = 1\n", "stage pm: ref: want a bool: 1"),
+            (GOOD + 'mapped_only = "yes"\n', "stage pm: mapped_only: want a bool: 'yes'"),
+            (GOOD + "ref = true\n", 'stage pm: ref: only for input = "build"'),
             (GOOD + "\n" + GOOD, "stage pm: listed twice"),
         ):
             with self.subTest(text=text):
