@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"ensemble/broker/internal/audit"
@@ -246,6 +247,11 @@ func TestUsageErrors(t *testing.T) {
 		{"unknown", []string{"login", "opencode", "ollama"}},
 		{"unknown", []string{"login", "opencode", "a/b"}},
 		{"unknown", []string{"login", "opencode", "strata", "x"}},
+		{"unknown", []string{"login", "env"}},
+		{"unknown", []string{"login", "env", ""}},
+		{"unknown", []string{"login", "env", "Dummy"}},
+		{"unknown", []string{"login", "env", "a/b"}},
+		{"unknown", []string{"login", "env", "dummy", "value"}},
 	} {
 		code, out, errOut := invoke(a, tc.args...)
 		if code != 2 {
@@ -810,5 +816,35 @@ func TestLoginGitHubKeyFileDispatch(t *testing.T) {
 		if code, out, errOut := invoke(a, "login", "github", "ensemble-bot", "--key-file", file, "--app-id", "1234567"); code != 1 || out != "" || errOut != want || called {
 			t.Fatalf("%s: exit %d %q %q called %v", file, code, out, errOut, called)
 		}
+	}
+}
+
+func TestLoginEnvDispatch(t *testing.T) {
+	var got string
+	a := app{loginEnv: func(name string, out io.Writer) error {
+		got = name
+		_, err := io.WriteString(out, "ok\n")
+		return err
+	}}
+	if code, out, errOut := invoke(a, "login", "env", "dummy"); code != 0 || got != "dummy" || out != "ok\n" || errOut != "" {
+		t.Fatalf("exit %d name %q %q %q", code, got, out, errOut)
+	}
+	a = app{loginEnv: func(string, io.Writer) error { return errors.New("the value must be 1 to 16384 bytes") }}
+	if code, out, errOut := invoke(a, "login", "env", "dummy"); code != 1 || out != "" || errOut != "ensemble-broker: the value must be 1 to 16384 bytes\n" {
+		t.Fatalf("%d %q %q", code, out, errOut)
+	}
+}
+
+func TestReadEnvValue(t *testing.T) {
+	for _, value := range []string{"one line", "-----BEGIN KEY-----\nabc\n-----END KEY-----\n", strings.Repeat("v", launcher.MaxSecretBytes)} {
+		if got, err := readEnvValue(strings.NewReader(value)); err != nil || string(got) != value {
+			t.Fatalf("%.20q: %.20q %v", value, got, err)
+		}
+	}
+	if _, err := readEnvValue(strings.NewReader(strings.Repeat("v", launcher.MaxSecretBytes+1))); err == nil || err.Error() != "the value must be 1 to 16384 bytes" {
+		t.Fatalf("over the limit: %v", err)
+	}
+	if _, err := readEnvValue(iotest.ErrReader(errors.New("closed"))); err == nil || err.Error() != "closed" {
+		t.Fatalf("read error: %v", err)
 	}
 }

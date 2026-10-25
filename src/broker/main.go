@@ -26,7 +26,7 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | build --ensemble DIR [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--max-age SECONDS] | start --manifest FILE | lock-query --lock NAME | refresh --container NAME --manifest FILE | close --container NAME | status | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force]"
+const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | build --ensemble DIR [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--max-age SECONDS] | start --manifest FILE | lock-query --lock NAME | refresh --container NAME --manifest FILE | close --container NAME | status | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force]"
 
 var containerPattern = regexp.MustCompile(`^ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}$`)
 var secondsPattern = regexp.MustCompile(`^[0-9]{1,9}$`)
@@ -48,6 +48,7 @@ type app struct {
 	loginGitHub   func(ctx context.Context, app string, key *keyFile, out io.Writer) error // key: nil without --key-file
 	loginCodex    func(context.Context, io.Writer) error
 	loginOpencode func(provider, authFile string, out io.Writer) error
+	loginEnv      func(name string, out io.Writer) error // login env NAME: the value on stdin
 	installCodex  func(context.Context, string, bool) (any, error)
 }
 
@@ -112,6 +113,20 @@ func readOpencodeAuth(path, provider string) ([]byte, error) {
 	return []byte(entry.Key), nil
 }
 
+// readEnvValue is all of r, a pipe or file carrying login env's value verbatim, at most launcher.MaxSecretBytes bytes.
+func readEnvValue(r io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, launcher.MaxSecretBytes+1))
+	switch {
+	case err != nil:
+		clear(data)
+		return nil, err
+	case len(data) > launcher.MaxSecretBytes:
+		clear(data)
+		return nil, fmt.Errorf("the value must be 1 to %d bytes", launcher.MaxSecretBytes)
+	}
+	return data, nil
+}
+
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr, system())
@@ -170,6 +185,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 				login = func() error { return a.loginOpencode(args[2], "", stdout) }
 			case len(args) == 5 && args[1] == "opencode" && launcher.ValidProvider(args[2]) && args[3] == "--auth-file" && isPath(args[4]):
 				login = func() error { return a.loginOpencode(args[2], args[4], stdout) }
+			case len(args) == 3 && args[1] == "env" && launcher.ValidEnvName(args[2]):
+				login = func() error { return a.loginEnv(args[2], stdout) }
 			}
 			if login != nil {
 				if err := login(); err != nil {
@@ -296,6 +313,7 @@ func withHost(command, container string, progress io.Writer, f func(launcher.Hos
 	h := launcher.NewHost(home, d.Endpoint(), d, broker.Credentials{Keychain: broker.SystemKeychain{Home: home}}, tokens(home, rec), rec)
 	h.Codex = broker.NewCodex(home, nil)
 	h.Opencode = broker.OpencodeKeys{Keychain: broker.SystemKeychain{Home: home}}
+	h.Env = broker.EnvKeys{Keychain: broker.SystemKeychain{Home: home}}
 	h.Progress = progress
 	h.Lock = broker.FileLock(filepath.Join(home, ".ensemble/docker/images.lock"))
 	return f(h)
@@ -413,6 +431,33 @@ func system() app {
 				fmt.Fprint(os.Stderr, "Login keychain password, to make the "+provider+" API key trust only the broker (hidden): ")
 				defer fmt.Fprintln(os.Stderr)
 				return broker.ReadHidden()
+			}, broker.SystemKeychain{Home: home}, out)
+		},
+		loginEnv: func(name string, out io.Writer) error {
+			home, err := accountHome()
+			if err != nil {
+				return err
+			}
+			if err := broker.CheckInstalled(); err != nil {
+				return err
+			}
+			// A terminal on stdin types one hidden line; anything else carries the value, so the password comes from the
+			// controlling terminal.
+			info, err := os.Stdin.Stat()
+			terminal := err == nil && info.Mode()&os.ModeCharDevice != 0
+			read, hidden := func() ([]byte, error) { return readEnvValue(os.Stdin) }, broker.ReadHiddenTTY
+			if terminal {
+				read = func() ([]byte, error) {
+					fmt.Fprint(os.Stderr, "Environment secret "+name+" (hidden): ")
+					defer fmt.Fprintln(os.Stderr)
+					return broker.ReadHidden()
+				}
+				hidden = broker.ReadHidden
+			}
+			return broker.LoginEnv(name, read, func() ([]byte, error) {
+				fmt.Fprint(os.Stderr, "Login keychain password, to make ensemble-env/"+name+" trust only the broker (hidden): ")
+				defer fmt.Fprintln(os.Stderr)
+				return hidden()
 			}, broker.SystemKeychain{Home: home}, out)
 		},
 		installCodex: func(ctx context.Context, version string, update bool) (any, error) {
