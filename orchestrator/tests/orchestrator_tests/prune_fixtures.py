@@ -26,7 +26,13 @@ from ensemble.orchestrator.trackers.linear import (
 from ensemble.utils import parse_time
 from orchestrator_tests.case import Case
 from orchestrator_tests.unit import promote_fixtures as tp
-from orchestrator_tests.unit.board_ids import DUPLICATE, FINISHED, TEAM, team_node
+from orchestrator_tests.unit.board_ids import (
+    DUPLICATE,
+    FINISHED,
+    HARNESS_IDENTITY,
+    TEAM,
+    team_node,
+)
 from orchestrator_tests.unit.board_ids import STATES as IDS_BY_KEY
 from orchestrator_tests.unit.fake_api import FakeApi
 from orchestrator_tests.unit.outage import FAILURES, FIELDS, failing
@@ -310,7 +316,7 @@ class PruneScenario(Case):
             team=TEAM,
             states=dict(IDS_BY_KEY),
             human_members=(),
-            harness_key="harness",
+            harness=HARNESS_IDENTITY,
             manager_key="",
             task_label_group="",
             task_labels={},

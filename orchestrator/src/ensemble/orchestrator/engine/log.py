@@ -93,6 +93,18 @@ def config_error(src, e, *, dry=False, now=datetime.now):
     return 2
 
 
+def token_error(src, *, dry=False):
+    """A client.use report: a failed renewal of a still usable app token, as a token-error line."""
+    return lambda identity, reason: log(
+        src, "token-error", dry=dry, identity=identity, reason=reason
+    )
+
+
+def token_state(src, identity, fields):
+    """A dry run's report of an app's token: days_left, or a state (missing, no expiry, expired)."""
+    log(src, "token", dry=True, identity=identity, **fields)
+
+
 def linear_error(src, e, *, dry=False, now=datetime.now):
     return _stop(
         src,

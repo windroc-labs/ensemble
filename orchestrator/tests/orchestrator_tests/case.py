@@ -14,6 +14,7 @@ from unittest import mock
 import ensemble
 from ensemble.orchestrator.engine import log
 from ensemble.orchestrator.engine.flow import workflow
+from ensemble.orchestrator.trackers.linear import client
 
 from utils.tests.sandbox import clean_env, project_roots
 
@@ -53,6 +54,7 @@ class Case(unittest.TestCase):
             if ".unit." in self.id():
                 stack.enter_context(mock.patch("subprocess.run", system_probe))
             log.use_logs(None)
+            client.use()  # a test's renewal policy and failed renewals must not reach the next
             workflow.DEFAULT.load()  # a test's own workflow must not reach the next
             self.ensemble = os.path.join(self.home, ".ensemble")
             os.mkdir(self.ensemble)

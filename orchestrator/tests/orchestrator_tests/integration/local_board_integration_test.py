@@ -238,7 +238,7 @@ class LocalBoard(BinFlow):
         on_board = self.dry_run()
         self.use("linear")
         self.seed_linear()
-        on_linear = self.dry_run()
+        on_linear = [e for e in self.dry_run() if e["kind"] != "token"]  # Linear's: the harness's
         local_comment = next(e for e in on_board if e["kind"] == "would comment")
         linear_comment = next(e for e in on_linear if e["kind"] == "would comment")
         self.assertEqual(local_comment["body"], BAD_TASK)

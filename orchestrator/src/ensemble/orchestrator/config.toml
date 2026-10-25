@@ -99,7 +99,6 @@ max_runs = 3
 # The Linear tracker's entities and keys, by id; required only with tracker = "linear".
 #   team              local, required: the Linear team id
 #   human_members     local: the human users' emails; each is subscribed to every issue moved to In Review; [] → none
-#   harness_key       local, required: Keychain service of the harness account's Linear API key (router, promote, prune)
 #   manager_key       local: Keychain service of the manager's Linear API key, for ensemble-orchestrator issue: an account
 #                     neither the harness nor a role, so its comments and moves count as the user's; "" → issue refuses
 #   task_label_group  local, required: Linear id of the `Tasks` label group; its labels pick an issue's task through
@@ -107,17 +106,34 @@ max_runs = 3
 [linear]
 team = ""
 human_members = []
-harness_key = ""
 manager_key = ""
 task_label_group = ""
 agent_label_group = ""
 # local: [orchestrator.linear]
 # local: team = "00000000-0000-0000-0000-000000000000"
 # local: human_members = ["you@example.com"]
-# local: harness_key = "linear-harness"
 # local: manager_key = "linear-manager"
 # local: task_label_group = "00000000-0000-0000-0000-000000000000"
 # local: agent_label_group = "00000000-0000-4000-8000-000000000101"
+
+# The harness's Linear OAuth app (router, promote, prune, a run's reads and session comments): its calls send a
+# client_credentials token, which every command renews when under 5 days are left; scopes are fixed (read,write).
+#   client_id       local, required: the app's Client ID
+#   secret_service  local, required: Keychain service of the app's client secret
+#   token_service   local, required: Keychain service of its token and expiry, written by the commands; delete
+#                   that item after rotating the client secret
+#   user_id         local, required: the app's Linear user id
+[linear.harness]
+client_id = ""
+secret_service = ""
+token_service = ""
+user_id = ""
+
+# local: [orchestrator.linear.harness]
+# local: client_id = "0123456789abcdef0123456789abcdef"
+# local: secret_service = "linear-app-harness-secret"
+# local: token_service = "linear-app-harness-token"
+# local: user_id = "00000000-0000-0000-0000-000000000000"
 
 # The team's workflow states the code uses.
 #   <state>  local, required for each of backlog, todo, in_progress, in_review, handoff, done, canceled: its Linear state id

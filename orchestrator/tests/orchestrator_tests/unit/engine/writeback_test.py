@@ -1926,7 +1926,7 @@ class BegunEvents(Events):
     def test_posts_the_running_session_comment_as_the_harness_and_records_its_start(self):
         self.assertTrue(self.deliver(delegate_event("begun")))
         body = f"Run {RUN_SID} · running · #1 · {STARTED}\n\n```\n{RESUME_COMMAND}\n```"
-        harness = self.cfg.linear.harness_key
+        harness = self.cfg.linear.harness.service
         self.assertEqual(
             self.linear.calls,
             [
@@ -1960,7 +1960,7 @@ class BegunEvents(Events):
         body = f"Run {RUN_SID} · running · #1 · {RESTARTED}\n\n```\n{RESUME_COMMAND}\n```"
         self.assertEqual(
             self.linear.writes("update")[-1],
-            (self.cfg.linear.harness_key, {"c": RUN_SESSION, "b": body}),
+            (self.cfg.linear.harness.service, {"c": RUN_SESSION, "b": body}),
         )
         self.assertEqual(
             self.ledger()[RUN_SID]["attempts"],
@@ -2134,7 +2134,7 @@ class FinishedEvents(Events):
         self.assertTrue(self.deliver(delegate_event("begun")))
         n = len(self.linear.calls)
         self.assertTrue(self.deliver(self.finished(outcome=outcome_data())))
-        harness, states = self.cfg.linear.harness_key, self.cfg.linear.states
+        harness, states = self.cfg.linear.harness.service, self.cfg.linear.states
         ended = session_body(f"done · #2 · {STARTED} → {RESTARTED} · exit 0")
         self.assertEqual(
             self.linear.calls[n:],
@@ -2205,7 +2205,7 @@ class FinishedEvents(Events):
         n = len(self.linear.calls)
         self.assertTrue(self.deliver(self.finished(1, error="stopped: Stopped: 143")))
         ended = session_body(f"interrupted · #2 · {STARTED} → {RESTARTED} · exit 1")
-        harness = self.cfg.linear.harness_key
+        harness = self.cfg.linear.harness.service
         self.assertEqual(
             self.linear.calls[n:],
             [
@@ -2262,7 +2262,7 @@ class FinishedEvents(Events):
         self.assertTrue(self.deliver(delegate_event("begun")))
         n = len(self.linear.calls)
         self.assertTrue(self.deliver(self.finished(0, error=TURN_FAILED)))
-        harness, states = self.cfg.linear.harness_key, self.cfg.linear.states
+        harness, states = self.cfg.linear.harness.service, self.cfg.linear.states
         ended = session_body(f"no outcome · #2 · {STARTED} → {RESTARTED} · exit 0")
         comment = ops.client_id(RUN_SID, "no-outcome:1:comment")
         self.assertEqual(
@@ -2419,7 +2419,7 @@ class LimitEvents(Events):
         self.assertTrue(self.deliver(delegate_event("begun")))
         n = len(self.linear.calls)
         self.assertTrue(self.deliver(self.limited()))
-        harness, states = self.cfg.linear.harness_key, self.cfg.linear.states
+        harness, states = self.cfg.linear.harness.service, self.cfg.linear.states
         ended = session_body(f"limit · #2 · {STARTED} → {RESTARTED} · exit -9")
         self.assertEqual(
             self.linear.calls[n:],

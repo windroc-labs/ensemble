@@ -152,6 +152,11 @@ def _key(service):
     return "lin_api_" + hashlib.sha256(service.encode()).hexdigest()[:32]
 
 
+def _record(service):
+    """An OAuth app's token entry: _key(service) as its token, good for years."""
+    return json.dumps({"access_token": _key(service), "expires_at": "2099-01-01T00:00:00+00:00"})
+
+
 def _errors(message):
     return {"data": None, "errors": [{"message": message}]}
 
@@ -259,7 +264,8 @@ class FakeLinear:
         self.users, self.issues, self.labels, self.projects, self.relations = {}, {}, {}, {}, []
         self.clock = itertools.count()
 
-    def user(self, email, name, service=None):
+    def user(self, email, name, service=None, *, app=False):
+        """app: service is an OAuth app's token entry (the harness), its calls Bearer ones."""
         with self.lock:
             if any(
                 u["email"].lower() == email.lower() or (service and u["service"] == service)
@@ -267,12 +273,22 @@ class FakeLinear:
             ):
                 raise ValueError(f"user {email} or service {service} seeded twice")
             uid = str(uuid.uuid4())
-            self.users[uid] = {"id": uid, "email": email, "name": name, "service": service}
+            self.users[uid] = {
+                "id": uid,
+                "email": email,
+                "name": name,
+                "service": service,
+                "app": app,
+            }
             return uid
 
     def keys(self):
         with self.lock:
-            return {u["service"]: _key(u["service"]) for u in self.users.values() if u["service"]}
+            return {
+                u["service"]: (_record if u["app"] else _key)(u["service"])
+                for u in self.users.values()
+                if u["service"]
+            }
 
     def label_group(self, id, name, labels):
         with self.lock:
@@ -368,6 +384,7 @@ class FakeLinear:
             self.failures.append(_Failure(op, kind, account, times, seconds))
 
     def answer(self, query, variables, key):
+        key = key.removeprefix("Bearer ") if isinstance(key, str) else key
         with self.lock:
             caller = next(
                 (u for u in self.users.values() if u["service"] and _key(u["service"]) == key),
@@ -447,7 +464,7 @@ class FakeLinear:
         keys = self.keys()
         if service not in keys:
             raise LinearError(f"fake transport: no key for {service}")
-        status, body, delay = self.answer(query, variables, keys[service])
+        status, body, delay = self.answer(query, variables, _key(service))
         if delay:
             time.sleep(min(delay, timeout))
             if delay >= timeout:

@@ -1,11 +1,11 @@
 import io
 import os
 import urllib.request
-from types import SimpleNamespace
 from unittest import mock
 
-from ensemble.orchestrator.engine.types import LinearIdentity
+from ensemble.orchestrator.engine.types import LinearKey
 from ensemble.orchestrator.trackers.linear import client
+from orchestrator_tests.unit.keychain_fixtures import Keychain, record
 
 FAILURES = {  # factories: a fresh exception per use
     "5xx": lambda: urllib.error.HTTPError(client.URL, 503, "Service Unavailable", {}, io.BytesIO()),
@@ -26,12 +26,14 @@ def failing(error, gql=None, ops=None):
         if ops is not None and client.operation(query) not in ops:
             return gql(query, **v)
         failed.append((query, v))
+        v = {"identity": LinearKey("linear-api-key"), **v}
+        token = record("lin_api_outage", days=20)
         with (
             mock.patch.dict(os.environ),
             mock.patch.object(urllib.request, "urlopen", side_effect=error()),
-            mock.patch("subprocess.run", return_value=SimpleNamespace(stdout="lin_api_outage\n")),
+            mock.patch("subprocess.run", Keychain({v["identity"].service: token})),
         ):
-            return client.linear_gql(query, **{"identity": LinearIdentity("linear-api-key"), **v})
+            return client.linear_gql(query, **v)
 
     call.failed = failed
     return call

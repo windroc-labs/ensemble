@@ -10,6 +10,7 @@ import json
 import os
 import re
 import urllib.error
+import urllib.request
 import uuid
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
@@ -31,7 +32,6 @@ from ensemble.orchestrator.engine import gate as quota
 from ensemble.orchestrator.engine.flow.types import IssueState, Pick
 from ensemble.orchestrator.engine.types import (
     LinearError,
-    LinearIdentity,
     Spec,
     TrackerFileError,
     TrackerKind,
@@ -85,10 +85,12 @@ from orchestrator_tests.router_fixtures import (
     pr_search,
     who,
 )
-from orchestrator_tests.unit.board_ids import HEADER, TASK_GROUP, TEAM
+from orchestrator_tests.unit.board_ids import HARNESS_IDENTITY, HEADER, TASK_GROUP, TEAM
 from orchestrator_tests.unit.board_ids import STATES as IDS_BY_KEY
 from orchestrator_tests.unit.board_ids import role as role_table
 from orchestrator_tests.unit.delegate_fixture import provider
+from orchestrator_tests.unit.keychain_fixtures import SECRET as APP_SECRET
+from orchestrator_tests.unit.keychain_fixtures import Endpoint, Keychain, record, token_http_error
 from orchestrator_tests.unit.outage import FAILURES, FIELDS, failing
 from orchestrator_tests.unit.run_fixtures import (
     HARNESS,
@@ -1684,6 +1686,47 @@ class RouterLocking(TickBase):
         self.assertEqual(fake.mutations, [])
 
 
+class HarnessToken(TickBase):
+    """The router renews the harness app's token over the real transport."""
+
+    def via(self, fake, days, answer=None, *argv):
+        self.keychain_items = Keychain(
+            {
+                HARNESS_IDENTITY.token_service: record(days=days),
+                HARNESS_IDENTITY.secret_service: APP_SECRET,
+            }
+        )
+        self.endpoint = Endpoint(answer, data=lambda q, v: fake(q, identity=HARNESS_IDENTITY, **v))
+        with (
+            mock.patch("subprocess.run", self.keychain_items),
+            mock.patch.object(urllib.request, "urlopen", side_effect=self.endpoint),
+        ):
+            return self.tick(client.linear_gql, *argv)
+
+    def test_a_failed_renewal_of_a_usable_token_logs_and_the_tick_still_claims(self):
+        fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
+        self.assertEqual(self.via(fake, 3, token_http_error(401)), 0)
+        self.assertEqual(self.launched_runs(), [("TASK-1", "new")])
+        self.assertIn("token-error identity=harness reason=HTTP 401", self.said())
+        self.assertEqual(len(self.endpoint.tokens), 1)
+
+    def test_an_expired_token_whose_renewal_fails_exits_2(self):
+        fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
+        for argv in ((), ("--dry-run",), ("--issue", "TASK-1")):
+            with self.subTest(argv=argv):
+                self.assertEqual(self.via(fake, -1, token_http_error(401), *argv), 2)
+                self.assertEqual(self.launched_runs(), [])
+                self.assertEqual(self.endpoint.graphql, [])
+
+    def test_a_dry_run_shows_days_left_and_requests_no_token(self):
+        fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
+        self.assertEqual(self.via(fake, 4, None, "--dry-run"), 0)
+        self.assertEqual(self.said()[0], "token identity=harness days_left=4.0")
+        self.assertEqual(self.endpoint.tokens, [])
+        writes = [argv for argv, _ in self.keychain_items.calls if argv[1:] == ["-i"]]
+        self.assertEqual((writes, self.launched_runs()), ([], []))
+
+
 class RouterOutages(TickBase):
     SAID = {name: f"linear-error op=teams {fields}" for name, fields in FIELDS.items()}
 
@@ -1699,7 +1742,7 @@ class RouterOutages(TickBase):
                         )
                         self.assertEqual(
                             gql.failed,
-                            [(ops.Q_TEAM, {"identity": LinearIdentity(HARNESS), "t": TEAM})],
+                            [(ops.Q_TEAM, {"identity": HARNESS_IDENTITY, "t": TEAM})],
                         )
                         self.assertEqual((self.start.launches, self.state), ([], ""))
                     fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
@@ -1725,7 +1768,8 @@ class RouterOutages(TickBase):
                 with self.subTest(argv=argv, failure=name):
                     self.assertEqual(self.tick(failing(error), *argv), 1)
                     self.assertEqual(
-                        (self.said(), len(self.raw.splitlines())), ([self.SAID[name]], 1)
+                        (self.said(), len(self.raw.splitlines())),
+                        (["token identity=harness days_left=20.0", self.SAID[name]], 2),
                     )
                     self.assertEqual((os.listdir(self.logs), self.state), (["runs.jsonl"], ""))
 

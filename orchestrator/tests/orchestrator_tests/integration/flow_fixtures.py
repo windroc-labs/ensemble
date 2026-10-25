@@ -54,7 +54,7 @@ KEYS = {r: _LINEAR["roles"][r]["key"] for r in ROLES}
 
 [HUMAN] = _LINEAR["human_members"]
 
-HARNESS, HARNESS_EMAIL = _LINEAR["harness_key"], "harness@agents.test"
+HARNESS, HARNESS_EMAIL = _LINEAR["harness"]["token_service"], "harness@agents.test"
 
 PROJECT = {"id": run_fixtures.PROJECT, "name": "Widgets"}
 
@@ -147,7 +147,7 @@ class Flow(Case):
                 + run_fixtures.CORE_LOCAL
             )
         self.fake = fake_linear.FakeLinear(harness=HARNESS)
-        self.ids = {HARNESS_EMAIL: self.fake.user(HARNESS_EMAIL, "Harness", HARNESS)}
+        self.ids = {HARNESS_EMAIL: self.fake.user(HARNESS_EMAIL, "Harness", HARNESS, app=True)}
         for r in ROLES:
             self.ids[ACCOUNTS[r]] = self.fake.user(ACCOUNTS[r], r.title(), KEYS[r])
         self.ids[HUMAN] = self.fake.user(HUMAN, "Me")

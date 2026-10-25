@@ -43,6 +43,17 @@ class Log(Logs):
             '"entry": "TASK-1/src/o/n", "reason": "not a clone é"}\n',
         )
 
+    def test_token_error_logs_the_identity_and_reason(self):
+        report = log.token_error("promote")
+        self.assertEqual(self.stderr(lambda: report("harness", "HTTP 401"))[1], "")
+        self.assertEqual(
+            [(d["src"], d["kind"], d["identity"], d["reason"]) for d in self.lines()],
+            [("promote", "token-error", "harness", "HTTP 401")],
+        )
+        dry = log.token_error("router", dry=True)
+        self.assertIn('"kind": "token-error"', self.stderr(lambda: dry("harness", "x"))[1])
+        self.assertEqual(len(self.lines()), 1)
+
     def test_the_file_is_0600_in_logs_dir_resolved_per_call(self):
         self.log("run", "end", "TASK-1", sid="s", exit=0)
         self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o600)

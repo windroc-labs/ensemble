@@ -215,7 +215,7 @@ def is_record(attachment):
 
 
 def is_comment(comment):
-    # isMe means the harness account because callers query with its key
+    # isMe means the harness account because callers query with its token
     return (
         bool((comment["user"] or {}).get("isMe"))
         and re.match(f"Run {UUID_RE.pattern} · ", comment["body"]) is not None
@@ -255,8 +255,8 @@ class LinearTracker(Tracker):
     humans: human_members emails, subscribed on notify; selves: the role accounts' emails, lowercased;
     say: the caller's logger. A method needing one not given raises TypeError. identity: who each call is made as,
     with timeout when given; None: gql as given. A comment's ref: its client id's parts. A home is a Linear
-    project; a note's account its user's email. Origin self: the harness account (isMe: router,
-    promote and the run reader query with linear.harness_key), a role account or Linear automation;
+    project; a note's account its user's email. Origin self: the harness app (isMe: router,
+    promote and the run reader query as linear.harness), a role account or Linear automation;
     other: any other user. A comment with no user (an integration's, such as GitHub's) is not
     returned. task_group, agent_group: the task and Agent label groups; label_tasks,
     label_clients: {label id: task or client}, which recheck's picks read."""

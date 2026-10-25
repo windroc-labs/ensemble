@@ -19,7 +19,7 @@ from ensemble.orchestrator.engine import (
     types,
 )
 from ensemble.orchestrator.engine.flow.types import ArchiveRefused, IssueState, Linked, Priority
-from ensemble.orchestrator.engine.types import LinearError, LinearIdentity
+from ensemble.orchestrator.engine.types import LinearError, LinearKey
 from ensemble.orchestrator.trackers.linear import (
     client,
     issue_archive,
@@ -40,7 +40,7 @@ from ensemble.utils import parse_time
 from orchestrator_tests.case import Case
 from orchestrator_tests.integration import fake_linear
 from orchestrator_tests.integration.fake_transport import install, refuse_keychain
-from orchestrator_tests.unit.board_ids import STATES, TASK_GROUP, TEAM
+from orchestrator_tests.unit.board_ids import HARNESS_IDENTITY, STATES, TASK_GROUP, TEAM
 from orchestrator_tests.unit.issue_fixtures import (
     CLIENT_GROUP,
     CLIENT_LABELS,
@@ -70,7 +70,7 @@ LINEAR_TIME = r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$"
 class ServerCase(Case):
     def setUp(self):
         self.fake = fake = fake_linear.FakeLinear(harness=HARNESS)
-        self.harness = fake.user(HARNESS_EMAIL, "Harness", HARNESS)
+        self.harness = fake.user(HARNESS_EMAIL, "Harness", HARNESS, app=True)
         self.engineer = fake.user(ENGINEER_EMAIL, "Engineer", ENGINEER)
         self.human = fake.user("Me@X.com", "Me")
         fake.issue(
@@ -88,8 +88,8 @@ class ServerCase(Case):
         self.addCleanup(env.stop)
         transport = install(os.environ["FAKE_LINEAR_TRANSPORT"])
         self.addCleanup(transport.close)
-        self.gql = functools.partial(client.linear_gql, identity=LinearIdentity(HARNESS))
-        self.eng = functools.partial(client.linear_gql, identity=LinearIdentity(ENGINEER))
+        self.gql = functools.partial(client.linear_gql, identity=HARNESS_IDENTITY)
+        self.eng = functools.partial(client.linear_gql, identity=LinearKey(ENGINEER))
 
     def log(self):
         return [(r.op, r.account, r.result) for r in self.fake.requests]
@@ -244,7 +244,7 @@ class GraphQLProjection(ServerCase):
     def test_each_failure_kind_as_the_caller_sees_it(self):
         for name, eng in (
             ("http", self.eng),
-            ("in process", functools.partial(self.fake, identity=LinearIdentity(ENGINEER))),
+            ("in process", functools.partial(self.fake, identity=LinearKey(ENGINEER))),
         ):
             with self.subTest(name):
                 self.fake.requests.clear()
@@ -313,7 +313,7 @@ class GraphQLProjection(ServerCase):
             ),
             self.assertRaises(LinearError) as cm,
         ):
-            client.linear_gql(ops.Q_USER, identity=LinearIdentity("stranger"), e="me@x.com")
+            client.linear_gql(ops.Q_USER, identity=LinearKey("stranger"), e="me@x.com")
         self.assertEqual(str(cm.exception), "linear api error: users: HTTP 401")
         self.assertEqual(
             self.fake.requests,
@@ -353,7 +353,7 @@ class GraphQLProjection(ServerCase):
     def test_a_bad_body_is_a_logged_400(self):
         send, key = (
             urllib.request.build_opener(urllib.request.ProxyHandler({})).open,
-            self.fake.keys()[HARNESS],
+            f"Bearer {fake_linear._key(HARNESS)}",
         )
         for body in (b"not json", b"[]", b'{"variables": {}}', b'{"query": "q", "variables": []}'):
             with self.subTest(body), self.assertRaises(urllib.error.HTTPError) as cm:

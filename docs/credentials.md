@@ -60,16 +60,18 @@ GitHub on the Docker Host needs no per-run login: `<B> login github ensemble-bot
 | Lifetime | 1 hour; each session renews them 10 minutes before the first expires |
 | Revoke | `close` revokes them before removing the container; a failed revoke is retried at the next start, close or status until it expires; `<B> status` lists pending ones |
 
-### Linear harness key
+### Linear harness app
+
+The harness is a Linear OAuth app, `[linear.harness]`: its client secret and its token are two Keychain items.
 
 | Field | Value |
 |---|---|
-| Purpose | the harness account's access for router (claims, bounces), promote (creates the next role's issue, relates it, moves to Done), prune (archives) and run comments |
-| Minimum permission | a personal API key of the harness account limited to the team, with Read, Write, Create issues and Create comments; not live-tested |
-| Stored at | a login keychain item whose service is `linear.harness_key` |
+| Purpose | the harness's access for router (claims, bounces), promote (creates the next role's issue, relates it, moves to Done), prune (archives), a run's issue read and run comments |
+| Minimum permission | an OAuth app with Client credentials on, its team access limited to the team; each token is requested with the scopes `read,write`, fixed in code |
+| Stored at | the client secret: a login keychain item whose service is `linear.harness.secret_service`; the token and its expiry (JSON `{"access_token", "expires_at"}`): one whose service is `linear.harness.token_service`, written by the commands |
 | Readers | any process running as the user: read through `/usr/bin/security`, which an item made by `security add-generic-password` without `-T` trusts |
-| Lifetime | no expiry documented |
-| Revoke | delete the key in Linear › Settings › Account › Security & Access, then `security delete-generic-password -s <service>` |
+| Lifetime | the token 30 days; any Linear call as the harness (router, promote, prune, write-back) first requests a new one with `client_credentials` when it is missing, undated, expired or has under 5 days left. A failed request with the old token still valid logs `token-error` and uses it; with it expired the command exits 2 naming the fix. `--dry-run` requests none and logs a `token` line with the days left |
+| Revoke | rotate the client secret in Linear › Settings › API › Applications (this revokes every token of the app), store the new secret with `security add-generic-password -U -s <secret service> -a <secret service> -w`, then `security delete-generic-password -s <token service>` so the next call requests a token |
 
 ### Linear manager key
 
@@ -78,9 +80,9 @@ GitHub on the Docker Host needs no per-run login: `<B> login github ensemble-bot
 | Purpose | the manager's `ensemble-orchestrator issue` commands (reads, comments, moves, creates, relations, labels, archives); an account neither the harness nor a role, so its comments are instructions and its moves to Todo restart the attempt count |
 | Minimum permission | a personal API key of that account (a dedicated manager account or your own) limited to the team, with Read, Write, Create issues and Create comments; not live-tested |
 | Stored at | a login keychain item whose service is `linear.manager_key`; unset, the `issue` commands refuse |
-| Readers | as the harness key |
-| Lifetime | as the harness key |
-| Revoke | as the harness key |
+| Readers | any process running as the user: read through `/usr/bin/security`, which an item made by `security add-generic-password` without `-T` trusts |
+| Lifetime | no expiry documented |
+| Revoke | delete the key in Linear › Settings › Account › Security & Access, then `security delete-generic-password -s <service>` |
 
 ### Linear role keys
 
@@ -92,9 +94,9 @@ One per role: `linear.roles.researcher.key` for `linear.roles.researcher.account
 | Purpose | write-back as the role: comments, state moves, subscribing `linear.human_members`, attachments, retitles; the router checks the item exists before a claim |
 | Minimum permission | a personal API key of the role account limited to the team, with Read, Write and Create comments; not live-tested |
 | Stored at | a login keychain item whose service is `linear.roles.<role>.key` |
-| Readers | as the harness key |
-| Lifetime | as the harness key |
-| Revoke | as the harness key |
+| Readers | as the manager key |
+| Lifetime | as the manager key |
+| Revoke | as the manager key |
 
 ### Claude Code login
 
@@ -177,7 +179,8 @@ shows.
 | `ensemble-revocations` | `pending` | — | tokens awaiting revocation | `<B> close`, `refresh` failures | the broker |
 | `ensemble-codex` | `auth` | — | the full Codex login | `<B> login codex`; renewals at `start`, `refresh` | the broker |
 | `ensemble-opencode` | provider name | `[session.clients.opencode.providers.<name>]` | that OpenCode provider's API key | `<B> login opencode <name>` | the broker |
-| the `linear.harness_key` value | any | `linear.harness_key` | harness Linear API key | the user ([Linear presets](#linear-presets)) | any process running as the user |
+| the `linear.harness.secret_service` value | any | `linear.harness.secret_service` | harness app client secret | the user ([Linear presets](#linear-presets)) | any process running as the user |
+| the `linear.harness.token_service` value | the existing item's, else the service | `linear.harness.token_service` | harness app token and expiry | router, promote, prune, write-back | any process running as the user |
 | the `linear.manager_key` value | the manager's account | `linear.manager_key` | manager Linear API key | the user ([Linear presets](#linear-presets)) | any process running as the user |
 | each `linear.roles.<role>.key` value | the role's account | `linear.roles.<role>.key` | role Linear API key | the user | any process running as the user |
 | Claude Code's own | — | — | local Claude login | Claude Code `/login` | Claude Code; service name not documented |
@@ -264,21 +267,32 @@ lists what it needs in Linear. By hand: create these in the Linear team, then pu
 | the humans subscribed on In Review | `linear.human_members` |
 | the Linear project of each product repo, optional | `linear.project_repos` |
 | — (local clones of target repos, optional) | `local_clones` |
-| the harness account's API key, a Keychain item (below) | `linear.harness_key` |
+| the harness's OAuth app (below): its Client ID, its client secret's and token's Keychain items, its Linear user id | `linear.harness.client_id`, `linear.harness.secret_service`, `linear.harness.token_service`, `linear.harness.user_id` |
 | the manager's API key, of an account neither the harness nor a role (yours, or one more member), a Keychain item (below) | `linear.manager_key` |
 | each role account's API key, a Keychain item (below) | `linear.roles.researcher.key`, `linear.roles.pm.key`, `linear.roles.engineer.key` |
+
+The harness app:
+
+1. Linear › Settings › API › Applications › New: Public and Webhooks off, Client credentials on; on its page limit team
+   access to the team. Its Client ID → `linear.harness.client_id`.
+2. Store its client secret, then paste it (nothing echoes):
+
+   ```sh
+   security add-generic-password -s <linear.harness.secret_service> -a <linear.harness.secret_service> -w
+   ```
+
+3. Its Linear user id → `linear.harness.user_id`; the first command as the harness requests and stores its token.
 
 Keys, one per account:
 
 1. Linear › Settings › Members: invite each role account; open the invite in a private window and choose
    **Continue with email**.
-2. As each account, the harness account included, create a personal API key in Settings › Account › Security & Access,
+2. As each role account and the manager's, create a personal API key in Settings › Account › Security & Access,
    limited to the team ([Linear API keys]).
 3. Store each in the login keychain, then paste the key (nothing echoes):
 
    ```sh
    security add-generic-password -s <linear.roles.<role>.key> -a <linear.roles.<role>.account> -w   # each role
-   security add-generic-password -s <linear.harness_key> -a <harness account> -w
    security add-generic-password -s <linear.manager_key> -a <manager account> -w
    ```
 

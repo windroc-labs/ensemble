@@ -27,7 +27,7 @@ from ensemble.orchestrator.engine.types import (
     UUID_RE,
     Accounts,
     ConfigError,
-    LinearIdentity,
+    LinearKey,
     TrackerKind,
     Wiring,
 )
@@ -140,9 +140,10 @@ def main(argv=None):
             "  Operational commands require configured orchestrator and Delegate\n"
             '  settings. [orchestrator] tracker picks the board: "local" (the default)\n'
             "  reads the directory $ENSEMBLE_BOARD_DIR (default ~/.ensemble/board);\n"
-            '  "linear" reaches Linear through the linear.harness_key Keychain service\n'
-            "  (the issue commands: linear.manager_key), role keys identifying the\n"
-            "  accounts used for issue work. Python 3.11+ is needed.\n"
+            '  "linear" reaches Linear as the [linear.harness] OAuth app, whose token any\n'
+            "  command renews before a call when under 5 days are left (the issue\n"
+            "  commands: linear.manager_key), role keys identifying the accounts used\n"
+            "  for issue work. Python 3.11+ is needed.\n"
             "  Router launches need the configured client/Delegate and its Host tools.\n"
             "  Router/promote/prune prepend ENSEMBLE_PATH, then this installation's bin,\n"
             "  then default executable directories. Logs: STATE/logs/orchestrator.jsonl;\n"
@@ -330,7 +331,7 @@ def _linear_accounts(gql, cfg, identity):
 def _linear_claimed(gql, cfg, claim):
     _start_row(claim, "key", claim.key is not None)
     _start_row(claim, "uuid", UUID_RE.fullmatch(claim.uuid) is not None)
-    return _linear_accounts(gql, cfg, LinearIdentity(claim.key))
+    return _linear_accounts(gql, cfg, LinearKey(claim.key))
 
 
 def _linear_identity(cfg, role):
@@ -345,6 +346,22 @@ def _linear_board_factory(gql, cfg):
     return lambda transport: LinearTracker.of_team(
         partial(transport, identity=linear.harness), linear, team, roles
     )
+
+
+def _linear_credentials(cfg, src, *, dry):
+    """src's renewal policy: renew unless dry, failed renewals as token-error lines; a dry run logs
+    each app's token state as a token line when it first calls as that app."""
+    del cfg
+    client.use(
+        renew=not dry,
+        report=event_log.token_error(src, dry=dry),
+        show=partial(event_log.token_state, src) if dry else None,
+    )
+
+
+def _local_credentials(cfg, src, *, dry):
+    """A local board calls no transport."""
+    del cfg, src, dry
 
 
 def _local_board(transport, cfg, *, say=None):
@@ -390,6 +407,7 @@ TRACKERS = MappingProxyType(
             claimed=_linear_claimed,
             identity=_linear_identity,
             board=_linear_board_factory,
+            credentials=_linear_credentials,
         ),
         TrackerKind.LOCAL: Wiring(
             connect=_local_board,
@@ -398,6 +416,7 @@ TRACKERS = MappingProxyType(
             claimed=_local_claimed,
             identity=lambda *_: None,
             board=_local_board_factory,
+            credentials=_local_credentials,
         ),
     }
 )
@@ -416,6 +435,7 @@ def _log_ignored(issue, ignored):
 
 def _writeback(cfg, issue, workdir):
     lines = sys.stdin.read().splitlines()
+    TRACKERS[cfg.tracker].credentials(cfg, "writeback", dry=False)
     try:
         if len(lines) != 1:
             raise ValueError(f"want one DelegateEvent line on stdin, got {len(lines)}")

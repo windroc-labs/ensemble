@@ -19,7 +19,7 @@ from ensemble.orchestrator.engine.types import (
     IssueEdit,
     IssueError,
     LinearError,
-    LinearIdentity,
+    LinearKey,
     ListQuery,
     LookupQuery,
     NewIssue,
@@ -35,7 +35,7 @@ from ensemble.orchestrator.trackers.local.issues import LocalIssues
 from orchestrator_tests.case import Case
 from orchestrator_tests.process_fixtures import CalledProcessError, CompletedProcess, TimeoutExpired
 from orchestrator_tests.unit import promote_fixtures as tp
-from orchestrator_tests.unit.board_ids import ACCOUNTS, STATES, TASK_GROUP
+from orchestrator_tests.unit.board_ids import ACCOUNTS, HARNESS_LINE, STATES, TASK_GROUP
 from orchestrator_tests.unit.issue_fixtures import (
     CLIENT_LABELS,
     CONFIG,
@@ -328,7 +328,7 @@ class Read(IssueCase):
         self.assertEqual(view["parent"]["identifier"], "TASK-9")
         self.assertIsNone(view["continue"])
         self.assertFalse(os.path.exists(os.path.join(self.root, "logs", "runs.jsonl")))
-        self.assertEqual(gql.call_args.kwargs["identity"], LinearIdentity(MANAGER_KEY))
+        self.assertEqual(gql.call_args.kwargs["identity"], LinearKey(MANAGER_KEY))
 
     def test_cut_fields_name_the_full_read(self):
         node = issue_node("TASK-2", comments=conn([comment(n) for n in range(1, 7)]))
@@ -452,7 +452,7 @@ class Move(IssueCase):
             },
         )
         self.assertTrue(out.endswith(b"\n"))
-        self.assertEqual(gql.call_args.kwargs["identity"], LinearIdentity(MANAGER_KEY))
+        self.assertEqual(gql.call_args.kwargs["identity"], LinearKey(MANAGER_KEY))
         self.assertEqual(gql.call_args.args[0].split("(")[0], "mutation")
         self.assertEqual(gql.call_args.kwargs["s"], STATES["handoff"])
 
@@ -536,7 +536,7 @@ class Edit(IssueCase):
                 )
                 self.assertEqual(gql.call_args.kwargs["in"], want)
                 self.assertNotIn("中文".encode(), out)
-                self.assertEqual(gql.call_args.kwargs["identity"], LinearIdentity(MANAGER_KEY))
+                self.assertEqual(gql.call_args.kwargs["identity"], LinearKey(MANAGER_KEY))
 
     def test_a_role_alone_changes_the_assignee(self):
         for role, want in (("engineer", ROLE_USERS[ACCOUNTS["engineer"]]), ("unassigned", None)):
@@ -1008,10 +1008,12 @@ class Failures(IssueCase):
 
     def test_configuration_errors_exit_two(self):
         with open(self.config, "w") as f:
-            f.write(CONFIG.replace('linear.harness_key = "linear-api-key"\n', ""))
+            f.write(CONFIG.replace(HARNESS_LINE, ""))
         code, out, err = self.run_main(["read", "TASK-2"], Gql(issue_node()))
         self.assertEqual((code, out), (2, b""))
-        self.assertIn("required, unset: linear.harness_key:", err)
+        self.assertIn(
+            "required, unset: linear.harness.client_id, linear.harness.secret_service", err
+        )
 
     def test_unset_manager_key_exits_two_before_any_call(self):
         with open(self.config, "w") as f:

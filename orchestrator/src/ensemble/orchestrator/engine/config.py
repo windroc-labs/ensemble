@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import sys
+from enum import StrEnum
 from types import MappingProxyType
 
 import ensemble.utils as utils
@@ -12,10 +13,13 @@ from ensemble.orchestrator.engine import types
 from ensemble.orchestrator.engine.flow import workflow
 from ensemble.orchestrator.engine.log import config_error
 from ensemble.orchestrator.engine.types import (
+    KEYCHAIN_NAME,
     UUID_RE,
+    AppKind,
     Config,
     ConfigError,
     Docs,
+    LinearApp,
     LinearRole,
     LinearSettings,
     Role,
@@ -49,7 +53,7 @@ LINEAR_KEYS = {
     "team",
     "states",
     "human_members",
-    "harness_key",
+    "harness",
     "manager_key",
     "task_label_group",
     "task_labels",
@@ -60,9 +64,20 @@ LINEAR_KEYS = {
 }
 ROLE_KEYS = {"max_runs"}
 LINEAR_ROLE_KEYS = {"account", "key"}
+
+
+class AppKey(StrEnum):
+    """An OAuth app table's keys ([linear.harness])."""
+
+    CLIENT_ID = "client_id"
+    SECRET_SERVICE = "secret_service"
+    TOKEN_SERVICE = "token_service"
+    USER_ID = "user_id"
+
+
 REQUIRED = (
     "linear.team",
-    "linear.harness_key",
+    *(f"linear.harness.{k}" for k in AppKey),
     "linear.task_label_group",
     *(f"linear.states.{k}" for k in State),
     "linear.roles.*.account",
@@ -272,7 +287,12 @@ def _linear_settings(linear):
     return LinearSettings(
         team=linear["team"],
         human_members=tuple(linear.get("human_members") or ()),
-        harness_key=linear["harness_key"],
+        harness=LinearApp(
+            "harness",
+            AppKind.HARNESS,
+            "linear.harness",
+            **{k.value: linear["harness"][k] for k in AppKey},
+        ),
         manager_key=linear.get("manager_key", ""),
         task_label_group=linear["task_label_group"],
         agent_label_group=linear["agent_label_group"],
@@ -365,22 +385,66 @@ def _load_config(cfg, local, board):
 
 
 def _linear(cfg, local):
+    _app_table(cfg["linear"], "harness")
     if missing := utils.unset(cfg, REQUIRED):
         raise ConfigError(
             f"orchestrator/config.toml: required, unset: {', '.join(missing)}: set them in {local} (orchestrator/config.toml's `# local:` lines)"
         )
     linear = cfg["linear"]
     _check_ids(linear)
-    hk = linear.get("harness_key")
-    if not isinstance(hk, str) or not hk:
-        raise ConfigError(
-            f"orchestrator/config.toml: linear.harness_key must be a Keychain service name: {hk!r}"
-        )
+    _app(linear, "harness")
     _linear_roles(linear)
     _manager_key(linear)
     _project_repos(linear)
     _task_labels(linear)
     _agent_labels(linear)
+
+
+def _app_table(linear, name):
+    """[linear.<name>]: a table of AppKey keys only (unset ones REQUIRED reports)."""
+    table = linear.setdefault(name, {})
+    if not isinstance(table, dict):
+        raise ConfigError(f"orchestrator/config.toml: [linear.{name}] must be a table")
+    if extra := sorted(set(table) - set(AppKey)):
+        raise ConfigError(
+            f"orchestrator/config.toml: [linear.{name}] has unknown keys: {', '.join(extra)}"
+        )
+
+
+def _app(linear, name):
+    """[linear.<name>]: an OAuth app's Client ID, its secret's and token's Keychain services (two)
+    and its Linear user id."""
+    table = linear[name]
+    for key, what, valid in (
+        (AppKey.CLIENT_ID, "a Linear OAuth app Client ID", _client_id),
+        (AppKey.SECRET_SERVICE, "a Keychain service name", _keychain_name),
+        (AppKey.TOKEN_SERVICE, "a Keychain service name", _keychain_name),
+        (AppKey.USER_ID, "a Linear user id (UUID)", _uuid),
+    ):
+        if not valid(table[key]):
+            raise ConfigError(
+                f"orchestrator/config.toml: linear.{name}.{key} must be {what}: {table[key]!r}"
+            )
+    if table["secret_service"] == table["token_service"]:
+        raise ConfigError(
+            f"orchestrator/config.toml: linear.{name}.secret_service {table['secret_service']!r} "
+            f"is also linear.{name}.token_service"
+        )
+
+
+def _client_id(v):
+    return isinstance(v, str) and bool(v) and v.isprintable() and not any(c.isspace() for c in v)
+
+
+def _keychain_name(v):
+    return isinstance(v, str) and bool(KEYCHAIN_NAME.fullmatch(v))
+
+
+def _harness_services(linear):
+    """{Keychain service: the harness setting naming it}."""
+    return {
+        linear["harness"][k]: f"linear.harness.{k}" for k in ("secret_service", "token_service")
+    }
 
 
 def _manager_key(linear):
@@ -390,7 +454,7 @@ def _manager_key(linear):
         raise ConfigError(
             f"orchestrator/config.toml: linear.manager_key must be a Keychain service name: {mk!r}"
         )
-    taken = {linear["harness_key"]: "linear.harness_key"} | {
+    taken = _harness_services(linear) | {
         p["key"]: f"[linear.roles.{n}]'s key" for n, p in linear["roles"].items()
     }
     if mk in taken:
@@ -436,9 +500,9 @@ def _linear_roles(linear):
                     f"orchestrator/config.toml: [linear.roles.{name}] {k} must be {what}: {p.get(k)!r}"
                 )
         key = p["key"]
-        if key == linear["harness_key"]:
+        if key in (harness := _harness_services(linear)):
             raise ConfigError(
-                f"orchestrator/config.toml: [linear.roles.{name}] key {key!r} is linear.harness_key"
+                f"orchestrator/config.toml: [linear.roles.{name}] key {key!r} is {harness[key]}"
             )
         if key in owner:
             raise ConfigError(

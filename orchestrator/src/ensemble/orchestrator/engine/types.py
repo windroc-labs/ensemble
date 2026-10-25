@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any, Literal
 
 from ensemble import delegate
@@ -48,10 +49,50 @@ class TrackerKind(StrEnum):
 
 
 @dataclass(frozen=True)
-class LinearIdentity:
-    """Who a Linear call is made as; service: the Keychain service holding its key."""
+class LinearKey:
+    """A personal API key, by the Keychain service holding it (roles, manager)."""
 
     service: str
+
+
+class AppKind(StrEnum):
+    """Which of ensemble's Linear OAuth apps: its token request's scopes."""
+
+    HARNESS = "harness"
+    ROLE = "role"
+    MANAGER = "manager"
+
+
+SCOPES = MappingProxyType(
+    {
+        AppKind.HARNESS: "read,write",
+        AppKind.ROLE: "read,write,app:assignable,app:mentionable",
+        AppKind.MANAGER: "read,write,app:assignable",
+    }
+)
+
+
+@dataclass(frozen=True)
+class LinearApp:
+    """A Linear OAuth app: name in messages and logs, table its config table (fix messages),
+    secret_service and token_service the Keychain services of its client secret and token record."""
+
+    name: str
+    kind: AppKind
+    table: str
+    client_id: str
+    secret_service: str
+    token_service: str
+    user_id: str
+
+    @property
+    def scopes(self) -> str:
+        return SCOPES[self.kind]
+
+    @property
+    def service(self) -> str:
+        """The Keychain service of what its calls send, as LinearKey.service."""
+        return self.token_service
 
 
 @dataclass(frozen=True)
@@ -60,8 +101,8 @@ class LinearRole:
     key: str
 
     @property
-    def identity(self) -> LinearIdentity:
-        return LinearIdentity(self.key)
+    def identity(self) -> LinearKey:
+        return LinearKey(self.key)
 
 
 @dataclass(frozen=True)
@@ -71,7 +112,7 @@ class LinearSettings:
     team: str
     states: Mapping[str, str]
     human_members: tuple[str, ...]
-    harness_key: str
+    harness: LinearApp
     manager_key: str
     task_label_group: str
     task_labels: Mapping[str, str]
@@ -81,12 +122,8 @@ class LinearSettings:
     roles: Mapping[str, LinearRole]
 
     @property
-    def harness(self) -> LinearIdentity:
-        return LinearIdentity(self.harness_key)
-
-    @property
-    def manager(self) -> LinearIdentity:
-        return LinearIdentity(self.manager_key)
+    def manager(self) -> LinearKey:
+        return LinearKey(self.manager_key)
 
 
 @dataclass(frozen=True)
@@ -177,10 +214,12 @@ class Wiring:
 
     connect: Connect  # the router's board
     reader: Callable[[Any, Config], Tracker]  # a run's issue read and Related-work search
-    accounts: Callable[[Any, Config, LinearIdentity | None], Accounts]  # write-back accounts
+    accounts: Callable[[Any, Config, LinearKey | None], Accounts]  # write-back accounts
     claimed: Callable[[Any, Config, Claim], Accounts]
-    identity: Callable[[Config, str], LinearIdentity | None]  # a role's; None: none to check
+    identity: Callable[[Config, str], LinearKey | None]  # a role's; None: none to check
     board: Callable[[Any, Config], Callable[[Any], Tracker]]
+    # (cfg, src, *, dry): command src's token renewal policy; dry: show each app's token, renew none
+    credentials: Callable[..., None]
 
 
 class State(StrEnum):
@@ -293,7 +332,12 @@ class LinearError(Exception):
 
 
 class KeychainError(LinearError):
-    """The harness_key Keychain item holds no usable key."""
+    """A Keychain item, or an app's token renewal, left no usable credential; identity: the app's
+    name when it is an app's."""
+
+    def __init__(self, msg: str, identity: str | None = None):
+        super().__init__(msg)
+        self.identity = identity
 
 
 class GraphQLErrors(LinearError):
@@ -401,6 +445,7 @@ class Target:
     host: str = "github.com"
 
 
+KEYCHAIN_NAME = re.compile(r"[A-Za-z0-9._@+][A-Za-z0-9._@+-]*")  # safe on a security -i line
 UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
