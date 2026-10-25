@@ -567,9 +567,12 @@ class HostedSession(Session):
                     yield IdleTimeout(self._idle)
         except GeneratorExit:  # the caller closed this iterator; the session goes on
             raise
-        except BaseException:
+        except BaseException as error:
             self._ended = True
-            self._running.stop()
+            try:
+                self._running.stop()
+            except SessionError as failed:
+                error.add_note(f"stop: {failed}")
             raise
 
     def _record(self, event: SessionEvent | Stderr | ClientBound) -> None:

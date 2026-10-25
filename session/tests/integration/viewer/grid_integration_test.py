@@ -141,6 +141,31 @@ class Live(Case):
         panes = self.tmux("list-panes", "-t", self.window_of(name), "-F", "#{pane_id}").split()
         return " ".join(sorted(panes, key=lambda p: int(p[1:])))
 
+    def viewer_settled(self, name: str) -> None:
+        """Waits until name's viewer client, the tmux client in its grid pane, has the pane's size.
+        Its resize lands after a re-tile and makes it the window's latest client: with tmux's
+        window-size latest, a client attached earlier then no longer sizes the window.
+        """
+        pane = self.tmux(
+            "display-message",
+            "-p",
+            "-t",
+            self.server.pane_of(name),
+            "#{pane_tty} #{pane_width}x#{pane_height}",
+        )
+        clients = functools.partial(
+            self.tmux,
+            "list-clients",
+            "-t",
+            f"={name}",
+            "-F",
+            "#{client_tty} #{client_width}x#{client_height}",
+        )
+        live_tmux.wait(
+            lambda: pane in clients().splitlines(),
+            what=f"{name}'s viewer client at its pane's size ({pane})",
+        )
+
     def holds(self, read, value, what: str):
         end = time.monotonic() + STEADY
         while time.monotonic() < end:
@@ -335,6 +360,7 @@ class RetileTest(Live):
         self.grid([["w1", "w2", "w3"]], width)
         # the most recently active client shows w1's session, not mgr's: tmux 3.4 then skips the
         # window's pane-exited hook, so window-layout-changed (a new pane set) re-tiles
+        self.viewer_settled("w1")
         self.server.attach("w1")
         tui.TuiStore.attach("w2", host=self.session_cls.host()).close()
         self.grid([["w1", "w3"]], width)
