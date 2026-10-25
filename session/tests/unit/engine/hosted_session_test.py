@@ -1078,6 +1078,16 @@ class EventsOverAModeTest(Case):
         self.assertEqual(self.mode.calls, [("stop",)])
         self.assertEqual(self.events(session), [])
 
+    def test_a_failed_stop_on_an_exception_from_the_mode_notes_it_on_that_exception(self):
+        session = self.session()
+        with (
+            mock.patch.object(self.mode, "poll", side_effect=RuntimeError("boom")),
+            mock.patch.object(self.mode, "stop", side_effect=SessionError("stop failed")),
+            self.assertRaisesRegex(RuntimeError, "boom") as raised,
+        ):
+            self.events(session)
+        self.assertEqual(raised.exception.__notes__, ["stop: stop failed"])
+
     def test_alive_send_and_stop_are_the_modes_and_name_defaults_to_none(self):
         session = self.session()
         self.assertIsNone(session.name)

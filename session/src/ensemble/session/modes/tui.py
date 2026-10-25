@@ -201,20 +201,16 @@ class TuiStore:
         return found + new, (ino, start + end)
 
     def process(self) -> Process | None:
-        if self.name not in self.host.list():
-            check_sid(self.name, None, self._sid)
-            return None
-        process = self.host.attach(self.name)
+        process = self._lookup()
         check_sid(self.name, process, self._sid)
         return process
+
+    def _lookup(self) -> Process | None:
+        return self.host.attach(self.name) if self.name in self.host.list() else None
 
     def check(self) -> None:
         if self._sid is not None:
             self.process()
-
-    def holder(self) -> str | None:
-        process = self.process()
-        return None if process is None else process.identity
 
     def start(
         self,
@@ -262,13 +258,14 @@ class TuiStore:
 
     def stop(self, identity: str) -> None:
         with self._locked():
+            process = self._lookup()
             try:
-                holder = self.holder()
+                check_sid(self.name, process, self._sid)
             except SessionError:
                 return
-            if holder is None:
+            if process is None:
                 self._drop()
-            elif holder == identity:
+            elif process.identity == identity:
                 self._close()
             else:
                 return
@@ -809,8 +806,8 @@ class TuiMode(BaseMode):
         self._store.close()
 
     def stop(self) -> None:
-        """Once; then ends (returncode: the code seen, else -SIGHUP)."""
+        """Once, unless it raises; then ends (returncode: the code seen, else -SIGHUP)."""
         if self._live:
             self._store.stop(self._terminal.identity)
-        self._live = False
+            self._live = False
         self._end()
