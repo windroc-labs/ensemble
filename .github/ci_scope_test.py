@@ -122,6 +122,8 @@ class Repository(unittest.TestCase):
             (["skills/act-as/SKILL.md"], "pull_request", True),
             (["skills/manage/SKILL.md"], "pull_request", False),
             (["src/ensemble/delegate/team/roles/engineer.md"], "pull_request", True),
+            # Runbook-only PRs keep full scope, so tests/unit/mini_op_runbooks_test.py runs.
+            ([".mini-op/runbooks/test-accounts.md"], "pull_request", True),
             (["README.md", "docs/tests.md"], "push", True),
         ):
             with self.subTest(paths=paths, event=event):

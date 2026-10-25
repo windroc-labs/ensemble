@@ -5,10 +5,10 @@ import io
 import json
 import os
 import re
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import mini_op_guard as guard
@@ -23,6 +23,8 @@ SAMPLES = {
         "url=http://172.20.1.2:9000/api",
         "host 192.168.77.5",
         "tailnet 100.70.1.1",
+        "padded 10.20.30.040",
+        "padded 192.168.001.002",
     ],
     "email address": ["mail someone@example.org now"],
     "UUID": [
@@ -39,6 +41,12 @@ SAMPLES = {
         "~/mini-op-projects/ensemble/install-ensemble/storekey-stdin made-up-item acct",
         "~/mini-op-projects/ensemble/test-accounts/lq made-up-item acct body.json",
         "importkey $d/export.keychain-db made-up-item acct",
+        "ssh mini 'security find-generic-password -s made-up-item'",
+        "printf 'add-generic-password -s made-up-item' | security -i",
+        "Check with `keychain_has made-up-item`.",
+        "ssh mini 'source ~/apm/lib/keychain.zsh; keychain_has made-up-item'",
+        "if keychain_has made-up-item; then",
+        "  lq made-up-item acct body.json",
     ],
 }
 CLEAN = [
@@ -54,6 +62,11 @@ CLEAN = [
     "npm install pkg@1.2.3 and @scope/name",
     "Co-Authored-By: Claude <noreply@anthropic.com>",
     "<user>@<address>",
+    "build 1.08.0.1 and 999.1.1.1",
+    "to security, keychain_read or the project's key scripts.",
+    "per-runbook dirs: install-test, clean-test, importkey, lq and storekey,",
+    "plus storekey-stdin for the Strata key and the templates",
+    "Board extras, with the same `lq` call (manager key)",
 ]
 
 
@@ -114,6 +127,12 @@ class GuardTest(Tree):
         self.assertIn(".mini-op/<entry #3>: email address\n", out)
         self.assertNotIn("a.md", out)
 
+    def test_mini_op_as_a_file_fails_closed(self):
+        self.write(".mini-op", "fine\n")
+        code, out = self.run_guard()
+        self.assertEqual(code, 1)
+        self.assertIn(".mini-op: not a directory\n", out)
+
     def test_symlink_and_binary_fail_closed(self):
         self.write(".mini-op/runbooks/x/target", "fine\n")
         os.symlink("target", self.root / ".mini-op/runbooks/x/link")
@@ -137,12 +156,12 @@ class FakeGit:
         self.calls.append((argv, kwargs))
         command = argv[3]
         if command == self.fail:
-            return subprocess.CompletedProcess(argv, 1, b"", b"fatal: secret detail")
+            return SimpleNamespace(returncode=1, stdout=b"", stderr=b"fatal: secret detail")
         if command == "diff":
             out = b"".join(path.encode() + b"\0" for path in self.changed)
         else:
             out = b"".join(f"{sha}\x1f{body}\0".encode() for sha, body in self.commits)
-        return subprocess.CompletedProcess(argv, 0, out, b"")
+        return SimpleNamespace(returncode=0, stdout=out, stderr=b"")
 
 
 class PullRequestTest(Tree):

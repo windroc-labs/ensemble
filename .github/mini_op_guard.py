@@ -35,13 +35,15 @@ ITEM_ARGS = {
     "lq": (0, 1),
     "importkey": (1, 2),
 }
+# A command name counts only where a shell would run it: at a line start, after a path, a
+# separator, a quote or backtick, or a keyword; in prose its next words are not item names.
 COMMANDS = re.compile(
-    r"(?:^|[\s/;|&(`'\"])("
+    r"(?:^[ \t]*|[/;|&(`'\"][ \t]*|\b(?:if|then|else|elif|do|while|until|exec|time|!)[ \t]+)("
     + "|".join(re.escape(c) for c in sorted(ITEM_ARGS, key=len, reverse=True))
-    + r")(?![\w-])((?:[ \t]+[^\s|;&)]+)*)"
+    + r")(?![\w-])((?:[ \t]+[^\s|;&)`]+)*)"
 )
 SECURITY = re.compile(WORD.format("security") + r"|\w-(?:generic|internet)-password\b")
-OPTION = re.compile(r"(?<=\s)-[sal][ \t]+([^\s|;&)]+)")
+OPTION = re.compile(r"(?<=\s)-[sal][ \t]+([^\s|;&)`]+)")
 SHA = re.compile(r"[0-9a-f]{40}")
 
 
@@ -50,12 +52,12 @@ class GuardError(Exception):
 
 
 def _literal(value):
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-        value = value[1:-1]
-    return NAME.fullmatch(value) is not None
+    """A keychain item name written out, not a variable, placeholder or format."""
+    return NAME.fullmatch(value.strip("'\"`")) is not None
 
 
 def _items(line):
+    """Whether the line passes a literal item name to a keychain reader or writer."""
     for match in COMMANDS.finditer(line):
         args = match[2].split()
         if any(i < len(args) and _literal(args[i]) for i in ITEM_ARGS[match[1]]):
@@ -63,13 +65,17 @@ def _items(line):
     return bool(SECURITY.search(line)) and any(_literal(v) for v in OPTION.findall(line))
 
 
+def _private(quad):
+    octets = [int(octet) for octet in quad.split(".")]
+    if any(octet > 255 for octet in octets):
+        return False
+    address = ipaddress.IPv4Address(bytes(octets))
+    return any(address in net for net in PRIVATE)
+
+
 def classes(line):
     found = []
-    if any(
-        any(ipaddress.ip_address(quad) in net for net in PRIVATE)
-        for quad in QUAD.findall(line)
-        if all(int(octet) <= 255 for octet in quad.split("."))
-    ):
+    if any(_private(quad) for quad in QUAD.findall(line)):
         found.append("private IPv4")
     if any(match not in ALLOWED for match in EMAIL.findall(line)):
         found.append("email address")
@@ -92,8 +98,10 @@ def scan(label, text):
 
 def _entries(root):
     base = root / TREE
-    if not base.is_dir() or base.is_symlink():
-        return [base] if base.is_symlink() else []
+    if base.is_symlink() or (base.exists() and not base.is_dir()):
+        return [base]
+    if not base.exists():
+        return []
     entries = []
     for top, dirs, files in os.walk(base):
         top = Path(top)
@@ -112,7 +120,9 @@ def scan_tree(root):
         named = [kind for part in rel.split("/") for kind in classes(part)]
         label = f"{TREE}/<entry #{index}>" if named else rel
         own = [f"{label}: {kind}" for kind in dict.fromkeys(named)]
-        if path.is_symlink() or not path.is_file():
+        if path == root / TREE:
+            own.append(f"{label}: not a directory")
+        elif path.is_symlink() or not path.is_file():
             own.append(f"{label}: not a regular file")
         else:
             text = _text(path.read_bytes())
@@ -161,13 +171,13 @@ def scan_pull_request(root, environ):
     title, body, base, head = _event(environ)
     diff = ["diff", "--name-only", "-z", f"{base}...{head}", "--", f"{TREE}/"]
     if not _git(root, diff, "git diff failed").strip("\0"):
-        return [], "PR fields skipped: no .mini-op/ change"
+        return [], True
     log = _git(root, ["log", "-z", "--format=%H%x1f%B", f"{base}..{head}"], "git log failed")
     findings = scan("PR title", title) + scan("PR body", body)
     for record in filter(None, log.split("\0")):
         sha, _, message = record.partition("\x1f")
         findings += scan(f"commit {sha.strip()[:12]}", message)
-    return findings, "PR fields clean" if not findings else ""
+    return findings, False
 
 
 def main(argv=None, *, root=ROOT, environ=os.environ):
@@ -178,22 +188,21 @@ def main(argv=None, *, root=ROOT, environ=os.environ):
         return 2
     root = Path(root)
     findings, count = scan_tree(root)
-    note = ""
+    error = skipped = None
     if environ.get("GITHUB_EVENT_NAME") == "pull_request":
         try:
-            more, note = scan_pull_request(root, environ)
-        except GuardError as error:
-            print(*findings, sep="\n", end="\n" if findings else "")
-            print(f"mini-op guard: {error}")
-            return 1
-        findings += more
-    if findings:
-        print(*findings, sep="\n")
-        print(f"mini-op guard: {len(findings)} findings")
+            more, skipped = scan_pull_request(root, environ)
+            findings += more
+        except GuardError as failure:
+            error = failure
+    for finding in findings:
+        print(finding)
+    if error or findings:
+        print(f"mini-op guard: {error or f'{len(findings)} findings'}")
         return 1
     print(f"mini-op guard: {count} files clean")
-    if note:
-        print(note)
+    if skipped is not None:
+        print("PR fields skipped: no .mini-op/ change" if skipped else "PR fields clean")
     return 0
 
 

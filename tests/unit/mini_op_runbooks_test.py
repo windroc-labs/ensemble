@@ -88,6 +88,16 @@ class Layout(Case):
                 ]
                 self.assertEqual(other, [])
 
+    def test_secrets_come_only_from_the_env_secret_files(self):
+        allowed = {f"/run/ensemble/secrets/env/{name}" for name in ("mini-password", "strata-key")}
+        found = [
+            where
+            for path in files()
+            for where, line in lines(path)
+            if any(match not in allowed for match in re.findall(r"/run/[\w./-]*[\w-]", line))
+        ]
+        self.assertEqual(found, [])
+
     def test_apm_paths_allowlisted(self):
         found = []
         for path in files():
