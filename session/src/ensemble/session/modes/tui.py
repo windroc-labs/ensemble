@@ -259,9 +259,8 @@ class TuiStore:
     def stop(self, identity: str) -> None:
         with self._locked():
             process = self._lookup()
-            try:
-                check_sid(self.name, process, self._sid)
-            except SessionError:
+            actual = None if process is None else process.session_identity()[0]
+            if self._sid is not None and actual != self._sid:
                 return
             if process is None:
                 self._drop()
