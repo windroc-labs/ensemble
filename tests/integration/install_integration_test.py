@@ -495,9 +495,11 @@ class InstallTest(Case):
         """The fake Linear workspace: LINEAR with `changes`."""
         (self.fakes / "linear.json").write_text(json.dumps({**LINEAR, **changes}))
 
-    def keys(self, *slots):
+    def keys(self, *slots, config=None):
         """Hidden credentials, then each missing public OAuth Client ID."""
-        data = tomllib.loads(self.config().read_text()) if self.config().exists() else {}
+        if config is None:
+            config = self.config().read_text() if self.config().exists() else ""
+        data = tomllib.loads(config)
         linear = data.get("orchestrator", {}).get("linear", {})
         answers = []
         for slot in slots:
@@ -2812,9 +2814,15 @@ exec /bin/rm "$@"
 
     def test_board_switch_from_local_to_linear(self):
         self.linear()
+        existing = HAND_CONFIG.replace('tracker = "linear"', 'tracker = "local"')
         result = self.configured(
-            HAND_CONFIG.replace('tracker = "linear"', 'tracker = "local"'),
-            then=[*self.keys(*SLOTS), (PROJECT_Q, "acme/widget"), (WRITE_Q, "y"), (WRITE_Q, "y")],
+            existing,
+            then=[
+                *self.keys(*SLOTS, config=existing),
+                (PROJECT_Q, "acme/widget"),
+                (WRITE_Q, "y"),
+                (WRITE_Q, "y"),
+            ],
         )
         self.assert_ok(result)
         self.assertEqual(

@@ -19,6 +19,7 @@ class LinearAppInstall(Case):
         self.output = Path(self.home, "apps.json")
         self.output.write_text("{}")
         self.secrets = {"secret-pm": "hidden-secret"}
+        self.accounts = {}
         self.requests = []
         self.oauth = {"access_token": "hidden-token", "expires_in": 2592000}
         self.viewer = USER
@@ -35,6 +36,8 @@ class LinearAppInstall(Case):
             code = 0 if service in self.secrets else 44
             if "-w" in args:
                 out = self.secrets.get(service, "")
+            elif service in self.accounts:
+                out = f'"acct"<blob>="{self.accounts[service]}"'
         elif args == ["security", "-i"]:
             if not self.reject_write:
                 words = kwargs["input"].split()
@@ -98,6 +101,17 @@ class LinearAppInstall(Case):
     def test_due_token_is_replaced(self):
         self.cached(expires_at=(datetime.now(UTC) + timedelta(days=4)).isoformat())
         self.prepare()
+        self.assertEqual(json.loads(self.secrets["token-pm"])["access_token"], "hidden-token")
+
+    def test_renewal_preserves_existing_keychain_account(self):
+        self.cached(expires_at=(datetime.now(UTC) - timedelta(days=1)).isoformat())
+        self.accounts["token-pm"] = "custom-owner"
+        self.prepare()
+        [command] = [
+            kwargs["input"] for args, kwargs in self.requests if args == ["security", "-i"]
+        ]
+        self.assertIn("-s token-pm -a custom-owner -X ", command)
+        self.assertNotIn("-a token-pm ", command)
         self.assertEqual(json.loads(self.secrets["token-pm"])["access_token"], "hidden-token")
 
     def test_malicious_token_and_invalid_expiry_are_rejected_without_write(self):
