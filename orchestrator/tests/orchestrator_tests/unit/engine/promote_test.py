@@ -16,7 +16,7 @@ from ensemble.orchestrator.engine import config, promote, prune
 from ensemble.orchestrator.engine import log as event_log
 from ensemble.orchestrator.engine.flow import workflow
 from ensemble.orchestrator.engine.flow.types import IssueState
-from ensemble.orchestrator.engine.types import IssueError, LinearError
+from ensemble.orchestrator.engine.types import IssueError, LinearError, LinearIdentity
 from ensemble.orchestrator.trackers.linear import linear_tracker, ops
 from ensemble.orchestrator.trackers.local.local_tracker import LocalTracker
 from orchestrator_tests.case import Case
@@ -274,7 +274,7 @@ class PromotionOutages(Base):
                     self.assertEqual(self.run_main(gql=gql), 1)
                     self.assertEqual((self.out, self.err, FakePruner.calls), (said, "", []))
                     self.assertEqual(
-                        [(q, v["service"], v["t"]) for q, v in gql.failed],
+                        [(q, v["identity"].service, v["t"]) for q, v in gql.failed],
                         [(ops.Q_SETUP, HARNESS, TEAM)],
                     )
         self.assertEqual(self.fake.calls, [])
@@ -310,7 +310,8 @@ class PromotionOutages(Base):
                 )
                 self.assertIn((linear_tracker.Q_DETAIL, {"i": "DR-1"}), fake.calls)
                 self.assertEqual(
-                    down.failed, [(linear_tracker.Q_DETAIL, {"service": HARNESS, "i": "DR-2"})]
+                    down.failed,
+                    [(linear_tracker.Q_DETAIL, {"identity": LinearIdentity(HARNESS), "i": "DR-2"})],
                 )
                 self.assertEqual(
                     (first["state"], later["state"], fake.mutations), ("Handoff", "Handoff", [])
@@ -388,7 +389,8 @@ class PromotionCleanup(Base):
         tracker = board(gql)
         self.assertIsInstance(tracker.gql, functools.partial)
         self.assertEqual(
-            (tracker.gql.func, tracker.gql.keywords), (self.fake, {"service": HARNESS})
+            (tracker.gql.func, tracker.gql.keywords),
+            (self.fake, {"identity": LinearIdentity(HARNESS)}),
         )
         self.assertEqual(
             (tracker.team_id, tracker.state_ids, tracker.finished_ids),

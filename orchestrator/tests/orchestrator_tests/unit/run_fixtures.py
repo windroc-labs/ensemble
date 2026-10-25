@@ -148,11 +148,11 @@ class Gql:
         self.fail, self.issue, self.calls, self.timeouts, self.comments = fail, issue, [], [], {}
         self.found = []
 
-    def __call__(self, query, *, service, timeout=30, **v):
+    def __call__(self, query, *, identity, timeout=30, **v):
         if query == linear_tracker.Q_STATE_NAME:
             return {"workflowState": {"name": STATE_NAMES[v["i"]]}}
         name = NAMES[query]
-        self.calls.append((name, service, v))
+        self.calls.append((name, identity.service, v))
         self.timeouts.append(timeout)
         if (e := self.fail(name, v)) is not None:
             raise e

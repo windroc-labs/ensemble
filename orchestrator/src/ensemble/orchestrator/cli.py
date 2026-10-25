@@ -27,6 +27,7 @@ from ensemble.orchestrator.engine.types import (
     UUID_RE,
     Accounts,
     ConfigError,
+    LinearIdentity,
     TrackerKind,
     Wiring,
 )
@@ -308,14 +309,18 @@ def _linear_reader(gql, cfg):
     return LinearTracker.reader(gql, cfg.linear)
 
 
-def _linear_accounts(gql, cfg, key):
-    """key's tracker and the harness_key's, for the session comment."""
+def _linear_accounts(gql, cfg, identity):
+    """identity's tracker and the harness's, for the session comment."""
     linear = cfg.linear
     return Accounts(
         LinearTracker(
-            gql, states=linear.states, team_id=linear.team, humans=linear.human_members, service=key
+            gql,
+            states=linear.states,
+            team_id=linear.team,
+            humans=linear.human_members,
+            identity=identity,
         ),
-        LinearTracker(gql, service=linear.harness_key, timeout=run_comments.LIMIT),
+        LinearTracker(gql, identity=linear.harness, timeout=run_comments.LIMIT),
         linear.states,
         tuple(e.lower() for e in linear.human_members),
         linear.project_repos,
@@ -325,20 +330,20 @@ def _linear_accounts(gql, cfg, key):
 def _linear_claimed(gql, cfg, claim):
     _start_row(claim, "key", claim.key is not None)
     _start_row(claim, "uuid", UUID_RE.fullmatch(claim.uuid) is not None)
-    return _linear_accounts(gql, cfg, claim.key)
+    return _linear_accounts(gql, cfg, LinearIdentity(claim.key))
 
 
-def _linear_key(cfg, role):
-    return cfg.linear.roles[role].key
+def _linear_identity(cfg, role):
+    return cfg.linear.roles[role].identity
 
 
 def _linear_board_factory(gql, cfg):
     """The team and role accounts read once, in one request; each tracker calls its transport as
-    the harness_key service."""
+    linear.harness."""
     linear = cfg.linear
-    team, roles = ops.team_and_roles(partial(gql, service=linear.harness_key), linear)
+    team, roles = ops.team_and_roles(partial(gql, identity=linear.harness), linear)
     return lambda transport: LinearTracker.of_team(
-        partial(transport, service=linear.harness_key), linear, team, roles
+        partial(transport, identity=linear.harness), linear, team, roles
     )
 
 
@@ -355,9 +360,9 @@ def _local_board_factory(transport, cfg):
     return lambda _: LocalTracker(cfg.board, cfg.roles, prefix=cfg.local_prefix)
 
 
-def _local_accounts(transport, cfg, key):
+def _local_accounts(transport, cfg, identity):
     """One board writes everything; it notifies no one and maps no project repos."""
-    del key
+    del identity
     board = _local_board(transport, cfg)
     return Accounts(board, board, {s: LOCAL_STATES[MOVES[s]].value for s in MOVES}, (), {})
 
@@ -383,7 +388,7 @@ TRACKERS = MappingProxyType(
             reader=_linear_reader,
             accounts=_linear_accounts,
             claimed=_linear_claimed,
-            key=_linear_key,
+            identity=_linear_identity,
             board=_linear_board_factory,
         ),
         TrackerKind.LOCAL: Wiring(
@@ -391,7 +396,7 @@ TRACKERS = MappingProxyType(
             reader=_local_board,
             accounts=_local_accounts,
             claimed=_local_claimed,
-            key=lambda *_: None,
+            identity=lambda *_: None,
             board=_local_board_factory,
         ),
     }

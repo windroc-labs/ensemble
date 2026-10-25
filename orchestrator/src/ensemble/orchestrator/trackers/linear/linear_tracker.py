@@ -253,8 +253,8 @@ def _move_origin(node, selves) -> Origin:
 class LinearTracker(Tracker):
     """states: {State key: state id}; team_id; finished: ops.Team.finished; roles: {user id: role};
     humans: human_members emails, subscribed on notify; selves: the role accounts' emails, lowercased;
-    say: the caller's logger. A method needing one not given raises TypeError. service: the key each call is made as, with
-    timeout when given; None: gql as given. A comment's ref: its client id's parts. A home is a Linear
+    say: the caller's logger. A method needing one not given raises TypeError. identity: who each call is made as,
+    with timeout when given; None: gql as given. A comment's ref: its client id's parts. A home is a Linear
     project; a note's account its user's email. Origin self: the harness account (isMe: router,
     promote and the run reader query with linear.harness_key), a role account or Linear automation;
     other: any other user. A comment with no user (an integration's, such as GitHub's) is not
@@ -274,15 +274,15 @@ class LinearTracker(Tracker):
         humans=(),
         selves=None,
         say=_quiet,
-        service=None,
+        identity=None,
         timeout=None,
         task_group=None,
         label_tasks=None,
         agent_group=None,
         label_clients=None,
     ):
-        if service is not None:
-            bound = {"service": service} | ({} if timeout is None else {"timeout": timeout})
+        if identity is not None:
+            bound = {"identity": identity} | ({} if timeout is None else {"timeout": timeout})
             gql = functools.partial(gql, **bound)
         self.gql, self.state_ids, self.team_id, self.roles = gql, states, team_id, roles
         self.finished_ids, self.humans, self.selves = finished, humans, selves
@@ -311,9 +311,9 @@ class LinearTracker(Tracker):
     @classmethod
     def connect(cls, gql, cfg, *, say):
         """Checks the team and task label group, then reads the role accounts; keeps the task and
-        Agent label maps. Calls gql as the harness_key service."""
+        Agent label maps. Calls gql as linear.harness."""
         linear = config.linear_settings(cfg, "router")
-        gql = functools.partial(gql, service=linear.harness_key)
+        gql = functools.partial(gql, identity=linear.harness)
         found = ops.team(gql, linear)
         ops.task_group(gql, linear)
         return cls(
@@ -346,13 +346,13 @@ class LinearTracker(Tracker):
 
     @classmethod
     def reader(cls, gql, linear):
-        """A run's issue read, as the harness_key service."""
+        """A run's issue read, as linear.harness."""
         return cls(
             gql,
             states=linear.states,
             team_id=linear.team,
             selves=_selves(linear.roles),
-            service=linear.harness_key,
+            identity=linear.harness,
         )
 
     def role(self, issue):

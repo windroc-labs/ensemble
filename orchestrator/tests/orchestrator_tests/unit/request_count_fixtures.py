@@ -47,12 +47,12 @@ class Counted:
         self.promote_fake, self.prune_fake = promote_fake, prune_fake
         self.phase, self.counts = SETUP, {}
 
-    def __call__(self, query, *, service, **v):
+    def __call__(self, query, *, identity, **v):
         name = NAMES.get(query, f"unnamed: {query[:80]}")
         self.counts.setdefault(self.phase, Counter())[name] += 1
         if query in PRUNE_QUERIES:
             return self.prune_fake(query, **v)
-        return self.promote_fake(query, service=service, **v)
+        return self.promote_fake(query, identity=identity, **v)
 
 
 class HostScale(PruneScenario):

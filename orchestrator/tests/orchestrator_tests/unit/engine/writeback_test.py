@@ -1697,7 +1697,8 @@ class Linear:
     def __init__(self, state, fail=lambda _op, _v: None):
         self.calls, self.comments, self.state, self.fail = [], {}, state, fail
 
-    def __call__(self, query, *, service, timeout=None, **v):
+    def __call__(self, query, *, identity, timeout=None, **v):
+        service = identity.service
         op = EVENT_OPS[query]
         self.calls.append((service, op, v))
         if (error := self.fail(op, v)) is not None:

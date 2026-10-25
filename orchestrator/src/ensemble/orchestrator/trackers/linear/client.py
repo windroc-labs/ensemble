@@ -24,9 +24,9 @@ def operation(query):
     return m[1] if m else "?"
 
 
-def linear_gql(query, *, service, timeout=30, **variables):
+def linear_gql(query, *, identity, timeout=30, **variables):
     # naming only service: urllib's header error would echo it
-    auth = _key(service, timeout)
+    auth = _key(identity, timeout)
     req = urllib.request.Request(
         URL,
         data=json.dumps({"query": query, "variables": variables}).encode(),
@@ -111,7 +111,8 @@ def _rate_limited(errors):
     return False
 
 
-def _key(service, timeout):
+def _key(identity, timeout):
+    service = identity.service
     found = subprocess.run(
         [SECURITY, "find-generic-password", "-s", service, "-w"],
         capture_output=True,
@@ -124,11 +125,11 @@ def _key(service, timeout):
     return found
 
 
-def has_key(service):
+def has_key(identity):
     # no -w: its secret is never read
     return (
         subprocess.run(
-            [SECURITY, "find-generic-password", "-s", service],
+            [SECURITY, "find-generic-password", "-s", identity.service],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         ).returncode

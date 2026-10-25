@@ -116,11 +116,11 @@ class FakeLinear:
     def writes(self):
         return [q for q, _ in self.calls if q == ops.Q_ISSUE_STATE or q.startswith("mutation")]
 
-    def __call__(self, query, *, service, **v):
+    def __call__(self, query, *, identity, **v):
         if query == linear_tracker.Q_STATE_NAME:
             return {"workflowState": {"name": STATE_NAMES[v["i"]]}}
         self.calls.append((query, v))
-        self.services.append(service)
+        self.services.append(identity.service)
         if error := (self.fail.get(query) or self.fail.get((query, v.get("i")))):
             raise LinearError(f"linear api error: {error}")
         if (value := self._identity(query, v)) is not None:

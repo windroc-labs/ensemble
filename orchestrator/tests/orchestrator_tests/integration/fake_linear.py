@@ -442,8 +442,8 @@ class FakeLinear:
                 delay=failure.seconds if kind == "hang" else 0,
             )
 
-    def __call__(self, query, *, timeout=30, service=None, **variables):
-        service = service or self.harness
+    def __call__(self, query, *, timeout=30, identity=None, **variables):
+        service = identity.service if identity is not None else self.harness
         keys = self.keys()
         if service not in keys:
             raise LinearError(f"fake transport: no key for {service}")

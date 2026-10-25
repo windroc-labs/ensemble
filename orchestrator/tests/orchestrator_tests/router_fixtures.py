@@ -250,11 +250,11 @@ class FakeLinear:
             "children": {"nodes": [{"id": i} for i in (LIGHT, DEEP, ORPHAN_LABEL)]},
         }
 
-    def __call__(self, query, *, service, **v):
+    def __call__(self, query, *, identity, **v):
         if query == linear_tracker.Q_STATE_NAME:
             return {"workflowState": {"name": STATE_NAMES[v["i"]]}}
         self.queries.append((query, v))
-        self.services.append(service)
+        self.services.append(identity.service)
         if (value := self._identity(query, v)) is not None:
             return value
         if "history" in query:
@@ -491,9 +491,9 @@ class Base(run_fixtures.Base):
         self.mark = len(logged(self.logs))
         return logs_at(self.logs)
 
-    def keychain(self, service):
-        self.keychain_calls.append(service)
-        return service not in self.missing
+    def keychain(self, identity):
+        self.keychain_calls.append(identity.service)
+        return identity.service not in self.missing
 
     def cfg(self):
         cfg = config.load(path=self.config_path)
