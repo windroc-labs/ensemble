@@ -239,8 +239,8 @@ def _parse(value):
     if not isinstance(token, str) or not _clean(token):
         return _Held(None, None)
     try:
-        expires = datetime.fromisoformat(record.get("expires_at"))
-    except (TypeError, ValueError):
+        expires = datetime.fromisoformat(record["expires_at"])
+    except (KeyError, TypeError, ValueError):
         expires = None
     return _Held(token, expires if expires and expires.tzinfo else None)
 
@@ -251,14 +251,17 @@ def _renew(app, held, now, timeout):
     try:
         secret = _secret(app, timeout)
         token, expires_in = _request_token(app, secret, timeout)
-        record = {"access_token": token, "expires_at": (now + expires_in).isoformat()}
-        _write(app.token_service, json.dumps(record, separators=(",", ":")), timeout)
+        try:
+            expires = (now + expires_in).isoformat()
+        except OverflowError:
+            raise _RenewalFailed("bad expires_in") from None
+        record = json.dumps({"access_token": token, "expires_at": expires}, separators=(",", ":"))
+        return _write(app.token_service, record, now, timeout)
     except _RenewalFailed as e:
         reason = one_line(str(e))
         for hidden in filter(None, (secret, held.token)):
-            reason = reason.replace(hidden, "[redacted]")
+            reason = _scrub(reason, hidden)
         raise _RenewalFailed(reason[:300] + "…" if len(reason) > 300 else reason) from None
-    return token
 
 
 def _secret(app, timeout):
@@ -311,7 +314,10 @@ def _request_token(app, secret, timeout):
         raise _RenewalFailed("bad access_token")
     if not isinstance(expires_in, int) or isinstance(expires_in, bool) or expires_in <= 0:
         raise _RenewalFailed("bad expires_in")
-    return token, timedelta(seconds=expires_in)
+    try:
+        return token, timedelta(seconds=expires_in)
+    except OverflowError:
+        raise _RenewalFailed("bad expires_in") from None
 
 
 def _oauth_error(e):
@@ -326,25 +332,24 @@ def _oauth_error(e):
     )
 
 
-def _write(service, value, timeout):
-    """value as service's password, on security -i's stdin (never argv); re-read, as security -i
-    can exit 0 on a failed command."""
-    attrs = _security(["find-generic-password", "-s", service], timeout)
-    found = ACCOUNT.search(attrs.stdout or "") if attrs.returncode == 0 else None
-    account = found[1] if found and KEYCHAIN_NAME.fullmatch(found[1]) else service
-    command = f"add-generic-password -U -s {service} -a {account} -X {value.encode().hex()}\n"
+def _write(service, value, now, timeout):
+    """value as service's password, on security -i's stdin (never argv); the token the entry then
+    holds: value's, or a concurrent renewal's. Re-read, as security -i can exit 0 on a failure."""
     try:
+        attrs = _security(["find-generic-password", "-s", service], timeout)
+        found = ACCOUNT.search(attrs.stdout or "") if attrs.returncode == 0 else None
+        account = found[1] if found and KEYCHAIN_NAME.fullmatch(found[1]) else service
+        command = f"add-generic-password -U -s {service} -a {account} -X {value.encode().hex()}\n"
         wrote = subprocess.run(
             [SECURITY, "-i"], input=command, capture_output=True, text=True, timeout=timeout
-        )
-        stored = _security(["find-generic-password", "-s", service, "-w"], timeout)
+        ).returncode
+        stored = _read(service, timeout)
     except (OSError, subprocess.SubprocessError):
-        wrote = stored = None
-    if (
-        not (wrote and wrote.returncode == 0 and stored.returncode == 0)
-        or stored.stdout.strip() != value
-    ):
+        wrote, stored = 1, _Held(None, None)
+    mine = stored.token == _parse(value).token
+    if wrote or not stored.usable(now) or not (mine or not stored.due(now)):
         raise _RenewalFailed(f"Keychain write of {service} failed")
+    return stored.token
 
 
 def _security(args, timeout):

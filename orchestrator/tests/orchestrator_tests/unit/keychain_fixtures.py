@@ -4,7 +4,6 @@ import io
 import json
 import re
 import shlex
-import subprocess
 import urllib.error
 import urllib.parse
 from datetime import UTC, datetime, timedelta
@@ -13,6 +12,7 @@ from unittest import mock
 from ensemble.orchestrator.engine.types import AppKind, LinearApp
 from ensemble.orchestrator.trackers.linear import client
 from orchestrator_tests.case import system_probe
+from orchestrator_tests.process_fixtures import CalledProcessError, CompletedProcess
 
 SECRET = "app-SECRET-sentinel"
 OLD = "tok-OLD-sentinel"
@@ -48,12 +48,13 @@ def renewed(case, value, since):
 
 class Keychain:
     """services: {service: (account, value)}; calls: each security (argv, stdin); fail_write: an
-    -i write leaves the entry as it was. Any other subprocess: a unit test's system_probe.
+    -i write leaves the entry as it was; race: the value another process writes over an -i write;
+    raises: an exception each attribute lookup (no -w) raises. Any other subprocess: system_probe.
     """
 
-    def __init__(self, entries=None, *, fail_write=False):
+    def __init__(self, entries=None, *, fail_write=False, race=None, raises=None):
         self.items = {s: (s, v) for s, v in (entries or {}).items()}
-        self.calls, self.fail_write = [], fail_write
+        self.calls, self.fail_write, self.race, self.raises = [], fail_write, race, raises
 
     def value(self, service):
         found = self.items.get(service)
@@ -66,15 +67,17 @@ class Keychain:
         if argv[1:2] == ["-i"]:
             return self._interactive(argv, kw.get("input") or "")
         service = argv[argv.index("-s") + 1]
+        if self.raises is not None and "-w" not in argv:
+            raise self.raises
         found = self.items.get(service)
         if found is None:
             if kw.get("check"):
-                raise subprocess.CalledProcessError(44, argv)
-            return subprocess.CompletedProcess(argv, 44, stdout="", stderr="not found")
+                raise CalledProcessError(44, argv)
+            return CompletedProcess(argv, 44, stdout="", stderr="not found")
         if "-w" in argv:
-            return subprocess.CompletedProcess(argv, 0, stdout=found[1] + "\n", stderr="")
+            return CompletedProcess(argv, 0, stdout=found[1] + "\n", stderr="")
         attrs = f'attributes:\n    "acct"<blob>="{found[0]}"\n    "svce"<blob>="{service}"\n'
-        return subprocess.CompletedProcess(argv, 0, stdout=attrs, stderr="")
+        return CompletedProcess(argv, 0, stdout=attrs, stderr="")
 
     def _interactive(self, argv, text):
         for line in text.splitlines():
@@ -82,8 +85,9 @@ class Keychain:
             if words[:1] != ["add-generic-password"] or self.fail_write:
                 continue
             opt = {words[i]: words[i + 1] for i in range(1, len(words) - 1) if words[i] != "-U"}
-            self.items[opt["-s"]] = (opt["-a"], bytes.fromhex(opt["-X"]).decode())
-        return subprocess.CompletedProcess(argv, 0, stdout="security> " * 2, stderr="")
+            value = self.race or bytes.fromhex(opt["-X"]).decode()
+            self.items[opt["-s"]] = (opt["-a"], value)
+        return CompletedProcess(argv, 0, stdout="security> " * 2, stderr="")
 
 
 class Endpoint:

@@ -70,7 +70,7 @@ LINEAR_TIME = r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$"
 class ServerCase(Case):
     def setUp(self):
         self.fake = fake = fake_linear.FakeLinear(harness=HARNESS)
-        self.harness = fake.user(HARNESS_EMAIL, "Harness", HARNESS)
+        self.harness = fake.user(HARNESS_EMAIL, "Harness", HARNESS, app=True)
         self.engineer = fake.user(ENGINEER_EMAIL, "Engineer", ENGINEER)
         self.human = fake.user("Me@X.com", "Me")
         fake.issue(

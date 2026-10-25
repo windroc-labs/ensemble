@@ -215,7 +215,7 @@ def is_record(attachment):
 
 
 def is_comment(comment):
-    # isMe means the harness account because callers query with its key
+    # isMe means the harness account because callers query with its token
     return (
         bool((comment["user"] or {}).get("isMe"))
         and re.match(f"Run {UUID_RE.pattern} · ", comment["body"]) is not None

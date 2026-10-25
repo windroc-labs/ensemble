@@ -441,7 +441,7 @@ def _keychain_name(v):
 
 
 def _harness_services(linear):
-    """{Keychain service: the harness key naming it}."""
+    """{Keychain service: the harness setting naming it}."""
     return {
         linear["harness"][k]: f"linear.harness.{k}" for k in ("secret_service", "token_service")
     }

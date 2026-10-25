@@ -16,6 +16,7 @@ from ensemble.orchestrator.engine.types import LinearError, LinearKey
 from ensemble.orchestrator.trackers.linear import client, ops
 from ensemble.utils import one_line
 from orchestrator_tests.case import Case
+from orchestrator_tests.process_fixtures import TimeoutExpired
 from orchestrator_tests.unit.board_ids import TEAM
 from orchestrator_tests.unit.keychain_fixtures import (
     HARNESS,
@@ -524,6 +525,8 @@ class AppToken(Case):
             "no token": ({"expires_in": 60}, "no access_token"),
             "unclean token": ({"access_token": "tok\n", "expires_in": 60}, "bad access_token"),
             "bad expiry": ({"access_token": NEW, "expires_in": True}, "bad expires_in"),
+            "huge expiry": ({"access_token": NEW, "expires_in": 10**12}, "bad expires_in"),
+            "huger expiry": ({"access_token": NEW, "expires_in": 10**20}, "bad expires_in"),
         }
 
     def test_a_failed_renewal_of_a_usable_token_reports_and_sends_the_old_one(self):
@@ -552,6 +555,26 @@ class AppToken(Case):
         _, endpoint = self.call(keychain)
         self.assertEqual(found, [("harness", "Keychain write of linear-app-harness-token failed")])
         self.assertEqual(endpoint.graphql[0].get_header("Authorization"), f"Bearer {OLD}")
+
+    def test_a_failed_account_lookup_is_a_failed_renewal(self):
+        found = self.reported()
+        keychain = Keychain(
+            {HARNESS.token_service: record(days=3), HARNESS.secret_service: APP_SECRET},
+            raises=TimeoutExpired(["security"], 30),
+        )
+        _, endpoint = self.call(keychain)
+        self.assertEqual(found, [("harness", "Keychain write of linear-app-harness-token failed")])
+        self.assertEqual(endpoint.graphql[0].get_header("Authorization"), f"Bearer {OLD}")
+
+    def test_a_concurrent_renewal_written_over_ours_is_used(self):
+        other = record(token="tok-OTHER", days=30)
+        keychain = Keychain(
+            {HARNESS.token_service: record(days=-1), HARNESS.secret_service: APP_SECRET},
+            race=other,
+        )
+        _, endpoint = self.call(keychain)
+        self.assertEqual(keychain.value(HARNESS.token_service), other)
+        self.assertEqual(endpoint.graphql[0].get_header("Authorization"), "Bearer tok-OTHER")
 
     def test_an_undated_token_whose_renewal_fails_is_still_used(self):
         found = self.reported()
