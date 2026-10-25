@@ -231,3 +231,32 @@ class Manage(Case):
         self.assertNotIn(-1, found, releasing)
         self.assertEqual(found, sorted(found))
         self.assertIn("A client without this plugin's `bin/` on its PATH", body("manage"))
+
+    def test_a_pipeline_needs_input_has_its_own_steps(self):
+        recover = section("manage", "Recover")
+        [steps] = re.findall(r"^- \*\*Pipeline needs_input\*\*.*?(?=^- |\Z)", recover, re.M | re.S)
+        order = [
+            "`ensemble-delegate outcome <work_dir>/work/<ID>/run`",
+            "`ensemble-orchestrator issue comment <ID> --body-file <file>`",
+            "`ensemble-orchestrator issue move <ID> running`",
+            "`ensemble-session ls --match '.*-<ID>-[0-9a-f]{8}'`",
+            "`ensemble-session send <session> '<answer>'`",
+            "transcript",
+            "`ensemble-crew close <ID>`",
+            "`ensemble-crew reopen <ID>`",
+        ]
+        found = [steps.find(step) for step in order]
+        self.assertNotIn(-1, found, steps)
+        self.assertEqual(found, sorted(found))
+        for phrase in (
+            "`ensemble-orchestrator resume <ID>`",
+            "`resume` field",
+            "delivers no answer",
+            "Never re-run the issue for an answer",
+        ):
+            self.assertIn(phrase, steps)
+        self.assertRegex(recover, r"(?m)^- \*\*Waiting role run\*\*")
+        events = section("manage", "Events")
+        self.assertIn("a role run: Recover › Waiting role run", events)
+        self.assertIn("a pipeline run: Recover › Pipeline needs_input", events)
+        self.assertIn("the router's reason", section("manage", "Launch"))
