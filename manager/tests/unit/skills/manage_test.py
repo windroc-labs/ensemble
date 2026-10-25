@@ -261,3 +261,31 @@ class Manage(Case):
         self.assertIn("a role run: Recover › Waiting role run", events)
         self.assertIn("a pipeline run: Recover › Pipeline needs_input", events)
         self.assertIn("the router's reason", section("manage", "Launch"))
+
+    def test_a_pipeline_answer_is_confirmed_per_client_and_its_tui_still_reports(self):
+        [step] = re.findall(r"^  5\. .*$", section("manage", "Recover"), re.M)
+        reader = "${CLAUDE_SKILL_DIR}/../../../session/src/ensemble/session/clients/opencode/transcript.py"
+        found = [
+            step.find(phrase)
+            for phrase in (
+                "transcript",
+                f"`{reader}`",
+                "`client_id` in `<work_dir>/work/<ID>/run/run.jsonl`",
+                "No harness watches it now",
+                "`blocked` and `done` events",
+                "per Events",
+                "for this one call only, never",
+                "Once it finishes",
+                "still show the old `needs_input`",
+                "`<work_dir>/work/<ID>/agent/tmp/deliverable.md`",
+                "In Review (`docs/board.md` › Using the board)",
+                "`ensemble-orchestrator issue move <ID> review`",
+            )
+        ]
+        self.assertNotIn(-1, found, step)
+        self.assertEqual(found, sorted(found))
+        self.assertIn(
+            "A client that does not expand `${CLAUDE_SKILL_DIR}` (Codex, OpenCode) writes every"
+            " `${CLAUDE_SKILL_DIR}` in this file as this file's directory",
+            body("manage"),
+        )
