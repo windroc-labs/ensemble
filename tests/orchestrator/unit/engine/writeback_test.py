@@ -610,6 +610,33 @@ class IssueBounce(Base):
                     ],
                 )
 
+    def test_a_ref_bounce_names_the_ref_line(self):
+        reason = "Ref: 'gone': no such branch or tag in acme/x"
+        gql = Gql(issue=None)
+        writeback.bounce(self.ctx(gql=gql), issue("Ref: gone"), Invalid(reason, line="Ref"))
+        self.assertEqual(
+            gql.calls,
+            [
+                sub(HUMANS[0]),
+                sub(HUMANS[1]),
+                comment(
+                    f"Question: repo check failed: {reason}. Fix the description's `Ref:` line, "
+                    "then move this issue back to Todo."
+                ),
+                reread(),
+                move("in_review"),
+            ],
+        )
+        gql = Gql(issue=self.src(), states=self.DONE)
+        writeback.bounce(self.ctx(gql=gql), issue(HANDOFF), Invalid(reason, line="Ref"))
+        self.assertIn(
+            comment(
+                f"Repo check failed: {reason}. To build it, move PRD-3 to Handoff again with a "
+                "comment `Ref: <branch or tag>` naming the ref."
+            ),
+            gql.calls,
+        )
+
     def test_question_subscribe_failure_noted(self):
         gql = Gql(
             fail=lambda name, v: False if name == "subscribe" and v["e"] == HUMANS[0] else None

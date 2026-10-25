@@ -12,7 +12,8 @@ from ensemble.orchestrator.engine.flow import handoff
 from ensemble.orchestrator.engine.flow.types import (
     Issue,
 )
-from ensemble.utils import SHORT
+from ensemble.utils import SHORT, check_ref
+from ensemble.utils import Invalid as RefInvalid
 from tests.delegate.fakes.delegate import FakeDelegate
 from tests.delegate.workdir import checkout_path
 from tests.orchestrator.case import Case
@@ -701,3 +702,119 @@ class StageKeys(Case):
         got = self.check("Repo: acme/other", api_=api("acme/other"))
         self.assertEqual(got, target.Target("acme", "other", "TASK-26-session-registry"))
         self.assertEqual(self.argvs()[0], ("gh", "api", "repos/acme/other"))
+
+    def ref_check(self, desc, refs=None, **keys):
+        """check with a Ref line's ls-remote answering refs (stdout or a result)."""
+        self.run_ = FakeRun(
+            [
+                (("gh", "api"), api()),
+                (self.REFS[:7], ok(refs) if isinstance(refs, str) else refs or ok()),
+                (self.BRANCHES, ok("")),
+            ]
+        )
+        return target.check(
+            issue(desc, project=PROJ),
+            self.REPOS,
+            run=self.run_,
+            delegate=FakeDelegate,
+            workdir=os.path.join(self.home, "TASK-26"),
+            roles=roles(),
+            **{"ref": True, "mapped_only": True, **keys},
+        )
+
+    REFS = (
+        "git",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "credential.helper=",
+        "-c",
+        "credential.helper=!gh auth git-credential",
+        "ls-remote",
+        "https://github.com/acme/ensemble.git",
+    )
+
+    def test_bad_ref_runs_no_command(self):
+        for desc, value in (
+            ("Ref: refs/pull/1/head", "refs/pull/1/head"),
+            ("Ref: --upload-pack=touch /tmp/x", "--upload-pack=touch /tmp/x"),
+            ("Ref: -x", "-x"),
+            ("Ref: a b", "a b"),
+            ("Ref:", ""),
+            ("Ref:   ", ""),
+            ("- **Ref:** `x.lock`", "x.lock"),
+            ("Ref: a\x1fb", "a\x1fb"),
+            ("Ref: a\x0bb", "a\x0bb"),
+            ("Ref: a\x85b", "a\x85b"),
+            ("Ref: HEAD", "HEAD"),
+            ("Ref: " + "ab12" * 10, "ab12" * 10),
+        ):
+            with self.subTest(desc=desc):
+                with self.assertRaises(RefInvalid) as caught:
+                    check_ref(value)
+                got = self.ref_check(f"Build it.\n{desc}\nMore.")
+                self.assertEqual(got, target.Invalid(f"Ref: {caught.exception}", line="Ref"))
+                self.assertEqual(self.argvs(), [])
+                self.assertFalse(os.path.exists("/tmp/x"))
+
+    def test_two_ref_lines_are_invalid(self):
+        for desc in ("Ref: main\nRef: main", "Ref: main\n* ref: dev", "Ref: -x\nRef: main"):
+            with self.subTest(desc=desc):
+                self.assertEqual(
+                    self.ref_check(desc), target.Invalid("several Ref: lines", line="Ref")
+                )
+                self.assertEqual(self.argvs(), [])
+
+    def test_unlisted_ref_is_invalid(self):
+        for refs in (
+            "",
+            "abc\trefs/remotes/origin/refs/heads/feature/x\n",
+            "abc\trefs/tags/feature/x^{}\n",
+            "abc\trefs/heads/feature/x-2\n",
+        ):
+            with self.subTest(refs=refs):
+                self.assertEqual(
+                    self.ref_check("Ref: feature/x", refs),
+                    target.Invalid(
+                        "Ref: 'feature/x': no such branch or tag in acme/ensemble", line="Ref"
+                    ),
+                )
+                self.assertEqual(
+                    self.argvs()[-1],
+                    (*self.REFS, "refs/heads/feature/x", "refs/tags/feature/x"),
+                )
+
+    def test_listed_tag_and_branch_pass(self):
+        for desc, refs, want in (
+            ("Ref: v1.2.0", "a\trefs/tags/v1.2.0\nb\trefs/tags/v1.2.0^{}\n", "v1.2.0"),
+            ("- **Ref:** `v1.2.0`", "a\trefs/tags/v1.2.0\n", "v1.2.0"),
+            ("ref:\tmain \r\nReference: TASK-1", "a\trefs/heads/main\n", "main"),
+            ("Ref: main\n\n## Comments\nRef: dev", "a\trefs/heads/main\n", "main"),
+        ):
+            with self.subTest(desc=desc):
+                self.assertEqual(
+                    self.ref_check(desc, refs),
+                    target.Target("acme", "ensemble", "TASK-26-session-registry", ref=want),
+                )
+                self.assertEqual(
+                    self.argvs()[-1], (*self.REFS, f"refs/heads/{want}", f"refs/tags/{want}")
+                )
+
+    def test_ref_ls_remote_failure_is_transient(self):
+        got = self.ref_check("Ref: main", ok(code=128, stderr="fatal: no access"))
+        self.assertTrue(
+            isinstance(got, target.Transient) and got.reason.startswith("git ls-remote: "), got
+        )
+
+    def test_no_ref_line_runs_no_ref_ls_remote(self):
+        got = self.ref_check("Repo: acme/ensemble\nReference: x")
+        self.assertEqual(got, target.Target("acme", "ensemble", "TASK-26-session-registry"))
+        self.assertNotIn(self.REFS, [a[: len(self.REFS)] for a in self.argvs()])
+
+    def test_keys_unset_ignore_ref_lines(self):
+        got = self.check("Repo: acme/other\nRef: refs/pull/1/head", api_=api("acme/other"))
+        self.assertEqual(got, target.Target("acme", "other", "TASK-26-session-registry"))
+        self.assertEqual([a[:2] for a in self.argvs()], [("gh", "api"), ("git", "-c")])
+        self.assertEqual(self.argvs()[1][:7], self.BRANCHES)

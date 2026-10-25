@@ -755,6 +755,7 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
                 workdir=workdir,
                 roles=cfg.roles,
                 host=cfg.repo_host(role),
+                ref=stage.ref,
                 mapped_only=stage.mapped_only,
             )
         except (OSError, subprocess.TimeoutExpired) as e:

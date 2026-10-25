@@ -12,7 +12,7 @@ from ensemble.orchestrator.engine import config
 from ensemble.orchestrator.engine.config import REF, TASKS
 from ensemble.orchestrator.engine.flow import handoff
 from ensemble.orchestrator.engine.types import Invalid, Target, Transient
-from ensemble.utils import GUARD, SHORT, Repo, common_dir, err_text, repo_slug, under
+from ensemble.utils import GUARD, SHORT, Repo, check_ref, common_dir, err_text, repo_slug, under
 from ensemble.utils import Invalid as RepoInvalid
 from ensemble.utils import checkout as clone_checkout
 
@@ -57,6 +57,47 @@ def parse_repo(description, *, host="github.com") -> tuple[str, str] | Invalid:
 
 
 NO_LINE = parse_repo("")
+
+
+def _ref(description) -> str | Invalid | None:
+    # split on newlines only: str.splitlines would split on control characters check_ref refuses
+    found = [
+        m.group(1)
+        for line in re.split(r"\r?\n", handoff.head(description))
+        if (m := re.match(r"^\s*(?:[-*>]\s+)?(?:\*\*|`)?ref:(?:\*\*)?(.*)$", line, re.I))
+    ]
+    if len(found) > 1:
+        return Invalid("several Ref: lines", line="Ref")
+    if not found:
+        return None
+    try:
+        return check_ref(found[0].strip(" \t").strip("`*").strip(" \t"))
+    except RepoInvalid as e:
+        return Invalid(f"Ref: {e}", line="Ref")
+
+
+def _listed(ref, o, n, *, run, host) -> None | Invalid | Transient:
+    res = run(
+        [
+            "git",
+            *GUARD,
+            "-c",
+            "credential.helper=",
+            "-c",
+            "credential.helper=!gh auth git-credential",
+            "ls-remote",
+            f"https://{host}/{o}/{n}.git",
+            f"refs/heads/{ref}",
+            f"refs/tags/{ref}",
+        ],
+        SHORT,
+    )
+    if res.returncode != 0:
+        return Transient(f"git ls-remote: {err_text(res)}")
+    names = {line.split("\t", 1)[-1] for line in res.stdout.splitlines()}
+    if names & {f"refs/heads/{ref}", f"refs/tags/{ref}"}:
+        return None
+    return Invalid(f"Ref: {ref!r}: no such branch or tag in {o}/{n}", line="Ref")
 
 
 def slug(title):
@@ -194,9 +235,10 @@ def check(
     workdir,
     roles,
     host="github.com",
+    ref=False,
     mapped_only=False,
 ) -> Target | Invalid | Transient:
-    """mapped_only: the stage's key (workflow.toml)."""
+    """ref, mapped_only: the stage's keys (workflow.toml)."""
     if run is None:
         run = config.shell
     repo = parse_repo(issue.description, host=host)
@@ -210,6 +252,9 @@ def check(
         repo = _mapped_only(repo, issue, repos) or repo
     if isinstance(repo, Invalid):
         return repo
+    wanted = _ref(issue.description) if ref else None
+    if isinstance(wanted, Invalid):
+        return wanted
     asked = f"{tag}{repo[0]}/{repo[1]}"
     info = _repo_info(*repo, run, host)
     if isinstance(info, Invalid):
@@ -231,7 +276,10 @@ def check(
         return Invalid(f"several {ident}-* branches: {', '.join(names)[:200]}")
     if names and not re.fullmatch(rf"{re.escape(ident)}-[a-z0-9-]{{1,40}}", names[0]):
         return Invalid(f"existing branch name {names[0][:80]!r} is not {ident}-<lowercase slug>")
-    return Target(o, n, names[0] if names else f"{ident}-{slug(issue.title)}", host=host)
+    if wanted and (missing := _listed(wanted, o, n, run=run, host=host)):
+        return missing
+    branch = names[0] if names else f"{ident}-{slug(issue.title)}"
+    return Target(o, n, branch, host=host, ref=wanted or "")
 
 
 def with_clone(t, ident, *, run=None, delegate, workdir, clones, writable=None) -> Target:

@@ -404,6 +404,19 @@ class BuildInputs(Case):
             ),
         )
 
+    def test_build_ref_header(self):
+        iss = issue(
+            "Build it.\nRef: refs/pull/1/head", ident="ENG-7", title="ENG: Session Registry"
+        )
+        src = inputs.Sources((), None)
+        plain = inputs.render(iss, "engineer", src, target=self.TARGET, docs=DOCS)
+        got = inputs.render(
+            iss, "engineer", src, target=replace(self.TARGET, ref="v1.2.0"), docs=DOCS
+        )
+        branch = "Branch: ENG-7-session-registry\n"
+        self.assertEqual(got, plain.replace(branch, branch + "Ref: v1.2.0\n", 1))
+        self.assertNotIn("Ref:", plain.split("\n\n", 1)[0])
+
     def test_golden_handoff_without_prd(self):
         head = lines(
             "Handoff from PM-9: u",

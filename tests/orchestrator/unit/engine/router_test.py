@@ -102,7 +102,7 @@ from tests.orchestrator.unit.run_fixtures import (
     node,
     show,
 )
-from tests.orchestrator.unit.target_fixtures import ok
+from tests.orchestrator.unit.target_fixtures import FakeRun, ok
 
 CONFIG_ENG2 = (
     HEADER
@@ -5728,13 +5728,14 @@ class RouterLinear(Base):
 class StageKeyChecks(OuterBase):
     """An engineer stage with ref and mapped_only: a failed check bounces before the attempt."""
 
+    FLOW = PACKAGED_FLOW.replace(
+        'failed = "Build failed:"\n', 'failed = "Build failed:"\nref = true\nmapped_only = true\n'
+    )
+    REF_REMOTE = ("git", "-c", "core.fsmonitor=false")
+
     def setUp(self):
         super().setUp()
-        flow = PACKAGED_FLOW.replace(
-            'failed = "Build failed:"\n',
-            'failed = "Build failed:"\nref = true\nmapped_only = true\n',
-        )
-        self.write_config(HEADER + workflow_line(flow) + OUTER.removeprefix(HEADER))
+        self.write_config(HEADER + workflow_line(self.FLOW) + OUTER.removeprefix(HEADER))
 
     def bounced(self, description, reason, *, line="Repo"):
         """A new run on description bounces with reason: comment, In Review, no attempt."""
@@ -5770,3 +5771,55 @@ class StageKeyChecks(OuterBase):
             "acme/other: this stage takes only its project's mapped repo acme/ensemble",
         )
         self.assertEqual(self.run_.calls, [])
+
+    def test_a_project_without_mapping_bounces_without_a_command(self):
+        mapping = f'[linear.project_repos]\n"{PROJECT}" = "acme/ensemble"\n'
+        self.write_config(
+            HEADER + workflow_line(self.FLOW) + OUTER.removeprefix(HEADER).replace(mapping, "")
+        )
+        self.bounced(
+            "Repo: acme/ensemble",
+            f"this stage takes only its project's mapped repo, and project {PROJECT!r} has none",
+        )
+        self.assertEqual(self.run_.calls, [])
+
+    def test_a_bad_ref_bounces_without_a_command(self):
+        for description, reason in (
+            (
+                "Ref: refs/pull/1/head",
+                "Ref: unsafe ref 'refs/pull/1/head': want a branch or tag name, not a full ref",
+            ),
+            (
+                "Ref: --upload-pack=touch /tmp/x",
+                "Ref: unsafe ref '--upload-pack=touch /tmp/x': want letters, digits, ., _, / or -",
+            ),
+            ("Ref: main\nRef: dev", "several Ref: lines"),
+        ):
+            with self.subTest(description=description):
+                self.run_ = FakeRun(ENG_RUN)
+                self.bounced(description, reason, line="Ref")
+                self.assertEqual(self.run_.calls, [])
+                self.assertFalse(os.path.exists("/tmp/x"))
+
+    def test_an_unlisted_ref_bounces(self):
+        self.run_ = FakeRun([(self.REF_REMOTE, ok("abc\trefs/heads/gone-2\n")), *ENG_RUN])
+        self.bounced("Ref: gone", "Ref: 'gone': no such branch or tag in Acme/Ensemble", line="Ref")
+
+    def test_a_listed_ref_is_in_the_input_header(self):
+        branch = "Branch: TASK-7-session-registry\n"
+        for description, refs, header in (
+            ("Ref: v1.2.0", "abc\trefs/tags/v1.2.0\n", "Ref: v1.2.0\n"),
+            ("Add a session registry.", "", ""),
+        ):
+            with self.subTest(description=description):
+                self.run_ = FakeRun([(self.REF_REMOTE, ok(refs)), *ENG_RUN])
+                self.api.detached.clear()
+                self.gql = Gql(issue=node(description=description, comments=[USER_NOTE]))
+                self.assertEqual(self.outer(), 0)
+                head = self.input().split("\n\n", 1)[0] + "\n"
+                self.assertEqual(
+                    head, INPUT.split("\n\n", 1)[0].replace(branch, branch + header) + "\n"
+                )
+                self.assertEqual(
+                    self.REF_REMOTE in [c[0][:3] for c in self.run_.calls], bool(header)
+                )
