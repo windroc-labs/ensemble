@@ -30,6 +30,8 @@ const (
 	kind           = "ws"
 	workspaceLabel = "ensemble.workspace"
 	maxProviders   = 32
+	// egressPrefix: the egress gateway's labels; a worker carrying one would count as a second gateway.
+	egressPrefix = "windroc.egress."
 )
 
 var (
@@ -226,7 +228,7 @@ func ParseManifest(data []byte) (Manifest, error) {
 	m.Labels = map[string]string{}
 	for key, raw := range labels {
 		value, ok := str(raw)
-		if !ok || !labelKeyPattern.MatchString(key) || strings.HasPrefix(key, "ensemble.") {
+		if !ok || !labelKeyPattern.MatchString(key) || strings.HasPrefix(key, "ensemble.") || strings.HasPrefix(key, egressPrefix) {
 			return reject("invalid label %q", key)
 		}
 		m.Labels[key] = value

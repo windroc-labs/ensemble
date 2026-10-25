@@ -192,6 +192,16 @@
       }
     },
     {
+      "file": "manifest-egress-label.json",
+      "definition": "manifest",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
       "file": "manifest-non-string-label.json",
       "definition": "manifest",
       "valid": false,
