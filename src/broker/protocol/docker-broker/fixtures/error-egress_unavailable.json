@@ -1,0 +1,9 @@
+{
+  "exit_code": 17,
+  "error": {
+    "command": "start",
+    "code": "egress_unavailable",
+    "message": "Egress gateway egress-gateway is unhealthy, not healthy. Start the egress gateway (./start.sh in its egress-proxy checkout, docs/docker-host.md#egress-gateway), then retry.",
+    "cleanup": "not_needed"
+  }
+}

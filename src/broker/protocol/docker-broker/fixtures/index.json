@@ -1,5 +1,5 @@
 {
-  "protocol_version": "20",
+  "protocol_version": "21",
   "cases": [
     {
       "file": "manifest-valid.json",
@@ -1364,6 +1364,16 @@
         "stage": "response",
         "exit_code": 16,
         "error_code": "refresh_failed"
+      }
+    },
+    {
+      "file": "error-egress_unavailable.json",
+      "definition": "error",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 17,
+        "error_code": "egress_unavailable"
       }
     },
     {
