@@ -20,7 +20,7 @@ SHA = "c" * 40
 SAMPLES = {
     "private IPv4": [
         "ssh admin@10.20.30.40",
-        "url=http://172.20.1.2:8080/v1",
+        "url=http://172.20.1.2:9000/api",
         "host 192.168.77.5",
         "tailnet 100.70.1.1",
     ],
