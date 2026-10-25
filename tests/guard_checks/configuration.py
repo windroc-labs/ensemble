@@ -12,6 +12,7 @@ from tests.guard_data.orchestrator import (
     LOAD_HELPERS,
     ONCE,
     ORCH_PROJECT,
+    ORCH_SRC,
 )
 from tests.guards import PKG, PROJECTS
 
@@ -20,9 +21,8 @@ LOCAL_EXAMPLE = re.compile(r"\s*# local: ?(.*)")
 
 def config_once(repo: str) -> list[str]:
     found = set()
-    for rel, text in _files(os.path.join(repo, ORCH_PROJECT), ".py"):
-        if not rel.startswith("src/"):
-            continue
+    for rel, text in _files(os.path.join(repo, "src", PKG, ORCH_PROJECT), ".py"):
+        rel = f"{ORCH_SRC}{rel}"
         tree = ast.parse(text, rel)
         bound = _bindings(tree)
         mains = {
@@ -43,9 +43,7 @@ def config_once(repo: str) -> list[str]:
 
 def explicit_keys(repo: str) -> list[str]:
     real, examples, found = set(), {}, set()
-    for rel in (
-        f"{project}/src/{PKG}/{package}/config.toml" for project, package in PROJECTS.items()
-    ):
+    for rel in (f"src/{PKG}/{package}/config.toml" for project, package in PROJECTS.items()):
         path = os.path.join(repo, rel)
         if not os.path.isfile(path):
             continue

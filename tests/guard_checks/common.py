@@ -103,13 +103,29 @@ def _resolve_boundary(name, modules):
     return name
 
 
+def _project_files(repo, project, suffixes):
+    assets = {
+        "manager": ("skills/manage", "hooks"),
+        "orchestrator": ("skills/board", "launchd"),
+        "delegate": ("skills/act-as",),
+    }
+    for base in (f"src/ensemble/{project}", *assets.get(project, ())):
+        for rel, text in _files(os.path.join(repo, base), suffixes):
+            yield f"{base}/{rel}", text
+
+
+def _source_files(repo, project, suffixes):
+    for rel, text in _files(os.path.join(repo, "src", "ensemble", project), suffixes):
+        yield f"ensemble/{project}/{rel}", text
+
+
 def _source_modules(repo, projects):
     return {
         rel.removesuffix(".py").replace("/", ".").removesuffix(".__init__"): _boundary_bindings(
             ast.parse(text)
         )
         for project in projects
-        for rel, text in _files(os.path.join(repo, project, "src"), ".py")
+        for rel, text in _source_files(repo, project, ".py")
     }
 
 

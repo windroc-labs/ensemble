@@ -6,7 +6,14 @@ import os
 import re
 import tokenize
 
-from tests.guard_checks.common import _bindings, _dotted, _files, _strings
+from tests.guard_checks.common import (
+    _bindings,
+    _dotted,
+    _files,
+    _project_files,
+    _source_files,
+    _strings,
+)
 from tests.guard_data.delegate import CONFIG_FILE, DELEGATE_SRC
 from tests.guard_data.orchestrator import (
     CLIENT_LIMIT_TABLES,
@@ -119,7 +126,7 @@ def session_names(repo: str) -> list[str]:
 
 def delegate_package_names(repo: str) -> list[str]:
     """Delegate owns package resources and never discovers sibling projects."""
-    base = "delegate/src/ensemble/delegate/"
+    base = "src/ensemble/delegate/"
     forbidden = {"read_project", "import_roots", "DELEGATE", "IMPORT_ROOTS"}
     found = set()
     for rel, text in _files(os.path.join(repo, base), ".py"):
@@ -146,7 +153,7 @@ def delegate_package_names(repo: str) -> list[str]:
 
 
 def manager_sid(repo: str) -> list[str]:
-    rel = "manager/src/ensemble/manager/engine/crew.py"
+    rel = "src/ensemble/manager/engine/crew.py"
     path = os.path.join(repo, rel)
     if not os.path.isfile(path):
         return []
@@ -172,7 +179,7 @@ def manager_sid(repo: str) -> list[str]:
 
 
 def manager_lease(repo: str) -> list[str]:
-    rel = "manager/src/ensemble/manager/engine/roster.py"
+    rel = "src/ensemble/manager/engine/roster.py"
     path = os.path.join(repo, rel)
     if not os.path.isfile(path):
         return []
@@ -187,7 +194,7 @@ def manager_lease(repo: str) -> list[str]:
 
 def manager_display(repo: str) -> list[str]:
     found = set()
-    base = "manager/src/ensemble/manager/"
+    base = "src/ensemble/manager/"
     forbidden = re.compile(
         r"(?<![a-zA-Z0-9_])(?:pane|opener|split_from)(?![a-zA-Z0-9_])|--split|@record"
     )
@@ -213,15 +220,9 @@ def manager_display(repo: str) -> list[str]:
 def standalone(repo: str) -> list[str]:
     found = set()
     for project in LOWER:
-        for top, dirs, names in os.walk(os.path.join(repo, project)):
-            dirs[:] = sorted(d for d in dirs if d != "__pycache__")
-            if top == os.path.join(repo, project):
-                dirs[:] = [d for d in dirs if d != "tests"]
-            for name in sorted(names):
-                rel = os.path.relpath(os.path.join(top, name), repo).replace(os.sep, "/")
-                with open(os.path.join(top, name), encoding="utf-8", errors="replace") as f:
-                    for number, line in enumerate(f, 1):
-                        found.update(f"{rel}:{number}: names {w}" for w in LINEAR.findall(line))
+        for rel, text in _project_files(repo, project, ""):
+            for number, line in enumerate(text.splitlines(), 1):
+                found.update(f"{rel}:{number}: names {w}" for w in LINEAR.findall(line))
     return sorted(found)
 
 
@@ -321,7 +322,7 @@ def tmux_calls(repo: str) -> list[str]:
 def session_display(repo: str) -> list[str]:
     found = set()
     for rel, text in _lower_files(repo, ".py", skip=TMUX_HOME):
-        if not (rel.startswith((SESSION_SRC, f"utils/src/{PKG}/utils/")) or rel == CONFIG_FILE):
+        if not (rel.startswith((SESSION_SRC, f"src/{PKG}/utils/")) or rel == CONFIG_FILE):
             continue
         found.update(
             f"{rel}:{line}: interprets display {value!r}"
@@ -364,8 +365,8 @@ def delegate_tmux(repo: str) -> list[str]:
 def status_log_format(repo: str) -> list[str]:
     found = set()
     for top in PROJECTS:
-        for rel, text in _files(os.path.join(repo, top, "src"), ".py"):
-            rel = f"{top}/src/{rel}"
+        for rel, text in _source_files(repo, top, ".py"):
+            rel = f"src/{rel}"
             if rel != STATUS_LOG_HOME:
                 found.update(
                     f"{rel}:{line}: status log line format outside session/engine/status_log.py"
@@ -377,9 +378,9 @@ def status_log_format(repo: str) -> list[str]:
 
 def orchestrator_text(repo: str) -> list[str]:
     found = set()
-    for rel, text in _files(os.path.join(repo, ORCH_PROJECT), (".py", ".toml"), skip="tests/"):
+    for rel, text in _project_files(repo, ORCH_PROJECT, (".py", ".toml")):
         lines = text.splitlines()
-        grammar = rel.startswith("src/") and rel.endswith(".py") and rel != HANDOFF_HOME
+        grammar = rel.endswith(".py") and rel != HANDOFF_HOME
         limits = _client_limit_keys(lines) if rel.endswith(".toml") else set()
         for number, line in enumerate(lines, 1):
             line = line[line.index("=") :] if number in limits else line
@@ -417,7 +418,6 @@ def _client_limit_keys(lines):
 
 def _lower_files(repo, suffixes, skip=None, projects=LOWER):
     for project in projects:
-        for rel, text in _files(os.path.join(repo, project), suffixes):
-            rel = f"{project}/{rel}"
-            if not rel.startswith(f"{project}/tests/") and not (skip and rel.startswith(skip)):
+        for rel, text in _project_files(repo, project, suffixes):
+            if not (skip and rel.startswith(skip)):
                 yield rel, text

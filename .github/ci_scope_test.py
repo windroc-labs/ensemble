@@ -27,8 +27,8 @@ class Repository(unittest.TestCase):
     def setUp(self):
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.contract(MODULES)
-        for project, module in zip(PROJECTS, MODULES, strict=True):
-            (self.root / project / "src" / module.replace(".", "/")).mkdir(parents=True)
+        for module in MODULES:
+            (self.root / "src" / module.replace(".", "/")).mkdir(parents=True)
 
     def contract(self, modules, *, repeat=False):
         text = (
@@ -39,31 +39,32 @@ class Repository(unittest.TestCase):
         (self.root / "pyproject.toml").write_text(text * (2 if repeat else 1))
 
     def test_map_uses_contract_order_and_actual_project_roots(self):
-        (self.root / "manager").rename(self.root / "control-panel")
-        self.contract([MODULES[1], MODULES[0], *MODULES[2:]])
+        (self.root / "src/ensemble/manager").rename(self.root / "src/ensemble/control_panel")
+        MODULES_RENAMED = ["ensemble.control_panel", *MODULES[1:]]
+        self.contract([MODULES[1], MODULES_RENAMED[0], *MODULES[2:]])
         self.assertEqual(
             list(scope.layer_map(self.root).items()),
             list(
                 zip(
-                    ["orchestrator", "control-panel", *PROJECTS[2:]],
-                    [MODULES[1], MODULES[0], *MODULES[2:]],
+                    ["orchestrator", "control_panel", *PROJECTS[2:]],
+                    [MODULES[1], MODULES_RENAMED[0], *MODULES[2:]],
                     strict=True,
                 )
             ),
         )
-        result = scope.classify(self.root, ["control-panel/skills/task/SKILL.md"], "pull_request")
-        self.assertEqual(result["projects"], ["orchestrator", "control-panel"])
+        result = scope.classify(self.root, ["src/ensemble/control_panel/main.py"], "pull_request")
+        self.assertEqual(result["projects"], ["orchestrator", "control_panel"])
         self.assertFalse(result["full"])
 
     def test_upper_source_docs_skills_and_tests_select_the_entire_upper_group(self):
         for path in (
-            "manager/src/ensemble/manager/main.py",
-            "manager/docs/guide.md",
-            "manager/skills/task/SKILL.md",
-            "orchestrator/src/ensemble/orchestrator/main.py",
-            "orchestrator/docs/guide.md",
-            "orchestrator/skills/task/SKILL.md",
-            "manager/tests/unit/main_test.py",
+            "src/ensemble/manager/main.py",
+            "hooks/hooks.json",
+            "skills/manage/SKILL.md",
+            "src/ensemble/orchestrator/main.py",
+            "launchd/com.windroc.ensemble.router.plist",
+            "skills/manage/SKILL.md",
+            "tests/manager/unit/main_test.py",
         ):
             with self.subTest(path=path):
                 result = scope.classify(self.root, [path], "pull_request")
@@ -114,13 +115,13 @@ class Repository(unittest.TestCase):
             },
         )
         for paths, event, full in (
-            (["README.md", "session/src/ensemble/session/cli.py"], "pull_request", True),
+            (["README.md", "src/ensemble/session/cli.py"], "pull_request", True),
             (["docs/tests.md", ".github/ci_scope.py"], "pull_request", True),
             (["docs/credentials.md"], "pull_request", True),
             (["README.md", "docs/credentials.md"], "pull_request", True),
-            (["delegate/skills/act-as/SKILL.md"], "pull_request", True),
-            (["manager/skills/manage/SKILL.md"], "pull_request", False),
-            (["delegate/src/ensemble/delegate/team/roles/engineer.md"], "pull_request", True),
+            (["skills/act-as/SKILL.md"], "pull_request", True),
+            (["skills/manage/SKILL.md"], "pull_request", False),
+            (["src/ensemble/delegate/team/roles/engineer.md"], "pull_request", True),
             (["README.md", "docs/tests.md"], "push", True),
         ):
             with self.subTest(paths=paths, event=event):
@@ -134,13 +135,13 @@ class Repository(unittest.TestCase):
     def test_broker_scope_for_docs_python_broker_protocol_and_workflow(self):
         for paths, event, broker in (
             (["README.md", "docs/tests.md"], "pull_request", False),
-            (["manager/src/ensemble/manager/main.py"], "pull_request", False),
-            (["orchestrator/src/ensemble/orchestrator/main.py"], "pull_request", False),
-            (["session/src/ensemble/session/cli.py"], "pull_request", True),
-            (["broker/main.go"], "pull_request", True),
-            (["protocol/docker-broker/request.schema.json"], "pull_request", True),
+            (["src/ensemble/manager/main.py"], "pull_request", False),
+            (["src/ensemble/orchestrator/main.py"], "pull_request", False),
+            (["src/ensemble/session/cli.py"], "pull_request", True),
+            (["src/broker/main.go"], "pull_request", True),
+            (["src/broker/protocol/docker-broker/request.schema.json"], "pull_request", True),
             ([".github/workflows/test.yml"], "pull_request", True),
-            (["README.md", "broker/go.mod"], "pull_request", True),
+            (["README.md", "src/broker/go.mod"], "pull_request", True),
             ([], "pull_request", True),
             (["README.md"], "push", True),
             (["manager/a.py"], "workflow_dispatch", True),
@@ -179,17 +180,14 @@ class Repository(unittest.TestCase):
         with self.assertRaises(ValueError):
             scope.layer_map(self.root)
         self.contract(MODULES)
-        (self.root / "other/src/ensemble/manager").mkdir(parents=True)
-        with self.assertRaises(ValueError):
-            scope.layer_map(self.root)
 
     def test_added_upper_layer_comes_from_contract_and_package(self):
         modules = ["ensemble.dashboard", *MODULES]
         self.contract(modules)
-        (self.root / "console/src/ensemble/dashboard").mkdir(parents=True)
-        result = scope.classify(self.root, ["console/docs/guide.md"], "pull_request")
+        (self.root / "src/ensemble/dashboard").mkdir(parents=True)
+        result = scope.classify(self.root, ["src/ensemble/dashboard/cli.py"], "pull_request")
         self.assertFalse(result["full"])
-        self.assertEqual(result["projects"], ["console", *PROJECTS[:2]])
+        self.assertEqual(result["projects"], ["dashboard", *PROJECTS[:2]])
 
     def test_malformed_contract_structure_fails_explicitly(self):
         for text in (
@@ -206,12 +204,12 @@ class Repository(unittest.TestCase):
         with self.assertRaises(ValueError):
             scope.layer_map(self.root)
         self.contract(MODULES)
-        (self.root / "utils/src/ensemble/utils").rename(self.root / "manager/src/ensemble/utils")
+        (self.root / "src/ensemble/utils").rmdir()
         with self.assertRaises(ValueError):
             scope.layer_map(self.root)
 
     def test_absent_or_empty_scope_keeps_directories(self):
-        directories = ["tests/unit", ".github", "manager/tests/unit"]
+        directories = ["tests/unit", ".github", "tests/manager/unit"]
         for value in (None, ""):
             with mock.patch.dict(os.environ, {}, clear=True):
                 if value is not None:
@@ -219,14 +217,15 @@ class Repository(unittest.TestCase):
                 self.assertEqual(scope.selected(self.root, directories), directories)
 
     def test_partial_scope_filters_by_actual_owner_and_full_keeps_shared(self):
-        (self.root / "manager").rename(self.root / "renamed")
+        (self.root / "src/ensemble/manager").rename(self.root / "src/ensemble/renamed")
+        self.contract(["ensemble.renamed", *MODULES[1:]])
         directories = [
             "tests/unit",
             ".github",
-            "renamed/tests/unit",
-            "orchestrator/tests/orchestrator_tests/integration",
-            "delegate/tests/unit",
-            "renamed-other/tests/unit",
+            "tests/renamed/unit",
+            "tests/orchestrator/integration",
+            "tests/delegate/unit",
+            "tests/renamed_other/unit",
         ]
         with mock.patch.dict(os.environ, {"TEST_PROJECTS": '["renamed", "orchestrator"]'}):
             self.assertEqual(scope.selected(self.root, directories), directories[2:4])
@@ -251,7 +250,7 @@ class Repository(unittest.TestCase):
                 mock.patch.dict(os.environ, {"TEST_PROJECTS": value}),
                 self.assertRaises(ValueError),
             ):
-                scope.selected(self.root, ["manager/tests/unit"])
+                scope.selected(self.root, ["tests/manager/unit"])
 
     def test_changed_paths_preserves_odd_names_and_both_rename_endpoints(self):
         raw = b"manager/old name.py\x00utils/new\nname.py\x00manager/caf\xc3\xa9.py\x00manager/odd\xff.py\x00"

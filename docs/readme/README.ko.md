@@ -83,7 +83,7 @@ ensemble은 레이어로 구성되며, 각 레이어는 한 가지 일만 하고
 | `127.0.0.1`에서만 듣고 컨텍스트 길이 65536 이상, tier 모델을 pull한 [Ollama](https://ollama.com); `tmux`에서는 OpenCode 1.x도(`npm install -g opencode-ai@1.19.3`) | OpenCode만([Docker host › OpenCode](../docker-host.md#opencode), [OpenCode sessions](../sessions.md#opencode-sessions)) |
 | `git`, 로그인된 `gh` | 코딩(checkout, pull request)과 GitHub 대상. 그 외에는 필요 없음. |
 | 실행 중인 iTerm2 | 기본 iTerm2 분할 |
-| 실행 중인 Docker Desktop; broker `B`(`/usr/local/libexec/ensemble/ensemble-broker`), `sh <plugin dir>/broker/install.sh`로 설치(`sudo`와 로그인된 `gh` 필요); 로그인은 각각 한 번: `B login claude`(`claude setup-token` 붙여넣기), `B login github ensemble-bot`, Codex는 `sudo B install-codex <version>` 후 `B login codex`; OpenCode는 필요 없음 | Docker Host 전용([Docker host](../docker-host.md)); 호스트에 Node는 필요 없음. 각 자격 증명의 권한, 저장 위치, 폐기 방법: [Credentials](../credentials.md). |
+| 실행 중인 Docker Desktop; broker `B`(`/usr/local/libexec/ensemble/ensemble-broker`), `sh <plugin dir>/src/broker/install.sh`로 설치(`sudo`와 로그인된 `gh` 필요); 로그인은 각각 한 번: `B login claude`(`claude setup-token` 붙여넣기), `B login github ensemble-bot`, Codex는 `sudo B install-codex <version>` 후 `B login codex`; OpenCode는 필요 없음 | Docker Host 전용([Docker host](../docker-host.md)); 호스트에 Node는 필요 없음. 각 자격 증명의 권한, 저장 위치, 폐기 방법: [Credentials](../credentials.md). |
 
 ensemble이 시작하는 session이 당신의 설정을 어떻게 불러오는지, 그리고 그 안에서 일부 명령이 거부되는 이유: [Session settings](../sessions.md#session-settings).
 

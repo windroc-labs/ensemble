@@ -135,7 +135,7 @@ class Units(Case):
             *((f"ensemble.delegate.{source}", "ensemble.utils", False) for source in shared),
             ("ensemble.delegate.config", "ensemble.session", True),
             (
-                "delegate.tests.unit.team.tools.repo_test",
+                "tests.delegate.unit.team.tools.repo_test",
                 "ensemble.delegate.team.tools.repo",
                 False,
             ),

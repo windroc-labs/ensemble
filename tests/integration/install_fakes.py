@@ -2,7 +2,7 @@
 
 Every call is logged to $LOG (argv) and $ENVLOG (environment values). State lives under
 $FAKES: brew/<name> (installed), processes (one running command line each; unkillable: those KILL misses), login/<client>, keychain/<service>, claude/ and codex/ (plugins),
-broker/ (the broker's Codex install and tokens), fail (a call prefix that fails once), tty_name
+src/broker/ (the broker's Codex install and tokens), fail (a call prefix that fails once), tty_name
 (what `ps -o tty=` reports), kqueue_refuses (a terminal the Bun-built clients die on, as on /dev/tty),
 commit (the commit GitHub reports for every ensemble ref), linear.json (the Linear workspace: keys
 {key: email}, teams [{id, key, name, states, members, projects}], labels).
@@ -196,7 +196,7 @@ def curl(args):
         out((FAKES / "commit").read_text())
         return 0
     raw = "https://raw.githubusercontent.com/windroc-labs/ensemble/"
-    if url.startswith(raw) and url.endswith("/broker/internal/launcher/versions.go"):
+    if url.startswith(raw) and url.endswith("/src/broker/internal/launcher/versions.go"):
         out((FAKES / "pkg-src/broker/internal/launcher/versions.go").read_text())
         return 0
     out(f"curl: unexpected {url}\n", sys.stderr)
@@ -570,7 +570,7 @@ def broker(args):
             "sudo /usr/local/libexec/ensemble/ensemble-broker install-codex <version>"
         )
         claude = (FAKES / "keychain/ensemble-claude").exists()
-        claude = claude and not (FAKES / "broker/claude_unusable").exists()
+        claude = claude and not (FAKES / "src/broker/claude_unusable").exists()
         out(
             json.dumps(
                 {"revocations": [], "codex": state or default, "claude": {"default": claude}}
@@ -589,9 +589,9 @@ def broker(args):
         return 0
     if args == ["login", "claude"]:
         out("Paste the setup-token (hidden): ")
-        mark(FAKES / "broker/claude_token", sys.stdin.readline().rstrip("\n"))
+        mark(FAKES / "src/broker/claude_token", sys.stdin.readline().rstrip("\n"))
         store_key("ensemble-claude", "token")
-        (FAKES / "broker/claude_unusable").unlink(missing_ok=True)
+        (FAKES / "src/broker/claude_unusable").unlink(missing_ok=True)
         return 0
     if args[:3] == ["login", "github", "ensemble-bot"] and args[3:4] == ["--key-file"]:
         if (

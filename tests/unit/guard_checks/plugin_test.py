@@ -8,7 +8,7 @@ CLAUDE, CODEX, OPENCODE = ".claude-plugin/plugin.json", ".codex-plugin/plugin.js
 
 
 class PluginManifests(Sample):
-    SKILLS = ["./delegate/skills/", "./manager/skills/"]
+    SKILLS = ["./skills/"]
 
     def manifest(self, **fields):
         return json.dumps({"name": "ensemble", "version": "1.0.0", "skills": self.SKILLS, **fields})
@@ -18,9 +18,9 @@ class PluginManifests(Sample):
             CLAUDE: self.manifest(),
             CODEX: self.manifest(),
             OPENCODE: self.manifest(),
-            "delegate/skills/a/SKILL.md": "",
-            "manager/skills/m/SKILL.md": "",
-            "manager/skills/t/scripts/ctmux": "",
+            "skills/a/SKILL.md": "",
+            "skills/m/SKILL.md": "",
+            "skills/t/scripts/ctmux": "",
             **dict(files),
         }
         return self.tree({rel: text for rel, text in files.items() if text is not None})
@@ -38,8 +38,7 @@ class PluginManifests(Sample):
                     CODEX: self.manifest(skills="./skills/"),
                     OPENCODE: self.manifest(skills="./skills/"),
                     "skills/a/SKILL.md": "",
-                    "delegate/skills/a/SKILL.md": None,
-                    "manager/skills/m/SKILL.md": None,
+                    "skills/m/SKILL.md": None,
                 },
                 [],
             ),
@@ -52,8 +51,11 @@ class PluginManifests(Sample):
             ),
             (
                 "a missing project skill",
-                {CODEX: self.manifest(skills=["./delegate/skills/"])},
-                [f"{CODEX}: skills miss manager/skills/m/SKILL.md"],
+                {CODEX: self.manifest(skills=[])},
+                [
+                    f"{CODEX}: skills miss skills/a/SKILL.md",
+                    f"{CODEX}: skills miss skills/m/SKILL.md",
+                ],
             ),
             (
                 "a skill outside the projects",
@@ -62,10 +64,11 @@ class PluginManifests(Sample):
             ),
             (
                 "a path not relative to the plugin root",
-                {CODEX: self.manifest(skills=["delegate/skills/", "./manager/skills/"])},
+                {CODEX: self.manifest(skills=["skills/"])},
                 [
-                    f'{CODEX}: skills path "delegate/skills/" does not start with ./',
-                    f"{CODEX}: skills miss delegate/skills/a/SKILL.md",
+                    f'{CODEX}: skills path "skills/" does not start with ./',
+                    f"{CODEX}: skills miss skills/a/SKILL.md",
+                    f"{CODEX}: skills miss skills/m/SKILL.md",
                 ],
             ),
             (
@@ -88,15 +91,13 @@ class PluginSkills(Sample):
     def test_a_missing_extra_or_repeated_skill(self):
         root = self.tree(
             {
-                "manager/skills/manage/SKILL.md": "",
                 "skills/manage/SKILL.md": "",
-                "manager/skills/extra/SKILL.md": "",
+                "skills/extra/SKILL.md": "",
             }
         )
         self.assertEqual(
             plugin.plugin_skills(root),
             [
-                "skill manage: shipped 2 times",
                 "skill act-as: missing",
                 "skill board: missing",
                 "skill extra: not one of act-as, board, manage",
@@ -112,14 +113,14 @@ class PluginCommandTemplates(Sample):
         head = '---\nname: m\ndescription: "run !`x` with $1"\n---\n'
         root = self.tree(
             {
-                "manager/skills/m/SKILL.md": head + "Run `!` first, then `ls`.\nTake $2.\n",
-                "delegate/skills/a/SKILL.md": head + "Arguments: $ARGUMENTS, $HOME, 1$\n",
+                "skills/m/SKILL.md": head + "Run `!` first, then `ls`.\nTake $2.\n",
+                "skills/a/SKILL.md": head + "Arguments: $ARGUMENTS, $HOME, 1$\n",
             }
         )
         self.assertEqual(
             plugin.plugin_command_templates(root),
             [
-                "manager/skills/m/SKILL.md: !` runs a shell command in an OpenCode command template",
-                "manager/skills/m/SKILL.md: $2 is an OpenCode command argument placeholder",
+                "skills/m/SKILL.md: !` runs a shell command in an OpenCode command template",
+                "skills/m/SKILL.md: $2 is an OpenCode command argument placeholder",
             ],
         )

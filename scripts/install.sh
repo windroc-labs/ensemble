@@ -1053,7 +1053,7 @@ codex_plugins() {
 }
 
 # The installed plugin: the whole repo (at $ref for OpenCode), source of the broker, ctmux and jobs. Claude Code's
-# install first, else Codex's newest, else OpenCode's, as manager/skills/manage/scripts/launcher looks.
+# install first, else Codex's newest, else OpenCode's, as skills/manage/scripts/launcher looks.
 plugin_dir() {
   step "plugin directory"
   if ! has claude && ! has codex; then
@@ -1086,10 +1086,10 @@ go_const() {
 opencode_version() {
   local text value
   if [ -n "$pkg" ]; then
-    go_const broker/internal/launcher/versions.go opencodeMinVersion
+    go_const src/broker/internal/launcher/versions.go opencodeMinVersion
     return
   fi
-  text=$(curl -fsSL "https://raw.githubusercontent.com/windroc-labs/ensemble/$ref/broker/internal/launcher/versions.go") \
+  text=$(curl -fsSL "https://raw.githubusercontent.com/windroc-labs/ensemble/$ref/src/broker/internal/launcher/versions.go") \
     || die "cannot read OpenCode's version at ref $ref"
   value=$(sed -n 's/^const opencodeMinVersion = "\([0-9.]*\)"$/\1/p' <<<"$text")
   [ -n "$value" ] || die "no opencodeMinVersion at ref $ref"
@@ -1503,7 +1503,7 @@ ctmux_install() {
   local name missing=
   step "ctmux --install"
   for name in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
-    [ -x "$HOME/.ensemble/bin/$name" ] || missing=1
+    [ -x "$HOME/.ensemble/bin/$name" ] && cmp -s "$pkg/skills/manage/scripts/launcher" "$HOME/.ensemble/bin/$name" || missing=1
   done
   if [ -n "$missing" ]; then
     if [ -d "$HOME/.ensemble/bin" ]; then
@@ -1513,7 +1513,7 @@ ctmux_install() {
     else
       record_dir "$HOME/.ensemble/bin"
     fi
-    "$pkg/manager/skills/manage/scripts/ctmux" --install </dev/null >&2
+    "$pkg/skills/manage/scripts/ctmux" --install </dev/null >&2
   else
     skip "launchers in ~/.ensemble/bin"
   fi
@@ -1527,7 +1527,7 @@ ctmux_install() {
 broker_source() {
   (
     cd "$pkg"
-    find broker -type f | LC_ALL=C sort | while IFS= read -r file; do shasum -a 256 "$file"; done
+    find src/broker -type f | LC_ALL=C sort | while IFS= read -r file; do shasum -a 256 "$file"; done
     shasum -a 256 .claude-plugin/plugin.json
   ) | shasum -a 256 | cut -d' ' -f1
 }
@@ -1617,9 +1617,9 @@ broker_install() {
   [ -e "$root/usr/local/libexec/ensemble" ] || ledger_add broker
   record_dir "$HOME/.ensemble/docker"
   if [ "$ref" = main ]; then
-    sh "$pkg/broker/install.sh" </dev/null >&2
+    sh "$pkg/src/broker/install.sh" </dev/null >&2
   else
-    sh "$pkg/broker/install.sh" --build </dev/null >&2
+    sh "$pkg/src/broker/install.sh" --build </dev/null >&2
   fi
   state_set broker_source "$source"
 }
@@ -1736,7 +1736,7 @@ broker_logins() {
     step "broker login: Codex"
     skip "Codex not chosen"
   else
-    min=$(go_const broker/internal/codex/versions.go MinVersion)
+    min=$(go_const src/broker/internal/codex/versions.go MinVersion)
     need=$(broker_need codex "$min")
     case $need in
       busy) die "broker busy; rerun" ;;
@@ -1821,7 +1821,7 @@ except (OSError, tomllib.TOMLDecodeError, AttributeError):
 names = re.compile(r"[a-z][a-z0-9-]*")
 if not stages or not all(isinstance(v, str) and names.fullmatch(v) for stage in stages for v in stage):
     sys.exit(f"install.sh: {path}: cannot read its [[stage]] roles")
-print("\n".join(f"{role}\t{input_}" for role, input_ in stages))' "$config" "$pkg/orchestrator/src/ensemble/orchestrator/engine/flow/workflow.toml"
+print("\n".join(f"{role}\t{input_}" for role, input_ in stages))' "$config" "$pkg/src/ensemble/orchestrator/engine/flow/workflow.toml"
 }
 
 # linear_slots <stages>: "<slot>\t<service>\t<account>" for each Linear key: harness, manager, then each stage role. Its
@@ -2121,7 +2121,7 @@ if unpublished:
                            ("dir", "Research/" if input_ == "research" else "Product Design/")):
             fill(table, key, value)
 with open(out, "w", encoding="utf-8") as f:
-    json.dump(plan, f)' "$config" "$1" "$2" "$3" "$pkg/delegate/src/ensemble/delegate/team/roles"
+    json.dump(plan, f)' "$config" "$1" "$2" "$3" "$pkg/src/ensemble/delegate/team/roles"
 }
 
 local_board_setup() {
@@ -2203,7 +2203,7 @@ if "@HOME@" not in text or "@PATH@" not in text:
     sys.exit(f"install.sh: {source} is not a template with @HOME@ and @PATH@")
 text = text.replace("@HOME@", escape(home)).replace("@PATH@", escape(path))
 with open(out, "w", encoding="utf-8") as f:
-    f.write(text)' "$pkg/orchestrator/launchd/com.windroc.ensemble.$1.plist" "$2" "$HOME" "$path"
+    f.write(text)' "$pkg/launchd/com.windroc.ensemble.$1.plist" "$2" "$HOME" "$path"
 }
 
 board_jobs() {

@@ -8,7 +8,6 @@ from unittest import mock
 
 from ensemble.orchestrator.engine.config import REQUIRED
 from ensemble.orchestrator.engine.flow.workflow import Workflow
-
 from tests.case import REPO, Case
 
 
@@ -52,9 +51,7 @@ class BoardContract(Case):
             with self.subTest(custom=custom):
                 config.write_text(f'[orchestrator]\nworkflow = "{path}"\n' if custom else "")
                 output = io.StringIO()
-                packaged = Path(
-                    REPO, "orchestrator/src/ensemble/orchestrator/engine/flow/workflow.toml"
-                )
+                packaged = Path(REPO, "src/ensemble/orchestrator/engine/flow/workflow.toml")
                 with (
                     mock.patch.object(sys, "argv", ["-c", str(config), str(packaged)]),
                     redirect_stdout(output),

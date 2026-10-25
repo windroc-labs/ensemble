@@ -34,7 +34,7 @@ ALLOWED_BASH = re.compile(r"^[ \t]+- Bash\((.+)\)$", re.M)
 
 
 def _manager_trees(repo):
-    base = "manager/src/ensemble/manager/"
+    base = "src/ensemble/manager/"
     for rel, text in _files(os.path.join(repo, base), ".py"):
         yield base + rel, ast.parse(text)
 
@@ -146,7 +146,7 @@ def bin_commands(repo: str) -> list[str]:
         if len(modules) != 1:
             found.append(f"{BIN}/{name}: runs {len(modules)} modules, not 1")
         elif not any(
-            os.path.isfile(os.path.join(repo, p, "src", *modules[0].split(".")) + ".py")
+            os.path.isfile(os.path.join(repo, "src", *modules[0].split(".")) + ".py")
             for p in PROJECTS
         ):
             found.append(f"{BIN}/{name}: no module {modules[0]}")

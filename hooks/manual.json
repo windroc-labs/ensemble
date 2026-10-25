@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"${PLUGIN_ROOT}/src/ensemble/manager/rearm.py\" --mode manual",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

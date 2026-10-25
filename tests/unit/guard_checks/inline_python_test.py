@@ -3,7 +3,7 @@ import hashlib
 from tests.guard_checks.inline_python import _violations, inline_python
 from tests.guard_samples import Sample
 
-PATH = "delegate/tests/example.py"
+PATH = "tests/delegate/example.py"
 
 
 def key(text):
@@ -30,8 +30,8 @@ class InlinePython(Sample):
         root = self.tree(
             {
                 PATH: "argv = ['python3', '-c', 'from ensemble.session import hidden']",
-                "session/src/ensemble/session/__init__.py": "",
-                "session/src/ensemble/session/hidden.py": "",
+                "src/ensemble/session/__init__.py": "",
+                "src/ensemble/session/hidden.py": "",
             }
         )
         self.assertEqual(len(inline_python(root, allowed={})), 1)
@@ -108,7 +108,7 @@ class InlinePython(Sample):
 
     def test_exceptions_match_exact_code_and_stale_entries_fail(self):
         code = "from ensemble.session.modes import tui"
-        path = "session/tests/example.py"
+        path = "tests/session/example.py"
         allowed = {
             (
                 path,
@@ -148,7 +148,7 @@ class InlinePython(Sample):
     def test_syntax_nonpublic_imports_and_private_object_access_are_rejected(self):
         for code in (
             "def broken(",
-            "from delegate.tests.harness import HarnessCase",
+            "from tests.delegate.harness import HarnessCase",
             "from ensemble.session.engine import types",
             "from ensemble.delegate import _private",
             "from . import sibling",
@@ -164,8 +164,8 @@ class InlinePython(Sample):
     def test_unresolved_programs_are_violations_unless_excepted(self):
         for source in (
             "import sys\nvalue = 1\nargv = [sys.executable, '-c', f'print({value})']",
-            "import sys\nfrom delegate.tests.program import CODE\nargv = [sys.executable, '-c', CODE]",
-            "import sys\nfrom delegate.tests import program\nargv = [sys.executable, '-c', program.CODE]",
+            "import sys\nfrom tests.delegate.program import CODE\nargv = [sys.executable, '-c', CODE]",
+            "import sys\nfrom tests.delegate import program\nargv = [sys.executable, '-c', program.CODE]",
             "import sys\nfor code in ('pass', 'print()'):\n    argv = [sys.executable, '-c', code]",
             "import sys\nCODE = 'pass'\nfor CODE in ('pass',):\n    argv = [sys.executable, '-c', CODE]",
         ):
@@ -196,7 +196,7 @@ class InlinePython(Sample):
                 "prog",
             ),
             (
-                "import sys\nfrom delegate.tests.program import CODE\nargv = [sys.executable, '-c', CODE]",
+                "import sys\nfrom tests.delegate.program import CODE\nargv = [sys.executable, '-c', CODE]",
                 "CODE",
             ),
             (

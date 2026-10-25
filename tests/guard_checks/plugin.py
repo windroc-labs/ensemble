@@ -7,12 +7,10 @@ import json
 import os
 import re
 
-from tests.guards import PROJECTS
-
 MANIFESTS = (".claude-plugin/plugin.json", ".codex-plugin/plugin.json", "package.json")
 
 
-SKILL_DIRS = ("skills", *(f"{project}/skills" for project in PROJECTS))
+SKILL_DIRS = ("skills",)
 
 
 SKILLS = ("act-as", "board", "manage")
@@ -32,7 +30,7 @@ def _skills(repo, dirs):
 
 def plugin_manifests(repo: str) -> list[str]:
     """Each manifest's `skills` paths start with ./ and hold exactly the plugin's skills
-    (`skills/` and each project's `skills/`); its name and version are the first manifest's.
+    (`skills/`); its name and version are the first manifest's.
     """
     found, first = [], None
     want = _skills(repo, SKILL_DIRS)

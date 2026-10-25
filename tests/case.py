@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from utils.tests.sandbox import clean_env, project_roots
+from tests.utils.sandbox import clean_env, project_roots
 
 try:
     import ensemble
@@ -17,10 +17,15 @@ except ImportError:
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ROOTS = project_roots(REPO)
-SRC = {os.path.basename(os.path.dirname(r)).replace("-", "_"): r for r in ROOTS}
+SRC = {
+    name: root
+    for root in ROOTS
+    for name in os.listdir(os.path.join(root, "ensemble"))
+    if os.path.isfile(os.path.join(root, "ensemble", name, "__init__.py"))
+}
 RUN_WITH = os.pathsep.join(os.path.relpath(root, REPO) for root in ROOTS)
 PY = (sys.executable, "-P", "-S")
-ORCH_ROOT = os.path.join(REPO, "orchestrator", "src")
+ORCH_ROOT = os.path.join(REPO, "src")
 
 
 class Case(unittest.TestCase):

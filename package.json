@@ -8,8 +8,8 @@
   "type": "module",
   "main": ".opencode-plugin/ensemble.js",
   "skills": [
-    "./delegate/skills/",
-    "./orchestrator/skills/",
-    "./manager/skills/"
+    "./skills/",
+    "./skills/",
+    "./skills/"
   ]
 }

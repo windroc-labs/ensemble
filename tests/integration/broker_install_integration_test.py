@@ -8,7 +8,7 @@ from pathlib import Path
 
 from tests.case import REPO, Case
 
-BROKER = Path(REPO, "broker")
+BROKER = Path(REPO, "src", "broker")
 TOOLS = (
     "sh",
     "dirname",
@@ -61,9 +61,9 @@ class Install(Case):
         (self.bin / "uname").chmod(0o755)
         self.log = Path(self.home, "calls.log")
         self.plugin = Path(self.home, "plugin")
-        (self.plugin / "broker/worker").mkdir(parents=True)
+        (self.plugin / "src/broker/worker").mkdir(parents=True)
         for name in ("install.sh", "build.sh", "with-go-state.sh", "worker/Dockerfile"):
-            shutil.copy(BROKER / name, self.plugin / "broker" / name)
+            shutil.copy(BROKER / name, self.plugin / "src/broker" / name)
         (self.plugin / ".claude-plugin").mkdir()
         self.manifest = self.plugin / ".claude-plugin/plugin.json"
         self.manifest.write_text(json.dumps({"name": "ensemble", "version": "9.8.7"}, indent=2))
@@ -93,7 +93,7 @@ class Install(Case):
 
     def run_script(self, name, *args, **env):
         return subprocess.run(
-            [str(self.bin / "sh"), str(self.plugin / "broker" / name), *args],
+            [str(self.bin / "sh"), str(self.plugin / "src/broker" / name), *args],
             env={**self.env, **env},
             capture_output=True,
             text=True,
@@ -182,7 +182,7 @@ class Install(Case):
         self.assertEqual(len(self.calls()), 1)
         self.assertIn(f"could not download {ASSET} from release v9.8.7", result.stderr)
         self.assertIn("retry in a few minutes", result.stderr)
-        self.assertIn(f"sh {self.plugin.resolve()}/broker/install.sh --build", result.stderr)
+        self.assertIn(f"sh {self.plugin.resolve()}/src/broker/install.sh --build", result.stderr)
 
     def test_local_asset_is_verified_then_installed(self):
         self.fake("gh", "sudo")
@@ -250,7 +250,9 @@ class Install(Case):
             result = self.run_script("install.sh", RELEASED=str(self.asset), PLATFORM=platform)
             self.assert_nothing_installed(result)
             self.assertIn(f"not {platform}", result.stderr)
-            self.assertIn(f"sh {self.plugin.resolve()}/broker/install.sh --build", result.stderr)
+            self.assertIn(
+                f"sh {self.plugin.resolve()}/src/broker/install.sh --build", result.stderr
+            )
         self.assertEqual(self.calls(), [])
 
     def test_build_seeds_definition_builds_signs_and_installs(self):

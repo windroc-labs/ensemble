@@ -7,7 +7,7 @@ import pkgutil
 import sys
 from pathlib import Path
 
-from tests import guard_checks, guards
+from tests import guard_checks
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -32,11 +32,7 @@ def discover(modules=MODULES):
 
 def checks(root):
     for name, check in discover():
-        roots = (
-            [os.path.join(root, project, "src") for project in guards.PROJECTS]
-            if name == "private_imports"
-            else [root]
-        )
+        roots = [os.path.join(root, "src")] if name == "private_imports" else [root]
         yield name, [violation for at in roots for violation in check(str(at))]
 
 
