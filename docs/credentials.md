@@ -102,6 +102,8 @@ Linear user id; runtime role discovery needs no role token or email lookup.
 
 Changing an app's client secret revokes its tokens: store the new secret and delete the token entry so
 the next call requests one. New runs record the role, never a credential service; existing run rows stay unchanged.
+Deterministic comments use the current app user id as their namespace. If an old member's comment landed
+before its write-back ledger was saved, Recover leaves it intact and posts the missing step as the app.
 
 ### Claude Code login
 

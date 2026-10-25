@@ -90,9 +90,11 @@ The board's stages (order, input layout, title prefix, comment leads, whether a 
 [orchestrator]
 workflow = "~/team/workflow.toml"
 
-[orchestrator.linear.roles.analyst]   # each stage role's Linear account
-account = "analyst@example.com"
-key = "linear-analyst"
+[orchestrator.linear.roles.analyst]   # each stage role's Linear OAuth app
+client_id = "<analyst Client ID>"
+secret_service = "linear-app-analyst-secret"
+token_service = "linear-app-analyst-token"
+user_id = "<analyst app user UUID>"
 ```
 
 A stage needs only `role` and `input` (`research`, `design` or `build`: the layout its input takes):

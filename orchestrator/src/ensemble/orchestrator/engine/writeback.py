@@ -133,7 +133,7 @@ def for_run(cfg, role, spec: Spec, accounts: Accounts):
 
 
 def for_claim(cfg, claim: Claim, accounts: Accounts, *, attempt: int) -> Context:
-    """Writes as accounts, the claim's key's, whatever the role's is now."""
+    """Write through accounts resolved from the recorded role's current configuration."""
     return replace(
         context(
             cfg,

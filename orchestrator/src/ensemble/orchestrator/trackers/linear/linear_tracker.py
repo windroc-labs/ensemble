@@ -33,7 +33,14 @@ from ensemble.orchestrator.engine.flow.types import (
     Snapshot,
     SubIssue,
 )
-from ensemble.orchestrator.engine.types import MOVES, UUID_RE, IssueError, LinearError, State
+from ensemble.orchestrator.engine.types import (
+    MOVES,
+    UUID_RE,
+    IssueError,
+    LinearApp,
+    LinearError,
+    State,
+)
 from ensemble.orchestrator.trackers.linear import ops
 from ensemble.orchestrator.trackers.linear.ops import DONE, HISTORY, call, client_id, last_move
 from ensemble.utils import LOCAL, one_line, parse_time
@@ -279,6 +286,7 @@ class LinearTracker(Tracker):
         agent_group=None,
         label_clients=None,
     ):
+        self.comment_namespace = (identity.user_id,) if isinstance(identity, LinearApp) else ()
         if identity is not None:
             bound = {"identity": identity} | ({} if timeout is None else {"timeout": timeout})
             gql = functools.partial(gql, **bound)
@@ -710,7 +718,9 @@ class LinearTracker(Tracker):
         )
 
     def comment(self, key, body, ref=None):
-        ops.comment(self.gql, key, body, None if ref is None else client_id(*ref))
+        ops.comment(
+            self.gql, key, body, None if ref is None else client_id(*self.comment_namespace, *ref)
+        )
 
     def move(self, key, to, *, frm=None):
         _need("states", self.state_ids)
@@ -759,10 +769,10 @@ class LinearTracker(Tracker):
         call(self.gql, M_UNARCHIVE, "issueUnarchive", i=key)
 
     def find_comment(self, key, ref):
-        return ops.find_comment(self.gql, client_id(*ref), key)
+        return ops.find_comment(self.gql, client_id(*self.comment_namespace, *ref), key)
 
     def put_comment(self, key, body, ref):
-        cid = client_id(*ref)
+        cid = client_id(*self.comment_namespace, *ref)
         try:
             done = self.gql(M_UPDATE, c=cid, b=body)["commentUpdate"]
         except LinearError as e:

@@ -7,6 +7,7 @@ import uuid
 from importlib.resources import files
 
 from ensemble.orchestrator.engine.types import AppKind, LinearApp
+from ensemble.orchestrator.trackers.linear import ops
 
 TEAM = "00000000-0000-4000-8000-000000000001"
 STATES = {
@@ -96,6 +97,11 @@ def role_app(name):
 
 def role_id(name):
     return str(uuid.uuid5(uuid.NAMESPACE_OID, name))
+
+
+def comment_id(role, sid, *parts):
+    app = HARNESS_IDENTITY if role == "harness" else role_app(role)
+    return ops.client_id(app.user_id, sid, *parts)
 
 
 def role(name, *lines):

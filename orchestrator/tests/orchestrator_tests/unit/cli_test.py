@@ -65,13 +65,15 @@ class Wirings(run_fixtures.Base):
         )
         gql.return_value = {"comment": None}
         accounts.tracker.find_comment(ISSUE, (SID, "start"))
-        gql.assert_called_with(ops.Q_COMMENT, identity=identity, c=ops.client_id(SID, "start"))
+        gql.assert_called_with(
+            ops.Q_COMMENT, identity=identity, c=ops.client_id(identity.user_id, SID, "start")
+        )
         accounts.harness.find_comment(ISSUE, (SID, "session"))
         gql.assert_called_with(
             ops.Q_COMMENT,
             identity=HARNESS_IDENTITY,
             timeout=run_comments.LIMIT,
-            c=ops.client_id(SID, "session"),
+            c=ops.client_id(HARNESS_IDENTITY.user_id, SID, "session"),
         )
 
     def test_linear_reads_a_run_as_the_harness_app(self):
