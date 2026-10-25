@@ -186,11 +186,11 @@ shows.
 | `ensemble-revocations` | `pending` | — | tokens awaiting revocation | `<B> close`, `refresh` failures | the broker |
 | `ensemble-codex` | `auth` | — | the full Codex login | `<B> login codex`; renewals at `start`, `refresh` | the broker |
 | `ensemble-opencode` | provider name | `[session.clients.opencode.providers.<name>]` | that OpenCode provider's API key | `<B> login opencode <name>` | the broker |
-| the `linear.harness.secret_service` value | any | `linear.harness.secret_service` | harness app client secret | the user ([Linear presets](#linear-presets)) | any process running as the user |
-| the `linear.harness.token_service` value | the existing item's, else the service | `linear.harness.token_service` | harness app token and expiry | router, promote, prune, write-back | any process running as the user |
-| the `linear.manager_key` value | the manager's account | `linear.manager_key` | manager Linear API key | the user ([Linear presets](#linear-presets)) | any process running as the user |
-| each `linear.roles.<role>.secret_service` value | any | `linear.roles.<role>.secret_service` | role app client secret | the user | any process running as the user |
-| each `linear.roles.<role>.token_service` value | the existing item's, else the service | `linear.roles.<role>.token_service` | role app token and expiry | router, write-back, Recover | any process running as the user |
+| the `linear.harness.secret_service` value | any | `linear.harness.secret_service` | harness app client secret | installer or the user ([Linear presets](#linear-presets)) | any process running as the user |
+| the `linear.harness.token_service` value | the existing item's, else the service | `linear.harness.token_service` | harness app token and expiry | installer, router, promote, prune, write-back | any process running as the user |
+| the `linear.manager_key` value | the manager's account | `linear.manager_key` | manager Linear API key | installer or the user ([Linear presets](#linear-presets)) | any process running as the user |
+| each `linear.roles.<role>.secret_service` value | any | `linear.roles.<role>.secret_service` | role app client secret | installer or the user | any process running as the user |
+| each `linear.roles.<role>.token_service` value | the existing item's, else the service | `linear.roles.<role>.token_service` | role app token and expiry | installer, router, write-back, Recover | any process running as the user |
 | Claude Code's own | — | — | local Claude login | Claude Code `/login` | Claude Code; service name not documented |
 | `gh`'s own | — | — | host `gh` token | `gh auth login` | `gh`; see `gh auth status` |
 | Codex's own, keyring mode only | — | — | local Codex login | `codex login` | Codex; service name not documented |
@@ -259,7 +259,11 @@ container's own tmux socket is not Docker's, so the socket search names `docker`
 
 ## Linear presets
 
-With `--board linear`, `scripts/install.sh` stores the keys and fills the ids itself ([Setup](board.md#setup)); the table
+With `--board linear`, `scripts/install.sh` asks for each harness/role app's Client ID and hidden client secret,
+stores its secret and first token with expiry in Keychain, and fills the app user ids ([Setup](board.md#setup)).
+Default services are `linear-app-<slot>-secret` and `linear-app-<slot>-token`; configured services are preserved.
+Reruns reuse valid tokens with over five days left. Cleanup removes only the credential items this installer created.
+The manager still supplies its separate API key. The table
 lists what it needs in Linear. By hand: create these in the Linear team, then put each id in `~/.ensemble/config.local.toml`: a `linear.<key>` under
 `[orchestrator.linear]` (`linear.states.todo` is `todo` in `[orchestrator.linear.states]`, `linear.roles.pm.client_id` is
 `client_id` in `[orchestrator.linear.roles.pm]`), `local_clones` under `[orchestrator]` ([Setup](board.md#setup)).
@@ -288,7 +292,8 @@ The harness app:
    security add-generic-password -s <linear.harness.secret_service> -a <linear.harness.secret_service> -w
    ```
 
-3. Its Linear user id → `linear.harness.user_id`; the first command as the harness requests and stores its token.
+3. Its Linear user id → `linear.harness.user_id`; when configuring by hand, the first non-dry command as the harness
+   requests and stores its token. The installer obtains both the token and user id during setup.
 
 For each role app, use the same secret-storage steps as the harness with its role table's service
 names. Fill `user_id` from the app's viewer during setup; runtime commands do not fetch it. The first

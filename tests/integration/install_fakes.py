@@ -13,11 +13,13 @@ import json
 import os
 import plistlib
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import termios
 from pathlib import Path
+from urllib.parse import parse_qs
 
 FAKES = Path(os.environ.get("FAKES", "/nonexistent"))
 ROOT = Path(os.environ.get("ENSEMBLE_INSTALL_ROOT", "/nonexistent"))
@@ -139,6 +141,30 @@ mkdir -p "{root}/Library/Developer/CommandLineTools"
 
 
 LINEAR = "https://api.linear.app/graphql"
+LINEAR_TOKEN = "https://api.linear.app/oauth/token"
+
+
+def linear_token(args):
+    """Client credentials arrive only on stdin; enforce the app's exact fixed scopes."""
+    if args[:1] != ["-q"] or args[args.index("--data-binary") + 1] != "@-":
+        return 2
+    form = parse_qs(sys.stdin.read(), strict_parsing=True)
+    workspace = load(FAKES / "linear.json", {})
+    client = form.get("client_id", [""])[0]
+    app = workspace.get("apps", {}).get(client)
+    scope = (
+        "read,write" if client == "client-harness" else "read,write,app:assignable,app:mentionable"
+    )
+    if (
+        app is None
+        or form.get("grant_type") != ["client_credentials"]
+        or form.get("client_secret") != [app["secret"]]
+        or form.get("scope") != [scope]
+    ):
+        out("curl: (22) OAuth credentials refused\n", sys.stderr)
+        return 22
+    out(json.dumps({"access_token": app["access_token"], "expires_in": 30 * 86400}))
+    return 0
 
 
 def linear(args):
@@ -148,13 +174,18 @@ def linear(args):
         return 2
     auth = re.fullmatch(r'header = "Authorization: (.*)"\n', sys.stdin.read())
     workspace = load(FAKES / "linear.json", {})
-    if not auth or auth.group(1) not in workspace.get("keys", {}):
+    value = auth.group(1) if auth else ""
+    app = next(
+        (a for a in workspace.get("apps", {}).values() if value == "Bearer " + a["access_token"]),
+        None,
+    )
+    if app is None and value not in workspace.get("keys", {}):
         out("curl: (22) The requested URL returned error: 400\n", sys.stderr)
         return 22
     sent = json.loads(args[args.index("--data-binary") + 1])
     query, variables = sent["query"], sent.get("variables") or {}
     if "viewer" in query:
-        data = {"viewer": {"email": workspace["keys"][auth.group(1)]}}
+        data = {"viewer": {"id": app["user_id"]} if app else {"email": workspace["keys"][value]}}
     elif "teams(" in query:
         data = {
             "teams": {
@@ -186,6 +217,8 @@ def curl(args):
     url = args[-1]
     if url == LINEAR:
         return linear(args)
+    if url == LINEAR_TOKEN:
+        return linear_token(args)
     if url == "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh":
         out(HOMEBREW_INSTALLER.format(prefix=PREFIX, apps=FAKES / "apps", root=ROOT))
         return 0
@@ -452,6 +485,14 @@ def hidden_line(prompt):
 
 
 def security(args):
+    if args == ["-i"]:
+        words = shlex.split(sys.stdin.read())
+        if words[:1] != ["add-generic-password"] or "-X" not in words:
+            return 2
+        store_key(
+            words[words.index("-s") + 1], bytes.fromhex(words[words.index("-X") + 1]).decode()
+        )
+        return 0
     if args[:1] == ["find-generic-password"]:
         item = FAKES / "keychain" / args[args.index("-s") + 1]
         if not item.exists():
