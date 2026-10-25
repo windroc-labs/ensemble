@@ -63,7 +63,7 @@ class Repository(unittest.TestCase):
             "skills/manage/SKILL.md",
             "src/ensemble/orchestrator/main.py",
             "launchd/com.windroc.ensemble.router.plist",
-            "skills/manage/SKILL.md",
+            "skills/board/SKILL.md",
             "tests/manager/unit/main_test.py",
         ):
             with self.subTest(path=path):
