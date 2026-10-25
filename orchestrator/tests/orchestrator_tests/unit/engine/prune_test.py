@@ -17,7 +17,7 @@ from ensemble.orchestrator.engine.flow.types import IssueState, Snapshot
 from ensemble.orchestrator.engine.types import (
     Entry,
     LinearError,
-    LinearIdentity,
+    LinearKey,
     PruneState,
     Unavailable,
 )
@@ -762,7 +762,7 @@ class RetentionCleanup(PruneScenario):
         self.outage(
             "issues",
             issues,
-            [(linear_tracker.Q_SNAPSHOTS, {"identity": LinearIdentity(HARNESS), "f": mock.ANY})],
+            [(linear_tracker.Q_SNAPSHOTS, {"identity": LinearKey(HARNESS), "f": mock.ANY})],
         )
         self.assertEqual(issues.calls, [])
         self.assertTrue(all(os.path.isdir(c) for c in clones))
@@ -779,7 +779,7 @@ class RetentionCleanup(PruneScenario):
         self.outage(
             "issueArchive",
             issues,
-            [(linear_tracker.M_ARCHIVE, {"identity": LinearIdentity(HARNESS), "i": "id-TASK-1"})],
+            [(linear_tracker.M_ARCHIVE, {"identity": LinearKey(HARNESS), "i": "id-TASK-1"})],
         )
 
 

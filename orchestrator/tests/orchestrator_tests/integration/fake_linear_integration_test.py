@@ -19,7 +19,7 @@ from ensemble.orchestrator.engine import (
     types,
 )
 from ensemble.orchestrator.engine.flow.types import ArchiveRefused, IssueState, Linked, Priority
-from ensemble.orchestrator.engine.types import LinearError, LinearIdentity
+from ensemble.orchestrator.engine.types import LinearError, LinearKey
 from ensemble.orchestrator.trackers.linear import (
     client,
     issue_archive,
@@ -88,8 +88,8 @@ class ServerCase(Case):
         self.addCleanup(env.stop)
         transport = install(os.environ["FAKE_LINEAR_TRANSPORT"])
         self.addCleanup(transport.close)
-        self.gql = functools.partial(client.linear_gql, identity=LinearIdentity(HARNESS))
-        self.eng = functools.partial(client.linear_gql, identity=LinearIdentity(ENGINEER))
+        self.gql = functools.partial(client.linear_gql, identity=LinearKey(HARNESS))
+        self.eng = functools.partial(client.linear_gql, identity=LinearKey(ENGINEER))
 
     def log(self):
         return [(r.op, r.account, r.result) for r in self.fake.requests]
@@ -244,7 +244,7 @@ class GraphQLProjection(ServerCase):
     def test_each_failure_kind_as_the_caller_sees_it(self):
         for name, eng in (
             ("http", self.eng),
-            ("in process", functools.partial(self.fake, identity=LinearIdentity(ENGINEER))),
+            ("in process", functools.partial(self.fake, identity=LinearKey(ENGINEER))),
         ):
             with self.subTest(name):
                 self.fake.requests.clear()
@@ -313,7 +313,7 @@ class GraphQLProjection(ServerCase):
             ),
             self.assertRaises(LinearError) as cm,
         ):
-            client.linear_gql(ops.Q_USER, identity=LinearIdentity("stranger"), e="me@x.com")
+            client.linear_gql(ops.Q_USER, identity=LinearKey("stranger"), e="me@x.com")
         self.assertEqual(str(cm.exception), "linear api error: users: HTTP 401")
         self.assertEqual(
             self.fake.requests,

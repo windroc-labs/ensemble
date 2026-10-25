@@ -15,7 +15,7 @@ from ensemble.orchestrator.engine import config, prune, router, run_comments, ru
 from ensemble.orchestrator.engine.types import (
     Claim,
     ConfigError,
-    LinearIdentity,
+    LinearKey,
     State,
     TrackerKind,
 )
@@ -49,7 +49,7 @@ class Wirings(run_fixtures.Base):
         gql = mock.Mock(return_value={})
         linear = cli.TRACKERS[TrackerKind.LINEAR]
         identity = linear.identity(cfg, "engineer")
-        self.assertEqual(identity, LinearIdentity(run_fixtures.KEY))
+        self.assertEqual(identity, LinearKey(run_fixtures.KEY))
         accounts = linear.accounts(gql, cfg, identity)
         self.assertEqual(
             (accounts.states, accounts.humans, accounts.repos),
@@ -65,7 +65,7 @@ class Wirings(run_fixtures.Base):
         accounts.harness.find_comment(ISSUE, (SID, "session"))
         gql.assert_called_with(
             ops.Q_COMMENT,
-            identity=LinearIdentity(run_fixtures.HARNESS),
+            identity=LinearKey(run_fixtures.HARNESS),
             timeout=run_comments.LIMIT,
             c=ops.client_id(SID, "session"),
         )
@@ -76,7 +76,7 @@ class Wirings(run_fixtures.Base):
         self.assertEqual(
             (reader.gql.keywords, reader.state_ids, reader.team_id),
             (
-                {"identity": LinearIdentity(run_fixtures.HARNESS)},
+                {"identity": LinearKey(run_fixtures.HARNESS)},
                 cfg.linear.states,
                 cfg.linear.team,
             ),
@@ -108,7 +108,7 @@ class Wirings(run_fixtures.Base):
         local_row = replace(row, issue="LOC-1", uuid="LOC-1", key=None)
         linear, local = cli.TRACKERS[TrackerKind.LINEAR], cli.TRACKERS[TrackerKind.LOCAL]
         writes = linear.claimed(mock.Mock(), linear_cfg, row).tracker
-        self.assertEqual(writes.gql.keywords, {"identity": LinearIdentity(run_fixtures.KEY)})
+        self.assertEqual(writes.gql.keywords, {"identity": LinearKey(run_fixtures.KEY)})
         self.assertIsInstance(local.claimed(None, local_cfg, local_row).tracker, LocalTracker)
         for wiring, cfg, claim, field, value in (
             (linear, linear_cfg, replace(row, key=None), "key", None),

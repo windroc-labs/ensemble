@@ -48,8 +48,8 @@ class TrackerKind(StrEnum):
 
 
 @dataclass(frozen=True)
-class LinearIdentity:
-    """Who a Linear call is made as; service: the Keychain service holding its key."""
+class LinearKey:
+    """A personal API key, by the Keychain service holding it: who a Linear call is made as."""
 
     service: str
 
@@ -60,8 +60,8 @@ class LinearRole:
     key: str
 
     @property
-    def identity(self) -> LinearIdentity:
-        return LinearIdentity(self.key)
+    def identity(self) -> LinearKey:
+        return LinearKey(self.key)
 
 
 @dataclass(frozen=True)
@@ -81,12 +81,12 @@ class LinearSettings:
     roles: Mapping[str, LinearRole]
 
     @property
-    def harness(self) -> LinearIdentity:
-        return LinearIdentity(self.harness_key)
+    def harness(self) -> LinearKey:
+        return LinearKey(self.harness_key)
 
     @property
-    def manager(self) -> LinearIdentity:
-        return LinearIdentity(self.manager_key)
+    def manager(self) -> LinearKey:
+        return LinearKey(self.manager_key)
 
 
 @dataclass(frozen=True)
@@ -177,9 +177,9 @@ class Wiring:
 
     connect: Connect  # the router's board
     reader: Callable[[Any, Config], Tracker]  # a run's issue read and Related-work search
-    accounts: Callable[[Any, Config, LinearIdentity | None], Accounts]  # write-back accounts
+    accounts: Callable[[Any, Config, LinearKey | None], Accounts]  # write-back accounts
     claimed: Callable[[Any, Config, Claim], Accounts]
-    identity: Callable[[Config, str], LinearIdentity | None]  # a role's; None: none to check
+    identity: Callable[[Config, str], LinearKey | None]  # a role's; None: none to check
     board: Callable[[Any, Config], Callable[[Any], Tracker]]
 
 

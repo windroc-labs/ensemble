@@ -27,7 +27,7 @@ from ensemble.orchestrator.engine.types import (
     UUID_RE,
     Accounts,
     ConfigError,
-    LinearIdentity,
+    LinearKey,
     TrackerKind,
     Wiring,
 )
@@ -330,7 +330,7 @@ def _linear_accounts(gql, cfg, identity):
 def _linear_claimed(gql, cfg, claim):
     _start_row(claim, "key", claim.key is not None)
     _start_row(claim, "uuid", UUID_RE.fullmatch(claim.uuid) is not None)
-    return _linear_accounts(gql, cfg, LinearIdentity(claim.key))
+    return _linear_accounts(gql, cfg, LinearKey(claim.key))
 
 
 def _linear_identity(cfg, role):

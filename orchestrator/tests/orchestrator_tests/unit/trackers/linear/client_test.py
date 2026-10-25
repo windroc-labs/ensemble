@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from ensemble.orchestrator.engine import types
-from ensemble.orchestrator.engine.types import LinearError, LinearIdentity
+from ensemble.orchestrator.engine.types import LinearError, LinearKey
 from ensemble.orchestrator.trackers.linear import client, ops
 from ensemble.utils import one_line
 from orchestrator_tests.case import Case
@@ -39,7 +39,7 @@ class LinearGql(Case):
         for service in ("svc-h", "linear-api-key-pm"):
             with self.subTest(service=service):
                 out, run, urlopen = self.gql(
-                    body=b'{"data": {"viewer": {"id": "v"}}}', identity=LinearIdentity(service)
+                    body=b'{"data": {"viewer": {"id": "v"}}}', identity=LinearKey(service)
                 )
                 self.assertEqual(out, {"viewer": {"id": "v"}})
                 self.assertEqual(
@@ -60,7 +60,7 @@ class LinearGql(Case):
                 _, run, urlopen = self.gql(
                     "query($i: String!) { issue(id: $i) { id } }",
                     i="TASK-1",
-                    identity=LinearIdentity("svc"),
+                    identity=LinearKey("svc"),
                     **kw,
                 )
                 self.assertEqual(run.call_args.kwargs["timeout"], want)
@@ -86,7 +86,7 @@ class LinearGql(Case):
                 mock.patch("subprocess.run", return_value=SimpleNamespace(stdout=out)),
                 self.assertRaises(types.KeychainError),
             ):
-                client.linear_gql(VIEWER, identity=LinearIdentity("svc"))
+                client.linear_gql(VIEWER, identity=LinearKey("svc"))
 
     def test_a_bad_keychain_key_raises_naming_only_the_service(self):
         for out, key in (("\n", ""), ("lin api\n", "lin api"), ("lin\x1bapi\n", "lin\x1bapi")):
@@ -94,9 +94,7 @@ class LinearGql(Case):
                 self.subTest(key=key),
                 mock.patch("subprocess.run", return_value=SimpleNamespace(stdout=out)),
             ):
-                code = refused(
-                    self, lambda: client.linear_gql(VIEWER, identity=LinearIdentity("svc"))
-                )
+                code = refused(self, lambda: client.linear_gql(VIEWER, identity=LinearKey("svc")))
                 self.assertIn("svc", code)
                 if key:
                     self.assertNotIn(key, code)
@@ -113,7 +111,7 @@ class Unavailable(Case):
         if read:
             resp.__enter__.return_value = mock.Mock(read=mock.Mock(side_effect=read))
         with mock.patch.object(urllib.request, "urlopen", side_effect=opened, return_value=resp):
-            return client.linear_gql(query, identity=LinearIdentity("svc"))
+            return client.linear_gql(query, identity=LinearKey("svc"))
 
     def unavailable(self, query, **kw):
         with self.assertRaises(types.Unavailable) as cm:
@@ -358,7 +356,7 @@ class HasKey(Case):
     def test_key_existence_check_never_reads_the_secret(self):
         for code, want in ((0, True), (44, False)):
             with mock.patch("subprocess.run", return_value=SimpleNamespace(returncode=code)) as m:
-                self.assertIs(client.has_key(LinearIdentity("svc")), want)
+                self.assertIs(client.has_key(LinearKey("svc")), want)
             self.assertEqual(
                 m.call_args.args[0], ["/usr/bin/security", "find-generic-password", "-s", "svc"]
             )
