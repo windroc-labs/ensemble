@@ -1,7 +1,7 @@
 """A Docker session's host run supervisor (argv: name, state dir, TUI dir, events or "", hook
 command, generation, the supervisor.lock fd its starter holds, then connector, dead-wait and
 dead-check argv as JSON). Each relay request that passes its checks and is newer than <gen>.seq runs
-`<hook> hook <TUI dir> <label>` once; every line gets one reply. SIGTERM closes the connector's
+`<hook> hook <TUI dir> <label>`; only success records seq, failures request retry. Every line gets one reply. SIGTERM closes the connector's
 stdin; lines already sent still run. A confirmed client exit writes the dead line. The session's
 GitHub tokens (<gen>.github.json) are refreshed REFRESH_AHEAD s before the earliest expiry.
 """
@@ -90,6 +90,9 @@ class Supervisor:
         elif seq > self._seen():
             body.pop("transcript_path", None)
             why = self._hook(request["argv"][2], body)
+            if why:
+                self.reject(gen, seq, why)
+                return {"gen": gen, "seq": seq, "ok": False, "retry": True}
             with contextlib.suppress(OSError):
                 save(self.seq_file, str(seq), durable=True)
         if why:

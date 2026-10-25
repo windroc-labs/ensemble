@@ -14,8 +14,9 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest import mock
 
+from ensemble.session.engine.status_log import SessionStatusLog
 from ensemble.session.engine.types import SessionError
-from ensemble.session.hosts.docker import supervisor
+from ensemble.session.hosts.docker import relay, supervisor
 from ensemble.session.hosts.docker.broker import Broker
 from ensemble.session.hosts.docker.supervisor import Supervisor
 from tests.session.case import REPO, Case
@@ -178,7 +179,7 @@ class HandleTest(Base):
         self.supervisor.handle(request(seq=1))
         self.assertEqual(len(self.ran), 1)
 
-    def test_hook_failure_is_not_ok_logged_and_not_replayed(self):
+    def test_hook_failure_is_retried_logged_and_only_success_is_recorded(self):
         self.code = 3
         for seq, error, reason in (
             (1, None, "hook exit 3"),
@@ -189,15 +190,19 @@ class HandleTest(Base):
                 if error is not None:
                     self.supervisor.run = mock.Mock(side_effect=error)
                 self.assertEqual(
-                    self.supervisor.handle(request(seq=seq)), {"gen": GEN, "seq": seq, "ok": False}
+                    self.supervisor.handle(request(seq=seq)),
+                    {"gen": GEN, "seq": seq, "ok": False, "retry": True},
                 )
                 self.assertEqual(self.rejected()[-1], {"gen": GEN, "seq": seq, "reason": reason})
+                self.assertFalse(os.path.exists(self.supervisor.seq_file))
         self.supervisor.run = self.hook_run
         self.code = 0
         self.assertEqual(self.supervisor.handle(request(seq=3))["ok"], True)
-        self.assertEqual(len(self.ran), 1)
-        self.assertEqual(self.supervisor.handle(request(seq=4))["ok"], True)
         self.assertEqual(len(self.ran), 2)
+        self.assertEqual(self.supervisor.handle(request(seq=3))["ok"], True)
+        self.assertEqual(len(self.ran), 2)
+        self.assertEqual(self.supervisor.handle(request(seq=4))["ok"], True)
+        self.assertEqual(len(self.ran), 3)
 
     def test_the_rejected_log_stops_at_its_cap(self):
         path = os.path.join(self.state, "rejected.jsonl")
@@ -205,6 +210,70 @@ class HandleTest(Base):
             f.write("x" * supervisor.LOG_MAX)
         self.supervisor.handle(b"bad\n")
         self.assertEqual(os.path.getsize(path), supervisor.LOG_MAX)
+
+
+class HookReplayTest(Base):
+    def pump(self, outcomes):
+        queue = relay.Queue(os.path.join(self.home, "queue"))
+        message = relay.relay_request(request())
+        relay.answer(
+            json.dumps({k: message[k] for k in ("id", "argv", "payload")}).encode() + b"\n",
+            queue,
+            GEN,
+        )
+        attempts, replies = [], []
+        outcomes = iter(outcomes)
+
+        def run(_argv, **_kw):
+            outcome = next(outcomes)
+            attempts.append(outcome)
+            if isinstance(outcome, Exception):
+                raise outcome
+            if outcome == 0:
+                SessionStatusLog(self.events).write("worker_1", "done")
+            return SimpleNamespace(returncode=outcome)
+
+        def write(line):
+            replies.append(json.dumps(self.supervisor.handle(line)).encode() + b"\n")
+
+        self.supervisor.run = run
+        reader = mock.Mock()
+        reader.readline.side_effect = lambda _: replies.pop(0) if replies else b""
+        writer = mock.Mock()
+        writer.write.side_effect = write
+        with mock.patch("time.sleep") as sleep:
+
+            def pause(_seconds):
+                self.assertEqual(queue.first(0)[0], 1)
+                if len(attempts) == 3:
+                    reader.readline.side_effect = lambda _: b""
+
+            sleep.side_effect = pause
+            relay.pump(queue, reader, writer, idle=0)
+        return queue, attempts
+
+    def test_hook_fails_once_then_delivers_one_manager_event_and_replays_harmlessly(self):
+        queue, attempts = self.pump([3, 0])
+        self.assertEqual(attempts, [3, 0])
+        self.assertIsNone(queue.first(0))
+        restarted = Supervisor(
+            "worker_1", self.state, TUI, self.events, HOOK, generation=GEN, run=self.supervisor.run
+        )
+        self.assertTrue(restarted.handle(request())["ok"])
+        with open(self.events) as stream:
+            self.assertEqual([line.split()[1:] for line in stream], [["worker_1", "done"]])
+
+    def test_persistent_hook_failures_remain_queued_and_log_each_reason(self):
+        queue, attempts = self.pump([3, OSError(2, "gone"), TimeoutExpired(HOOK, 60), 3])
+        self.assertEqual(len(attempts), 4)
+        self.assertEqual(queue.first(0)[0], 1)
+        self.assertFalse(os.path.exists(self.supervisor.seq_file))
+        self.assertEqual(
+            [item["reason"] for item in self.rejected()],
+            ["hook exit 3", "hook error", "hook timeout", "hook exit 3"],
+        )
+        with open(self.events) as stream:
+            self.assertEqual(stream.read(), "")
 
 
 class ServeTest(Base):
