@@ -165,7 +165,7 @@ def say(text: str) -> None:
 
 
 def to_stderr(text: str) -> None:
-    """Dropped once stderr is dead: EIO, its terminal hung up (a killed pane); EPIPE, no reader."""
+    """Dropped once stderr is dead: EIO, its terminal hung up; EPIPE, its reader gone."""
     try:
         sys.stderr.write(text)
         sys.stderr.flush()

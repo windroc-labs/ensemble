@@ -601,6 +601,30 @@ class TuiPolicy(Base):
                 self.assertEqual(self.handle.calls, [("stop",)])
                 self.assert_closed_as_stopped()
 
+    def test_a_killed_harness_whose_own_stop_fails_has_its_tui_stopped_by_the_retry(self):
+        def hangup():
+            yield turn(START)
+            sys.stderr = DeadStream()
+            yield Reply("a line for the hung-up terminal")
+            try:  # the session's own stop on the signal, as HostedSession.events() does
+                self.handle.stop()
+            except SessionError:
+                self.handle.stop_fail = None
+            raise Stopped(128 + signal.SIGHUP)
+
+        self.handle = FakeHandle(
+            hangup(), stop_fail=SessionError("tmux sessions unknown: tmux failed")
+        )
+        with (
+            mock.patch.object(self.driver, "start", side_effect=self.handle.start),
+            self.assertRaises(Stopped) as raised,
+        ):
+            self.go(mode="tui")
+        self.assertEqual(raised.exception.code, 129)
+        self.assertEqual(self.handle.calls[-2:], [("stop",), ("stop",)])
+        self.assertIsNone(self.handle.stop_fail)
+        self.assert_closed_as_stopped()
+
     def test_a_stop_that_raises_still_closes_the_run(self):
         crash = RuntimeError("stop crashed")
         self.assertIs(self.killed(stop_fail=crash), crash)
