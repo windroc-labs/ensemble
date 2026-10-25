@@ -243,6 +243,20 @@ class Wirings(run_fixtures.Base):
                 for phrase in (*phrases, "Record", "ISSUE", "configured", "Exit", "duplicate"):
                     self.assertIn(phrase, text)
 
+    def test_resume_help_says_it_delivers_no_answer_to_a_needs_input_run(self):
+        output = io.StringIO()
+        with redirect_stdout(output), self.assertRaises(SystemExit):
+            cli.main(["resume", "--help"])
+        text = " ".join(output.getvalue().split())
+        for phrase in (
+            "Restart exactly one interrupted recorded run",
+            "delivers no answer to a needs_input run",
+            "ensemble-session send",
+            "ensemble-crew reopen --help",
+        ):
+            self.assertIn(phrase, text)
+        self.assertNotIn("then resume", text)
+
     def test_maintenance_and_automation_help_retains_operational_contracts(self):
         expected = {
             "router": (
