@@ -262,7 +262,7 @@ class Manage(Case):
 
     def test_a_pipeline_answer_is_confirmed_per_client_and_its_tui_still_reports(self):
         [step] = re.findall(r"^  5\. .*?(?=^  6\. )", section("manage", "Recover"), re.M | re.S)
-        reader = "${CLAUDE_SKILL_DIR}/../../../session/src/ensemble/session/clients/opencode/transcript.py"
+        reader = "${CLAUDE_SKILL_DIR}/../../src/ensemble/session/clients/opencode/transcript.py"
         found = [
             step.find(phrase)
             for phrase in (
