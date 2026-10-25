@@ -14,11 +14,11 @@ import re
 import signal
 import stat
 import subprocess
-import sys
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import asdict
 
+from ensemble.delegate.engine.runner import to_stderr
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import Begun, ConfigError, Event, Progress
 from ensemble.delegate.event import DelegateEvent
@@ -104,7 +104,7 @@ class EventCallback:
                     kill_group(child)
                     raise
             if stderr:
-                print(stderr, end="", file=sys.stderr, flush=True)
+                to_stderr(stderr)
             if child.returncode:
                 self._exited(child.returncode, stderr or "")
         except BaseException:

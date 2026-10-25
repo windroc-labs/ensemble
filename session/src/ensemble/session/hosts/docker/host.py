@@ -1407,7 +1407,10 @@ class DockerHost(Host):
         """unknown when the container's tmux did not answer: no proof its client exited."""
         record = _record(name)
         record = record if record.get("generation") == generation else {}
-        listing = self.container_tmux(container).listing()
+        try:
+            listing = self.container_tmux(container).listing()
+        except TuiError:
+            listing = None
         found = [row for row in listing or [] if row["name"] == name]
         row = found[0] if len(found) == 1 else {"dead": True, "state": None, "last_lines": None}
         if listing is None:

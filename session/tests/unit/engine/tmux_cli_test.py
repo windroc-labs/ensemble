@@ -741,6 +741,7 @@ class ListingTest(Case):
                 "capture-pane": capture,
             }
         )
+        self.fake = fake
         return tmux_cli.TmuxCli(fake).listing(match), fake
 
     def test_every_field_sorted_by_name_one_call_each(self):
@@ -977,11 +978,15 @@ class ListingTest(Case):
                 got, fake = self.listing(result)
                 self.assertEqual((got, fake.calls), ([], [LISTING]))
 
-    def test_tmux_failing_is_none(self):
+    def test_tmux_failing_raises_why(self):
         sessions, client = listed(("w1", "0")), tabbed(("7", "/dev/host", "w1"))
-        for failing in (
-            *((1, "", err + "\n") for err in FAILED),
-            FileNotFoundError(2, "No such file", "tmux"),
+        for failing, why in (
+            *(((1, "", err + "\n"), "exited 1" + (f": {err}" if err else "")) for err in FAILED),
+            (FileNotFoundError(2, "No such file", "tmux"), "[Errno 2] No such file: 'tmux'"),
+            (
+                BlockingIOError(errno.EAGAIN, "Resource temporarily unavailable"),
+                f"[Errno {errno.EAGAIN}] Resource temporarily unavailable",
+            ),
         ):
             for at, calls in (
                 ({"sessions": failing}, [LISTING]),
@@ -989,8 +994,11 @@ class ListingTest(Case):
                 ({"clients": client, "panes": failing}, [LISTING, ALL_CLIENTS, HOST_PANES]),
             ):
                 with self.subTest(failing=failing, at=at):
-                    got, fake = self.listing(**{"sessions": sessions, **at})
-                    self.assertEqual((got, fake.calls), (None, calls))
+                    with self.assertRaises(tmux_cli.TuiError) as raised:
+                        self.listing(**{"sessions": sessions, **at})
+                    verb = calls[-1][2]
+                    want = f"tmux {verb} {why}" if why.startswith("exited") else f"tmux: {why}"
+                    self.assertEqual((str(raised.exception), self.fake.calls), (want, calls))
 
 
 class DetachHandoverTest(StartFixture):

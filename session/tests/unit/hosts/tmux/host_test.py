@@ -602,3 +602,17 @@ class ReturncodeTest(Base):
                 self.assertEqual(process.returncode(), expected)
         self.tmux.process.side_effect = TuiError("tmux unavailable")
         self.assertIsNone(process.returncode())
+
+
+class ListTest(Base):
+    def test_a_failed_listing_names_why_in_list_and_rows(self):
+        self.tmux.listing.side_effect = TuiError("tmux list-sessions exited 1: lost server")
+        for verb in (self.host.list, self.host.rows):
+            with (
+                self.subTest(verb=verb.__name__),
+                self.assertRaisesRegex(
+                    SessionError,
+                    r"\Atmux sessions unknown: tmux list-sessions exited 1: lost server\Z",
+                ),
+            ):
+                verb()
