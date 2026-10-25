@@ -30,7 +30,6 @@ const usage = "usage: ensemble-broker version | install-codex VERSION | update-c
 
 var containerPattern = regexp.MustCompile(`^ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}$`)
 var secondsPattern = regexp.MustCompile(`^[0-9]{1,9}$`)
-var pluginPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}@[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}#[a-f0-9]{40}(?:::[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}#[a-f0-9]{40})?$`)
 var volumePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$`)
 
 // step runs a command; progress is the broker's stderr, for build's Docker progress and start's phase times.
@@ -241,7 +240,7 @@ type buildArgs struct {
 // buildOptions parses build's [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--max-age SECONDS], else nil.
 func buildOptions(args []string) *buildArgs {
 	o := &buildArgs{maxAge: -1}
-	for len(args) >= 2 && args[0] == "--plugin" && pluginPattern.MatchString(args[1]) {
+	for len(args) >= 2 && args[0] == "--plugin" && launcher.PluginSourcePattern.MatchString(args[1]) {
 		o.plugins, args = append(o.plugins, args[1]), args[2:]
 	}
 	if len(args) == 2 && args[0] == "--max-age" && secondsPattern.MatchString(args[1]) {

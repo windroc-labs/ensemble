@@ -11,7 +11,17 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-var pluginSourcePattern = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9._-]{0,63})@([A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]{0,99})#([a-f0-9]{40})(?:::([A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]{0,99})#([a-f0-9]{40}))?$`)
+const (
+	pluginName = `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`
+	pluginRepo = `[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}`
+)
+
+// PluginNamePattern is a plugin's name; PluginSourcePattern a repository source naming one,
+// NAME@OWNER/REPO#COMMIT[::MARKETPLACE-OWNER/REPO#COMMIT].
+var (
+	PluginNamePattern   = regexp.MustCompile(`^` + pluginName + `$`)
+	PluginSourcePattern = regexp.MustCompile(`^(` + pluginName + `)@(` + pluginRepo + `)#([a-f0-9]{40})(?:::(` + pluginRepo + `)#([a-f0-9]{40}))?$`)
+)
 
 const pluginRoot = "/opt/ensemble/plugins/"
 
@@ -27,7 +37,7 @@ type pluginSource struct {
 func stagePlugins(names []string, dir string) ([]string, error) {
 	sources := []pluginSource{}
 	for _, value := range names {
-		match := pluginSourcePattern.FindStringSubmatch(value)
+		match := PluginSourcePattern.FindStringSubmatch(value)
 		if match == nil {
 			return nil, protocol.New(protocol.BuildFailed, "Plugin "+value+": use name@owner/repo#40-hex-commit, optionally followed by ::marketplace-owner/repo#40-hex-commit.")
 		}

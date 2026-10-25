@@ -164,3 +164,15 @@ func TestMalformedConfiguredMarketplacesFailBeforeDocker(t *testing.T) {
 		}
 	}
 }
+
+func TestPluginNameGrammar(t *testing.T) {
+	long := strings.Repeat("a", 64)
+	for name, want := range map[string]bool{"a": true, "a.b-c_d": true, long: true, long + "a": false, "../x": false, ".x": false, "-x": false, "a/b": false, "": false, "a@b": false} {
+		if got := PluginNamePattern.MatchString(name); got != want {
+			t.Errorf("PluginNamePattern(%q) = %v", name, got)
+		}
+		if got := PluginSourcePattern.MatchString(name + "@owner/repo#" + strings.Repeat("a", 40)); got != want {
+			t.Errorf("PluginSourcePattern name %q = %v", name, got)
+		}
+	}
+}
