@@ -53,7 +53,7 @@ func taken(c string) *protocol.Error {
 }
 
 // Start writes each phase's seconds to Progress only once it succeeds, so a failure's stderr stays one error object.
-func (h Host) Start(ctx context.Context, path string) (StartResult, error) {
+func (h Host) Start(ctx context.Context, path string) (result StartResult, retErr error) {
 	var times strings.Builder
 	var notes strings.Builder
 	progress := h.Progress
@@ -65,6 +65,12 @@ func (h Host) Start(ctx context.Context, path string) (StartResult, error) {
 		fmt.Fprintf(&times, "ensemble-broker: start %s %.2f s\n", phase, now.Sub(last).Seconds())
 		last = now
 	}
+	defer func() {
+		if retErr == nil && progress != nil {
+			fmt.Fprintf(&times, "ensemble-broker: start total %.2f s\n", time.Since(began).Seconds())
+			_, _ = io.WriteString(progress, times.String()+notes.String())
+		}
+	}()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return StartResult{}, protocol.New(protocol.ManifestRejected, "Cannot read manifest "+path+".")
@@ -132,7 +138,42 @@ func (h Host) Start(ctx context.Context, path string) (StartResult, error) {
 		return StartResult{}, err
 	}
 	lap("checks")
-	result, held, err := h.create(ctx, c, m, info, policy, facts, lap)
+	var held bool
+	if m.Lock != "" {
+		mutex, err := h.acquireMutex(ctx, m.Lock, info.ID)
+		if err != nil {
+			return StartResult{}, err
+		}
+		defer func() {
+			if cleanup := h.releaseMutex(ctx, mutex); cleanup != nil {
+				if retErr == nil {
+					h.rollback(ctx, c, cleanup)
+					if held && cleanup.Cleanup == protocol.Removed && clientKind(m.Client) != "" {
+						h.Audit.Add(c, audit.Credential{Kind: clientKind(m.Client), Result: audit.Withdrawn}, "")
+					}
+					result, retErr = StartResult{}, cleanup
+				} else {
+					var e *protocol.Error
+					if errors.As(retErr, &e) {
+						e.Message += " " + cleanup.Message
+						if e.Code == protocol.Busy {
+							e.Code, e.Holder = protocol.StartFailed, nil
+						}
+					} else {
+						retErr = cleanup
+					}
+				}
+			}
+		}()
+		holder, err := h.lockHolder(ctx, m.Lock, "")
+		if err != nil {
+			return StartResult{}, err
+		}
+		if holder != nil {
+			return StartResult{}, busy(holder)
+		}
+	}
+	result, held, err = h.create(ctx, c, m, info, policy, facts, lap)
 	if errors.Is(err, errTaken) {
 		return StartResult{}, taken(c)
 	}
@@ -142,16 +183,16 @@ func (h Host) Start(ctx context.Context, path string) (StartResult, error) {
 			e = protocol.New(protocol.StartFailed, "Start failed.")
 		}
 		h.rollback(ctx, c, e)
+		if e.Code == protocol.Busy && e.Cleanup == protocol.Failed {
+			e.Code, e.Holder = protocol.StartFailed, nil
+			e.Message = "Cannot remove yielding container " + c + "."
+		}
 		if kind := clientKind(m.Client); held && kind != "" && e.Cleanup == protocol.Removed {
 			h.Audit.Add(c, audit.Credential{Kind: kind, Result: audit.Withdrawn}, "")
 		}
 		return StartResult{}, e
 	}
 	result.GitHubUserID = userID
-	fmt.Fprintf(&times, "ensemble-broker: start total %.2f s\n", time.Since(began).Seconds())
-	if progress != nil {
-		_, _ = io.WriteString(progress, times.String()+notes.String())
-	}
 	return result, nil
 }
 
@@ -206,6 +247,9 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	}
 	args = append(args,
 		"--label", "ensemble.session="+m.Name, "--label", "ensemble.generation="+m.Generation, "--label", clientLabel+"="+m.Client)
+	if m.Lock != "" {
+		args = append(args, "--restart", "no", "--label", lockLabel+"="+m.Lock, "--label", ownerLabel+"="+m.LockOwner)
+	}
 	keys := make([]string, 0, len(m.Labels))
 	for k := range m.Labels {
 		keys = append(keys, k)
@@ -228,6 +272,15 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 		return StartResult{}, false, e
 	}
 	lap("create")
+	if m.Lock != "" {
+		holder, err := h.lockHolder(ctx, m.Lock, c)
+		if err != nil {
+			return StartResult{}, false, err
+		}
+		if holder != nil {
+			return StartResult{}, false, busy(holder)
+		}
+	}
 	// OpenCode has no state to seed.
 	if m.Client != "opencode" {
 		if _, err := h.Docker.Run(ctx, asAgent(c, Python, "-I", Bootstrap, m.Client, m.StateDir(), m.CWD), nil); err != nil {
