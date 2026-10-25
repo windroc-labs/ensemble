@@ -395,8 +395,16 @@ func TestCodexStatusFixtures(t *testing.T) {
 		if err := json.Unmarshal(c.Data, &result); err != nil {
 			t.Fatal(err)
 		}
+		var metadata struct {
+			AuditWarning string `json:"audit_warning"`
+		}
+		_ = json.Unmarshal(c.Data, &metadata)
+		var response any = result
+		if metadata.AuditWarning != "" {
+			response = auditWarningResult{result}
+		}
 		var out bytes.Buffer
-		if emit(&out, result) != 0 {
+		if emit(&out, response) != 0 {
 			t.Fatal("status encoding failed")
 		}
 		var original, encoded any

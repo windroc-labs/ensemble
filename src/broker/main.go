@@ -283,19 +283,20 @@ func withHost(command, container string, progress io.Writer, f func(launcher.Hos
 		return nil, err
 	}
 	rec := recorder(home, command, container)
-	defer func() { rec.Flush(err) }()
-	d, clean, err := docker.New(home)
-	if err != nil {
-		return nil, err
-	}
-	defer clean()
-	d.Progress = progress
-	h := launcher.NewHost(home, d.Endpoint(), d, broker.Credentials{Keychain: broker.SystemKeychain{Home: home}}, tokens(home, rec), rec)
-	h.Codex = broker.NewCodex(home, nil)
-	h.Opencode = broker.OpencodeKeys{Keychain: broker.SystemKeychain{Home: home}}
-	h.Progress = progress
-	h.Lock = broker.FileLock(filepath.Join(home, ".ensemble/docker/images.lock"))
-	return f(h)
+	return withAudit(rec, func() (any, error) {
+		d, clean, err := docker.New(home)
+		if err != nil {
+			return nil, err
+		}
+		defer clean()
+		d.Progress = progress
+		h := launcher.NewHost(home, d.Endpoint(), d, broker.Credentials{Keychain: broker.SystemKeychain{Home: home}}, tokens(home, rec), rec)
+		h.Codex = broker.NewCodex(home, nil)
+		h.Opencode = broker.OpencodeKeys{Keychain: broker.SystemKeychain{Home: home}}
+		h.Progress = progress
+		h.Lock = broker.FileLock(filepath.Join(home, ".ensemble/docker/images.lock"))
+		return f(h)
+	})
 }
 
 // tokens is the broker's GitHub App token store in the account's login keychain, reporting to rec (nil: none).
@@ -332,22 +333,23 @@ func system() app {
 			var rec *audit.Recorder
 			if cleanup {
 				rec = recorder(home, "status", "")
-				defer func() { rec.Flush(err) }()
 			}
-			h := launcher.Host{GitHub: tokens(home, rec)}
-			query := h.Status
-			if cleanup {
-				query = h.Cleanup
-			}
-			status, err := query(ctx)
-			if err != nil {
-				return nil, err
-			}
-			codexStatus := broker.NewCodex(home, nil).Status(ctx)
-			status.Codex = &codexStatus
-			credentials := broker.Credentials{Keychain: broker.SystemKeychain{Home: home}}
-			status.Claude = map[string]bool{"default": credentials.Usable("default")}
-			return status, nil
+			return withAudit(rec, func() (any, error) {
+				h := launcher.Host{GitHub: tokens(home, rec)}
+				query := h.Status
+				if cleanup {
+					query = h.Cleanup
+				}
+				status, err := query(ctx)
+				if err != nil {
+					return nil, err
+				}
+				codexStatus := broker.NewCodex(home, nil).Status(ctx)
+				status.Codex = &codexStatus
+				credentials := broker.Credentials{Keychain: broker.SystemKeychain{Home: home}}
+				status.Claude = map[string]bool{"default": credentials.Usable("default")}
+				return status, nil
+			})
 		},
 		close: func(ctx context.Context, container string, _ io.Writer) (any, error) {
 			return withHost("close", container, nil, func(h launcher.Host) (any, error) { return h.Close(ctx, container) })

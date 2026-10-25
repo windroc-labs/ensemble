@@ -553,6 +553,9 @@
         },
         "client_update": {
           "$ref": "#/$defs/client_update"
+        },
+        "audit_warning": {
+          "$ref": "#/$defs/audit_warning"
         }
       },
       "required": [
@@ -622,6 +625,9 @@
         },
         "removed": {
           "type": "boolean"
+        },
+        "audit_warning": {
+          "$ref": "#/$defs/audit_warning"
         }
       },
       "required": [
@@ -723,6 +729,9 @@
               "$ref": "#/$defs/time"
             }
           ]
+        },
+        "audit_warning": {
+          "$ref": "#/$defs/audit_warning"
         }
       },
       "required": [
@@ -794,6 +803,9 @@
             "default"
           ],
           "additionalProperties": false
+        },
+        "audit_warning": {
+          "$ref": "#/$defs/audit_warning"
         }
       },
       "required": [
@@ -912,6 +924,9 @@
               }
             }
           ]
+        },
+        "audit_warning": {
+          "$ref": "#/$defs/audit_warning"
         }
       },
       "required": [
@@ -1253,6 +1268,31 @@
             }
           }
         }
+      ],
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "audit_warning"
+            ]
+          },
+          "then": {
+            "properties": {
+              "error": {
+                "properties": {
+                  "command": {
+                    "enum": [
+                      "start",
+                      "refresh",
+                      "close",
+                      "status"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
       ]
     },
     "github_login": {
@@ -1469,6 +1509,9 @@
         "available"
       ],
       "additionalProperties": false
+    },
+    "audit_warning": {
+      "const": "audit_write_failed"
     }
   }
 }

@@ -1,0 +1,14 @@
+{
+  "exit_code": 9,
+  "error": {
+    "command": "start",
+    "code": "start_failed",
+    "message": "Example start_failed.",
+    "cleanup": "failed",
+    "cleanup_error": "Docker delete failed.",
+    "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef"
+  },
+  "audit_warning": {
+    "message": "AUDIT_SECRET_SENTINEL"
+  }
+}
