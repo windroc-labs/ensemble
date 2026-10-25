@@ -443,6 +443,70 @@ later, it leaves its worker running.
   continues the conversation in a new container. Events queued in the old one are lost.
 - **Codex authentication expired** (`client_auth_expired`): run `/usr/local/libexec/ensemble/ensemble-broker login codex` on the host, then `ensemble-session resume NAME`; native history is kept. Renewal failures (`client_refresh_failed`) retry each minute until expiry, when the generation closes. No run logs in or uses another identity.
 
+## Broker locks
+
+A broker `start` manifest may add `"lock": "dummy-lock", "lock_owner": "worker_1"`.
+Lock names match `[a-z0-9][a-z0-9_.-]{0,62}`; `lock_owner` is nonempty readable text
+(ensemble callers send the session name). Both fields must appear together. The broker
+validates them again and rejects caller labels prefixed with `windroc.` or `ensemble.`
+as `manifest_rejected`.
+
+A holder has `windroc.lock=<lock>` and state **running**, **paused** or **restarting**;
+`windroc.lock.owner` names its owner. Other states release the lock. Stopped containers
+remain in Docker and are never removed to acquire a lock. Every broker-created mutex
+and run container with a lock uses restart policy `no` (`--restart no`).
+
+```mermaid
+flowchart TD
+    P[Configuration checks] --> M[1. Create mutex]
+    M -->|name conflict| T{Older than 120 s?}
+    T -->|no| B[busy: starting]
+    T -->|yes| R[Remove inspected ID; retry once]
+    R -->|conflict again| B
+    R -->|created| H[2. Query holders]
+    M -->|created| H
+    H -->|occupied| O[busy: holder]
+    H -->|free| C[3. Create and start run]
+    C --> Q[4. Recheck other holders]
+    Q -->|another holder| D[Remove own run]
+    D -->|removed| O
+    D -->|failed| E[Error naming own run]
+    Q -->|none| S[Finish preparing run]
+    O --> X[5. Remove own mutex by ID]
+    E --> X
+    S --> X
+    X -->|success only| A[Hand over run]
+```
+Every exit after acquiring a mutex, including errors and cancellation, attempts step 5.
+
+The mutex is a never-started `windroc-lock-<lock>` container on the checked local image
+being started, created with `--pull never --network none --restart no` and labels
+`windroc.lock.mutex=<lock>` and `windroc.lock.since=<host epoch seconds>`. Docker's unique
+container name serializes ordinary starts. On conflict, only a timestamp strictly more
+than 120 seconds old permits removal, using the inspected ID, followed by one create
+retry. Missing or malformed timestamps stay busy. A killed starter can therefore leave
+same-lock starts busy until this expiry; successful cleanup leaves no mutex behind.
+ID-based cleanup protects a later starter's same-name mutex.
+
+The run receives `windroc.lock` and `windroc.lock.owner` at creation. The post-start
+recheck happens before bootstrap, credential injection and handover; it protects against
+overlapping starts after mutex expiry. Both starters may see each other and yield.
+Failure to remove a yielding run is `start_failed`, naming that container; stop it before
+retrying. A mutex cleanup failure also reports an error and rolls back a successful run.
+Claude token and image checks run before step 1, so their refusals retain their configuration
+error codes and are never busy.
+
+Busy is a distinct stderr protocol error (`code: "busy"`, exit 75), with a
+`holder` object containing `container` and `owner`; a mutex conflict reports
+`windroc-lock-<lock>` / `starting`. `ensemble-broker lock-query --lock dummy-lock` only
+reads Docker: it returns `{"holder": {"container": "…", "owner": "…"}}` or
+`{"holder": null}`, creates nothing and takes no lock. It queries run holders, so an
+in-progress start may still have an empty result; `start` always acquires and checks again.
+
+Release a holder with `docker stop <container>` (or close its session). A manual
+`docker start` of a stopped lock container bypasses this acquisition protocol and can
+create concurrent holders; start a fresh container through the broker instead.
+
 ## Workspace volumes
 
 A worker's workspace is a Docker volume, `ensemble-ws-<name>`, never a host directory, where it could plant files

@@ -8,7 +8,7 @@ import (
 	"unicode/utf8"
 )
 
-const Version = "21"
+const Version = "22"
 
 const AuditWriteFailed = "audit_write_failed"
 
@@ -31,13 +31,14 @@ const (
 	GitHubFailed      Code = "github_failed"
 	RefreshFailed     Code = "refresh_failed"
 	InternalError     Code = "internal_error"
+	Busy              Code = "busy"
 )
 
 var exits = map[Code]int{
 	Usage: 2, ManifestRejected: 3, MountRejected: 4, LoginRequired: 5, ImageRejected: 6,
 	DockerUnreachable: 7, BuildFailed: 8, StartFailed: 9, CloseFailed: 10, KeychainFailed: 11,
 	WorkspaceDirty: 12, WorkspaceRejected: 13, WorkspaceFailed: 14, GitHubFailed: 15, RefreshFailed: 16,
-	InternalError: 70,
+	InternalError: 70, Busy: 75,
 }
 
 func Exit(c Code) int {
@@ -76,14 +77,20 @@ type CodexStatus struct {
 	Repair    string `json:"repair"`
 }
 
+type Holder struct {
+	Container string `json:"container"`
+	Owner     string `json:"owner"`
+}
+
 type Error struct {
-	Code         Code   `json:"code"`
-	Message      string `json:"message"`
-	Cleanup      string `json:"cleanup"`
-	Cause        string `json:"cause,omitempty"`
-	CleanupError string `json:"cleanup_error,omitempty"`
-	Container    string `json:"container,omitempty"`
-	AuditWarning string `json:"-"` // independent envelope metadata, never part of the operation error
+	Code         Code    `json:"code"`
+	Message      string  `json:"message"`
+	Cleanup      string  `json:"cleanup"`
+	Cause        string  `json:"cause,omitempty"`
+	CleanupError string  `json:"cleanup_error,omitempty"`
+	Container    string  `json:"container,omitempty"`
+	Holder       *Holder `json:"holder,omitempty"`
+	AuditWarning string  `json:"-"` // independent envelope metadata, never part of the operation error
 }
 
 func New(code Code, message string) *Error {

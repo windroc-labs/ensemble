@@ -24,6 +24,7 @@ type fakeTokens struct {
 	ready, user, issue, refresh, revoke, retry error
 	pending                                    []protocol.Pending
 	onRevoke                                   func()
+	revokeContexts                             []error
 	permissions                                []map[string]string // each Issue's and Refresh's set
 }
 
@@ -54,8 +55,9 @@ func (f *fakeTokens) Refresh(_ context.Context, app string, permissions map[stri
 	}
 	return expiry, exec([]string{"write"}, []byte("ghs_token"))
 }
-func (f *fakeTokens) Revoke(_ context.Context, c string) error {
+func (f *fakeTokens) Revoke(ctx context.Context, c string) error {
 	f.calls = append(f.calls, "revoke "+c)
+	f.revokeContexts = append(f.revokeContexts, ctx.Err())
 	if f.onRevoke != nil {
 		f.onRevoke()
 	}
