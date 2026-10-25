@@ -501,6 +501,8 @@ func status(s C.OSStatus) error {
 		return ErrAuthFailed
 	case C.errSecInteractionNotAllowed:
 		return ErrNeedsDialog
+	case C.errSecInvalidOwnerEdit:
+		return ErrInvalidOwnerEdit
 	}
 	return fmt.Errorf("keychain status %d", int(s))
 }

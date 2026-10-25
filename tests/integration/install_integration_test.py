@@ -1122,7 +1122,7 @@ class InstallTest(Case):
         pem.unlink()
         self.assert_secret_free("SENTINELKEY", TOKEN, result=result)
 
-    def test_broker_change_logs_in_again(self):
+    def test_broker_change_reuses_usable_credentials(self):
         self.assert_ok(self.fresh(docker="y"))
         result = self.again()
         self.assert_ok(result)
@@ -1131,12 +1131,31 @@ class InstallTest(Case):
         self.assertIn("==> Docker Desktop running\n    skip: broker current", result.stderr)
         versions = Path(self.fakes, "claude/cache/0/broker/internal/codex/versions.go")
         versions.write_text('package codex\n\nconst MinVersion = "0.170.0"\n')
-        self.assert_ok(self.again(answers=[(TOKEN_Q, TOKEN)]))
+        self.assert_ok(self.again())
         calls = self.calls()
         self.assertIn("broker-install ", calls)
-        self.assertIn("ensemble-broker login claude", calls)
+        self.assertNotIn("ensemble-broker login claude", calls)
         self.assertIn(f"sudo -A {self.broker_path()} update-codex 0.170.0", calls)
         self.assertNotIn("ensemble-broker login codex", calls)
+
+    def test_claude_credential_skips_login_without_installer_login_state(self):
+        self.assert_ok(self.fresh(docker="y"))
+        state = Path(self.ensemble, "install/state")
+        state.write_text(re.sub(r"(?m)^login_claude=.*\n", "", state.read_text()))
+        result = self.again()
+        self.assert_ok(result)
+        self.assertIn("skip: default Claude credential usable by this broker", result.stderr)
+        self.assertNotIn("claude setup-token", self.calls())
+        self.assertNotIn("ensemble-broker login claude", self.calls())
+        self.assertNotIn("ensemble-broker login codex", self.calls())
+        self.assertIn("login_claude", self.state())
+
+    def test_claude_unusable_credential_is_not_hidden_by_installer_state(self):
+        self.assert_ok(self.fresh(docker="y"))
+        (self.fakes / "broker/claude_unusable").touch()
+        self.assert_ok(self.again(answers=[(TOKEN_Q, TOKEN)]))
+        self.assertIn("claude setup-token", self.calls())
+        self.assertIn("ensemble-broker login claude", self.calls())
 
     def test_codex_install_or_update(self):
         self.assert_ok(self.fresh(docker="y"))
@@ -1382,7 +1401,7 @@ class InstallTest(Case):
                 *[(WRITE_Q, "y")] * 3,
                 *provider_answers,
                 (WRITE_Q, "y"),
-                (WRITE_Q, path_answer),
+                *([(WRITE_Q, path_answer)] if path_answer is not None else []),
             ],
         )
 
@@ -1398,6 +1417,93 @@ class InstallTest(Case):
             ".cache/opencode/packages/ensemble@git+https:/github.com/windroc-labs/ensemble.git#main",
             "node_modules/ensemble",
         )
+
+    def test_opencode_reuses_stable_path_binary_and_preserves_it_on_cleanup(self):
+        for version in ("1.19.3", "1.20.0", "1.100.0"):
+            with self.subTest(version=version):
+                external = self.bin / "opencode"
+                shutil.copy(self.fakes / "apps/opencode", external)
+                (self.fakes / "opencode_version").write_text(version)
+                before = external.read_bytes()
+                self.assert_ok(self.opencode_only(path_answer=None))
+                self.assertEqual(
+                    tomllib.loads(self.config().read_text())["session"]["clients"]["opencode"][
+                        "executable"
+                    ],
+                    str(external),
+                )
+                self.assertFalse(Path(self.ensemble, "opencode").exists())
+                self.assertFalse(any(c.startswith("npm install") for c in self.calls()))
+                self.assertNotIn("brew install node", self.calls())
+                self.assertNotIn(".ensemble/opencode/bin", Path(self.home, ".zprofile").read_text())
+                self.assert_ok(self.opencode_rerun())
+                self.assertFalse(any("auth login" in c for c in self.calls()))
+                self.assert_ok(self.cleanup("--yes"))
+                self.assertEqual(external.read_bytes(), before)
+
+    def test_opencode_unusable_path_binary_falls_back_to_private_install(self):
+        for version in ("1.19.2", "1.9.9", "1.20.0-beta.1", "2.0.0", "garbage", ""):
+            with self.subTest(version=version):
+                shutil.copy(self.fakes / "apps/opencode", self.bin / "opencode")
+                (self.fakes / "opencode_version").write_text(version)
+                self.assert_ok(self.opencode_only())
+                private = Path(self.ensemble, "opencode/bin/opencode")
+                self.assertTrue(private.exists())
+                self.assertIn("opencode-ai@1.19.3", "\n".join(self.calls()))
+                self.assert_ok(self.cleanup("--yes"))
+
+    def test_opencode_failed_path_version_falls_back_to_private_install(self):
+        shutil.copy(self.fakes / "apps/opencode", self.bin / "opencode")
+        (self.fakes / "opencode_version").write_text("1.20.0")
+        (self.fakes / "fail").write_text("opencode --version")
+        self.assert_ok(self.opencode_only())
+        self.assertTrue(Path(self.ensemble, "opencode/bin/opencode").exists())
+
+    def test_opencode_rerun_migrates_private_default_to_path_with_spaces(self):
+        self.assert_ok(self.opencode_only())
+        external_dir = Path(self.home, "my tools")
+        external_dir.mkdir()
+        external = external_dir / "opencode"
+        shutil.copy(self.fakes / "apps/opencode", external)
+        (self.fakes / "opencode_version").write_text("1.20.0")
+        self.env["PATH"] = str(external_dir) + os.pathsep + self.env["PATH"]
+        self.assert_ok(self.opencode_rerun((WRITE_Q, "y")))
+        self.assertEqual(
+            tomllib.loads(self.config().read_text())["session"]["clients"]["opencode"][
+                "executable"
+            ],
+            str(external),
+        )
+        self.assertFalse(any(c.startswith("npm install") for c in self.calls()))
+
+    def test_opencode_removed_external_binary_migrates_to_private_copy(self):
+        external = self.bin / "opencode"
+        shutil.copy(self.fakes / "apps/opencode", external)
+        (self.fakes / "opencode_version").write_text("1.20.0")
+        self.assert_ok(self.opencode_only(path_answer=None))
+        self.assertEqual(self.state()["opencode_executable"], str(external))
+        external.unlink()
+        self.assert_ok(self.opencode_rerun((WRITE_Q, "y"), (WRITE_Q, "y")))
+        private = str(Path(self.ensemble, "opencode/bin/opencode"))
+        self.assertEqual(
+            tomllib.loads(self.config().read_text())["session"]["clients"]["opencode"][
+                "executable"
+            ],
+            private,
+        )
+        self.assertEqual(self.state()["opencode_executable"], private)
+
+    def test_opencode_declined_executable_migration_keeps_ownership_for_retry(self):
+        external = self.bin / "opencode"
+        shutil.copy(self.fakes / "apps/opencode", external)
+        (self.fakes / "opencode_version").write_text("1.20.0")
+        self.assert_ok(self.opencode_only(path_answer=None))
+        external.unlink()
+        self.assert_ok(self.opencode_rerun((WRITE_Q, "n"), (WRITE_Q, "y")))
+        self.assertEqual(self.state()["opencode_executable"], str(external))
+        self.assert_ok(self.opencode_rerun((WRITE_Q, "y")))
+        private = str(Path(self.ensemble, "opencode/bin/opencode"))
+        self.assertEqual(self.state()["opencode_executable"], private)
 
     def test_opencode_only(self):
         result = self.opencode_only()
@@ -2192,7 +2298,7 @@ exec /bin/rm "$@"
         self.assertNotIn("opencode auth login", self.calls())
         binary = self.root / "usr/local/libexec/ensemble/ensemble-broker"
         binary.write_text(binary.read_text() + "\n# replacement fake broker build\n")
-        self.assert_ok(self.again(answers=[(TOKEN_Q, TOKEN)]))
+        self.assert_ok(self.again())
         self.assertIn(login, self.calls())
         self.assertNotIn("opencode auth login", self.calls())
         self.auth_json().unlink()
@@ -2235,6 +2341,43 @@ exec /bin/rm "$@"
         self.assertIn(login, self.calls())
         self.assertNotIn("opencode auth login", self.calls())
         self.assertEqual((self.fakes / "keychain/ensemble-opencode").read_text(), KEY)
+
+    def test_opencode_foreign_keychain_item_stops_retry_and_names_recovery(self):
+        self.assert_ok(
+            self.fresh(
+                clients="opencode",
+                docker="y",
+                opencode=PROVIDER_ANSWERS,
+                logins=[(PEM_Q, ""), (OPENCODE_LOGIN_Q, "lan"), (r"API key:", KEY)],
+            )
+        )
+        state = Path(self.ensemble, "install/state")
+        state.write_text(re.sub(r"(?m)^login_opencode=.*\n", "", state.read_text()))
+        (self.fakes / "keychain/foreign-ensemble-opencode").touch()
+        result = self.again()
+        self.assertEqual(result.code, 0, result.stderr)
+        self.assertIn("ensemble-opencode/lan", result.tty)
+        self.assertIn("delete this item", result.tty)
+        self.assertIn("rerun install.sh", result.tty)
+        self.assertNotIn("Try again?", result.tty)
+        self.assertEqual(
+            sum(c.startswith("ensemble-broker login opencode") for c in self.calls()), 1
+        )
+        self.assertNotIn("login_opencode", self.state())
+        self.assert_secret_free(KEY, PASSWORD, result=result)
+
+    def test_codex_unavailable_foreign_keychain_item_names_recovery(self):
+        self.assert_ok(self.fresh(docker="y"))
+        codex = self.broker_path().parent / "codex/state.json"
+        saved = json.loads(codex.read_text())
+        codex.write_text(json.dumps({**saved, "state": "login_unavailable", "repair": "login"}))
+        (self.fakes / "keychain/foreign-ensemble-codex").touch()
+        result = self.again()
+        self.assertEqual(result.code, 1, result.stderr)
+        self.assertIn("ensemble-codex/auth", result.stderr + result.tty)
+        self.assertIn("delete this item", result.stderr + result.tty)
+        self.assertIn("rerun install.sh", result.stderr + result.tty)
+        self.assertEqual(self.calls().count("ensemble-broker login codex"), 1)
         self.assert_secret_free(KEY, PASSWORD, result=result)
 
     def test_opencode_docker_key_from_stdin(self):
@@ -3692,7 +3835,7 @@ exec /bin/rm "$@"
             " completions.\n# End of Docker Desktop section.\n"
         )
         before = self.snapshot()
-        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        self.assert_ok(self.fresh("--docker", logins=[(PEM_Q, "")]))
         self.assertFalse(
             [r for r in self.ledger() if r.startswith(("homebrew", "clt", "formula\tgh"))]
         )

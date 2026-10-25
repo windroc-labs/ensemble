@@ -553,12 +553,29 @@ def shasum(args):
 def broker(args):
     codex_file = BROKER.parent / "codex/state.json"
     state = load(codex_file, None)
+    if args[:2] in (["login", "opencode"], ["login", "codex"]):
+        service = "ensemble-" + args[1]
+        if (FAKES / "keychain" / ("foreign-" + service)).exists():
+            account = "auth" if args[1] == "codex" else args[2]
+            out(
+                f"ensemble-broker: keychain item {service}/{account} belongs to another process"
+                " (keychain status -25244); delete this item from the login keychain in Keychain"
+                " Access, then rerun install.sh\n",
+                sys.stderr,
+            )
+            return 11
     if args == ["status"]:
         default = {"state": "installation_invalid", "version": ""}
         default["repair"] = (
             "sudo /usr/local/libexec/ensemble/ensemble-broker install-codex <version>"
         )
-        out(json.dumps({"revocations": [], "codex": state or default}))
+        claude = (FAKES / "keychain/ensemble-claude").exists()
+        claude = claude and not (FAKES / "broker/claude_unusable").exists()
+        out(
+            json.dumps(
+                {"revocations": [], "codex": state or default, "claude": {"default": claude}}
+            )
+        )
         return 0
     if args[:1] in (["install-codex"], ["update-codex"]):
         if os.environ.get("FAKE_SUDO") != "1":
@@ -574,6 +591,7 @@ def broker(args):
         out("Paste the setup-token (hidden): ")
         mark(FAKES / "broker/claude_token", sys.stdin.readline().rstrip("\n"))
         store_key("ensemble-claude", "token")
+        (FAKES / "broker/claude_unusable").unlink(missing_ok=True)
         return 0
     if args[:3] == ["login", "github", "ensemble-bot"] and args[3:4] == ["--key-file"]:
         if (

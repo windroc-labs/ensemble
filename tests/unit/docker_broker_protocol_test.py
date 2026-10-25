@@ -9,6 +9,14 @@ PROTOCOL = Path(REPO, "protocol/docker-broker")
 
 
 class DockerBrokerProtocol(Case):
+    def test_status_reports_only_default_claude_usability(self):
+        schema = json.loads((PROTOCOL / "protocol.schema.json").read_text())
+        validator = Draft202012Validator({**schema, "$ref": "#/$defs/status_output"})
+        for ready in (True, False):
+            self.assertTrue(validator.is_valid({"revocations": [], "claude": {"default": ready}}))
+        for value in ({}, {"default": "token"}, {"default": True, "token": "secret"}):
+            self.assertFalse(validator.is_valid({"revocations": [], "claude": value}))
+
     def test_plugin_sources_require_full_commits(self):
         schema = json.loads((PROTOCOL / "protocol.schema.json").read_text())
         validator = Draft202012Validator({**schema, "$ref": "#/$defs/plugin"})

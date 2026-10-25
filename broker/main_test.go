@@ -72,6 +72,16 @@ func TestVersion(t *testing.T) {
 	}
 }
 
+func TestLoginOwnershipFailureExit(t *testing.T) {
+	a := app{loginOpencode: func(string, string, io.Writer) error {
+		return fmt.Errorf("cannot save item: %w", broker.ErrInvalidOwnerEdit)
+	}}
+	code, out, errOut := invoke(a, "login", "opencode", "strata")
+	if code != 11 || out != "" || !strings.Contains(errOut, "keychain status -25244") {
+		t.Fatalf("%d %q %q", code, out, errOut)
+	}
+}
+
 func TestProbeOpencodeCommand(t *testing.T) {
 	calls := 0
 	a := app{probeOpencode: func(_ context.Context, provider, base string) (any, error) {

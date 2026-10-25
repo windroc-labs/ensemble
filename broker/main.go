@@ -173,6 +173,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 			if login != nil {
 				if err := login(); err != nil {
 					fmt.Fprintln(stderr, "ensemble-broker:", err)
+					if errors.Is(err, broker.ErrInvalidOwnerEdit) {
+						return protocol.Exit(protocol.KeychainFailed)
+					}
 					return 1
 				}
 				return 0
@@ -334,6 +337,8 @@ func system() app {
 			}
 			codexStatus := broker.NewCodex(home, nil).Status(ctx)
 			status.Codex = &codexStatus
+			credentials := broker.Credentials{Keychain: broker.SystemKeychain{Home: home}}
+			status.Claude = map[string]bool{"default": credentials.Usable("default")}
 			return status, nil
 		},
 		close: func(ctx context.Context, container string, _ io.Writer) (any, error) {

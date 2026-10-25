@@ -779,6 +779,14 @@
         },
         "codex": {
           "$ref": "#/$defs/codex_status"
+        },
+        "claude": {
+          "type": "object",
+          "properties": {
+            "default": {"type": "boolean"}
+          },
+          "required": ["default"],
+          "additionalProperties": false
         }
       },
       "required": [

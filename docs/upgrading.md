@@ -12,7 +12,8 @@ It does not update what is installed, but for OpenCode's ensemble plugin: when `
 commit than the one it last downloaded, it deletes OpenCode's copy and downloads it again, and the `~/.ensemble/bin`
 commands run the new copy. Update the other plugins (Claude Code: `claude plugin marketplace update windroc`, then
 `claude plugin update ensemble@windroc`; Codex: `codex plugin marketplace upgrade windroc`), then rerun it: when
-the plugin's broker sources changed it reinstalls the broker and asks its logins again ([Log in](docker-host.md#log-in)).
+the plugin's broker sources changed it reinstalls the broker, reusing locally usable Claude and ready Codex
+credentials and requesting any missing logins ([Log in](docker-host.md#log-in)).
 It does not edit config keys a release renames.
 
 For OpenCode with `--docker`, rerunning the installer also ensures the local `auth.json` entry for a commander,
@@ -20,6 +21,7 @@ then imports it into the broker without a second key entry. A broker-only instal
 existing local API entries are reused, including after a broker reinstall. Both entries follow the install ledger's
 cleanup ownership ([Credentials](credentials.md#opencode-provider-api-keys)).
 
-With OpenCode selected, accept the installer's shell profile addition for `~/.ensemble/opencode/bin`, then open
-a new terminal to run `opencode` directly. Rerunning the install offers the same addition; it keeps the
-selected provider's configuration and credentials.
+With OpenCode selected, an existing stable 1.x executable on `PATH` at or above the minimum version is reused.
+Otherwise, the installer installs a private copy and offers a shell profile addition for `~/.ensemble/opencode/bin`;
+accept it, then open a new terminal to run `opencode` directly. A rerun can migrate an installer-written executable
+path when that program is removed or replaced; user-written paths, the selected provider and credentials are kept.
