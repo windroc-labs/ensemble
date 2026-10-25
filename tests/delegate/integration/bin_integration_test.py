@@ -73,8 +73,7 @@ class Command(Case):
         """OpenCode caches the plugin under .../ensemble@git+https:/...: PATH and PYTHONPATH split on ":"."""
         repo = os.path.join(self.tmp, "ensemble@git+https:", "ensemble")
         os.makedirs(repo)
-        for name in ("utils", "session", "delegate"):
-            os.symlink(os.path.join(REPO, name), os.path.join(repo, name))
+        os.symlink(os.path.join(REPO, "src"), os.path.join(repo, "src"))
         shutil.copytree(os.path.join(REPO, "bin"), os.path.join(repo, "bin"))
         path = MINIMAL
         if not system_python_ok():

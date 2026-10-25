@@ -99,8 +99,8 @@ class ChildEnvironments(Case):
                     {"env": expected, "commands": commands, "gate": gate},
                 )
 
-    def test_source_callers_supply_only_the_three_owned_import_roots(self):
-        owned = tuple(SRC[name] for name in ("delegate", "session", "utils"))
+    def test_source_callers_supply_the_shared_import_root_once(self):
+        owned = (SRC["delegate"],)
         self.assert_environments(
             self.caller_environments(),
             {"PYTHONPATH": os.pathsep.join(owned)},

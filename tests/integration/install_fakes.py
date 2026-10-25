@@ -197,7 +197,7 @@ def curl(args):
         return 0
     raw = "https://raw.githubusercontent.com/windroc-labs/ensemble/"
     if url.startswith(raw) and url.endswith("/src/broker/internal/launcher/versions.go"):
-        out((FAKES / "pkg-src/broker/internal/launcher/versions.go").read_text())
+        out((FAKES / "pkg-src/src/broker/internal/launcher/versions.go").read_text())
         return 0
     out(f"curl: unexpected {url}\n", sys.stderr)
     return 22

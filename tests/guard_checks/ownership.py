@@ -220,7 +220,7 @@ def manager_display(repo: str) -> list[str]:
 def standalone(repo: str) -> list[str]:
     found = set()
     for project in LOWER:
-        for rel, text in _project_files(repo, project, ""):
+        for rel, text in _project_files(repo, project, "", errors="replace"):
             for number, line in enumerate(text.splitlines(), 1):
                 found.update(f"{rel}:{number}: names {w}" for w in LINEAR.findall(line))
     return sorted(found)

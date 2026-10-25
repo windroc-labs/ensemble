@@ -7,7 +7,7 @@
   "tests.delegate.integration.bin_integration_test.Command.test_help_lists_the_subcommands_with_only_its_own_roots": 0.27631386999999563,
   "tests.delegate.integration.bin_integration_test.Command.test_it_sets_pythonpath_to_three_roots_and_puts_its_dir_first_on_path": 0.004763851999996405,
   "tests.delegate.integration.child_env_integration_test.ChildEnvironments.test_installed_callers_supply_no_pythonpath": 0.35286401299998715,
-  "tests.delegate.integration.child_env_integration_test.ChildEnvironments.test_source_callers_supply_only_the_three_owned_import_roots": 0.1986330599999917,
+  "tests.delegate.integration.child_env_integration_test.ChildEnvironments.test_source_callers_supply_the_shared_import_root_once": 0.1986330599999917,
   "tests.delegate.integration.cli_integration_test.ConfigErrors.test_a_config_error_exits_2_and_starts_nothing": 1.2461339700000167,
   "tests.delegate.integration.cli_integration_test.ConfigErrors.test_cwd_in_run_dir_writes_nothing": 0.7094958550001138,
   "tests.delegate.integration.cli_integration_test.Draft.test_an_answer_keeps_the_draft_until_the_deliverable_replaces_it": 1.9893676330000005,

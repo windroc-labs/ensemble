@@ -593,7 +593,7 @@ class Swallowed(unittest.TestCase):
             "    def test_write(self):\n"
             f"        os.mkdir({str(marker)!r})\n"
         )
-        (root / "tests/unit/external_test.py").write_text(
+        (root / ".github/external_test.py").write_text(
             "import importlib.util, sys\n"
             f"spec = importlib.util.spec_from_file_location('helper', {str(helper)!r})\n"
             "helper = importlib.util.module_from_spec(spec)\n"

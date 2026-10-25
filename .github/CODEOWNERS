@@ -15,7 +15,7 @@
 /tests/utils/sandbox.py @windroc
 
 # Protocol schemas, fixture expectations and recorded test oracles.
-/src/src/broker/protocol/** @windroc
+/src/broker/protocol/** @windroc
 /tests/delegate/integration/composer/composer_prompts.json @windroc
 /tests/session/unit/clients/claude/fixtures/** @windroc
 

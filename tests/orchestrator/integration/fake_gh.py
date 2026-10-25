@@ -22,7 +22,7 @@ CLONE = re.compile(r"(?:github\.com/)?([^/]+)/([^/]+)")
 SSH = '#!/bin/sh\nset -- $2\nexec git "${1#git-}" %s\n'
 TAIL = "/usr/bin:/bin"
 # the repo root, for tests.utils.sandbox: an agent run's PYTHONPATH holds only the src roots
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), *[os.pardir] * 4))
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), *[os.pardir] * 3))
 
 
 def install(bin_dir: str) -> str:

@@ -663,7 +663,7 @@ class HarnessLaunch(HarnessCase):
         RootedSession.asked, RootedSession.failure = [], None
         with mock.patch.dict(os.environ, {"PYTHONPATH": "/caller/only"}):
             self.make(session_cls=RootedSession, host="agent", harness_host="harness").detach()
-        roots = (SRC["delegate"], SRC["session"], SRC["utils"], REPO, "/extra/root")
+        roots = (SRC["delegate"], REPO, "/extra/root")
         self.assertEqual(RecordingHost.launches[0]["env"]["PYTHONPATH"], os.pathsep.join(roots))
         self.assertEqual(RootedSession.asked[-1], "fake")
 

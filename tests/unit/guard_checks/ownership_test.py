@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from tests.case import REPO
 from tests.guard_checks import commands, exports, ownership
 from tests.guard_data.delegate import CONFIG_FILE, DELEGATE_SRC
@@ -161,6 +163,14 @@ class OrchestratorText(Sample):
 
 
 class Standalone(Sample):
+    def test_bytecode_caches_are_ignored_and_metadata_bytes_are_tolerated(self):
+        root = Path(self.tree({"src/ensemble/session/engine/sample.py": ""}))
+        cache = root / "src/ensemble/session/engine/__pycache__"
+        cache.mkdir()
+        (cache / "sample.cpython-311.pyc").write_bytes(b"\xa7\r\r\nensemble.orchestrator")
+        (root / "src/ensemble/session/.DS_Store").write_bytes(b"\xff")
+        self.assertEqual(ownership.standalone(str(root)), [])
+
     def test_any_file_of_a_lower_project_naming_the_orchestrator(self):
         team = f"{PKG}/delegate/team"
         root = self.tree(

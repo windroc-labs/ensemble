@@ -90,10 +90,10 @@ def created(name: str, cwd: str, shell: str, root: str = REPO) -> list[str]:
 
 
 def plugin(root: str) -> str:
-    """A plugin install at root: this checkout's projects linked in, its bin/ copied."""
+    """A plugin install at root: this checkout's source and skills linked in, its bin/ copied."""
     os.makedirs(root)
-    for project in ("utils", "session", "delegate", "manager", "orchestrator"):
-        os.symlink(os.path.join(REPO, project), os.path.join(root, project))
+    for directory in ("src", "skills"):
+        os.symlink(os.path.join(REPO, directory), os.path.join(root, directory))
     shutil.copytree(os.path.join(REPO, "bin"), os.path.join(root, "bin"))
     return root
 

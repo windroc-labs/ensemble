@@ -330,7 +330,7 @@ class PackagedDeployments(ConfigFile, Case):
     def test_load_accepts_work_dir_and_local_clone_in_the_deployment_checkout(self):
         git("init", "-q", str(self.deployment))
         git("-C", str(self.deployment), "remote", "add", "origin", HTTPS)
-        (self.package() / ".git").write_text("invalid metadata\n")
+        (self.deployment / "src" / ".git").write_text("invalid metadata\n")
         work = self.package() / "state"
         self.local(f"work_dir = {json.dumps(str(work))}\n" + PIPELINE)
         self.assertEqual(self.child(), {"work": str(work), "clones": {}})

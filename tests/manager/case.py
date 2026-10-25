@@ -82,8 +82,7 @@ class Case(unittest.TestCase):
         """
         root = os.path.join(self.home, "plugin")
         os.makedirs(os.path.join(root, "bin"))
-        for project in ("utils", "session", "delegate", "manager"):
-            os.symlink(os.path.join(REPO, project), os.path.join(root, project))
+        os.symlink(os.path.join(REPO, "src"), os.path.join(root, "src"))
         return shutil.copy(os.path.join(REPO, "bin", "ensemble-crew"), os.path.join(root, "bin"))
 
     def fake_record(

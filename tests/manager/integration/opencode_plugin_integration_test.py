@@ -107,7 +107,7 @@ class OpenCodePluginTest(Case):
         root = os.path.join(self.home, "packages", "ensemble@git+https:", "ensemble")
         os.makedirs(os.path.join(root, ".opencode-plugin"))
         shutil.copy(PLUGIN, os.path.join(root, ".opencode-plugin"))
-        for name in ("bin", "manager", "delegate", "orchestrator", "package.json"):
+        for name in ("bin", "src", "skills", "package.json"):
             os.symlink(os.path.join(REPO, name), os.path.join(root, name))
         plugin = os.path.join(root, ".opencode-plugin", "ensemble.js")
         for _ in range(2):

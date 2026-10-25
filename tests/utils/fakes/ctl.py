@@ -19,7 +19,9 @@ from ensemble.utils.record import Record, RecordError, Status
 
 COMMAND = "ensemble-orchestrator"
 SCRIPT = os.path.abspath(__file__)
-PYTHONPATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT))), "src")
+PYTHONPATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT)))), "src"
+)
 SESSIONS = "sessions.json"
 CALLS = "calls.jsonl"
 GONE = {
