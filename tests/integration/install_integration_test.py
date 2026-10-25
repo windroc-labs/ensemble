@@ -1419,7 +1419,7 @@ class InstallTest(Case):
         )
 
     def test_opencode_reuses_stable_path_binary_and_preserves_it_on_cleanup(self):
-        for version in ("1.19.3", "1.20.0", "2.0.0"):
+        for version in ("1.19.3", "1.20.0", "1.100.0"):
             with self.subTest(version=version):
                 external = self.bin / "opencode"
                 shutil.copy(self.fakes / "apps/opencode", external)
@@ -1442,7 +1442,7 @@ class InstallTest(Case):
                 self.assertEqual(external.read_bytes(), before)
 
     def test_opencode_unusable_path_binary_falls_back_to_private_install(self):
-        for version in ("1.19.2", "1.9.9", "1.20.0-beta.1", "garbage", ""):
+        for version in ("1.19.2", "1.9.9", "1.20.0-beta.1", "2.0.0", "garbage", ""):
             with self.subTest(version=version):
                 shutil.copy(self.fakes / "apps/opencode", self.bin / "opencode")
                 (self.fakes / "opencode_version").write_text(version)
@@ -1475,6 +1475,35 @@ class InstallTest(Case):
             str(external),
         )
         self.assertFalse(any(c.startswith("npm install") for c in self.calls()))
+
+    def test_opencode_removed_external_binary_migrates_to_private_copy(self):
+        external = self.bin / "opencode"
+        shutil.copy(self.fakes / "apps/opencode", external)
+        (self.fakes / "opencode_version").write_text("1.20.0")
+        self.assert_ok(self.opencode_only(path_answer=None))
+        self.assertEqual(self.state()["opencode_executable"], str(external))
+        external.unlink()
+        self.assert_ok(self.opencode_rerun((WRITE_Q, "y"), (WRITE_Q, "y")))
+        private = str(Path(self.ensemble, "opencode/bin/opencode"))
+        self.assertEqual(
+            tomllib.loads(self.config().read_text())["session"]["clients"]["opencode"][
+                "executable"
+            ],
+            private,
+        )
+        self.assertEqual(self.state()["opencode_executable"], private)
+
+    def test_opencode_declined_executable_migration_keeps_ownership_for_retry(self):
+        external = self.bin / "opencode"
+        shutil.copy(self.fakes / "apps/opencode", external)
+        (self.fakes / "opencode_version").write_text("1.20.0")
+        self.assert_ok(self.opencode_only(path_answer=None))
+        external.unlink()
+        self.assert_ok(self.opencode_rerun((WRITE_Q, "n"), (WRITE_Q, "y")))
+        self.assertEqual(self.state()["opencode_executable"], str(external))
+        self.assert_ok(self.opencode_rerun((WRITE_Q, "y")))
+        private = str(Path(self.ensemble, "opencode/bin/opencode"))
+        self.assertEqual(self.state()["opencode_executable"], private)
 
     def test_opencode_only(self):
         result = self.opencode_only()
@@ -2269,7 +2298,7 @@ exec /bin/rm "$@"
         self.assertNotIn("opencode auth login", self.calls())
         binary = self.root / "usr/local/libexec/ensemble/ensemble-broker"
         binary.write_text(binary.read_text() + "\n# replacement fake broker build\n")
-        self.assert_ok(self.again(answers=[(TOKEN_Q, TOKEN)]))
+        self.assert_ok(self.again())
         self.assertIn(login, self.calls())
         self.assertNotIn("opencode auth login", self.calls())
         self.auth_json().unlink()
@@ -2314,7 +2343,14 @@ exec /bin/rm "$@"
         self.assertEqual((self.fakes / "keychain/ensemble-opencode").read_text(), KEY)
 
     def test_opencode_foreign_keychain_item_stops_retry_and_names_recovery(self):
-        self.assert_ok(self.fresh(clients="opencode", docker="y", opencode=PROVIDER_ANSWERS))
+        self.assert_ok(
+            self.fresh(
+                clients="opencode",
+                docker="y",
+                opencode=PROVIDER_ANSWERS,
+                logins=[(PEM_Q, ""), (OPENCODE_LOGIN_Q, "lan"), (r"API key:", KEY)],
+            )
+        )
         state = Path(self.ensemble, "install/state")
         state.write_text(re.sub(r"(?m)^login_opencode=.*\n", "", state.read_text()))
         (self.fakes / "keychain/foreign-ensemble-opencode").touch()
@@ -3676,7 +3712,7 @@ exec /bin/rm "$@"
         """Docker Desktop's and iTerm2's own files go; a shell rc there before keeps its own lines."""
         bashrc = Path(self.home, ".bashrc")
         bashrc.write_text("export EDITOR=vim\n")
-        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        self.assert_ok(self.fresh("--docker", logins=[(PEM_Q, "")]))
         library = Path(self.home, "Library")
         written = [
             library / "Application Support/Docker Desktop/state.json",

@@ -722,7 +722,7 @@ answers() {
 config_plan() {
   python3 -I -c '
 import json, os, re, sys, tomllib
-path, out, default, harness, client, exe, name, url, model, context, prev_name, prev_url, prev_model, prev_context, only, board = sys.argv[1:]
+path, out, default, harness, client, exe, name, url, model, context, prev_name, prev_url, prev_model, prev_context, only, board, previous_exe = sys.argv[1:]
 fresh = not os.path.exists(path)
 text = ""
 if not fresh:
@@ -758,7 +758,7 @@ if not scoped and harness and get(data, "delegate.delegates", "harness_host") in
     wanted.append(("delegate.delegates", "harness_host", harness))
 if name and not scoped:
     target, before = f"{name}/{model}", f"{prev_name}/{prev_model}" if prev_name else None
-    if get(data, "session.clients.opencode", "executable") in (None, "", os.path.expanduser("~/.ensemble/opencode/bin/opencode")):
+    if get(data, "session.clients.opencode", "executable") in (None, "", previous_exe, os.path.expanduser("~/.ensemble/opencode/bin/opencode")):
         want("session.clients.opencode", "executable", exe)
     def ours(value):
         return value is None or (isinstance(value, str) and (value.startswith("ollama/") or value == before))
@@ -823,13 +823,13 @@ with open(out, "w", encoding="utf-8") as f:
     f.write(result)
 sys.exit(3)' "$config" "$1" "$wanted_default" "$wanted_harness" "$wanted_client" \
     "$opencode_executable" "$provider" "$url" "$model" "$context" \
-    "$prev_provider" "$prev_url" "$prev_model" "$prev_context" "$only" "$board_file"
+    "$prev_provider" "$prev_url" "$prev_model" "$prev_context" "$only" "$board_file" "$(state_get opencode_executable)"
 }
 
 # Writes the configuration's settings into config.local.toml with consent; given <table> <key> <value>, only that;
 # given board <file>, the settings board_plan wrote to <file>.
 config_file() {
-  local wanted_default=tmux wanted_harness= wanted_client= only= board_file= changes rc=0 plan
+  local wanted_default=tmux wanted_harness= wanted_client= only= board_file= changes rc=0 plan executable_changed=
   if [ $# = 2 ] && [ "$1" = board ]; then
     board_file=$2
   elif [ $# = 3 ]; then
@@ -847,6 +847,7 @@ config_file() {
   mkdir -p "$state_dir"
   plan=$state_dir/config.local.toml.plan
   changes=$(config_plan "$plan") || rc=$?
+  case $changes in *'[session.clients.opencode] executable = '*) executable_changed=yes ;; esac
   case $rc in
     0) skip "has the configuration" ;;
     3)
@@ -854,6 +855,9 @@ config_file() {
       if consent "$config" "$changes"; then
         if [ -f "$config" ]; then backup_config; else ledger_add config created; fi
         mv "$plan" "$config"
+        if [ -n "$executable_changed" ] && [ -z "$only$board_file" ]; then
+          state_set opencode_executable "$opencode_executable"
+        fi
       else
         rm -f "$plan"
         skip declined
@@ -1096,7 +1100,7 @@ opencode_version() {
   printf '%s' "$value"
 }
 
-# Only a stable X.Y.Z version at or above $2 qualifies; failed --version calls never qualify.
+# Only a stable, compatible 1.x version at or above $2 qualifies; failed --version calls never qualify.
 opencode_usable() {
   local found major minor patch want_major want_minor want_patch
   local stable='^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$'
@@ -1104,9 +1108,9 @@ opencode_usable() {
   [[ $found =~ $stable ]] || return 1
   IFS=. read -r major minor patch <<<"$found"
   IFS=. read -r want_major want_minor want_patch <<<"$2"
-  [ "$major" -gt "$want_major" ] || { [ "$major" -eq "$want_major" ] && {
+  [ "$major" -eq 1 ] && [ "$major" -eq "$want_major" ] && {
     [ "$minor" -gt "$want_minor" ] || { [ "$minor" -eq "$want_minor" ] && [ "$patch" -ge "$want_patch" ]; }
-  }; }
+  }
 }
 
 # Select before config_file so the config, plugin installer and login all use the same executable.
@@ -1119,7 +1123,7 @@ opencode_select() {
   record_dir "${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
   record_dir "${XDG_STATE_HOME:-$HOME/.local/state}/opencode"
   record_dir "${XDG_CACHE_HOME:-$HOME/.cache}/opencode"
-  if candidate=$(command -v opencode) && opencode_usable "$candidate" "$opencode_min"; then
+  if candidate=$(type -P opencode) && opencode_usable "$candidate" "$opencode_min"; then
     case $candidate in /*) ;; *) candidate=$PWD/$candidate ;; esac
     opencode_executable=$candidate
   fi
