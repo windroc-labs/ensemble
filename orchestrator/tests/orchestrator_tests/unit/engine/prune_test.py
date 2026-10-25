@@ -14,7 +14,13 @@ from ensemble.delegate import ConfigError, SessionError
 from ensemble.orchestrator import cli
 from ensemble.orchestrator.engine import config, log, prune, prune_state
 from ensemble.orchestrator.engine.flow.types import IssueState, Snapshot
-from ensemble.orchestrator.engine.types import Entry, LinearError, PruneState, Unavailable
+from ensemble.orchestrator.engine.types import (
+    Entry,
+    LinearError,
+    LinearIdentity,
+    PruneState,
+    Unavailable,
+)
 from ensemble.orchestrator.trackers.linear import linear_tracker, ops
 from ensemble.utils import temp_dirs
 from orchestrator_tests.process_fixtures import CompletedProcess
@@ -754,7 +760,9 @@ class RetentionCleanup(PruneScenario):
         clones = [self.mkc(ident) for ident in ("TASK-48", "TASK-49")]
         issues = gql_for(dict.fromkeys(("TASK-48", "TASK-49"), ("Done", [(30, "Done")])))
         self.outage(
-            "issues", issues, [(linear_tracker.Q_SNAPSHOTS, {"service": HARNESS, "f": mock.ANY})]
+            "issues",
+            issues,
+            [(linear_tracker.Q_SNAPSHOTS, {"identity": LinearIdentity(HARNESS), "f": mock.ANY})],
         )
         self.assertEqual(issues.calls, [])
         self.assertTrue(all(os.path.isdir(c) for c in clones))
@@ -771,7 +779,7 @@ class RetentionCleanup(PruneScenario):
         self.outage(
             "issueArchive",
             issues,
-            [(linear_tracker.M_ARCHIVE, {"service": HARNESS, "i": "id-TASK-1"})],
+            [(linear_tracker.M_ARCHIVE, {"identity": LinearIdentity(HARNESS), "i": "id-TASK-1"})],
         )
 
 

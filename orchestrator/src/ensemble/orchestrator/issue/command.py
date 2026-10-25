@@ -805,7 +805,7 @@ def _linear(cfg, gql):
     linear = config.linear_settings(cfg, "issue")
     if not linear.manager_key:
         raise ConfigError("orchestrator/config.toml: linear.manager_key is unset")
-    return LinearIssues(functools.partial(gql, service=linear.manager_key), linear)
+    return LinearIssues(functools.partial(gql, identity=linear.manager), linear)
 
 
 def main(argv, *, gql=linear_gql, config_path=None, out=None, err=None, stdin=None):
