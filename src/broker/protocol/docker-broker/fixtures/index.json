@@ -937,6 +937,90 @@
       "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation."
     },
     {
+      "file": "runtime-egress-stopped.json",
+      "definition": "manifest",
+      "valid": true,
+      "expected": {
+        "stage": "runtime",
+        "exit_code": 17,
+        "error_code": "egress_unavailable"
+      },
+      "context": {
+        "home": "/Users/example",
+        "cwd_exists": true,
+        "volume": "absent",
+        "claude_dir_has_symlink": false,
+        "login": "present",
+        "image": "broker_built",
+        "docker": "reachable",
+        "egress": "stopped"
+      },
+      "note": "Schema-valid; broker must refuse from the fake egress gateway state before any credential or container."
+    },
+    {
+      "file": "runtime-egress-unhealthy.json",
+      "definition": "manifest",
+      "valid": true,
+      "expected": {
+        "stage": "runtime",
+        "exit_code": 17,
+        "error_code": "egress_unavailable"
+      },
+      "context": {
+        "home": "/Users/example",
+        "cwd_exists": true,
+        "volume": "absent",
+        "claude_dir_has_symlink": false,
+        "login": "present",
+        "image": "broker_built",
+        "docker": "reachable",
+        "egress": "unhealthy"
+      },
+      "note": "Schema-valid; broker must refuse from the fake egress gateway state before any credential or container."
+    },
+    {
+      "file": "runtime-egress-missing.json",
+      "definition": "manifest",
+      "valid": true,
+      "expected": {
+        "stage": "runtime",
+        "exit_code": 17,
+        "error_code": "egress_unavailable"
+      },
+      "context": {
+        "home": "/Users/example",
+        "cwd_exists": true,
+        "volume": "absent",
+        "claude_dir_has_symlink": false,
+        "login": "present",
+        "image": "broker_built",
+        "docker": "reachable",
+        "egress": "missing"
+      },
+      "note": "Schema-valid; broker must refuse from the fake egress gateway state before any credential or container."
+    },
+    {
+      "file": "runtime-egress-not-internal.json",
+      "definition": "manifest",
+      "valid": true,
+      "expected": {
+        "stage": "runtime",
+        "exit_code": 17,
+        "error_code": "egress_unavailable"
+      },
+      "context": {
+        "home": "/Users/example",
+        "cwd_exists": true,
+        "volume": "absent",
+        "claude_dir_has_symlink": false,
+        "login": "present",
+        "image": "broker_built",
+        "docker": "reachable",
+        "egress": "not_internal"
+      },
+      "note": "Schema-valid; broker must refuse from the fake egress gateway state before any credential or container."
+    },
+    {
       "file": "runtime-docker-sharing-denied.json",
       "definition": "manifest",
       "valid": true,

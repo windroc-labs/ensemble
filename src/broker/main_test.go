@@ -521,7 +521,17 @@ func (s *scripted) Run(_ context.Context, args []string, stdin []byte) ([]byte, 
 	if s.fail != "" && strings.Contains(joined, s.fail) {
 		return nil, &docker.CommandError{Exit: 1, Stderr: "failed: " + string(stdin)}
 	}
+	gateway := strings.Repeat("e", 64)
 	switch {
+	case strings.HasPrefix(joined, "ps --all"):
+		return []byte(gateway + "\n"), nil
+	case joined == "container inspect "+gateway:
+		return []byte(`[{"Id":"` + gateway + `","Name":"/egress-gateway","State":{"Running":true,"Health":{"Status":"healthy"}},` +
+			`"Config":{"Labels":{"windroc.egress.contract":"1","windroc.egress.networks":"workers",` +
+			`"windroc.egress.network.workers.name":"egress-workers","windroc.egress.network.workers.proxy":"http://egress-proxy-workers:4750"}},` +
+			`"NetworkSettings":{"Networks":{"egress-workers":{"NetworkID":"` + strings.Repeat("f", 64) + `"}}}}]`), nil
+	case strings.HasPrefix(joined, "network inspect"):
+		return []byte(`[{"Name":"egress-workers","Id":"` + strings.Repeat("f", 64) + `","Internal":true}]`), nil
 	case strings.HasPrefix(joined, "image inspect"):
 		return []byte(`[{"Id":"sha256:` + strings.Repeat("b", 64) + `","Config":{"Labels":{"ensemble.key":"` + strings.Repeat("a", 64) +
 			`","ensemble.version":"1.2.3","ensemble.agent-uid":"1001","ensemble.agent-gid":"1002"}}}]`), nil
