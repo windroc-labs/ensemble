@@ -105,8 +105,8 @@ Q_FINISHED = (
 )
 M_ARCHIVE = "mutation($i: String!) { issueArchive(id: $i) { success } }"
 Q_HANDOFF = """query($t: ID, $s: ID, $a: [ID!]) { issues(filter: { team: { id: { eq: $t } }, state: { id: { eq: $s } },
-  project: { null: false }, assignee: { id: { in: $a } } }, first: 100) {
-  nodes { id identifier url title priority createdAt project { id name } assignee { id } attachments { nodes { title url } } } } }"""
+  project: { null: false }, delegate: { id: { in: $a } } }, first: 100) {
+  nodes { id identifier url title priority createdAt project { id name } delegate { id } attachments { nodes { title url } } } } }"""
 Q_DETAIL = (
     """query($i: String!, $after: String) { issue(id: $i) { state { id }
   """
@@ -664,7 +664,7 @@ class LinearTracker(Tracker):
                 n["createdAt"],
                 n["project"]["id"],
                 n["project"]["name"],
-                roles[n["assignee"]["id"]],
+                roles[n["delegate"]["id"]],
                 tuple(
                     (a["title"], a["url"]) for a in n["attachments"]["nodes"] if not is_record(a)
                 ),
@@ -713,7 +713,8 @@ class LinearTracker(Tracker):
                     "id": client_id(*once),
                     "teamId": _need("team_id", self.team_id),
                     "projectId": home,
-                    "assigneeId": self.users[owner],
+                    "delegateId": self.users[owner],
+                    "assigneeId": None,
                     "stateId": self.ids[IssueState.READY],
                     "priority": priority,
                     "title": title,

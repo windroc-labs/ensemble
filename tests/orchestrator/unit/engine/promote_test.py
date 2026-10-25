@@ -441,6 +441,14 @@ class PromotionCleanup(Base):
 
 
 class HandoffPromotion(Base):
+    def test_handoff_uses_delegate_and_preserves_human_assignee(self):
+        human = {"id": "human-user"}
+        src = self.ready(assignee=human)
+        self.assertEqual(self.run_main(), 0)
+        (child,) = self.fake.children.values()
+        self.assertEqual((child["delegateId"], child["assigneeId"]), (role_id("pm"), None))
+        self.assertEqual(src["assignee"], human)
+
     def test_happy_path(self):
         src = self.ready(attachments=[{"title": "Report", "url": "https://gh/r.md"}])
         self.assertEqual(self.run_main(), 0)
@@ -449,12 +457,13 @@ class HandoffPromotion(Base):
         self.assertEqual(
             (
                 child["projectId"],
+                child["delegateId"],
                 child["assigneeId"],
                 child["stateId"],
                 child["priority"],
                 child["teamId"],
             ),
-            ("p-dr", role_id("pm"), STATES["Todo"], 2, TEAM),
+            ("p-dr", role_id("pm"), None, STATES["Todo"], 2, TEAM),
         )
         self.assertEqual(child["title"], "PRD: Title DR-1")
         self.assertEqual(
@@ -678,7 +687,7 @@ class HandoffPromotion(Base):
         self.run_main()
         self.assertEqual(self.fake.children, {})
         self.assertEqual(
-            (src["state"], src["assignee"], src["subscribers"], src["posted"]),
+            (src["state"], src["delegate"], src["subscribers"], src["posted"]),
             (
                 "In Review",
                 {"id": role_id("researcher")},
@@ -894,8 +903,8 @@ class PromotionScope(Base):
                 promote.Promoter(cfg, board(self.fake), NOW, dry=False, tasks=tasks).run()
                 (child,) = self.fake.children.values()
                 self.assertEqual(
-                    (child["projectId"], child["assigneeId"], child["title"]),
-                    ("p-dr", role_id("engineer"), want),
+                    (child["projectId"], child["delegateId"], child["assigneeId"], child["title"]),
+                    ("p-dr", role_id("engineer"), None, want),
                 )
                 self.assertEqual(
                     instructions(child["description"]), f"## Instructions\nMe, {ago(45)}:\nbuild X"
@@ -912,7 +921,7 @@ class PromotionScope(Base):
         self.assertNotIn("## Instructions", child["description"])
         self.assertEqual(src["state"], "Done")
 
-    def test_handoff_scans_role_accounts_in_projects(self):
+    def test_handoff_scans_role_delegates_in_projects(self):
         self.ready("DR-1", role=None)
         self.ready("DR-2", role="someone")
         self.ready("DR-3", project=None)
@@ -925,7 +934,8 @@ class PromotionScope(Base):
         self.assertIn("team: { id: { eq: $t } }", linear_tracker.Q_HANDOFF)
         self.assertIn("state: { id: { eq: $s } }", linear_tracker.Q_HANDOFF)
         self.assertIn("project: { null: false }", linear_tracker.Q_HANDOFF)
-        self.assertIn("assignee: { id: { in: $a } }", linear_tracker.Q_HANDOFF)
+        self.assertIn("delegate: { id: { in: $a } }", linear_tracker.Q_HANDOFF)
+        self.assertNotIn("assignee", linear_tracker.Q_HANDOFF)
 
     def test_unknown_flag(self):
         self.assertEqual(self.run_main("--nope"), 2)

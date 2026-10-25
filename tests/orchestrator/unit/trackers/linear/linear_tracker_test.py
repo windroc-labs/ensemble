@@ -83,7 +83,7 @@ BASE = {
     "Q_ATTACHED": "63dbe2b07f16ec03a33efb47cf14ddb32a3bac690ae5a62ac57c43c57fbe3c96",
     "Q_ID": "339eb6885dd45c62cfae3c2f1d2bbdcdf6995a2e008079832d405f3019f5adf9",
     "M_UPDATE": "95eaa4a0cccf407f93c0137e32a54edfd12fcc68a35f4c94b2ad407ad59377dd",
-    "Q_HANDOFF": "d5f85ca23fbe967486bc4ddfab203a172d029c0533575e9ea5d74a5a92e141b9",
+    "Q_HANDOFF": "3eada7810bdef455eed9413555b17b5e6934e09fc539b2dce60ecb35c7b5c3f9",
     "Q_DETAIL": "444ae6ce6852a4319966f4ed0aa28ac76a23e611152d090abb1974c87c8577bf",
     "Q_CHILD": "4fa2b83d88ba5fc7dd9a33223140644eb8647521ac24c8c19ba044602dbca7a1",
     "M_CREATE": "a67ba5a98ce64a1689f6842fca53f944e76ab2437837d95c7c5ce1940911b430",
@@ -1484,7 +1484,8 @@ class ApprovedList(Case):
             "priority": 2,
             "createdAt": CREATED,
             "project": {"id": "p-dr", "name": "Deep Research"},
-            "assignee": {"id": role_id("pm")},
+            "delegate": {"id": role_id("pm")},
+            "assignee": {"id": role_id("engineer")},
             "attachments": {
                 "nodes": [
                     {"title": "Report", "url": "https://x/report"},
@@ -1663,7 +1664,8 @@ class NextIssue(Case):
             "id": key,
             "teamId": TEAM,
             "projectId": "p-dr",
-            "assigneeId": role_id("engineer"),
+            "delegateId": role_id("engineer"),
+            "assigneeId": None,
             "stateId": STATES["todo"],
             "priority": 3,
             "title": "ENG: T",

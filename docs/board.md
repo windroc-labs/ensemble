@@ -111,7 +111,7 @@ To use a different target host, set the build role's complete output table, for 
 flowchart LR
     T[Todo] -->|router claims| P[In Progress]
     T -->|"bad Tasks or Agent label, or 4 attempts"| R[In Review]
-    P -->|"output, questions, failure, usage limit, failed repo check, label-selected client error, a resumed run's role not the assignee's, or 4 attempts; you subscribed"| R
+    P -->|"output, questions, failure, usage limit, failed repo check, label-selected client error, a resumed run's role not the delegate's, or 4 attempts; you subscribed"| R
     P -->|"failed new research run, or Recover"| T
     R -->|Approve| H[Handoff]
     R -->|Revise| T
@@ -124,11 +124,11 @@ flowchart LR
     D & C -->|"Finish, 2 h later; Duplicate too"| X[cleaned up]
 ```
 
-- **New work:** a Todo issue in the product's project, assigned to a role app. The description is the brief, or an engineer issue's requirement. Add `Repo: <owner>/<name>` if the repo is not the project's `[orchestrator.linear.project_repos]` entry.
+- **New work:** a Todo issue in the product's project, delegated to a role app (Linear's Agent field). The router identifies the role by delegate and leaves the assignee unchanged; without a configured role delegate it logs `claim-skip`. Group or subgroup the board by **Agent** for app lanes; this is separate from the `Agent` label group that selects the client. The description is the brief, or an engineer issue's requirement. Add `Repo: <owner>/<name>` if the repo is not the project's `[orchestrator.linear.project_repos]` entry.
 - **Order work:** the router claims by priority, then later role, then oldest. A blocked issue waits until its blockers are Done, Canceled or Duplicate.
 - **Duplicates:** on an issue's first claim the router searches the team's issues (archived too), configured documents and the target repo's merged PRs by its title words and the issue ids its description names, and lists the matches, minus its Handoff chain, at the end of the agent's input under `## Related work`. A failed search logs `related-skip` and the run goes on.
 - **Linked documents:** the agent's input inlines [configured documents](#document-destinations-and-github-hosts) an issue links, in order, up to 50,000 bytes in all; each one that no longer fits is listed by path and URL for the agent to read. A PRD and an earlier version are always inlined.
-- **Approve:** move to Handoff and comment what's next. After 10 minutes (move it out of Handoff to undo), promote creates the next role's issue and marks this one Done.
+- **Approve:** move to Handoff and comment what's next. After 10 minutes (move it out of Handoff to undo), promote finds it by delegate, creates the next role's issue with that app as delegate and an empty assignee, and marks this one Done.
 - **Revise:** comment and move back to Todo. The agent resumes where it left off. On an engineer issue your PR comments and reviews count too. After 4 attempts the issue goes to In Review; moving it back to Todo restarts the count.
 - **Who counts as you:** every Linear account but the harness app, the role apps and Linear automation, the manager included (its `ensemble-orchestrator issue` commands act as `linear.manager_key`'s account): its comments are instructions and its moves to Todo restart the attempt count. Comments without a user, such as the GitHub integration's, are ignored. `linear.human_members` only picks who is subscribed on In Review. Anyone who can comment on or move the team's issues (members, guests, synced users) can so instruct agents: keep the team's membership and guest access tight.
 - **Write-back identity:** live write-back, resume and Recover use the current app configured for the session's recorded role, including sessions with old `key` fields. An unavailable role token blocks only that role; fix its reported app configuration and retry.
