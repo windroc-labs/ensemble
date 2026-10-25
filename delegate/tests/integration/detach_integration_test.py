@@ -168,9 +168,10 @@ class Detach(Case):
         return [line for line in shaped if line != "turn end"]
 
     def records(self):
+        """run.jsonl's complete lines; a line still being written waits for a later read."""
         try:
             with open(os.path.join(Layout(self.work).run, "run.jsonl")) as stream:
-                return [json.loads(line) for line in stream]
+                return [json.loads(line) for line in stream if line.endswith("\n")]
         except FileNotFoundError:
             return []
 
