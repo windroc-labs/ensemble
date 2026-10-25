@@ -37,21 +37,24 @@ def _stderr_report(identity, reason):
 @dataclass(frozen=True)
 class Policy:
     """renew: a due token may be renewed (false: a dry run); report(identity, reason): a failed
-    renewal of a still usable token."""
+    renewal of a still usable token; show(identity, status): each app's token as first read."""
 
     renew: bool = True
     report: Callable[[str, str], None] = _stderr_report
+    show: Callable[[str, dict], None] | None = None
 
 
 _policy = Policy()
 _failed: dict[str, str] = {}  # token service: why its renewal failed in this process
+_shown: set[str] = set()  # token services show was called for
 
 
-def use(*, renew=True, report=None):
-    """This process's renewal policy; forgets earlier failed renewals."""
+def use(*, renew=True, report=None, show=None):
+    """This process's renewal policy; forgets earlier failed renewals and shown tokens."""
     global _policy
-    _policy = Policy(renew, report or _stderr_report)
+    _policy = Policy(renew, report or _stderr_report, show)
     _failed.clear()
+    _shown.clear()
 
 
 def _now():
@@ -200,6 +203,9 @@ class _RenewalFailed(Exception):
 def _token(app, timeout):
     """app's token, renewed first when due and the policy allows; KeychainError when none usable."""
     held, now = _read(app.token_service, timeout), _now()
+    if _policy.show and app.token_service not in _shown:
+        _shown.add(app.token_service)
+        _policy.show(app.name, _status(held, now))
     if held.token is not None and not held.due(now):
         return held.token
     reason = _failed.get(app.token_service) or (None if _policy.renew else "dry run: no renewal")
@@ -352,10 +358,8 @@ def _security(args, timeout):
     )
 
 
-def status(app):
-    """app's token as a dry run reports it, read only: {"days_left": n.n} or {"state": missing,
-    no expiry or expired}."""
-    held, now = _read(app.token_service, 30), _now()
+def _status(held, now):
+    """held as a dry run shows it: {"days_left": n.n} or {"state": missing, no expiry or expired}."""
     if held.token is None:
         return {"state": "missing"}
     if held.expires is None:

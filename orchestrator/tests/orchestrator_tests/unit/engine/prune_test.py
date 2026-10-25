@@ -1,10 +1,12 @@
 """Orchestrator prune behavior at its dependency boundaries."""
 
+import contextlib
 import io
 import json
 import os
 import shutil
 import time
+import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from datetime import timedelta
@@ -20,7 +22,7 @@ from ensemble.orchestrator.engine.types import (
     PruneState,
     Unavailable,
 )
-from ensemble.orchestrator.trackers.linear import linear_tracker, ops
+from ensemble.orchestrator.trackers.linear import client, linear_tracker, ops
 from ensemble.utils import temp_dirs
 from orchestrator_tests.process_fixtures import CompletedProcess
 from orchestrator_tests.prune_fixtures import (
@@ -35,6 +37,9 @@ from orchestrator_tests.prune_fixtures import (
 )
 from orchestrator_tests.unit import promote_fixtures as tp
 from orchestrator_tests.unit.board_ids import FINISHED, HARNESS_IDENTITY
+from orchestrator_tests.unit.keychain_fixtures import NOW as TOKEN_NOW
+from orchestrator_tests.unit.keychain_fixtures import SECRET as APP_SECRET
+from orchestrator_tests.unit.keychain_fixtures import Endpoint, Keychain, record, token_http_error
 from orchestrator_tests.unit.run_fixtures import CORE_LOCAL, logged, show
 
 from delegate.tests.workdir import checkout_path
@@ -1047,7 +1052,9 @@ class Stalled(PruneScenario):
 class PruneCommand(PruneScenario):
     """ensemble-orchestrator prune: one prune tick alone, as promote's tick runs it."""
 
-    def command(self, prune_gql, *argv):
+    def command(self, prune_gql, *argv, token=None):
+        """prune's exit code, stdout, plain stderr and logged lines; token: (days left, token
+        endpoint answer) to call through the real transport as the harness app."""
         write(
             os.path.join(self.ensemble, "config.local.toml"),
             f'[orchestrator]\nwork_dir = "{self.root}"\n' + CORE_LOCAL,
@@ -1060,11 +1067,28 @@ class PruneCommand(PruneScenario):
             return (prune_gql if query in PRUNE_QUERIES else fake)(query, **v)
 
         before, out, err = len(logged(self.logs)), io.StringIO(), io.StringIO()
-        with redirect_stdout(out), redirect_stderr(err):
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(redirect_stdout(out))
+            stack.enter_context(redirect_stderr(err))
+            if token is not None:
+                self.keychain = Keychain(
+                    {
+                        HARNESS_IDENTITY.token_service: record(days=token[0]),
+                        HARNESS_IDENTITY.secret_service: APP_SECRET,
+                    }
+                )
+                self.endpoint = Endpoint(
+                    token[1], data=lambda q, v: gql(q, identity=HARNESS_IDENTITY, **v)
+                )
+                stack.enter_context(mock.patch("subprocess.run", self.keychain))
+                stack.enter_context(
+                    mock.patch.object(urllib.request, "urlopen", side_effect=self.endpoint)
+                )
+                stack.enter_context(mock.patch.object(client, "_now", return_value=TOKEN_NOW))
             code = prune.main(
                 list(argv),
                 trackers=cli.TRACKERS,
-                gql=gql,
+                gql=client.linear_gql if token is not None else gql,
                 now=NOW,
                 config_path=path,
                 pruner=self.pruner,
@@ -1074,6 +1098,19 @@ class PruneCommand(PruneScenario):
         said = "\n".join(show(e) for e in logged(self.logs)[before:] + copies)
         rest = "".join(f"{line}\n" for line in lines if not line.startswith("{"))
         return code, out.getvalue(), rest, said
+
+    def test_the_harness_token_renews_or_shows_and_an_expired_one_exits_2(self):
+        gql = gql_for({})
+        self.assertEqual(self.command(gql, token=(4, None))[0], 0)
+        self.assertEqual([t["scope"] for t in self.endpoint.tokens], ["read,write"])
+        code, _, _, said = self.command(gql, "--dry-run", token=(4, None))
+        self.assertEqual((code, self.endpoint.tokens), (0, []))
+        self.assertIn("token identity=harness days_left=4.0", said)
+        for argv in ((), ("--dry-run",)):
+            with self.subTest(argv=argv):
+                code, _, _, said = self.command(gql, *argv, token=(-1, token_http_error(401)))
+                self.assertEqual(code, 2)
+                self.assertIn("Linear harness app token expired", said)
 
     def test_config_error_exits_2(self):
         # a config.toml or Linear setup error, each logged as config-error

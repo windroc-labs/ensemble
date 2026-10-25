@@ -1227,6 +1227,7 @@ def main(
             attended=attended,
         )
     try:
+        wiring.credentials(cfg, "router", dry=opts["dry"])
         if opts["issue"]:
             return run_issue(
                 opts,

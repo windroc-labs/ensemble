@@ -12,6 +12,7 @@ from unittest import mock
 
 from ensemble.orchestrator.engine.types import AppKind, LinearApp
 from ensemble.orchestrator.trackers.linear import client
+from orchestrator_tests.case import system_probe
 
 NOW = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
 SECRET = "app-SECRET-sentinel"
@@ -38,7 +39,7 @@ def record(token=OLD, days=10.0, now=NOW):
 
 class Keychain:
     """services: {service: (account, value)}; calls: each security (argv, stdin); fail_write: an
-    -i write leaves the entry as it was.
+    -i write leaves the entry as it was. Any other subprocess: a unit test's system_probe.
     """
 
     def __init__(self, entries=None, *, fail_write=False):
@@ -51,7 +52,7 @@ class Keychain:
 
     def __call__(self, argv, *args, **kw):
         if not argv or argv[0] != client.SECURITY:
-            raise AssertionError(f"unexpected subprocess: {argv}")
+            return system_probe(argv, *args, **kw)
         self.calls.append((list(argv), kw.get("input")))
         if argv[1:2] == ["-i"]:
             return self._interactive(argv, kw.get("input") or "")
@@ -77,8 +78,9 @@ class Keychain:
 
 
 class Endpoint:
-    """urlopen for the token endpoint (answer: a dict, bytes, or an exception) and GraphQL (data);
-    tokens: each token request's form fields; graphql: each GraphQL request."""
+    """urlopen for the token endpoint (answer: a dict, bytes, or an exception) and GraphQL (data, or
+    data(query, variables) answering each); tokens: each token request's form fields; graphql: each
+    GraphQL request."""
 
     def __init__(self, answer=None, data=None):
         self.answer = {"access_token": NEW, "expires_in": 30 * 86400} if answer is None else answer
@@ -92,7 +94,9 @@ class Endpoint:
             body = self.answer if isinstance(self.answer, bytes) else json.dumps(self.answer)
             return _response(body if isinstance(body, bytes) else body.encode())
         self.graphql.append(req)
-        return _response(json.dumps({"data": self.data}).encode())
+        body = json.loads(req.data)
+        data = self.data(body["query"], body["variables"]) if callable(self.data) else self.data
+        return _response(json.dumps({"data": data}).encode())
 
 
 def _response(body):

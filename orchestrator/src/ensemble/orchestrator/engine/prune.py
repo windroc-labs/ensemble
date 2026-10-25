@@ -632,6 +632,7 @@ def main(argv, *, trackers, gql, now=None, config_path=None, pruner=Pruner):
         return 2
     event_log.use_logs(cfg.logs_dir)
     try:
+        trackers[cfg.tracker].credentials(cfg, "prune", dry=dry)
         board = trackers[cfg.tracker].board(gql, cfg)
         code = pruner(
             board, gql, now or datetime.now(UTC), dry=dry, work=cfg.workdirs, cfg=cfg

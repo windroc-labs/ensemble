@@ -1,5 +1,6 @@
 """Client boundary behavior."""
 
+import contextlib
 import dataclasses
 import http.client
 import io
@@ -617,7 +618,7 @@ class AppToken(Case):
             self.call(keychain, Endpoint(token_http_error(401), data={}))
         self.assertEqual(err.getvalue(), "ensemble-orchestrator: token-error: harness: HTTP 401\n")
 
-    def test_status_reads_without_renewing(self):
+    def test_a_dry_run_shows_each_token_once_as_first_read(self):
         cases = {
             record(days=4.24): {"days_left": 4.2},
             record(days=-1): {"state": "expired"},
@@ -626,16 +627,14 @@ class AppToken(Case):
         }
         for value, want in cases.items():
             with self.subTest(value=value):
+                shown = []
+                client.use(renew=False, show=lambda *seen, into=shown: into.append(seen))
                 keychain = Keychain({} if value is None else {HARNESS.token_service: value})
-                with (
-                    mock.patch("subprocess.run", keychain),
-                    mock.patch.object(
-                        urllib.request, "urlopen", side_effect=AssertionError("request")
-                    ),
-                    mock.patch.object(client, "_now", return_value=NOW),
-                ):
-                    self.assertEqual(client.status(HARNESS), want)
-                self.assertEqual([argv[1] for argv, _ in keychain.calls], ["find-generic-password"])
+                for _ in range(2):
+                    with contextlib.suppress(types.KeychainError):
+                        self.call(keychain, Endpoint(AssertionError("token request")))
+                self.assertEqual(shown, [("harness", want)])
+                self.assertEqual({argv[1] for argv, _ in keychain.calls}, {"find-generic-password"})
 
     def test_no_secret_or_token_leaks_from_any_path(self):
         echo = json.dumps({"error": APP_SECRET, "error_description": OLD})

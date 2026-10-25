@@ -5,6 +5,7 @@ import io
 import json
 import os
 import time
+import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import timedelta
 from pathlib import Path
@@ -17,12 +18,22 @@ from ensemble.orchestrator.engine import log as event_log
 from ensemble.orchestrator.engine.flow import workflow
 from ensemble.orchestrator.engine.flow.types import IssueState
 from ensemble.orchestrator.engine.types import IssueError, LinearError
-from ensemble.orchestrator.trackers.linear import linear_tracker, ops
+from ensemble.orchestrator.trackers.linear import client, linear_tracker, ops
 from ensemble.orchestrator.trackers.local.local_tracker import LocalTracker
 from orchestrator_tests.case import Case
 from orchestrator_tests.unit.board_ids import FINISHED, HARNESS_IDENTITY, TEAM
 from orchestrator_tests.unit.board_ids import STATES as IDS_BY_KEY
 from orchestrator_tests.unit.board_ids import role as role_table
+from orchestrator_tests.unit.keychain_fixtures import (
+    NEW,
+    OLD,
+    Endpoint,
+    Keychain,
+    record,
+    token_http_error,
+)
+from orchestrator_tests.unit.keychain_fixtures import NOW as NOW_TOKEN
+from orchestrator_tests.unit.keychain_fixtures import SECRET as APP_SECRET
 from orchestrator_tests.unit.outage import FAILURES, FIELDS, failing
 from orchestrator_tests.unit.promote_fixtures import (
     AGENT,
@@ -286,7 +297,12 @@ class PromotionOutages(Base):
                 self.assertEqual(self.run_main("--dry-run", gql=failing(error)), 1)
                 self.assertEqual(
                     (self.out, len(self.err.splitlines()), FakePruner.calls),
-                    (f"linear-error op=teams {FIELDS[name]}", 1, []),
+                    (
+                        "token identity=harness days_left=20.0\n"
+                        f"linear-error op=teams {FIELDS[name]}",
+                        2,
+                        [],
+                    ),
                 )
         self.assertFalse(os.path.exists(self.logs))
 
@@ -681,6 +697,84 @@ class HandoffPromotion(Base):
             ],
         )
         self.assertIn("handoff-bounce DR-1 to=in_review reason=no instructions", self.out)
+
+
+class HarnessToken(Base):
+    """promote alone renews the harness app's token, over the real transport."""
+
+    def setUp(self):
+        super().setUp()
+        clock = mock.patch.object(client, "_now", return_value=NOW_TOKEN)
+        clock.start()
+        self.addCleanup(clock.stop)
+        self.ready("DR-1")
+
+    def promote(self, days, answer=None, *argv):
+        self.keychain = Keychain(
+            {
+                HARNESS_IDENTITY.token_service: record(days=days),
+                HARNESS_IDENTITY.secret_service: APP_SECRET,
+            }
+        )
+        self.endpoint = Endpoint(
+            answer, data=lambda q, v: self.fake(q, identity=HARNESS_IDENTITY, **v)
+        )
+        with (
+            mock.patch("subprocess.run", self.keychain),
+            mock.patch.object(urllib.request, "urlopen", side_effect=self.endpoint),
+        ):
+            return self.run_main(*argv, gql=client.linear_gql)
+
+    def stored(self):
+        return json.loads(self.keychain.value(HARNESS_IDENTITY.token_service))
+
+    def test_4_days_left_renews_before_the_first_call_and_6_does_not(self):
+        self.assertEqual(self.promote(4), 0)
+        self.assertEqual([t["scope"] for t in self.endpoint.tokens], ["read,write"])
+        self.assertEqual(
+            self.stored(),
+            {"access_token": NEW, "expires_at": (NOW_TOKEN + timedelta(days=30)).isoformat()},
+        )
+        self.assertEqual(
+            {r.get_header("Authorization") for r in self.endpoint.graphql}, {f"Bearer {NEW}"}
+        )
+        self.assertIn("promote DR-1", self.out)
+        self.ready("DR-2")
+        self.assertEqual(self.promote(6), 0)
+        self.assertEqual(self.endpoint.tokens, [])
+        self.assertEqual(self.stored()["access_token"], OLD)
+
+    def test_a_failed_renewal_of_a_usable_token_is_one_token_error_and_promote_goes_on(self):
+        self.assertEqual(self.promote(3, token_http_error(401)), 0)
+        self.assertEqual(len(self.endpoint.tokens), 1)
+        self.assertEqual(self.stored()["access_token"], OLD)
+        lines = [e for e in logged(self.logs) if e["kind"] == "token-error"]
+        self.assertEqual(
+            [(e["src"], e["identity"], e["reason"]) for e in lines],
+            [("promote", "harness", "HTTP 401")],
+        )
+        self.assertIn("promote DR-1", self.out)
+
+    def test_an_expired_token_whose_renewal_fails_exits_2_naming_the_harness(self):
+        self.assertEqual(self.promote(-1, token_http_error(401)), 2)
+        [line] = [e for e in logged(self.logs) if e["kind"] == "config-error"]
+        self.assertEqual(
+            line["reason"],
+            "Linear harness app token expired and renewal failed: HTTP 401; fix: check "
+            "linear.harness.client_id and the client secret in Keychain service "
+            "linear-api-key-secret (rotated: store the new secret), then rerun",
+        )
+        self.assertEqual((self.endpoint.graphql, self.fake.mutations), ([], []))
+
+    def test_a_dry_run_shows_days_left_and_requests_no_token(self):
+        self.assertEqual(self.promote(4, None, "--dry-run"), 0)
+        self.assertEqual(self.endpoint.tokens, [])
+        self.assertEqual(self.stored()["access_token"], OLD)
+        self.assertNotIn(("-i",), {tuple(argv[1:]) for argv, _ in self.keychain.calls})
+        self.assertEqual(self.out.splitlines()[0], "token identity=harness days_left=4.0")
+        self.assertEqual(self.promote(-1, None, "--dry-run"), 2)
+        self.assertEqual(self.endpoint.tokens, [])
+        self.assertIn("Linear harness app token expired", self.err)
 
 
 class HarnessIdentity(Base):

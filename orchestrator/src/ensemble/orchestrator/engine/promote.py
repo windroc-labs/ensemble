@@ -311,6 +311,7 @@ def main(argv, *, trackers, gql, now=None, config_path=None, pruner=None):
     event_log.use_logs(cfg.logs_dir)
     now = now or datetime.now(UTC)
     try:
+        trackers[cfg.tracker].credentials(cfg, "promote", dry=dry)
         board = trackers[cfg.tracker].board(gql, cfg)
         promoter = Promoter(cfg, board(gql), now, dry, tasks=config.TASKS, wait="--now" not in argv)
         promoter.run()

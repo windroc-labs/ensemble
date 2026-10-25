@@ -226,6 +226,8 @@ class Wiring:
     claimed: Callable[[Any, Config, Claim], Accounts]
     identity: Callable[[Config, str], LinearKey | None]  # a role's; None: none to check
     board: Callable[[Any, Config], Callable[[Any], Tracker]]
+    # (cfg, src, *, dry): command src's token renewal policy; dry: show each app's token, renew none
+    credentials: Callable[..., None]
 
 
 class State(StrEnum):

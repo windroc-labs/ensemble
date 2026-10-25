@@ -12,6 +12,7 @@ from unittest import mock
 
 from ensemble.orchestrator import cli
 from ensemble.orchestrator.engine import config, prune, router, run_comments, runs
+from ensemble.orchestrator.engine import log as event_log
 from ensemble.orchestrator.engine.types import (
     Claim,
     ConfigError,
@@ -19,7 +20,7 @@ from ensemble.orchestrator.engine.types import (
     State,
     TrackerKind,
 )
-from ensemble.orchestrator.trackers.linear import ops
+from ensemble.orchestrator.trackers.linear import client, ops
 from ensemble.orchestrator.trackers.linear.linear_tracker import LinearTracker
 from ensemble.orchestrator.trackers.local.local_tracker import LocalTracker
 from ensemble.utils import SID_ENV, Record, Status
@@ -27,7 +28,7 @@ from orchestrator_tests.case import REPO, Case
 from orchestrator_tests.linear_run_case import SID, ReadyDelegate, RunCase
 from orchestrator_tests.unit import run_fixtures
 from orchestrator_tests.unit.board_ids import HARNESS_IDENTITY
-from orchestrator_tests.unit.run_fixtures import logged
+from orchestrator_tests.unit.run_fixtures import logged, show
 from orchestrator_tests.unit.streams import Stderr
 
 from delegate.tests.fakes.delegate import FakeDelegate
@@ -82,6 +83,41 @@ class Wirings(run_fixtures.Base):
                 cfg.linear.team,
             ),
         )
+
+    def test_linear_credentials_set_each_commands_renewal_policy(self):
+        cfg = config.load()
+        event_log.use_logs(cfg.logs_dir)
+        linear = cli.TRACKERS[TrackerKind.LINEAR]
+        for src, dry in (("promote", False), ("router", True)):
+            with self.subTest(src=src, dry=dry), mock.patch.object(client, "use") as use:
+                linear.credentials(cfg, src, dry=dry)
+                kw = use.call_args.kwargs
+                self.assertEqual((kw["renew"], kw["show"] is None), (not dry, not dry))
+                kw["report"]("harness", "HTTP 401")
+                if dry:
+                    kw["show"]("harness", {"days_left": 4.0})
+        lines = [(e["src"], show(e)) for e in logged()]
+        self.assertEqual(lines, [("promote", "token-error identity=harness reason=HTTP 401")])
+
+    def test_a_local_board_sets_no_renewal_policy(self):
+        board = os.path.realpath(os.path.join(self.work, "board"))
+        cfg = replace(config.load(), tracker=TrackerKind.LOCAL, linear=None, board=board)
+        with mock.patch.object(client, "use", side_effect=AssertionError("policy")):
+            cli.TRACKERS[TrackerKind.LOCAL].credentials(cfg, "prune", dry=True)
+
+    def test_writeback_renews_as_writeback(self):
+        cfg = config.load()
+        event_log.use_logs(cfg.logs_dir)
+        with (
+            mock.patch.object(cli.sys, "stdin", io.StringIO("an event\n")),
+            mock.patch.object(cli.DelegateEvent, "parse"),
+            mock.patch.object(cli.writeback, "deliver", return_value=True),
+            mock.patch.object(client, "use") as use,
+        ):
+            self.assertEqual(cli._writeback(cfg, "TASK-1", self.work), 0)
+        self.assertTrue(use.call_args.kwargs["renew"])
+        use.call_args.kwargs["report"]("harness", "HTTP 401")
+        self.assertEqual([e["src"] for e in logged()], ["writeback"])
 
     def test_a_local_board_writes_as_one_tracker_with_no_keys(self):
         board = os.path.realpath(os.path.join(self.work, "board"))

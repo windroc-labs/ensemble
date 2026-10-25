@@ -347,6 +347,22 @@ def _linear_board_factory(gql, cfg):
     )
 
 
+def _linear_credentials(cfg, src, *, dry):
+    """src's renewal policy: renew unless dry, failed renewals as token-error lines; a dry run logs
+    each app's token state as a token line when it first calls as that app."""
+    del cfg
+    client.use(
+        renew=not dry,
+        report=event_log.token_error(src, dry=dry),
+        show=partial(event_log.token_state, src) if dry else None,
+    )
+
+
+def _local_credentials(cfg, src, *, dry):
+    """A local board calls no transport."""
+    del cfg, src, dry
+
+
 def _local_board(transport, cfg, *, say=None):
     """A local board's tracker, the router's and a run's: it needs no transport and logs nothing."""
     del transport, say
@@ -390,6 +406,7 @@ TRACKERS = MappingProxyType(
             claimed=_linear_claimed,
             identity=_linear_identity,
             board=_linear_board_factory,
+            credentials=_linear_credentials,
         ),
         TrackerKind.LOCAL: Wiring(
             connect=_local_board,
@@ -398,6 +415,7 @@ TRACKERS = MappingProxyType(
             claimed=_local_claimed,
             identity=lambda *_: None,
             board=_local_board_factory,
+            credentials=_local_credentials,
         ),
     }
 )
@@ -420,6 +438,7 @@ def _writeback(cfg, issue, workdir):
         if len(lines) != 1:
             raise ValueError(f"want one DelegateEvent line on stdin, got {len(lines)}")
         event = DelegateEvent.parse(lines[0])
+        TRACKERS[cfg.tracker].credentials(cfg, "writeback", dry=False)
         accounts = partial(TRACKERS[cfg.tracker].claimed, client.linear_gql, cfg)
         return 0 if writeback.deliver(cfg, issue, workdir, event, accounts=accounts) else 1
     except (ValueError, ConfigError) as error:

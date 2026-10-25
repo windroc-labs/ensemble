@@ -100,6 +100,11 @@ def token_error(src, *, dry=False):
     )
 
 
+def token_state(src, identity, fields):
+    """A dry run's report of an app's token: days_left, or a state (missing, no expiry, expired)."""
+    log(src, "token", dry=True, identity=identity, **fields)
+
+
 def linear_error(src, e, *, dry=False, now=datetime.now):
     return _stop(
         src,
