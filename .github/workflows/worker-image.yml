@@ -1,0 +1,192 @@
+name: Worker image
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    # Keep in sync with the image inputs in "Detect image input changes".
+    paths:
+      - broker/**
+      - session/src/**
+      - utils/src/**
+      - delegate/src/**
+      - .claude-plugin/plugin.json
+      - .github/workflows/worker-image.yml
+      - .github/worker_codex.py
+      - .github/worker_codex/**
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  worker-image:
+    name: Worker image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      # pull_request has no paths filter so this required check always reports.
+      - name: Detect image input changes
+        id: inputs
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          changed=$(git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA")
+          if grep -qE '^(broker/|session/src/|utils/src/|delegate/src/|\.claude-plugin/plugin\.json$|\.github/workflows/worker-image\.yml$|\.github/worker_codex\.py$|\.github/worker_codex/)' <<<"$changed"; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No image input changed; nothing to build."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Set up Go
+        if: ${{ steps.inputs.outputs.build != 'false' }}
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: broker/go.mod
+          cache: false
+      - name: Build ensemble-broker
+        if: ${{ steps.inputs.outputs.build != 'false' }}
+        working-directory: broker
+        run: sh with-go-state.sh go build -trimpath -o "$RUNNER_TEMP/ensemble-broker" .
+      - name: Link the broker's Docker Desktop paths to the runner's Docker
+        if: ${{ steps.inputs.outputs.build != 'false' }}
+        run: |
+          resources=/Applications/Docker.app/Contents/Resources
+          buildx=$(docker info --format '{{range .ClientInfo.Plugins}}{{if eq .Name "buildx"}}{{.Path}}{{end}}{{end}}')
+          test -x "$buildx"
+          sudo install -d "$resources/bin" "$resources/cli-plugins"
+          sudo ln -s "$(command -v docker)" "$resources/bin/docker"
+          sudo ln -s "$buildx" "$resources/cli-plugins/docker-buildx"
+          mkdir -p "$HOME/.docker/run"
+          ln -s /var/run/docker.sock "$HOME/.docker/run/docker.sock"
+      - name: Seed the default worker image definition
+        if: ${{ steps.inputs.outputs.build != 'false' }}
+        run: install -D -m 0644 broker/worker/Dockerfile "$HOME/.ensemble/docker/worker/Dockerfile"
+      - name: Build with ensemble-broker
+        id: build
+        if: ${{ steps.inputs.outputs.build != 'false' }}
+        run: |
+          mapfile -t plugins < <(python3 -c 'import tomllib; print(*tomllib.load(open("session/src/ensemble/session/config.toml", "rb"))["hosts"]["docker"]["plugins"], sep="\n")')
+          args=()
+          for plugin in "${plugins[@]}"; do args+=(--plugin "$plugin"); done
+          "$RUNNER_TEMP/ensemble-broker" build --ensemble "$GITHUB_WORKSPACE" "${args[@]}" > "$RUNNER_TEMP/build.json"
+          cat "$RUNNER_TEMP/build.json"
+          image=$(jq -er 'select(.rebuilt == true) | .image' "$RUNNER_TEMP/build.json")
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+      - name: Check image labels
+        if: ${{ steps.inputs.outputs.build != 'false' }}
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+        run: |
+          labels=$(docker image inspect "$IMAGE" --format '{{json .Config.Labels}}')
+          echo "$labels"
+          version=$(jq -er .version .claude-plugin/plugin.json)
+          jq -e --arg key "${IMAGE#ensemble-worker:}" --arg version "$version" '
+            .["ensemble.key"] == $key and .["ensemble.version"] == $version
+            and (.["ensemble.agent-uid"] | test("^[1-9][0-9]*$"))
+            and (.["ensemble.agent-gid"] | test("^[1-9][0-9]*$"))' <<<"$labels"
+      - name: Check image history holds no token
+        if: ${{ steps.inputs.outputs.build != 'false' }}
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+        run: |
+          history=$(docker history --no-trunc "$IMAGE")
+          if grep -q sk-ant <<<"$history"; then
+            echo "::error::docker history contains sk-ant"
+            exit 1
+          fi
+      - name: Smoke-check a container
+        if: ${{ steps.inputs.outputs.build != 'false' }}
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+        run: |
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges "$IMAGE" sh -euc '
+            uid=$(id -u)
+            echo "uid $uid"
+            test "$uid" != 0
+            if command -v sudo; then
+              echo "sudo is on PATH"
+              exit 1
+            fi
+            tmux -V
+            git --version
+            gh --version
+            /usr/local/bin/gh api --help | grep -q -- --slurp
+            /usr/local/bin/gh pr checks --help | grep -q -- --fail-fast
+            python3 --version
+            uv --version
+            node --version
+            claude --version
+            codex --version
+            test "$(command -v opencode)" = /opt/ensemble/bin/opencode
+            test "$(opencode --version)" = 1.19.3
+            client=/opt/ensemble/session/src/ensemble/session/clients/opencode
+            test -r "$client/launcher.py"
+            test -r "$client/plugin.js"
+            status=0
+            python3 -I "$client/launcher.py" 2>/dev/null || status=$?
+            test "$status" = 2
+            rg --version
+            test -x /opt/ensemble/bin/with-secrets
+            test "$(command -v gh)" = /opt/ensemble/bin/gh
+            test "$(git config --system credential.helper)" = /opt/ensemble/bin/git-credential-ensemble
+            test "$(git config --system credential.useHttpPath)" = true
+            test "$(command -v python3)" = /opt/ensemble/bin/python3
+            python3 -c "import ensemble.delegate"
+            python3 -P /opt/ensemble/team/tools/repo.py --help
+            plugin=/opt/ensemble/plugins/updraft
+            test "$CLAUDE_CODE_PLUGIN_DIRS" = "$plugin"
+            test "$(stat -c %u:%g "$plugin" "$plugin/skills/light-build/SKILL.md" | sort -u)" = 0:0
+            test -r "$plugin/skills/light-build/SKILL.md"
+            if touch "$plugin/x" 2>/dev/null || touch "$plugin/skills/light-build/SKILL.md" 2>/dev/null; then
+              echo "agent can write the plugin"
+              exit 1
+            fi'
+      - name: Check both clients have the configured plugin commits
+        if: ${{ steps.inputs.outputs.build != 'false' }}
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+        run: |
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges "$IMAGE" python3 -c '
+          import json, subprocess
+          from pathlib import Path
+          root = Path("/opt/ensemble")
+          sources = json.loads((root / "plugin-sources.json").read_text())
+          assert sources, "default build must install pinned plugins"
+          for source in sources:
+              for client in ("claude", "codex"):
+                  checkout = root / f"{client}-plugins/sources" / source["repo"]
+                  actual = subprocess.check_output(["git", "-c", f"safe.directory={checkout}", "-C", str(checkout), "rev-parse", "HEAD"], text=True).strip()
+                  assert actual == source["commit"], f"{client} {source}: actual {actual}"
+                  market = json.loads((checkout / ".claude-plugin/marketplace.json").read_text())["name"]
+                  installed = root / f"{client}-plugins/plugins/cache" / market / source["name"]
+                  assert any(installed.iterdir()), f"{client} {source}: missing installation"
+                  print(client, source["name"], "verified", actual)'
+      - name: Check OpenCode discovers the image skills
+        if: ${{ steps.inputs.outputs.build != 'false' }}
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+        run: |
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges "$IMAGE" python3 -c '
+          import json, os, subprocess
+          env = {**os.environ, "OPENCODE_CONFIG_CONTENT": json.dumps({"skills": {"paths": ["/opt/ensemble/plugins"]}})}
+          result = subprocess.run(["opencode", "debug", "skill"], env=env, capture_output=True, text=True, check=True)
+          assert any(skill["name"] == "light-build" for skill in json.loads(result.stdout))'
+      - name: Check Codex volatile authentication and history mounts
+        if: ${{ steps.inputs.outputs.build != 'false' }}
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+        run: python3 .github/worker_codex.py "$IMAGE"

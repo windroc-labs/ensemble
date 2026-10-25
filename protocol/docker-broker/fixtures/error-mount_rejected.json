@@ -1,0 +1,9 @@
+{
+  "exit_code": 4,
+  "error": {
+    "command": "start",
+    "code": "mount_rejected",
+    "message": "Example mount_rejected.",
+    "cleanup": "not_needed"
+  }
+}

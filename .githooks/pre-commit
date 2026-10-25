@@ -1,0 +1,4 @@
+#!/bin/sh
+# Enable once per clone (Docker worker images set it): git config core.hooksPath .githooks (docs/tests.md).
+command -v python3 >/dev/null 2>&1 || { echo "pre-commit (ruff): python3 not found; skipped" >&2; exit 0; }
+exec python3 "${0%/*}/../.github/ruff_hook.py"

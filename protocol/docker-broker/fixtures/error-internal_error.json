@@ -1,0 +1,9 @@
+{
+  "exit_code": 70,
+  "error": {
+    "command": "version",
+    "code": "internal_error",
+    "message": "Example internal_error.",
+    "cleanup": "not_needed"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "exit_code": 5,
+  "error": {
+    "command": "start",
+    "code": "login_required",
+    "message": "Example login_required.",
+    "cleanup": "not_needed"
+  }
+}

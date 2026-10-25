@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+bin_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repo_dir=$(dirname -- "$bin_dir")
+case $repo_dir in
+  *:*) # PATH and PYTHONPATH split on ":" (OpenCode's plugin cache path holds one): rerun through a link without it
+    link=$HOME/.ensemble/links/$(printf '%s' "$repo_dir" | cksum | cut -d' ' -f1)
+    mkdir -p "$HOME/.ensemble/links"
+    [ "$(readlink "$link" 2>/dev/null)" = "$repo_dir" ] || ln -sfn "$repo_dir" "$link"
+    exec "$link/bin/${0##*/}" "$@"
+    ;;
+esac
+export PATH="$bin_dir:$PATH"
+export PYTHONPATH="$repo_dir/utils/src:$repo_dir/session/src:$repo_dir/delegate/src:$repo_dir/orchestrator/src"
+exec python3 -P -m ensemble.orchestrator.cli "$@"

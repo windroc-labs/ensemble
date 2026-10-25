@@ -1,0 +1,9 @@
+{
+  "exit_code": 2,
+  "error": {
+    "command": "version",
+    "code": "usage",
+    "message": "Example usage.",
+    "cleanup": "not_needed"
+  }
+}

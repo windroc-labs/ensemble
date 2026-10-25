@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>AbandonProcessGroup</key>
+	<true/>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>@PATH@</string>
+	</dict>
+	<key>Label</key>
+	<string>com.windroc.ensemble.router</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>@HOME@/.ensemble/bin/ensemble-orchestrator</string>
+		<string>router</string>
+	</array>
+	<key>StandardErrorPath</key>
+	<string>@HOME@/.ensemble/logs/orchestrator.jsonl</string>
+	<key>StandardOutPath</key>
+	<string>@HOME@/.ensemble/logs/orchestrator.jsonl</string>
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict>
+			<key>Minute</key>
+			<integer>0</integer>
+		</dict>
+		<dict>
+			<key>Minute</key>
+			<integer>30</integer>
+		</dict>
+	</array>
+</dict>
+</plist>

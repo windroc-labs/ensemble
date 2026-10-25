@@ -1,0 +1,9 @@
+{
+  "exit_code": 15,
+  "error": {
+    "command": "refresh",
+    "code": "github_failed",
+    "message": "x",
+    "cleanup": "removed"
+  }
+}

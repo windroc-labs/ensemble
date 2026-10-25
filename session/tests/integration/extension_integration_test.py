@@ -1,0 +1,96 @@
+"""A Client and a Host written outside the session package (session/tests/outside.py, importing only
+ensemble.session.extension and ensemble.session), configured as module.path:Class in
+[clients.outside] and [hosts.outside]: a session starts in each mode the client offers and yields
+its events; the Host keeps, lists and ends the processes it detaches.
+"""
+
+import ast
+import inspect
+import os
+import sys
+import unittest
+
+from ensemble.session import Access, Exited, Launch, Mode, Reply, Spec, TurnEnd
+from ensemble.session.engine.hosted_session import HostedSession
+from ensemble.session.extension import ConfigError, Host, Record, SessionError
+
+from session.tests import outside
+from session.tests.case import Case
+
+CLIENTS = {"outside": {"implementation": "session.tests.outside:OutsideClient"}}
+HOSTS = {"default": "outside", "outside": {"implementation": "session.tests.outside:OutsideHost"}}
+PUBLIC = {"ensemble.session", "ensemble.session.extension"}
+WAIT = 20  # seconds
+
+
+class OutsideTest(Case):
+    def setUp(self):
+        self.session = HostedSession.configured(clients=CLIENTS, hosts=Host.parse_hosts(HOSTS))
+        self.workdir = os.path.join(self.home, "work")
+
+    def started(self, mode: Mode):
+        spec = Spec(
+            workdir=self.workdir,
+            access=Access(cwd=self.workdir),
+            client="outside",
+            mode=mode,
+            prompt="hello",
+        )
+        return self.session.start(spec)
+
+    def test_the_outside_module_imports_only_the_public_session_modules(self):
+        tree = ast.parse(inspect.getsource(outside))
+        imported = {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+        imported |= {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
+        self.assertNotIn(None, imported)
+        others = {m for m in imported if m.split(".")[0] not in sys.stdlib_module_names}
+        self.assertEqual(others, {"ensemble.session.extension"})
+        self.assertLessEqual(others, PUBLIC)
+
+    def test_a_headless_session_yields_the_events_the_client_reads_from_its_stream(self):
+        session = self.started(Mode.HEADLESS)
+        self.assertEqual(list(session.events()), [Reply("hello"), TurnEnd("hello"), Exited(0)])
+        self.assertEqual(session.reply, "hello")
+        self.assertFalse(session.showable)
+
+    def test_an_in_process_session_yields_its_runs_events(self):
+        session = self.started(Mode.IN_PROCESS)
+        self.assertEqual(list(session.events()), [Reply("hello"), TurnEnd("hello"), Exited(0)])
+
+    def test_a_mode_the_client_does_not_offer_is_refused(self):
+        with self.assertRaises(ConfigError) as caught:
+            self.started(Mode.TUI)
+        self.assertEqual(str(caught.exception), "client 'outside' does not support tui mode")
+
+    def test_the_configured_host_keeps_lists_and_ends_its_processes(self):
+        host = self.session.host()
+        self.assertIsInstance(host, outside.OutsideHost)
+        self.assertIs(self.session.host("outside"), host)
+        resume = ("ensemble-session", "resume", "j1")
+        record = Record(
+            1, "job", "j1", ("j1",), None, None, ("ensemble-session",), resume, "d", None
+        )
+        process = host.detach(
+            "j1",
+            Launch((sys.executable, "-c", "import time; time.sleep(60)"), cwd=self.home),
+            display="d",
+            record=record,
+        )
+        self.addCleanup(process.close)
+        self.assertIs(host.attach("j1"), process)
+        self.assertEqual((process.record(), process.display()), (record, "d"))
+        self.assertEqual(host.list(), ["j1"])
+        self.assertEqual(
+            [[row.name for row in self.session.list(display=d)] for d in ("d", "e", "")],
+            [["j1"], [], []],
+        )
+        self.assertTrue(process.alive())
+        process.kill()
+        self.assertTrue(process.wait_exit(WAIT))
+        self.assertFalse(process.alive())
+        with self.assertRaises(SessionError):
+            host.attach("j2")
+
+
+if __name__ == "__main__":
+    unittest.main()

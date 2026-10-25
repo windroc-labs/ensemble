@@ -1,0 +1,8 @@
+{
+  "argv": [
+    "workspace-rm",
+    "--volume",
+    "ensemble-ws-worker_1",
+    "--force"
+  ]
+}

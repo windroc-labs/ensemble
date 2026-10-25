@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "probe-provider",
+    "--provider",
+    "strata",
+    "--base-url",
+    "https://strata.test/v1"
+  ]
+}

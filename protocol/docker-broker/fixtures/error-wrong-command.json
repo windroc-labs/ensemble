@@ -1,0 +1,9 @@
+{
+  "exit_code": 3,
+  "error": {
+    "command": "build",
+    "code": "manifest_rejected",
+    "message": "Invalid manifest.",
+    "cleanup": "not_needed"
+  }
+}

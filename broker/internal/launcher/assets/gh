@@ -1,0 +1,84 @@
+#!/opt/ensemble/venv/bin/python -I
+"""gh with GH_TOKEN, in its process only, the installation token of the owner of the repository it
+acts on: a repo argument, else the cwd's origin, else the only token. An api path's {owner} or :owner,
+which gh fills from the current repo, is no repo argument.
+"""
+
+import os
+import re
+import runpy
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(os.path.realpath(__file__))
+helper = runpy.run_path(str(HERE.parent / "git-credential-ensemble"))
+TOKENS, token = helper["TOKENS"], helper["token"]
+URL = re.compile(r"(?:https://github\.com/|git@github\.com:)([^/]+)/")
+API = re.compile(r"/?repos/([^/]+)/")
+
+
+def _repo(value):
+    """The owner in [HOST/]OWNER/REPO or a github.com URL; "" for another host, None for no owner."""
+    if found := URL.match(value):
+        return found[1]
+    parts = value.split("/")
+    if "://" in value or "@" in value or len(parts) > 3:
+        return ""
+    if len(parts) == 3:
+        return parts[1] if parts[0] == "github.com" else ""
+    return parts[0] if len(parts) == 2 else None
+
+
+def _origin():
+    try:
+        res = subprocess.run(
+            ["git", "config", "--get", "remote.origin.url"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return res.stdout.strip() if res.returncode == 0 else ""
+
+
+def owner(argv, tokens):
+    """The owner argv acts on; "" for none."""
+    for i, arg in enumerate(argv):
+        if arg in ("-R", "--repo") and i + 1 < len(argv):
+            return _repo(argv[i + 1]) or ""
+        if arg.startswith("--repo="):
+            return _repo(arg.removeprefix("--repo=")) or ""
+    found = None
+    if argv[:2] == ["repo", "clone"] and len(argv) > 2:
+        found = _repo(argv[2])
+    elif argv[:1] == ["api"]:
+        found = next((m[1] for arg in argv[1:] if (m := API.match(arg))), None)
+        if found in ("{owner}", ":owner"):
+            found = None
+    if found is not None:
+        return found
+    if found := URL.match(_origin()):
+        return found[1]
+    try:
+        names = [name for name in os.listdir(tokens) if not name.startswith(".")]
+    except OSError:
+        return ""
+    return names[0] if len(names) == 1 else ""
+
+
+def main(argv, tokens=TOKENS):
+    for folder in os.environ.get("PATH", "").split(os.pathsep):
+        real = os.path.join(folder, "gh")
+        if os.path.isfile(real) and os.access(real, os.X_OK) and Path(os.path.realpath(real)) != HERE:
+            break
+    else:
+        sys.exit("gh: no gh on PATH after the ensemble wrapper")
+    found = token(owner(argv, tokens), tokens)
+    env = os.environ if found is None else {**os.environ, "GH_TOKEN": found}
+    os.execve(real, ["gh", *argv], env)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

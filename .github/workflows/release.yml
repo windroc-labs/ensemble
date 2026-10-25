@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions: {}
+
+jobs:
+  broker:
+    name: Broker release asset
+    runs-on: macos-15
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require the tag to be the plugin version
+        run: |
+          version=$(jq -er .version .claude-plugin/plugin.json)
+          if ! test "$TAG" = "v$version"; then
+            echo "::error::release tag $TAG is not v$version from .claude-plugin/plugin.json"
+            exit 1
+          fi
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: broker/go.mod
+          cache: false
+      - name: Build and sign
+        env:
+          GOOS: darwin
+          GOARCH: arm64
+        run: sh broker/build.sh "$RUNNER_TEMP/release/ensemble-broker"
+      - name: Pack
+        run: tar -czf "$RUNNER_TEMP/ensemble-broker-darwin-arm64.tar.gz" -C "$RUNNER_TEMP/release" ensemble-broker
+      - name: Attest provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/ensemble-broker-darwin-arm64.tar.gz
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" "$RUNNER_TEMP/ensemble-broker-darwin-arm64.tar.gz" --repo "$GITHUB_REPOSITORY" --clobber

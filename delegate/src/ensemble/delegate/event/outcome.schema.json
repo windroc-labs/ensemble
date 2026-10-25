@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "title", "summary"],
+  "properties": {
+    "status": {"enum": ["done", "needs_input", "failed"]},
+    "title": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[^\\n\\r]*$"},
+    "summary": {"type": "string", "maxLength": 300},
+    "questions": {"type": "array", "items": {"type": "string", "maxLength": 1000}, "maxItems": 4},
+    "url": {"type": "string", "maxLength": 2000},
+    "files": {"type": "array", "items": {"type": "string", "maxLength": 1000}, "maxItems": 20},
+    "deliverable": {"type": "string", "maxLength": 2000000},
+    "updraft": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "head"],
+      "properties": {
+        "status": {"enum": ["converged", "capped-without-pass", "stopped"]},
+        "head": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      }
+    }
+  }
+}

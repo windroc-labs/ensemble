@@ -1,0 +1,27 @@
+# CI workflows, gates, runners and this ownership policy.
+/.github/** @windroc
+
+# Lint, types, import contracts, dead code, spelling and scan exclusions.
+/pyproject.toml @windroc
+/.gitignore @windroc
+/.githooks/** @windroc
+
+# Repository check discovery, policy, exceptions and test isolation.
+/tests/*.py @windroc
+/tests/session_interface.json @windroc
+/tests/delegate_interface.json @windroc
+/tests/guard_checks/** @windroc
+/tests/guard_data/** @windroc
+/utils/tests/sandbox.py @windroc
+
+# Protocol schemas, fixture expectations and recorded test oracles.
+/protocol/** @windroc
+/delegate/tests/integration/composer/composer_prompts.json @windroc
+/session/tests/unit/clients/claude/fixtures/** @windroc
+
+# Go check dependencies, execution environment and CI build entry.
+/broker/go.mod @windroc
+/broker/go.sum @windroc
+/broker/staticcheck.conf @windroc
+/broker/with-go-state.sh @windroc
+/broker/build.sh @windroc

@@ -1,0 +1,9 @@
+{
+  "exit_code": 11,
+  "error": {
+    "command": "start",
+    "code": "keychain_failed",
+    "message": "Example keychain_failed.",
+    "cleanup": "not_needed"
+  }
+}

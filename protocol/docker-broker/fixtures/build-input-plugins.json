@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "build",
+    "--ensemble",
+    "/opt/ensemble",
+    "--plugin",
+    "updraft@windroc-labs/updraft#33f01c3b9e398e009f1fb1a4554ddcf19209dd4e::windroc-labs/agent-plugins-marketplace#dbea3408ab0c113bd74f414ab3a19d820e0f6e43",
+    "--plugin",
+    "beta@owner/market#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "--max-age",
+    "604800"
+  ]
+}

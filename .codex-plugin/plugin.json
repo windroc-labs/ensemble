@@ -1,0 +1,18 @@
+{
+  "name": "ensemble",
+  "version": "0.1.0",
+  "description": "Guidelines for your commander session (the manage skill), and ensemble's core roles and tasks, researcher, pm and engineer, run in this conversation (the act-as skill), and fixed board issue commands (the board skill).",
+  "author": {
+    "name": "Windroc"
+  },
+  "license": "MIT",
+  "hooks": "./manager/hooks/manual.json",
+  "skills": [
+    "./delegate/skills/",
+    "./orchestrator/skills/",
+    "./manager/skills/"
+  ],
+  "interface": {
+    "displayName": "Ensemble"
+  }
+}

@@ -1,0 +1,395 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  IMPORT_LINTER_VERSION: "2.15"
+  COVERAGE_VERSION: "7.10.7"
+  PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/.github:${{ github.workspace }}/manager/src:${{ github.workspace }}/orchestrator/src:${{ github.workspace }}/delegate/src:${{ github.workspace }}/session/src:${{ github.workspace }}/utils/src:${{ github.workspace }}/orchestrator/tests
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  changes:
+    name: Test scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      full: ${{ steps.scope.outputs.full }}
+      docs: ${{ steps.scope.outputs.docs }}
+      projects: ${{ steps.scope.outputs.projects }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Classify changed paths
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 .github/ci_scope.py --event "$EVENT" --base "$BASE_SHA" --head "$HEAD_SHA" --github-output "$GITHUB_OUTPUT"
+
+  lint:
+    name: Lint ${{ matrix.group }}
+    runs-on: ubuntu-24.04
+    needs: [changes]
+    env:
+      TEST_PROJECTS: ${{ needs.changes.outputs.full == 'false' && needs.changes.outputs.projects || '' }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJSON(needs.changes.outputs.docs == 'true' && '["style"]' || '["style", "types", "design"]') }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Install pinned tools
+        run: |
+          case '${{ matrix.group }}' in
+            style) python3 -m pip install ruff==0.16.9 vulture==2.16 ;;
+            types) python3 -m pip install pyright==1.1.414 ;;
+            design) python3 -m pip install import-linter=="$IMPORT_LINTER_VERSION" pylint==4.1.3 ;;
+          esac
+      - name: Protect shipped source
+        if: ${{ !cancelled() }}
+        run: chmod -R a-w manager/src orchestrator/src delegate/src session/src utils/src
+      - name: Comment budget
+        if: ${{ !cancelled() && matrix.group == 'style' }}
+        run: python3 .github/comment_budget.py
+      - name: Ruff
+        if: ${{ !cancelled() && matrix.group == 'style' }}
+        run: |
+          ruff check --no-cache --output-format=github
+          ruff format --check --no-cache
+      - name: Unit import boundaries
+        if: ${{ !cancelled() && matrix.group == 'style' }}
+        run: python3 -m tests.unit_imports
+      - name: Pyright
+        if: ${{ !cancelled() && matrix.group == 'types' }}
+        run: pyright
+      - name: Import contracts
+        if: ${{ !cancelled() && matrix.group == 'design' }}
+        run: lint-imports --no-cache
+      - name: Pylint
+        if: ${{ !cancelled() && matrix.group == 'design' }}
+        run: pylint --disable=all --enable=cyclic-import,duplicate-code manager/src orchestrator/src delegate/src session/src utils/src
+      - name: Vulture
+        if: ${{ !cancelled() && matrix.group == 'style' }}
+        run: vulture
+      - name: Repository design and test boundaries
+        if: ${{ !cancelled() && matrix.group == 'design' }}
+        run: python3 -m tests.checks
+      - name: Require unchanged checkout
+        if: ${{ always() }}
+        run: |
+          status=$(git -c core.fsmonitor=false -c core.hooksPath=/dev/null status --porcelain)
+          if [[ -n "$status" ]]; then
+            printf '%s\n' "$status"
+            exit 1
+          fi
+      - name: Integration duration assignment
+        if: ${{ !cancelled() && matrix.group == 'style' }}
+        run: python3 .github/integration_jobs.py --check
+      - name: Install actionlint 1.7.12
+        if: ${{ !cancelled() && matrix.group == 'style' }}
+        run: |
+          curl --fail --location --silent --show-error https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz | tar -xz -C "$RUNNER_TEMP" actionlint
+      - name: Actionlint
+        if: ${{ !cancelled() && matrix.group == 'style' }}
+        run: '"$RUNNER_TEMP/actionlint" -shellcheck= -pyflakes='
+      - name: Typos
+        if: ${{ !cancelled() && matrix.group == 'style' }}
+        uses: crate-ci/typos@v1.47.0
+        with:
+          config: pyproject.toml
+
+  repository:
+    name: Repository tests ${{ matrix.job }}
+    needs: [changes]
+    if: ${{ needs.changes.outputs.full == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        job: ["1", "2", "3", "4", "5", "6", "7", "8"]
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Install pinned test dependencies
+        run: python3 -m pip install coverage=="$COVERAGE_VERSION" import-linter=="$IMPORT_LINTER_VERSION" ruff==0.16.9 jsonschema==4.26.0
+      - name: Protect shipped source
+        run: chmod -R a-w manager/src orchestrator/src delegate/src session/src utils/src
+      - name: Repository integration tests
+        run: python3 -X faulthandler .github/run_tests.py 'Repository integration ${{ matrix.job }}' tests/integration --shard '${{ matrix.job }}/${{ strategy.job-total }}'
+      - name: Require unchanged checkout
+        if: ${{ always() }}
+        run: |
+          status=$(git -c core.fsmonitor=false -c core.hooksPath=/dev/null status --porcelain)
+          if [[ -n "$status" ]]; then
+            printf '%s\n' "$status"
+            exit 1
+          fi
+
+  unit:
+    name: Unit ${{ matrix.job }}
+    runs-on: ubuntu-24.04
+    needs: [changes]
+    env:
+      TEST_PROJECTS: ${{ needs.changes.outputs.full == 'false' && needs.changes.outputs.projects || '' }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        job: ["1", "2"]
+    outputs:
+      shards: ${{ steps.unit.outputs.shards }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Protect shipped source
+        run: chmod -R a-w manager/src orchestrator/src delegate/src session/src utils/src
+      - name: Install pinned coverage
+        if: ${{ github.event_name == 'pull_request' }}
+        run: python3 -m pip install coverage=="$COVERAGE_VERSION"
+      - name: Install Docker protocol test dependency
+        run: python3 -m pip install jsonschema==4.26.0
+      - name: Unit tests
+        id: unit
+        env:
+          RUN_TESTS_COVERAGE: ${{ github.event_name == 'pull_request' && 'collect' || '' }}
+          RUN_TESTS_REPORT_DIR: ${{ runner.temp }}/unit
+        run: |
+          echo "shards=$(( ${{ strategy.job-total }} * 4 ))" >> "$GITHUB_OUTPUT"
+          python3 -X faulthandler .github/run_tests.py 'Unit ${{ matrix.job }}' --unit --parallel 4 --shard '${{ matrix.job }}/${{ strategy.job-total }}'
+      - name: Preserve unit coverage
+        if: ${{ always() && github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: unit-coverage-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.job }}
+          path: ${{ runner.temp }}/unit/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Require unchanged checkout
+        if: ${{ always() }}
+        run: |
+          status=$(git -c core.fsmonitor=false -c core.hooksPath=/dev/null status --porcelain)
+          if [[ -n "$status" ]]; then
+            printf '%s\n' "$status"
+            exit 1
+          fi
+
+  coverage:
+    name: Coverage
+    needs: [changes, unit]
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Install pinned coverage
+        run: python3 -m pip install coverage=="$COVERAGE_VERSION"
+      - name: Download every unit shard
+        uses: actions/download-artifact@v8.0.2
+        with:
+          pattern: unit-coverage-${{ github.run_id }}-${{ github.run_attempt }}-*
+          path: ${{ runner.temp }}/unit-coverage
+          merge-multiple: true
+      - name: Combine coverage from every shard
+        env:
+          EXPECTED_SHARDS: ${{ needs.unit.outputs.shards }}
+        run: |
+          files=("$RUNNER_TEMP"/unit-coverage/shard-*/coverage-data.*)
+          test "${#files[@]}" = "$EXPECTED_SHARDS"
+          python3 -m coverage combine --rcfile=/dev/null --keep --data-file="$RUNNER_TEMP/coverage-data" "${files[@]}"
+      - name: Diff coverage of changed src lines
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: python3 .github/coverage_gate.py "$RUNNER_TEMP/coverage-data" "origin/$BASE_REF"
+      - name: Require unchanged checkout
+        if: ${{ always() }}
+        run: |
+          status=$(git -c core.fsmonitor=false -c core.hooksPath=/dev/null status --porcelain)
+          if [[ -n "$status" ]]; then
+            printf '%s\n' "$status"
+            exit 1
+          fi
+
+  integration:
+    name: Integration ${{ matrix.job }}
+    runs-on: ubuntu-24.04
+    needs: [changes]
+    if: ${{ needs.changes.outputs.docs == 'false' }}
+    timeout-minutes: 15
+    env:
+      INTEGRATION_WORKERS: "4"
+      TEST_PROJECTS: ${{ needs.changes.outputs.full == 'false' && needs.changes.outputs.projects || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        job: ["1", "2", "3", "4", "5", "6", "7", "8"]
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Install tmux
+        run: |
+          if ! command -v tmux >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends tmux
+          fi
+      - name: Protect shipped source
+        run: chmod -R a-w manager/src orchestrator/src delegate/src session/src utils/src
+      - name: Integration tests
+        env:
+          INTEGRATION_TIMING_DIR: ${{ runner.temp }}/integration-timing
+          RUN_TESTS_DURATIONS: ${{ runner.temp }}/integration-timing/durations.jsonl
+          INTEGRATION_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          INTEGRATION_RUNNER: ubuntu-24.04
+        run: |
+          mkdir -p "$INTEGRATION_TIMING_DIR"
+          export INTEGRATION_TMUX_VERSION="$(tmux -V)"
+          python3 -X faulthandler .github/integration_jobs.py '${{ matrix.job }}'
+      - name: Preserve integration timings
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: integration-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.job }}
+          path: ${{ runner.temp }}/integration-timing/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Require unchanged checkout
+        if: ${{ always() }}
+        run: |
+          status=$(git -c core.fsmonitor=false -c core.hooksPath=/dev/null status --porcelain)
+          if [[ -n "$status" ]]; then
+            printf '%s\n' "$status"
+            exit 1
+          fi
+
+  broker:
+    name: Broker ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    defaults:
+      run:
+        working-directory: broker
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: broker/go.mod
+          cache: false
+      - name: Gofmt
+        run: |
+          unformatted=$(sh with-go-state.sh gofmt -l .)
+          if [[ -n "$unformatted" ]]; then
+            printf '%s\n' "$unformatted"
+            exit 1
+          fi
+      - name: Go vet
+        run: sh with-go-state.sh go vet ./...
+      - name: Staticcheck
+        run: sh with-go-state.sh go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
+      - name: Go test
+        run: sh with-go-state.sh go test ./...
+      - name: Go build
+        if: ${{ runner.os == 'Linux' }}
+        run: sh with-go-state.sh go build -trimpath -o "$RUNNER_TEMP/ensemble-broker" .
+      - name: Build darwin/arm64 binary with cgo
+        if: ${{ runner.os == 'macOS' }}
+        env:
+          GOOS: darwin
+          GOARCH: arm64
+        run: sh build.sh "$RUNNER_TEMP/ensemble-broker-darwin-arm64"
+      - name: Upload darwin/arm64 binary
+        if: ${{ runner.os == 'macOS' }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: ensemble-broker-darwin-arm64
+          path: ${{ runner.temp }}/ensemble-broker-darwin-arm64
+          if-no-files-found: error
+          retention-days: 30
+      - name: Require unchanged checkout
+        if: ${{ always() }}
+        run: |
+          status=$(git -c core.fsmonitor=false -c core.hooksPath=/dev/null status --porcelain)
+          if [[ -n "$status" ]]; then
+            printf '%s\n' "$status"
+            exit 1
+          fi
+
+  ci:
+    name: CI
+    needs: [changes, lint, repository, unit, coverage, integration, broker]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Require every check and test job
+        env:
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: python3 .github/ci_scope.py --gate

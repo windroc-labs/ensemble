@@ -1,0 +1,255 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E101", "E401", "E402", "E701", "E702", "E703", "E711", "E712", "E713", "E714",
+    "E721", "E722", "E731", "E741", "E742", "E743", "E902", "F",
+    "UP", "B", "SIM", "I", "ERA001", "PLR0917", "PLR0133",
+    "ARG001", "ARG004", "ARG005", "TID", "BLE", "TRY002", "TRY201", "TRY203", "TRY300",
+    "TRY400", "TRY401", "FBT", "T100",
+]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.format]
+
+[tool.pyright]
+typeCheckingMode = "basic"
+reportUnnecessaryComparison = "error"
+reportUnnecessaryCast = "error"
+pythonVersion = "3.11"
+include = ["manager/src", "orchestrator/src", "delegate/src", "session/src", "utils/src", ".github/worker_codex.py", ".github/worker_codex"]
+extraPaths = ["manager/src", "orchestrator/src", "delegate/src", "session/src", "utils/src"]
+
+[tool.vulture]
+paths = [
+    "manager/src", "orchestrator/src", "delegate/src", "session/src", "utils/src",
+    ".github/vulture_whitelist.py",
+]
+
+[tool.importlinter]
+include_external_packages = true
+contract_types = ["units: tests.import_contracts.UnitsContract"]
+root_packages = ["ensemble", "manager.tests", "orchestrator_tests", "delegate.tests", "session.tests", "utils.tests", "tests"]
+
+[[tool.importlinter.contracts]]
+name = "Production layers"
+type = "layers"
+layers = ["ensemble.manager", "ensemble.orchestrator", "ensemble.delegate", "ensemble.session", "ensemble.utils"]
+
+[[tool.importlinter.contracts]]
+name = "Manager communicates with layers only through commands"
+type = "forbidden"
+source_modules = ["ensemble.manager"]
+forbidden_modules = ["ensemble.session", "ensemble.delegate", "ensemble.orchestrator"]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "Manager units own commands, bookkeeping and events"
+type = "units"
+container = "ensemble.manager"
+units = ["ensemble.manager.engine.crew", "ensemble.manager.engine.holder", "ensemble.manager.engine.roster", "ensemble.manager.engine.events", "ensemble.manager.engine.pr", "ensemble.manager.engine.types"]
+dependencies = [
+    "ensemble.manager.engine.crew -> ensemble.manager.engine.pr ensemble.manager.engine.roster ensemble.manager.engine.types ensemble.utils",
+    "ensemble.manager.engine.holder -> ensemble.manager.engine.roster ensemble.manager.engine.types ensemble.utils",
+    "ensemble.manager.engine.roster -> ensemble.manager.engine.events ensemble.manager.engine.types ensemble.utils",
+    "ensemble.manager.engine.events -> ensemble.manager.engine.types ensemble.utils",
+    "ensemble.manager.engine.pr -> ensemble.utils",
+    "ensemble.manager.engine.types -> ensemble.utils",
+    "outside -> ensemble.manager.engine.crew ensemble.manager.engine.holder ensemble.manager.engine.types ensemble.utils",
+]
+
+[[tool.importlinter.contracts]]
+name = "manager uses lower public packages"
+type = "forbidden"
+source_modules = ["ensemble.manager", "manager.tests"]
+forbidden_modules = ["ensemble.orchestrator.*", "ensemble.delegate.*", "ensemble.session.*", "ensemble.utils.*"]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "manager tests respect layer ownership"
+type = "forbidden"
+source_modules = ["manager.tests"]
+forbidden_modules = ["tests"]
+
+[[tool.importlinter.contracts]]
+name = "orchestrator uses lower public packages"
+type = "forbidden"
+source_modules = ["ensemble.orchestrator", "orchestrator_tests"]
+forbidden_modules = ["ensemble.delegate.*", "ensemble.session.*", "ensemble.utils.*"]
+allow_indirect_imports = true
+ignore_imports = [
+    "orchestrator_tests.unit.engine.writeback_test -> ensemble.delegate.engine.types",
+    "orchestrator_tests.integration.promote_integration_test -> ensemble.delegate.engine.config",
+]
+
+[[tool.importlinter.contracts]]
+name = "orchestrator reaches session only through delegate"
+type = "forbidden"
+source_modules = ["ensemble.orchestrator"]
+forbidden_modules = ["ensemble.session"]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "Linear transport, operations and reporting have one direction"
+type = "units"
+container = "ensemble.orchestrator"
+units = ["ensemble.orchestrator", "ensemble.orchestrator.cli", "ensemble.orchestrator.engine", "ensemble.orchestrator.engine.log", "ensemble.orchestrator.engine.issues", "ensemble.orchestrator.engine.run_comments", "ensemble.orchestrator.engine.types", "ensemble.orchestrator.engine.flow", "ensemble.orchestrator.engine.flow.handoff", "ensemble.orchestrator.engine.flow.tracker", "ensemble.orchestrator.engine.flow.types", "ensemble.orchestrator.engine.flow.workflow", "ensemble.orchestrator.issue", "ensemble.orchestrator.trackers", "ensemble.orchestrator.trackers.linear", "ensemble.orchestrator.trackers.linear.client", "ensemble.orchestrator.trackers.linear.ops", "ensemble.orchestrator.trackers.linear.linear_tracker", "ensemble.orchestrator.trackers.local"]
+dependencies = [
+    "ensemble.orchestrator -> ensemble.orchestrator.engine",
+    "ensemble.orchestrator.engine -> ensemble.orchestrator.engine.log ensemble.orchestrator.engine.issues ensemble.orchestrator.engine.run_comments ensemble.orchestrator.engine.types ensemble.orchestrator.engine.flow.handoff ensemble.orchestrator.engine.flow.tracker ensemble.orchestrator.engine.flow.types ensemble.orchestrator.engine.flow.workflow ensemble.orchestrator.trackers.linear.client ensemble.delegate ensemble.utils",
+    "ensemble.orchestrator.engine.flow.handoff -> ensemble.orchestrator.engine.flow.types ensemble.utils",
+    "ensemble.orchestrator.engine.flow.tracker -> ensemble.orchestrator.engine.flow.types",
+    "ensemble.orchestrator.engine.flow.workflow -> ensemble.orchestrator.engine.flow.types",
+    "ensemble.orchestrator.engine.log -> ensemble.orchestrator.engine.types ensemble.utils",
+    "ensemble.orchestrator.engine.issues -> ensemble.orchestrator.engine.flow.handoff ensemble.orchestrator.engine.flow.types ensemble.orchestrator.engine.flow.workflow ensemble.utils",
+    "ensemble.orchestrator.engine.run_comments -> ensemble.orchestrator.engine.types ensemble.delegate ensemble.utils",
+    "ensemble.orchestrator.engine.types -> ensemble.orchestrator.engine.flow.tracker ensemble.orchestrator.engine.flow.types ensemble.delegate ensemble.utils",
+    "ensemble.orchestrator.issue -> ensemble.orchestrator.engine ensemble.orchestrator.engine.types ensemble.orchestrator.engine.flow.types ensemble.orchestrator.trackers.linear ensemble.orchestrator.trackers.linear.client ensemble.orchestrator.trackers.local ensemble.delegate",
+    "ensemble.orchestrator.trackers.linear -> ensemble.orchestrator.trackers.linear.client ensemble.orchestrator.trackers.linear.ops ensemble.orchestrator.trackers.linear.linear_tracker ensemble.orchestrator.engine.types ensemble.orchestrator.engine.flow.types",
+    "ensemble.orchestrator.trackers.linear.linear_tracker -> ensemble.orchestrator.trackers.linear.ops ensemble.orchestrator.engine ensemble.orchestrator.engine.types ensemble.orchestrator.engine.flow.handoff ensemble.orchestrator.engine.flow.tracker ensemble.orchestrator.engine.flow.types ensemble.utils",
+    "ensemble.orchestrator.trackers.linear.client -> ensemble.orchestrator.engine.types ensemble.utils",
+    "ensemble.orchestrator.trackers.linear.ops -> ensemble.orchestrator.engine.types ensemble.utils",
+    "ensemble.orchestrator.trackers.local -> ensemble.orchestrator.engine.flow.handoff ensemble.orchestrator.engine.flow.tracker ensemble.orchestrator.engine.flow.types ensemble.orchestrator.engine.types",
+    "ensemble.orchestrator.cli -> ensemble.orchestrator.engine ensemble.orchestrator.engine.log ensemble.orchestrator.engine.issues ensemble.orchestrator.engine.run_comments ensemble.orchestrator.engine.types ensemble.orchestrator.issue ensemble.orchestrator.trackers.linear.client ensemble.orchestrator.trackers.linear.ops ensemble.orchestrator.trackers.linear.linear_tracker ensemble.orchestrator.trackers.local ensemble.delegate ensemble.utils",
+]
+
+[[tool.importlinter.contracts]]
+name = "engine imports no tracker"
+type = "forbidden"
+source_modules = ["ensemble.orchestrator.engine"]
+forbidden_modules = ["ensemble.orchestrator.trackers"]
+# the router's Linear transport
+ignore_imports = [
+    "ensemble.orchestrator.engine.router -> ensemble.orchestrator.trackers.linear.client",
+]
+
+[[tool.importlinter.contracts]]
+name = "trackers import no board rule"
+type = "forbidden"
+source_modules = ["ensemble.orchestrator.trackers"]
+forbidden_modules = [
+    "ensemble.orchestrator.engine.router",
+    "ensemble.orchestrator.engine.promote",
+    "ensemble.orchestrator.engine.prune",
+    "ensemble.orchestrator.engine.writeback",
+]
+
+[[tool.importlinter.contracts]]
+name = "orchestrator tests respect layer ownership"
+type = "forbidden"
+source_modules = ["orchestrator_tests"]
+forbidden_modules = ["tests", "ensemble.manager", "manager.tests"]
+
+[[tool.importlinter.contracts]]
+name = "delegate uses lower public packages"
+type = "forbidden"
+source_modules = ["ensemble.delegate", "delegate.tests"]
+forbidden_modules = ["ensemble.session.*", "ensemble.utils.*"]
+allow_indirect_imports = true
+ignore_imports = [
+    "delegate.tests.case -> ensemble.session.engine.config",
+    "delegate.tests.unit.engine.config_test -> ensemble.session.engine.config",
+    "delegate.tests.fakes.harness_session -> ensemble.session.engine.types",
+    "delegate.tests.unit.engine.harness_delegate_test -> ensemble.session.engine.types",
+    "delegate.tests.unit.engine.runner_test -> ensemble.session.engine.types",
+]
+
+[[tool.importlinter.contracts]]
+name = "delegate tests respect layer ownership"
+type = "forbidden"
+source_modules = ["delegate.tests"]
+forbidden_modules = ["tests", "ensemble.manager", "ensemble.orchestrator", "manager.tests", "orchestrator_tests"]
+
+[[tool.importlinter.contracts]]
+name = "session uses lower public packages"
+type = "forbidden"
+source_modules = ["ensemble.session", "session.tests"]
+forbidden_modules = ["ensemble.utils.*"]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "session tests respect layer ownership"
+type = "forbidden"
+source_modules = ["session.tests"]
+forbidden_modules = ["tests", "ensemble.manager", "ensemble.orchestrator", "ensemble.delegate", "manager.tests", "orchestrator_tests", "delegate.tests"]
+
+[[tool.importlinter.contracts]]
+name = "utils tests respect layer ownership"
+type = "forbidden"
+source_modules = ["utils.tests"]
+forbidden_modules = ["tests", "ensemble.manager", "ensemble.orchestrator", "ensemble.delegate", "ensemble.session", "manager.tests", "orchestrator_tests", "delegate.tests", "session.tests"]
+
+[[tool.importlinter.contracts]]
+name = "Modes do not import the session API"
+type = "forbidden"
+source_modules = ["ensemble.session.modes"]
+forbidden_modules = ["ensemble.session.engine.base", "ensemble.session.engine.hosted_session"]
+
+[[tool.importlinter.contracts]]
+name = "Session units follow the main import rules"
+type = "units"
+container = "ensemble.session"
+units = ["ensemble.session.engine.accounts", "ensemble.session.engine.base", "ensemble.session.engine.config", "ensemble.session.engine.hosted_session", "ensemble.session.engine.worker", "ensemble.session.cli", "ensemble.session.engine.types", "ensemble.session.engine.records", "ensemble.session.engine.status_log", "ensemble.session.engine.tmux_cli", "ensemble.session.modes", "ensemble.session.modes.client_adapters", "ensemble.session.clients", "ensemble.session.hosts", "ensemble.session.hosts.base", "ensemble.session.hosts.types", "ensemble.session.viewer", "ensemble.session.extension"]
+dependencies = [
+    "ensemble.session.engine.accounts -> ensemble.session.engine.types ensemble.utils",
+    "ensemble.session.engine.base -> ensemble.session.engine.types ensemble.session.hosts.base ensemble.utils",
+    "ensemble.session.engine.config -> ensemble.utils",
+    "ensemble.session.engine.hosted_session -> ensemble.session.engine.accounts ensemble.session.engine.config ensemble.session.engine.base ensemble.session.engine.records ensemble.session.engine.types ensemble.session.clients ensemble.session.modes ensemble.session.hosts ensemble.session.hosts.base ensemble.session.viewer ensemble.utils",
+    "ensemble.session.cli -> ensemble.session.engine.base ensemble.session.engine.config ensemble.session.engine.types ensemble.session.engine.worker ensemble.session.hosts.base ensemble.session.modes ensemble.session.viewer ensemble.utils",
+    "ensemble.session.engine.worker -> ensemble.session.engine.base ensemble.session.engine.types ensemble.session.hosts.base ensemble.session.modes ensemble.utils",
+    "ensemble.session.modes -> ensemble.session.modes.client_adapters ensemble.session.clients ensemble.session.hosts ensemble.session.hosts.base ensemble.session.engine.types ensemble.session.viewer ensemble.utils",
+    "ensemble.session.modes.client_adapters -> ensemble.session.engine.types ensemble.utils",
+    "ensemble.session.clients -> ensemble.session.modes.client_adapters ensemble.session.engine.status_log ensemble.session.engine.types ensemble.utils",
+    "ensemble.session.clients.registry -> ensemble.session.hosts ensemble.session.hosts.base",
+    "ensemble.session.engine.types -> ensemble.utils",
+    "ensemble.session.engine.records -> ensemble.session.engine.types ensemble.utils",
+    "ensemble.session.engine.status_log -> ensemble.utils",
+    "ensemble.session.engine.tmux_cli -> ensemble.session.engine.status_log ensemble.session.engine.types ensemble.utils",
+    "ensemble.session.hosts -> ensemble.session.hosts.base ensemble.session.hosts.types ensemble.session.engine.status_log ensemble.session.engine.tmux_cli ensemble.session.engine.types ensemble.utils",
+    "ensemble.session.hosts.base -> ensemble.session.hosts.types ensemble.session.engine.types ensemble.utils",
+    "ensemble.session.hosts.types -> ",
+    "ensemble.session.viewer -> ensemble.session.engine.tmux_cli ensemble.session.hosts.base ensemble.session.hosts.types ensemble.session.engine.types ensemble.utils",
+    "ensemble.session.extension -> ensemble.session.clients ensemble.session.modes.client_adapters ensemble.session.engine.types ensemble.session.hosts.base ensemble.session.hosts.types ensemble.utils",
+    "outside -> ensemble.session.engine.status_log ensemble.session.engine.base ensemble.session.engine.config ensemble.session.engine.records ensemble.session.engine.types ensemble.session.hosts.base ensemble.session.viewer ensemble.utils",
+]
+
+[[tool.importlinter.contracts]]
+name = "Delegate units and shared modules follow the main import rules"
+type = "units"
+container = "ensemble.delegate"
+units = ["ensemble.delegate", "ensemble.delegate.composer", "ensemble.delegate.event", "ensemble.delegate.config", "ensemble.delegate.engine.config", "ensemble.delegate.team.tools"]
+unimported_units = ["ensemble.delegate.team.tools"]
+dependencies = [
+    "ensemble.delegate -> ensemble.delegate.composer ensemble.delegate.event ensemble.delegate.config ensemble.delegate.engine.config ensemble.session ensemble.utils",
+    "ensemble.delegate.composer -> ensemble.delegate.event ensemble.delegate.config ensemble.delegate.engine.config ensemble.session ensemble.utils",
+    "ensemble.delegate.event -> ensemble.delegate.config ensemble.delegate.engine.config ensemble.utils",
+    "ensemble.delegate.config -> ensemble.utils",
+    "ensemble.delegate.engine.config -> ensemble.delegate.config ensemble.session ensemble.utils",
+    "ensemble.delegate.team.tools -> ensemble.delegate.config ensemble.delegate.engine.config ensemble.utils",
+]
+
+[[tool.importlinter.contracts]]
+name = "Utils imports only itself and the standard library"
+type = "units"
+container = "ensemble.utils"
+units = ["ensemble.utils"]
+dependencies = []
+
+[tool.typos.files]
+ignore-hidden = false
+# Translated READMEs: typos checks English spelling only.
+extend-exclude = ["docs/readme/"]
+
+[tool.typos.default]
+# Unicode code point ranges (U+0100-02BA) in inlined font CSS are hex, not words.
+extend-ignore-re = ["U\\+[0-9A-Fa-f]{1,6}(-[0-9A-Fa-f]{1,6})?"]
+
+[tool.typos.default.extend-words]
+# Escaped café filenames test Unicode handling.
+caf = "caf"
+# English ordinal suffix in 2nd, parsed by the client's reset-time protocol.
+nd = "nd"

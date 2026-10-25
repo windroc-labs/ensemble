@@ -1,0 +1,10 @@
+{
+  "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+  "github": [
+    {
+      "account": "acme",
+      "expires_at": "in an hour"
+    }
+  ],
+  "credential_expires_at": null
+}

@@ -1,0 +1,9 @@
+{
+  "exit_code": 14,
+  "error": {
+    "command": "workspace-rm",
+    "code": "workspace_failed",
+    "message": "Example workspace_failed.",
+    "cleanup": "not_needed"
+  }
+}

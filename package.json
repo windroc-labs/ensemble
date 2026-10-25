@@ -1,0 +1,15 @@
+{
+  "name": "ensemble",
+  "version": "0.1.0",
+  "description": "Guidelines for your commander session (/ensemble:manage), and ensemble's core roles and tasks, researcher, pm and engineer, run in this conversation (/ensemble:act-as), and fixed board issue commands (/ensemble:board).",
+  "author": "Windroc",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": ".opencode-plugin/ensemble.js",
+  "skills": [
+    "./delegate/skills/",
+    "./orchestrator/skills/",
+    "./manager/skills/"
+  ]
+}

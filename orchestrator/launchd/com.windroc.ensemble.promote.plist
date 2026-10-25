@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>@PATH@</string>
+	</dict>
+	<key>Label</key>
+	<string>com.windroc.ensemble.promote</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>@HOME@/.ensemble/bin/ensemble-orchestrator</string>
+		<string>promote</string>
+	</array>
+	<key>StandardErrorPath</key>
+	<string>@HOME@/.ensemble/logs/orchestrator.jsonl</string>
+	<key>StandardOutPath</key>
+	<string>@HOME@/.ensemble/logs/orchestrator.jsonl</string>
+	<key>StartInterval</key>
+	<integer>300</integer>
+</dict>
+</plist>

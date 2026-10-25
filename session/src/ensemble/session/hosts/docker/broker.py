@@ -1,0 +1,493 @@
+"""The root-owned broker at the PROTOCOL version (protocol/docker-broker/protocol.schema.json): version, build, start, refresh,
+close and workspace-rm with strict response parsing. A missing, malformed or inconsistent response is a transport failure;
+a valid error response is a BrokerError.
+"""
+
+import json
+import os
+import re
+import select
+import subprocess
+import sys
+import time
+from collections.abc import Mapping, Sequence
+from dataclasses import fields
+from datetime import datetime
+
+from ensemble.session.engine.types import ConfigError, SessionError
+from ensemble.session.hosts.docker.types import Refreshed, Started
+from ensemble.utils import save
+
+# Installed by broker/install.sh and the worker image (broker/internal/launcher/assets/Dockerfile).
+BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
+RELAY = "/opt/ensemble/bin/relay"
+PROTOCOL = "20"
+SCHEMA = "protocol/docker-broker/protocol.schema.json"
+INSTALL = "install or upgrade it: see docs/docker-host.md#install"
+TIMEOUT = 1800
+REFRESH = (
+    7 * 24 * 3600
+)  # seconds: a start rebuilds an older image, which installs the latest clients
+GRACE = 5  # for a broker whose pipes closed by the deadline to be reaped
+
+TEXT = re.compile(r"[^\x00-\x1f\x7f]+")
+IMAGE = re.compile(r"ensemble-worker:[0-9a-f]{64}")
+DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+CONTAINER = re.compile(r"ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}")
+ENDPOINT = re.compile(r"unix:///[^\x00-\x1f\x7f]+/\.docker/run/docker\.sock")
+LOGIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}")
+TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
+VERSION = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)")
+COMMANDS = frozenset(
+    {
+        "version",
+        "build",
+        "start",
+        "refresh",
+        "close",
+        "status",
+        "workspace-rm",
+        "probe-provider",
+        "unknown",
+    }
+)
+CODES = {  # code → (exit code, the commands that report it)
+    "usage": (2, COMMANDS),
+    "manifest_rejected": (3, {"start", "refresh"}),
+    "mount_rejected": (4, {"start", "refresh"}),
+    "login_required": (5, {"start", "refresh", "probe-provider"}),
+    "image_rejected": (6, {"start"}),
+    "docker_unreachable": (7, {"build", "start", "refresh", "close", "workspace-rm"}),
+    "build_failed": (8, {"build"}),
+    "start_failed": (9, {"start"}),
+    "close_failed": (10, {"close"}),
+    "keychain_failed": (11, {"start", "refresh", "close", "status", "probe-provider"}),
+    "workspace_dirty": (12, {"workspace-rm"}),
+    "workspace_rejected": (13, {"workspace-rm"}),
+    "workspace_failed": (14, {"workspace-rm"}),
+    "github_failed": (15, {"start", "refresh"}),
+    "refresh_failed": (16, {"refresh"}),
+    "internal_error": (70, COMMANDS),
+}
+ERROR_KEYS = frozenset({"command", "code", "message", "cleanup"})
+ERROR_OPTIONAL = frozenset({"cause", "cleanup_error", "container"})
+
+
+class BrokerError(SessionError):
+    def __init__(
+        self,
+        exit_code: int,
+        code: str,
+        message: str,
+        cleanup: str,
+        container: str | None,
+        *,
+        cause: str | None = None,
+    ) -> None:
+        self.exit_code, self.code, self.message, self.cleanup, self.container, self.cause = (
+            exit_code,
+            code,
+            message,
+            cleanup,
+            container,
+            cause,
+        )
+        super().__init__(f"broker: {message}" + (f" ({cause})" if cause else ""))
+
+
+class _Bad(Exception):
+    pass
+
+
+def _unique(pairs):
+    found = dict(pairs)
+    if len(found) != len(pairs):
+        raise _Bad("a duplicate key")
+    return found
+
+
+def _constant(name):
+    raise _Bad(f"constant {name}")
+
+
+def _object(text: str) -> dict:
+    try:
+        found = json.loads(text, object_pairs_hook=_unique, parse_constant=_constant)
+    except (ValueError, RecursionError) as error:
+        raise _Bad("not one JSON object") from error
+    if not isinstance(found, dict):
+        raise _Bad("not a JSON object")
+    return found
+
+
+def _text(value) -> bool:
+    return isinstance(value, str) and bool(TEXT.fullmatch(value))
+
+
+def _matches(pattern: re.Pattern, value) -> bool:
+    return isinstance(value, str) and bool(pattern.fullmatch(value))
+
+
+def _expiries(value) -> bool:
+    return isinstance(value, list) and all(
+        isinstance(e, dict)
+        and e.keys() == {"account", "expires_at"}
+        and _matches(LOGIN, e["account"])
+        and e["expires_at"] is not None
+        and _credential_expiry(e["expires_at"])
+        for e in value
+    )
+
+
+def _credential_expiry(value) -> bool:
+    if value is None:
+        return True
+    if not _matches(TIME, value):
+        return False
+    try:
+        datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _user_id(value) -> bool:
+    return value is None or (type(value) is int and value >= 1)
+
+
+def _client_update(value, clients) -> bool:
+    if not isinstance(value, dict) or value.keys() != {
+        "client",
+        "pinned_version",
+        "min_version",
+        "image_version",
+        "target_version",
+        "result",
+    }:
+        return False
+    minimum = value["min_version"]
+    client = value["client"]
+    image, target, result = value["image_version"], value["target_version"], value["result"]
+    if not (
+        _text(client)
+        and client in clients
+        and _matches(VERSION, value["pinned_version"])
+        and _matches(VERSION, image)
+        and _matches(VERSION, minimum)
+        and isinstance(target, str)
+        and (target == "" or _matches(VERSION, target))
+        and isinstance(result, str)
+    ):
+        return False
+    floor = tuple(map(int, minimum.split(".")))
+    if any(
+        tuple(map(int, version.split("."))) < floor
+        for version in (value["pinned_version"], image, target)
+        if version
+    ):
+        return False
+    actual = clients[client].rsplit(" ", 1)[-1]
+    if result in {"registry_unavailable", "no_supported_release"}:
+        return target == "" and actual == image
+    if result == "current":
+        return target == image and actual == image
+    if result in {"updated", "update_failed"}:
+        expected = target if result == "updated" else image
+        return bool(target) and target != image and actual == expected
+    return False
+
+
+def _error(command: str, returncode: int, data: dict) -> BrokerError:
+    error, exit_code = data.get("error"), data.get("exit_code")
+    if not (
+        set(data) == {"exit_code", "error"}
+        and type(exit_code) is int
+        and exit_code == returncode
+        and isinstance(error, dict)
+        and ERROR_KEYS <= set(error) <= ERROR_KEYS | ERROR_OPTIONAL
+        and all(isinstance(error[key], str) for key in ERROR_KEYS)
+    ):
+        raise _Bad("error shape")
+    code, cleanup, container = error["code"], error["cleanup"], error.get("container")
+    if not (
+        CODES.get(code, (None,))[0] == exit_code
+        and error["command"] in CODES[code][1]
+        and error["command"] in {command, "unknown"}
+        and cleanup in {"not_needed", "removed", "failed"}
+        and (command == "start" or cleanup == "not_needed")
+        and (cleanup == "failed") == ("cleanup_error" in error)
+        and (cleanup != "failed" or container is not None)
+        and (container is None or _matches(CONTAINER, container))
+        and all(_text(error[key]) for key in ("message", "cause", "cleanup_error") if key in error)
+    ):
+        raise _Bad("error fields")
+    return BrokerError(
+        exit_code, code, error["message"], cleanup, container, cause=error.get("cause")
+    )
+
+
+def _stream(argv, *, stdin, env, timeout) -> subprocess.CompletedProcess:
+    """argv's text result, copying stderr (build's progress) to ours line by line as it arrives,
+    but a failing run's error object. TimeoutExpired past `timeout`.
+    """
+    deadline = time.monotonic() + timeout
+    with subprocess.Popen(
+        argv, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
+    ) as proc:
+        try:
+            out, err, shown = _copy(proc, deadline, timeout)
+            code = proc.wait(max(GRACE, deadline - time.monotonic()))
+        except BaseException:
+            proc.kill()
+            raise
+    rest = err[shown:]
+    if code == 0 or not rest.startswith(b"{"):
+        _show(rest)
+    return subprocess.CompletedProcess(argv, code, out.decode(), err.decode(errors="replace"))
+
+
+def _copy(proc, deadline: float, timeout: float) -> tuple[bytes, bytes, int]:
+    """proc's stdout and stderr, and how much of stderr it showed: every complete line but a last
+    one starting with `{`, which may be the error object.
+    """
+    out, err = bytearray(), bytearray()
+    found = {proc.stdout.fileno(): out, proc.stderr.fileno(): err}
+    shown = 0
+    while found:
+        ready = select.select(list(found), [], [], max(0.0, deadline - time.monotonic()))[0]
+        if not ready:
+            raise subprocess.TimeoutExpired(proc.args, timeout)
+        for fd in ready:
+            chunk = os.read(fd, 1 << 16)
+            found[fd] += chunk
+            if not chunk:
+                del found[fd]
+        end = err.rfind(b"\n") + 1
+        last = err.rfind(b"\n", 0, max(end - 1, 0)) + 1
+        if err.startswith(b"{", last):
+            end = last
+        if end > shown:
+            _show(err[shown:end])
+            shown = end
+    return bytes(out), bytes(err), shown
+
+
+def _show(progress: bytes | bytearray) -> None:
+    sys.stderr.write(progress.decode(errors="replace"))
+    sys.stderr.flush()
+
+
+class Broker:
+    def __init__(self, runner=_stream) -> None:
+        self.runner = runner
+
+    def _run(self, command: str, *args: str) -> dict:
+        try:
+            res = self.runner(
+                [BROKER, command, *args],
+                stdin=subprocess.DEVNULL,
+                env={"PATH": os.defpath},
+                timeout=TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            raise SessionError(f"broker: {command} timed out after {TIMEOUT} s") from None
+        except UnicodeDecodeError:
+            raise SessionError(f"broker: bad response to {command}: not UTF-8") from None
+        except OSError as error:
+            raise SessionError(f"broker {BROKER}: {error.strerror}; {INSTALL}") from None
+        try:
+            if res.returncode == 0:
+                return _object(res.stdout)
+            err = res.stderr
+            if command == "build":  # its progress lines come before the error object
+                err = err[err.rfind("\n{") + 1 :]
+            raise _error(command, res.returncode, _object(err))
+        except _Bad as why:
+            raise SessionError(f"broker: bad response to {command}: {why}") from None
+
+    def version(self) -> None:
+        found = self._parsed("version", lambda d: set(d) == {"protocol_version"})
+        if found["protocol_version"] != PROTOCOL:
+            raise SessionError(
+                f"broker {BROKER}: protocol {found['protocol_version']!r:.20}, want {PROTOCOL!r};"
+                f" {INSTALL}"
+            )
+
+    def probe_provider(self, provider: str, base_url: str) -> bool:
+        found = self._parsed(
+            "probe-provider",
+            lambda d: set(d) == {"available"} and type(d["available"]) is bool,
+            "--provider",
+            provider,
+            "--base-url",
+            base_url,
+        )
+        return found["available"]
+
+    def build(
+        self, package: str, *, plugins: Sequence[str] = (), max_age: int | None = None
+    ) -> tuple[str, str]:
+        """`package`'s image tag and digest, with `plugins` installed from repository sources;
+        `max_age`: rebuild an image built at least that many seconds ago.
+        """
+        named = [arg for name in plugins for arg in ("--plugin", name)]
+        age = () if max_age is None else ("--max-age", str(max_age))
+        found = self._parsed(
+            "build",
+            lambda d: (
+                set(d) == {"image", "digest", "rebuilt"}
+                and _matches(IMAGE, d["image"])
+                and _matches(DIGEST, d["digest"])
+                and type(d["rebuilt"]) is bool
+            ),
+            "--ensemble",
+            package,
+            *named,
+            *age,
+        )
+        return found["image"], found["digest"]
+
+    def start(self, manifest: str, *, clients: frozenset[str]) -> Started:
+        """`clients`: the client names the protocol requires in the response."""
+        required = {f.name for f in fields(Started)} - {"client_update"}
+        found = self._parsed(
+            "start",
+            lambda d: required <= set(d) <= required | {"client_update"},
+            "--manifest",
+            manifest,
+        )
+        started = Started(**found)
+        if not (
+            _matches(CONTAINER, started.container)
+            and _matches(ENDPOINT, started.endpoint)
+            and _matches(DIGEST, started.image_digest)
+            and isinstance(started.clients, dict)
+            and started.clients.keys() == clients
+            and all(map(_text, started.clients.values()))
+            and _expiries(started.github)
+            and _user_id(started.github_user_id)
+            and _credential_expiry(started.credential_expires_at)
+            and (
+                _client_update(started.client_update, started.clients)
+                if started.credential_expires_at is not None
+                else "client_update" not in found
+            )
+        ):
+            raise SessionError("broker: bad response to start: fields")
+        return started
+
+    def refresh(self, container: str, manifest: str) -> Refreshed:
+        """Public credential deadlines; `manifest`: the one the container was started with."""
+        found = self._parsed(
+            "refresh",
+            lambda d: (
+                d.keys() == {"container", "github", "credential_expires_at"}
+                and _matches(CONTAINER, d["container"])
+                and d["container"] == container
+                and _expiries(d["github"])
+                and _credential_expiry(d["credential_expires_at"])
+            ),
+            "--container",
+            container,
+            "--manifest",
+            manifest,
+        )
+        return Refreshed(found["github"], found["credential_expires_at"])
+
+    def close(self, container: str) -> bool:
+        """Whether it removed `container`; False: it was already gone."""
+        found = self._parsed(
+            "close",
+            lambda d: (
+                d.keys() == {"container", "removed"}
+                and d["container"] == container
+                and type(d["removed"]) is bool
+            ),
+            "--container",
+            container,
+        )
+        return found["removed"]
+
+    def workspace_rm(self, volume: str) -> bool:
+        """Whether it removed workspace `volume` after its check found no unsaved work; False: none."""
+        found = self._parsed(
+            "workspace-rm",
+            lambda d: (
+                d.keys() == {"volume", "removed"}
+                and d["volume"] == volume
+                and type(d["removed"]) is bool
+            ),
+            "--volume",
+            volume,
+        )
+        return found["removed"]
+
+    def _parsed(self, command: str, valid, *args: str) -> dict:
+        found = self._run(command, *args)
+        if not valid(found):
+            raise SessionError(f"broker: bad response to {command}: fields")
+        return found
+
+
+def plugin_root(hook_path: str) -> str:
+    """The running plugin's root: the parent of the bin/ holding its ensemble-session."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(hook_path)))
+    if not os.path.isfile(os.path.join(root, SCHEMA)):
+        raise ConfigError(f"ensemble plugin {root}: no {SCHEMA}")
+    return root
+
+
+def client_keys(root: str) -> frozenset[str]:
+    """The client names a start response must report: the required keys of start_output's one
+    inline object property in the protocol schema under `root`.
+    """
+    try:
+        with open(os.path.join(root, SCHEMA), encoding="utf-8") as f:
+            properties = json.load(f)["$defs"]["start_output"]["properties"]
+        (keys,) = (
+            p["required"]
+            for p in properties.values()
+            if isinstance(p, dict) and p.get("type") == "object" and "required" in p
+        )
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ConfigError(f"{SCHEMA}: no start_output client map ({error})") from None
+    return frozenset(keys)
+
+
+def write_manifest(
+    path: str,
+    *,
+    name: str,
+    generation: str,
+    image: str,
+    cwd: str,
+    workspace: str,
+    home: tuple[str, str],
+    hook_path: str,
+    github: str,
+    permissions: Mapping[str, str] | None = None,
+    providers: tuple[str, ...] = (),
+    account: str = "",
+) -> None:
+    """The start manifest, 0600; home: (its manifest field, the client home's path); github: the
+    App whose tokens the container gets, "": none; permissions: each token's repository
+    permissions; providers: those whose API keys it gets; account: the one whose credential it
+    gets, "": the default.
+    """
+    field, home_path = home
+    client = field.removesuffix("_dir")
+    manifest = {
+        "name": name,
+        "generation": generation,
+        "image": image,
+        "cwd": cwd,
+        "workspace": workspace,
+        "client": client,
+        field: home_path,
+        "hook_path": hook_path,
+        "github": {"app": github, "permissions": dict(permissions or {})} if github else None,
+        "labels": {},
+        **({f"{client}_providers": list(providers)} if providers else {}),
+        **({f"{client}_account": account} if account else {}),
+    }
+    save(path, json.dumps(manifest), durable=True)

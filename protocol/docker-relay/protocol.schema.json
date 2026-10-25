@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Docker relay wire format",
+  "$defs": {
+    "id": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "generation": {
+      "type": "string",
+      "allOf": [
+        {
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          }
+        }
+      ],
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "allOf": [
+        {
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          }
+        }
+      ],
+      "pattern": "^/[^\\u0000-\\u001f\\u007f]*$"
+    },
+    "label": {
+      "type": "string",
+      "allOf": [
+        {
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          }
+        }
+      ],
+      "pattern": "^[A-Za-z0-9_.-]{1,64}$"
+    },
+    "argv": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "const": "hook"
+        },
+        {
+          "$ref": "#/$defs/path"
+        },
+        {
+          "$ref": "#/$defs/label"
+        }
+      ],
+      "items": false,
+      "minItems": 3
+    },
+    "payload": {
+      "type": "string",
+      "maxLength": 89478488,
+      "allOf": [
+        {
+          "not": {
+            "pattern": "[\\u0000-\\u001f\\u007f]"
+          }
+        }
+      ],
+      "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+      "if": {
+        "minLength": 89478488
+      },
+      "then": {
+        "pattern": "==$"
+      }
+    },
+    "stub_request": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "argv": {
+          "$ref": "#/$defs/argv"
+        },
+        "payload": {
+          "$ref": "#/$defs/payload"
+        }
+      },
+      "required": [
+        "id",
+        "argv",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    "stub_reply": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/id"
+            },
+            "queued": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "id",
+            "queued"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "queued": {
+              "const": false
+            }
+          },
+          "required": [
+            "queued"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "relay_request": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "gen": {
+          "$ref": "#/$defs/generation"
+        },
+        "seq": {
+          "$ref": "#/$defs/seq"
+        },
+        "argv": {
+          "$ref": "#/$defs/argv"
+        },
+        "payload": {
+          "$ref": "#/$defs/payload"
+        }
+      },
+      "required": [
+        "id",
+        "gen",
+        "seq",
+        "argv",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    "relay_reply": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "gen": {
+              "$ref": "#/$defs/generation"
+            },
+            "seq": {
+              "$ref": "#/$defs/seq"
+            },
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "gen",
+            "seq",
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "const": false
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

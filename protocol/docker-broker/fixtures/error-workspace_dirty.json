@@ -1,0 +1,9 @@
+{
+  "exit_code": 12,
+  "error": {
+    "command": "workspace-rm",
+    "code": "workspace_dirty",
+    "message": "Example workspace_dirty.",
+    "cleanup": "not_needed"
+  }
+}

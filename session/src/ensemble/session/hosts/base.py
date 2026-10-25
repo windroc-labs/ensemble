@@ -1,0 +1,361 @@
+"""Host, where processes live, keeping each one's Record and Display; an attachable one names the
+attach target the Viewer shows a session through.
+"""
+
+from __future__ import annotations
+
+import os
+import signal
+import subprocess
+from abc import ABC, abstractmethod
+from collections.abc import Iterable, Mapping, Sequence
+from contextlib import AbstractContextManager
+from dataclasses import replace
+from typing import ClassVar, Protocol
+
+from ensemble.session.engine.types import (
+    LOCAL_CONTEXT,
+    ClientContext,
+    ClientHome,
+    ConfigError,
+    HookCallback,
+    Hosts,
+    Key,
+    KeyPress,
+    Launch,
+    Liveness,
+    NotShowable,
+    Paste,
+    Permission,
+    ProviderProbe,
+    SessionError,
+    SessionRow,
+    StatusState,
+    TuiSettings,
+)
+from ensemble.session.hosts.types import CommandView, SessionView
+from ensemble.utils import (
+    CLASS_PATH,
+    CONFIG_NAME,
+    STATE,
+    STOP_WAIT,
+    Display,
+    Record,
+    Status,
+    append_line,
+    kill_group,
+    piped_popen,
+    printable_abs,
+    resume_command,
+    thaw,
+)
+
+SIGNALS = (signal.SIGHUP, signal.SIGTERM, signal.SIGINT)
+TUI_DIR = f"{STATE}/tui"
+TUI_STATE = "session.json"
+
+
+def tui_lock(name: str) -> str:
+    return os.path.join(os.path.expanduser(TUI_DIR), f"{name}.lock")
+
+
+class Process(ABC):
+    """close: ends it and forgets it, absent is fine; kill: its process group; wait_exit: until that
+    group ends too.
+    """
+
+    name: str
+
+    @abstractmethod
+    def alive(self) -> bool: ...
+
+    @abstractmethod
+    def close(self) -> None: ...
+
+    @abstractmethod
+    def wait_exit(self, timeout: float) -> bool: ...
+
+    @abstractmethod
+    def kill(self) -> None: ...
+
+    @property
+    def identity(self) -> str:
+        return self.name
+
+    @property
+    def token(self) -> str | None:
+        return None
+
+    def publish(self, record: Record) -> None:
+        raise SessionError(f"session {self.name}: its host cannot store a Record after launch")
+
+    def session_identity(self) -> tuple[str | None, str | None]:
+        """Private sid and generation, independent of Record; None never matches a supplied sid."""
+        return None, None
+
+    def state(self) -> Liveness:
+        return Liveness.LIVE if self.alive() else Liveness.ABSENT
+
+    def returncode(self) -> int | None:
+        return None if self.alive() else -signal.SIGHUP
+
+    def activity(self) -> StatusState | None:
+        return None
+
+    def screen(self, lines: int | None = None) -> str:
+        raise NotShowable(f"session {self.name}: its host cannot show")
+
+    def status(self) -> Status:
+        """unknown, too, when its host fails after telling its liveness."""
+        unknown = Status(
+            name=self.name,
+            alive=False,
+            state=StatusState.UNKNOWN,
+            outcome=None,
+            attach=None,
+            hidden=False,
+        )
+        liveness = self.state()
+        if liveness == Liveness.UNKNOWN:
+            return unknown
+        try:
+            alive = liveness == Liveness.LIVE and self.alive()
+            state = (self.activity() or StatusState.WORKING) if alive else StatusState.DEAD
+        except SessionError:
+            return unknown
+        return Status(
+            name=self.name, alive=alive, state=state, outcome=None, attach=None, hidden=False
+        )
+
+    def mark(self, word: StatusState, events: str | None) -> None:
+        """Optional activity metadata for a terminal's status display."""
+        return None
+
+    def row(self) -> SessionRow:
+        receipt = self.record()
+        return SessionRow(
+            self.name,
+            None if receipt is None else receipt.sid,
+            None if receipt is None else receipt.kind,
+            StatusState.WORKING if self.alive() else StatusState.DEAD,
+            self.display(),
+            None,
+            None,
+            own=False,
+        )
+
+    @abstractmethod
+    def record(self) -> Record | None: ...
+
+    @abstractmethod
+    def display(self) -> Display: ...
+
+
+class Interactive(ABC):
+    """send: into its input (Key names: the Client's)."""
+
+    @abstractmethod
+    def send(self, action: Paste | Key) -> None: ...
+
+    @abstractmethod
+    def press(self, keys: Sequence[KeyPress]) -> None: ...
+
+
+class InteractiveProcess(Process, Interactive): ...
+
+
+class Lines(Iterable[str], AbstractContextManager[object], Protocol): ...
+
+
+class Piped(ABC):
+    """wait: exit code or None, no side effect; stop (ended: pipes at EOF), then close: frees once
+    what its Host holds."""
+
+    stdout: Lines
+    stderr: Lines
+
+    @abstractmethod
+    def wait(self, timeout: float) -> int | None: ...
+
+    @abstractmethod
+    def stop(self, *, ended: bool) -> None: ...
+
+    def close(self) -> None:
+        return None
+
+
+class LocalPiped(Piped):
+    stop_wait = STOP_WAIT
+
+    def __init__(self, proc: subprocess.Popen) -> None:
+        out, err = proc.stdout, proc.stderr
+        assert out is not None and err is not None
+        self.proc, self.stdout, self.stderr = proc, out, err
+
+    def wait(self, timeout: float) -> int | None:
+        try:
+            return self.proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None
+
+    def stop(self, *, ended: bool) -> None:
+        kill_group(self.proc, ended=ended, wait=self.stop_wait)
+        self.close()
+
+
+def host_resume(host: Host, name: str | None, cwd: str) -> str | None:
+    argv = None if name is None else host._resume_argv(name)
+    return resume_command(cwd, {}, argv) if argv else None
+
+
+def check_sid(name: str, process: Process | None, sid: str | None) -> None:
+    if sid is not None:
+        actual = None if process is None else process.session_identity()[0]
+        if actual != sid:
+            raise SessionError(f"session {name}: expected sid {sid!r}, found {actual!r}")
+
+
+class Host(ABC):
+    """settings: [hosts.<name>] minus implementation and isolated. Launch.env is passed verbatim;
+    on exit, events gets `exited <rc>` / `dead`.
+    attach: a Process, unknown → SessionError. list: its sessions' names, sorted. A display is kept
+    as given; the Viewer reads it.
+    """
+
+    attachable: ClassVar[bool] = False
+
+    def _provider_usage(self, request: ProviderProbe) -> bool | None:
+        """Probe with this Host's credentials, when supported."""
+        return None
+
+    def __init__(self, name: str, settings: Mapping | None = None) -> None:
+        self.name = name
+        self.settings = thaw(settings or {})
+        self._isolated = self.settings.pop("isolated", False)
+        if not isinstance(self._isolated, bool):
+            raise ConfigError(f"[hosts.{name}] isolated: want true or false")
+
+    @classmethod
+    def parse_hosts(cls, table) -> Hosts:
+        """The [hosts] parser's only home: an already-read [hosts] table as Hosts(default, tables),
+        else ConfigError. An implementation is checked only for the module.path:Class form, never
+        imported.
+        """
+        if not isinstance(table, Mapping):
+            raise ConfigError("[hosts]: missing")
+        tables = {}
+        for key, value in table.items():
+            if key == "default":
+                continue
+            if not isinstance(key, str):
+                raise ConfigError(f"[hosts] {key!r}: want a string key")
+            if not isinstance(value, Mapping):
+                raise ConfigError(f"[hosts] {key}: want default or a [hosts.<name>] table")
+            if not CONFIG_NAME.match(key):
+                raise ConfigError(f"[hosts.{key}]: want a name matching [a-z][a-z0-9_]*")
+            implementation = value.get("implementation")
+            if not isinstance(implementation, str) or not CLASS_PATH.fullmatch(implementation):
+                raise ConfigError(f"[hosts.{key}].implementation: want module.path:Class")
+            tables[key] = value
+        default = table.get("default")
+        names = ", ".join(sorted(tables))
+        if isinstance(default, str) and default and default not in tables:
+            raise ConfigError(
+                f"[hosts] default: {default!r} is not a Host here; want one of {names}"
+            )
+        if not isinstance(default, str) or default not in tables:
+            raise ConfigError(f"[hosts] default: want one of {names}")
+        return Hosts(default, tables)
+
+    @abstractmethod
+    def detach(
+        self,
+        name: str,
+        launch: Launch,
+        *,
+        display: Display = None,
+        events: str | None = None,
+        record: Record | None = None,
+    ) -> Process: ...
+
+    @abstractmethod
+    def terminal(
+        self,
+        name: str,
+        launch: Launch,
+        *,
+        display: Display = None,
+        events: str | None = None,
+        record: Record | None = None,
+        metadata: Mapping[str, str] | None = None,
+    ) -> InteractiveProcess:
+        """metadata: private sid/client/generation, apart from the published Record; a container
+        Host writes prompt to prompt_file."""
+        ...
+
+    def pipe(
+        self, name: str | None, launch: Launch, *, metadata: Mapping[str, str] | None = None
+    ) -> Piped:
+        """A headless client on pipes, run here."""
+        return LocalPiped(piped_popen(launch.argv, env=dict(launch.env), cwd=launch.cwd))
+
+    @abstractmethod
+    def attach(self, name: str) -> Process: ...
+
+    @abstractmethod
+    def list(self) -> list[str]: ...
+
+    def rows(self) -> list[SessionRow]:
+        return [self.attach(name).row() for name in self.list()]
+
+    def attach_target(self, name: str) -> SessionView | CommandView | None:
+        """What the Viewer shows session `name` through; None unless attachable."""
+        return None
+
+    def reclaim(self, token: str) -> Process | None:
+        """An untrusted token's live process group, else None."""
+        return None
+
+    def events_path(self, events: str | None) -> str | None:
+        return None if events is None else os.path.abspath(events)
+
+    def prepare_events(self, events: str | None) -> str | None:
+        if events is not None:
+            try:
+                append_line(events, "")
+            except OSError as error:
+                raise SessionError(f"events file {events}: {error.strerror}") from error
+        return events
+
+    def hook_callback(self, name: str, metadata: Mapping[str, str]) -> HookCallback | None:
+        return None
+
+    _inherit_env = True
+
+    def _client_context(self) -> ClientContext:
+        if self._isolated:
+            return replace(LOCAL_CONTEXT, permission=Permission.YOLO)
+        return LOCAL_CONTEXT
+
+    def _client_env(
+        self, name: str, client: str, home: ClientHome | None, *, resume: bool
+    ) -> Mapping[str, str]:
+        """Env for `client`'s launch as `name`; ConfigError: not on this Host."""
+        return {}
+
+    def _resume_argv(self, name: str) -> tuple[str, ...] | None:
+        """None: the client's."""
+        return None
+
+    def tui_settings(self) -> TuiSettings:
+        return TuiSettings()
+
+    def _preflight(self, name: str, launch: Launch) -> None:
+        """validate, before its caller makes the cwd."""
+        self.validate(name, launch)
+
+    def validate(self, name: str, launch: Launch) -> None:
+        if not launch.argv:
+            raise ConfigError("no command")
+        if not printable_abs(launch.cwd):
+            raise ConfigError(f"cwd must be a printable absolute path, got {launch.cwd!r:.80}")
