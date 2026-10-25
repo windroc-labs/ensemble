@@ -17,7 +17,6 @@ from orchestrator_tests.integration.flow_fixtures import (
     ENTRY,
     HARNESS_EMAIL,
     HUMAN,
-    KEYS,
     LAUNCH,
     PROJECT,
     UPDRAFT,
@@ -360,7 +359,6 @@ class Undone(Run):
             "uuid": UUID,
             "project": PROJECT["id"],
             "target": None,
-            "key": KEYS["researcher"],
             "task": None,
         }
         self.assertEqual(self.runs(), [start, note])

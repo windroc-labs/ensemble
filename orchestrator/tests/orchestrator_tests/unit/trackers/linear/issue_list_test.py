@@ -216,7 +216,6 @@ class Unresolved(IssueCase):
                 "label group",
             ),
             (["--role", "Ann"], Routes(), "--role Ann: not a role: researcher, pm, engineer, me"),
-            (["--role", "pm"], Routes(users={"nodes": []}), ACCOUNTS["pm"]),
             (["--task", "nope"], Routes(), "build, light-build"),
             (["--client", "nope"], Routes(), "codex, claude"),
             (["--parent", "nope"], Routes(), "want an issue identifier"),

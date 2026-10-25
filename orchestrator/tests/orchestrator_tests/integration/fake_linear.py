@@ -264,7 +264,7 @@ class FakeLinear:
         self.users, self.issues, self.labels, self.projects, self.relations = {}, {}, {}, {}, []
         self.clock = itertools.count()
 
-    def user(self, email, name, service=None, *, app=False):
+    def user(self, email, name, service=None, *, app=False, uid=None):
         """app: service is an OAuth app's token entry (the harness), its calls Bearer ones."""
         with self.lock:
             if any(
@@ -272,7 +272,7 @@ class FakeLinear:
                 for u in self.users.values()
             ):
                 raise ValueError(f"user {email} or service {service} seeded twice")
-            uid = str(uuid.uuid4())
+            uid = uid or str(uuid.uuid4())
             self.users[uid] = {
                 "id": uid,
                 "email": email,
@@ -797,14 +797,6 @@ class FakeLinear:
     def _teams(self, caller, v):
         return {"teams": {"nodes": [self._team()] if v.get("t") == TEAM else []}}
 
-    def _setup(self, caller, v):
-        """Q_SETUP's users filter: an or of email eqIgnoreCase."""
-        emails = {f["email"]["eqIgnoreCase"].lower() for f in v["u"]["or"]}
-        found = [
-            self._person(i, caller) for i, u in self.users.items() if u["email"].lower() in emails
-        ]
-        return {**self._teams(caller, v), "users": {"nodes": found}}
-
     def _label_group(self, caller, v):
         if v["i"] not in self.labels:
             raise Problem(f"Entity not found: {'IssueLabel'}")
@@ -1019,7 +1011,6 @@ OPS = {
     "linear.Q_ISSUE_STATE": FakeLinear._issue,
     "linear.Q_USER": FakeLinear._users,
     "linear.Q_TEAM": FakeLinear._teams,
-    "linear.Q_SETUP": FakeLinear._setup,
     "linear.Q_TASK_GROUP": FakeLinear._label_group,
     "router.Q_RELATIONS": FakeLinear._issue,
     "router.Q_RECHECK": FakeLinear._issue,

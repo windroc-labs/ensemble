@@ -62,7 +62,7 @@ implementation = "ensemble.delegate:HarnessDelegate"
 # local: "<client>" = "off"
 
 # An orchestrated role: each workflow stage's role is one, and a table names only a stage's role. Its tasks are its
-# charter's index (roles/<role>.md › Tasks, in core or a [delegate] team_dirs dir). Its Linear account and key:
+# charter's index (roles/<role>.md › Tasks, in core or a [delegate] team_dirs dir). Its Linear app:
 # [linear.roles.<role>]. A table for a packaged stage your workflow leaves out is ignored.
 #   max_runs  agent runs of this role at once; 3 for these roles unless config.local.toml sets it; no table → 1
 [roles.researcher]

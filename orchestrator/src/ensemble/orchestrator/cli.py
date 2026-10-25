@@ -141,8 +141,8 @@ def main(argv=None):
             "  reads the directory $ENSEMBLE_BOARD_DIR (default ~/.ensemble/board);\n"
             '  "linear" reaches Linear as the [linear.harness] OAuth app, whose token any\n'
             "  command renews before a call when under 5 days are left (the issue\n"
-            "  commands: linear.manager_key), role keys identifying the accounts used\n"
-            "  for issue work. Python 3.11+ is needed.\n"
+            "  commands: linear.manager_key). Role OAuth apps write back using the\n"
+            "  current role configuration, including resumed runs. Python 3.11+ is needed.\n"
             "  Router launches need the configured client/Delegate and its Host tools.\n"
             "  Router/promote/prune prepend ENSEMBLE_PATH, then this installation's bin,\n"
             "  then default executable directories. Logs: STATE/logs/orchestrator.jsonl;\n"

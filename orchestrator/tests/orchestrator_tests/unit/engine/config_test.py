@@ -859,7 +859,7 @@ class ConfigurationLoading(ConfigFile, Case):
         for obj, attr in (
             (cfg, "linear"),
             (cfg.linear, "team"),
-            (cfg.linear.roles["pm"], "key"),
+            (cfg.linear.roles["pm"], "client_id"),
             (cfg, "roles"),
             (cfg, "work_dir"),
             (cfg.roles["pm"], "max_runs"),

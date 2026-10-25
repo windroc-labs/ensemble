@@ -101,10 +101,10 @@ class BegunAndProgress(Writeback):
             ],
         )
 
-    def test_a_changed_role_account_does_not_move_a_running_claim(self):
-        self.claim(key=KEYS["pm"])
+    def test_an_old_start_row_key_writes_as_the_current_role_app(self):
+        self.claim(key="deleted-member-key")
         self.ok("progress", name="start", text=PICK)
-        self.assertEqual(self.stored(), [(ACCOUNTS["pm"], ops.client_id(SID, "start"))])
+        self.assertEqual(self.stored(), [(ACCOUNTS["researcher"], ops.client_id(SID, "start"))])
 
     def test_no_start_row_exits_2_and_writes_nothing(self):
         res = self.feed("begun")

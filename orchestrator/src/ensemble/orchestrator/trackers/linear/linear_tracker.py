@@ -253,12 +253,10 @@ def _move_origin(node, selves) -> Origin:
 class LinearTracker(Tracker):
     """states: {State key: state id}; team_id; finished: ops.Team.finished; roles: {user id: role};
     humans: human_members emails, subscribed on notify; selves: the role apps' user ids;
-    say: the caller's logger. A method needing one not given raises TypeError. identity: who each call is made as,
-    with timeout when given; None: gql as given. A comment's ref: its client id's parts. A home is a Linear
-    project; a note's account its user's email. Origin self: the harness app (isMe: router,
-    promote and the run reader query as linear.harness), a role account or Linear automation;
-    other: any other user. A comment with no user (an integration's, such as GitHub's) is not
-    returned. task_group, agent_group: the task and Agent label groups; label_tasks,
+    say: caller's logger; missing method dependencies raise TypeError. identity and timeout bind
+    gql; None leaves it as given. Comment refs are client id parts; home is a project.
+    Origin self: harness (isMe), configured role app ids or automation; other: other users.
+    Userless comments are omitted. task_group, agent_group: label groups; label_tasks,
     label_clients: {label id: task or client}, which recheck's picks read."""
 
     batch = SNAPSHOT_BATCH

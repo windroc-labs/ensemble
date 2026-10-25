@@ -5024,19 +5024,66 @@ class Picks(Base):
         )
 
 
-class RoleKeys(Base):
-    """A role with no key needs no Keychain item; pm's key here is empty."""
+class RoleAppTokens(TickBase):
+    def setUp(self):
+        super().setUp()
+        apps = self.cfg().linear.roles
+        self.items = Keychain(
+            {
+                **{a.token_service: record(days=10) for a in apps.values()},
+                **{a.secret_service: APP_SECRET for a in apps.values()},
+                apps["engineer"].token_service: record(days=-1),
+            }
+        )
+        self.endpoint = Endpoint(token_http_error(401))
+        self.keychain = client.has_key
+        self.enterContext(mock.patch("subprocess.run", self.items))
+        self.enterContext(mock.patch("urllib.request.urlopen", self.endpoint))
 
-    def cfg(self):
-        cfg = super().cfg()
-        roles = {**cfg.linear.roles, "pm": replace(cfg.linear.roles["pm"], token_service="")}
-        return replace(cfg, linear=replace(cfg.linear, roles=roles))
+    def test_expired_engineer_does_not_block_pm_claim(self):
+        fake = self.fake(
+            issue("TASK-1", "Todo", "engineer", priority=1),
+            issue("TASK-2", "Todo", "pm", priority=2),
+        )
+        self.assertEqual(self.tick(fake), 0)
+        self.assertEqual(self.launched(), "TASK-2")
+        self.assertTrue(any("config-error" in line and "engineer" in line for line in self.said()))
+        self.assertEqual(
+            [r["scope"] for r in self.endpoint.tokens],
+            ["read,write,app:assignable,app:mentionable"],
+        )
+
+    def test_expired_engineer_does_not_resume_or_block_pm(self):
+        self.resumable("TASK-1", "eng", 40, role="engineer")
+        fake = self.fake(issue("TASK-1", "In Progress", "engineer"), issue("TASK-2", "Todo", "pm"))
+        self.assertEqual(self.tick(fake), 0)
+        self.assertEqual(self.launched_runs(), [("TASK-2", "new")])
+
+    def test_explicit_engineer_reports_config_error(self):
+        fake = self.fake(issue("TASK-1", "Todo", "engineer"))
+        self.assertEqual(self.tick(fake, "--issue", "TASK-1"), 2)
+        self.assertEqual(self.start.launches, [])
+        self.assertTrue(any("config-error" in line and "engineer" in line for line in self.said()))
+
+    def test_dry_run_reports_expired_engineer_and_renews_none(self):
+        fake = self.fake(issue("TASK-1", "Todo", "engineer"), issue("TASK-2", "Todo", "pm"))
+        before = dict(self.items.items)
+        self.assertEqual(self.tick(fake, "--dry-run"), 0)
+        self.assertEqual(self.endpoint.tokens, [])
+        self.assertEqual(self.items.items, before)
+        self.assertTrue(
+            any("identity=engineer" in line and "expired" in line for line in self.said())
+        )
+
+
+class RoleKeys(Base):
+    """An unavailable app affects its role; a local tracker needs no credentials."""
 
     def test_the_keychain_is_checked_only_for_a_role_key(self):
         key = self.cfg().linear.roles["researcher"].token_service
         self.missing = {key, ""}
         self.assertEqual(self.claim(two()), f"TASK-2 https://linear.app/x/TASK-2 {PD}")
-        self.assertEqual(self.keychain_calls, [key])
+        self.assertEqual(self.keychain_calls, [key, self.cfg().linear.roles["pm"].token_service])
         self.assertIn(f"claim-skip TASK-1 reason=no Keychain item for role key {key}", self.said())
 
     def test_a_tracker_without_role_keys_checks_no_keychain(self):

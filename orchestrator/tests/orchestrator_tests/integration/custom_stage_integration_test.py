@@ -16,7 +16,7 @@ from orchestrator_tests.integration import fake_linear, flow_fixtures, segments
 from orchestrator_tests.integration.flow_fixtures import BRANCH, DOCS
 from orchestrator_tests.integration.segments import INSTRUCTIONS, RESEARCH, Segment
 from orchestrator_tests.unit import run_fixtures
-from orchestrator_tests.unit.board_ids import PACKAGED_FLOW
+from orchestrator_tests.unit.board_ids import PACKAGED_FLOW, role, role_id
 
 from utils.tests.case import local_section
 from utils.tests.sandbox import owned_directory
@@ -64,7 +64,7 @@ class CustomStage(Segment):
         board = (
             f'workflow = "{flow}"\n'
             + run_fixtures.local(os.path.join(self.root, "state"))
-            + f'[linear.roles.{ROLE}]\naccount = "{ACCOUNT}"\nkey = "{KEY}"\n'
+            + role(ROLE)
         )
         output = f'type = "github"\nrepo = "{DOCS}"\nbranch = "{BRANCH}"\ndir = "{DIR}"\n'
         with open(os.path.join(self.ensemble, "config.local.toml"), "w") as f:
@@ -74,7 +74,7 @@ class CustomStage(Segment):
                 + run_fixtures.CORE_LOCAL
                 + f"\n[delegate.roles.{ROLE}.output]\n{output}"
             )
-        self.ids[ACCOUNT] = self.fake.user(ACCOUNT, "Writer", KEY)
+        self.ids[ACCOUNT] = self.fake.user(ACCOUNT, "Writer", KEY, app=True, uid=role_id(ROLE))
         with open(self.seam, encoding="utf-8") as f:  # its keys: the users when it was written
             url = json.load(f)["url"]
         self.seam = fake_linear.seam(self, self.fake, url)
