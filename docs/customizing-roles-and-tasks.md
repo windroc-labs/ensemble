@@ -1,6 +1,6 @@
 # Customizing roles and tasks
 
-- The built-in roles, tasks and templates live in `delegate/src/ensemble/delegate/team/`; don't edit them.
+- The built-in roles, tasks and templates live in `src/ensemble/delegate/team/`; don't edit them.
 - A role's run settings (model, client, destination, commands) go in `~/.ensemble/config.local.toml`.
 - Your own roles, tasks and templates go in a team dir. A team dir only adds: it cannot change or replace a built-in role, task or template, so a new task needs a new role.
 - Your own roles run through `/ensemble:act-as`, `/ensemble:manage` and `ensemble-delegate run`, and on the board as a workflow stage ([On the board](#on-the-board)).
@@ -11,11 +11,11 @@
 
 ## Change a role's run settings
 
-Set run keys under `[delegate]` (every role) or `[delegate.roles.<role>]` (one role) in `~/.ensemble/config.local.toml`. Each key, its values and the order they resolve in: the comments of `delegate/src/ensemble/delegate/config.toml`.
+Set run keys under `[delegate]` (every role) or `[delegate.roles.<role>]` (one role) in `~/.ensemble/config.local.toml`. Each key, its values and the order they resolve in: the comments of `src/ensemble/delegate/config.toml`.
 
 ```toml
 [delegate.roles.engineer]
-client = "codex"          # a [clients.<name>] of session/src/ensemble/session/config.toml
+client = "codex"          # a [clients.<name>] of src/ensemble/session/config.toml
 tier = 1
 
 [delegate.roles.researcher.output]
@@ -71,7 +71,7 @@ Pick the task below that fits the input; unsure → `review` (`<tasks>/review.md
 
 ### Task file: `tasks/<task>.md`
 
-It starts with a `# ` heading, has exactly one `[ensemble-progress:start] <what to report>` line and a `## Resume` section, outside code fences. The smallest built-in example: `delegate/src/ensemble/delegate/team/tasks/echo.md`.
+It starts with a `# ` heading, has exactly one `[ensemble-progress:start] <what to report>` line and a `## Resume` section, outside code fences. The smallest built-in example: `src/ensemble/delegate/team/tasks/echo.md`.
 
 ## Run and check
 
@@ -84,7 +84,7 @@ It starts with a `# ` heading, has exactly one `[ensemble-progress:start] <what 
 
 ## On the board
 
-The board's stages (order, input layout, title prefix, comment leads, whether a Handoff needs instructions, the state a failed first run goes to) are a workflow file. The packaged one, `orchestrator/src/ensemble/orchestrator/engine/flow/workflow.toml`, has researcher, pm and engineer; its header lists every key and its default. To change a stage, or to put your own role on the board, copy it (e.g. into your team dir), edit the copy and name it in `~/.ensemble/config.local.toml`; it replaces the packaged one whole:
+The board's stages (order, input layout, title prefix, comment leads, whether a Handoff needs instructions, the state a failed first run goes to) are a workflow file. The packaged one, `src/ensemble/orchestrator/engine/flow/workflow.toml`, has researcher, pm and engineer; its header lists every key and its default. To change a stage, or to put your own role on the board, copy it (e.g. into your team dir), edit the copy and name it in `~/.ensemble/config.local.toml`; it replaces the packaged one whole:
 
 ```toml
 [orchestrator]

@@ -2,7 +2,7 @@
 
 ## CodexBar
 
-`session/src/ensemble/session/clients/claude/usage.py` is ported from [CodexBar](https://github.com/steipete/CodexBar) at commit `6480977b47f6e4ffd5dcaae1cb0c7fdf34ee449e`: the Claude `/usage` output parser (`ClaudeStatusProbe.parse`, `ClaudeUsageFetcher.makeSnapshot`, `ClaudeStatusProbe.parseResetDate`). `ClaudeCommon.PROBE` and `ClaudeCommon.probe` in `session/src/ensemble/session/clients/claude/common.py` follow its direct `/usage` probe launch (`ClaudeUsageFetcher.loadViaDirectCLI`, `ClaudeCLISession.probeSettingsArguments`, `ClaudeCLISession.launchEnvironment`).
+`src/ensemble/session/clients/claude/usage.py` is ported from [CodexBar](https://github.com/steipete/CodexBar) at commit `6480977b47f6e4ffd5dcaae1cb0c7fdf34ee449e`: the Claude `/usage` output parser (`ClaudeStatusProbe.parse`, `ClaudeUsageFetcher.makeSnapshot`, `ClaudeStatusProbe.parseResetDate`). `ClaudeCommon.PROBE` and `ClaudeCommon.probe` in `src/ensemble/session/clients/claude/common.py` follow its direct `/usage` probe launch (`ClaudeUsageFetcher.loadViaDirectCLI`, `ClaudeCLISession.probeSettingsArguments`, `ClaudeCLISession.launchEnvironment`).
 
 ```
 MIT License

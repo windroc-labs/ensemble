@@ -14,7 +14,7 @@ from tests.case import REPO, Case
 class PluginInstall(Case):
     def setUp(self):
         self.code = runpy.run_path(
-            str(Path(REPO, "broker/internal/launcher/assets/plugin-install.py"))
+            str(Path(REPO, "src/broker/internal/launcher/assets/plugin-install.py"))
         )
         self.root = Path(self.home, "image")
         self.calls = []

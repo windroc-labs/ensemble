@@ -11,19 +11,19 @@ class EveryTest(Sample):
     def test_discovery_finds_direct_and_normalized_test_packages(self):
         root = self.tree(
             {
-                "project/tests/unit/__init__.py": "",
-                "project/tests/project_tests/__init__.py": "",
-                "project/tests/project_tests/integration/__init__.py": "",
-                "project/tests/empty/unit/leftover.py": "",
+                "tests/unit/__init__.py": "",
+                "tests/project_tests/__init__.py": "",
+                "tests/project_tests/integration/__init__.py": "",
+                "tests/empty/unit/leftover.py": "",
             }
         )
         self.assertEqual(
-            test_suites(root, "project/tests"),
+            test_suites(root, "tests"),
             [
-                (os.path.join(root, "project/tests/unit"), root),
+                (os.path.join(root, "tests/unit"), root),
                 (
-                    os.path.join(root, "project/tests/project_tests/integration"),
-                    os.path.join(root, "project/tests"),
+                    os.path.join(root, "tests/project_tests/integration"),
+                    root,
                 ),
             ],
         )
@@ -57,132 +57,130 @@ class UnitTestModules(Sample):
 
         for files, expected in (
             (
-                {"session/tests/unit/_test.py": "", "session/src/ensemble/session/__init__.py": ""},
-                missing("session/tests/unit/_test.py", "session/src/ensemble/session/.py"),
+                {"tests/session/unit/_test.py": "", "src/ensemble/session/__init__.py": ""},
+                missing("tests/session/unit/_test.py", "src/ensemble/session/.py"),
             ),
             (
                 {
                     path: ""
                     for project, layer in guards.PROJECTS.items()
                     for path in (
-                        f"{project}/tests/unit/engine/config_test.py",
-                        f"{project}/src/ensemble/{layer}/engine/config.py",
+                        f"tests/{project}/unit/engine/config_test.py",
+                        f"src/ensemble/{layer}/engine/config.py",
                     )
                 },
                 [],
             ),
             (
-                {"session/tests/unit/clients/codex/removed_test.py": ""},
+                {"tests/session/unit/clients/codex/removed_test.py": ""},
                 missing(
-                    "session/tests/unit/clients/codex/removed_test.py",
-                    "session/src/ensemble/session/clients/codex/removed.py",
+                    "tests/session/unit/clients/codex/removed_test.py",
+                    "src/ensemble/session/clients/codex/removed.py",
                 ),
             ),
             (
                 {
-                    "orchestrator/tests/orchestrator_tests/unit/engine/router_test.py": "",
-                    "orchestrator/src/ensemble/orchestrator/engine/router.py": "",
+                    "tests/orchestrator/unit/engine/router_test.py": "",
+                    "src/ensemble/orchestrator/engine/router.py": "",
                 },
                 [],
             ),
             (
                 {
-                    "delegate/tests/unit/composer_test.py": "",
-                    "delegate/src/ensemble/delegate/composer/__init__.py": "",
+                    "tests/delegate/unit/composer_test.py": "",
+                    "src/ensemble/delegate/composer/__init__.py": "",
                 },
                 [],
             ),
             (
                 {
-                    "delegate/tests/unit/team/roles_test.py": "",
-                    "delegate/src/ensemble/delegate/team/roles/engineer.md": "charter",
+                    "tests/delegate/unit/team/roles_test.py": "",
+                    "src/ensemble/delegate/team/roles/engineer.md": "charter",
                 },
                 [],
             ),
             (
-                {"session/tests/unit/fakes/host_test.py": "", "session/tests/fakes/host.py": ""},
+                {"tests/session/unit/fakes/host_test.py": "", "tests/session/fakes/host.py": ""},
                 [],
             ),
             (
                 {
-                    "delegate/tests/unit/composer/support_test.py": "",
-                    "delegate/tests/unit/composer/support.py": "",
+                    "tests/delegate/unit/composer/support_test.py": "",
+                    "tests/delegate/unit/composer/support.py": "",
                 },
                 missing(
-                    "delegate/tests/unit/composer/support_test.py",
-                    "delegate/src/ensemble/delegate/composer/support.py",
+                    "tests/delegate/unit/composer/support_test.py",
+                    "src/ensemble/delegate/composer/support.py",
                 ),
             ),
             (
                 {
-                    "session/tests/unit/session_test.py": "",
-                    "session/src/ensemble/session/__init__.py": "",
+                    "tests/session/unit/session_test.py": "",
+                    "src/ensemble/session/__init__.py": "",
                 },
                 [],
             ),
             (
                 {
-                    "delegate/tests/unit/composer/roles_test.py": "",
-                    "delegate/src/ensemble/delegate/team/roles/engineer.md": "charter",
+                    "tests/delegate/unit/composer/roles_test.py": "",
+                    "src/ensemble/delegate/team/roles/engineer.md": "charter",
                 },
                 missing(
-                    "delegate/tests/unit/composer/roles_test.py",
-                    "delegate/src/ensemble/delegate/composer/roles.py",
+                    "tests/delegate/unit/composer/roles_test.py",
+                    "src/ensemble/delegate/composer/roles.py",
                 ),
             ),
             (
-                {"session/tests/unit/host_test.py": "", "session/tests/fakes/host.py": ""},
-                missing("session/tests/unit/host_test.py", "session/src/ensemble/session/host.py"),
+                {"tests/session/unit/host_test.py": "", "tests/session/fakes/host.py": ""},
+                missing("tests/session/unit/host_test.py", "src/ensemble/session/host.py"),
             ),
             (
                 {
-                    "utils/tests/unit/case.py": "",
-                    "utils/tests/unit/fakes/record.py": "",
-                    "utils/tests/unit/live_tmux.py": "",
-                    "utils/tests/unit/files_test.py.backup": "",
-                    "utils/tests/unit/files_test.txt": "",
+                    "tests/utils/unit/case.py": "",
+                    "tests/utils/unit/fakes/record.py": "",
+                    "tests/utils/unit/live_tmux.py": "",
+                    "tests/utils/unit/files_test.py.backup": "",
+                    "tests/utils/unit/files_test.txt": "",
                 },
                 [],
             ),
             (
                 {
-                    "session/tests/integration/unit/unmatched_test.py": "",
-                    "session/tests/session_tests/integration/unmatched_test.py": "",
+                    "tests/session/integration/unit/unmatched_test.py": "",
+                    "tests/session/session_tests/integration/unmatched_test.py": "",
                     "tests/unit/unmatched_test.py": "",
                     ".github/unit/unmatched_test.py": "",
                 },
                 [],
             ),
             (
-                {"manager/tests/unit/config_test.py": "", "utils/src/ensemble/utils/config.py": ""},
-                missing(
-                    "manager/tests/unit/config_test.py", "manager/src/ensemble/manager/config.py"
-                ),
+                {"tests/manager/unit/config_test.py": "", "src/ensemble/utils/config.py": ""},
+                missing("tests/manager/unit/config_test.py", "src/ensemble/manager/config.py"),
             ),
         ):
             with self.subTest(files=sorted(files)):
                 self.assertEqual(testing.unit_test_modules(self.tree(files)), expected)
 
     def test_empty_directory_does_not_match_a_unit_test(self):
-        test = "delegate/tests/unit/team_test.py"
-        source = "delegate/src/ensemble/delegate/team.py"
+        test = "tests/delegate/unit/team_test.py"
+        source = "src/ensemble/delegate/team.py"
         root = self.tree({test: ""})
-        os.makedirs(os.path.join(root, "delegate/src/ensemble/delegate/team"))
+        os.makedirs(os.path.join(root, "src/ensemble/delegate/team"))
         self.assertEqual(
             testing.unit_test_modules(root), [f"{test}: missing source module {source}"]
         )
 
     def test_source_package_init_suite_uses_the_package_name(self):
-        test = "delegate/tests/unit/composer/__init___test.py"
-        root = self.tree({test: "", "delegate/src/ensemble/delegate/composer/__init__.py": ""})
+        test = "tests/delegate/unit/composer/__init___test.py"
+        root = self.tree({test: "", "src/ensemble/delegate/composer/__init__.py": ""})
         self.assertEqual(len(testing.unit_test_modules(root)), 1)
 
     def test_missing_modules_are_reported_in_path_order(self):
         root = self.tree(
             {
-                "session/tests/unit/z_test.py": "",
-                "manager/tests/unit/a_test.py": "",
-                "session/tests/unit/a_test.py": "",
+                "tests/session/unit/z_test.py": "",
+                "tests/manager/unit/a_test.py": "",
+                "tests/session/unit/a_test.py": "",
             }
         )
         found = testing.unit_test_modules(root)
@@ -194,11 +192,7 @@ class TestBoundaries(Sample):
     def violations(self, sample, own, *, shipped=False):
         return testing.test_boundaries(
             self.tree(
-                {
-                    f"{own}/src/ensemble/{own}/probe.py"
-                    if shipped
-                    else f"{own}/tests/probe.py": sample
-                }
+                {f"src/ensemble/{own}/probe.py" if shipped else f"tests/{own}/probe.py": sample}
             )
         )
 
@@ -233,10 +227,10 @@ class TestBoundaries(Sample):
             *(
                 (statement, "session", False)
                 for statement in (
-                    "import session.tests.unit.api_test as helper",
-                    "from session.tests.unit import api_test",
+                    "import tests.session.unit.api_test as helper",
+                    "from tests.session.unit import api_test",
                     "from .api_test import Helper",
-                    "importlib.import_module('session.tests.unit.api_test')",
+                    "importlib.import_module('tests.session.unit.api_test')",
                 )
             ),
             *(
@@ -256,7 +250,7 @@ class TestBoundaries(Sample):
                     "from sys import modules\n" + statement,
                     "session",
                     False,
-                    ["session/tests/probe.py:2: sys.modules mutation"],
+                    ["tests/session/probe.py:2: sys.modules mutation"],
                 )
                 for statement in (
                     "modules['fake'] = object()",
@@ -267,7 +261,7 @@ class TestBoundaries(Sample):
                 )
             ),
             *(
-                (hosted + statement, "session", False, [f"session/tests/probe.py:3: {reason}"])
+                (hosted + statement, "session", False, [f"tests/session/probe.py:3: {reason}"])
                 for statement, reason in (
                     (
                         "patch.multiple('ensemble.session.engine.hosted_session', start=object())",
@@ -277,13 +271,13 @@ class TestBoundaries(Sample):
                 )
             ),
             (
-                "from unittest.mock import patch\nimport os\nfrom session.tests import fake_client\npatch.object(os, 'getcwd')\npatch.object(fake_client, 'start')\nfake_client.start = object()\npatch.dict(os.environ, {})\n",
+                "from unittest.mock import patch\nimport os\nfrom tests.session import fake_client\npatch.object(os, 'getcwd')\npatch.object(fake_client, 'start')\nfake_client.start = object()\npatch.dict(os.environ, {})\n",
                 "delegate",
                 False,
                 [],
             ),
             *(
-                (lower + statement, "manager", False, [f"manager/tests/probe.py:3: {reason}"])
+                (lower + statement, "manager", False, [f"tests/manager/probe.py:3: {reason}"])
                 for statement, reason in (
                     ("patch.object(session, 'sessions')", "shipped object patch"),
                     ("patch('ensemble.session.sessions')", "shipped code patch"),
@@ -299,8 +293,8 @@ class TestBoundaries(Sample):
     def test_nested_standard_library_boundaries_and_keyword_patch_targets(self):
         root = self.tree(
             {
-                "session/src/ensemble/session/engine/api.py": "import time\n",
-                "session/tests/probe.py": (
+                "src/ensemble/session/engine/api.py": "import time\n",
+                "tests/session/probe.py": (
                     "from unittest.mock import patch\nfrom ensemble.session.engine import api\npatch.object(api.time, 'sleep')\n"
                 ),
             }
@@ -330,10 +324,10 @@ class UnitIsolation(Sample):
                 self.assertTrue(all(line.startswith(path + ":") for line in found), found)
 
     def test_no_migration_exemption_can_be_reintroduced(self):
-        root = self.tree({"session/tests/unit/present_test.py": ""})
+        root = self.tree({"tests/session/unit/present_test.py": ""})
         self.assertEqual(testing.unit_isolation_allowlist(root), [])
         with mock.patch.dict(
-            guards.UNIT_ISOLATION_ALLOWED, {"session/tests/unit/present_test.py": "escape"}
+            guards.UNIT_ISOLATION_ALLOWED, {"tests/session/unit/present_test.py": "escape"}
         ):
             self.assertEqual(
                 testing.unit_isolation_allowlist(root),

@@ -1,7 +1,7 @@
 # Tests
 
 ```bash
-export PYTHONPATH=.:.github:delegate/src:session/src:utils/src:manager/src:orchestrator/src:orchestrator/tests   # from the repo root
+export PYTHONPATH=.:.github:src   # from the repo root
 ```
 
 Lint (tool versions pinned in `.github/workflows/test.yml`):
@@ -13,7 +13,7 @@ ruff format --check --no-cache
 python3 -m tests.unit_imports
 pyright
 lint-imports --no-cache
-pylint --disable=all --enable=cyclic-import,duplicate-code manager/src orchestrator/src delegate/src session/src utils/src
+pylint --disable=all --enable=cyclic-import,duplicate-code src/ensemble
 vulture
 python3 -m tests.checks
 python3 .github/run_tests.py "Repository integration" tests/integration
@@ -35,12 +35,12 @@ has none, and CI's Ruff step still catches it.
 
 | Suite | Command |
 |---|---|
-| one project's unit tests | `python3 .github/run_tests.py "Session unit" session/tests/unit` |
+| one project's unit tests | `python3 .github/run_tests.py "Session unit" tests/session/unit` |
 | all unit tests | `python3 .github/run_tests.py Unit --unit` |
 | one unit shard | `python3 .github/run_tests.py Unit --unit --shard 1/8` |
 | one four-process unit job | `python3 .github/run_tests.py Unit --unit --parallel 4 --shard 1/2` |
-| one complete test ID | `python3 .github/run_tests.py Integration manager.tests.integration.crew_close_all_integration_test.CloseAllTest.test_close_all_closes_what_mgr_opened_and_only_that` |
-| one test file | `python3 .github/run_tests.py Integration manager/tests/integration/crew_close_all_integration_test.py` |
+| one complete test ID | `python3 .github/run_tests.py Integration tests.manager.integration.crew_close_all_integration_test.CloseAllTest.test_close_all_closes_what_mgr_opened_and_only_that` |
+| one test file | `python3 .github/run_tests.py Integration tests/manager/integration/crew_close_all_integration_test.py` |
 | one repository integration shard | `python3 .github/run_tests.py 'Repository integration 1' tests/integration --shard 1/8` |
 | integration shard (labels in `.github/workflows/test.yml`) | `python3 .github/integration_jobs.py <N>` |
 
@@ -68,12 +68,12 @@ the target is about 3.5 minutes per job, with headroom below 15 minutes.
 
 Docker protocol fixtures need `python3 -m pip install jsonschema==4.26.0` (test only).
 Run `python3 .github/run_tests.py Protocol tests/unit/docker_broker_protocol_test.py tests/unit/docker_relay_protocol_test.py`.
-The Go broker (`broker/`, Go from `broker/go.mod`): `sh with-go-state.sh gofmt -l .`,
+The Go broker (`src/broker/`, Go from `src/broker/go.mod`): `sh with-go-state.sh gofmt -l .`,
 `sh with-go-state.sh go vet ./...`, `sh with-go-state.sh go test ./...`,
-`sh with-go-state.sh go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...` in `broker/`; run every
-Go tool through `broker/with-go-state.sh` (state in `.cache/go/`). CI's `Broker` jobs run them on
+`sh with-go-state.sh go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...` in `src/broker/`; run every
+Go tool through `src/broker/with-go-state.sh` (state in `.cache/go/`). CI's `Broker` jobs run them on
 Linux and macOS and build the darwin/arm64 binary for full scope, including changes to
-`broker/**`, `protocol/docker-broker/**`, `.github/workflows/test.yml`, and every push to
+`src/broker/**`, `src/broker/protocol/docker-broker/**`, `.github/workflows/test.yml`, and every push to
 `main`. Docs-only and upper-layer-only PRs skip Go setup, checks, builds and artifact
 upload; both `Broker` jobs still report success, like the required `Worker image` check.
 
@@ -134,13 +134,13 @@ occurs exactly once. Coverage applies to pull requests; `CI` requires every appl
 
 | Change/event | Unit and integration tests | Repository tests |
 |---|---|---|
-| PR touching only `manager/` and/or `orchestrator/`, including their docs/skills | both upper layers | intentionally skipped |
+| PR touching only `src/ensemble/manager/`, `src/ensemble/orchestrator/`, their `tests/<layer>/`, `skills/manage/`, `skills/board/`, `hooks/` and `launchd/` | both upper layers | intentionally skipped |
 | PR touching only root `*.md` files and/or `docs/` | upper-layer unit tests (they check the docs skills cite); integration, type and design lints skipped | intentionally skipped |
 | PR touching a lower layer, `tests/`, `.github/`, shared config, an unknown path, or an empty diff | all layers, plus shared unit tests | run |
 | push to `main` | all layers, plus shared unit tests | run |
 
-`.github/ci_scope.py` derives project roots from the import-linter `layers` contract and
-their `src` packages. Layers before `ensemble.delegate` form the upper group; every
+`.github/ci_scope.py` derives layer names from the import-linter `layers` contract and
+their `src/ensemble/<layer>/` packages. Layers before `ensemble.delegate` form the upper group; every
 other path selects the full suite. Renames consider both endpoints. `TEST_PROJECTS`
 passes the selected group to discovery. Static lint remains required; `Lint style` checks
 unit import boundaries on every change. `CI` accepts a skipped repository job only for
@@ -150,8 +150,8 @@ cancellation or unexpected skips. The explicit `broker` output controls Go steps
 result to be success, even when its Go steps are intentionally skipped.
 
 ```bash
-python3 .github/ci_scope.py --event pull_request --paths manager/skills/manage/SKILL.md
-python3 .github/ci_scope.py --event pull_request --paths session/src/ensemble/session/cli.py
+python3 .github/ci_scope.py --event pull_request --paths skills/manage/SKILL.md
+python3 .github/ci_scope.py --event pull_request --paths src/ensemble/session/cli.py
 ```
 
 `Worker image` (`.github/workflows/worker-image.yml`, its own README badge) runs the real
@@ -173,8 +173,8 @@ scheduling, setup and cleanup. Report observed times and flakes; no hard timing 
 
 | | Unit | Integration |
 |---|---|---|
-| Tests | pure logic, with fakes and recorded output | real tools in `utils/tests/sandbox.py` |
-| Limits | no processes, no sockets, writes only in the runner's temp dir | tmux only on `session/tests/live_tmux.py` servers |
+| Tests | pure logic, with fakes and recorded output | real tools in `tests/utils/sandbox.py` |
+| Limits | no processes, no sockets, writes only in the runner's temp dir | tmux only on `tests/session/live_tmux.py` servers |
 
 ## Live tests
 
@@ -182,7 +182,7 @@ Live tests run a real client by hand, outside CI: [Docker host › Live acceptan
 
 | Live test | Needs only a running agent | Depends on the reply protocol |
 |---|---|---|
-| Docker Host lifecycle: `session/tests/live_docker.py worker --client opencode` (start, send, read, status, restart, close, resume, `rm -f`, isolation baseline, killed supervisor) | ✅ a turn-end event after each prompt is enough | |
+| Docker Host lifecycle: `tests/session/live_docker.py worker --client opencode` (start, send, read, status, restart, close, resume, `rm -f`, isolation baseline, killed supervisor) | ✅ a turn-end event after each prompt is enough | |
 | hook relay and supervisor recovery | ✅ | |
 | crew: `worker`, `send`, `read`, `next-event`, `close`; the Viewer | ✅ | |
 | board recovery (`session_status`), usage gate | ✅ | |

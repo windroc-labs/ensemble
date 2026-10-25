@@ -3,16 +3,15 @@
 import ast
 import builtins
 import importlib
-import os
 import re
 import sys
 
 from tests.guard_checks.common import (
     _bindings,
     _dotted,
-    _files,
     _private,
     _resolve_boundary,
+    _source_files,
     _source_modules,
     _tree_files,
 )
@@ -29,11 +28,10 @@ OPTION_WORD = re.compile(r"[a-z0-9]+(?:[_-][a-z0-9]+)*")
 def shared_types(repo: str) -> list[str]:
     found = []
     for project in PROJECTS:
-        src = os.path.join(repo, project, "src")
         trees = {
             rel[:-3].replace("/", ".").removesuffix(".__init__"): (rel, ast.parse(text, rel))
-            for rel, text in _files(src, ".py")
-            if f"{project}/src/{rel}" not in STANDALONE
+            for rel, text in _source_files(repo, project, ".py")
+            if f"src/{rel}" not in STANDALONE
         }
         data = {
             f"{module}.{node.name}": rel.endswith("__init__.py")
@@ -44,7 +42,7 @@ def shared_types(repo: str) -> list[str]:
         }
         for module, (rel, tree) in trees.items():
             if not rel.endswith("__init__.py"):
-                found += _type_uses(project, rel, module, tree, data)
+                found += _type_uses(rel, module, tree, data)
     return sorted(found)
 
 
@@ -63,8 +61,7 @@ def _data_type(node, bound):
 def types_only(repo: str) -> list[str]:
     found, private = [], {}
     for project in PROJECTS:
-        src = os.path.join(repo, project, "src")
-        for rel, text in _files(src, ".py"):
+        for rel, text in _source_files(repo, project, ".py"):
             if not (rel.endswith("/types.py") or "/types/" in rel):
                 continue
             tree = ast.parse(text, rel)
@@ -74,17 +71,13 @@ def types_only(repo: str) -> list[str]:
                 if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
                     if _private(node.name):
                         module = rel.removesuffix(".py").replace("/", ".").removesuffix(".__init__")
-                        private[f"{module}.{node.name}"] = f"{project}/src/{rel}"
+                        private[f"{module}.{node.name}"] = f"src/{rel}"
                     else:
-                        found.append(
-                            f"{project}/src/{rel}:{node.lineno}: types module function {node.name}"
-                        )
+                        found.append(f"src/{rel}:{node.lineno}: types module function {node.name}")
                 elif isinstance(node, ast.ClassDef):
                     kind = kinds.get(node.name)
                     if kind is None:
-                        found.append(
-                            f"{project}/src/{rel}:{node.lineno}: {node.name}: not a type class"
-                        )
+                        found.append(f"src/{rel}:{node.lineno}: {node.name}: not a type class")
                     else:
                         found += _type_methods(project, rel, node, kind, bound)
     return sorted([*found, *_types_private_uses(repo, private)])
@@ -217,7 +210,7 @@ def _type_methods(project, rel, node, kind, bound):
         if kind == "dataclass" and "classmethod" in decorators and _builds(method, args):
             continue
         found.append(
-            f"{project}/src/{rel}:{method.lineno}: {node.name}.{method.name}: business method in types module"
+            f"src/{rel}:{method.lineno}: {node.name}.{method.name}: business method in types module"
         )
     return found
 
@@ -232,7 +225,7 @@ def _builds(method, args):
     )
 
 
-def _type_uses(project, rel, module, tree, data):
+def _type_uses(rel, module, tree, data):
     package, bound, used = module.split(".")[:-1], {}, []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
@@ -252,7 +245,7 @@ def _type_uses(project, rel, module, tree, data):
     used += [(n.lineno, _dotted(n, bound)) for n in ast.walk(tree) if isinstance(n, ast.Attribute)]
     return sorted(
         {
-            f"{project}/src/{rel}:{line}: {key}: a shared data type belongs in a types.py"
+            f"src/{rel}:{line}: {key}: a shared data type belongs in a types.py"
             for line, key in used
             if key in data
             and (source := key.rpartition(".")[0]) != module
@@ -266,8 +259,8 @@ def option_tuples(repo: str) -> list[str]:
     """FR-49: a module-level tuple of option words in shipped code is a StrEnum, unless allowlisted."""
     found, seen = set(), set()
     for project in PROJECTS:
-        for rel, text in _files(os.path.join(repo, project, "src"), ".py"):
-            rel = f"{project}/src/{rel}"
+        for rel, text in _source_files(repo, project, ".py"):
+            rel = f"src/{rel}"
             for node in _module_assignments(ast.parse(text, rel).body):
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 for name in (t.id for t in targets if isinstance(t, ast.Name)):

@@ -104,7 +104,7 @@ class HelpSafety(Case):
                 "COLUMNS": "80",
             }
         )
-        installer = Path(REPO, "manager", "skills", "manage", "scripts", "ctmux")
+        installer = Path(REPO, "skills", "manage", "scripts", "ctmux")
         installed = subprocess.run(
             [str(installer), "--install"],
             env=self.env,

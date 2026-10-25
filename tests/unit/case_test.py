@@ -12,18 +12,17 @@ from pathlib import Path
 from unittest import mock
 
 import ensemble
-
 from tests import guards
 from tests.case import REPO, Case
-from utils.tests.sandbox import clean_env, owned_directory
+from tests.utils.sandbox import clean_env, owned_directory
 
 CASES = (
     "tests",
-    "utils/tests",
-    "session/tests",
-    "delegate/tests",
-    "orchestrator/tests",
-    "manager/tests",
+    "tests/utils",
+    "tests/session",
+    "tests/delegate",
+    "tests/orchestrator",
+    "tests/manager",
 )
 
 
@@ -41,9 +40,7 @@ class SandboxFixtures(Case):
         self.assertEqual(list(target.iterdir()), [])
 
 
-RUN_WITH = os.pathsep.join(
-    f"{p}/src" for p in ("delegate", "manager", "orchestrator", "session", "utils")
-)
+RUN_WITH = "src"
 
 
 @contextlib.contextmanager
@@ -63,8 +60,8 @@ class Checks:
 
     def setUp(self):
         self.case = importlib.import_module(
-            "orchestrator_tests.case"
-            if self.tree == "orchestrator/tests"
+            "tests.orchestrator.case"
+            if self.tree == "tests/orchestrator"
             else f"{self.tree.replace('/', '.')}.case"
         )
 
@@ -179,7 +176,7 @@ class Checks:
 
     def test_the_orchestrator_absent_or_this_trees_passes(self):
         orch = self.case.SRC["orchestrator"]
-        self.assertEqual(orch, os.path.join(self.case.REPO, "orchestrator", "src"))
+        self.assertEqual(orch, os.path.join(self.case.REPO, "src"))
         self.assertEqual(getattr(self.case, "ORCH_ROOT", orch), orch)
         name = "ensemble.orchestrator"
         self.assertTrue(os.path.isfile(self.module(name, orch).__file__))
@@ -190,16 +187,16 @@ class Checks:
             self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
             self.assertEqual(len(ran), 1)
 
-    def test_ensemble_spans_exactly_this_trees_five_src_dirs(self):
+    def test_ensemble_uses_exactly_this_trees_src(self):
         own = {os.path.realpath(os.path.join(r, "ensemble")) for r in self.case.ROOTS}
         self.assertEqual({os.path.realpath(p) for p in ensemble.__path__}, own)
-        self.assertEqual(len(own), 5)
+        self.assertEqual(len(own), 1)
         self.assertEqual(self.case.SRC, guards_src())
-        self.assertEqual(self.case.ROOTS, tuple(sorted(guards_src().values())))
+        self.assertEqual(self.case.ROOTS, tuple(sorted(set(guards_src().values()))))
         self.assertFalse(hasattr(ensemble, "__file__") and ensemble.__file__)
 
     def test_child_env_drops_python_variables_and_sets_pythonpath_where_kept(self):
-        if self.tree == "utils/tests":
+        if self.tree == "tests/utils":
             self.assertFalse(hasattr(self.case, "child_env"))
             return
         child_env, ROOTS = self.case.child_env, self.case.ROOTS
@@ -235,7 +232,7 @@ class Checks:
 
 
 def guards_src():
-    return {sub: os.path.join(REPO, project, "src") for project, sub in guards.PROJECTS.items()}
+    return {sub: os.path.join(REPO, "src") for project, sub in guards.PROJECTS.items()}
 
 
 for _tree in CASES:

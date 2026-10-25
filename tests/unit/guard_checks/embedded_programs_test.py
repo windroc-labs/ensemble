@@ -7,8 +7,8 @@ from tests.guard_checks.embedded_programs import embedded_programs
 from tests.guard_data.session import EMBEDDED_PROGRAMS_ALLOWED as SESSION_ALLOWED
 from tests.guard_samples import Sample
 
-PATH = "delegate/tests/example.py"
-HOST = "session/src/ensemble/session/hosts/docker/host.py"
+PATH = "tests/delegate/example.py"
+HOST = "src/ensemble/session/hosts/docker/host.py"
 
 
 class EmbeddedPrograms(Sample):
@@ -168,7 +168,7 @@ class EmbeddedPrograms(Sample):
         self.assertEqual(len(edited), 2)
         self.assertTrue(any("stale embedded program exception" in line for line in edited))
         other = embedded_programs(
-            self.tree({"session/tests/example.py": "exec('print(1)')"}), allowed=allowed
+            self.tree({"tests/session/example.py": "exec('print(1)')"}), allowed=allowed
         )
         self.assertEqual(len(other), 2)
 

@@ -20,7 +20,7 @@ from budget_fixtures import (
 )
 
 from tests.case import Case
-from utils.tests.sandbox import clean_env, git
+from tests.utils.sandbox import clean_env, git
 
 
 class Main(Case):

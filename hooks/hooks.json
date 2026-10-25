@@ -1,0 +1,17 @@
+{
+  "modules": ["./quiet.tsx"],
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"${CLAUDE_PLUGIN_ROOT}/src/ensemble/manager/rearm.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

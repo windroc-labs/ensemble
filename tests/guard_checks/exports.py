@@ -12,7 +12,13 @@ import sysconfig
 import textwrap
 import types
 
-from tests.guard_checks.common import _at_import, _bindings, _dotted, _files, _resolve_boundary
+from tests.guard_checks.common import (
+    _at_import,
+    _bindings,
+    _dotted,
+    _resolve_boundary,
+    _source_files,
+)
 from tests.guard_data import OBJECT_EXPORT_MODULES, OBJECT_EXPORTS_ALLOWED
 from tests.guard_data.delegate import DELEGATE_INTERFACE, DELEGATE_INTERFACE_MODULES
 from tests.guard_data.orchestrator import ORCH_PROJECT
@@ -21,7 +27,7 @@ from tests.guards import PROJECTS
 
 
 def manager_exports(repo: str) -> list[str]:
-    base = "manager/src/ensemble/manager/__init__.py"
+    base = "src/ensemble/manager/__init__.py"
     path = os.path.join(repo, base)
     if not os.path.isfile(path):
         return []
@@ -49,12 +55,12 @@ def object_exports(repo: str) -> list[str]:
     found, seen = set(), set()
     for rel in OBJECT_EXPORT_MODULES:
         path = os.path.join(repo, rel)
-        project = rel.split("/", 1)[0]
+        project = rel.split("/")[2]
         if not os.path.isfile(path):
             if project in ("delegate", ORCH_PROJECT):
                 found.add(f"{rel}: no literal __all__")
             continue
-        package = rel.removeprefix(f"{project}/src/").removesuffix(".py").replace("/", ".")
+        package = rel.removeprefix("src/").removesuffix(".py").replace("/", ".")
         package = package.removesuffix(".__init__")
         with open(path, encoding="utf-8") as source:
             exports = _all_node(ast.parse(source.read(), rel))
@@ -146,7 +152,7 @@ def _export_kinds(repo, package, names):
             "class" if isinstance(value, type) else "function" if callable(value) else "constant"
         )
     for owner in PROJECTS:
-        for rel, text in _files(os.path.join(repo, owner, "src"), ".py"):
+        for rel, text in _source_files(repo, owner, ".py"):
             module = rel.removesuffix(".py").replace("/", ".").removesuffix(".__init__")
             _definitions(
                 module,

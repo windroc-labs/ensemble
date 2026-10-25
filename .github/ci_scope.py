@@ -38,12 +38,10 @@ def layer_map(root: Path) -> dict[str, str]:
         raise ValueError("Production layers must be unique modules ordered above ensemble.delegate")
     projects = {}
     for module in modules:
-        packages = [
-            path for path in root.glob("*/src/" + module.replace(".", "/")) if path.is_dir()
-        ]
-        if len(packages) != 1:
-            raise ValueError(f"Layer {module} must map to exactly one project package")
-        project = packages[0].relative_to(root).parts[0]
+        package = root / "src" / module.replace(".", "/")
+        if not package.is_dir():
+            raise ValueError(f"Layer {module} must map to a source package")
+        project = module.split(".")[-1]
         if project in projects:
             raise ValueError(f"Multiple production layers map to project {project}")
         projects[project] = module
@@ -56,6 +54,14 @@ def _owner(path: str) -> str | None:
     parts = path.split("/")
     if any(part in ("", ".", "..") for part in parts):
         return None
+    if len(parts) >= 4 and parts[:2] == ["src", "ensemble"]:
+        return parts[2]
+    if len(parts) >= 3 and parts[0] == "tests":
+        return parts[1]
+    if len(parts) >= 3 and parts[0] == "skills":
+        return {"manage": "manager", "board": "orchestrator", "act-as": "delegate"}.get(parts[1])
+    if len(parts) >= 2 and parts[0] in {"hooks", "launchd"}:
+        return {"hooks": "manager", "launchd": "orchestrator"}[parts[0]]
     return parts[0]
 
 
@@ -64,7 +70,7 @@ CHECKED_DOCS = ("docs/credentials.md",)
 
 
 def _docs(path: str) -> bool:
-    # Root *.md and docs/** but CHECKED_DOCS; skills and team text live under projects, so they are not docs.
+    # Root *.md and docs/** but CHECKED_DOCS; skills and team text are not docs.
     if path in CHECKED_DOCS:
         return False
     return _owner(path) == "docs" or (_owner(path) == path and path.endswith(".md"))
