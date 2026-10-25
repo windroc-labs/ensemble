@@ -1,4 +1,4 @@
-"""broker/internal/launcher/assets/workspace-check against real git repos."""
+"""src/broker/internal/launcher/assets/workspace-check against real git repos."""
 
 import runpy
 import shutil
@@ -7,7 +7,7 @@ from pathlib import Path
 
 from tests.case import REPO, Case
 
-CHECK = Path(REPO, "broker/internal/launcher/assets/workspace-check")
+CHECK = Path(REPO, "src/broker/internal/launcher/assets/workspace-check")
 
 
 class WorkspaceCheck(Case):

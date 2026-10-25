@@ -10,7 +10,7 @@ from pathlib import Path
 import ruff_hook
 
 from tests.case import REPO, Case
-from utils.tests.sandbox import git, git_run, python_path
+from tests.utils.sandbox import git, git_run, python_path
 
 HOOKS = os.path.join(REPO, ".githooks")
 VERSION = ruff_hook.pinned_version(ruff_hook.WORKFLOW.read_text(encoding="utf-8"))

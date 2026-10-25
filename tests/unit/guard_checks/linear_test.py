@@ -54,8 +54,8 @@ class EnumComparisons(Sample):
     def test_only_linear_source_is_scanned(self):
         root = self.tree(
             {
-                "manager/src/ensemble/manager/example.py": 'entry.state == "live"\n',
-                "orchestrator/tests/example.py": 'run.state == "working"\n',
+                "src/ensemble/manager/example.py": 'entry.state == "live"\n',
+                "tests/orchestrator/example.py": 'run.state == "working"\n',
             }
         )
         self.assertEqual(linear.linear_enum_comparisons(root), [])
@@ -155,7 +155,7 @@ class FlowNamesNoLinear(Sample):
     def test_package_paths_toml_and_other_trees(self):
         root = self.tree(
             {
-                f"{FLOW}workflow.py": 'REL = "orchestrator/src/ensemble/orchestrator/x"\n',
+                f"{FLOW}workflow.py": 'REL = "src/ensemble/orchestrator/x"\n',
                 f"{FLOW}workflow.toml": "# [orchestrator.roles] project\n",
                 f"{ENGINE}router.py": "# the Linear project\n",
                 f"{TRACKERS}linear/ops.py": 'Q = "query { project { id } }"\n',

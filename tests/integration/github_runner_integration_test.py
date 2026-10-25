@@ -13,7 +13,7 @@ from pathlib import Path
 from runner_fixtures import HERE, SCRIPT
 
 from tests.case import Case
-from utils.tests.sandbox import clean_env
+from tests.utils.sandbox import clean_env
 
 
 class Supervise(Case):
@@ -132,7 +132,7 @@ class Supervise(Case):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         data = coverage.CoverageData(basename=str(out / "data"))
         data.read()
-        text = str(HERE.parent / "utils/src/ensemble/utils/text.py")
+        text = str(HERE.parent / "src/ensemble/utils/text.py")
         self.assertIn(text, data.measured_files())
         self.assertIn((10, 11), data.arcs(text))
         self.assertFalse(any(name.startswith(".coverage") for name in os.listdir(tmp)))

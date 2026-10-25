@@ -91,7 +91,7 @@ class Release(Case):
             'test "$TAG" = "v$version"', self.steps["Require the tag to be the plugin version"]
         )
         build = self.steps["Build and sign"]
-        self.assertIn('run: sh broker/build.sh "$RUNNER_TEMP/release/ensemble-broker"', build)
+        self.assertIn('run: sh src/broker/build.sh "$RUNNER_TEMP/release/ensemble-broker"', build)
         self.assertIn("GOOS: darwin", build)
         self.assertIn("GOARCH: arm64", build)
         self.assertIn(

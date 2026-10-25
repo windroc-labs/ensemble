@@ -8,9 +8,7 @@
   },
   "license": "MIT",
   "skills": [
-    "./delegate/skills/",
-    "./orchestrator/skills/",
-    "./manager/skills/"
+    "./skills/"
   ],
-  "hooks": "./manager/hooks/hooks.json"
+  "hooks": "./hooks/hooks.json"
 }

@@ -135,7 +135,7 @@ class Units(Case):
             *((f"ensemble.delegate.{source}", "ensemble.utils", False) for source in shared),
             ("ensemble.delegate.config", "ensemble.session", True),
             (
-                "delegate.tests.unit.team.tools.repo_test",
+                "tests.delegate.unit.team.tools.repo_test",
                 "ensemble.delegate.team.tools.repo",
                 False,
             ),
@@ -147,3 +147,29 @@ class Units(Case):
         for source, target, rejected in cases:
             with self.subTest(source=source, target=target):
                 self.assertEqual(self.rejected(source, target), rejected)
+
+
+class TestOwnership(Case):
+    def test_each_layer_forbids_every_shared_test_module(self):
+        contracts = tomllib.loads(Path(REPO, "pyproject.toml").read_text())["tool"]["importlinter"][
+            "contracts"
+        ]
+        layers = next(c["layers"] for c in contracts if c["type"] == "layers")
+        layer_packages = {f"tests.{layer.rsplit('.', 1)[-1]}" for layer in layers}
+        root = Path(REPO, "tests")
+        modules = {
+            f"tests.{path.stem}" for path in root.glob("*.py") if path.stem != "__init__"
+        } | {f"tests.{path.name}" for path in root.iterdir() if (path / "__init__.py").is_file()}
+        shared_modules = modules - layer_packages
+        for layer in sorted(layer_packages):
+            with self.subTest(layer=layer):
+                ownership = [
+                    c
+                    for c in contracts
+                    if c["type"] == "forbidden" and c.get("source_modules") == [layer]
+                ]
+                self.assertEqual(len(ownership), 1)
+                forbidden = {
+                    name for name in ownership[0]["forbidden_modules"] if name.startswith("tests.")
+                }
+                self.assertEqual(forbidden - layer_packages, shared_modules)

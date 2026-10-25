@@ -150,7 +150,7 @@ class CredentialsInventory(Sample):
         self.assertEqual(
             found,
             [
-                "broker/internal/broker/keychain.go: KeychainServices entry is not a string"
+                "src/broker/internal/broker/keychain.go: KeychainServices entry is not a string"
                 " literal: codexService,"
             ],
         )
@@ -160,24 +160,24 @@ class CredentialsInventory(Sample):
         root = self.tree(
             {
                 "docs/credentials.md": inventory(),
-                "orchestrator/src/ensemble/orchestrator/config.toml": CONFIG,
-                "broker/internal/broker/keychain.go": go,
+                "src/ensemble/orchestrator/config.toml": CONFIG,
+                "src/broker/internal/broker/keychain.go": go,
             }
         )
         self.assertEqual(
             credentials.credentials_inventory(root),
             [
-                "broker/internal/broker/keychain.go: KeychainServices entry is not a string"
+                "src/broker/internal/broker/keychain.go: KeychainServices entry is not a string"
                 " literal: codexService,",
-                "broker/internal/broker/keychain.go: no KeychainServices list",
+                "src/broker/internal/broker/keychain.go: no KeychainServices list",
             ],
         )
 
     def test_missing_files_and_list_are_violations(self):
         files = {
             "docs/credentials.md": inventory(),
-            "orchestrator/src/ensemble/orchestrator/config.toml": CONFIG,
-            "broker/internal/broker/keychain.go": GO,
+            "src/ensemble/orchestrator/config.toml": CONFIG,
+            "src/broker/internal/broker/keychain.go": GO,
         }
         self.assertEqual(credentials.credentials_inventory(self.tree(files)), [])
         for rel in files:
@@ -186,12 +186,12 @@ class CredentialsInventory(Sample):
                 self.assertEqual(credentials.credentials_inventory(root), [f"{rel}: missing"])
         for go in ("package broker\n", "var KeychainServices = []string{\n}\n"):
             with self.subTest(go=go):
-                root = self.tree({**files, "broker/internal/broker/keychain.go": go})
+                root = self.tree({**files, "src/broker/internal/broker/keychain.go": go})
                 self.assertEqual(
                     credentials.credentials_inventory(root),
-                    ["broker/internal/broker/keychain.go: no KeychainServices list"],
+                    ["src/broker/internal/broker/keychain.go: no KeychainServices list"],
                 )
-        root = self.tree({**files, "orchestrator/src/ensemble/orchestrator/config.toml": "team ="})
+        root = self.tree({**files, "src/ensemble/orchestrator/config.toml": "team ="})
         found = credentials.credentials_inventory(root)
         self.assertEqual(len(found), 1)
-        self.assertTrue(found[0].startswith("orchestrator/src/ensemble/orchestrator/config.toml: "))
+        self.assertTrue(found[0].startswith("src/ensemble/orchestrator/config.toml: "))

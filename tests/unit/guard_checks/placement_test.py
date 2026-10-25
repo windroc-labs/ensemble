@@ -16,7 +16,7 @@ UNLISTED = (
 
 class PackageClimbs(Sample):
     def violations(self, text, sub="engine/sample.py"):
-        rel = f"delegate/{PKG}/delegate/{sub}"
+        rel = f"{PKG}/delegate/{sub}"
         root = self.tree({rel: text})
         return [v for v in placement.package_climbs(root) if v.startswith(f"{rel}:")]
 
@@ -85,12 +85,12 @@ class PackageClimbs(Sample):
             with self.subTest(text=text):
                 self.assertEqual(self.violations(text, sub), [])
         root = self.tree(
-            {"delegate/tests/test.py": "from pathlib import Path\nx = Path(__file__).parents[9]\n"}
+            {"tests/delegate/test.py": "from pathlib import Path\nx = Path(__file__).parents[9]\n"}
         )
         self.assertFalse(any("test.py" in v for v in placement.package_climbs(root)))
 
     def test_no_file_is_exempt(self):
-        rel = "utils/src/ensemble/utils/paths.py"
+        rel = "src/ensemble/utils/paths.py"
         root = self.tree(
             {
                 rel: "import os\nROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), *[os.pardir] * 4))\n"
@@ -104,42 +104,21 @@ class PackageClimbs(Sample):
 
 class NamespacePackage(Sample):
     def own(self, *extra: str) -> str:
-        files = [f"{top}/src/ensemble/{sub}/__init__.py" for top, sub in guards.PROJECTS.items()]
+        files = [f"src/ensemble/{sub}/__init__.py" for sub in guards.PROJECTS.values()]
+        files.append("src/broker/go.mod")
         return self.tree({f: "" for f in (*files, *extra)})
 
-    def test_only_the_own_subpackages_without_an_init_py_pass_and_leftovers_are_ignored(self):
+    def test_shared_namespace_and_broker_allow_only_the_source_packages(self):
         for extra, expected in (
-            (("session/src/__pycache__/x.pyc", f"session/{PKG}/__pycache__/x.pyc"), []),
+            (("src/__pycache__/x.pyc", f"{PKG}/__pycache__/x.pyc"), []),
+            (("src/.DS_Store", f"{PKG}/.DS_Store", "src/ensemble.egg-info/PKG-INFO"), []),
+            ((f"{PKG}/__init__.py",), [f"{PKG}/__init__.py: namespace package __init__.py"]),
             (
-                (
-                    "utils/src/.DS_Store",
-                    f"utils/{PKG}/.DS_Store",
-                    "manager/src/ensemble_manager.egg-info/PKG-INFO",
-                    f"session/{PKG}/x.egg-info/PKG-INFO",
-                ),
-                [],
-            ),
-            (
-                tuple(f"{top}/{PKG}/__init__.py" for top in guards.PROJECTS),
-                sorted(
-                    f"{top}/{PKG}/__init__.py: namespace package __init__.py"
-                    for top in guards.PROJECTS
-                ),
-            ),
-            (
-                (
-                    f"delegate/{PKG}/orchestrator/__init__.py",
-                    f"delegate/{PKG}/config.py",
-                    "utils/src/repo.py",
-                    f"orchestrator/{PKG}/session/__init__.py",
-                    "orchestrator/src/other/__init__.py",
-                ),
+                (f"{PKG}/config.py", "src/repo.py", "src/other/__init__.py"),
                 [
-                    f"delegate/{PKG}/config.py: not delegate's",
-                    f"delegate/{PKG}/orchestrator: not delegate's",
-                    f"orchestrator/{PKG}/session: not orchestrator's",
-                    "orchestrator/src/other: not orchestrator's",
-                    "utils/src/repo.py: not utils's",
+                    f"{PKG}/config.py: not a source package",
+                    "src/other: not a source package",
+                    "src/repo.py: not a source package",
                 ],
             ),
         ):
@@ -148,9 +127,9 @@ class NamespacePackage(Sample):
 
     def test_a_missing_subpackage(self):
         root = self.own()
-        os.remove(os.path.join(root, "manager", PKG, "manager", "__init__.py"))
-        os.rmdir(os.path.join(root, "manager", PKG, "manager"))
-        self.assertEqual(placement.namespace_package(root), [f"manager/{PKG}/manager: missing"])
+        os.remove(os.path.join(root, PKG, "manager", "__init__.py"))
+        os.rmdir(os.path.join(root, PKG, "manager"))
+        self.assertEqual(placement.namespace_package(root), [f"{PKG}/manager: missing"])
 
 
 class OrchestratorLayout(Sample):
@@ -158,22 +137,19 @@ class OrchestratorLayout(Sample):
         for files, expected in (
             (
                 {
-                    f"{ORCH_PROJECT}/{OPKG}/cli.py": 'if __name__ == "__main__": pass\n',
-                    f"{ORCH_PROJECT}/{OPKG}/engine/router.py": 'if __name__ == "__main__": pass\n',
+                    f"{OPKG}/cli.py": 'if __name__ == "__main__": pass\n',
+                    f"{OPKG}/engine/router.py": 'if __name__ == "__main__": pass\n',
                 },
-                [f"{ORCH_PROJECT}/{OPKG}/engine/router.py:1: entry outside cli.py"],
+                [f"{OPKG}/engine/router.py:1: entry outside cli.py"],
             ),
             (
                 {
-                    f"{ORCH_PROJECT}/{OPKG}/cli.py": "",
-                    f"{ORCH_PROJECT}/{OPKG}/engine/run.py": "from ensemble import delegate\n",
+                    f"{OPKG}/cli.py": "",
+                    f"{OPKG}/engine/run.py": "from ensemble import delegate\n",
                 },
-                [
-                    f"{ORCH_PROJECT}/{OPKG}/engine/run.py: no such module: a run is its Delegate's"
-                    " harness (FR-25)"
-                ],
+                [f"{OPKG}/engine/run.py: no such module: a run is its Delegate's harness (FR-25)"],
             ),
-            ({}, [f"{ORCH_PROJECT}/{OPKG}/cli.py: missing entry"]),
+            ({}, [f"{OPKG}/cli.py: missing entry"]),
         ):
             with self.subTest(files=sorted(files)):
                 self.assertEqual(placement.orchestrator_entry(self.tree(files)), expected)
@@ -181,18 +157,18 @@ class OrchestratorLayout(Sample):
     def test_session_imports_are_frozen_at_their_owners(self):
         root = self.tree(
             {
-                f"{ORCH_PROJECT}/{OPKG}/engine/router.py": "from ensemble.session import SessionError, RunLog\n",
-                f"{ORCH_PROJECT}/{OPKG}/engine/ops.py": "from ensemble.session import SessionError\n",
-                f"{ORCH_PROJECT}/{OPKG}/engine/new.py": "import ensemble.session as session\nsession.RunLog()\n",
+                f"{OPKG}/engine/router.py": "from ensemble.session import SessionError, RunLog\n",
+                f"{OPKG}/engine/ops.py": "from ensemble.session import SessionError\n",
+                f"{OPKG}/engine/new.py": "import ensemble.session as session\nsession.RunLog()\n",
             }
         )
         self.assertEqual(
             imports.orchestrator_session_imports(root),
             [
-                f"{ORCH_PROJECT}/{OPKG}/engine/new.py: {ORCH_PKG}.engine.new imports RunLog from ensemble.session; go through ensemble.delegate",
-                f"{ORCH_PROJECT}/{OPKG}/engine/ops.py: {ORCH_PKG}.engine.ops imports SessionError from ensemble.session; go through ensemble.delegate",
-                f"{ORCH_PROJECT}/{OPKG}/engine/router.py: {ORCH_PKG}.engine.router imports RunLog from ensemble.session; go through ensemble.delegate",
-                f"{ORCH_PROJECT}/{OPKG}/engine/router.py: {ORCH_PKG}.engine.router imports SessionError from ensemble.session; go through ensemble.delegate",
+                f"{OPKG}/engine/new.py: {ORCH_PKG}.engine.new imports RunLog from ensemble.session; go through ensemble.delegate",
+                f"{OPKG}/engine/ops.py: {ORCH_PKG}.engine.ops imports SessionError from ensemble.session; go through ensemble.delegate",
+                f"{OPKG}/engine/router.py: {ORCH_PKG}.engine.router imports RunLog from ensemble.session; go through ensemble.delegate",
+                f"{OPKG}/engine/router.py: {ORCH_PKG}.engine.router imports SessionError from ensemble.session; go through ensemble.delegate",
             ],
         )
 
@@ -200,7 +176,7 @@ class OrchestratorLayout(Sample):
 class PackageTop(Sample):
     def package(self, project, *entries):
         sub = guards.PROJECTS[project]
-        return {f"{project}/{PKG}/{sub}/{e}": "" for e in entries}
+        return {f"{PKG}/{sub}/{e}": "" for e in entries}
 
     def test_only_init_cli_engine_listed_subpackages_entry_modules_and_config(self):
         resource = {
@@ -232,9 +208,9 @@ class PackageTop(Sample):
                 "unlisted",
                 unlisted,
                 [
-                    f"delegate/{PKG}/delegate/misc: {UNLISTED}",
-                    f"manager/{PKG}/manager/y.py: {UNLISTED}",
-                    f"session/{PKG}/session/extra.py: {UNLISTED}",
+                    f"{PKG}/delegate/misc: {UNLISTED}",
+                    f"{PKG}/manager/y.py: {UNLISTED}",
+                    f"{PKG}/session/extra.py: {UNLISTED}",
                 ],
             ),
         ):
@@ -243,6 +219,4 @@ class PackageTop(Sample):
 
     def test_a_missing_entry(self):
         files = self.package("delegate", "__init__.py", "cli.py")
-        self.assertIn(
-            f"delegate/{PKG}/delegate/engine: missing", placement.package_top(self.tree(files))
-        )
+        self.assertIn(f"{PKG}/delegate/engine: missing", placement.package_top(self.tree(files)))

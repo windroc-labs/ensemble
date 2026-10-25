@@ -9,8 +9,8 @@ class UnitImports(Case):
     def test_selection_preserves_unit_paths_github_tests_and_allowlist(self):
         root = Path(self.home)
         selected = (
-            "manager/tests/unit/engine/a_test.py",
-            "session/tests/unit/b_test.py",
+            "tests/manager/unit/engine/a_test.py",
+            "tests/session/unit/b_test.py",
             "tests/unit/helper.py",
             "nested/unit/tests/c.py",
             ".github/escape_test.py",

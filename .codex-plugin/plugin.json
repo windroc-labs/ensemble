@@ -6,11 +6,9 @@
     "name": "Windroc"
   },
   "license": "MIT",
-  "hooks": "./manager/hooks/manual.json",
+  "hooks": "./hooks/manual.json",
   "skills": [
-    "./delegate/skills/",
-    "./orchestrator/skills/",
-    "./manager/skills/"
+    "./skills/"
   ],
   "interface": {
     "displayName": "Ensemble"

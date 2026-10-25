@@ -10,10 +10,9 @@ from ensemble.delegate import composer
 from ensemble.delegate.composer import Composer
 from ensemble.delegate.config import CONFIG
 from ensemble.delegate.event.outcome import SCHEMA
-
-from delegate.tests.unit.composer.prompts import composed
-from delegate.tests.unit.composer.shipped import generic_names, runs, team_texts, words
 from tests.case import REPO, Case
+from tests.delegate.unit.composer.prompts import composed
+from tests.delegate.unit.composer.shipped import generic_names, runs, team_texts, words
 
 TICKET = re.compile(r"TASK-\d+")
 
@@ -118,7 +117,7 @@ class DelegatePolicy(Case):
 
 class SessionPolicy(Case):
     def test_clients_contain_no_role_policy_names(self):
-        root = Path(REPO) / "session" / "src" / "ensemble" / "session" / "clients"
+        root = Path(REPO) / "src" / "ensemble" / "session" / "clients"
         forbidden = ("role_policy", "permission-mode", "approval_policy", "approvals_reviewer")
         for path in root.rglob("*.py"):
             for name in forbidden:
@@ -126,7 +125,7 @@ class SessionPolicy(Case):
                     self.assertNotIn(name, path.read_text())
 
     def test_recovery_helpers_use_driver_selection_without_literal_builders(self):
-        root = Path(REPO) / "session" / "src" / "ensemble" / "session" / "clients"
+        root = Path(REPO) / "src" / "ensemble" / "session" / "clients"
         for client in ("claude", "codex"):
             common = root / client / "common.py"
             paths = [common] if common.is_file() else (root / client / "common").rglob("*.py")

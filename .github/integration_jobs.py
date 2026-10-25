@@ -23,7 +23,7 @@ DURATIONS = ROOT / ".github/integration_durations.json"
 def directories(root):
     return sorted(
         str(path.relative_to(root))
-        for pattern in ("*/tests/integration", "*/tests/*/integration")
+        for pattern in ("tests/*/integration",)
         for path in root.glob(pattern)
         if (path / "__init__.py").is_file()
     )

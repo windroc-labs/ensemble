@@ -1,5 +1,16 @@
 # Upgrading
 
+## Unified source layout
+
+After updating the plugin to the `src/ensemble/` layout, refresh the launchers once:
+`<plugin dir>/skills/manage/scripts/ctmux --install`. Use the plugin path directly because an
+older installed `ctmux` launcher still looks for `manager/skills/manage/scripts/ctmux`.
+Rerunning `scripts/install.sh` after the plugin update does this automatically, including when
+all five launchers already exist. Python imports and user configuration stay the same.
+
+Docker-host users must rerun `scripts/install.sh` after the release containing this layout change
+to reinstall the broker. An older broker fails on the new layout with `session/src unreadable`.
+
 ## With scripts/install.sh
 
 On a machine already set up, by hand or by [`scripts/install.sh`](../README.md#install), run the same command again, with

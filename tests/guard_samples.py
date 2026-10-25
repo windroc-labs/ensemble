@@ -29,11 +29,11 @@ def flat(suite):
 
 
 def own_case(test, top):
-    project = top.split("/")[0]
+    project = top.split("/")[1] if top.startswith("tests/") else top
     trees = (
         [top]
         if project not in guards.LAYERS
-        else [f"{p}/tests" for p in guards.LAYERS[: guards.LAYERS.index(project) + 1]]
+        else [f"tests/{p}" for p in guards.LAYERS[: guards.LAYERS.index(project) + 1]]
     )
     roots = [os.path.realpath(os.path.join(REPO, tree)) for tree in trees]
     return any(
@@ -44,15 +44,6 @@ def own_case(test, top):
 
 
 class Sample(Case):
-    def wrap_orchestrator(self, root):
-        return self.tree(
-            {
-                f"orchestrator/{p.relative_to(root)}": p.read_text()
-                for p in Path(root).rglob("*")
-                if p.is_file()
-            }
-        )
-
     def tree(self, files: dict[str, str]) -> str:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -68,7 +59,7 @@ def test_suites(root, top):
     base = Path(root, top)
     owners = [base, *(p for p in sorted(base.iterdir()) if (p / "__init__.py").is_file())]
     return [
-        (str(owner / kind), root if owner == base else str(base))
+        (str(owner / kind), root)
         for owner in owners
         for kind in ("unit", "integration")
         if (owner / kind / "__init__.py").is_file()

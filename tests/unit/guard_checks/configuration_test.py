@@ -3,7 +3,7 @@ import os
 
 from tests.case import ORCH_ROOT, REPO
 from tests.guard_checks import configuration, ownership
-from tests.guard_data.orchestrator import CONFIG_PY, LOAD_HELPERS, ORCH_PROJECT
+from tests.guard_data.orchestrator import CONFIG_PY, LOAD_HELPERS
 from tests.guard_data.session import SESSION_SRC
 from tests.guard_samples import Sample
 
@@ -25,14 +25,14 @@ class ConfigOnce(Sample):
                     f"{OPKG}/engine/promote.py": (
                         "import ensemble.orchestrator.engine.config as c\n\nclass P:\n    def main(self):\n        c.load()\n"
                     ),
-                    "src/run.py": "import ensemble.orchestrator.engine.config\n\ndef main():\n    ensemble.orchestrator.engine.config.load()\n",
+                    f"{OPKG}/run.py": "import ensemble.orchestrator.engine.config\n\ndef main():\n    ensemble.orchestrator.engine.config.load()\n",
                 },
                 [
                     f"{OPKG}/engine/promote.py:5: {self.LOAD}",
                     f"{OPKG}/engine/prune.py:8: {self.LOAD}",
                     f"{OPKG}/engine/writeback.py:5: {self.LOAD}",
                     f"{OPKG}/engine/writeback.py:6: {self.USE_LOGS}",
-                    f"src/run.py:4: {self.LOAD}",
+                    f"{OPKG}/run.py:4: {self.LOAD}",
                 ],
             ),
             (
@@ -46,21 +46,19 @@ class ConfigOnce(Sample):
                     f"{OPKG}/engine/promote.py": (
                         "from ensemble.orchestrator.engine import config\nfrom ensemble.orchestrator.engine import log as linear\ndef main():\n    try:\n        cfg = config.load()\n    except SystemExit:\n        linear.use_logs(None)\n"
                     ),
-                    "src/config.py": "def load():\n    _runnable()\n",
+                    f"{OPKG}/config.py": "def load():\n    _runnable()\n",
                 },
                 [
-                    "src/config.py:2: calls _runnable",
+                    f"{OPKG}/config.py:2: calls _runnable",
                     f"{OPKG}/engine/run.py:2: calls ensemble.orchestrator.engine.config._runnable",
                 ],
             ),
         ):
             with self.subTest(files=sorted(files)):
-                self.assertEqual(
-                    configuration.config_once(self.wrap_orchestrator(self.tree(files))), expected
-                )
+                self.assertEqual(configuration.config_once(self.tree(files)), expected)
 
     def test_the_load_helpers_are_config_py_functions(self):
-        with open(os.path.join(REPO, ORCH_PROJECT, CONFIG_PY), encoding="utf-8") as f:
+        with open(os.path.join(REPO, CONFIG_PY), encoding="utf-8") as f:
             defined = {n.name for n in ast.parse(f.read()).body if isinstance(n, ast.FunctionDef)}
         self.assertLessEqual(set(LOAD_HELPERS), defined)
 
@@ -72,7 +70,7 @@ class ConfigOnce(Sample):
                 encoding="utf-8",
             ) as f:
                 files[f"{OPKG}/not_{name}"] = f.read()
-        found = configuration.config_once(self.wrap_orchestrator(self.tree(files)))
+        found = configuration.config_once(self.tree(files))
         self.assertEqual(
             {(f.split(":")[0], f.split(": ", 1)[1]) for f in found},
             {(rel, call) for rel in files for call in (self.LOAD, self.USE_LOGS)},
@@ -89,13 +87,13 @@ class OrchestratorAbsent(Sample):
 
 class ExplicitKeys(Sample):
     def test_each_local_example_key_needs_a_real_line_in_the_packaged_defaults(self):
-        orch = f"{ORCH_PROJECT}/{OPKG}/config.toml"
+        orch = f"{OPKG}/config.toml"
         for name, files, expected in (
             (
                 "packaged defaults supply the keys",
                 {
                     SESSION_SRC + "config.toml": "[hosts.tmux]\nstatus_line = false\n",
-                    "delegate/src/ensemble/delegate/config.toml": (
+                    "src/ensemble/delegate/config.toml": (
                         "# local: [session.hosts.tmux]\n# local: status_line = true\n"
                     ),
                 },
@@ -114,7 +112,7 @@ class ExplicitKeys(Sample):
             (
                 "a real line, its shape suffix or an empty table",
                 {
-                    "delegate/src/ensemble/delegate/config.toml": (
+                    "src/ensemble/delegate/config.toml": (
                         'cwd = ""\n# local: cwd = "/x"\n[output]\ntype = "local"\ndir = ""\n[roles.a.output]\ntype = "x"\n# local: [roles.b]\n# local: cwd = "/y"\n# local: [roles.b.output]\n# local: dir = "d"\n'
                     ),
                     orch: (
@@ -152,19 +150,19 @@ class ExplicitKeys(Sample):
                 SESSION_SRC + "config.toml": (
                     "[hosts.tmux]\nx = 1\n# local: [hosts.tmux]\n# local: status_line = true\n"
                 ),
-                "delegate/src/ensemble/delegate/config.toml": (
+                "src/ensemble/delegate/config.toml": (
                     '# local: team_dirs = ["~/t"]\n[roles.a]\nt = 1\n# local: [roles.a]\n# local: [roles.a.deep]\n# local: y = 2\n'
                 ),
-                f"{ORCH_PROJECT}/{OPKG}/config.toml": "# local: [bad\n",
+                f"{OPKG}/config.toml": "# local: [bad\n",
             }
         )
-        bad = f"{ORCH_PROJECT}/{OPKG}/config.toml: "
+        bad = f"{OPKG}/config.toml: "
         found = configuration.explicit_keys(root)
         self.assertEqual(
             [f for f in found if not f.startswith(bad)],
             [
-                "delegate/src/ensemble/delegate/config.toml: `# local:` key roles.a.deep.y has no real line",
-                "delegate/src/ensemble/delegate/config.toml: `# local:` key team_dirs has no real line",
+                "src/ensemble/delegate/config.toml: `# local:` key roles.a.deep.y has no real line",
+                "src/ensemble/delegate/config.toml: `# local:` key team_dirs has no real line",
                 SESSION_SRC + "config.toml: `# local:` key hosts.tmux.status_line has no real line",
             ],
         )
