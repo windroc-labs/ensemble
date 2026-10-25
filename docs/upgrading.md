@@ -23,5 +23,5 @@ cleanup ownership ([Credentials](credentials.md#opencode-provider-api-keys)).
 
 With OpenCode selected, an existing stable 1.x executable on `PATH` at or above the minimum version is reused.
 Otherwise, the installer installs a private copy and offers a shell profile addition for `~/.ensemble/opencode/bin`;
-accept it, then open a new terminal to run `opencode` directly. A rerun can migrate an installer-written executable
-path when that program is removed or replaced; user-written paths, the selected provider and credentials are kept.
+accept it, then open a new terminal to run `opencode` directly. Existing executable paths, the selected provider
+and credentials are kept on rerun.
