@@ -43,7 +43,8 @@ so drop it to shrink the image (a Dockerfile seeded before this change has `@ope
 
 After every install or reinstall, run all three logins: `login claude`, `login github ensemble-bot` and
 `login codex` ([Codex](#codex)), plus `login claude <name>` for each other registered
-[Claude account](#claude-accounts) and `login opencode <name>` for each configured OpenCode provider. A reinstalled broker cannot read the old items without asking; `start` never asks and instead names the login to rerun. Each login asks its terminal questions first, without
+[Claude account](#claude-accounts), `login opencode <name>` for each configured OpenCode provider and
+`login env <name>` for each [environment secret](#environment-secrets). A reinstalled broker cannot read the old items without asking; `start` never asks and instead names the login to rerun. Each login asks its terminal questions first, without
 echo:
 
 | Login | Terminal | macOS dialog, at most | Click |
@@ -52,7 +53,8 @@ echo:
 | `login github ensemble-bot [--key-file <pem> --app-id <ID>]` | the login keychain password, when a step is not yet in place | with `--key-file`, none; else one change-access dialog (Deny / Allow), after the password | Allow |
 | `login codex` | the login keychain password, when a step is not yet in place, before the browser opens | one change-access dialog (Deny / Allow), after the password | Allow |
 | `login opencode <name>` | the provider's API key; the login keychain password only when the item's access needs a change | at most one change-access dialog (Deny / Allow), after the password | Allow |
-| `start` | none | none: a token or key it cannot read without one names unlocking the login keychain or the login to run (`keychain_failed` for an OpenCode key; `login_required` for other clients) | |
+| `login env <name>` | the value, hidden, unless stdin is a pipe or file; the login keychain password only when the item's access needs a change, from the terminal | at most one change-access dialog (Deny / Allow), after the password | Allow |
+| `start` | none | none: a token or key it cannot read without one names unlocking the login keychain or the login to run (`keychain_failed` for an OpenCode key or an environment secret needing approval; `login_required` for other clients and a missing environment secret) | |
 
 What each login hands a container: [Credentials › Who logs in](credentials.md#who-logs-in).
 
@@ -207,11 +209,41 @@ EOF
 
 It prints the container name (`C` below) and client versions.
 
+## Environment secrets
+
+Named values a container gets by reference, such as a password, an API key or an ssh private key. Import each once
+per broker install:
+
+```sh
+"$B" login env dummy                      # type or paste the value; nothing echoes
+"$B" login env mini-ssh < ~/.ssh/id_mini  # a pipe or file: stored verbatim, newlines included
+```
+
+It saves the value, 1 to 16384 bytes, in broker-only item `ensemble-env/<name>` / `<name>`, replacing an earlier one.
+Names match `[a-z0-9][a-z0-9._-]{0,63}`. With a pipe or file on stdin, the keychain password, when needed, is read
+from the terminal. The value never goes on a command line.
+
+A start manifest lists the secrets it wants, at most 16:
+
+```json
+"secrets": [{"item": "ensemble-env/dummy", "file": "dummy.txt"}]
+```
+
+`item` must be an `ensemble-env/<name>` reference; any other keychain service, the broker's own and Linear's
+included, is `manifest_rejected`. `file` is one name of at most 255 bytes: no `/`, no control character, not `.`
+or `..`, and not repeated in the list. The broker checks both itself whatever sent the manifest. It reads each
+item at `start` only, after the manifest checks and before any container exists, so a missing or unreadable item
+refuses the start, naming it and the login to run. It then writes each value to
+`/run/ensemble/secrets/env/<file>` in the container's secrets tmpfs, 0400, owner `agent`, through `docker exec`
+stdin: never in the container's env, arguments or image. The copy goes with the container. Who can read the item
+and the copy, and how to revoke: [Credentials › Environment secrets](credentials.md#environment-secrets).
+
 ## What a container gets
 
 - User `agent`, all capabilities dropped, `no-new-privileges`, bridge network; no Docker socket.
 - A workspace volume at cwd; Claude and OpenCode have their own client-state bind, Codex only its session history.
-- Credentials on tmpfs, readable by the container's processes ([Credentials](credentials.md)).
+- Credentials on tmpfs, readable by the container's processes ([Credentials](credentials.md)); each listed
+  [environment secret](#environment-secrets) at `/run/ensemble/secrets/env/<file>`.
 - Tools from your `~/.ensemble/docker/worker/Dockerfile`, plus ensemble, clients, plugins and credential wrappers.
 - Each checkout runs its own branch's `.githooks/` through `core.hooksPath = .githooks`; a checkout without that directory runs none.
 - With GitHub configured, commits use the App's bot identity.
@@ -227,7 +259,7 @@ It prints the container name (`C` below) and client versions.
 
 ## Audit log
 
-Every `start`, `refresh` and `close` appends to `~/Library/Logs/ensemble/broker.jsonl`, recording credentials issued, renewed, withdrawn or revoked, never a token or key. Past 10 MiB it rotates to `broker.jsonl.1`. An unwritable log may lose records. OpenCode provider keys have no audit line. No container mounts it.
+Every `start`, `refresh` and `close` appends to `~/Library/Logs/ensemble/broker.jsonl`, recording credentials issued, renewed, withdrawn or revoked, never a token or key. Past 10 MiB it rotates to `broker.jsonl.1`. An unwritable log may lose records. OpenCode provider keys have no audit line. Each environment secret a start writes is an `env-secret` credential naming its `item`, never its value. No container mounts it.
 
 ```sh
 jq 'select(.session=="NAME")' ~/Library/Logs/ensemble/broker.jsonl
