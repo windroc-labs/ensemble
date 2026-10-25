@@ -14,7 +14,6 @@ from ensemble.orchestrator.engine.types import AppKind, LinearApp
 from ensemble.orchestrator.trackers.linear import client
 from orchestrator_tests.case import system_probe
 
-NOW = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
 SECRET = "app-SECRET-sentinel"
 OLD = "tok-OLD-sentinel"
 NEW = "tok-NEW-sentinel"
@@ -30,11 +29,21 @@ HARNESS = LinearApp(
 SENTINELS = (SECRET, OLD, NEW, SECRET.encode().hex(), OLD.encode().hex(), NEW.encode().hex())
 
 
-def record(token=OLD, days=10.0, now=NOW):
+def record(token=OLD, days=10.0):
+    """A token record expiring days from now."""
+    expires = datetime.now(UTC) + timedelta(days=days)
     return json.dumps(
-        {"access_token": token, "expires_at": (now + timedelta(days=days)).isoformat()},
-        separators=(",", ":"),
+        {"access_token": token, "expires_at": expires.isoformat()}, separators=(",", ":")
     )
+
+
+def renewed(case, value, since):
+    """Asserts value is NEW's record, expiring 30 days after the renewal (made after since)."""
+    found = json.loads(value)
+    expires = datetime.fromisoformat(found.pop("expires_at"))
+    case.assertEqual(found, {"access_token": NEW})
+    case.assertLessEqual(since + timedelta(days=30), expires)
+    case.assertLessEqual(expires, datetime.now(UTC) + timedelta(days=30))
 
 
 class Keychain:

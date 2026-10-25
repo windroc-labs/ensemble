@@ -89,7 +89,6 @@ from orchestrator_tests.unit.board_ids import HARNESS_IDENTITY, HEADER, TASK_GRO
 from orchestrator_tests.unit.board_ids import STATES as IDS_BY_KEY
 from orchestrator_tests.unit.board_ids import role as role_table
 from orchestrator_tests.unit.delegate_fixture import provider
-from orchestrator_tests.unit.keychain_fixtures import NOW as TOKEN_NOW
 from orchestrator_tests.unit.keychain_fixtures import SECRET as APP_SECRET
 from orchestrator_tests.unit.keychain_fixtures import Endpoint, Keychain, record, token_http_error
 from orchestrator_tests.unit.outage import FAILURES, FIELDS, failing
@@ -1701,7 +1700,6 @@ class HarnessToken(TickBase):
         with (
             mock.patch("subprocess.run", self.keychain_items),
             mock.patch.object(urllib.request, "urlopen", side_effect=self.endpoint),
-            mock.patch.object(client, "_now", return_value=TOKEN_NOW),
         ):
             return self.tick(client.linear_gql, *argv)
 

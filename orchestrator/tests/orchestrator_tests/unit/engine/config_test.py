@@ -1261,8 +1261,8 @@ class TrackerChoice(ConfigFile, Case):
         linear = cfg.linear
         self.assertIsInstance(linear, config.LinearSettings)
         self.assertEqual(
-            (linear.team, linear.states, linear.harness, linear.apps, linear.task_label_group),
-            (TEAM, STATES, HARNESS, (HARNESS,), TASK_GROUP),
+            (linear.team, linear.states, linear.harness, linear.task_label_group),
+            (TEAM, STATES, HARNESS, TASK_GROUP),
         )
         self.assertEqual(
             (linear.human_members, linear.task_labels, linear.agent_label_group),

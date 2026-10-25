@@ -140,9 +140,10 @@ def main(argv=None):
             "  Operational commands require configured orchestrator and Delegate\n"
             '  settings. [orchestrator] tracker picks the board: "local" (the default)\n'
             "  reads the directory $ENSEMBLE_BOARD_DIR (default ~/.ensemble/board);\n"
-            '  "linear" reaches Linear through the linear.harness_key Keychain service\n'
-            "  (the issue commands: linear.manager_key), role keys identifying the\n"
-            "  accounts used for issue work. Python 3.11+ is needed.\n"
+            '  "linear" reaches Linear as the [linear.harness] OAuth app, whose token any\n'
+            "  command renews before a call when under 5 days are left (the issue\n"
+            "  commands: linear.manager_key), role keys identifying the accounts used\n"
+            "  for issue work. Python 3.11+ is needed.\n"
             "  Router launches need the configured client/Delegate and its Host tools.\n"
             "  Router/promote/prune prepend ENSEMBLE_PATH, then this installation's bin,\n"
             "  then default executable directories. Logs: STATE/logs/orchestrator.jsonl;\n"
@@ -434,11 +435,11 @@ def _log_ignored(issue, ignored):
 
 def _writeback(cfg, issue, workdir):
     lines = sys.stdin.read().splitlines()
+    TRACKERS[cfg.tracker].credentials(cfg, "writeback", dry=False)
     try:
         if len(lines) != 1:
             raise ValueError(f"want one DelegateEvent line on stdin, got {len(lines)}")
         event = DelegateEvent.parse(lines[0])
-        TRACKERS[cfg.tracker].credentials(cfg, "writeback", dry=False)
         accounts = partial(TRACKERS[cfg.tracker].claimed, client.linear_gql, cfg)
         return 0 if writeback.deliver(cfg, issue, workdir, event, accounts=accounts) else 1
     except (ValueError, ConfigError) as error:

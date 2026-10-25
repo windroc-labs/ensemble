@@ -37,7 +37,6 @@ from orchestrator_tests.prune_fixtures import (
 )
 from orchestrator_tests.unit import promote_fixtures as tp
 from orchestrator_tests.unit.board_ids import FINISHED, HARNESS_IDENTITY
-from orchestrator_tests.unit.keychain_fixtures import NOW as TOKEN_NOW
 from orchestrator_tests.unit.keychain_fixtures import SECRET as APP_SECRET
 from orchestrator_tests.unit.keychain_fixtures import Endpoint, Keychain, record, token_http_error
 from orchestrator_tests.unit.run_fixtures import CORE_LOCAL, logged, show
@@ -1084,7 +1083,6 @@ class PruneCommand(PruneScenario):
                 stack.enter_context(
                     mock.patch.object(urllib.request, "urlopen", side_effect=self.endpoint)
                 )
-                stack.enter_context(mock.patch.object(client, "_now", return_value=TOKEN_NOW))
             code = prune.main(
                 list(argv),
                 trackers=cli.TRACKERS,

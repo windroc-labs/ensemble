@@ -4,6 +4,7 @@ import io
 import json
 import os
 import plistlib
+import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -28,6 +29,8 @@ from orchestrator_tests.case import REPO, Case
 from orchestrator_tests.linear_run_case import SID, ReadyDelegate, RunCase
 from orchestrator_tests.unit import run_fixtures
 from orchestrator_tests.unit.board_ids import HARNESS_IDENTITY
+from orchestrator_tests.unit.keychain_fixtures import SECRET as APP_SECRET
+from orchestrator_tests.unit.keychain_fixtures import Endpoint, Keychain, record, token_http_error
 from orchestrator_tests.unit.run_fixtures import logged, show
 from orchestrator_tests.unit.streams import Stderr
 
@@ -46,7 +49,7 @@ class Commands(Case):
 class Wirings(run_fixtures.Base):
     """Each tracker kind's engine wiring: its run reader, role keys and write-back accounts."""
 
-    def test_linear_writes_as_the_role_key_and_the_harness_key(self):
+    def test_linear_writes_as_the_role_key_and_the_harness_app(self):
         cfg = config.load()
         gql = mock.Mock(return_value={})
         linear = cli.TRACKERS[TrackerKind.LINEAR]
@@ -72,7 +75,7 @@ class Wirings(run_fixtures.Base):
             c=ops.client_id(SID, "session"),
         )
 
-    def test_linear_reads_a_run_as_the_harness_key(self):
+    def test_linear_reads_a_run_as_the_harness_app(self):
         cfg = config.load()
         reader = cli.TRACKERS[TrackerKind.LINEAR].reader(mock.Mock(), cfg)
         self.assertEqual(
@@ -84,40 +87,47 @@ class Wirings(run_fixtures.Base):
             ),
         )
 
+    def renewal(self, days, answer):
+        """A harness call over a fake Keychain and token endpoint: its stderr."""
+        keychain = Keychain(
+            {
+                HARNESS_IDENTITY.token_service: record(days=days),
+                HARNESS_IDENTITY.secret_service: APP_SECRET,
+            }
+        )
+        err = io.StringIO()
+        with (
+            mock.patch("subprocess.run", keychain),
+            mock.patch.object(urllib.request, "urlopen", side_effect=Endpoint(answer)),
+            redirect_stderr(err),
+        ):
+            client.linear_gql("query { viewer { id } }", identity=HARNESS_IDENTITY)
+        return err.getvalue()
+
     def test_linear_credentials_set_each_commands_renewal_policy(self):
         cfg = config.load()
         event_log.use_logs(cfg.logs_dir)
-        linear = cli.TRACKERS[TrackerKind.LINEAR]
-        for src, dry in (("promote", False), ("router", True)):
-            with self.subTest(src=src, dry=dry), mock.patch.object(client, "use") as use:
-                linear.credentials(cfg, src, dry=dry)
-                kw = use.call_args.kwargs
-                self.assertEqual((kw["renew"], kw["show"] is None), (not dry, not dry))
-                kw["report"]("harness", "HTTP 401")
-                if dry:
-                    kw["show"]("harness", {"days_left": 4.0})
-        lines = [(e["src"], show(e)) for e in logged()]
-        self.assertEqual(lines, [("promote", "token-error identity=harness reason=HTTP 401")])
+        cli.TRACKERS[TrackerKind.LINEAR].credentials(cfg, "promote", dry=False)
+        self.assertEqual(self.renewal(3, token_http_error(401)), "")
+        self.assertEqual(
+            [(e["src"], show(e)) for e in logged()],
+            [("promote", "token-error identity=harness reason=HTTP 401")],
+        )
+        cli.TRACKERS[TrackerKind.LINEAR].credentials(cfg, "router", dry=True)
+        shown = [
+            json.loads(line) for line in self.renewal(3, AssertionError("request")).splitlines()
+        ]
+        self.assertEqual(
+            [(e["src"], e["kind"], e["identity"], round(e["days_left"])) for e in shown],
+            [("router", "token", "harness", 3)],
+        )
+        self.assertEqual(len(logged()), 1)
 
     def test_a_local_board_sets_no_renewal_policy(self):
         board = os.path.realpath(os.path.join(self.work, "board"))
         cfg = replace(config.load(), tracker=TrackerKind.LOCAL, linear=None, board=board)
-        with mock.patch.object(client, "use", side_effect=AssertionError("policy")):
-            cli.TRACKERS[TrackerKind.LOCAL].credentials(cfg, "prune", dry=True)
-
-    def test_writeback_renews_as_writeback(self):
-        cfg = config.load()
-        event_log.use_logs(cfg.logs_dir)
-        with (
-            mock.patch.object(cli.sys, "stdin", io.StringIO("an event\n")),
-            mock.patch.object(cli.DelegateEvent, "parse"),
-            mock.patch.object(cli.writeback, "deliver", return_value=True),
-            mock.patch.object(client, "use") as use,
-        ):
-            self.assertEqual(cli._writeback(cfg, "TASK-1", self.work), 0)
-        self.assertTrue(use.call_args.kwargs["renew"])
-        use.call_args.kwargs["report"]("harness", "HTTP 401")
-        self.assertEqual([e["src"] for e in logged()], ["writeback"])
+        cli.TRACKERS[TrackerKind.LOCAL].credentials(cfg, "prune", dry=True)
+        self.assertIn("token-error: harness: HTTP 401", self.renewal(3, token_http_error(401)))
 
     def test_a_local_board_writes_as_one_tracker_with_no_keys(self):
         board = os.path.realpath(os.path.join(self.work, "board"))
@@ -368,8 +378,8 @@ class Wirings(run_fixtures.Base):
         with redirect_stdout(output), self.assertRaises(SystemExit):
             cli.main(["--help"])
         self.assertIn(
-            "reaches Linear through the linear.harness_key Keychain service (the issue"
-            " commands: linear.manager_key)",
+            "reaches Linear as the [linear.harness] OAuth app, whose token any command renews"
+            " before a call when under 5 days are left (the issue commands: linear.manager_key)",
             " ".join(output.getvalue().split()),
         )
 
@@ -755,6 +765,29 @@ class OnALocalBoard(RunCase):
 
 
 class WritebackUsage(RunCase):
+    def test_writeback_renews_as_writeback(self):
+        result, _, _ = _call(
+            ["writeback", "--issue", "TASK-1", "--workdir", self.cfg.issue_workdir("TASK-1")],
+            stdin="{\n",
+        )
+        self.assertEqual(result, 2)
+        keychain = Keychain(
+            {
+                HARNESS_IDENTITY.token_service: record(days=3),
+                HARNESS_IDENTITY.secret_service: APP_SECRET,
+            }
+        )
+        with (
+            mock.patch("subprocess.run", keychain),
+            mock.patch.object(
+                urllib.request, "urlopen", side_effect=Endpoint(token_http_error(401))
+            ),
+        ):
+            client.linear_gql("query { viewer { id } }", identity=HARNESS_IDENTITY)
+        self.assertIn(
+            ("writeback", "token-error"), [(e["src"], e["kind"]) for e in logged(self.cfg.logs_dir)]
+        )
+
     def test_what_is_not_one_writable_event_exits_2_without_output(self):
         begun = json.dumps({"v": 1, "kind": "begun", "sid": SID, "attempt": 1})
         other = "9c1d2e3f-4a5b-4c6d-8e7f-a0b1c2d3e4f5"

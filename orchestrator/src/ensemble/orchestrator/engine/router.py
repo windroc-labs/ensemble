@@ -27,8 +27,10 @@ Arguments and options:
   Valued options occur at most once; boolean flags may repeat with no change.
 
 Prerequisites and effects:
-  Requires configured roles and board (Linear: [linear], harness/role Keychain
-  credentials and access) and the selected Delegate/client executable. See
+  Requires configured roles and board (Linear: [linear], the [linear.harness]
+  OAuth app, whose token a run renews when under 5 days are left (--dry-run
+  never; it logs the days left), role Keychain keys and access) and the
+  selected Delegate/client executable. See
   ensemble-orchestrator --help for configuration, executable lookup and Record schema.
   Execution can claim/move issues, post comments or write back ended outcomes.
   A launch prepares input, records a runs.jsonl row and detaches a LinearRun;

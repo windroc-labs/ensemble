@@ -57,10 +57,6 @@ def use(*, renew=True, report=None, show=None):
     _shown.clear()
 
 
-def _now():
-    return datetime.now(UTC)
-
-
 def operation(query):
     m = re.match(r"[^{]*\{\s*([_A-Za-z]\w*)", query)
     return m[1] if m else "?"
@@ -202,7 +198,7 @@ class _RenewalFailed(Exception):
 
 def _token(app, timeout):
     """app's token, renewed first when due and the policy allows; KeychainError when none usable."""
-    held, now = _read(app.token_service, timeout), _now()
+    held, now = _read(app.token_service, timeout), datetime.now(UTC)
     if _policy.show and app.token_service not in _shown:
         _shown.add(app.token_service)
         _policy.show(app.name, _status(held, now))
@@ -250,8 +246,7 @@ def _parse(value):
 
 
 def _renew(app, held, now, timeout):
-    """A new token for app, written to its token entry; _RenewalFailed with a reason holding no
-    secret or token."""
+    """A new token, stored; _RenewalFailed's reason holds no secret or token."""
     secret = None
     try:
         secret = _secret(app, timeout)
@@ -332,8 +327,8 @@ def _oauth_error(e):
 
 
 def _write(service, value, timeout):
-    """value as service's password: its command on security -i's stdin, never in argv, then
-    re-read, since security -i can exit 0 when its command fails."""
+    """value as service's password, on security -i's stdin (never argv); re-read, as security -i
+    can exit 0 on a failed command."""
     attrs = _security(["find-generic-password", "-s", service], timeout)
     found = ACCOUNT.search(attrs.stdout or "") if attrs.returncode == 0 else None
     account = found[1] if found and KEYCHAIN_NAME.fullmatch(found[1]) else service

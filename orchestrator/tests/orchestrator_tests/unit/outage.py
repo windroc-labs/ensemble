@@ -1,7 +1,6 @@
 import io
 import os
 import urllib.request
-from datetime import UTC, datetime
 from unittest import mock
 
 from ensemble.orchestrator.engine.types import LinearKey
@@ -28,7 +27,7 @@ def failing(error, gql=None, ops=None):
             return gql(query, **v)
         failed.append((query, v))
         v = {"identity": LinearKey("linear-api-key"), **v}
-        token = record("lin_api_outage", days=20, now=datetime.now(UTC))
+        token = record("lin_api_outage", days=20)
         with (
             mock.patch.dict(os.environ),
             mock.patch.object(urllib.request, "urlopen", side_effect=error()),

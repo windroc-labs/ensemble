@@ -7,7 +7,7 @@ import os
 import time
 import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -30,9 +30,9 @@ from orchestrator_tests.unit.keychain_fixtures import (
     Endpoint,
     Keychain,
     record,
+    renewed,
     token_http_error,
 )
-from orchestrator_tests.unit.keychain_fixtures import NOW as NOW_TOKEN
 from orchestrator_tests.unit.keychain_fixtures import SECRET as APP_SECRET
 from orchestrator_tests.unit.outage import FAILURES, FIELDS, failing
 from orchestrator_tests.unit.promote_fixtures import (
@@ -704,9 +704,6 @@ class HarnessToken(Base):
 
     def setUp(self):
         super().setUp()
-        clock = mock.patch.object(client, "_now", return_value=NOW_TOKEN)
-        clock.start()
-        self.addCleanup(clock.stop)
         self.ready("DR-1")
 
     def promote(self, days, answer=None, *argv):
@@ -729,12 +726,10 @@ class HarnessToken(Base):
         return json.loads(self.keychain.value(HARNESS_IDENTITY.token_service))
 
     def test_4_days_left_renews_before_the_first_call_and_6_does_not(self):
+        since = datetime.now(UTC)
         self.assertEqual(self.promote(4), 0)
         self.assertEqual([t["scope"] for t in self.endpoint.tokens], ["read,write"])
-        self.assertEqual(
-            self.stored(),
-            {"access_token": NEW, "expires_at": (NOW_TOKEN + timedelta(days=30)).isoformat()},
-        )
+        renewed(self, self.keychain.value(HARNESS_IDENTITY.token_service), since)
         self.assertEqual(
             {r.get_header("Authorization") for r in self.endpoint.graphql}, {f"Bearer {NEW}"}
         )

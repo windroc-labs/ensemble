@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import sys
+from enum import StrEnum
 from types import MappingProxyType
 
 import ensemble.utils as utils
@@ -63,10 +64,20 @@ LINEAR_KEYS = {
 }
 ROLE_KEYS = {"max_runs"}
 LINEAR_ROLE_KEYS = {"account", "key"}
-APP_KEYS = ("client_id", "secret_service", "token_service", "user_id")
+
+
+class AppKey(StrEnum):
+    """An OAuth app table's keys ([linear.harness])."""
+
+    CLIENT_ID = "client_id"
+    SECRET_SERVICE = "secret_service"
+    TOKEN_SERVICE = "token_service"
+    USER_ID = "user_id"
+
+
 REQUIRED = (
     "linear.team",
-    *(f"linear.harness.{k}" for k in APP_KEYS),
+    *(f"linear.harness.{k}" for k in AppKey),
     "linear.task_label_group",
     *(f"linear.states.{k}" for k in State),
     "linear.roles.*.account",
@@ -280,7 +291,7 @@ def _linear_settings(linear):
             "harness",
             AppKind.HARNESS,
             "linear.harness",
-            **{k: linear["harness"][k] for k in APP_KEYS},
+            **{k.value: linear["harness"][k] for k in AppKey},
         ),
         manager_key=linear.get("manager_key", ""),
         task_label_group=linear["task_label_group"],
@@ -390,11 +401,11 @@ def _linear(cfg, local):
 
 
 def _app_table(linear, name):
-    """[linear.<name>]: a table of APP_KEYS only (unset ones REQUIRED reports)."""
+    """[linear.<name>]: a table of AppKey keys only (unset ones REQUIRED reports)."""
     table = linear.setdefault(name, {})
     if not isinstance(table, dict):
         raise ConfigError(f"orchestrator/config.toml: [linear.{name}] must be a table")
-    if extra := sorted(set(table) - set(APP_KEYS)):
+    if extra := sorted(set(table) - set(AppKey)):
         raise ConfigError(
             f"orchestrator/config.toml: [linear.{name}] has unknown keys: {', '.join(extra)}"
         )
@@ -405,10 +416,10 @@ def _app(linear, name):
     and its Linear user id."""
     table = linear[name]
     for key, what, valid in (
-        ("client_id", "a Linear OAuth app Client ID", _client_id),
-        ("secret_service", "a Keychain service name", _keychain_name),
-        ("token_service", "a Keychain service name", _keychain_name),
-        ("user_id", "a Linear user id (UUID)", _uuid),
+        (AppKey.CLIENT_ID, "a Linear OAuth app Client ID", _client_id),
+        (AppKey.SECRET_SERVICE, "a Keychain service name", _keychain_name),
+        (AppKey.TOKEN_SERVICE, "a Keychain service name", _keychain_name),
+        (AppKey.USER_ID, "a Linear user id (UUID)", _uuid),
     ):
         if not valid(table[key]):
             raise ConfigError(

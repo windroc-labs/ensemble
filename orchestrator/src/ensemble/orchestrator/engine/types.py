@@ -95,9 +95,6 @@ class LinearApp:
         return self.token_service
 
 
-LinearIdentity = LinearKey | LinearApp  # who a Linear call is made as
-
-
 @dataclass(frozen=True)
 class LinearRole:
     account: str
@@ -123,11 +120,6 @@ class LinearSettings:
     agent_labels: Mapping[str, str]
     project_repos: Mapping[str, str]
     roles: Mapping[str, LinearRole]
-
-    @property
-    def apps(self) -> tuple[LinearApp, ...]:
-        """The configured OAuth apps."""
-        return (self.harness,)
 
     @property
     def manager(self) -> LinearKey:

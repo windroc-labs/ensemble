@@ -7,7 +7,7 @@ import io
 import json
 import urllib.error
 import urllib.request
-from datetime import timedelta
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest import mock
 
@@ -20,12 +20,12 @@ from orchestrator_tests.unit.board_ids import TEAM
 from orchestrator_tests.unit.keychain_fixtures import (
     HARNESS,
     NEW,
-    NOW,
     OLD,
     Endpoint,
     Keychain,
     leaks,
     record,
+    renewed,
     token_http_error,
 )
 from orchestrator_tests.unit.keychain_fixtures import (
@@ -409,12 +409,11 @@ class AppToken(Case):
     """An app identity's call: Bearer, renewal and its failures, over a fake Keychain and
     token endpoint."""
 
-    def call(self, keychain, endpoint=None, *, query=VIEWER, app=HARNESS, now=NOW, **kw):
+    def call(self, keychain, endpoint=None, *, query=VIEWER, app=HARNESS, **kw):
         endpoint = endpoint or Endpoint(data={"viewer": {"id": "v"}})
         with (
             mock.patch("subprocess.run", keychain),
             mock.patch.object(urllib.request, "urlopen", side_effect=endpoint),
-            mock.patch.object(client, "_now", return_value=now),
         ):
             return client.linear_gql(query, identity=app, **kw), endpoint
 
@@ -427,17 +426,18 @@ class AppToken(Case):
         return json.loads(keychain.value(HARNESS.token_service))
 
     def test_a_token_with_days_to_spare_is_sent_as_bearer_without_a_request(self):
-        keychain = Keychain({HARNESS.token_service: record(days=6)})
+        keychain = Keychain({HARNESS.token_service: (held := record(days=6))})
         out, endpoint = self.call(keychain)
         self.assertEqual(out, {"viewer": {"id": "v"}})
         self.assertEqual(endpoint.tokens, [])
         self.assertEqual(endpoint.graphql[0].get_header("Authorization"), f"Bearer {OLD}")
-        self.assertEqual(record(days=6), keychain.value(HARNESS.token_service))
+        self.assertEqual(keychain.value(HARNESS.token_service), held)
 
     def test_under_five_days_renews_writes_and_sends_the_new_token(self):
         keychain = Keychain(
             {HARNESS.token_service: record(days=4), HARNESS.secret_service: APP_SECRET}
         )
+        since = datetime.now(UTC)
         _, endpoint = self.call(keychain)
         self.assertEqual(
             endpoint.tokens,
@@ -450,10 +450,7 @@ class AppToken(Case):
                 }
             ],
         )
-        self.assertEqual(
-            self.written(keychain),
-            {"access_token": NEW, "expires_at": (NOW + timedelta(days=30)).isoformat()},
-        )
+        renewed(self, keychain.value(HARNESS.token_service), since)
         self.assertEqual(endpoint.graphql[0].get_header("Authorization"), f"Bearer {NEW}")
         self.assertEqual(leaks(" ".join(argv) for argv, _ in keychain.calls), [])
 
@@ -534,11 +531,14 @@ class AppToken(Case):
             with self.subTest(name):
                 found = self.reported()
                 keychain = Keychain(
-                    {HARNESS.token_service: record(days=3), HARNESS.secret_service: APP_SECRET}
+                    {
+                        HARNESS.token_service: (held := record(days=3)),
+                        HARNESS.secret_service: APP_SECRET,
+                    }
                 )
                 _, endpoint = self.call(keychain, Endpoint(answer, data={}))
                 self.assertEqual(found, [("harness", reason)])
-                self.assertEqual(keychain.value(HARNESS.token_service), record(days=3))
+                self.assertEqual(keychain.value(HARNESS.token_service), held)
                 self.assertEqual(endpoint.graphql[0].get_header("Authorization"), f"Bearer {OLD}")
                 _, again = self.call(keychain, Endpoint(answer, data={}))
                 self.assertEqual((again.tokens, found), ([], [("harness", reason)]))
@@ -665,7 +665,6 @@ class AppToken(Case):
         with (
             mock.patch("subprocess.run", keychain),
             mock.patch.object(urllib.request, "urlopen", return_value=respond(echo)),
-            mock.patch.object(client, "_now", return_value=NOW),
             self.assertRaises(types.GraphQLErrors) as cm,
         ):
             client.linear_gql(VIEWER, identity=HARNESS)
@@ -675,7 +674,6 @@ class AppToken(Case):
             with (
                 mock.patch("subprocess.run", keychain),
                 mock.patch.object(urllib.request, "urlopen", side_effect=http_error(code, echo)),
-                mock.patch.object(client, "_now", return_value=NOW),
                 self.assertRaises(LinearError) as cm,
             ):
                 client.linear_gql(VIEWER, identity=HARNESS)

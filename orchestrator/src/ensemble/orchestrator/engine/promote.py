@@ -47,8 +47,10 @@ Arguments and options:
 
 Prerequisites and effects:
   Requires Python 3.11+ and configured Delegate settings; on Linear
-  ([orchestrator] tracker = "linear") also Linear access and the
-  linear.harness_key Keychain service. On a local board ($ENSEMBLE_BOARD_DIR)
+  ([orchestrator] tracker = "linear") also Linear access as the
+  [linear.harness] OAuth app (its client secret and token: Keychain items);
+  promote renews its token when under 5 days are
+  left (--dry-run: never; it logs the days left). On a local board ($ENSEMBLE_BOARD_DIR)
   no job runs it on a timer: run it on demand. There the next issue is a
   file in <next role>/ready/ with the source's parent in place of a project,
   and an unreadable board exits 2 (promote.py: <path>: <reason>).
