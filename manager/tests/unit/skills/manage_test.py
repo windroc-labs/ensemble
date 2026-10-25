@@ -243,7 +243,7 @@ class Manage(Case):
             "`ensemble-session send <session> '<answer>'`",
             "transcript",
             "`ensemble-crew close <ID>`",
-            "`ensemble-crew reopen <ID>`",
+            "`ensemble-crew reopen --work-dir <work_dir> <ID>`",
         ]
         found = [steps.find(step) for step in order]
         self.assertNotIn(-1, found, steps)
