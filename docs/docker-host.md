@@ -119,7 +119,11 @@ both and writes the App's slug to `github.app`.
 "$B" build --ensemble "$PKG"              # Docker's progress on stderr, then {"image":"ensemble-worker:<key>","digest":"sha256:…","rebuilt":true}
 "$B" build --ensemble "$PKG"              # the same, "rebuilt":false
 "$B" build --ensemble "$PKG" --max-age 0  # rebuild now
+"$B" build --ensemble "$PKG" --base-image dummy-env:test --image-plugin dummy-plugin  # see Base images
 ```
+
+The full form is `build --ensemble DIR [--base-image IMAGE] [--plugin SOURCE]... [--image-plugin NAME]... [--max-age
+SECONDS]`, in that order.
 
 A changed Dockerfile or ensemble version gives a new key. No build log shows a secret. Rebuilds skip Docker's cache,
 so they install npm's latest Claude Code. `--max-age N` rebuilds an image N or more seconds old under the same key (a
@@ -192,6 +196,42 @@ Invalid sources and duplicate plugin names fail before Docker; marketplace, inst
 fail the image build. Selecting a plugin trusts its code, hooks and servers beside the container's credentials.
 `scripts/install.sh --docker` installs ensemble on the host and leaves updraft installation to the image;
 `--no-docker` also installs updraft for the selected host Claude/Codex clients.
+A base image can also carry plugins of its own: [Base images](#base-images).
+
+### Base images
+
+`--base-image IMAGE` takes a local image tag or ID as stage 1 in place of `~/.ensemble/docker/worker`; the result is
+still `ensemble-worker:<key>`. The broker never pulls or rebuilds it: an image absent locally fails the build naming
+it. The key covers the base image's local ID, so rebuilding the base image gives a new key and the next build
+rebuilds the variant; the same ID under two tags shares one variant. The 7-day refresh (`--max-age`) rebuilds only
+the ensemble layer; updating the base image's Claude Code and plugins is yours. The broker tags the base image as
+`ensemble-user:<key>`, so removing older images can delete a base image that has no tag of its own once no variant
+or container uses it: tag your base images.
+
+Before building, the broker checks the base image, offline and unprivileged, and fails with `build_failed` naming
+each missing item:
+
+| Requirement | Why |
+|---|---|
+| `apt-get`, `dpkg` (Debian) | the ensemble layer installs tini, python3, python3-venv, curl, ripgrep and gh |
+| `node`, `npm` | the ensemble layer installs Codex and OpenCode |
+| `tmux`, `git`, `claude` (Claude Code) | sessions run them |
+| a non-root user `agent` | sessions run as it; the broker reads its UID and GID from the image (1000 works) |
+
+Commands must be on `/home/agent/.npm-global/bin:/usr/local/bin:/usr/bin:/bin`, the container's `PATH` less `/opt/ensemble/bin`. python3 is
+not required. A label starting with `windroc.` or `ensemble.` also fails the build, naming it: those are the
+broker's.
+
+`--image-plugin NAME` adds a plugin the base image (or `~/.ensemble/docker/worker`) already holds in
+`/opt/windroc/plugins/NAME/`, on top of the `--plugin` sources: its `.claude-plugin/plugin.json` must have `"name":
+"NAME"` and `agent` must be able to read every file in the directory. Claude Code loads it as `/NAME:` through
+`CLAUDE_CODE_PLUGIN_DIRS`, after the source plugins; Codex and OpenCode do not load it. A plugin directory that is
+missing, unreadable by `agent`, or whose `plugin.json` names another plugin fails the build naming the plugin; a
+name used twice, by either option, fails before Docker. Plugin names are part of the key.
+
+The base image is trusted like `~/.ensemble/docker/worker`: the variant inherits its environment, `ONBUILD`
+triggers and binaries, and sessions run in it with their credentials. The checks verify its shape, not its
+contents.
 
 ## Start
 
