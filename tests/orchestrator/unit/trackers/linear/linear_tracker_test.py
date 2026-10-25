@@ -102,13 +102,13 @@ NOT_FOUND = LinearError("linear api error: [{'message': 'Entity not found: Comme
 ROUTER = {
     "RELATIONS": "b443e58b5f277fc5edad3e11004a6af6f76beb96e1858ce1920077c9f20798a8",
     "Q_RELATIONS": "c271398e2c19c59eb040a3f5988e3ddf0d7787ae9dbd824e63541dd45a4afc53",
-    "Q_RECHECK": "585cff398cb172d48816a2e46fe7fa611ed917ddae67fe1cf0678c9d42080572",
+    "Q_RECHECK": "053a6338cfc4e79cd74b73c25e75967b994666605be9d04a2b024d89568a8fda",
     # its nodes' actor and botActor
     "Q_HISTORY": "e07e42dff6752b712c71a4f96777c02097b5373a29f06aaaa86d99a6185b49df",
 }
 LISTS = {
-    "": "497ec35294c8fc0894d43e9f3925801b8dcfe6af7a961e18b39f92e03fdec959",
-    "RELATIONS": "730acfcbed9ef3680074d0746fd8811b4f55621654e2be30148a7921dfcaabae",
+    "": "86e506045a173b15e9d5bf0475b1cdf2ed20a2ee23468b2609708b0fbd1cbc1d",
+    "RELATIONS": "ea09879b2ad078a3623976c3c788cd4f98e5dd8d2faca99eef63c0bd8349e8b8",
 }
 TRIAGE = "00000000-0000-4000-8000-000000000019"
 OTHER = "00000000-0000-4000-8000-000000000099"  # another team's state
@@ -213,6 +213,8 @@ class Gql:
         reply = reply.pop(0) if isinstance(reply, list) else reply
         if isinstance(reply, Exception):
             raise reply
+        if name in ("LIST", "LIST_RELATIONS"):
+            reply["issues"].setdefault("pageInfo", {"hasNextPage": False, "endCursor": None})
         return reply
 
 
@@ -1048,17 +1050,69 @@ def listed(state):
     return {
         "team": {"id": {"eq": TEAM}},
         "project": {"null": False},
-        "assignee": {"id": {"in": list(ROLES)}},
         "state": {"id": {"eq": STATES[state]}},
     }
 
 
 class Assigned(Case):
+    def test_pages_past_unowned_and_empty_pages(self):
+        owned = {"identifier": "TASK-9", "delegate": {"id": role_id("pm")}}
+        unowned = {"identifier": "TASK-1", "delegate": None, "assignee": PM}
+        gql = Gql(
+            LIST=[
+                {
+                    "issues": {
+                        "nodes": [unowned],
+                        "pageInfo": {"hasNextPage": True, "endCursor": "a"},
+                    }
+                },
+                {"issues": {"nodes": [], "pageInfo": {"hasNextPage": True, "endCursor": "b"}}},
+                {
+                    "issues": {
+                        "nodes": [owned],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    }
+                },
+            ]
+        )
+        said = []
+        port = tracker(gql)
+        port.say = lambda *a, **f: said.append((a, f))
+        self.assertEqual(port.assigned(IssueState.READY), [owned])
+        self.assertEqual([v.get("c") for _, v in gql.calls], [None, "a", "b"])
+        self.assertEqual(
+            said,
+            [(("claim-skip", "TASK-1"), {"once": True, "reason": "no configured role delegate"})],
+        )
+
+    def test_invalid_page_cursor_is_refused(self):
+        for end in (None, "a"):
+            with self.subTest(end=end):
+                gql = Gql(
+                    LIST=[
+                        {
+                            "issues": {
+                                "nodes": [],
+                                "pageInfo": {"hasNextPage": True, "endCursor": "a"},
+                            }
+                        },
+                        {
+                            "issues": {
+                                "nodes": [],
+                                "pageInfo": {"hasNextPage": True, "endCursor": end},
+                            }
+                        },
+                    ]
+                )
+                with self.assertRaisesRegex(LinearError, "hasNextPage without a new endCursor"):
+                    tracker(gql).assigned(IssueState.RUNNING)
+
     def test_filter_per_state(self):
         for state, key in ((IssueState.READY, "todo"), (IssueState.RUNNING, "in_progress")):
             with self.subTest(state=state):
-                gql = Gql(LIST={"issues": {"nodes": [{"identifier": "TASK-1"}]}})
-                self.assertEqual(tracker(gql).assigned(state), [{"identifier": "TASK-1"}])
+                node = {"identifier": "TASK-1", "delegate": {"id": role_id("pm")}}
+                gql = Gql(LIST={"issues": {"nodes": [node]}})
+                self.assertEqual(tracker(gql).assigned(state), [node])
                 self.assertEqual(gql.calls, [(linear_tracker.q_issues(), {"f": listed(key)})])
 
     def test_other_state_value_error(self):
@@ -1068,7 +1122,7 @@ class Assigned(Case):
 
 
 def todo(ident, *inverse):
-    found = {"id": f"id-{ident}", "identifier": ident}
+    found = {"id": f"id-{ident}", "identifier": ident, "delegate": {"id": role_id("pm")}}
     return found | ({"inverseRelations": {"nodes": list(inverse)}} if inverse else {})
 
 
@@ -1217,8 +1271,8 @@ class MovedAt(Case):
         self.assertEqual(found.moved_at("id-TASK-1", IssueState.READY), ago(4))
 
 
-def rechecked(state, *, assignee=None, project=None, labels=()):
-    issue = {"state": {"id": state}, "assignee": assignee, "project": project}
+def rechecked(state, *, delegate=None, assignee=None, project=None, labels=()):
+    issue = {"state": {"id": state}, "delegate": delegate, "assignee": assignee, "project": project}
     return {"issue": issue | {"labels": {"nodes": list(labels)}}}
 
 
@@ -1235,8 +1289,14 @@ def labelled(ident, name, group=TASK_GROUP):
 
 
 class Rechecks(Case):
+    def test_delegate_picks_role_and_assignee_remains_user_metadata(self):
+        human = {"id": "human", "email": "human@example.test"}
+        gql = Gql(Q_RECHECK=rechecked(STATES["todo"], delegate=PM, assignee=human, project=PROJECT))
+        found = tracker(gql).recheck("TASK-1")
+        self.assertEqual((found.role, found.assignee), ("pm", human))
+
     def picker(self, *nodes):
-        gql = Gql(Q_RECHECK=rechecked(STATES["todo"], assignee=PM, project=PROJECT, labels=nodes))
+        gql = Gql(Q_RECHECK=rechecked(STATES["todo"], delegate=PM, project=PROJECT, labels=nodes))
         found = LinearTracker(
             gql,
             states=TEAM_OBJ.states,
@@ -1251,14 +1311,14 @@ class Rechecks(Case):
     def test_maps_state_role_and_parts(self):
         # no label maps: no picks
         nodes = [labelled("l-1", "Light Research"), labelled("l-2", "Urgent", None)]
-        gql = Gql(Q_RECHECK=rechecked(STATES["todo"], assignee=PM, project=PROJECT, labels=nodes))
+        gql = Gql(Q_RECHECK=rechecked(STATES["todo"], delegate=PM, project=PROJECT, labels=nodes))
         self.assertEqual(
             tracker(gql).recheck("id-TASK-1"),
             Recheck(
                 ready=True,
                 role="pm",
                 refused=None,
-                assignee=PM,
+                assignee=None,
                 home=PROJECT,
                 task=Pick(),
                 client=Pick(),
@@ -1357,8 +1417,13 @@ class Rechecks(Case):
 
 
 class Role(Case):
-    def test_by_assignee_id(self):
-        self.assertEqual(tracker(Gql()).role({"assignee": {"id": role_id("pm")}}), "pm")
+    def test_by_delegate_id(self):
+        self.assertEqual(
+            tracker(Gql()).role({"delegate": {"id": role_id("pm")}, "assignee": None}), "pm"
+        )
+        for delegate in (None, {"id": "foreign-app"}):
+            self.assertIsNone(tracker(Gql()).role({"delegate": delegate, "assignee": PM}))
+        self.assertIsNone(tracker(Gql()).role({"assignee": PM}))
 
 
 class Interface(Case):

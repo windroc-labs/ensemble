@@ -39,7 +39,7 @@ class MinimalPath(BinFlow):
         self.fake.issue(
             "ENG: Session registry",
             identifier=ID,
-            assignee=self.ids[ACCOUNTS["engineer"]],
+            delegate=self.ids[ACCOUNTS["engineer"]],
             project=PROJECT,
             description="Add a session registry.",
         )

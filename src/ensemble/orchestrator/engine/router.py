@@ -147,7 +147,7 @@ from ensemble.utils import (
 STALE = timedelta(hours=2)
 LIVE = timedelta(minutes=30)
 CAP = 4
-NOT_QUEUED = "not a {state} issue assigned to a role account"
+NOT_QUEUED = "not a {state} issue {ownership}"
 SKEW = timedelta(minutes=5)
 CAP_COMMENT = "Tried 4 times without finishing; needs a look."
 INTERRUPTED = "The previous agent run was interrupted. Moving this issue back to the {state} queue."
@@ -449,7 +449,8 @@ class Board:
                 )
                 if logged == role:
                     return True
-                why = f"role ({logged}) is not the assignee's ({role})"
+                owner = "delegate" if self.cfg.tracker is TrackerKind.LINEAR else "assignee"
+                why = f"role ({logged}) is not the {owner}'s ({role})"
                 self.say("recover", ident, to="in_review", reason=why)
                 self.comment_and_move(
                     issue,
@@ -610,7 +611,16 @@ class Board:
     def unqueued(self, ident):
         """Why ident is not queued, with the tracker's refusal."""
         current = self.tracker.recheck(ident)
-        reason = NOT_QUEUED.format(state=self.tracker.state_name(IssueState.READY))
+        if self.cfg.tracker is TrackerKind.LINEAR and current.ready and current.role is None:
+            self.say("claim-skip", ident, once=True, reason="no configured role delegate")
+        ownership = (
+            "delegated to a role app"
+            if self.cfg.tracker is TrackerKind.LINEAR
+            else "assigned to a role account"
+        )
+        reason = NOT_QUEUED.format(
+            state=self.tracker.state_name(IssueState.READY), ownership=ownership
+        )
         reasons = [] if current.ready and current.role else [reason]
         reasons += [current.refused] if current.refused else []
         return "; ".join(reasons) or reason

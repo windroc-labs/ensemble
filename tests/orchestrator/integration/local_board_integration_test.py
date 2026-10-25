@@ -182,7 +182,7 @@ class LocalBoard(BinFlow):
                 f"Issue {seed.n}",
                 identifier=f"TASK-{seed.n}",
                 state=LINEAR_STATES[seed.state],
-                assignee=owners[seed.owner],
+                delegate=owners[seed.owner],
                 project=PROJECT,
                 description=f"Issue {seed.n}.",
                 priority=seed.priority,

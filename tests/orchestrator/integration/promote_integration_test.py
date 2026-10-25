@@ -72,7 +72,8 @@ class Promote(Tick):
             TITLE,
             identifier=SOURCE,
             state="in_progress",
-            assignee=researcher,
+            delegate=researcher,
+            assignee=human,
             project=PROJECT,
         )
         self.fake.move(SOURCE, "in_review", actor=researcher, at=now - timedelta(minutes=40))
@@ -95,8 +96,14 @@ class Promote(Tick):
             self.assertIsNotNone(child, f"no issue {self.child}")
             child, relations = dict(child), list(self.fake.relations)
         self.assertEqual(
-            (self.state(self.child), child["assignee"], child["project"], child["title"]),
-            ("todo", self.ids[ACCOUNTS["pm"]], PROJECT, f"PRD: {TITLE}"),
+            (
+                self.state(self.child),
+                child["delegate"],
+                child["assignee"],
+                child["project"],
+                child["title"],
+            ),
+            ("todo", self.ids[ACCOUNTS["pm"]], None, PROJECT, f"PRD: {TITLE}"),
         )
         self.assertEqual(
             child["description"].split("\n\n")[:2],
@@ -208,7 +215,7 @@ class Prune(Tick, TmuxFlow):
             "ENG: Session registry",
             identifier=DONE,
             state="in_review",
-            assignee=engineer,
+            delegate=engineer,
             project=PROJECT,
         )["id"]
         self.fake.move(
@@ -218,7 +225,7 @@ class Prune(Tick, TmuxFlow):
             "ENG: Session reaper",
             identifier=OPEN,
             state="in_progress",
-            assignee=engineer,
+            delegate=engineer,
             project=PROJECT,
         )
         workdir = os.path.join(self.workdirs, DONE)

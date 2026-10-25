@@ -43,7 +43,7 @@ class Tui(TmuxFlow):
             identifier=ID,
             id=UUID,
             state="in_progress",
-            assignee=self.ids[ACCOUNTS["pm"]],
+            delegate=self.ids[ACCOUNTS["pm"]],
             project=PROJECT,
         )
         self.scene([f"{mark('start', 'a PRD.')}\n{block(DONE)}"])

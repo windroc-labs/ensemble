@@ -135,7 +135,7 @@ ATTACHED = ("already been linked", "Duplicate attachment", "Unable to create iss
 RELATIONS = "inverseRelations(first: 50) { nodes { type issue { identifier state { type } } } }"
 Q_RELATIONS = "query($i: String!) { issue(id: $i) { " + RELATIONS + " } }"
 Q_RECHECK = (
-    "query($i: String!) { issue(id: $i) { state { id } assignee { id email } project { id name } "
+    "query($i: String!) { issue(id: $i) { state { id } delegate { id } assignee { id email } project { id name } "
     "labels { nodes { id name parent { id } } } } }"
 )
 # ops.HISTORY's nodes with their actors: nested objects there would multiply Q_FINISHED's complexity
@@ -180,11 +180,11 @@ Q_READ = """query($i: String!) { issue(id: $i) { id identifier url title descrip
 def q_issues(fields=""):
     return (
         (
-            "query($f: IssueFilter) { issues(filter: $f, first: 100) { nodes { id identifier url priority createdAt "
-            "project { id name } assignee { id email } "
+            "query($f: IssueFilter, $c: String) { issues(filter: $f, first: 100, after: $c) { nodes { id identifier url priority createdAt "
+            "project { id name } delegate { id } assignee { id email } "
         )
         + fields
-        + " } } }"
+        + " } pageInfo { hasNextPage endCursor } } }"
     )
 
 
@@ -362,22 +362,36 @@ class LinearTracker(Tracker):
         )
 
     def role(self, issue):
-        return _need("roles", self.roles)[issue["assignee"]["id"]]
+        return _need("roles", self.roles).get((issue.get("delegate") or {}).get("id"))
 
     def assigned(self, state):
         return self._listed(state)
 
     def _listed(self, state, fields=""):
-        """state's issues with a project, assigned to a role account; the first 100."""
+        """Page state's project issues, diagnose unowned ones, return the first 100 role delegates."""
         if state not in LISTED:
             raise ValueError(f"no list of {state} issues")
         flt = {
             "team": {"id": {"eq": _need("team_id", self.team_id)}},
             "project": {"null": False},
-            "assignee": {"id": {"in": list(_need("roles", self.roles))}},
             "state": {"id": {"eq": _need("states", self.state_ids)[LISTED[state]]}},
         }
-        return self.gql(q_issues(fields), f=flt)["issues"]["nodes"]
+        found, cursors, variables = [], set(), {"f": flt}
+        while True:
+            page = self.gql(q_issues(fields), **variables)["issues"]
+            for issue in page["nodes"]:
+                if self.role(issue) is not None:
+                    found.append(issue)
+                else:
+                    self.say(
+                        "claim-skip",
+                        issue["identifier"],
+                        once=True,
+                        reason="no configured role delegate",
+                    )
+            if not page["pageInfo"]["hasNextPage"]:
+                return found[:100]
+            variables["c"] = ops.advance("role issues", page["pageInfo"]["endCursor"], cursors)
 
     def ready(self):
         """Relations come with the list; when that read fails, a logged todo-error, the plain list
@@ -409,7 +423,7 @@ class LinearTracker(Tracker):
         nodes = found["labels"]["nodes"]
         return Recheck(
             ready,
-            role=_need("roles", self.roles).get((found["assignee"] or {}).get("id")),
+            role=self.role(found),
             refused=None if found["project"] else "no project",
             assignee=found["assignee"],
             home=found["project"],

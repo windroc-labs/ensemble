@@ -59,7 +59,7 @@ class LivePipeline(LiveCrew):
         self.fake.issue(
             "ENG: Session registry",
             identifier=ID,
-            assignee=ids["engineer"],
+            delegate=ids["engineer"],
             project=PROJECT,
             description="Add a session registry.",
         )

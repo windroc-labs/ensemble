@@ -54,7 +54,7 @@ class LinearCtlContract(CtlContract, TmuxFlow):
         self.fake.issue(
             "ENG: Contract",
             identifier=issue,
-            assignee=self.ids[ACCOUNTS["engineer"]],
+            delegate=self.ids[ACCOUNTS["engineer"]],
             project=PROJECT,
             description="Exercise the ctl contract.",
         )

@@ -51,11 +51,12 @@ MYSTERY = "00000000-0000-4000-8000-000000000031"
 
 
 class Parity(BinFlow):
-    def seed(self, ident, title, assignee=ENGINEER, **fields):
+    def seed(self, ident, title, delegate=ENGINEER, **fields):
         self.fake.issue(
             title,
             identifier=ident,
-            assignee=self.ids[assignee],
+            delegate=self.ids[delegate],
+            assignee=self.ids[HUMAN],
             project=PROJECT,
             description=f"{title}.",
             **fields,
@@ -236,18 +237,18 @@ class Recover(Parity):
         self.assertEqual((option(second, "--resume"), option(second, "--session-id")), (sid, None))
         self.assertEqual(self.state(ID), "in_review")
 
-    def test_a_logged_role_not_the_assignees_is_not_resumed_and_goes_to_in_review(self):
+    def test_a_logged_role_not_the_delegates_is_not_resumed_and_goes_to_in_review(self):
         """v1 CLAUDE.md › Architecture: Recover resumes a session only while its runs.jsonl
-        `role` is the assignee's (v1 router_test.test_fr22_a_logged_role_not_the_assignees_goes_to_review).
+        `role` is the delegate's; a changed delegate invalidates the saved role.
         """
         sid = self.interrupted()
         with self.fake.lock:
-            self.fake.find(ID)["assignee"] = self.ids[ACCOUNTS["pm"]]
+            self.fake.find(ID)["delegate"] = self.ids[ACCOUNTS["pm"]]
         self.scene([START, DONE], usage=usage(0.5))
         self.tick()
         self.assertEqual([(r["kind"], r["sid"]) for r in self.runs()], [("start", sid)])
         self.assertEqual(len(agent_calls(self.calls())), 1)
-        why = "role (engineer) is not the assignee's (pm)"
+        why = "role (engineer) is not the delegate's (pm)"
         self.assertIn(f"router recover {ID} to=in_review reason={why}", self.routed())
         self.assertEqual(self.state(ID), "in_review")
         self.assertEqual(self.history(ID)[-1], ("in_progress", "in_review", HARNESS_EMAIL))
@@ -298,7 +299,8 @@ class Refusals(Parity):
             "PRD: Session registry",
             identifier=SOURCE,
             state="in_progress",
-            assignee=pm,
+            delegate=pm,
+            assignee=self.ids[HUMAN],
             project=PROJECT,
         )
         self.fake.move(SOURCE, "in_review", actor=pm, at=now - timedelta(minutes=40))

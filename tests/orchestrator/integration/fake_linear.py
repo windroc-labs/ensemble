@@ -115,7 +115,17 @@ BUILT = {
     "router.issues+relations": linear_tracker.q_issues(linear_tracker.RELATIONS),
 }
 
-CREATE = {"id", "teamId", "projectId", "assigneeId", "stateId", "priority", "title", "description"}
+CREATE = {
+    "id",
+    "teamId",
+    "projectId",
+    "delegateId",
+    "assigneeId",
+    "stateId",
+    "priority",
+    "title",
+    "description",
+}
 
 ISSUE_CREATE = CREATE | {"labelIds", "parentId"}
 
@@ -124,6 +134,7 @@ UPDATE = {
     "description",
     "priority",
     "assigneeId",
+    "delegateId",
     "addedLabelIds",
     "removedLabelIds",
     "stateId",
@@ -304,6 +315,7 @@ class FakeLinear:
         id=None,
         state="todo",
         assignee=None,
+        delegate=None,
         project=None,
         description="",
         priority=0,
@@ -315,11 +327,13 @@ class FakeLinear:
             if (
                 assignee is not None
                 and assignee not in self.users
+                or delegate is not None
+                and delegate not in self.users
                 or any(i not in self.labels for i in labels)
                 or parent is not None
                 and self.find(parent) is None
             ):
-                raise ValueError("assignee, a label or the parent not seeded")
+                raise ValueError("assignee, delegate, a label or the parent not seeded")
             if project:
                 self.projects[project["id"]] = project["name"]
             try:
@@ -331,6 +345,7 @@ class FakeLinear:
                     priority=priority,
                     state=IDS[state],
                     assignee=assignee,
+                    delegate=delegate,
                     project=project and dict(project),
                     labels=list(labels),
                     createdAt=stamp(created),
@@ -630,6 +645,7 @@ class FakeLinear:
             "state": self._state(rec["state"]),
             "team": self._team(),
             "assignee": self._person(rec["assignee"], caller),
+            "delegate": self._person(rec["delegate"], caller),
             "parent": rec["parent"] and self._brief(rec["parent"]),
             "projectMilestone": None,
             "labels": {"nodes": [self._label(i) for i in rec["labels"]], "pageInfo": ONE_PAGE},
@@ -690,6 +706,7 @@ class FakeLinear:
             "team": TEAM,
             "state": rec["state"],
             "assignee": rec["assignee"],
+            "delegate": rec["delegate"],
             "project": rec["project"] and rec["project"]["id"],
             "parent": rec["parent"],
             "priority": rec["priority"],
@@ -807,7 +824,7 @@ class FakeLinear:
         return {"searchIssues": {"nodes": []}, "issues": {"nodes": []}}
 
     def _board(self, caller, v):
-        return self._list(caller, v.get("f") or {}, 100)
+        return self._list(caller, v.get("f") or {}, 100, v.get("c"))
 
     def _handoff(self, caller, v):
         return self._list(
@@ -816,7 +833,7 @@ class FakeLinear:
                 "team": {"id": {"eq": v.get("t")}},
                 "state": {"id": {"eq": v.get("s")}},
                 "project": {"null": False},
-                "assignee": {"id": {"in": v.get("a")}},
+                "delegate": {"id": {"in": v.get("a")}},
             },
             100,
         )
@@ -830,7 +847,7 @@ class FakeLinear:
             {
                 "team": {"id": {"eq": v.get("t")}},
                 "or": [
-                    {"state": {"id": {"in": v.get("d")}}, "assignee": {"id": {"in": v.get("a")}}},
+                    {"state": {"id": {"in": v.get("d")}}, "delegate": {"id": {"in": v.get("a")}}},
                     {"state": {"id": {"in": v.get("s")}}},
                 ],
             },
@@ -888,8 +905,9 @@ class FakeLinear:
             raise Problem(f"fake: issueUpdate has no input {extra[0]}")
         if "stateId" in new and new["stateId"] not in NAMES:
             raise Problem(f"Entity not found: {'WorkflowState'}")
-        if new.get("assigneeId") is not None and new["assigneeId"] not in self.users:
-            raise Problem(f"Entity not found: {'User'}")
+        for field in ("assigneeId", "delegateId"):
+            if new.get(field) is not None and new[field] not in self.users:
+                raise Problem(f"Entity not found: {'User'}")
         removed = set(new.get("removedLabelIds", ()))
         labels = [i for i in rec["labels"] if i not in removed]
         labels = self._labelled(
@@ -898,8 +916,9 @@ class FakeLinear:
         for key in ("title", "description", "priority"):
             if key in new:
                 rec[key] = new[key]
-        if "assigneeId" in new:
-            rec["assignee"] = new["assigneeId"]
+        for field in ("assignee", "delegate"):
+            if field + "Id" in new:
+                rec[field] = new[field + "Id"]
         rec["labels"] = labels
         if "stateId" in new:
             self._move(rec, new["stateId"], caller["id"], stamp())
@@ -948,7 +967,7 @@ class FakeLinear:
         new, now = v["in"], stamp()
         pid, uid, sid = (
             new.get("projectId"),
-            new.get("assigneeId"),
+            new.get("assigneeId", caller["id"] if "delegateId" in new else None),
             new.get("stateId", STATES["todo"]),
         )
         if extra := sorted(set(new) - inputs):
@@ -957,6 +976,7 @@ class FakeLinear:
             new.get("teamId") != TEAM
             or (pid and pid not in self.projects)
             or (uid and uid not in self.users)
+            or (new.get("delegateId") is not None and new["delegateId"] not in self.users)
             or sid not in NAMES
         ):
             raise Problem(
@@ -972,6 +992,7 @@ class FakeLinear:
             priority=new.get("priority", 0),
             state=sid,
             assignee=uid,
+            delegate=new.get("delegateId"),
             project=pid and {"id": pid, "name": self.projects[pid]},
             labels=labels,
             createdAt=now,

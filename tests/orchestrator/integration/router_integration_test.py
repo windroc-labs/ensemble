@@ -113,7 +113,8 @@ class Router(TmuxFlow):
         self.fake.issue(
             TITLE,
             identifier=ID,
-            assignee=self.ids[ENGINEER],
+            delegate=self.ids[ENGINEER],
+            assignee=self.ids[HUMAN],
             project=PROJECT,
             description="Add a session registry.",
         )
@@ -121,6 +122,7 @@ class Router(TmuxFlow):
     def claim(self, mode="start", argv=("--issue", ID)):
         res = self.router(*argv)
         self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.issue(ID)["assignee"], self.ids[HUMAN])
         last = self.runs()[-1]
         self.assertEqual(
             (last["kind"], last["issue"], last["role"], last["client"]),

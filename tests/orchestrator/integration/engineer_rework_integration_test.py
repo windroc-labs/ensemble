@@ -71,7 +71,7 @@ class Rework(BinFlow):
         self.fake.issue(
             TITLE,
             identifier=ID,
-            assignee=self.ids[ENGINEER],
+            delegate=self.ids[ENGINEER],
             project=PROJECT,
             description="Add a session registry.",
         )
