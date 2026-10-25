@@ -27,7 +27,6 @@ from ensemble.orchestrator.engine.types import (
     UUID_RE,
     Accounts,
     ConfigError,
-    LinearKey,
     TrackerKind,
     Wiring,
 )
@@ -329,9 +328,12 @@ def _linear_accounts(gql, cfg, identity):
 
 
 def _linear_claimed(gql, cfg, claim):
-    _start_row(claim, "key", claim.key is not None)
     _start_row(claim, "uuid", UUID_RE.fullmatch(claim.uuid) is not None)
-    return _linear_accounts(gql, cfg, LinearKey(claim.key))
+    if claim.role not in cfg.linear.roles:
+        raise ConfigError(
+            f"{claim.issue}: session {claim.sid}'s role {claim.role!r} has no configured Linear app"
+        )
+    return _linear_accounts(gql, cfg, _linear_identity(cfg, claim.role))
 
 
 def _linear_identity(cfg, role):
@@ -385,8 +387,7 @@ def _local_accounts(transport, cfg, identity):
 
 
 def _local_claimed(transport, cfg, claim):
-    """A local board's row: no key, its issue id as the uuid."""
-    _start_row(claim, "key", claim.key is None)
+    """A local board's row: its issue id as the uuid."""
     _start_row(claim, "uuid", claim.uuid == claim.issue)
     return _local_accounts(transport, cfg, None)
 

@@ -182,9 +182,7 @@ class Accounts:
 
 @dataclass(frozen=True)
 class Claim:
-    """A run's claim context as its sid's runs.jsonl start row recorded it; `key`: the role's
-    Keychain service then, its write-back's Linear account (None: a tracker without accounts).
-    """
+    """The run's start context; role selects its current configured write-back identity."""
 
     issue: str
     sid: str
@@ -192,7 +190,6 @@ class Claim:
     uuid: str
     project: str | None
     target: tuple[str, str] | None
-    key: str | None
     client: str
     delegate_kind: str
 

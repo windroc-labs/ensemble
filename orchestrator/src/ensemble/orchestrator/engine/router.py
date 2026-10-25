@@ -110,6 +110,7 @@ from ensemble.orchestrator.engine.runs import (
     latest,
     note,
     parse_log,
+    role_of,
     started_task,
     trim,
 )
@@ -504,7 +505,13 @@ class Board:
         the client the issue chooses when that differs, as a session resumes only in its own
         client. An invalid task or client choice keeps the resume.
         """
-        ident, role, resumed = issue["identifier"], self.role(issue), client_of(self.entries, sid)
+        ident, role, resumed = (
+            issue["identifier"],
+            role_of(self.entries, sid),
+            client_of(self.entries, sid),
+        )
+        if role not in self.cfg.roles:
+            raise ConfigError(f"{ident}: session {sid}'s role {role!r} is not configured")
         current = self.tracker.recheck(issue["id"])
         task, task_error = task_for(
             current.task,
@@ -649,9 +656,9 @@ def begin(cfg, spec: Spec) -> Spec:
     return spec
 
 
-def record(cfg, spec: Spec, *, role, key, now, target=None) -> str:
+def record(cfg, spec: Spec, *, role, now, target=None) -> str:
     """The run's runs.jsonl row, an attempt toward CAP: a start row holds the claim's context (issue
-    uuid, project, target, the role's key), which its write-back reads, and its task, which picks
+    uuid, project, target, role), which its write-back reads, and its task, which picks
     a resume's tier; returns its Delegate kind.
     """
     if spec.mode == "new":
@@ -661,7 +668,6 @@ def record(cfg, spec: Spec, *, role, key, now, target=None) -> str:
                 "uuid": spec.uuid,
                 "project": spec.project,
                 "target": target,
-                "key": key,
                 "task": spec.task,
             },
         )
@@ -718,6 +724,8 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
     if reason := a.identity_error():
         print(f"router.py: {reason}", file=sys.stderr)
         return 2
+    if a.mode == "resume":
+        a = replace(a, role=role_of(parse_log(cfg.runs_log), a.sid))
     role = a.role
     tasks = cfg.roles[role].tasks if role is not None else ()
     reason = a.role_error(role, tasks)
@@ -725,7 +733,7 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
         return fail(a.issue, "config-error", reason, 2)
     identity = wiring.identity(cfg, role)
     key = identity.service if identity is not None else None
-    kind = record(cfg, a, role=role, key=key, now=now) if a.mode == "resume" else cfg.delegate_kind
+    kind = record(cfg, a, role=role, now=now) if a.mode == "resume" else cfg.delegate_kind
     if key is not None and not keychain(identity):
         return fail(a.issue, "config-error", f"no Keychain item for role key {key}", 2)
     if a.mode == "resume":
@@ -833,7 +841,7 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
                 return _label_client_error(a, ctx, error)
             raise
         if a.mode == "new":
-            record(cfg, a, role=role, key=key, target=slug, now=now)
+            record(cfg, a, role=role, target=slug, now=now)
         detached = linear_run.detach()
     except (ConfigError, delegate.ConfigError, delegate.SessionError) as e:
         log("router", "launch-error", a.issue, error=one_line(e))

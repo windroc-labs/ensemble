@@ -128,7 +128,7 @@ NO = SessionStatus("no", None, "")
 RESUME = ["ts", "kind", "issue", "sid", "role", "client", "delegate_kind"]
 
 
-START = [*RESUME, "uuid", "project", "target", "key", "task"]
+START = [*RESUME, "uuid", "project", "target", "task"]
 
 
 def ago(**kw):

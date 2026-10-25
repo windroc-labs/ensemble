@@ -737,8 +737,8 @@ class RouterEntry(OuterBase):
                 self.assertEqual(self.detached(), self.expected(sid=sid))
                 row = json.loads(self.state.splitlines()[-1])
                 self.assertEqual(
-                    [row[k] for k in ("uuid", "project", "target", "key", "delegate_kind")],
-                    [UUID, PROJECT, "Acme/Ensemble", KEY, "harness"],
+                    [row[k] for k in ("uuid", "project", "target", "delegate_kind")],
+                    [UUID, PROJECT, "Acme/Ensemble", "harness"],
                 )
                 self.assertEqual(
                     self.said()[-2 - len(said) :],
@@ -3211,6 +3211,22 @@ class ScheduledTaskSelection(TickBase):
 
 
 class RunLaunching(OuterBase):
+    def test_resume_keeps_recorded_role_and_current_app(self):
+        runs.note(
+            self.runs,
+            "start",
+            issue=ID,
+            sid=SID,
+            role="engineer",
+            client="a",
+            delegate_kind="harness",
+            key="deleted-member-key",
+        )
+        self.assertEqual(self.outer(mode="resume", role="pm"), 0)
+        self.assertEqual(self.detached(), self.expected(resume=True))
+        self.assertEqual(self.keychain_calls, [KEY])
+        self.assertEqual(runs.parse_log(self.runs)[-1].role, "engineer")
+
     """FR-45, FR-47's resume check: the outer reads the issue, checks its repo, renders its input,
     records the run and detaches its LinearRun (FR-25).
     """
@@ -3295,7 +3311,6 @@ class RunLaunching(OuterBase):
                 "uuid": UUID,
                 "project": PROJECT,
                 "target": "Acme/Ensemble",
-                "key": KEY,
                 "task": None,
             },
         )
@@ -3473,7 +3488,7 @@ class RunLaunching(OuterBase):
             ),
         ):
             with self.subTest(reason=reason):
-                self.assertEqual(self.outer(mode="resume", **kw), 2)
+                self.assertEqual(self.outer(**kw), 2)
                 self.assertEqual(
                     (self.said(), self.err), ([f"config-error TASK-7 reason={reason}"], "")
                 )
@@ -3722,7 +3737,6 @@ class RunStartRecords(Base):
                     uuid=UUID,
                 ),
                 role="researcher",
-                key=cfg.linear.roles["researcher"].key,
                 target=None,
                 now=lambda: datetime.fromisoformat(stamp),
             )
@@ -3734,8 +3748,7 @@ class RunStartRecords(Base):
             '"delegate_kind": "harness"'
         )
         claim = (
-            f'"uuid": "{UUID}", "project": "{IDS[DR]}", "target": null, '
-            f'"key": "{cfg.linear.roles["researcher"].key}", "task": "light-research"'
+            f'"uuid": "{UUID}", "project": "{IDS[DR]}", "target": null, "task": "light-research"'
         )
         with open(cfg.runs_log) as f:
             self.assertEqual(
@@ -3744,9 +3757,7 @@ class RunStartRecords(Base):
                 f'{{"ts": "{stamp}", "kind": "resume", {common}}}\n',
             )
         self.assertEqual([e.kind for e in runs.parse_log(cfg.runs_log)], ["start", "resume"])
-        self.assertEqual(
-            runs.claim(cfg.runs_log, "TASK-1", "s1").key, cfg.linear.roles["researcher"].key
-        )
+        self.assertEqual(runs.claim(cfg.runs_log, "TASK-1", "s1").role, "researcher")
 
 
 class ExplicitIssueRuns(TickBase):
@@ -5018,18 +5029,18 @@ class RoleKeys(Base):
 
     def cfg(self):
         cfg = super().cfg()
-        roles = {**cfg.linear.roles, "pm": replace(cfg.linear.roles["pm"], key="")}
+        roles = {**cfg.linear.roles, "pm": replace(cfg.linear.roles["pm"], token_service="")}
         return replace(cfg, linear=replace(cfg.linear, roles=roles))
 
     def test_the_keychain_is_checked_only_for_a_role_key(self):
-        key = self.cfg().linear.roles["researcher"].key
+        key = self.cfg().linear.roles["researcher"].token_service
         self.missing = {key, ""}
         self.assertEqual(self.claim(two()), f"TASK-2 https://linear.app/x/TASK-2 {PD}")
         self.assertEqual(self.keychain_calls, [key])
         self.assertIn(f"claim-skip TASK-1 reason=no Keychain item for role key {key}", self.said())
 
     def test_a_tracker_without_role_keys_checks_no_keychain(self):
-        self.missing = {self.cfg().linear.roles["researcher"].key, ""}
+        self.missing = {self.cfg().linear.roles["researcher"].token_service, ""}
         self.wiring = replace(cli.TRACKERS[TrackerKind.LINEAR], identity=lambda *_: None)
         self.assertEqual(self.claim(two()), "TASK-1 https://linear.app/x/TASK-1 Deep Research")
         self.assertEqual(self.keychain_calls, [])
@@ -5383,7 +5394,7 @@ class ScheduledRuns(TickScenario):
         self.assertEqual((self.api.order, self.api.usage_calls), (SESSIONS, []))
         self.assertEqual(
             [v["e"] for q, v in fake.queries if "users(filter" in q],
-            [ROLE["researcher"], ROLE["pm"], ROLE["engineer"]],
+            [],
         )
         self.assertEqual(fake.mutations, [])
 
@@ -5585,7 +5596,7 @@ class RecoverWriteBack(TickBase):
         super().setUp()
         self.moved("TASK-1", 61)
         start = json.loads(self.row("start", "TASK-1", "a", "researcher", minutes=60))
-        key = self.cfg().linear.roles["researcher"].key
+        key = "deleted-member-key"
         self.lines.append(
             json.dumps(start | {"uuid": self.ISSUE, "project": IDS[DR], "target": None, "key": key})
         )
@@ -5614,6 +5625,8 @@ class RecoverWriteBack(TickBase):
         self.assertEqual(self.linear.issues["TASK-1"]["state"], "In Review")
         self.assertIsNone(self.linear.issues["TASK-1"].get("comments"))
         self.assertEqual(self.steps(), ["comment", "move:in_review", "outcome"])
+        self.assertNotIn("deleted-member-key", self.linear.services)
+        self.assertIn(self.cfg().linear.roles["researcher"].token_service, self.linear.services)
         recovered = [show(e) for e in logged(self.logs) if e["kind"] == "recover"]
         self.assertEqual(self.unmap("\n".join(recovered)), "recover TASK-1 to=writeback sid=a")
         mutations = list(self.linear.mutations)
@@ -5656,7 +5669,7 @@ class RecoverWriteBack(TickBase):
         self.assertFalse(done)
         [(kind, reason)] = said
         self.assertEqual(kind, ("recover-skip", "TASK-1"))
-        self.assertIn(f"session {sid}'s start row key:", reason)
+        self.assertIn(f"session {sid}'s start row uuid:", reason)
         self.assertEqual(self.steps(), ["comment"])
 
     def test_a_dry_run_writes_nothing(self):

@@ -553,6 +553,19 @@ def start(sid, **fields):
 
 
 class ClaimOf(Case):
+    def test_claim_ignores_old_credentials_and_needs_none(self):
+        for fields in ({}, {"key": "deleted-member-key"}, {"key": None}, {"key": 7}):
+            row = json.loads(start(SID_A))
+            row.pop("key")
+            row.update(fields)
+            before = json.dumps(row)
+            self.write([before])
+            found = runs.claim(self.log, "TASK-1", SID_A)
+            self.assertEqual(found.role, "engineer")
+            self.assertFalse(hasattr(found, "key"))
+            with open(self.log) as source:
+                self.assertEqual(source.read().strip(), before)
+
     def test_the_sids_start_row_not_the_latest(self):
         self.write(
             [
@@ -570,12 +583,11 @@ class ClaimOf(Case):
                 uuid=UUID,
                 project="p1",
                 target=("acme", "ensemble"),
-                key="ensemble-engineer",
                 client="claude",
                 delegate_kind="harness",
             ),
         )
-        self.assertEqual(runs.claim(self.log, "TASK-1", SID_B).key, "ensemble-researcher")
+        self.assertEqual(runs.claim(self.log, "TASK-1", SID_B).role, "researcher")
         self.assertIsNone(runs.claim(self.log, "TASK-1", SID_B).target)
 
     def test_null_project_and_target_are_none(self):
@@ -586,7 +598,7 @@ class ClaimOf(Case):
     def test_a_local_boards_start_row_has_its_issue_id_and_no_key(self):
         self.write([start(SID_A, uuid="LOC-1", key=None)])
         found = runs.claim(self.log, "TASK-1", SID_A)
-        self.assertEqual((found.uuid, found.key), ("LOC-1", None))
+        self.assertEqual(found.uuid, "LOC-1")
 
     def test_no_start_row_for_the_issue_and_sid_raises(self):
         self.write(
@@ -610,8 +622,6 @@ class ClaimOf(Case):
             ("uuid", None),
             ("project", 7),
             ("target", "not a slug"),
-            ("key", ""),
-            ("key", 7),
             ("client", ""),
             ("delegate_kind", None),
         ):
@@ -619,7 +629,7 @@ class ClaimOf(Case):
                 self.write([start(SID_A, **{field: value})])
                 with self.assertRaisesRegex(ValueError, f"start row {field}"):
                     runs.claim(self.log, "TASK-1", SID_A)
-        for field in ("role", "uuid", "project", "target", "key", "client", "delegate_kind"):
+        for field in ("role", "uuid", "project", "target", "client", "delegate_kind"):
             with self.subTest(missing=field):
                 row = json.loads(start(SID_A))
                 del row[field]

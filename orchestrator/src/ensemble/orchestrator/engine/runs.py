@@ -101,7 +101,6 @@ CLAIMED = {
     "uuid": _text,
     "project": lambda v: v is None or isinstance(v, str),
     "target": lambda v: v is None or repo_slug(v) is not None,
-    "key": lambda v: v is None or _text(v),
     "client": _text,
     "delegate_kind": _text,
 }
@@ -129,7 +128,6 @@ def claim(path, issue, sid) -> Claim:
                 d["uuid"],
                 d["project"],
                 d["target"] and repo_slug(d["target"]),
-                d["key"],
                 d["client"],
                 d["delegate_kind"],
             )
@@ -234,6 +232,12 @@ def trim(path, now):
 def client_of(entries, sid):
     mine = [e for e in entries if e.sid == sid]
     return next((e for e in mine if e.kind == "start"), min(mine, key=lambda e: e.ts)).client
+
+
+def role_of(entries, sid):
+    """A session's recorded role, independent of the board's current assignment."""
+    mine = [e for e in entries if e.sid == sid]
+    return next((e for e in mine if e.kind == "start"), min(mine, key=lambda e: e.ts)).role
 
 
 def delegate_of(entries, sid) -> str:

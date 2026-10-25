@@ -1643,7 +1643,7 @@ class ResumedComments(Base):
 
 RUN_ISSUE = "TASK-1"
 
-CLAIM_KEY = "ensemble-engineer-at-claim"
+ROLE_SERVICE = "linear-api-key-engineer"
 
 STARTED, RESTARTED = "2026-10-14T09:00:00+08:00", "2026-10-14T10:00:00+08:00"
 BEFORE = datetime.fromisoformat(STARTED) - timedelta(hours=1)  # a row, then its run's Begun
@@ -1662,7 +1662,6 @@ CLAIM = Claim(
     uuid=UUID,
     project="p1",
     target=("acme", "ensemble"),
-    key=CLAIM_KEY,
     client="fake",
     delegate_kind="fake",
 )
@@ -1770,7 +1769,7 @@ class Events(RunCase):
             uuid=UUID,
             project="p1",
             target="acme/ensemble",
-            **{"key": CLAIM_KEY, **fields},
+            **{"key": "deleted-engineer-member-key", **fields},
         )
 
     def accounts(self):
@@ -1858,14 +1857,16 @@ class RunningEvents(Events):
                     self.assertTrue(self.deliver(delegate_event("begun", attempt)))
                     calls = self.linear.calls[n:]
                     self.assertEqual(self.linear.state, self.cfg.linear.states["in_progress"])
-                    self.assertIn((CLAIM_KEY, "reread", {"i": UUID}), calls)
+                    self.assertIn(
+                        (self.cfg.linear.roles[role].token_service, "reread", {"i": UUID}), calls
+                    )
                     moved = [c for c in calls if c[1] == "state"]
                     expected = (
                         []
                         if state == self.cfg.linear.states["in_progress"]
                         else [
                             (
-                                CLAIM_KEY,
+                                self.cfg.linear.roles[role].token_service,
                                 "state",
                                 {"i": UUID, "s": self.cfg.linear.states["in_progress"]},
                             )
@@ -1874,7 +1875,10 @@ class RunningEvents(Events):
                     self.assertEqual(moved, expected)
                     if moved:
                         self.assertLess(
-                            calls.index((CLAIM_KEY, "reread", {"i": UUID})), calls.index(moved[0])
+                            calls.index(
+                                (self.cfg.linear.roles[role].token_service, "reread", {"i": UUID})
+                            ),
+                            calls.index(moved[0]),
                         )
 
     def test_limit_resume_returns_to_work_and_the_next_limit_ends_it_again(self):
@@ -1932,7 +1936,7 @@ class BegunEvents(Events):
             [
                 (harness, "update", {"c": RUN_SESSION, "b": body}),
                 (harness, "comment", {"c": RUN_SESSION, "i": RUN_ISSUE, "b": body}),
-                (CLAIM_KEY, "reread", {"i": UUID}),
+                (ROLE_SERVICE, "reread", {"i": UUID}),
             ],
         )
         self.assertEqual(
@@ -2002,10 +2006,10 @@ class ProgressEvents(Events):
         self.assertEqual(
             self.linear.calls,
             [
-                (CLAIM_KEY, "reread", {"i": UUID}),
-                (CLAIM_KEY, "find", {"c": ops.client_id(RUN_SID, "start")}),
+                (ROLE_SERVICE, "reread", {"i": UUID}),
+                (ROLE_SERVICE, "find", {"c": ops.client_id(RUN_SID, "start")}),
                 (
-                    CLAIM_KEY,
+                    ROLE_SERVICE,
                     "comment",
                     {
                         "c": ops.client_id(RUN_SID, "start"),
@@ -2013,9 +2017,9 @@ class ProgressEvents(Events):
                         "b": "Build started: light-build: a tweak",
                     },
                 ),
-                (CLAIM_KEY, "find", {"c": ops.client_id(RUN_SID, digest)}),
+                (ROLE_SERVICE, "find", {"c": ops.client_id(RUN_SID, digest)}),
                 (
-                    CLAIM_KEY,
+                    ROLE_SERVICE,
                     "comment",
                     {
                         "c": ops.client_id(RUN_SID, digest),
@@ -2038,13 +2042,16 @@ class ProgressEvents(Events):
         self.assertEqual(self.ledger()[RUN_SID]["steps"], ["running:1", "start"])
 
     def test_a_resumed_attempt_finds_a_start_whose_ledger_write_was_lost(self):
-        self.linear.comments[ops.client_id(RUN_SID, "start")] = {"body": "x", "service": CLAIM_KEY}
+        self.linear.comments[ops.client_id(RUN_SID, "start")] = {
+            "body": "x",
+            "service": ROLE_SERVICE,
+        }
         self.assertTrue(self.deliver(delegate_event("progress", attempt=2, name="start", text="x")))
         self.assertEqual(
             self.linear.calls,
             [
-                (CLAIM_KEY, "reread", {"i": UUID}),
-                (CLAIM_KEY, "find", {"c": ops.client_id(RUN_SID, "start")}),
+                (ROLE_SERVICE, "reread", {"i": UUID}),
+                (ROLE_SERVICE, "find", {"c": ops.client_id(RUN_SID, "start")}),
             ],
         )
 
@@ -2074,32 +2081,17 @@ class RefusedEvents(Events):
         self.assertEqual(self.linear.calls, [])
         self.assertFalse(os.path.exists(os.path.join(self.workdir, writeback.LEDGER)))
 
-    def test_a_start_row_key_that_does_not_fit_the_tracker_raises_before_any_write(self):
-        other = "9c1d2e3f-4a5b-4c6d-8e7f-a0b1c2d3e4f5"
-        self.claim(sid=other, key=None)
-        local = replace(self.cfg, tracker=TrackerKind.LOCAL, linear=None, board=self.dir)
-        done = Outcome(status="done", summary="x", title="x")
-
-        def accounts(cfg):
-            return functools.partial(cli.TRACKERS[cfg.tracker].claimed, self.linear, cfg)
-
-        def deliver(cfg, sid):
-            event = delegate_event("begun", sid=sid)
-            return writeback.deliver(cfg, RUN_ISSUE, self.workdir, event, accounts=accounts(cfg))
-
-        def replay(cfg, sid):
-            return writeback.replay(cfg, RUN_ISSUE, sid, done, accounts=accounts(cfg))
-
-        for cfg, sid, key in ((self.cfg, other, None), (local, RUN_SID, CLAIM_KEY)):
-            for call in (deliver, replay):
-                with self.subTest(call.__name__, tracker=cfg.tracker):
-                    with self.assertRaises(ConfigError) as cm:
-                        call(cfg, sid)
-                    self.assertEqual(
-                        str(cm.exception), f"{RUN_ISSUE}: session {sid}'s start row key: {key!r}"
-                    )
+    def test_removed_role_refuses_before_writing(self):
+        self.cfg = replace(self.cfg, linear=replace(self.cfg.linear, roles={}))
+        with self.assertRaisesRegex(ConfigError, "role 'engineer' has no configured Linear app"):
+            self.deliver(delegate_event("begun"))
         self.assertEqual(self.linear.calls, [])
-        self.assertFalse(os.path.exists(os.path.join(self.workdir, writeback.LEDGER)))
+
+    def test_current_app_replaces_the_old_start_row_credential(self):
+        app = replace(self.cfg.linear.roles["engineer"], token_service="new-engineer-token")
+        self.cfg = replace(self.cfg, linear=replace(self.cfg.linear, roles={"engineer": app}))
+        self.assertTrue(self.deliver(delegate_event("progress", name="start", text="x")))
+        self.assertEqual({service for service, _, _ in self.linear.calls}, {"new-engineer-token"})
 
     def test_a_claimed_role_without_write_back_raises(self):
         other = "9c1d2e3f-4a5b-4c6d-8e7f-a0b1c2d3e4f5"
@@ -2139,10 +2131,10 @@ class FinishedEvents(Events):
         self.assertEqual(
             self.linear.calls[n:],
             [
-                (CLAIM_KEY, "read", {"i": UUID}),
-                (CLAIM_KEY, "find", {"c": ops.client_id(RUN_SID, "comment")}),
+                (ROLE_SERVICE, "read", {"i": UUID}),
+                (ROLE_SERVICE, "find", {"c": ops.client_id(RUN_SID, "comment")}),
                 (
-                    CLAIM_KEY,
+                    ROLE_SERVICE,
                     "comment",
                     {
                         "c": ops.client_id(RUN_SID, "comment"),
@@ -2150,9 +2142,9 @@ class FinishedEvents(Events):
                         "b": "Build ready:\nAgent report before delivery:\n\n> Ready.",
                     },
                 ),
-                (CLAIM_KEY, "attach", {"i": UUID, "u": PR, "t": "TASK-1: x"}),
-                (CLAIM_KEY, "reread", {"i": UUID}),
-                (CLAIM_KEY, "state", {"i": UUID, "s": states["in_review"]}),
+                (ROLE_SERVICE, "attach", {"i": UUID, "u": PR, "t": "TASK-1: x"}),
+                (ROLE_SERVICE, "reread", {"i": UUID}),
+                (ROLE_SERVICE, "state", {"i": UUID, "s": states["in_review"]}),
                 (harness, "update", {"c": RUN_SESSION, "b": ended}),
                 (harness, "find", {"c": RUN_SESSION}),
             ],
@@ -2268,15 +2260,15 @@ class FinishedEvents(Events):
         self.assertEqual(
             self.linear.calls[n:],
             [
-                (CLAIM_KEY, "read", {"i": UUID}),
-                (CLAIM_KEY, "find", {"c": comment}),
+                (ROLE_SERVICE, "read", {"i": UUID}),
+                (ROLE_SERVICE, "find", {"c": comment}),
                 (
-                    CLAIM_KEY,
+                    ROLE_SERVICE,
                     "comment",
                     {"c": comment, "i": UUID, "b": f"Build failed: {TURN_FAILED}"},
                 ),
-                (CLAIM_KEY, "reread", {"i": UUID}),
-                (CLAIM_KEY, "state", {"i": UUID, "s": states["in_review"]}),
+                (ROLE_SERVICE, "reread", {"i": UUID}),
+                (ROLE_SERVICE, "state", {"i": UUID, "s": states["in_review"]}),
                 (harness, "update", {"c": RUN_SESSION, "b": ended}),
                 (harness, "find", {"c": RUN_SESSION}),
             ],
@@ -2424,9 +2416,9 @@ class LimitEvents(Events):
         self.assertEqual(
             self.linear.calls[n:],
             [
-                (CLAIM_KEY, "find", {"c": ops.client_id(RUN_SID, "limit")}),
+                (ROLE_SERVICE, "find", {"c": ops.client_id(RUN_SID, "limit")}),
                 (
-                    CLAIM_KEY,
+                    ROLE_SERVICE,
                     "comment",
                     {
                         "c": ops.client_id(RUN_SID, "limit"),
@@ -2434,8 +2426,8 @@ class LimitEvents(Events):
                         "b": "Usage limit, resets at 2026-10-11T18:00:00+08:00.",
                     },
                 ),
-                (CLAIM_KEY, "reread", {"i": UUID}),
-                (CLAIM_KEY, "state", {"i": UUID, "s": states["in_review"]}),
+                (ROLE_SERVICE, "reread", {"i": UUID}),
+                (ROLE_SERVICE, "state", {"i": UUID, "s": states["in_review"]}),
                 (harness, "update", {"c": RUN_SESSION, "b": ended}),
                 (harness, "find", {"c": RUN_SESSION}),
             ],
@@ -2492,7 +2484,7 @@ class LimitEvents(Events):
 
         self.linear.fail = fail
         self.assertTrue(self.deliver(self.limited()))
-        mine = [(op, v) for service, op, v in self.linear.calls if service == CLAIM_KEY]
+        mine = [(op, v) for service, op, v in self.linear.calls if service == ROLE_SERVICE]
         self.assertEqual(
             [op for op, _ in mine], ["subscribe", "subscribe", "find", "comment", "reread", "state"]
         )
@@ -2524,7 +2516,7 @@ class LimitEvents(Events):
             LinearError("commentCreate: success: false") if op == "comment" else None
         )
         self.assertFalse(self.deliver(self.limited()))
-        mine = [op for service, op, _ in self.linear.calls if service == CLAIM_KEY]
+        mine = [op for service, op, _ in self.linear.calls if service == ROLE_SERVICE]
         self.assertEqual(mine, ["find", "comment"])
         self.assertIn(
             f"writeback step-error {RUN_ISSUE} sid={RUN_SID} step=limit "
@@ -2581,7 +2573,7 @@ class LimitEvents(Events):
         n = len(self.linear.calls)
         self.assertTrue(self.deliver(self.limited(attempt=2)))
         self.assertEqual(
-            [op for service, op, _ in self.linear.calls[n:] if service == CLAIM_KEY],
+            [op for service, op, _ in self.linear.calls[n:] if service == ROLE_SERVICE],
             ["reread", "state"],
         )
         self.assertEqual(len([c for c in self.linear.comments if c != RUN_SESSION]), 1)
