@@ -5,11 +5,11 @@ and how to revoke it. The local Host (`tmux`) and the Docker Host (`[session.hos
 [Docker host](docker-host.md)) differ for the model clients; their columns are separate. `<B>` is `/usr/local/libexec/ensemble/ensemble-broker`.
 
 **Three-way readers**: a credential the broker hands to a container (the Claude setup-token copy, GitHub installation
-tokens, the Codex access token, OpenCode provider API keys) can be read by the broker, by every process in that container, and by any process
+tokens, the Codex access token, OpenCode provider API keys, environment secrets) can be read by the broker, by every process in that container, and by any process
 running as the user: `<B> start --manifest <file>` does not check its caller, and the Docker
 socket is the user's, so such a process can start a container or
 `docker exec` into one and read `/run/ensemble/secrets/`. Only the App private key and the Codex refresh token stay
-with the broker; a provider API key is the same long-lived key in every container that lists it. The user accepted this on 2026-10-18; the broker is unchanged ([Risks](#risks)).
+with the broker; a provider API key or an environment secret is the same long-lived value in every container that lists it. The user accepted this on 2026-10-18; the broker is unchanged ([Risks](#risks)).
 
 ## Who logs in
 
@@ -107,6 +107,20 @@ One per role: `linear.roles.researcher.key` for `linear.roles.researcher.account
 | Lifetime | refreshed by Claude Code; `/login` renews | one year |
 | Revoke | `/logout` | Unknown: no official route. `claude.ai/settings/claude-code`, cited by the community, is unverified. On a leak: run `claude setup-token` again and rerun `<B> login claude [<name>]` |
 
+### Environment secrets
+
+One per `<B> login env <name>`: a named value (a password, an API key, an ssh private key) that a start manifest
+lists in `secrets` ([Docker host › Environment secrets](docker-host.md#environment-secrets)).
+
+| Field | Value |
+|---|---|
+| Purpose | whatever the container's tools use it for; ensemble passes it only by reference, `ensemble-env/<name>` |
+| Minimum permission | whatever the value grants; issue one for ensemble alone |
+| Stored at | `ensemble-env/<name>` / `<name>`; per container `/run/ensemble/secrets/env/<file>` (0400, owner `agent`, tmpfs), written at `start` only |
+| Readers | item: the broker only, once `login env <name>` has made it trust only the broker; container copy: **three-way readers**, and since `<B> start` does not check its caller, any process running as the user can start a container listing any `ensemble-env/*` item and read it |
+| Lifetime | until replaced or deleted; a container's copy until the container goes |
+| Revoke | rotate it at its source, then `<B> login env <name>` with the new value, which replaces the item; `security delete-generic-password -s ensemble-env/<name>` deletes it; running containers keep the old copy until closed |
+
 ### Stored broker credentials
 
 `ensemble-broker status` reports local usability of the default Claude token as `claude.default`:
@@ -177,6 +191,7 @@ shows.
 | `ensemble-revocations` | `pending` | — | tokens awaiting revocation | `<B> close`, `refresh` failures | the broker |
 | `ensemble-codex` | `auth` | — | the full Codex login | `<B> login codex`; renewals at `start`, `refresh` | the broker |
 | `ensemble-opencode` | provider name | `[session.clients.opencode.providers.<name>]` | that OpenCode provider's API key | `<B> login opencode <name>` | the broker |
+| `ensemble-env/<name>` | `<name>` | — | that environment secret | `<B> login env <name>` | the broker |
 | the `linear.harness_key` value | any | `linear.harness_key` | harness Linear API key | the user ([Linear presets](#linear-presets)) | any process running as the user |
 | the `linear.manager_key` value | the manager's account | `linear.manager_key` | manager Linear API key | the user ([Linear presets](#linear-presets)) | any process running as the user |
 | each `linear.roles.<role>.key` value | the role's account | `linear.roles.<role>.key` | role Linear API key | the user | any process running as the user |
@@ -199,7 +214,7 @@ column, and after `!` in the manager's Claude Code prompt for the manager column
 for s in ensemble-claude ensemble-bot ensemble-github-users ensemble-tokens ensemble-revocations ensemble-codex ensemble-opencode; do security find-generic-password -s "$s" >/dev/null 2>&1; e=$?; r=$(bash -c 'perl -e "alarm 10; exec @ARGV" security find-generic-password -s "$0" -w 2>/dev/null | wc -c | tr -d " "; echo "exit=${PIPESTATUS[0]}"' "$s" | tr '\n' ' '); echo "$s exists=$e bytes/$r"; done
 ```
 
-An item must exist to be measured (`exists=0`); `exists=44` means absent: record `absent, not measured` and make it
+For each environment secret, add `ensemble-env/<name>` to the loop's list. An item must exist to be measured (`exists=0`); `exists=44` means absent: record `absent, not measured` and make it
 first. `ensemble-claude`, `ensemble-github-users`, `ensemble-codex` and `ensemble-opencode` exist after their `login`; `ensemble-bot` once
 the user stores the key; `ensemble-tokens` while a Docker session runs; `ensemble-revocations` after a `close` with the
 network off, until the next start, close or status online.
@@ -220,6 +235,7 @@ A read that returns bytes fails this check unless the user accepts it: mark the 
 | `ensemble-revocations` | absent, not measured | absent, not measured |
 | `ensemble-codex` | exists=0, exit=128, bytes=0 | exists=0, exit=128, bytes=0 |
 | `ensemble-opencode` | pending | pending |
+| `ensemble-env/<name>` | pending | pending |
 
 ## What a container reaches
 
@@ -304,10 +320,13 @@ For the manager and the user, on macOS with Docker Desktop; write each result in
 - **Three-way readers** of handed-out credentials: accepted by the user on 2026-10-18; the broker is unchanged.
 - The Linear key items trust `/usr/bin/security`: any process running as the user reads them without a dialog.
 - Each broker release changes its ad-hoc code identity: rerun `login claude`, each `login claude <name>`,
-  `login github ensemble-bot`, `login codex` and each `login opencode <name>` ([Log in](docker-host.md#log-in)).
+  `login github ensemble-bot`, `login codex`, each `login opencode <name>` and each `login env <name>`
+  ([Log in](docker-host.md#log-in)).
 - Config picks a Docker Claude session's account ([Claude accounts](docker-host.md#claude-accounts)); it is no
   access control: any process running as the user can start a container with any logged-in account (`<B> start`
   does not check its caller).
+- An environment secret reaches whoever can start a container: `<B> start` does not check its caller, so any process
+  running as the user can list any `ensemble-env/*` item in a manifest and read the copy (**three-way readers**).
 - `<B> probe-provider --provider NAME --base-url URL` also does not check its caller: any process running as
   the user can choose an endpoint and have the broker send that provider's stored API key to it.
 - An OpenCode provider whose `base_url` is `http://` gets its API key in plaintext: anyone on the LAN path, or on the

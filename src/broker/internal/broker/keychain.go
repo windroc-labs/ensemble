@@ -1,5 +1,5 @@
 // Package broker owns the broker's keychain secrets: each Claude account's setup-token (login, access, injection into a
-// container) and the GitHub App private keys (login).
+// container), the GitHub App private keys (login) and the environment secrets (login, injection into a container).
 // It never decides how a container starts: the launcher calls it through Credentials with an exec bound to one container.
 package broker
 
@@ -68,7 +68,8 @@ const AppKeyService = "ensemble-bot"
 
 // KeychainServices are every keychain service the broker reads or writes, one literal each: docs/credentials.md names
 // them all (tests/guard_checks/credentials.py reads this list). Declare each service as a package-level `...Service`
-// string constant: TestKeychainServices pins this list to exactly those.
+// string constant, and each prefix item, an entry ending in "/" that stands for every service starting with it, as a
+// `...ServicePrefix` one: TestKeychainServices pins this list to exactly those.
 var KeychainServices = []string{
 	"ensemble-claude",
 	"ensemble-bot",
@@ -77,6 +78,7 @@ var KeychainServices = []string{
 	"ensemble-revocations",
 	"ensemble-codex",
 	"ensemble-opencode",
+	"ensemble-env/", // prefix item: every ensemble-env/<name>
 }
 
 // SecretKeychain holds broker-only items: created trusting only the broker, read without a dialog.
