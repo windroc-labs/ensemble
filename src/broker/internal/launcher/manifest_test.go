@@ -84,6 +84,41 @@ func TestManifestCleansCWD(t *testing.T) {
 	}
 }
 
+func TestManifestLock(t *testing.T) {
+	for _, lock := range []string{"a", "0", "a.b-c_d", strings.Repeat("a", 63)} {
+		path := editedManifest(t, func(f map[string]any) { f["lock"], f["lock_owner"] = lock, "session 1" })
+		data, _ := os.ReadFile(path)
+		if _, err := ParseManifest(data); err != nil {
+			t.Errorf("%q: %v", lock, err)
+		}
+	}
+	for _, lock := range []any{"", "A B", "A", "-a", "a/b", "a\n", strings.Repeat("a", 64), nil, 1} {
+		path := editedManifest(t, func(f map[string]any) { f["lock"], f["lock_owner"] = lock, "session 1" })
+		data, _ := os.ReadFile(path)
+		if _, err := ParseManifest(data); code(t, err) != protocol.ManifestRejected {
+			t.Errorf("accepted lock %v", lock)
+		}
+	}
+	for _, label := range []string{"windroc.lock", "windroc.other", "ensemble.lock"} {
+		path := editedManifest(t, func(f map[string]any) { f["labels"] = map[string]string{label: "x"} })
+		data, _ := os.ReadFile(path)
+		if _, err := ParseManifest(data); code(t, err) != protocol.ManifestRejected {
+			t.Errorf("accepted reserved label %q", label)
+		}
+	}
+	for name, edit := range map[string]func(map[string]any){
+		"missing owner": func(f map[string]any) { f["lock"] = "x" },
+		"orphan owner":  func(f map[string]any) { f["lock_owner"] = "session" },
+		"empty owner":   func(f map[string]any) { f["lock"], f["lock_owner"] = "x", "" },
+		"control owner": func(f map[string]any) { f["lock"], f["lock_owner"] = "x", "a\n" },
+	} {
+		data, _ := os.ReadFile(editedManifest(t, edit))
+		if _, err := ParseManifest(data); code(t, err) != protocol.ManifestRejected {
+			t.Errorf("accepted %s", name)
+		}
+	}
+}
+
 func TestManifestWorkspace(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(fixtures.Dir(), "manifest-valid.json"))
 	if err != nil {

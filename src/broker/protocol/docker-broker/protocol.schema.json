@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Docker broker protocol 20",
+  "title": "Docker broker protocol 21",
   "$comment": "Changes to the protocol format defined by this schema require bumping Version in src/broker/internal/protocol/protocol.go.",
   "$ref": "#/$defs/manifest",
   "$defs": {
@@ -190,7 +190,7 @@
         ],
         "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
         "not": {
-          "pattern": "^ensemble\\."
+          "pattern": "^(ensemble|windroc)\\."
         }
       },
       "additionalProperties": {
@@ -286,6 +286,19 @@
             "required": ["item", "file"],
             "additionalProperties": false
           }
+        },
+        "lock": {
+          "$ref": "#/$defs/lock_name"
+        },
+        "lock_owner": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/text"
+            },
+            {
+              "pattern": "\\S"
+            }
+          ]
         }
       },
       "required": [
@@ -392,7 +405,15 @@
             ]
           }
         }
-      ]
+      ],
+      "dependentRequired": {
+        "lock": [
+          "lock_owner"
+        ],
+        "lock_owner": [
+          "lock"
+        ]
+      }
     },
     "version_input": {
       "type": "object",
@@ -808,9 +829,13 @@
         "claude": {
           "type": "object",
           "properties": {
-            "default": {"type": "boolean"}
+            "default": {
+              "type": "boolean"
+            }
           },
-          "required": ["default"],
+          "required": [
+            "default"
+          ],
           "additionalProperties": false
         }
       },
@@ -838,7 +863,8 @@
                 "status",
                 "workspace-rm",
                 "unknown",
-                "probe-provider"
+                "probe-provider",
+                "lock-query"
               ]
             },
             "code": {
@@ -858,7 +884,8 @@
                 "workspace_failed",
                 "github_failed",
                 "refresh_failed",
-                "internal_error"
+                "internal_error",
+                "busy"
               ]
             },
             "message": {
@@ -879,6 +906,9 @@
             },
             "container": {
               "$ref": "#/$defs/container"
+            },
+            "holder": {
+              "$ref": "#/$defs/holder"
             }
           },
           "required": [
@@ -928,6 +958,35 @@
                   }
                 }
               }
+            },
+            {
+              "if": {
+                "properties": {
+                  "code": {
+                    "const": "busy"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "holder"
+                ],
+                "properties": {
+                  "cleanup": {
+                    "enum": [
+                      "not_needed",
+                      "removed"
+                    ]
+                  }
+                }
+              },
+              "else": {
+                "not": {
+                  "required": [
+                    "holder"
+                  ]
+                }
+              }
             }
           ]
         }
@@ -958,7 +1017,8 @@
                     "status",
                     "workspace-rm",
                     "unknown",
-                    "probe-provider"
+                    "probe-provider",
+                    "lock-query"
                   ]
                 }
               }
@@ -1061,7 +1121,8 @@
                     "start",
                     "refresh",
                     "close",
-                    "workspace-rm"
+                    "workspace-rm",
+                    "lock-query"
                   ]
                 }
               }
@@ -1099,7 +1160,8 @@
                 },
                 "command": {
                   "enum": [
-                    "start"
+                    "start",
+                    "lock-query"
                   ]
                 }
               }
@@ -1264,8 +1326,26 @@
                     "status",
                     "workspace-rm",
                     "unknown",
-                    "probe-provider"
+                    "probe-provider",
+                    "lock-query"
                   ]
+                }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "exit_code": {
+              "const": 75
+            },
+            "error": {
+              "properties": {
+                "code": {
+                  "const": "busy"
+                },
+                "command": {
+                  "const": "start"
                 }
               }
             }
@@ -1485,6 +1565,73 @@
       },
       "required": [
         "available"
+      ],
+      "additionalProperties": false
+    },
+    "lock_name": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]{0,62}$",
+      "not": {
+        "pattern": "[\\u0000-\\u001f\\u007f]"
+      }
+    },
+    "holder": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "$ref": "#/$defs/text"
+        },
+        "owner": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "container",
+        "owner"
+      ],
+      "additionalProperties": false
+    },
+    "lock_query_input": {
+      "type": "object",
+      "properties": {
+        "argv": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": "lock-query"
+            },
+            {
+              "const": "--lock"
+            },
+            {
+              "$ref": "#/$defs/lock_name"
+            }
+          ],
+          "minItems": 3,
+          "maxItems": 3
+        }
+      },
+      "required": [
+        "argv"
+      ],
+      "additionalProperties": false
+    },
+    "lock_query_output": {
+      "type": "object",
+      "properties": {
+        "holder": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/holder"
+            }
+          ]
+        }
+      },
+      "required": [
+        "holder"
       ],
       "additionalProperties": false
     }
