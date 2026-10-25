@@ -232,17 +232,19 @@ func tokenIn(entries []tokenEntry) func(string) bool {
 	}
 }
 
-// discard takes entries out of container's record (all of it, read in the same lock section, when whole) and
-// revokes them through the backlog. With the backlog unreadable, or the lock failing, it revokes them directly;
-// with the lock failing it queues the ones it could not revoke without the lock, so none is left untracked, then
-// takes them out of the record.
+// discard retires entries (the whole record when whole) through a durable backlog transfer, or direct revocation
+// if that transfer fails. The original record keeps every token not confirmed revoked, expired or queued.
 func (g GitHub) discard(ctx context.Context, container string, entries []tokenEntry, whole bool) error {
 	var backlogErr error
 	ran := false
 	err := g.locked(func() error {
 		ran = true
 		if whole {
-			if rec, found, err := g.readRecord(container); err == nil && found {
+			rec, found, err := g.readRecord(container)
+			if err != nil {
+				return err
+			}
+			if found {
 				in := tokenIn(entries)
 				entries = append(slices.Clone(entries), slices.DeleteFunc(rec.Tokens, func(e tokenEntry) bool { return in(e.Token) })...)
 			}
@@ -253,10 +255,11 @@ func (g GitHub) discard(ctx context.Context, container string, entries []tokenEn
 			}
 			return list
 		})
-		if backlogErr == nil {
-			for _, e := range entries {
-				g.note(container, audit.Pending, "queued for revocation", e, nil)
-			}
+		if backlogErr != nil {
+			return nil // direct revocation below must finish before the original record can change
+		}
+		for _, e := range entries {
+			g.note(container, audit.Pending, "queued for revocation", e, nil)
 		}
 		if whole {
 			return g.Keychain.DeleteSecret(tokensService, container)
@@ -281,11 +284,18 @@ func (g GitHub) discard(ctx context.Context, container string, entries []tokenEn
 		}
 		var left []pending
 		var missed []miss
+		var confirmed []tokenEntry
 		for _, e := range entries {
+			if expires, err := time.Parse(time.RFC3339, e.ExpiresAt); err == nil && !g.API.Now().Before(expires) {
+				confirmed = append(confirmed, e)
+				g.note(container, audit.ExpiredUnrevoked, "", e, nil)
+				continue
+			}
 			if err := g.API.Revoke(ctx, e.Token); err != nil {
 				left = append(left, pending{container, e.Account, e.Token, e.ExpiresAt})
 				missed = append(missed, miss{e, err.Error()})
 			} else {
+				confirmed = append(confirmed, e)
 				g.note(container, audit.Revoked, "", e, nil)
 			}
 		}
@@ -301,8 +311,19 @@ func (g GitHub) discard(ctx context.Context, container string, entries []tokenEn
 				return unrevoked(container) // the record keeps them tracked
 			}
 			g.untrack(container, entries)
-		} else if len(left) > 0 {
-			return unrevoked(container)
+		} else {
+			if len(confirmed) > 0 {
+				_, removeErr := g.editRecord(container, false, func(rec *tokenRecord, _ bool) {
+					in := tokenIn(confirmed)
+					rec.Tokens = slices.DeleteFunc(rec.Tokens, func(e tokenEntry) bool { return in(e.Token) })
+				})
+				if removeErr != nil {
+					return tokensError(removeErr)
+				}
+			}
+			if len(left) > 0 {
+				return unrevoked(container)
+			}
 		}
 	} else {
 		_, _ = g.Retry(ctx)
@@ -544,7 +565,7 @@ func (g GitHub) Refresh(ctx context.Context, app string, permissions map[string]
 	return expiries(fresh), nil
 }
 
-// Revoke revokes every token of container's record and deletes it. An unreadable record is deleted best-effort.
+// Revoke retires every token of container's record. An unreadable record is kept for recovery.
 func (g GitHub) Revoke(ctx context.Context, container string) error {
 	var found bool
 	err := g.locked(func() (err error) {
@@ -555,7 +576,6 @@ func (g GitHub) Revoke(ctx context.Context, container string) error {
 		return g.discard(ctx, container, nil, true)
 	}
 	if err != nil {
-		_ = g.Keychain.DeleteSecret(tokensService, container)
 		return unrevoked(container)
 	}
 	if !found {
@@ -584,7 +604,7 @@ func (g GitHub) Retry(ctx context.Context) ([]protocol.Pending, error) {
 	var resolved []outcome // done's: noted once the backlog no longer holds them, so a failed removal notes nothing twice
 	for i, p := range list {
 		expires, err := time.Parse(time.RFC3339, p.ExpiresAt)
-		if err != nil || !now.Before(expires) {
+		if err == nil && !now.Before(expires) {
 			done, resolved = append(done, p.Token), append(resolved, outcome{p, audit.ExpiredUnrevoked})
 			continue
 		}
