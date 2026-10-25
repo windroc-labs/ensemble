@@ -11,5 +11,5 @@ case $repo_dir in
     ;;
 esac
 export PATH="$bin_dir:$PATH"
-export PYTHONPATH="$repo_dir/utils/src:$repo_dir/session/src:$repo_dir/delegate/src:$repo_dir/orchestrator/src"
+export PYTHONPATH="$repo_dir/src"
 exec python3 -P -m ensemble.orchestrator.cli "$@"

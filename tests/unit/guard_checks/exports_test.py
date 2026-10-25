@@ -12,7 +12,7 @@ from tests.guard_samples import PKG, Sample
 
 
 class EventObjectExports(Sample):
-    EVENT = "delegate/src/ensemble/delegate/event/"
+    EVENT = "src/ensemble/delegate/event/"
 
     def exports(self, root):
         return [entry for entry in exports.object_exports(root) if entry.startswith(self.EVENT)]
@@ -163,7 +163,7 @@ class EventObjectExports(Sample):
                 {
                     init: "__all__ = []\n",
                     **{
-                        f"{project}/src/ensemble/{package}/__init__.py": "def run(): pass\n__all__ = ['run']\n"
+                        f"src/ensemble/{package}/__init__.py": "def run(): pass\n__all__ = ['run']\n"
                         for project, package in (
                             ("utils", "utils"),
                             ("session", "session"),
@@ -228,7 +228,7 @@ class DelegateObjectExports(Sample):
     }
 
     def exports(self, package, extra="", names=()):
-        rel = "delegate/src/" + package.replace(".", "/") + "/__init__.py"
+        rel = "src/" + package.replace(".", "/") + "/__init__.py"
         functions = self.PINNED[package]
         sample = "import os\nfrom enum import StrEnum\n"
         sample += "".join(f"def {name}(): pass\n" for name in functions)
@@ -273,11 +273,11 @@ class DelegateObjectExports(Sample):
     def test_missing_all_is_rejected_for_both_packages(self):
         root = self.tree({})
         for package in self.PINNED:
-            rel = "delegate/src/" + package.replace(".", "/") + "/__init__.py"
+            rel = "src/" + package.replace(".", "/") + "/__init__.py"
             self.assertIn(f"{rel}: no literal __all__", exports.object_exports(root))
 
     def test_delegate_runtime_helpers_are_rejected(self):
-        rel = "delegate/src/ensemble/delegate/__init__.py"
+        rel = "src/ensemble/delegate/__init__.py"
         sample = "read_config = 'literal'\ndef module_roots(): pass\n"
         sample += "__all__ = ['read_config', 'module_roots']\n"
         found = [
@@ -298,7 +298,7 @@ class DelegateObjectExports(Sample):
             "SEPARATORS = (os.sep, '/')\n"
         )
         for package in self.PINNED:
-            rel = "delegate/src/" + package.replace(".", "/") + "/__init__.py"
+            rel = "src/" + package.replace(".", "/") + "/__init__.py"
             for source, names, expected in (
                 *(
                     (source, [name], [f"__all__ exports unrecognised value {name} (FR-44)"])
@@ -320,13 +320,13 @@ class DelegateObjectExports(Sample):
 
 
 class OrchestratorObjectExports(Sample):
-    INIT = "orchestrator/src/ensemble/orchestrator/__init__.py"
+    INIT = "src/ensemble/orchestrator/__init__.py"
 
     def found(self, source):
         root = self.tree(
             {
-                "delegate/src/ensemble/delegate/event/__init__.py": "__all__ = []\n",
-                "orchestrator/src/ensemble/orchestrator/engine/run.py": (
+                "src/ensemble/delegate/event/__init__.py": "__all__ = []\n",
+                "src/ensemble/orchestrator/engine/run.py": (
                     "class LinearRun: pass\ndef launch(): pass\n"
                 ),
                 self.INIT: source,
@@ -357,12 +357,12 @@ class OrchestratorObjectExports(Sample):
                 self.assertEqual(self.found(source), expected)
 
     def test_a_missing_package_init_fails(self):
-        root = self.tree({"delegate/src/ensemble/delegate/event/__init__.py": "__all__ = []\n"})
+        root = self.tree({"src/ensemble/delegate/event/__init__.py": "__all__ = []\n"})
         self.assertIn(f"{self.INIT}: no literal __all__", exports.object_exports(root))
 
 
 class ObjectExports(Sample):
-    SESSION = f"session/{PKG}/session/"
+    SESSION = f"{PKG}/session/"
     INIT = SESSION + "__init__.py"
     EXTENSION = SESSION + "extension.py"
     ENTRY_EXPORTS = ("SESSION_NAME", "SESSION_NAME_RULE", "get_viewer")
@@ -387,7 +387,7 @@ class ObjectExports(Sample):
 
     def found(self, files=None):
         tree = {
-            "delegate/src/ensemble/delegate/event/__init__.py": "__all__ = []\n",
+            "src/ensemble/delegate/event/__init__.py": "__all__ = []\n",
             self.SESSION + "engine/config.py": "def read_config(): pass\n",
             self.SESSION + "modes/__init__.py": "",
             self.INIT: self.init(),
@@ -434,7 +434,7 @@ class ObjectExports(Sample):
             "class Error(Exception): pass\n"
             "Event = Spec | Mode\n"
         )
-        utils = f"utils/{PKG}/utils/"
+        utils = f"{PKG}/utils/"
         stale = "allowlisted but not an exported function or value (FR-44)"
         for files, expected in (
             *(

@@ -12,6 +12,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import tests
+
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("run_tests", HERE / "run_tests.py")
 runner = importlib.util.module_from_spec(spec)
@@ -172,9 +174,12 @@ class Discovery(unittest.TestCase):
     def selection_fixture(self, *, normalized=False):
         root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
         package = "example_" + root.name + "_tests"
-        directory = root / (f"project/tests/{package}/integration" if normalized else ".github")
+        directory = root / (f"tests/{package}/integration" if normalized else ".github")
         directory.mkdir(parents=True)
         if normalized:
+            self.enterContext(
+                mock.patch.object(tests, "__path__", [*tests.__path__, str(root / "tests")])
+            )
             for parent in (directory, directory.parent):
                 (parent / "__init__.py").touch()
         name = "selection_" + root.name + "_test"
@@ -183,7 +188,7 @@ class Discovery(unittest.TestCase):
             "import unittest\nclass Choice(unittest.TestCase):\n"
             "    def test_one(self): pass\n    def test_two(self): pass\n"
         )
-        module = (package + ".integration." if normalized else "") + name
+        module = ("tests." + package + ".integration." if normalized else "") + name
         return root, path, module
 
     def test_exact_id_and_file_select_only_the_requested_tests(self):
@@ -222,7 +227,7 @@ class Discovery(unittest.TestCase):
 
     def test_ambiguous_module_names_are_rejected_before_import(self):
         root, path, module = self.selection_fixture(normalized=True)
-        other = root / "other/tests" / path.relative_to(root / "project/tests")
+        other = root / ".github" / (module + ".py")
         other.parent.mkdir(parents=True)
         for parent in (other.parent, other.parent.parent):
             (parent / "__init__.py").touch()
@@ -242,14 +247,14 @@ class Discovery(unittest.TestCase):
 
     def test_top_level_preserves_project_packages_and_normalized_tests(self):
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        regular = root / "session/tests/unit"
-        normalized = root / "orchestrator/tests/orchestrator_tests/unit"
+        regular = root / "tests/session/unit"
+        normalized = root / "tests/orchestrator/unit"
         for path in (regular, normalized):
             path.mkdir(parents=True)
             (path / "__init__.py").touch()
         (normalized.parent / "__init__.py").touch()
         self.assertEqual(runner.discovery_top(root, regular), root.resolve())
-        self.assertEqual(runner.discovery_top(root, normalized), normalized.parent.parent.resolve())
+        self.assertEqual(runner.discovery_top(root, normalized), root.resolve())
         self.assertEqual(
             runner.discovery_top(root, (root / ".github").resolve()), (root / ".github").resolve()
         )

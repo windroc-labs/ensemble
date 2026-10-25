@@ -12,7 +12,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-DOCKERFILE = Path(__file__).resolve().parents[1] / "broker/internal/launcher/assets/Dockerfile"
+DOCKERFILE = Path(__file__).resolve().parents[1] / "src/broker/internal/launcher/assets/Dockerfile"
 PYTHON = "/opt/ensemble/venv/bin/python"
 BOOTSTRAP = "/opt/ensemble/lib/bootstrap.py"
 PROBES = Path(__file__).with_suffix("")

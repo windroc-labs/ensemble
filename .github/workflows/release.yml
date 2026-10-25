@@ -32,13 +32,13 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: broker/go.mod
+          go-version-file: src/broker/go.mod
           cache: false
       - name: Build and sign
         env:
           GOOS: darwin
           GOARCH: arm64
-        run: sh broker/build.sh "$RUNNER_TEMP/release/ensemble-broker"
+        run: sh src/broker/build.sh "$RUNNER_TEMP/release/ensemble-broker"
       - name: Pack
         run: tar -czf "$RUNNER_TEMP/ensemble-broker-darwin-arm64.tar.gz" -C "$RUNNER_TEMP/release" ensemble-broker
       - name: Attest provenance

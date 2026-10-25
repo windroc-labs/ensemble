@@ -24,7 +24,7 @@ for x86_64/amd64 emulation on Apple Silicon**. Rosetta cannot be uninstalled, so
 undo it.
 
 ```sh
-sh "$PKG/broker/install.sh"
+sh "$PKG/src/broker/install.sh"
 ```
 
 It downloads the broker asset of the plugin's version, installs it root-owned (`sudo` asks once) only after
@@ -131,7 +131,7 @@ After a rebuild, `build` removes unused older images, keeping those used by cont
 ### Plugins
 
 A container’s Claude Code and Codex independently install `[session.hosts.docker] plugins` through their
-native marketplace commands. The [packaged default](../session/src/ensemble/session/config.toml) pins updraft
+native marketplace commands. The [packaged default](../src/ensemble/session/config.toml) pins updraft
 (the team’s `/updraft:build`, `/updraft:light-build` and `/updraft:review`); `[]`: none. Configure a remote plugin as
 `name@plugin-owner/repo#commit::marketplace-owner/repo#commit`, with both commits exactly 40 lowercase hexadecimal
 characters. The plugin and its catalogue are pinned together in the same entry; neither follows a moving branch.
@@ -176,7 +176,7 @@ flowchart LR
 | Action | File or check |
 |---|---|
 | Choose the commit | Review the source diff; resolve a reviewed tag with `git -C <source-checkout> rev-parse <tag>^{commit}` and use the full commit, not the tag. |
-| Set the pin | Your override: `~/.ensemble/config.local.toml`, `[session.hosts.docker] plugins` (replaces the whole list). Packaged default: `session/src/ensemble/session/config.toml`; Worker image CI reads that same list. Keep all plugins from one plugin or catalogue repo on the same respective pin. |
+| Set the pin | Your override: `~/.ensemble/config.local.toml`, `[session.hosts.docker] plugins` (replaces the whole list). Packaged default: `src/ensemble/session/config.toml`; Worker image CI reads that same list. Keep all plugins from one plugin or catalogue repo on the same respective pin. |
 | Force a build | `/usr/local/libexec/ensemble/ensemble-broker build --ensemble <plugin-dir> --plugin '<name>@<plugin-owner>/<repo>#<commit>::<marketplace-owner>/<repo>#<commit>' --max-age 0`; repeat `--plugin` for every configured entry. Upgrade the broker from this checkout first. |
 | Check the result | Build logs must report the configured commit for both `claude` and `codex`. In the image, compare `plugin-sources.json` with `git -c safe.directory=<checkout> -C <checkout> rev-parse HEAD` for both source directories above. For a remote plugin, also compare Codex’s installed Git HEAD and Claude Code’s `gitCommitSha` installation record with `plugin_commit`. Worker image CI checks the catalogue pins and both installed caches; the installer verifies the plugin pins. |
 | Exercise a failure | `python3 .github/run_tests.py Unit tests/unit/docker_plugin_install_test.py` with [test setup](tests.md): fake git returns a different commit for each client, before and after installation, and checks the explicit mismatch error. Real configuration and credentials stay untouched. |
@@ -482,7 +482,7 @@ secrets in environments that need it.
 
 ## Live acceptance
 
-`session/tests/live_docker.py` checks the critical path on Docker Desktop, run by hand from
+`tests/session/live_docker.py` checks the critical path on Docker Desktop, run by hand from
 the repo root with `PYTHONPATH` as in [Tests](tests.md). It needs the broker installed and
 logged in ([Install](#install), [Log in](#log-in)), for Codex also `install-codex` and
 `login codex` ([Codex](#codex)), for OpenCode the host's Ollama on `127.0.0.1` with the
@@ -492,9 +492,9 @@ tier model pulled and `OLLAMA_CONTEXT_LENGTH` ≥ 65536, `[session.hosts] defaul
 
 | Command | Checks |
 |---|---|
-| `python3 session/tests/live_docker.py worker --client claude\|codex\|opencode CWD [NAME]`, from a manager session | a second build reuses the image; with no `--host`, the worker runs in a container; its security flags (`--cap-drop ALL`, network `bridge`, no extra hosts) and mounts match the plan, and the [unreachable](credentials.md#what-a-container-cannot-reach) resources stay so; a supervisor killed mid-turn delivers its event once; restart, close then resume, and `docker rm -f` then resume each answer a prompt; every close revokes the generation's GitHub tokens and withdraws its client credential; no revocation stays pending but the removed container's, whose tokens it reports; for OpenCode also: the first turn leaves `~/.ensemble/docker-state/<NAME>/opencode/opencode/opencode.db`, Ollama listens on `127.0.0.1` only (`lsof`), the container holds only GitHub secrets and each configured provider's key (`find /run/ensemble/secrets`), and each resume continues the same OpenCode session |
-| `python3 session/tests/live_docker.py role --repo OWNER/NAME [--timeout S] [NAME]` | a headless engineer run on the test repo gets one forced token refresh, opens a draft PR as `windroc-bot[bot]` after it, and its close reclaims its credentials |
-| `python3 session/tests/live_docker.py pr URL` | the PR, such as an unattended board run's, was opened as a draft by `windroc-bot[bot]` |
+| `python3 tests/session/live_docker.py worker --client claude\|codex\|opencode CWD [NAME]`, from a manager session | a second build reuses the image; with no `--host`, the worker runs in a container; its security flags (`--cap-drop ALL`, network `bridge`, no extra hosts) and mounts match the plan, and the [unreachable](credentials.md#what-a-container-cannot-reach) resources stay so; a supervisor killed mid-turn delivers its event once; restart, close then resume, and `docker rm -f` then resume each answer a prompt; every close revokes the generation's GitHub tokens and withdraws its client credential; no revocation stays pending but the removed container's, whose tokens it reports; for OpenCode also: the first turn leaves `~/.ensemble/docker-state/<NAME>/opencode/opencode/opencode.db`, Ollama listens on `127.0.0.1` only (`lsof`), the container holds only GitHub secrets and each configured provider's key (`find /run/ensemble/secrets`), and each resume continues the same OpenCode session |
+| `python3 tests/session/live_docker.py role --repo OWNER/NAME [--timeout S] [NAME]` | a headless engineer run on the test repo gets one forced token refresh, opens a draft PR as `windroc-bot[bot]` after it, and its close reclaims its credentials |
+| `python3 tests/session/live_docker.py pr URL` | the PR, such as an unattended board run's, was opened as a draft by `windroc-bot[bot]` |
 
 Each prints a `PASS` line per check and per-generation timings. It stops with exit 1 at
 the first failed check. The keychain, Linear preset and board-run checks stay manual

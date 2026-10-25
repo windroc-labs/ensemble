@@ -10,7 +10,7 @@ from tests.guard_data.orchestrator import ORCH_FILES
 
 INVENTORY = "docs/credentials.md"
 CONFIG = f"{ORCH_FILES}config.toml"
-SERVICES = "broker/internal/broker/keychain.go"
+SERVICES = "src/broker/internal/broker/keychain.go"
 LIST = re.compile(r"var KeychainServices = \[\]string\{(.*?)\}", re.S)
 ENTRY = re.compile(r'"([^"]+)",\s*(//.*)?')
 PREFIXES = ("ghs_", "ghp_", "gho_", "ghu_", "ghr_", "github_pat_", "lin_api_", "sk-ant-")

@@ -5,7 +5,7 @@ import os
 
 from tests.guard_checks.common import _bindings, _dotted, _files
 from tests.guard_data import ENTRY_MODULES, SUBPACKAGES
-from tests.guard_data.orchestrator import ORCH_ABSENT, ORCH_PROJECT, ORCH_SRC
+from tests.guard_data.orchestrator import ORCH_ABSENT, ORCH_SRC
 from tests.guards import PKG, PROJECTS
 
 LEFTOVERS = {"__pycache__", ".DS_Store"}
@@ -16,11 +16,11 @@ TOP = {"__init__.py", "cli.py", "engine"}
 
 def orchestrator_entry(repo: str) -> list[str]:
     found = []
-    root = os.path.join(repo, ORCH_PROJECT, ORCH_SRC)
+    root = os.path.join(repo, ORCH_SRC)
     if not os.path.isfile(os.path.join(root, "cli.py")):
-        found.append(f"{ORCH_PROJECT}/{ORCH_SRC}cli.py: missing entry")
+        found.append(f"{ORCH_SRC}cli.py: missing entry")
     found += [
-        f"{ORCH_PROJECT}/{ORCH_SRC}{rel}: no such module: a run is its Delegate's harness (FR-25)"
+        f"{ORCH_SRC}{rel}: no such module: a run is its Delegate's harness (FR-25)"
         for rel in ORCH_ABSENT
         if os.path.lexists(os.path.join(root, rel))
     ]
@@ -32,14 +32,14 @@ def orchestrator_entry(repo: str) -> list[str]:
                 isinstance(value, ast.Constant) and value.value == "__main__"
                 for value in (node.left, *node.comparators)
             ):
-                found.append(f"{ORCH_PROJECT}/{ORCH_SRC}{rel}:{node.lineno}: entry outside cli.py")
+                found.append(f"{ORCH_SRC}{rel}:{node.lineno}: entry outside cli.py")
     return sorted(found)
 
 
 def package_top(repo: str) -> list[str]:
     found = set()
     for project in (p for p in PROJECTS if p != "utils"):
-        rel = f"{project}/src/{PKG}/{PROJECTS[project]}"
+        rel = f"src/{PKG}/{PROJECTS[project]}"
         path = os.path.join(repo, rel)
         have = {e for e in (os.listdir(path) if os.path.isdir(path) else ()) if e not in LEFTOVERS}
         found.update(f"{rel}/{e}: missing" for e in (TOP - {"cli.py"}) - have)
@@ -59,20 +59,19 @@ def package_top(repo: str) -> list[str]:
 
 def namespace_package(repo: str) -> list[str]:
     found = set()
-    for top, own in PROJECTS.items():
-        for rel, wanted in (("src", {PKG}), (f"src/{PKG}", {own})):
-            path = os.path.join(repo, top, rel)
-            have = {
-                e
-                for e in (os.listdir(path) if os.path.isdir(path) else ())
-                if e not in LEFTOVERS and not e.endswith(".egg-info")
-            }
-            found.update(
-                f"{top}/{rel}/{e}: "
-                + ("namespace package __init__.py" if e == "__init__.py" else f"not {top}'s")
-                for e in have - wanted
-            )
-            found.update(f"{top}/{rel}/{e}: missing" for e in wanted - have)
+    for rel, wanted in (("src", {PKG, "broker"}), (f"src/{PKG}", set(PROJECTS.values()))):
+        path = os.path.join(repo, rel)
+        have = {
+            e
+            for e in (os.listdir(path) if os.path.isdir(path) else ())
+            if e not in LEFTOVERS and not e.endswith(".egg-info")
+        }
+        found.update(
+            f"{rel}/{e}: "
+            + ("namespace package __init__.py" if e == "__init__.py" else "not a source package")
+            for e in have - wanted
+        )
+        found.update(f"{rel}/{e}: missing" for e in wanted - have)
     return sorted(found)
 
 
@@ -80,7 +79,7 @@ def package_climbs(repo: str) -> list[str]:
     """Runtime paths stay inside their own package."""
     found = []
     for project, package in PROJECTS.items():
-        base = f"{project}/src/ensemble/{package}"
+        base = f"src/ensemble/{package}"
         for sub, text in _files(os.path.join(repo, base), (".py",)):
             rel = f"{base}/{sub}"
             depth = len(sub.split("/"))

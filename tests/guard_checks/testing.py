@@ -98,7 +98,7 @@ def unit_test_modules(repo: str) -> list[str]:
     """
     found = []
     for project, layer in PROJECTS.items():
-        tests = os.path.join(repo, project, "tests")
+        tests = os.path.join(repo, "tests", project)
         for top, dirs, names in os.walk(tests):
             parts = os.path.relpath(top, tests).split(os.sep)
             dirs[:] = sorted(d for d in dirs if d != "__pycache__")
@@ -109,7 +109,7 @@ def unit_test_modules(repo: str) -> list[str]:
             relative = parts[unit + 1 :]
             for name in sorted(n for n in names if n.endswith("_test.py")):
                 stem = name.removesuffix("_test.py")
-                source = os.path.join(project, "src", PKG, layer, *relative, stem)
+                source = os.path.join("src", PKG, layer, *relative, stem)
                 home = os.path.join(repo, source)
                 helper = os.path.join(tests, *parts[:unit], *relative, stem + ".py")
                 matches = (
@@ -120,9 +120,7 @@ def unit_test_modules(repo: str) -> list[str]:
                     or (
                         not relative
                         and stem == layer
-                        and os.path.isfile(
-                            os.path.join(repo, project, "src", PKG, layer, "__init__.py")
-                        )
+                        and os.path.isfile(os.path.join(repo, "src", PKG, layer, "__init__.py"))
                     )
                 )
                 if not stem or stem == "__init__" or not matches:
@@ -172,6 +170,9 @@ def test_boundaries(repo: str) -> list[str]:
         f"{rel}:{line}: {reason}"
         for rel, text in _tree_files(repo, ".py")
         for line, reason in _boundary_violations(
-            text, rel.split("/")[0].replace("-", "_"), modules, shipped="/src/" in rel
+            text,
+            rel.split("/")[2] if rel.startswith("src/ensemble/") else rel.split("/")[1],
+            modules,
+            shipped=rel.startswith("src/"),
         )
     )

@@ -1,13 +1,12 @@
 from tests.guard_checks import commands
-from tests.guard_data.orchestrator import ORCH_PROJECT
 from tests.guard_samples import PKG, Sample
 
 OPKG = "src/ensemble/orchestrator"
 
 
 class LayerCommands(Sample):
-    SESSION, DELEGATE = (f"{layer}/{PKG}/{layer}" for layer in ("session", "delegate"))
-    LINEAR = f"orchestrator/{OPKG}"
+    SESSION, DELEGATE = (f"{PKG}/{layer}" for layer in ("session", "delegate"))
+    LINEAR = f"{OPKG}"
 
     def test_a_layer_command_in_a_spawn_argv_and_only_there(self):
         for files, expected in (
@@ -39,7 +38,7 @@ class LayerCommands(Sample):
                     f"{self.DELEGATE}/a.py": (
                         'import subprocess\nNAME = "ensemble-progress"\nprint("ensemble-x")\nsubprocess.run(["tmux", NAME, "/ensemble-list"], env={"A": "ensemble-x"})\n'
                     ),
-                    f"manager/{PKG}/manager/crew.py": (
+                    f"{PKG}/manager/crew.py": (
                         'import subprocess\nsubprocess.run(["ensemble-x"])\n'
                     ),
                     "tests/b.py": 'import subprocess\nsubprocess.run(["ensemble-x"])\n',
@@ -53,35 +52,35 @@ class LayerCommands(Sample):
 
 class PythonCommands(Sample):
     def test_a_python_command_other_than_p_m_ensemble_or_a_team_tool(self):
-        team = f"delegate/{PKG}/delegate/team"
+        team = f"{PKG}/delegate/team"
         for files, expected in (
             (
                 {
-                    "delegate/src/ensemble/delegate/config.toml": 'commands = ["python3 x.py", "python3 -m ensemble.x"]\n# python3 -P {{team}}/tools/repo.py\ngate = "python3 -P {{team}}/x.py"\n',
-                    f"{ORCH_PROJECT}/{OPKG}/config.toml": 'gate = "python3 -P -m ensemblex.y"\n',
-                    "delegate/skills/a/SKILL.md": "Run `python3.11 x.py`.\n- Bash(python -P -m ensemble.delegate.cli --list)\n",
-                    "manager/skills/b/SKILL.md": "Run `python3 y.py`.\n",
+                    "src/ensemble/delegate/config.toml": 'commands = ["python3 x.py", "python3 -m ensemble.x"]\n# python3 -P {{team}}/tools/repo.py\ngate = "python3 -P {{team}}/x.py"\n',
+                    f"{OPKG}/config.toml": 'gate = "python3 -P -m ensemblex.y"\n',
+                    "skills/a/SKILL.md": "Run `python3.11 x.py`.\n- Bash(python -P -m ensemble.delegate.cli --list)\n",
+                    "skills/b/SKILL.md": "Run `python3 y.py`.\n",
                     f"{team}/roles/r.md": (
                         "1. `python3 -P ensemble.x`\n2. /usr/bin/python3 -I -m ensemble.x\n3. `env PYTHONPATH=x python3 -P -m ensemble.orchestrator.engine.run`\n4. `python3 -P <team>/tools/repo.py status --dir x`\n5. `python3 -P <team>/tools/../repo.py`\n6. `python3 -P <team>/tools/repo.pyc`\n7. `python3 -P <role team>/tools/x.py`\n"
                     ),
                 },
                 [
-                    'delegate/skills/a/SKILL.md:1: python command "python3.11 x.py"',
-                    'delegate/src/ensemble/delegate/config.toml:1: python command "python3 -m ensemble.x"',
-                    'delegate/src/ensemble/delegate/config.toml:1: python command "python3 x.py"',
-                    'delegate/src/ensemble/delegate/config.toml:3: python command "python3 -P {{team}}/x.py"',
+                    'skills/a/SKILL.md:1: python command "python3.11 x.py"',
+                    'src/ensemble/delegate/config.toml:1: python command "python3 -m ensemble.x"',
+                    'src/ensemble/delegate/config.toml:1: python command "python3 x.py"',
+                    'src/ensemble/delegate/config.toml:3: python command "python3 -P {{team}}/x.py"',
                     f'{team}/roles/r.md:1: python command "python3 -P ensemble.x"',
                     f'{team}/roles/r.md:2: python command "python3 -I -m ensemble.x"',
                     f'{team}/roles/r.md:5: python command "python3 -P <team>/tools/../repo.py"',
                     f'{team}/roles/r.md:6: python command "python3 -P <team>/tools/repo.pyc"',
-                    'manager/skills/b/SKILL.md:1: python command "python3 y.py"',
-                    f'{ORCH_PROJECT}/{OPKG}/config.toml:1: python command "python3 -P -m ensemblex.y"',
+                    'skills/b/SKILL.md:1: python command "python3 y.py"',
+                    f'{OPKG}/config.toml:1: python command "python3 -P -m ensemblex.y"',
                 ],
             ),
             (
                 {
                     f"{team}/a.md": "pythonic, my_python3 x.py, Python 3.11\n",
-                    "delegate/skills/a/notes.txt": "python3 x.py\n",
+                    "skills/a/notes.txt": "python3 x.py\n",
                     "delegate/README.md": "python3 x.py\n",
                     "orchestrator/other.toml": 'x = "python3 x.py"\n',
                     "tests/a.md": "python3 x.py\n",
@@ -90,7 +89,7 @@ class PythonCommands(Sample):
             ),
         ):
             with self.subTest(files=sorted(files)):
-                self.assertEqual(commands.python_commands(self.tree(files)), expected)
+                self.assertEqual(commands.python_commands(self.tree(files)), sorted(expected))
 
 
 class BinCommands(Sample):
@@ -101,24 +100,24 @@ class BinCommands(Sample):
         return self.tree(
             {
                 "bin/ensemble-delegate": self.SCRIPT.format("delegate"),
-                f"delegate/{PKG}/delegate/cli.py": "",
-                "delegate/skills/a/SKILL.md": self.SKILL.format("ensemble-delegate run --list"),
-                f"delegate/{PKG}/delegate/config.toml": 'commands = ["python3 -P {{team}}/tools/repo.py *"]\n',
-                f"{ORCH_PROJECT}/{OPKG}/config.toml": '[core.roles.r]\ngate = "ensemble-delegate run --list"\n',
+                f"{PKG}/delegate/cli.py": "",
+                "skills/a/SKILL.md": self.SKILL.format("ensemble-delegate run --list"),
+                f"{PKG}/delegate/config.toml": 'commands = ["python3 -P {{team}}/tools/repo.py *"]\n',
+                f"{OPKG}/config.toml": '[core.roles.r]\ngate = "ensemble-delegate run --list"\n',
                 **dict(files),
             }
         )
 
     def test_shipped_commands_name_bin_scripts_each_running_one_module_of_its_own(self):
-        config = f"{ORCH_PROJECT}/{OPKG}/config.toml"
+        config = f"{OPKG}/config.toml"
         two = self.SCRIPT.format("delegate") + "exec python3 -P -m ensemble.session.cli\n"
         for name, files, expected in (
             ("shipped", {}, []),
             *(
                 (
                     rule,
-                    {"manager/skills/b/SKILL.md": self.SKILL.format(rule)},
-                    [f'manager/skills/b/SKILL.md: pre-approves "{rule}", not a bin/ command'],
+                    {"skills/b/SKILL.md": self.SKILL.format(rule)},
+                    [f'skills/b/SKILL.md: pre-approves "{rule}", not a bin/ command'],
                 )
                 for rule in ("ensemble-nope run", "python3 -P -m ensemble.delegate.cli run --list")
             ),

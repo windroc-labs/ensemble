@@ -16,7 +16,6 @@ from pathlib import Path
 
 from ensemble.orchestrator.engine import config as orchestrator_config
 from ensemble.orchestrator.trackers.local import board as local_board
-
 from tests.case import REPO, Case
 
 SCRIPT = Path(REPO, "scripts/install.sh")
@@ -127,7 +126,7 @@ uv_cache=${UV_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/uv}
 mkdir -p "$uv_cache"
 printf 'fake uv cache' > "$uv_cache/installer-cache"
 for n in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
-  printf '#!/bin/sh\\n' > "$HOME/.ensemble/bin/$n"
+  cp "$(dirname "$0")/launcher" "$HOME/.ensemble/bin/$n"
   chmod 755 "$HOME/.ensemble/bin/$n"
 done
 """
@@ -329,20 +328,21 @@ class InstallTest(Case):
             Path(REPO, "scripts/install_linear_app.py"),
             self.pkg_src / "scripts/install_linear_app.py",
         )
-        executable(self.pkg_src / "broker/install.sh", BROKER_INSTALL)
-        self.versions = self.pkg_src / "broker/internal/codex/versions.go"
+        executable(self.pkg_src / "src/broker/install.sh", BROKER_INSTALL)
+        self.versions = self.pkg_src / "src/broker/internal/codex/versions.go"
         self.versions.parent.mkdir(parents=True)
         self.versions.write_text('package codex\n\nconst MinVersion = "0.163.0"\n')
-        launcher = self.pkg_src / "broker/internal/launcher/versions.go"
+        launcher = self.pkg_src / "src/broker/internal/launcher/versions.go"
         launcher.parent.mkdir(parents=True)
         launcher.write_text('package launcher\n\nconst opencodeMinVersion = "1.19.3"\n')
-        executable(self.pkg_src / "manager/skills/manage/scripts/ctmux", CTMUX)
+        executable(self.pkg_src / "skills/manage/scripts/ctmux", CTMUX)
+        (self.pkg_src / "skills/manage/scripts/launcher").write_text("#!/bin/sh\nexit 0\n")
         (self.pkg_src / ".claude-plugin").mkdir()
         (self.pkg_src / ".claude-plugin/plugin.json").write_text('{"version": "9.8.7"}\n')
-        shutil.copytree(Path(REPO, "orchestrator/launchd"), self.pkg_src / "orchestrator/launchd")
-        flow = "orchestrator/src/ensemble/orchestrator/engine/flow"
+        shutil.copytree(Path(REPO, "launchd"), self.pkg_src / "launchd")
+        flow = "src/ensemble/orchestrator/engine/flow"
         (self.pkg_src / flow).mkdir(parents=True)
-        charters = "delegate/src/ensemble/delegate/team/roles"
+        charters = "src/ensemble/delegate/team/roles"
         (self.pkg_src / charters).mkdir(parents=True)
         # copyfile: CI makes the shipped source read-only, and the cleanup must delete these copies
         for source in [Path(REPO, flow, "workflow.toml"), *Path(REPO, charters).glob("*.md")]:
@@ -421,7 +421,7 @@ class InstallTest(Case):
     def assert_secret_free(self, *secrets, result):
         kept = {
             self.fakes / "keychain",
-            self.fakes / "broker/claude_token",
+            self.fakes / "src/broker/claude_token",
             self.fakes / "linear.json",
         }
         kept |= {self.fakes / "sudo_password", self.fakes / "claude_token", self.auth_json()}
@@ -976,7 +976,7 @@ class InstallTest(Case):
         self.assertLess(
             calls.index("claude setup-token"), calls.index("ensemble-broker login claude")
         )
-        self.assertEqual((self.fakes / "broker/claude_token").read_text(), TOKEN)
+        self.assertEqual((self.fakes / "src/broker/claude_token").read_text(), TOKEN)
         self.assertIn(
             "skip: no GitHub App key: create the App by docs/docker-host.md#create-the-github-app",
             result.stderr,
@@ -1160,7 +1160,7 @@ class InstallTest(Case):
         self.assert_ok(self.fresh(docker="y"))
         state = Path(self.ensemble, "install/state")
         state.write_text(re.sub(r"(?m)^login_claude=.*\n", "", state.read_text()))
-        versions = Path(self.fakes, "claude/cache/0/broker/internal/codex/versions.go")
+        versions = Path(self.fakes, "claude/cache/0/src/broker/internal/codex/versions.go")
         versions.write_text('package codex\n\nconst MinVersion = "0.170.0"\n')
         result = self.again()
         self.assert_ok(result)
@@ -1172,7 +1172,7 @@ class InstallTest(Case):
         self.assertNotIn("ensemble-broker login codex", calls)
         self.assertIn(f"sudo -A {self.broker_path()} update-codex 0.170.0", calls)
         self.assertIn("login_claude", self.state())
-        (self.fakes / "broker/claude_unusable").touch()
+        (self.fakes / "src/broker/claude_unusable").touch()
         self.assert_ok(self.again(answers=[(TOKEN_Q, TOKEN)]))
         self.assertIn("claude setup-token", self.calls())
         self.assertIn("ensemble-broker login claude", self.calls())
@@ -1361,7 +1361,7 @@ class InstallTest(Case):
         self.assertTrue(all(on < at < off for at in shown), result.tty)
         self.assertRegex(result.tty[on:off], TOKEN_Q)
         self.assertIn("    setup-token saved in the broker; its screen is cleared\n", result.stderr)
-        self.assertEqual((self.fakes / "broker/claude_token").read_text(), TOKEN)
+        self.assertEqual((self.fakes / "src/broker/claude_token").read_text(), TOKEN)
         self.assert_secret_free(TOKEN, result=result)
 
     def test_setup_token_failure_leaves_the_alternate_screen(self):
@@ -1484,7 +1484,7 @@ class InstallTest(Case):
         calls = self.calls()
         self.assertIn(f"opencode plugin -g -f {SPEC}", calls)
         self.assertIn(
-            "curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/main/broker/internal/launcher/versions.go",
+            "curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/main/src/broker/internal/launcher/versions.go",
             calls,
         )
         self.assertFalse([c for c in calls if c.startswith(("claude", "codex"))])
@@ -1586,6 +1586,25 @@ class InstallTest(Case):
         self.assertTrue((package / "NEW").exists())
         self.assertEqual(self.state()["opencode_plugin_commit"], NEW)
         self.assertIn(f"    {package}\n", result.stderr)
+
+    def test_plugin_layout_upgrade_refreshes_existing_executable_launchers_once(self):
+        self.assert_ok(self.opencode_only())
+        for name in (
+            "ctmux",
+            "ensemble-crew",
+            "ensemble-session",
+            "ensemble-delegate",
+            "ensemble-orchestrator",
+        ):
+            path = Path(self.ensemble, "bin", name)
+            path.write_text("#!/bin/sh\n# old plugin layout\n")
+            path.chmod(0o755)
+        self.assert_ok(self.opencode_rerun())
+        self.assertIn("ctmux --install", self.calls())
+        for path in Path(self.ensemble, "bin").iterdir():
+            self.assertEqual(path.read_text(), "#!/bin/sh\nexit 0\n")
+        self.assert_ok(self.opencode_rerun())
+        self.assertNotIn("ctmux --install", self.calls())
 
     def test_opencode_new_commit_reinstalls_broker(self):
         result = self.fresh(

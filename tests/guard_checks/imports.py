@@ -13,6 +13,7 @@ from tests.guard_checks.common import (
     _dotted,
     _files,
     _private,
+    _source_files,
     _tree_files,
     _within,
 )
@@ -83,7 +84,7 @@ def orchestrator_session_imports(repo: str) -> list[str]:
         if any(c.get("ignore_imports") for c in contracts if c["name"] == ORCH_SESSION_CONTRACT):
             found.append(f"pyproject.toml: {ORCH_SESSION_CONTRACT!r} must ignore no imports")
     session = f"{PKG}.{SESSION}."
-    for rel, text in _files(os.path.join(repo, ORCH_PROJECT, ORCH_SRC), ".py"):
+    for rel, text in _files(os.path.join(repo, ORCH_SRC), ".py"):
         module = f"{ORCH_PKG}.{rel.removesuffix('.py').replace('/', '.')}".removesuffix(".__init__")
         tree = ast.parse(text)
         bound = _bindings(tree)
@@ -96,7 +97,7 @@ def orchestrator_session_imports(repo: str) -> list[str]:
             if dotted.startswith(session)
         }
         found += [
-            f"{ORCH_PROJECT}/{ORCH_SRC}{rel}: {module} imports {name} from {PKG}.{SESSION}; "
+            f"{ORCH_SRC}{rel}: {module} imports {name} from {PKG}.{SESSION}; "
             "go through ensemble.delegate"
             for name in sorted(names)
         ]
@@ -109,13 +110,13 @@ def orchestrator_imports(repo: str) -> list[str]:
     """
     exported = _literal_all(os.path.join(repo, DELEGATE_SRC, "__init__.py"))
     found = set()
-    for rel, text in _files(os.path.join(repo, ORCH_PROJECT, ORCH_SRC), ".py"):
+    for rel, text in _files(os.path.join(repo, ORCH_SRC), ".py"):
         tree = ast.parse(text, rel)
         bound = _bindings(tree)
         modules, names = _imported(tree)
         names += [_dotted(n, bound) for n in ast.walk(tree) if isinstance(n, ast.Attribute)]
         found.update(
-            f"{ORCH_PROJECT}/{ORCH_SRC}{rel}: imports {reached} (FR-3)"
+            f"{ORCH_SRC}{rel}: imports {reached} (FR-3)"
             for reached in (
                 *map(_orchestrator_module, modules),
                 *(_orchestrator_name(name, exported) for name in names),
@@ -124,13 +125,13 @@ def orchestrator_imports(repo: str) -> list[str]:
         )
     for project in PROJECTS:
         if project != ORCH_PROJECT:
-            for rel, text in _files(os.path.join(repo, project, "src"), ".py"):
+            for rel, text in _source_files(repo, project, ".py"):
                 tree = ast.parse(text, rel)
                 bound = _bindings(tree)
                 modules, names = _imported(tree)
                 names += [_dotted(n, bound) for n in ast.walk(tree) if isinstance(n, ast.Attribute)]
                 if any(_within(name, ORCH_PKG) for name in (*modules, *names)):
-                    found.add(f"{project}/src/{rel}: imports {ORCH_PKG} (FR-3)")
+                    found.add(f"src/{rel}: imports {ORCH_PKG} (FR-3)")
     return sorted(found)
 
 
@@ -189,7 +190,7 @@ def literal_imports(repo: str) -> list[str]:
         contracts = tomllib.load(file)["tool"]["importlinter"]["contracts"]
     found = set()
     for project in PROJECTS:
-        for rel, text in _files(os.path.join(repo, project, "src"), ".py"):
+        for rel, text in _source_files(repo, project, ".py"):
             module = rel.removesuffix(".py").replace("/", ".").removesuffix(".__init__")
             tree = ast.parse(text)
             bound = _bindings(tree)
@@ -207,7 +208,7 @@ def literal_imports(repo: str) -> list[str]:
                 if target and any(
                     _literal_violation(module, target, contract) for contract in contracts
                 ):
-                    found.add(f"{project}/src/{rel}:{call.lineno}: imports {target}")
+                    found.add(f"src/{rel}:{call.lineno}: imports {target}")
     return sorted(found)
 
 
@@ -235,7 +236,7 @@ def standalone_imports(repo: str) -> list[str]:
 
 
 def test_gate_imports(repo: str) -> list[str]:
-    return _stdlib_imports(repo, {".github/isolation.py", "utils/tests/sandbox.py"})
+    return _stdlib_imports(repo, {".github/isolation.py", "tests/utils/sandbox.py"})
 
 
 def _stdlib_imports(repo, paths):

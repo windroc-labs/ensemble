@@ -12,16 +12,16 @@
 /tests/delegate_interface.json @windroc
 /tests/guard_checks/** @windroc
 /tests/guard_data/** @windroc
-/utils/tests/sandbox.py @windroc
+/tests/utils/sandbox.py @windroc
 
 # Protocol schemas, fixture expectations and recorded test oracles.
-/protocol/** @windroc
-/delegate/tests/integration/composer/composer_prompts.json @windroc
-/session/tests/unit/clients/claude/fixtures/** @windroc
+/src/broker/protocol/** @windroc
+/tests/delegate/integration/composer/composer_prompts.json @windroc
+/tests/session/unit/clients/claude/fixtures/** @windroc
 
 # Go check dependencies, execution environment and CI build entry.
-/broker/go.mod @windroc
-/broker/go.sum @windroc
-/broker/staticcheck.conf @windroc
-/broker/with-go-state.sh @windroc
-/broker/build.sh @windroc
+/src/broker/go.mod @windroc
+/src/broker/go.sum @windroc
+/src/broker/staticcheck.conf @windroc
+/src/broker/with-go-state.sh @windroc
+/src/broker/build.sh @windroc

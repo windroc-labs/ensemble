@@ -3,7 +3,7 @@ from unittest import mock
 from tests.case import REPO
 from tests.guard_checks import suppressions
 from tests.guard_data import NO_COVER_ALLOWED, NOQA_ALLOWED
-from tests.guard_samples import PKG, Sample
+from tests.guard_samples import Sample
 
 PRAGMA = "# pragma: " + "no cover"
 
@@ -46,7 +46,7 @@ class SourceSuppressions(Sample):
 
     def test_each_suppression_needs_its_scopes_inventory_entry_and_reason(self):
         (path, code, scope), reason = next(iter(NOQA_ALLOWED.items()))
-        hook = "session/src/ensemble/session/modes/tui_hook.py"
+        hook = "src/ensemble/session/modes/tui_hook.py"
         hook_comment = f"# noqa: BLE001  # {NOQA_ALLOWED[hook, 'BLE001', 'run']}"
         needs = "suppression needs explicit codes and a recorded reason"
         listed = f"# noqa: {code} # {reason}"
@@ -82,8 +82,8 @@ class SourceSuppressions(Sample):
             ),
             (
                 {
-                    f"{PKG}/utils/unused.py": "# noqa\n",
-                    "utils/src/ensemble/utils/strings.py": (
+                    "docs/unused.py": "# noqa\n",
+                    "src/ensemble/utils/strings.py": (
                         '"""Example: # noqa and # type: ignore."""\nvalue = \'# noqa: F401\'\n# Suppressions are checked elsewhere.\n'
                     ),
                 },
@@ -94,11 +94,11 @@ class SourceSuppressions(Sample):
                 ({where: f"value = 1  {comment}\n"}, None, [f"{where}:1: {needs}"])
                 for where, comment in (
                     *(
-                        ("utils/src/ensemble/utils/a.py", comment)
+                        ("src/ensemble/utils/a.py", comment)
                         for comment in ("# noqa", "# noqa:", "# noqa: F401", "# noqa: BLE001")
                     ),
                     *(
-                        ("delegate/src/ensemble/delegate/a.py", comment)
+                        ("src/ensemble/delegate/a.py", comment)
                         for comment in (
                             "# type: ignore",
                             "# type: ignore[assignment]",
@@ -108,8 +108,8 @@ class SourceSuppressions(Sample):
                     *(
                         (where, comment)
                         for where in (
-                            "session/src/ensemble/session/sample.py",
-                            "session/tests/unit/sample_test.py",
+                            "src/ensemble/session/sample.py",
+                            "tests/session/unit/sample_test.py",
                             "tests/unit/sample_test.py",
                             ".github/sample.py",
                         )
@@ -132,11 +132,9 @@ class SourceSuppressions(Sample):
                 [f"tests/a.py:{line}: {needs}" for line in range(1, 6)],
             ),
             (
-                {
-                    "utils/src/ensemble/utils/a.py": "value = 1  # noqa: BLE001  # Forward failures.\n"
-                },
+                {"src/ensemble/utils/a.py": "value = 1  # noqa: BLE001  # Forward failures.\n"},
                 None,
-                ["utils/src/ensemble/utils/a.py:1: suppression BLE001 in <module> is not allowed"],
+                ["src/ensemble/utils/a.py:1: suppression BLE001 in <module> is not allowed"],
             ),
             (
                 {path: self.scoped(scope, [f"# noqa: {code}, F401  # {reason}"])},
@@ -240,7 +238,7 @@ class CoveragePragmas(Sample):
         self.assertEqual(suppressions.coverage_pragmas(REPO), [])
 
     def test_a_registered_function_header_may_carry_the_pragma(self):
-        path = "utils/src/ensemble/utils/a.py"
+        path = "src/ensemble/utils/a.py"
         for scope, source in (
             ("run", f"def run():  {PRAGMA}\n    pass\n"),
             ("run", f"def run(\n    a,  {PRAGMA}\n):\n    pass\n"),
@@ -252,7 +250,7 @@ class CoveragePragmas(Sample):
                 self.assertEqual(self.found({path: source}, {(path, scope): "Spawns."}), [])
 
     def test_an_unregistered_function_is_rejected(self):
-        path = "utils/src/ensemble/utils/a.py"
+        path = "src/ensemble/utils/a.py"
         source = f"def run():  {PRAGMA}\n    pass\n\n\ndef other():  {PRAGMA}\n    pass\n"
         self.assertEqual(
             self.found({path: source}, {(path, "run"): "Spawns."}),
@@ -260,7 +258,7 @@ class CoveragePragmas(Sample):
         )
 
     def test_a_pragma_outside_a_def_header_is_rejected_whatever_its_spelling(self):
-        path = "utils/src/ensemble/utils/a.py"
+        path = "src/ensemble/utils/a.py"
         for line, source in (
             (1, f"value = 1  {PRAGMA}\n"),
             (2, f"def run():\n    pass  {PRAGMA}\n"),
@@ -277,7 +275,7 @@ class CoveragePragmas(Sample):
                 )
 
     def test_a_second_pragma_in_one_function_is_a_duplicate(self):
-        path = "utils/src/ensemble/utils/a.py"
+        path = "src/ensemble/utils/a.py"
         source = f"def run(  {PRAGMA}\n    a,  {PRAGMA}\n):\n    pass\n"
         self.assertEqual(
             self.found({path: source}, {(path, "run"): "Spawns."}),
@@ -285,14 +283,14 @@ class CoveragePragmas(Sample):
         )
 
     def test_an_entry_needs_a_reason(self):
-        path = "utils/src/ensemble/utils/a.py"
+        path = "src/ensemble/utils/a.py"
         self.assertEqual(
             self.found({path: f"def run():  {PRAGMA}\n    pass\n"}, {(path, "run"): " "}),
             [f"{path}:1: pragma no cover in run needs a reason"],
         )
 
     def test_each_entry_needs_a_pragma(self):
-        path = "utils/src/ensemble/utils/a.py"
+        path = "src/ensemble/utils/a.py"
         for files in ({path: "def run():\n    pass\n"}, {}):
             with self.subTest(files=files):
                 self.assertEqual(

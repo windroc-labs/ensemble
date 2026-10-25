@@ -56,6 +56,6 @@ class Rules(unittest.TestCase):
         for path in ("tests/a.py", "x/tests/b.py", "tests/unit/c.py", "delegate/d_test.py"):
             with self.subTest(path=path):
                 self.assertIs(budget.rule(path), budget.TESTS)
-        for path in ("delegate/src/e.py", ".github/comment_budget.py", "contests/f.py", "tests.py"):
+        for path in ("src/e.py", ".github/comment_budget.py", "contests/f.py", "tests.py"):
             with self.subTest(path=path):
                 self.assertIs(budget.rule(path), budget.SOURCE)

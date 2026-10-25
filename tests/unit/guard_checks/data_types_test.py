@@ -1,7 +1,6 @@
 from tests.case import REPO
 from tests.guard_checks import data_types
 from tests.guard_data import OPTION_TUPLES_ALLOWED, STANDALONE
-from tests.guard_data.orchestrator import ORCH_PROJECT
 from tests.guard_data.session import SESSION_SRC
 from tests.guard_samples import PKG, Sample
 
@@ -10,7 +9,7 @@ OPKG = "src/ensemble/orchestrator"
 
 class SharedTypes(Sample):
     DATA = "from dataclasses import dataclass\n\n\n@dataclass\nclass A:\n    x: int\n"
-    UTILS = f"utils/{PKG}/utils"
+    UTILS = f"{PKG}/utils"
 
     def found(self, home: str, user: str = "b.py", extra=None) -> list[str]:
         user_text = f"from ensemble.utils.{home[:-3]} import A\n"
@@ -40,7 +39,7 @@ class SharedTypes(Sample):
                 self.assertEqual(self.found(home, user), expected)
 
     def test_orchestrator_issue_data_types_have_no_exemption(self):
-        home = "orchestrator/src/ensemble/orchestrator/engine"
+        home = "src/ensemble/orchestrator/engine"
         for name in ("Issue", "Handoff", "Note", "Link", "Linked"):
             with self.subTest(name=name):
                 root = self.tree(
@@ -152,7 +151,7 @@ class SharedTypes(Sample):
 
 
 class TypesOnly(Sample):
-    HOME = f"utils/{PKG}/utils"
+    HOME = f"{PKG}/utils"
 
     def found(self, source, name="types.py"):
         return data_types.types_only(self.tree({f"{self.HOME}/{name}": source}))
@@ -251,7 +250,7 @@ class TypesOnly(Sample):
 
 class RunSpecSerialization(Sample):
     def test_serialization_belongs_to_the_run_spec_alone(self):
-        spec = f"{ORCH_PROJECT}/{OPKG}/engine/types.py"
+        spec = f"{OPKG}/engine/types.py"
         for path, source, expected in (
             (
                 spec,
@@ -267,7 +266,7 @@ class RunSpecSerialization(Sample):
                     f"from dataclasses import dataclass\n@dataclass\nclass {name}:\n    def to_argv(self): return []\n",
                     [f"{path}:4: {name}.to_argv: business method in types module"],
                 )
-                for path, name in ((spec, "Other"), ("utils/src/ensemble/utils/types.py", "Spec"))
+                for path, name in ((spec, "Other"), ("src/ensemble/utils/types.py", "Spec"))
             ),
         ):
             with self.subTest(source=source):
@@ -298,8 +297,8 @@ class OptionTuples(Sample):
                 self.assertNotIn("\n", reason)
 
     def test_module_level_tuples_of_option_words_fail_in_src_and_standalone_scripts(self):
-        rel = f"delegate/{PKG}/delegate/x.py"
-        hook = f"session/{PKG}/session/modes/tui_hook.py"
+        rel = f"{PKG}/delegate/x.py"
+        hook = f"{PKG}/session/modes/tui_hook.py"
         for extra, expected in (
             (
                 {
@@ -352,8 +351,8 @@ class OptionTuples(Sample):
                         'class C:\n    FIELD = ("a", "b")\n'
                         'with open("x") as f:\n    WITH = ("a", "b")\n'
                     ),
-                    "delegate/tests/unit/x_test.py": 'X = ("a", "b")\n',
-                    "delegate/skills/tool.py": 'X = ("a", "b")\n',
+                    "tests/delegate/unit/x_test.py": 'X = ("a", "b")\n',
+                    "skills/tool.py": 'X = ("a", "b")\n',
                     "tests/x.py": 'X = ("a", "b")\n',
                 },
                 [],

@@ -6,8 +6,8 @@ from jsonschema import Draft202012Validator
 
 from tests.case import REPO, Case
 
-PROTOCOL = Path(REPO, "protocol/docker-relay")
-BROKER = Path(REPO, "protocol/docker-broker")
+PROTOCOL = Path(REPO, "src/broker/protocol/docker-relay")
+BROKER = Path(REPO, "src/broker/protocol/docker-broker")
 REPLY = {"stub_request": "stub_reply", "relay_request": "relay_reply"}
 MALFORMED_REPLY = {"stub_request": {"queued": False}, "relay_request": {"ok": False}}
 

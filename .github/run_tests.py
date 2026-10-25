@@ -18,7 +18,7 @@ from pathlib import Path
 import ci_scope
 import isolation
 
-from utils.tests.sandbox import clean_env, kill_processes, leaked_processes, stop_tmux_servers
+from tests.utils.sandbox import clean_env, kill_processes, leaked_processes, stop_tmux_servers
 
 STATE = "RUN_TESTS_STATE"
 COVERAGE = "RUN_TESTS_COVERAGE"
@@ -140,7 +140,7 @@ def stack(lines):
 
 
 def src_trees(repo):
-    return sorted(repo.glob("*/src"))
+    return [repo / "src"]
 
 
 def start_coverage(sandbox, repo):
@@ -246,7 +246,6 @@ def supervise(title):
         roots = [
             repo,
             repo / ".github",
-            repo / "orchestrator/tests",
             *src_trees(repo),
             sysconfig.get_path("purelib"),
             sysconfig.get_path("platlib"),
@@ -308,13 +307,6 @@ def discovery_top(root, start):
     start = Path(start).resolve()
     if start == root / ".github":
         return start
-    for parent in [start, *start.parents]:
-        if (
-            parent.parent.name == "tests"
-            and parent.name not in {"unit", "integration"}
-            and (parent / "__init__.py").is_file()
-        ):
-            return parent.parent
     return root
 
 
@@ -350,7 +342,7 @@ def select(root, selectors):
     if len(selectors) == 1 and not paths[0].exists() and "/" not in selectors[0]:
         test_id = selectors[0]
         paths = []
-        for pattern in (".github/*_test.py", "tests/**/*_test.py", "*/tests/**/*_test.py"):
+        for pattern in (".github/*_test.py", "tests/**/*_test.py"):
             for path in sorted(root.glob(pattern)):
                 top = discovery_top(root, path.parent)
                 module = ".".join(path.relative_to(top).with_suffix("").parts)
@@ -391,7 +383,7 @@ def unit_directories(root):
         "tests/unit",
         *sorted(
             str(path.relative_to(root))
-            for pattern in ("*/tests/unit", "*/tests/*/unit")
+            for pattern in ("tests/*/unit",)
             for path in root.glob(pattern)
             if (path / "__init__.py").is_file()
         ),

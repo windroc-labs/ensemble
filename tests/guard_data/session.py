@@ -5,13 +5,13 @@ from tests.guards import PKG
 SESSION = "session"
 
 
-SESSION_SRC = f"session/src/{PKG}/{SESSION}/"
+SESSION_SRC = f"src/{PKG}/{SESSION}/"
 
 
 PLUGIN_SOURCE_CONFIG = f"{SESSION_SRC}config.toml"
 
 
-TMUX_HOST = "session/src/ensemble/session/hosts/tmux/host.py"
+TMUX_HOST = "src/ensemble/session/hosts/tmux/host.py"
 
 
 TMUX_HOME = (
@@ -120,51 +120,51 @@ COMMAND_SRC = (SESSION_SRC,)
 
 PYTHON_CODE_ALLOWED = {
     (
-        "session/tests/integration/engine/base_integration_test.py",
+        "tests/session/integration/engine/base_integration_test.py",
         "1a36105f9ea4517947d974b341422a0263475c87d737adc54c4b74455b260c6a",
     ): "Session class-method dispatch before and after configuration requires a fresh interpreter; Hosts is imported from its defining module after its public export was removed.",
     (
-        "session/tests/integration/extension_client_integration_test.py",
+        "tests/session/integration/extension_client_integration_test.py",
         "9b00dc3c8b97bf1d4ade627cbf8d52ed6d2f9f82c829b5a55b6732f458c6ff3b",
     ): "Loads the unexported session config reader in a fresh installed-layout interpreter to configure and launch the extension Client.",
     (
-        "session/tests/integration/installed_integration_test.py",
+        "tests/session/integration/installed_integration_test.py",
         "8a84d0e700c5ef374725eec9289eb2f33c67a387b7d29025c073c55bbedf6943",
     ): "Loads the unexported session config reader from the copied installation; only a fresh interpreter proves it uses the installed package.",
     (
-        "session/tests/integration/clients/codex/tui/start_integration_test.py",
+        "tests/session/integration/clients/codex/tui/start_integration_test.py",
         "c8fb72314c0cf520ad5a14e8e027bb27d258fba56fabe1318331d8c7ee663c71",
     ): "Fresh-interpreter import of codex tui submodules: sys.path untouched, canonical clients.common/codex.common identity, no _ensemble_codex_* copies; needs internal submodules and clean sys.modules.",
     (
-        "session/tests/integration/clients/codex/tui/start_integration_test.py",
+        "tests/session/integration/clients/codex/tui/start_integration_test.py",
         "69680777b770082268cec7a6126b7a273da4e5d5babbf5109d7d1845300d7ea9",
     ): "Imports codex.tui.HOOKS under -I with only session+utils roots, as isolated hook scripts do; HOOKS is not re-exported.",
     (
-        "session/tests/integration/clients/codex/tui/start_integration_test.py",
+        "tests/session/integration/clients/codex/tui/start_integration_test.py",
         "81320d3e3cd6d6bc389d76d2420665e794512ac4062ad326c5fb2d442990f2fa",
     ): "Runs codex tui start as __main__ under -P -s from PYTHONPATH roots (and from a cwd decoy), then checks in that interpreter that internal codex modules are canonical; needs internal submodules and a fresh interpreter.",
     (
-        "session/tests/integration/extension_client_integration_test.py",
+        "tests/session/integration/extension_client_integration_test.py",
         "ec5dfcbc92032c9ec70596f6a779897ed3305cd4f9acfd399665c83bdcff3d2f",
     ): "Codex tui launch (argv, PYTHONPATH) from an installed-layout site through HostedSession's client registry; no public API returns a configured Client's launch, and only a fresh interpreter on the copied site sees that layout.",
     (
-        "session/tests/integration/hosted_integration_test.py",
+        "tests/session/integration/hosted_integration_test.py",
         "2443c6161954fdc9009fbdde92c6fc001de6e6c6f62f0fde8fb162ae6a0d74d6",
     ): "HostedSession.list, Session.list and TuiStore.attach refused while HostedSession is unconfigured; tests may not patch HostedSession._setup (test_boundaries), and another test may have configured it in-process, so only a fresh interpreter has it unconfigured.",
     (
-        "session/src/ensemble/session/engine/tmux_cli.py",
+        "src/ensemble/session/engine/tmux_cli.py",
         "2353827626a3c6e192d6841bde2f5dfdcdbbc4a8bff857d91303607d99299413",
     ): "Shipped tmux pane wrapper: stdlib-only f-string interpolating TERMINAL_KEYS (one home), run with -I; production code, no ensemble import.",
     (
-        "session/tests/integration/clients/codex/tui/start_integration_test.py",
+        "tests/session/integration/clients/codex/tui/start_integration_test.py",
         "7e4699b393a08c5b495eef12293120ce9612e2b3e1ddb34344a1329cd6505d0f",
     ): "Runs internal codex tui start (a hook entry named in argv, not a layer command) as __main__ under -P -s and counts json.loads calls in that interpreter.",
     (
-        "session/tests/integration/clients/codex/tui/start_integration_test.py",
+        "tests/session/integration/clients/codex/tui/start_integration_test.py",
         "0842107b14800fd722eaff5e4ccafe1155e2741a5ec4a5fce845607c25f369af",
     ): "Runs internal codex tui start (named in argv) as __main__ under -P -s with a lone-surrogate argument to check its one-line stderr and exit status.",
     (
-        "session/tests/integration/clients/codex/tui/start_integration_test.py",
+        "tests/session/integration/clients/codex/tui/start_integration_test.py",
         "57fc6aac3dc49a226570cf6f0855e21aea62e766ca50d9db62743186f3e0e6f6",
     ): "Runs the standalone account probe file by path under -I and audits that it imports only the standard library; run_path of that file is the subject.",
 }
@@ -172,43 +172,43 @@ PYTHON_CODE_ALLOWED = {
 
 EMBEDDED_PROGRAMS_ALLOWED = {
     (
-        "session/src/ensemble/session/hosts/docker/host.py",
+        "src/ensemble/session/hosts/docker/host.py",
         "ee61a1ec24e436f6fef0bc86511b4bfbfa91036687b7b6668107fcfbfc1bb84e",
     ): "Existing private prompt writer runs as the container agent; freeze its current program body.",
     (
-        "session/tests/integration/installed_integration_test.py",
+        "tests/session/integration/installed_integration_test.py",
         "8a84d0e700c5ef374725eec9289eb2f33c67a387b7d29025c073c55bbedf6943",
     ): "Existing process fixture checks the copy reads its packaged config and runs a headless session.",
     (
-        "session/tests/integration/clients/codex/tui/start_integration_test.py",
+        "tests/session/integration/clients/codex/tui/start_integration_test.py",
         "c8fb72314c0cf520ad5a14e8e027bb27d258fba56fabe1318331d8c7ee663c71",
     ): "Existing process fixture checks package imports keep sys path and share canonical modules.",
     (
-        "session/tests/integration/clients/codex/tui/start_integration_test.py",
+        "tests/session/integration/clients/codex/tui/start_integration_test.py",
         "69680777b770082268cec7a6126b7a273da4e5d5babbf5109d7d1845300d7ea9",
     ): "Existing process fixture checks shared schema preserves hooks in isolated scripts and client.",
     (
-        "session/tests/integration/clients/codex/tui/start_integration_test.py",
+        "tests/session/integration/clients/codex/tui/start_integration_test.py",
         "57fc6aac3dc49a226570cf6f0855e21aea62e766ca50d9db62743186f3e0e6f6",
     ): "Existing process fixture checks standalone account probe uses stdlib.",
     (
-        "session/tests/integration/modes/tui_hook_integration_test.py",
+        "tests/session/integration/modes/tui_hook_integration_test.py",
         "1a5f0fb5b44d358c0c9cca725a5f3b3e8df06645090d413a073d7fa0d2164754",
     ): "Existing hook subprocess fixture drives journal replay, completion or configuration through the hook CLI.",
     (
-        "session/tests/integration/modes/tui_hook_integration_test.py",
+        "tests/session/integration/modes/tui_hook_integration_test.py",
         "98e6019d48021ff1a528c2a5346f52266e340c36ca9f52ac983fbb9770ce070d",
     ): "Existing hook subprocess fixture drives journal replay, completion or configuration through the hook CLI.",
     (
-        "session/tests/integration/modes/tui_hook_integration_test.py",
+        "tests/session/integration/modes/tui_hook_integration_test.py",
         "6138ed0fff57048f56a487d4ce38a6a8bb472e3b5e34dae0a41d8027b9da7bc7",
     ): "Existing hook subprocess fixture drives journal replay, completion or configuration through the hook CLI.",
     (
-        "session/tests/integration/modes/tui_hook_integration_test.py",
+        "tests/session/integration/modes/tui_hook_integration_test.py",
         "65efdb35b0c074fec52bfac23d7723db7011deaa77ed1d2196b97da4fe6ac7e0",
     ): "Existing hook subprocess fixture drives journal replay, completion or configuration through the hook CLI.",
     (
-        "session/tests/integration/modes/tui_hook_integration_test.py",
+        "tests/session/integration/modes/tui_hook_integration_test.py",
         "c787a4d85b5693fea07e23f2e0344e024ca5a289f1dde761144e3621b48c8950",
     ): "Existing process fixture checks two synchronized writers keep every complete journal record.",
 }

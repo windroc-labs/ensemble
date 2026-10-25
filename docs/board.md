@@ -46,7 +46,7 @@ Needs macOS and [Install](../README.md#install)'s requirements. The orchestrator
    for job in router promote; do
      launchctl bootout gui/$(id -u)/com.windroc.ensemble.$job 2>/dev/null   # fails harmlessly if none is loaded
      sed -e "s|@HOME@|$HOME|g" -e "s|@PATH@|$PATH|" \
-       orchestrator/launchd/com.windroc.ensemble.$job.plist \
+       launchd/com.windroc.ensemble.$job.plist \
        > ~/Library/LaunchAgents/com.windroc.ensemble.$job.plist   # needs ctmux --install's ~/.ensemble/bin
      launchctl enable gui/$(id -u)/com.windroc.ensemble.$job
      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.windroc.ensemble.$job.plist
@@ -59,7 +59,7 @@ Needs macOS and [Install](../README.md#install)'s requirements. The orchestrator
 | router | :00 and :30 |
 | promote | every 5 min |
 
-The plists hard-code this checkout's path and `~/.ensemble` (launchd doesn't expand `~`). For another checkout or `work_dir`, edit them in `orchestrator/launchd/` and rerun step 4. To uninstall a job:
+The plists hard-code this checkout's path and `~/.ensemble` (launchd doesn't expand `~`). For another checkout or `work_dir`, edit them in `launchd/` and rerun step 4. To uninstall a job:
 
 ```bash
 launchctl bootout gui/$(id -u)/com.windroc.ensemble.<job>
@@ -132,7 +132,7 @@ flowchart LR
 - **Revise:** comment and move back to Todo. The agent resumes where it left off. On an engineer issue your PR comments and reviews count too. After 4 attempts the issue goes to In Review; moving it back to Todo restarts the count.
 - **Who counts as you:** every Linear account but the harness app, the role apps and Linear automation, the manager included (its `ensemble-orchestrator issue` commands act as `linear.manager_key`'s account): its comments are instructions and its moves to Todo restart the attempt count. Comments without a user, such as the GitHub integration's, are ignored. `linear.human_members` only picks who is subscribed on In Review. Anyone who can comment on or move the team's issues (members, guests, synced users) can so instruct agents: keep the team's membership and guest access tight.
 - **Write-back identity:** live write-back, resume and Recover use the current app configured for the session's recorded role, including sessions with old `key` fields. An unavailable role token blocks only that role; fix its reported app configuration and retry.
-- **Continue work:** every resumed or rerun board attempt re-reads the issue's state and returns it to In Progress; already there is a no-op. Write-back records this once per attempt, retries a failed move on progress, and ignores ended or older attempts. Pane answers, follow-ups, rework and PR-gate fixes after the harness ends follow `/ensemble:manage`'s **Continue issue work** rule (`manager/skills/manage/SKILL.md`): the manager moves it before sending and applies the normal end state when that work finishes.
+- **Continue work:** every resumed or rerun board attempt re-reads the issue's state and returns it to In Progress; already there is a no-op. Write-back records this once per attempt, retries a failed move on progress, and ignores ended or older attempts. Pane answers, follow-ups, rework and PR-gate fixes after the harness ends follow `/ensemble:manage`'s **Continue issue work** rule (`skills/manage/SKILL.md`): the manager moves it before sending and applies the normal end state when that work finishes.
 - **Runs without an outcome:** an error (invalid outcome, no outcome block, client failure or crash) is written back as a failure with its reason in a comment. The workflow's `first_failure` applies to a first attempt (packaged: researcher → Todo; pm/engineer → In Review); resumed failures go to In Review. Each failed attempt is written once, and a later valid outcome can still be delivered. A signal stop or keyboard interrupt stays In Progress for Recover; usage limits keep their own write-back. A refused write-back logs `writeback refused` with its reason in `orchestrator.jsonl`, and its `callback_error` row in the run's `run.jsonl` keeps the callback's stderr.
 - **Finish:** set Done, Canceled or Duplicate. 2 hours later prune closes the run, deletes its `agent/` dir and the issue's pushed branches, and archives the issue (Canceled or Duplicate whoever is assigned, no one or researcher too; Done only pm and engineer issues: researcher reports stay) unless a sub-issue, at any depth, is still open (Linear would archive it too); 7 days later it deletes the issue's whole workdir. An issue left in any other state but Todo or In Progress (In Review, Handoff, Backlog) for 7 days since its latest move or run loses its checkouts and temp files (`agent/src`, `agent/publish`, `agent/tmp`), unless its run or agent session is still open; its other agent files, run records (`run/`), write-back ledger and branches stay, and a Revise rebuilds the checkouts. Each run's end also clears `agent/tmp`. Uncommitted and unpushed work is lost.
 
@@ -150,11 +150,11 @@ bin/ensemble-orchestrator router --issue <ID> --tui   # the same, attended in a 
 bin/ensemble-orchestrator status <ID>                 # alive: its run; once that ends, state is its open TUI's (done, working, blocked), gone once none is open
 bin/ensemble-orchestrator attach-command <ID>         # the command that shows its agent run
 bin/ensemble-orchestrator close <ID>                  # end the run and its TUI; the issue stays In Progress for Recover
-bin/ensemble-orchestrator resume <ID>                 # resume an attended run where it was shown
+bin/ensemble-orchestrator resume <ID>                 # resume an interrupted attended run where it was shown; no answer to a needs_input run
 tmux ls                                         # running agent runs
 ```
 
-Run `bin/ensemble-orchestrator` by its absolute path; `--help` lists each command's options. Issue operations (`bin/ensemble-orchestrator issue …`: read, list, create (`--parent` splits), edit, move, comment, relate, archive; on Linear also look up and swap a label), in abstract states, roles, task and client names: `/ensemble:board` ([orchestrator/skills/board/SKILL.md](../orchestrator/skills/board/SKILL.md)), their one guide. Events go to `<work_dir>/logs/orchestrator.jsonl`. Keep `<work_dir>/logs/runs.jsonl`: deleting it breaks resume, Recover, write-back and the first-claim search.
+Run `bin/ensemble-orchestrator` by its absolute path; `--help` lists each command's options. Issue operations (`bin/ensemble-orchestrator issue …`: read, list, create (`--parent` splits), edit, move, comment, relate, archive; on Linear also look up and swap a label), in abstract states, roles, task and client names: `/ensemble:board` ([skills/board/SKILL.md](../skills/board/SKILL.md)), their one guide. Events go to `<work_dir>/logs/orchestrator.jsonl`. Keep `<work_dir>/logs/runs.jsonl`: deleting it breaks resume, Recover, write-back and the first-claim search.
 
 A run that ended leaves its TUI open for pane follow-ups; the issue's next run, new or resumed, closes it.
 
@@ -182,7 +182,7 @@ The commander needs no Linear MCP server: `/ensemble:board`'s commands replace i
 
 ### Agent label
 
-Copy `[orchestrator.linear]`'s `agent_label_group` and `[orchestrator.linear.agent_labels]` from the `# local:` examples in [orchestrator/config.toml](../orchestrator/src/ensemble/orchestrator/config.toml) into this machine's `~/.ensemble/config.local.toml`, with one line per client in place of the `"<client>"` line, and the Agent group's and its child labels' ids in place of the example ids. Both settings empty disables selection. Mapping keys name clients configured in Delegate; unknown clients are accepted at load time and checked when constructing a run.
+Copy `[orchestrator.linear]`'s `agent_label_group` and `[orchestrator.linear.agent_labels]` from the `# local:` examples in [orchestrator/config.toml](../src/ensemble/orchestrator/config.toml) into this machine's `~/.ensemble/config.local.toml`, with one line per client in place of the `"<client>"` line, and the Agent group's and its child labels' ids in place of the example ids. Both settings empty disables selection. Mapping keys name clients configured in Delegate; unknown clients are accepted at load time and checked when constructing a run.
 
 | Agent-group labels at claim recheck | New run |
 |---|---|

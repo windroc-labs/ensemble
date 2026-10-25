@@ -10,9 +10,9 @@ import time
 import unittest
 from pathlib import Path
 
-from session.tests import live_tmux
 from tests.case import REPO, Case
-from utils.tests.sandbox import clean_env
+from tests.session import live_tmux
+from tests.utils.sandbox import clean_env
 
 SCRIPT = """import json, os, subprocess, sys, tempfile
 from pathlib import Path
@@ -122,7 +122,7 @@ print(json.dumps(sorted(blocked)))
 CLEAN_ENV_SCRIPT = """import json, tempfile, threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from utils.tests.sandbox import clean_env
+from tests.utils.sandbox import clean_env
 
 barrier = threading.Barrier(8)
 def allocate():
@@ -246,7 +246,7 @@ class SandboxGates(Case):
     def test_forked_clean_env_children_cannot_remove_the_parents_fallback_directory(self):
         script = """import json, os, sys
 from pathlib import Path
-from utils.tests.sandbox import clean_env
+from tests.utils.sandbox import clean_env
 
 parent = Path(clean_env()["TMUX_TMPDIR"])
 reader, writer = os.pipe()
@@ -284,7 +284,7 @@ print(json.dumps(str(parent)))
     def test_clean_env_recreates_a_cached_directory_when_it_is_removed(self):
         script = """import json, shutil
 from pathlib import Path
-from utils.tests.sandbox import clean_env
+from tests.utils.sandbox import clean_env
 
 first = Path(clean_env()["TMUX_TMPDIR"])
 shutil.rmtree(first)
@@ -318,7 +318,7 @@ print(json.dumps(str(second)))
         kept.start("kept")
         script = """import json, os, subprocess, sys
 from pathlib import Path
-from utils.tests.sandbox import clean_env
+from tests.utils.sandbox import clean_env
 
 env = clean_env()
 directory = Path(env["TMUX_TMPDIR"])
@@ -365,7 +365,7 @@ print(json.dumps({"directory": str(directory), "pids": pids}))
 
     def test_fallback_exit_cleanup_ignores_a_daemon_held_allocation_lock(self):
         script = """import json, threading
-from utils.tests import sandbox
+from tests.utils import sandbox
 
 directory = sandbox.clean_env()["TMUX_TMPDIR"]
 locked = threading.Event()
@@ -488,7 +488,7 @@ def load_tests(loader, tests, pattern):
         marker = root / "server-pids"
         (package / "server_test.py").write_text(
             "import json, os, subprocess, unittest\nfrom pathlib import Path\n"
-            "from utils.tests.sandbox import clean_env\n"
+            "from tests.utils.sandbox import clean_env\n"
             "class Server(unittest.TestCase):\n"
             "    def test_private(self):\n"
             "        pids = {}\n"
@@ -593,7 +593,7 @@ class Swallowed(unittest.TestCase):
             "    def test_write(self):\n"
             f"        os.mkdir({str(marker)!r})\n"
         )
-        (root / "tests/unit/external_test.py").write_text(
+        (root / ".github/external_test.py").write_text(
             "import importlib.util, sys\n"
             f"spec = importlib.util.spec_from_file_location('helper', {str(helper)!r})\n"
             "helper = importlib.util.module_from_spec(spec)\n"

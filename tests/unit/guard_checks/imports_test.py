@@ -14,7 +14,7 @@ class OrchestratorSessionImports(Sample):
         root = self.tree(
             {
                 "pyproject.toml": config or Path(REPO, "pyproject.toml").read_text(),
-                f"orchestrator/{ORCH_SRC}{module}": sample,
+                f"{ORCH_SRC}{module}": sample,
             }
         )
         return imports.orchestrator_session_imports(root)
@@ -22,7 +22,7 @@ class OrchestratorSessionImports(Sample):
     def message(self, rel, name):
         module = f"{ORCH_PKG}.{rel.removesuffix('.py').replace('/', '.')}"
         return (
-            f"orchestrator/{ORCH_SRC}{rel}: {module} imports {name} from "
+            f"{ORCH_SRC}{rel}: {module} imports {name} from "
             "ensemble.session; go through ensemble.delegate"
         )
 
@@ -69,14 +69,14 @@ class OrchestratorImports(Sample):
     DELEGATE_INIT = DELEGATE + '__all__ = ["Delegate", "ConfigError"]\n'
 
     def check(self, files):
-        root = self.tree({f"delegate/{PKG}/delegate/__init__.py": self.DELEGATE_INIT, **files})
+        root = self.tree({f"{PKG}/delegate/__init__.py": self.DELEGATE_INIT, **files})
         return imports.orchestrator_imports(root)
 
     def test_the_real_tree_is_clean(self):
         self.assertEqual(imports.orchestrator_imports(REPO), [])
 
     def test_only_delegates_exports_utils_itself_and_the_standard_library_cross_the_layer(self):
-        rel = f"orchestrator/{ORCH_SRC}engine/prune.py"
+        rel = f"{ORCH_SRC}engine/prune.py"
         for files, expected in (
             *(
                 ({rel: sample}, [])
@@ -119,7 +119,7 @@ class OrchestratorImports(Sample):
             *(
                 ({other: sample}, [f"{other}: imports ensemble.orchestrator (FR-3)"])
                 for other in (
-                    f"{project}/{PKG}/{project}/engine/sample.py"
+                    f"{PKG}/{project}/engine/sample.py"
                     for project in ("manager", "delegate", "session", "utils")
                 )
                 for sample in (
@@ -131,10 +131,10 @@ class OrchestratorImports(Sample):
             ),
             (
                 {
-                    "orchestrator/tests/orchestrator_tests/sample.py": (
+                    "tests/orchestrator/sample.py": (
                         "from ensemble.delegate.composer import Composer\n"
                     ),
-                    "manager/tests/sample.py": "from ensemble import orchestrator\n",
+                    "tests/manager/sample.py": "from ensemble import orchestrator\n",
                 },
                 [],
             ),
@@ -148,7 +148,7 @@ class LiteralImports(Sample):
         root = self.tree(
             {
                 "pyproject.toml": "[[tool.importlinter.contracts]]\ntype = 'unknown'\n",
-                "session/src/ensemble/session/clients/probe.py": "__import__('ensemble.utils')",
+                "src/ensemble/session/clients/probe.py": "__import__('ensemble.utils')",
             }
         )
         with self.assertRaisesRegex(ValueError, "unsupported import contract type: 'unknown'"):
@@ -159,7 +159,7 @@ class LiteralImports(Sample):
         root = self.tree(
             {
                 "pyproject.toml": config,
-                f"{project}/src/ensemble/{guards.PROJECTS[project]}/{module}": sample,
+                f"src/ensemble/{guards.PROJECTS[project]}/{module}": sample,
             }
         )
         return imports.literal_imports(root)
@@ -187,7 +187,7 @@ class LiteralImports(Sample):
                 "delegate",
                 "engine/probe.py",
                 [
-                    "delegate/src/ensemble/delegate/engine/probe.py:1: imports ensemble.session.engine.hosted_session"
+                    "src/ensemble/delegate/engine/probe.py:1: imports ensemble.session.engine.hosted_session"
                 ],
             ),
             (
@@ -195,7 +195,7 @@ class LiteralImports(Sample):
                 "delegate",
                 "engine/config.py",
                 [
-                    "delegate/src/ensemble/delegate/engine/config.py:1: imports ensemble.delegate.engine.future"
+                    "src/ensemble/delegate/engine/config.py:1: imports ensemble.delegate.engine.future"
                 ],
             ),
         ):
@@ -342,7 +342,7 @@ class OldCore(Sample):
         root = self.tree(
             {
                 "tests/a.py": "from core.src import drive\n",
-                "session/b.py": "import core\nimport core_x\n",
+                "src/ensemble/session/b.py": "import core\nimport core_x\n",
                 ".github/c.py": "import core\n",
                 "docs/d.py": "import core\n",
             }
@@ -351,7 +351,7 @@ class OldCore(Sample):
             imports.old_core(root),
             [
                 ".github/c.py: imports core",
-                "session/b.py: imports core",
+                "src/ensemble/session/b.py: imports core",
                 "tests/a.py: imports core",
             ],
         )

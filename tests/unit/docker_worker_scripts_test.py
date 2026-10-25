@@ -14,10 +14,9 @@ from types import SimpleNamespace
 from unittest import mock
 
 from ensemble.session.clients.opencode.common import HOME
-
 from tests.case import REPO, Case
 
-ASSETS = Path(REPO, "broker/internal/launcher/assets")
+ASSETS = Path(REPO, "src/broker/internal/launcher/assets")
 
 
 def script(name):
@@ -997,7 +996,7 @@ class InstallHook(Case):
     def test_hook_stub_hands_off_to_the_sessions_stub_and_exits_zero(self):
         text = (ASSETS / "hook-stub").read_text()
         self.assertTrue(text.startswith("#!/bin/sh\n"))
-        stub = "session/src/ensemble/session/hosts/docker/stub.py"
+        stub = "src/ensemble/session/hosts/docker/stub.py"
         self.assertIn(f'/opt/ensemble/venv/bin/python -I /opt/ensemble/{stub} "$@"', text)
         self.assertTrue(os.path.isfile(os.path.join(REPO, stub)))
         self.assertIn(">&2", text)
@@ -1222,7 +1221,7 @@ class GhWrapper(GitHubTokens):
 
 class DefaultDockerfile(Case):
     def test_default_dockerfile_pins(self):
-        text = Path(REPO, "broker/worker/Dockerfile").read_text()
+        text = Path(REPO, "src/broker/worker/Dockerfile").read_text()
         self.assertIn(
             "FROM mcr.microsoft.com/devcontainers/base:bookworm@sha256:"
             "9a5942e64b35c5497c591b9bf177f4a3002d43440bf0a5e1a14fc34667b1a5c1",
@@ -1442,7 +1441,7 @@ class OpencodeInstall(Case):
             (self.ns["VERSION"], HOME.min_width),
             ("1.19.3", 40),
             "see HOME in clients/opencode/common.py: keep min_width while the broker's "
-            "opencodeMinVersion (broker/internal/launcher/versions.go) bundles @opentui/core "
+            "opencodeMinVersion (src/broker/internal/launcher/versions.go) bundles @opentui/core "
             "older than 0.5.3, then update this pin",
         )
 

@@ -17,7 +17,7 @@ PROJECTS = {p: p.replace("-", "_") for level in LEVELS for p in level}
 LAYERS = tuple(PROJECTS)
 
 
-TREES = (*PROJECTS, "tests", ".github")
+TREES = ("src/ensemble", "skills", "hooks", "tests", ".github")
 
 
-TESTS = ("tests", *(f"{p}/tests" for p in PROJECTS))
+TESTS = ("tests",)
