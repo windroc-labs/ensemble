@@ -722,7 +722,7 @@ answers() {
 config_plan() {
   python3 -I -c '
 import json, os, re, sys, tomllib
-path, out, default, harness, client, exe, name, url, model, context, prev_name, prev_url, prev_model, prev_context, only, board, previous_exe = sys.argv[1:]
+path, out, default, harness, client, exe, name, url, model, context, prev_name, prev_url, prev_model, prev_context, only, board = sys.argv[1:]
 fresh = not os.path.exists(path)
 text = ""
 if not fresh:
@@ -758,7 +758,7 @@ if not scoped and harness and get(data, "delegate.delegates", "harness_host") in
     wanted.append(("delegate.delegates", "harness_host", harness))
 if name and not scoped:
     target, before = f"{name}/{model}", f"{prev_name}/{prev_model}" if prev_name else None
-    if get(data, "session.clients.opencode", "executable") in (None, "", previous_exe, os.path.expanduser("~/.ensemble/opencode/bin/opencode")):
+    if get(data, "session.clients.opencode", "executable") in (None, ""):
         want("session.clients.opencode", "executable", exe)
     def ours(value):
         return value is None or (isinstance(value, str) and (value.startswith("ollama/") or value == before))
@@ -823,13 +823,13 @@ with open(out, "w", encoding="utf-8") as f:
     f.write(result)
 sys.exit(3)' "$config" "$1" "$wanted_default" "$wanted_harness" "$wanted_client" \
     "$opencode_executable" "$provider" "$url" "$model" "$context" \
-    "$prev_provider" "$prev_url" "$prev_model" "$prev_context" "$only" "$board_file" "$(state_get opencode_executable)"
+    "$prev_provider" "$prev_url" "$prev_model" "$prev_context" "$only" "$board_file"
 }
 
 # Writes the configuration's settings into config.local.toml with consent; given <table> <key> <value>, only that;
 # given board <file>, the settings board_plan wrote to <file>.
 config_file() {
-  local wanted_default=tmux wanted_harness= wanted_client= only= board_file= changes rc=0 plan executable_changed=
+  local wanted_default=tmux wanted_harness= wanted_client= only= board_file= changes rc=0 plan
   if [ $# = 2 ] && [ "$1" = board ]; then
     board_file=$2
   elif [ $# = 3 ]; then
@@ -847,7 +847,6 @@ config_file() {
   mkdir -p "$state_dir"
   plan=$state_dir/config.local.toml.plan
   changes=$(config_plan "$plan") || rc=$?
-  case $changes in *'[session.clients.opencode] executable = '*) executable_changed=yes ;; esac
   case $rc in
     0) skip "has the configuration" ;;
     3)
@@ -855,9 +854,6 @@ config_file() {
       if consent "$config" "$changes"; then
         if [ -f "$config" ]; then backup_config; else ledger_add config created; fi
         mv "$plan" "$config"
-        if [ -n "$executable_changed" ] && [ -z "$only$board_file" ]; then
-          state_set opencode_executable "$opencode_executable"
-        fi
       else
         rm -f "$plan"
         skip declined

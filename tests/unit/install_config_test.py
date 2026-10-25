@@ -1,4 +1,4 @@
-"""Installer executable ownership and configuration migration, without launching tools."""
+"""Installer fills missing executable settings and preserves existing ones."""
 
 import io
 import json
@@ -13,7 +13,7 @@ from tests.case import REPO, Case
 
 
 class OpenCodeExecutableConfigTest(Case):
-    def plan(self, current=None, previous=""):
+    def plan(self, current):
         config = Path(self.home, "config.local.toml")
         output = Path(self.home, "config.plan")
         selected = str(Path(self.home, "selected tools/opencode"))
@@ -39,7 +39,6 @@ class OpenCodeExecutableConfigTest(Case):
             "",
             "",
             "",
-            previous,
         ]
         stdout = io.StringIO()
         with (
@@ -53,28 +52,14 @@ class OpenCodeExecutableConfigTest(Case):
         data = tomllib.loads(output.read_text())["session"]["clients"]["opencode"]
         return data["executable"], stdout.getvalue(), selected
 
-    def test_fresh_config_uses_selected_path(self):
-        actual, changes, selected = self.plan()
-        self.assertEqual(actual, selected)
-        self.assertIn("[session.clients.opencode] executable = ", changes)
-
-    def test_previous_installer_path_can_migrate(self):
-        previous = "/old tools/opencode"
-        actual, changes, selected = self.plan(previous, previous)
-        self.assertEqual(actual, selected)
-        self.assertIn("[session.clients.opencode] executable = ", changes)
-
-    def test_legacy_private_default_can_migrate(self):
-        actual, _, selected = self.plan(str(Path(self.home, ".ensemble/opencode/bin/opencode")))
-        self.assertEqual(actual, selected)
-
-    def test_user_path_is_preserved_and_not_claimed(self):
-        actual, changes, _ = self.plan("/my/custom/opencode", "/previous/opencode")
-        self.assertEqual(actual, "/my/custom/opencode")
-        self.assertNotIn("[session.clients.opencode] executable = ", changes)
-
-    def test_existing_matching_path_is_not_claimed(self):
-        selected = str(Path(self.home, "selected tools/opencode"))
-        actual, changes, _ = self.plan(selected)
-        self.assertEqual(actual, selected)
-        self.assertNotIn("[session.clients.opencode] executable = ", changes)
+    def test_only_missing_executable_is_filled(self):
+        for current in (
+            None,
+            "",
+            "/my/custom/opencode",
+            str(Path(self.home, ".ensemble/opencode/bin/opencode")),
+        ):
+            with self.subTest(current=current):
+                actual, changes, selected = self.plan(current)
+                self.assertEqual(actual, current or selected)
+                self.assertEqual("[session.clients.opencode] executable = " in changes, not current)
