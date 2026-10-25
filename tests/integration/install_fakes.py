@@ -564,7 +564,7 @@ def broker(args):
                 sys.stderr,
             )
             return 11
-    if args == ["status"]:
+    if args == ["status", "--cleanup"]:
         default = {"state": "installation_invalid", "version": ""}
         default["repair"] = (
             "sudo /usr/local/libexec/ensemble/ensemble-broker install-codex <version>"

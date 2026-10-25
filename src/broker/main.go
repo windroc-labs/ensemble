@@ -26,7 +26,7 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | build --ensemble DIR [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--max-age SECONDS] | start --manifest FILE | refresh --container NAME --manifest FILE | close --container NAME | status | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force]"
+const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | build --ensemble DIR [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--max-age SECONDS] | start --manifest FILE | refresh --container NAME --manifest FILE | close --container NAME | status [--cleanup] | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force]"
 
 var containerPattern = regexp.MustCompile(`^ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}$`)
 var secondsPattern = regexp.MustCompile(`^[0-9]{1,9}$`)
@@ -40,7 +40,7 @@ type app struct {
 	build         func(ctx context.Context, pkg string, plugins []string, maxAge time.Duration, progress io.Writer) (any, error)
 	start, close  step
 	refresh       func(ctx context.Context, container, manifest string) (any, error)
-	status        func(ctx context.Context) (any, error)
+	status        func(ctx context.Context, cleanup bool) (any, error)
 	probeOpencode func(ctx context.Context, provider, base string) (any, error)
 	workspaceRm   func(ctx context.Context, volume string, force bool) (any, error)
 	login         func(account string, out io.Writer) error                                // login claude [NAME]
@@ -205,8 +205,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 		s, arg = func(ctx context.Context, container string, _ io.Writer) (any, error) {
 			return a.refresh(ctx, container, manifest)
 		}, args[2]
-	case command == "status" && len(args) == 1:
-		s = func(ctx context.Context, _ string, _ io.Writer) (any, error) { return a.status(ctx) }
+	case command == "status" && (len(args) == 1 || len(args) == 2 && args[1] == "--cleanup"):
+		s = func(ctx context.Context, _ string, _ io.Writer) (any, error) { return a.status(ctx, len(args) == 2) }
 	case command == "probe-provider" && len(args) == 5 && args[1] == "--provider" && launcher.ValidProvider(args[2]) && args[3] == "--base-url" && broker.ValidOpencodeURL(args[4]):
 		s = func(ctx context.Context, _ string, _ io.Writer) (any, error) {
 			return a.probeOpencode(ctx, args[2], args[4])
@@ -324,14 +324,22 @@ func system() app {
 		refresh: func(ctx context.Context, container, manifest string) (any, error) {
 			return withHost("refresh", container, nil, func(h launcher.Host) (any, error) { return h.Refresh(ctx, container, manifest) })
 		},
-		status: func(ctx context.Context) (_ any, err error) {
+		status: func(ctx context.Context, cleanup bool) (_ any, err error) {
 			home, err := accountHome()
 			if err != nil {
 				return nil, err
 			}
-			rec := recorder(home, "status", "")
-			defer func() { rec.Flush(err) }()
-			status, err := launcher.Host{GitHub: tokens(home, rec)}.Status(ctx)
+			var rec *audit.Recorder
+			if cleanup {
+				rec = recorder(home, "status", "")
+				defer func() { rec.Flush(err) }()
+			}
+			h := launcher.Host{GitHub: tokens(home, rec)}
+			query := h.Status
+			if cleanup {
+				query = h.Cleanup
+			}
+			status, err := query(ctx)
 			if err != nil {
 				return nil, err
 			}

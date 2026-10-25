@@ -1,5 +1,5 @@
 {
-  "protocol_version": "20",
+  "protocol_version": "21",
   "cases": [
     {
       "file": "manifest-valid.json",
@@ -1823,6 +1823,16 @@
       "expected": {
         "stage": "response",
         "exit_code": null,
+        "error_code": null
+      }
+    },
+    {
+      "file": "status-input-cleanup.json",
+      "definition": "status_input",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
         "error_code": null
       }
     }

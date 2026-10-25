@@ -1,5 +1,9 @@
 # Upgrading
 
+Broker protocol 21 makes `ensemble-broker status` read-only. Upgrade the broker with the
+plugin, and change automation that relied on status retrying GitHub revocations to
+`ensemble-broker status --cleanup`. The installer already uses this compatibility option.
+
 ## Unified source layout
 
 After updating the plugin to the `src/ensemble/` layout, refresh the launchers once:
