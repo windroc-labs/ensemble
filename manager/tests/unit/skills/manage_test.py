@@ -236,7 +236,7 @@ class Manage(Case):
         recover = section("manage", "Recover")
         [steps] = re.findall(r"^- \*\*Pipeline needs_input\*\*.*?(?=^- |\Z)", recover, re.M | re.S)
         order = [
-            "`ensemble-delegate outcome <work_dir>/work/<ID>/run`",
+            "`ensemble-delegate outcome <work_dir>/work/<ID>`",
             "`ensemble-orchestrator issue comment <ID> --body-file <file>`",
             "`ensemble-orchestrator issue move <ID> running`",
             "`ensemble-session ls --match '.*-<ID>-[0-9a-f]{8}'`",
@@ -255,6 +255,7 @@ class Manage(Case):
             "Never re-run the issue for an answer",
         ):
             self.assertIn(phrase, steps)
+        self.assertNotIn("/work/<ID>/run`", steps)
         self.assertRegex(recover, r"(?m)^- \*\*Waiting role run\*\*")
         events = section("manage", "Events")
         self.assertIn("a role run: Recover › Waiting role run", events)
