@@ -72,7 +72,7 @@ def _docs(path: str) -> bool:
 
 def classify(root: Path, paths: list[str], event: str) -> dict:
     projects = layer_map(root)
-    full = {"full": True, "docs": False, "projects": list(projects), "reason": ""}
+    full = {"full": True, "docs": False, "broker": True, "projects": list(projects), "reason": ""}
     if event != "pull_request":
         return {**full, "reason": f"Event {event} requires every layer"}
     if not paths:
@@ -81,13 +81,20 @@ def classify(root: Path, paths: list[str], event: str) -> dict:
     upper = list(projects)[:boundary]
     if all(_docs(path) for path in paths):
         # Upper unit tests check the docs the skills cite; nothing else reads these docs.
-        return {"full": False, "docs": True, "projects": upper, "reason": "Docs-only changes"}
+        return {
+            "full": False,
+            "docs": True,
+            "broker": False,
+            "projects": upper,
+            "reason": "Docs-only changes",
+        }
     for path in paths:
         if _owner(path) not in upper:
             return {**full, "reason": f"Shared, lower-layer or unsafe path: {path!r}"}
     return {
         "full": False,
         "docs": False,
+        "broker": False,
         "projects": upper,
         "reason": "Changes touch only upper-layer projects",
     }
@@ -139,6 +146,13 @@ def gate(needs: dict, event: str) -> list[str]:
         failures.append("changes.outputs.docs must be exactly true or false")
     if docs == "true" and full != "false":
         failures.append("changes.outputs.docs requires full false")
+    broker = output.get("broker") if isinstance(output, dict) else None
+    if broker not in ("true", "false") or not isinstance(broker, str):
+        failures.append("changes.outputs.broker must be exactly true or false")
+    if full == "true" and broker != "true":
+        failures.append("changes.outputs.broker must be true for full scope")
+    if docs == "true" and broker != "false":
+        failures.append("changes.outputs.docs requires broker false")
     expected = {
         "changes": "success",
         "lint": "success",
@@ -194,6 +208,7 @@ def main(argv=None, *, root=None) -> int:
             with args.github_output.open("a", encoding="utf-8") as output:
                 output.write(
                     f"full={str(result['full']).lower()}\ndocs={str(result['docs']).lower()}\n"
+                    f"broker={str(result['broker']).lower()}\n"
                     f"projects={json.dumps(result['projects'])}\n"
                 )
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
