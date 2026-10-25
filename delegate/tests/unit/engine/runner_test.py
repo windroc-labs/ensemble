@@ -1,5 +1,6 @@
 """Pure logic over fake objects and in-process clients."""
 
+import errno
 import io
 import json
 import os
@@ -11,7 +12,7 @@ from unittest import mock
 from ensemble.delegate import ConfigError, Progress, Spec
 from ensemble.delegate.composer import Composer
 from ensemble.delegate.engine.plan import plan
-from ensemble.delegate.engine.runner import FIX, NUDGE, STOP_LIMIT, execute, stopped
+from ensemble.delegate.engine.runner import FIX, NUDGE, STOP_LIMIT, execute, say, stopped
 from ensemble.delegate.engine.types import Begun, Finished, Layout, Limit, Result
 from ensemble.delegate.event.reply import marks
 from ensemble.session import ConfigError as SessionConfigError
@@ -658,6 +659,26 @@ class InstructionRuns(InstructionCase):
             self.assertRaisesRegex(ConfigError, "instruction has no session to resume"),
         ):
             executed(*args, driver=self.driver)
+
+
+class Say(Case):
+    def test_a_dead_stderr_drops_the_text_and_any_other_write_error_raises(self):
+        for error, dead in (
+            (OSError(errno.EIO, "Input/output error"), True),
+            (BrokenPipeError(errno.EPIPE, "Broken pipe"), True),
+            (OSError(errno.ENOSPC, "No space left on device"), False),
+        ):
+            with self.subTest(error=error):
+                stream = mock.Mock()
+                stream.write.side_effect = error
+                with mock.patch("sys.stderr", stream):
+                    if dead:
+                        say("delegate: gone")
+                    else:
+                        with self.assertRaises(OSError) as raised:
+                            say("delegate: gone")
+                        self.assertIs(raised.exception, error)
+                stream.write.assert_called_once_with("delegate: gone\n")
 
 
 class Stopping(Case):
