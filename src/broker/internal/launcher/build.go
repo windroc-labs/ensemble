@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/protocol"
@@ -33,8 +34,20 @@ var checks embed.FS
 // checkPath is the ensemble layer's PATH less /opt/ensemble/bin: where the layer finds what it needs.
 const checkPath = "/home/agent/.npm-global/bin:/usr/local/bin:/usr/bin:/bin"
 
+var baseImagePattern = regexp.MustCompile(`^(?:sha256:[a-f0-9]{64}|[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?)$`)
+
+// ValidBaseImage reports whether s names a local image: a tag, repository[:tag], or sha256 ID (no registry port or
+// digest).
+func ValidBaseImage(s string) bool {
+	return len(s) <= 255 && baseImagePattern.MatchString(s)
+}
+
+// baseRequirements are what the base check reports missing, in its order; agent is its non-root user agent.
+var baseRequirements = []string{"apt-get", "dpkg", "node", "npm", "tmux", "git", "claude", "agent"}
+
 // BuildSpec is what a build adds to the ensemble package.
 type BuildSpec struct {
+	BaseImage    string   // a local image as stage 1, never pulled or rebuilt; "": built from ~/.ensemble/docker/worker
 	Plugins      []string // repository sources both clients install
 	ImagePlugins []string // plugins the stage-1 image carries under /opt/windroc/plugins, for Claude Code
 }
@@ -181,16 +194,23 @@ func (h Host) checkImage(ctx context.Context, image string) (imageInfo, error) {
 	return info, nil
 }
 
-// stage snapshots the worker image definition, package, plugin sources and embedded assets into tmp, and returns the
-// package version and Claude Code's plugin directories. Key-only inputs go in tmp itself, outside every build context.
-func (h Host) stage(pkg string, spec BuildSpec, tmp string) (string, string, error) {
+// stage snapshots the worker image definition (or records baseID, the base image's), package, plugin sources and
+// embedded assets into tmp, and returns the package version and Claude Code's plugin directories. Key-only inputs go
+// in tmp itself, outside every build context.
+func (h Host) stage(pkg string, spec BuildSpec, baseID, tmp string) (string, string, error) {
 	userDir, packageDir := filepath.Join(tmp, "user"), filepath.Join(tmp, "package")
-	definition := filepath.Join(h.Home, ".ensemble/docker/worker")
-	if info, err := os.Stat(definition); err != nil || !info.IsDir() {
-		return "", "", protocol.New(protocol.BuildFailed, "No worker image definition at "+definition+"; run sh <ensemble plugin directory>/src/broker/install.sh.")
-	}
-	if err := snapshotTree(definition, userDir); err != nil {
-		return "", "", protocol.New(protocol.BuildFailed, "Cannot read the worker image definition.")
+	if baseID != "" {
+		if err := os.WriteFile(filepath.Join(tmp, "base-image"), []byte(baseID+"\n"), 0o644); err != nil {
+			return "", "", protocol.New(protocol.BuildFailed, "Cannot stage the base image.")
+		}
+	} else {
+		definition := filepath.Join(h.Home, ".ensemble/docker/worker")
+		if info, err := os.Stat(definition); err != nil || !info.IsDir() {
+			return "", "", protocol.New(protocol.BuildFailed, "No worker image definition at "+definition+"; run sh <ensemble plugin directory>/src/broker/install.sh.")
+		}
+		if err := snapshotTree(definition, userDir); err != nil {
+			return "", "", protocol.New(protocol.BuildFailed, "Cannot read the worker image definition.")
+		}
 	}
 	for _, rel := range []string{"src/ensemble/session", "src/ensemble/utils", "src/ensemble/delegate", ".claude-plugin/plugin.json"} {
 		if err := snapshotTree(filepath.Join(pkg, rel), filepath.Join(packageDir, rel)); err != nil {
@@ -239,7 +259,13 @@ func (h Host) Build(ctx context.Context, pkg string, spec BuildSpec, maxAge time
 		return BuildResult{}, protocol.New(protocol.BuildFailed, "Cannot create a build directory.")
 	}
 	defer os.RemoveAll(tmp)
-	version, dirs, err := h.stage(pkg, spec, tmp)
+	var base imageInfo
+	if spec.BaseImage != "" {
+		if base, err = h.baseImage(ctx, spec.BaseImage); err != nil {
+			return BuildResult{}, err
+		}
+	}
+	version, dirs, err := h.stage(pkg, spec, base.ID, tmp)
 	if err != nil {
 		return BuildResult{}, err
 	}
@@ -256,7 +282,7 @@ func (h Host) Build(ctx context.Context, pkg string, spec BuildSpec, maxAge time
 	if current && (maxAge < 0 || (maxAge > 0 && time.Since(info.Created) < maxAge)) {
 		return BuildResult{Image: image, Digest: info.ID}, nil
 	}
-	result, err := h.rebuild(ctx, tmp, key, version, dirs, slices.Sorted(slices.Values(spec.ImagePlugins)))
+	result, err := h.rebuild(ctx, tmp, key, version, dirs, spec, base.ID)
 	var e *protocol.Error
 	if current && maxAge > 0 && errors.As(err, &e) && e.Code == protocol.BuildFailed {
 		// An age-only refresh that fails (e.g. offline) keeps the usable image.
@@ -319,24 +345,21 @@ func (h Host) leased(key string) bool {
 	return err == nil && time.Since(info.ModTime()) < imageLease
 }
 
-// rebuild builds both stages of key's images from the context in tmp; imagePlugins must be in stage 1.
-func (h Host) rebuild(ctx context.Context, tmp, key, version, plugins string, imagePlugins []string) (BuildResult, error) {
+// rebuild builds both stages of key's images from the context in tmp, stage 1 being baseID's image when set.
+func (h Host) rebuild(ctx context.Context, tmp, key, version, plugins string, spec BuildSpec, baseID string) (BuildResult, error) {
 	image, userImage := "ensemble-worker:"+key, "ensemble-user:"+key
-	if _, err := h.Docker.Run(ctx, []string{"build", "--progress=plain", "--no-cache", "--label", "ensemble.key=" + key, "--tag", userImage, filepath.Join(tmp, "user")}, nil); err != nil {
-		return BuildResult{}, diagnosed(err, protocol.BuildFailed, "Building the worker image definition failed.")
+	var uid, gid string
+	var err error
+	if baseID != "" {
+		uid, gid, err = h.useBase(ctx, spec.BaseImage, baseID, userImage)
+	} else {
+		uid, gid, err = h.buildDefinition(ctx, tmp, key, userImage)
 	}
-	out, err := h.Docker.Run(ctx, []string{"run", "--rm", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-		"--entrypoint", "/bin/sh", userImage, "-c", "id -u agent && id -g agent"}, nil)
 	if err != nil {
-		return BuildResult{}, failure(err, protocol.BuildFailed, "The worker image has no usable user agent.")
+		return BuildResult{}, err
 	}
-	ids := strings.Fields(string(out))
-	if len(ids) != 2 || !numeric(ids[0]) || !numeric(ids[1]) {
-		return BuildResult{}, protocol.New(protocol.BuildFailed, "The worker image's user agent must be a non-root user.")
-	}
-	uid, gid := ids[0], ids[1]
-	if len(imagePlugins) > 0 {
-		if err := h.checkImagePlugins(ctx, userImage, imagePlugins); err != nil {
+	if len(spec.ImagePlugins) > 0 {
+		if err := h.checkImagePlugins(ctx, userImage, slices.Sorted(slices.Values(spec.ImagePlugins))); err != nil {
 			return BuildResult{}, err
 		}
 	}
@@ -361,6 +384,112 @@ func (h Host) rebuild(ctx context.Context, tmp, key, version, plugins string, im
 	}
 	h.prune(ctx, key)
 	return BuildResult{Image: image, Digest: info.ID, Rebuilt: true}, nil
+}
+
+// buildDefinition builds ~/.ensemble/docker/worker's snapshot in tmp as userImage and returns its agent's ids.
+func (h Host) buildDefinition(ctx context.Context, tmp, key, userImage string) (string, string, error) {
+	if _, err := h.Docker.Run(ctx, []string{"build", "--progress=plain", "--no-cache", "--label", "ensemble.key=" + key, "--tag", userImage, filepath.Join(tmp, "user")}, nil); err != nil {
+		return "", "", diagnosed(err, protocol.BuildFailed, "Building the worker image definition failed.")
+	}
+	out, err := h.Docker.Run(ctx, []string{"run", "--rm", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+		"--entrypoint", "/bin/sh", userImage, "-c", "id -u agent && id -g agent"}, nil)
+	if err != nil {
+		return "", "", failure(err, protocol.BuildFailed, "The worker image has no usable user agent.")
+	}
+	ids := strings.Fields(string(out))
+	if len(ids) != 2 || !numeric(ids[0]) || !numeric(ids[1]) {
+		return "", "", protocol.New(protocol.BuildFailed, "The worker image's user agent must be a non-root user.")
+	}
+	return ids[0], ids[1], nil
+}
+
+// baseImage inspects ref, which must be a local image without reserved labels.
+func (h Host) baseImage(ctx context.Context, ref string) (imageInfo, error) {
+	if !ValidBaseImage(ref) {
+		return imageInfo{}, protocol.New(protocol.BuildFailed, "Base image "+ref+": use a local image tag or sha256 ID.")
+	}
+	info, found, err := h.inspectImage(ctx, ref)
+	if err != nil {
+		return imageInfo{}, failure(err, protocol.BuildFailed, "Cannot inspect base image "+ref+".")
+	}
+	if !found {
+		return imageInfo{}, protocol.New(protocol.BuildFailed, "Base image "+ref+" is not a local image; build or load it first (ensemble-broker never pulls it).")
+	}
+	var reserved []string
+	for label := range info.Config.Labels {
+		if strings.HasPrefix(label, "windroc.") || strings.HasPrefix(label, "ensemble.") {
+			reserved = append(reserved, label)
+		}
+	}
+	if len(reserved) == 0 {
+		return info, nil
+	}
+	// Label keys come from the image: name a few, never echoing a control character or a long key.
+	slices.Sort(reserved)
+	shown := reserved[:min(5, len(reserved))]
+	for i, label := range shown {
+		if len(label) > 128 || strings.ContainsFunc(label, func(r rune) bool { return !unicode.IsPrint(r) }) {
+			shown[i] = "(invalid label)"
+		}
+	}
+	names := strings.Join(shown, ", ")
+	if more := len(reserved) - len(shown); more > 0 {
+		names += " and " + strconv.Itoa(more) + " more"
+	}
+	return imageInfo{}, protocol.New(protocol.BuildFailed, "Base image "+ref+" carries reserved labels "+names+"; remove every windroc. and ensemble. label.")
+}
+
+// useBase checks ref's image, baseID, meets the ensemble layer's needs, tags it userImage and returns its agent's ids.
+func (h Host) useBase(ctx context.Context, ref, baseID, userImage string) (string, string, error) {
+	script, err := checks.ReadFile("checks/base-check")
+	if err != nil {
+		return "", "", protocol.New(protocol.BuildFailed, "Embedded image checks unreadable.")
+	}
+	out, err := h.Docker.Run(ctx, []string{"run", "--rm", "-i", "--pull", "never", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+		"--user", "65534:65534", "--entrypoint", "/bin/sh", baseID, "-s", checkPath}, script)
+	if err != nil {
+		return "", "", diagnosed(err, protocol.BuildFailed, "Checking base image "+ref+" failed.")
+	}
+	unexpected := protocol.New(protocol.BuildFailed, "Checking base image "+ref+" gave unexpected output.")
+	lines := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+	if len(lines) > len(baseRequirements)+1 {
+		return "", "", unexpected
+	}
+	missing := map[string]bool{}
+	var ids []string
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		switch {
+		case len(fields) == 2 && fields[0] == "missing" && slices.Contains(baseRequirements, fields[1]) && !missing[fields[1]]:
+			missing[fields[1]] = true
+		case len(fields) == 3 && fields[0] == "agent" && ids == nil && numeric(fields[1]) && numeric(fields[2]):
+			ids = fields[1:]
+		default:
+			return "", "", unexpected
+		}
+	}
+	if (ids == nil) == !missing["agent"] {
+		return "", "", unexpected
+	}
+	if len(missing) > 0 {
+		var lacks []string
+		for _, item := range baseRequirements {
+			switch {
+			case !missing[item]:
+			case item == "claude":
+				lacks = append(lacks, "claude (Claude Code)")
+			case item == "agent":
+				lacks = append(lacks, "a non-root user agent")
+			default:
+				lacks = append(lacks, item)
+			}
+		}
+		return "", "", protocol.New(protocol.BuildFailed, "Base image "+ref+" lacks "+strings.Join(lacks, ", ")+"; see docs/docker-host.md#base-images.")
+	}
+	if _, err := h.Docker.Run(ctx, []string{"tag", baseID, userImage}, nil); err != nil {
+		return "", "", diagnosed(err, protocol.BuildFailed, "Tagging base image "+ref+" failed.")
+	}
+	return ids[0], ids[1], nil
 }
 
 // checkImagePlugins requires each of names, sorted, to be a plugin directory agent can read in image, its

@@ -1,0 +1,14 @@
+# Usage: sh -s PATH (this file on stdin), in a base image. Prints "missing <item>" for each command the ensemble
+# layer needs that PATH lacks, then "missing agent" or "agent <uid> <gid>" for its non-root user agent;
+# exits 0 either way, so a non-zero exit means the check itself failed.
+PATH=$1
+export PATH
+for tool in apt-get dpkg node npm tmux git claude; do
+	command -v "$tool" >/dev/null 2>&1 || echo "missing $tool"
+done
+if uid=$(id -u agent 2>/dev/null) && gid=$(id -g agent 2>/dev/null) && [ "$uid" != 0 ] && [ "$gid" != 0 ]; then
+	echo "agent $uid $gid"
+else
+	echo "missing agent"
+fi
+exit 0

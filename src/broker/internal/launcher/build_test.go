@@ -103,7 +103,13 @@ type buildEnv struct {
 	// pluginCheck answers the in-image plugin check's run, pluginCheckErr fails it.
 	pluginCheck    string
 	pluginCheckErr error
-	failStage      string
+	// bases maps base image references to their IDs, all carrying baseLabels; baseCheck answers the base check's
+	// run (default agent 1000 1000), baseCheckErr fails it, and tagErr fails docker tag.
+	bases                map[string]string
+	baseLabels           map[string]string
+	baseCheck            string
+	baseCheckErr, tagErr error
+	failStage            string
 	// images answers image ls, KEY standing for the built key, and dangling its untagged listing;
 	// containers and used answer container ls and inspect.
 	images, dangling, containers, used string
@@ -117,7 +123,7 @@ type buildEnv struct {
 }
 
 func newBuildEnv(t *testing.T) *buildEnv {
-	e := &buildEnv{home: t.TempDir(), pkg: t.TempDir(), built: map[string]map[string]string{}, probe: "1001\n1002\n"}
+	e := &buildEnv{home: t.TempDir(), pkg: t.TempDir(), built: map[string]map[string]string{}, probe: "1001\n1002\n", baseCheck: "agent 1000 1000\n"}
 	putFile(t, filepath.Join(e.home, ".ensemble/docker/worker/Dockerfile"), "FROM base")
 	putFile(t, filepath.Join(e.pkg, ".claude-plugin/plugin.json"), `{"version":"1.2.3"}`)
 	putFile(t, filepath.Join(e.pkg, "src/ensemble/session/sample.py"), "session")
@@ -153,7 +159,12 @@ func newBuildEnv(t *testing.T) *buildEnv {
 				e.key = k
 			}
 			return nil, nil
+		case "tag":
+			return nil, e.tagErr
 		case "run":
+			if slices.Contains(args, "-s") {
+				return []byte(e.baseCheck), e.baseCheckErr
+			}
 			if slices.Contains(args, "node") {
 				return []byte(e.pluginCheck), e.pluginCheckErr
 			}
@@ -167,6 +178,9 @@ func newBuildEnv(t *testing.T) *buildEnv {
 				return []byte(strings.ReplaceAll(e.images, "KEY", e.key)), nil
 			case "rm":
 				return nil, e.rmErr
+			}
+			if id, ok := e.bases[args[len(args)-1]]; ok {
+				return inspectJSON(id, e.baseLabels, time.Now()), nil
 			}
 			labels, ok := e.built[args[len(args)-1]]
 			if !ok {
@@ -752,5 +766,194 @@ func TestImagePluginCheck(t *testing.T) {
 				t.Fatal("ensemble layer built after a failed check")
 			}
 		})
+	}
+}
+
+const baseRef = "dummy-env:test"
+
+var baseID = "sha256:" + strings.Repeat("c", 64)
+
+// newBaseEnv is newBuildEnv with baseRef local and no worker image definition.
+func newBaseEnv(t *testing.T) *buildEnv {
+	e := newBuildEnv(t)
+	e.bases = map[string]string{baseRef: baseID}
+	if err := os.RemoveAll(filepath.Join(e.home, ".ensemble/docker/worker")); err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+// buildFailure is err's message and cause, failing unless it is build_failed.
+func buildFailure(t *testing.T, err error) (string, string) {
+	t.Helper()
+	var pe *protocol.Error
+	if !errors.As(err, &pe) || pe.Code != protocol.BuildFailed {
+		t.Fatalf("%v", err)
+	}
+	return pe.Message, pe.Cause
+}
+
+// noPull fails on a pull, a call that may pull, or a stage-1 build: a base image is neither pulled nor rebuilt.
+func noPull(t *testing.T, calls [][]string) {
+	t.Helper()
+	for _, c := range calls {
+		if c[0] == "pull" || (c[0] == "build" && strings.HasPrefix(c[slices.Index(c, "--tag")+1], "ensemble-user:")) {
+			t.Fatalf("pulled or rebuilt: %q", c)
+		}
+		if i := slices.Index(c, "--pull"); i >= 0 && c[i+1] != "never" {
+			t.Fatalf("may pull: %q", c)
+		}
+	}
+}
+
+func TestBaseImageAbsent(t *testing.T) {
+	e := newBaseEnv(t)
+	_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{BaseImage: "nope:none"}, -1)
+	if message, _ := buildFailure(t, err); message != "Base image nope:none is not a local image; build or load it first (ensemble-broker never pulls it)." {
+		t.Fatal(message)
+	}
+	if got := e.fake.verbs(); !slices.Equal(got, []string{"image inspect"}) || e.fake.calls[0][2] != "nope:none" {
+		t.Fatalf("%q", e.fake.calls)
+	}
+	e = newBaseEnv(t)
+	_, err = e.host().Build(context.Background(), e.pkg, BuildSpec{BaseImage: "-x"}, -1)
+	if message, _ := buildFailure(t, err); !strings.Contains(message, "-x") || len(e.fake.calls) != 0 {
+		t.Fatalf("%s %q", message, e.fake.calls)
+	}
+}
+
+func TestBaseImageReservedLabels(t *testing.T) {
+	many := map[string]string{}
+	for _, k := range []string{"windroc.a", "windroc.b", "windroc.c", "ensemble.d", "ensemble.e", "windroc.f", "windroc.g", "other"} {
+		many[k] = "x"
+	}
+	for name, tc := range map[string]struct {
+		labels  map[string]string
+		message string
+	}{
+		"lock":    {map[string]string{"windroc.lock": "x", "org.opencontainers.image.title": "t"}, "Base image dummy-env:test carries reserved labels windroc.lock; remove every windroc. and ensemble. label."},
+		"several": {map[string]string{"windroc.b": "", "ensemble.a": "", "maintainer": "m"}, "Base image dummy-env:test carries reserved labels ensemble.a, windroc.b; remove every windroc. and ensemble. label."},
+		"many":    {many, "Base image dummy-env:test carries reserved labels ensemble.d, ensemble.e, windroc.a, windroc.b, windroc.c and 2 more; remove every windroc. and ensemble. label."},
+		"invalid": {map[string]string{"windroc.\x1b[31m": "", "ensemble." + strings.Repeat("a", 130): ""}, "Base image dummy-env:test carries reserved labels (invalid label), (invalid label); remove every windroc. and ensemble. label."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newBaseEnv(t)
+			e.baseLabels = tc.labels
+			_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{BaseImage: baseRef}, -1)
+			if message, _ := buildFailure(t, err); message != tc.message {
+				t.Fatal(message)
+			}
+			if got := e.fake.verbs(); !slices.Equal(got, []string{"image inspect"}) {
+				t.Fatalf("%q", got)
+			}
+		})
+	}
+}
+
+func TestBaseImageRequirements(t *testing.T) {
+	script, err := checks.ReadFile("checks/base-check")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unexpected := "Checking base image dummy-env:test gave unexpected output."
+	for name, tc := range map[string]struct {
+		out, message string
+		err          error
+	}{
+		"tools":         {out: "missing tmux\nmissing claude\nagent 1000 1000\n", message: "Base image dummy-env:test lacks tmux, claude (Claude Code); see docs/docker-host.md#base-images."},
+		"agent":         {out: "missing agent\n", message: "Base image dummy-env:test lacks a non-root user agent; see docs/docker-host.md#base-images."},
+		"any order":     {out: "missing agent\nmissing git\nmissing apt-get\n", message: "Base image dummy-env:test lacks apt-get, git, a non-root user agent; see docs/docker-host.md#base-images."},
+		"all":           {out: "missing apt-get\nmissing dpkg\nmissing node\nmissing npm\nmissing tmux\nmissing git\nmissing claude\nmissing agent\n", message: "Base image dummy-env:test lacks apt-get, dpkg, node, npm, tmux, git, claude (Claude Code), a non-root user agent; see docs/docker-host.md#base-images."},
+		"root ids":      {out: "agent 0 0\n", message: unexpected},
+		"short ids":     {out: "agent 1000\n", message: unexpected},
+		"nothing":       {out: "", message: unexpected},
+		"unknown item":  {out: "missing python3\nagent 1 1\n", message: unexpected},
+		"agent twice":   {out: "missing agent\nagent 1 1\n", message: unexpected},
+		"repeated":      {out: "missing git\nmissing git\nagent 1 1\n", message: unexpected},
+		"too long":      {out: strings.Repeat("missing git\n", 9) + "agent 1 1\n", message: unexpected},
+		"docker failed": {err: &docker.CommandError{Exit: 127, Stderr: "exec: \"/bin/sh\": stat /bin/sh: no such file"}, message: "Checking base image dummy-env:test failed."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newBaseEnv(t)
+			e.baseCheck, e.baseCheckErr = tc.out, tc.err
+			_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{BaseImage: baseRef}, -1)
+			message, cause := buildFailure(t, err)
+			if message != tc.message {
+				t.Fatal(message)
+			}
+			if tc.err != nil && !strings.Contains(cause, "/bin/sh") {
+				t.Fatalf("cause %q", cause)
+			}
+			i := slices.IndexFunc(e.fake.calls, func(c []string) bool { return slices.Contains(c, "-s") })
+			want := []string{"run", "--rm", "-i", "--pull", "never", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+				"--user", "65534:65534", "--entrypoint", "/bin/sh", baseID, "-s", "/home/agent/.npm-global/bin:/usr/local/bin:/usr/bin:/bin"}
+			if i < 0 || !slices.Equal(e.fake.calls[i], want) || string(e.fake.stdin[i]) != string(script) {
+				t.Fatalf("%q", e.fake.calls)
+			}
+			for _, c := range e.fake.calls {
+				if c[0] == "tag" || c[0] == "build" {
+					t.Fatalf("%q after a failed check", c)
+				}
+			}
+		})
+	}
+}
+
+func TestBaseImageStages(t *testing.T) {
+	e := newBaseEnv(t)
+	result, err := e.host().Build(context.Background(), e.pkg, BuildSpec{BaseImage: baseRef, ImagePlugins: []string{"dummy-plugin"}}, -1)
+	if err != nil || !result.Rebuilt || result.Image != "ensemble-worker:"+e.key {
+		t.Fatalf("%+v %v", result, err)
+	}
+	if got := e.fake.verbs(); !slices.Equal(got, []string{"image inspect", "image inspect", "run --rm", "tag " + baseID, "run --rm", "build --progress=plain", "image inspect", "container ls", "image ls", "image ls"}) {
+		t.Fatalf("%q", got)
+	}
+	userImage := "ensemble-user:" + e.key
+	if tag := e.fake.calls[3]; !slices.Equal(tag, []string{"tag", baseID, userImage}) {
+		t.Fatalf("%q", tag)
+	}
+	if check := e.fake.calls[4]; !slices.Contains(check, "node") || !slices.Contains(check, userImage) {
+		t.Fatalf("%q", check)
+	}
+	layer := e.fake.calls[5]
+	for _, arg := range []string{"USER_IMAGE=" + userImage, "AGENT_UID=1000", "AGENT_GID=1000", "ENSEMBLE_PLUGIN_DIRS=/opt/windroc/plugins/dummy-plugin", "--no-cache"} {
+		if !slices.Contains(layer, arg) {
+			t.Fatalf("%s absent: %q", arg, layer)
+		}
+	}
+	noPull(t, e.fake.calls)
+	t.Run("tag fails", func(t *testing.T) {
+		e := newBaseEnv(t)
+		e.tagErr = &docker.CommandError{Exit: 1, Stderr: "Error response from daemon: No such image: " + baseID}
+		_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{BaseImage: baseRef}, -1)
+		if message, cause := buildFailure(t, err); message != "Tagging base image dummy-env:test failed." || !strings.Contains(cause, "No such image") {
+			t.Fatalf("%s %s", message, cause)
+		}
+	})
+}
+
+func TestBaseImageKeyFollowsItsID(t *testing.T) {
+	e := newBaseEnv(t)
+	e.bases["alias:1"] = baseID
+	build := func(ref string) BuildResult {
+		t.Helper()
+		result, err := e.host().Build(context.Background(), e.pkg, BuildSpec{BaseImage: ref}, -1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	first := build(baseRef)
+	e.bases[baseRef] = "sha256:" + strings.Repeat("d", 64)
+	rebuilt := build(baseRef)
+	if !rebuilt.Rebuilt || rebuilt.Image == first.Image {
+		t.Fatalf("rebuilt base kept %+v", rebuilt)
+	}
+	if alias := build("alias:1"); alias.Image != first.Image || alias.Rebuilt {
+		t.Fatalf("same ID, other tag: %+v vs %+v", alias, first)
+	}
+	putFile(t, filepath.Join(e.home, ".ensemble/docker/worker/Dockerfile"), "FROM base")
+	if defaultPath, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); err != nil || defaultPath.Image == first.Image {
+		t.Fatalf("%+v %v", defaultPath, err)
 	}
 }

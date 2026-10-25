@@ -216,6 +216,14 @@ func TestUsageErrors(t *testing.T) {
 		{"build", []string{"build", "--ensemble", "/x", "--image-plugin", "a@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
 		{"build", []string{"build", "--ensemble", "/x", "--image-plugin", "a", "--plugin", "b@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
 		{"build", []string{"build", "--ensemble", "/x", "--max-age", "1", "--image-plugin", "a"}},
+		{"build", []string{"build", "--ensemble", "/x", "--base-image"}},
+		{"build", []string{"build", "--ensemble", "/x", "--base-image", "-x"}},
+		{"build", []string{"build", "--ensemble", "/x", "--base-image", "Dummy:test"}},
+		{"build", []string{"build", "--ensemble", "/x", "--base-image", "localhost:5000/env:1"}},
+		{"build", []string{"build", "--ensemble", "/x", "--base-image", "env@sha256:" + strings.Repeat("c", 64)}},
+		{"build", []string{"build", "--ensemble", "/x", "--base-image", strings.Repeat("a", 256)}},
+		{"build", []string{"build", "--ensemble", "/x", "--base-image", "a", "--base-image", "b"}},
+		{"build", []string{"build", "--ensemble", "/x", "--plugin", "b@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "--base-image", "a"}},
 		{"start", []string{"start", "--manifest", "/bad\npath"}},
 		{"start", []string{"start", "--manifest", "/bad\xffpath"}},
 		{"close", []string{"close", "--container", "other"}},
@@ -474,6 +482,8 @@ func TestBuildPlugins(t *testing.T) {
 		{[]string{"--plugin", b, "--plugin", a, "--max-age", "60"}, launcher.BuildSpec{Plugins: []string{b, a}}, time.Minute},
 		{[]string{"--image-plugin", "dummy-plugin"}, launcher.BuildSpec{ImagePlugins: []string{"dummy-plugin"}}, -1},
 		{[]string{"--plugin", b, "--image-plugin", "z", "--image-plugin", "a.b_c-d", "--max-age", "0"}, launcher.BuildSpec{Plugins: []string{b}, ImagePlugins: []string{"z", "a.b_c-d"}}, 0},
+		{[]string{"--base-image", "dummy-env:test"}, launcher.BuildSpec{BaseImage: "dummy-env:test"}, -1},
+		{[]string{"--base-image", "sha256:" + strings.Repeat("c", 64), "--plugin", b, "--image-plugin", "z", "--max-age", "60"}, launcher.BuildSpec{BaseImage: "sha256:" + strings.Repeat("c", 64), Plugins: []string{b}, ImagePlugins: []string{"z"}}, time.Minute},
 	} {
 		var spec launcher.BuildSpec
 		maxAge := time.Duration(-2)
@@ -482,7 +492,7 @@ func TestBuildPlugins(t *testing.T) {
 			return map[string]string{}, nil
 		}}
 		if code, _, errOut := invoke(app, append([]string{"build", "--ensemble", "/pkg"}, c.args...)...); code != 0 || !slices.Equal(spec.Plugins, c.spec.Plugins) ||
-			!slices.Equal(spec.ImagePlugins, c.spec.ImagePlugins) || maxAge != c.maxAge {
+			!slices.Equal(spec.ImagePlugins, c.spec.ImagePlugins) || spec.BaseImage != c.spec.BaseImage || maxAge != c.maxAge {
 			t.Fatalf("%q: exit %d spec %+v max age %v: %s", c.args, code, spec, maxAge, errOut)
 		}
 	}

@@ -101,7 +101,7 @@ func TestPluginSourceValidation(t *testing.T) {
 func TestEmptyPluginSources(t *testing.T) {
 	e := newBuildEnv(t)
 	tmp := t.TempDir()
-	_, dirs, err := e.host().stage(e.pkg, BuildSpec{}, tmp)
+	_, dirs, err := e.host().stage(e.pkg, BuildSpec{}, "", tmp)
 	if err != nil || dirs != "" {
 		t.Fatalf("%q %v", dirs, err)
 	}
