@@ -1193,19 +1193,27 @@ def main(
     if launch_sid is not None and not UUID_RE.fullmatch(launch_sid):
         print(f"router.py: bad ${SID_ENV}: {launch_sid}", file=sys.stderr)
         return 2
+    os.environ["PATH"] = config.path()
     with event_log.captured() as said:
-        rc = _route(
-            opts,
-            launch_sid,
-            trackers=trackers,
-            now=now,
-            config_path=config_path,
-            gql=gql,
-            run=run,
-            keychain=keychain,
-            start=start,
-            delegate_cls=delegate_cls,
-        )
+        try:
+            cfg = config.load(path=config_path)
+        except ConfigError as error:
+            config.report_error("router", error, dry=opts["dry"])
+            rc = 2
+        else:
+            event_log.use_logs(cfg.logs_dir)
+            rc = _route(
+                opts,
+                cfg,
+                launch_sid,
+                trackers=trackers,
+                now=now,
+                gql=gql,
+                run=run,
+                keychain=keychain,
+                start=start,
+                delegate_cls=delegate_cls,
+            )
     if opts["issue"] is not None and rc and not opts["dry"]:
         why_refused(opts["issue"], said)
     return rc
@@ -1231,16 +1239,7 @@ def why_refused(ident, said):
             print(printable(text), file=sys.stderr, flush=True)
 
 
-def _route(
-    opts, launch_sid, *, trackers, now, config_path, gql, run, keychain, start, delegate_cls
-):
-    os.environ["PATH"] = config.path()
-    try:
-        cfg = config.load(path=config_path)
-    except ConfigError as error:
-        config.report_error("router", error, dry=opts["dry"])
-        return 2
-    event_log.use_logs(cfg.logs_dir)
+def _route(opts, cfg, launch_sid, *, trackers, now, gql, run, keychain, start, delegate_cls):
     if delegate_cls is not None:
         cfg = replace(cfg, delegates={**cfg.delegates, cfg.delegate_kind: delegate_cls})
     wiring = trackers[cfg.tracker]
