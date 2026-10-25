@@ -14,13 +14,16 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest import mock
 
+from ensemble.session import cli
 from ensemble.session.engine.status_log import SessionStatusLog
 from ensemble.session.engine.types import SessionError
 from ensemble.session.hosts.docker import relay, supervisor
 from ensemble.session.hosts.docker.broker import Broker
 from ensemble.session.hosts.docker.supervisor import Supervisor
 from tests.session.case import REPO, Case
-from tests.session.unit.hosts.docker.support import FakeBroker
+from tests.session.tui_hook_support import state as hook_state
+from tests.session.tui_hook_support import write_state
+from tests.session.unit.hosts.docker.support import FakeBroker, FakePopen
 from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired
 
 HOOK = "/plugin/bin/ensemble-session"
@@ -107,7 +110,7 @@ class HandleTest(Base):
     def test_transcript_path_is_dropped_before_the_hook_runs(self):
         self.assertEqual(self.supervisor.handle(request()), {"gen": GEN, "seq": 1, "ok": True})
         ((argv, kw),) = self.ran
-        self.assertEqual(argv, [HOOK, "hook", TUI, "Stop"])
+        self.assertEqual(argv, [HOOK, "hook", "--strict", TUI, "Stop"])
         self.assertEqual(json.loads(kw["input"]), {"session_id": "s"})
         self.assertEqual(kw["timeout"], supervisor.HOOK_WAIT)
         self.assertEqual(kw["stdout"], kw["stderr"])
@@ -274,6 +277,60 @@ class HookReplayTest(Base):
         )
         with open(self.events) as stream:
             self.assertEqual(stream.read(), "")
+
+
+class HookCommandTest(Base):
+    def test_real_callback_failure_retries_then_delivers_once_through_the_cli(self):
+        folder = os.path.join(self.home, "tui")
+        os.mkdir(folder)
+        saved = hook_state(self.home, self.events)
+        saved["words"] = {"Stop": "done"}
+        saved["host_hook"] = {
+            "module": "ensemble.session.hosts.docker.hook",
+            "roots": [],
+            "state": {
+                "docker": "/usr/local/bin/docker",
+                "target": "worker_1",
+                "generation": GEN,
+                "container": f"ensemble-worker_1-{GEN}",
+                "endpoint": "unix:///Users/a/.docker/run/docker.sock",
+            },
+        }
+        write_state(folder, saved)
+        self.supervisor.tui_dir = folder
+        calls = []
+
+        def invoke(argv, **options):
+            calls.append(argv)
+            stdin = SimpleNamespace(buffer=io.BytesIO(options["input"]))
+            with mock.patch("sys.stdin", stdin):
+                return SimpleNamespace(returncode=cli.main(argv[1:]))
+
+        self.supervisor.run = invoke
+        popen = FakePopen(
+            (b"", b"temporary docker failure", 1),
+            (f"4242 $3 %7 4343\t{saved['sid']}\t{GEN}\n".encode(), b"", 0),
+            (b"", b"", 0),
+        )
+        line = request(argv=["hook", folder, "Stop"])
+        with (
+            mock.patch("pwd.getpwuid", return_value=SimpleNamespace(pw_dir="/Users/a")),
+            mock.patch("subprocess.Popen", popen),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            self.assertEqual(
+                self.supervisor.handle(line), {"gen": GEN, "seq": 1, "ok": False, "retry": True}
+            )
+            self.assertFalse(os.path.exists(self.supervisor.seq_file))
+            self.assertTrue(self.supervisor.handle(line)["ok"])
+            self.assertTrue(self.supervisor.handle(line)["ok"])
+        self.assertEqual(calls, [[HOOK, "hook", "--strict", folder, "Stop"]] * 2)
+        self.assertEqual(len(popen.calls), 3)
+        self.assertEqual(self.rejected()[-1]["reason"], "hook exit 1")
+        with open(os.path.join(folder, "hook.log")) as stream:
+            self.assertIn("temporary docker failure", stream.read())
+        with open(self.events) as stream:
+            self.assertEqual([line.split()[1:] for line in stream], [["worker_1", "done"]])
 
 
 class ServeTest(Base):

@@ -422,7 +422,9 @@ later, it leaves its worker running.
 
 ### Recovery
 
-- **Host hook failed** (timeout, could not start or non-zero exit): the supervisor logs the reason in
+- **Host hook failed** (timeout, could not start, callback failure or non-zero exit): the supervisor
+  invokes `ensemble-session hook --strict DIR LABEL` so callback failures return non-zero; ordinary
+  client hook calls retain their default exit 0. The supervisor logs the failure in
   `rejected.jsonl` without advancing the successful sequence. Its `ok: false, retry: true` reply keeps the
   event at the relay queue's head and retries on the same connection every 10 s until success or session
   end; later events wait behind it. Success records the sequence, so acknowledged replays do not rerun

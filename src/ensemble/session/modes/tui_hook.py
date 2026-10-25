@@ -1,9 +1,8 @@
-"""A tui client's hook, run as `ensemble-session hook DIR LABEL`: drains stdin, checks callback
-sources, binds client identity, and appends one hooks.jsonl record before notifying its optional
-Host callback. Never stdout, always exits 0; failures retain a traceback and one stderr line.
-session.json's client_hook and host_hook are HookCallback.fields(): a callback module is found over
-the hook's own source roots, then every callback's declared roots, then sys.path, each its on_hook
-given a HookCall; one outside sys.path loads from its roots, sys.path unchanged.
+"""A tui client's hook: drains stdin, checks callback sources, binds identity and journals
+hooks.jsonl before notifying the optional Host. No stdout; failures log a traceback and stderr line.
+The CLI defaults to exit 0; --strict reports failure. session.json declares client_hook and host_hook
+via HookCallback.fields(). Resolve modules over hook roots, all callbacks' roots, then sys.path.
+Call on_hook(HookCall); load external modules from declared roots without changing sys.path.
 """
 
 from __future__ import annotations
@@ -315,10 +314,10 @@ def append(path: str, record: dict) -> None:
         raise HookError(f"{path}: short write")
 
 
-def run(argv: Sequence[str], stdin, *, roots: Sequence[str]) -> None:
+def run(argv: Sequence[str], stdin, *, roots: Sequence[str]) -> bool:
     """One hook call, as `ensemble-session hook DIR LABEL` runs it with its own source roots, its
-    payload stdin's bytes (stdin may be None): never raises, never writes stdout; a failure keeps
-    its traceback in DIR/hook.log and one stderr line.
+    payload stdin's bytes (stdin may be None): returns success, never raises or writes stdout;
+    a failure keeps its traceback in DIR/hook.log and one stderr line.
     """
     try:
         main(argv, stdin.buffer, roots=roots)
@@ -335,3 +334,6 @@ def run(argv: Sequence[str], stdin, *, roots: Sequence[str]) -> None:
             ):
                 file.write(traceback.format_exc())
         say(str(e) if isinstance(e, HookError) else f"{type(e).__name__}: {e}")
+        return False
+    else:
+        return True
