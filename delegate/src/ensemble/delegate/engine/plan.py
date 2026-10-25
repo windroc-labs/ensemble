@@ -5,7 +5,6 @@ prompt the run takes. A refusal is ConfigError, a Driver one keeping its message
 
 import functools
 import os
-import sys
 import uuid
 from collections.abc import Mapping
 from dataclasses import replace
@@ -13,6 +12,7 @@ from dataclasses import replace
 from ensemble.delegate.composer import Composer, RunConfig
 from ensemble.delegate.engine.container import reference_repo, repo_lines, users_env, with_repo
 from ensemble.delegate.engine.drivers import Driver
+from ensemble.delegate.engine.runner import say
 from ensemble.delegate.engine.types import ConfigError, Layout, Plan, Spec
 from ensemble.delegate.event.reply import OUTCOME, PROGRESS
 from ensemble.session import Access, Mode, RunLog
@@ -129,10 +129,7 @@ def plan(
         and not project
         and os.path.realpath(here) != os.path.realpath(layout.agent)
     ):
-        print(
-            f"delegate: cwd {here} is not in trusted_dirs: its project settings are off",
-            file=sys.stderr,
-        )
+        say(f"delegate: cwd {here} is not in trusted_dirs: its project settings are off")
     intent = composition.access(
         run, layout.agent, cwd=here, project=project, repo_dir=spec.repo, docker=docker
     )

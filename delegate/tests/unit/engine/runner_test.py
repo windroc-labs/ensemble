@@ -1,9 +1,11 @@
 """Pure logic over fake objects and in-process clients."""
 
+import errno
 import io
 import json
 import os
 import signal
+import sys
 from contextlib import redirect_stderr
 from datetime import datetime
 from unittest import mock
@@ -11,7 +13,7 @@ from unittest import mock
 from ensemble.delegate import ConfigError, Progress, Spec
 from ensemble.delegate.composer import Composer
 from ensemble.delegate.engine.plan import plan
-from ensemble.delegate.engine.runner import FIX, NUDGE, STOP_LIMIT, execute, stopped
+from ensemble.delegate.engine.runner import FIX, NUDGE, STOP_LIMIT, execute, say, stopped
 from ensemble.delegate.engine.types import Begun, Finished, Layout, Limit, Result
 from ensemble.delegate.event.reply import marks
 from ensemble.session import ConfigError as SessionConfigError
@@ -44,6 +46,13 @@ from delegate.tests.unit.runs import (
     said,
     turn,
 )
+
+
+class DeadStream(io.StringIO):
+    """stderr on a hung-up terminal."""
+
+    def write(self, _text):
+        raise OSError(errno.EIO, "Input/output error")
 
 
 class InProcess(Base):
@@ -563,6 +572,65 @@ class TuiPolicy(Base):
                     self.last("result")["error"].startswith(f"stopped: {type(error).__name__}")
                 )
 
+    def killed(self, **kw):
+        """A tui run whose harness pane is killed at its first progress mark: stderr hung up,
+        then SIGHUP's Stopped(129); the error it raised.
+        """
+
+        def hangup(event):
+            if isinstance(event, Progress):
+                sys.stderr = DeadStream()
+                raise Stopped(128 + signal.SIGHUP)
+
+        with self.assertRaises(BaseException) as raised:
+            self.faked(turn(START), on_event=hangup, **kw)
+        return raised.exception
+
+    def assert_closed_as_stopped(self):
+        self.assertEqual(self.kinds()[-2:], ["result", "end"])
+        self.assertEqual(
+            (self.last("result")["error"], self.last("end")["rc"]), ("stopped: Stopped: 129", 129)
+        )
+
+    def test_a_killed_harness_with_its_stderr_gone_stops_the_tui_and_closes_the_run(self):
+        for stop_fail in (None, SessionError("tmux sessions unknown: tmux failed")):
+            with self.subTest(stop_fail=stop_fail):
+                self.fresh()
+                error = self.killed(stop_fail=stop_fail)
+                self.assertEqual((type(error), error.code), (Stopped, 129))
+                self.assertEqual(self.handle.calls, [("stop",)])
+                self.assert_closed_as_stopped()
+
+    def test_a_killed_harness_whose_own_stop_fails_has_its_tui_stopped_by_the_retry(self):
+        def hangup():
+            yield turn(START)
+            sys.stderr = DeadStream()
+            yield Reply("a line for the hung-up terminal")
+            try:  # the session's own stop on the signal, as HostedSession.events() does
+                self.handle.stop()
+            except SessionError:
+                self.handle.stop_fail = None
+            raise Stopped(128 + signal.SIGHUP)
+
+        self.handle = FakeHandle(
+            hangup(), stop_fail=SessionError("tmux sessions unknown: tmux failed")
+        )
+        with (
+            mock.patch.object(self.driver, "start", side_effect=self.handle.start),
+            self.assertRaises(Stopped) as raised,
+        ):
+            self.go(mode="tui")
+        self.assertEqual(raised.exception.code, 129)
+        self.assertEqual(self.handle.calls[-2:], [("stop",), ("stop",)])
+        self.assertIsNone(self.handle.stop_fail)
+        self.assert_closed_as_stopped()
+
+    def test_a_stop_that_raises_still_closes_the_run(self):
+        crash = RuntimeError("stop crashed")
+        self.assertIs(self.killed(stop_fail=crash), crash)
+        self.assertEqual(self.handle.calls, [("stop",)])
+        self.assert_closed_as_stopped()
+
     def test_a_failed_stop_is_printed_and_never_replaces_the_limit_or_stale_out_result(self):
         gone = SessionError("gone")
         r = self.faked(LimitHit(None), stop_fail=gone)
@@ -658,6 +726,26 @@ class InstructionRuns(InstructionCase):
             self.assertRaisesRegex(ConfigError, "instruction has no session to resume"),
         ):
             executed(*args, driver=self.driver)
+
+
+class Say(Case):
+    def test_a_dead_stderr_drops_the_text_and_any_other_write_error_raises(self):
+        for error, dead in (
+            (OSError(errno.EIO, "Input/output error"), True),
+            (BrokenPipeError(errno.EPIPE, "Broken pipe"), True),
+            (OSError(errno.ENOSPC, "No space left on device"), False),
+        ):
+            with self.subTest(error=error):
+                stream = mock.Mock()
+                stream.write.side_effect = error
+                with mock.patch("sys.stderr", stream):
+                    if dead:
+                        say("delegate: gone")
+                    else:
+                        with self.assertRaises(OSError) as raised:
+                            say("delegate: gone")
+                        self.assertIs(raised.exception, error)
+                stream.write.assert_called_once_with("delegate: gone\n")
 
 
 class Stopping(Case):

@@ -4,6 +4,7 @@ run.jsonl (the session's workdir). A Mode's policy (POLICIES) starts the session
 answers each turn end and IdleTimeout: go on (None), END or GiveUp.
 """
 
+import errno
 import os
 import sys
 from collections.abc import Callable
@@ -160,7 +161,17 @@ POLICIES = {Mode.HEADLESS: Headless, Mode.TUI: Tui, Mode.IN_PROCESS: Headless}
 
 
 def say(text: str) -> None:
-    print(printable(text), file=sys.stderr, flush=True)
+    to_stderr(printable(text) + "\n")
+
+
+def to_stderr(text: str) -> None:
+    """Dropped once stderr is dead: EIO, its terminal hung up; EPIPE, its reader gone."""
+    try:
+        sys.stderr.write(text)
+        sys.stderr.flush()
+    except OSError as error:
+        if error.errno not in (errno.EIO, errno.EPIPE):
+            raise
 
 
 def report(result: Result, out: str | None) -> tuple[int, str | None]:
@@ -197,11 +208,13 @@ def execute(
         result = attempts.result()
         attempts.on_event(Finished(result))
     except BaseException as e:
-        if attempts.handle is not None:
-            attempts.stop(attempts.handle)
-        if not attempts.refused:
-            ended = stopped(e)
-            attempts.close({"error": ended.error}, ended.returncode)
+        try:
+            if attempts.handle is not None:
+                attempts.stop(attempts.handle)
+        finally:
+            if not attempts.refused:
+                ended = stopped(e)
+                attempts.close({"error": ended.error}, ended.returncode)
         raise
     closing = {"error": result.error}
     if result.outcome is not None:
@@ -256,7 +269,7 @@ class _Attempts:
             try:
                 self.note(kind, **fields)
             except OSError as e:
-                print(f"delegate: {e}", file=sys.stderr)
+                say(f"delegate: {e}")
 
     def result(self) -> Result:
         p = self.plan
@@ -415,7 +428,7 @@ class _Attempts:
             if gated.reason:
                 say(f"delegate: ready gate: {gated.reason}")
         if not s.resume and outcome.status != "needs_input" and "start" not in self.seen:
-            print("delegate: missing progress mark: start", file=sys.stderr, flush=True)
+            say("delegate: missing progress mark: start")
             self.note("missing", name="start")
         result = Result(rc, outcome, f"the client exited {rc}" if rc else "")
         return result

@@ -406,18 +406,19 @@ class TmuxHost(Host):
         return (TmuxTerminal if kind == "terminal" else TmuxProcess)(name, process, tmux=self.tmux)
 
     def list(self) -> list[str]:
-        found = self.tmux.listing()
-        if found is None:
-            raise SessionError("tmux sessions unknown: tmux failed")
-        return sorted(row["name"] for row in found)
+        return sorted(row["name"] for row in self._listing())
+
+    def _listing(self) -> list[dict]:
+        try:
+            return self.tmux.listing()
+        except TuiError as error:
+            raise SessionError(f"tmux sessions unknown: {error}") from error
 
     def reclaim(self, token: str) -> ReclaimedGroup | None:
         return ReclaimedGroup.reclaim(token)
 
     def rows(self) -> list[SessionRow]:
-        found = self.tmux.listing()
-        if found is None:
-            raise SessionError("tmux sessions unknown: tmux failed")
+        found = self._listing()
         return [
             SessionRow(
                 name=row["name"],

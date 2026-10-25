@@ -102,8 +102,10 @@ class AttachListTest(AttachmentBase):
         self.assertEqual(self.host.list(), ["a", "b", "c", "d"])
 
     def test_list_when_tmux_fails_is_a_driver_error(self):
-        self.tmux.listing.return_value = None
-        with self.assertRaisesRegex(SessionError, "^tmux sessions unknown: tmux failed$"):
+        self.tmux.listing.side_effect = TuiError("tmux list-sessions exited 1: boom")
+        with self.assertRaisesRegex(
+            SessionError, "^tmux sessions unknown: tmux list-sessions exited 1: boom$"
+        ):
             self.host.list()
 
 
