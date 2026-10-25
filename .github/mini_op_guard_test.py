@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -270,6 +271,34 @@ class PullRequestTest(Tree):
                 self.assertTrue(out.endswith(f"mini-op guard: {reason}\n"), out)
                 self.assertNotIn("secret detail", out)
                 self.assertNotIn("main; id", out)
+
+
+WORKFLOW = guard.ROOT / ".github/workflows/test.yml"
+
+
+def job_block(text, name):
+    found = re.search(rf"(?ms)^  {re.escape(name)}:\n(.*?)(?=^  \S|\Z)", text)
+    assert found, f"test.yml has no job {name}"
+    return found[1]
+
+
+class WorkflowTest(unittest.TestCase):
+    def test_triggers_and_job(self):
+        text = WORKFLOW.read_text()
+        self.assertRegex(
+            text, r"(?m)^  pull_request:\n    types: \[opened, synchronize, reopened, edited\]$"
+        )
+        block = job_block(text, "mini-op")
+        self.assertRegex(block, r"(?m)^    name: mini-op guard$")
+        for key in ("if", "needs", "permissions"):
+            self.assertNotRegex(block, rf"(?m)^    {key}:")
+        self.assertIn("persist-credentials: false", block)
+        self.assertIn("fetch-depth: 0", block)
+        self.assertRegex(block, r"(?m)^        run: python3 \.github/mini_op_guard\.py$")
+        self.assertNotIn("secrets.", block)
+        self.assertNotIn("github.event.pull_request", block)
+        ci = job_block(text, "ci")
+        self.assertRegex(ci, r"(?m)^    needs: \[.*\bmini-op\b.*\]$")
 
 
 if __name__ == "__main__":
