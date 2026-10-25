@@ -558,7 +558,13 @@ def broker(args):
         default["repair"] = (
             "sudo /usr/local/libexec/ensemble/ensemble-broker install-codex <version>"
         )
-        out(json.dumps({"revocations": [], "codex": state or default}))
+        claude = (FAKES / "keychain/ensemble-claude").exists()
+        claude = claude and not (FAKES / "broker/claude_unusable").exists()
+        out(
+            json.dumps(
+                {"revocations": [], "codex": state or default, "claude": {"default": claude}}
+            )
+        )
         return 0
     if args[:1] in (["install-codex"], ["update-codex"]):
         if os.environ.get("FAKE_SUDO") != "1":
@@ -574,6 +580,7 @@ def broker(args):
         out("Paste the setup-token (hidden): ")
         mark(FAKES / "broker/claude_token", sys.stdin.readline().rstrip("\n"))
         store_key("ensemble-claude", "token")
+        (FAKES / "broker/claude_unusable").unlink(missing_ok=True)
         return 0
     if args[:3] == ["login", "github", "ensemble-bot"] and args[3:4] == ["--key-file"]:
         if (

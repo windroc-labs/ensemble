@@ -334,6 +334,8 @@ func system() app {
 			}
 			codexStatus := broker.NewCodex(home, nil).Status(ctx)
 			status.Codex = &codexStatus
+			credentials := broker.Credentials{Keychain: broker.SystemKeychain{Home: home}}
+			status.Claude = map[string]bool{"default": credentials.Usable("default")}
 			return status, nil
 		},
 		close: func(ctx context.Context, container string, _ io.Writer) (any, error) {

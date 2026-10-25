@@ -113,6 +113,7 @@ type RefreshResult struct {
 type StatusResult struct {
 	Revocations []protocol.Pending    `json:"revocations"`
 	Codex       *protocol.CodexStatus `json:"codex,omitempty"`
+	Claude      map[string]bool       `json:"claude,omitempty"`
 }
 
 type CloseResult struct {

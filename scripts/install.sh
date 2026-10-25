@@ -1639,11 +1639,15 @@ store_app_key() {
   ledger_add keychain ensemble-bot "$app_id"
 }
 
-# install, update, login, ready or busy: what the broker's pinned Codex needs.
-codex_need() {
+# Claude's default credential or pinned Codex: install, update, login, ready or busy.
+broker_need() {
   "$broker" status </dev/null | python3 -I -c '
 import json, sys
-codex = json.load(sys.stdin).get("codex") or {}
+data = json.load(sys.stdin)
+if sys.argv[1] == "claude":
+    print("ready" if (data.get("claude") or {}).get("default") is True else "login")
+    sys.exit(0)
+codex = data.get("codex") or {}
 state = codex.get("state", "")
 def version(text):
     try:
@@ -1654,10 +1658,10 @@ if state == "busy":
     print("busy")
 elif state == "installation_invalid":
     print("install" if "install-codex" in codex.get("repair", "") else "update")
-elif version(codex.get("version", "")) < version(sys.argv[1]):
+elif version(codex.get("version", "")) < version(sys.argv[2]):
     print("update")
 else:
-    print("ready" if state == "ready" else "login")' "$1"
+    print("ready" if state == "ready" else "login")' "$@"
 }
 
 # Copies stdin to the terminal and to stdout.
@@ -1689,8 +1693,9 @@ broker_logins() {
   step "broker login: Claude"
   if ! has claude; then
     skip "Claude Code not chosen"
-  elif [ "$(state_get login_claude)" = "$sha" ]; then
-    skip "done for this broker"
+  elif [ "$(broker_need claude)" = ready ]; then
+    skip "default Claude credential usable by this broker"
+    if [ "$(state_get login_claude)" != "$sha" ]; then state_set login_claude "$sha"; fi
   else
     say "Create a token with claude setup-token, then paste it at the broker's prompt; both run on a screen cleared afterwards"
     record_item ensemble-claude default
@@ -1728,14 +1733,14 @@ broker_logins() {
     skip "Codex not chosen"
   else
     min=$(go_const broker/internal/codex/versions.go MinVersion)
-    need=$(codex_need "$min")
+    need=$(broker_need codex "$min")
     case $need in
       busy) die "broker busy; rerun" ;;
       install | update) sudo -A "$broker" "$need-codex" "$min" </dev/null >&2 ;;
       *) skip "Codex $min or newer installed" ;;
     esac
     step "broker login: Codex"
-    if [ "$(codex_need "$min")" = ready ]; then
+    if [ "$(broker_need codex "$min")" = ready ]; then
       skip "logged in"
     else
       record_item ensemble-codex auth

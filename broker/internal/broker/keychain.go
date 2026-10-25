@@ -442,6 +442,17 @@ func incomplete(item, account, rerun string, k ItemTrust, before AppAccess, caus
 
 type Credentials struct{ Keychain TokenReader }
 
+// Usable checks an account's access and token without prompting or exporting the token.
+// It checks local usability, not revocation or expiry at the upstream service.
+func (c Credentials) Usable(account string) bool {
+	if c.Ready(account) != nil {
+		return false
+	}
+	token, err := c.Keychain.Get(account)
+	defer erase(token)
+	return err == nil && checkSecret("setup-token", token) == nil
+}
+
 // keychainError maps a keychain failure for account's token to the protocol, without its detail.
 func keychainError(account string, err error) *protocol.Error {
 	switch {

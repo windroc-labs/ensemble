@@ -1122,7 +1122,7 @@ class InstallTest(Case):
         pem.unlink()
         self.assert_secret_free("SENTINELKEY", TOKEN, result=result)
 
-    def test_broker_change_logs_in_again(self):
+    def test_broker_change_reuses_usable_credentials(self):
         self.assert_ok(self.fresh(docker="y"))
         result = self.again()
         self.assert_ok(result)
@@ -1131,12 +1131,31 @@ class InstallTest(Case):
         self.assertIn("==> Docker Desktop running\n    skip: broker current", result.stderr)
         versions = Path(self.fakes, "claude/cache/0/broker/internal/codex/versions.go")
         versions.write_text('package codex\n\nconst MinVersion = "0.170.0"\n')
-        self.assert_ok(self.again(answers=[(TOKEN_Q, TOKEN)]))
+        self.assert_ok(self.again())
         calls = self.calls()
         self.assertIn("broker-install ", calls)
-        self.assertIn("ensemble-broker login claude", calls)
+        self.assertNotIn("ensemble-broker login claude", calls)
         self.assertIn(f"sudo -A {self.broker_path()} update-codex 0.170.0", calls)
         self.assertNotIn("ensemble-broker login codex", calls)
+
+    def test_claude_credential_skips_login_without_installer_login_state(self):
+        self.assert_ok(self.fresh(docker="y"))
+        state = Path(self.ensemble, "install/state")
+        state.write_text(re.sub(r"(?m)^login_claude=.*\n", "", state.read_text()))
+        result = self.again()
+        self.assert_ok(result)
+        self.assertIn("skip: default Claude credential usable by this broker", result.stderr)
+        self.assertNotIn("claude setup-token", self.calls())
+        self.assertNotIn("ensemble-broker login claude", self.calls())
+        self.assertNotIn("ensemble-broker login codex", self.calls())
+        self.assertIn("login_claude", self.state())
+
+    def test_claude_unusable_credential_is_not_hidden_by_installer_state(self):
+        self.assert_ok(self.fresh(docker="y"))
+        (self.fakes / "broker/claude_unusable").touch()
+        self.assert_ok(self.again(answers=[(TOKEN_Q, TOKEN)]))
+        self.assertIn("claude setup-token", self.calls())
+        self.assertIn("ensemble-broker login claude", self.calls())
 
     def test_codex_install_or_update(self):
         self.assert_ok(self.fresh(docker="y"))

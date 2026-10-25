@@ -107,6 +107,14 @@ One per role: `linear.roles.researcher.key` for `linear.roles.researcher.account
 | Lifetime | refreshed by Claude Code; `/login` renews | one year |
 | Revoke | `/logout` | Unknown: no official route. `claude.ai/settings/claude-code`, cited by the community, is unverified. On a leak: run `claude setup-token` again and rerun `<B> login claude [<name>]` |
 
+### Stored broker credentials
+
+`ensemble-broker status` reports local usability of the default Claude token as `claude.default`:
+the item must trust this broker, allow a read without a dialog, and hold a nonempty, well-formed token.
+This does not contact Claude to check expiry or revocation. The installer checks this status before
+requesting `claude setup-token`, even without its saved login state. Codex already skips login when
+its status is `ready`.
+
 ### Codex login
 
 | Field | Local (`tmux`) | Docker |
