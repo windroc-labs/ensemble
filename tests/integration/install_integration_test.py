@@ -3712,7 +3712,7 @@ exec /bin/rm "$@"
         """Docker Desktop's and iTerm2's own files go; a shell rc there before keeps its own lines."""
         bashrc = Path(self.home, ".bashrc")
         bashrc.write_text("export EDITOR=vim\n")
-        self.assert_ok(self.fresh("--docker", logins=[(PEM_Q, "")]))
+        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
         library = Path(self.home, "Library")
         written = [
             library / "Application Support/Docker Desktop/state.json",
@@ -3835,7 +3835,7 @@ exec /bin/rm "$@"
             " completions.\n# End of Docker Desktop section.\n"
         )
         before = self.snapshot()
-        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        self.assert_ok(self.fresh("--docker", logins=[(PEM_Q, "")]))
         self.assertFalse(
             [r for r in self.ledger() if r.startswith(("homebrew", "clt", "formula\tgh"))]
         )
