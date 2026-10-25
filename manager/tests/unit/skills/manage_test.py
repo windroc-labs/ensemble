@@ -263,7 +263,7 @@ class Manage(Case):
         self.assertIn("the router's reason", section("manage", "Launch"))
 
     def test_a_pipeline_answer_is_confirmed_per_client_and_its_tui_still_reports(self):
-        [step] = re.findall(r"^  5\. .*$", section("manage", "Recover"), re.M)
+        [step] = re.findall(r"^  5\. .*?(?=^  6\. )", section("manage", "Recover"), re.M | re.S)
         reader = "${CLAUDE_SKILL_DIR}/../../../session/src/ensemble/session/clients/opencode/transcript.py"
         found = [
             step.find(phrase)
@@ -277,7 +277,10 @@ class Manage(Case):
                 "for this one call only, never",
                 "Once it finishes",
                 "still show the old `needs_input`",
+                "its last outcome block",
+                "`deliverable` for a `local` or `orchestrator` destination",
                 "`<work_dir>/work/<ID>/agent/tmp/deliverable.md`",
+                "else its `url`",
                 "In Review (`docs/board.md` › Using the board)",
                 "`ensemble-orchestrator issue move <ID> review`",
             )
