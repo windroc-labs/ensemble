@@ -7,7 +7,7 @@ from unittest import mock
 
 from ensemble.session import ConfigError, SessionError
 from ensemble.session.engine import tmux_cli
-from ensemble.session.engine.tmux_cli import TmuxCli
+from ensemble.session.engine.tmux_cli import TmuxCli, TuiError
 from ensemble.session.engine.types import SessionRow
 from ensemble.session.hosts.base import Host
 from ensemble.session.viewer import display as displays
@@ -176,8 +176,13 @@ class DescendantsTest(Base):
         self.assertEqual(displays.names(self.viewer, self.host, "", descendants=True), [])
 
     def test_a_tmux_failure_is_a_driver_error(self):
-        self.tmux.listing.side_effect = [[listed("a", opener="mgr", display="mgr")], None]
-        with self.assertRaisesRegex(SessionError, "tmux failed"):
+        self.tmux.listing.side_effect = [
+            [listed("a", opener="mgr", display="mgr")],
+            TuiError("tmux list-sessions exited 1: lost server"),
+        ]
+        with self.assertRaisesRegex(
+            SessionError, r"\Atmux sessions unknown: tmux list-sessions exited 1: lost server\Z"
+        ):
             displays.names(self.viewer, self.host, "mgr", descendants=True)
 
 

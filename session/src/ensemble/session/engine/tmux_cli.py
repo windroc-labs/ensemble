@@ -596,27 +596,26 @@ class TmuxCli:
 
     def sessions(self) -> list[str] | None:
         """Names: [] without a server, None when tmux fails."""
-        found = self._table(["list-sessions", *VIEWLESS, "-F", "#{session_name}"], 1)
-        return None if found is None else [name for (name,) in found if name]
+        try:
+            found = self._table(["list-sessions", *VIEWLESS, "-F", "#{session_name}"], 1)
+        except TuiError:
+            return None
+        return [name for (name,) in found if name]
 
-    def listing(self, match=None, *, views: bool = False) -> list[dict] | None:
+    def listing(self, match=None, *, views: bool = False) -> list[dict]:
         """NAME sessions `match` fullmatches (None: all), by name: tags, pane state, `shown` (no
         client: None; else the newest client's host session, "" if none or not NAME), a dead pane's
         last LAST_LINES lines; bad or empty fields None, wrong-width rows dropped; [] without a
-        server, None when tmux fails. Reads @process's pane (gone: dead; bad: dead None), else the active.
+        server, TuiError (why) when tmux fails. Reads @process's pane (gone: dead; bad: dead None), else the active.
         views: only VIEW sessions, else none.
         """
         found = self._table(["list-sessions", *(VIEWS if views else VIEWLESS), "-F", LISTING], 9)
-        if found is None:
-            return None
         rows = sorted(
             f for f in found if NAME.fullmatch(f[0]) and (match is None or match.fullmatch(f[0]))
         )
         if not rows:
             return []
         clients = self._table(["list-clients", "-F", SHOWN], 3)
-        if clients is None:
-            return None
         recent = {}
         for _, tty, session in sorted(
             (c for c in clients if c[0].isdigit() and c[1]), key=lambda c: int(c[0])
@@ -625,8 +624,6 @@ class TmuxCli:
         hosts, launched = {}, {}
         if any(f[0] in recent or f[8] for f in rows):
             panes = self._table(["list-panes", "-a", "-F", LISTED_PANES], 4)
-            if panes is None:
-                return None
             hosts = {tty: session for dead, tty, session, _ in panes if dead != "1"}
             launched = {pane_id: dead for dead, _, _, pane_id in panes}
         out = []
@@ -650,14 +647,14 @@ class TmuxCli:
             )
         return out
 
-    def _table(self, args: list[str], width: int) -> list[list[str]] | None:
-        try:
-            # -u: else, without a UTF-8 locale or $TMUX, tmux prints tabs as _
-            res = self.run(["-u", *args])
-        except TuiError:
-            return None
+    def _table(self, args: list[str], width: int) -> list[list[str]]:
+        # -u: else, without a UTF-8 locale or $TMUX, tmux prints tabs as _
+        res = self.run(["-u", *args])
         if res.returncode:
-            return [] if absent(res) else None
+            if absent(res):
+                return []
+            why = " ".join(error(res).split())
+            raise TuiError(f"tmux {args[0]} exited {res.returncode}" + (f": {why}" if why else ""))
         return [f for f in (line.split("\t") for line in res.stdout.split("\n")) if len(f) == width]
 
     def _last_lines(self, target: str) -> str | None:

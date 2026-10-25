@@ -136,10 +136,11 @@ def _matching(host: Host, display: Display) -> list[SessionRow]:
 
 
 def _placed(viewer: Viewer) -> dict[str, dict]:
-    found = viewer._tmux.listing()
-    views = viewer._tmux.listing(views=True)
-    if found is None or views is None:
-        raise SessionError("tmux sessions unknown: tmux failed")
+    try:
+        found = viewer._tmux.listing()
+        views = viewer._tmux.listing(views=True)
+    except TuiError as error:
+        raise SessionError(f"tmux sessions unknown: {error}") from error
     return {row["name"]: row for row in (*found, *views)}
 
 
