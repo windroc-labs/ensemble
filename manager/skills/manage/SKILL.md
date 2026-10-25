@@ -108,9 +108,9 @@ In tmux, with a tmux client showing your session, the panes you launch form a gr
   1. Read its questions: `ensemble-delegate outcome <work_dir>/work/<ID>/run` (`<work_dir>`: the board's, `~/.ensemble` by default). Answer the ones yours to decide (Decisions); ask the user the rest and wait for their answer.
   2. Record the answer on the issue as a comment: `ensemble-orchestrator issue comment <ID> --body-file <file>`.
   3. Move the issue to In Progress (Continue issue work): `ensemble-orchestrator issue move <ID> running`.
-  4. Check its tui is live: `ensemble-session ls --match '.*-<ID>-[0-9a-f]{8}'` lists it, `<session>` (`<role>-<ID>-<sid8>`), with its state. No row: step 6.
+  4. Check its tui is live: `ensemble-session ls --match '.*-<ID>-[0-9a-f]{8}'` lists it, `<session>` (`<role>-<ID>-<sid8>`), with its state. No row, or state `dead` (its client exited, the pane kept): step 6.
   5. Read its pane, then `ensemble-session send <session> '<answer>'` (each `'` written `'\''`), and confirm the answer reached its transcript (Workers and role runs). No harness watches it now: once it finishes, check the result, relay its deliverable and move the issue to its normal end state (Continue issue work).
-  6. Tui gone: `ensemble-crew close <ID>`, then `ensemble-crew reopen <ID>` resumes that conversation as worker `<agent name>`; send it the answer as in step 5.
+  6. Tui gone or dead: `ensemble-crew close <ID>`, then `ensemble-crew reopen <ID>` resumes that conversation as worker `<agent name>`; send it the answer as in step 5.
 
 ## The user
 
