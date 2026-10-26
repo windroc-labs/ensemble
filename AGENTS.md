@@ -18,6 +18,24 @@ Test boundaries and commands: `docs/tests.md`.
 - Keep `<work_dir>/logs/runs.jsonl` (`docs/board.md` › Operating).
 - A `[local_clones]` clone must not move: that breaks its worktrees. Run `git -C <new path> worktree repair`, then update the entry.
 
+## Merging
+
+Once an admin enables **Require merge queue** for `main`, add a reviewed, green PR with
+GitHub's **Merge when ready** button or `gh pr merge <number> --auto --squash`.
+The queue tests current `main` plus preceding queued PRs on `merge_group` commits and
+squash-merges automatically when required `CI` passes; no manual branch updates are needed.
+`Worker image` also reports on queue groups, building when their combined diff changes image inputs.
+Queue groups run every CI project, including diff coverage against the group's base SHA.
+
+`CI` requires every applicable job and the Linux broker leg. It waits for a running
+`Broker macos-15` and blocks on its failure or cancellation after starting. If macOS
+remains queued after every other CI job finishes, the gate requests ordinary workflow
+cancellation, then accepts only terminal macOS cancellation with no runner or steps.
+The aggregate's `always()` job and step survive; the workflow may show **cancelled** with
+a green required `CI`. Missing API evidence or a start during cancellation blocks.
+Require `CI`, never the macOS leg separately. Fork PR tokens cannot cancel runs; if a
+fork's macOS leg remains queued, CI fails closed and needs a rerun when runners are available.
+
 ## Releasing
 
 `<version>` is `.claude-plugin/plugin.json`'s `version`, `X.Y.Z`. In this order: bump the version and merge it, publish the Release, upload and confirm its broker asset, then pin it in the marketplace. Installs follow the pin, so a pin ahead of its asset breaks every new Docker install.

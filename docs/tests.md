@@ -142,7 +142,7 @@ flowchart LR
     M[mini-op guard: every event] --> CI
 ```
 Unit shards use sorted test IDs; integration shards use recorded durations. Every ID
-occurs exactly once. Coverage applies to pull requests; `CI` requires every applicable result.
+occurs exactly once. Coverage applies to pull requests and merge groups; `CI` requires every applicable result.
 
 | Change/event | Unit and integration tests | Repository tests |
 |---|---|---|
@@ -150,20 +150,29 @@ occurs exactly once. Coverage applies to pull requests; `CI` requires every appl
 | PR touching only root `*.md` files and/or `docs/` | upper-layer unit tests (they check the docs skills cite); integration, type and design lints skipped | intentionally skipped |
 | PR changing only the release `version` (`X.Y.Z`) of `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json` and/or `package.json` | skipped, with coverage; every lint runs (`Lint design` checks the versions agree) | intentionally skipped |
 | PR touching a lower layer, `tests/`, `.github/`, shared config, an unknown path, or an empty diff | all layers, plus shared unit tests | run |
-| push to `main` | all layers, plus shared unit tests | run |
+| push to `main` or `merge_group` | all layers, plus shared unit tests | run |
 
 `.github/ci_scope.py` derives layer names from the import-linter `layers` contract and
 their `src/ensemble/<layer>/` packages. Layers before `ensemble.delegate` form the upper group; every
 other path selects the full suite. Renames consider both endpoints. Version-only scope reads
 each version file at the merge base and the head: any other byte changed, a reformat included,
 selects the full suite, and `--paths` (no content) never selects it. `TEST_PROJECTS`
-passes the selected group to discovery. Static lint remains required; `Lint style` checks
+passes the selected group to discovery. Merge groups always select full scope and collect
+unit coverage, comparing changed source lines against `merge_group.base_sha`.
+Static lint remains required; `Lint style` checks
 unit import boundaries on every change. `CI` accepts a skipped repository job only for
 a non-full decision, skipped unit, coverage and integration jobs only for the decision that
 allows them, and rejects failures,
 cancellation or unexpected skips. The explicit `broker` output controls Go steps;
-`CI` validates it against full and docs scope and always requires the `broker` job's
-result to be success, even when its Go steps are intentionally skipped.
+`CI` validates it against full and docs scope and checks both broker matrix legs through
+the current run/attempt jobs API in
+`.github/ci_broker.py`. Linux must succeed. macOS must succeed or be confirmed cancelled
+without a runner or steps; cancellation after starting and actual failures block.
+The aggregate does not depend on the broker matrix, so it can cancel an unstarted
+macOS leg after every other CI job finishes. Its `always()` job and gate step survive
+ordinary cancellation; the overall run can show cancelled while required `CI` is green.
+API errors, missing evidence and cancellation races fail closed. Fork PR tokens cannot
+cancel runs, so a queued macOS leg on a fork needs a rerun when runners are available.
 
 ```bash
 python3 .github/ci_scope.py --event pull_request --paths skills/manage/SKILL.md
@@ -177,8 +186,8 @@ that the image holds only ensemble's `@openai/codex` package (logging the image 
 container runs as non-root without `sudo`, prints every client version, has
 `/opt/ensemble/bin/with-secrets`, and runs `/opt/ensemble/team/tools/repo.py` with the image's
 `python3`. Every run on `main` builds: a push changing an image
-input (the workflow's `push.paths`), the weekly schedule, or a manual dispatch. Every PR
-gets the check; it builds only when the PR changes an image input and passes at once
+input (the workflow's `push.paths`), the weekly schedule, or a manual dispatch. Every PR and merge group
+gets the check; it builds only when the combined diff changes an image input and passes at once
 otherwise. Require it beside `CI` in the default-branch ruleset only once the workflow is
 on `main`: a PR without the workflow never reports it.
 
