@@ -325,6 +325,7 @@ class InstallTest(Case):
         (self.pkg_src / ".claude-plugin").mkdir()
         (self.pkg_src / ".claude-plugin/plugin.json").write_text('{"version": "9.8.7"}\n')
         shutil.copytree(Path(REPO, "launchd"), self.pkg_src / "launchd")
+        self.serve()
         flow = "src/ensemble/orchestrator/engine/flow"
         (self.pkg_src / flow).mkdir(parents=True)
         charters = "src/ensemble/delegate/team/roles"
@@ -343,6 +344,29 @@ class InstallTest(Case):
             "TMPDIR": str(self.tmp),
             "ENSEMBLE_INSTALL_ROOT": str(self.root),
         }
+
+    def serve(self, claude=None, codex=None):
+        """The windroc marketplace's manifests: ensemble's source for Claude Code and Codex
+        (a dict merged into the url source, or a list of plugins; None: no ref, the default branch)."""
+        url = {"source": "url", "url": "https://github.com/windroc-labs/ensemble.git"}
+        for path, source in (
+            (".claude-plugin/marketplace.json", claude),
+            (".agents/plugins/marketplace.json", claude if codex is None else codex),
+        ):
+            plugins = source if isinstance(source, list) else None
+            plugins = plugins or [{"name": "ensemble", "source": {**url, **(source or {})}}]
+            manifest = self.fakes / "marketplace" / path
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            manifest.write_text(json.dumps({"name": "windroc", "plugins": plugins}))
+
+    def refused(self, *args, rerun=False):
+        """A run of `args` that stops before any client step: the sudo password, then on a first
+        run the brew profile line."""
+        answers = [(SUDO_Q, PASSWORD), *(() if rerun else ((WRITE_Q, "y"),))]
+        result = self.run_install(*args, answers=answers)
+        self.assertEqual(result.code, 1, result.stderr)
+        self.assertEqual(self.plugin_calls(), [])
+        return result
 
     def run_install(self, *args, answers=(), stdin=None, tty=True, script=SCRIPT, ctty=None):
         """`ctty`: what /dev/tty opens, else the terminal, which is also /dev/ttys001."""
@@ -849,18 +873,69 @@ class InstallTest(Case):
         self.assertIn("ensemble-broker login claude", calls)
         self.assertNotIn("[delegate]", self.config().read_text())
 
-    def test_ref_with_claude_or_codex_is_refused(self):
-        result = self.run_install(
-            *("--ref", "orchestrator-revamped", "--clients", "claude,codex", "--no-docker"),
-            answers=[(SUDO_Q, PASSWORD), (WRITE_Q, "y")],
-        )
-        self.assertEqual(result.code, 1)
+    def test_ref_with_claude_or_codex_must_be_the_served_ref(self):
+        self.serve({"ref": "v9.8.7"})
+        flags = ("--clients", "claude,codex", "--no-docker")
+        result = self.fresh("--ref", "v9.8.7", *flags)
+        self.assert_ok(result)
+        self.assertIn("ensemble is installed (ref v9.8.7, clients claude,codex", result.stderr)
+        result = self.refused("--ref", "orchestrator-revamped", *flags, rerun=True)
         self.assertIn(
             "install.sh: --ref orchestrator-revamped: Claude Code and Codex install ensemble@windroc"
-            " from the windroc marketplace (main); use --ref only with --clients opencode\n",
+            " from the windroc marketplace, which serves ensemble at v9.8.7; use --ref v9.8.7,"
+            " or --clients opencode for another ref\n",
             result.stderr,
         )
-        self.assertEqual(self.plugin_calls(), [])
+
+    def test_served_ref_is_the_default(self):
+        self.serve({"ref": "v9.8.7"})
+        result = self.fresh(clients="claude")
+        self.assert_ok(result)
+        self.assertIn(
+            "ensemble is installed (ref v9.8.7, clients claude, Docker no)", result.stderr
+        )
+        market = "https://raw.githubusercontent.com/windroc-labs/agent-plugins-marketplace/main/"
+        self.assertIn(f"curl -fsSL {market}.claude-plugin/marketplace.json", self.calls())
+        self.assertNotIn(f"curl -fsSL {market}.agents/plugins/marketplace.json", self.calls())
+
+    def test_served_refs_must_agree(self):
+        self.serve({"ref": "v9.8.7"}, {"ref": "v9.8.6"})
+        result = self.refused("--clients", "claude,codex", "--no-docker")
+        self.assertIn(
+            "install.sh: the windroc marketplace serves ensemble at v9.8.7 to Claude Code and"
+            " v9.8.6 to Codex: they must match\n",
+            result.stderr,
+        )
+
+    def test_invalid_served_ref_or_sha_pin_stops(self):
+        flags = ("--clients", "claude", "--no-docker")
+        cases = (
+            ({"ref": "../../x/y/main"}, "not a git ref: '../../x/y/main'"),
+            ({"ref": "v1#x"}, "not a git ref: 'v1#x'"),
+            ({"ref": "-x"}, "not a git ref: '-x'"),
+            ({"ref": "v1\nx"}, "not a git ref: 'v1\\nx'"),
+            ({"ref": 7}, "not a git ref: 7"),
+            ({"sha": OLD}, "pinned by sha, not a release tag"),
+            ([{"name": "updraft", "source": "./"}], "no ensemble entry"),
+        )
+        for rerun, (source, reason) in enumerate(cases):
+            with self.subTest(source=source):
+                self.serve(source)
+                result = self.refused(*flags, rerun=bool(rerun))
+                self.assertIn(
+                    "install.sh: cannot read ensemble's ref from the windroc marketplace"
+                    f" (.claude-plugin/marketplace.json): {reason}\n",
+                    result.stderr,
+                )
+
+    def test_unreadable_marketplace_stops(self):
+        (self.fakes / "marketplace/.agents/plugins/marketplace.json").unlink()
+        result = self.refused("--clients", "codex", "--no-docker")
+        self.assertIn(
+            "install.sh: cannot read ensemble's ref from the windroc marketplace"
+            " (.agents/plugins/marketplace.json)\n",
+            result.stderr,
+        )
 
     def test_installs_from_the_windroc_marketplace(self):
         self.assert_ok(self.fresh())
@@ -1216,6 +1291,7 @@ class InstallTest(Case):
         self.assert_ok(result)
         self.assertIn("brew install go", self.calls())
         self.assertIn("broker-install --build", self.calls())
+        self.assertNotIn("agent-plugins-marketplace", "\n".join(self.calls()))
 
     def test_docker_not_running_fails(self):
         (self.fakes / "docker_wont_start").touch()

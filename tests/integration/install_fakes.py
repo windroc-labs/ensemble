@@ -4,7 +4,8 @@ Every call is logged to $LOG (argv) and $ENVLOG (environment values). State live
 $FAKES: brew/<name> (installed), processes (one running command line each; unkillable: those KILL misses), login/<client>, keychain/<service>, claude/ and codex/ (plugins),
 src/broker/ (the broker's Codex install and tokens), fail (a call prefix that fails once), tty_name
 (what `ps -o tty=` reports), kqueue_refuses (a terminal the Bun-built clients die on, as on /dev/tty),
-commit (the commit GitHub reports for every ensemble ref), linear.json (the Linear workspace: keys
+commit (the commit GitHub reports for every ensemble ref), marketplace/ (the windroc marketplace's
+manifests on main), refs/<ref>/ (ensemble files at a ref, over pkg-src/), linear.json (the Linear workspace: keys
 {key: email}, teams [{id, key, name, states, members, projects}], labels).
 """
 
@@ -28,6 +29,13 @@ BROKER = ROOT / "usr/local/libexec/ensemble/ensemble-broker"
 APPS = {"gh": "gh", "tmux": "tmux", "git": "git", "go": "go", "python": "python3", "node": "npm"}
 CASKS = {"claude-code": "claude", "codex": "codex", "docker-desktop": "docker"}
 CASK_APPS = {"docker-desktop": "Docker.app", "iterm2": "iTerm.app"}
+# The ensemble files the installer reads from GitHub: refs/<ref>/<file>, else pkg-src/<file>.
+ENSEMBLE_FILES = (
+    ".claude-plugin/plugin.json",
+    "src/ensemble/session/hosts/docker/broker.py",
+    "src/broker/internal/protocol/protocol.go",
+    "src/broker/internal/launcher/versions.go",
+)
 
 
 def out(text, stream=sys.stdout):
@@ -197,12 +205,24 @@ def curl(args):
     if url.startswith("https://api.github.com/repos/windroc-labs/ensemble/commits/"):
         out((FAKES / "commit").read_text())
         return 0
+    market = "https://raw.githubusercontent.com/windroc-labs/agent-plugins-marketplace/main/"
     raw = "https://raw.githubusercontent.com/windroc-labs/ensemble/"
-    if url.startswith(raw) and url.endswith("/src/broker/internal/launcher/versions.go"):
-        out((FAKES / "pkg-src/src/broker/internal/launcher/versions.go").read_text())
-        return 0
-    out(f"curl: unexpected {url}\n", sys.stderr)
-    return 22
+    if url.startswith(market):
+        found = FAKES / "marketplace" / url.removeprefix(market)
+    elif url.startswith(raw):
+        name = next((f for f in ENSEMBLE_FILES if url.endswith("/" + f)), None)
+        ref = url.removeprefix(raw).removesuffix("/" + (name or ""))
+        found = FAKES / "refs" / ref / name if name else None
+        if found and not found.is_file():
+            found = FAKES / "pkg-src" / name
+    else:
+        out(f"curl: unexpected {url}\n", sys.stderr)
+        return 22
+    if not found or not found.is_file():
+        out(f"curl: (22) The requested URL returned error: 404 {url}\n", sys.stderr)
+        return 22
+    out(found.read_text())
+    return 0
 
 
 def homebrew_sudo():

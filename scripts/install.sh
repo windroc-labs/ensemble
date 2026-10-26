@@ -16,7 +16,8 @@ config=$HOME/.ensemble/config.local.toml
 opencode_prefix=$HOME/.ensemble/opencode
 opencode_executable=$opencode_prefix/bin/opencode
 opencode_min=
-ref=main
+ref=
+served_ref=
 # Label contract v1; update only after checking the pinned repo's docs/label-contract.md.
 egress_commit=225409bd04954ff1ea81d66e5339c812a519b4f7
 clients_flag=
@@ -79,8 +80,9 @@ usage: $synopsis
 
   curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install.sh | bash -s -- [flags]
 
-  --ref <ref>                 git branch or tag of windroc-labs/ensemble to install the plugin and broker from (default main);
-                              another ref only without claude and codex, which install from the windroc marketplace
+  --ref <ref>                 git branch or tag of windroc-labs/ensemble to install the plugin and broker from (default
+                              the ref the windroc marketplace serves ensemble at); with claude or codex only that ref, as
+                              they install from the marketplace; a release tag downloads its broker, a branch builds it
   --clients <list>            comma-separated: claude (Claude Code), codex (Codex), opencode (OpenCode)
   --docker                    run workers in Docker: Docker Desktop, the broker and its logins
   --no-docker                 run workers on the local tmux Host; no Docker
@@ -986,10 +988,44 @@ found = [p for p in json.load(sys.stdin).get("installed", []) if p.get("pluginId
 sys.exit(1 if not found else 0 if found[0].get("enabled") else 2)' "$1"
 }
 
-# The windroc marketplace has no other ref of windroc-labs/ensemble: only an OpenCode-only install takes one.
+# The ref the windroc marketplace serves ensemble at, from its manifest $1 on main: the ensemble entry's source.ref,
+# else main (the default branch). A ref goes into URLs: --ref's characters and no .. segment.
+marketplace_ref() {
+  local text served
+  text=$(curl -fsSL "https://raw.githubusercontent.com/windroc-labs/agent-plugins-marketplace/main/$1" </dev/null) \
+    || die "cannot read ensemble's ref from the windroc marketplace ($1)"
+  served=$(python3 -I -c '
+import json, re, sys
+try:
+    plugins = json.loads(sys.stdin.read())["plugins"]
+    source = next(p["source"] for p in plugins if p.get("name") == "ensemble")
+    ref = None if "sha" in source else source.get("ref", "main")
+except Exception:
+    sys.exit("no ensemble entry")
+if ref is None:
+    sys.exit("pinned by sha, not a release tag")
+if not isinstance(ref, str) or not re.fullmatch(r"[A-Za-z0-9._/-]+", ref) or ref.startswith("-") \
+        or ".." in ref.split("/"):
+    sys.exit(f"not a git ref: {ref!r}")
+print(ref)' 2>&1 <<<"$text") || die "cannot read ensemble's ref from the windroc marketplace ($1): $served"
+  printf '%s' "$served"
+}
+
+# Claude Code and Codex install ensemble@windroc from the windroc marketplace, which serves one ref of ensemble: the
+# install takes that ref, unless OpenCode alone names another.
 ref_check() {
-  if [ "$ref" != main ] && { has claude || has codex; }; then
-    die "--ref $ref: Claude Code and Codex install ensemble@windroc from the windroc marketplace (main); use --ref only with --clients opencode"
+  local claude_ref= codex_ref=
+  if [ -n "$ref" ] && ! has claude && ! has codex; then return; fi
+  if has claude || ! has codex; then claude_ref=$(marketplace_ref .claude-plugin/marketplace.json); fi
+  if has codex; then codex_ref=$(marketplace_ref .agents/plugins/marketplace.json); fi
+  if [ -n "$claude_ref" ] && [ -n "$codex_ref" ] && [ "$claude_ref" != "$codex_ref" ]; then
+    die "the windroc marketplace serves ensemble at $claude_ref to Claude Code and $codex_ref to Codex: they must match"
+  fi
+  served_ref=${claude_ref:-$codex_ref}
+  if [ -z "$ref" ]; then
+    ref=$served_ref
+  elif [ "$ref" != "$served_ref" ]; then
+    die "--ref $ref: Claude Code and Codex install ensemble@windroc from the windroc marketplace, which serves ensemble at $served_ref; use --ref $served_ref, or --clients opencode for another ref"
   fi
 }
 
