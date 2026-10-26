@@ -11,7 +11,7 @@ from ensemble.orchestrator.engine.types import (
     WriteUnknown,
 )
 from ensemble.orchestrator.issue.output import receipt_payload
-from ensemble.orchestrator.trackers.linear import issue_write, ops
+from ensemble.orchestrator.trackers.linear import issue_write, linear_tracker, ops
 from tests.orchestrator.case import Case
 from tests.orchestrator.unit.board_ids import STATES
 from tests.orchestrator.unit.issue_fixtures import (
@@ -65,6 +65,43 @@ class Move(Case):
         self.assertEqual((receipt.result, gql.writes), ("unchanged", []))
         self.assertEqual(receipt_payload(receipt)["actor"], VIEWER)
 
+    def test_an_archived_issue_moved_to_an_active_state_is_unarchived_first(self):
+        unarchive = (linear_tracker.M_UNARCHIVE, {"i": "id-TASK-2"})
+        for state, key in KEYS.items():
+            if state in (IssueState.DONE, IssueState.CANCELED):
+                continue
+            for already in (False, True):
+                with self.subTest(state=state, already=already):
+                    at = STATES[key] if already else STATES["done"]
+                    gql = WriteGql(write_issue(state=at, archived=True))
+                    receipt = move(gql, state)
+                    update = (
+                        [] if already else [(ops.M_STATE, {"i": "id-TASK-2", "s": STATES[key]})]
+                    )
+                    self.assertEqual(gql.writes, [unarchive, *update])
+                    self.assertEqual(receipt.result, "changed")
+
+    def test_an_archived_issue_moved_to_a_finished_state_stays_archived(self):
+        for state in (IssueState.DONE, IssueState.CANCELED):
+            with self.subTest(state=state):
+                gql = WriteGql(write_issue(state=STATES["todo"], archived=True))
+                move(gql, state)
+                self.assertEqual(
+                    gql.writes, [(ops.M_STATE, {"i": "id-TASK-2", "s": STATES[KEYS[state]]})]
+                )
+                gql = WriteGql(write_issue(state=STATES[KEYS[state]], archived=True))
+                self.assertEqual((move(gql, state).result, gql.writes), ("unchanged", []))
+
+    def test_an_unarchive_outage_is_result_unknown_and_moves_nothing(self):
+        gql = WriteGql(
+            write_issue(state=STATES["done"], archived=True),
+            result=Unavailable("issueUnarchive", reason="timed out"),
+        )
+        with self.assertRaises(WriteUnknown) as cm:
+            move(gql, IssueState.READY)
+        self.assertIn("move TASK-2: result unknown", str(cm.exception))
+        self.assertEqual([q for q, _ in gql.writes], [linear_tracker.M_UNARCHIVE])
+
     def test_an_issue_of_another_team_writes_nothing(self):
         gql = WriteGql(write_issue("OPS-3", team_id=OTHER_TEAM))
         with self.assertRaises(IssueError) as cm:
@@ -81,6 +118,7 @@ class Move(Case):
         self.assertEqual((query, variables), (issue_write.Q_MOVE, {"i": "TASK-2"}))
         self.assertIn("team { id key }", query)
         self.assertIn("state { id }", query)
+        self.assertIn("archivedAt", query)
         self.assertNotIn("states", query)
 
     def test_no_such_issue_writes_nothing(self):
@@ -127,6 +165,16 @@ class Comment(Case):
                 "comment_id": "c-new",
             },
         )
+
+    def test_an_archived_issue_takes_no_comment_and_says_how_to_restore_it(self):
+        gql = WriteGql(write_issue(archived=True))
+        with self.assertRaises(IssueError) as cm:
+            issue_write.comment(gql, "TASK-2", BODY)
+        text = str(cm.exception)
+        for phrase in ("TASK-2", "archived", "ensemble-orchestrator issue move TASK-2"):
+            self.assertIn(phrase, text)
+        self.assertEqual(gql.writes, [])
+        self.assertIn("archivedAt", gql.calls[0][0])
 
     def test_no_such_issue_posts_nothing(self):
         gql = WriteGql(None)

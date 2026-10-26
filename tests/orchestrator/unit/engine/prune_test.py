@@ -450,8 +450,13 @@ class RetentionCleanup(PruneScenario):
 
     def test_finished_or_archived_sub_issues_let_the_parent_go(self):
         gql = gql_for(
-            {"TASK-1": ("Done", [(30, "Done")])},
-            owners={"TASK-1": "u-engineer"},
+            {
+                "TASK-1": ("Done", [(30, "Done")]),
+                "TASK-2": ("Done", [(30, "Done")]),
+                "TASK-3": ("Canceled", [(30, "Canceled")]),
+                "TASK-5": ("Duplicate", [(30, "Duplicate")]),
+            },
+            owners={"TASK-1": "u-engineer", "TASK-2": "u-pm"},
             children={
                 "TASK-1": {"TASK-2": "completed", "TASK-3": "canceled", "TASK-5": "duplicate"}
             },
@@ -469,6 +474,47 @@ class RetentionCleanup(PruneScenario):
             self.prune(gql), (0, "prune-skip TASK-1 reason=archive: sub-issue TASK-3 not finished")
         )
         self.assertEqual((gql.archived, gql.subs), ([], ["id-TASK-2"]))
+
+    def test_a_sub_issue_prune_would_not_archive_keeps_its_parent(self):
+        for top, sub, state, owner, why in (
+            ("TASK-1", "TASK-2", ("Done", [(1, "Done")]), "u-pm", "finished under 2 hours ago"),
+            ("TASK-3", "TASK-4", ("Done", []), "u-engineer", "finish time unknown"),
+            (
+                "TASK-5",
+                "TASK-6",
+                ("Done", [(30, "Done")]),
+                "u-researcher",
+                "not an archive candidate",
+            ),
+            ("TASK-7", "TASK-8", None, None, "not an archive candidate"),  # another team's
+        ):
+            unknown = [f"prune-skip {sub} reason=archive: {why}"] if state == ("Done", []) else []
+            for dry in (False, True):
+                with self.subTest(why, sub=sub, dry=dry):
+                    gql = gql_for(
+                        {top: ("Done", [(30, "Done")])} | ({sub: state} if state else {}),
+                        owners={top: "u-pm", sub: owner},
+                        children={top: {sub: "completed"}},
+                    )
+                    code, out = self.prune(gql, dry=dry)
+                    self.assertEqual(
+                        (code, out.splitlines()),
+                        (0, [*unknown, f"prune-skip {top} reason=archive: sub-issue {sub} {why}"]),
+                    )
+                    self.assertEqual(gql.archived, [])
+
+    def test_a_parent_goes_with_sub_issues_prune_would_archive_too(self):
+        gql = gql_for(
+            {
+                "TASK-1": ("Done", [(30, "Done")]),
+                "TASK-2": ("Done", [(30, "Done")]),
+                "TASK-3": ("Canceled", [(3, "Canceled")]),
+            },
+            owners={"TASK-1": "u-pm", "TASK-2": "u-engineer", "TASK-3": "u-researcher"},
+            children={"TASK-1": {"TASK-2": "completed"}, "TASK-2": {"TASK-3": "canceled"}},
+        )
+        self.assertEqual(self.prune(gql), (0, "prune-archived TASK-1"))
+        self.assertEqual(gql.archived, ["id-TASK-1"])
 
     def test_every_page_at_every_depth_is_read(self):
         many = {f"SUB-{n}": "completed" for n in range(1, 261)}
@@ -494,11 +540,13 @@ class RetentionCleanup(PruneScenario):
                     )
                     self.assertEqual(gql.archived, [])
         gql = gql_for(
-            {"TASK-1": ("Done", [(30, "Done")])},
+            {"TASK-1": ("Done", [(30, "Done")])}
+            | dict.fromkeys(many, ("Canceled", [(30, "Canceled")])),
             owners={"TASK-1": "u-pm"},
             children={"TASK-1": many},
         )
-        self.assertEqual(self.prune(gql), (0, "prune-archived TASK-1"))
+        code, out = self.prune(gql)
+        self.assertEqual((code, out.splitlines()[0]), (0, "prune-archived TASK-1"))
         self.assertEqual(gql.archived, ["id-TASK-1"])
         self.assertEqual(gql.subs.count("id-TASK-1"), 5)
 
@@ -1560,15 +1608,23 @@ class ArchiveBound(Bound):
     def test_a_dry_run_counts_the_archive_write(self):
         big = {f"SUB-{k}": "completed" for k in range(18)}
         children = {"TASK-1": big} | {c: {f"LEAF-{c}": "completed"} for c in big}
+        subs = [*big, *(f"LEAF-{c}" for c in big)]
         for dry in (False, True):
             with self.subTest(dry=dry):
                 if os.path.exists(self.cache()):
                     os.remove(self.cache())
                 gql = gql_for(
-                    {"TASK-1": self.done}, owners={"TASK-1": "u-pm"}, children=children, changed=()
+                    {"TASK-1": self.done} | dict.fromkeys(subs, self.done),
+                    owners=dict.fromkeys(["TASK-1", *subs], "u-pm"),
+                    children=children,
+                    changed=(),
                 )
                 self.assertEqual(
-                    self.tick(gql, dry=dry), (0, f"prune-skip TASK-1 reason={prune.TOO_BIG}")
+                    self.tick(gql, dry=dry)[1].splitlines(),
+                    [
+                        f"prune-skip TASK-1 reason={prune.TOO_BIG}",
+                        f"prune-deferred archive={len(subs)}",
+                    ],
                 )
                 self.assertEqual(len(gql.calls), prune.ARCHIVE_REQUESTS)
 
@@ -1605,6 +1661,97 @@ class ArchiveBound(Bound):
         self.tick(gql, now=NOW + prune.BACKSTOP)
         self.assertEqual(gql.calls.count(linear_tracker.Q_ARCHIVE), 1)
 
+    def test_a_quarantined_sub_issue_holds_its_parent_only_until_due(self):
+        gql = gql_for(
+            {"TASK-1": self.done, "TASK-2": ("Done", [(1, "Done")])},
+            owners={"TASK-1": "u-pm", "TASK-2": "u-pm"},
+            children={"TASK-1": {"TASK-2": "completed"}},
+            changed=(),
+        )
+        skip = "prune-skip TASK-1 reason=archive: sub-issue TASK-2 finished under 2 hours ago"
+        self.assertEqual(self.tick(gql), (0, skip))
+        self.assertEqual(self.tick(gql, now=NOW + timedelta(hours=1)), (0, "prune-archived TASK-1"))
+        self.assertEqual(gql.archived, ["id-TASK-1"])
+
+    def test_a_changed_archive_candidate_waits_for_a_consistent_list(self):
+        for changed in ("TASK-1", "TASK-2"):
+            for dry in (False, True):
+                with self.subTest(changed=changed, dry=dry):
+                    if os.path.exists(self.cache()):
+                        os.remove(self.cache())
+                    issues = {"TASK-1": self.done}
+                    children = {}
+                    if changed == "TASK-2":
+                        issues[changed] = self.done
+                        children = {"TASK-1": {changed: "completed"}}
+                    gql = gql_for(
+                        issues,
+                        owners=dict.fromkeys(issues, "u-pm"),
+                        children=children,
+                        changed=(),
+                    )
+
+                    def recompleted(query, gql=gql, issues=issues, changed=changed, **v):
+                        result = gql(query, **v)
+                        if query == linear_tracker.Q_FINISHED:
+                            issues[changed] = ("Done", [(1, "Done")])
+                        return result
+
+                    code, out = self.prune(recompleted, dry=dry)
+                    self.assertEqual(code, 0)
+                    self.assertIn("changed since archive candidate read", out)
+                    self.assertEqual(gql.archived, [])
+                    if not dry:
+                        self.assertEqual(prune_state.load(self.cache())[0].refused, {})
+                    self.assertNotIn("prune-archived", self.tick(gql, dry=dry)[1])
+                    self.assertEqual(gql.archived, [])
+                    code, out = self.tick(gql, now=NOW + timedelta(hours=1), dry=dry)
+                    self.assertEqual(code, 0)
+                    self.assertIn("prune-plan" if dry else "prune-archived", out)
+                    self.assertEqual(gql.archived, [] if dry else ["id-TASK-1"])
+
+    def test_a_parent_held_by_a_sub_issue_is_replanned_only_on_change(self):
+        gql = gql_for(
+            {"TASK-1": self.done, "TASK-2": self.done},
+            owners={"TASK-1": "u-pm", "TASK-2": "u-researcher"},
+            children={"TASK-1": {"TASK-2": "completed"}},
+            changed=(),
+        )
+        skip = "prune-skip TASK-1 reason=archive: sub-issue TASK-2 not an archive candidate"
+        self.assertEqual(self.tick(gql), (0, skip))
+        self.tick(gql)
+        self.assertEqual(gql.calls, [linear_tracker.Q_CHANGED, linear_tracker.Q_FINISHED])
+        gql.changed = {"TASK-2"}
+        self.tick(gql)
+        self.assertEqual(gql.calls.count(linear_tracker.Q_ARCHIVE), 1)
+        self.assertEqual(gql.archived, [])
+
+    def test_a_renamed_candidate_is_skipped_without_stopping_prune(self):
+        for dry in (False, True):
+            with self.subTest(dry=dry):
+                if os.path.exists(self.cache()):
+                    os.remove(self.cache())
+                issues = {"TASK-1": self.done, "TASK-2": self.done}
+                gql = gql_for(issues, owners=dict.fromkeys(issues, "u-pm"), changed=())
+
+                def renamed(query, gql=gql, **v):
+                    result = gql(query, **v)
+                    if query == linear_tracker.Q_ARCHIVE and v["i"] == "id-TASK-1":
+                        result["issue"]["identifier"] = "OPS-9"
+                    return result
+
+                code, out = self.prune(renamed, dry=dry)
+                self.assertEqual(code, 0)
+                self.assertEqual(
+                    out.splitlines()[0],
+                    "prune-skip TASK-1 reason=archive: issue TASK-1 changed since archive candidate read",
+                )
+                self.assertIn("prune-plan TASK-2" if dry else "prune-archived TASK-2", out)
+                self.assertEqual(gql.archived, [] if dry else ["id-TASK-2"])
+                if not dry:
+                    self.assertTrue(os.path.isfile(self.cache()))
+                    self.assertEqual(prune_state.load(self.cache())[0].refused, {})
+
     def test_a_refusal_named_again_unchanged_is_kept(self):
         issues = {"TASK-1": self.done, "TASK-3": ("In Progress", [(0.1, "In Progress")])}
         gql = gql_for(
@@ -1623,21 +1770,23 @@ class ArchiveBound(Bound):
 
     def test_a_now_finished_sub_issue_lets_the_parent_go(self):
         children = {"TASK-1": {"TASK-3": "started"}}
+        issues = {"TASK-1": self.done, "TASK-3": ("In Progress", [(30, "In Progress")])}
         gql = gql_for(
-            {"TASK-1": self.done}, owners={"TASK-1": "u-pm"}, children=children, changed=()
+            issues, owners={"TASK-1": "u-pm", "TASK-3": "u-pm"}, children=children, changed=()
         )
         self.tick(gql)
-        children["TASK-1"]["TASK-3"] = "completed"
+        children["TASK-1"]["TASK-3"], issues["TASK-3"] = "completed", ("Done", [(3, "Done")])
         gql.changed = {"TASK-3"}
         self.assertEqual(self.tick(gql), (0, "prune-archived TASK-1"))
 
     def test_an_invalidated_refusal_is_replanned_after_a_cut_short_tick(self):
         children = {"TASK-1": {"TASK-3": "started"}}
+        issues = {"TASK-1": self.done, "TASK-3": ("In Progress", [(30, "In Progress")])}
         gql = gql_for(
-            {"TASK-1": self.done}, owners={"TASK-1": "u-pm"}, children=children, changed=()
+            issues, owners={"TASK-1": "u-pm", "TASK-3": "u-pm"}, children=children, changed=()
         )
         self.tick(gql)
-        children["TASK-1"]["TASK-3"] = "completed"
+        children["TASK-1"]["TASK-3"], issues["TASK-3"] = "completed", ("Done", [(3, "Done")])
         gql.changed = {"TASK-3"}
 
         def down(query, **v):

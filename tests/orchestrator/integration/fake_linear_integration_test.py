@@ -19,7 +19,7 @@ from ensemble.orchestrator.engine import (
     types,
 )
 from ensemble.orchestrator.engine.flow.types import ArchiveRefused, IssueState, Linked, Priority
-from ensemble.orchestrator.engine.types import LinearError
+from ensemble.orchestrator.engine.types import IssueError, LinearError
 from ensemble.orchestrator.trackers.linear import (
     client,
     issue_archive,
@@ -482,6 +482,7 @@ class GraphQLProjection(ServerCase):
                 "assignee": {"id": self.engineer, "email": ENGINEER_EMAIL},
                 "project": PROJECT,
                 "labels": {"nodes": [{"id": LABEL, "name": "build", "parent": {"id": TASK_GROUP}}]},
+                "archivedAt": None,
             },
         )
         self.fake.move(blocker["id"], "done", actor=self.harness, at=done)
@@ -1179,13 +1180,15 @@ class IssueOps(ServerCase):
                 "viewer": self.me,
                 "issue": {
                     **issue,
+                    "archivedAt": None,
                     "state": {"id": STATES["in_progress"]},
                     "team": {"id": TEAM, "key": "TASK"},
                 },
             },
         )
         self.assertEqual(
-            self.gql(issue_write.Q_COMMENT, i="TASK-7"), {"viewer": self.me, "issue": issue}
+            self.gql(issue_write.Q_COMMENT, i="TASK-7"),
+            {"viewer": self.me, "issue": {**issue, "archivedAt": None}},
         )
         made = self.gql(issue_write.M_COMMENT, i=self.task7["id"], b="Raw.")
         self.assertEqual(
@@ -1214,6 +1217,27 @@ class IssueOps(ServerCase):
                 "issue_write.M_COMMENT",
             ],
         )
+
+    def test_an_archived_issue_moved_to_todo_is_listed_again(self):
+        flt = {"team": {"id": {"eq": TEAM}}, "state": {"id": {"eq": STATES["todo"]}}}
+
+        def todo():
+            nodes = self.gql(linear_tracker.q_issues(), f=flt)["issues"]["nodes"]
+            return [n["identifier"] for n in nodes]
+
+        with self.fake.lock:
+            self.task7["archived"] = True
+        self.assertNotIn("TASK-7", todo())
+        with self.assertRaisesRegex(IssueError, "TASK-7: archived"):
+            self.issues.comment("TASK-7", "Back.")
+        self.fake.requests.clear()
+        self.assertEqual(self.issues.move("TASK-7", IssueState.READY).result, "changed")
+        self.assertEqual(
+            self.ops(), ["issue_write.Q_MOVE", "writeback.M_UNARCHIVE", "linear.M_STATE"]
+        )
+        self.assertFalse(self.task7["archived"])
+        self.assertIn("TASK-7", todo())
+        self.assertEqual(self.issues.comment("TASK-7", "Back.").result, "changed")
 
     def test_relation_add_and_remove_both_directions(self):
         eight = self.fake.issue("Eight")
@@ -1278,7 +1302,7 @@ class IssueOps(ServerCase):
         self.assertEqual(self.issues.archive("TASK-7").result, "changed")
         self.assertEqual((self.task7["archived"], child["archived"]), (True, True))
         self.assertEqual(self.issues.archive("TASK-7").result, "unchanged")
-        self.assertIn("issue_write.Q_COMMENT", self.ops())
+        self.assertIn("issue_archive.Q_ISSUE", self.ops())
 
 
 class RefusedKeychain(Case):

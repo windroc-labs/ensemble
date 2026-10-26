@@ -117,7 +117,7 @@ class HostScale(PruneScenario):
         children["TASK-902"] = {"TASK-903": "unstarted"}  # refused, a level down
         children["TASK-259"] = {f"TASK-{2000 + i}": "completed" for i in range(59)}
         children["TASK-259"]["TASK-2059"] = "started"  # refused, on the second page
-        children["TASK-263"] = {"TASK-904": "completed", "TASK-905": "canceled"}
+        children["TASK-263"] = {"TASK-904": "completed", "TASK-905": "canceled"}  # held: unlisted
         children["TASK-904"] = {"TASK-906": "completed"}
         bare += [add(n, "In Review", [(30, "In Review")]) for n in range(264, 276)]
         bare += [add(n, "Todo", [(10, "Todo")]) for n in range(276, 286)]

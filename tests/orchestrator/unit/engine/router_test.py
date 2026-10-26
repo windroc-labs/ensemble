@@ -4108,6 +4108,33 @@ class ExplicitIssueRuns(TickBase):
                 )
                 self.assertEqual((self.start.launches, fake.mutations, self.state), ([], [], ""))
 
+    def test_an_archived_todo_issue_is_named_archived(self):
+        fake = FakeLinear([issue("TASK-8", "Todo", "researcher", archived=True)])
+        for dry in (False, True):
+            with self.subTest(dry=dry):
+                code = self.tick(fake, "--issue", "TASK-8", *["--dry-run"] * dry)
+                self.assertEqual(code, 0 if dry else 2)
+                self.assertEqual(
+                    self.said(),
+                    [f"pick-none TASK-8 reason={linear_tracker.ARCHIVED.format(key='TASK-8')}"],
+                )
+                self.assertEqual((self.start.launches, fake.mutations, self.state), ([], [], ""))
+
+    def test_a_todo_issue_the_list_leaves_out_is_named_unlisted(self):
+        class Lagging(FakeLinear):
+            def _queue(self, query, v):
+                return {"issues": {"nodes": []}}
+
+        fake = Lagging([issue("TASK-8", "Todo", "researcher")])
+        self.assertEqual(self.tick(fake, "--issue", "TASK-8"), 2)
+        self.assertEqual(
+            self.said(),
+            [
+                "pick-none TASK-8 reason=a Todo issue assigned to a role account, yet not in "
+                "the Todo list (it can lag a change: retry)"
+            ],
+        )
+
     def test_no_project_is_the_reason_given(self):
         fake = FakeLinear(
             [
