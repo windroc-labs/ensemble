@@ -98,7 +98,7 @@ ensemble-orchestrator issue archive TASK-1 --dry-run
 ensemble-orchestrator issue archive TASK-1
 ```
 
-Archiving takes every sub-issue with it. `archive` reads all of them, at every depth, and archives only when the issue and each unarchived sub-issue are finished (`done` or `canceled`); prune follows the same rule. Otherwise it exits 1 naming the unfinished ones; there is no override. `--dry-run` lists what would go, writing nothing, and exits 0 whatever it finds: read its `result` (`refused` when anything blocks) and `unfinished`. It closes no run and deletes no file.
+Archiving takes every sub-issue with it. `archive` reads all of them, at every depth, and archives only when the issue and each unarchived sub-issue are finished (`done` or `canceled`); prune also waits until it would archive each sub-issue itself. Otherwise it exits 1 naming the unfinished ones; there is no override. `--dry-run` lists what would go, writing nothing, and exits 0 whatever it finds: read its `result` (`refused` when anything blocks) and `unfinished`. It closes no run and deletes no file.
 
 ## Local board
 
