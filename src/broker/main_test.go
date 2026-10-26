@@ -36,29 +36,39 @@ type call struct{ command, arg string }
 
 func recording(calls *[]call) app {
 	result := func(name string) step {
-		return func(_ context.Context, arg string, _ io.Writer) (any, error) {
+		return func(_ context.Context, _ keys, arg string, _ io.Writer) (any, error) {
 			*calls = append(*calls, call{name, arg})
 			return map[string]string{"ok": name}, nil
 		}
 	}
 	build, workspaceRm := result("build"), result("workspace-rm")
-	return app{build: func(ctx context.Context, arg string, _ launcher.BuildSpec, _ time.Duration, p io.Writer) (any, error) {
-		return build(ctx, arg, p)
+	return app{build: func(ctx context.Context, k keys, arg string, _ launcher.BuildSpec, _ time.Duration, p io.Writer) (any, error) {
+		return build(ctx, k, arg, p)
 	},
 		start: result("start"), close: result("close"),
-		lockQuery: func(ctx context.Context, name string) (any, error) { return result("lock-query")(ctx, name, nil) },
-		maintain: func(ctx context.Context, container, _ string, _ []string, _ bool) (any, error) {
-			return result("maintain")(ctx, container, nil)
+		lockQuery: func(ctx context.Context, k keys, name string) (any, error) {
+			return result("lock-query")(ctx, k, name, nil)
 		},
-		status: func(ctx context.Context, _ bool) (any, error) { return result("status")(ctx, "", nil) },
-		probeOpencode: func(ctx context.Context, provider, base string) (any, error) {
-			return result("probe-provider")(ctx, provider+" "+base, nil)
+		maintain: func(ctx context.Context, k keys, container, _ string, _ []string, _ bool) (any, error) {
+			return result("maintain")(ctx, k, container, nil)
 		},
-		workspaceRm:  func(ctx context.Context, volume string, _ bool) (any, error) { return workspaceRm(ctx, volume, nil) },
-		checkClients: func(ctx context.Context, p io.Writer) (any, error) { return result("check-clients")(ctx, "", p) }}
+		status: func(ctx context.Context, k keys, _ bool) (any, error) { return result("status")(ctx, k, "", nil) },
+		probeOpencode: func(ctx context.Context, k keys, provider, base string) (any, error) {
+			return result("probe-provider")(ctx, k, provider+" "+base, nil)
+		},
+		workspaceRm: func(ctx context.Context, k keys, volume string, _ bool) (any, error) {
+			return workspaceRm(ctx, k, volume, nil)
+		},
+		checkClients: func(ctx context.Context, k keys, p io.Writer) (any, error) {
+			return result("check-clients")(ctx, k, "", p)
+		}}
 }
 
+// invoke runs args on a, with a keychain and an old-name check that find nothing unless a sets its own.
 func invoke(a app, args ...string) (int, string, string) {
+	if a.keychain == nil {
+		a.keychain = func(bool) (keys, error) { return keys{Home: "/nonexistent"}, nil }
+	}
 	var out, errOut bytes.Buffer
 	code := run(context.Background(), args, &out, &errOut, a)
 	return code, out.String(), errOut.String()
@@ -78,7 +88,7 @@ func TestVersion(t *testing.T) {
 
 func TestLockQueryCommand(t *testing.T) {
 	calls := 0
-	a := app{lockQuery: func(_ context.Context, name string) (any, error) {
+	a := app{lockQuery: func(_ context.Context, _ keys, name string) (any, error) {
 		calls++
 		if name != "dummy" {
 			t.Fatalf("query %q", name)
@@ -95,7 +105,7 @@ func TestLockQueryCommand(t *testing.T) {
 			t.Fatalf("%q: %d %q %q", args, code, out, errOut)
 		}
 	}
-	a.start = func(context.Context, string, io.Writer) (any, error) {
+	a.start = func(context.Context, keys, string, io.Writer) (any, error) {
 		e := protocol.New(protocol.Busy, "Lock held by container (worker_1).")
 		e.Holder = &protocol.Holder{Container: "container", Owner: "worker_1"}
 		return nil, e
@@ -108,7 +118,7 @@ func TestLockQueryCommand(t *testing.T) {
 
 func TestCheckClientsCommand(t *testing.T) {
 	calls := 0
-	a := app{checkClients: func(_ context.Context, progress io.Writer) (any, error) {
+	a := app{checkClients: func(_ context.Context, _ keys, progress io.Writer) (any, error) {
 		calls++
 		fmt.Fprintln(progress, "ensemble-broker: removed ensemble-worker:x")
 		return launcher.CheckResult{Latest: launcher.ClientVersions{Claude: "2.1.7", Codex: "0.170.0", Opencode: "1.20.1"},
@@ -128,7 +138,7 @@ func TestCheckClientsCommand(t *testing.T) {
 		t.Fatalf("extra args: %d %q %q", code, out, errOut)
 	}
 	assertError(t, errOut, out, "check-clients", protocol.Usage)
-	a.checkClients = func(context.Context, io.Writer) (any, error) {
+	a.checkClients = func(context.Context, keys, io.Writer) (any, error) {
 		return nil, protocol.New(protocol.BuildFailed, "Cannot look up the latest client releases.")
 	}
 	code, out, errOut = invoke(a, "check-clients")
@@ -143,7 +153,7 @@ func TestCheckClientsCommand(t *testing.T) {
 }
 
 func TestLoginOwnershipFailureExit(t *testing.T) {
-	a := app{loginOpencode: func(string, string, io.Writer) error {
+	a := app{loginOpencode: func(keys, string, string, io.Writer) error {
 		return fmt.Errorf("cannot save item: %w", broker.ErrInvalidOwnerEdit)
 	}}
 	code, out, errOut := invoke(a, "login", "opencode", "strata")
@@ -154,7 +164,7 @@ func TestLoginOwnershipFailureExit(t *testing.T) {
 
 func TestProbeOpencodeCommand(t *testing.T) {
 	calls := 0
-	a := app{probeOpencode: func(_ context.Context, provider, base string) (any, error) {
+	a := app{probeOpencode: func(_ context.Context, _ keys, provider, base string) (any, error) {
 		calls++
 		if provider != "strata" || base != "https://strata.test/v1" {
 			t.Fatal("wrong probe input")
@@ -302,6 +312,8 @@ func TestUsageErrors(t *testing.T) {
 		{"unknown", []string{"login", "env", "Dummy"}},
 		{"unknown", []string{"login", "env", "a/b"}},
 		{"unknown", []string{"login", "env", "dummy", "value"}},
+		{"unknown", []string{"retrust", "--all"}},
+		{"unknown", []string{"retrust", "x"}},
 	} {
 		code, out, errOut := invoke(a, tc.args...)
 		if code != 2 {
@@ -317,7 +329,7 @@ func TestUsageErrors(t *testing.T) {
 func TestLoginGitHubDispatch(t *testing.T) {
 	for _, name := range []string{"ensemble-broker-bot"} {
 		var got string
-		a := app{loginGitHub: func(ctx context.Context, app string, key *keyFile, out io.Writer) error {
+		a := app{loginGitHub: func(ctx context.Context, _ keys, app string, key *keyFile, out io.Writer) error {
 			if ctx == nil {
 				t.Error("no context")
 			}
@@ -332,7 +344,7 @@ func TestLoginGitHubDispatch(t *testing.T) {
 			t.Fatalf("%s: exit %d app %q %q %q", name, code, got, out, errOut)
 		}
 	}
-	a := app{loginGitHub: func(context.Context, string, *keyFile, io.Writer) error { return errors.New("no item") }}
+	a := app{loginGitHub: func(context.Context, keys, string, *keyFile, io.Writer) error { return errors.New("no item") }}
 	if code, out, errOut := invoke(a, "login", "github", "ensemble-broker-bot"); code != 1 || out != "" || errOut != "ensemble-broker: no item\n" {
 		t.Fatalf("exit %d %q %q", code, out, errOut)
 	}
@@ -341,7 +353,7 @@ func TestLoginGitHubDispatch(t *testing.T) {
 func TestLoginClaudeDispatch(t *testing.T) {
 	for want, args := range map[string][]string{"default": {"login", "claude"}, "work": {"login", "claude", "work"}, "a.b-1_2": {"login", "claude", "a.b-1_2"}} {
 		var got string
-		a := app{login: func(account string, out io.Writer) error {
+		a := app{login: func(_ keys, account string, out io.Writer) error {
 			got = account
 			_, err := io.WriteString(out, "ok\n")
 			return err
@@ -350,7 +362,7 @@ func TestLoginClaudeDispatch(t *testing.T) {
 			t.Fatalf("%q: exit %d account %q %q %q", args, code, got, out, errOut)
 		}
 	}
-	a := app{login: func(string, io.Writer) error { return errors.New("no terminal") }}
+	a := app{login: func(keys, string, io.Writer) error { return errors.New("no terminal") }}
 	if code, out, errOut := invoke(a, "login", "claude", "work"); code != 1 || out != "" || errOut != "ensemble-broker: no terminal\n" {
 		t.Fatalf("exit %d %q %q", code, out, errOut)
 	}
@@ -363,7 +375,7 @@ func TestLoginClaudeDispatch(t *testing.T) {
 
 func TestLoginOpencodeDispatch(t *testing.T) {
 	var got, file string
-	a := app{loginOpencode: func(provider, authFile string, out io.Writer) error {
+	a := app{loginOpencode: func(_ keys, provider, authFile string, out io.Writer) error {
 		got, file = provider, authFile
 		_, err := io.WriteString(out, "ok\n")
 		return err
@@ -383,7 +395,7 @@ func TestLoginOpencodeDispatch(t *testing.T) {
 			t.Fatalf("accepted %q", args)
 		}
 	}
-	a = app{loginOpencode: func(string, string, io.Writer) error { return errors.New("no terminal") }}
+	a = app{loginOpencode: func(keys, string, string, io.Writer) error { return errors.New("no terminal") }}
 	if code, out, errOut := invoke(a, "login", "opencode", "strata"); code != 1 || out != "" || errOut != "ensemble-broker: no terminal\n" {
 		t.Fatalf("exit %d %q %q", code, out, errOut)
 	}
@@ -455,7 +467,7 @@ func TestCodexCommands(t *testing.T) {
 		}
 	}
 	called := false
-	a := app{loginCodex: func(ctx context.Context, out io.Writer) error {
+	a := app{loginCodex: func(ctx context.Context, _ keys, out io.Writer) error {
 		called = true
 		_, err := io.WriteString(out, "saved\n")
 		return err
@@ -463,7 +475,7 @@ func TestCodexCommands(t *testing.T) {
 	if code, out, errOut := invoke(a, "login", "codex"); code != 0 || !called || out != "saved\n" || errOut != "" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
-	a.loginCodex = func(context.Context, io.Writer) error { return errors.New("login failed") }
+	a.loginCodex = func(context.Context, keys, io.Writer) error { return errors.New("login failed") }
 	if code, out, errOut := invoke(a, "login", "codex"); code != 1 || out != "" || errOut != "ensemble-broker: login failed\n" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
@@ -509,7 +521,7 @@ func TestBuildMaxAge(t *testing.T) {
 		999999999 * time.Second: {"--max-age", "999999999"},
 	} {
 		got := time.Duration(-2)
-		a := app{build: func(_ context.Context, _ string, _ launcher.BuildSpec, maxAge time.Duration, _ io.Writer) (any, error) {
+		a := app{build: func(_ context.Context, _ keys, _ string, _ launcher.BuildSpec, maxAge time.Duration, _ io.Writer) (any, error) {
 			got = maxAge
 			return map[string]string{}, nil
 		}}
@@ -537,7 +549,7 @@ func TestBuildPlugins(t *testing.T) {
 	} {
 		var spec launcher.BuildSpec
 		maxAge := time.Duration(-2)
-		app := app{build: func(_ context.Context, _ string, s launcher.BuildSpec, m time.Duration, _ io.Writer) (any, error) {
+		app := app{build: func(_ context.Context, _ keys, _ string, s launcher.BuildSpec, m time.Duration, _ io.Writer) (any, error) {
 			spec, maxAge = s, m
 			return map[string]string{}, nil
 		}}
@@ -551,7 +563,7 @@ func TestBuildPlugins(t *testing.T) {
 func TestWorkspaceRmForce(t *testing.T) {
 	for want, args := range map[bool][]string{false: {"workspace-rm", "--volume", "v"}, true: {"workspace-rm", "--volume", "v", "--force"}} {
 		got := !want
-		a := app{workspaceRm: func(_ context.Context, volume string, force bool) (any, error) {
+		a := app{workspaceRm: func(_ context.Context, _ keys, volume string, force bool) (any, error) {
 			got = force
 			return map[string]any{"volume": volume, "removed": true}, nil
 		}}
@@ -562,9 +574,9 @@ func TestWorkspaceRmForce(t *testing.T) {
 }
 
 func TestChannels(t *testing.T) {
-	failing := app{build: func(context.Context, string, launcher.BuildSpec, time.Duration, io.Writer) (any, error) {
+	failing := app{build: func(context.Context, keys, string, launcher.BuildSpec, time.Duration, io.Writer) (any, error) {
 		return nil, protocol.New(protocol.BuildFailed, "stage failed")
-	}, close: func(context.Context, string, io.Writer) (any, error) {
+	}, close: func(context.Context, keys, string, io.Writer) (any, error) {
 		return nil, errors.New("surprise")
 	}}
 	code, out, errOut := invoke(failing, "build", "--ensemble", "/pkg")
@@ -580,7 +592,7 @@ func TestChannels(t *testing.T) {
 }
 
 func TestPanicIsInternalError(t *testing.T) {
-	a := app{start: func(context.Context, string, io.Writer) (any, error) { panic("boom") }}
+	a := app{start: func(context.Context, keys, string, io.Writer) (any, error) { panic("boom") }}
 	code, out, errOut := invoke(a, "start", "--manifest", "/m.json")
 	if code != 70 {
 		t.Fatal(code)
@@ -671,7 +683,7 @@ func TestTokenNeverLeaves(t *testing.T) {
 			Creds:  broker.Credentials{Keychain: &memKeychain{token: []byte(token)}},
 			GitHub: broker.GitHub{Keychain: noSecrets{}, API: github.Client{Now: time.Now}, Lock: broker.FileLock(filepath.Join(t.TempDir(), "tokens.lock"))},
 		}
-		a := app{start: func(ctx context.Context, m string, _ io.Writer) (any, error) { return h.Start(ctx, m) }}
+		a := app{start: func(ctx context.Context, _ keys, m string, _ io.Writer) (any, error) { return h.Start(ctx, m) }}
 		_, out, errOut := invoke(a, "start", "--manifest", path)
 		if strings.Contains(out+errOut, token) {
 			t.Fatalf("token in output: %q %q", out, errOut)
@@ -694,7 +706,7 @@ func TestTokenNeverLeaves(t *testing.T) {
 func TestBuildProgressGoesToStderr(t *testing.T) {
 	result := map[string]any{"image": "ensemble-worker:k", "digest": "sha256:d", "rebuilt": true}
 	build := func(fail bool) app {
-		return app{build: func(_ context.Context, _ string, _ launcher.BuildSpec, _ time.Duration, progress io.Writer) (any, error) {
+		return app{build: func(_ context.Context, _ keys, _ string, _ launcher.BuildSpec, _ time.Duration, progress io.Writer) (any, error) {
 			_, _ = io.WriteString(progress, "#1 [1/3] FROM base\n#2 DONE\n")
 			if fail {
 				return nil, protocol.New(protocol.BuildFailed, "stage failed")
@@ -716,14 +728,14 @@ func TestBuildProgressGoesToStderr(t *testing.T) {
 }
 
 func TestStatus(t *testing.T) {
-	a := app{status: func(context.Context, bool) (any, error) {
+	a := app{status: func(context.Context, keys, bool) (any, error) {
 		return launcher.StatusResult{Revocations: []protocol.Pending{{Container: "c", Account: "acme", ExpiresAt: "2026-10-17T13:00:00Z"}}}, nil
 	}}
 	code, out, errOut := invoke(a, "status")
 	if code != 0 || errOut != "" || out != `{"revocations":[{"container":"c","account":"acme","expires_at":"2026-10-17T13:00:00Z"}]}`+"\n" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
-	a = app{status: func(context.Context, bool) (any, error) { return nil, protocol.New(protocol.KeychainFailed, "x") }}
+	a = app{status: func(context.Context, keys, bool) (any, error) { return nil, protocol.New(protocol.KeychainFailed, "x") }}
 	code, out, errOut = invoke(a, "status")
 	if code != 11 {
 		t.Fatalf("%d %q", code, errOut)
@@ -735,9 +747,9 @@ func TestStatusCleanupOption(t *testing.T) {
 	var calls []call
 	a := recording(&calls)
 	var choices []bool
-	a.status = func(ctx context.Context, cleanup bool) (any, error) {
+	a.status = func(ctx context.Context, k keys, cleanup bool) (any, error) {
 		choices = append(choices, cleanup)
-		return recording(&calls).status(ctx, cleanup)
+		return recording(&calls).status(ctx, k, cleanup)
 	}
 	code, out, errOut := invoke(a, "status", "--cleanup")
 	if code != 0 || len(calls) != 1 || out == "" || errOut != "" {
@@ -889,7 +901,7 @@ func TestLoginGitHubKeyFileDispatch(t *testing.T) {
 	}
 	var seen *keyFile
 	var held string
-	a := app{loginGitHub: func(_ context.Context, app string, key *keyFile, out io.Writer) error {
+	a := app{loginGitHub: func(_ context.Context, _ keys, app string, key *keyFile, out io.Writer) error {
 		seen, held = key, string(key.pem)
 		_, err := io.WriteString(out, "ok\n")
 		return err
@@ -909,7 +921,7 @@ func TestLoginGitHubKeyFileDispatch(t *testing.T) {
 		filepath.Join(path, "no"): "ensemble-broker: reading the App private key failed: open " + filepath.Join(path, "no") + ": not a directory\n",
 	} {
 		called := false
-		a := app{loginGitHub: func(context.Context, string, *keyFile, io.Writer) error { called = true; return nil }}
+		a := app{loginGitHub: func(context.Context, keys, string, *keyFile, io.Writer) error { called = true; return nil }}
 		if code, out, errOut := invoke(a, "login", "github", "ensemble-broker-bot", "--key-file", file, "--app-id", "1234567"); code != 1 || out != "" || errOut != want || called {
 			t.Fatalf("%s: exit %d %q %q called %v", file, code, out, errOut, called)
 		}
@@ -918,7 +930,7 @@ func TestLoginGitHubKeyFileDispatch(t *testing.T) {
 
 func TestLoginEnvDispatch(t *testing.T) {
 	var got string
-	a := app{loginEnv: func(name string, out io.Writer) error {
+	a := app{loginEnv: func(_ keys, name string, out io.Writer) error {
 		got = name
 		_, err := io.WriteString(out, "ok\n")
 		return err
@@ -926,7 +938,7 @@ func TestLoginEnvDispatch(t *testing.T) {
 	if code, out, errOut := invoke(a, "login", "env", "dummy"); code != 0 || got != "dummy" || out != "ok\n" || errOut != "" {
 		t.Fatalf("exit %d name %q %q %q", code, got, out, errOut)
 	}
-	a = app{loginEnv: func(string, io.Writer) error { return errors.New("the value must be 1 to 16384 bytes") }}
+	a = app{loginEnv: func(keys, string, io.Writer) error { return errors.New("the value must be 1 to 16384 bytes") }}
 	if code, out, errOut := invoke(a, "login", "env", "dummy"); code != 1 || out != "" || errOut != "ensemble-broker: the value must be 1 to 16384 bytes\n" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
@@ -987,7 +999,7 @@ type datedCall struct {
 }
 
 func datedApp(got *[]datedCall) app {
-	return app{dated: func(kind credential.Kind, name, authFile string, reg credential.Registration, out io.Writer) error {
+	return app{dated: func(_ keys, kind credential.Kind, name, authFile string, reg credential.Registration, out io.Writer) error {
 		*got = append(*got, datedCall{kind, name, authFile, reg})
 		_, err := io.WriteString(out, "ok\n")
 		return err
@@ -1187,7 +1199,7 @@ func TestStaticSentinelAbsent(t *testing.T) {
 	if err == nil || err.Error() != s.store.Path+": invalid content" {
 		t.Fatalf("%v", err)
 	}
-	code, stdout, stderr := invoke(app{loginEnv: func(string, io.Writer) error { return err }}, "login", "env", "db")
+	code, stdout, stderr := invoke(app{loginEnv: func(keys, string, io.Writer) error { return err }}, "login", "env", "db")
 	logged, _ := os.ReadFile(audit.Path(home))
 	for name, text := range map[string]string{"stdout": out.String() + stdout, "stderr": errOut.String() + stderr, "audit": string(logged)} {
 		if strings.Contains(text, sentinel) {
@@ -1226,7 +1238,7 @@ func TestMaintainArgs(t *testing.T) {
 		renew bool
 	}
 	var calls []got
-	a := app{maintain: func(_ context.Context, container, manifest string, delivered []string, renew bool) (any, error) {
+	a := app{maintain: func(_ context.Context, _ keys, container, manifest string, delivered []string, renew bool) (any, error) {
 		calls = append(calls, got{append([]string{container, manifest}, delivered...), renew})
 		return launcher.MaintainResult{Container: container, Results: []launcher.ProviderResult{}, Notices: []launcher.Notice{}}, nil
 	}}
@@ -1316,6 +1328,87 @@ func TestStaticLoginPipedToken(t *testing.T) {
 		records, _ := staticStore(home).Load()
 		if err != nil || records["ensemble-broker-claude/default"].Provenance != c.want || errOut.Len() != 0 || strings.Contains(out.String(), "piped") {
 			t.Fatalf("%v: %v %+v %q %q", c.want, err, records, out.String(), errOut.String())
+		}
+	}
+}
+
+func TestRetrustCommand(t *testing.T) {
+	var got []keys
+	a := app{retrust: func(k keys, out io.Writer) error {
+		got = append(got, k)
+		_, err := fmt.Fprintln(out, "re-trusted 1 broker keychain item(s)")
+		return err
+	}}
+	if code, out, errOut := invoke(a, "retrust"); code != 0 || out != "re-trusted 1 broker keychain item(s)\n" || errOut != "" || len(got) != 1 {
+		t.Fatalf("%d %q %q %v", code, out, errOut, got)
+	}
+	for _, args := range [][]string{{"retrust", "--all"}, {"retrust", "x"}} {
+		if code, _, errOut := invoke(a, args...); code != 2 || !strings.Contains(errOut, "| retrust") {
+			t.Fatalf("%q: %d %q", args, code, errOut)
+		}
+	}
+	if len(got) != 1 {
+		t.Fatalf("retrust ran with arguments: %v", got)
+	}
+	a.retrust = func(keys, io.Writer) error { return errors.New("1 broker keychain item(s) not re-trusted; rerun x") }
+	if code, out, errOut := invoke(a, "retrust"); code != 1 || out != "" || errOut != "ensemble-broker: 1 broker keychain item(s) not re-trusted; rerun x\n" {
+		t.Fatalf("%d %q %q", code, out, errOut)
+	}
+	a.keychain = func(bool) (keys, error) { return keys{}, errors.New("cannot resolve system account home") }
+	if code, _, errOut := invoke(a, "retrust"); code != 1 || errOut != "ensemble-broker: cannot resolve system account home\n" {
+		t.Fatalf("%d %q", code, errOut)
+	}
+}
+
+// Only a login or retrust gets an interactive keychain, whose dialogs and writes may ask; every other command's
+// keychain fails rather than show a dialog.
+func TestOnlyLoginsAndRetrustAreInteractive(t *testing.T) {
+	var calls []call
+	a := recording(&calls)
+	ok := func(keys, io.Writer) error { return nil }
+	a.retrust = ok
+	a.login = func(keys, string, io.Writer) error { return nil }
+	a.loginGitHub = func(context.Context, keys, string, *keyFile, io.Writer) error { return nil }
+	a.loginCodex = func(context.Context, keys, io.Writer) error { return nil }
+	a.loginOpencode = func(keys, string, string, io.Writer) error { return nil }
+	a.loginEnv = func(keys, string, io.Writer) error { return nil }
+	a.dated = func(keys, credential.Kind, string, string, credential.Registration, io.Writer) error { return nil }
+	a.linear = func(context.Context, keys, bool) (any, error) { return map[string]bool{"ok": true}, nil }
+	a.installCodex = func(context.Context, string, bool) (any, error) { return map[string]bool{"ok": true}, nil }
+	container := "ensemble-worker_1-0123456789abcdef0123456789abcdef"
+	for _, tc := range []struct {
+		args        []string
+		interactive []bool
+	}{
+		{[]string{"retrust"}, []bool{true}},
+		{[]string{"login", "claude"}, []bool{true}},
+		{[]string{"login", "claude", "work"}, []bool{true}},
+		{[]string{"login", "claude", "--expires", "2027-01-01"}, []bool{true}},
+		{[]string{"login", "github", broker.AppKeyService}, []bool{true}},
+		{[]string{"login", "codex"}, []bool{true}},
+		{[]string{"login", "opencode", "strata"}, []bool{true}},
+		{[]string{"login", "env", "db"}, []bool{true}},
+		{[]string{"login", "linear"}, []bool{true}},
+		{[]string{"linear-maintain"}, []bool{false}},
+		{[]string{"start", "--manifest", "/m.json"}, []bool{false}},
+		{[]string{"maintain", "--container", container, "--manifest", "/m.json"}, []bool{false}},
+		{[]string{"close", "--container", container}, []bool{false}},
+		{[]string{"status", "--cleanup"}, []bool{false}},
+		{[]string{"build", "--ensemble", "/e"}, []bool{false}},
+		{[]string{"lock-query", "--lock", "dummy"}, []bool{false}},
+		{[]string{"probe-provider", "--provider", "strata", "--base-url", "https://strata.test/v1"}, []bool{false}},
+		{[]string{"workspace-rm", "--volume", "ensemble-ws-w"}, []bool{false}},
+		{[]string{"check-clients"}, []bool{false}},
+		{[]string{"version"}, nil},
+		{[]string{"install-codex", "0.1.0"}, nil},
+	} {
+		var asked []bool
+		a.keychain = func(interactive bool) (keys, error) {
+			asked = append(asked, interactive)
+			return keys{Home: "/nonexistent"}, nil
+		}
+		if code, _, errOut := invoke(a, tc.args...); code != 0 || !slices.Equal(asked, tc.interactive) {
+			t.Errorf("%q: exit %d %q, keychain asked %v, want %v", tc.args, code, errOut, asked, tc.interactive)
 		}
 	}
 }

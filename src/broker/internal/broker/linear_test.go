@@ -203,7 +203,7 @@ func linearRig(t *testing.T) (Linear, *linearKeysFake, *linearHostFake, *[]url.V
 	h := &linearHostFake{values: map[[2]string][]byte{}}
 	var calls []url.Values
 	var callsMu sync.Mutex
-	l := NewLinear(t.TempDir(), nil)
+	l := NewLinear(t.TempDir(), SystemKeychain{}, nil)
 	l.keys, l.host, l.now = k, h, func() time.Time { return linearNow }
 	l.http = &http.Client{Transport: linearRoundTrip(func(r *http.Request) (*http.Response, error) {
 		b, _ := io.ReadAll(r.Body)
@@ -325,7 +325,7 @@ func TestLinearReconstructionRepairsPublicationWithoutRenewal(t *testing.T) {
 		t.Fatalf("failure %v", err)
 	}
 	h.fail = false
-	rebuilt := NewLinear(t.TempDir(), nil)
+	rebuilt := NewLinear(t.TempDir(), SystemKeychain{}, nil)
 	rebuilt.keys, rebuilt.host, rebuilt.http, rebuilt.now = k, h, l.http, l.now
 	if got, err := rebuilt.Maintain(context.Background(), a); err != nil || got.Renewed || len(*calls) != 1 {
 		t.Fatalf("repair %+v %v, requests %d", got, err, len(*calls))
@@ -363,7 +363,7 @@ func TestLinearRegistryUpdateFailureKeepsExistingReservations(t *testing.T) {
 	if err := l.read("registry", &registry); err != nil || len(registry) != 1 || registry[0] != a {
 		t.Fatalf("lost old reservation: %v %+v", err, registry)
 	}
-	rebuilt := NewLinear(t.TempDir(), nil)
+	rebuilt := NewLinear(t.TempDir(), SystemKeychain{}, nil)
 	rebuilt.keys = k
 	alias := a
 	alias.Name = "alias"
@@ -417,7 +417,7 @@ func TestLinearPendingEnrollmentReconstruction(t *testing.T) {
 		t.Fatal("pending enrollment active")
 	}
 	k.frozen = false
-	rebuilt := NewLinear(t.TempDir(), l.password)
+	rebuilt := NewLinear(t.TempDir(), SystemKeychain{}, l.password)
 	rebuilt.keys, rebuilt.host, rebuilt.http, rebuilt.now = k, h, l.http, l.now
 	if err := rebuilt.Enroll(a); err != nil {
 		t.Fatal(err)
@@ -533,7 +533,7 @@ func TestLinearIdentityPublicationsSurviveRenewalAndReconstruction(t *testing.T)
 	if !bytes.Equal(h.value(t, a), newA) || !bytes.Equal(h.value(t, b), oldB) || len(*calls) != 4 {
 		t.Fatal("failed publication changed either host entry or did not renew verifier")
 	}
-	rebuilt := NewLinear(t.TempDir(), nil)
+	rebuilt := NewLinear(t.TempDir(), SystemKeychain{}, nil)
 	rebuilt.keys, rebuilt.host, rebuilt.http, rebuilt.now = k, h, l.http, l.now
 	if got, err := rebuilt.Maintain(context.Background(), b); err != nil || got.Renewed || len(*calls) != 4 {
 		t.Fatalf("verifier repair: %+v %v, requests %d", got, err, len(*calls))
@@ -649,7 +649,7 @@ func TestLinearReenrollmentRepairsPreviousBrokerMetadata(t *testing.T) {
 		t.Fatal("stale broker metadata accepted")
 	}
 	passwordReads := 0
-	rebuilt := NewLinear(t.TempDir(), func() ([]byte, error) { passwordReads++; return []byte(keychainPass), nil })
+	rebuilt := NewLinear(t.TempDir(), SystemKeychain{}, func() ([]byte, error) { passwordReads++; return []byte(keychainPass), nil })
 	rebuilt.keys, rebuilt.host, rebuilt.http, rebuilt.now = k, h, l.http, l.now
 	k.frozen = true
 	if err := rebuilt.Enroll(a); err == nil {

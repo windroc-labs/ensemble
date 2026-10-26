@@ -27,7 +27,7 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-broker-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | (login claude, opencode and env also take --expires YYYY-MM-DD; claude --issued YYYY-MM-DD or --fresh-token instead) | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | lock-query --lock NAME | maintain --container NAME --manifest FILE [--renew] [--delivered KEY]... | close --container NAME | status [--cleanup] | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients | login linear | linear-maintain (public identity JSON on stdin)"
+const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-broker-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | (login claude, opencode and env also take --expires YYYY-MM-DD; claude --issued YYYY-MM-DD or --fresh-token instead) | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | lock-query --lock NAME | maintain --container NAME --manifest FILE [--renew] [--delivered KEY]... | close --container NAME | status [--cleanup] | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients | login linear | linear-maintain (public identity JSON on stdin) | retrust"
 
 // replaced answers a supervisor started before protocol 29, which still calls refresh and notices.
 const replaced = "Broker protocol 29 replaced refresh and notices with maintain; restart this session (close and resume it) to renew its credentials."
@@ -37,26 +37,32 @@ var secondsPattern = regexp.MustCompile(`^[0-9]{1,9}$`)
 var volumePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$`)
 
 // step runs a command; progress is the broker's stderr, for build's Docker progress and start's phase times.
-type step func(ctx context.Context, arg string, progress io.Writer) (any, error)
+type step func(ctx context.Context, k keys, arg string, progress io.Writer) (any, error)
+
+// keys is the login keychain every command but version and install-codex reaches, chosen by run: interactive, its
+// dialogs and writes allowed to ask, only for a login or retrust; every other command fails rather than ask.
+type keys = broker.SystemKeychain
 
 type app struct {
-	linear        func(context.Context, bool) (any, error) // bounded identity JSON on stdin; bool: enrollment
-	build         func(ctx context.Context, pkg string, spec launcher.BuildSpec, maxAge time.Duration, progress io.Writer) (any, error)
+	keychain      func(interactive bool) (keys, error)
+	linear        func(ctx context.Context, k keys, enroll bool) (any, error) // bounded identity JSON on stdin
+	build         func(ctx context.Context, k keys, pkg string, spec launcher.BuildSpec, maxAge time.Duration, progress io.Writer) (any, error)
 	start, close  step
-	maintain      func(ctx context.Context, container, manifest string, delivered []string, renew bool) (any, error)
-	status        func(ctx context.Context, cleanup bool) (any, error)
-	lockQuery     func(ctx context.Context, name string) (any, error)
-	probeOpencode func(ctx context.Context, provider, base string) (any, error)
-	workspaceRm   func(ctx context.Context, volume string, force bool) (any, error)
-	login         func(account string, out io.Writer) error                                // login claude [NAME]
-	loginGitHub   func(ctx context.Context, app string, key *keyFile, out io.Writer) error // key: nil without --key-file
-	loginCodex    func(context.Context, io.Writer) error
-	loginOpencode func(provider, authFile string, out io.Writer) error
-	loginEnv      func(name string, out io.Writer) error // login env NAME: the value on stdin
+	maintain      func(ctx context.Context, k keys, container, manifest string, delivered []string, renew bool) (any, error)
+	status        func(ctx context.Context, k keys, cleanup bool) (any, error)
+	lockQuery     func(ctx context.Context, k keys, name string) (any, error)
+	probeOpencode func(ctx context.Context, k keys, provider, base string) (any, error)
+	workspaceRm   func(ctx context.Context, k keys, volume string, force bool) (any, error)
+	login         func(k keys, account string, out io.Writer) error                                // login claude [NAME]
+	loginGitHub   func(ctx context.Context, k keys, app string, key *keyFile, out io.Writer) error // key: nil without --key-file
+	loginCodex    func(ctx context.Context, k keys, out io.Writer) error
+	loginOpencode func(k keys, provider, authFile string, out io.Writer) error
+	loginEnv      func(k keys, name string, out io.Writer) error // login env NAME: the value on stdin
 	// a login claude, opencode or env with an expiry option; authFile: opencode's --auth-file, "" without
-	dated        func(kind credential.Kind, name, authFile string, reg credential.Registration, out io.Writer) error
+	dated        func(k keys, kind credential.Kind, name, authFile string, reg credential.Registration, out io.Writer) error
+	retrust      func(k keys, out io.Writer) error
 	installCodex func(context.Context, string, bool) (any, error)
-	checkClients func(ctx context.Context, progress io.Writer) (any, error)
+	checkClients func(ctx context.Context, k keys, progress io.Writer) (any, error)
 }
 
 // keyFile is login github's --key-file content and --app-id.
@@ -157,7 +163,11 @@ func isPath(s string) bool {
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (code int) {
 	if len(args) == 1 && args[0] == "linear-maintain" || len(args) == 2 && args[0] == "login" && args[1] == "linear" {
-		result, err := a.linear(ctx, args[0] == "login")
+		k, err := a.keychain(args[0] == "login")
+		var result any
+		if err == nil {
+			result, err = a.linear(ctx, k, args[0] == "login")
+		}
 		if err != nil {
 			fmt.Fprintln(stderr, "ensemble-broker: Linear command failed; check enrollment and broker installation, then rerun")
 			return 1
@@ -178,37 +188,44 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 			}
 		case "version", "build", "start", "maintain", "close", "status", "workspace-rm", "probe-provider", "lock-query", "check-clients":
 			command = args[0]
-		case "login":
-			var login func() error
+		case "login", "retrust":
+			var login func(keys) error
 			switch {
+			case len(args) == 1 && args[0] == "retrust":
+				login = func(k keys) error { return a.retrust(k, stdout) }
+			case args[0] != "login":
 			case len(args) == 2 && args[1] == "codex":
-				login = func() error { return a.loginCodex(ctx, stdout) }
+				login = func(k keys) error { return a.loginCodex(ctx, k, stdout) }
 			case len(args) == 2 && args[1] == "claude":
-				login = func() error { return a.login(launcher.DefaultClaudeAccount, stdout) }
+				login = func(k keys) error { return a.login(k, launcher.DefaultClaudeAccount, stdout) }
 			case len(args) == 3 && args[1] == "claude" && launcher.ValidClaudeAccount(args[2]):
-				login = func() error { return a.login(args[2], stdout) }
+				login = func(k keys) error { return a.login(k, args[2], stdout) }
 			case len(args) == 3 && args[1] == "github" && args[2] == broker.AppKeyService:
-				login = func() error { return a.loginGitHub(ctx, args[2], nil, stdout) }
+				login = func(k keys) error { return a.loginGitHub(ctx, k, args[2], nil, stdout) }
 			case len(args) == 7 && args[1] == "github" && args[2] == broker.AppKeyService && args[3] == "--key-file" && args[5] == "--app-id":
-				login = func() error {
+				login = func(k keys) error {
 					pem, err := readKeyFile(args[4])
 					if err != nil {
 						return err
 					}
 					defer clear(pem)
-					return a.loginGitHub(ctx, args[2], &keyFile{id: args[6], pem: pem}, stdout)
+					return a.loginGitHub(ctx, k, args[2], &keyFile{id: args[6], pem: pem}, stdout)
 				}
 			case len(args) == 3 && args[1] == "opencode" && launcher.ValidProvider(args[2]):
-				login = func() error { return a.loginOpencode(args[2], "", stdout) }
+				login = func(k keys) error { return a.loginOpencode(k, args[2], "", stdout) }
 			case len(args) == 5 && args[1] == "opencode" && launcher.ValidProvider(args[2]) && args[3] == "--auth-file" && isPath(args[4]):
-				login = func() error { return a.loginOpencode(args[2], args[4], stdout) }
+				login = func(k keys) error { return a.loginOpencode(k, args[2], args[4], stdout) }
 			case len(args) == 3 && args[1] == "env" && launcher.ValidEnvName(args[2]):
-				login = func() error { return a.loginEnv(args[2], stdout) }
+				login = func(k keys) error { return a.loginEnv(k, args[2], stdout) }
 			default:
 				login = datedLogin(args, a, stdout)
 			}
 			if login != nil {
-				if err := login(); err != nil {
+				k, err := a.keychain(true)
+				if err == nil {
+					err = login(k)
+				}
+				if err != nil {
 					fmt.Fprintln(stderr, "ensemble-broker:", err)
 					if errors.Is(err, broker.ErrInvalidOwnerEdit) {
 						return protocol.Exit(protocol.KeychainFailed)
@@ -231,43 +248,51 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 		return emit(stdout, map[string]string{"protocol_version": protocol.Version})
 	case command == "build" && len(args) >= 3 && args[1] == "--ensemble" && isPath(args[2]) && buildOptions(args[3:]) != nil:
 		o := buildOptions(args[3:])
-		s, arg = func(ctx context.Context, pkg string, progress io.Writer) (any, error) {
-			return a.build(ctx, pkg, o.spec, o.maxAge, progress)
+		s, arg = func(ctx context.Context, k keys, pkg string, progress io.Writer) (any, error) {
+			return a.build(ctx, k, pkg, o.spec, o.maxAge, progress)
 		}, args[2]
 	case command == "start" && len(args) == 3 && args[1] == "--manifest" && isPath(args[2]):
 		s, arg = a.start, args[2]
 	case command == "maintain" && len(args) >= 5 && args[1] == "--container" && containerPattern.MatchString(args[2]) &&
 		args[3] == "--manifest" && isPath(args[4]) && maintainOptions(args[5:]) != nil:
 		manifest, o := args[4], maintainOptions(args[5:])
-		s, arg = func(ctx context.Context, container string, _ io.Writer) (any, error) {
-			return a.maintain(ctx, container, manifest, o.delivered, o.renew)
+		s, arg = func(ctx context.Context, k keys, container string, _ io.Writer) (any, error) {
+			return a.maintain(ctx, k, container, manifest, o.delivered, o.renew)
 		}, args[2]
 	case command == "status" && (len(args) == 1 || len(args) == 2 && args[1] == "--cleanup"):
-		s = func(ctx context.Context, _ string, _ io.Writer) (any, error) { return a.status(ctx, len(args) == 2) }
+		s = func(ctx context.Context, k keys, _ string, _ io.Writer) (any, error) {
+			return a.status(ctx, k, len(args) == 2)
+		}
 	case command == "lock-query" && len(args) == 3 && args[1] == "--lock" && launcher.ValidLock(args[2]):
-		s, arg = func(ctx context.Context, lock string, _ io.Writer) (any, error) { return a.lockQuery(ctx, lock) }, args[2]
+		s, arg = func(ctx context.Context, k keys, lock string, _ io.Writer) (any, error) {
+			return a.lockQuery(ctx, k, lock)
+		}, args[2]
 	case command == "probe-provider" && len(args) == 5 && args[1] == "--provider" && launcher.ValidProvider(args[2]) && args[3] == "--base-url" && broker.ValidOpencodeURL(args[4]):
-		s = func(ctx context.Context, _ string, _ io.Writer) (any, error) {
-			return a.probeOpencode(ctx, args[2], args[4])
+		s = func(ctx context.Context, k keys, _ string, _ io.Writer) (any, error) {
+			return a.probeOpencode(ctx, k, args[2], args[4])
 		}
 	case command == "close" && len(args) == 3 && args[1] == "--container" && containerPattern.MatchString(args[2]):
 		s, arg = a.close, args[2]
 	case command == "workspace-rm" && (len(args) == 3 || len(args) == 4 && args[3] == "--force") && args[1] == "--volume" &&
 		volumePattern.MatchString(args[2]):
 		force := len(args) == 4
-		s, arg = func(ctx context.Context, volume string, _ io.Writer) (any, error) {
-			return a.workspaceRm(ctx, volume, force)
+		s, arg = func(ctx context.Context, k keys, volume string, _ io.Writer) (any, error) {
+			return a.workspaceRm(ctx, k, volume, force)
 		}, args[2]
 	case command == "check-clients" && len(args) == 1:
-		s = func(ctx context.Context, _ string, progress io.Writer) (any, error) {
-			return a.checkClients(ctx, progress)
+		s = func(ctx context.Context, k keys, _ string, progress io.Writer) (any, error) {
+			return a.checkClients(ctx, k, progress)
 		}
 	case len(args) > 0 && (args[0] == "refresh" || args[0] == "notices"):
 		return fail(stderr, command, protocol.New(protocol.Usage, replaced))
 	default:
 		return fail(stderr, command, protocol.New(protocol.Usage, usage))
 	}
-	result, err := s(ctx, arg, stderr)
+	k, err := a.keychain(false)
+	var result any
+	if err == nil {
+		result, err = s(ctx, k, arg, stderr)
+	}
 	if err != nil {
 		var e *protocol.Error
 		if !errors.As(err, &e) {
@@ -355,13 +380,10 @@ func recorder(home, command, container string) *audit.Recorder {
 	return &audit.Recorder{Command: command, Container: container, Now: time.Now, Log: audit.Log{Path: audit.Path(home)}}
 }
 
-// withHost runs f on the launcher wired to the fixed Docker Desktop CLI, then writes command's audit lines; docker
-// build's stderr and the launcher's notes go to progress.
-func withHost(command, container string, progress io.Writer, f func(launcher.Host) (any, error)) (result any, err error) {
-	home, err := accountHome()
-	if err != nil {
-		return nil, err
-	}
+// withHost runs f on the launcher wired to the fixed Docker Desktop CLI and the keychain k, in k's account home, then
+// writes command's audit lines; docker build's stderr and the launcher's notes go to progress.
+func withHost(command, container string, k keys, progress io.Writer, f func(launcher.Host) (any, error)) (result any, err error) {
+	home := k.Home
 	rec := recorder(home, command, container)
 	return withAudit(rec, func() (any, error) {
 		d, clean, err := docker.New(home)
@@ -370,10 +392,10 @@ func withHost(command, container string, progress io.Writer, f func(launcher.Hos
 		}
 		defer clean()
 		d.Progress = progress
-		h := launcher.NewHost(home, d.Endpoint(), d, broker.Credentials{Keychain: broker.SystemKeychain{Home: home}}, tokens(home, rec), rec)
-		h.Codex = broker.NewCodex(home, nil)
-		h.Opencode = broker.OpencodeKeys{Keychain: broker.SystemKeychain{Home: home}}
-		h.Env = broker.EnvKeys{Keychain: broker.SystemKeychain{Home: home}}
+		h := launcher.NewHost(home, d.Endpoint(), d, broker.Credentials{Keychain: k}, tokens(k, rec), rec)
+		h.Codex = broker.NewCodex(home, k, nil)
+		h.Opencode = broker.OpencodeKeys{Keychain: k}
+		h.Env = broker.EnvKeys{Keychain: k}
 		h.Static = staticStore(home)
 		h.Progress = progress
 		h.Lock = broker.FileLock(filepath.Join(home, ".ensemble/docker/images.lock"))
@@ -381,47 +403,50 @@ func withHost(command, container string, progress io.Writer, f func(launcher.Hos
 	})
 }
 
-// tokens is the broker's GitHub App token store in the account's login keychain, reporting to rec (nil: none).
-func tokens(home string, rec *audit.Recorder) broker.GitHub {
-	k := broker.SystemKeychain{Home: home}
-	return broker.GitHub{Keychain: k, Apps: k, API: github.New(), Lock: broker.FileLock(filepath.Join(home, ".ensemble/docker/tokens.lock")),
+// tokens is the broker's GitHub App token store in k, the account's login keychain, reporting to rec (nil: none).
+func tokens(k keys, rec *audit.Recorder) broker.GitHub {
+	return broker.GitHub{Keychain: k, Apps: k, API: github.New(), Lock: broker.FileLock(filepath.Join(k.Home, ".ensemble/docker/tokens.lock")),
 		Audit: rec}
 }
 
 func system() app {
 	return app{
-		linear: linearSystem,
-		lockQuery: func(ctx context.Context, lock string) (any, error) {
-			return withHost("lock-query", "", nil, func(h launcher.Host) (any, error) { return h.LockQuery(ctx, lock) })
-		},
-		probeOpencode: func(ctx context.Context, provider, base string) (any, error) {
+		keychain: func(interactive bool) (keys, error) {
 			home, err := accountHome()
 			if err != nil {
-				return nil, err
+				return keys{}, err
 			}
-			available, err := (broker.OpencodeKeys{Keychain: broker.SystemKeychain{Home: home}}).Probe(ctx, provider, base, nil)
+			k := keys{Home: home}
+			if interactive {
+				k = k.Interactive()
+			}
+			return k, nil
+		},
+		linear: linearSystem,
+		lockQuery: func(ctx context.Context, k keys, lock string) (any, error) {
+			return withHost("lock-query", "", k, nil, func(h launcher.Host) (any, error) { return h.LockQuery(ctx, lock) })
+		},
+		probeOpencode: func(ctx context.Context, k keys, provider, base string) (any, error) {
+			available, err := (broker.OpencodeKeys{Keychain: k}).Probe(ctx, provider, base, nil)
 			return map[string]bool{"available": available}, err
 		},
-		build: func(ctx context.Context, pkg string, spec launcher.BuildSpec, maxAge time.Duration, progress io.Writer) (any, error) {
-			return withHost("build", "", progress, func(h launcher.Host) (any, error) { return h.Build(ctx, pkg, spec, maxAge) })
+		build: func(ctx context.Context, k keys, pkg string, spec launcher.BuildSpec, maxAge time.Duration, progress io.Writer) (any, error) {
+			return withHost("build", "", k, progress, func(h launcher.Host) (any, error) { return h.Build(ctx, pkg, spec, maxAge) })
 		},
-		checkClients: func(ctx context.Context, progress io.Writer) (any, error) {
-			return withHost("check-clients", "", progress, func(h launcher.Host) (any, error) { return h.CheckClients(ctx) })
+		checkClients: func(ctx context.Context, k keys, progress io.Writer) (any, error) {
+			return withHost("check-clients", "", k, progress, func(h launcher.Host) (any, error) { return h.CheckClients(ctx) })
 		},
-		start: func(ctx context.Context, manifest string, progress io.Writer) (any, error) {
-			return withHost("start", "", progress, func(h launcher.Host) (any, error) { return h.Start(ctx, manifest) })
+		start: func(ctx context.Context, k keys, manifest string, progress io.Writer) (any, error) {
+			return withHost("start", "", k, progress, func(h launcher.Host) (any, error) { return h.Start(ctx, manifest) })
 		},
-		status: func(ctx context.Context, cleanup bool) (_ any, err error) {
-			home, err := accountHome()
-			if err != nil {
-				return nil, err
-			}
+		status: func(ctx context.Context, k keys, cleanup bool) (_ any, err error) {
+			home := k.Home
 			var rec *audit.Recorder
 			if cleanup {
 				rec = recorder(home, "status", "")
 			}
 			return withAudit(rec, func() (any, error) {
-				h := launcher.Host{GitHub: tokens(home, rec), Static: staticStore(home), Audit: rec}
+				h := launcher.Host{GitHub: tokens(k, rec), Static: staticStore(home), Audit: rec}
 				query := h.Status
 				if cleanup {
 					query = h.Cleanup
@@ -430,10 +455,9 @@ func system() app {
 				if err != nil {
 					return nil, err
 				}
-				codexStatus := broker.NewCodex(home, nil).Status(ctx)
+				codexStatus := broker.NewCodex(home, k, nil).Status(ctx)
 				status.Codex = &codexStatus
-				credentials := broker.Credentials{Keychain: broker.SystemKeychain{Home: home}}
-				usable := credentials.Usable("default")
+				usable := (broker.Credentials{Keychain: k}).Usable("default")
 				status.Claude = map[string]bool{"default": usable}
 				if status.Static, err = h.StaticStatus(cleanup, map[string]bool{credential.StaticRef(credential.Claude, "default"): usable}); err != nil {
 					return nil, err
@@ -441,27 +465,24 @@ func system() app {
 				return status, nil
 			})
 		},
-		maintain: func(ctx context.Context, container, manifest string, delivered []string, renew bool) (any, error) {
-			return withHost("maintain", container, nil, func(h launcher.Host) (any, error) {
+		maintain: func(ctx context.Context, k keys, container, manifest string, delivered []string, renew bool) (any, error) {
+			return withHost("maintain", container, k, nil, func(h launcher.Host) (any, error) {
 				return h.Maintain(ctx, container, manifest, delivered, renew)
 			})
 		},
-		close: func(ctx context.Context, container string, _ io.Writer) (any, error) {
-			return withHost("close", container, nil, func(h launcher.Host) (any, error) { return h.Close(ctx, container) })
+		close: func(ctx context.Context, k keys, container string, _ io.Writer) (any, error) {
+			return withHost("close", container, k, nil, func(h launcher.Host) (any, error) { return h.Close(ctx, container) })
 		},
-		workspaceRm: func(ctx context.Context, volume string, force bool) (any, error) {
-			return withHost("workspace-rm", "", nil, func(h launcher.Host) (any, error) { return h.WorkspaceRm(ctx, volume, force) })
+		workspaceRm: func(ctx context.Context, k keys, volume string, force bool) (any, error) {
+			return withHost("workspace-rm", "", k, nil, func(h launcher.Host) (any, error) { return h.WorkspaceRm(ctx, volume, force) })
 		},
-		login: func(account string, out io.Writer) error { return loginClaude(account, credential.Registration{}, out) },
-		loginGitHub: func(ctx context.Context, app string, key *keyFile, out io.Writer) error {
-			home, err := accountHome()
-			if err != nil {
-				return err
-			}
+		login: func(k keys, account string, out io.Writer) error {
+			return loginClaude(k, account, credential.Registration{}, out)
+		},
+		loginGitHub: func(ctx context.Context, k keys, app string, key *keyFile, out io.Writer) error {
 			if err := broker.CheckInstalled(); err != nil {
 				return err
 			}
-			k := broker.SystemKeychain{Home: home}
 			if key != nil {
 				if err := broker.StoreAppKey(app, key.id, key.pem, k); err != nil {
 					return err
@@ -474,20 +495,32 @@ func system() app {
 			}, out); err != nil {
 				return err
 			}
-			return tokens(home, nil).SaveUser(ctx, out)
+			return tokens(k, nil).SaveUser(ctx, out)
 		},
-		loginOpencode: func(provider, authFile string, out io.Writer) error {
-			return loginOpencode(provider, authFile, credential.Registration{}, out)
+		loginOpencode: func(k keys, provider, authFile string, out io.Writer) error {
+			return loginOpencode(k, provider, authFile, credential.Registration{}, out)
 		},
-		loginEnv: func(name string, out io.Writer) error { return loginEnv(name, credential.Registration{}, out) },
-		dated: func(kind credential.Kind, name, authFile string, reg credential.Registration, out io.Writer) error {
+		loginEnv: func(k keys, name string, out io.Writer) error {
+			return loginEnv(k, name, credential.Registration{}, out)
+		},
+		dated: func(k keys, kind credential.Kind, name, authFile string, reg credential.Registration, out io.Writer) error {
 			switch kind {
 			case credential.Claude:
-				return loginClaude(name, reg, out)
+				return loginClaude(k, name, reg, out)
 			case credential.Opencode:
-				return loginOpencode(name, authFile, reg, out)
+				return loginOpencode(k, name, authFile, reg, out)
 			}
-			return loginEnv(name, reg, out)
+			return loginEnv(k, name, reg, out)
+		},
+		retrust: func(k keys, out io.Writer) error {
+			if err := broker.CheckInstalled(); err != nil {
+				return err
+			}
+			return broker.Retrust(k, func() ([]byte, error) {
+				fmt.Fprint(os.Stderr, "Login keychain password, to make the broker's keychain items trust this broker (hidden): ")
+				defer fmt.Fprintln(os.Stderr)
+				return broker.ReadHidden()
+			}, os.Stderr, out)
 		},
 		installCodex: func(ctx context.Context, version string, update bool) (any, error) {
 			if err := broker.CheckInstalled(); err != nil {
@@ -495,15 +528,11 @@ func system() app {
 			}
 			return codex.New().Install(ctx, version, update)
 		},
-		loginCodex: func(ctx context.Context, out io.Writer) error {
-			home, err := accountHome()
-			if err != nil {
-				return err
-			}
+		loginCodex: func(ctx context.Context, k keys, out io.Writer) error {
 			if err := broker.CheckInstalled(); err != nil {
 				return err
 			}
-			return broker.NewCodex(home, func() ([]byte, error) {
+			return broker.NewCodex(k.Home, k, func() ([]byte, error) {
 				fmt.Fprint(os.Stderr, "Login keychain password, to make Codex trust only the broker (hidden): ")
 				defer fmt.Fprintln(os.Stderr)
 				return broker.ReadHidden()
@@ -512,12 +541,9 @@ func system() app {
 	}
 }
 
-// loginClaude is login claude: account's setup-token, registered with reg.
-func loginClaude(account string, reg credential.Registration, out io.Writer) error {
-	home, err := accountHome()
-	if err != nil {
-		return err
-	}
+// loginClaude is login claude: account's setup-token in k, registered with reg.
+func loginClaude(k keys, account string, reg credential.Registration, out io.Writer) error {
+	home := k.Home
 	if err := broker.CheckInstalled(); err != nil {
 		return err
 	}
@@ -527,16 +553,13 @@ func loginClaude(account string, reg credential.Registration, out io.Writer) err
 			fmt.Fprint(os.Stderr, "Login keychain password, to make Claude trust only the broker (hidden): ")
 			defer fmt.Fprintln(os.Stderr)
 			return hidden()
-		}, broker.SystemKeychain{Home: home}, os.Stderr, out)
+		}, k, os.Stderr, out)
 	})
 }
 
-// loginOpencode is login opencode: provider's API key, from authFile ("": the terminal), registered with reg.
-func loginOpencode(provider, authFile string, reg credential.Registration, out io.Writer) error {
-	home, err := accountHome()
-	if err != nil {
-		return err
-	}
+// loginOpencode is login opencode: provider's API key in k, from authFile ("": the terminal), registered with reg.
+func loginOpencode(k keys, provider, authFile string, reg credential.Registration, out io.Writer) error {
+	home := k.Home
 	if err := broker.CheckInstalled(); err != nil {
 		return err
 	}
@@ -552,16 +575,13 @@ func loginOpencode(provider, authFile string, reg credential.Registration, out i
 			fmt.Fprint(os.Stderr, "Login keychain password, to make the "+provider+" API key trust only the broker (hidden): ")
 			defer fmt.Fprintln(os.Stderr)
 			return broker.ReadHidden()
-		}, broker.SystemKeychain{Home: home}, out)
+		}, k, out)
 	})
 }
 
-// loginEnv is login env: name's value, registered with reg.
-func loginEnv(name string, reg credential.Registration, out io.Writer) error {
-	home, err := accountHome()
-	if err != nil {
-		return err
-	}
+// loginEnv is login env: name's value in k, registered with reg.
+func loginEnv(k keys, name string, reg credential.Registration, out io.Writer) error {
+	home := k.Home
 	if err := broker.CheckInstalled(); err != nil {
 		return err
 	}
@@ -571,6 +591,6 @@ func loginEnv(name string, reg credential.Registration, out io.Writer) error {
 			fmt.Fprint(os.Stderr, "Login keychain password, to make ensemble-broker-env/"+name+" trust only the broker (hidden): ")
 			defer fmt.Fprintln(os.Stderr)
 			return hidden()
-		}, broker.SystemKeychain{Home: home}, out)
+		}, k, out)
 	})
 }

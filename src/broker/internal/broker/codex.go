@@ -66,8 +66,9 @@ type Codex struct {
 	uid         func() int
 }
 
-func NewCodex(home string, password func() ([]byte, error)) Codex {
-	return Codex{native: codex.New(), keychain: SystemKeychain{Home: home}, grants: SystemKeychain{Home: home},
+// NewCodex is the Codex login of the account at home, its items in k.
+func NewCodex(home string, k SystemKeychain, password func() ([]byte, error)) Codex {
+	return Codex{native: codex.New(), keychain: k, grants: k,
 		grantsLock: FileLock(filepath.Join(home, ".ensemble/docker/codex-grants.lock")), password: password,
 		revisionDir: filepath.Join(home, ".ensemble/docker/codex-refresh"), tempRoot: "/private/tmp", now: time.Now, uid: os.Geteuid}
 }

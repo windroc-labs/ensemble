@@ -155,8 +155,8 @@ type Linear struct {
 	password func() ([]byte, error)
 }
 
-func NewLinear(home string, password func() ([]byte, error)) Linear {
-	k := SystemKeychain{Home: home}
+// NewLinear is Linear for the account at home, its items in k.
+func NewLinear(home string, k SystemKeychain, password func() ([]byte, error)) Linear {
 	return Linear{keys: k, host: linearHostEntries{home: home, run: runLinearSecurity, access: k.AppAccess},
 		http: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, now: time.Now, password: password,
 		lock: func(id string) func() (func(), error) {
