@@ -381,7 +381,8 @@ class IssueClaims(Base):
         fake = FakeLinear([issue("TASK-1", "Todo", "pm")])
         self.claim(fake)
         ((q, v),) = fake.mutations
-        self.assertNotIn("delegate", q + repr(v))
+        for field in ("assignee", "delegate"):
+            self.assertNotIn(field, q + repr(v))
         self.assertEqual(
             (fake.issues["TASK-1"]["state"], fake.issues["TASK-1"]["delegate"]),
             ("In Progress", who("pm")),
@@ -409,7 +410,7 @@ class IssueClaims(Base):
             (fake.issues["TASK-1"]["state"], "comments" in fake.issues["TASK-1"]), ("Todo", False)
         )
         flt = next(v["f"] for q, v in fake.queries if "issues(filter" in q)
-        self.assertNotIn("assignee", flt)
+        self.assertEqual({"assignee", "delegate"} & set(flt), set())
 
     def test_capped_todo_goes_to_review(self):
         self.write_config(HUMANS + CONFIG)
@@ -4282,8 +4283,12 @@ class ExplicitIssueRuns(TickBase):
             with self.subTest(ident=ident):
                 self.assertEqual(self.tick(fake, "--issue", ident), 2)
                 self.assertEqual(
-                    self.said()[-1],
-                    f"pick-none {ident} reason=not a Todo issue delegated to a role app",
+                    self.said(),
+                    [
+                        "claim-skip TASK-2 reason=no configured role delegate",
+                        "claim-skip TASK-3 reason=no configured role delegate",
+                        f"pick-none {ident} reason=not a Todo issue delegated to a role app",
+                    ],
                 )
                 self.assertEqual((self.start.launches, fake.mutations, self.state), ([], [], ""))
 
@@ -5554,7 +5559,7 @@ class ScheduledRuns(TickScenario):
         self.assertNotIn("TASK-1", [v["i"] for q, v in fake.queries if "history" in q])
         flts = [v["f"] for q, v in fake.queries if "issues(filter" in q]
         self.assertTrue(flts)
-        self.assertTrue(all("assignee" not in f for f in flts))
+        self.assertTrue(all({"assignee", "delegate"}.isdisjoint(f) for f in flts))
 
     def test_full_role_resume_not_launched(self):
         fake = self.fake(
