@@ -901,11 +901,13 @@ func TestReadEnvValue(t *testing.T) {
 			}
 		}
 	}
-	r := &keptReader{r: strings.NewReader(strings.Repeat("v", launcher.MaxSecretBytes+2))}
-	if _, err := readEnvValue(r); err == nil || err.Error() != "the value must be 1 to 16384 bytes" || !r.erased() {
-		t.Fatalf("over the limit: %v, erased %v", err, r.erased())
+	for _, n := range []int{launcher.MaxSecretBytes + 1, launcher.MaxSecretBytes + 2} {
+		r := &keptReader{r: strings.NewReader(strings.Repeat("v", n))}
+		if _, err := readEnvValue(r); err == nil || err.Error() != "the value must be 1 to 16384 bytes" || !r.erased() {
+			t.Fatalf("%d bytes: %v, erased %v", n, err, r.erased())
+		}
 	}
-	r = &keptReader{r: io.MultiReader(strings.NewReader("partial"), iotest.ErrReader(errors.New("closed")))}
+	r := &keptReader{r: io.MultiReader(strings.NewReader("partial"), iotest.ErrReader(errors.New("closed")))}
 	if _, err := readEnvValue(r); err == nil || err.Error() != "closed" || !r.erased() {
 		t.Fatalf("read error: %v, erased %v", err, r.erased())
 	}
