@@ -98,7 +98,9 @@ jobs:
           jq -e --arg key "${IMAGE#ensemble-worker:}" --arg version "$version" '
             .["ensemble.key"] == $key and .["ensemble.version"] == $version
             and (.["ensemble.agent-uid"] | test("^[1-9][0-9]*$"))
-            and (.["ensemble.agent-gid"] | test("^[1-9][0-9]*$"))' <<<"$labels"
+            and (.["ensemble.agent-gid"] | test("^[1-9][0-9]*$"))
+            and ([.["ensemble.claude-version"], .["ensemble.codex-version"], .["ensemble.opencode-version"]]
+              | all(test("^[0-9]+\\.[0-9]+\\.[0-9]+$")))' <<<"$labels"
       - name: Check image history holds no token
         if: ${{ steps.inputs.outputs.build != 'false' }}
         env:
@@ -114,7 +116,12 @@ jobs:
         env:
           IMAGE: ${{ steps.build.outputs.image }}
         run: |
-          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges "$IMAGE" sh -euc '
+          label() { docker image inspect "$IMAGE" --format "{{index .Config.Labels \"ensemble.$1-version\"}}"; }
+          claude=$(label claude)
+          codex=$(label codex)
+          opencode=$(label opencode)
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+            --env CLAUDE_VERSION="$claude" --env CODEX_VERSION="$codex" --env OPENCODE_VERSION="$opencode" "$IMAGE" sh -euc '
             uid=$(id -u)
             echo "uid $uid"
             test "$uid" != 0
@@ -130,10 +137,12 @@ jobs:
             python3 --version
             uv --version
             node --version
-            claude --version
-            codex --version
+            test "$(command -v claude)" = /opt/ensemble/bin/claude
+            test "$(claude --version | cut -d " " -f 1)" = "$CLAUDE_VERSION"
+            test "$(command -v codex)" = /opt/ensemble/bin/codex
+            test "$(codex --version)" = "codex-cli $CODEX_VERSION"
             test "$(command -v opencode)" = /opt/ensemble/bin/opencode
-            test "$(opencode --version)" = 1.19.3
+            test "$(opencode --version)" = "$OPENCODE_VERSION"
             client=/opt/ensemble/src/ensemble/session/clients/opencode
             test -r "$client/launcher.py"
             test -r "$client/plugin.js"
@@ -216,6 +225,7 @@ jobs:
               *) echo "CLAUDE_CODE_PLUGIN_DIRS=$CLAUDE_CODE_PLUGIN_DIRS"; exit 1 ;;
             esac
             grep -q "\"dummy-plugin\"" /opt/windroc/plugins/dummy-plugin/.claude-plugin/plugin.json
+            test "$(command -v claude)" = /opt/ensemble/bin/claude
             claude --version'
       - name: Check base image failures name their cause
         if: ${{ steps.inputs.outputs.build != 'false' }}

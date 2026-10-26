@@ -12,6 +12,7 @@ import (
 	"ensemble/broker/internal/codex"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/protocol"
+	"ensemble/broker/internal/releases"
 )
 
 // Credentials is the broker package's side of start: each Claude account's setup-token, which the launcher never sees.
@@ -71,6 +72,7 @@ type Host struct {
 	Env      EnvSecrets
 	GitHub   Tokens
 	Versions CodexVersions
+	Releases Releases                          // nil: a build that must rebuild fails
 	Progress io.Writer                         // nil: none; build's notes on older images, after Docker's progress; start's phase times
 	Lock     func() (unlock func(), err error) // the image lock: build's lease and inspect, and prune
 	Audit    *audit.Recorder                   // nil: none; start, refresh and close name their container and add the client credential
@@ -90,6 +92,7 @@ func NewHost(home, endpoint string, d docker.Runner, creds Credentials, tokens T
 		Safe:     realSafe,
 		Docker:   d,
 		Versions: codex.New(),
+		Releases: releases.New(),
 	}
 }
 

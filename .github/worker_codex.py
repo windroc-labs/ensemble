@@ -12,7 +12,6 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-DOCKERFILE = Path(__file__).resolve().parents[1] / "src/broker/internal/launcher/assets/Dockerfile"
 PYTHON = "/opt/ensemble/venv/bin/python"
 BOOTSTRAP = "/opt/ensemble/lib/bootstrap.py"
 PROBES = Path(__file__).with_suffix("")
@@ -105,12 +104,11 @@ def main(image):
         sys.exit("worker_codex.py runs only in GitHub CI")
     if not re.fullmatch(r"ensemble-worker:[0-9a-f]{64}", image):
         sys.exit("expected a broker-built worker image tag")
-    [pinned] = re.findall(r"@openai/codex@(\S+)", DOCKERFILE.read_text(encoding="utf-8"))
-    version = f"codex-cli {pinned}".encode()
     inspected = json.loads(docker("image", "inspect", image))[0]
     print(f"Worker image size: {inspected['Size']} bytes")
     single_installation(image)
     labels = inspected["Config"]["Labels"]
+    version = f"codex-cli {labels['ensemble.codex-version']}".encode()
     owner = f",mode=0700,uid={labels['ensemble.agent-uid']},gid={labels['ensemble.agent-gid']}"
     with tempfile.TemporaryDirectory(
         dir=os.environ["RUNNER_TEMP"], prefix="codex-state-"

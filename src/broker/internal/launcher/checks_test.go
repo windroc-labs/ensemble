@@ -75,7 +75,7 @@ func TestBaseCheckScript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tools := []string{"apt-get", "dpkg", "node", "npm", "tmux", "git", "claude"}
+	tools := []string{"apt-get", "dpkg", "node", "npm", "tmux", "git"}
 	// id answers -u agent and -g agent with STUB_UID and STUB_GID, failing when STUB_UID is empty (no user agent).
 	id := "#!/bin/sh\n[ -n \"$STUB_UID\" ] || exit 1\ncase $1 in -u) echo \"$STUB_UID\" ;; -g) echo \"$STUB_GID\" ;; esac\n"
 	check := func(t *testing.T, mode string, present []string, uid, gid string) string {
@@ -121,9 +121,9 @@ func TestBaseCheckScript(t *testing.T) {
 		want    string
 	}{
 		"all":       {tools, ""},
-		"no tmux":   {[]string{"apt-get", "dpkg", "node", "npm", "git", "claude"}, "missing tmux\n"},
-		"two short": {[]string{"apt-get", "node", "npm", "tmux", "git"}, "missing dpkg\nmissing claude\n"},
-		"none":      {nil, "missing apt-get\nmissing dpkg\nmissing node\nmissing npm\nmissing tmux\nmissing git\nmissing claude\n"},
+		"no tmux":   {[]string{"apt-get", "dpkg", "node", "npm", "git"}, "missing tmux\n"},
+		"two short": {[]string{"apt-get", "node", "npm", "tmux"}, "missing dpkg\nmissing git\n"},
+		"none":      {nil, "missing apt-get\nmissing dpkg\nmissing node\nmissing npm\nmissing tmux\nmissing git\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := check(t, "tools", tc.present, "", ""); got != tc.want {

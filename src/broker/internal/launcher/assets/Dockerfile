@@ -27,10 +27,21 @@ COPY plugin-sources.json /opt/ensemble/plugin-sources.json
 COPY .claude-plugin/plugin.json /opt/ensemble/version.json
 COPY bootstrap.py codex-probe.py opencode-install.py plugin-install.py hook-stub with-secrets workspace-check gh git-credential-ensemble /opt/ensemble/lib/
 COPY claude.json /opt/ensemble/templates/.claude.json
-RUN npm install --global --ignore-scripts --prefix /opt/ensemble/clients @openai/codex@0.163.0 \
-    && python3 -I /opt/ensemble/lib/opencode-install.py "$(dpkg --print-architecture)" /opt/ensemble/clients \
-    && PATH=/opt/ensemble/clients/bin:/home/agent/.npm-global/bin:/usr/local/bin:/usr/bin:/bin python3 -I /opt/ensemble/lib/plugin-install.py /opt/ensemble/plugin-sources.json /opt/ensemble \
-    && python3 -I /opt/ensemble/lib/codex-probe.py /opt/ensemble/clients/bin/codex 0.163.0
+ARG CLAUDE_VERSION
+ARG CODEX_VERSION
+ARG OPENCODE_VERSION
+# Of every package's install script, only Claude Code's own runs: it links its platform binary from its optional
+# dependency. Each client's version check runs in a scratch HOME.
+RUN test -n "${CLAUDE_VERSION}" && test -n "${CODEX_VERSION}" && test -n "${OPENCODE_VERSION}" \
+    && npm install --global --ignore-scripts --registry=https://registry.npmjs.org --prefix /opt/ensemble/clients @anthropic-ai/claude-code@${CLAUDE_VERSION} @openai/codex@${CODEX_VERSION} \
+    && npm rebuild --global --prefix /opt/ensemble/clients --ignore-scripts=false @anthropic-ai/claude-code \
+    && python3 -I /opt/ensemble/lib/opencode-install.py "$(dpkg --print-architecture)" /opt/ensemble/clients "${OPENCODE_VERSION}" \
+    && check=$(mktemp -d) \
+    && test "$(HOME="$check" /opt/ensemble/clients/bin/claude --version | cut -d ' ' -f 1)" = "${CLAUDE_VERSION}" \
+    && test "$(HOME="$check" /opt/ensemble/clients/bin/opencode --version)" = "${OPENCODE_VERSION}" \
+    && rm -rf "$check" \
+    && python3 -I /opt/ensemble/lib/codex-probe.py /opt/ensemble/clients/bin/codex "${CODEX_VERSION}" \
+    && PATH=/opt/ensemble/clients/bin:/home/agent/.npm-global/bin:/usr/local/bin:/usr/bin:/bin python3 -I /opt/ensemble/lib/plugin-install.py /opt/ensemble/plugin-sources.json /opt/ensemble
 # python3 on the agent's PATH is this venv's, importing ensemble; system site keeps pip --user working.
 RUN python3 -m venv --system-site-packages /opt/ensemble/venv && mkdir -p /opt/ensemble/bin \
     && printf '%s\n' /opt/ensemble/src > "$(/opt/ensemble/venv/bin/python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/ensemble.pth" \
@@ -39,6 +50,7 @@ RUN python3 -m venv --system-site-packages /opt/ensemble/venv && mkdir -p /opt/e
     && printf '%s\n' '#!/bin/sh' 'export PYTHONPATH=/opt/ensemble/src' 'exec /opt/ensemble/venv/bin/python -P -m ensemble.session.cli "$@"' > /opt/ensemble/bin/ensemble-session \
     && printf '%s\n' '#!/bin/sh' 'exec /opt/ensemble/venv/bin/python -I /opt/ensemble/src/ensemble/session/hosts/docker/relay.py "$@"' > /opt/ensemble/bin/relay \
     && ln -s /opt/ensemble/lib/with-secrets /opt/ensemble/bin/with-secrets \
+    && ln -s /opt/ensemble/clients/bin/claude /opt/ensemble/bin/claude \
     && ln -s /opt/ensemble/clients/bin/codex /opt/ensemble/bin/codex \
     && ln -s /opt/ensemble/clients/bin/opencode /opt/ensemble/bin/opencode \
     && ln -s /opt/ensemble/lib/gh /opt/ensemble/bin/gh \
@@ -54,6 +66,7 @@ RUN python3 -m venv --system-site-packages /opt/ensemble/venv && mkdir -p /opt/e
     && install -d -o agent -g agent -m 0700 /run/ensemble /run/ensemble/relay-queue
 ARG ENSEMBLE_VERSION
 LABEL ensemble.version=${ENSEMBLE_VERSION} ensemble.agent-uid=${AGENT_UID} ensemble.agent-gid=${AGENT_GID}
+LABEL ensemble.claude-version=${CLAUDE_VERSION} ensemble.codex-version=${CODEX_VERSION} ensemble.opencode-version=${OPENCODE_VERSION}
 ENV PATH=/opt/ensemble/bin:/home/agent/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
 # Claude Code loads each plugin here as <name>@inline, keeping its /<name>: commands.
 ARG ENSEMBLE_PLUGIN_DIRS

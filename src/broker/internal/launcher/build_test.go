@@ -120,10 +120,30 @@ type buildEnv struct {
 	held            [][]string
 	locks, lockFail int
 	locked          bool
+	releases        *fakeReleases
 }
 
+// fakeReleases answers Latest from latest, failing with err; it records each package asked.
+type fakeReleases struct {
+	latest map[string]string
+	err    error
+	asked  []string
+}
+
+func (f *fakeReleases) Latest(_ context.Context, pkg string) (string, error) {
+	f.asked = append(f.asked, pkg)
+	return f.latest[pkg], f.err
+}
+
+func newReleases() *fakeReleases {
+	return &fakeReleases{latest: map[string]string{"@anthropic-ai/claude-code": "2.1.7", "@openai/codex": "0.170.0", "opencode-ai": "1.20.1"}}
+}
+
+// clientArgs maps the ensemble layer's client build args to the labels its Dockerfile sets.
+var clientArgs = map[string]string{"CLAUDE_VERSION": "ensemble.claude-version", "CODEX_VERSION": "ensemble.codex-version", "OPENCODE_VERSION": "ensemble.opencode-version"}
+
 func newBuildEnv(t *testing.T) *buildEnv {
-	e := &buildEnv{home: t.TempDir(), pkg: t.TempDir(), built: map[string]map[string]string{}, probe: "1001\n1002\n", baseAgent: "agent 1000 1000\n"}
+	e := &buildEnv{home: t.TempDir(), pkg: t.TempDir(), built: map[string]map[string]string{}, probe: "1001\n1002\n", baseAgent: "agent 1000 1000\n", releases: newReleases()}
 	putFile(t, filepath.Join(e.home, ".ensemble/docker/worker/Dockerfile"), "FROM base")
 	putFile(t, filepath.Join(e.pkg, ".claude-plugin/plugin.json"), `{"version":"1.2.3"}`)
 	putFile(t, filepath.Join(e.pkg, "src/ensemble/session/sample.py"), "session")
@@ -151,6 +171,9 @@ func newBuildEnv(t *testing.T) *buildEnv {
 						labels["ensemble.agent-uid"] = v
 					case "AGENT_GID":
 						labels["ensemble.agent-gid"] = v
+					}
+					if label, ok := clientArgs[k]; ok {
+						labels[label] = v
 					}
 				}
 			}
@@ -202,7 +225,7 @@ func newBuildEnv(t *testing.T) *buildEnv {
 }
 
 func (e *buildEnv) host() Host {
-	return Host{Home: e.home, Docker: e.fake, Progress: &e.progress, Lock: e.lock}
+	return Host{Home: e.home, Docker: e.fake, Progress: &e.progress, Lock: e.lock, Releases: e.releases}
 }
 
 // lock is a non-reentrant image lock: taking it while held fails, as a second process would wait.
@@ -245,7 +268,8 @@ func TestBuildCacheAndStages(t *testing.T) {
 		t.Fatalf("%q", probe)
 	}
 	stage2 := e.fake.calls[3]
-	want := []string{"build", "--progress=plain", "--no-cache", "--build-arg", "USER_IMAGE=ensemble-user:" + e.key, "--build-arg", "ENSEMBLE_VERSION=1.2.3", "--build-arg", "AGENT_UID=1001", "--build-arg", "AGENT_GID=1002", "--build-arg", "ENSEMBLE_PLUGIN_DIRS=", "--label", "ensemble.key=" + e.key, "--tag", "ensemble-worker:" + e.key}
+	want := []string{"build", "--progress=plain", "--no-cache", "--build-arg", "USER_IMAGE=ensemble-user:" + e.key, "--build-arg", "ENSEMBLE_VERSION=1.2.3", "--build-arg", "AGENT_UID=1001", "--build-arg", "AGENT_GID=1002", "--build-arg", "ENSEMBLE_PLUGIN_DIRS=",
+		"--build-arg", "CLAUDE_VERSION=2.1.7", "--build-arg", "CODEX_VERSION=0.170.0", "--build-arg", "OPENCODE_VERSION=1.20.1", "--label", "ensemble.key=" + e.key, "--tag", "ensemble-worker:" + e.key}
 	if !slices.Equal(stage2[:len(want)], want) || len(stage2) != len(want)+1 {
 		t.Fatalf("%q", stage2)
 	}
@@ -322,6 +346,21 @@ func TestBuildFailures(t *testing.T) {
 		}
 		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); code(err) != protocol.BuildFailed {
 			t.Fatal(err)
+		}
+	})
+	t.Run("client label mismatch", func(t *testing.T) {
+		e := newBuildEnv(t)
+		inner := e.fake.respond
+		e.fake.respond = func(args []string) ([]byte, error) {
+			out, err := inner(args)
+			if args[0] == "build" && slices.Contains(args, "--build-arg") {
+				e.built["ensemble-worker:"+e.key]["ensemble.codex-version"] = "0.169.0"
+			}
+			return out, err
+		}
+		_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+		if message, _ := buildFailure(t, err); message != "Built image labels do not match the package." {
+			t.Fatal(message)
 		}
 	})
 	t.Run("unreachable", func(t *testing.T) {
@@ -873,19 +912,20 @@ func TestBaseImageRequirements(t *testing.T) {
 		toolsUser             string // the tools run's --user; "": no tools run
 		err                   error
 	}{
-		"tools":         {agent: "agent 1000 1000\n", tools: "missing tmux\nmissing claude\n", toolsUser: "1000:1000", message: lacks("tmux, claude (Claude Code)")},
-		"agent":         {agent: "missing agent\n", toolsUser: "65534:65534", message: lacks("a non-root user agent")},
-		"any order":     {agent: "missing agent\n", tools: "missing git\nmissing apt-get\n", toolsUser: "65534:65534", message: lacks("apt-get, git, a non-root user agent")},
-		"all":           {agent: "missing agent\n", tools: "missing apt-get\nmissing dpkg\nmissing node\nmissing npm\nmissing tmux\nmissing git\nmissing claude\n", toolsUser: "65534:65534", message: lacks("apt-get, dpkg, node, npm, tmux, git, claude (Claude Code), a non-root user agent")},
-		"root ids":      {agent: "agent 0 0\n", message: unexpected},
-		"short ids":     {agent: "agent 1000\n", message: unexpected},
-		"no agent line": {agent: "", message: unexpected},
-		"two lines":     {agent: "missing agent\nagent 1 1\n", message: unexpected},
-		"unknown tool":  {agent: "agent 1 2\n", tools: "missing python3\n", toolsUser: "1:2", message: unexpected},
-		"agent as tool": {agent: "agent 1 2\n", tools: "missing agent\n", toolsUser: "1:2", message: unexpected},
-		"repeated":      {agent: "agent 1 2\n", tools: "missing git\nmissing git\n", toolsUser: "1:2", message: unexpected},
-		"garbage":       {agent: "agent 1 2\n", tools: "tmux\n", toolsUser: "1:2", message: unexpected},
-		"docker failed": {err: &docker.CommandError{Exit: 127, Stderr: "exec: \"/bin/sh\": stat /bin/sh: no such file"}, message: "Checking base image dummy-env:test failed."},
+		"tools":          {agent: "agent 1000 1000\n", tools: "missing tmux\nmissing npm\n", toolsUser: "1000:1000", message: lacks("npm, tmux")},
+		"agent":          {agent: "missing agent\n", toolsUser: "65534:65534", message: lacks("a non-root user agent")},
+		"any order":      {agent: "missing agent\n", tools: "missing git\nmissing apt-get\n", toolsUser: "65534:65534", message: lacks("apt-get, git, a non-root user agent")},
+		"all":            {agent: "missing agent\n", tools: "missing apt-get\nmissing dpkg\nmissing node\nmissing npm\nmissing tmux\nmissing git\n", toolsUser: "65534:65534", message: lacks("apt-get, dpkg, node, npm, tmux, git, a non-root user agent")},
+		"no claude need": {agent: "agent 1 2\n", tools: "missing claude\n", toolsUser: "1:2", message: unexpected},
+		"root ids":       {agent: "agent 0 0\n", message: unexpected},
+		"short ids":      {agent: "agent 1000\n", message: unexpected},
+		"no agent line":  {agent: "", message: unexpected},
+		"two lines":      {agent: "missing agent\nagent 1 1\n", message: unexpected},
+		"unknown tool":   {agent: "agent 1 2\n", tools: "missing python3\n", toolsUser: "1:2", message: unexpected},
+		"agent as tool":  {agent: "agent 1 2\n", tools: "missing agent\n", toolsUser: "1:2", message: unexpected},
+		"repeated":       {agent: "agent 1 2\n", tools: "missing git\nmissing git\n", toolsUser: "1:2", message: unexpected},
+		"garbage":        {agent: "agent 1 2\n", tools: "tmux\n", toolsUser: "1:2", message: unexpected},
+		"docker failed":  {err: &docker.CommandError{Exit: 127, Stderr: "exec: \"/bin/sh\": stat /bin/sh: no such file"}, message: "Checking base image dummy-env:test failed."},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := newBaseEnv(t)
@@ -984,5 +1024,128 @@ func TestBaseImageKeyFollowsItsID(t *testing.T) {
 	putFile(t, filepath.Join(e.home, ".ensemble/docker/worker/Dockerfile"), "FROM base")
 	if defaultPath, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); err != nil || defaultPath.Image == first.Image {
 		t.Fatalf("%+v %v", defaultPath, err)
+	}
+}
+
+func TestBuildReusesCurrentImageWithoutLookup(t *testing.T) {
+	e := newBuildEnv(t)
+	first, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.releases = &fakeReleases{err: errors.New("no lookup expected")}
+	calls := len(e.fake.calls)
+	for _, maxAge := range []time.Duration{-1, 7 * 24 * time.Hour} {
+		got, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, maxAge)
+		if err != nil || got != (BuildResult{Image: first.Image, Digest: first.Digest}) {
+			t.Fatalf("%+v %v", got, err)
+		}
+	}
+	if e.releases.asked != nil || len(e.fake.calls) != calls+2 {
+		t.Fatalf("%q %q", e.releases.asked, e.fake.verbs()[calls:])
+	}
+}
+
+func TestFirstBuildLooksUpLatest(t *testing.T) {
+	e := newBuildEnv(t)
+	result, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+	if err != nil || !result.Rebuilt {
+		t.Fatalf("%+v %v", result, err)
+	}
+	if want := []string{"@anthropic-ai/claude-code", "@openai/codex", "opencode-ai"}; !slices.Equal(e.releases.asked, want) {
+		t.Fatalf("%q", e.releases.asked)
+	}
+	layer := packageBuild(e.fake.calls)
+	for _, arg := range []string{"CLAUDE_VERSION=2.1.7", "CODEX_VERSION=0.170.0", "OPENCODE_VERSION=1.20.1"} {
+		if i := slices.Index(layer, arg); i < 1 || layer[i-1] != "--build-arg" {
+			t.Fatalf("%s absent: %q", arg, layer)
+		}
+	}
+	t.Run("a lookup failure fails it", func(t *testing.T) {
+		e := newBuildEnv(t)
+		e.releases.err = errors.New("opencode-ai registry unavailable")
+		_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+		if message, cause := buildFailure(t, err); message != "Cannot look up the latest client releases; check the network and retry." || cause != "" {
+			t.Fatalf("%q %q", message, cause)
+		}
+		if slices.ContainsFunc(e.fake.calls, func(c []string) bool { return c[0] == "build" }) {
+			t.Fatalf("built without versions: %q", e.fake.verbs())
+		}
+	})
+	t.Run("a release below its minimum fails it", func(t *testing.T) {
+		e := newBuildEnv(t)
+		e.releases.latest["@anthropic-ai/claude-code"] = "2.0.9"
+		_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+		if message, _ := buildFailure(t, err); message != "Cannot look up the latest client releases; check the network and retry." {
+			t.Fatal(message)
+		}
+	})
+}
+
+func TestBuildRebuildsAnImageWithoutClientLabels(t *testing.T) {
+	e := newBuildEnv(t)
+	first, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range clientArgs {
+		delete(e.built[first.Image], label)
+	}
+	e.releases.asked = nil
+	again, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+	if err != nil || !again.Rebuilt || len(e.releases.asked) != 3 {
+		t.Fatalf("%+v %v %q", again, err, e.releases.asked)
+	}
+}
+
+func TestRefreshKeepsImageWhenLookupFails(t *testing.T) {
+	e := newBuildEnv(t)
+	first, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.age, e.releases.err = 8*24*time.Hour, errors.New("@openai/codex registry unavailable")
+	e.progress.Reset()
+	calls := len(e.fake.calls)
+	got, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, 7*24*time.Hour)
+	if err != nil || got != (BuildResult{Image: first.Image, Digest: first.Digest}) {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if want := "ensemble-broker: kept " + first.Image + ": refreshing it failed: @openai/codex registry unavailable\n"; e.progress.String() != want {
+		t.Fatalf("%q", e.progress.String())
+	}
+	if got := e.fake.verbs()[calls:]; !slices.Equal(got, []string{"image inspect"}) {
+		t.Fatalf("%q", got)
+	}
+	_, err = e.host().Build(context.Background(), e.pkg, BuildSpec{}, 0)
+	if message, _ := buildFailure(t, err); message != "Cannot look up the latest client releases; check the network and retry." {
+		t.Fatal(message)
+	}
+}
+
+func TestWorkerImageInstallsClientsAtBuildArgVersions(t *testing.T) {
+	data, err := assets.ReadFile("assets/Dockerfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"ARG CLAUDE_VERSION\n", "ARG CODEX_VERSION\n", "ARG OPENCODE_VERSION\n",
+		`test -n "${CLAUDE_VERSION}" && test -n "${CODEX_VERSION}" && test -n "${OPENCODE_VERSION}"`,
+		"npm install --global --ignore-scripts --registry=https://registry.npmjs.org --prefix /opt/ensemble/clients @anthropic-ai/claude-code@${CLAUDE_VERSION} @openai/codex@${CODEX_VERSION} \\\n",
+		"npm rebuild --global --prefix /opt/ensemble/clients --ignore-scripts=false @anthropic-ai/claude-code \\\n",
+		`python3 -I /opt/ensemble/lib/opencode-install.py "$(dpkg --print-architecture)" /opt/ensemble/clients "${OPENCODE_VERSION}"`,
+		`/opt/ensemble/clients/bin/claude --version | cut -d ' ' -f 1)" = "${CLAUDE_VERSION}"`,
+		`python3 -I /opt/ensemble/lib/codex-probe.py /opt/ensemble/clients/bin/codex "${CODEX_VERSION}"`,
+		`/opt/ensemble/clients/bin/opencode --version)" = "${OPENCODE_VERSION}"`,
+		"ln -s /opt/ensemble/clients/bin/claude /opt/ensemble/bin/claude",
+		"LABEL ensemble.claude-version=${CLAUDE_VERSION} ensemble.codex-version=${CODEX_VERSION} ensemble.opencode-version=${OPENCODE_VERSION}\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("Dockerfile lacks %q", want)
+		}
+	}
+	if strings.Count(text, "npm install") != 1 || strings.Contains(text, "@0.163.0") {
+		t.Error("Dockerfile installs a client another way")
 	}
 }

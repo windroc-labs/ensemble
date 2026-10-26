@@ -43,7 +43,7 @@ func ValidBaseImage(s string) bool {
 }
 
 // baseRequirements are what the base check reports missing, in its order; agent is its non-root user agent.
-var baseRequirements = []string{"apt-get", "dpkg", "node", "npm", "tmux", "git", "claude", "agent"}
+var baseRequirements = []string{"apt-get", "dpkg", "node", "npm", "tmux", "git", "agent"}
 
 // BuildSpec is what a build adds to the ensemble package.
 type BuildSpec struct {
@@ -275,9 +275,9 @@ func (h Host) prepare(ctx context.Context, pkg string, spec BuildSpec, tmp strin
 	return prepared{key: key, version: version, dirs: dirs, baseID: base.ID, spec: spec}, nil
 }
 
-// Build produces ensemble-worker:<key> in two stages; an image with this key and version built less than maxAge ago
-// is reused (maxAge < 0: of any age; 0: never). Both stages rebuild without cache to refresh clients and plugins.
-// spec's plugins are part of the key.
+// Build produces ensemble-worker:<key> in two stages; an image with this key, version and client versions built less
+// than maxAge ago is reused (maxAge < 0: of any age; 0: never). A rebuild installs each client's latest release; both
+// stages rebuild without cache to refresh plugins. spec's plugins are part of the key.
 func (h Host) Build(ctx context.Context, pkg string, spec BuildSpec, maxAge time.Duration) (BuildResult, error) {
 	tmp, err := docker.TempDir(h.Home, "ensemble-build-")
 	if err != nil {
@@ -294,20 +294,32 @@ func (h Host) Build(ctx context.Context, pkg string, spec BuildSpec, maxAge time
 	if err != nil {
 		return BuildResult{}, err
 	}
-	current := found && info.Config.Labels["ensemble.key"] == key && info.Config.Labels["ensemble.version"] == version
+	_, labelled := imageClients(info.Config.Labels)
+	current := found && info.Config.Labels["ensemble.key"] == key && info.Config.Labels["ensemble.version"] == version && labelled
 	if current && (maxAge < 0 || (maxAge > 0 && time.Since(info.Created) < maxAge)) {
 		return BuildResult{Image: image, Digest: info.ID}, nil
 	}
-	result, err := h.rebuild(ctx, tmp, key, version, dirs, spec, p.baseID)
+	// An age-only refresh that fails (e.g. offline) keeps the usable image.
+	keep := current && maxAge > 0
+	kept := func(why string) (BuildResult, error) {
+		h.note("kept " + image + ": refreshing it failed: " + why)
+		return BuildResult{Image: image, Digest: info.ID}, nil
+	}
+	latest, err := h.latestClients(ctx)
+	if err != nil {
+		if keep {
+			return kept(err.Error())
+		}
+		return BuildResult{}, protocol.New(protocol.BuildFailed, "Cannot look up the latest client releases; check the network and retry.")
+	}
+	result, err := h.rebuild(ctx, tmp, key, version, dirs, spec, p.baseID, latest)
 	var e *protocol.Error
-	if current && maxAge > 0 && errors.As(err, &e) && e.Code == protocol.BuildFailed {
-		// An age-only refresh that fails (e.g. offline) keeps the usable image.
+	if keep && errors.As(err, &e) && e.Code == protocol.BuildFailed {
 		why := e.Message
 		if e.Cause != "" {
 			why += " (" + e.Cause + ")"
 		}
-		h.note("kept " + image + ": refreshing it failed: " + why)
-		return BuildResult{Image: image, Digest: info.ID}, nil
+		return kept(why)
 	}
 	return result, err
 }
@@ -361,8 +373,9 @@ func (h Host) leased(key string) bool {
 	return err == nil && time.Since(info.ModTime()) < imageLease
 }
 
-// rebuild builds both stages of key's images from the context in tmp, stage 1 being baseID's image when set.
-func (h Host) rebuild(ctx context.Context, tmp, key, version, plugins string, spec BuildSpec, baseID string) (BuildResult, error) {
+// rebuild builds both stages of key's images from the context in tmp, stage 1 being baseID's image when set, the
+// ensemble layer installing the clients at v.
+func (h Host) rebuild(ctx context.Context, tmp, key, version, plugins string, spec BuildSpec, baseID string, v ClientVersions) (BuildResult, error) {
 	image, userImage := "ensemble-worker:"+key, "ensemble-user:"+key
 	var uid, gid string
 	var err error
@@ -383,7 +396,8 @@ func (h Host) rebuild(ctx context.Context, tmp, key, version, plugins string, sp
 		return BuildResult{}, leaseFailed()
 	}
 	args := []string{"build", "--progress=plain", "--no-cache", "--build-arg", "USER_IMAGE=" + userImage, "--build-arg", "ENSEMBLE_VERSION=" + version,
-		"--build-arg", "AGENT_UID=" + uid, "--build-arg", "AGENT_GID=" + gid, "--build-arg", "ENSEMBLE_PLUGIN_DIRS=" + plugins, "--label", "ensemble.key=" + key, "--tag", image, filepath.Join(tmp, "package")}
+		"--build-arg", "AGENT_UID=" + uid, "--build-arg", "AGENT_GID=" + gid, "--build-arg", "ENSEMBLE_PLUGIN_DIRS=" + plugins,
+		"--build-arg", "CLAUDE_VERSION=" + v.Claude, "--build-arg", "CODEX_VERSION=" + v.Codex, "--build-arg", "OPENCODE_VERSION=" + v.Opencode, "--label", "ensemble.key=" + key, "--tag", image, filepath.Join(tmp, "package")}
 	if _, err := h.Docker.Run(ctx, args, nil); err != nil {
 		return BuildResult{}, diagnosed(err, protocol.BuildFailed, "Building the ensemble image stage failed.")
 	}
@@ -392,7 +406,9 @@ func (h Host) rebuild(ctx context.Context, tmp, key, version, plugins string, sp
 		return BuildResult{}, failure(err, protocol.BuildFailed, "Cannot inspect the built image.")
 	}
 	labels := info.Config.Labels
-	if !found || labels["ensemble.key"] != key || labels["ensemble.version"] != version || labels["ensemble.agent-uid"] != uid || labels["ensemble.agent-gid"] != gid {
+	clients, _ := imageClients(labels)
+	if !found || labels["ensemble.key"] != key || labels["ensemble.version"] != version || labels["ensemble.agent-uid"] != uid || labels["ensemble.agent-gid"] != gid ||
+		clients.differs(v) {
 		return BuildResult{}, protocol.New(protocol.BuildFailed, "Built image labels do not match the package.")
 	}
 	if err := h.lease(key); err != nil {
@@ -491,8 +507,6 @@ func (h Host) useBase(ctx context.Context, ref, baseID, userImage string) (strin
 		for _, item := range baseRequirements {
 			switch {
 			case !missing[item]:
-			case item == "claude":
-				lacks = append(lacks, "claude (Claude Code)")
 			case item == "agent":
 				lacks = append(lacks, "a non-root user agent")
 			default:

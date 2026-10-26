@@ -7,7 +7,7 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-// opencodeMinVersion is the lowest image OpenCode an opencode start accepts; the image pins it (assets/opencode-install.py).
+// opencodeMinVersion is the lowest OpenCode a build installs and an opencode start accepts in the image.
 const opencodeMinVersion = "1.19.3"
 
 type CodexVersions interface {

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -406,16 +405,5 @@ func TestCheckOpencode(t *testing.T) {
 		if err != nil && code(t, err) != protocol.StartFailed {
 			t.Errorf("%q: %v", version, err)
 		}
-	}
-}
-
-func TestPinnedOpencodeMeetsMinimum(t *testing.T) {
-	script, err := assets.ReadFile("assets/opencode-install.py")
-	if err != nil {
-		t.Fatal(err)
-	}
-	pinned := regexp.MustCompile(`(?m)^VERSION = "([^"]+)"$`).FindSubmatch(script)
-	if pinned == nil || string(pinned[1]) != opencodeMinVersion {
-		t.Fatalf("pinned %q, minimum %s", pinned, opencodeMinVersion)
 	}
 }

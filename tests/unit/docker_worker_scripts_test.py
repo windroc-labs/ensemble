@@ -1,14 +1,18 @@
+import base64
 import errno
 import hashlib
 import http.client
 import io
 import json
 import os
+import re
 import runpy
 import shutil
 import stat
 import tarfile
 import tempfile
+import urllib.request
+import urllib.response
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -663,7 +667,6 @@ class CodexCIReload(Case):
             documents[0]["tokens"]["access_token"], documents[1]["tokens"]["access_token"]
         )
         self.assertEqual(documents[0]["last_refresh"], documents[1]["last_refresh"])
-        self.assertIn("0.163.0", (ASSETS / "Dockerfile").read_text())
 
     def test_reload_natural_auth_adopts_replacement_after_cached_near_expiry_value(self):
         code = self.reload_code()
@@ -700,7 +703,7 @@ class CodexCIReload(Case):
 
     def test_ci_entrypoint_injects_managed_values_and_runs_reload_with_network_disabled(self):
         calls, active = [], {}
-        version = b"codex-cli 0.163.0"
+        version = b"codex-cli 0.170.0"
 
         def docker(*args, data=None):
             calls.append((args, data))
@@ -714,6 +717,7 @@ class CodexCIReload(Case):
                                 "Labels": {
                                     "ensemble.agent-uid": "1000",
                                     "ensemble.agent-gid": "1000",
+                                    "ensemble.codex-version": "0.170.0",
                                 }
                             },
                         }
@@ -1130,10 +1134,10 @@ class DefaultDockerfile(Case):
             "rm -rf /etc/sudoers.d",
             "USER agent",
             "NPM_CONFIG_PREFIX=/home/agent/.npm-global",
-            "npm install -g @anthropic-ai/claude-code\n",
         ):
             self.assertIn(needle, text)
         self.assertNotIn("SHASUMS256", text)
+        self.assertNotIn("@anthropic-ai/claude-code", text)
         self.assertNotIn("@openai/codex", text)
 
 
@@ -1147,15 +1151,25 @@ def tarball(files):
     return buffer.getvalue()
 
 
+VERSION = "1.19.3"
+
+
+def metadata(package, data, **fields):
+    """package@VERSION's registry metadata, its integrity data's sha512; fields replace its keys."""
+    integrity = "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode()
+    return json.dumps(
+        {"name": package, "version": VERSION, "dist": {"integrity": integrity}, **fields}
+    ).encode()
+
+
 class OpencodeInstall(Case):
     def setUp(self):
         self.ns = script("opencode-install.py")
-        version = self.ns["VERSION"]
         self.tarballs = {
             "opencode-ai": tarball(
                 {
                     "package/package.json": json.dumps(
-                        {"name": "opencode-ai", "version": version}
+                        {"name": "opencode-ai", "version": VERSION}
                     ).encode(),
                     "package/LICENSE": b"MIT",
                     "package/bin/opencode.exe": b"stub",
@@ -1164,13 +1178,14 @@ class OpencodeInstall(Case):
         }
         self.native = {}
         for name in ("opencode-linux-arm64", "opencode-linux-x64"):
-            self.native[name] = self.binary(name, version)
+            self.native[name] = self.binary(name, VERSION)
             self.tarballs[name] = tarball(
                 {
-                    "package/package.json": json.dumps({"name": name, "version": version}).encode(),
+                    "package/package.json": json.dumps({"name": name, "version": VERSION}).encode(),
                     "package/bin/opencode": self.native[name],
                 }
             )
+        self.metadata = {}
         self.urls, self.runs = [], []
         self.prefix = Path(self.home, "clients")
         self.prefix.mkdir()
@@ -1187,24 +1202,27 @@ class OpencodeInstall(Case):
         return SimpleNamespace(returncode=0, stdout=f"{version}\n")
 
     def opener(self, url, timeout):
+        """The registry: a tarball, or a package version's metadata (self.metadata, else its hash)."""
         self.urls.append((url, timeout))
-        name = url.rsplit("/", 1)[1].removesuffix(f"-{self.ns['VERSION']}.tgz")
-        return io.BytesIO(self.tarballs[name])
+        path = url.removeprefix("https://registry.npmjs.org/")
+        if "/-/" in path:
+            return io.BytesIO(self.tarballs[path.split("/-/")[0]])
+        name = path.rsplit("/", 1)[0]
+        return io.BytesIO(self.metadata.get(name) or metadata(name, self.tarballs[name]))
 
-    def install(self, arch, opener=None):
-        sums = {n: hashlib.sha512(data).hexdigest() for n, data in self.tarballs.items()}
+    def install(self, arch, opener=None, version=VERSION):
         fetch = self.ns["fetch"]
-        with (
-            mock.patch.dict(self.ns["SHA512"], sums),
-            mock.patch("subprocess.run", self.version_run),
-        ):
+        with mock.patch("subprocess.run", self.version_run):
             self.ns["install"](
-                arch, self.prefix, fetch=lambda name: fetch(name, opener=opener or self.opener)
+                arch,
+                self.prefix,
+                version,
+                fetch=lambda name, version: fetch(name, version, opener=opener or self.opener),
             )
 
-    def assert_refused(self, arch="arm64", opener=None):
+    def assert_refused(self, arch="arm64", opener=None, version=VERSION):
         with self.assertRaises(SystemExit) as raised:
-            self.install(arch, opener)
+            self.install(arch, opener, version)
         self.assertTrue(str(raised.exception.code).startswith("opencode-install: "))
         self.assertEqual(list(self.prefix.iterdir()), [])
         return str(raised.exception.code)
@@ -1229,24 +1247,49 @@ class OpencodeInstall(Case):
                     os.readlink(link), "../lib/node_modules/opencode-ai/bin/opencode.exe"
                 )
                 self.assertEqual(link.resolve(), executable.resolve())
-                version = self.ns["VERSION"]
+                registry = "https://registry.npmjs.org"
                 self.assertEqual(
                     self.urls,
                     [
-                        (f"https://registry.npmjs.org/{n}/-/{n}-{version}.tgz", 300)
+                        (url, 300)
                         for n in ("opencode-ai", name)
+                        for url in (
+                            f"{registry}/{n}/{VERSION}",
+                            f"{registry}/{n}/-/{n}-{VERSION}.tgz",
+                        )
                     ],
                 )
 
-    def test_recorded_hashes_cover_both_platforms_and_the_package(self):
-        self.assertEqual(self.ns["VERSION"], "1.19.3")
-        self.assertEqual(set(self.ns["SHA512"]), {"opencode-ai", *self.ns["PLATFORMS"].values()})
+    def test_the_version_comes_from_the_command_line(self):
+        install = mock.Mock()
+        with mock.patch.dict(self.ns["main"].__globals__, {"install": install}):
+            self.ns["main"](["arm64", str(self.prefix), "1.20.4"])
+        install.assert_called_once_with("arm64", self.prefix, "1.20.4")
+        self.assertNotIn("VERSION", self.ns)
+        self.assertNotIn("SHA512", self.ns)
         self.assertEqual(
             self.ns["PLATFORMS"],
             {"arm64": "opencode-linux-arm64", "amd64": "opencode-linux-x64"},
         )
-        for value in self.ns["SHA512"].values():
-            self.assertRegex(value, "^[0-9a-f]{128}$")
+
+    def test_a_bad_version_fetches_nothing(self):
+        for version in ("1.19", "v1.19.3", "1.19.3-beta.1", "1.19.3\n", "../1.19.3", "١.١٩.٣", ""):
+            with self.subTest(version=version):
+                self.assertIn("invalid version", self.assert_refused(version=version))
+        self.assertEqual(self.urls, [])
+
+    def test_the_hash_comes_from_the_registry_metadata_before_the_tarball(self):
+        self.metadata["opencode-ai"] = metadata("opencode-ai", b"another tarball")
+        self.assertIn(
+            "opencode-ai@1.19.3 does not match its registry sha512", self.assert_refused()
+        )
+        self.assertEqual(
+            [url for url, _ in self.urls],
+            [
+                "https://registry.npmjs.org/opencode-ai/1.19.3",
+                "https://registry.npmjs.org/opencode-ai/-/opencode-ai-1.19.3.tgz",
+            ],
+        )
 
     def test_a_tarball_that_does_not_match_its_hash_installs_nothing(self):
         for name in ("opencode-ai", "opencode-linux-arm64"):
@@ -1258,7 +1301,62 @@ class OpencodeInstall(Case):
                     return io.BytesIO(data + b"x" if data == good else data)
 
                 message = self.assert_refused(opener=tampered)
-                self.assertIn(f"{name}@1.19.3 does not match its recorded sha512", message)
+                self.assertIn(f"{name}@1.19.3 does not match its registry sha512", message)
+
+    def test_oversize_or_unparsable_metadata_installs_nothing(self):
+        self.metadata["opencode-ai"] = b" " * (1 << 20) + b"{}"
+        self.assertIn("opencode-ai@1.19.3 metadata exceeds 1048576 bytes", self.assert_refused())
+        self.metadata["opencode-ai"] = b"{"
+        self.assertIn("opencode-ai@1.19.3: registry metadata", self.assert_refused())
+
+    def test_metadata_for_another_package_or_version_installs_nothing(self):
+        data = self.tarballs["opencode-ai"]
+        for fields in ({"name": "opencode"}, {"version": "1.19.4"}, {"name": None}):
+            with self.subTest(fields=fields):
+                self.metadata["opencode-ai"] = metadata("opencode-ai", data, **fields)
+                self.assertIn("opencode-ai@1.19.3: registry metadata", self.assert_refused())
+
+    def test_an_integrity_other_than_one_sha512_installs_nothing(self):
+        data = self.tarballs["opencode-ai"]
+        sha512 = base64.b64encode(hashlib.sha512(data).digest()).decode()
+        sha256 = base64.b64encode(hashlib.sha256(data).digest()).decode()
+        for integrity in (
+            f"sha256-{sha256}",
+            f"sha512-{sha512} sha512-{sha512}",
+            f"sha512-{sha512} sha256-{sha256}",
+            f"sha512-{sha256}",
+            "sha512-not*base64",
+            "",
+            None,
+        ):
+            with self.subTest(integrity=integrity):
+                self.metadata["opencode-ai"] = metadata(
+                    "opencode-ai", data, dist={"integrity": integrity}
+                )
+                self.assertIn("opencode-ai@1.19.3: registry integrity", self.assert_refused())
+        self.metadata["opencode-ai"] = metadata("opencode-ai", data, dist=[])
+        self.assertIn("opencode-ai@1.19.3: registry integrity", self.assert_refused())
+
+    def test_a_redirect_is_refused(self):
+        def redirect(_handler, request):
+            headers = http.client.HTTPMessage()
+            headers["Location"] = "https://elsewhere.invalid/opencode-ai"
+            response = urllib.response.addinfourl(io.BytesIO(b""), headers, request.full_url, 302)
+            response.msg = "Found"
+            return response
+
+        with (
+            mock.patch.object(
+                urllib.request.HTTPSHandler, "https_open", autospec=True, side_effect=redirect
+            ) as opened,
+            self.assertRaises(SystemExit) as raised,
+        ):
+            self.ns["fetch"]("opencode-ai", VERSION)
+        self.assertIn("redirect", str(raised.exception.code))
+        self.assertEqual(opened.call_count, 1)
+        self.assertEqual(
+            opened.call_args.args[1].full_url, "https://registry.npmjs.org/opencode-ai/1.19.3"
+        )
 
     def test_wrong_package_name_or_version_installs_nothing(self):
         for name, manifest in (
@@ -1283,9 +1381,13 @@ class OpencodeInstall(Case):
         def broken(*_, **__):
             raise OSError("no route")
 
-        self.assertIn("downloading opencode-ai@1.19.3 failed", self.assert_refused(opener=broken))
+        self.assertIn(
+            "downloading opencode-ai@1.19.3 metadata failed", self.assert_refused(opener=broken)
+        )
 
-        def truncated(*_, **__):
+        def truncated(url, timeout):
+            if "/-/" not in url:
+                return self.opener(url, timeout)
             response = mock.MagicMock()
             response.__enter__.return_value = response
             response.read.side_effect = http.client.IncompleteRead(b"partial")
@@ -1303,7 +1405,7 @@ class OpencodeInstall(Case):
         )
         self.assertIn("no package/bin/opencode", self.assert_refused())
 
-    def test_a_binary_that_does_not_report_the_pinned_version_installs_nothing(self):
+    def test_a_binary_that_does_not_report_the_requested_version_installs_nothing(self):
         name = "opencode-linux-arm64"
         self.tarballs[name] = tarball(
             {
@@ -1323,14 +1425,22 @@ class OpencodeInstall(Case):
         self.assertNotEqual(scratch, self.home)
         self.assertFalse(os.path.exists(scratch))
 
-    def test_main_requires_arch_and_absolute_prefix(self):
-        for argv in ([], ["arm64"], ["arm64", "relative"], ["arm64", "/p", "extra"]):
+    def test_main_requires_arch_absolute_prefix_and_version(self):
+        for argv in (
+            [],
+            ["arm64"],
+            ["arm64", "/p"],
+            ["arm64", "relative", VERSION],
+            ["arm64", "/p", VERSION, "extra"],
+        ):
             with self.subTest(argv=argv), self.assertRaises(SystemExit):
                 self.ns["main"](argv)
 
-    def test_the_pinned_opencode_still_needs_the_window_floor(self):
+    def test_the_minimum_opencode_still_needs_the_window_floor(self):
+        versions = Path(REPO, "src/broker/internal/launcher/versions.go").read_text()
+        [minimum] = re.findall(r'^const opencodeMinVersion = "([0-9.]+)"$', versions, re.M)
         self.assertEqual(
-            (self.ns["VERSION"], HOME.min_width),
+            (minimum, HOME.min_width),
             ("1.19.3", 40),
             "see HOME in clients/opencode/common.py: keep min_width while the broker's "
             "opencodeMinVersion (src/broker/internal/launcher/versions.go) bundles @opentui/core "
