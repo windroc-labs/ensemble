@@ -1653,10 +1653,7 @@ class InstallTest(Case):
         self.assertLess(
             calls.index(f"{install} --accept-license --user=tester"), calls.index("open -a Docker")
         )
-        self.assertEqual(
-            json.loads(self.docker_settings().read_text()),
-            {"UseVirtualizationFrameworkRosetta": False, "DisplayedOnboarding": True},
-        )
+        self.assertFalse(self.docker_group().exists())
         self.assertIn(
             "Docker Desktop 4.96.0 for arm64, macOS 14.0+: matches arm64, macOS 26.7.1",
             result.stderr,
@@ -1677,23 +1674,19 @@ class InstallTest(Case):
         )
         self.assertNotIn("[session.hosts.docker] docker", self.again().tty)
 
-    def test_docker_settings_kept(self):
-        self.docker_settings().parent.mkdir(parents=True)
-        self.docker_settings().write_text(
-            '{"UseVirtualizationFrameworkRosetta": true, "Theme": "dark"}'
-        )
+    def test_docker_group_container_denied(self):
+        group = self.docker_group()
+        group.mkdir(parents=True)
+        (group / "settings-store.json").write_text('{"Theme": "dark"}')
+        group.chmod(0)
+        self.addCleanup(lambda: group.exists() and group.chmod(0o700))
         self.assert_ok(self.fresh(clients="claude", docker="y"))
-        self.assertEqual(
-            json.loads(self.docker_settings().read_text()),
-            {
-                "UseVirtualizationFrameworkRosetta": True,
-                "Theme": "dark",
-                "DisplayedOnboarding": True,
-            },
-        )
+        group.chmod(0o700)
+        self.assertEqual([p.name for p in group.iterdir()], ["settings-store.json"])
+        self.assertEqual((group / "settings-store.json").read_text(), '{"Theme": "dark"}')
 
-    def docker_settings(self):
-        return Path(self.home, "Library/Group Containers/group.com.docker/settings-store.json")
+    def docker_group(self):
+        return Path(self.home, "Library/Group Containers/group.com.docker")
 
     def assert_docker_build_refused(self, marker, text, said):
         (self.fakes / marker).write_text(text)
