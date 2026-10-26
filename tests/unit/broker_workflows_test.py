@@ -5,7 +5,6 @@ from tests.case import REPO, Case
 
 WORKFLOWS = Path(REPO, ".github/workflows")
 STATICCHECK = "sh with-go-state.sh go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./..."
-ASSET = "ensemble-broker-darwin-arm64.tar.gz"
 
 
 def job(workflow, name):
@@ -67,58 +66,9 @@ class BrokerJob(Case):
 
 
 class Release(Case):
-    def setUp(self):
-        self.text = (WORKFLOWS / "release.yml").read_text()
-        self.job = job("release.yml", "broker")
-        self.steps = steps(self.job)
-
-    def test_release_trigger_runner_and_permissions(self):
-        self.assertRegex(self.text, r"(?m)^on:\n  release:\n    types: \[published\]\n\n")
-        self.assertRegex(self.text, r"(?m)^permissions: \{\}$")
-        self.assertIn("    runs-on: macos-15\n", self.job)
-        granted = re.findall(r"(?m)^      ([a-z-]+): write$", self.job)
-        self.assertEqual(sorted(granted), ["attestations", "contents", "id-token"])
-        self.assertEqual(len(re.findall(r": write$", self.text, re.M)), 3)
-        self.assertEqual(re.findall(r"(?m)^  (\S+):$", self.text.split("\njobs:\n")[1]), ["broker"])
-
-    def test_every_action_is_pinned_by_sha(self):
-        uses = re.findall(r"uses: (\S+)", self.text)
-        self.assertTrue(uses)
-        for action in uses:
-            self.assertRegex(action, r"^[\w.-]+/[\w.-]+@[0-9a-f]{40}$")
-
-    def test_release_builds_signs_attests_and_uploads_the_asset(self):
-        names = list(self.steps)
-        self.assertLess(
-            names.index("Require the tag to be the plugin version"), names.index("Build and sign")
-        )
-        self.assertIn(
-            'test "$TAG" = "v$version"', self.steps["Require the tag to be the plugin version"]
-        )
-        build = self.steps["Build and sign"]
-        self.assertIn('run: sh src/broker/build.sh "$RUNNER_TEMP/release/ensemble-broker"', build)
-        self.assertIn("GOOS: darwin", build)
-        self.assertIn("GOARCH: arm64", build)
-        self.assertIn(
-            f'tar -czf "$RUNNER_TEMP/{ASSET}" -C "$RUNNER_TEMP/release" ensemble-broker',
-            self.steps["Pack"],
-        )
-        attest = self.steps["Attest provenance"]
-        self.assertIn("uses: actions/attest-build-provenance@", attest)
-        self.assertIn(f"subject-path: ${{{{ runner.temp }}}}/{ASSET}", attest)
-        upload = self.steps["Upload to the release"]
-        self.assertIn(
-            f'gh release upload "$TAG" "$RUNNER_TEMP/{ASSET}" --repo "$GITHUB_REPOSITORY" --clobber',
-            upload,
-        )
-        self.assertIn("GH_TOKEN: ${{ github.token }}", upload)
-        self.assertLess(names.index("Pack"), names.index("Attest provenance"))
-        self.assertLess(names.index("Attest provenance"), names.index("Upload to the release"))
-        self.assertIn("TAG: ${{ github.event.release.tag_name }}", self.job)
-
-    def test_release_run_blocks_hold_no_expressions(self):
-        run = re.compile(r"(?m)^        run: ")
-        runs = [run.split(body, maxsplit=1)[1] for body in self.steps.values() if run.search(body)]
-        self.assertGreaterEqual(len(runs), 4)
-        for run in runs:
-            self.assertNotIn("${{", run)
+    def test_no_workflow_builds_or_attests_a_release(self):
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            text = path.read_text()
+            with self.subTest(workflow=path.name):
+                self.assertNotRegex(text, r"(?m)^  release:")
+                self.assertNotIn("attest", text)

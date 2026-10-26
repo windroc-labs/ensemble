@@ -36,14 +36,14 @@ cannot be uninstalled, so `scripts/install-cleanup.sh` cannot undo it.
 sh "$PKG/src/broker/install.sh"
 ```
 
-It downloads the broker asset of the plugin's version, installs it root-owned (`sudo` asks once) only after
-`gh attestation verify` proves the ensemble release workflow built it from that version's tag and the asset speaks the
-plugin's broker protocol (a plugin ahead of its release, such as `main` after a protocol change, is refused: update the
-plugin to that release, or use `--build`), and seeds
+It downloads the broker asset of the plugin's version and its sha256 file, and installs it root-owned (`sudo` asks
+once) only when the asset matches that sha256 (an integrity check of the download: the maintainer builds and uploads
+both, `AGENTS.md` › Releasing) and speaks the plugin's broker protocol (a plugin ahead of its release, such as `main`
+after a protocol change, is refused: update the plugin to that release, or use `--build`). It seeds
 `~/.ensemble/docker/worker/Dockerfile` (your image, edit freely) only if `~/.ensemble/docker/worker` does not exist.
-The asset appears a few minutes after a Release is published; until then it exits non-zero: retry. `--build`
-instead builds and ad-hoc signs it locally with the hardened runtime (needs Go, `brew install go`, and the Xcode
-command line tools).
+A missing asset or sha256 file, or a mismatch, installs nothing and exits non-zero; the maintainer uploads both
+shortly after publishing a Release: retry. `--build` instead builds and ad-hoc signs it locally with the hardened
+runtime (needs Go, `brew install go`, and the Xcode command line tools).
 
 To upgrade, rerun it (your Dockerfile is never overwritten), then [log in](#log-in) again. The image pins `gh`, and
 Claude Code, Codex and OpenCode each at its npm `latest` release when the image was built; the broker rebuilds it when

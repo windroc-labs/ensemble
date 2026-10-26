@@ -6,6 +6,10 @@ it must contain `/opt/windroc/mini-op/skills/mini-op/SKILL.md`. Remove any local
 any `mini-op` entry in an environment's `plugins`; the packaged environment no longer requests that plugin.
 Update the broker with the plugin so its worker image includes the new client skill bootstrap.
 
+The broker release asset no longer has a GitHub provenance attestation: the maintainer builds it and uploads it with
+`ensemble-broker-darwin-arm64.tar.gz.sha256`, and `src/broker/install.sh` installs it only when the download matches
+that sha256. Nothing to do: install or upgrade the broker as before (`gh` still downloads it).
+
 Broker protocol 29 replaces `refresh` and `notices` with `maintain`: the broker now decides when each session's
 credentials renew ([Docker host › Credential renewal](docker-host.md#credential-renewal)). Upgrade the broker with the
 plugin, then restart (close and resume) every Docker session that was running: until then its old supervisor's
