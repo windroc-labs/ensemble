@@ -54,7 +54,7 @@ func (h Host) held(ctx context.Context, c string) (kind string, secrets []string
 }
 
 // Close revokes the container's GitHub tokens, then deletes it and its tmpfs, then withdraws its Codex grant, so a
-// refresh racing the close finds no container to grant; an absent container is success. A revocation or withdrawal
+// maintain racing the close finds no container to grant; an absent container is success. A revocation or withdrawal
 // failure is reported after the deletion, so it never keeps a container alive.
 func (h Host) Close(ctx context.Context, container string) (CloseResult, error) {
 	h.Audit.Begin(container, nil)

@@ -246,10 +246,10 @@ func TestStartOpencode(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := StartResult{Container: container, Endpoint: "unix://" + home + "/.docker/run/docker.sock", ImageDigest: digest,
-			Clients: Clients{Claude: "2.1.0 (Claude Code)", Codex: "codex-cli 0.163.0", Opencode: "1.19.3"}, GitHub: []protocol.Expiry{}}
+			Clients: Clients{Claude: "2.1.0 (Claude Code)", Codex: "codex-cli 0.163.0", Opencode: "1.19.3"}}
 		if github {
 			id := botID
-			want.GitHub, want.GitHubUserID = expiry, &id
+			want.GitHubUserID = &id
 		}
 		gotJSON, _ := json.Marshal(got)
 		wantJSON, _ := json.Marshal(want)
@@ -362,7 +362,7 @@ func TestOpencodeAuditHasNoClientCredential(t *testing.T) {
 	}
 }
 
-func TestRefreshOpencode(t *testing.T) {
+func TestMaintainOpencode(t *testing.T) {
 	for _, github := range []bool{false, true} {
 		tokens := &fakeTokens{}
 		h, _, codexCreds := opencodeHost(&world{labels: goodLabels()}, tokens)
@@ -374,16 +374,16 @@ func TestRefreshOpencode(t *testing.T) {
 				withGitHub(f)
 			}
 		})
-		rec, path := audited(t, &h, "refresh", container)
-		got, err := h.Refresh(context.Background(), container, manifest)
+		rec, path := audited(t, &h, "maintain", container)
+		got, err := h.Maintain(context.Background(), container, manifest, nil, false)
 		rec.Flush(err)
 		if !github {
-			if e := protoErr(t, err); e.Code != protocol.ManifestRejected || len(tokens.calls) != 0 {
-				t.Fatalf("%+v %q", e, tokens.calls)
+			if err != nil || len(got.Results) != 0 || len(tokens.calls) != 0 {
+				t.Fatalf("%+v %v %q", got, err, tokens.calls)
 			}
 			continue
 		}
-		if err != nil || got.CredentialExpiresAt != nil || !slices.Equal(got.GitHub, expiry) || codexCreds.injected != 0 ||
+		if err != nil || got.Deadline != nil || len(got.Results) != 1 || *got.Results[0].ExpiresAt != expiry[0].ExpiresAt || codexCreds.injected != 0 ||
 			!slices.Equal(tokens.calls, []string{"ready ensemble-bot", "refresh ensemble-bot " + container}) {
 			t.Fatalf("%+v %v %q", got, err, tokens.calls)
 		}

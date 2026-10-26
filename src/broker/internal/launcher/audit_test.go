@@ -218,16 +218,16 @@ func TestStartFailureLine(t *testing.T) {
 	})
 }
 
-func TestRefreshLineCodex(t *testing.T) {
-	h, manifest, _, _, _ := refreshCodexHost(t, true)
-	rec, path := audited(t, &h, "refresh", container)
-	_, err := h.Refresh(context.Background(), container, manifest)
+func TestMaintainRefreshLineCodex(t *testing.T) {
+	h, manifest, _, _ := maintainHost(t, true, nil)
+	rec, path := audited(t, &h, "maintain", container)
+	_, err := h.Maintain(context.Background(), container, manifest, nil, false)
 	rec.Flush(err)
 	if err != nil {
 		t.Fatal(err)
 	}
 	l := readLines(t, path)[0]
-	if l.Event != "refresh" || l.Session != "worker_1" || l.Image != nil || l.Mounts != nil || !slices.Equal(kinds(l), []string{"codex-access-token renewed"}) ||
+	if l.Event != "refresh" || l.Command != "maintain" || l.Session != "worker_1" || l.Image != nil || l.Mounts != nil || !slices.Equal(kinds(l), []string{"codex-access-token renewed"}) ||
 		*l.Credentials[0].ExpiresAt != "2026-10-18T12:00:00Z" {
 		t.Fatalf("%+v", l)
 	}
