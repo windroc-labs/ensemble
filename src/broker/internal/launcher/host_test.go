@@ -35,7 +35,7 @@ func TestOpenCheckLogRotatesPastTheLimit(t *testing.T) {
 	if _, err := running.WriteString("before"); err != nil {
 		t.Fatal(err)
 	}
-	log, err := openCheckLog(dir)
+	log, err := openCheckLog(dir, os.Rename)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestOpenCheckLogKeepsASmallLog(t *testing.T) {
 	path := filepath.Join(dir, "clients-check.log")
 	writeLog(t, path, checkLogMax)
 	writeLog(t, path+".1", 3)
-	log, err := openCheckLog(dir)
+	log, err := openCheckLog(dir, os.Rename)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestOpenCheckLogKeepsASmallLog(t *testing.T) {
 
 func TestOpenCheckLogCreatesAMissingLog(t *testing.T) {
 	dir := t.TempDir()
-	log, err := openCheckLog(dir)
+	log, err := openCheckLog(dir, os.Rename)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,11 +98,34 @@ func TestOpenCheckLogReportsARenameFailure(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(path+".1", "kept"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if log, err := openCheckLog(dir); err == nil {
+	if log, err := openCheckLog(dir, os.Rename); err == nil {
 		log.Close()
 		t.Fatal("opened the log past a failed rotation")
 	}
 	if info, err := os.Stat(path); err != nil || info.Size() != checkLogMax+1 {
+		t.Fatalf("log %v %v", info, err)
+	}
+}
+
+func TestOpenCheckLogToleratesAConcurrentRotation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "clients-check.log")
+	writeLog(t, path, checkLogMax+1)
+	// Another spawn moves the log between this one's Stat and Rename.
+	log, err := openCheckLog(dir, func(from, to string) error {
+		if err := os.Rename(from, to); err != nil {
+			t.Fatal(err)
+		}
+		return os.Rename(from, to)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	if got := readLog(t, path+".1"); len(got) != checkLogMax+1 {
+		t.Fatalf(".1 holds %d bytes", len(got))
+	}
+	if info, err := os.Stat(path); err != nil || info.Size() != 0 || info.Mode().Perm() != 0o600 {
 		t.Fatalf("log %v %v", info, err)
 	}
 }

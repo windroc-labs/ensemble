@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -115,7 +116,7 @@ func spawnCheck(home string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	log, err := openCheckLog(dir)
+	log, err := openCheckLog(dir, os.Rename)
 	if err != nil {
 		return err
 	}
@@ -130,11 +131,12 @@ func spawnCheck(home string) error {
 }
 
 // openCheckLog opens dir's clients-check.log for appending, first moving one past checkLogMax to clients-check.log.1:
-// a running check keeps writing to the moved file, so a spawn never loses its output.
-func openCheckLog(dir string) (*os.File, error) {
+// a running check keeps writing to the moved file, so a spawn never loses its output. A log another spawn moved first
+// is fine.
+func openCheckLog(dir string, rename func(oldpath, newpath string) error) (*os.File, error) {
 	path := filepath.Join(dir, "clients-check.log")
 	if info, err := os.Stat(path); err == nil && info.Size() > checkLogMax {
-		if err := os.Rename(path, path+".1"); err != nil {
+		if err := rename(path, path+".1"); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return nil, err
 		}
 	}
