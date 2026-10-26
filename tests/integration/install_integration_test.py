@@ -53,6 +53,7 @@ REAL = (
     "tar",
     "gzip",
     "ln",
+    "ls",
 )
 FAKED = ("uname", "id", "sudo", "curl", "security", "open", "launchctl", "shasum")
 FAKED += ("xcode-select", "ps", "sw_vers", "lipo", "pgrep", "pkill", "defaults")
@@ -95,6 +96,9 @@ LEAVE_Q = r"Press Enter to leave this screen:"
 SCREEN_ON, SCREEN_OFF = "\x1b[?1049h\x1b[H\x1b[2J", "\x1b[H\x1b[2J\x1b[?1049l"
 PEM_Q = r"private key \(\.pem; [^)]*\), empty to skip:"
 DOCKER_LOGINS = ((TOKEN_Q, TOKEN), (PEM_Q, ""))
+DOCKER_PRESETS = {"UseVirtualizationFrameworkRosetta": False, "DisplayedOnboarding": True}
+PRESETS_NOT_WRITTEN = "    Docker Desktop presets not written (Rosetta off, onboarding done): "
+NOT_TOLD = "    not recorded for cleanup: "
 REMOVE_Q = r"Remove all of this\? \[y/N\]"
 SHARED = (
     "say",
@@ -335,6 +339,10 @@ class InstallTest(Case):
         (self.fakes / "tty_name").write_text("ttys001\n")
         (self.fakes / "commit").write_text(OLD)
         (self.root / "dev").mkdir(parents=True)
+        # A test machine's terminal has Full Disk Access (install-cleanup.sh reads TCC.db); its tests revoke it.
+        self.tcc = Path(self.home, "Library/Application Support/com.apple.TCC/TCC.db")
+        self.tcc.parent.mkdir(parents=True)
+        self.tcc.write_text("granted")
         self.pkg_src = self.fakes / "pkg-src"
         (self.pkg_src / "scripts").mkdir(parents=True)
         shutil.copyfile(
@@ -1684,10 +1692,8 @@ class InstallTest(Case):
         self.assertLess(
             calls.index(f"{install} --accept-license --user=tester"), calls.index("open -a Docker")
         )
-        self.assertEqual(
-            json.loads(self.docker_settings().read_text()),
-            {"UseVirtualizationFrameworkRosetta": False, "DisplayedOnboarding": True},
-        )
+        self.assertEqual(json.loads(self.docker_settings().read_text()), DOCKER_PRESETS)
+        self.assertNotIn(PRESETS_NOT_WRITTEN, result.stderr)
         self.assertIn(
             "Docker Desktop 4.96.0 for arm64, macOS 14.0+: matches arm64, macOS 26.7.1",
             result.stderr,
@@ -1709,7 +1715,7 @@ class InstallTest(Case):
         self.assertNotIn("[session.hosts.docker] docker", self.again().tty)
 
     def test_docker_settings_kept(self):
-        self.docker_settings().parent.mkdir(parents=True)
+        self.docker_group().mkdir(parents=True)
         self.docker_settings().write_text(
             '{"UseVirtualizationFrameworkRosetta": true, "Theme": "dark"}'
         )
@@ -1723,8 +1729,71 @@ class InstallTest(Case):
             },
         )
 
+    def test_docker_group_container_denied(self):
+        group = self.docker_group()
+        group.mkdir(parents=True)
+        self.docker_settings().write_text('{"Theme": "dark"}')
+        group.chmod(0)
+        self.addCleanup(lambda: group.exists() and group.chmod(0o700))
+        result = self.fresh(clients="claude", docker="y")
+        self.assert_ok(result)
+        self.assertEqual(result.stderr.count(PRESETS_NOT_WRITTEN), 1, result.stderr)
+        group.chmod(0o700)
+        self.assertEqual([p.name for p in group.iterdir()], ["settings-store.json"])
+        self.assertEqual(self.docker_settings().read_text(), '{"Theme": "dark"}')
+
+    def test_docker_group_container_create_denied(self):
+        parent = self.docker_group().parent
+        parent.mkdir(parents=True)
+        parent.chmod(0o500)
+        self.addCleanup(lambda: parent.exists() and parent.chmod(0o700))
+        result = self.fresh(clients="claude", docker="y")
+        self.assert_ok(result)
+        self.assertEqual(result.stderr.count(PRESETS_NOT_WRITTEN), 1, result.stderr)
+        self.assertFalse(self.docker_group().exists())
+
+    def test_docker_settings_invalid_kept(self):
+        self.docker_group().mkdir(parents=True)
+        self.docker_settings().write_text("[]")
+        result = self.fresh(clients="claude", docker="y")
+        self.assert_ok(result)
+        self.assertEqual(result.stderr.count(PRESETS_NOT_WRITTEN), 1, result.stderr)
+        self.assertEqual(self.docker_settings().read_text(), "[]")
+        self.assertEqual([p.name for p in self.docker_group().iterdir()], ["settings-store.json"])
+
+    def test_docker_group_container_unreadable_parent(self):
+        """A container whose lstat macOS denies may be the user's: never recorded, so cleanup keeps it."""
+        group = self.docker_group()
+        group.mkdir(parents=True)
+        (group / "data").write_text("user's")
+        group.parent.chmod(0o600)
+        self.addCleanup(lambda: group.parent.exists() and group.parent.chmod(0o700))
+        result = self.fresh(clients="claude", docker="y")
+        self.assert_ok(result)
+        self.assertEqual(
+            result.stderr.count(f"{NOT_TOLD}{group}: cannot tell whether it is there"), 1
+        )
+        self.assertNotIn(f"dir\t{group}", self.ledger())
+        self.assert_ok(self.cleanup("--yes"))
+        group.parent.chmod(0o700)
+        self.assertEqual((group / "data").read_text(), "user's")
+
+    def test_dangling_symlink_not_recorded(self):
+        """A dangling symlink is there, not missing: cleanup leaves it (Docker Desktop writes through it)."""
+        plist = Path(self.home, "Library/Preferences/com.docker.docker.plist")
+        plist.parent.mkdir(parents=True)
+        Path(self.home, "dotfiles").mkdir()
+        plist.symlink_to(Path(self.home, "dotfiles/docker.plist"))
+        self.assert_ok(self.fresh(clients="claude", docker="y"))
+        self.assertNotIn(f"file\t{plist}", self.ledger())
+        self.assert_ok(self.cleanup("--yes"))
+        self.assertTrue(plist.is_symlink())
+
+    def docker_group(self):
+        return Path(self.home, "Library/Group Containers/group.com.docker")
+
     def docker_settings(self):
-        return Path(self.home, "Library/Group Containers/group.com.docker/settings-store.json")
+        return self.docker_group() / "settings-store.json"
 
     def assert_docker_build_refused(self, marker, text, said):
         (self.fakes / marker).write_text(text)
@@ -4210,6 +4279,35 @@ exec /bin/rm "$@"
             ],
         )
 
+    def test_ledger_before_python_works(self):
+        """Before the Command Line Tools, macOS's python3 is a shim that fails: tool state is still recorded."""
+        (self.bin / "python3").unlink()
+        clt = Path(self.root, "Library/Developer/CommandLineTools")
+        executable(
+            self.bin / "python3",
+            f'#!/bin/sh\n[ -d "{clt}" ] || exit 1\nexec {sys.executable} "$@"\n',
+        )
+        self.assert_ok(self.fresh("--no-docker"))
+        h = self.home
+        for record in (
+            f"dir\t{h}/.homebrew",
+            f"file\t{h}/.homebrew/trust.json",
+            f"dir\t{h}/.cache/uv",
+        ):
+            self.assertIn(record, self.ledger())
+
+    def test_relative_tool_path_not_recorded(self):
+        """A relative path from the environment cannot be confirmed missing: one line, no record."""
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(self.home)
+        self.env["UV_CACHE_DIR"] = "uv-cache"
+        result = self.fresh("--no-docker")
+        self.assert_ok(result)
+        self.assertEqual(
+            result.stderr.count(f"{NOT_TOLD}uv-cache: cannot tell whether it is there"), 1
+        )
+        self.assertFalse([record for record in self.ledger() if "uv-cache" in record])
+
     def test_ledger_with_docker_and_opencode(self):
         self.assert_ok(self.full())
         h, ledger = self.home, self.ledger()
@@ -4483,7 +4581,9 @@ exec /bin/rm "$@"
     def test_cleanup_needs_full_disk_access_for_a_container(self):
         """macOS lets only Full Disk Access remove an app container: without it nothing is removed."""
         self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        self.tcc.unlink()
         container = Path(self.home, "Library/Containers/com.docker.docker")
+        group = Path(self.home, "Library/Group Containers/group.com.docker")
         (container / "locked").mkdir(parents=True)
         (container / "locked/data").write_text("")
         ledger = Path(self.ensemble, "install/added")
@@ -4492,7 +4592,7 @@ exec /bin/rm "$@"
         self.assertEqual(result.code, 1, result.stderr)
         self.assertEqual(
             result.stderr,
-            f"install-cleanup.sh: macOS lets only Full Disk Access remove {container}: give the"
+            f"install-cleanup.sh: macOS lets only Full Disk Access remove {container} {group}: give the"
             " terminal Full Disk Access (System Settings › Privacy & Security), reopen it, then"
             " rerun; nothing removed (take the access back once cleanup has finished)\n",
         )
@@ -4500,9 +4600,7 @@ exec /bin/rm "$@"
         self.assertEqual(ledger.read_bytes(), recorded)
         self.assertTrue((container / "locked/data").exists())
         self.assertEqual([c for c in self.calls() if not c.startswith(("uname", "ps "))], [])
-        tcc = Path(self.home, "Library/Application Support/com.apple.TCC/TCC.db")
-        tcc.parent.mkdir(parents=True)
-        tcc.write_text("granted")
+        self.tcc.write_text("granted")
         locked = container / "locked"
         locked.chmod(0o500)
         self.addCleanup(lambda: locked.exists() and locked.chmod(0o700))
@@ -4524,6 +4622,33 @@ exec /bin/rm "$@"
         self.assertFalse(container.exists())
         self.assertFalse(Path(self.ensemble, "install").exists())
         self.assertFalse(Path(self.home, ".zprofile").exists())
+
+    def test_cleanup_needs_full_disk_access_for_a_group_container(self):
+        """macOS 27 denies a terminal Docker's Group Container too: without the access nothing is removed."""
+        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        group = Path(self.home, "Library/Group Containers/group.com.docker")
+        self.assertTrue((group / "settings-store.json").exists())
+        self.tcc.unlink()
+        ledger = Path(self.ensemble, "install/added")
+        recorded = ledger.read_bytes()
+        result = self.cleanup()
+        self.assertEqual(result.code, 1, result.stderr)
+        self.assertIn(
+            f"install-cleanup.sh: macOS lets only Full Disk Access remove {group}:", result.stderr
+        )
+        self.assertNotRegex(result.tty, REMOVE_Q)
+        self.assertEqual(ledger.read_bytes(), recorded)
+        self.assertTrue((group / "settings-store.json").exists())
+        group.parent.chmod(0o600)
+        self.addCleanup(lambda: group.parent.exists() and group.parent.chmod(0o700))
+        result = self.cleanup()
+        self.assertEqual(result.code, 1, result.stderr)
+        self.assertIn(f"remove {group}:", result.stderr)
+        self.assertEqual(ledger.read_bytes(), recorded)
+        group.parent.chmod(0o700)
+        self.tcc.write_text("granted")
+        self.assert_ok(self.cleanup("--yes"))
+        self.assertFalse(group.exists())
 
     def preinstalled_homebrew(self):
         """Homebrew with gh and the Command Line Tools, there before install.sh; PATH lacks its bin."""
