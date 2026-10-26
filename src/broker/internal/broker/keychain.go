@@ -290,10 +290,7 @@ func erase(b []byte) {
 
 // ClaudeLogin is the command that logs account in: login claude, NAME only for an account other than the default.
 func ClaudeLogin(account string) string {
-	if account == launcher.DefaultClaudeAccount {
-		return "ensemble-broker login claude"
-	}
-	return "ensemble-broker login claude " + account
+	return credential.LoginCommand(credential.StaticRef(credential.Claude, account))
 }
 
 // Login reads account's setup-token with read, checks it, stores it in account's item (replacing an earlier one) and
