@@ -20,12 +20,12 @@ Test boundaries and commands: `docs/tests.md`.
 
 ## Releasing
 
-`<version>` is `.claude-plugin/plugin.json`'s `version`, `X.Y.Z`.
+`<version>` is `.claude-plugin/plugin.json`'s `version`, `X.Y.Z`. In this order: bump the version and merge it, publish the Release, confirm its broker asset, then pin it in the marketplace. Installs follow the pin, so a pin ahead of its asset breaks every new Docker install.
 
 1. Bump `version` to the same `X.Y.Z` in `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json` and `package.json` (nothing else), open a PR titled `ensemble X.Y.Z` and squash-merge it once CI is green (rulesets reject a direct push to `main`).
 2. Create and publish Release `v<version>`: `gh release create vX.Y.Z --target <that commit's full sha> --title 'vX.Y.Z: <summary>' --notes-file <notes>`. Notes format: first line `Changes on top of v<previous> (ensemble X.Y.Z).`; one bullet per user-facing change with its PR numbers; internal PRs in one `Internal` bullet; last an **Upgrading** section with every step a user must take (config keys, CLI verbs, paths, data the release deletes), checked against each PR body, or "Nothing to do beyond v<previous>'s steps." Steps that stay needed also go into `docs/upgrading.md`.
 3. Wait for its run of `.github/workflows/release.yml`, then confirm the broker asset, `gh release view v<version> --repo windroc-labs/ensemble --json assets` (lists `ensemble-broker-darwin-arm64.tar.gz`), and its provenance: `gh release download v<version> --repo windroc-labs/ensemble --pattern ensemble-broker-darwin-arm64.tar.gz --dir <dir>`, then `gh attestation verify <dir>/ensemble-broker-darwin-arm64.tar.gz --repo windroc-labs/ensemble --signer-workflow windroc-labs/ensemble/.github/workflows/release.yml --source-ref refs/tags/v<version> --deny-self-hosted-runners`.
-4. Pin it in the `windroc` marketplace: in `windroc-labs/agent-plugins-marketplace`, set ensemble's `source.ref` to `v<version>` in `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json` (a PR, squash-merged). `scripts/install.sh` installs the ref it serves, with that release's broker; a `sha` pin stops it.
+4. Only after step 3, the manager pins it in the `windroc` marketplace: in `windroc-labs/agent-plugins-marketplace`, set ensemble's `source.ref` to `v<version>` in `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json` (a PR there, squash-merged; never in the release PR). `scripts/install.sh` and the clients install the tag it pins, with that release's broker; a `sha` pin stops the installer.
 5. Only then update the installed plugin (`skills/manage/SKILL.md` › Git and reviews): `claude plugin marketplace update windroc`, then `claude plugin update ensemble@windroc` (a running Claude Code applies it after `/reload-plugins` or a restart); `codex plugin marketplace upgrade windroc`; OpenCode: its `plugin` entry's `#v<version>` (`docs/sessions.md` › OpenCode commander).
 
 ## Import rules
