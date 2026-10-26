@@ -129,7 +129,7 @@ func (r *Recorder) Flush(err error) error {
 		lines = append(lines, l)
 	}
 	event := r.Command
-	if r.Command == maintainCommand && r.renewing {
+	if (r.Command == maintainCommand || r.Command == "linear-maintain") && r.renewing {
 		event = refreshEvent
 	}
 	switch event {

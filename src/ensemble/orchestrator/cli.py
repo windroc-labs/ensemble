@@ -25,10 +25,10 @@ from ensemble.orchestrator.engine.linear_run import LinearRun
 from ensemble.orchestrator.engine.types import (
     MOVES,
     UUID_RE,
-    Accounts,
     ConfigError,
     TrackerKind,
     Wiring,
+    Writers,
 )
 from ensemble.orchestrator.issue import command as issue_command
 from ensemble.orchestrator.trackers.linear import client, ops
@@ -141,9 +141,11 @@ def main(argv=None):
             "  Operational commands require configured orchestrator and Delegate\n"
             '  settings. [orchestrator] tracker picks the board: "local" (the default)\n'
             "  reads the directory $ENSEMBLE_BOARD_DIR (default ~/.ensemble/board);\n"
-            '  "linear" reaches Linear through the linear.harness_key Keychain service\n'
-            "  (the issue commands: linear.manager_key), role keys identifying the\n"
-            "  accounts used for issue work. Python 3.11+ is needed.\n"
+            '  "linear" reaches Linear as the [linear.harness] OAuth app, whose token any\n'
+            "  command renews before a call when under 5 days are left (the issue\n"
+            "  commands: the [linear.manager] OAuth app). Role OAuth apps write back\n"
+            "  using the current role configuration, including resumed runs. Python\n"
+            "  3.11+ is needed.\n"
             "  Router launches need the configured client/Delegate and its Host tools.\n"
             "  Router/promote/prune prepend ENSEMBLE_PATH, then this installation's bin,\n"
             "  then default executable directories. Logs: STATE/logs/orchestrator.jsonl;\n"
@@ -310,14 +312,18 @@ def _linear_reader(gql, cfg):
     return LinearTracker.reader(gql, cfg.linear)
 
 
-def _linear_accounts(gql, cfg, key):
-    """key's tracker and the harness_key's, for the session comment."""
+def _linear_writers(gql, cfg, identity):
+    """identity's tracker and the harness's, for the session comment."""
     linear = cfg.linear
-    return Accounts(
+    return Writers(
         LinearTracker(
-            gql, states=linear.states, team_id=linear.team, humans=linear.human_members, service=key
+            gql,
+            states=linear.states,
+            team_id=linear.team,
+            humans=linear.human_members,
+            identity=identity,
         ),
-        LinearTracker(gql, service=linear.harness_key, timeout=run_comments.LIMIT),
+        LinearTracker(gql, identity=linear.harness, timeout=run_comments.LIMIT),
         linear.states,
         tuple(e.lower() for e in linear.human_members),
         linear.project_repos,
@@ -325,23 +331,42 @@ def _linear_accounts(gql, cfg, key):
 
 
 def _linear_claimed(gql, cfg, claim):
-    _start_row(claim, "key", claim.key is not None)
     _start_row(claim, "uuid", UUID_RE.fullmatch(claim.uuid) is not None)
-    return _linear_accounts(gql, cfg, claim.key)
+    if claim.role not in cfg.linear.roles:
+        raise ConfigError(
+            f"{claim.issue}: session {claim.sid}'s role {claim.role!r} has no configured Linear app"
+        )
+    return _linear_writers(gql, cfg, _linear_identity(cfg, claim.role))
 
 
-def _linear_key(cfg, role):
-    return cfg.linear.roles[role].key
+def _linear_identity(cfg, role):
+    return cfg.linear.roles[role]
 
 
 def _linear_board_factory(gql, cfg):
-    """The team and role accounts read once, in one request; each tracker calls its transport as
-    the harness_key service."""
+    """The team read once, in one request; each tracker calls its transport as
+    linear.harness."""
     linear = cfg.linear
-    team, roles = ops.team_and_roles(partial(gql, service=linear.harness_key), linear)
+    team, roles = ops.team_and_roles(partial(gql, identity=linear.harness), linear)
     return lambda transport: LinearTracker.of_team(
-        partial(transport, service=linear.harness_key), linear, team, roles
+        partial(transport, identity=linear.harness), linear, team, roles
     )
+
+
+def _linear_credentials(cfg, src, *, dry):
+    """src's renewal policy: renew unless dry, failed renewals as token-error lines; a dry run logs
+    each app's token state as a token line when it first calls as that app."""
+    del cfg
+    client.use(
+        renew=not dry,
+        report=event_log.token_error(src, dry=dry),
+        show=partial(event_log.token_state, src) if dry else None,
+    )
+
+
+def _local_credentials(cfg, src, *, dry):
+    """A local board calls no transport."""
+    del cfg, src, dry
 
 
 def _local_board(transport, cfg, *, say=None):
@@ -357,18 +382,17 @@ def _local_board_factory(transport, cfg):
     return lambda _: LocalTracker(cfg.board, cfg.roles, prefix=cfg.local_prefix)
 
 
-def _local_accounts(transport, cfg, key):
+def _local_writers(transport, cfg, identity):
     """One board writes everything; it notifies no one and maps no project repos."""
-    del key
+    del identity
     board = _local_board(transport, cfg)
-    return Accounts(board, board, {s: LOCAL_STATES[MOVES[s]].value for s in MOVES}, (), {})
+    return Writers(board, board, {s: LOCAL_STATES[MOVES[s]].value for s in MOVES}, (), {})
 
 
 def _local_claimed(transport, cfg, claim):
-    """A local board's row: no key, its issue id as the uuid."""
-    _start_row(claim, "key", claim.key is None)
+    """A local board's row: its issue id as the uuid."""
     _start_row(claim, "uuid", claim.uuid == claim.issue)
-    return _local_accounts(transport, cfg, None)
+    return _local_writers(transport, cfg, None)
 
 
 def _start_row(claim, field, valid):
@@ -383,18 +407,20 @@ TRACKERS = MappingProxyType(
         TrackerKind.LINEAR: Wiring(
             connect=LinearTracker.connect,
             reader=_linear_reader,
-            accounts=_linear_accounts,
+            writers=_linear_writers,
             claimed=_linear_claimed,
-            key=_linear_key,
+            identity=_linear_identity,
             board=_linear_board_factory,
+            credentials=_linear_credentials,
         ),
         TrackerKind.LOCAL: Wiring(
             connect=_local_board,
             reader=_local_board,
-            accounts=_local_accounts,
+            writers=_local_writers,
             claimed=_local_claimed,
-            key=lambda *_: None,
+            identity=lambda *_: None,
             board=_local_board_factory,
+            credentials=_local_credentials,
         ),
     }
 )
@@ -413,12 +439,13 @@ def _log_ignored(issue, ignored):
 
 def _writeback(cfg, issue, workdir):
     lines = sys.stdin.read().splitlines()
+    TRACKERS[cfg.tracker].credentials(cfg, "writeback", dry=False)
     try:
         if len(lines) != 1:
             raise ValueError(f"want one DelegateEvent line on stdin, got {len(lines)}")
         event = DelegateEvent.parse(lines[0])
-        accounts = partial(TRACKERS[cfg.tracker].claimed, client.linear_gql, cfg)
-        return 0 if writeback.deliver(cfg, issue, workdir, event, accounts=accounts) else 1
+        writers = partial(TRACKERS[cfg.tracker].claimed, client.linear_gql, cfg)
+        return 0 if writeback.deliver(cfg, issue, workdir, event, writers=writers) else 1
     except (ValueError, ConfigError) as error:
         print(f"ensemble-orchestrator writeback: {error}", file=sys.stderr)
         _refused(issue, error)

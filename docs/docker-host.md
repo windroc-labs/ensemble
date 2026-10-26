@@ -61,7 +61,7 @@ access, pinned to commit `9ed47580dc9eb4c1fe794d12e54a8f2d3f258831` (label contr
 a branch or tag. No Docker selection means no proxy installation.
 
 The installer creates `~/.egress/config.local.yaml` only when absent, with just `workers` in denylist mode;
-an existing config is kept byte for byte. A config symlink is preserved and rejected: the proxy mounts
+an existing config is kept byte for byte, so one without a `networks.workers` section (for example a config written only for another caller) leaves the proxy healthy with no `workers` network, and the installer stops with an error naming the file. Add `networks.workers` (see `config.example.yaml` in the installed version), with any Ollama or LAN provider `host:port` under `networks.workers.exceptions` ([OpenCode sessions](#opencode)), then rerun `scripts/install.sh --docker`. A config symlink is preserved and rejected: the proxy mounts
 its containing directory, so host symlink targets may not resolve inside the container. Use a regular file. Every rerun runs the pinned `start.sh` again, which applies a new or changed config and
 leaves the proxy running when nothing changed; the checkout and config are kept.
 The proxy is shared with other caller networks: ensemble cleanup keeps `~/.egress`. If cleanup also removes
@@ -296,6 +296,7 @@ Invalid sources and duplicate plugin names fail before Docker; marketplace, inst
 fail the image build. Selecting a plugin trusts its code, hooks and servers beside the container's credentials.
 `scripts/install.sh --docker` installs ensemble on the host and leaves updraft installation to the image;
 `--no-docker` also installs updraft for the selected host Claude/Codex clients.
+OpenCode on the tmux host has no `/updraft:*` commands, so engineer build tasks cannot run there; use Docker workers.
 A base image can also carry plugins of its own: [Base images](#base-images).
 
 ### Base images
@@ -594,9 +595,14 @@ each replacing the keys it sets (a list whole):
 
 The packaged default is `[environment.docker]`: `image = "@worker"`, `gateway = "workers"`, `plugins = []`,
 `secrets = []`, `prefetch = false`, no `lock`. It also ships one named environment, `[environments.mini-op]`: image
-`mini-op:env`, gateway, lock and plugin `mini-op`, and the secrets `ensemble-env/mini-op-password` (file `mini-password`)
+`mini-op:env`, gateway and lock `mini-op`, and the secrets `ensemble-env/mini-op-password` (file `mini-password`)
 and `ensemble-env/mini-op-ssh-key` (file `mini-ssh-key`); no prefetch. The built-in `verifier` selects it with
-`prefetch = true`, so on a Host without a default table (the packaged `tmux`) a `verifier` run is the configuration error
+`prefetch = true`. It uses the selected client, like every other role: Claude and Codex bootstrap links
+`/opt/windroc/mini-op/skills/mini-op` into Claude's effective config directory's `skills/mini-op` or
+Codex's `~/.agents/skills/mini-op` (independent of `CODEX_HOME`);
+OpenCode loads `/opt/windroc/mini-op/skills` through its container-only `skills.paths`. The environment requests no
+mini-op plugin; use a mini-op image containing its plain skill (WDRC-195). On a Host without a default table
+(the packaged `tmux`) a `verifier` run is the configuration error
 below. Keys:
 
 - `image`: a local [base image](#base-images) or `"@worker"`, ensemble's worker base.

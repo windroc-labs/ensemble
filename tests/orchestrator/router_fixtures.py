@@ -30,7 +30,15 @@ from ensemble.orchestrator.trackers.linear import (
 from ensemble.session import SessionStatus
 from ensemble.utils import EVENTS_ENV, SHORT, SID_ENV
 from tests.orchestrator.unit import run_fixtures
-from tests.orchestrator.unit.board_ids import ACCOUNTS, HEADER, STATE_NAMES, TEAM, team_node
+from tests.orchestrator.unit.board_ids import (
+    HARNESS_USER,
+    HEADER,
+    ROLES,
+    STATE_NAMES,
+    TEAM,
+    role_id,
+    team_node,
+)
 from tests.orchestrator.unit.board_ids import STATES as IDS_BY_KEY
 from tests.orchestrator.unit.board_ids import role as role_table
 from tests.orchestrator.unit.clock import logs_at
@@ -76,16 +84,14 @@ DR, PD = "Deep Research", "Product Design"
 IDS = {DR: "p-dr", PD: "p-pd"}
 
 
-ROLE = ACCOUNTS
-
-# history actor ids as users: the harness (isMe), the user, the manager and the role accounts;
+# history actor ids as users: the harness app, the user, the manager and the role apps;
 # None: Linear automation; BOT: an integration's move, credited to the user
 ACTORS = {
-    AGENT: {"email": "agent@x.com", "isMe": True},
-    USER: {"email": "Me@X.com", "isMe": False},
-    MANAGER: {"email": "manager@x.com", "isMe": False},
-    BOT: {"email": "Me@X.com", "isMe": False},
-    **{f"u-{r}": {"email": a, "isMe": False} for r, a in ACCOUNTS.items()},
+    AGENT: {"id": HARNESS_USER},
+    USER: {"id": USER},
+    MANAGER: {"id": MANAGER},
+    BOT: {"id": USER},
+    **{role_id(r): {"id": role_id(r)} for r in ROLES},
 }
 
 
@@ -110,7 +116,7 @@ LIGHT, DEEP, STRAY, ORPHAN_LABEL = (
 
 
 RECHECK = (
-    "query($i: String!) { issue(id: $i) { state { id } assignee { id email } project { id name } "
+    "query($i: String!) { issue(id: $i) { state { id } delegate { id } assignee { id email } project { id name } "
     "labels { nodes { id name parent { id } } } archivedAt } }"
 )
 
@@ -121,7 +127,7 @@ NO = SessionStatus("no", None, "")
 RESUME = ["ts", "kind", "issue", "sid", "role", "client", "delegate_kind"]
 
 
-START = [*RESUME, "uuid", "project", "target", "key", "task"]
+START = [*RESUME, "uuid", "project", "target", "task"]
 
 
 def ago(**kw):
@@ -129,7 +135,8 @@ def ago(**kw):
 
 
 def who(role):
-    return None if role is None else {"id": f"u-{role}", "email": ROLE.get(role, f"{role}@x.com")}
+    """A role's app user, no email."""
+    return None if role is None else {"id": role_id(role), "email": None}
 
 
 def op(query):
@@ -155,7 +162,8 @@ def issue(
         "url": f"https://linear.app/x/{ident}",
         "state": state,
         "project": project and {"id": IDS[project], "name": project},
-        "assignee": who(role),
+        "delegate": who(role),
+        "assignee": None,
         "priority": priority,
         "createdAt": created,
         "inverseRelations": {"nodes": list(inverse)},
@@ -252,11 +260,11 @@ class FakeLinear:
             "children": {"nodes": [{"id": i} for i in (LIGHT, DEEP, ORPHAN_LABEL)]},
         }
 
-    def __call__(self, query, *, service, **v):
+    def __call__(self, query, *, identity, **v):
         if query == linear_tracker.Q_STATE_NAME:
             return {"workflowState": {"name": STATE_NAMES[v["i"]]}}
         self.queries.append((query, v))
-        self.services.append(service)
+        self.services.append(identity.service)
         if (value := self._identity(query, v)) is not None:
             return value
         if "history" in query:
@@ -278,15 +286,6 @@ class FakeLinear:
             return {"teams": {"nodes": [team_node()]}}
         if query == ops.Q_TASK_GROUP:
             return {"issueLabel": self.group}
-        if "users(filter" in query:
-            users = {
-                "me@x.com": USER,
-                "b@x.com": "user-b",
-                **{a.lower(): f"u-{r}" for r, a in ROLE.items()},
-            }
-            return {
-                "users": {"nodes": [{"id": u} for e, u in users.items() if v["e"].lower() == e]}
-            }
         return None
 
     def _issue_read(self, query, v):
@@ -321,6 +320,7 @@ class FakeLinear:
                 "issue": {
                     "state": {"id": STATES[i["state"]]},
                     "assignee": i["assignee"],
+                    "delegate": i.get("delegate"),
                     "project": i["project"],
                     "labels": {"nodes": i["labels"]},
                     "archivedAt": "2026-10-26T04:11:00.000Z" if i["archived"] else None,
@@ -356,19 +356,23 @@ class FakeLinear:
             if "inverseRelations" in query
             else {"state", "labels", "archived", "inverseRelations"}
         )
+        nodes = [
+            {k: x for k, x in i.items() if k not in drop}
+            for i in self.issues.values()
+            if f["team"]["id"]["eq"] == TEAM
+            and not i["archived"]  # Linear lists none without includeArchived
+            and f["project"] == {"null": False}
+            and i["project"]
+            and i["state"] == NAMES[f["state"]["id"]["eq"]]
+        ]
+        start = int(v.get("c") or 0)
         return {
             "issues": {
-                "nodes": [
-                    {k: x for k, x in i.items() if k not in drop}
-                    for i in self.issues.values()
-                    if f["team"]["id"]["eq"] == TEAM
-                    and not i["archived"]  # Linear lists none without includeArchived
-                    and f["project"] == {"null": False}
-                    and i["project"]
-                    and i["assignee"]
-                    and (i["assignee"]["id"] in f["assignee"]["id"]["in"])
-                    and (i["state"] == NAMES[f["state"]["id"]["eq"]])
-                ]
+                "nodes": nodes[start : start + 100],
+                "pageInfo": {
+                    "hasNextPage": start + 100 < len(nodes),
+                    "endCursor": str(start + 100),
+                },
             }
         }
 
@@ -385,7 +389,7 @@ class Base(run_fixtures.Base):
 
     def setUp(self):
         super().setUp()
-        self.missing, self.keychain_calls = set(), []
+        self.keychain_calls = []
         self.write_local(f'work_dir = "{self.work}"\n')
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -495,9 +499,9 @@ class Base(run_fixtures.Base):
         self.mark = len(logged(self.logs))
         return logs_at(self.logs)
 
-    def keychain(self, service):
-        self.keychain_calls.append(service)
-        return service not in self.missing
+    def keychain(self, identity):
+        self.keychain_calls.append(identity.service)
+        return True
 
     def cfg(self):
         cfg = config.load(path=self.config_path)

@@ -17,15 +17,15 @@ from tests.delegate.workdir import checkout_root
 from tests.orchestrator.case import REPO as WORKTREE
 from tests.orchestrator.integration import fake_gh
 from tests.orchestrator.integration.flow_fixtures import (
-    ACCOUNTS,
     HUMAN,
     PROJECT,
     REPO,
     UPDRAFT,
     BinFlow,
 )
+from tests.orchestrator.unit.board_ids import role_id
 
-ENGINEER = ACCOUNTS["engineer"]
+ENGINEER = role_id("engineer")
 ID, TITLE, BRANCH = "TASK-7", "ENG: Session registry", "TASK-7-session-registry"
 PR = f"https://github.com/{REPO}/pull/1"
 TOOL = os.path.join(WORKTREE, "src", "ensemble", "delegate", "team", "tools", "repo.py")
@@ -71,7 +71,7 @@ class Rework(BinFlow):
         self.fake.issue(
             TITLE,
             identifier=ID,
-            assignee=self.ids[ENGINEER],
+            delegate=ENGINEER,
             project=PROJECT,
             description="Add a session registry.",
         )

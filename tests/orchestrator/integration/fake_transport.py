@@ -68,11 +68,11 @@ def install(path):
             or (len(argv) == 5 and argv[4] != "-w")
         ):
             raise ValueError("fake transport refuses an unexpected credential command")
-        key = settings()["keys"].get(argv[3])
+        token = settings()["tokens"].get(argv[3])
         result = subprocess.CompletedProcess(
             argv,
-            0 if key is not None else 44,
-            (key + "\n") if key is not None and len(argv) == 5 else "",
+            0 if token is not None else 44,
+            (token + "\n") if token is not None and len(argv) == 5 else "",
             "",
         )
         if kwargs.get("check") and result.returncode:

@@ -27,6 +27,7 @@ jobs:
     outputs:
       full: ${{ steps.scope.outputs.full }}
       docs: ${{ steps.scope.outputs.docs }}
+      version: ${{ steps.scope.outputs.version }}
       broker: ${{ steps.scope.outputs.broker }}
       projects: ${{ steps.scope.outputs.projects }}
     steps:
@@ -148,6 +149,12 @@ jobs:
           python-version: "3.11"
       - name: Install pinned test dependencies
         run: python3 -m pip install coverage=="$COVERAGE_VERSION" import-linter=="$IMPORT_LINTER_VERSION" ruff==0.16.9 jsonschema==4.26.0
+      - name: Install zsh
+        run: |
+          if ! command -v zsh >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends zsh
+          fi
       - name: Protect shipped source
         run: chmod -R a-w src
       - name: Repository integration tests
@@ -165,6 +172,7 @@ jobs:
     name: Unit ${{ matrix.job }}
     runs-on: ubuntu-24.04
     needs: [changes]
+    if: ${{ needs.changes.outputs.version == 'false' }}
     env:
       TEST_PROJECTS: ${{ needs.changes.outputs.full == 'false' && needs.changes.outputs.projects || '' }}
     timeout-minutes: 15
@@ -218,7 +226,7 @@ jobs:
   coverage:
     name: Coverage
     needs: [changes, unit]
-    if: ${{ github.event_name == 'pull_request' }}
+    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.version == 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -263,7 +271,7 @@ jobs:
     name: Integration ${{ matrix.job }}
     runs-on: ubuntu-24.04
     needs: [changes]
-    if: ${{ needs.changes.outputs.docs == 'false' }}
+    if: ${{ needs.changes.outputs.docs == 'false' && needs.changes.outputs.version == 'false' }}
     timeout-minutes: 15
     env:
       INTEGRATION_WORKERS: "4"

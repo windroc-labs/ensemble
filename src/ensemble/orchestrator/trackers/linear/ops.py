@@ -140,39 +140,14 @@ def last_move(nodes, states, keep=None):
     )
 
 
-Q_USER = "query($e: String!) { users(filter: { email: { eqIgnoreCase: $e } }) { nodes { id } } }"
-
-
-def user_id(gql, email):
-    nodes = gql(Q_USER, e=email)["users"]["nodes"]
-    return nodes[0]["id"] if nodes else None
-
-
-def role_ids(gql, roles):
-    return _roles(roles, lambda email: user_id(gql, email))
-
-
-def _roles(roles, find):
-    """{user id: role}, find(account) giving each role account's id, None when Linear has none."""
-    out = {}
-    for name, role in roles.items():
-        uid = find(role.account)
-        if not uid:
-            raise LinearError(
-                f"orchestrator/config.toml [linear.roles.{name}]: account {role.account!r} not found in Linear"
-            )
-        out[uid] = name
-    return out
+def role_ids(roles):
+    """{configured app user id: role}."""
+    return {app.user_id: name for name, app in roles.items()}
 
 
 TEAMS = """teams(filter: { id: { eq: $t } }) { nodes { id name
   states(first: 100) { nodes { id type } } } }"""
 Q_TEAM = "query($t: ID) { " + TEAMS + " }"
-Q_SETUP = (
-    "query($t: ID, $u: UserFilter) { "
-    + TEAMS
-    + " users(filter: $u, first: 100) { nodes { id email } } }"
-)
 
 
 def team(gql, linear):
@@ -180,15 +155,8 @@ def team(gql, linear):
 
 
 def team_and_roles(gql, linear):
-    """team() and role_ids() in one read (none with no roles: team() alone), the team checked
-    first."""
-    if not linear.roles:
-        return team(gql, linear), {}
-    accounts = [{"email": {"eqIgnoreCase": r.account}} for r in linear.roles.values()]
-    found = gql(Q_SETUP, t=linear.team, u={"or": accounts})
-    found_team = _team(found["teams"]["nodes"], linear)
-    ids = {n["email"].lower(): n["id"] for n in found["users"]["nodes"]}
-    return found_team, _roles(linear.roles, lambda email: ids.get(email.lower()))
+    """Read the team as the harness; role ids come solely from configuration."""
+    return team(gql, linear), role_ids(linear.roles)
 
 
 def _team(nodes, linear):

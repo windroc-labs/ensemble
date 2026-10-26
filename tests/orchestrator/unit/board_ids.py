@@ -3,7 +3,11 @@ import hashlib
 import os
 import shutil
 import tempfile
+import uuid
 from importlib.resources import files
+
+from ensemble.orchestrator.engine.types import AppKind, LinearApp
+from ensemble.orchestrator.trackers.linear import ops
 
 TEAM = "00000000-0000-4000-8000-000000000001"
 STATES = {
@@ -28,10 +32,38 @@ FINISHED = frozenset({STATES["done"], STATES["canceled"], DUPLICATE})
 TASK_GROUP = "00000000-0000-4000-8000-000000000002"
 # The Linear tracker, then dotted keys and inline tables: fixtures may append top-level keys (a
 # Linear one as linear.<key>) or tables ([linear.<table>] included) after it.
+HARNESS_USER = "00000000-0000-4000-8000-000000000201"
+# The manager app's user: [linear.manager] user_id where a fixture sets it.
+MANAGER_USER = "00000000-0000-4000-8000-000000000202"
+# The harness app: its token entry is "linear-app-harness-token", what a fake transport keys the harness by.
+HARNESS_APP = {
+    "client_id": "client-harness",
+    "secret_service": "linear-app-harness-secret",
+    "token_service": "linear-app-harness-token",
+    "user_id": HARNESS_USER,
+}
+HARNESS_IDENTITY = LinearApp("harness", AppKind.HARNESS, "linear.harness", **HARNESS_APP)
+HARNESS_LINE = "linear.harness = {{ {} }}\n".format(
+    ", ".join(f'{k} = "{v}"' for k, v in HARNESS_APP.items())
+)
+# The manager app: its token entry is "linear-app-manager-token"; HEADER leaves it out (the issue command's
+# fixtures prepend MANAGER_LINE).
+MANAGER_APP = {
+    "client_id": "client-manager",
+    "secret_service": "linear-app-manager-secret",
+    "token_service": "linear-app-manager-token",
+    "user_id": MANAGER_USER,
+}
+MANAGER_IDENTITY = LinearApp("manager", AppKind.MANAGER, "linear.manager", **MANAGER_APP)
+# LinearSettings.manager when [linear.manager] is unset.
+NO_MANAGER = LinearApp("manager", AppKind.MANAGER, "linear.manager", "", "", "", "")
+MANAGER_LINE = "linear.manager = {{ {} }}\n".format(
+    ", ".join(f'{k} = "{v}"' for k, v in MANAGER_APP.items())
+)
 HEADER = (
     'tracker = "linear"\n'
-    + 'linear.team = "{}"\nlinear.harness_key = "linear-api-key"\nlinear.states = {{ {} }}\n'.format(
-        TEAM, ", ".join(f'{k} = "{v}"' for k, v in STATES.items())
+    + 'linear.team = "{}"\n{}linear.states = {{ {} }}\n'.format(
+        TEAM, HARNESS_LINE, ", ".join(f'{k} = "{v}"' for k, v in STATES.items())
     )
     + f'linear.task_label_group = "{TASK_GROUP}"\n'
     + 'delegates = { default = "harness", harness = { implementation = "ensemble.delegate:HarnessDelegate" } }\n'
@@ -45,7 +77,7 @@ STATE_NAMES = dict(
     )
 )
 
-ACCOUNTS = {r: f"{r}@agents.test" for r in ("researcher", "pm", "engineer")}
+ROLES = ("researcher", "pm", "engineer")
 
 
 # the packaged workflow's text, for a fixture that changes it
@@ -67,10 +99,34 @@ def workflow_line(text):
     return f'workflow = "{workflow_file(text)}"\n'
 
 
+def role_app(name):
+    return LinearApp(
+        name,
+        AppKind.ROLE,
+        f"linear.roles.{name}",
+        f"client-{name}",
+        f"linear-app-{name}-secret",
+        f"linear-app-{name}-token",
+        role_id(name),
+    )
+
+
+def role_id(name):
+    return str(uuid.uuid5(uuid.NAMESPACE_OID, name))
+
+
+def comment_id(role, sid, *parts):
+    app = HARNESS_IDENTITY if role == "harness" else role_app(role)
+    return ops.client_id(app.user_id, sid, *parts)
+
+
 def role(name, *lines):
-    """[linear.roles.<name>]'s account and key, then [roles.<name>] holding `lines`."""
+    """The stage's app table, then its board run settings."""
+    app = role_app(name)
+    fields = ("client_id", "secret_service", "token_service", "user_id")
     return (
-        f'[linear.roles.{name}]\naccount = "{name}@agents.test"\nkey = "linear-api-key-{name}"\n'
+        f"[linear.roles.{name}]\n"
+        + "".join(f'{k} = "{getattr(app, k)}"\n' for k in fields)
         + f"[roles.{name}]\n"
         + "".join(f"{x}\n" for x in lines)
     )

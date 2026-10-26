@@ -5,8 +5,9 @@ import io
 import json
 import os
 import time
+import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -17,12 +18,29 @@ from ensemble.orchestrator.engine import log as event_log
 from ensemble.orchestrator.engine.flow import workflow
 from ensemble.orchestrator.engine.flow.types import IssueState
 from ensemble.orchestrator.engine.types import IssueError, LinearError
-from ensemble.orchestrator.trackers.linear import linear_tracker, ops
+from ensemble.orchestrator.trackers.linear import client, linear_tracker, ops
 from ensemble.orchestrator.trackers.local.local_tracker import LocalTracker
 from tests.orchestrator.case import Case
-from tests.orchestrator.unit.board_ids import FINISHED, TEAM
+from tests.orchestrator.unit.board_ids import (
+    FINISHED,
+    HARNESS_IDENTITY,
+    HARNESS_USER,
+    ROLES,
+    TEAM,
+    role_id,
+)
 from tests.orchestrator.unit.board_ids import STATES as IDS_BY_KEY
 from tests.orchestrator.unit.board_ids import role as role_table
+from tests.orchestrator.unit.keychain_fixtures import (
+    NEW,
+    OLD,
+    Endpoint,
+    Keychain,
+    record,
+    renewed,
+    token_http_error,
+)
+from tests.orchestrator.unit.keychain_fixtures import SECRET as APP_SECRET
 from tests.orchestrator.unit.outage import FAILURES, FIELDS, failing
 from tests.orchestrator.unit.promote_fixtures import (
     AGENT,
@@ -31,7 +49,6 @@ from tests.orchestrator.unit.promote_fixtures import (
     NOW,
     OTHER,
     PM_NEXT,
-    ROLE,
     STATES,
     Base,
     FakeLinear,
@@ -274,8 +291,8 @@ class PromotionOutages(Base):
                     self.assertEqual(self.run_main(gql=gql), 1)
                     self.assertEqual((self.out, self.err, FakePruner.calls), (said, "", []))
                     self.assertEqual(
-                        [(q, v["service"], v["t"]) for q, v in gql.failed],
-                        [(ops.Q_SETUP, HARNESS, TEAM)],
+                        [(q, v["identity"].service, v["t"]) for q, v in gql.failed],
+                        [(ops.Q_TEAM, HARNESS, TEAM)],
                     )
         self.assertEqual(self.fake.calls, [])
         self.assertEqual((self.run_main(), src["state"]), (0, "Done"))
@@ -286,7 +303,12 @@ class PromotionOutages(Base):
                 self.assertEqual(self.run_main("--dry-run", gql=failing(error)), 1)
                 self.assertEqual(
                     (self.out, len(self.err.splitlines()), FakePruner.calls),
-                    (f"linear-error op=teams {FIELDS[name]}", 1, []),
+                    (
+                        "token identity=harness days_left=20.0\n"
+                        f"linear-error op=teams {FIELDS[name]}",
+                        2,
+                        [],
+                    ),
                 )
         self.assertFalse(os.path.exists(self.logs))
 
@@ -310,7 +332,8 @@ class PromotionOutages(Base):
                 )
                 self.assertIn((linear_tracker.Q_DETAIL, {"i": "DR-1"}), fake.calls)
                 self.assertEqual(
-                    down.failed, [(linear_tracker.Q_DETAIL, {"service": HARNESS, "i": "DR-2"})]
+                    down.failed,
+                    [(linear_tracker.Q_DETAIL, {"identity": HARNESS_IDENTITY, "i": "DR-2"})],
                 )
                 self.assertEqual(
                     (first["state"], later["state"], fake.mutations), ("Handoff", "Handoff", [])
@@ -388,13 +411,14 @@ class PromotionCleanup(Base):
         tracker = board(gql)
         self.assertIsInstance(tracker.gql, functools.partial)
         self.assertEqual(
-            (tracker.gql.func, tracker.gql.keywords), (self.fake, {"service": HARNESS})
+            (tracker.gql.func, tracker.gql.keywords),
+            (self.fake, {"identity": HARNESS_IDENTITY}),
         )
         self.assertEqual(
             (tracker.team_id, tracker.state_ids, tracker.finished_ids),
             (TEAM, dict(IDS_BY_KEY), FINISHED),
         )
-        self.assertEqual(tracker.roles, {f"u-{role}": role for role in ROLE})
+        self.assertEqual(tracker.roles, {role_id(role): role for role in ROLES})
 
     def test_prune_error_does_not_break_promote(self):
         class Boom:
@@ -423,6 +447,14 @@ class PromotionCleanup(Base):
 
 
 class HandoffPromotion(Base):
+    def test_handoff_uses_delegate_and_preserves_human_assignee(self):
+        human = {"id": "human-user"}
+        src = self.ready(assignee=human)
+        self.assertEqual(self.run_main(), 0)
+        (child,) = self.fake.children.values()
+        self.assertEqual((child["delegateId"], child["assigneeId"]), (role_id("pm"), None))
+        self.assertEqual(src["assignee"], human)
+
     def test_happy_path(self):
         src = self.ready(attachments=[{"title": "Report", "url": "https://gh/r.md"}])
         self.assertEqual(self.run_main(), 0)
@@ -431,12 +463,13 @@ class HandoffPromotion(Base):
         self.assertEqual(
             (
                 child["projectId"],
+                child["delegateId"],
                 child["assigneeId"],
                 child["stateId"],
                 child["priority"],
                 child["teamId"],
             ),
-            ("p-dr", "u-pm", STATES["Todo"], 2, TEAM),
+            ("p-dr", role_id("pm"), None, STATES["Todo"], 2, TEAM),
         )
         self.assertEqual(child["title"], "PRD: Title DR-1")
         self.assertEqual(
@@ -558,7 +591,7 @@ class HandoffPromotion(Base):
 
     def test_session_comments_left_out_of_comments(self):
         run = "Run 0b6f2c1e-6d0a-4c1b-9a51-3f1f6b0e2a7d · running · 2026-09-27T10:00:00+08:00"
-        harness = {"email": "agent@x.com", "name": "Harness", "isMe": True}
+        harness = {"id": HARNESS_USER, "email": None, "name": "Harness"}
         self.fake.add("DR-1")
         self.fake.said("DR-1", 48, user=harness, body=run)
         self.fake.said("DR-1", 47, user=harness, body="Repo check failed: no Repo: line")
@@ -660,10 +693,10 @@ class HandoffPromotion(Base):
         self.run_main()
         self.assertEqual(self.fake.children, {})
         self.assertEqual(
-            (src["state"], src["assignee"], src["subscribers"], src["posted"]),
+            (src["state"], src["delegate"], src["subscribers"], src["posted"]),
             (
                 "In Review",
-                {"id": "u-researcher"},
+                {"id": role_id("researcher")},
                 ["me@x.com", "b@x.com"],
                 [promote.NO_INSTRUCTIONS.format(state="In Review")],
             ),
@@ -679,6 +712,86 @@ class HandoffPromotion(Base):
             ],
         )
         self.assertIn("handoff-bounce DR-1 to=in_review reason=no instructions", self.out)
+
+
+class HarnessToken(Base):
+    """promote alone renews the harness app's token, over the real transport."""
+
+    def setUp(self):
+        super().setUp()
+        self.ready("DR-1")
+
+    def promote(self, days, answer=None, *argv):
+        self.keychain = Keychain(
+            {
+                HARNESS_IDENTITY.token_service: record(days=days),
+                HARNESS_IDENTITY.secret_service: APP_SECRET,
+            }
+        )
+        self.endpoint = Endpoint(
+            answer, data=lambda q, v: self.fake(q, identity=HARNESS_IDENTITY, **v)
+        )
+        with (
+            mock.patch("subprocess.run", self.keychain),
+            mock.patch.object(urllib.request, "urlopen", side_effect=self.endpoint),
+        ):
+            return self.run_main(*argv, gql=client.linear_gql)
+
+    def stored(self):
+        return json.loads(self.keychain.value(HARNESS_IDENTITY.token_service))
+
+    def test_4_days_left_renews_before_the_first_call_and_6_does_not(self):
+        since = datetime.now(UTC)
+        self.assertEqual(self.promote(4), 0)
+        self.assertEqual([t["scope"] for t in self.endpoint.tokens], ["read,write"])
+        renewed(self, self.keychain.value(HARNESS_IDENTITY.token_service), since)
+        self.assertEqual(
+            {r.get_header("Authorization") for r in self.endpoint.graphql}, {f"Bearer {NEW}"}
+        )
+        self.assertIn("promote DR-1", self.out)
+        self.ready("DR-2")
+        self.assertEqual(self.promote(6), 0)
+        self.assertEqual(self.endpoint.tokens, [])
+        self.assertEqual(self.stored()["access_token"], OLD)
+
+    def test_promote_runs_without_a_manager_app(self):
+        linear = config.load(path=self.config_path).linear
+        with self.assertRaises(config.ConfigError):
+            config.manager_app(linear)
+        self.assertEqual(self.promote(6), 0)
+        self.assertIn("promote DR-1", self.out)
+
+    def test_a_failed_renewal_of_a_usable_token_is_one_token_error_and_promote_goes_on(self):
+        self.assertEqual(self.promote(3, token_http_error(401)), 0)
+        self.assertEqual(len(self.endpoint.tokens), 1)
+        self.assertEqual(self.stored()["access_token"], OLD)
+        lines = [e for e in logged(self.logs) if e["kind"] == "token-error"]
+        self.assertEqual(
+            [(e["src"], e["identity"], e["reason"]) for e in lines],
+            [("promote", "harness", "HTTP 401")],
+        )
+        self.assertIn("promote DR-1", self.out)
+
+    def test_an_expired_token_whose_renewal_fails_exits_2_naming_the_harness(self):
+        self.assertEqual(self.promote(-1, token_http_error(401)), 2)
+        [line] = [e for e in logged(self.logs) if e["kind"] == "config-error"]
+        self.assertEqual(
+            line["reason"],
+            "Linear harness app token expired and renewal failed: HTTP 401; fix: check "
+            "linear.harness.client_id and the client secret in Keychain service "
+            "linear-app-harness-secret (rotated: store the new secret), then rerun",
+        )
+        self.assertEqual((self.endpoint.graphql, self.fake.mutations), ([], []))
+
+    def test_a_dry_run_shows_days_left_and_requests_no_token(self):
+        self.assertEqual(self.promote(4, None, "--dry-run"), 0)
+        self.assertEqual(self.endpoint.tokens, [])
+        self.assertEqual(self.stored()["access_token"], OLD)
+        self.assertNotIn(("-i",), {tuple(argv[1:]) for argv, _ in self.keychain.calls})
+        self.assertEqual(self.out.splitlines()[0], "token identity=harness days_left=4.0")
+        self.assertEqual(self.promote(-1, None, "--dry-run"), 2)
+        self.assertEqual(self.endpoint.tokens, [])
+        self.assertIn("Linear harness app token expired", self.err)
 
 
 class HarnessIdentity(Base):
@@ -803,8 +916,8 @@ class PromotionScope(Base):
                 promote.Promoter(cfg, board(self.fake), NOW, dry=False, tasks=tasks).run()
                 (child,) = self.fake.children.values()
                 self.assertEqual(
-                    (child["projectId"], child["assigneeId"], child["title"]),
-                    ("p-dr", "u-engineer", want),
+                    (child["projectId"], child["delegateId"], child["assigneeId"], child["title"]),
+                    ("p-dr", role_id("engineer"), None, want),
                 )
                 self.assertEqual(
                     instructions(child["description"]), f"## Instructions\nMe, {ago(45)}:\nbuild X"
@@ -821,7 +934,7 @@ class PromotionScope(Base):
         self.assertNotIn("## Instructions", child["description"])
         self.assertEqual(src["state"], "Done")
 
-    def test_handoff_scans_role_accounts_in_projects(self):
+    def test_handoff_scans_role_delegates_in_projects(self):
         self.ready("DR-1", role=None)
         self.ready("DR-2", role="someone")
         self.ready("DR-3", project=None)
@@ -830,11 +943,12 @@ class PromotionScope(Base):
         self.assertEqual(
             self.fake.handoff_vars, {"t": TEAM, "s": IDS_BY_KEY["handoff"], "a": mock.ANY}
         )
-        self.assertEqual(sorted(self.fake.handoff_vars["a"]), sorted(f"u-{r}" for r in ROLE))
+        self.assertEqual(sorted(self.fake.handoff_vars["a"]), sorted(role_id(r) for r in ROLES))
         self.assertIn("team: { id: { eq: $t } }", linear_tracker.Q_HANDOFF)
         self.assertIn("state: { id: { eq: $s } }", linear_tracker.Q_HANDOFF)
         self.assertIn("project: { null: false }", linear_tracker.Q_HANDOFF)
-        self.assertIn("assignee: { id: { in: $a } }", linear_tracker.Q_HANDOFF)
+        self.assertIn("delegate: { id: { in: $a } }", linear_tracker.Q_HANDOFF)
+        self.assertNotIn("assignee", linear_tracker.Q_HANDOFF)
 
     def test_unknown_flag(self):
         self.assertEqual(self.run_main("--nope"), 2)
@@ -982,7 +1096,7 @@ class LocalBoardPromotion(Base):
         )
 
 
-SETUP_REQUESTS = {"ops.Q_SETUP": 1}
+SETUP_REQUESTS = {"ops.Q_TEAM": 1}
 PROMOTION = {  # one Handoff issue promoted
     "linear_tracker.Q_DETAIL": 1,
     "linear_tracker.Q_CHILD": 1,

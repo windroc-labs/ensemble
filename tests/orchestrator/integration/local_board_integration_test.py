@@ -14,15 +14,16 @@ from typing import NamedTuple
 from ensemble.orchestrator.engine.config import BOARD_ENV
 from ensemble.orchestrator.engine.router import CAP
 from tests.orchestrator.integration.flow_fixtures import (
-    ACCOUNTS,
     BIN,
     HUMAN,
     LIGHT_RESEARCH,
     PROJECT,
+    ROLES,
     TIMEOUT,
     BinFlow,
     usage,
 )
+from tests.orchestrator.unit.board_ids import role_id
 
 AGENT_GROUP = "00000000-0000-4000-8000-000000000101"
 CLAUDE = "00000000-0000-4000-8000-000000000102"
@@ -173,8 +174,8 @@ class LocalBoard(BinFlow):
 
     def seed_linear(self):
         self.fake.label_group(AGENT_GROUP, "Agent", {CLAUDE: "Claude"})
-        owners = {"unassigned": None, "me": self.ids[HUMAN], None: self.ids[ACCOUNTS["pm"]]}
-        owners.update((role, self.ids[account]) for role, account in ACCOUNTS.items())
+        owners = {"unassigned": None, "me": self.ids[HUMAN], None: role_id("pm")}
+        owners.update((role, role_id(role)) for role in ROLES)
         for seed in ISSUES:
             labels = [LIGHT_RESEARCH] if seed.task else []
             labels += [CLAUDE] if seed.client else []
@@ -182,7 +183,7 @@ class LocalBoard(BinFlow):
                 f"Issue {seed.n}",
                 identifier=f"TASK-{seed.n}",
                 state=LINEAR_STATES[seed.state],
-                assignee=owners[seed.owner],
+                delegate=owners[seed.owner],
                 project=PROJECT,
                 description=f"Issue {seed.n}.",
                 priority=seed.priority,
@@ -238,11 +239,27 @@ class LocalBoard(BinFlow):
         on_board = self.dry_run()
         self.use("linear")
         self.seed_linear()
-        on_linear = self.dry_run()
+        on_linear = [e for e in self.dry_run() if e["kind"] != "token"]  # Linear's: the harness's
+        unowned = [
+            e
+            for e in on_linear
+            if e["kind"] == "claim-skip" and e.get("reason") == "no configured role delegate"
+        ]
+        self.assertEqual(
+            unowned,
+            router(
+                {"kind": "claim-skip", "issue": "TASK-12", "reason": "no configured role delegate"},
+                {"kind": "claim-skip", "issue": "TASK-13", "reason": "no configured role delegate"},
+            ),
+        )
+        on_linear = [e for e in on_linear if e not in unowned]
         local_comment = next(e for e in on_board if e["kind"] == "would comment")
         linear_comment = next(e for e in on_linear if e["kind"] == "would comment")
         self.assertEqual(local_comment["body"], BAD_TASK)
-        self.assertEqual(linear_comment["body"], BAD_TASK.replace("ready/", "Todo"))
+        self.assertEqual(
+            linear_comment["body"],
+            BAD_TASK.replace("ready/", "Todo").replace("assignee", "delegate"),
+        )
         normalized = [
             json.loads(re.sub(r"\bLOC-(\d+)", r"TASK-\1", json.dumps(e))) for e in on_board
         ]

@@ -27,7 +27,7 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | (login claude, opencode and env also take --expires YYYY-MM-DD; claude --issued YYYY-MM-DD or --fresh-token instead) | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | lock-query --lock NAME | maintain --container NAME --manifest FILE [--renew] [--delivered KEY]... | close --container NAME | status [--cleanup] | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients"
+const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | (login claude, opencode and env also take --expires YYYY-MM-DD; claude --issued YYYY-MM-DD or --fresh-token instead) | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | lock-query --lock NAME | maintain --container NAME --manifest FILE [--renew] [--delivered KEY]... | close --container NAME | status [--cleanup] | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients | login linear | linear-maintain (public identity JSON on stdin)"
 
 // replaced answers a supervisor started before protocol 29, which still calls refresh and notices.
 const replaced = "Broker protocol 29 replaced refresh and notices with maintain; restart this session (close and resume it) to renew its credentials."
@@ -40,6 +40,7 @@ var volumePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$`)
 type step func(ctx context.Context, arg string, progress io.Writer) (any, error)
 
 type app struct {
+	linear        func(context.Context, bool) (any, error) // bounded identity JSON on stdin; bool: enrollment
 	build         func(ctx context.Context, pkg string, spec launcher.BuildSpec, maxAge time.Duration, progress io.Writer) (any, error)
 	start, close  step
 	maintain      func(ctx context.Context, container, manifest string, delivered []string, renew bool) (any, error)
@@ -155,6 +156,14 @@ func isPath(s string) bool {
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (code int) {
+	if len(args) == 1 && args[0] == "linear-maintain" || len(args) == 2 && args[0] == "login" && args[1] == "linear" {
+		result, err := a.linear(ctx, args[0] == "login")
+		if err != nil {
+			fmt.Fprintln(stderr, "ensemble-broker: Linear command failed; check enrollment and broker installation, then rerun")
+			return 1
+		}
+		return emit(stdout, result)
+	}
 	command := "unknown"
 	if len(args) > 0 {
 		switch args[0] {
@@ -381,6 +390,7 @@ func tokens(home string, rec *audit.Recorder) broker.GitHub {
 
 func system() app {
 	return app{
+		linear: linearSystem,
 		lockQuery: func(ctx context.Context, lock string) (any, error) {
 			return withHost("lock-query", "", nil, func(h launcher.Host) (any, error) { return h.LockQuery(ctx, lock) })
 		},

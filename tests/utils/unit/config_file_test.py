@@ -75,7 +75,7 @@ class ConfigFileTest(Case):
 
 SESSION = '[hosts]\ndefault = "tmux"\n[hosts.tmux]\nstatus_line = false\n'
 DELEGATE = 'client = "a"\nshow = ""\nteam_dirs = []\n[roles.pm]\ntier = 2\n[roles.pm.output]\ntype = "local"\n'
-ORCH = 'team = ""\nwork_dir = "~/w"\n[roles.pm]\naccount = ""\nmax_runs = 3\n[core.roles.pm]\ngate = "g"\n'
+ORCH = 'team = ""\nwork_dir = "~/w"\n[roles.pm]\nnote = ""\nmax_runs = 3\n[core.roles.pm]\ngate = "g"\n'
 
 
 class FrozenTables(Case):
@@ -145,23 +145,21 @@ class Resources(Case):
         )
 
     def test_reads_resources_and_interleaves_each_local_section(self):
-        self.local(
-            '[delegate.roles.pm]\ntier = 1\n[orchestrator.roles.pm]\ntier = 3\naccount = "pm@x"\n'
-        )
+        self.local('[delegate.roles.pm]\ntier = 1\n[orchestrator.roles.pm]\ntier = 3\nnote = "n"\n')
         found = read_resources(iter(self.resources))
         self.assertEqual(
             found["roles"]["pm"],
-            {"tier": 3, "output": {"type": "local"}, "account": "pm@x", "max_runs": 3},
+            {"tier": 3, "output": {"type": "local"}, "note": "n", "max_runs": 3},
         )
         self.assertEqual(read_resources(self.resources[:2])["roles"]["pm"]["tier"], 1)
         self.assertEqual(found["hosts"]["default"], "tmux")
 
     def test_upper_packaged_values_override_lower_local_values(self):
-        self.local('[delegate.roles.pm]\naccount = "not-known-at-this-layer"\n')
-        self.assertEqual(read_resources(self.resources)["roles"]["pm"]["account"], "")
+        self.local('[delegate.roles.pm]\nnote = "not-known-at-this-layer"\n')
+        self.assertEqual(read_resources(self.resources)["roles"]["pm"]["note"], "")
         self.local('[delegate]\nclient = "lower-local"\n[delegate.roles.pm]\ntier = 1\n')
         Path(self.root, self.package, "orchestrator", "config.toml").write_text(
-            ORCH.replace('account = ""', 'tier = 3\naccount = ""')
+            ORCH.replace('note = ""', 'tier = 3\nnote = ""')
         )
         self.assertEqual(read_resources(self.resources)["roles"]["pm"]["tier"], 3)
         self.assertEqual(read_resources(self.resources)["client"], "lower-local")
@@ -242,19 +240,19 @@ class Resources(Case):
         self.assertIs(caught.exception, error)
 
     def test_flat_migration_hints_match_key_paths_and_never_choose_utils(self):
-        unrelated = DELEGATE + '[clients.writer]\naccount = ""\n'
+        unrelated = DELEGATE + '[clients.writer]\nnote = ""\n'
         Path(self.root, self.package, "delegate", "config.toml").write_text(unrelated)
-        extra = 'harness_key = ""\n' + ORCH
+        extra = 'typo_key = ""\n' + ORCH
         Path(self.root, self.package, "orchestrator", "config.toml").write_text(extra)
         for text, key, hint in (
             (
-                'harness_key = "secret-service"\n',
-                "harness_key",
+                'typo_key = "secret-service"\n',
+                "typo_key",
                 "move it under [orchestrator]",
             ),
             (
-                '[roles.engineer]\naccount = "engineer@x"\n',
-                "roles.engineer.account",
+                '[roles.engineer]\nnote = "n"\n',
+                "roles.engineer.note",
                 "move it under [orchestrator]",
             ),
             (
@@ -326,12 +324,12 @@ class Resources(Case):
     def test_flat_key_errors_with_supplied_layers(self):
         for text, layers, message in (
             (
-                'harness_key = "linear-harness"\n',
+                'typo_key = "x"\n',
                 1,
-                "~/.ensemble/config.local.toml: unknown key 'harness_key': flat local configuration; no supplied layer has it; move it under its owning layer's section",
+                "~/.ensemble/config.local.toml: unknown key 'typo_key': flat local configuration; no supplied layer has it; move it under its owning layer's section",
             ),
             (
-                'harness_key = "unprovided"\nsession = 1\n',
+                'typo_key = "unprovided"\nsession = 1\n',
                 1,
                 "~/.ensemble/config.local.toml: [session]: want a table",
             ),
@@ -358,7 +356,7 @@ class Resources(Case):
                 "output": {"type": "local"},
                 "unknown_field": 1,
                 "unknown": {"tier": 1},
-                "account": "",
+                "note": "",
                 "max_runs": 3,
             },
         )
@@ -380,7 +378,7 @@ class Resources(Case):
 
     def test_local_goes_over_every_table_merging_and_lists_replaced_whole(self):
         self.local(
-            '[session.hosts.tmux]\nstatus_line = true\n[delegate]\nclient = "b"\nteam_dirs = ["~/t"]\n[delegate.roles.pm]\ntier = 1\n[orchestrator]\nteam = "T"\n[orchestrator.roles.pm]\naccount = "pm@x"\n'
+            '[session.hosts.tmux]\nstatus_line = true\n[delegate]\nclient = "b"\nteam_dirs = ["~/t"]\n[delegate.roles.pm]\ntier = 1\n[orchestrator]\nteam = "T"\n[orchestrator.roles.pm]\nnote = "n"\n'
         )
         found = read_resources(self.resources)
         self.assertEqual(
@@ -389,7 +387,7 @@ class Resources(Case):
         )
         self.assertEqual(
             found["roles"]["pm"],
-            {"tier": 1, "output": {"type": "local"}, "account": "pm@x", "max_runs": 3},
+            {"tier": 1, "output": {"type": "local"}, "note": "n", "max_runs": 3},
         )
 
     def test_a_new_table_under_a_known_one_is_taken_as_its_owners(self):
@@ -418,15 +416,13 @@ class Unset(Case):
             "team": "",
             "key": "k",
             "states": {"a": "1", "b": ""},
-            "roles": {"x": {"account": ""}, "y": {}},
+            "roles": {"x": {"note": ""}, "y": {}},
         }
         self.assertEqual(
-            unset(
-                cfg, ("team", "key", "gone", "states.a", "states.b", "states.c", "roles.*.account")
-            ),
-            ["team", "gone", "states.b", "states.c", "roles.x.account", "roles.y.account"],
+            unset(cfg, ("team", "key", "gone", "states.a", "states.b", "states.c", "roles.*.note")),
+            ["team", "gone", "states.b", "states.c", "roles.x.note", "roles.y.note"],
         )
-        self.assertEqual(unset({}, ("roles.*.account",)), [])
+        self.assertEqual(unset({}, ("roles.*.note",)), [])
 
 
 if __name__ == "__main__":

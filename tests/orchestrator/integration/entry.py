@@ -29,7 +29,7 @@ def launch(argv):
         cfg,
         gql=client.linear_gql,
         run=config.shell,
-        keychain=client.has_key,
+        keychain=client.has_token,
         wiring=cli.TRACKERS[cfg.tracker],
     )
 
