@@ -17,7 +17,7 @@ import (
 // prefetchHost is credentialHost with a real Home holding a default-base variant record for imageKey.
 func prefetchHost(t *testing.T, w *world) (Host, *fakeDocker, *fakeTokens) {
 	t.Helper()
-	h, d, _, tokens, _, _ := credentialHost(w)
+	h, d, _, tokens, _, _, _ := credentialHost(w)
 	h.Home = t.TempDir()
 	putFile(t, h.recordPath(imageKey), `{"package":"/p","base_image":"","plugins":[],"image_plugins":[]}`)
 	return h, d, tokens

@@ -371,12 +371,15 @@ func (c Client) Repositories(ctx context.Context, token string) (string, []strin
 	return "", nil, fmt.Errorf("GitHub listed more than %d repositories", maxPages*perPage)
 }
 
-// Revoke invalidates token; 401 and 404 mean it is already invalid.
+// ErrAlreadyInvalid is Revoke's answer for a token GitHub no longer accepts: as good as revoked.
+var ErrAlreadyInvalid = errors.New("GitHub token already invalid")
+
+// Revoke invalidates token; 401 and 404 mean it is already invalid (ErrAlreadyInvalid).
 func (c Client) Revoke(ctx context.Context, token string) error {
 	err := c.call(ctx, http.MethodDelete, "/installation/token", token, nil, http.StatusNoContent, nil)
 	var se *StatusError
 	if errors.As(err, &se) && (se.Status == http.StatusUnauthorized || se.Status == http.StatusNotFound) {
-		return nil
+		return ErrAlreadyInvalid
 	}
 	return err
 }

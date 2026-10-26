@@ -6,11 +6,38 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"ensemble/broker/internal/audit"
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/protocol"
 )
+
+// heldKinds are the credential kinds m's container holds: its client's, GitHub's for an App, env for secrets.
+func heldKinds(m Manifest) []credential.Kind {
+	var kinds []credential.Kind
+	switch m.Client {
+	case "codex":
+		kinds = append(kinds, credential.Codex)
+	case "opencode":
+		kinds = append(kinds, credential.Opencode)
+	default:
+		kinds = append(kinds, credential.Claude)
+	}
+	if m.GitHubApp != "" {
+		kinds = append(kinds, credential.GitHub)
+	}
+	if len(m.Secrets) > 0 {
+		kinds = append(kinds, credential.Env)
+	}
+	return kinds
+}
+
+// renewable is whether any of m's credentials is a token kind; static ones a human rotates.
+func renewable(m Manifest) bool {
+	return slices.ContainsFunc(heldKinds(m), func(k credential.Kind) bool { return credential.Renewable(k) == nil })
+}
 
 // Refresh replaces container credentials; path is its original manifest.
 func (h Host) Refresh(ctx context.Context, container, path string) (RefreshResult, error) {
@@ -23,7 +50,7 @@ func (h Host) Refresh(ctx context.Context, container, path string) (RefreshResul
 	if err != nil {
 		return RefreshResult{}, err
 	}
-	if "ensemble-"+m.Name+"-"+m.Generation != container || (m.GitHubApp == "" && m.Client != "codex") {
+	if "ensemble-"+m.Name+"-"+m.Generation != container || !renewable(m) {
 		return RefreshResult{}, protocol.New(protocol.ManifestRejected, "Manifest rejected: refresh needs the container's manifest and renewable credentials.")
 	}
 	if err := h.checkMounts(m); err != nil {

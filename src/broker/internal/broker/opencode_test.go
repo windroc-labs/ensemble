@@ -219,8 +219,8 @@ func TestOpencodeKeysInject(t *testing.T) {
 	if err := (OpencodeKeys{Keychain: k}).Inject([]string{"strata", "lab"}, e.run); err != nil {
 		t.Fatal(err)
 	}
-	script := "mkdir -p -m 0700 " + docker.SecretsDir + "/opencode && umask 0377 && set -C && cat > " + docker.SecretsDir + `/opencode/"$1".key`
-	want := [][]string{{"/bin/sh", "-c", script, "sh", "strata"}, {"/bin/sh", "-c", script, "sh", "lab"}}
+	script := "mkdir -p -m 0700 " + docker.SecretsDir + "/opencode && umask 0377 && set -C && cat > " + docker.SecretsDir + `/opencode/"$1"`
+	want := [][]string{{"/bin/sh", "-c", script, "sh", "strata.key"}, {"/bin/sh", "-c", script, "sh", "lab.key"}}
 	if !reflect.DeepEqual(e.argv, want) || string(e.stdin[0]) != apiKey+"-strata" || string(e.stdin[1]) != apiKey+"-lab" {
 		t.Fatalf("%q %q", e.argv, e.stdin)
 	}
