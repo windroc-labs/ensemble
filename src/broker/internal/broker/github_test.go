@@ -116,6 +116,16 @@ type api struct {
 	reposFail int // the repository listing's status; 0: each installation reaches <login>/one and <login>/two
 	onRepos   func(token string)
 	bodies    []string // each token request's body
+	repo      *fakeRepo
+	repoPaths []string // each /repos/ request's path and its token
+}
+
+// fakeRepo is the one repository a prefetch test reaches: acme/app, on the acme installation when installed.
+type fakeRepo struct {
+	installed      bool
+	defaultBranch  string
+	branches, tags []string
+	refStatus      int // a ref lookup's status; 0: 200 or 404 by branches and tags
 }
 
 // perms is the set every test token is requested with; permsBody, its request body.
@@ -167,6 +177,9 @@ func (a *api) handler(t *testing.T) http.HandlerFunc {
 			_, _ = fmt.Sscanf(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ghs_"), "%d_", &id)
 			login := a.installs[id-1]
 			_, _ = fmt.Fprintf(w, `{"total_count":2,"repository_selection":"all","repositories":[{"full_name":"%s/two"},{"full_name":"%s/one"}]}`, login, login)
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/repos/"):
+			a.repoPaths = append(a.repoPaths, r.URL.Path+" "+r.Header.Get("Authorization"))
+			a.answerRepo(w, strings.TrimPrefix(r.URL.Path, "/repos/acme/app"))
 		case r.Method == http.MethodGet && r.URL.Path == "/app":
 			a.appAuth = append(a.appAuth, r.Header.Get("Authorization"))
 			if a.slug == "" {
@@ -185,6 +198,26 @@ func (a *api) handler(t *testing.T) http.HandlerFunc {
 		default:
 			t.Errorf("unexpected %s %s", r.Method, r.URL)
 		}
+	}
+}
+
+func (a *api) answerRepo(w http.ResponseWriter, rest string) {
+	repo := a.repo
+	if repo == nil {
+		repo = &fakeRepo{}
+	}
+	switch {
+	case rest == "/installation" && repo.installed:
+		_, _ = fmt.Fprintf(w, `{"id":%d,"account":{"login":"acme"}}`, slices.Index(a.installs, "acme")+1)
+	case rest == "" && repo.installed:
+		_, _ = fmt.Fprintf(w, `{"full_name":"acme/app","default_branch":%q}`, repo.defaultBranch)
+	case strings.HasPrefix(rest, "/git/ref/") && repo.refStatus != 0:
+		w.WriteHeader(repo.refStatus)
+	case strings.HasPrefix(rest, "/git/ref/heads/") && slices.Contains(repo.branches, strings.TrimPrefix(rest, "/git/ref/heads/")),
+		strings.HasPrefix(rest, "/git/ref/tags/") && slices.Contains(repo.tags, strings.TrimPrefix(rest, "/git/ref/tags/")):
+		_, _ = fmt.Fprintf(w, `{"ref":%q}`, "refs/"+strings.TrimPrefix(rest, "/git/ref/"))
+	default:
+		w.WriteHeader(http.StatusNotFound)
 	}
 }
 

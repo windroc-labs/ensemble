@@ -1,5 +1,9 @@
 # Upgrading
 
+Broker protocol 27 adds the start manifest's optional `gateway` (the caller network, default `workers`) and `prefetch`
+([Docker host › Prefetch](docker-host.md#prefetch)). Upgrade the broker with the plugin: sessions refuse a broker of
+another protocol.
+
 Broker protocol 26 drops `start`'s `client_update`: a start never updates Codex; the image carries Claude Code,
 Codex and OpenCode at their latest releases and `ensemble-broker check-clients` rebuilds it when one moves
 ([Docker host › Client releases](docker-host.md#client-releases)). Upgrade the broker with the plugin. Drop

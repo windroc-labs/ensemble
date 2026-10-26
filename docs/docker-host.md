@@ -73,11 +73,13 @@ bare compose lacks those attachments. The proxy uses `restart: unless-stopped`, 
 restarts; after a Mac reboot, Docker Desktop must start at login. Any policy restart disconnects in-flight
 connections on **every** caller network. Running workers keep their proxy settings and need no restart.
 An edited config makes health `unhealthy` until `start.sh` applies it. Every `start` needs `egress-proxy` running
-and healthy on its internal `workers` network: otherwise, before any credential or container, it fails
-`egress_unavailable` (exit 17), naming the proxy and `start.sh`, and never falls back to `bridge`. Fix the
+and healthy on the internal caller network it joins (`workers` unless its manifest names another `gateway`):
+otherwise, before any credential or container, it fails `egress_unavailable` (exit 17), naming the proxy, the
+caller network and `~/.egress/current/start.sh`, and never falls back to `bridge`. Fix the
 config/startup error, wait for healthy, then start, restart or resume again.
 
-New workers join only the internal network advertised by the `workers` label (`egress-workers` in contract 1).
+New workers join only the internal network advertised by their manifest's `gateway` label key, by default `workers`
+(`egress-workers` in contract 1).
 Both cases of `HTTP_PROXY` and `HTTPS_PROXY` point to the label's proxy (`http://egress-proxy-workers:4750`), and
 `NO_PROXY`/`no_proxy` list only container loopback (`localhost,127.0.0.1,::1`): all other traffic, `host.docker.internal`
 and LAN addresses included, goes through the proxy's `workers` policy. The proxy allows public destinations and denies private
@@ -88,6 +90,12 @@ Without the proxy there is no worker egress. Tools that ignore proxy variables c
 The proxy cannot discover the Mac's public IPv4 address or global IPv6 LAN prefix: add those to `deny_ranges`
 in the local config. Restart after changing Wi-Fi or another host network. The policy's limits and defaults
 are in the pinned README. Image builds still use their existing network and can reach the Mac and LAN.
+
+A start manifest's optional `gateway` names the caller network to join: a key the proxy lists in its
+`windroc.egress.networks` label, whose network and proxy URL are its `windroc.egress.network.<key>.name` and
+`.proxy` labels. Keys match `[a-z0-9][a-z0-9_-]{0,62}`; without `gateway` a start joins `workers`. A key the proxy
+does not list, or lists without a valid internal network it is attached to, fails `egress_unavailable` naming the
+proxy and the key, never `busy`.
 
 ## Log in
 
@@ -352,10 +360,45 @@ refuses the start, naming it and the login to run. It then writes each value to
 stdin: never in the container's env, arguments or image. The copy goes with the container. Who can read the item
 and the copy, and how to revoke: [Credentials › Environment secrets](credentials.md#environment-secrets).
 
+## Prefetch
+
+A start manifest's optional `prefetch` clones a GitHub repo into a new workspace before the container starts:
+
+```json
+"prefetch": {"repo": "acme/app", "ref": "release/1.2"}
+```
+
+`repo` is `owner/name`; `ref` is a branch or tag name, or absent for the default branch. A ref must match
+`[A-Za-z0-9._/-]`, at most 255 bytes, and is never `HEAD`, a full ref (`refs/...`, `refs/pull/...` included), something
+that starts with `-`, 7 to 64 hex digits (a commit SHA), or a name git refuses (`..`, a trailing `.`, an empty
+component, a component starting with `.` or ending in `.lock`): the same rule as the router's `Ref:` check. The
+broker checks both before any git or GitHub call (`manifest_rejected`). A manifest with `prefetch` must have
+`"github": null`: the container gets no GitHub token, and the clone's `.git/config` holds none either.
+
+Only a start that creates the workspace volume prefetches; a restart or resume into an existing workspace does not.
+After the volume's chown and before the [lock](#broker-locks), the broker:
+
+1. finds the App's installation on the repo: not installed is `github_failed`;
+2. issues a token of that installation for this one repo, `contents: read` only, and keeps it in the container's
+   `ensemble-tokens` record while in use;
+3. resolves the ref with that token, a branch first, then a tag (neither: `manifest_rejected`);
+4. runs a throwaway helper, `ensemble-prefetch-<hex>`: the newest default worker image (a build without a base image;
+   none: `start_failed` naming `ensemble-broker build`), `--pull never`, on the proxy's `workers` network whatever
+   `gateway` is, as the run image's `agent`, the workspace at cwd, a tmpfs `HOME`. The token reaches it on stdin only,
+   never env or arguments; git gets it through a command-line credential helper with repo hooks off and runs
+   `git clone --depth 1 --branch <ref>` into cwd. A helper failure is `start_failed`, its cause scrubbed of the token;
+5. revokes the token once the helper exits, success or not; an unconfirmed revocation goes to the backlog.
+
+`broker.jsonl` records the token's issue (with the one repository it reaches) and revocation, never its value. If the
+start then fails for any reason, `busy` included, the broker removes the workspace volume it created, so a retry
+prefetches again. None of these errors is `busy`.
+
 ## What a container gets
 
 - User `agent`, all capabilities dropped, `no-new-privileges`; no Docker socket.
-- Only the proxy's `workers` network, with its proxy variables ([Egress proxy](#egress-proxy)).
+- Only the manifest's caller network (`gateway`, by default the proxy's `workers`), with its proxy variables
+  ([Egress proxy](#egress-proxy)).
+- With [`prefetch`](#prefetch), the repo at its ref in the workspace and no GitHub token.
 - A workspace volume at cwd; Claude and OpenCode have their own client-state bind, Codex only its session history.
 - Credentials on tmpfs, readable by the container's processes ([Credentials](credentials.md)); each listed
   [environment secret](#environment-secrets) at `/run/ensemble/secrets/env/<file>`.
