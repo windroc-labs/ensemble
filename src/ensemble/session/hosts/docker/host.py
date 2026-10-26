@@ -702,9 +702,12 @@ class DockerHost(Host):
     def container_tmux(self, container: str) -> TmuxCli:
         return TmuxCli(exec_runner(self.docker, container, run=self.run))
 
-    def _ps(self) -> list[list[str]]:
-        """[] with no daemon socket or docker CLI, as tmux with no server: every Host is listed."""
-        return self._listed("ps", "-a", "--filter", f"label={LABEL}", "--format", PS_FORMAT) or []
+    def _ps(self, *, required: bool = False) -> list[list[str]]:
+        """Admission requires an answer; other callers list no sessions without a daemon/CLI."""
+        rows = self._listed("ps", "-a", "--filter", f"label={LABEL}", "--format", PS_FORMAT)
+        if rows is None and required:
+            raise SessionError(f"host {self.name}: inventory unavailable (no Docker CLI or socket)")
+        return rows or []
 
     def _listed(self, *args: str) -> list[list[str]] | None:
         """docker `args`' tab-separated rows; None with no daemon socket or docker CLI; Unanswered
@@ -723,21 +726,21 @@ class DockerHost(Host):
             raise Unanswered(f"docker {args[0]}: {res.stderr.strip()}")
         return [line.split("\t") for line in res.stdout.splitlines()]
 
-    def _rows(self) -> list[Row]:
+    def _rows(self, *, required: bool = False) -> list[Row]:
         return [
             Row(name, container, generation, state)
             for container, name, generation, state in (
-                row for row in self._ps() if len(row) == len(Row._fields)
+                row for row in self._ps(required=required) if len(row) == len(Row._fields)
             )
             if SESSION_NAME.fullmatch(name)
             and GEN.fullmatch(generation)
             and container == container_name(name, generation)
         ]
 
-    def _containers(self) -> dict[str, Row]:
+    def _containers(self, *, required: bool = False) -> dict[str, Row]:
         """Name → its row; of several, the one of host.json's generation."""
         found: dict[str, Row] = {}
-        for row in self._rows():
+        for row in self._rows(required=required):
             if _piped(row.name, row.generation):
                 continue
             if row.name not in found or row.generation == _record(row.name).get("generation"):
@@ -1564,6 +1567,13 @@ class DockerHost(Host):
 
     def list(self) -> list[str]:
         return sorted(self._containers())
+
+    def _capacity_rows(self) -> list[SessionRow]:
+        containers = self._containers(required=True)
+        return [
+            self._row(name, row.container, row.generation)
+            for name, row in sorted(containers.items())
+        ]
 
     def rows(self) -> list[SessionRow]:
         """[] with a warning when docker fails, so the other Hosts' rows still list; list() raises,

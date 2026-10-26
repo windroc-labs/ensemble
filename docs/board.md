@@ -141,7 +141,7 @@ A label from the `Tasks` group picks the role's task, mapped by `[task_labels]`.
 ## Operating
 
 ```bash
-bin/ensemble-orchestrator router --issue <ID>         # run one issue now, skipping the run limits and usage gates
+bin/ensemble-orchestrator router --issue <ID>         # run one issue now, skipping role limits and usage gates
 bin/ensemble-orchestrator router --issue <ID> --tui   # the same, attended in a TUI (display, events file, exit codes: --help)
 bin/ensemble-orchestrator status <ID>                 # alive: its run; once that ends, state is its open TUI's (done, working, blocked), gone once none is open
 bin/ensemble-orchestrator attach-command <ID>         # the command that shows its agent run

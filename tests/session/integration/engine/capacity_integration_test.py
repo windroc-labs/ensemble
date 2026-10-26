@@ -29,7 +29,28 @@ def interrupted_tui():
         os._exit(0)  # A crash after reservation cannot execute context cleanup.
 
 
+def interrupted_transient(mode):
+    with Admission("fake", 1, name="held", sid="s1", mode=mode, hosts={}) as ticket:
+        ticket.started(lambda: Liveness.LIVE)
+    os._exit(0)  # The kernel, not normal ticket cleanup, releases the lease.
+
+
 class CapacityTest(Case):
+    def test_transient_owner_crash_releases_its_lease(self):
+        for mode in (Mode.HEADLESS, Mode.IN_PROCESS):
+            with self.subTest(mode=mode):
+                child = multiprocessing.get_context("fork").Process(
+                    target=interrupted_transient, args=(mode,)
+                )
+                child.start()
+                child.join(10)
+                if child.is_alive():
+                    child.kill()
+                    child.join(10)
+                self.assertEqual(child.exitcode, 0)
+                with Admission("fake", 1, name="new", sid="s2", mode=mode, hosts={}):
+                    pass
+
     def test_simultaneous_processes_cannot_both_take_the_last_slot(self):
         context = multiprocessing.get_context("fork")
         ready, release, output = context.Event(), context.Event(), context.Queue()

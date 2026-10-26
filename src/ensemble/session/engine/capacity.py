@@ -24,10 +24,7 @@ MAX_RECORD = 16384
 def _inventory(hosts: Mapping[str, Host], client: str) -> tuple[dict, dict]:
     known, holders = {}, {}
     for key, host in hosts.items():
-        names = set(host.list())
-        rows = {row.name: row for row in host.rows()}
-        if names - rows.keys():
-            raise SessionError(f"client {client}: host {host.name} inventory unavailable")
+        rows = {row.name: row for row in host._capacity_rows()}
         known[key] = rows
         for row in rows.values():
             if row.client == client and row.state not in (StatusState.DEAD, StatusState.GONE):
@@ -91,6 +88,29 @@ def _holders(directory: str, known: dict, holders: dict) -> list[str]:
     return sorted(holders.values())
 
 
+@contextlib.contextmanager
+def _locked(directory: str, client: str) -> Iterator[None]:
+    parent = os.path.dirname(os.path.dirname(directory))
+    gate = os.path.join(parent, f"client-runs-{client}.lock")
+    existed = os.path.isdir(parent)
+    try:
+        os.makedirs(parent, mode=0o700, exist_ok=True)
+        with inode_lock(gate):
+            try:
+                os.makedirs(directory, mode=0o700, exist_ok=True)
+                yield
+            finally:
+                for path in (directory, os.path.dirname(directory)):
+                    with contextlib.suppress(OSError):
+                        os.rmdir(path)
+                # Waiters verify the inode again, so the lock may be removed after cleanup.
+                os.unlink(gate)
+    finally:
+        if not existed:
+            with contextlib.suppress(OSError):
+                os.rmdir(parent)
+
+
 class Admission(AbstractContextManager):
     def __init__(
         self,
@@ -124,16 +144,9 @@ class Admission(AbstractContextManager):
 
     @contextlib.contextmanager
     def _admit(self) -> Iterator[Admission]:
-        gate = os.path.join(
-            os.path.dirname(os.path.dirname(self.directory)), f"client-runs-{self.client}.lock"
-        )
-        parent = os.path.dirname(gate)
-        existed = os.path.isdir(parent)
         try:
-            os.makedirs(parent, mode=0o700, exist_ok=True)
-            with inode_lock(gate):
+            with _locked(self.directory, self.client):
                 try:
-                    os.makedirs(self.directory, mode=0o700, exist_ok=True)
                     if self.limit:
                         known, holders = _inventory(self.hosts, self.client)
                         active = _holders(self.directory, known, holders)
@@ -156,20 +169,23 @@ class Admission(AbstractContextManager):
                 finally:
                     if not self._committed:
                         self.close()
-                    for path in (self.directory, os.path.dirname(self.directory)):
-                        with contextlib.suppress(OSError):
-                            os.rmdir(path)
-                    # inode_lock rechecks the inode after waiting, so deleting its file is safe.
-                    os.unlink(gate)
         except (OSError, ValueError) as error:
             if self._yielded:
                 raise
             self.close()
             raise SessionError(f"client {self.client}: capacity: {error}") from error
-        finally:
-            if not existed and not self._committed:
-                with contextlib.suppress(OSError):
-                    os.rmdir(parent)
+
+    @classmethod
+    def reconcile(cls, client: str, hosts: Mapping[str, Host]) -> None:
+        directory = os.path.join(os.path.expanduser(ROOT), client)
+        if not os.path.isdir(directory):
+            return
+        try:
+            with _locked(directory, client):
+                known, holders = _inventory(hosts, client)
+                _holders(directory, known, holders)
+        except (OSError, ValueError) as error:
+            raise SessionError(f"client {client}: capacity: {error}") from error
 
     def started(self, state: Callable[[], Liveness]) -> None:
         if self.record["kind"] == Mode.TUI:

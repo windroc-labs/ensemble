@@ -107,6 +107,61 @@ class ClientCapacityTest(HostedTuiBase):
         self.host = CapacityHost("tmux")
         self.configure(tui=True, max_runs=1)
 
+    def _other_configuration(self):
+        setup = self.session._config()
+        other = ScreenHost("elsewhere")
+        return HostedSession.configured(
+            clients=setup.registry.settings.clients,
+            hosts=parsed(
+                {"elsewhere": {"implementation": "tests.session.fakes.terminal:ScreenHost"}},
+                "elsewhere",
+            ),
+            class_loader=setup.class_loader,
+            host_factory=lambda _kind, _name, _settings: other,
+            viewer_factory=MemoryViewer,
+        )
+
+    def test_independent_configurations_share_capacity_and_attached_closes_release_it(self):
+        for action in ("original", "attached-close", "attached-stop", "retire"):
+            with self.subTest(action=action):
+                other = self._other_configuration()
+                first = self.start(mode="tui", name="one", sid="s1")
+                spec = self.spec(client="fake", mode="tui", name="two", sid="s2")
+                with self.assertRaisesRegex(SessionError, "one"):
+                    other.start(spec)
+                if action == "original":
+                    first.close()
+                elif action == "retire":
+                    self.session.retire("one", sid="s1")
+                else:
+                    attached = self.session.attach("one", sid="s1")
+                    attached.close() if action == "attached-close" else attached.stop()
+                other.start(spec).close()
+
+    def test_a_stale_attached_stop_keeps_the_replacement_reservation(self):
+        first = self.start(mode="tui", name="one", sid="same")
+        attached = self.session.attach("one", sid="same")
+        first.close()
+        replacement = self.start(mode="tui", name="one", sid="same")
+        attached.stop()
+        other = self._other_configuration()
+        with self.assertRaisesRegex(SessionError, "one"):
+            other.start(self.spec(client="fake", mode="tui", name="two"))
+        replacement.close()
+
+    def test_launch_and_publication_failures_release_the_reserved_slot(self):
+        for mode, boundary in (
+            ("headless", self.host.calls.pipe),
+            ("tui", self.host.calls.terminal),
+            ("tui", self.host.calls.close_view),
+        ):
+            with self.subTest(mode=mode, boundary=boundary):
+                boundary.side_effect = SessionError("fake launch failure")
+                with self.assertRaisesRegex(SessionError, "fake launch failure"):
+                    self.start(mode=mode, name="one", sid="s1")
+                boundary.side_effect = None
+                self.start(mode=mode, name="one", sid="s2").close()
+
     def test_each_mode_and_resumed_start_uses_the_same_client_capacity(self):
         for mode, name in (("tui", "one"), ("headless", None), ("headless", "one")):
             with self.subTest(mode=mode, name=name):

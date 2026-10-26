@@ -309,6 +309,13 @@ class Host(ABC):
     def rows(self) -> list[SessionRow]:
         return [self.attach(name).row() for name in self.list()]
 
+    def _capacity_rows(self) -> list[SessionRow]:
+        names = set(self.list())
+        rows = self.rows()
+        if names - {row.name for row in rows}:
+            raise SessionError(f"host {self.name}: inventory unavailable")
+        return rows
+
     def attach_target(self, name: str) -> SessionView | CommandView | None:
         """What the Viewer shows session `name` through; None unless attachable."""
         return None

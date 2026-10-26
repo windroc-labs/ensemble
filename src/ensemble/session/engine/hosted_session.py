@@ -258,6 +258,7 @@ class HostedSession(Session):
         self._blocked = False
         self._bound = False
         self._capacity: Admission | None = None
+        self._capacity_hosts: Mapping[str, Host] = {}
 
     @classmethod
     def configure(
@@ -405,6 +406,7 @@ class HostedSession(Session):
                 running.close()
                 raise
             session._capacity = capacity
+            session._capacity_hosts = {_host_key(setup, selected_host): on}
             return session
 
     @classmethod
@@ -452,6 +454,7 @@ class HostedSession(Session):
         )
         for event in running.replayed:
             session._fold(event, replayed=True)
+        session._capacity_hosts = {_host_key(setup, host or setup.hosts.default): on}
         if not session._blocked:
             session._blocked = running.marked_blocked()
         session.info()
@@ -459,9 +462,19 @@ class HostedSession(Session):
 
     @classmethod
     def retire(cls, name: str, *, sid: str | None = None, host: str | None = None) -> None:
+        setup = cls._config()
         on = cls.host(host)
-        tui.TuiStore.attach(name, host=on, sid=sid).close()
-        cls.viewer().close(name, on)
+        store = tui.TuiStore.attach(name, host=on, sid=sid)
+        try:
+            clients = [store.read()["client"]]
+        except SessionError:
+            clients = setup.registry.configured()
+        store.close()
+        try:
+            cls.viewer().close(name, on)
+        finally:
+            for client in clients:
+                Admission.reconcile(client, {_host_key(setup, host or setup.hosts.default): on})
 
     @classmethod
     def list(
@@ -686,8 +699,13 @@ class HostedSession(Session):
 
     def stop(self) -> None:
         self._running.stop()
+        self._release_capacity()
+
+    def _release_capacity(self) -> None:
         if self._capacity is not None:
             self._capacity.release_if_absent(self._running.state)
+        elif self.mode == Mode.TUI:
+            Admission.reconcile(self.client, self._capacity_hosts)
 
     def _refresh_metadata(self) -> None:
         if not self._bound:
@@ -724,10 +742,11 @@ class HostedSession(Session):
     def close(self) -> None:
         name = self._tui()
         self._running.close()
-        if name is not None:
-            self._viewer.close(name, self._host)
-        if self._capacity is not None:
-            self._capacity.release_if_absent(self._running.state)
+        try:
+            if name is not None:
+                self._viewer.close(name, self._host)
+        finally:
+            self._release_capacity()
 
     def session_status(self) -> SessionStatus:
         info = self.info()
