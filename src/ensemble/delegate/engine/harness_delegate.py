@@ -17,9 +17,10 @@ from ensemble.delegate import config
 from ensemble.delegate.composer import Composer, DelegateConfig, RunConfig, Team, teams
 from ensemble.delegate.engine.base import Delegate
 from ensemble.delegate.engine.callback import EventCallback, sweep
-from ensemble.delegate.engine.config import module_roots, read_config
+from ensemble.delegate.engine.config import module_roots, packaged_environments, read_config
 from ensemble.delegate.engine.container import on_docker
 from ensemble.delegate.engine.drivers import AgentDriver, Driver, InstructionDriver
+from ensemble.delegate.engine.environment import resolve
 from ensemble.delegate.engine.plan import plan
 from ensemble.delegate.engine.runner import execute, say, stopped
 from ensemble.delegate.engine.state import RunState
@@ -41,6 +42,7 @@ from ensemble.delegate.event.types import Outcome
 from ensemble.session import (
     SIGNALS,
     Access,
+    EnvironmentSpec,
     Host,
     Launch,
     Mode,
@@ -208,6 +210,9 @@ class HarnessDelegate(Delegate):
             self._configure()
             hosts = Host.parse_hosts(self._settings.get("hosts")).tables
             agent_host = session_cls.host(host)
+            environment = resolve(
+                self._settings, role=role, host=agent_host.name, packaged=packaged_environments()
+            )
             self._harness_override = harness_host if isinstance(harness_host, Host) else None
             harness = (
                 harness_host
@@ -247,6 +252,7 @@ class HarnessDelegate(Delegate):
             driver=self.driver,
             composition=self.composer,
             accounts=accounts,
+            environment=environment,
         )
         name = spec.name or f"{role}-{accepted.sid[:8]}"
         named = name if self._named(spec.mode) else None
@@ -413,6 +419,8 @@ class HarnessDelegate(Delegate):
             session["access"] = Access(**access)
             session["flags"] = tuple(session["flags"])
             session["reply_tags"] = tuple(session["reply_tags"])
+            if session.get("environment") is not None:
+                session["environment"] = EnvironmentSpec.from_fields(session["environment"])
             accepted = Plan(
                 spec,
                 SessionSpec(**session),
@@ -1196,6 +1204,8 @@ class HarnessDelegate(Delegate):
                 session=replace(
                     accepted.session,
                     name=named,
+                    # stored, never re-resolved (FR-62)
+                    environment=state.plan.session.environment,
                     access=replace(
                         accepted.session.access, cwd=original.cwd, project=original.project
                     ),

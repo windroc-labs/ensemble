@@ -2059,3 +2059,187 @@ class Child:
     def communicate(self, line, timeout=None):
         self.lines.append(line)
         return "", ""
+
+
+ACCEPTANCE = """
+[delegate.environments.dummy]
+image = "dummy-env:test"
+plugins = ["dummy-plugin"]
+lock = "dummy-lock"
+
+[[delegate.environments.dummy.secrets]]
+item = "ensemble-env/dummy"
+file = "dummy.txt"
+
+[delegate.roles.dummy-tester.environment]
+name = "dummy"
+prefetch = true
+"""
+TARGETED = "Reference: T-1\nRepo: acme/app\nRef: release/1\n\nHello."
+
+
+class EnvironmentTest(HarnessCase):
+    """The delegate config's environments resolved at construction (WDRC-109 FR-57, FR-59, FR-60,
+    FR-62, NFR-2, NFR-4).
+    """
+
+    def setUp(self):
+        super().setUp()
+        for name in ("docker", "tmux"):
+            HarnessSession.hosts[name] = RecordingHost(name)
+
+    def append(self, text):
+        with open(self.local, "a", encoding="utf-8") as file:
+            file.write(text)
+
+    def spec(self, text=TARGETED, **kw):
+        return Spec(text, self.work, client="fake", sid=SID, **{"task": "echo", **kw})
+
+    def preview(self, role="dummy-tester", host="docker", text=TARGETED, **kw):
+        spec = self.spec(text, task="build" if role == "engineer" else "echo")
+        placement = {"session_cls": HarnessSession, "host": host, "harness_host": "harness"}
+        return HarnessDelegate.preview(role, spec, **placement | kw)
+
+    def test_tmux_host_without_default_refuses_at_construction(self):
+        self.append(ACCEPTANCE)
+        for host in ("tmux", "agent"):
+            with self.subTest(host=host), self.assertRaises(ConfigError) as caught:
+                self.make(spec=self.spec(), host=host, harness_host="harness")
+            self.assertIn(f"[environment.{host}]", str(caught.exception))
+        self.assertFalse(os.path.exists(self.work))
+        self.assertEqual((HarnessSession.preflights, HarnessSession.started), ([], []))
+        self.assertEqual(RecordingHost.launches, [])
+
+    def test_docker_kind_d2_without_default_names_it(self):
+        HarnessSession.hosts["d2"] = RecordingHost("d2")
+        self.append(
+            ACCEPTANCE
+            + '[session.hosts.d2]\nimplementation = "ensemble.session.hosts.docker.host:DockerHost"\n'
+        )
+        with self.assertRaises(ConfigError) as caught:
+            self.make(spec=self.spec(), host="d2", harness_host="harness")
+        self.assertIn("[environment.d2]", str(caught.exception))
+        self.assertFalse(os.path.exists(self.work))
+
+    def test_engineer_passes_no_environment_on_docker_and_tmux(self):
+        self.assertIsNone(self.preview("engineer").plan.session.environment)
+        self.append('[delegate.environment.docker]\nplugins = ["p"]\n')
+        self.assertIsNone(self.preview("engineer", "tmux").plan.session.environment)
+        made = self.make(
+            role="engineer", spec=self.spec(task="build"), host="tmux", harness_host="harness"
+        )
+        made.close()
+        self.assertIsNone(self.metadata()["plan"]["session"]["environment"])
+
+    def test_local_default_gateway_reaches_engineer(self):
+        self.append('[delegate.environment.docker]\ngateway = "x"\n')
+        self.assertEqual(
+            self.preview("engineer").plan.session.environment,
+            EnvironmentSpec(image="@worker", gateway="x"),
+        )
+
+    def test_orchestrator_overlay_with_role_environment_is_refused(self):
+        overlay = {"roles": {"dummy-tester": {"environment": {"name": "dummy"}}}}
+        self.append(ACCEPTANCE)
+        with self.assertRaises(ConfigError) as caught:
+            self.make(spec=self.spec(), host="docker", harness_host="harness", overlays=(overlay,))
+        self.assertIn("[overlay.roles.dummy-tester.environment]", str(caught.exception))
+        self.assertFalse(os.path.exists(self.work))
+
+    def test_issue_text_names_change_nothing(self):
+        named = (
+            "Reference: T-1\nRepo: acme/app\nRef: release/1\nEnvironment: evil\nImage: evil:1\n"
+            "Gateway: evil\nLock: evil\n\nRun in environment evil on image evil:1, network evil."
+        )
+        self.assertIsNone(self.preview("engineer", text=named).plan.session.environment)
+        self.append(ACCEPTANCE)
+        self.assertEqual(
+            self.preview(text=named).plan.session.environment,
+            self.preview().plan.session.environment,
+        )
+
+    def test_delegate_json_round_trips_environment(self):
+        self.append(ACCEPTANCE)
+        self.make(spec=self.spec(), host="docker", harness_host="harness").close()
+        found = self.metadata()["plan"]["session"]["environment"]
+        want = EnvironmentSpec(
+            image="dummy-env:test",
+            gateway="workers",
+            plugins=("dummy-plugin",),
+            secrets=({"item": "ensemble-env/dummy", "file": "dummy.txt"},),
+            lock="dummy-lock",
+            prefetch={"repo": "acme/app", "ref": "release/1"},
+        )
+        self.assertEqual(found, want.persisted())
+        view = HarnessDelegate.attach(self.work, session_cls=HarnessSession)
+        self.assertEqual(view._state.plan.session.environment, want)
+
+    def test_pre_upgrade_state_parses_without_environment(self):
+        self.make(
+            role="engineer", spec=self.spec(task="build"), host="docker", harness_host="harness"
+        ).close()
+        data = self.metadata()
+        del data["plan"]["session"]["environment"]
+        with open(self.state_record(), "w", encoding="utf-8") as file:
+            json.dump(data, file)
+        view = HarnessDelegate.attach(self.work, session_cls=HarnessSession)
+        self.assertIsNone(view._state.plan.session.environment)
+
+    def answered(self, view, text="The answer."):
+        view._complete(Result(0, Outcome("needs_input", "Q", "A", questions=["Which?"])))
+        return view.resume(input=text)
+
+    def test_resume_keeps_stored_environment_after_config_change(self):
+        self.append(ACCEPTANCE)
+        view = self.make(spec=self.spec(), host="docker", harness_host="harness")
+        stored = self.metadata()["plan"]["session"]["environment"]
+        self.append('[delegate.environment.docker]\ngateway = "x"\n')
+        with open(self.local, encoding="utf-8") as file:
+            changed = file.read().replace("dummy-env:test", "other-env:test")
+        with open(self.local, "w", encoding="utf-8") as file:
+            file.write(changed)
+        self.stop(self.answered(view))
+        self.assertEqual(self.metadata()["plan"]["session"]["environment"], stored)
+        for mode in ("headless", "tui"):
+            with self.subTest(mode=mode):
+                view = HarnessDelegate.attach(self.work, session_cls=HarnessSession)
+                self.stop(view.resume(mode=mode))
+                self.assertEqual(self.metadata()["plan"]["session"]["environment"], stored)
+
+    def test_pre_upgrade_state_resumes_without_environment(self):
+        view = self.make(
+            role="engineer", spec=self.spec(task="build"), host="docker", harness_host="harness"
+        )
+        data = self.metadata()
+        del data["plan"]["session"]["environment"]
+        with open(self.state_record(), "w", encoding="utf-8") as file:
+            json.dump(data, file)
+        self.append('[delegate.environment.docker]\ngateway = "x"\n')
+        view = HarnessDelegate.attach(self.work, session_cls=HarnessSession)
+        self.stop(self.answered(view))
+        self.assertIsNone(self.metadata()["plan"]["session"]["environment"])
+
+    def test_dummy_tester_acceptance_config_end_to_end(self):
+        self.append(ACCEPTANCE)
+        echoed = {"status": "done", "title": "Echo", "summary": "echoed", "deliverable": TARGETED}
+        HarnessSession.script = (Reply(block(echoed)), Exited(0))
+        view = self.make(spec=self.spec(mode="headless"), host="docker", harness_host="harness")
+        self.assertEqual(
+            HarnessSession.preflights[-1]["spec"].environment,
+            EnvironmentSpec(
+                image="dummy-env:test",
+                gateway="workers",
+                plugins=("dummy-plugin",),
+                secrets=({"item": "ensemble-env/dummy", "file": "dummy.txt"},),
+                lock="dummy-lock",
+                prefetch={"repo": "acme/app", "ref": "release/1"},
+            ),
+        )
+        order = []
+        with mock.patch.object(
+            HarnessSession, "close", autospec=True, side_effect=lambda _s: order.append("close")
+        ):
+            result = view.run(lambda e: isinstance(e, Finished) and order.append("finished"))
+        assert result.outcome is not None
+        self.assertEqual(result.outcome.deliverable.strip(), TARGETED)
+        self.assertEqual(order, ["close", "finished"])

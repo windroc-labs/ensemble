@@ -564,6 +564,79 @@ before starting anything.
 state from before environments runs without one. Each new container takes the lock again and resolves its secrets
 again; only a workspace the start creates is prefetched.
 
+#### Environment config
+
+A role run's environment comes only from the delegate config: the packaged
+`src/ensemble/delegate/config.toml` and `~/.ensemble/config.local.toml`. A caller overlay (the orchestrator's
+included) holding `environment`, `environments` or `roles.<role>.environment` refuses the run; `ensemble-delegate run`
+has no environment option, and nothing in a run's input (an issue's text included) selects or changes one. Layers,
+each replacing the keys it sets (a list whole):
+
+| Table | Local spelling | Holds |
+|---|---|---|
+| `[environment.<host>]` | `[delegate.environment.<host>]` | the Host's default; only a Docker-kind Host has one, with `image` and `gateway` |
+| `[environments.<name>]` | `[delegate.environments.<name>]` | a named environment: only the keys that differ from the default |
+| `[roles.<role>.environment]` | `[delegate.roles.<role>.environment]` | `name` (a named environment) and keys overriding it; without `name`, overrides of the default |
+
+The packaged default is `[environment.docker]`: `image = "@worker"`, `gateway = "workers"`, `plugins = []`,
+`secrets = []`, `prefetch = false`, no `lock`. Keys:
+
+- `image`: a local [base image](#base-images) or `"@worker"`, ensemble's worker base.
+- `gateway`: the caller network the container joins, by the egress proxy's label name
+  ([Egress proxy](#egress-proxy); WDRC-107 FR-39).
+- `plugins`: in-image names or pinned sources, added to `[hosts.docker] plugins`.
+- `secrets`: `[[…secrets]]` tables of `item` (an `ensemble-env/<name>` reference) and `file`
+  ([Environment secrets](#environment-secrets)); never a value.
+- `lock`: a [lock](#broker-locks) name. A locked run's session closes as soon as the run ends (outcome, failure,
+  give-up, usage limit), before its result goes out: no TUI is left for a pane to follow; the workspace and history
+  stay, so `ensemble-crew reopen` continues.
+- `prefetch`: `true` prefetches the input's Reference block: exactly one `Repo:` line (a clone path names its origin)
+  and at most one `Ref:` line (the [Prefetch](#prefetch) ref rule; none: the default branch). Both are checked before
+  any git or GitHub call; `Base:` is not read.
+
+Environment names, and `name`, match `[a-z0-9][a-z0-9_.-]{0,62}`. Loading the config fails, naming the table, on an
+unknown key (`ports`, `mounts`, `password`…), a default table for a Host that is not Docker-kind, a default without
+`image` or `gateway`, a `name` outside a role table or naming no `[environments.<name>]`, or an invalid value.
+
+The delegate resolves the run's Host default, then the role's named environment, then its overrides, once it knows
+the agent Host. A result equal to the Host's packaged default (local changes aside) passes no environment, so an
+engineer starts as before; a local `[delegate.environment.docker] gateway = "x"` puts every Docker run on `x`. A
+Host without a default table (`tmux`, or a Docker-kind `[hosts.d2]` without `[environment.d2]`) runs a role that
+selects or overrides an environment as a configuration error naming `[environment.<host>]`, before anything is
+written. A run in mode `in_process` starts no container: it runs without the environment, and one with a `lock`,
+`secrets` or `prefetch` is refused as a configuration error. `ensemble-delegate run --dry-run` prints the result as `environment` (secrets as references; `null`: none).
+The run stores it in `delegate.json`'s `plan.session`; resume and `ensemble-crew reopen` reuse it whatever the config
+says now, and a run stored before environments resumes without one.
+
+The acceptance setup, with a local `dummy-env:test` image holding `/opt/windroc/plugins/dummy-plugin/` and
+`"$B" login env dummy` done:
+
+```toml
+[session.hosts]
+default = "docker"
+
+[delegate.delegates]
+harness_host = "tmux"
+
+[delegate.environments.dummy]   # gateway: the default's workers
+image = "dummy-env:test"
+plugins = ["dummy-plugin"]
+lock = "dummy-lock"
+
+[[delegate.environments.dummy.secrets]]
+item = "ensemble-env/dummy"
+file = "dummy.txt"
+
+[delegate.roles.dummy-tester.environment]
+name = "dummy"
+prefetch = true
+```
+
+```sh
+ensemble-delegate run --role dummy-tester --dry-run \
+  --input $'Reference: T-1\nRepo: acme/app\nRef: main\n\nEcho me.'
+```
+
 ### Codex
 
 Install or upgrade the broker first ([Install](#install)). `<version>` is an exact stable npm version, at least `0.163.0` for both the pinned host installation and the image. A lower host version needs `update-codex`; a lower image needs a [rebuild](#build).

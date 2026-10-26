@@ -57,6 +57,7 @@ def executed(
     composition=None,
     docker=False,
     session_name=None,
+    environment=None,
 ) -> Result:
     """plan() then execute(), a session run's agent and run dirs made between."""
     composition = Composer(team=spec.team) if composition is None else composition
@@ -64,6 +65,8 @@ def executed(
     accepted = replace(accepted, docker=docker or accepted.docker)
     if session_name is not None:
         accepted = replace(accepted, session=replace(accepted.session, name=session_name))
+    if environment is not None:
+        accepted = replace(accepted, session=replace(accepted.session, environment=environment))
     if driver.session_based:
         for made in (Layout(spec.workdir).agent, accepted.session.workdir):
             os.makedirs(made, exist_ok=True)
@@ -103,7 +106,15 @@ class Base(Case):
         )
 
     def go(
-        self, *steps, fixes=None, output=None, on_event=None, docker=False, session_name=None, **kw
+        self,
+        *steps,
+        fixes=None,
+        output=None,
+        on_event=None,
+        docker=False,
+        session_name=None,
+        environment=None,
+        **kw,
     ) -> Result:
         """executed() over the fake with `steps` (`fixes`: its steps on --resume); self.events gets
         each callback, self.err the stderr.
@@ -139,6 +150,7 @@ class Base(Case):
                     composition=composition,
                     docker=docker,
                     session_name=session_name,
+                    environment=environment,
                 )
         finally:
             self.err = err.getvalue()

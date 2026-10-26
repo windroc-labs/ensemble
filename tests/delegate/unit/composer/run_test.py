@@ -529,6 +529,30 @@ class Overlays(Fake):
                     f"{source}: {message.format(t=table)}",
                 )
 
+    def test_an_overlay_never_carries_an_environment(self):
+        trusted = "environments come only from the delegate config files"
+        for overlay, table in (
+            ({"environment": {"docker": {"gateway": "x"}}}, "[{t}.environment]"),
+            ({"environments": {"dummy": {"image": "x"}}}, "[{t}.environments]"),
+            (
+                {"roles": {"writer": {"environment": {"name": "dummy"}}}},
+                "[{t}.roles.writer.environment]",
+            ),
+            ({"roles": {"writer": {"environment": {}}}}, "[{t}.roles.writer.environment]"),
+        ):
+            for kwargs, source, where in (
+                ({}, "run overlay", "overlay"),
+                (
+                    {"label": ("orchestrator.toml", "orchestrator")},
+                    "orchestrator.toml",
+                    "orchestrator",
+                ),
+            ):
+                with self.subTest(overlay=overlay, table=where):
+                    message = self.refused(overlays=(overlay,), **kwargs)
+                    self.assertTrue(message.startswith(f"{source}: {table.format(t=where)}: "))
+                    self.assertIn(trusted, message)
+
 
 class OldKeys(Fake):
     def test_task_tables_or_default_task_in_any_role_table(self):
