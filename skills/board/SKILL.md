@@ -30,7 +30,7 @@ Exit 0: success, or `"result": "unchanged"` (already so; nothing written). Exit 
 ## Values
 
 - **States** (`STATE`, `--state`): `backlog`, `ready`, `running`, `review`, `approved`, `done`, `canceled`. `create` defaults to `backlog`.
-- **Assignment** (`--role`): a role (`researcher`, `pm`, `engineer`), `me` (the account the commands run as) or `unassigned`.
+- **Assignment** (`--role`): a role (`researcher`, `pm`, `engineer`), `me` (the identity the commands run as) or `unassigned`; how the board records it: its section below.
 - **Task** (`--task`) and **client** (`--client`): a configured name, such as `build` or `codex`. An unknown one exits 2 listing the configured names.
 - **Priority** (`--priority`): `none`, `urgent`, `high`, `medium`, `low`.
 
@@ -106,7 +106,7 @@ On a local board (`$ENSEMBLE_BOARD_DIR`), the commands write as `other`, a perso
 
 ## Linear
 
-On Linear (`[orchestrator.linear]`), the commands act as the `manager_key` account (Keychain), separate from the harness and role apps, so your comments and moves count as the user's; `me` is that account, a role is its app's `[orchestrator.linear.roles.<role>] user_id`, a task or client is its label in `task_labels` or `agent_labels`, and a state is its `[orchestrator.linear.states]` id. `read` and `list` show Linear's state names; finished means a state of type completed, canceled or duplicate. These exist only on Linear:
+On Linear (`[orchestrator.linear]`), the commands act as the manager's OAuth app (`[orchestrator.linear.manager]`), separate from the harness and role apps, so your comments and moves count as the user's. `--role` sets the issue's delegate (Linear's Agent field) and clears its assignee: a role is its app (`[orchestrator.linear.roles.<role>] user_id`), `me` the manager's app, `unassigned` no delegate; `create` always leaves the assignee empty. `list --role` filters by delegate, so `unassigned` also lists an issue with an assignee but no delegate. A task or client is its label in `task_labels` or `agent_labels`, and a state is its `[orchestrator.linear.states]` id. `read` and `list` show Linear's state names; finished means a state of type completed, canceled or duplicate. These exist only on Linear:
 
 ```bash
 ensemble-orchestrator issue lookup states

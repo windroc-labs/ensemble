@@ -166,7 +166,7 @@ def app_config(slot):
 
 
 def app_table(slot):
-    table = "harness" if slot == "harness" else f"roles.{slot}"
+    table = slot if slot in ("harness", "manager") else f"roles.{slot}"
     return f"\n[orchestrator.linear.{table}]\n" + "".join(
         f'{key} = "{value}"\n' for key, value in app_config(slot).items()
     )
@@ -182,7 +182,6 @@ def label(n, name, parent=None):
 
 
 LINEAR = {
-    "keys": {"k-SENTINEL-manager": "manager@example.com"},
     "apps": {
         f"client-{slot}": {
             "secret": f"k-SENTINEL-{slot}",
@@ -190,7 +189,6 @@ LINEAR = {
             "user_id": app_config(slot)["user_id"],
         }
         for slot in (*SLOTS, "reviewer")
-        if slot != "manager"
     },
     "teams": [
         {
@@ -221,10 +219,10 @@ BOARD = ((PROJECT_Q, "acme/widget"), *DOCS, (WRITE_Q, "y"), (WRITE_Q, "y"))
 STATE_KEYS = ("backlog", "todo", "in_progress", "in_review", "handoff", "done", "canceled")
 HAND_CONFIG = (
     f'[orchestrator]\ntracker = "linear"\n\n[orchestrator.linear]\nteam = "{uuid(1)}"\n'
-    f'manager_key = "linear-manager"\ntask_label_group = "{uuid(40)}"\n\n'
+    f'task_label_group = "{uuid(40)}"\n\n'
     "[orchestrator.linear.states]\n"
     + "".join(f'{key} = "{uuid(10 + i)}"\n' for i, key in enumerate(STATE_KEYS))
-    + "".join(app_table(slot) for slot in SLOTS if slot != "manager")
+    + "".join(app_table(slot) for slot in SLOTS)
     + "".join(
         f'\n[delegate.roles.{role}.output]\ntype = "github"\nrepo = "acme/docs"\nbranch = "main"\ndir = "{d}"\n'
         for role, d in (("researcher", "Research/"), ("pm", "Product Design/"))
@@ -504,14 +502,13 @@ class InstallTest(Case):
         answers = []
         for slot in slots:
             answers.append((KEY_Q, f"k-SENTINEL-{slot}"))
-            if slot != "manager":
-                app = (
-                    linear.get("harness", {})
-                    if slot == "harness"
-                    else linear.get("roles", {}).get(slot, {})
-                )
-                if not app.get("client_id"):
-                    answers.append((f"Linear OAuth Client ID for {slot}:", f"client-{slot}"))
+            app = (
+                linear.get(slot, {})
+                if slot in ("harness", "manager")
+                else linear.get("roles", {}).get(slot, {})
+            )
+            if not app.get("client_id"):
+                answers.append((f"Linear OAuth Client ID for {slot}:", f"client-{slot}"))
         return answers
 
     def configured(self, text, then=(), board="linear"):
@@ -2539,7 +2536,7 @@ exec /bin/rm "$@"
         self.assertIn("==> board launchd jobs\n    skip: board not chosen", result.stderr)
         self.config().write_text(self.config().read_text() + "\n" + HAND_CONFIG)
         (self.fakes / "keychain").mkdir(exist_ok=True)
-        (self.fakes / "keychain/linear-manager").write_text("k-SENTINEL-manager")
+        (self.fakes / "keychain/linear-app-manager-secret").write_text("k-SENTINEL-manager")
         self.linear()
         result = self.again(
             "--board",
@@ -2563,7 +2560,7 @@ exec /bin/rm "$@"
             "security add-generic-password -s linear-app-harness-secret -a linear-app-harness-secret -w",
             calls,
         )
-        self.assertIn("skip: linear-manager in the keychain", result.stderr)
+        self.assertIn("skip: linear-app-manager-secret in the keychain", result.stderr)
         self.assertIn(
             "==> linear board configuration\n    skip: has the Linear board configuration",
             result.stderr,
@@ -2606,11 +2603,6 @@ exec /bin/rm "$@"
         result = self.fresh("--board", "linear", "--launchd", then=[*self.keys(*SLOTS), *BOARD])
         self.assert_ok(result)
         for slot in SLOTS:
-            if slot == "manager":
-                self.assertEqual(
-                    (self.fakes / "keychain/linear-manager").read_text(), "k-SENTINEL-manager"
-                )
-                continue
             self.assertEqual(
                 (self.fakes / f"keychain/linear-app-{slot}-secret").read_text(),
                 f"k-SENTINEL-{slot}",
@@ -2632,16 +2624,15 @@ exec /bin/rm "$@"
             result.stderr,
         )
         viewers = [c for c in calls if c.startswith("curl -q ") and "viewer" in c]
-        self.assertEqual(
-            len(viewers), len(SLOTS) + 1
-        )  # app ids; the manager's new key and plan check
+        self.assertEqual(len(viewers), len(SLOTS))  # each app's user id, no account check
         tokens = [
             c
             for c in calls
             if c.startswith("curl -q ") and c.endswith("https://api.linear.app/oauth/token")
         ]
-        self.assertEqual(len(tokens), len(SLOTS) - 1)
-        self.assertIn("keychain\tlinear-manager\tlinear-manager", self.ledger())
+        self.assertEqual(len(tokens), len(SLOTS))
+        self.assertNotIn("Linear key", result.stderr)
+        self.assertNotIn("API key", result.tty)
         self.assert_secret_free("k-SENTINEL", "t-SENTINEL", result=result)
         self.assertNotIn("k-SENTINEL", result.tty)
         self.assertNotIn("t-SENTINEL", result.tty)
@@ -2665,7 +2656,7 @@ exec /bin/rm "$@"
         )
         self.assertFalse((self.fakes / "keychain/linear-app-researcher-secret").exists())
         self.assertFalse((self.fakes / "keychain/linear-app-researcher-token").exists())
-        self.assertTrue((self.fakes / "keychain/linear-manager").exists())
+        self.assertTrue((self.fakes / "keychain/linear-app-manager-token").exists())
         self.assert_secret_free("k-SENTINEL", "t-SENTINEL", result=result)
         self.assertNotIn("k-SENTINEL", result.tty)
         self.assertNotIn("t-SENTINEL", result.tty)
@@ -3323,8 +3314,9 @@ exec /bin/rm "$@"
         self.assertEqual(linear["agent_label_group"], uuid(43))
         self.assertEqual(linear["agent_labels"], {"claude": uuid(44)})
         self.assertEqual(linear["harness"], app_config("harness"))
-        self.assertEqual(linear["manager_key"], "linear-manager")
+        self.assertEqual(linear["manager"], app_config("manager"))
         self.assertNotIn("harness_key", linear)
+        self.assertNotIn("manager_key", linear)
         self.assertEqual(linear["human_members"], ["me@example.com"])
         self.assertEqual(
             linear["roles"],
@@ -3357,8 +3349,7 @@ exec /bin/rm "$@"
         result = self.again()
         self.assert_ok(result)
         for slot in SLOTS:
-            service = "linear-manager" if slot == "manager" else f"linear-app-{slot}-secret"
-            self.assertIn(f"skip: {service} in the keychain", result.stderr)
+            self.assertIn(f"skip: linear-app-{slot}-secret in the keychain", result.stderr)
         for said in ("has the Linear board configuration", "router installed", "promote installed"):
             self.assertIn(f"skip: {said}", result.stderr)
         changing = ("curl -q", "security add", "launchctl")
@@ -3477,11 +3468,7 @@ exec /bin/rm "$@"
         members = [*team["members"], {"email": "x\x1b[2J@example.com", "active": True}]
         self.linear(teams=[{**team, "members": members}])
         again = self.again(
-            answers=[
-                (f"Linear OAuth Client ID for {slot}:", f"client-{slot}")
-                for slot in SLOTS
-                if slot != "manager"
-            ]
+            answers=[(f"Linear OAuth Client ID for {slot}:", f"client-{slot}") for slot in SLOTS]
         )
         self.assert_board_stopped(again, "Linear returned an invalid member email")
         for text in (result.stdout, result.stderr, result.tty, again.stderr, again.tty):
@@ -3948,10 +3935,7 @@ exec /bin/rm "$@"
         """A fresh install, then the Linear board set up and the installer run again for its keys and jobs."""
         self.assert_ok(self.fresh("--no-docker"))
         first = self.run_calls()
-        linear = (
-            '\n[orchestrator]\ntracker = "linear"\n\n[orchestrator.linear]\n'
-            'manager_key = "linear-manager"\n'
-        )
+        linear = '\n[orchestrator]\ntracker = "linear"\n\n[orchestrator.linear]\n'
         self.config().write_text(self.config().read_text() + linear)
         self.linear()
         board = [*self.keys(*SLOTS), (PROJECT_Q, ""), *DOCS, (WRITE_Q, "y"), (WRITE_Q, "y")]

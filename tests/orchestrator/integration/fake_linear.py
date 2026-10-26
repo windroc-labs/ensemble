@@ -1068,7 +1068,6 @@ OPS = {
     "issue_list.Q_LIST": FakeLinear._issue_list,
     "issue_create.M_CREATE": FakeLinear._issue_create,
     "issue_create.Q_VIEWER": FakeLinear._viewer,
-    "issue_names.Q_VIEWER": FakeLinear._viewer,
     "issue_refs.Q_ISSUE": FakeLinear._issue_ref,
     "issue_edit.Q_READ": _paged_op(issue_edit.Q_READ, viewer=True),
     "issue_edit.M_EDIT": FakeLinear._update,

@@ -21,7 +21,8 @@ from tests.orchestrator.integration.flow_fixtures import (
     TIMEOUT,
     Flow,
 )
-from tests.orchestrator.unit.issue_fixtures import CLIENT_GROUP, CLIENT_LABELS, MANAGER_KEY
+from tests.orchestrator.unit.board_ids import MANAGER_IDENTITY, MANAGER_LINE
+from tests.orchestrator.unit.issue_fixtures import CLIENT_GROUP, CLIENT_LABELS
 
 TASK, CLIENT = "light-research", "claude"
 ROLE = "researcher"  # TASK is one of its tasks
@@ -107,7 +108,13 @@ class Parity(Flow):
         with open(self.config, encoding="utf-8") as f:
             self.linear_text = f.read()
         self.assertEqual(self.linear_text.count('tracker = "linear"\n'), 1)
-        self.fake.user("manager@agents.test", "Manager", MANAGER_KEY)
+        self.fake.user(
+            "manager@agents.test",
+            "Manager",
+            MANAGER_IDENTITY.token_service,
+            app=True,
+            uid=MANAGER_IDENTITY.user_id,
+        )
         with open(self.seam, encoding="utf-8") as f:  # its keys: the users when it was written
             self.seam = seam(self, self.fake, json.load(f)["url"])
         self.fake.label_group(CLIENT_GROUP, "Agent", {CLIENT_LABELS[CLIENT]: "Claude"})
@@ -125,8 +132,7 @@ class Parity(Flow):
     def use(self, tracker):
         text = self.linear_text.replace(
             'tracker = "linear"\n',
-            f'tracker = "{tracker}"\nlinear.manager_key = "{MANAGER_KEY}"\n'
-            f'linear.agent_label_group = "{CLIENT_GROUP}"\n',
+            f'tracker = "{tracker}"\n{MANAGER_LINE}linear.agent_label_group = "{CLIENT_GROUP}"\n',
         )
         with open(self.config, "w", encoding="utf-8") as f:
             f.write(

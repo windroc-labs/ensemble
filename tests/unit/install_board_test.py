@@ -6,7 +6,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from ensemble.orchestrator.engine.config import REQUIRED
+from ensemble.orchestrator.engine.config import REQUIRED, AppKey
 from ensemble.orchestrator.engine.flow.workflow import Workflow
 from tests.case import REPO, Case
 
@@ -32,7 +32,33 @@ class BoardContract(Case):
             for keys in values["required"]
         }
         self.assertLessEqual(set(REQUIRED), covered)
-        self.assertIn("linear.manager_key", covered)
+        self.assertLessEqual({f"linear.manager.{key}" for key in AppKey}, covered)
+        self.assertNotIn("linear.manager_key", covered)
+
+    def test_slots_make_the_manager_an_app_and_refuse_manager_key(self):
+        path = Path(self.home, "config.toml")
+        path.write_text("")
+        out = io.StringIO()
+        with (
+            mock.patch.object(sys, "argv", ["-c", str(path), "pm\tdesign"]),
+            redirect_stdout(out),
+        ):
+            exec(embedded("linear_slots"), {})
+        self.assertEqual(
+            out.getvalue().splitlines(),
+            [
+                f"{slot}\tlinear-app-{slot}-token\tlinear-app-{slot}-secret"
+                for slot in ("harness", "manager", "pm")
+            ],
+        )
+        path.write_text('[orchestrator.linear]\nmanager_key = "linear-manager"\n')
+        with (
+            mock.patch.object(sys, "argv", ["-c", str(path), "pm\tdesign"]),
+            self.assertRaises(SystemExit) as cm,
+        ):
+            exec(embedded("linear_slots"), {})
+        self.assertIn("unknown keys in [linear]: manager_key", str(cm.exception.code))
+        self.assertIn("docs/credentials.md#linear-manager-app", str(cm.exception.code))
 
     def test_stage_snapshot_is_passed_to_board_helpers(self):
         script = Path(REPO, "scripts/install.sh").read_text()

@@ -6,16 +6,13 @@ from ensemble.orchestrator.engine.flow.types import IssueState
 from ensemble.orchestrator.engine.types import IssueError
 from ensemble.orchestrator.trackers.linear import issue_names
 from tests.orchestrator.case import Case
-from tests.orchestrator.unit.board_ids import ACCOUNTS, STATES
+from tests.orchestrator.unit.board_ids import ACCOUNTS, MANAGER_USER, STATES
 from tests.orchestrator.unit.issue_fixtures import (
     CLIENT_LABELS,
     OTHER_TEAM,
     ROLE_USERS,
     TASK_LABELS,
-    VIEWER,
-    Routes,
     names_cfg,
-    role_users,
     write_issue,
 )
 
@@ -37,30 +34,21 @@ class StateId(Case):
                 self.assertEqual(issue_names.state_id(names_cfg(), state), STATES[key])
 
 
-class Assignee(Case):
-    def test_a_role_is_its_configured_app_user(self):
-        gql = Routes(users=role_users)
-        self.assertEqual(
-            issue_names.assignee(gql, names_cfg(), "engineer"), ROLE_USERS[ACCOUNTS["engineer"]]
-        )
-        self.assertEqual(gql.calls, [])
-
-    def test_me_is_the_viewer_and_unassigned_none(self):
-        gql = Routes(viewer=VIEWER)
-        self.assertEqual(issue_names.assignee(gql, names_cfg(), "me"), VIEWER["id"])
-        self.assertIsNone(issue_names.assignee(gql, names_cfg(), "unassigned"))
-        self.assertEqual(len(gql.calls), 1)
+class Delegate(Case):
+    def test_a_role_is_its_app_me_the_manager_app_and_unassigned_none(self):
+        linear = names_cfg()
+        self.assertEqual(issue_names.delegate(linear, "engineer"), ROLE_USERS[ACCOUNTS["engineer"]])
+        self.assertEqual(issue_names.delegate(linear, "me"), MANAGER_USER)
+        self.assertIsNone(issue_names.delegate(linear, "unassigned"))
 
     def test_an_unknown_spec_names_every_role_me_and_unassigned(self):
         for spec in ("nobody", "Engineer", "u1@example.com"):
-            gql = Routes()
             with self.subTest(spec=spec), self.assertRaises(IssueError) as cm:
-                issue_names.assignee(gql, names_cfg(), spec)
+                issue_names.delegate(names_cfg(), spec)
             self.assertEqual(
                 str(cm.exception),
                 f"--role {spec}: not a role: researcher, pm, engineer, me, unassigned",
             )
-            self.assertEqual(gql.calls, [])
 
 
 class Labels(Case):

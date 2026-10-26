@@ -17,11 +17,17 @@ next = ""
 
 [linear]
 team = ""
-manager_key = ""
+api_key = ""
 task_label_group = ""
 agent_label_group = ""
 
 [linear.harness]
+client_id = ""
+secret_service = ""
+token_service = ""
+user_id = ""
+
+[linear.manager]
 client_id = ""
 secret_service = ""
 token_service = ""
@@ -41,13 +47,17 @@ key = ""
 """
 
 KEYS = [
-    "linear.manager_key",
+    "linear.api_key",
     "linear.task_label_group",
     "linear.agent_label_group",
     "linear.harness.client_id",
     "linear.harness.secret_service",
     "linear.harness.token_service",
     "linear.harness.user_id",
+    "linear.manager.client_id",
+    "linear.manager.secret_service",
+    "linear.manager.token_service",
+    "linear.manager.user_id",
     "linear.states.todo",
     "linear.states.done",
     "linear.task_labels",
@@ -116,10 +126,10 @@ class CredentialsInventory(Sample):
         )
 
     def test_a_key_named_without_its_linear_prefix_is_missing(self):
-        text = inventory(missing={"linear.manager_key"}) + "`manager_key`\n"
+        text = inventory(missing={"linear.api_key"}) + "`api_key`\n"
         self.assertEqual(
             _violations(self.config(), SERVICES, text),
-            ["docs/credentials.md: missing config key `linear.manager_key`"],
+            ["docs/credentials.md: missing config key `linear.api_key`"],
         )
 
     def test_a_missing_service_is_reported(self):

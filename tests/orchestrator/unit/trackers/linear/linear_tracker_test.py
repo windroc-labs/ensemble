@@ -48,7 +48,7 @@ from ensemble.orchestrator.engine.flow.types import (
     Snapshot,
     SubIssue,
 )
-from ensemble.orchestrator.engine.types import IssueError, LinearError, LinearKey, Unavailable
+from ensemble.orchestrator.engine.types import IssueError, LinearError, Unavailable
 from ensemble.orchestrator.trackers.linear import (
     linear_tracker,
     ops,
@@ -65,6 +65,7 @@ from tests.orchestrator.unit.board_ids import (
     STATES,
     TASK_GROUP,
     TEAM,
+    role_app,
     role_id,
     team_node,
 )
@@ -790,17 +791,22 @@ class Account(Case):
 
     def test_identity_and_timeout_bind_each_call(self):
         self.assertEqual(
-            self.calls(identity=LinearKey("linear-api-key"), timeout=10),
+            self.calls(identity=HARNESS_IDENTITY, timeout=10),
             [
                 (
                     ops.Q_COMMENT,
-                    {"identity": LinearKey("linear-api-key"), "timeout": 10, "c": CID},
+                    {
+                        "identity": HARNESS_IDENTITY,
+                        "timeout": 10,
+                        "c": ops.client_id(HARNESS_IDENTITY.user_id, *REF),
+                    },
                 )
             ],
         )
+        engineer = role_app("engineer")
         self.assertEqual(
-            self.calls(identity=LinearKey("linear-api-key-engineer")),
-            [(ops.Q_COMMENT, {"identity": LinearKey("linear-api-key-engineer"), "c": CID})],
+            self.calls(identity=engineer),
+            [(ops.Q_COMMENT, {"identity": engineer, "c": ops.client_id(engineer.user_id, *REF)})],
         )
 
     def test_no_identity_calls_gql_as_given(self):
@@ -980,7 +986,7 @@ def board_linear():
         agent_labels={"b": "label-b"},
         human_members=("human@x.test",),
         harness=HARNESS_IDENTITY,
-        manager_user_id=MANAGER_USER,
+        manager=SimpleNamespace(user_id=MANAGER_USER),
         roles={"pm": SimpleNamespace(user_id=role_id("pm"))},
     )
 
@@ -1042,7 +1048,7 @@ class OfTeam(Case):
             states=STATES,
             team=TEAM,
             harness=HARNESS_IDENTITY,
-            manager_user_id=MANAGER_USER,
+            manager=SimpleNamespace(user_id=MANAGER_USER),
             roles={"pm": SimpleNamespace(user_id=role_id("pm"))},
         )
         gql = Gql(Q_UPSTREAM={"issue": None})

@@ -53,7 +53,7 @@ from ensemble.orchestrator.issue.output import (
     refusal,
     write_full,
 )
-from ensemble.orchestrator.trackers.linear.client import linear_gql, messages
+from ensemble.orchestrator.trackers.linear.client import linear_gql, messages, use
 from ensemble.orchestrator.trackers.linear.issues import LinearIssues
 from ensemble.orchestrator.trackers.local.issues import LocalIssues
 
@@ -62,9 +62,11 @@ PRIORITIES = [str(priority) for priority in PRIORITY_NUMBERS]
 _LINEAR_ONLY = '{}: Linear only, not on a local board ([orchestrator] tracker = "local")'
 _RULES = (
     "Prerequisites and effects:\n"
-    "  Reads the configured board: Linear as the linear.manager_key account\n"
-    "  (Keychain); a local board ($ENSEMBLE_BOARD_DIR) directly, writing as other.\n"
-    "  An issue needs no recorded run. Help needs no credentials or services.\n"
+    "  Reads the configured board: Linear as the manager's OAuth app\n"
+    "  ([linear.manager]; its token is renewed first when under 5 days are left,\n"
+    "  a failed renewal of a usable token printing token-error on stderr);\n"
+    "  a local board ($ENSEMBLE_BOARD_DIR) directly, writing as other. An issue\n"
+    "  needs no recorded run. Help needs no credentials or services.\n"
     "  stdout: one JSON object of at most 8192 bytes; diagnostics go to stderr.\n"
     "  Exit 0: success; 1: the board failed (Linear: GraphQL errors, HTTP,\n"
     "  timeout); 2: usage, configuration, Keychain, a board that cannot be\n"
@@ -73,14 +75,16 @@ _RULES = (
 _HELP = (
     _RULES.removesuffix("\n")
     + "  create, edit, move, comment, archive, relation and label swap write as that\n"
-    "  account (a local board: other) and print a receipt instead; for them exit\n"
+    "  app (a local board: other) and print a receipt instead; for them exit\n"
     "  1 also means the write failed or its result is unknown, for create also a\n"
     "  relation that failed, for archive and label swap also a refusal (their\n"
     "  --help).\n\n"
     "Values: abstract names; on Linear each the configured team's id.\n"
     "  States: backlog, ready, running, review, approved, done, canceled.\n"
     "  --role SPEC: a role of [orchestrator.linear.roles], me (the\n"
-    "  linear.manager_key account) or unassigned; a local board: that directory.\n"
+    "  [linear.manager] OAuth app) or unassigned: on Linear that app is the\n"
+    "  delegate (the Agent field; unassigned: none), writes clearing the\n"
+    "  assignee; a local board: that directory.\n"
     "  --task NAME / --client NAME: on Linear a key of\n"
     "  [orchestrator.linear.task_labels] / agent_labels; a local board: a\n"
     "  configured role's task / any client name.\n"
@@ -129,8 +133,9 @@ _LIST_HELP = (
     "  recently updated first; archived ones only with --include-archived.\n"
     "  --query TEXT matches title or description in any case; --state STATE:\n"
     "  backlog, ready, running, review, approved, done or canceled; --role SPEC:\n"
-    "  a configured role, me (the linear.manager_key account) or\n"
-    "  unassigned (no assignee); --task NAME, --client NAME: a configured task or\n"
+    "  a configured role, me (the [linear.manager] OAuth app) or\n"
+    "  unassigned (no delegate; a local board: no assignee), on Linear by the\n"
+    "  delegate; --task NAME, --client NAME: a configured task or\n"
     "  client name; --priority NAME: none, urgent, high, medium or low; --parent\n"
     "  ID: the parent issue's identifier or id. Linear only (a local board exits\n"
     "  2): --label (not a group or retired) and --project, each an id or exact\n"
@@ -199,9 +204,9 @@ _READ_HELP = (
 
 _WRITE_RULES = (
     "Prerequisites and effects:\n"
-    "  Writes the configured board: Linear as the linear.manager_key account\n"
-    "  (Keychain); a local board ($ENSEMBLE_BOARD_DIR) directly, as other. An\n"
-    "  issue needs no recorded run. Help needs no credentials or services.\n"
+    "  Writes the configured board: Linear as the manager's OAuth app\n"
+    "  ([linear.manager]); a local board ($ENSEMBLE_BOARD_DIR) directly, as other.\n"
+    "  An issue needs no recorded run. Help needs no credentials or services.\n"
     "  stdout: one receipt of at most 1024 bytes: issue {id, identifier, url},\n"
     "  operation, result (changed or unchanged), actor {id, name}%s.\n"
     "  It never echoes what was written or the board's response. Diagnostics go\n"
@@ -223,8 +228,9 @@ _CREATE_HELP = (
     "  unreadable exits 2.\n"
     "--state STATE: backlog, ready, running, review, approved, done or canceled;\n"
     "  default backlog.\n"
-    "--role SPEC: the assignee: a configured role's account, me (the\n"
-    "  linear.manager_key account) or unassigned (as without --role).\n"
+    "--role SPEC: the delegate: a configured role's app, me (the\n"
+    "  [linear.manager] OAuth app) or unassigned (as without --role: none); on\n"
+    "  Linear the assignee stays empty. A local board: the assignee directory.\n"
     "--task NAME / --client NAME: the configured task / client label.\n"
     "--priority NAME: none, urgent, high, medium or low.\n"
     "--parent ID: an issue, the new one its sub-issue: this splits an issue.\n"
@@ -278,8 +284,9 @@ _EDIT_HELP = (
     "--title TEXT: not blank. --body-file FILE: the new Markdown description,\n"
     "  UTF-8, sent verbatim, minus a leading byte order mark; - reads stdin;\n"
     "  blank or unreadable exits 2.\n"
-    "--role SPEC: the assignee: a configured role's account, me (the\n"
-    "  linear.manager_key account) or unassigned (no assignee); a local board:\n"
+    "--role SPEC: the delegate: a configured role's app, me (the\n"
+    "  [linear.manager] OAuth app) or unassigned (none), clearing the assignee;\n"
+    "  a local board: the assignee directory:\n"
     "  the file moves to <SPEC>/<state>/, an archived issue exits 2.\n"
     "--project VALUE: Linear only (a local board exits 2): a project of the\n"
     "  configured team, an id or exact name, resolved before the issue is read;\n"
@@ -419,7 +426,11 @@ def _parser():
     )
     found.add_argument("--query", metavar="TEXT", help="title or description holds TEXT, any case")
     found.add_argument("--state", choices=STATES, metavar="STATE", help=", ".join(STATES))
-    found.add_argument("--role", metavar="SPEC", help="a configured role, me or unassigned")
+    found.add_argument(
+        "--role",
+        metavar="SPEC",
+        help="delegate (a local board: assignee): a role, me or unassigned",
+    )
     found.add_argument("--task", metavar="NAME", help="a configured task name")
     found.add_argument("--client", metavar="NAME", help="a configured client name")
     found.add_argument("--priority", choices=PRIORITIES, metavar="NAME", help=", ".join(PRIORITIES))
@@ -469,7 +480,11 @@ def _parser():
         help=", ".join(STATES) + " (default: backlog)",
     )
     for option, metavar, what in (
-        ("--role", "SPEC", "assignee: a configured role, me or unassigned"),
+        (
+            "--role",
+            "SPEC",
+            "delegate (a local board: assignee): a configured role, me or unassigned",
+        ),
         ("--task", "NAME", "a configured task name"),
         ("--client", "NAME", "a configured client name"),
         ("--parent", "ID", "parent issue identifier (TASK-1) or id: a split"),
@@ -500,8 +515,8 @@ def _parser():
     )
     change = commands.add_parser(
         "edit",
-        help="change one issue's title, description, assignee, project, task, client or priority",
-        description="Change the title, description, assignee, project, task, client or priority "
+        help="change one issue's title, description, role, project, task, client or priority",
+        description="Change the title, description, role, project, task, client or priority "
         "of one issue.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_EDIT_HELP,
@@ -512,7 +527,10 @@ def _parser():
         "--body-file", action=_Once, metavar="FILE", help="the description, UTF-8; -: stdin"
     )
     change.add_argument(
-        "--role", action=_Once, metavar="SPEC", help="assignee: a configured role, me or unassigned"
+        "--role",
+        action=_Once,
+        metavar="SPEC",
+        help="delegate (a local board: assignee): a configured role, me or unassigned",
     )
     change.add_argument(
         "--project", action=_Once, metavar="VALUE", help="Linear only: project id or name"
@@ -800,12 +818,12 @@ def _linear_only(command, request):
     return next((option for option, is_set in given.items() if is_set), None)
 
 
-def _linear(cfg, gql):
-    """cfg's LinearIssues, as linear.manager_key."""
+def _linear(cfg, gql, err):
+    """cfg's LinearIssues, as the manager's app, whose failed renewals go to err."""
     linear = config.linear_settings(cfg, "issue")
-    if not linear.manager_key:
-        raise ConfigError("orchestrator/config.toml: linear.manager_key is unset")
-    return LinearIssues(functools.partial(gql, identity=linear.manager), linear)
+    app = config.manager_app(linear)
+    use(report=lambda identity, reason: diagnose(err, f"token-error: {identity}: {reason}"))
+    return LinearIssues(functools.partial(gql, identity=app), linear)
 
 
 def main(argv, *, gql=linear_gql, config_path=None, out=None, err=None, stdin=None):
@@ -835,7 +853,7 @@ def main(argv, *, gql=linear_gql, config_path=None, out=None, err=None, stdin=No
         board = (
             LocalIssues(cfg.board, cfg.roles, prefix=cfg.local_prefix)
             if cfg.tracker is TrackerKind.LOCAL
-            else _linear(cfg, gql)
+            else _linear(cfg, gql, err)
         )
     except (ConfigError, TrackerFileError) as error:
         diagnose(err, error)

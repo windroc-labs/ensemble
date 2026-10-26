@@ -14,6 +14,9 @@ NAME = re.compile(r"[A-Za-z0-9._@+][A-Za-z0-9._@+-]*")
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 TOKEN_URL = "https://api.linear.app/oauth/token"
 GRAPHQL_URL = "https://api.linear.app/graphql"
+# engine/types.py SCOPES by slot; any other slot is a role
+SCOPES = {"harness": "read,write", "manager": "read,write,app:assignable"}
+ROLE_SCOPES = "read,write,app:assignable,app:mentionable"
 
 
 class InstallError(Exception):
@@ -74,7 +77,7 @@ def curl(url, payload, headers, *, config=None):
 
 
 def request_token(client_id, secret, slot, now):
-    scopes = "read,write" if slot == "harness" else "read,write,app:assignable,app:mentionable"
+    scopes = SCOPES.get(slot, ROLE_SCOPES)
     try:
         answer = curl(
             TOKEN_URL,
@@ -146,9 +149,7 @@ def prepare(config, slot, service, secret_service, output):
         raise InstallError("token and client secret must use different Keychain services")
     data = tomllib.loads(Path(config).read_text()) if Path(config).exists() else {}
     linear = data.get("orchestrator", {}).get("linear", {})
-    settings = (
-        linear.get("harness", {}) if slot == "harness" else linear.get("roles", {}).get(slot, {})
-    )
+    settings = linear.get(slot, {}) if slot in SCOPES else linear.get("roles", {}).get(slot, {})
     client_id = settings.get("client_id")
     if client_id in (None, ""):
         client_id = ask(slot)

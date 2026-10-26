@@ -9,7 +9,7 @@ from ensemble.orchestrator.engine.types import Config, Docs, LinearSettings, Tra
 from ensemble.utils import load_class
 from tests.delegate.fakes.harness_session import HarnessSession, RecordingHost, harness_launches
 from tests.delegate.harness import SID, HarnessCase
-from tests.orchestrator.unit.board_ids import HARNESS_IDENTITY
+from tests.orchestrator.unit.board_ids import HARNESS_IDENTITY, NO_MANAGER
 
 HARNESS_DELEGATE = load_class("ensemble.delegate.engine.harness_delegate:HarnessDelegate", Delegate)
 
@@ -29,8 +29,7 @@ class HarnessRun(HarnessCase):
             states={},
             human_members=(),
             harness=HARNESS_IDENTITY,
-            manager_user_id="",
-            manager_key="",
+            manager=NO_MANAGER,
             task_label_group="",
             task_labels={},
             agent_label_group="",

@@ -395,7 +395,7 @@ class Base(run_fixtures.Base):
 
     def setUp(self):
         super().setUp()
-        self.missing, self.keychain_calls = set(), []
+        self.keychain_calls = []
         self.write_local(f'work_dir = "{self.work}"\n')
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -507,7 +507,7 @@ class Base(run_fixtures.Base):
 
     def keychain(self, identity):
         self.keychain_calls.append(identity.service)
-        return identity.service not in self.missing
+        return True
 
     def cfg(self):
         cfg = config.load(path=self.config_path)

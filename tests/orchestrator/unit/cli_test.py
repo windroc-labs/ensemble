@@ -398,7 +398,8 @@ class Wirings(run_fixtures.Base):
             cli.main(["--help"])
         self.assertIn(
             "reaches Linear as the [linear.harness] OAuth app, whose token any command renews"
-            " before a call when under 5 days are left (the issue commands: linear.manager_key)",
+            " before a call when under 5 days are left (the issue commands: the [linear.manager]"
+            " OAuth app)",
             " ".join(output.getvalue().split()),
         )
 

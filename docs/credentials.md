@@ -73,16 +73,23 @@ The harness is a Linear OAuth app, `[linear.harness]`: its client secret and its
 | Lifetime | the token 30 days; any Linear call as the harness (router, promote, prune, write-back) first requests a new one with `client_credentials` when it is missing, undated, expired or has under 5 days left. A failed request with the old token still valid logs `token-error` and uses it; with it expired the command exits 2 naming the fix. `--dry-run` requests none and logs a `token` line with the days left |
 | Revoke | rotate the client secret in Linear › Settings › API › Applications (this revokes every token of the app), store the new secret with `security add-generic-password -U -s <secret service> -a <secret service> -w`, then `security delete-generic-password -s <token service>` so the next call requests a token |
 
-### Linear manager key
+### Linear manager app
+
+The manager is a Linear OAuth app, `[linear.manager]`, with the harness app's four keys. Any of them unset, the `issue`
+commands exit 2 naming it; router, promote and prune run without it.
 
 | Field | Value |
 |---|---|
-| Purpose | the manager's `ensemble-orchestrator issue` commands (reads, comments, moves, creates, relations, labels, archives); an account neither the harness nor a role, so its comments are instructions and its moves to Todo restart the attempt count |
-| Minimum permission | a personal API key of that account (a dedicated manager account or your own) limited to the team, with Read, Write, Create issues and Create comments; not live-tested |
-| Stored at | a login keychain item whose service is `linear.manager_key`; unset, the `issue` commands refuse |
+| Purpose | the manager's `ensemble-orchestrator issue` commands (reads, comments, moves, creates, relations, labels, archives); its comments and moves count as other (instructions; a move to Todo restarts the attempt count), whether or not `linear.manager.user_id` is set; the id only matters for a manager move that carries a `botActor` |
+| Minimum permission | an OAuth app with Client credentials on, its team access limited to the team; each token is requested with the scopes `read,write,app:assignable`, fixed in code |
+| Stored at | the client secret: a login keychain item whose service is `linear.manager.secret_service`; the token and its expiry: one whose service is `linear.manager.token_service`, written by the `issue` commands |
 | Readers | any process running as the user: read through `/usr/bin/security`, which an item made by `security add-generic-password` without `-T` trusts |
-| Lifetime | no expiry documented |
-| Revoke | delete the key in Linear › Settings › Account › Security & Access, then `security delete-generic-password -s <service>` |
+| Lifetime | the token 30 days; any `issue` command first requests a new one when it is missing, undated, expired or has under 5 days left. A failed request with the old token still valid prints `token-error: manager: <reason>` on stderr and uses it; with it expired the command exits 2 naming the fix |
+| Revoke | as the harness app, with `linear.manager`'s services |
+
+Before this app, the manager used a personal API key, a setting now refused as an unknown key. Once the app works, revoke
+that key in Linear › Settings › Account › Security & Access, then `security delete-generic-password -s <its service>`
+(the installer's default: `linear-manager`).
 
 ### Linear role apps
 
@@ -188,7 +195,8 @@ shows.
 | `ensemble-opencode` | provider name | `[session.clients.opencode.providers.<name>]` | that OpenCode provider's API key | `<B> login opencode <name>` | the broker |
 | the `linear.harness.secret_service` value | any | `linear.harness.secret_service` | harness app client secret | installer or the user ([Linear presets](#linear-presets)) | any process running as the user |
 | the `linear.harness.token_service` value | the existing item's, else the service | `linear.harness.token_service` | harness app token and expiry | installer, router, promote, prune, write-back | any process running as the user |
-| the `linear.manager_key` value | the manager's account | `linear.manager_key` | manager Linear API key | installer or the user ([Linear presets](#linear-presets)) | any process running as the user |
+| the `linear.manager.secret_service` value | any | `linear.manager.secret_service` | manager app client secret | installer or the user ([Linear presets](#linear-presets)) | any process running as the user |
+| the `linear.manager.token_service` value | the existing item's, else the service | `linear.manager.token_service` | manager app token and expiry; its comments and moves count as other whether or not `linear.manager.user_id` is set (the id only matters for a manager move that carries a `botActor`) | installer, the `issue` commands | any process running as the user |
 | each `linear.roles.<role>.secret_service` value | any | `linear.roles.<role>.secret_service` | role app client secret | installer or the user | any process running as the user |
 | each `linear.roles.<role>.token_service` value | the existing item's, else the service | `linear.roles.<role>.token_service` | role app token and expiry | installer, router, write-back, Recover | any process running as the user |
 | Claude Code's own | — | — | local Claude login | Claude Code `/login` | Claude Code; service name not documented |
@@ -259,11 +267,11 @@ container's own tmux socket is not Docker's, so the socket search names `docker`
 
 ## Linear presets
 
-With `--board linear`, `scripts/install.sh` asks for each harness/role app's Client ID and hidden client secret,
+With `--board linear`, `scripts/install.sh` asks for each harness, manager and role app's Client ID and hidden client secret,
 stores its secret and first token with expiry in Keychain, and fills the app user ids ([Setup](board.md#setup)).
 Default services are `linear-app-<slot>-secret` and `linear-app-<slot>-token`; configured services are preserved.
 Reruns reuse valid tokens with over five days left. Cleanup removes only the credential items this installer created.
-The manager still supplies its separate API key. The table
+The old manager key setting left in `config.local.toml` stops the installer ([Linear manager app](#linear-manager-app)). The table
 lists what it needs in Linear. By hand: create these in the Linear team, then put each id in `~/.ensemble/config.local.toml`: a `linear.<key>` under
 `[orchestrator.linear]` (`linear.states.todo` is `todo` in `[orchestrator.linear.states]`, `linear.roles.pm.client_id` is
 `client_id` in `[orchestrator.linear.roles.pm]`), `local_clones` under `[orchestrator]` ([Setup](board.md#setup)).
@@ -280,8 +288,7 @@ lists what it needs in Linear. By hand: create these in the Linear team, then pu
 | the Linear project of each product repo, optional | `linear.project_repos` |
 | — (local clones of target repos, optional) | `local_clones` |
 | the harness's OAuth app (below): its Client ID, its client secret's and token's Keychain items, its Linear user id | `linear.harness.client_id`, `linear.harness.secret_service`, `linear.harness.token_service`, `linear.harness.user_id` |
-| the manager's API key, of an account neither the harness nor a role (yours, or one more member), a Keychain item (below) | `linear.manager_key` |
-| the manager's OAuth app's Linear user id, optional: its comments and moves count as yours | `linear.manager.user_id` |
+| the manager's OAuth app (below), for the `issue` commands: its Client ID, its client secret's and token's Keychain items, its Linear user id; its comments and moves count as yours either way, the id mattering only for a move carrying a `botActor` | `linear.manager.client_id`, `linear.manager.secret_service`, `linear.manager.token_service`, `linear.manager.user_id` |
 
 The harness app:
 
@@ -298,11 +305,11 @@ The harness app:
 
 For each role app, use the same secret-storage steps as the harness with its role table's service
 names. Fill `user_id` from the app's viewer during setup; runtime commands do not fetch it. The first
-non-dry call requests its token. The manager still uses its separate `linear.manager_key` until its
-integration migration lands; store that account's personal key in its configured service.
+non-dry call requests its token. The manager app takes the same steps with `linear.manager`'s keys; its
+scopes are `read,write,app:assignable`.
 
-`bin/ensemble-orchestrator router --dry-run` and `bin/ensemble-orchestrator promote --dry-run` should
-report no configuration error once every app has a usable token.
+`bin/ensemble-orchestrator router --dry-run`, `bin/ensemble-orchestrator promote --dry-run` and
+`bin/ensemble-orchestrator issue list` should report no configuration error once every app has a usable token.
 
 ## Live checks
 

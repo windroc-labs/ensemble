@@ -754,6 +754,13 @@ class HarnessToken(Base):
         self.assertEqual(self.endpoint.tokens, [])
         self.assertEqual(self.stored()["access_token"], OLD)
 
+    def test_promote_runs_without_a_manager_app(self):
+        linear = config.load(path=self.config_path).linear
+        with self.assertRaises(config.ConfigError):
+            config.manager_app(linear)
+        self.assertEqual(self.promote(6), 0)
+        self.assertIn("promote DR-1", self.out)
+
     def test_a_failed_renewal_of_a_usable_token_is_one_token_error_and_promote_goes_on(self):
         self.assertEqual(self.promote(3, token_http_error(401)), 0)
         self.assertEqual(len(self.endpoint.tokens), 1)

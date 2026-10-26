@@ -46,6 +46,20 @@ HARNESS_IDENTITY = LinearApp("harness", AppKind.HARNESS, "linear.harness", **HAR
 HARNESS_LINE = "linear.harness = {{ {} }}\n".format(
     ", ".join(f'{k} = "{v}"' for k, v in HARNESS_APP.items())
 )
+# The manager app: its token entry is "linear-api-key-manager"; HEADER leaves it out (the issue command's
+# fixtures prepend MANAGER_LINE).
+MANAGER_APP = {
+    "client_id": "client-manager",
+    "secret_service": "linear-api-key-manager-secret",
+    "token_service": "linear-api-key-manager",
+    "user_id": MANAGER_USER,
+}
+MANAGER_IDENTITY = LinearApp("manager", AppKind.MANAGER, "linear.manager", **MANAGER_APP)
+# LinearSettings.manager when [linear.manager] is unset.
+NO_MANAGER = LinearApp("manager", AppKind.MANAGER, "linear.manager", "", "", "", "")
+MANAGER_LINE = "linear.manager = {{ {} }}\n".format(
+    ", ".join(f'{k} = "{v}"' for k, v in MANAGER_APP.items())
+)
 HEADER = (
     'tracker = "linear"\n'
     + 'linear.team = "{}"\n{}linear.states = {{ {} }}\n'.format(

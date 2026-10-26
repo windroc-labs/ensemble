@@ -8,11 +8,10 @@ import json
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from unittest import mock
 
 from ensemble.orchestrator.engine import types
-from ensemble.orchestrator.engine.types import LinearError, LinearKey
+from ensemble.orchestrator.engine.types import LinearError
 from ensemble.orchestrator.trackers.linear import client, ops
 from ensemble.utils import one_line
 from tests.orchestrator.case import Case
@@ -45,7 +44,7 @@ from tests.orchestrator.unit.outage import FAILURES, failing
 
 class LinearGql(Case):
     def gql(self, query=VIEWER, body=b'{"data": {}}', **kw):
-        run = mock.Mock(return_value=SimpleNamespace(stdout="secret\n"))
+        run = mock.Mock(wraps=Keychain({HARNESS.token_service: record(token="secret")}))
         with (
             mock.patch("subprocess.run", run),
             mock.patch.object(
@@ -53,35 +52,28 @@ class LinearGql(Case):
             ),
             mock.patch.object(urllib.request, "urlopen", return_value=respond(body)) as urlopen,
         ):
-            return client.linear_gql(query, **kw), run, urlopen
+            return client.linear_gql(query, **{"identity": HARNESS, **kw}), run, urlopen
 
-    def test_key_by_service_only_sent_by_urlopen(self):
-        for service in ("svc-h", "linear-api-key-pm"):
-            with self.subTest(service=service):
-                out, run, urlopen = self.gql(
-                    body=b'{"data": {"viewer": {"id": "v"}}}', identity=LinearKey(service)
-                )
-                self.assertEqual(out, {"viewer": {"id": "v"}})
-                self.assertEqual(
-                    [c.args[0] for c in run.call_args_list],
-                    [["/usr/bin/security", "find-generic-password", "-s", service, "-w"]],
-                )
-                urlopen.assert_called_once()
-                req = urlopen.call_args[0][0]
-                self.assertEqual(
-                    (req.full_url, req.get_header("Authorization")),
-                    ("https://api.linear.app/graphql", "secret"),
-                )
-                self.assertEqual(json.loads(req.data)["variables"], {})
+    def test_the_apps_token_only_sent_by_urlopen_as_bearer(self):
+        out, run, urlopen = self.gql(body=b'{"data": {"viewer": {"id": "v"}}}')
+        self.assertEqual(out, {"viewer": {"id": "v"}})
+        self.assertEqual(
+            [c.args[0] for c in run.call_args_list],
+            [["/usr/bin/security", "find-generic-password", "-s", HARNESS.token_service, "-w"]],
+        )
+        urlopen.assert_called_once()
+        req = urlopen.call_args[0][0]
+        self.assertEqual(
+            (req.full_url, req.get_header("Authorization")),
+            ("https://api.linear.app/graphql", "Bearer secret"),
+        )
+        self.assertEqual(json.loads(req.data)["variables"], {})
 
     def test_timeout_bounds_keychain_and_request(self):
         for kw, want in (({}, 30), ({"timeout": 5}, 5)):
             with self.subTest(timeout=want):
                 _, run, urlopen = self.gql(
-                    "query($i: String!) { issue(id: $i) { id } }",
-                    i="TASK-1",
-                    identity=LinearKey("svc"),
-                    **kw,
+                    "query($i: String!) { issue(id: $i) { id } }", i="TASK-1", **kw
                 )
                 self.assertEqual(run.call_args.kwargs["timeout"], want)
                 self.assertEqual(urlopen.call_args.kwargs["timeout"], want)
@@ -99,30 +91,21 @@ class LinearGql(Case):
         ):
             client.linear_gql(VIEWER)
 
-    def test_a_bad_keychain_key_is_a_keychain_error(self):
-        for out in ("\n", "lin api\n"):
+    def test_a_bad_token_without_a_secret_raises_naming_only_the_app(self):
+        for value in ("", "lin api", "lin\x1bapi"):
             with (
-                self.subTest(out=out),
-                mock.patch("subprocess.run", return_value=SimpleNamespace(stdout=out)),
-                self.assertRaises(types.KeychainError),
+                self.subTest(value=value),
+                mock.patch("subprocess.run", Keychain({HARNESS.token_service: value})),
             ):
-                client.linear_gql(VIEWER, identity=LinearKey("svc"))
-
-    def test_a_bad_keychain_key_raises_naming_only_the_service(self):
-        for out, key in (("\n", ""), ("lin api\n", "lin api"), ("lin\x1bapi\n", "lin\x1bapi")):
-            with (
-                self.subTest(key=key),
-                mock.patch("subprocess.run", return_value=SimpleNamespace(stdout=out)),
-            ):
-                code = refused(self, lambda: client.linear_gql(VIEWER, identity=LinearKey("svc")))
-                self.assertIn("svc", code)
-                if key:
-                    self.assertNotIn(key, code)
+                code = refused(self, lambda: client.linear_gql(VIEWER, identity=HARNESS))
+                self.assertIn("Linear harness app has no token", code)
+                if value:
+                    self.assertNotIn(value, code)
 
 
 class Unavailable(Case):
     def setUp(self):
-        p = mock.patch("subprocess.run", return_value=SimpleNamespace(stdout=SECRET + "\n"))
+        p = mock.patch("subprocess.run", Keychain({HARNESS.token_service: record(token=SECRET)}))
         p.start()
         self.addCleanup(p.stop)
 
@@ -131,7 +114,7 @@ class Unavailable(Case):
         if read:
             resp.__enter__.return_value = mock.Mock(read=mock.Mock(side_effect=read))
         with mock.patch.object(urllib.request, "urlopen", side_effect=opened, return_value=resp):
-            return client.linear_gql(query, identity=LinearKey("svc"))
+            return client.linear_gql(query, identity=HARNESS)
 
     def unavailable(self, query, **kw):
         with self.assertRaises(types.Unavailable) as cm:
@@ -373,13 +356,15 @@ class Outage(Case):
 
 
 class HasKey(Case):
-    def test_key_existence_check_never_reads_the_secret(self):
-        for code, want in ((0, True), (44, False)):
-            with mock.patch("subprocess.run", return_value=SimpleNamespace(returncode=code)) as m:
-                self.assertIs(client.has_key(LinearKey("svc")), want)
-            self.assertEqual(
-                m.call_args.args[0], ["/usr/bin/security", "find-generic-password", "-s", "svc"]
-            )
+    def test_a_usable_token_is_true_and_none_a_keychain_error(self):
+        with mock.patch("subprocess.run", Keychain({HARNESS.token_service: record()})):
+            self.assertTrue(client.has_key(HARNESS))
+        with (
+            mock.patch("subprocess.run", Keychain()),
+            mock.patch.object(urllib.request, "urlopen", side_effect=AssertionError("sent")),
+            self.assertRaises(types.KeychainError),
+        ):
+            client.has_key(HARNESS)
 
 
 class Messages(Case):
