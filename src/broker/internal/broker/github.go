@@ -308,7 +308,7 @@ func (g GitHub) discard(ctx context.Context, container string, entries []tokenEn
 				g.note(container, audit.ExpiredUnrevoked, "", e, nil)
 				continue
 			}
-			if err := g.API.Revoke(ctx, e.Token); err != nil {
+			if err := g.revoke(ctx, e.Token); err != nil {
 				left = append(left, pending{container, e.Account, e.Token, e.ExpiresAt})
 				missed = append(missed, miss{e, err.Error()})
 			} else {
@@ -359,6 +359,14 @@ func (g GitHub) untrack(container string, entries []tokenEntry) {
 		rec.Tokens = slices.DeleteFunc(rec.Tokens, func(e tokenEntry) bool { return in(e.Token) })
 		_ = g.writeRecord(container, rec)
 	}
+}
+
+// revoke is API.Revoke with an already invalid token counted as revoked.
+func (g GitHub) revoke(ctx context.Context, token string) error {
+	if err := g.API.Revoke(ctx, token); !errors.Is(err, github.ErrAlreadyInvalid) {
+		return err
+	}
+	return nil
 }
 
 // SaveUser asks GitHub which App the AppKeyService key is (its slug), looks up its bot user (`<slug>[bot]`) and keeps
@@ -641,7 +649,7 @@ func (g GitHub) Refresh(ctx context.Context, app string, permissions map[string]
 			_ = g.discard(ctx, container, []tokenEntry{e}, false)
 			return nil, err
 		}
-		if g.API.Revoke(ctx, old.Token) != nil {
+		if g.revoke(ctx, old.Token) != nil {
 			_ = g.discard(ctx, container, []tokenEntry{old}, false)
 		} else {
 			g.note(container, audit.Revoked, "", old, nil)
@@ -710,7 +718,7 @@ func (g GitHub) Retry(ctx context.Context) ([]protocol.Pending, error) {
 			done, resolved = append(done, p.Token), append(resolved, outcome{p, audit.ExpiredUnrevoked})
 			continue
 		}
-		err = g.API.Revoke(ctx, p.Token)
+		err = g.revoke(ctx, p.Token)
 		if err == nil {
 			done, resolved = append(done, p.Token), append(resolved, outcome{p, audit.Revoked})
 			continue
