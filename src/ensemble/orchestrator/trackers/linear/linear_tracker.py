@@ -35,11 +35,13 @@ from ensemble.orchestrator.engine.flow.types import (
 )
 from ensemble.orchestrator.engine.types import (
     MOVES,
+    UNOWNED,
     UUID_RE,
     IssueError,
     LinearApp,
     LinearError,
     State,
+    TrackerKind,
 )
 from ensemble.orchestrator.trackers.linear import ops
 from ensemble.orchestrator.trackers.linear.ops import DONE, HISTORY, call, client_id, last_move
@@ -368,7 +370,8 @@ class LinearTracker(Tracker):
         return self._listed(state)
 
     def _listed(self, state, fields=""):
-        """Page state's project issues, diagnose unowned ones, return the first 100 role delegates."""
+        """Page state's project issues, return the first 100 role delegates; an unowned Todo one
+        logs claim-skip."""
         if state not in LISTED:
             raise ValueError(f"no list of {state} issues")
         flt = {
@@ -382,12 +385,12 @@ class LinearTracker(Tracker):
             for issue in page["nodes"]:
                 if self.role(issue) is not None:
                     found.append(issue)
-                else:
+                elif state is IssueState.READY:
                     self.say(
                         "claim-skip",
                         issue["identifier"],
                         once=True,
-                        reason="no configured role delegate",
+                        reason=UNOWNED[TrackerKind.LINEAR],
                     )
             if not page["pageInfo"]["hasNextPage"]:
                 return found[:100]

@@ -1110,6 +1110,24 @@ class Assigned(Case):
             [(("claim-skip", "TASK-1"), {"once": True, "reason": "no configured role delegate"})],
         )
 
+    def test_running_list_logs_no_claim_skip(self):
+        owned = {"identifier": "TASK-9", "delegate": {"id": role_id("pm")}}
+        nodes = [
+            {"identifier": "TASK-1", "delegate": None, "assignee": PM},
+            {"identifier": "TASK-2", "delegate": {"id": "someone"}},
+            owned,
+        ]
+        gql = Gql(
+            LIST=[
+                {"issues": {"nodes": nodes, "pageInfo": {"hasNextPage": False, "endCursor": None}}}
+            ]
+        )
+        said = []
+        port = tracker(gql)
+        port.say = lambda *a, **f: said.append((a, f))
+        self.assertEqual(port.assigned(IssueState.RUNNING), [owned])
+        self.assertEqual(said, [])
+
     def test_invalid_page_cursor_is_refused(self):
         for end in (None, "a"):
             with self.subTest(end=end):

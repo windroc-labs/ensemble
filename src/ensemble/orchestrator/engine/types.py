@@ -48,6 +48,12 @@ class TrackerKind(StrEnum):
     LOCAL = "local"
 
 
+# why an issue has no role: Linear reads its delegate, a local board its assignee directory
+UNOWNED = MappingProxyType(
+    {TrackerKind.LINEAR: "no configured role delegate", TrackerKind.LOCAL: "not assigned to a role"}
+)
+
+
 @dataclass(frozen=True)
 class LinearKey:
     """The manager's personal API key, by its Keychain service."""
