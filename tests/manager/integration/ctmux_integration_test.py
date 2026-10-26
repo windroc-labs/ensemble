@@ -288,6 +288,63 @@ class FakeTmux(Case):
         self.assertIn(selected, err)
         self.assertIn("--install", err)
 
+    def test_missing_selected_path_recovers_only_from_the_same_client(self):
+        for client in ("claude", "codex", "opencode"):
+            with self.subTest(client=client):
+                if client == "claude":
+                    selected = plugin(os.path.join(self.home, "cache", "0.5.0"))
+                    record(self.home, selected)
+                    newer = plugin(os.path.join(self.home, "cache", "0.10.0"))
+                elif client == "codex":
+                    selected = plugin(os.path.join(self.codex, "0.5.0"))
+                    newer = plugin(os.path.join(self.codex, "0.10.0"))
+                else:
+                    selected = self.opencode_install("0.5.0")
+                    newer = self.opencode_install("0.10.0")
+                self.install(script=os.path.join(selected, "skills/manage/scripts/ctmux"))
+                shutil.rmtree(selected)
+                if client == "claude":
+                    record(self.home, newer)
+                for _ in range(2):
+                    process, _, err, calls = self.ctmux("s1", script=self.dst)
+                    self.assertEqual(process.returncode, 0, err)
+                    self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", newer))
+                    self.assertEqual(err, f"ctmux: re-selected plugin {newer}\n" if _ == 0 else "")
+                with open(os.path.join(self.ensemble, "plugin-root"), encoding="utf-8") as f:
+                    self.assertEqual(json.load(f)["root"], newer)
+                shutil.rmtree(newer)
+
+    def test_missing_selected_path_with_only_another_client_or_no_copy_fails(self):
+        for client in ("claude", "codex", "opencode"):
+            for other in (False, True):
+                with self.subTest(client=client, other=other):
+                    if client == "claude":
+                        selected = plugin(os.path.join(self.home, "cache", "0.5.0"))
+                        record(self.home, selected)
+                    elif client == "codex":
+                        selected = plugin(os.path.join(self.codex, "0.5.0"))
+                    else:
+                        selected = self.opencode_install("0.5.0")
+                    self.install(script=os.path.join(selected, "skills/manage/scripts/ctmux"))
+                    shutil.rmtree(selected)
+                    leftover = None
+                    if other:
+                        leftover = (
+                            self.opencode_install("99.0.0")
+                            if client != "opencode"
+                            else plugin(os.path.join(self.codex, "99.0.0"))
+                        )
+                    process, out, err, calls = self.ctmux("s1", script=self.dst)
+                    self.assertNotEqual(process.returncode, 0)
+                    self.assertEqual((out, calls), ("", []))
+                    self.assertEqual(
+                        err,
+                        f"ctmux: selected plugin {selected!r} has no executable skills/manage/scripts/ctmux; "
+                        "rerun install.sh or the plugin's ctmux --install\n",
+                    )
+                    if leftover:
+                        shutil.rmtree(leftover)
+
     def test_legacy_equal_versions_use_path_order_instead_of_creation_order(self):
         self.legacy_install()
         for spec in ("z-last", "a-first"):

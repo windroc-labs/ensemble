@@ -1772,7 +1772,7 @@ class InstallTest(Case):
         result = self.again("--clients", "codex", "--docker")
         self.assert_ok(result)
         self.assertEqual(
-            Path(self.ensemble, "plugin-root").read_text().strip(), str(cache / "9.8.7")
+            json.loads(Path(self.ensemble, "plugin-root").read_text())["root"], str(cache / "9.8.7")
         )
 
     def test_installed_plugin_with_another_protocol_stops_up_front(self):
@@ -2506,8 +2506,8 @@ class InstallTest(Case):
         self.assert_ok(self.opencode_rerun())
         self.assertIn("ctmux --install", self.calls())
         for path in Path(self.ensemble, "bin").iterdir():
-            self.assertTrue(path.read_text().startswith("#!/bin/bash\nexec "))
-            self.assertIn("/node_modules/ensemble/", path.read_text())
+            self.assertTrue(path.read_text().startswith("#!/bin/bash\ntarget=$(python3 -I - "))
+            self.assertIn("/node_modules/ensemble ", path.read_text())
         self.assert_ok(self.opencode_rerun())
         self.assertNotIn("ctmux --install", self.calls())
 
@@ -2519,13 +2519,13 @@ class InstallTest(Case):
         self.assert_ok(self.opencode_only())
         backup = Path(self.ensemble, "install/plugin-root.orig")
         self.assertEqual(backup.read_text(), "previous selection\n")
-        self.assertEqual(selected.read_text().strip(), str(self.opencode_package()))
+        self.assertEqual(json.loads(selected.read_text())["root"], str(self.opencode_package()))
         self.assert_ok(self.again("--clients", "codex", "--no-docker", answers=[(WRITE_Q, "y")]))
         codex = Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.7")
-        self.assertEqual(selected.read_text().strip(), str(codex))
+        self.assertEqual(json.loads(selected.read_text())["root"], str(codex))
         self.assertIn("ctmux --install", self.calls())
         self.assert_ok(self.again("--clients", "claude", "--no-docker"))
-        self.assertEqual(selected.read_text().strip(), self.claude_ensemble())
+        self.assertEqual(json.loads(selected.read_text())["root"], self.claude_ensemble())
         self.assertIn("ctmux --install", self.calls())
         self.assertEqual(backup.read_text(), "previous selection\n")
         self.assertEqual(self.ledger().count("plugin-root"), 1)
@@ -2618,7 +2618,71 @@ class InstallTest(Case):
         self.assert_ok(self.fresh(clients="codex"))
         self.assert_command_sources(commands, codex / "plugins/cache/windroc/ensemble/9.8.7")
 
-    def assert_command_sources(self, commands, package):
+    def test_installer_adapters_follow_same_client_updates_of_historical_refs(self):
+        commands = self.legacy_command_package()
+        self.assert_ok(self.opencode_only())
+        selected = self.opencode_package()
+        newer = Path(self.home, ".cache/opencode/packages/new/node_modules/ensemble")
+        shutil.copytree(selected, newer)
+        (newer / "package.json").write_text(json.dumps({"version": "10.0.0"}))
+        shutil.rmtree(selected)
+        self.assert_command_sources(commands, newer, reselected=commands[0])
+        self.assert_command_sources(commands, newer)
+        self.assertEqual(
+            json.loads(Path(self.ensemble, "plugin-root").read_text())["root"], str(newer)
+        )
+
+    def test_installer_adapters_refuse_other_clients_after_the_selected_path_disappears(self):
+        commands = self.legacy_command_package()
+        self.assert_ok(self.opencode_only())
+        selected = self.opencode_package()
+        shutil.rmtree(selected)
+        for other in (False, True):
+            with self.subTest(other=other):
+                if other:
+                    leftover = Path(self.home, ".codex/plugins/cache/windroc/ensemble/99.0.0")
+                    shutil.copytree(self.pkg_src, leftover)
+                for name in commands:
+                    result = subprocess.run(
+                        [str(Path(self.ensemble, "bin", name))],
+                        env=self.env,
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, "")
+                    self.assertEqual(
+                        result.stderr,
+                        f"{name}: selected plugin {str(selected)!r} has no executable bin/{name}; "
+                        "rerun install.sh or the plugin's ctmux --install\n",
+                    )
+
+    def test_installer_codex_adapters_follow_an_update(self):
+        commands = self.legacy_command_package()
+        self.assert_ok(self.fresh(clients="codex"))
+        selected = Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.7")
+        newer = selected.with_name("10.0.0")
+        shutil.copytree(selected, newer)
+        shutil.rmtree(selected)
+        self.assert_command_sources(commands, newer, reselected=commands[0])
+        self.assert_command_sources(commands, newer)
+
+    def test_installer_claude_adapters_follow_an_update(self):
+        commands = self.legacy_command_package()
+        self.assert_ok(self.fresh(clients="claude"))
+        selected = Path(self.claude_ensemble())
+        newer = selected.with_name("10.0.0")
+        shutil.copytree(selected, newer)
+        shutil.rmtree(selected)
+        Path(self.home, ".claude/plugins/installed_plugins.json").write_text(
+            json.dumps({"plugins": {"ensemble@windroc": [{"installPath": str(newer)}]}})
+        )
+        self.assert_command_sources(commands, newer, reselected=commands[0])
+        self.assert_command_sources(commands, newer)
+
+    def assert_command_sources(self, commands, package, reselected=""):
         for name in commands:
             with self.subTest(name=name):
                 result = subprocess.run(
@@ -2631,6 +2695,10 @@ class InstallTest(Case):
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout, f"{package / 'bin' / name}|argument with spaces\n")
+                self.assertEqual(
+                    result.stderr,
+                    f"{name}: re-selected plugin {package}\n" if reselected == name else "",
+                )
 
     def test_opencode_new_commit_reinstalls_broker(self):
         result = self.fresh(

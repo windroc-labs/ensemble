@@ -1,8 +1,8 @@
 #!/bin/sh
 # ctmux --install copies this under each command's name into ~/.ensemble/bin: it runs that command
 # from the plugin selected by that install. Older installs without a selection use client discovery.
-target=$(python3 -I - "${0##*/}" <<'EOF'
-import glob, json, os, sys
+target=$(python3 -I - "${0##*/}" "$@" <<'EOF'
+import glob, json, os, sys, tempfile
 
 name = sys.argv[1]
 rel = os.path.join("skills", "manage", "scripts", name) if name == "ctmux" else os.path.join("bin", name)
@@ -12,46 +12,96 @@ cache = os.path.join(os.environ.get("CODEX_HOME") or os.path.join(home, ".codex"
 packages = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(home, ".cache"), "opencode", "packages")
 selection = os.path.join(home, ".ensemble", "plugin-root")
 
-try:
-    with open(selection, encoding="utf-8") as f:
-        root = f.read().rstrip("\n")
-except FileNotFoundError:
-    pass
-except (OSError, UnicodeError) as e:
-    sys.exit(f"{name}: cannot read {selection}: {e}; rerun install.sh or the plugin's ctmux --install")
-else:
-    path = os.path.join(root, rel)
-    if os.path.isabs(root) and "\n" not in root and os.access(path, os.X_OK):
-        print(path)
-        sys.exit()
-    sys.exit(f"{name}: selected plugin {root!r} has no executable {rel}; rerun install.sh or the plugin's ctmux --install")
-
-
 def version(text):
     return [int(part) if part.isdigit() else -1 for part in text.split(".")]
 
 
-def opencode_version(root):
+def plugin_version(root, manifest="package.json"):
     try:
-        with open(os.path.join(root, "package.json"), encoding="utf-8") as f:
+        with open(os.path.join(root, manifest), encoding="utf-8") as f:
             return version(str(json.load(f).get("version")))
     except (OSError, ValueError, AttributeError):
         return []
 
 
+def client_roots(client, source):
+    if client == "claude":
+        try:
+            with open(source, encoding="utf-8") as f:
+                entries = json.load(f)["plugins"]["ensemble@windroc"]
+            roots = [e.get("installPath") for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
+        except (OSError, ValueError, LookupError, TypeError):
+            roots = []
+        key = lambda p: plugin_version(p, ".claude-plugin/plugin.json") or version(os.path.basename(p))
+    elif client == "codex":
+        roots = glob.glob(os.path.join(glob.escape(source), "*"))
+        key = lambda p: version(os.path.basename(p))
+    elif client == "opencode":
+        roots = []
+        for top, dirs, _ in os.walk(source):
+            if "node_modules" in dirs:
+                dirs.remove("node_modules")
+                roots.append(os.path.join(top, "node_modules", "ensemble"))
+        key = plugin_version
+    else:
+        return []
+    return sorted(sorted(p for p in roots if isinstance(p, str) and os.path.isabs(p) and "\n" not in p), key=key, reverse=True)
+
+
+def identify(root):
+    for client, source in (("claude", record), ("codex", cache), ("opencode", packages)):
+        if root in client_roots(client, source) or (client != "claude" and root.startswith(source + os.sep)):
+            return {"root": root, "client": client, "source": source}
+    return {"root": root, "client": "", "source": ""}
+
+
+def save(data):
+    fd, temp = tempfile.mkstemp(prefix=".plugin-root.", dir=os.path.dirname(selection))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+            f.write("\n")
+        os.replace(temp, selection)
+    finally:
+        if os.path.exists(temp):
+            os.unlink(temp)
+
+
+if name == "launcher" and sys.argv[2:3] == ["--select"]:
+    save(identify(sys.argv[3]))
+    sys.exit()
+
 try:
-    with open(record, encoding="utf-8") as f:
-        entries = json.load(f)["plugins"]["ensemble@windroc"]
-except (OSError, ValueError, LookupError, TypeError):
-    entries = []
-roots = [entry.get("installPath") for entry in entries if isinstance(entry, dict)] if isinstance(entries, list) else []
-roots += sorted(sorted(glob.glob(os.path.join(glob.escape(cache), "*"))), key=lambda p: version(os.path.basename(p)), reverse=True)
-found = []
-for top, dirs, _ in os.walk(packages):  # each spec's dir holds a node_modules; never walk into one
-    if "node_modules" in dirs:
-        dirs.remove("node_modules")
-        found.append(os.path.join(top, "node_modules", "ensemble"))
-roots += sorted(sorted(found), key=opencode_version, reverse=True)
+    with open(selection, encoding="utf-8") as f:
+        text = f.read().rstrip("\n")
+except FileNotFoundError:
+    pass
+except (OSError, UnicodeError) as e:
+    sys.exit(f"{name}: cannot read {selection}: {e}; rerun install.sh or the plugin's ctmux --install")
+else:
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = identify(text)
+    if not isinstance(data, dict) or not isinstance(data.get("root"), str):
+        data = identify(text)
+    root = data["root"]
+    path = os.path.join(root, rel)
+    if os.path.isabs(root) and "\n" not in root:
+        if os.access(path, os.X_OK):
+            print(path)
+            sys.exit()
+        if not os.path.exists(root) and data.get("client") in ("claude", "codex", "opencode") and isinstance(data.get("source"), str):
+            for candidate in client_roots(data["client"], data["source"]):
+                if os.access(target := os.path.join(candidate, rel), os.X_OK):
+                    data["root"] = candidate
+                    save(data)
+                    print(f"{name}: re-selected plugin {candidate}", file=sys.stderr)
+                    print(target)
+                    sys.exit()
+    sys.exit(f"{name}: selected plugin {root!r} has no executable {rel}; rerun install.sh or the plugin's ctmux --install")
+
+roots = client_roots("claude", record) + client_roots("codex", cache) + client_roots("opencode", packages)
 for root in roots:
     if isinstance(root, str) and os.access(path := os.path.join(root, rel), os.X_OK):
         print(path)
@@ -59,4 +109,5 @@ for root in roots:
 sys.exit(f"{name}: no installed ensemble plugin has {rel}; looked in {record}, {cache}/<version>/ and {packages}/")
 EOF
 ) || exit
+[ "${0##*/}" != launcher ] || [ "${1:-}" != --select ] || exit 0
 exec "$target" "$@"

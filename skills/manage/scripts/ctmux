@@ -10,9 +10,7 @@ if [ "$1" = --install ]; then
   for name in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
     install -m 755 "$(dirname -- "$0")/launcher" "$bin/$name" && echo "$bin/$name" || exit
   done
-  selection=$(mktemp "$HOME/.ensemble/.plugin-root.XXXXXX") || exit
-  trap 'rm -f -- "$selection"' EXIT
-  printf '%s\n' "$root" > "$selection" && mv -f -- "$selection" "$HOME/.ensemble/plugin-root" || exit
+  "$(dirname -- "$0")/launcher" --select "$root" || exit
   exit
 fi
 s=${1:?usage: ctmux <session-name> | ctmux --install}
