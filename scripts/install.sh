@@ -1660,7 +1660,7 @@ opencode_login() {
 }
 
 opencode_key() {
-  local sha later
+  local sha later saved
   step "OpenCode key"
   if ! has opencode; then
     skip "OpenCode not chosen"
@@ -1683,8 +1683,11 @@ opencode_key() {
   fi
   if [ "$docker" = yes ]; then
     sha=$(shasum -a 256 "$broker" | cut -d' ' -f1)
-    if [ "$(state_get login_opencode)" = "$sha $provider" ] \
+    saved=$(state_get login_opencode)
+    # This broker's retrust already made an earlier login's item trust it: no second keychain password.
+    if { [ "$saved" = "$sha $provider" ] || { [ "$(state_get retrust)" = "$sha" ] && [ "${saved#* }" = "$provider" ]; }; } \
       && security find-generic-password -s ensemble-broker-opencode -a "$provider" </dev/null >/dev/null 2>&1; then
+      state_set login_opencode "$sha $provider"
       skip "$provider logged in to this broker"
     else
       record_item ensemble-broker-opencode "$provider"
@@ -1926,6 +1929,14 @@ token_screen_leave() {
 broker_logins() {
   local sha min need said slug
   sha=$(shasum -a 256 "$broker" | cut -d' ' -f1)
+  # Before any other broker call: a new broker's items from earlier builds trust it, with one keychain password.
+  step "broker re-trust"
+  if [ "$(state_get retrust)" = "$sha" ]; then
+    skip "done for this broker"
+  else
+    "$broker" retrust <&3 >&3 2>&3 || die "broker re-trust failed; rerun install.sh, or run $broker retrust"
+    state_set retrust "$sha"
+  fi
   step "broker login: Claude"
   if ! has claude; then
     skip "Claude Code not chosen"
@@ -2056,8 +2067,8 @@ egress_install() {
 docker_steps() {
   local name
   if [ "$docker" != yes ]; then
-    for name in "Docker Desktop running" "egress proxy" broker "broker login: Claude" "broker login: GitHub" \
-      "broker Codex install" "broker login: Codex"; do
+    for name in "Docker Desktop running" "egress proxy" broker "broker re-trust" "broker login: Claude" \
+      "broker login: GitHub" "broker Codex install" "broker login: Codex"; do
       step "$name"
       skip "Docker not chosen"
     done

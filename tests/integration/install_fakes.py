@@ -701,6 +701,9 @@ def broker(args):
             response["audit_warning"] = load(warning, None)
         out(json.dumps(response))
         return 0
+    if args == ["retrust"]:
+        out("every broker keychain item already trusts this broker\n")
+        return 0
     if args == ["version"]:
         spoken = FAKES / "src/broker/protocol"
         client = (FAKES / "pkg-src/src/ensemble/session/hosts/docker/broker.py").read_text()

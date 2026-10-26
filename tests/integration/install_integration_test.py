@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import plistlib
@@ -122,6 +123,7 @@ DOCKER_STEPS = (
     "Docker Desktop running",
     "egress proxy",
     "broker",
+    "broker re-trust",
     "broker login: Claude",
     "broker login: GitHub",
     "broker Codex install",
@@ -1152,6 +1154,7 @@ class InstallTest(Case):
             [
                 "broker-install ",
                 f"sudo mkdir -p {self.root}/usr/local/libexec/ensemble",
+                "ensemble-broker retrust",
                 "ensemble-broker login claude",
                 f"sudo -A {broker} install-codex 0.163.0",
                 "ensemble-broker install-codex 0.163.0",
@@ -2252,6 +2255,37 @@ class InstallTest(Case):
         self.assertIn("claude auth login", self.calls())
         self.assertIn("opencode auth login", self.calls())
 
+    def test_broker_retrust_runs_once_per_broker_before_logins(self):
+        result = self.fresh(clients="claude", docker="y")
+        self.assert_ok(result)
+        calls = self.calls()
+        self.assertEqual(calls.count("ensemble-broker retrust"), 1)
+        self.assertLess(
+            calls.index("ensemble-broker retrust"), calls.index("ensemble-broker status --cleanup")
+        )
+        self.assertLess(
+            calls.index("ensemble-broker retrust"), calls.index("ensemble-broker login claude")
+        )
+        self.assertLess(
+            result.stderr.index("==> broker re-trust\n"),
+            result.stderr.index("==> broker login: Claude"),
+        )
+        binary = self.root / "usr/local/libexec/ensemble/ensemble-broker"
+        self.assertEqual(self.state()["retrust"], hashlib.sha256(binary.read_bytes()).hexdigest())
+        result = self.again()
+        self.assert_ok(result)
+        self.assertNotIn("ensemble-broker retrust", self.calls())
+        self.assertIn("==> broker re-trust\n    skip: done for this broker\n", result.stderr)
+        binary.write_text(binary.read_text() + "\n# replacement fake broker build\n")
+        (self.fakes / "fail").write_text("ensemble-broker retrust")
+        result = self.again()
+        self.assertEqual(result.code, 1, result.stderr)
+        self.assertIn("broker re-trust failed; rerun install.sh, or run", result.stderr)
+        self.assertFalse([c for c in self.calls() if c.startswith("ensemble-broker login")])
+        self.assert_ok(self.again())
+        self.assertEqual(self.calls().count("ensemble-broker retrust"), 1)
+        self.assertEqual(self.state()["retrust"], hashlib.sha256(binary.read_bytes()).hexdigest())
+
     def test_broker_logins_use_the_terminal_device(self):
         result = self.fresh(clients="claude", docker="y", ctty=self.refused_tty())
         self.assert_ok(result)
@@ -3197,17 +3231,46 @@ exec /bin/rm "$@"
         self.assert_ok(self.again())
         self.assertIn(login, self.calls())
         self.assertNotIn("opencode auth login", self.calls())
-        binary = self.root / "usr/local/libexec/ensemble/ensemble-broker"
-        binary.write_text(binary.read_text() + "\n# replacement fake broker build\n")
-        self.assert_ok(self.again())
-        self.assertIn(login, self.calls())
-        self.assertNotIn("opencode auth login", self.calls())
         self.auth_json().unlink()
         self.assert_ok(self.again(answers=[(OPENCODE_LOGIN_Q, "lan"), (r"API key:", KEY)]))
         self.assertNotIn(login, self.calls())
         self.assert_ok(self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n"))
         self.assertFalse(self.auth_json().exists())
         self.assertFalse((self.fakes / "keychain/ensemble-broker-opencode").exists())
+
+    def test_opencode_key_uses_new_service_name(self):
+        result = self.fresh(
+            clients="opencode",
+            docker="y",
+            opencode=PROVIDER_ANSWERS,
+            logins=[(PEM_Q, ""), (OPENCODE_LOGIN_Q, "lan"), (r"API key:", KEY)],
+        )
+        self.assert_ok(result)
+        self.assertEqual((self.fakes / "keychain/ensemble-broker-opencode").read_text(), KEY)
+        self.assertIn("keychain\tensemble-broker-opencode\tlan", self.ledger())
+        self.assertRegex(self.state()["login_opencode"], r"^[0-9a-f]{64} lan$")
+
+    def test_opencode_key_skips_relogin_after_retrust(self):
+        """A new broker re-trusts the provider's existing item: no second login and no second password."""
+        result = self.fresh(
+            clients="opencode",
+            docker="y",
+            opencode=PROVIDER_ANSWERS,
+            logins=[(PEM_Q, ""), (OPENCODE_LOGIN_Q, "lan"), (r"API key:", KEY)],
+        )
+        self.assert_ok(result)
+        login = f"ensemble-broker login opencode lan --auth-file {self.auth_json()}"
+        binary = self.root / "usr/local/libexec/ensemble/ensemble-broker"
+        binary.write_text(binary.read_text() + "\n# replacement fake broker build\n")
+        self.assert_ok(self.again())
+        self.assertIn("ensemble-broker retrust", self.calls())
+        self.assertNotIn(login, self.calls())
+        sha = hashlib.sha256(binary.read_bytes()).hexdigest()
+        self.assertEqual(self.state()["login_opencode"], f"{sha} lan")
+        binary.write_text(binary.read_text() + "\n# another fake broker build\n")
+        (self.fakes / "keychain/ensemble-broker-opencode").unlink()
+        self.assert_ok(self.again())
+        self.assertIn(login, self.calls())
 
     def test_opencode_docker_import_existing_auth_and_preserve_on_cleanup(self):
         self.auth_json().parent.mkdir(parents=True)
