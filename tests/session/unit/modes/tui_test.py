@@ -2657,6 +2657,3 @@ class OwnerTest(Base):
                 self.assertEqual(str(caught.exception), f"no tui session w1: {path}: bad owner")
         self.write_state(self.state(owner=self.owner()))
         self.assertEqual(tui.TuiMode.snapshot(NAME)["owner"], self.owner())
-
-    def test_a_tui_mode_writes_its_own_run_records(self):
-        self.assertTrue(tui.TuiMode.records)

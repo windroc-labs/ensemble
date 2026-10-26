@@ -26,7 +26,6 @@ from ensemble.session.engine.base import Session
 from ensemble.session.engine.capacity import Admission
 from ensemble.session.engine.records import RunLog
 from ensemble.session.engine.types import (
-    Blocked,
     ClientBound,
     ConfigError,
     Exited,
@@ -38,7 +37,6 @@ from ensemble.session.engine.types import (
     Mode,
     NoRecordedSession,
     NotShowable,
-    Reply,
     Resumable,
     SessionError,
     SessionEvent,
@@ -48,9 +46,10 @@ from ensemble.session.engine.types import (
     Spec,
     StatusState,
     Stderr,
-    TurnEnd,
     Usage,
 )
+from ensemble.session.harness.channel import Channel
+from ensemble.session.harness.view import OwnedSession, fold
 from ensemble.session.hosts.base import Host, host_resume
 from ensemble.session.modes import headless, in_process, tui
 from ensemble.session.modes.base import BaseMode, child_env
@@ -259,6 +258,7 @@ class HostedSession(Session):
         self._bound = False
         self._capacity: Admission | None = None
         self._capacity_hosts: Mapping[str, Host] = {}
+        self._read_only = False  # a view's attach: its owner writes the run records
 
     @classmethod
     def configure(
@@ -341,6 +341,25 @@ class HostedSession(Session):
         idle_timeout: float | None = None,
     ) -> HostedSession:
         """spec.sid: its id, else a new one; display: kept by its Host."""
+        return cls._begin(spec, display=display, host=host, idle_timeout=idle_timeout)
+
+    @classmethod
+    def own(
+        cls, spec: Spec, *, display: Display = None, host: str | None = None, owner: str
+    ) -> Owned:
+        """For the session harness at dir `owner`: its tui worker started, as start does."""
+        return Owned(cls._begin(spec, display=display, host=host, owner=owner), host)
+
+    @classmethod
+    def _begin(
+        cls,
+        spec: Spec,
+        *,
+        display: Display = None,
+        host: str | None = None,
+        idle_timeout: float | None = None,
+        owner: str | None = None,
+    ) -> HostedSession:
         setup = cls._config()
         client_name, mode = _request(spec, idle_timeout)
         client = setup.registry.client(client_name)
@@ -387,6 +406,7 @@ class HostedSession(Session):
                 host=on,
                 display=display,
                 check_name=check_name,
+                owner=owner,
             )
             try:
                 capacity.started(running.state)
@@ -435,11 +455,26 @@ class HostedSession(Session):
         """Tui session `name`, from any process; its client record and hook log replayed into its
         reply and blocked, blocked too while its terminal is marked so.
         """
+        return cls._attached(name, sid=sid, host=host, idle_timeout=idle_timeout)
+
+    @classmethod
+    def _attached(
+        cls,
+        name: str,
+        *,
+        sid: str | None = None,
+        host: str | None = None,
+        idle_timeout: float | None = None,
+        generation: str | None = None,
+    ) -> HostedSession:
+        """attach's session; with `generation` (a view's), read-only and only that generation's."""
         setup = cls._config()
         tui.checked_name(name)
         _idle(idle_timeout)
         on = cls.host(host)
         state = tui.TuiMode.snapshot(name)
+        if generation is not None and state.get("generation") != generation:
+            raise SessionError(f"session {name}: its worker {generation} is gone")
         try:
             client = setup.registry.client(state["client"])
         except ConfigError as e:
@@ -455,6 +490,7 @@ class HostedSession(Session):
             idle_timeout=idle_timeout,
             client=client,
         )
+        session._read_only = generation is not None
         for event in running.replayed:
             session._fold(event, replayed=True)
         session._capacity_hosts = {_host_key(setup, host or setup.hosts.default): on}
@@ -462,6 +498,33 @@ class HostedSession(Session):
             session._blocked = running.marked_blocked()
         session.info()
         return session
+
+    @classmethod
+    def _view(
+        cls,
+        channel: Channel,
+        *,
+        name: str,
+        client: str,
+        sid: str,
+        generation: str,
+        host: str | None = None,
+        idle_timeout: float | None = None,
+        replay: bool = False,
+    ) -> OwnedSession:
+        """The one way a control view is built: its attach read-only, bound to `sid` and
+        `generation`, so a same-name successor is never acted on.
+        """
+        return OwnedSession(
+            channel,
+            name,
+            client=client,
+            sid=sid,
+            generation=generation,
+            idle_timeout=idle_timeout,
+            attach=lambda: cls._attached(name, sid=sid, host=host, generation=generation),
+            replay=replay,
+        )
 
     @classmethod
     def retire(cls, name: str, *, sid: str | None = None, host: str | None = None) -> None:
@@ -635,8 +698,7 @@ class HostedSession(Session):
                         yield Exited(code)
                         continue
                 elif wait > 0:
-                    found, self._closed = self._running.poll(wait)
-                    self._queue.extend(e for e in found if not isinstance(e, Exited))
+                    self._queue.extend(self._step(wait)[0])
                     continue
                 if wait <= 0 and self._idle is not None:
                     last = self._clock()
@@ -651,7 +713,19 @@ class HostedSession(Session):
                 error.add_note(f"stop: {failed}")
             raise
 
+    def _step(self, wait: float) -> tuple[list[SessionEvent | Stderr | ClientBound], bool]:
+        """One poll of its mode, up to `wait` s: its new events, never Exited, and whether its worker
+        ended.
+        """
+        if self._closed:
+            return [], True
+        found, self._closed = self._running.poll(wait)
+        return [e for e in found if not isinstance(e, Exited)], self._closed
+
     def _record(self, event: SessionEvent | Stderr | ClientBound) -> None:
+        if self._read_only:
+            self._fold(event)
+            return
         if isinstance(event, ClientBound):
             self._log.note(
                 "client_session",
@@ -670,13 +744,8 @@ class HostedSession(Session):
         if isinstance(event, ClientBound):
             self._bound = True
             return
-        if isinstance(event, Reply):
-            self._reply = event.text
-        elif isinstance(event, TurnEnd) and (event.reply or replayed):
-            self._reply = event.reply
-        # a client record's Reply can land after the block it preceded
-        self._blocked = (
-            isinstance(event, Blocked) or self._blocked and isinstance(event, (Stderr, Reply))
+        self._reply, self._blocked = fold(
+            self._reply, event, blocked=self._blocked, replayed=replayed
         )
 
     @property
@@ -736,6 +805,8 @@ class HostedSession(Session):
             return
         if info != self._info:
             self._info = info
+            if self._read_only:
+                return
             self._log.note(
                 "session_metadata",
                 best_effort=True,
@@ -818,3 +889,76 @@ class HostedSession(Session):
         if name is None:
             raise NotShowable(f"{call}: tui mode only")
         return self._viewer, name
+
+
+class Owned:
+    """The owner handle of one worker HostedSession.own started: what its session harness drives
+    it through. When a Host's managed worker replaces the mode underneath, only this changes.
+    """
+
+    def __init__(self, session: HostedSession, host: str | None) -> None:
+        self._session, self._host = session, host
+
+    @property
+    def name(self) -> str:
+        assert self._session.name is not None
+        return self._session.name
+
+    @property
+    def sid(self) -> str:
+        return self._session.sid
+
+    @property
+    def generation(self) -> str:
+        generation = self._session._running.generation
+        assert generation is not None
+        return generation
+
+    def pump(self, wait: float) -> tuple[list[SessionEvent | Stderr | ClientBound], bool]:
+        """Its new events, never Exited, waiting up to `wait` s; True once its worker ended."""
+        return self._session._step(wait)
+
+    def record(self, event: SessionEvent | Stderr | ClientBound) -> None:
+        """Its run records for `event`: client_session, stderr, session_metadata."""
+        self._session._record(event)
+
+    def stop(self) -> list[SessionEvent | Stderr | ClientBound]:
+        """The events its last read found, then its terminal stopped while it holds the name."""
+        final = self._session._step(0)[0]
+        self._session.stop()
+        return final
+
+    def close(self) -> list[SessionEvent | Stderr | ClientBound]:
+        """The events its last read found, then its terminal, tui dir and viewer closed."""
+        final = self._session._step(0)[0]
+        self._session.close()
+        return final
+
+    def confirm_end(self, timeout: float) -> int | None:
+        """Its worker's return code once its terminal is gone from its Host, else None after
+        `timeout` s.
+        """
+        deadline = time.monotonic() + timeout
+        code = self._session._running.returncode(timeout)
+        while code is not None:
+            try:
+                if self.name not in self._session._host.list():
+                    return code
+            except SessionError:
+                pass
+            if (left := deadline - time.monotonic()) <= 0:
+                return None
+            time.sleep(min(POLL, left))
+        return None
+
+    def view(self, channel: Channel, idle_timeout: float | None = None) -> OwnedSession:
+        """A control view of this worker, for its handlers' EventCall.session."""
+        return type(self._session)._view(
+            channel,
+            name=self.name,
+            client=self._session.client,
+            sid=self.sid,
+            generation=self.generation,
+            host=self._host,
+            idle_timeout=idle_timeout,
+        )

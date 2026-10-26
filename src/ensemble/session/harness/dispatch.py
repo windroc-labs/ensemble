@@ -69,17 +69,19 @@ class Dispatch:
         *,
         sid: str,
         generation: str,
-        sleep: Callable[[float], object] = time.sleep,
+        sleep: Callable[[float], object] | None = None,
     ) -> None:
-        self._channel, self._session, self._sleep = channel, session, sleep
+        self._stopped = threading.Event()
+        self._channel, self._session = channel, session
+        self._sleep = sleep or self._stopped.wait
         self._sid, self._generation = sid, generation
         self._pending = 0
         self._lock = threading.Lock()
         self._settled = threading.Condition(self._lock)
-        self._queues: list[queue.SimpleQueue[Logged]] = []
+        self._queues: list[queue.SimpleQueue[Logged | None]] = []
         self.threads: list[threading.Thread] = []
         for index, (handler, state) in enumerate(zip(handlers, states, strict=True)):
-            waiting: queue.SimpleQueue[Logged] = queue.SimpleQueue()
+            waiting: queue.SimpleQueue[Logged | None] = queue.SimpleQueue()
             thread = threading.Thread(
                 target=self._serve,
                 args=(index, handler, state, waiting),
@@ -112,15 +114,20 @@ class Dispatch:
                 self._settled.wait(left)
             return self._pending
 
+    def stop(self) -> None:
+        """Ends each handler's thread once its current call returns; nothing more is delivered."""
+        self._stopped.set()
+        for waiting in self._queues:
+            waiting.put(None)
+
     def _serve(
         self,
         index: int,
         handler: Any,
         state: Mapping[str, object],
-        waiting: queue.SimpleQueue[Logged],
+        waiting: queue.SimpleQueue[Logged | None],
     ) -> None:
-        while True:
-            logged = waiting.get()
+        while (logged := waiting.get()) is not None:
             assert isinstance(logged.event, SessionEvent)
             call = EventCall(
                 session=self._session,
@@ -141,6 +148,8 @@ class Dispatch:
                     LOG.warning("%s %d: %s failed", KIND, index, logged.id, exc_info=True)
                     self._note(index, logged, attempt, repr(error)[:ERROR_MAX])
                     self._sleep(delay)
+                    if self._stopped.is_set():
+                        return
                     attempt, delay = attempt + 1, min(delay * 2, BACKOFF_MAX)
                     continue
                 if returned is None:

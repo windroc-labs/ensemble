@@ -55,6 +55,8 @@ from ensemble.session.engine.types import (
     Usage,
     Window,
 )
+from ensemble.session.harness.channel import Channel
+from ensemble.session.harness.view import OwnedSession
 from ensemble.session.hosts.base import Piped
 from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.session.modes import tui
@@ -2909,3 +2911,98 @@ class EnvironmentHostTest(HostedTuiBase):
             with self.subTest(where), self.assertRaises(engine_types.SessionBusy) as raised:
                 call()
             self.assertIs(raised.exception, self.busy)
+
+
+class OwnedTest(HostedTuiBase):
+    """HostedSession.own: the owner handle a session harness drives its one worker through."""
+
+    def own(self, name="w1"):
+        self.channel = Channel.create()
+        spec = dataclasses.replace(
+            self.spec(), client="fake", mode="tui", prompt="hello", name=name, sid=SID
+        )
+        owned = self.session.own(spec, owner=self.channel.directory)
+        self.addCleanup(lambda: self.host.processes.pop(name, None))
+        return owned
+
+    def hook(self, label, payload, name="w1"):
+        with open(os.path.join(self.root, name, "hooks.jsonl"), "a") as f:
+            f.write(json.dumps({"ts": "", "label": label, "payload": payload}) + "\n")
+
+    def test_own_starts_the_worker_its_owner_dir_named(self):
+        owned = self.own()
+        state = tui.TuiMode.snapshot("w1")
+        self.assertEqual(state["owner"], self.channel.directory)
+        self.assertEqual(
+            (owned.name, owned.sid, owned.generation), ("w1", SID, state["generation"])
+        )
+        self.assertIn("w1", self.host.processes)
+
+    def test_pump_yields_events_never_exited_and_says_when_the_worker_ended(self):
+        owned = self.own()
+        self.hook("stop", {"last_message": "r1"})
+        found, ended = owned.pump(0.5)
+        self.assertEqual(
+            ([e for e in found if not isinstance(e, ClientBound)], ended),
+            ([TurnEnd("r1", 0)], False),
+        )
+        terminal = self.host.processes["w1"]
+        terminal.calls.state.return_value = Liveness.LIVE
+        terminal.calls.returncode.return_value = 3
+        found, ended = owned.pump(0.1)
+        self.assertTrue(ended)
+        self.assertNotIn(Exited(3), found)
+        self.assertEqual(owned.pump(0), ([], True))
+
+    def test_close_returns_what_it_read_before_ending_the_terminal(self):
+        owned = self.own()
+        terminal = self.host.processes["w1"]
+        self.hook("stop", {"last_message": "last"})
+        self.host.calls.close_view.reset_mock()
+        final = owned.close()
+        self.assertIn(TurnEnd("last", 0), final)
+        terminal.calls.close.assert_called_once_with()
+        self.host.calls.close_view.assert_called_once_with("w1")
+        self.assertFalse(os.path.lexists(os.path.join(self.root, "w1")))
+        self.assertEqual(owned.confirm_end(1), -signal.SIGHUP)
+
+    def test_stop_returns_its_final_read_and_leaves_the_viewer(self):
+        owned = self.own()
+        self.hook("stop", {"last_message": "last"})
+        self.host.calls.close_view.reset_mock()
+        self.assertIn(TurnEnd("last", 0), owned.stop())
+        self.host.calls.close_view.assert_not_called()
+        self.assertEqual(owned.confirm_end(1), -signal.SIGHUP)
+
+    def test_confirm_end_is_none_while_the_terminal_lives(self):
+        owned = self.own()
+        self.assertIsNone(owned.confirm_end(0.1))
+
+    def test_record_notes_client_sessions_and_stderr(self):
+        owned = self.own()
+        owned.record(ClientBound("n1"))
+        owned.record(Stderr("oops"))
+        kinds = [entry["kind"] for entry in self.written()]
+        self.assertIn("client_session", kinds)
+        self.assertIn("stderr", kinds)
+
+    def test_view_is_bound_to_this_worker(self):
+        owned = self.own()
+        view = owned.view(self.channel, idle_timeout=3)
+        self.assertIsInstance(view, OwnedSession)
+        self.assertEqual(
+            (view.name, view.client, view.sid, view.generation, view.mode),
+            ("w1", "fake", SID, owned.generation, Mode.TUI),
+        )
+        before = len(self.written())
+        self.assertTrue(view.alive())
+        view.info()
+        self.assertEqual(len(self.written()), before, "the view's attach writes no RunLog line")
+
+    def test_the_views_attach_refuses_another_generation(self):
+        owned = self.own()
+        view = owned.view(self.channel)
+        self.host.processes.pop("w1")
+        self.own()
+        with self.assertRaisesRegex(SessionError, "w1"):
+            view.screen()

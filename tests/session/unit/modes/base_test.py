@@ -429,10 +429,9 @@ class OwnerTest(Case):
                     owner="/h",
                 )
 
-    def test_every_mode_writes_its_own_run_records(self):
-        for mode in KINDS:
-            with self.subTest(mode=mode.kind):
-                self.assertTrue(mode.records)
+    def test_only_a_tui_mode_has_a_generation(self):
+        self.assertIsNone(BaseMode.generation.fget(mock.Mock(spec=BaseMode)))
+        self.assertIsNot(tui.TuiMode.generation, BaseMode.generation)
 
     def test_only_a_tmux_host_is_harnessed(self):
         self.assertFalse(Host._harnessed)

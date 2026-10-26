@@ -74,6 +74,7 @@ class Base(Case):
             generation="g",
             sleep=self.sleeps.append,
         )
+        self.addCleanup(found.stop)
         return found
 
     def deliveries(self) -> list[dict]:
@@ -119,6 +120,7 @@ class DispatchTest(Base):
         self.assertEqual([c.event for c in handler.calls], [Reply("hi")])
 
     def test_a_failing_handler_is_retried_with_the_same_ids(self):
+        self.enterContext(self.assertLogs("session", "WARNING"))
         handler = Recorder(fail=2)
         found = self.start(handler)
         found.put(Logged(1, "g:1", "g:t1", TurnStarted()))
@@ -132,6 +134,7 @@ class DispatchTest(Base):
         self.assertIn("handler broke", records[0]["error"])
 
     def test_backoff_doubles_up_to_thirty_seconds(self):
+        self.enterContext(self.assertLogs("session", "WARNING"))
         handler = Recorder(fail=7)
         found = self.start(handler)
         found.put(Logged(1, "g:1", None, Reply("x")))
@@ -139,16 +142,20 @@ class DispatchTest(Base):
         self.assertEqual(self.sleeps, [1, 2, 4, 8, 16, 30, 30])
 
     def test_error_text_is_capped(self):
-        class Loud:
+        class Loud(Recorder):
             def on_event(self, call):
-                raise RuntimeError("x" * 5000)
+                if not self.calls:
+                    self.calls.append(call)
+                    raise RuntimeError("x" * 5000)
 
+        self.enterContext(self.assertLogs("session", "WARNING"))
         found = self.start(Loud())
         found.put(Logged(1, "g:1", None, Reply("x")))
         until(lambda: self.deliveries())
         self.assertEqual(len(self.deliveries()[0]["error"]), dispatch.ERROR_MAX)
 
     def test_later_events_wait_behind_a_failure(self):
+        self.enterContext(self.assertLogs("session", "WARNING"))
         gate = threading.Event()
         handler = Recorder(fail=1)
         found = Dispatch(
@@ -160,6 +167,7 @@ class DispatchTest(Base):
             generation="g",
             sleep=lambda _seconds: gate.wait(),
         )
+        self.addCleanup(found.stop)
         found.put(Logged(1, "g:1", None, Reply("a")))
         found.put(Logged(2, "g:2", None, Reply("b")))
         until(lambda: self.deliveries())
@@ -170,6 +178,7 @@ class DispatchTest(Base):
         self.assertEqual([c.event_id for c in handler.calls], ["g:1", "g:1", "g:2"])
 
     def test_other_handlers_continue(self):
+        self.enterContext(self.assertLogs("session", "WARNING"))
         gate = threading.Event()
         self.addCleanup(gate.set)
         stuck, other = Recorder(fail=1), Recorder()
@@ -182,6 +191,7 @@ class DispatchTest(Base):
             generation="g",
             sleep=lambda _seconds: gate.wait(),
         )
+        self.addCleanup(found.stop)
         found.put(Logged(1, "g:1", None, Reply("a")))
         found.put(Logged(2, "g:2", None, Reply("b")))
         until(lambda: len(other.calls) == 2)

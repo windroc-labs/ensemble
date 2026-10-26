@@ -676,6 +676,10 @@ class TuiMode(BaseMode):
         )
 
     @property
+    def generation(self) -> str:
+        return self._generation
+
+    @property
     def replayed(self) -> tuple[SessionEvent | Stderr | ClientBound, ...]:
         """Attached: its client record's, then its hook log's events so far."""
         return self._replayed

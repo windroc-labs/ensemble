@@ -110,7 +110,6 @@ def _select_account(spec: Spec, client: Client) -> str:
 
 class BaseMode(ABC):
     kind: ClassVar[Mode]
-    records: ClassVar[bool] = True  # False: its owner already wrote its run records
 
     def __init__(self, prepared: Prepared) -> None:
         """Built by start (TuiMode.attach too) from what it started."""
@@ -119,6 +118,11 @@ class BaseMode(ABC):
     @property
     def prepared(self) -> Prepared:
         return self._prepared
+
+    @property
+    def generation(self) -> str | None:
+        """Its worker start's id; a tui session's only."""
+        return None
 
     @classmethod
     def preflight(
