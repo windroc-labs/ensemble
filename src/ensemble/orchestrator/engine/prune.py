@@ -13,9 +13,8 @@ configured one) reports agent files in (Delegate.checkouts not None):
   app (a researcher's report stays), any other whatever its assignee, none included, unless
   it (reopened since) or a sub-issue, at any depth, is unfinished, every page of them read first
   (Tracker.archive; Linear archives sub-issues with their parent, theirs too): skipped until each
-  is finished or archived. A finished sub-issue it would not archive itself (not listed, or its
-  finish time unknown or under 2 hours ago) keeps the parent too. A candidate whose version
-  differs from the archive plan's waits for a consistent read next tick.
+  is finished or archived. Descendants must be candidates finished at least 2 hours ago;
+  unknown finish times or mismatched candidate/plan versions hold the parent.
 
 For each stalled issue (any state but Todo, In Progress or a finished one) whose latest move into its
 state and latest recorded run are both at least 7 days old, it deletes its agent files' checkouts and
@@ -387,7 +386,7 @@ class Pruner:
             self.say("prune-archived", ident)
 
     def held(self, plan, root, finished):
-        """First issue with a stale candidate version or an ineligible descendant, with why."""
+        """First stale candidate or ineligible descendant, with why."""
         if root.ident != plan.ident or root.updated != plan.updated:
             return root, CHANGED
         for sub in plan.descendants:
