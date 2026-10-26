@@ -21,11 +21,26 @@ var (
 )
 
 // UnrevokedError is a retirement that left material neither confirmed revoked nor queued; what was recorded stays
-// recorded for a later Release, and the rest expires.
-type UnrevokedError struct{ Consumer string }
+// recorded for a later Release, and the rest expires. Cause (nil: none) is the failure the retirement rolled back.
+type UnrevokedError struct {
+	Consumer string
+	Cause    error
+}
 
 func (e *UnrevokedError) Error() string {
 	return "the credentials of " + e.Consumer + " could not be revoked"
+}
+
+func (e *UnrevokedError) Unwrap() error { return e.Cause }
+
+// rolledBack is err, or the unrevoked error rollback reported with err as its cause: live tokens are what the
+// caller must act on.
+func rolledBack(err, rollback error) error {
+	var unrevoked *UnrevokedError
+	if errors.As(rollback, &unrevoked) {
+		return &UnrevokedError{unrevoked.Consumer, err}
+	}
+	return err
 }
 
 // Store holds broker-only items; NotFound is its error for an absent one.
@@ -362,7 +377,7 @@ func (l Lifecycle) discard(ctx context.Context, id string, entries []Material, w
 		}
 		if !ran {
 			if !queued {
-				return &UnrevokedError{id} // the record keeps them tracked
+				return &UnrevokedError{Consumer: id} // the record keeps them tracked
 			}
 			l.untrack(id, entries)
 		} else {
@@ -376,7 +391,7 @@ func (l Lifecycle) discard(ctx context.Context, id string, entries []Material, w
 				}
 			}
 			if len(left) > 0 {
-				return &UnrevokedError{id}
+				return &UnrevokedError{Consumer: id}
 			}
 		}
 	} else {
@@ -475,11 +490,11 @@ func (l Lifecycle) Acquire(ctx context.Context, d Delivery, subject string, scop
 	}
 	var issued []Material
 	fail := func(err error) ([]protocol.Expiry, error) {
-		var unrevoked *UnrevokedError
-		if len(issued) > 0 && errors.As(l.discard(ctx, id, issued, true), &unrevoked) {
-			err = unrevoked // what the caller must act on: tokens left live
+		err = redactErr(err, secret)
+		if len(issued) > 0 {
+			err = rolledBack(err, l.discard(ctx, id, issued, true))
 		}
-		return nil, redactErr(err, secret)
+		return nil, err
 	}
 	for _, target := range targets {
 		m, err := issuer.Issue(ctx, scope, target)
@@ -571,16 +586,14 @@ func (l Lifecycle) Refresh(ctx context.Context, d Delivery, scope map[string]str
 		})
 		if err != nil || !found {
 			l.noteUnrecorded(id, audit.Renewed, m)
-			_ = l.discard(ctx, id, []Material{m}, false)
-			if err != nil {
-				return nil, err
+			if err == nil {
+				err = ErrReleased
 			}
-			return nil, ErrReleased
+			return nil, rolledBack(err, l.discard(ctx, id, []Material{m}, false))
 		}
 		l.describe(ctx, id, audit.Renewed, m, secret)
 		if err := l.deliver(d, m); err != nil {
-			_ = l.discard(ctx, id, []Material{m}, false)
-			return nil, redactErr(err, secret)
+			return nil, rolledBack(redactErr(err, secret), l.discard(ctx, id, []Material{m}, false))
 		}
 		var old []Material
 		found, err = l.editRecord(id, false, func(rec *Record, _ bool) {
@@ -644,7 +657,7 @@ func (l Lifecycle) Release(ctx context.Context, c Consumer) error {
 	case errors.Is(err, ErrLock):
 		return l.discard(ctx, id, nil, true)
 	case err != nil:
-		return &UnrevokedError{id}
+		return &UnrevokedError{Consumer: id}
 	case !found:
 		if !l.shared() {
 			_, _ = l.Retry(ctx)

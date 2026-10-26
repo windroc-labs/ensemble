@@ -595,3 +595,53 @@ func TestSharedProviderReleaseNeverRevokes(t *testing.T) {
 		t.Fatalf("shared material revoked: %q", fp.calls)
 	}
 }
+
+func TestRefreshRecordFailure(t *testing.T) {
+	for _, revokeOK := range []bool{true, false} {
+		for _, backlogOK := range []bool{true, false} {
+			t.Run(fmt.Sprintf("revoke=%v/backlog=%v", revokeOK, backlogOK), func(t *testing.T) {
+				store, p := newStore(), newProvider(t, "acme")
+				l := lifecycle(store, p, nil)
+				acquire(t, l, ctrA, newContainer())
+				store.fail = func(op, service string) bool {
+					return service == backlogS && !backlogOK || service == records && op == "write"
+				}
+				if !revokeOK {
+					p.revoke = failRevoke
+				}
+				c := newContainer()
+				_, err := l.Refresh(bg, to(ctrA, c), nil)
+				var unrevoked *UnrevokedError
+				live := !revokeOK && !backlogOK
+				if errors.As(err, &unrevoked) != live || !errors.Is(err, ErrStore) {
+					t.Fatalf("%v", err)
+				}
+				if len(c.argv) != 0 {
+					t.Fatal("an unrecorded replacement was delivered")
+				}
+				rec, _ := store.record(t, ctrA)
+				wantTokens(t, "record", tokens(rec), map[string]State{"tok_1": Delivered})
+				if !live && !slices.Contains(p.revoked, "tok_2") && !slices.Contains(pendingTokens(store.backlog(t)), "tok_2") {
+					t.Fatal("replacement lost")
+				}
+			})
+		}
+	}
+}
+
+func TestTargetsErrorRedacted(t *testing.T) {
+	p := &secretProvider{newProvider(t, "acme")}
+	_, err := lifecycle(newStore(), p, nil).Acquire(bg, to(ctrA, newContainer()), "app", nil)
+	if err == nil || strings.Contains(err.Error(), "jwt_ISSUER_SECRET") {
+		t.Fatalf("targets error: %v", err)
+	}
+}
+
+// secretProvider fails Targets with its issuer secret in the error text.
+type secretProvider struct{ *fakeProvider }
+
+func (p *secretProvider) Targets(context.Context) ([]Material, error) {
+	return nil, errors.New("listing with jwt_ISSUER_SECRET failed")
+}
+
+func (p *secretProvider) Begin(context.Context, string) (Issuer, error) { return p, nil }

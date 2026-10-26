@@ -157,7 +157,7 @@ type File struct {
 type Provider interface {
 	Kind() Kind
 	AuditKind() string                                         // the audit log's kind for its tokens
-	Begin(ctx context.Context, subject string) (Issuer, error) // authenticates once for a run of issues
+	Begin(ctx context.Context, subject string) (Issuer, error) // authenticates once for a run of issues; its errors hold no secret
 	File(m Material) (File, error)                             // where m goes in a container, validating m
 	Revoke(ctx context.Context, m Material) Revocation
 	Now() time.Time
