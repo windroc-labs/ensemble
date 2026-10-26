@@ -24,7 +24,7 @@ type Manifest struct {
 	ClaudeAccount                                                                               string            // the account whose setup-token a claude container gets; "" for other clients
 	Secrets                                                                                     []Secret          // the environment secrets the container gets; nil without the field
 	Lock, LockOwner                                                                             string            // optional lock name and readable owner
-	Gateway                                                                                     string            // the egress gateway's caller network key; workers without the field
+	Gateway                                                                                     string            // the egress proxy's caller network key; workers without the field
 	Prefetch                                                                                    *Prefetch         // the repo cloned into a new workspace; nil without the field
 }
 
@@ -90,7 +90,7 @@ func validSecretFile(file string) bool {
 
 func ValidLock(name string) bool { return lockPattern.MatchString(name) }
 
-func ValidGateway(key string) bool { return gatewayPattern.MatchString(key) }
+func validGateway(key string) bool { return gatewayPattern.MatchString(key) }
 
 // ValidRef is whether ref names a branch or tag, by ensemble.utils.git.check_ref's rule (WDRC-109 FR-52): never an
 // option, a full ref, HEAD or something that looks like a commit SHA.
@@ -243,7 +243,7 @@ func ParseManifest(data []byte) (Manifest, error) {
 	}
 	if _, ok := fields["gateway"]; !ok {
 		m.Gateway = workersKey
-	} else if !ValidGateway(m.Gateway) {
+	} else if !validGateway(m.Gateway) {
 		return reject("invalid gateway")
 	}
 	if raw := fields["github"]; string(raw) != "null" {

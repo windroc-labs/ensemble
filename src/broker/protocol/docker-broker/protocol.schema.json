@@ -301,7 +301,7 @@
           ]
         },
         "gateway": {
-          "$comment": "The egress gateway's caller network key (windroc.egress.networks); absent: workers.",
+          "$comment": "The egress proxy's caller network key (windroc.egress.networks); absent: workers.",
           "type": "string",
           "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
         },
