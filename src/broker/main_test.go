@@ -50,6 +50,9 @@ func recording(calls *[]call) app {
 		refresh: func(ctx context.Context, container, manifest string) (any, error) {
 			return result("refresh")(ctx, container+" "+manifest, nil)
 		},
+		notices: func(ctx context.Context, container, _ string, _ []string) (any, error) {
+			return result("notices")(ctx, container, nil)
+		},
 		status: func(ctx context.Context, _ bool) (any, error) { return result("status")(ctx, "", nil) },
 		probeOpencode: func(ctx context.Context, provider, base string) (any, error) {
 			return result("probe-provider")(ctx, provider+" "+base, nil)
@@ -66,7 +69,7 @@ func invoke(a app, args ...string) (int, string, string) {
 
 func TestVersion(t *testing.T) {
 	code, out, errOut := invoke(app{}, "version")
-	if code != 0 || out != `{"protocol_version":"27"}`+"\n" || errOut != "" {
+	if code != 0 || out != `{"protocol_version":"28"}`+"\n" || errOut != "" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
 	for _, c := range fixtures.Cases(t, "version_output") {
@@ -174,7 +177,7 @@ func TestProbeOpencodeCommand(t *testing.T) {
 }
 
 func TestInputFixtures(t *testing.T) {
-	for _, c := range fixtures.Cases(t, "version_input", "build_input", "start_input", "refresh_input", "close_input", "status_input", "workspace_rm_input", "probe_provider_input", "lock_query_input", "check_clients_input") {
+	for _, c := range fixtures.Cases(t, "version_input", "build_input", "start_input", "refresh_input", "notices_input", "close_input", "status_input", "workspace_rm_input", "probe_provider_input", "lock_query_input", "check_clients_input") {
 		t.Run(c.File, func(t *testing.T) {
 			var in struct{ Argv []string }
 			if err := json.Unmarshal(c.Data, &in); err != nil {
@@ -1198,5 +1201,36 @@ func TestStaticSentinelAbsent(t *testing.T) {
 	}
 	if code != 1 {
 		t.Fatalf("exit %d", code)
+	}
+}
+
+func TestNoticesCommand(t *testing.T) {
+	const c = "ensemble-worker_1-0123456789abcdef0123456789abcdef"
+	var got []string
+	a := app{notices: func(_ context.Context, container, manifest string, delivered []string) (any, error) {
+		got = append([]string{container, manifest}, delivered...)
+		return launcher.NoticesResult{Container: container, Notices: []launcher.Notice{}}, nil
+	}}
+	base := []string{"notices", "--container", c, "--manifest", "/tmp/m.json"}
+	code, out, errOut := invoke(a, append(base, "--delivered", "ensemble-env/db@2:7d", "--delivered", "ensemble-claude/work@1:rotated")...)
+	if code != 0 || errOut != "" || out != `{"container":"`+c+`","notices":[],"next_check":null}`+"\n" ||
+		!slices.Equal(got, []string{c, "/tmp/m.json", "ensemble-env/db@2:7d", "ensemble-claude/work@1:rotated"}) {
+		t.Fatalf("%d %q %q %q", code, out, errOut, got)
+	}
+	many := slices.Clone(base)
+	for range maxDelivered + 1 {
+		many = append(many, "--delivered", "ensemble-env/db@2:7d")
+	}
+	got = nil
+	for _, args := range [][]string{
+		append(slices.Clone(base), "--delivered"), append(slices.Clone(base), "--delivered", "ensemble-bot/x@1:7d"),
+		append(slices.Clone(base), "--delivered", "ensemble-env/db@2:2d"), append(slices.Clone(base), "extra"),
+		{"notices", "--container", "bad", "--manifest", "/tmp/m.json"}, {"notices", "--container", c, "--manifest", "relative"}, many,
+	} {
+		code, out, errOut := invoke(a, args...)
+		if code != 2 || out != "" || got != nil {
+			t.Fatalf("%q: %d %q", args, code, got)
+		}
+		assertError(t, errOut, out, "notices", protocol.Usage)
 	}
 }

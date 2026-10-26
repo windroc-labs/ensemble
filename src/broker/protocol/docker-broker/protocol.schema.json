@@ -471,7 +471,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "27"
+          "const": "28"
         }
       },
       "required": [
@@ -802,6 +802,97 @@
       ],
       "additionalProperties": false
     },
+    "notice_key": {
+      "type": "string",
+      "pattern": "^ensemble-(claude|opencode|env)/[A-Za-z0-9._-]{1,64}@[0-9]{1,9}:(30d|7d|1d|expired|rotated)$"
+    },
+    "notices_input": {
+      "type": "object",
+      "properties": {
+        "argv": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": "notices"
+            },
+            {
+              "const": "--container"
+            },
+            {
+              "$ref": "#/$defs/container"
+            },
+            {
+              "const": "--manifest"
+            },
+            {
+              "$ref": "#/$defs/path"
+            }
+          ],
+          "items": {
+            "anyOf": [
+              {
+                "const": "--delivered"
+              },
+              {
+                "$ref": "#/$defs/notice_key"
+              }
+            ]
+          },
+          "minItems": 5,
+          "maxItems": 133
+        }
+      },
+      "required": [
+        "argv"
+      ],
+      "additionalProperties": false
+    },
+    "notices_output": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "$ref": "#/$defs/container"
+        },
+        "notices": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "$ref": "#/$defs/notice_key"
+              },
+              "text": {
+                "$ref": "#/$defs/text"
+              }
+            },
+            "required": [
+              "key",
+              "text"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "next_check": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/time"
+            }
+          ]
+        },
+        "audit_warning": {
+          "$ref": "#/$defs/audit_warning"
+        }
+      },
+      "required": [
+        "container",
+        "notices",
+        "next_check"
+      ],
+      "additionalProperties": false
+    },
     "status_input": {
       "type": "object",
       "properties": {
@@ -889,6 +980,7 @@
                 "build",
                 "start",
                 "refresh",
+                "notices",
                 "close",
                 "status",
                 "workspace-rm",
@@ -1048,6 +1140,7 @@
                     "build",
                     "start",
                     "refresh",
+                    "notices",
                     "close",
                     "status",
                     "workspace-rm",
@@ -1074,7 +1167,8 @@
                 "command": {
                   "enum": [
                     "start",
-                    "refresh"
+                    "refresh",
+                    "notices"
                   ]
                 }
               }
@@ -1094,7 +1188,8 @@
                 "command": {
                   "enum": [
                     "start",
-                    "refresh"
+                    "refresh",
+                    "notices"
                   ]
                 }
               }
@@ -1378,6 +1473,7 @@
                     "build",
                     "start",
                     "refresh",
+                    "notices",
                     "close",
                     "status",
                     "workspace-rm",

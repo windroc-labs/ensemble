@@ -1,5 +1,5 @@
 """The root-owned broker at the PROTOCOL version (src/broker/protocol/docker-broker/protocol.schema.json): version, build, start, refresh,
-close and workspace-rm with strict response parsing. A missing, malformed or inconsistent response is a transport failure;
+notices, close and workspace-rm with strict response parsing. A missing, malformed or inconsistent response is a transport failure;
 a valid error response is a BrokerError.
 """
 
@@ -16,13 +16,13 @@ from dataclasses import fields
 from datetime import datetime
 
 from ensemble.session.engine.types import ConfigError, SessionError
-from ensemble.session.hosts.docker.types import Refreshed, Started
+from ensemble.session.hosts.docker.types import Noticed, Refreshed, Started
 from ensemble.utils import save
 
 # Installed by src/broker/install.sh and the worker image (src/broker/internal/launcher/assets/Dockerfile).
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
 RELAY = "/opt/ensemble/bin/relay"
-PROTOCOL = "27"
+PROTOCOL = "28"
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
 INSTALL = "install or upgrade it: see docs/docker-host.md#install"
 TIMEOUT = 1800
@@ -35,12 +35,16 @@ CONTAINER = re.compile(r"ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}")
 ENDPOINT = re.compile(r"unix:///[^\x00-\x1f\x7f]+/\.docker/run/docker\.sock")
 LOGIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}")
 TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
+NOTICE_KEY = re.compile(
+    r"ensemble-[a-z]+/[A-Za-z0-9._-]{1,64}@[0-9]{1,9}:(30d|7d|1d|expired|rotated)"
+)
 COMMANDS = frozenset(
     {
         "version",
         "build",
         "start",
         "refresh",
+        "notices",
         "close",
         "status",
         "workspace-rm",
@@ -50,8 +54,8 @@ COMMANDS = frozenset(
 )
 CODES = {  # code → (exit code, the commands that report it)
     "usage": (2, COMMANDS),
-    "manifest_rejected": (3, {"start", "refresh"}),
-    "mount_rejected": (4, {"start", "refresh"}),
+    "manifest_rejected": (3, {"start", "refresh", "notices"}),
+    "mount_rejected": (4, {"start", "refresh", "notices"}),
     "login_required": (5, {"start", "refresh", "probe-provider"}),
     "image_rejected": (6, {"start"}),
     "docker_unreachable": (7, {"build", "start", "refresh", "close", "workspace-rm"}),
@@ -267,7 +271,7 @@ class Broker:
                 found = _object(err)
             if "audit_warning" in found:
                 if (
-                    command not in {"start", "refresh", "close", "status"}
+                    command not in {"start", "refresh", "notices", "close", "status"}
                     or found.pop("audit_warning") != "audit_write_failed"
                 ):
                     raise _Bad("audit warning")
@@ -358,6 +362,31 @@ class Broker:
             manifest,
         )
         return Refreshed(found["github"], found["credential_expires_at"])
+
+    def notices(self, container: str, manifest: str, delivered: Sequence[str] = ()) -> Noticed:
+        """The static secret notices `container` is due; `delivered`: keys of ones it was told."""
+        found = self._parsed(
+            "notices",
+            lambda d: (
+                d.keys() == {"container", "notices", "next_check"}
+                and d["container"] == container
+                and isinstance(d["notices"], list)
+                and all(
+                    isinstance(n, dict)
+                    and n.keys() == {"key", "text"}
+                    and _matches(NOTICE_KEY, n["key"])
+                    and _text(n["text"])
+                    for n in d["notices"]
+                )
+                and _credential_expiry(d["next_check"])
+            ),
+            "--container",
+            container,
+            "--manifest",
+            manifest,
+            *(arg for key in delivered for arg in ("--delivered", key)),
+        )
+        return Noticed(found["notices"], found["next_check"])
 
     def close(self, container: str) -> bool:
         """Whether it removed `container`; False: it was already gone."""
