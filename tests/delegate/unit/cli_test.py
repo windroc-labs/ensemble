@@ -379,6 +379,65 @@ class Harnessed(HarnessCase):
         return code, out.getvalue(), err.getvalue()
 
 
+ACCEPTANCE = """
+[delegate.environments.dummy]
+image = "dummy-env:test"
+plugins = ["dummy-plugin"]
+lock = "dummy-lock"
+
+[[delegate.environments.dummy.secrets]]
+item = "ensemble-env/dummy"
+file = "dummy.txt"
+
+[delegate.roles.dummy-tester.environment]
+name = "dummy"
+prefetch = true
+"""
+
+
+class Environments(Harnessed):
+    """run's environment: resolved from the delegate config only (WDRC-109 FR-57, FR-60)."""
+
+    TARGETED = "Reference: T-1\nRepo: acme/app\nRef: release/1\n\nHello."
+
+    def configure(self, default):
+        self.settings(default=default, harness_host="harness")
+        # the fake resolves no --host to its "agent" entry: make that the default Host
+        Shown.hosts["agent"] = RecordingHost(default)
+        with open(self.local, "a", encoding="utf-8") as file:
+            file.write(ACCEPTANCE)
+
+    def test_dry_run_prints_environment(self):
+        self.configure("docker")
+        code, out, err = self.cli("--dry-run", input=self.TARGETED)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(
+            json.loads(out)["environment"],
+            {
+                "image": "dummy-env:test",
+                "gateway": "workers",
+                "secrets": [{"item": "ensemble-env/dummy", "file": "dummy.txt"}],
+                "plugins": ["dummy-plugin"],
+                "lock": "dummy-lock",
+                "prefetch": {"repo": "acme/app", "ref": "release/1"},
+            },
+        )
+        self.assertFalse(os.path.exists(self.work))
+
+    def test_run_refuses_environment_on_tmux(self):
+        self.configure("tmux")
+        code, out, err = self.cli(input=self.TARGETED)
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("[environment.tmux]", err)
+        self.assertFalse(os.path.exists(self.work))
+
+    def test_run_has_no_environment_option(self):
+        self.configure("docker")
+        code, _, err = self.cli("--environment", "dummy", "--dry-run", input=self.TARGETED)
+        self.assertEqual(code, 2)
+        self.assertIn("--environment", err)
+
+
 class DetachDisplay(Harnessed):
     def test_a_given_or_absent_display_is_completed_once_on_the_agent_host_and_kept(self):
         for given, extra in (("mgr:%1 right", ("--display", "mgr:%1 right")), (None, ())):
@@ -490,6 +549,7 @@ class DryRun(Base):
                 "sessions": {"agent": None, "harness": None},
                 "hosts": {"agent": "tmux", "harness": "tmux"},
                 "callback": None,
+                "environment": None,
             },
         )
         self.assertEqual(

@@ -75,6 +75,35 @@ class SessionNames(Sample):
                 self.assertEqual(ownership.session_names(self.tree(files)), expected)
 
 
+class SessionRoles(Sample):
+    ROLES = {DELEGATE_SRC + "team/roles/engineer.md": "", DELEGATE_SRC + "team/roles/pm.md": ""}
+
+    def test_session_roles_finds_a_planted_role_name_and_roles_read(self):
+        probe = SESSION_SRC + "engine/probe.py"
+        for files, expected in (
+            ({probe: "ROLE = 'engineer'\n"}, [probe + ":1: names role engineer"]),
+            ({probe: "engineer = 1\n"}, [probe + ":1: names role engineer"]),
+            ({probe: "x = config['roles']\n"}, [probe + ":1: reads role config roles"]),
+            ({probe: "x = config.roles\n"}, [probe + ":1: reads role config roles"]),
+            (
+                {SESSION_SRC + "config.toml": "[roles.engineer]\nk = 1  # pm\n"},
+                [
+                    SESSION_SRC + "config.toml:1: names role engineer",
+                    SESSION_SRC + "config.toml:1: reads role config roles",
+                ],
+            ),
+            ({probe: "# the engineer role\nROLE = 'engineers'\nrole = 'user'\n"}, []),
+            ({SESSION_SRC + "clients/claude/tui.py": "PM = 'pm'\n"}, []),
+            ({"src/ensemble/delegate/probe.py": "ROLE = 'engineer'\n"}, []),
+        ):
+            with self.subTest(files=files):
+                root = self.tree({**self.ROLES, **files})
+                self.assertEqual(ownership.session_roles(root), expected)
+
+    def test_the_repo_passes(self):
+        self.assertEqual(ownership.session_roles(REPO), [])
+
+
 class OrchestratorText(Sample):
     def test_agent_label_examples_in_the_packaged_config_name_no_client(self):
         path = f"{OPKG}/config.toml"

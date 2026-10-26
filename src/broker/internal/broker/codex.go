@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"ensemble/broker/internal/codex"
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
-	"ensemble/broker/internal/launcher"
 	"ensemble/broker/internal/protocol"
 )
 
@@ -52,9 +52,13 @@ type codexKeychain interface {
 	WriteCodex([]byte) error
 }
 
+// Codex holds the one Codex login and each container's grant of it (codex_grants.go); grantsLock guards the grant
+// records only, taken while the account lock (native.Lock) is held, never around it.
 type Codex struct {
 	native      codexNative
 	keychain    codexKeychain
+	grants      credential.Store
+	grantsLock  func() (unlock func(), err error)
 	password    func() ([]byte, error)
 	revisionDir string
 	tempRoot    string
@@ -63,7 +67,9 @@ type Codex struct {
 }
 
 func NewCodex(home string, password func() ([]byte, error)) Codex {
-	return Codex{native: codex.New(), keychain: SystemKeychain{Home: home}, password: password, revisionDir: filepath.Join(home, ".ensemble/docker/codex-refresh"), tempRoot: "/private/tmp", now: time.Now, uid: os.Geteuid}
+	return Codex{native: codex.New(), keychain: SystemKeychain{Home: home}, grants: SystemKeychain{Home: home},
+		grantsLock: FileLock(filepath.Join(home, ".ensemble/docker/codex-grants.lock")), password: password,
+		revisionDir: filepath.Join(home, ".ensemble/docker/codex-refresh"), tempRoot: "/private/tmp", now: time.Now, uid: os.Geteuid}
 }
 
 type codexAuthTokens struct {
@@ -308,91 +314,6 @@ func (c Codex) trusted() error {
 	return nil
 }
 
-func (c Codex) containerAuth(ctx context.Context, use func(codexAuthDocument, time.Time) error) (result error) {
-	if _, err := c.native.Verify(); err != nil {
-		return protocol.New(protocol.LoginRequired, "Pinned Codex unavailable; run "+codexRepair(err))
-	}
-	before, err := c.readRevision()
-	if err != nil {
-		return c.refreshError(err)
-	}
-	unlock, err := c.native.Lock(ctx)
-	if err != nil {
-		return protocol.New(protocol.LoginRequired, "Cannot lock Codex login; retry "+codexLoginCommand)
-	}
-	defer unlock()
-	revision, err := c.readRevision()
-	if err != nil {
-		return c.refreshError(err)
-	}
-	if c.trusted() != nil {
-		return protocol.New(protocol.LoginRequired, "Codex login unavailable; run "+codexLoginCommand)
-	}
-	data, err := c.keychain.Secret(codexService, codexAccount)
-	defer func() { erase(data) }()
-	if err != nil {
-		return protocol.New(protocol.LoginRequired, "Codex login unavailable; run "+codexLoginCommand)
-	}
-	expires, err := parseCodexAuth(data)
-	if err != nil {
-		return protocol.New(protocol.LoginRequired, "Invalid Codex login; run "+codexLoginCommand)
-	}
-	var auth codexAuthDocument
-	if json.Unmarshal(data, &auth) != nil {
-		return protocol.New(protocol.LoginRequired, "Invalid Codex login; run "+codexLoginCommand)
-	}
-	stamp, _ := time.Parse(time.RFC3339, auth.LastRefresh)
-	if stamp.After(c.now()) {
-		return protocol.New(protocol.LoginRequired, "Invalid Codex login timestamp; run "+codexLoginCommand)
-	}
-	reused := revision.completedSince(before)
-	if reused && (revision.State == "failed" || !c.now().Before(expires)) {
-		return c.refreshError(errors.New("Concurrent Codex authentication renewal failed; retry or run " + codexLoginCommand))
-	}
-	repair := (revision.State == "active" || revision.State == "failed") && c.now().Before(expires) && c.now().Sub(stamp) < time.Minute
-	if !reused && !repair && !expires.After(c.now().Add(codexRefreshAhead)) {
-		revision, err = c.beginRevision()
-		if err != nil {
-			return c.refreshError(err)
-		}
-		defer func() {
-			revision.State = "failed"
-			if result == nil {
-				revision.State = "complete"
-			}
-			if err := c.writeRevision(revision); err != nil {
-				result = errors.Join(result, c.refreshError(err))
-			}
-		}()
-		next, err := c.renew(ctx, data, auth, expires)
-		if err != nil {
-			return c.refreshError(err)
-		}
-		erase(data)
-		data = next
-		expires, _ = parseCodexAuth(data)
-		_ = json.Unmarshal(data, &auth)
-	} else if repair {
-		defer func() {
-			revision.State = "failed"
-			if result == nil {
-				revision.State = "complete"
-			}
-			if err := c.writeRevision(revision); err != nil {
-				result = errors.Join(result, c.refreshError(err))
-			}
-		}()
-	}
-	if !c.now().Before(expires) {
-		return protocol.New(protocol.LoginRequired, "Codex authentication expired; run "+codexLoginCommand)
-	}
-	return use(auth, expires)
-}
-
-func (c Codex) Ready(ctx context.Context) error {
-	return c.containerAuth(ctx, func(codexAuthDocument, time.Time) error { return nil })
-}
-
 // codexWriterMessages are bootstrap.py's fixed codex-auth exit messages. The writer runs in the untrusted container,
 // so writerCause passes on only these, or a write failure's errno text.
 var (
@@ -419,39 +340,6 @@ func writerCause(err error) string {
 		return line
 	}
 	return fmt.Sprintf("credential writer exited %d without a known diagnostic", ce.Exit)
-}
-
-func (c Codex) Inject(ctx context.Context, exec func([]string, []byte) error) (string, error) {
-	return c.inject(ctx, exec, nil, protocol.StartFailed)
-}
-
-// inject writes the access-only credential into the container; failed is the calling command's failure code.
-func (c Codex) inject(ctx context.Context, exec func([]string, []byte) error, publish func(string) error, failed protocol.Code) (string, error) {
-	var expiry string
-	err := c.containerAuth(ctx, func(auth codexAuthDocument, expires time.Time) error {
-		auth.Mode = "chatgpt"
-		auth.Tokens.Refresh = ""
-		data, err := json.Marshal(auth)
-		if err != nil {
-			return protocol.New(failed, "Cannot encode Codex container credentials")
-		}
-		defer erase(data)
-		err = exec([]string{launcher.Python, "-I", launcher.Bootstrap, "codex-auth"}, data)
-		if errors.Is(err, docker.ErrUnreachable) {
-			return docker.ErrUnreachable
-		}
-		if err != nil {
-			e := protocol.New(failed, "Writing Codex credentials into the container failed")
-			e.Cause = writerCause(err)
-			return e
-		}
-		expiry = expires.Format(time.RFC3339)
-		if publish != nil {
-			return publish(expiry)
-		}
-		return nil
-	})
-	return expiry, err
 }
 
 func (c Codex) Status(ctx context.Context) protocol.CodexStatus {

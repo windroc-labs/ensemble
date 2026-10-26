@@ -91,7 +91,8 @@ Examples:
   Modes: headless runs without a terminal; tui is a text user interface (TUI);
   in_process uses the configured in-process client runtime.
   --dry-run prints a JSON preview, writes nothing and skips launch preflight;
-  it still requires valid configuration and conditional inputs.
+  it still requires valid configuration and conditional inputs. Its "environment" is the
+  resolved container environment (secrets by reference only), null for none.
 
 Examples:
   Discover roles/tasks before choosing one:
@@ -397,6 +398,7 @@ def _begun(event) -> None:
 
 def _shown(preview: Preview, a: argparse.Namespace) -> dict:
     access, s = preview.plan.session.access, preview.plan.spec
+    environment = preview.plan.session.environment
     shown = {
         "client": s.client,
         "mode": s.mode,
@@ -413,6 +415,7 @@ def _shown(preview: Preview, a: argparse.Namespace) -> dict:
         "sessions": {"agent": preview.agent, "harness": preview.harness if a.detach else None},
         "hosts": {"agent": preview.host, "harness": preview.harness_host},
         "callback": preview.callback,
+        "environment": None if environment is None else environment.persisted(),
     }
     if a.detach:
         shown["events"] = os.path.abspath(a.events)

@@ -39,6 +39,7 @@ CALLS = {
     "build_output": ("build", lambda b: b.build("/opt/ensemble")),
     "start_output": ("start", lambda b: b.start(MANIFEST, clients=KEYS)),
     "refresh_output": ("refresh", lambda b: b.refresh(CONTAINER, MANIFEST)),
+    "notices_output": ("notices", lambda b: b.notices(CONTAINER, MANIFEST, root=REPO)),
     "close_output": ("close", lambda b: b.close(CONTAINER)),
     "workspace_rm_output": ("workspace-rm", lambda b: b.workspace_rm(VOLUME)),
 }
@@ -48,6 +49,7 @@ COMMANDS = {
     "build": CALLS["build_output"],
     "start": CALLS["start_output"],
     "refresh": CALLS["refresh_output"],
+    "notices": CALLS["notices_output"],
     "close": CALLS["close_output"],
     "workspace-rm": CALLS["workspace_rm_output"],
     "unknown": CALLS["version_output"],
@@ -223,6 +225,108 @@ class ResponseTest(Case):
             Broker(FakeBroker((0, json.dumps({"container": CONTAINER, "github": []}), ""))).refresh(
                 CONTAINER, MANIFEST
             )
+
+    def test_notices_are_strict_and_pass_delivered_keys(self):
+        good = data("notices-output.json")
+        fake = FakeBroker((0, json.dumps(good), ""))
+        found = Broker(fake).notices(
+            CONTAINER,
+            MANIFEST,
+            delivered=("ensemble-env/db@2:7d", "ensemble-claude/w@1:rotated"),
+            root=REPO,
+        )
+        self.assertEqual((found.notices, found.next_check), (good["notices"], good["next_check"]))
+        self.assertEqual(
+            fake.calls[0][1:],
+            [
+                *("notices", "--container", CONTAINER, "--manifest", MANIFEST),
+                *(
+                    "--delivered",
+                    "ensemble-env/db@2:7d",
+                    "--delivered",
+                    "ensemble-claude/w@1:rotated",
+                ),
+            ],
+        )
+        notice = good["notices"][0]
+        for change in (
+            {"next_check": "2026-02-30T00:00:00Z"},
+            {"next_check": "soon"},
+            {"container": "wrong"},
+            {"token": "secret"},
+            {"notices": {}},
+            {"notices": [notice | {"token": "secret"}]},
+            {"notices": [{"key": notice["key"]}]},
+            {"notices": [notice | {"key": "other/x@1:30d"}]},
+            {"notices": [notice | {"key": "ensemble-bot/x@1:30d"}]},
+            {"notices": [notice | {"key": "ensemble-other/x@1:30d"}]},
+            {"notices": [notice | {"key": 1}]},
+            {"notices": [notice | {"key": "ensemble-env/db@1:2d"}]},
+            {"notices": [notice | {"text": "two\nlines"}]},
+            {"notices": [notice | {"text": ""}]},
+        ):
+            with self.subTest(change=change), self.assertRaisesRegex(SessionError, "bad response"):
+                Broker(FakeBroker((0, json.dumps(good | change), ""))).notices(
+                    CONTAINER, MANIFEST, root=REPO
+                )
+        for key in (
+            "ensemble-claude/default@1:30d",
+            "ensemble-opencode/strata@2:rotated",
+            "ensemble-env/db@3:expired",
+        ):
+            response = good | {"notices": [notice | {"key": key}]}
+            found = Broker(FakeBroker((0, json.dumps(response), ""))).notices(
+                CONTAINER, MANIFEST, root=REPO
+            )
+            self.assertEqual(found.notices[0]["key"], key)
+        # An empty list reads no schema.
+        empty = Broker(FakeBroker(success("notices-output-empty.json"))).notices(
+            CONTAINER, MANIFEST, root="/nonexistent"
+        )
+        self.assertEqual((empty.notices, empty.next_check), ([], None))
+
+    def test_notice_keys_are_the_schemas(self):
+        with open(os.path.join(REPO, broker.SCHEMA), encoding="utf-8") as f:
+            schema = json.load(f)["$defs"]["notice_key"]["pattern"]
+        self.assertEqual(broker.notice_key(REPO).pattern, schema)
+        self.assertEqual(broker.hook_root(HOOK), REPO)
+
+    def test_an_unreadable_notice_key_is_a_session_error(self):
+        response = data("notices-output.json")
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, broker.SCHEMA)
+            os.makedirs(os.path.dirname(path))
+            for text in (
+                '{"$defs": {}}',
+                "not json",
+                '{"$defs": {"notice_key": {"pattern": "("}}}',
+            ):
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(text)
+                fake = FakeBroker((0, json.dumps(response), ""))
+                with self.subTest(text=text), self.assertRaises(SessionError) as raised:
+                    Broker(fake).notices(CONTAINER, MANIFEST, root=root)
+                self.assertNotIsInstance(raised.exception, BrokerError)
+                self.assertIn(broker.SCHEMA, str(raised.exception))
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("not json")
+            for read in (broker.notice_key, broker.client_keys):
+                with self.subTest(read=read), self.assertRaisesRegex(ConfigError, "unreadable"):
+                    read(root)
+
+    def test_notices_errors_and_audit_warning(self):
+        warned = []
+        response = data("notices-output-audit-warning.json")
+        found = Broker(FakeBroker((0, json.dumps(response), "")), warning=warned.append).notices(
+            CONTAINER, MANIFEST, root=REPO
+        )
+        self.assertEqual((found.notices, warned), ([], [broker.AUDIT_WARNING]))
+        for code, exit_code in (("manifest_rejected", 3), ("internal_error", 70), ("usage", 2)):
+            error = {"command": "notices", "code": code, "message": "No.", "cleanup": "not_needed"}
+            fake = FakeBroker((exit_code, "", json.dumps({"exit_code": exit_code, "error": error})))
+            with self.subTest(code=code), self.assertRaises(BrokerError) as raised:
+                Broker(fake).notices(CONTAINER, MANIFEST, root=REPO)
+            self.assertEqual(raised.exception.code, code)
 
     def test_refresh_failure_keeps_the_brokers_message_and_cause(self):
         message = "Writing Codex credentials into the container failed"
@@ -403,6 +507,87 @@ class ResponseTest(Case):
                 Broker(FakeBroker(success("start-output.json"))).start(MANIFEST, clients=keys)
 
 
+class LockTest(Case):
+    def test_lock_query_returns_the_holder_or_none(self):
+        holder = data("lock-query-output.json")["holder"]
+        for name, want in (
+            ("lock-query-output.json", holder),
+            ("lock-query-output-empty.json", None),
+        ):
+            with self.subTest(name):
+                fake = FakeBroker(success(name))
+                self.assertEqual(Broker(fake).lock_query("dummy-lock"), want)
+                self.assertEqual(fake.calls, [argv("lock-query")])
+
+    def test_a_bad_lock_query_response_is_a_transport_failure(self):
+        for name in (
+            "lock-query-output-missing.json",
+            "lock-query-output-extra.json",
+            "lock-query-output-invalid-holder.json",
+        ):
+            with self.subTest(name), self.assertRaisesRegex(SessionError, "bad response") as raised:
+                Broker(FakeBroker(success(name))).lock_query("dummy-lock")
+            self.assertNotIsInstance(raised.exception, BrokerError)
+
+    def test_a_lock_query_error_is_a_broker_error(self):
+        error = {
+            "exit_code": 7,
+            "error": {
+                "command": "lock-query",
+                "code": "docker_unreachable",
+                "message": "Docker is unreachable.",
+                "cleanup": "not_needed",
+            },
+        }
+        with self.assertRaises(BrokerError) as raised:
+            Broker(FakeBroker((7, "", json.dumps(error)))).lock_query("dummy-lock")
+        self.assertEqual(raised.exception.code, "docker_unreachable")
+        self.assertIsNone(raised.exception.holder)
+
+    def test_busy_error_keeps_its_holder(self):
+        for name in ("error-busy.json", "error-busy-starting.json", "error-busy-removed.json"):
+            with self.subTest(name), self.assertRaises(BrokerError) as raised:
+                Broker(FakeBroker(failure(name))).start(MANIFEST, clients=KEYS)
+            error = data(name)["error"]
+            self.assertEqual((raised.exception.exit_code, raised.exception.code), (75, "busy"))
+            self.assertEqual(raised.exception.holder, error["holder"])
+            self.assertEqual(raised.exception.cleanup, error["cleanup"])
+
+    def test_holder_only_with_busy(self):
+        for name, call in (
+            ("error-busy-missing-holder.json", lambda b: b.start(MANIFEST, clients=KEYS)),
+            ("error-nonbusy-holder.json", lambda b: b.start(MANIFEST, clients=KEYS)),
+            ("error-busy-query.json", lambda b: b.lock_query("dummy-lock")),
+        ):
+            with self.subTest(name), self.assertRaisesRegex(SessionError, "bad response") as raised:
+                call(Broker(FakeBroker(failure(name))))
+            self.assertNotIsInstance(raised.exception, BrokerError)
+        bad = data("error-busy.json")
+        for holder in ({"container": "c"}, {"container": "c", "owner": "o\x1b"}, "c"):
+            with self.subTest(holder), self.assertRaisesRegex(SessionError, "bad response"):
+                error = {**bad, "error": {**bad["error"], "holder": holder}}
+                Broker(FakeBroker((75, "", json.dumps(error)))).start(MANIFEST, clients=KEYS)
+
+    def test_build_argv_order(self):
+        fake = FakeBroker(success("build-cached.json"))
+        Broker(fake).build(
+            "/opt/ensemble",
+            plugins=("beta@owner/market#" + "b" * 40,),
+            base_image="dummy-env:test",
+            image_plugins=("dummy-plugin", "other.plugin"),
+        )
+        self.assertEqual(fake.calls, [[BROKER, *data("build-input-base-image.json")["argv"][:-2]]])
+        fake = FakeBroker(success("build-cached.json"))
+        Broker(fake).build(
+            "/opt/ensemble",
+            plugins=("beta@owner/market#" + "b" * 40,),
+            image_plugins=("dummy-plugin", "other.plugin"),
+        )
+        self.assertEqual(
+            fake.calls, [[BROKER, *data("build-input-image-plugins.json")["argv"][:-2]]]
+        )
+
+
 class ManifestTest(Case):
     def test_writes_the_protocol_manifest_owner_only(self):
         path = os.path.join(self.home, "state", "g.json")
@@ -495,6 +680,48 @@ class ManifestTest(Case):
                 self.assertEqual(manifest["claude_account"], "work")
             else:
                 self.assertNotIn("claude_account", manifest)
+
+    def test_an_environment_reaches_the_manifest_only_when_set(self):
+        path = os.path.join(self.home, "state", "g.json")
+        base = {
+            "name": "w",
+            "generation": "0" * 32,
+            "image": "ensemble-worker:" + "a" * 64,
+            "cwd": "/work",
+            "workspace": "ensemble-ws-w",
+            "home": ("claude_dir", "/home/claude"),
+            "hook_path": "/plugin/bin/ensemble-session",
+            "github": "",
+        }
+        secret = {"item": "ensemble-env/dummy", "file": "dummy.txt"}
+        broker.write_manifest(
+            path,
+            **base,
+            gateway="mini-op",
+            secrets=(secret,),
+            lock="dummy-lock",
+            lock_owner="w",
+            prefetch={"repo": "o/r", "ref": "main"},
+        )
+        with open(path) as f:
+            manifest = json.load(f)
+        self.assertEqual(
+            {
+                key: manifest[key]
+                for key in ("gateway", "secrets", "lock", "lock_owner", "prefetch")
+            },
+            {
+                "gateway": "mini-op",
+                "secrets": [secret],
+                "lock": "dummy-lock",
+                "lock_owner": "w",
+                "prefetch": {"repo": "o/r", "ref": "main"},
+            },
+        )
+        broker.write_manifest(path, **base)
+        with open(path) as f:
+            manifest = json.load(f)
+        self.assertFalse({"gateway", "secrets", "lock", "lock_owner", "prefetch"} & set(manifest))
 
 
 class StreamTest(Case):

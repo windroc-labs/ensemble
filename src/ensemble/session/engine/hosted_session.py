@@ -91,6 +91,16 @@ HostFactory = Callable[[type[Host], str, Mapping], Host]
 ViewerFactory = Callable[[Mapping], Viewer]
 
 
+def _environment_check(spec: Spec, on: Host, mode: Mode) -> None:
+    """An environment runs only on a Docker-kind Host, in a mode its Host runs (FR-66)."""
+    if spec.environment is None:
+        return
+    if not on._environments:
+        raise ConfigError(f"environment: host {on.name} is not a Docker-kind Host")
+    if mode == Mode.IN_PROCESS:
+        raise ConfigError("environment: in_process mode runs on no Host")
+
+
 def _built(cls: type[Host], name: str, settings: Mapping) -> Host:
     return cls(name, settings)
 
@@ -300,6 +310,7 @@ class HostedSession(Session):
         client = setup.registry.client(client_name)
         spec = replace(spec, sid=spec.sid or str(uuid.uuid4()))
         on = cls.host(host)
+        _environment_check(spec, on, mode)
         cls.viewer()
         displays.validate_display(display, on)
         MODES[mode].preflight(
@@ -325,6 +336,7 @@ class HostedSession(Session):
         client = setup.registry.client(client_name)
         spec = replace(spec, sid=spec.sid or str(uuid.uuid4()))
         on = cls.host(host)
+        _environment_check(spec, on, mode)
         viewer = cls.viewer()
         displays.validate_display(display, on)
         spec = _picked(setup, spec, client_name, client, on)

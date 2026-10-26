@@ -18,6 +18,11 @@ const (
 	opencodeKeyDir  = docker.SecretsDir + "/opencode"
 )
 
+// opencodeLogin is the command that stores provider's API key.
+func opencodeLogin(provider string) string {
+	return credential.LoginCommand(credential.StaticRef(credential.Opencode, provider))
+}
+
 // OpencodeKeychain holds the providers' API keys as broker-only items.
 type OpencodeKeychain interface{ brokerOnlyStore }
 
@@ -36,7 +41,7 @@ func LoginOpencode(provider string, read, password func() ([]byte, error), k Ope
 	if err := checkSecret("API key", key); err != nil {
 		return err
 	}
-	if err := storeBrokerOnly(opencodeService, provider, "rerun ensemble-broker login opencode "+provider, key, k, password); err != nil {
+	if err := storeBrokerOnly(opencodeService, provider, "rerun "+opencodeLogin(provider), key, k, password); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(out, "OpenCode provider %s API key saved; keychain trusts only the broker\n", provider)
@@ -48,7 +53,7 @@ type OpencodeKeys struct{ Keychain OpencodeKeychain }
 
 // opencodeError maps a keychain failure for provider's key to the protocol, without its detail.
 func opencodeError(provider string, err error) *protocol.Error {
-	login := "ensemble-broker login opencode " + provider
+	login := opencodeLogin(provider)
 	switch {
 	case errors.Is(err, ErrNotFound):
 		return protocol.New(protocol.LoginRequired, "No API key for OpenCode provider "+provider+": run "+login+".")
@@ -66,7 +71,7 @@ func (o OpencodeKeys) Ready(providers []string) error {
 			return opencodeError(p, err)
 		}
 		if !trusted {
-			return protocol.New(protocol.LoginRequired, "The OpenCode provider "+p+" API key trusts another broker build: run ensemble-broker login opencode "+p+".")
+			return protocol.New(protocol.LoginRequired, "The OpenCode provider "+p+" API key trusts another broker build: run "+opencodeLogin(p)+".")
 		}
 	}
 	return nil

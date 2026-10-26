@@ -1,5 +1,5 @@
 {
-  "protocol_version": "27",
+  "protocol_version": "28",
   "cases": [
     {
       "file": "manifest-valid.json",
@@ -2624,6 +2624,96 @@
     {
       "file": "version-output-audit-warning.json",
       "definition": "version_output",
+      "valid": false,
+      "expected": {
+        "stage": "response",
+        "exit_code": null,
+        "error_code": null
+      }
+    },
+    {
+      "file": "notices-input.json",
+      "definition": "notices_input",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "notices-input-delivered.json",
+      "definition": "notices_input",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "notices-input-bad-key.json",
+      "definition": "notices_input",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 2,
+        "error_code": "usage"
+      }
+    },
+    {
+      "file": "notices-output.json",
+      "definition": "notices_output",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "notices-output-empty.json",
+      "definition": "notices_output",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "notices-output-audit-warning.json",
+      "definition": "notices_output",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "notices-output-secret.json",
+      "definition": "notices_output",
+      "valid": false,
+      "expected": {
+        "stage": "response",
+        "exit_code": null,
+        "error_code": null
+      }
+    },
+    {
+      "file": "status-output-static.json",
+      "definition": "status_output",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "status-output-static-secret.json",
+      "definition": "status_output",
       "valid": false,
       "expected": {
         "stage": "response",

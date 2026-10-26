@@ -24,6 +24,7 @@ import (
 
 	"ensemble/broker/internal/audit"
 	"ensemble/broker/internal/broker"
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/fixtures"
 	"ensemble/broker/internal/github"
@@ -49,6 +50,9 @@ func recording(calls *[]call) app {
 		refresh: func(ctx context.Context, container, manifest string) (any, error) {
 			return result("refresh")(ctx, container+" "+manifest, nil)
 		},
+		notices: func(ctx context.Context, container, _ string, _ []string) (any, error) {
+			return result("notices")(ctx, container, nil)
+		},
 		status: func(ctx context.Context, _ bool) (any, error) { return result("status")(ctx, "", nil) },
 		probeOpencode: func(ctx context.Context, provider, base string) (any, error) {
 			return result("probe-provider")(ctx, provider+" "+base, nil)
@@ -65,7 +69,7 @@ func invoke(a app, args ...string) (int, string, string) {
 
 func TestVersion(t *testing.T) {
 	code, out, errOut := invoke(app{}, "version")
-	if code != 0 || out != `{"protocol_version":"27"}`+"\n" || errOut != "" {
+	if code != 0 || out != `{"protocol_version":"28"}`+"\n" || errOut != "" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
 	for _, c := range fixtures.Cases(t, "version_output") {
@@ -173,7 +177,7 @@ func TestProbeOpencodeCommand(t *testing.T) {
 }
 
 func TestInputFixtures(t *testing.T) {
-	for _, c := range fixtures.Cases(t, "version_input", "build_input", "start_input", "refresh_input", "close_input", "status_input", "workspace_rm_input", "probe_provider_input", "lock_query_input", "check_clients_input") {
+	for _, c := range fixtures.Cases(t, "version_input", "build_input", "start_input", "refresh_input", "notices_input", "close_input", "status_input", "workspace_rm_input", "probe_provider_input", "lock_query_input", "check_clients_input") {
 		t.Run(c.File, func(t *testing.T) {
 			var in struct{ Argv []string }
 			if err := json.Unmarshal(c.Data, &in); err != nil {
@@ -978,5 +982,309 @@ func TestReadEnvValue(t *testing.T) {
 	r := &keptReader{r: io.MultiReader(strings.NewReader("partial"), iotest.ErrReader(errors.New("closed")))}
 	if _, err := readEnvValue(r); err == nil || err.Error() != "closed" || !r.erased() {
 		t.Fatalf("read error: %v, erased %v", err, r.erased())
+	}
+}
+
+type datedCall struct {
+	kind           credential.Kind
+	name, authFile string
+	reg            credential.Registration
+}
+
+func datedApp(got *[]datedCall) app {
+	return app{dated: func(kind credential.Kind, name, authFile string, reg credential.Registration, out io.Writer) error {
+		*got = append(*got, datedCall{kind, name, authFile, reg})
+		_, err := io.WriteString(out, "ok\n")
+		return err
+	}}
+}
+
+func day(t *testing.T, s string) time.Time {
+	t.Helper()
+	d, err := credential.ParseDate(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func TestLoginClaudeFlagsDispatch(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want datedCall
+	}{
+		{[]string{"--fresh-token"}, datedCall{credential.Claude, "default", "", credential.Registration{Fresh: true}}},
+		{[]string{"work", "--fresh-token"}, datedCall{credential.Claude, "work", "", credential.Registration{Fresh: true}}},
+		{[]string{"--expires", "2027-01-02"}, datedCall{credential.Claude, "default", "", credential.Registration{Expires: day(t, "2027-01-02")}}},
+		{[]string{"work", "--issued", "2026-01-02", "--expires", "2027-01-02"}, datedCall{credential.Claude, "work", "", credential.Registration{Issued: day(t, "2026-01-02"), Expires: day(t, "2027-01-02")}}},
+		{[]string{"--fresh-token", "--expires", "2027-01-02"}, datedCall{credential.Claude, "default", "", credential.Registration{Fresh: true, Expires: day(t, "2027-01-02")}}},
+	} {
+		var got []datedCall
+		code, out, errOut := invoke(datedApp(&got), append([]string{"login", "claude"}, c.args...)...)
+		if code != 0 || out != "ok\n" || errOut != "" || len(got) != 1 || !reflect.DeepEqual(got[0], c.want) {
+			t.Errorf("%q: exit %d %q %q %+v", c.args, code, out, errOut, got)
+		}
+	}
+}
+
+func TestLoginStaticFlagsDispatch(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want datedCall
+	}{
+		{[]string{"opencode", "strata", "--expires", "2027-01-02"}, datedCall{credential.Opencode, "strata", "", credential.Registration{Expires: day(t, "2027-01-02")}}},
+		{[]string{"opencode", "strata", "--expires", "2027-01-02", "--auth-file", "/tmp/auth.json"}, datedCall{credential.Opencode, "strata", "/tmp/auth.json", credential.Registration{Expires: day(t, "2027-01-02")}}},
+		{[]string{"opencode", "strata", "--auth-file", "/tmp/auth.json", "--expires", "2027-01-02"}, datedCall{credential.Opencode, "strata", "/tmp/auth.json", credential.Registration{Expires: day(t, "2027-01-02")}}},
+		{[]string{"env", "db", "--expires", "2027-01-02"}, datedCall{credential.Env, "db", "", credential.Registration{Expires: day(t, "2027-01-02")}}},
+	} {
+		var got []datedCall
+		code, out, errOut := invoke(datedApp(&got), append([]string{"login"}, c.args...)...)
+		if code != 0 || out != "ok\n" || errOut != "" || len(got) != 1 || !reflect.DeepEqual(got[0], c.want) {
+			t.Errorf("%q: exit %d %q %q %+v", c.args, code, out, errOut, got)
+		}
+	}
+}
+
+func TestLoginFlagsUsage(t *testing.T) {
+	var got []datedCall
+	a := datedApp(&got)
+	for _, args := range [][]string{
+		{"claude", "--expires"}, {"claude", "--bogus"}, {"claude", "--fresh-token", "x"}, {"claude", "Work", "--fresh-token"},
+		{"claude", "--fresh-token", "work"}, {"opencode", "strata", "--issued", "2026-01-02"}, {"opencode", "strata", "--fresh-token"},
+		{"env", "db", "--fresh-token"}, {"env", "db", "--issued", "2026-01-02"}, {"env", "db", "--expires"},
+		{"opencode", "strata", "--expires", "2027-01-02", "--auth-file", "relative"}, {"env", "db", "--auth-file", "/tmp/a"},
+	} {
+		if code, _, _ := invoke(a, append([]string{"login"}, args...)...); code != 2 {
+			t.Errorf("%q: exit %d", args, code)
+		}
+	}
+	for _, c := range []struct {
+		args []string
+		err  string
+	}{
+		{[]string{"claude", "--expires", "2027-1-2"}, `"2027-1-2" is not a YYYY-MM-DD date`},
+		{[]string{"claude", "--expires", "2027-01-02", "--expires", "2027-01-03"}, "--expires given twice"},
+		{[]string{"claude", "--fresh-token", "--fresh-token"}, "--fresh-token given twice"},
+		{[]string{"env", "db", "--expires", "2027-02-30"}, `"2027-02-30" is not a YYYY-MM-DD date`},
+	} {
+		code, out, errOut := invoke(a, append([]string{"login"}, c.args...)...)
+		if code != 1 || out != "" || errOut != "ensemble-broker: "+c.err+"\n" {
+			t.Errorf("%q: exit %d %q %q", c.args, code, out, errOut)
+		}
+	}
+	if len(got) != 0 {
+		t.Fatalf("dated called: %+v", got)
+	}
+}
+
+// staticFixture is a login's static records under a temporary home: its store, audit log and clock.
+func staticFixture(t *testing.T) (staticLogin, string) {
+	t.Helper()
+	home := t.TempDir()
+	return staticLogin{store: staticStore(home), log: audit.Log{Path: audit.Path(home)},
+		now: func() time.Time { return time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC) }}, home
+}
+
+func savedLogin(out io.Writer, line string) func() error {
+	return func() error {
+		_, err := io.WriteString(out, line+"\n")
+		return err
+	}
+}
+
+func TestStaticLoginRecordsExpiry(t *testing.T) {
+	s, home := staticFixture(t)
+	var out, errOut bytes.Buffer
+	if err := s.register("ensemble-claude/default", credential.Registration{}, &out, &errOut, savedLogin(&out, "saved")); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "saved\nExpiry unknown\n" || errOut.String() != "" {
+		t.Fatalf("%q %q", out.String(), errOut.String())
+	}
+	out.Reset()
+	if err := s.register("ensemble-claude/default", credential.Registration{Fresh: true}, &out, &errOut, savedLogin(&out, "saved")); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "saved\nExpires 2027-10-26 (assumed)\n" {
+		t.Fatalf("%q", out.String())
+	}
+	records, err := staticStore(home).Load()
+	if err != nil || !reflect.DeepEqual(records["ensemble-claude/default"], credential.Static{Version: 2, ExpiresAt: "2027-10-26T12:00:00Z", Provenance: credential.Assumed}) {
+		t.Fatalf("%+v %v", records, err)
+	}
+	if _, err := os.Stat(audit.Path(home)); !os.IsNotExist(err) {
+		t.Fatalf("an audit line without a notice: %v", err)
+	}
+}
+
+func TestStaticLoginRejectsBeforeLogin(t *testing.T) {
+	s, home := staticFixture(t)
+	called := false
+	var out, errOut bytes.Buffer
+	err := s.register("ensemble-claude/default", credential.Registration{Fresh: true, Expires: day(t, "2027-01-02")}, &out, &errOut, func() error {
+		called = true
+		return nil
+	})
+	if err == nil || err.Error() != "--fresh-token takes no date" || called || out.Len() != 0 {
+		t.Fatalf("%v %v %q", err, called, out.String())
+	}
+	if _, err := os.Stat(staticStore(home).Path); !os.IsNotExist(err) {
+		t.Fatalf("store written: %v", err)
+	}
+}
+
+func TestStaticLoginPrintsDueNotice(t *testing.T) {
+	s, home := staticFixture(t)
+	var out, errOut bytes.Buffer
+	if err := s.register("ensemble-env/db", credential.Registration{Expires: day(t, "2026-10-31")}, &out, &errOut, savedLogin(&out, "saved")); err != nil {
+		t.Fatal(err)
+	}
+	want := "saved\nExpires 2026-10-31 (explicit)\nensemble-env/db expires 2026-10-31 (explicit), in 5 days: rotate it at its source, then ensemble-broker login env db [--expires <date>]; running sessions keep their copy until they restart\n"
+	if out.String() != want || errOut.String() != "" {
+		t.Fatalf("%q %q", out.String(), errOut.String())
+	}
+	records, _ := staticStore(home).Load()
+	if got := records["ensemble-env/db"].Notified; !reflect.DeepEqual(got, []string{"7d"}) {
+		t.Fatalf("notified %q", got)
+	}
+	data, err := os.ReadFile(audit.Path(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 1 || !strings.Contains(lines[0], `"command":"login","event":"credential-notice"`) ||
+		!strings.Contains(lines[0], `"kind":"env-secret","result":"notified","expires_at":"2026-10-31T00:00:00Z","item":"ensemble-env/db","notice":"7d"`) {
+		t.Fatalf("%q", lines)
+	}
+}
+
+func TestStaticLoginAuditWarning(t *testing.T) {
+	s, home := staticFixture(t)
+	if err := os.MkdirAll(audit.Path(home), 0o700); err != nil { // a directory where the log goes
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if err := s.register("ensemble-env/db", credential.Registration{Expires: day(t, "2026-10-31")}, &out, &errOut, savedLogin(&out, "saved")); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(errOut.String(), "ensemble-broker: audit_write_failed: ") || !strings.Contains(out.String(), "in 5 days") {
+		t.Fatalf("%q %q", out.String(), errOut.String())
+	}
+}
+
+func TestStaticSentinelAbsent(t *testing.T) {
+	const sentinel = "SENTINEL-5ec2e7"
+	s, home := staticFixture(t)
+	var out, errOut bytes.Buffer
+	login := func() error {
+		value := []byte(sentinel) // what the Keychain login reads and stores; never handed to the static records
+		clear(value)
+		_, err := io.WriteString(&out, "saved\n")
+		return err
+	}
+	if err := s.register("ensemble-env/db", credential.Registration{Expires: day(t, "2026-10-31")}, &out, &errOut, login); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.store.Path, []byte(sentinel), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := s.register("ensemble-env/db", credential.Registration{}, &out, &errOut, login)
+	if err == nil || err.Error() != s.store.Path+": invalid content" {
+		t.Fatalf("%v", err)
+	}
+	code, stdout, stderr := invoke(app{loginEnv: func(string, io.Writer) error { return err }}, "login", "env", "db")
+	logged, _ := os.ReadFile(audit.Path(home))
+	for name, text := range map[string]string{"stdout": out.String() + stdout, "stderr": errOut.String() + stderr, "audit": string(logged)} {
+		if strings.Contains(text, sentinel) {
+			t.Errorf("%s: %q", name, text)
+		}
+	}
+	if code != 1 {
+		t.Fatalf("exit %d", code)
+	}
+}
+
+func TestNoticesCommand(t *testing.T) {
+	const c = "ensemble-worker_1-0123456789abcdef0123456789abcdef"
+	var got []string
+	a := app{notices: func(_ context.Context, container, manifest string, delivered []string) (any, error) {
+		got = append([]string{container, manifest}, delivered...)
+		return launcher.NoticesResult{Container: container, Notices: []launcher.Notice{}}, nil
+	}}
+	base := []string{"notices", "--container", c, "--manifest", "/tmp/m.json"}
+	code, out, errOut := invoke(a, append(base, "--delivered", "ensemble-env/db@2:7d", "--delivered", "ensemble-claude/work@1:rotated")...)
+	if code != 0 || errOut != "" || out != `{"container":"`+c+`","notices":[],"next_check":null}`+"\n" ||
+		!slices.Equal(got, []string{c, "/tmp/m.json", "ensemble-env/db@2:7d", "ensemble-claude/work@1:rotated"}) {
+		t.Fatalf("%d %q %q %q", code, out, errOut, got)
+	}
+	many := slices.Clone(base)
+	for range maxDelivered + 1 {
+		many = append(many, "--delivered", "ensemble-env/db@2:7d")
+	}
+	got = nil
+	for _, args := range [][]string{
+		append(slices.Clone(base), "--delivered"), append(slices.Clone(base), "--delivered", "ensemble-bot/x@1:7d"),
+		append(slices.Clone(base), "--delivered", "ensemble-env/db@2:2d"), append(slices.Clone(base), "extra"),
+		{"notices", "--container", "bad", "--manifest", "/tmp/m.json"}, {"notices", "--container", c, "--manifest", "relative"}, many,
+	} {
+		code, out, errOut := invoke(a, args...)
+		if code != 2 || out != "" || got != nil {
+			t.Fatalf("%q: %d %q", args, code, got)
+		}
+		assertError(t, errOut, out, "notices", protocol.Usage)
+	}
+}
+
+func TestPipedSecretReaders(t *testing.T) {
+	for _, c := range []struct{ in, token, value string }{
+		{"tok\n", "tok", "tok\n"}, {"tok\r\n", "tok", "tok\r\n"}, {"tok", "tok", "tok"}, {"a\nb\n", "a\nb", "a\nb\n"},
+	} {
+		for _, token := range []bool{true, false} {
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			go func() { _, _ = io.WriteString(w, c.in); w.Close() }()
+			read, _ := stdinReaders(r, "unused prompt", token)
+			got, err := read()
+			r.Close()
+			want := c.value
+			if token {
+				want = c.token
+			}
+			if err != nil || string(got) != want {
+				t.Errorf("%q token=%v: %q %v", c.in, token, got, err)
+			}
+		}
+	}
+}
+
+func TestStaticLoginPipedToken(t *testing.T) {
+	// login claude with the token piped and no terminal: --fresh-token records assumed, its absence unknown, and
+	// nothing asks for confirmation.
+	for _, c := range []struct {
+		reg  credential.Registration
+		want credential.Provenance
+	}{{credential.Registration{Fresh: true}, credential.Assumed}, {credential.Registration{}, credential.Unknown}} {
+		s, home := staticFixture(t)
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() { _, _ = io.WriteString(w, "sk-ant-oat01-piped\n"); w.Close() }()
+		read, _ := stdinReaders(r, "Claude account default setup-token (hidden): ", true)
+		var out, errOut bytes.Buffer
+		err = s.register("ensemble-claude/default", c.reg, &out, &errOut, func() error {
+			token, err := read()
+			if err == nil && string(token) != "sk-ant-oat01-piped" {
+				err = fmt.Errorf("token %q", token)
+			}
+			return err
+		})
+		r.Close()
+		records, _ := staticStore(home).Load()
+		if err != nil || records["ensemble-claude/default"].Provenance != c.want || errOut.Len() != 0 || strings.Contains(out.String(), "piped") {
+			t.Fatalf("%v: %v %+v %q %q", c.want, err, records, out.String(), errOut.String())
+		}
 	}
 }

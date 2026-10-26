@@ -7,13 +7,16 @@ import re
 import signal
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from dataclasses import fields as dataclass_fields
 from enum import StrEnum
 from types import MappingProxyType
-from typing import NamedTuple, Self
+from typing import ClassVar, NamedTuple, Self
 
 from ensemble.utils import (
     ACCOUNT_ENV,
+    Invalid,
     StatusState,
+    check_ref,
     environment_ok,
     freeze,
     printable_abs,
@@ -29,7 +32,9 @@ __all__ = [
     "ClientHome",
     "ConfigError",
     "SessionError",
+    "SessionBusy",
     "Effort",
+    "EnvironmentSpec",
     "Exited",
     "HookCall",
     "HookCallback",
@@ -42,11 +47,13 @@ __all__ = [
     "Launch",
     "LimitHit",
     "Liveness",
+    "LOCK_NAME",
     "Mode",
     "NamedKey",
     "NotShowable",
     "NoRecordedSession",
     "PaneStatus",
+    "PLUGIN_SOURCE",
     "Paste",
     "Prepared",
     "ProcessOptions",
@@ -246,6 +253,24 @@ DEFAULT_ACCOUNT = "default"
 RESUME = (COMMAND, "resume")
 
 
+# The broker's rules (its protocol.schema.json)
+PLUGIN_SOURCE = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}@[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}#[a-f0-9]{40}"
+    r"(?:::[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}#[a-f0-9]{40})?"
+)
+PLUGIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+BASE_IMAGE = re.compile(
+    r"sha256:[a-f0-9]{64}|[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*"
+    r"(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?"
+)
+GATEWAY = re.compile(r"[a-z0-9][a-z0-9_-]{0,62}")
+LOCK_NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,62}")
+SECRET_ITEM = re.compile(r"ensemble-env/[a-z0-9][a-z0-9._-]{0,63}")
+SECRET_FILE = re.compile(r"[^/\x00-\x1f\x7f-\x9f]{1,255}")
+SECRETS_MAX = 16
+REPO = re.compile(r"[A-Za-z0-9-]+/(?!\.\.?\Z)[A-Za-z0-9._-]+")
+
+
 def _string_tuple(value) -> bool:
     return isinstance(value, tuple) and all(isinstance(s, str) for s in value)
 
@@ -271,6 +296,107 @@ class Access:
         if not environment_ok(self.env):
             raise ConfigError("access env must map variable names to strings without NUL")
         object.__setattr__(self, "env", MappingProxyType(dict(self.env)))
+
+
+def _secret(value) -> bool:
+    return (
+        isinstance(value, Mapping)
+        and set(value) == {"item", "file"}
+        and isinstance(value["item"], str)
+        and SECRET_ITEM.fullmatch(value["item"]) is not None
+        and isinstance(value["file"], str)
+        and SECRET_FILE.fullmatch(value["file"]) is not None
+        and value["file"] not in (".", "..")
+        and len(value["file"].encode("utf-8")) <= 255
+    )
+
+
+def _prefetch(value) -> bool:
+    if not (
+        isinstance(value, Mapping)
+        and "repo" in value
+        and set(value) <= {"repo", "ref"}
+        and isinstance(value["repo"], str)
+        and REPO.fullmatch(value["repo"])
+    ):
+        return False
+    try:
+        return "ref" not in value or isinstance(value["ref"], str) and bool(check_ref(value["ref"]))
+    except Invalid:
+        return False
+
+
+@dataclass(frozen=True, kw_only=True)
+class EnvironmentSpec:
+    """A resolved container environment (WDRC-109 FR-56): image, a local image or WORKER (the
+    worker base); secrets, {"item", "file"} each; prefetch, {"repo"[, "ref"]}.
+    """
+
+    WORKER: ClassVar[str] = "@worker"
+    image: str
+    gateway: str
+    secrets: tuple[Mapping[str, str], ...] = ()
+    plugins: tuple[str, ...] = ()
+    lock: str | None = None
+    prefetch: Mapping[str, str] | None = None
+
+    def __post_init__(self):
+        secrets, files = self.secrets, ()
+        if isinstance(secrets, tuple) and all(map(_secret, secrets)):
+            files = [secret["file"] for secret in secrets]
+        plugins = self.plugins
+        checks = {
+            "image": isinstance(self.image, str)
+            and (self.image == self.WORKER or bool(BASE_IMAGE.fullmatch(self.image)))
+            and len(self.image) <= 255,
+            "gateway": isinstance(self.gateway, str) and bool(GATEWAY.fullmatch(self.gateway)),
+            "secrets": isinstance(secrets, tuple)
+            and len(files) == len(secrets) <= SECRETS_MAX
+            and len(set(files)) == len(files),
+            "plugins": isinstance(plugins, tuple)
+            and all(
+                isinstance(p, str) and (PLUGIN_SOURCE.fullmatch(p) or PLUGIN_NAME.fullmatch(p))
+                for p in plugins
+            )
+            and len(set(plugins)) == len(plugins),
+            "lock": self.lock is None
+            or isinstance(self.lock, str)
+            and bool(LOCK_NAME.fullmatch(self.lock)),
+            "prefetch": self.prefetch is None or _prefetch(self.prefetch),
+        }
+        if bad := next((name for name, ok in checks.items() if not ok), None):
+            raise ConfigError(f"environment {bad}: {getattr(self, bad)!r:.120} is not valid")
+        object.__setattr__(
+            self, "secrets", tuple(MappingProxyType(dict(secret)) for secret in secrets)
+        )
+        if self.prefetch is not None:
+            object.__setattr__(self, "prefetch", MappingProxyType(dict(self.prefetch)))
+
+    def persisted(self) -> dict:
+        return {
+            "image": self.image,
+            "gateway": self.gateway,
+            "secrets": [dict(secret) for secret in self.secrets],
+            "plugins": list(self.plugins),
+            "lock": self.lock,
+            "prefetch": None if self.prefetch is None else dict(self.prefetch),
+        }
+
+    @classmethod
+    def from_fields(cls, fields: Mapping) -> Self:
+        """Lists for its tuples; ConfigError naming an unknown or missing field."""
+        if not isinstance(fields, Mapping):
+            raise ConfigError(f"environment: want a table, got {type(fields).__name__}")
+        names = [f.name for f in dataclass_fields(cls)]
+        if unknown := sorted(str(key) for key in fields if key not in names):
+            raise ConfigError(f"environment: unknown field {unknown[0]!r:.80}")
+        if missing := [name for name in ("image", "gateway") if name not in fields]:
+            raise ConfigError(f"environment: missing field {missing[0]!r}")
+        found = dict(fields)
+        for name in ("secrets", "plugins"):
+            if isinstance(found.get(name), list):
+                found[name] = tuple(found[name])
+        return cls(**found)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -300,6 +426,7 @@ class Spec(ProcessOptions):
     prompt: str = ""
     resume: bool = False  # resume session sid
     events: str | None = None
+    environment: EnvironmentSpec | None = None
 
     def __post_init__(self):
         if not printable_abs(self.workdir):
@@ -345,6 +472,8 @@ class Spec(ProcessOptions):
             isinstance(self.events, str) and self.events.isprintable()
         ):
             raise ConfigError(f"events must be a printable path, got {self.events!r:.80}")
+        if self.environment is not None and not isinstance(self.environment, EnvironmentSpec):
+            raise ConfigError("environment must be None or an EnvironmentSpec")
 
 
 @dataclass(frozen=True)
@@ -616,6 +745,16 @@ class KeyPress:
 
 class SessionError(Exception):
     """A failed start, or a call its mode lacks."""
+
+
+class SessionBusy(SessionError):
+    """holder: "<container> (owner <owner>)"; PATTERN: (lock, holder) of its message in a text."""
+
+    PATTERN: ClassVar[re.Pattern] = re.compile(r"(?:^|: )busy: lock (\S+) is held by (.+)\Z", re.S)
+
+    def __init__(self, lock: str, holder: str) -> None:
+        self.lock, self.holder = lock, holder
+        super().__init__(f"busy: lock {lock} is held by {holder}")
 
 
 class Unanswered(SessionError):
