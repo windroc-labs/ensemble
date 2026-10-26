@@ -48,7 +48,7 @@ func recording(calls *[]call) app {
 		refresh: func(ctx context.Context, container, manifest string) (any, error) {
 			return result("refresh")(ctx, container+" "+manifest, nil)
 		},
-		status: func(ctx context.Context) (any, error) { return result("status")(ctx, "", nil) },
+		status: func(ctx context.Context, _ bool) (any, error) { return result("status")(ctx, "", nil) },
 		probeOpencode: func(ctx context.Context, provider, base string) (any, error) {
 			return result("probe-provider")(ctx, provider+" "+base, nil)
 		},
@@ -63,7 +63,7 @@ func invoke(a app, args ...string) (int, string, string) {
 
 func TestVersion(t *testing.T) {
 	code, out, errOut := invoke(app{}, "version")
-	if code != 0 || out != `{"protocol_version":"21"}`+"\n" || errOut != "" {
+	if code != 0 || out != `{"protocol_version":"22"}`+"\n" || errOut != "" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
 	for _, c := range fixtures.Cases(t, "version_output") {
@@ -440,8 +440,16 @@ func TestCodexStatusFixtures(t *testing.T) {
 		if err := json.Unmarshal(c.Data, &result); err != nil {
 			t.Fatal(err)
 		}
+		var metadata struct {
+			AuditWarning string `json:"audit_warning"`
+		}
+		_ = json.Unmarshal(c.Data, &metadata)
+		var response any = result
+		if metadata.AuditWarning != "" {
+			response = auditWarningResult{result}
+		}
 		var out bytes.Buffer
-		if emit(&out, result) != 0 {
+		if emit(&out, response) != 0 {
 			t.Fatal("status encoding failed")
 		}
 		var original, encoded any
@@ -656,19 +664,41 @@ func TestBuildProgressGoesToStderr(t *testing.T) {
 }
 
 func TestStatus(t *testing.T) {
-	a := app{status: func(context.Context) (any, error) {
+	a := app{status: func(context.Context, bool) (any, error) {
 		return launcher.StatusResult{Revocations: []protocol.Pending{{Container: "c", Account: "acme", ExpiresAt: "2026-10-17T13:00:00Z"}}}, nil
 	}}
 	code, out, errOut := invoke(a, "status")
 	if code != 0 || errOut != "" || out != `{"revocations":[{"container":"c","account":"acme","expires_at":"2026-10-17T13:00:00Z"}]}`+"\n" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
-	a = app{status: func(context.Context) (any, error) { return nil, protocol.New(protocol.KeychainFailed, "x") }}
+	a = app{status: func(context.Context, bool) (any, error) { return nil, protocol.New(protocol.KeychainFailed, "x") }}
 	code, out, errOut = invoke(a, "status")
 	if code != 11 {
 		t.Fatalf("%d %q", code, errOut)
 	}
 	assertError(t, errOut, out, "status", protocol.KeychainFailed)
+}
+
+func TestStatusCleanupOption(t *testing.T) {
+	var calls []call
+	a := recording(&calls)
+	var choices []bool
+	a.status = func(ctx context.Context, cleanup bool) (any, error) {
+		choices = append(choices, cleanup)
+		return recording(&calls).status(ctx, cleanup)
+	}
+	code, out, errOut := invoke(a, "status", "--cleanup")
+	if code != 0 || len(calls) != 1 || out == "" || errOut != "" {
+		t.Fatalf("explicit cleanup not dispatched: %d %q %q %v", code, out, errOut, calls)
+	}
+	for _, args := range [][]string{{"status", "--other"}, {"status", "--cleanup", "--cleanup"}} {
+		if code, _, _ := invoke(recording(&calls), args...); code != 2 || len(calls) != 1 {
+			t.Fatal("invalid status options dispatched")
+		}
+	}
+	if code, _, _ := invoke(a, "status"); code != 0 || !slices.Equal(choices, []bool{true, false}) {
+		t.Fatalf("wrong status choices: %v", choices)
+	}
 }
 
 // noSecrets is an empty broker-only keychain.
