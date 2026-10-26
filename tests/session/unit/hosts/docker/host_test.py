@@ -328,6 +328,13 @@ def _free(path):
 
 
 class ConfigTest(Base):
+    def test_capacity_namespace_uses_the_fixed_endpoint_across_aliases(self):
+        alias = DockerHost(
+            "alias", {"docker": "/other/docker"}, run=self.docker, broker=self.broker
+        )
+        self.assertEqual(self.host._capacity_namespace(), f"docker:{self.ep}")
+        self.assertEqual(alias._capacity_namespace(), self.host._capacity_namespace())
+
     def test_provider_usage_rejects_broker_18_before_probing_credentials(self):
         request = SimpleNamespace(provider="strata", base_url="https://strata.test/v1")
         locked = data("error-login_required.json")

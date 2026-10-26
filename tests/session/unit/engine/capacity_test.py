@@ -12,6 +12,13 @@ from tests.session.case import Case
 from tests.session.fakes.terminal import MemoryHost
 
 
+class NamespacedHost(MemoryHost):
+    namespace = "shared-backend"
+
+    def _capacity_namespace(self):
+        return self.namespace
+
+
 class AdmissionTest(Case):
     def setUp(self):
         self.host = MemoryHost()
@@ -83,6 +90,55 @@ class AdmissionTest(Case):
         self.host.processes["first"].calls.alive.return_value = False
         with self.enter(name="second", sid="s2"):
             pass
+
+    def test_alias_inventory_and_its_reservation_count_one_physical_tui(self):
+        shared = NamespacedHost()
+        hosts = {"original-config": shared, "alias-config": shared}
+        first = self.enter(limit=2, mode=Mode.TUI, hosts=hosts)
+        with first:
+            shared.create("first", metadata={"client": "fake", "sid": "s1"})
+            first.started(lambda: Liveness.LIVE)
+        second = self.enter(limit=2, name="second", sid="s2", hosts=hosts)
+        with second:
+            second.started(lambda: Liveness.LIVE)
+        with (
+            self.assertRaisesRegex(SessionError, "held by: first, second"),
+            self.enter(limit=2, name="third", sid="s3", hosts=hosts),
+        ):
+            self.fail("two real sessions must fill two slots")
+
+    def test_independent_backends_with_equal_name_and_sid_count_separately(self):
+        other = MemoryHost("other")
+        for host in (self.host, other):
+            host.create("same", metadata={"client": "fake", "sid": "same"})
+        with (
+            self.assertRaisesRegex(SessionError, "held by: same, same"),
+            self.enter(limit=2, hosts={"a": self.host, "b": other}),
+        ):
+            self.fail("equal logical IDs do not identify a shared backend")
+
+    def test_distinct_known_namespaces_keep_equal_session_identities_separate(self):
+        first, second = NamespacedHost(), NamespacedHost()
+        second.namespace = "other-backend"
+        for host in (first, second):
+            host.create("same", metadata={"client": "fake", "sid": "same"})
+        with (
+            self.assertRaisesRegex(SessionError, "held by: same, same"),
+            self.enter(limit=2, hosts={"a": first, "b": second}),
+        ):
+            self.fail("independent servers must consume independent slots")
+
+    def test_unknown_configuration_is_not_merged_by_matching_name_and_sid(self):
+        first = self.enter(mode=Mode.TUI, hosts={"old-config": NamespacedHost()})
+        with first:
+            first.started(lambda: Liveness.LIVE)
+        other = NamespacedHost()
+        other.create("first", metadata={"client": "fake", "sid": "s1"})
+        with (
+            self.assertRaisesRegex(SessionError, "held by: first, first"),
+            self.enter(limit=2, hosts={"new-config": other}),
+        ):
+            self.fail("an unknown reservation must retain its separate slot")
 
     def test_tui_reservation_is_durable_before_the_spawn(self):
         first = self.enter(mode=Mode.TUI)

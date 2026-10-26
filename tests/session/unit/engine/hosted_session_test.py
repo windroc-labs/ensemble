@@ -16,6 +16,7 @@ import stat
 import tempfile
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from ensemble.session import Host, NoRecordedSession, NotShowable
@@ -74,7 +75,9 @@ from tests.session.hosted_support import (
     HostedEnvBase,
     HostedTuiBase,
     ProbeClient,
+    TuiBase,
     fake_tmux,
+    listed,
 )
 from tests.session.threads import capture_errors
 from tests.utils.sandbox import owned_directory
@@ -268,6 +271,39 @@ class ClientCapacityTest(HostedTuiBase):
 
 def parsed(tables, default) -> Hosts:
     return Host.parse_hosts({**tables, "default": default})
+
+
+class AliasedClientCapacityTest(TuiBase):
+    def test_two_tmux_aliases_count_one_existing_tui_and_still_enforce_the_limit(self):
+        self.configure(client="checked", max_runs=2)
+        setup = self.session._config()
+        self.host.checked.return_value = SimpleNamespace(stdout="/fake/server.sock\n")
+        self.host.listing.return_value = [listed("existing", client="checked", sid="s1")]
+        self.session = HostedSession.configured(
+            clients=setup.registry.settings.clients,
+            hosts=parsed(
+                {"tmux": HOSTS["tmux"], "alias": {**HOSTS["tmux"], "status_line": False}},
+                "tmux",
+            ),
+            class_loader=setup.class_loader,
+            host_factory=lambda kind, name, table: kind(name, table, tmux=self.host),
+            viewer_factory=MemoryViewer,
+        )
+        reached, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        self.steps({"sleep": 1})
+
+        def sleep(_seconds):
+            reached.set()
+            release.wait(WAIT)
+
+        with mock.patch("time.sleep", side_effect=sleep):
+            second = self.start(client="checked", mode="in_process", sid="s2")
+            self.assertTrue(reached.wait(WAIT))
+            with self.assertRaisesRegex(SessionError, "client checked.*limit 2.*existing.*s2"):
+                self.start(client="checked", mode="in_process", sid="s3")
+            release.set()
+            self.assertTrue(second._capacity.finished.wait(WAIT))
 
 
 class ConfiguredTest(Case):

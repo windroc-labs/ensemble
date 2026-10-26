@@ -316,6 +316,10 @@ class Host(ABC):
             raise SessionError(f"host {self.name}: inventory unavailable")
         return rows
 
+    def _capacity_namespace(self) -> str | None:
+        """Shared backend identity, if known."""
+        return None
+
     def attach_target(self, name: str) -> SessionView | CommandView | None:
         """What the Viewer shows session `name` through; None unless attachable."""
         return None

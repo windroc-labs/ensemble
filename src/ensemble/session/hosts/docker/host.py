@@ -1575,6 +1575,9 @@ class DockerHost(Host):
             for name, row in sorted(containers.items())
         ]
 
+    def _capacity_namespace(self) -> str:
+        return f"docker:{endpoint()}"
+
     def rows(self) -> list[SessionRow]:
         """[] with a warning when docker fails, so the other Hosts' rows still list; list() raises,
         as its callers act on absence.

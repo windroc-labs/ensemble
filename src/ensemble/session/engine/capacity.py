@@ -17,7 +17,6 @@ from ensemble.session.engine.types import (
     Liveness,
     Mode,
     SessionError,
-    SessionRow,
     StatusState,
 )
 from ensemble.session.hosts.base import Host
@@ -32,10 +31,12 @@ def _inventory(hosts: Mapping[str, Host], client: str) -> tuple[dict, dict]:
     known, holders = {}, {}
     for key, host in hosts.items():
         rows = {row.name: row for row in host._capacity_rows()}
-        known[key] = rows
+        backend = host._capacity_namespace() if rows else None
+        namespace = ("backend", backend) if backend is not None else ("configuration", key)
+        known[key] = namespace, rows
         for row in rows.values():
             if row.client == client and row.state not in (StatusState.DEAD, StatusState.GONE):
-                holders[(key, row.name, row.sid)] = row.name
+                holders[(namespace, row.name, row.sid)] = row.name
     return known, holders
 
 
@@ -54,10 +55,10 @@ def _read(fd: int) -> dict:
     return value
 
 
-def _retained(record: dict, known: dict[str, dict[str, SessionRow]]) -> bool:
+def _retained(record: dict, known: dict) -> bool:
     if record["host"] not in known:
         return True
-    row = known[record["host"]].get(record["name"])
+    row = known[record["host"]][1].get(record["name"])
     return (
         row is not None
         and row.state not in (StatusState.DEAD, StatusState.GONE)
@@ -82,8 +83,10 @@ def _holders(directory: str, known: dict, holders: dict) -> list[str]:
                 held = True
             if record["kind"] == Mode.TUI:
                 if _retained(record, known):
-                    holders.pop((record["host"], record["name"], None), None)
-                    holders[(record["host"], record["name"], record["sid"])] = record["name"]
+                    host = record["host"]
+                    namespace = known[host][0] if host in known else ("configuration", host)
+                    holders.pop((namespace, record["name"], None), None)
+                    holders[(namespace, record["name"], record["sid"])] = record["name"]
                     continue
             elif held:
                 holders[(entry.name,)] = record["name"]
