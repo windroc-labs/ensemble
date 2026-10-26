@@ -14,6 +14,7 @@ NAME = re.compile(r"[A-Za-z0-9._@+][A-Za-z0-9._@+-]*")
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 TOKEN_URL = "https://api.linear.app/oauth/token"
 GRAPHQL_URL = "https://api.linear.app/graphql"
+BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
 # engine/types.py SCOPES by slot; any other slot is a role
 SCOPES = {"harness": "read,write", "manager": "read,write,app:assignable"}
 ROLE_SCOPES = "read,write,app:assignable,app:mentionable"
@@ -142,16 +143,81 @@ def ask(slot):
     return answer.decode(errors="replace").strip()
 
 
+def settings_for(config, slot):
+    data = tomllib.loads(Path(config).read_text()) if Path(config).exists() else {}
+    linear = data.get("orchestrator", {}).get("linear", {})
+    return linear.get(slot, {}) if slot in SCOPES else linear.get("roles", {}).get(slot, {})
+
+
+def writer(config, slot):
+    selected = settings_for(config, slot).get("renewal", "transport")
+    if selected not in ("transport", "broker"):
+        raise InstallError("renewal must be transport or broker")
+    return selected
+
+
+def broker_token(settings, slot, client_id, service, secret_service, *, now):
+    identity = {
+        "name": slot,
+        "kind": slot if slot in SCOPES else "role",
+        "client_id": client_id,
+        "user_id": settings.get("user_id", ""),
+        "secret_service": secret_service,
+        "token_service": service,
+    }
+    failed = False
+    try:
+        result = process([BROKER, "linear-maintain"], input=json.dumps(identity))
+        reply = (
+            json.loads(result.stdout)
+            if not result.returncode and len(result.stdout) <= 4096
+            else {}
+        )
+        if (
+            not isinstance(reply, dict)
+            or not {"version", "renewed", "expires_at"}
+            <= reply.keys()
+            <= {"version", "renewed", "expires_at", "audit_warning"}
+            or type(reply.get("version")) is not int
+            or reply["version"] != 1
+            or type(reply.get("renewed")) is not bool
+        ):
+            failed = True
+        elif "audit_warning" in reply:
+            print(
+                "install.sh: Linear broker audit persistence failed; the credential result still applies",
+                file=sys.stderr,
+            )
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+        failed = True
+    try:
+        held = json.loads(read_secret(service))
+        token, expires = held["access_token"], datetime.fromisoformat(held["expires_at"])
+        if clean(token) and expires.tzinfo and expires > max(now, datetime.now(UTC)):
+            if failed:
+                print(
+                    "install.sh: Linear broker maintenance failed; using the current usable token",
+                    file=sys.stderr,
+                )
+            return token
+    except (ValueError, TypeError, KeyError):
+        pass
+    raise InstallError(
+        "no usable broker-published token; check enrollment and broker installation, then rerun"
+    )
+
+
 def prepare(config, slot, service, secret_service, output):
     if not all(isinstance(v, str) and NAME.fullmatch(v) for v in (slot, service, secret_service)):
         raise InstallError("invalid app or Keychain service name")
     if service == secret_service:
         raise InstallError("token and client secret must use different Keychain services")
-    data = tomllib.loads(Path(config).read_text()) if Path(config).exists() else {}
-    linear = data.get("orchestrator", {}).get("linear", {})
-    settings = linear.get(slot, {}) if slot in SCOPES else linear.get("roles", {}).get(slot, {})
+    settings = settings_for(config, slot)
+    selected = writer(config, slot)
     client_id = settings.get("client_id")
     if client_id in (None, ""):
+        if selected == "broker":
+            raise InstallError("broker enrollment requires a configured Client ID and user_id")
         client_id = ask(slot)
     if (
         not isinstance(client_id, str)
@@ -163,17 +229,23 @@ def prepare(config, slot, service, secret_service, output):
     configured_id = settings.get("user_id")
     if configured_id and (not isinstance(configured_id, str) or not UUID.fullmatch(configured_id)):
         raise InstallError("invalid configured app user_id")
-    secret = read_secret(secret_service)
-    if not clean(secret):
-        raise InstallError(
-            f"no usable client secret in {secret_service}; fix that item, then rerun"
-        )
     now = datetime.now(UTC)
-    token = held_token(service, now)
-    renewed = token is None
-    if renewed:
-        token, record = request_token(client_id, secret, slot, now)
-        write_token(service, record)
+    if selected == "broker":
+        if not configured_id:
+            raise InstallError("broker enrollment requires a configured user_id")
+        token = broker_token(settings, slot, client_id, service, secret_service, now=now)
+        renewed = False
+    else:
+        secret = read_secret(secret_service)
+        if not clean(secret):
+            raise InstallError(
+                f"no usable client secret in {secret_service}; fix that item, then rerun"
+            )
+        token = held_token(service, now)
+        renewed = token is None
+        if renewed:
+            token, record = request_token(client_id, secret, slot, now)
+            write_token(service, record)
     ident = viewer(token) if renewed or not configured_id else configured_id
     if configured_id and ident != configured_id:
         raise InstallError("configured user_id differs from app viewer id")
@@ -187,10 +259,19 @@ def prepare(config, slot, service, secret_service, output):
         "token_service": service,
         "user_id": ident,
     }
+    if selected == "broker":
+        planned[slot]["renewal"] = selected
     Path(output).write_text(json.dumps(planned))
 
 
 def main(args):
+    if len(args) == 3 and args[0] == "--writer":
+        try:
+            print(writer(args[1], args[2]))
+        except (InstallError, OSError, ValueError, TypeError, AttributeError):
+            print("install.sh: cannot determine Linear renewal writer", file=sys.stderr)
+            return 1
+        return 0
     if len(args) != 5:
         print(
             "usage: install_linear_app.py <config> <slot> <token-service> <secret-service> <plan>",

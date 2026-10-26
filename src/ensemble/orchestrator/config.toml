@@ -119,7 +119,9 @@ agent_label_group = ""
 #   token_service   local, required: Keychain service of its token and expiry, written by the commands; delete
 #                   that item after rotating the client secret
 #   user_id         local, required: the app's Linear user id
+# renewal: transport keeps the current writer; broker requires enrollment (docs/credentials.md).
 [linear.harness]
+renewal = "transport"
 client_id = ""
 secret_service = ""
 token_service = ""
@@ -142,6 +144,7 @@ user_id = ""
 #   user_id         local, required for issue: the app's Linear user id; it matters only for a manager move that
 #                   Linear credits to a botActor, which then counts as other too
 [linear.manager]
+renewal = "transport"
 client_id = ""
 secret_service = ""
 token_service = ""
@@ -193,18 +196,21 @@ canceled = ""
 # Each stage role's OAuth app: four required fields, one table per workflow stage.
 # Store secrets and token records in Keychain; user_id is the app user id from installation.
 [linear.roles.researcher]
+renewal = "transport"
 client_id = ""
 secret_service = ""
 token_service = ""
 user_id = ""
 
 [linear.roles.pm]
+renewal = "transport"
 client_id = ""
 secret_service = ""
 token_service = ""
 user_id = ""
 
 [linear.roles.engineer]
+renewal = "transport"
 client_id = ""
 secret_service = ""
 token_service = ""

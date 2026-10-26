@@ -86,6 +86,7 @@ class LinearApp:
     secret_service: str
     token_service: str
     user_id: str
+    renewal: str = "transport"
 
     @property
     def scopes(self) -> str:

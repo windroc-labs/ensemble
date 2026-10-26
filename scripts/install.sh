@@ -2110,10 +2110,12 @@ if extra := sorted(set(linear) - KNOWN):
 def table_of(table, found):
     if not isinstance(found, dict):
         sys.exit(f"install.sh: config.local.toml: [{table}] must be a table")
-    if extra := sorted(set(found) - {"client_id", "secret_service", "token_service", "user_id"}):
+    if extra := sorted(set(found) - {"client_id", "secret_service", "token_service", "user_id", "renewal"}):
         refuse(table, extra)
     if any(not isinstance(value, str) for value in found.values()):
         sys.exit(f"install.sh: config.local.toml: [{table}] app fields must be strings")
+    if found.get("renewal", "transport") not in ("transport", "broker"):
+        sys.exit(f"install.sh: config.local.toml: [{table}] renewal must be transport or broker")
     return found
 role_tables = linear.get("roles", {})
 if not isinstance(role_tables, dict):
@@ -2172,13 +2174,18 @@ def linear(service, query, variables):
 '
 
 linear_apps() {
-  local list=$1 slot token secret new_secret new_token
+  local list=$1 slot token secret new_secret new_token writer
   step "Linear apps"
   linear_wanted || return 0
   mkdir -p "$state_dir"
   printf '{}\n' >"$state_dir/linear-apps.json"
   while IFS=$'\t' read -r slot token secret; do
     [ -n "$token" ] || continue
+    writer=$(python3 -I "$pkg/scripts/install_linear_app.py" --writer "$config" "$slot") || exit 1
+    if [ "$writer" = broker ]; then
+      python3 -I "$pkg/scripts/install_linear_app.py" "$config" "$slot" "$token" "$secret" "$state_dir/linear-apps.json" || exit 1
+      continue
+    fi
     new_secret=no new_token=no
     if security find-generic-password -s "$secret" </dev/null >/dev/null 2>&1; then
       skip "$secret in the keychain"

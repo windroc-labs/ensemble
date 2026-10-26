@@ -26,6 +26,7 @@ from ensemble.utils import one_line
 URL = "https://api.linear.app/graphql"
 TOKEN_URL = "https://api.linear.app/oauth/token"
 SECURITY = "/usr/bin/security"  # absolute: no PATH entry stands in for the Keychain
+BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
 RENEW_BEFORE = timedelta(days=5)
 ACCOUNT = re.compile(r'^\s*"acct"<blob>="([^"]*)"$', re.M)
 
@@ -184,6 +185,8 @@ def _token(app, timeout):
     if _policy.show and app.token_service not in _shown:
         _shown.add(app.token_service)
         _policy.show(app.name, _status(held, now))
+    if app.renewal == "broker":
+        return _broker_token(app, held, now, timeout)
     if held.token is not None and not held.due(now):
         return held.token
     reason = _failed.get(app.token_service) or (None if _policy.renew else "dry run: no renewal")
@@ -203,6 +206,88 @@ def _token(app, timeout):
         "(rotated: store the new secret), then rerun",
         identity=app.name,
     )
+
+
+def _broker_token(app, held, now, timeout):
+    reason = _failed.get(app.token_service) or "dry run: no renewal"
+    if _policy.renew and app.token_service not in _failed:
+        try:
+            _broker_maintain(app, timeout)
+            reason = None
+        except _RenewalFailed:
+            reason = _failed[app.token_service] = (
+                "broker maintenance failed; check enrollment and broker installation"
+            )
+        try:
+            current = _read(app.token_service, timeout)
+            now = datetime.now(UTC)
+            if current.usable(now):
+                held = current
+        except (OSError, subprocess.SubprocessError):
+            reason = _failed[app.token_service] = "host token read failed"
+        if reason and held.usable(now):
+            _policy.report(app.name, reason)
+    now = datetime.now(UTC)
+    if held.usable(now):
+        return held.token
+    state = "token expired" if held.token is not None else "has no token"
+    raise KeychainError(
+        f"Linear {app.name} app {state} and renewal failed: {reason or 'no usable published token'}; "
+        f"fix: check {app.table}.client_id, broker enrollment and the client secret in "
+        f"Keychain service {app.secret_service}, then rerun",
+        identity=app.name,
+    )
+
+
+def _broker_pairs(pairs):
+    found = dict(pairs)
+    if len(found) != len(pairs):
+        raise _RenewalFailed()
+    return found
+
+
+def _broker_maintain(app, timeout):
+    identity = {
+        key: getattr(app, key)
+        for key in ("name", "kind", "client_id", "user_id", "secret_service", "token_service")
+    }
+    try:
+        result = subprocess.run(
+            [BROKER, "linear-maintain"],
+            input=json.dumps(identity),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        if result.returncode or len(result.stdout) > 4096:
+            raise _RenewalFailed()
+        reply = json.loads(result.stdout, object_pairs_hook=_broker_pairs)
+        if (
+            not isinstance(reply, dict)
+            or not {"version", "renewed", "expires_at"}
+            <= reply.keys()
+            <= {"version", "renewed", "expires_at", "audit_warning"}
+            or type(reply["version"]) is not int
+            or reply["version"] != 1
+            or type(reply["renewed"]) is not bool
+            or not isinstance(reply["expires_at"], str)
+            or not re.fullmatch(
+                r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?Z",
+                reply["expires_at"],
+            )
+            or not datetime.fromisoformat(reply["expires_at"]).tzinfo
+            or reply.get("audit_warning", "audit_write_failed") != "audit_write_failed"
+        ):
+            raise _RenewalFailed()
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError, RecursionError):
+        raise _RenewalFailed() from None
+    if "audit_warning" in reply:
+        _policy.report(
+            app.name,
+            "audit_write_failed: broker audit persistence failed; the credential result still applies",
+        )
 
 
 def _read(service, timeout):

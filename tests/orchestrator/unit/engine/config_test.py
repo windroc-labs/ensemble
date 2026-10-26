@@ -166,12 +166,15 @@ HARNESS = LinearApp("harness", AppKind.HARNESS, "linear.harness", **HARNESS_APP)
 
 LINEAR_DEFAULTS = {
     **dict.fromkeys(("team", "task_label_group", "agent_label_group"), ""),
-    "harness": dict.fromkeys(("client_id", "secret_service", "token_service", "user_id"), ""),
-    "manager": dict.fromkeys(("client_id", "secret_service", "token_service", "user_id"), ""),
+    "harness": {**dict.fromkeys(config.AppKey, ""), "renewal": "transport"},
+    "manager": {**dict.fromkeys(config.AppKey, ""), "renewal": "transport"},
     "states": dict.fromkeys(State, ""),
     "human_members": [],
     **dict.fromkeys(("task_labels", "agent_labels", "project_repos"), {}),
-    "roles": dict.fromkeys(("researcher", "pm", "engineer"), dict.fromkeys(config.AppKey, "")),
+    "roles": dict.fromkeys(
+        ("researcher", "pm", "engineer"),
+        {**dict.fromkeys(config.AppKey, ""), "renewal": "transport"},
+    ),
 }
 
 
@@ -205,6 +208,29 @@ A = "engineer-TASK-12-0b6f2c1e"
 
 
 class ConfigurationLoading(ConfigFile, Case):
+    def test_app_renewal_writer_is_explicit_and_validated(self):
+        for table in ("linear.harness", "linear.manager", "linear.roles.engineer"):
+            with self.subTest(table=table):
+                if table.endswith("harness"):
+                    text = PIPELINE.replace(
+                        HARNESS_LINE, HARNESS_LINE.replace(" }", ', renewal = "broker" }')
+                    )
+                elif table.endswith("manager"):
+                    text = MANAGER_LINE.replace(" }", ', renewal = "broker" }') + PIPELINE
+                else:
+                    text = PIPELINE.replace(f"[{table}]", f'[{table}]\nrenewal = "broker"')
+                found = self.load(text).linear
+                app = (
+                    found.harness
+                    if table.endswith("harness")
+                    else found.manager
+                    if table.endswith("manager")
+                    else found.roles["engineer"]
+                )
+                self.assertEqual(app.renewal, "broker")
+                with self.assertRaisesRegex(config.ConfigError, "renewal"):
+                    self.load(text.replace('renewal = "broker"', 'renewal = "other"'))
+
     def test_role_apps_require_all_four_fields_and_reject_other_keys(self):
         app = {
             "client_id": "client-dummy",

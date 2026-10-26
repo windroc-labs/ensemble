@@ -15,6 +15,74 @@ USER = "00000000-0000-4000-8000-000000000123"
 
 
 class LinearAppInstall(Case):
+    def test_writer_selection_is_read_only_and_invalid_values_fail(self):
+        self.assertEqual(app.writer(str(self.config), "pm"), "transport")
+        with self.config.open("a") as file:
+            file.write('renewal = "bad"\n')
+        with self.assertRaisesRegex(app.InstallError, "renewal"):
+            self.prepare()
+        self.assertEqual(self.requests, [])
+        with mock.patch("sys.stdout"), mock.patch("sys.stderr"):
+            self.assertEqual(app.main(["--writer", str(self.config), "pm"]), 1)
+        self.config.write_text('[orchestrator.linear.roles.pm]\nrenewal = "broker"\n')
+        with mock.patch("sys.stdout") as output:
+            self.assertEqual(app.main(["--writer", str(self.config), "pm"]), 0)
+            self.assertTrue(output.write.called)
+        with self.assertRaisesRegex(app.InstallError, "configured Client ID"):
+            self.prepare()
+        self.config.write_text(
+            '[orchestrator.linear.roles.pm]\nrenewal = "broker"\nclient_id = "client-pm"\n'
+        )
+        with self.assertRaisesRegex(app.InstallError, "configured user_id"):
+            self.prepare()
+
+    def test_broker_failure_uses_only_valid_published_material(self):
+        self.cached()
+        with self.config.open("a") as file:
+            file.write('renewal = "broker"\n')
+        old_process = self.run_process
+
+        def process(args, **kwargs):
+            if args == [app.BROKER, "linear-maintain"]:
+                raise OSError("ROOT-SENTINEL")
+            return old_process(args, **kwargs)
+
+        with mock.patch("subprocess.run", side_effect=process), mock.patch("sys.stderr") as output:
+            self.prepare()
+            self.assertNotIn("ROOT-SENTINEL", str(output.write.call_args_list))
+            self.secrets.pop("token-pm")
+            with self.assertRaisesRegex(app.InstallError, "no usable broker-published token"):
+                self.prepare()
+
+    def test_broker_writer_never_reads_root_or_renews_in_installer(self):
+        self.cached()
+        with self.config.open("a") as file:
+            file.write('renewal = "broker"\n')
+        real_process = self.run_process
+
+        def process(args, **kwargs):
+            if args == [app.BROKER, "linear-maintain"]:
+                self.requests.append((args, kwargs))
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {"version": 1, "renewed": False, "expires_at": "2026-11-26T12:00:00Z"}
+                    ),
+                    stderr="",
+                )
+            return real_process(args, **kwargs)
+
+        with mock.patch("subprocess.run", side_effect=process):
+            self.prepare()
+        self.assertFalse(
+            [
+                args
+                for args, _ in self.requests
+                if "secret-pm" in args or args[0] == "curl" or "-i" in args
+            ]
+        )
+        self.assertEqual(json.loads(self.output.read_text())["pm"]["renewal"], "broker")
+
     def setUp(self):
         self.config = Path(self.home, "config.toml")
         self.config.write_text('[orchestrator.linear.roles.pm]\nclient_id = "client-pm"\n')
