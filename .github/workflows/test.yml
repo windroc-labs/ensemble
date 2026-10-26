@@ -3,6 +3,8 @@ name: CI
 on:
   push:
     branches: [main]
+  merge_group:
+    types: [checks_requested]
   pull_request:
     types: [opened, synchronize, reopened, edited]
 
@@ -194,20 +196,20 @@ jobs:
       - name: Protect shipped source
         run: chmod -R a-w src
       - name: Install pinned coverage
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name != 'push' }}
         run: python3 -m pip install coverage=="$COVERAGE_VERSION"
       - name: Install Docker protocol test dependency
         run: python3 -m pip install jsonschema==4.26.0
       - name: Unit tests
         id: unit
         env:
-          RUN_TESTS_COVERAGE: ${{ github.event_name == 'pull_request' && 'collect' || '' }}
+          RUN_TESTS_COVERAGE: ${{ github.event_name != 'push' && 'collect' || '' }}
           RUN_TESTS_REPORT_DIR: ${{ runner.temp }}/unit
         run: |
           echo "shards=$(( ${{ strategy.job-total }} * 4 ))" >> "$GITHUB_OUTPUT"
           python3 -X faulthandler .github/run_tests.py 'Unit ${{ matrix.job }}' --unit --parallel 4 --shard '${{ matrix.job }}/${{ strategy.job-total }}'
       - name: Preserve unit coverage
-        if: ${{ always() && github.event_name == 'pull_request' }}
+        if: ${{ always() && github.event_name != 'push' }}
         uses: actions/upload-artifact@v7.0.2
         with:
           name: unit-coverage-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.job }}
@@ -226,7 +228,7 @@ jobs:
   coverage:
     name: Coverage
     needs: [changes, unit]
-    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.version == 'false' }}
+    if: ${{ github.event_name != 'push' && needs.changes.outputs.version == 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -256,8 +258,8 @@ jobs:
           python3 -m coverage combine --rcfile=/dev/null --keep --data-file="$RUNNER_TEMP/coverage-data" "${files[@]}"
       - name: Diff coverage of changed src lines
         env:
-          BASE_REF: ${{ github.base_ref }}
-        run: python3 .github/coverage_gate.py "$RUNNER_TEMP/coverage-data" "origin/$BASE_REF"
+          BASE_REF: ${{ github.event.merge_group.base_sha || format('origin/{0}', github.base_ref) }}
+        run: python3 .github/coverage_gate.py "$RUNNER_TEMP/coverage-data" "$BASE_REF"
       - name: Require unchanged checkout
         if: ${{ always() }}
         run: |
@@ -419,10 +421,13 @@ jobs:
 
   ci:
     name: CI
-    needs: [changes, lint, repository, unit, coverage, integration, broker, mini-op]
+    needs: [changes, lint, repository, unit, coverage, integration, mini-op]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: write
     steps:
       - name: Check out
         uses: actions/checkout@v7.0.1
@@ -432,7 +437,13 @@ jobs:
         uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.11"
-      - name: Require every check and test job
+      - name: Require every non-broker job
+        id: gate
         env:
           CI_NEEDS: ${{ toJSON(needs) }}
         run: python3 .github/ci_scope.py --gate
+      - name: Require broker results or confirmed unstarted macOS cancellation
+        if: ${{ always() && steps.gate.outcome == 'success' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 .github/ci_broker.py
