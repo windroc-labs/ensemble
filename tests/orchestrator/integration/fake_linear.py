@@ -107,6 +107,7 @@ MODULES = {
     "issue_edit": issue_edit,
     "issue_label": issue_label,
     "issue_write": issue_write,
+    "issue_archive": issue_archive,
     "issue_relation": issue_relation,
 }
 
