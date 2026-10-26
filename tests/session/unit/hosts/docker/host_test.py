@@ -6,6 +6,7 @@ import contextlib
 import fcntl
 import io
 import json
+import logging
 import os
 import re
 import runpy
@@ -57,7 +58,7 @@ from ensemble.session.hosts.docker.host import (
     DockerTerminal,
 )
 from ensemble.session.hosts.docker.relay import SOCKET
-from ensemble.session.hosts.docker.types import Started
+from ensemble.session.hosts.docker.types import Noticed, Started
 from ensemble.session.hosts.types import CommandView
 from ensemble.session.viewer import display as displays
 from ensemble.utils import Record, parse_time
@@ -187,6 +188,9 @@ class FakeBroker:
         if "refresh" in self.failing:
             raise self.failing["refresh"]
         return SimpleNamespace(github=[], credential_expires_at=self.started.credential_expires_at)
+
+    def notices(self, _container, _manifest, delivered=()):
+        return Noticed([], None)
 
     def close(self, container):
         self.order.append(("close", container))
@@ -1767,6 +1771,56 @@ class PipeTest(Base):
             piped.close()
         self.assertIn("docker session w: github_refresh_failed broker: offline", logs.output[0])
 
+    def logged_to_file(self):
+        path = os.path.join(self.home, "session.log")
+        handler = logging.FileHandler(path)
+        logger = logging.getLogger("session")
+        logger.addHandler(handler)
+        self.addCleanup(handler.close)
+        self.addCleanup(logger.removeHandler, handler)
+        return path
+
+    def test_a_piped_session_logs_and_acks_its_credential_notice(self):
+        log, acked, calls = self.logged_to_file(), threading.Event(), []
+
+        def notices(_container, _manifest, delivered=()):
+            calls.append(tuple(delivered))
+            if delivered:
+                acked.set()
+                return Noticed([], None)
+            return Noticed(
+                [{"key": "ensemble-env/db@1:7d", "text": "ensemble-env/db expires soon"}], None
+            )
+
+        self.broker.notices = notices
+        piped = self.pipe()
+        self.assertTrue(acked.wait(5))
+        piped.close()
+        with open(log) as stream:
+            self.assertIn(
+                "docker session w: credential_notice ensemble-env/db expires soon", stream.read()
+            )
+        self.assertEqual(calls, [(), ("ensemble-env/db@1:7d",)])
+
+    def test_a_piped_notice_failure_logs_a_fixed_marker(self):
+        log, failed = self.logged_to_file(), threading.Event()
+
+        def notices(*_args, **_kwargs):
+            failed.set()
+            raise SessionError("broker: bad response to notices: SENTINEL-headless")
+
+        self.broker.notices = notices
+        piped = self.pipe()
+        self.assertTrue(failed.wait(5))
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and "credential_notice_failed" not in _read(log):
+            time.sleep(0.01)
+        piped.close()
+        with open(log) as stream:
+            text = stream.read()
+        self.assertIn("docker session w: credential_notice_failed transport", text)
+        self.assertNotIn("SENTINEL", text)
+
     def test_stop_kills_the_exec_then_closes_and_a_close_failure_only_warns(self):
         piped = self.pipe()
         self.broker.close = mock.Mock(side_effect=SessionError("broker: boom"))
@@ -3112,3 +3166,8 @@ class AttachTargetTest(Base):
         )
         with self.assertRaisesRegex(SessionError, "^no docker session x$"):
             self.host.attach_target("x")
+
+
+def _read(path):
+    with open(path) as stream:
+        return stream.read()

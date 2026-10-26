@@ -8,6 +8,7 @@ import contextlib
 import fcntl
 import io
 import json
+import logging
 import os
 import signal
 import threading
@@ -20,6 +21,7 @@ from ensemble.session.engine.types import SessionError
 from ensemble.session.hosts.docker import relay, supervisor
 from ensemble.session.hosts.docker.broker import Broker
 from ensemble.session.hosts.docker.supervisor import Supervisor
+from ensemble.session.hosts.docker.types import Noticed
 from ensemble.session.modes import tui_hook
 from tests.session.case import REPO, SRC, Case
 from tests.session.tui_hook_support import state as hook_state
@@ -592,9 +594,15 @@ class Waits:
         return len(self.timeouts) > self.n
 
 
+NO_NOTICES = Noticed([], None)
+
+
 class TokenBroker:
     def __init__(self, *results):
         self.results, self.calls = list(results), []
+
+    def notices(self, _container, _manifest, delivered=()):
+        return NO_NOTICES
 
     def refresh(self, container, manifest):
         self.calls.append((container, manifest))
@@ -605,6 +613,11 @@ class TokenBroker:
 
 
 NOW = 1_792_238_400.0  # 2026-10-17T12:00:00Z
+
+
+def no_notices():
+    response = {"container": f"ensemble-worker_1-{GEN}", "notices": [], "next_check": None}
+    return SimpleNamespace(returncode=0, stdout=json.dumps(response), stderr="")
 
 
 def expiry(seconds, account="acme"):
@@ -772,6 +785,7 @@ class CodexRenewalTest(Base):
         with open(self.github, "w") as stream:
             json.dump([], stream)
         self.supervisor.broker = mock.Mock()
+        self.supervisor.broker.notices.return_value = NO_NOTICES
         self.waits = []
 
     def deadline(self, seconds):
@@ -813,6 +827,8 @@ class CodexRenewalTest(Base):
         deadlines, calls = [NOW + 3600, NOW + 3000], []
 
         def run(argv, **_kwargs):
+            if argv[1] == "notices":
+                return no_notices()
             self.assertEqual(argv[1], "refresh")
             self.assertLess(self.now, min(deadlines))
             calls.append(self.now)
@@ -849,6 +865,8 @@ class CodexRenewalTest(Base):
                 calls = []
 
                 def run(argv, *, calls=calls, code=code, exit_code=exit_code, **_kwargs):
+                    if argv[1] == "notices":
+                        return no_notices()
                     self.assertEqual(argv[1], "refresh")
                     calls.append(self.now)
                     if len(calls) == 1:
@@ -927,7 +945,7 @@ class CodexRenewalTest(Base):
             "cause": "bootstrap: cannot write managed Codex credentials: No space left on device",
         }
         reply = (16, "", json.dumps({"exit_code": 16, "error": error}))
-        self.supervisor.broker = Broker(FakeBroker(reply, reply))
+        self.supervisor.broker = Broker(FakeBroker(noticed([], None), reply, reply))
         self.supervisor.refresh(self.stop(1))
         with open(self.events) as stream:
             lines = stream.read().splitlines()
@@ -1000,3 +1018,149 @@ class CodexRenewalTest(Base):
         self.supervisor.broker.refresh.assert_not_called()
         self.supervisor.broker.close.assert_not_called()
         self.assertEqual(self.waits, [0])
+
+
+def at(seconds):
+    return datetime.fromtimestamp(NOW + seconds, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+NOTICE = {
+    "key": "ensemble-claude/default@1:30d",
+    "text": "ensemble-claude/default expires 2026-11-06 (explicit), in 20 days: run claude"
+    " setup-token, then ensemble-broker login claude --fresh-token; running sessions keep their"
+    " copy until they restart",
+}
+
+
+def noticed(notices, next_check):
+    response = {
+        "container": f"ensemble-worker_1-{GEN}",
+        "notices": notices,
+        "next_check": next_check,
+    }
+    return 0, json.dumps(response), ""
+
+
+def notices_failure(message, code="internal_error", exit_code=70):
+    error = {"command": "notices", "code": code, "message": message, "cleanup": "not_needed"}
+    return exit_code, "", json.dumps({"exit_code": exit_code, "error": error})
+
+
+class NoticeTest(Base):
+    """A session without GitHub or Codex tokens: its tick only checks static secret notices."""
+
+    def setUp(self):
+        super().setUp()
+        self.now, self.waits = NOW, []
+        self.supervisor.clock = lambda: self.now
+
+    def run_ticks(self, *results, ticks):
+        fake = FakeBroker(*results)
+        self.supervisor.broker = Broker(fake)
+
+        def wait(delay):
+            self.waits.append(delay)
+            if len(self.waits) > ticks:
+                return True
+            self.now += delay
+            return False
+
+        self.supervisor.refresh(SimpleNamespace(wait=wait))
+        return [call[1:] for call in fake.calls]
+
+    def event_lines(self):
+        with open(self.supervisor.events) as stream:
+            return stream.read().splitlines()
+
+    def test_first_tick_writes_credential_notice_once(self):
+        calls = self.run_ticks(
+            noticed([NOTICE], at(3600)),
+            noticed([], at(3600)),
+            noticed([], at(7200)),
+            ticks=1,
+        )
+        lines = self.event_lines()
+        self.assertEqual(len(lines), 1)
+        self.assertRegex(
+            lines[0], r"^\d\d:\d\d:\d\d worker_1 credential_notice ensemble-claude/default "
+        )
+        self.assertTrue(lines[0].endswith(NOTICE["text"]))
+        self.assertIn("claude setup-token", lines[0])
+        base = [
+            "notices",
+            "--container",
+            f"ensemble-worker_1-{GEN}",
+            "--manifest",
+            f"{self.state}/{GEN}.json",
+        ]
+        self.assertEqual(calls, [base, [*base, "--delivered", NOTICE["key"]], base])
+        self.assertEqual(self.waits, [3600, 3600])
+
+    def test_event_write_failure_acks_nothing(self):
+        os.remove(self.supervisor.events)
+        os.mkdir(self.supervisor.events)  # every write fails
+        calls = self.run_ticks(noticed([NOTICE], at(60)), noticed([NOTICE], at(60)), ticks=1)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all("--delivered" not in call for call in calls))
+
+    def test_without_events_the_notice_is_logged_and_acked(self):
+        self.supervisor.events = ""
+        with self.assertLogs("session", "WARNING") as logs:
+            calls = self.run_ticks(noticed([NOTICE], None), noticed([], None), ticks=0)
+        self.assertEqual(
+            logs.output,
+            [f"WARNING:session:docker session worker_1: credential_notice {NOTICE['text']}"],
+        )
+        self.assertEqual(calls[1][-2:], ["--delivered", NOTICE["key"]])
+        self.assertEqual(self.waits, [])
+
+    def test_a_failing_check_writes_one_marker_per_streak_and_retries(self):
+        sentinel = "SENTINEL-n0t1ce-failure"
+        output = io.StringIO()
+        handler = logging.StreamHandler(output)
+        logger = logging.getLogger("session")
+        logger.addHandler(handler)
+        self.addCleanup(logger.removeHandler, handler)
+        calls = self.run_ticks(
+            notices_failure(sentinel),
+            notices_failure(sentinel),
+            noticed([], at(3600)),
+            notices_failure(sentinel, "manifest_rejected", 3),
+            ticks=3,
+        )
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(self.waits[:3], [60, 60, 3480])
+        lines = self.event_lines()
+        self.assertEqual(
+            [line.split(" ", 1)[1] for line in lines],
+            [
+                "worker_1 credential_notice_failed internal_error",
+                "worker_1 credential_notice_failed manifest_rejected",
+            ],
+        )
+        for text in ("\n".join(lines), output.getvalue()):
+            self.assertNotIn(sentinel, text)
+
+    def test_a_transport_failure_is_a_fixed_marker(self):
+        self.run_ticks((0, "not json SENTINEL", ""), noticed([], None), ticks=1)
+        lines = self.event_lines()
+        self.assertEqual(
+            [line.split(" ", 1)[1] for line in lines],
+            ["worker_1 credential_notice_failed transport"],
+        )
+
+    def test_a_failed_ack_repeats_the_notice(self):
+        self.run_ticks(
+            noticed([NOTICE], at(60)),
+            notices_failure("ack failed"),
+            noticed([NOTICE], at(3600)),
+            noticed([], at(3600)),
+            ticks=1,
+        )
+        lines = self.event_lines()
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(all(" credential_notice " in line for line in lines))
+
+    def test_no_static_secret_stops_checking(self):
+        calls = self.run_ticks(noticed([], None), ticks=5)
+        self.assertEqual((len(calls), self.waits), (1, []))

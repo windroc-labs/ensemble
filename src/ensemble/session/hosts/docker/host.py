@@ -1266,6 +1266,7 @@ class DockerHost(Host):
                 expired=lambda reason: LOG.warning(
                     "docker session %s: client_auth_expired %s", name, reason
                 ),
+                notice=lambda word, text: LOG.warning("docker session %s: %s %s", name, word, text),
             ),
         )
 
