@@ -889,7 +889,7 @@ class HarnessDelegate(Delegate):
                 self._clear_tmp()
 
     def _start_failure_end(self, error: BaseException) -> Result:
-        """A signal's stop ends as this attempt's start_failure when detach saved one."""
+        """A signal's stop ends as the saved start_failure, if any."""
         ended = stopped(error)
         if not isinstance(error, Stopped):
             return ended
@@ -1032,9 +1032,10 @@ class HarnessDelegate(Delegate):
 
     def _started(self, state: _State) -> None:
         """Tui: waits, outside the mutex, until this run's agent session has its client running;
-        SessionError naming why, its harness and agent session closed, when the harness ends first,
-        a Host fails or its start limit passes. The last two save start_failure first, which the
-        harness then ends with. A same-named session of another sid is not this run's.
+        else SessionError naming why (SessionBusy: its result names its lock held), its harness and
+        agent session closed. A Host failure or the passed start limit is saved as the attempt's
+        start_failure before the close, and the harness then ends with it; a harness that ended
+        first is not. A same-named session of another sid is not this run's.
         """
         if state.plan.spec.mode != Mode.TUI:
             return
@@ -1099,7 +1100,7 @@ class HarnessDelegate(Delegate):
         return f": exit {result.returncode}" + (f": {result.error}" if result.error else "")
 
     def _tail(self, state: _State, agent: Session | None) -> str:
-        """`; last lines: …` of the agent's client: its screen, else its Host row's once exited."""
+        """`; last lines: …` of the agent's client: its screen, else its Host row's."""
         try:
             text = "" if agent is None else agent.screen()
         except SessionError:
