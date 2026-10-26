@@ -116,7 +116,7 @@ echo:
 
 | Login | Terminal | macOS dialog, at most | Click |
 |---|---|---|---|
-| `login claude [<name>] [--fresh-token \| --issued <date> \| --expires <date>]` | the token, hidden, unless stdin is a pipe or file (one line); then the password from the terminal; the login keychain password only when the item's access needs a change | one change-access dialog, after the password; one read dialog, announced on the terminal first | Allow; Always Allow |
+| `login claude [<name>] [--fresh-token \| --issued <date> \| --expires <date>]` | the token, hidden, unless stdin is a pipe or file (one line); the login keychain password only when the item's access needs a change, from the terminal | one change-access dialog, after the password; one read dialog, announced on the terminal first | Allow; Always Allow |
 | `login github ensemble-bot [--key-file <pem> --app-id <ID>]` | the login keychain password, when a step is not yet in place | with `--key-file`, none; else one change-access dialog (Deny / Allow), after the password | Allow |
 | `login codex` | the login keychain password, when a step is not yet in place, before the browser opens | one change-access dialog (Deny / Allow), after the password | Allow |
 | `login opencode <name> [--expires <date>]` | the provider's API key; the login keychain password only when the item's access needs a change | at most one change-access dialog (Deny / Allow), after the password | Allow |
@@ -463,7 +463,7 @@ expiry with where it came from: `explicit` (`--expires`), `derived` (`--issued` 
 |---|---|
 | 30, 7 and 1 days before a known expiry, and at it | a notice naming the reference, the date, its provenance and the login to rerun: printed by the login, shown by `status`, delivered once per session and version |
 | the item is replaced | running sessions holding the old version get a notice to restart; new starts get the new one |
-| a `start` whose Claude token, OpenCode key or environment secret has expired | `login_required` (exit 5) naming the reference, before the lock and any container; never `busy`. An unknown expiry starts |
+| a `start` whose Claude token, OpenCode key or environment secret has expired | `login_required` (exit 5) naming the reference, before the lock and any container; never `busy`. An unknown expiry starts. An environment session whose lock is held still reports `SessionBusy` from the session's preflight first (that ordering is WDRC-168's) |
 
 Running sessions are never stopped. Their tick (the TUI supervisor or the headless harness) asks
 `ensemble-broker notices` at once, then when it says (at most an hour apart), and writes each notice to the session's
