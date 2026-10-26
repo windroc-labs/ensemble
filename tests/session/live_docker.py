@@ -953,11 +953,13 @@ class RoleRun:
                 raise SystemExit(f"the run exited {proc.returncode} before {container} ran")
             time.sleep(POLL)
 
-    def refresh(self, container: str, manifest: str) -> None:
+    def renew(self, container: str, manifest: str) -> None:
         deadline = time.monotonic() + REFRESH_WAIT
         while True:
             try:
-                self.broker.refresh(container, manifest)
+                found = self.broker.maintain(container, manifest, renew=True, root=REPO)
+                if failed := [r for r in found.results if r["error"] is not None]:
+                    raise SessionError(f"broker: {failed[0]['error']['message']}")
                 break
             except SessionError as error:
                 if time.monotonic() > deadline:
@@ -993,7 +995,7 @@ def role(args: Args) -> int:
             session, generation = role_run.generation(before, proc)
             container = f"ensemble-{session}-{generation}"
             role_run.running(container, proc)
-            role_run.refresh(container, os.path.join(state_dir(session), f"{generation}.json"))
+            role_run.renew(container, os.path.join(state_dir(session), f"{generation}.json"))
             try:
                 proc.wait(timeout=args.timeout)
             except subprocess.TimeoutExpired:

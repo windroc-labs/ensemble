@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"ensemble/broker/internal/audit"
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/protocol"
 )
@@ -190,6 +191,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 						}
 					}
 					h.rollback(ctx, c, cleanup)
+					h.dropTokens(m)
 					h.releaseCodex(ctx, c, held, cleanup)
 					h.withdraw(c, m, held, cleanup)
 					result, retErr = StartResult{}, cleanup
@@ -225,6 +227,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 			e = protocol.New(protocol.StartFailed, "Start failed.")
 		}
 		h.rollback(ctx, c, e)
+		h.dropTokens(m)
 		h.releaseCodex(ctx, c, held, e)
 		if e.Code == protocol.Busy && e.Cleanup == protocol.Failed {
 			e.Code, e.Holder = protocol.StartFailed, nil
@@ -448,7 +451,39 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 		}
 		lap("github")
 	}
-	return StartResult{Container: c, Endpoint: h.Endpoint, ImageDigest: info.ID, Clients: clients, GitHub: expiries, CredentialExpiresAt: codexExpiry}, held, nil
+	if err := h.startTokens(ctx, c, m, codexExpiry, expiries); err != nil {
+		return StartResult{}, held, err
+	}
+	delivered := TokenRecord{Expires: map[credential.Kind][]string{credential.GitHub: expiryTimes(expiries)}}
+	if codexExpiry != nil {
+		delivered.Expires[credential.Codex] = []string{*codexExpiry}
+	}
+	return StartResult{Container: c, Endpoint: h.Endpoint, ImageDigest: info.ID, Clients: clients, Deadline: deadlineOf(delivered, heldKinds(m))},
+		held, nil
+}
+
+// startTokens records the expiries a start delivered; on failure it retires the GitHub grant, which the container
+// rollback alone would leave live.
+func (h Host) startTokens(ctx context.Context, c string, m Manifest, codexExpiry *string, github []protocol.Expiry) error {
+	var err error
+	if codexExpiry != nil {
+		err = h.recordTokens(m, credential.Codex, []string{*codexExpiry}, nil)
+	}
+	if err == nil && m.GitHubApp != "" {
+		err = h.recordTokens(m, credential.GitHub, expiryTimes(github), nil)
+	}
+	if err == nil {
+		return nil
+	}
+	e := protocol.New(protocol.StartFailed, tokensFailed(m).Message)
+	if m.GitHubApp != "" {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		if revoked := h.GitHub.Release(rctx, c); revoked != nil {
+			e.Message += " " + injected(revoked, protocol.KeychainFailed, "Revoking the GitHub tokens failed; retry their pending revocation.").Message
+		}
+	}
+	return e
 }
 
 // injected classifies a Credentials or Tokens error: its protocol error, an unreachable daemon, else code.

@@ -1,9 +1,0 @@
-{
-  "argv": [
-    "refresh",
-    "--container",
-    "ensemble-worker_1-0123456789abcdef0123456789abcdef",
-    "--manifest",
-    "/Users/example/.ensemble/docker-state/worker_1/0123456789abcdef0123456789abcdef.json"
-  ]
-}
