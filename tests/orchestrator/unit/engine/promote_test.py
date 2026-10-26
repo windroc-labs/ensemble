@@ -21,7 +21,13 @@ from ensemble.orchestrator.engine.types import IssueError, LinearError
 from ensemble.orchestrator.trackers.linear import client, linear_tracker, ops
 from ensemble.orchestrator.trackers.local.local_tracker import LocalTracker
 from tests.orchestrator.case import Case
-from tests.orchestrator.unit.board_ids import FINISHED, HARNESS_IDENTITY, TEAM, role_id
+from tests.orchestrator.unit.board_ids import (
+    FINISHED,
+    HARNESS_IDENTITY,
+    HARNESS_USER,
+    TEAM,
+    role_id,
+)
 from tests.orchestrator.unit.board_ids import STATES as IDS_BY_KEY
 from tests.orchestrator.unit.board_ids import role as role_table
 from tests.orchestrator.unit.keychain_fixtures import (
@@ -585,7 +591,7 @@ class HandoffPromotion(Base):
 
     def test_session_comments_left_out_of_comments(self):
         run = "Run 0b6f2c1e-6d0a-4c1b-9a51-3f1f6b0e2a7d · running · 2026-09-27T10:00:00+08:00"
-        harness = {"email": "agent@x.com", "name": "Harness", "isMe": True}
+        harness = {"id": HARNESS_USER, "email": None, "name": "Harness"}
         self.fake.add("DR-1")
         self.fake.said("DR-1", 48, user=harness, body=run)
         self.fake.said("DR-1", 47, user=harness, body="Repo check failed: no Repo: line")

@@ -32,6 +32,7 @@ from ensemble.utils import EVENTS_ENV, SHORT, SID_ENV
 from tests.orchestrator.unit import run_fixtures
 from tests.orchestrator.unit.board_ids import (
     ACCOUNTS,
+    HARNESS_USER,
     HEADER,
     STATE_NAMES,
     TEAM,
@@ -85,14 +86,14 @@ IDS = {DR: "p-dr", PD: "p-pd"}
 
 ROLE = ACCOUNTS
 
-# history actor ids as users: the harness (isMe), the user, the manager and the role accounts;
+# history actor ids as users: the harness app, the user, the manager and the role apps;
 # None: Linear automation; BOT: an integration's move, credited to the user
 ACTORS = {
-    AGENT: {"email": "agent@x.com", "isMe": True},
-    USER: {"email": "Me@X.com", "isMe": False},
-    MANAGER: {"email": "manager@x.com", "isMe": False},
-    BOT: {"email": "Me@X.com", "isMe": False},
-    **{role_id(r): {"id": role_id(r), "email": a, "isMe": False} for r, a in ACCOUNTS.items()},
+    AGENT: {"id": HARNESS_USER},
+    USER: {"id": USER},
+    MANAGER: {"id": MANAGER},
+    BOT: {"id": USER},
+    **{role_id(r): {"id": role_id(r)} for r in ACCOUNTS},
 }
 
 

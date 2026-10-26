@@ -53,12 +53,15 @@ from ensemble.orchestrator.trackers.linear import (
     linear_tracker,
     ops,
 )
-from ensemble.orchestrator.trackers.linear.linear_tracker import LinearTracker
+from ensemble.orchestrator.trackers.linear.linear_tracker import LinearTracker, Selves
 from ensemble.utils import one_line
 from tests.orchestrator.case import Case
 from tests.orchestrator.prune_fixtures import NOW, ROLES, TEAM_OBJ
 from tests.orchestrator.unit.board_ids import (
     DUPLICATE,
+    HARNESS_IDENTITY,
+    HARNESS_USER,
+    MANAGER_USER,
     STATES,
     TASK_GROUP,
     TEAM,
@@ -84,11 +87,11 @@ BASE = {
     "Q_ID": "339eb6885dd45c62cfae3c2f1d2bbdcdf6995a2e008079832d405f3019f5adf9",
     "M_UPDATE": "95eaa4a0cccf407f93c0137e32a54edfd12fcc68a35f4c94b2ad407ad59377dd",
     "Q_HANDOFF": "3eada7810bdef455eed9413555b17b5e6934e09fc539b2dce60ecb35c7b5c3f9",
-    "Q_DETAIL": "444ae6ce6852a4319966f4ed0aa28ac76a23e611152d090abb1974c87c8577bf",
+    "Q_DETAIL": "a70db4f841d6b6ddfb78e4d627243fc80cfcaa59ab32b12cf9bc60034e76fb04",
     "Q_CHILD": "4fa2b83d88ba5fc7dd9a33223140644eb8647521ac24c8c19ba044602dbca7a1",
     "M_CREATE": "a67ba5a98ce64a1689f6842fca53f944e76ab2437837d95c7c5ce1940911b430",
     "M_RELATE": "6672d8a892ce59d43f46f25990e6867358dff5cf5e8f79438d77d09bb1e587d5",
-    "Q_READ": "562b027e6fd2e18f092584b85cf6d8b1b30e985a3ef677b6edf76d2ea5edac00",
+    "Q_READ": "482c080905561b61fec1676f566437c3976fee4b3b2b6b82de2defd9078a0607",
     "Q_SEARCH": "bda2e9a29af014b08f88961462a759452ec79f9c0a411933db1ec264595256ca",
     "Q_SEARCH_IDS": "054d541ce9250a347a2c489c69ed5c6e7580f1244c43b79d71c01bad0cc741e0",
     "Q_IDS": "fd0f74d3cdd0d0a34ba9f12805652c7ecedebd4d75e003bece27d4d9912f9b95",
@@ -104,7 +107,7 @@ ROUTER = {
     "Q_RELATIONS": "c271398e2c19c59eb040a3f5988e3ddf0d7787ae9dbd824e63541dd45a4afc53",
     "Q_RECHECK": "053a6338cfc4e79cd74b73c25e75967b994666605be9d04a2b024d89568a8fda",
     # its nodes' actor and botActor
-    "Q_HISTORY": "e07e42dff6752b712c71a4f96777c02097b5373a29f06aaaa86d99a6185b49df",
+    "Q_HISTORY": "1cd65dbc0ac87de669ba7cc20c4f1c60fa62bd5d97f28b94bc9cc31c6d7988ce",
 }
 LISTS = {
     "": "86e506045a173b15e9d5bf0475b1cdf2ed20a2ee23468b2609708b0fbd1cbc1d",
@@ -117,7 +120,8 @@ NEW = ("Q_SNAPSHOTS", "Q_CHANGED", "Q_STATE_NAME")
 # ops queries the adapter delegates to
 OPS = {getattr(ops, n): n for n in ("M_COMMENT", "M_STATE", "M_SUBSCRIBE", "Q_ISSUE_STATE")}
 HUMANS = ("Me@X.com", "you@x.com")
-SELVES = frozenset({role_id("pm")})
+SELVES = Selves(HARNESS_USER, frozenset({role_id("pm")}), MANAGER_USER)
+USER = "00000000-0000-4000-8000-000000000203"  # the user, a member
 RULES = (
     gate,
     inputs,
@@ -265,6 +269,12 @@ class Queries(Case):
         for name, text in texts.items():
             with self.subTest(query=name):
                 self.assertEqual(hashlib.sha256(text.encode()).hexdigest(), digests[name])
+
+    def test_origin_reads_no_is_me_and_moves_no_email(self):
+        for name in ("Q_READ", "Q_DETAIL", "Q_HISTORY"):
+            with self.subTest(query=name):
+                self.assertNotIn("isMe", getattr(linear_tracker, name))
+        self.assertNotIn("email", linear_tracker.Q_HISTORY)
 
     def test_lists_select_no_updated_at(self):
         for fields in ("", linear_tracker.RELATIONS):
@@ -969,7 +979,8 @@ def board_linear():
         agent_label_group="agents",
         agent_labels={"b": "label-b"},
         human_members=("human@x.test",),
-        harness=LinearKey("linear-api-key"),
+        harness=HARNESS_IDENTITY,
+        manager_user_id=MANAGER_USER,
         roles={"pm": SimpleNamespace(user_id=role_id("pm"))},
     )
 
@@ -1014,9 +1025,7 @@ class Connect(Case):
         found, gql = connected(Q_USER=users(role_id("pm")), Q_UPSTREAM={"issue": None})
         found.description("TASK-1")
         self.assertEqual(gql.names()[-1], "Q_UPSTREAM")
-        self.assertEqual(
-            [v.get("identity") for _, v in gql.calls], [LinearKey("linear-api-key")] * 3
-        )
+        self.assertEqual([v.get("identity") for _, v in gql.calls], [HARNESS_IDENTITY] * 3)
 
 
 class OfTeam(Case):
@@ -1032,14 +1041,15 @@ class OfTeam(Case):
         linear = SimpleNamespace(
             states=STATES,
             team=TEAM,
-            harness=LinearKey("linear-api-key"),
+            harness=HARNESS_IDENTITY,
+            manager_user_id=MANAGER_USER,
             roles={"pm": SimpleNamespace(user_id=role_id("pm"))},
         )
         gql = Gql(Q_UPSTREAM={"issue": None})
         found = LinearTracker.reader(gql, linear)
         self.assertEqual((found.state_ids, found.team_id, found.selves), (STATES, TEAM, SELVES))
         found.description("TASK-1")
-        self.assertEqual([v.get("identity") for _, v in gql.calls], [LinearKey("linear-api-key")])
+        self.assertEqual([v.get("identity") for _, v in gql.calls], [HARNESS_IDENTITY])
 
     def test_classifying_reads_need_selves(self):
         with self.assertRaisesRegex(TypeError, "LinearTracker needs selves"):
@@ -1246,10 +1256,10 @@ class Ready(Case):
 
 
 ACTORS = {
-    "harness": {"email": "h@x.test", "isMe": True},
-    "pm": {"id": role_id("pm"), "email": "PM@agents.test", "isMe": False},
-    "manager": {"email": "manager@x.test", "isMe": False},
-    "human": {"email": "me@x.com", "isMe": False},
+    "harness": {"id": HARNESS_USER},
+    "pm": {"id": role_id("pm")},
+    "manager": {"id": MANAGER_USER},
+    "human": {"id": USER},
 }
 
 
@@ -1269,9 +1279,9 @@ def history(*moves):
 
 
 class MovedAt(Case):
-    def tracker(self, *replies):
+    def tracker(self, *replies, selves=SELVES):
         gql = Gql(Q_HISTORY=list(replies))
-        return LinearTracker(gql, states=TEAM_OBJ.states, selves=SELVES)
+        return LinearTracker(gql, states=TEAM_OBJ.states, selves=selves)
 
     def test_cached_per_key(self):
         found = self.tracker(history((2, "todo", "pm")), history((5, "todo", "pm")))
@@ -1293,7 +1303,8 @@ class MovedAt(Case):
             ("role account", "pm", "self"),
             ("automation", None, "self"),
             ("integration credited to a user", ("bot", "human"), "self"),
-            ("manager", "manager", "other"),
+            ("manager app", "manager", "other"),
+            ("manager app, with a botActor", ("bot", "manager"), "other"),
             ("user", "human", "other"),
         ):
             with self.subTest(name):
@@ -1301,6 +1312,17 @@ class MovedAt(Case):
                 self.assertEqual(found.moved_at("id-TASK-1", IssueState.READY, by=want), ago(1))
                 other = "other" if want == "self" else "self"
                 self.assertIsNone(found.moved_at("id-TASK-1", IssueState.READY, by=other))
+
+    def test_unset_manager_matches_no_move(self):
+        unset = replace(SELVES, manager=None)
+        for name, actor, want in (
+            ("automation", None, "self"),
+            ("integration credited to a user", ("bot", "human"), "self"),
+            ("manager app", "manager", "other"),
+        ):
+            with self.subTest(name):
+                found = self.tracker(history((1, "todo", actor)), selves=unset)
+                self.assertEqual(found.moved_at("id-TASK-1", IssueState.READY, by=want), ago(1))
 
     def test_moved_at_by_none_any_move(self):
         found = self.tracker(history((1, "todo", None), (3, "todo", "human")))
@@ -1572,30 +1594,27 @@ class ApprovedList(Case):
 
 class DetailRead(Case):
     def test_detail_origin_self_other_and_userless_dropped(self):
-        """self: the harness (isMe) or a role account; other: anyone else, human_members or not;
-        a comment with no user (an integration's) is not returned."""
+        """self: the harness or a role app, by user id; other: anyone else, the manager app and one
+        isMe marks included; a comment with no user (an integration's) is not returned."""
         found = {
             "state": {"id": STATES["handoff"]},
             "history": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}},
             "comments": {
                 "nodes": [
-                    {
-                        "body": "harness",
-                        "createdAt": "c1",
-                        "user": node(email="h@x", name="H", isMe=True),
-                    },
-                    {
-                        "body": "role",
-                        "createdAt": "c2",
-                        "user": node(id=role_id("pm"), email="PM@agents.test", name="PM"),
-                    },
+                    {"body": "harness", "createdAt": "c1", "user": node(id=HARNESS_USER, name="H")},
+                    {"body": "role", "createdAt": "c2", "user": node(id=role_id("pm"), name="PM")},
                     {
                         "body": "manager",
                         "createdAt": "c3",
-                        "user": node(email="mgr@x.com", name="Mgr"),
+                        "user": node(id=MANAGER_USER, name="Mgr"),
                     },
-                    {"body": "user", "createdAt": "c4", "user": node(email="me@x.com", name="Me")},
+                    {"body": "user", "createdAt": "c4", "user": node(id=USER, name="Me")},
                     {"body": "GitHub", "createdAt": "c5", "user": None},
+                    {
+                        "body": "isMe",
+                        "createdAt": "c6",
+                        "user": node(id=USER, name="Me", isMe=True),
+                    },
                 ]
             },
             "relations": {"nodes": []},
@@ -1604,7 +1623,13 @@ class DetailRead(Case):
         got = tracker(Gql(Q_DETAIL={"issue": found})).detail("id-DR-1")
         self.assertEqual(
             [(c.body, c.origin) for c in got.comments],
-            [("harness", "self"), ("role", "self"), ("manager", "other"), ("user", "other")],
+            [
+                ("harness", "self"),
+                ("role", "self"),
+                ("manager", "other"),
+                ("user", "other"),
+                ("isMe", "other"),
+            ],
         )
 
     def test_states_moves_comments_related(self):
@@ -1638,24 +1663,18 @@ class DetailRead(Case):
             },
             "comments": {
                 "nodes": [
-                    {
-                        "body": "build X",
-                        "createdAt": "c1",
-                        "user": node(email="me@x.COM", name="Me"),
-                    },
-                    {"body": "hi", "createdAt": "c2", "user": node(email="bot@x.com", name="Bot")},
+                    {"body": "build X", "createdAt": "c1", "user": node(id=USER, name="Me")},
+                    {"body": "hi", "createdAt": "c2", "user": node(id="u-bot", name="Bot")},
                     {"body": "synced", "createdAt": "c3", "user": None},
-                    {
-                        "body": run,
-                        "createdAt": "c4",
-                        "user": node(email="h@x.com", name="H", isMe=True),
-                    },
-                    {"body": "no email", "createdAt": "c5", "user": node(email=None, name="N")},
+                    {"body": run, "createdAt": "c4", "user": node(id=HARNESS_USER, name="H")},
+                    {"body": "no email", "createdAt": "c5", "user": node(id="u-n", name="N")},
                     {
                         "body": "as the role",
                         "createdAt": "c6",
-                        "user": node(id=role_id("pm"), email="PM@agents.test", name="PM"),
+                        "user": node(id=role_id("pm"), name="PM"),
                     },
+                    {"body": run, "createdAt": "c7", "user": node(id=role_id("pm"), name="PM")},
+                    {"body": run, "createdAt": "c8", "user": node(id=USER, name="Me", isMe=True)},
                 ]
             },
             "relations": {"nodes": [{"relatedIssue": {"id": "id-A"}}]},
@@ -1680,6 +1699,8 @@ class DetailRead(Case):
                     Comment("c4", run, "H", "self", run=True),
                     Comment("c5", "no email", "N", "other", run=False),
                     Comment("c6", "as the role", "PM", "self", run=False),
+                    Comment("c7", run, "PM", "self", run=False),
+                    Comment("c8", run, "Me", "other", run=False),
                 ),
                 frozenset({"id-A", "id-B"}),
             ),
@@ -1804,22 +1825,17 @@ def run_issue(**over):
                 {
                     "body": "as the role",
                     "createdAt": "2026-09-02T12:00:00.000Z",
-                    "user": {
-                        "id": role_id("pm"),
-                        "email": "PM@agents.test",
-                        "name": "PM",
-                        "isMe": False,
-                    },
+                    "user": {"id": role_id("pm"), "email": "PM@agents.test", "name": "PM"},
                 },
                 {
                     "body": f"Run {SID} · started",
                     "createdAt": "2026-09-02T00:00:00.000Z",
-                    "user": {"email": "h@x.com", "name": "H", "isMe": True},
+                    "user": {"id": HARNESS_USER, "email": None, "name": "H"},
                 },
                 {
                     "body": "first",
                     "createdAt": "2026-09-01T12:00:00.000Z",
-                    "user": {"email": "ann@x.com", "name": "Ann", "isMe": False},
+                    "user": {"id": USER, "email": "ann@x.com", "name": "Ann"},
                 },
             ]
         },
@@ -1851,6 +1867,31 @@ class RunIssue(Case):
         notes = LinearTracker(Gql(Q_READ=run_issue()), selves=SELVES).issue("TASK-7").notes
         self.assertEqual(
             [(n.body, n.origin) for n in notes], [("first", "other"), ("as the role", "self")]
+        )
+
+    def test_manager_comment_is_a_note_and_others_runs_too(self):
+        comments = run_issue()["issue"]["comments"]["nodes"] + [
+            {
+                "body": "do Y",
+                "createdAt": "2026-09-04T00:00:00.000Z",
+                "user": {"id": MANAGER_USER, "email": None, "name": "Manager"},
+            },
+            {
+                "body": f"Run {SID} · started",
+                "createdAt": "2026-09-05T00:00:00.000Z",
+                "user": {"id": role_id("pm"), "email": None, "name": "PM"},
+            },
+        ]
+        reply = run_issue(comments={"nodes": comments})
+        notes = LinearTracker(Gql(Q_READ=reply), selves=SELVES).issue("TASK-7").notes
+        self.assertEqual(
+            [(n.body, n.origin) for n in notes],
+            [
+                ("first", "other"),
+                ("as the role", "self"),
+                ("do Y", "other"),
+                (f"Run {SID} · started", "self"),
+            ],
         )
 
     def test_one_read_by_identifier_parsed(self):

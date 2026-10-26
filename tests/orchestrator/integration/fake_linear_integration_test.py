@@ -137,7 +137,7 @@ class GraphQLProjection(ServerCase):
         self.assertIn("fake: linear.Q_ISSUE_STATE has no field color", str(cm.exception))
         self.assertEqual(self.log(), [("linear.Q_ISSUE_STATE", HARNESS_EMAIL, "error")])
 
-    def test_is_me_follows_the_key(self):
+    def test_comment_authors_by_id_and_is_me_follows_the_key(self):
         mine = {
             HARNESS: self.fake.comment("TASK-7", self.harness, f"Run {SID} · running"),
             ENGINEER: self.fake.comment("TASK-7", self.engineer, f"Run {SID} · not a session"),
@@ -147,10 +147,10 @@ class GraphQLProjection(ServerCase):
             with self.subTest(service):
                 nodes = gql(linear_tracker.Q_READ, i="TASK-7")["issue"]["comments"]["nodes"]
                 self.assertEqual(
-                    {n["body"]: (n["user"] or {}).get("isMe") for n in nodes},
+                    {n["body"]: (n["user"] or {}).get("id") for n in nodes},
                     {
-                        f"Run {SID} · running": service == HARNESS,
-                        f"Run {SID} · not a session": service == ENGINEER,
+                        f"Run {SID} · running": self.harness,
+                        f"Run {SID} · not a session": self.engineer,
                         "From an integration": None,
                     },
                 )
@@ -568,7 +568,7 @@ class GraphQLProjection(ServerCase):
                 {
                     "createdAt": done,
                     "toStateId": STATES["done"],
-                    "actor": {"id": self.harness, "email": HARNESS_EMAIL, "isMe": True},
+                    "actor": {"id": self.harness},
                     "botActor": None,
                 }
             ],
@@ -825,7 +825,9 @@ class GraphQLQueries(ServerCase):
             self.gql(linear_tracker.Q_ID, i="TASK-7"),
             {"issue": {"id": task["id"], "team": {"id": TEAM}}},
         )
-        read = linear_tracker.LinearTracker(self.gql, selves=frozenset()).issue("TASK-7")
+        read = linear_tracker.LinearTracker(
+            self.gql, selves=linear_tracker.Selves(self.harness, frozenset())
+        ).issue("TASK-7")
         self.assertEqual(
             (read.title, read.home, read.linked),
             (
@@ -899,12 +901,7 @@ class GraphQLQueries(ServerCase):
                         {
                             "body": "Build it.",
                             "createdAt": said,
-                            "user": {
-                                "id": self.human,
-                                "email": "Me@X.com",
-                                "name": "Me",
-                                "isMe": False,
-                            },
+                            "user": {"id": self.human, "email": "Me@X.com", "name": "Me"},
                         }
                     ]
                 },

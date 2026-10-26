@@ -4,6 +4,7 @@ attachments are a run's."""
 
 import functools
 import re
+from dataclasses import dataclass
 from typing import TypeVar
 
 from ensemble.orchestrator.engine import config
@@ -40,6 +41,7 @@ from ensemble.orchestrator.engine.types import (
     IssueError,
     LinearApp,
     LinearError,
+    LinearSettings,
     State,
     TrackerKind,
 )
@@ -114,7 +116,7 @@ Q_DETAIL = (
   """
     + HISTORY
     + """
-  comments(first: 250) { nodes { body createdAt user { id email name isMe } } }
+  comments(first: 250) { nodes { body createdAt user { id email name } } }
   relations(first: 250) { nodes { relatedIssue { id } } }
   inverseRelations(first: 250) { nodes { issue { id } } } } }"""
 )
@@ -144,7 +146,7 @@ Q_RECHECK = (
 Q_HISTORY = (
     "query($i: String!, $after: String) { issue(id: $i) { "
     "history(first: 250, after: $after, orderBy: createdAt) { "
-    "nodes { createdAt toStateId actor { id email isMe } botActor { type } } "
+    "nodes { createdAt toStateId actor { id } botActor { type } } "
     "pageInfo { hasNextPage endCursor } } } }"
 )
 _NODES = (
@@ -172,7 +174,7 @@ GROUP_BY_TYPE = {
 }
 Q_READ = """query($i: String!) { issue(id: $i) { id identifier url title description createdAt
   project { id }
-  comments(first: 250) { nodes { body createdAt user { id email name isMe } } }
+  comments(first: 250) { nodes { body createdAt user { id email name } } }
   attachments(first: 50) { nodes { url } }
   labels(first: 50) { nodes { id } }
   relations(first: 50) { nodes { relatedIssue { identifier title state { name } } } }
@@ -223,14 +225,6 @@ def is_record(attachment):
     return attachment["url"].startswith(URL)
 
 
-def is_comment(comment):
-    # isMe means the harness account because callers query with its token
-    return (
-        bool((comment["user"] or {}).get("isMe"))
-        and re.match(f"Run {UUID_RE.pattern} · ", comment["body"]) is not None
-    )
-
-
 def finished_at(issue, finished):
     """The latest of issue's move into finished and its canceledAt and completedAt (the history
     read can lack a move into Duplicate that canceledAt holds); None: unknown."""
@@ -244,27 +238,45 @@ def _quiet(*_, **__):
     pass
 
 
-def _selves(roles):
-    return frozenset(r.user_id for r in roles.values())
+@dataclass(frozen=True)
+class Selves:
+    """The app user ids origin is decided by: self is the harness or a role app, or Linear
+    automation's move (no actor, or a botActor); manager (None: unset) is other even with a
+    botActor."""
 
+    harness: str
+    roles: frozenset[str]
+    manager: str | None = None
 
-def _origin(user, selves) -> Origin:
-    return "self" if user.get("isMe") or user.get("id") in selves else "other"
+    @classmethod
+    def of(cls, linear: LinearSettings) -> "Selves":
+        roles = frozenset(r.user_id for r in linear.roles.values())
+        return cls(linear.harness.user_id, roles, linear.manager_user_id or None)
 
+    def origin(self, user) -> Origin:
+        uid = user.get("id")
+        return "self" if uid == self.harness or uid in self.roles else "other"
 
-def _move_origin(node, selves) -> Origin:
-    """Linear automation's (no actor, or a bot) is self."""
-    if node["botActor"] or not node["actor"]:
-        return "self"
-    return _origin(node["actor"], selves)
+    def move_origin(self, node) -> Origin:
+        actor = node["actor"]
+        if self.manager is not None and actor and actor.get("id") == self.manager:
+            return "other"
+        if node["botActor"] or not actor:
+            return "self"
+        return self.origin(actor)
+
+    def is_run(self, comment) -> bool:
+        """The harness app's session comment."""
+        return (comment["user"] or {}).get("id") == self.harness and re.match(
+            f"Run {UUID_RE.pattern} · ", comment["body"]
+        ) is not None
 
 
 class LinearTracker(Tracker):
     """states: {State key: state id}; team_id; finished: ops.Team.finished; roles: {user id: role};
-    humans: human_members emails, subscribed on notify; selves: the role apps' user ids;
+    humans: human_members emails, subscribed on notify; selves: Selves, who counts as self;
     say: caller's logger; missing method dependencies raise TypeError. identity and timeout bind
     gql; None leaves it as given. Comment refs are client id parts; home is a project.
-    Origin self: harness (isMe), configured role app ids or automation; other: other users.
     Userless comments are omitted. task_group, agent_group: label groups; label_tasks,
     label_clients: {label id: task or client}, which recheck's picks read."""
 
@@ -331,7 +343,7 @@ class LinearTracker(Tracker):
             finished=found.finished,
             roles=ops.role_ids(linear.roles),
             humans=linear.human_members,
-            selves=_selves(linear.roles),
+            selves=Selves.of(linear),
             say=say,
             task_group=linear.task_label_group,
             label_tasks={i: task for task, i in linear.task_labels.items()},
@@ -349,7 +361,7 @@ class LinearTracker(Tracker):
             finished=team.finished,
             roles=roles,
             humans=linear.human_members,
-            selves=_selves(linear.roles),
+            selves=Selves.of(linear),
         )
 
     @classmethod
@@ -359,7 +371,7 @@ class LinearTracker(Tracker):
             gql,
             states=linear.states,
             team_id=linear.team,
-            selves=_selves(linear.roles),
+            selves=Selves.of(linear),
             identity=linear.harness,
         )
 
@@ -440,7 +452,7 @@ class LinearTracker(Tracker):
         if key not in self.hist:
             self.hist[key] = self.gql(Q_HISTORY, i=key)["issue"]["history"]["nodes"]
         moved = {_need("states", self.state_ids)[LISTED[state]]}
-        keep = None if by is None else (lambda n: _move_origin(n, selves) == by)
+        keep = None if by is None else (lambda n: selves.move_origin(n) == by)
         return last_move(self.hist[key], moved, keep)
 
     def read(self, ident):
@@ -511,10 +523,10 @@ class LinearTracker(Tracker):
                     c["createdAt"],
                     c["user"].get("email"),
                     c["user"].get("name"),
-                    _origin(c["user"], selves),
+                    selves.origin(c["user"]),
                 )
                 for c in node["comments"]["nodes"]
-                if c["user"] and not is_comment(c)
+                if c["user"] and not selves.is_run(c)
             ),
             key=lambda n: parse_time(n.at),
         )
@@ -691,8 +703,8 @@ class LinearTracker(Tracker):
                     c["createdAt"],
                     c["body"],
                     c["user"]["name"],
-                    _origin(c["user"], selves),
-                    run=is_comment(c),
+                    selves.origin(c["user"]),
+                    run=selves.is_run(c),
                 )
                 for c in issue["comments"]["nodes"]
                 if c["user"]

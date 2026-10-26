@@ -40,7 +40,7 @@ URL = f"https://linear.app/t/issue/{ID}"
 USER_NOTE = {
     "body": "Use SQLite.",
     "createdAt": "2026-09-02T00:00:00.000Z",
-    "user": {"email": "ME@x.com", "name": "Me", "isMe": False},
+    "user": {"id": "u-me", "email": "ME@x.com", "name": "Me"},
 }
 
 CORE_LOCAL = """[delegate.roles.researcher.output]
