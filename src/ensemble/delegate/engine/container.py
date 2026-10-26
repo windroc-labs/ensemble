@@ -5,12 +5,11 @@ import json
 import os
 from collections.abc import Mapping
 
+from ensemble.delegate.engine.config import DOCKER_HOST
 from ensemble.delegate.engine.types import ConfigError
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import Host
 from ensemble.utils import GUARD, GitError, Invalid, Repo, Runner, origin, run_git, sh
-
-DOCKER_HOST = "ensemble.session.hosts.docker.host:DockerHost"
 
 
 def on_docker(settings: Mapping, host: str | None) -> bool:

@@ -156,6 +156,33 @@ type = "pull-request"
 tier = 3
 effort = "low"
 
+# Environments (docs/docker-host.md › Environment config): the container a role run's agent starts in, on a Docker-kind
+# Host. Only this file and config.local.toml set them: a caller's overlay (the orchestrator's among them) holding
+# environment, environments or roles.<role>.environment is refused, and nothing in a run's input selects one.
+# A run on Host <host> resolves, each step replacing the keys it sets (a list whole):
+#   [environment.<host>]  the Host's default; only a Docker-kind Host has one, and it must set image and gateway. A Host
+#                         without one runs a role selecting or overriding an environment as a configuration error
+#   [environments.<name>] a named environment: only the keys that differ from the default; <name> as lock below
+#   [roles.<role>.environment]  local: name (a named environment) and keys overriding it, or the default without name
+# A result equal to this file's default (config.local.toml aside) passes no environment: the run starts as before
+# environments. Keys (a table refuses any other):
+#   image     a local base image's tag or ID, or "@worker": ensemble's worker base (~/.ensemble/docker/worker)
+#   gateway   the egress proxy's caller network the container joins (its label name, docs/docker-host.md › Egress proxy)
+#   plugins   in-image plugin names or pinned sources, added to [hosts.docker] plugins; [] → none
+#   secrets   [[…secrets]] tables of item (an ensemble-env/<name> keychain item) and file (its name under
+#             /run/ensemble/secrets/env/); references only, never a value; [] → none
+#   lock      a lock name ([a-z0-9][a-z0-9_.-]{0,62}): one running container per name; a locked run's session closes
+#             when the run ends; unset → none
+#   prefetch  true: clone the input's one Reference `Repo:` at its optional `Ref:` line into the new workspace
+[environment.docker]
+image = "@worker"
+gateway = "workers"
+plugins = []
+secrets = []
+prefetch = false
+
+[environments]
+
 # [delegates]
 #   harness_host  the [hosts.<name>] (src/ensemble/session/config.toml) the harness runs on; "" → the agent's Host.
 #                 An agent on the Docker Host needs a harness on another one, e.g. "tmux"

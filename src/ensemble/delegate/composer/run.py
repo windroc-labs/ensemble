@@ -47,6 +47,7 @@ RUN_KEYS = frozenset(
 )
 OVERLAY_KEYS = RUN_KEYS | {"gate"}
 ACCOUNTS_KEY = "accounts"
+ENVIRONMENT_KEY = "environment"  # a config role table's; engine/config.py checks it
 OUTPUT_KEYS = frozenset({"type", "repo", "branch", "dir", "host"})
 OLD_KEYS = frozenset({"default_task", "tasks"})
 NAMES = {"workdir": "<Workdir>", "team": "<team>", "role_team": "<role team>"}
@@ -246,7 +247,7 @@ def _check(cfg: Mapping) -> None:
     _check_output(cfg, "output", str)
     _accounts(cfg, "")
     for r, table in cfg.get("roles", {}).items():
-        _check_role(table, r, "", str)
+        _check_role(table, r, "", str, RUN_KEYS | {ENVIRONMENT_KEY})
 
 
 def _check_overlay(overlay: Mapping, roles: set[str], where: str) -> None:
