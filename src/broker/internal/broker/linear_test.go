@@ -29,8 +29,11 @@ func linearApp(name string) LinearIdentity {
 type linearKeysFake struct {
 	mu sync.Mutex
 	fakeApps
-	items map[string][]byte
-	fail  string
+	items        map[string][]byte
+	fail         string
+	failWriteKey string
+	destructive  bool // models the existing native PutSecret's delete-before-add failure
+	untrusted    map[string]bool
 }
 
 func (k *linearKeysFake) Secret(s, a string) ([]byte, error) {
@@ -48,6 +51,12 @@ func (k *linearKeysFake) Secret(s, a string) ([]byte, error) {
 func (k *linearKeysFake) PutSecret(s, a string, v []byte) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	if k.failWriteKey == s+"/"+a {
+		if k.destructive {
+			delete(k.items, s+"/"+a)
+		}
+		return errors.New("ROOT-SENTINEL")
+	}
 	if k.fail == s {
 		return errors.New("ROOT-SENTINEL")
 	}
@@ -64,7 +73,26 @@ func (k *linearKeysFake) AppAccount(s string) (string, error) { return s, nil }
 func (k *linearKeysFake) AppAccess(s, a string) (AppAccess, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	if s == linearService || s == linearGrantsService {
+		if _, ok := k.items[s+"/"+a]; !ok {
+			return AppAccess{}, ErrNotFound
+		}
+		if k.untrusted[s+"/"+a] {
+			return *added(), nil
+		}
+		return brokerOnly(), nil
+	}
 	return k.fakeApps.AppAccess(s, a)
+}
+
+func (k *linearKeysFake) UpdateSecret(s, a string, v []byte) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.fail == s || k.failWriteKey == s+"/"+a {
+		return errors.New("ROOT-SENTINEL")
+	}
+	k.items[s+"/"+a] = bytes.Clone(v)
+	return nil
 }
 
 type linearHostFake struct {
@@ -151,7 +179,7 @@ func TestLinearIdentityInput(t *testing.T) {
 }
 
 func TestLinearHostRenewalAndBoundedGrant(t *testing.T) {
-	for _, kind := range []string{"harness", "manager", "role"} {
+	for kind, expectedScope := range map[string]string{"harness": "read,write", "manager": "read,write,app:assignable", "role": "read,write,app:assignable,app:mentionable"} {
 		t.Run(kind, func(t *testing.T) {
 			l, k, h, calls := linearRig(t)
 			a := linearApp("verifier")
@@ -172,7 +200,7 @@ func TestLinearHostRenewalAndBoundedGrant(t *testing.T) {
 				t.Fatalf("requests %d", len(*calls))
 			}
 			for _, form := range *calls {
-				if form.Get("scope") != a.scopes() || form.Get("client_secret") != "ROOT-SENTINEL" || form.Get("client_id") != a.ClientID {
+				if form.Get("scope") != expectedScope || form.Get("client_secret") != "ROOT-SENTINEL" || form.Get("client_id") != a.ClientID {
 					t.Fatal("wrong identity/scope")
 				}
 			}
@@ -204,6 +232,243 @@ func TestLinearReconstructionRepairsPublicationWithoutRenewal(t *testing.T) {
 	rebuilt.keys, rebuilt.host, rebuilt.http, rebuilt.now = k, h, l.http, l.now
 	if got, err := rebuilt.Maintain(context.Background(), a); err != nil || got.Renewed || len(*calls) != 1 {
 		t.Fatalf("repair %+v %v, requests %d", got, err, len(*calls))
+	}
+	var published linearAccess
+	if json.Unmarshal(h.value, &published) != nil || published.AccessToken != "TOKEN-1" || published.ExpiresAt != "2026-11-25T12:00:00Z" {
+		t.Fatalf("unrepaired publication %+v", published)
+	}
+}
+
+func TestLinearLegacyExpiryIsCanonical(t *testing.T) {
+	l, k, h, calls := linearRig(t)
+	a := linearApp("harness")
+	enrollLinear(t, l, k, a)
+	h.value = []byte(`{"access_token":"OLD","expires_at":"2026-11-25T12:00:00+00:00"}`)
+	got, err := l.Maintain(context.Background(), a)
+	if err != nil || got.ExpiresAt != "2026-11-25T12:00:00Z" || got.Renewed || len(*calls) != 0 {
+		t.Fatalf("legacy reply %+v %v", got, err)
+	}
+}
+
+func TestLinearRegistryUpdateFailureKeepsExistingReservations(t *testing.T) {
+	l, k, _, _ := linearRig(t)
+	a := linearApp("harness")
+	enrollLinear(t, l, k, a)
+	b := linearApp("verifier")
+	b.UserID = "00000000-0000-4000-8000-000000000002"
+	k.failWriteKey = linearService + "/registry"
+	k.destructive = true
+	if err := l.Enroll(b); err == nil {
+		t.Fatal("failed registry update accepted")
+	}
+	k.failWriteKey = ""
+	var registry []LinearIdentity
+	if err := l.read("registry", &registry); err != nil || len(registry) != 1 || registry[0] != a {
+		t.Fatalf("lost old reservation: %v %+v", err, registry)
+	}
+	rebuilt := NewLinear(t.TempDir(), nil)
+	rebuilt.keys = k
+	alias := a
+	alias.Name = "alias"
+	alias.TokenService = "token-alias"
+	if err := rebuilt.Enroll(alias); err == nil {
+		t.Fatal("same identity received two account locks")
+	}
+}
+
+func TestLinearRejectsPlantedMetadataAndUnregisteredBinding(t *testing.T) {
+	for _, attack := range []string{"account trust", "registry trust", "missing registry", "binding"} {
+		t.Run(attack, func(t *testing.T) {
+			l, k, h, calls := linearRig(t)
+			a := linearApp("harness")
+			enrollLinear(t, l, k, a)
+			k.untrusted = map[string]bool{}
+			switch attack {
+			case "account trust":
+				k.untrusted[linearService+"/app/"+a.TokenService] = true
+			case "registry trust":
+				k.untrusted[linearService+"/registry"] = true
+			case "missing registry":
+				k.DeleteSecret(linearService, "registry")
+			case "binding":
+				alias := a
+				alias.Name = "verifier"
+				alias.Kind = "role"
+				alias.TokenService = "token-forged"
+				value, _ := json.Marshal(linearAccount{Version: 1, Identity: alias, RootAccount: a.SecretService, TokenAccount: alias.TokenService, Active: true})
+				k.PutSecret(linearService, "app/"+alias.TokenService, value)
+				a = alias
+			}
+			if _, err := l.Maintain(context.Background(), a); err == nil || len(*calls) != 0 || h.writes != 0 {
+				t.Fatal("planted state authorized root use or publication")
+			}
+		})
+	}
+}
+
+func TestLinearPendingEnrollmentReconstruction(t *testing.T) {
+	l, k, h, calls := linearRig(t)
+	a := linearApp("verifier")
+	k.PutSecret(a.SecretService, a.SecretService, []byte("ROOT-SENTINEL"))
+	k.access = added()
+	k.frozen = true
+	l.password = func() ([]byte, error) { return []byte(keychainPass), nil }
+	if err := l.Enroll(a); err == nil {
+		t.Fatal("failed restriction accepted")
+	}
+	if _, err := l.Maintain(context.Background(), a); err == nil || len(*calls) != 0 || h.writes != 0 {
+		t.Fatal("pending enrollment active")
+	}
+	k.frozen = false
+	rebuilt := NewLinear(t.TempDir(), l.password)
+	rebuilt.keys, rebuilt.host, rebuilt.http, rebuilt.now = k, h, l.http, l.now
+	if err := rebuilt.Enroll(a); err != nil {
+		t.Fatal(err)
+	}
+	if onlyBroker(*k.access) != nil {
+		t.Fatal("root restriction not repaired")
+	}
+	if _, err := rebuilt.Maintain(context.Background(), a); err != nil || len(*calls) != 1 {
+		t.Fatalf("reconstructed enrollment %v", err)
+	}
+}
+
+func TestLinearAccountSaveFailureNeverPublishes(t *testing.T) {
+	l, k, h, calls := linearRig(t)
+	a := linearApp("verifier")
+	enrollLinear(t, l, k, a)
+	k.failWriteKey = linearService + "/app/" + a.TokenService
+	if _, err := l.Maintain(context.Background(), a); err == nil || len(*calls) != 1 || h.writes != 0 {
+		t.Fatal("published before durable access-token save")
+	}
+	k.failWriteKey = ""
+	var account linearAccount
+	if err := l.read("app/"+a.TokenService, &account); err != nil || !account.Active || account.Current.AccessToken != "" {
+		t.Fatalf("lost old enrollment %+v %v", account, err)
+	}
+}
+
+func TestLinearBlockedIdentityDoesNotBlockAnotherRenewal(t *testing.T) {
+	l, k, h, _ := linearRig(t)
+	a, b := linearApp("harness"), linearApp("verifier")
+	b.UserID = "00000000-0000-4000-8000-000000000002"
+	enrollLinear(t, l, k, a)
+	enrollLinear(t, l, k, b)
+	entered, release := make(chan struct{}), make(chan struct{})
+	l.http = &http.Client{Transport: linearRoundTrip(func(r *http.Request) (*http.Response, error) {
+		data, _ := io.ReadAll(r.Body)
+		form, _ := url.ParseQuery(string(data))
+		if form.Get("client_id") == a.ClientID {
+			close(entered)
+			<-release
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"access_token":"NEW","expires_in":2592000}`))}, nil
+	})}
+	resultA, resultB := make(chan error, 1), make(chan error, 1)
+	go func() { _, err := l.Maintain(context.Background(), a); resultA <- err }()
+	<-entered
+	go func() { _, err := l.Maintain(context.Background(), b); resultB <- err }()
+	completedB := false
+	select {
+	case err := <-resultB:
+		completedB = true
+		if err != nil {
+			t.Error(err)
+		}
+	case <-time.After(time.Second):
+		t.Error("unrelated identity blocked")
+	}
+	close(release)
+	if err := <-resultA; err != nil {
+		t.Error(err)
+	}
+	if !completedB {
+		if err := <-resultB; err != nil {
+			t.Error(err)
+		}
+	}
+	if h.writes != 2 {
+		t.Fatalf("publications %d", h.writes)
+	}
+}
+
+func TestLinearEnrollmentWaitDoesNotHoldRegistry(t *testing.T) {
+	l, k, _, _ := linearRig(t)
+	a, b := linearApp("harness"), linearApp("verifier")
+	b.UserID = "00000000-0000-4000-8000-000000000002"
+	enrollLinear(t, l, k, a)
+	k.PutSecret(b.SecretService, b.SecretService, []byte("ROOT-SENTINEL"))
+	base := l.lock
+	unlock, err := base("account/" + a.TokenService)()
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting := make(chan struct{})
+	l.lock = func(id string) func() (func(), error) {
+		return func() (func(), error) {
+			if id == "account/"+a.TokenService {
+				close(waiting)
+			}
+			return base(id)()
+		}
+	}
+	resultA, resultB := make(chan error, 1), make(chan error, 1)
+	go func() { resultA <- l.Enroll(a) }()
+	<-waiting
+	go func() { resultB <- l.Enroll(b) }()
+	blocked := false
+	select {
+	case err := <-resultB:
+		if err != nil {
+			t.Error(err)
+		}
+	case <-time.After(time.Second):
+		blocked = true
+	}
+	unlock()
+	if err := <-resultA; err != nil {
+		t.Error(err)
+	}
+	if blocked {
+		if err := <-resultB; err != nil {
+			t.Error(err)
+		}
+		t.Fatal("identity wait held the registry lock")
+	}
+}
+
+func TestLinearPublicationRejectsUnconfirmedValueOrTrust(t *testing.T) {
+	value := []byte(`{"access_token":"TOKEN","expires_at":"2026-11-26T12:00:00Z"}`)
+	for _, failure := range []string{"mismatch", "read error", "any reader", "unexpected reader", "no reader"} {
+		t.Run(failure, func(t *testing.T) {
+			h := linearHostEntries{home: "/fake", run: func(_ context.Context, args []string, _ []byte) ([]byte, error) {
+				if slices.Contains(args, "-i") {
+					return nil, nil
+				}
+				if failure == "mismatch" {
+					return []byte("other"), nil
+				}
+				if failure == "read error" {
+					return nil, errors.New("SENTINEL")
+				}
+				return value, nil
+			}, access: func(string, string) (AppAccess, error) {
+				a := brokerOnly()
+				a.Entries[1].Apps = append(a.Entries[1].Apps, security)
+				switch failure {
+				case "any reader":
+					a.Entries[1].Any = true
+				case "unexpected reader":
+					a.Entries[1].Apps = append(a.Entries[1].Apps, "/evil")
+				case "no reader":
+					a.Entries[1].Apps = nil
+				}
+				return a, nil
+			}}
+			if err := h.Publish(context.Background(), "token-verifier", "token-verifier", value); err == nil || strings.Contains(err.Error(), "SENTINEL") {
+				t.Fatalf("invalid confirmation %v", err)
+			}
+		})
 	}
 }
 

@@ -127,8 +127,9 @@ Linear user id; runtime role discovery reads it from configuration and needs no 
 | Failure | an expired token whose renewal fails skips only that role's claims and resumes; write-back reports refusal for Recover |
 | Revoke | revoke the app's tokens in Linear, then remove its token and secret entries from Keychain |
 
-Changing an app's client secret revokes its tokens: store the new secret and delete the token entry so
-the next call requests one. New runs record the role, never a credential service; existing run rows stay unchanged.
+With transport ownership, changing an app's client secret revokes its tokens: store the new secret and delete the
+token entry so the next call requests one. Enrolled apps instead follow the secret-rotation procedure under
+[broker renewal](#linear-broker-renewal). New runs record the role, never a credential service; existing run rows stay unchanged.
 Deterministic comments use the current app user id as their namespace. If a comment posted before the switch to apps
 landed before its write-back ledger was saved, Recover leaves it intact and posts the missing step as the app.
 
@@ -317,7 +318,7 @@ shows.
 | the `linear.manager.secret_service` value | any | `linear.manager.secret_service` | manager app client secret | installer or the user ([Linear presets](#linear-presets)); broker owns enrolled access | broker when enrolled; otherwise any process running as the user |
 | the `linear.manager.token_service` value | the existing item's, else the service | `linear.manager.token_service` | manager app token and expiry; its comments and moves count as other whether or not `linear.manager.user_id` is set (the id only matters for a manager move that carries a `botActor`) | selected writer: transport/installer or broker | any process running as the user through the restricted host reader |
 | each `linear.roles.<role>.secret_service` value | any | `linear.roles.<role>.secret_service` | role app client secret | installer or the user; broker owns enrolled access | broker when enrolled; otherwise any process running as the user |
-| each `linear.roles.<role>.token_service` value | the existing item's, else the service | `linear.roles.<role>.token_service` | role app token and expiry | installer, router, write-back, Recover | any process running as the user |
+| each `linear.roles.<role>.token_service` value | the existing item's, else the service | `linear.roles.<role>.token_service` | role app token and expiry, including configured verifier | selected writer: transport/installer or broker | any process running as the user through the restricted host reader |
 | Claude Code's own | — | — | local Claude login | Claude Code `/login` | Claude Code; service name not documented |
 | `gh`'s own | — | — | host `gh` token | `gh auth login` | `gh`; see `gh auth status` |
 | Codex's own, keyring mode only | — | — | local Codex login | `codex login` | Codex; service name not documented |

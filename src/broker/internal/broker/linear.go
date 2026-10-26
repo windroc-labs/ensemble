@@ -116,6 +116,7 @@ type linearKeys interface {
 	SecretKeychain
 	ItemTrust
 	AppAccount(string) (string, error)
+	UpdateSecret(string, string, []byte) error
 }
 
 type linearHost interface {
@@ -159,7 +160,7 @@ func NewLinear(home string, password func() ([]byte, error)) Linear {
 }
 
 func (l Linear) read(account string, into any) error {
-	b, err := l.keys.Secret(linearService, account)
+	b, err := (linearStore{l.keys}).Secret(linearService, account)
 	defer erase(b)
 	if err != nil {
 		return err
@@ -173,7 +174,7 @@ func (l Linear) read(account string, into any) error {
 func (l Linear) save(account string, value any) error {
 	b, err := json.Marshal(value)
 	defer erase(b)
-	if err != nil || l.keys.PutSecret(linearService, account, b) != nil {
+	if err != nil || (linearStore{l.keys}).PutSecret(linearService, account, b) != nil {
 		return errLinear
 	}
 	return nil
@@ -184,57 +185,14 @@ func (l Linear) Enroll(a LinearIdentity) error {
 	if a.check() != nil {
 		return errLinear
 	}
-	unlock, err := l.lock("registry")()
+	unlock, err := l.lock("account/" + a.TokenService)()
 	if err != nil {
 		return errLinear
 	}
 	defer unlock()
-	unlockAccount, err := l.lock("account/" + a.TokenService)()
+	account, err := l.reserve(a)
 	if err != nil {
-		return errLinear
-	}
-	defer unlockAccount()
-	var registry []LinearIdentity
-	err = l.read("registry", &registry)
-	if err != nil && !errors.Is(err, ErrNotFound) {
-		return errLinear
-	}
-	exists := false
-	for _, old := range registry {
-		if old == a {
-			exists = true
-			continue
-		}
-		if old.ClientID == a.ClientID || old.UserID == a.UserID || old.Name == a.Name || slices.Contains([]string{old.SecretService, old.TokenService}, a.SecretService) || slices.Contains([]string{old.SecretService, old.TokenService}, a.TokenService) {
-			return errLinear
-		}
-	}
-	if !exists {
-		registry = append(registry, a)
-		if l.save("registry", registry) != nil {
-			return errLinear
-		}
-	}
-	var account linearAccount
-	err = l.read("app/"+a.TokenService, &account)
-	if errors.Is(err, ErrNotFound) {
-		root, err := l.keys.AppAccount(a.SecretService)
-		if err != nil || !linearSafe(root) {
-			return errLinear
-		}
-		token, err := l.keys.AppAccount(a.TokenService)
-		if errors.Is(err, ErrNotFound) {
-			token, err = a.TokenService, nil
-		}
-		if err != nil || !linearSafe(token) {
-			return errLinear
-		}
-		account = linearAccount{Version: 1, Identity: a, RootAccount: root, TokenAccount: token}
-		if l.save("app/"+a.TokenService, account) != nil {
-			return errLinear
-		}
-	} else if err != nil || account.Version != 1 || account.Identity != a {
-		return errLinear
+		return err
 	}
 	if secureItem(a.SecretService, account.RootAccount, "rerun login linear", l.keys, l.password) != nil {
 		return errLinear
@@ -245,6 +203,60 @@ func (l Linear) Enroll(a LinearIdentity) error {
 	}
 	account.Active = true
 	return l.save("app/"+a.TokenService, account)
+}
+
+// reserve is a short registry transaction. It never waits for another account, calls a provider or prompts.
+func (l Linear) reserve(a LinearIdentity) (linearAccount, error) {
+	unlock, err := l.lock("registry")()
+	if err != nil {
+		return linearAccount{}, errLinear
+	}
+	defer unlock()
+	var registry []LinearIdentity
+	err = l.read("registry", &registry)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return linearAccount{}, errLinear
+	}
+	exists := false
+	for _, old := range registry {
+		if old == a {
+			exists = true
+			continue
+		}
+		if old.ClientID == a.ClientID || old.UserID == a.UserID || old.Name == a.Name || slices.Contains([]string{old.SecretService, old.TokenService}, a.SecretService) || slices.Contains([]string{old.SecretService, old.TokenService}, a.TokenService) {
+			return linearAccount{}, errLinear
+		}
+	}
+	var account linearAccount
+	err = l.read("app/"+a.TokenService, &account)
+	newAccount := errors.Is(err, ErrNotFound)
+	if errors.Is(err, ErrNotFound) {
+		root, err := l.keys.AppAccount(a.SecretService)
+		if err != nil || !linearSafe(root) {
+			return linearAccount{}, errLinear
+		}
+		token, err := l.keys.AppAccount(a.TokenService)
+		if errors.Is(err, ErrNotFound) {
+			token, err = a.TokenService, nil
+		}
+		if err != nil || !linearSafe(token) {
+			return linearAccount{}, errLinear
+		}
+		account = linearAccount{Version: 1, Identity: a, RootAccount: root, TokenAccount: token}
+	} else if err != nil || account.Version != 1 || account.Identity != a {
+		return linearAccount{}, errLinear
+	}
+	if !exists {
+		if l.save("registry", append(registry, a)) != nil {
+			return linearAccount{}, errLinear
+		}
+	}
+	if newAccount {
+		if l.save("app/"+a.TokenService, account) != nil {
+			return linearAccount{}, errLinear
+		}
+	}
+	return account, nil
 }
 
 // LinearResult is the complete non-secret host maintenance reply. It is separate from the Docker protocol.
@@ -263,6 +275,10 @@ func (l Linear) Maintain(ctx context.Context, a LinearIdentity) (LinearResult, e
 		return LinearResult{}, errLinear
 	}
 	defer unlock()
+	var registry []LinearIdentity
+	if l.read("registry", &registry) != nil || !slices.Contains(registry, a) {
+		return LinearResult{}, errLinear
+	}
 	var account linearAccount
 	if l.read("app/"+a.TokenService, &account) != nil || account.Version != 1 || !account.Active || account.Identity != a {
 		return LinearResult{}, errLinear
@@ -272,7 +288,7 @@ func (l Linear) Maintain(ctx context.Context, a LinearIdentity) (LinearResult, e
 		return LinearResult{}, errLinear
 	}
 	p := &linearProvider{owner: l, account: &account}
-	lifecycle := credential.Lifecycle{Provider: p, Store: l.keys, NotFound: ErrNotFound, Records: linearGrantsService, Lock: l.lock("grant/" + a.TokenService), Audit: l.Audit}
+	lifecycle := credential.Lifecycle{Provider: p, Store: linearStore{l.keys}, NotFound: ErrNotFound, Records: linearGrantsService, Lock: l.lock("grant/" + a.TokenService), Audit: l.Audit}
 	d := credential.Delivery{Consumer: credential.Consumer{Host: a.TokenService}, Publish: func(m credential.Material) error {
 		value, _ := json.Marshal(linearAccess{AccessToken: m.Token, ExpiresAt: m.ExpiresAt})
 		defer erase(value)
@@ -330,12 +346,16 @@ func (p *linearProvider) Issue(ctx context.Context, scope map[string]string, _ c
 		_ = json.Unmarshal(data, &a.Current)
 		erase(data)
 		if expires, err := time.Parse(time.RFC3339, a.Current.ExpiresAt); err == nil {
+			a.Current.ExpiresAt = expires.UTC().Format(time.RFC3339Nano)
 			a.RenewAt = expires.Add(-5 * 24 * time.Hour).Format(time.RFC3339)
 		}
 	}
 	now := l.now()
 	renewAt, _ := time.Parse(time.RFC3339, a.RenewAt)
 	expires, _ := time.Parse(time.RFC3339, a.Current.ExpiresAt)
+	if !expires.IsZero() {
+		a.Current.ExpiresAt = expires.UTC().Format(time.RFC3339Nano)
+	}
 	if !linearClean(a.Current.AccessToken) || !now.Before(renewAt) || !now.Before(expires) {
 		l.Audit.Renewing("")
 		secret, err := l.keys.Secret(a.Identity.SecretService, a.RootAccount)
