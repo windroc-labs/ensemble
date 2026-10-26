@@ -19,6 +19,15 @@ class NamespacedHost(MemoryHost):
         return self.namespace
 
 
+class EndingHost(MemoryHost):
+    """Its sessions end, and a tmux server exits with its last one, before the namespace read."""
+
+    def _capacity_namespace(self):
+        for terminal in list(self.processes.values()):
+            terminal.close()
+        raise SessionError("no server running")
+
+
 class AdmissionTest(Case):
     def setUp(self):
         self.host = MemoryHost()
@@ -191,6 +200,19 @@ class AdmissionTest(Case):
         self.host.calls.list.side_effect = None
         self.host.calls.list.return_value = ["missing"]
         with self.assertRaises(SessionError), self.enter():
+            pass
+
+    def test_sessions_all_ending_before_the_namespace_read_leave_no_rows(self):
+        self.host = EndingHost()
+        self.host.create("old", metadata={"client": "fake", "sid": "old"})
+        with self.enter():
+            pass
+
+    def test_a_namespace_failure_with_sessions_still_listed_fails_closed(self):
+        self.host = EndingHost()
+        self.host.create("old", metadata={"client": "fake", "sid": "old"})
+        self.host.calls.list.return_value = ["old"]
+        with self.assertRaisesRegex(SessionError, "no server running"), self.enter():
             pass
 
     def test_concurrent_admissions_serialize_the_count_and_start(self):

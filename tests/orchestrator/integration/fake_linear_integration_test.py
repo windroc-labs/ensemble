@@ -4,6 +4,7 @@ the promote, prune and write-back ops, comments by client id (FR-54, FR-55), and
 queries and mutations, alone and through LinearIssues."""
 
 import functools
+import json
 import os
 import time
 import urllib.request
@@ -19,7 +20,7 @@ from ensemble.orchestrator.engine import (
     types,
 )
 from ensemble.orchestrator.engine.flow.types import ArchiveRefused, IssueState, Linked, Priority
-from ensemble.orchestrator.engine.types import IssueError, LinearError
+from ensemble.orchestrator.engine.types import AppKind, IssueError, LinearApp, LinearError
 from ensemble.orchestrator.trackers.linear import (
     client,
     issue_archive,
@@ -27,7 +28,6 @@ from ensemble.orchestrator.trackers.linear import (
     issue_edit,
     issue_label,
     issue_list,
-    issue_names,
     issue_read,
     issue_refs,
     issue_relation,
@@ -40,7 +40,17 @@ from ensemble.utils import parse_time
 from tests.orchestrator.case import Case
 from tests.orchestrator.integration import fake_linear
 from tests.orchestrator.integration.fake_transport import install, refuse_keychain
-from tests.orchestrator.unit.board_ids import STATES, TASK_GROUP, TEAM
+from tests.orchestrator.unit.board_ids import (
+    HARNESS_IDENTITY,
+    HARNESS_USER,
+    MANAGER_IDENTITY,
+    MANAGER_USER,
+    STATES,
+    TASK_GROUP,
+    TEAM,
+    role_app,
+    role_id,
+)
 from tests.orchestrator.unit.issue_fixtures import (
     CLIENT_GROUP,
     CLIENT_LABELS,
@@ -50,9 +60,9 @@ from tests.orchestrator.unit.issue_fixtures import (
     names_cfg,
 )
 
-HARNESS, ENGINEER = "linear-api-key", "linear-api-key-engineer"
+HARNESS, ENGINEER = "linear-app-harness-token", "linear-app-engineer-token"
 
-HARNESS_EMAIL, ENGINEER_EMAIL = "harness@agents.test", "engineer@agents.test"
+ENGINEER_USER = role_id("engineer")
 
 PROJECT = {"id": "121166b1-191a-4461-bec4-42f1c2dc0ddd", "name": "Widgets"}
 
@@ -70,13 +80,14 @@ LINEAR_TIME = r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$"
 class ServerCase(Case):
     def setUp(self):
         self.fake = fake = fake_linear.FakeLinear(harness=HARNESS)
-        self.harness = fake.user(HARNESS_EMAIL, "Harness", HARNESS)
-        self.engineer = fake.user(ENGINEER_EMAIL, "Engineer", ENGINEER)
-        self.human = fake.user("Me@X.com", "Me")
+        self.harness = fake.user("Harness", HARNESS, uid=HARNESS_USER)
+        self.engineer = fake.user("Engineer", ENGINEER, uid=ENGINEER_USER)
+        self.human = fake.user("Me", email="Me@X.com")
         fake.issue(
             "Session registry",
             identifier="TASK-7",
             state="in_progress",
+            delegate=self.engineer,
             assignee=self.engineer,
             project=PROJECT,
         )
@@ -88,11 +99,11 @@ class ServerCase(Case):
         self.addCleanup(env.stop)
         transport = install(os.environ["FAKE_LINEAR_TRANSPORT"])
         self.addCleanup(transport.close)
-        self.gql = functools.partial(client.linear_gql, service=HARNESS)
-        self.eng = functools.partial(client.linear_gql, service=ENGINEER)
+        self.gql = functools.partial(client.linear_gql, identity=HARNESS_IDENTITY)
+        self.eng = functools.partial(client.linear_gql, identity=role_app("engineer"))
 
     def log(self):
-        return [(r.op, r.account, r.result) for r in self.fake.requests]
+        return [(r.op, r.caller, r.result) for r in self.fake.requests]
 
 
 class GraphQLProjection(ServerCase):
@@ -125,9 +136,9 @@ class GraphQLProjection(ServerCase):
         with self.assertRaises(LinearError) as cm:
             self.gql(query, i="TASK-7")
         self.assertIn("fake: linear.Q_ISSUE_STATE has no field color", str(cm.exception))
-        self.assertEqual(self.log(), [("linear.Q_ISSUE_STATE", HARNESS_EMAIL, "error")])
+        self.assertEqual(self.log(), [("linear.Q_ISSUE_STATE", HARNESS_USER, "error")])
 
-    def test_is_me_follows_the_key(self):
+    def test_comment_authors_by_id_and_is_me_follows_the_token(self):
         mine = {
             HARNESS: self.fake.comment("TASK-7", self.harness, f"Run {SID} · running"),
             ENGINEER: self.fake.comment("TASK-7", self.engineer, f"Run {SID} · not a session"),
@@ -137,10 +148,10 @@ class GraphQLProjection(ServerCase):
             with self.subTest(service):
                 nodes = gql(linear_tracker.Q_READ, i="TASK-7")["issue"]["comments"]["nodes"]
                 self.assertEqual(
-                    {n["body"]: (n["user"] or {}).get("isMe") for n in nodes},
+                    {n["body"]: (n["user"] or {}).get("id") for n in nodes},
                     {
-                        f"Run {SID} · running": service == HARNESS,
-                        f"Run {SID} · not a session": service == ENGINEER,
+                        f"Run {SID} · running": self.harness,
+                        f"Run {SID} · not a session": self.engineer,
                         "From an integration": None,
                     },
                 )
@@ -171,9 +182,9 @@ class GraphQLProjection(ServerCase):
         self.assertEqual(
             self.log(),
             [
-                ("sessions.M_UPDATE", HARNESS_EMAIL, "error"),
-                ("linear.M_COMMENT_ID", HARNESS_EMAIL, "ok"),
-                ("sessions.M_UPDATE", HARNESS_EMAIL, "ok"),
+                ("sessions.M_UPDATE", HARNESS_USER, "error"),
+                ("linear.M_COMMENT_ID", HARNESS_USER, "ok"),
+                ("sessions.M_UPDATE", HARNESS_USER, "ok"),
             ],
         )
 
@@ -208,12 +219,12 @@ class GraphQLProjection(ServerCase):
         self.assertEqual(
             self.log(),
             [
-                ("linear.Q_COMMENT", ENGINEER_EMAIL, "error"),
-                ("linear.M_COMMENT_ID", ENGINEER_EMAIL, "ok"),
-                *[("linear.Q_COMMENT", ENGINEER_EMAIL, "ok")] * 2,
-                ("linear.Q_COMMENT", HARNESS_EMAIL, "ok"),
-                ("linear.Q_COMMENT", ENGINEER_EMAIL, "ok"),
-                ("linear.M_COMMENT_ID", HARNESS_EMAIL, "error"),
+                ("linear.Q_COMMENT", ENGINEER_USER, "error"),
+                ("linear.M_COMMENT_ID", ENGINEER_USER, "ok"),
+                *[("linear.Q_COMMENT", ENGINEER_USER, "ok")] * 2,
+                ("linear.Q_COMMENT", HARNESS_USER, "ok"),
+                ("linear.Q_COMMENT", ENGINEER_USER, "ok"),
+                ("linear.M_COMMENT_ID", HARNESS_USER, "error"),
             ],
         )
 
@@ -244,7 +255,7 @@ class GraphQLProjection(ServerCase):
     def test_each_failure_kind_as_the_caller_sees_it(self):
         for name, eng in (
             ("http", self.eng),
-            ("in process", functools.partial(self.fake, service=ENGINEER)),
+            ("in process", functools.partial(self.fake, identity=role_app("engineer"))),
         ):
             with self.subTest(name):
                 self.fake.requests.clear()
@@ -268,11 +279,11 @@ class GraphQLProjection(ServerCase):
                 self.assertEqual(
                     self.log(),
                     [
-                        ("linear.M_COMMENT", ENGINEER_EMAIL, "error"),
-                        ("linear.Q_ISSUE_STATE", ENGINEER_EMAIL, "ok"),
-                        ("linear.M_STATE", ENGINEER_EMAIL, "unsuccessful"),
-                        ("linear.M_SUBSCRIBE", ENGINEER_EMAIL, "503"),
-                        ("linear.Q_ISSUE_STATE", ENGINEER_EMAIL, "hang"),
+                        ("linear.M_COMMENT", ENGINEER_USER, "error"),
+                        ("linear.Q_ISSUE_STATE", ENGINEER_USER, "ok"),
+                        ("linear.M_STATE", ENGINEER_USER, "unsuccessful"),
+                        ("linear.M_SUBSCRIBE", ENGINEER_USER, "503"),
+                        ("linear.Q_ISSUE_STATE", ENGINEER_USER, "hang"),
                     ],
                 )
         task = self.fake.find("TASK-7")
@@ -280,8 +291,8 @@ class GraphQLProjection(ServerCase):
             (task["state"], task["comments"], task["subscribers"]), (STATES["in_progress"], [], [])
         )
 
-    def test_account_and_times_scope_a_failure(self):
-        self.fake.fail("linear.M_COMMENT", "error", account="Engineer@agents.test", times=2)
+    def test_caller_and_times_scope_a_failure(self):
+        self.fake.fail("linear.M_COMMENT", "error", caller=ENGINEER_USER, times=2)
         ops.comment(self.gql, "TASK-7", "by the harness")
         for _ in range(2):
             with self.assertRaises(LinearError):
@@ -290,10 +301,10 @@ class GraphQLProjection(ServerCase):
         self.assertEqual(
             self.log(),
             [
-                ("linear.M_COMMENT", HARNESS_EMAIL, "ok"),
-                ("linear.M_COMMENT", ENGINEER_EMAIL, "error"),
-                ("linear.M_COMMENT", ENGINEER_EMAIL, "error"),
-                ("linear.M_COMMENT", ENGINEER_EMAIL, "ok"),
+                ("linear.M_COMMENT", HARNESS_USER, "ok"),
+                ("linear.M_COMMENT", ENGINEER_USER, "error"),
+                ("linear.M_COMMENT", ENGINEER_USER, "error"),
+                ("linear.M_COMMENT", ENGINEER_USER, "ok"),
             ],
         )
         self.assertEqual(
@@ -301,25 +312,34 @@ class GraphQLProjection(ServerCase):
             ["by the harness", "by the engineer"],
         )
 
-    def test_an_unknown_query_and_a_bad_key_are_errors_and_logged(self):
+    def test_an_unknown_query_and_a_bad_token_are_errors_and_logged(self):
         with self.assertRaises(LinearError) as cm:
             self.gql(UNKNOWN)
         self.assertIn("fake: unknown query", str(cm.exception))
         stranger = fake_linear.FakeLinear()
-        stranger.user("stranger@x.com", "Stranger", "stranger")
+        uid = stranger.user("Stranger", "stranger")
+        app = LinearApp(
+            "stranger",
+            AppKind.ROLE,
+            "linear.roles.stranger",
+            "c",
+            "stranger-secret",
+            "stranger",
+            uid,
+        )
         with (
             mock.patch.dict(
                 os.environ, {"FAKE_LINEAR_TRANSPORT": fake_linear.seam(self, stranger, self.url)}
             ),
             self.assertRaises(LinearError) as cm,
         ):
-            client.linear_gql(ops.Q_USER, service="stranger", e="me@x.com")
-        self.assertEqual(str(cm.exception), "linear api error: users: HTTP 401")
+            client.linear_gql(ops.Q_TEAM, identity=app, t=TEAM)
+        self.assertEqual(str(cm.exception), "linear api error: teams: HTTP 401")
         self.assertEqual(
             self.fake.requests,
             [
-                fake_linear.Request(UNKNOWN, HARNESS_EMAIL, {}, "unknown"),
-                fake_linear.Request("linear.Q_USER", None, {"e": "me@x.com"}, "unauthorized"),
+                fake_linear.Request(UNKNOWN, HARNESS_USER, {}, "unknown"),
+                fake_linear.Request("linear.Q_TEAM", None, {"t": TEAM}, "unauthorized"),
             ],
         )
 
@@ -345,23 +365,61 @@ class GraphQLProjection(ServerCase):
         self.assertEqual(
             self.log(),
             [
-                ("linear.Q_ISSUE_STATE", HARNESS_EMAIL, "error"),
-                ("promote.Q_HANDOFF", HARNESS_EMAIL, "error"),
+                ("linear.Q_ISSUE_STATE", HARNESS_USER, "error"),
+                ("promote.Q_HANDOFF", HARNESS_USER, "error"),
             ],
         )
 
     def test_a_bad_body_is_a_logged_400(self):
-        send, key = (
+        send, authorization = (
             urllib.request.build_opener(urllib.request.ProxyHandler({})).open,
-            self.fake.keys()[HARNESS],
+            f"Bearer {fake_linear._token(HARNESS)}",
         )
         for body in (b"not json", b"[]", b'{"variables": {}}', b'{"query": "q", "variables": []}'):
             with self.subTest(body), self.assertRaises(urllib.error.HTTPError) as cm:
-                send(urllib.request.Request(self.url, body, {"Authorization": key}), timeout=5)
+                send(
+                    urllib.request.Request(self.url, body, {"Authorization": authorization}),
+                    timeout=5,
+                )
             cm.exception.close()
             self.assertEqual(cm.exception.code, 400)
         self.assertEqual(
-            self.fake.requests, [fake_linear.Request(None, HARNESS_EMAIL, {}, "error")] * 4
+            self.fake.requests, [fake_linear.Request(None, HARNESS_USER, {}, "error")] * 4
+        )
+
+    def test_only_a_bearer_token_is_authorized(self):
+        send, token = (
+            urllib.request.build_opener(urllib.request.ProxyHandler({})).open,
+            fake_linear._token(HARNESS),
+        )
+        body = json.dumps({"query": ops.Q_ISSUE_STATE, "variables": {"i": "TASK-7"}}).encode()
+
+        def post(authorization):
+            request = urllib.request.Request(self.url, body, {"Authorization": authorization})
+            return send(request, timeout=5)
+
+        for authorization in (token, f"bearer {token}"):
+            with self.subTest(authorization), self.assertRaises(urllib.error.HTTPError) as cm:
+                post(authorization)
+            answer = cm.exception.read().decode()
+            cm.exception.close()
+            self.assertEqual(cm.exception.code, 401)
+            self.assertEqual(json.loads(answer), fake_linear._errors("fake: unauthorized"))
+            self.assertNotIn(token, answer)
+        with post(f"Bearer {token}") as res:
+            self.assertEqual(
+                json.load(res), {"data": {"issue": {"state": {"id": STATES["in_progress"]}}}}
+            )
+        unauthorized = fake_linear.Request(
+            "linear.Q_ISSUE_STATE", None, {"i": "TASK-7"}, "unauthorized"
+        )
+        self.assertEqual(
+            self.fake.requests,
+            [
+                unauthorized,
+                unauthorized,
+                fake_linear.Request("linear.Q_ISSUE_STATE", HARNESS_USER, {"i": "TASK-7"}, "ok"),
+            ],
         )
 
     def test_finished_issues_page(self):
@@ -369,13 +427,20 @@ class GraphQLProjection(ServerCase):
             self.fake.issue(
                 f"Finished {n}",
                 state=("done", "canceled")[n % 2],
-                assignee=self.engineer,
+                delegate=self.engineer,
+                assignee=self.human,
             )["identifier"]
             for n in range(51)
         ]
-        archived = self.fake.issue("Archived", state="done", assignee=self.engineer)["identifier"]
+        archived = self.fake.issue(
+            "Archived", state="done", delegate=self.engineer, assignee=self.human
+        )["identifier"]
         ops.call(self.gql, linear_tracker.M_ARCHIVE, "issueArchive", i=archived)
         self.fake.issue("Someone else's", state="done", assignee=self.human)
+        self.fake.issue("Role assignee only", state="done", assignee=self.engineer)
+        self.fake.issue(
+            "Foreign delegate", state="done", delegate=self.human, assignee=self.engineer
+        )
         pages, cursor = [], None
         while True:
             page = self.gql(
@@ -394,13 +459,57 @@ class GraphQLProjection(ServerCase):
         self.assertEqual(sum(pages, []), finished)
         self.assertTrue(self.fake.find(archived)["archived"])
 
+    def test_create_with_delegate_defaults_omitted_assignee_to_caller_but_keeps_explicit_null(self):
+        for assignment, want in (({}, self.harness), ({"assigneeId": None}, None)):
+            with self.subTest(assignment=assignment):
+                new = {
+                    "id": str(uuid.uuid4()),
+                    "teamId": TEAM,
+                    "delegateId": self.engineer,
+                    "title": "Delegated work",
+                    **assignment,
+                }
+                ops.call(self.gql, linear_tracker.M_CREATE, "issueCreate", **{"in": new})
+                made = self.fake.find(new["id"])
+                self.assertEqual((made["delegate"], made["assignee"]), (self.engineer, want))
+
+    def test_board_filters_and_projects_delegate_independently_of_assignee(self):
+        delegated = self.fake.issue(
+            "Delegated", delegate=self.engineer, assignee=self.human, project=PROJECT
+        )
+        self.fake.issue("Only assigned", assignee=self.engineer, project=PROJECT)
+        page = self.gql(
+            linear_tracker.q_issues(),
+            f={
+                "delegate": {"id": {"eq": self.engineer}},
+                "state": {"id": {"eq": STATES["todo"]}},
+            },
+        )["issues"]
+        self.assertEqual([n["id"] for n in page["nodes"]], [delegated["id"]])
+        self.assertEqual(page["nodes"][0]["delegate"], {"id": self.engineer})
+        checked = self.gql(linear_tracker.Q_RECHECK, i=delegated["id"])["issue"]
+        self.assertEqual(checked["delegate"], {"id": self.engineer})
+        self.assertEqual(checked["assignee"]["id"], self.human)
+
+    def test_board_cursor_returns_the_next_page(self):
+        seeded = [self.fake.issue(f"Ready {n}")["id"] for n in range(101)]
+        query = linear_tracker.q_issues()
+        flt = {"state": {"id": {"eq": STATES["todo"]}}}
+        first = self.gql(query, f=flt)["issues"]
+        self.assertEqual([n["id"] for n in first["nodes"]], seeded[:100])
+        self.assertTrue(first["pageInfo"]["hasNextPage"])
+        second = self.gql(query, f=flt, c=first["pageInfo"]["endCursor"])["issues"]
+        self.assertEqual([n["id"] for n in second["nodes"]], seeded[100:])
+        self.assertFalse(second["pageInfo"]["hasNextPage"])
+
     def test_issue_create_takes_the_next_number_and_refuses_a_used_id(self):
         self.fake.issue("Older", identifier="TASK-3")
         new = {
             "id": ops.client_id("src", "pm", "2026-10-09T07:00:00.000Z"),
             "teamId": TEAM,
             "projectId": PROJECT["id"],
-            "assigneeId": self.engineer,
+            "delegateId": self.engineer,
+            "assigneeId": None,
             "stateId": STATES["todo"],
             "priority": 2,
             "title": "PRD: Widgets",
@@ -417,12 +526,22 @@ class GraphQLProjection(ServerCase):
         self.assertEqual(
             {
                 k: child[k]
-                for k in ("id", "state", "assignee", "project", "priority", "title", "description")
+                for k in (
+                    "id",
+                    "state",
+                    "delegate",
+                    "assignee",
+                    "project",
+                    "priority",
+                    "title",
+                    "description",
+                )
             },
             {
                 "id": new["id"],
                 "state": STATES["todo"],
-                "assignee": self.engineer,
+                "delegate": self.engineer,
+                "assignee": None,
                 "project": PROJECT,
                 "priority": 2,
                 "title": "PRD: Widgets",
@@ -443,11 +562,12 @@ class GraphQLProjection(ServerCase):
         blocker = self.fake.issue("Blocker", state="in_progress")
         ready = self.fake.issue(
             "Ready",
-            assignee=self.engineer,
+            delegate=self.engineer,
+            assignee=self.human,
             project=PROJECT,
             labels=[LABEL],
         )
-        self.fake.issue("No project", assignee=self.engineer)
+        self.fake.issue("No project", delegate=self.engineer, assignee=self.human)
         self.fake.issue("Someone else's", assignee=self.human, project=PROJECT)
         ops.call(
             self.gql,
@@ -460,11 +580,10 @@ class GraphQLProjection(ServerCase):
         )
         self.assertEqual(ops.team(self.gql, cfg).states, STATES)
         ops.task_group(self.gql, cfg)
-        self.assertEqual(ops.user_id(self.gql, "me@x.com"), self.human)
         flt = {
             "team": {"id": {"eq": TEAM}},
             "project": {"null": False},
-            "assignee": {"id": {"in": [self.engineer]}},
+            "delegate": {"id": {"in": [self.engineer]}},
             "state": {"id": {"eq": STATES["todo"]}},
         }
         nodes = self.gql(linear_tracker.q_issues(linear_tracker.RELATIONS), f=flt)["issues"][
@@ -479,7 +598,8 @@ class GraphQLProjection(ServerCase):
             self.gql(linear_tracker.Q_RECHECK, i=ready["id"])["issue"],
             {
                 "state": {"id": STATES["todo"]},
-                "assignee": {"id": self.engineer, "email": ENGINEER_EMAIL},
+                "delegate": {"id": self.engineer},
+                "assignee": {"id": self.human, "email": "Me@X.com"},
                 "project": PROJECT,
                 "labels": {"nodes": [{"id": LABEL, "name": "build", "parent": {"id": TASK_GROUP}}]},
                 "archivedAt": None,
@@ -496,7 +616,7 @@ class GraphQLProjection(ServerCase):
                 {
                     "createdAt": done,
                     "toStateId": STATES["done"],
-                    "actor": {"email": HARNESS_EMAIL, "isMe": True},
+                    "actor": {"id": self.harness},
                     "botActor": None,
                 }
             ],
@@ -520,7 +640,6 @@ class FixtureOperations(Case):
             issue_create.M_CREATE,
             issue_create.M_RELATE,
             issue_create.Q_VIEWER,
-            issue_names.Q_VIEWER,
             issue_refs.Q_ISSUE,
             issue_edit.Q_READ,
             issue_edit.M_EDIT,
@@ -549,19 +668,36 @@ class FixtureOperations(Case):
 
     def test_fail_refuses_a_misuse(self):
         fake = fake_linear.FakeLinear()
-        fake.user("engineer@agents.test", "Engineer", "linear-api-key-engineer")
-        fake.user("me@x.com", "Me")
+        engineer = fake.user("Engineer", "linear-app-engineer-token", uid=ENGINEER_USER)
+        human = fake.user("Me", email="me@x.com")
         for args, kw in (
             (("linear.M_NOPE", "error"), {}),
             (("linear.M_STATE", "500"), {}),
             (("linear.Q_ISSUE_STATE", "unsuccessful"), {}),
             (("linear.M_STATE", "error"), {"times": 0}),
-            (("linear.M_STATE", "error"), {"account": "nobody@agents.test"}),
-            (("linear.M_STATE", "error"), {"account": "me@x.com"}),
+            (("linear.M_STATE", "error"), {"caller": "nobody"}),
+            (("linear.M_STATE", "error"), {"caller": human}),
         ):
             with self.subTest(args, **kw), self.assertRaises(ValueError):
                 fake.fail(*args, **kw)
-        fake.fail("linear.M_STATE", "error", account="Engineer@agents.test")
+        fake.fail("linear.M_STATE", "error", caller=engineer)
+
+    def test_seeding_refuses_a_user_twice(self):
+        fake = fake_linear.FakeLinear()
+        fake.user("Engineer", "linear-app-engineer-token", uid=ENGINEER_USER)
+        fake.user("Me", email="me@x.com")
+        for args, kw in (
+            (("Other",), {"uid": ENGINEER_USER}),
+            (("Other", "linear-app-engineer-token"), {}),
+            (("Other",), {"email": "ME@x.com"}),
+        ):
+            with self.subTest(args, **kw), self.assertRaises(ValueError):
+                fake.user(*args, **kw)
+        self.assertEqual(len(fake.users), 2)
+        self.assertEqual(
+            fake.tokens(),
+            {"linear-app-engineer-token": fake_linear._record("linear-app-engineer-token")},
+        )
 
     def test_seeding_refuses_a_used_or_malformed_issue_id(self):
         fake = fake_linear.FakeLinear()
@@ -588,7 +724,7 @@ class FixtureOperations(Case):
 
     def test_a_backlog_issue_moves_to_todo_and_back(self):
         fake = fake_linear.FakeLinear()
-        actor = fake.user("me@x.com", "Me")
+        actor = fake.user("Me", email="me@x.com")
         self.assertEqual(
             fake.issue("Later", identifier="TASK-1", state="backlog")["state"],
             fake_linear.BACKLOG,
@@ -664,16 +800,16 @@ class GraphQLQueries(ServerCase):
         later = self.fake.issue(
             "Later",
             state="backlog",
-            assignee=self.engineer,
+            delegate=self.engineer,
             project=PROJECT,
         )
-        ready = self.fake.issue("Ready", assignee=self.engineer, project=PROJECT)
+        ready = self.fake.issue("Ready", delegate=self.engineer, project=PROJECT)
 
         def listed(state):
             flt = {
                 "team": {"id": {"eq": TEAM}},
                 "project": {"null": False},
-                "assignee": {"id": {"in": [self.engineer]}},
+                "delegate": {"id": {"in": [self.engineer]}},
                 "state": {"id": {"eq": state}},
             }
             return [
@@ -753,7 +889,9 @@ class GraphQLQueries(ServerCase):
             self.gql(linear_tracker.Q_ID, i="TASK-7"),
             {"issue": {"id": task["id"], "team": {"id": TEAM}}},
         )
-        read = linear_tracker.LinearTracker(self.gql, selves=frozenset()).issue("TASK-7")
+        read = linear_tracker.LinearTracker(
+            self.gql, selves=linear_tracker.Selves(self.harness, frozenset())
+        ).issue("TASK-7")
         self.assertEqual(
             (read.title, read.home, read.linked),
             (
@@ -774,7 +912,8 @@ class GraphQLQueries(ServerCase):
             "Research",
             identifier="TASK-9",
             state="in_review",
-            assignee=self.engineer,
+            delegate=self.engineer,
+            assignee=self.human,
             project=PROJECT,
             priority=2,
             created=created,
@@ -801,7 +940,7 @@ class GraphQLQueries(ServerCase):
                     "priority": 2,
                     "createdAt": created,
                     "project": PROJECT,
-                    "assignee": {"id": self.engineer},
+                    "delegate": {"id": self.engineer},
                     "attachments": {"nodes": [{"title": "PR", "url": PR}]},
                 }
             ],
@@ -826,7 +965,7 @@ class GraphQLQueries(ServerCase):
                         {
                             "body": "Build it.",
                             "createdAt": said,
-                            "user": {"email": "Me@X.com", "name": "Me", "isMe": False},
+                            "user": {"id": self.human, "email": "Me@X.com", "name": "Me"},
                         }
                     ]
                 },
@@ -857,6 +996,7 @@ class IssueOps(ServerCase):
         self.task7 = self.fake.find("TASK-7")
         self.issues = LinearIssues(self.gql, names_cfg())
         self.me = {"id": self.harness, "name": "Harness"}
+        self.manager = self.fake.user("Manager", MANAGER_IDENTITY.token_service, uid=MANAGER_USER)
 
     def ops(self):
         return [r.op for r in self.fake.requests]
@@ -866,8 +1006,7 @@ class IssueOps(ServerCase):
 
     def test_the_viewer(self):
         self.assertEqual(self.gql(issue_create.Q_VIEWER), {"viewer": self.me})
-        self.assertEqual(self.eng(issue_names.Q_VIEWER), {"viewer": {"id": self.engineer}})
-        self.assertEqual(self.ops(), ["issue_create.Q_VIEWER", "issue_names.Q_VIEWER"])
+        self.assertEqual(self.ops(), ["issue_create.Q_VIEWER"])
 
     def test_an_issue_by_identifier_or_id(self):
         want = {"issue": {"id": self.task7["id"], "identifier": "TASK-7"}}
@@ -1036,7 +1175,8 @@ class IssueOps(ServerCase):
     def test_list_filters(self):
         self.fake.issue(
             "Widget parser",
-            assignee=self.engineer,
+            delegate=self.engineer,
+            assignee=self.human,
             priority=2,
             labels=[TASK_LABELS["build"]],
         )
@@ -1047,16 +1187,18 @@ class IssueOps(ServerCase):
             priority=1,
             labels=[CLIENT_LABELS["codex"]],
         )
-        gone = self.fake.issue("Archived widget", assignee=self.engineer)
+        self.fake.issue("Mine", state="backlog", delegate=self.manager, assignee=self.engineer)
+        gone = self.fake.issue("Archived widget", delegate=self.engineer)
         ops.call(self.gql, linear_tracker.M_ARCHIVE, "issueArchive", i=gone["id"])
         for given, want in (
-            ({}, ["TASK-7", "TASK-8", "TASK-9"]),
-            ({"include_archived": True}, ["TASK-10", "TASK-7", "TASK-8", "TASK-9"]),
+            ({}, ["TASK-10", "TASK-7", "TASK-8", "TASK-9"]),
+            ({"include_archived": True}, ["TASK-10", "TASK-11", "TASK-7", "TASK-8", "TASK-9"]),
             ({"query": "widget"}, ["TASK-8", "TASK-9"]),
-            ({"query": "widget", "include_archived": True}, ["TASK-10", "TASK-8", "TASK-9"]),
+            ({"query": "widget", "include_archived": True}, ["TASK-11", "TASK-8", "TASK-9"]),
             ({"state": IssueState.READY}, ["TASK-8", "TASK-9"]),
             ({"state": IssueState.RUNNING}, ["TASK-7"]),
             ({"role": "engineer"}, ["TASK-7", "TASK-8"]),
+            ({"role": "me"}, ["TASK-10"]),
             ({"role": "unassigned"}, ["TASK-9"]),
             ({"task": "build"}, ["TASK-8"]),
             ({"client": "codex"}, ["TASK-9"]),
@@ -1087,6 +1229,7 @@ class IssueOps(ServerCase):
                     "description": "Old",
                     "priority": 0,
                     "assignee": None,
+                    "delegate": None,
                     "project": None,
                     "team": {"id": TEAM, "key": "TASK"},
                     "labels": {"nodes": labels, "pageInfo": pages(labels)},
@@ -1149,16 +1292,20 @@ class IssueOps(ServerCase):
                 ops.call(self.gql, issue_edit.M_EDIT, "issueUpdate", i="TASK-8", **{"in": bad})
         self.assertEqual(rec["labels"], [TASK_LABELS["light-build"], CLIENT_LABELS["claude"]])
 
-    def test_edit_role_assigns_and_unassigns_only(self):
-        rec = self.fake.issue("Unassigned", description="Kept")
-        for role, want in (("engineer", self.engineer), ("me", self.harness), ("unassigned", None)):
+    def test_edit_role_delegates_clears_the_assignee_and_unassigns_only(self):
+        rec = self.fake.issue("Unassigned", description="Kept", assignee=self.human)
+        for role, want, sent in (
+            ("engineer", self.engineer, {"delegateId": self.engineer, "assigneeId": None}),
+            ("me", self.manager, {"delegateId": self.manager}),
+            ("unassigned", None, {"delegateId": None}),
+        ):
             with self.subTest(role=role):
                 receipt = self.issues.edit(issue_change(rec["identifier"], role=role))
                 self.assertEqual(receipt.result, "changed")
-                self.assertEqual(self.fake.requests[-1].variables["in"], {"assigneeId": want})
+                self.assertEqual(self.fake.requests[-1].variables["in"], sent)
                 self.assertEqual(
-                    (rec["assignee"], rec["title"], rec["description"]),
-                    (want, "Unassigned", "Kept"),
+                    (rec["delegate"], rec["assignee"], rec["title"], rec["description"]),
+                    (want, None, "Unassigned", "Kept"),
                 )
         again = self.issues.edit(issue_change(rec["identifier"], role="unassigned"))
         self.assertEqual(again.result, "unchanged")

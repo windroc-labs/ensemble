@@ -337,7 +337,7 @@ class Host(ABC):
     def _capacity_rows(self) -> list[SessionRow]:
         names = set(self.list())
         rows = self.rows()
-        if names - {row.name for row in rows}:
+        if (missing := names - {row.name for row in rows}) and missing & set(self.list()):
             raise SessionError(f"host {self.name}: inventory unavailable")
         return rows
 

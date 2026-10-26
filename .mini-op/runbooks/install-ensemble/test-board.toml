@@ -1,55 +1,35 @@
 # The test board's settings, a template for the mini's ~/.ensemble/config.local.toml: copy it there
-# and fill every <…> from the test Linear workspace and GitHub account (docs/credentials.md › Linear
-# presets). The filled values live only on the mini; never commit them.
+# and fill every <…> (test-accounts.md 4.). Each app's Keychain services default to
+# linear-app-<slot>-secret and -token. install.sh asks each app's client secret and each Linear
+# project's repo, and fills each app's user_id and the team, state and label ids (docs/credentials.md
+# › Linear presets).
+# The filled values live only on the mini; never commit them.
 [orchestrator]
 tracker = "linear"
 
 [orchestrator.linear]
-team = "<team id>"
-task_label_group = "<Tasks label group id>"
-agent_label_group = "<Agent label group id>"
-harness_key = "<harness key service>"
-manager_key = "<manager key service>"
 human_members = ["<the test manager account's address>"]
 
-[orchestrator.linear.states]
-backlog     = "<Backlog state id>"
-todo        = "<Todo state id>"
-in_progress = "<In Progress state id>"
-in_review   = "<In Review state id>"
-handoff     = "<Handoff state id>"
-done        = "<Done state id>"
-canceled    = "<Canceled state id>"
+[orchestrator.linear.harness]
+client_id = "<harness app's Client ID>"
 
-[orchestrator.linear.task_labels]
-build          = "<Build label id>"
-light-build    = "<Light Build label id>"
-light-research = "<Light Research label id>"
-deep-research  = "<Deep Research label id>"
-
-[orchestrator.linear.agent_labels]
-claude   = "<Claude label id>"
-codex    = "<Codex label id>"
-opencode = "<OpenCode label id>"
+[orchestrator.linear.manager]
+client_id = "<manager app's Client ID>"
 
 [orchestrator.linear.roles.researcher]
-account = "<researcher account's address>"
-key = "<researcher key service>"
+client_id = "<researcher app's Client ID>"
 
 [orchestrator.linear.roles.pm]
-account = "<pm account's address>"
-key = "<pm key service>"
+client_id = "<pm app's Client ID>"
 
 [orchestrator.linear.roles.engineer]
-account = "<engineer account's address>"
-key = "<engineer key service>"
+client_id = "<engineer app's Client ID>"
 
-[orchestrator.linear.project_repos]
-"<project id>" = "<test owner>/<test repo>"
+[session.clients.opencode]
+max_runs = 1
 
-[orchestrator.client_max_runs]
-opencode = 1
-claude = 1
+[session.clients.claude]
+max_runs = 1
 
 [delegate.roles.researcher.output]
 type = "github"

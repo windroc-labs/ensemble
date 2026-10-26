@@ -4,6 +4,7 @@ import io
 import json
 import os
 import plistlib
+import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -12,8 +13,14 @@ from unittest import mock
 
 from ensemble.orchestrator import cli
 from ensemble.orchestrator.engine import config, prune, router, run_comments, runs
-from ensemble.orchestrator.engine.types import Claim, ConfigError, State, TrackerKind
-from ensemble.orchestrator.trackers.linear import ops
+from ensemble.orchestrator.engine import log as event_log
+from ensemble.orchestrator.engine.types import (
+    Claim,
+    ConfigError,
+    State,
+    TrackerKind,
+)
+from ensemble.orchestrator.trackers.linear import client, ops
 from ensemble.orchestrator.trackers.linear.linear_tracker import LinearTracker
 from ensemble.orchestrator.trackers.local.local_tracker import LocalTracker
 from ensemble.utils import SID_ENV, Record, Status
@@ -21,7 +28,10 @@ from tests.delegate.fakes.delegate import FakeDelegate
 from tests.orchestrator.case import REPO, Case
 from tests.orchestrator.linear_run_case import SID, ReadyDelegate, RunCase
 from tests.orchestrator.unit import run_fixtures
-from tests.orchestrator.unit.run_fixtures import logged
+from tests.orchestrator.unit.board_ids import HARNESS_IDENTITY
+from tests.orchestrator.unit.keychain_fixtures import SECRET as APP_SECRET
+from tests.orchestrator.unit.keychain_fixtures import Endpoint, Keychain, record, token_http_error
+from tests.orchestrator.unit.run_fixtures import logged, show
 from tests.orchestrator.unit.streams import Stderr
 from tests.utils.cli_help import examples, parse_only
 
@@ -35,56 +45,109 @@ class Commands(Case):
 
 
 class Wirings(run_fixtures.Base):
-    """Each tracker kind's engine wiring: its run reader, role keys and write-back accounts."""
+    """Each tracker kind's engine wiring: its run reader, role apps and write-back writers."""
 
-    def test_linear_writes_as_the_role_key_and_the_harness_key(self):
+    def test_router_help_identifies_linear_delegate_ownership(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(router.main(["--help"], trackers=cli.TRACKERS), 0)
+        self.assertIn("delegate (Agent field)", output.getvalue())
+        self.assertNotIn("assigned to a role", output.getvalue())
+
+    def test_linear_writes_as_the_role_app_and_the_harness_app(self):
         cfg = config.load()
         gql = mock.Mock(return_value={})
         linear = cli.TRACKERS[TrackerKind.LINEAR]
-        key = linear.key(cfg, "engineer")
-        self.assertEqual(key, run_fixtures.KEY)
-        accounts = linear.accounts(gql, cfg, key)
+        identity = linear.identity(cfg, "engineer")
+        self.assertEqual(identity, cfg.linear.roles["engineer"])
+        writers = linear.writers(gql, cfg, identity)
         self.assertEqual(
-            (accounts.states, accounts.humans, accounts.repos),
+            (writers.states, writers.humans, writers.repos),
             (cfg.linear.states, ("me@x.com",), {run_fixtures.PROJECT: "acme/ensemble"}),
         )
         self.assertEqual(
-            (accounts.tracker.state_ids, accounts.tracker.team_id),
+            (writers.tracker.state_ids, writers.tracker.team_id),
             (cfg.linear.states, cfg.linear.team),
         )
         gql.return_value = {"comment": None}
-        accounts.tracker.find_comment(ISSUE, (SID, "start"))
-        gql.assert_called_with(ops.Q_COMMENT, service=key, c=ops.client_id(SID, "start"))
-        accounts.harness.find_comment(ISSUE, (SID, "session"))
+        writers.tracker.find_comment(ISSUE, (SID, "start"))
+        gql.assert_called_with(
+            ops.Q_COMMENT, identity=identity, c=ops.client_id(identity.user_id, SID, "start")
+        )
+        writers.harness.find_comment(ISSUE, (SID, "session"))
         gql.assert_called_with(
             ops.Q_COMMENT,
-            service=run_fixtures.HARNESS,
+            identity=HARNESS_IDENTITY,
             timeout=run_comments.LIMIT,
-            c=ops.client_id(SID, "session"),
+            c=ops.client_id(HARNESS_IDENTITY.user_id, SID, "session"),
         )
 
-    def test_linear_reads_a_run_as_the_harness_key(self):
+    def test_linear_reads_a_run_as_the_harness_app(self):
         cfg = config.load()
         reader = cli.TRACKERS[TrackerKind.LINEAR].reader(mock.Mock(), cfg)
         self.assertEqual(
             (reader.gql.keywords, reader.state_ids, reader.team_id),
-            ({"service": run_fixtures.HARNESS}, cfg.linear.states, cfg.linear.team),
+            (
+                {"identity": HARNESS_IDENTITY},
+                cfg.linear.states,
+                cfg.linear.team,
+            ),
         )
 
-    def test_a_local_board_writes_as_one_tracker_with_no_keys(self):
+    def renewal(self, days, answer):
+        """A harness call over a fake Keychain and token endpoint: its stderr."""
+        keychain = Keychain(
+            {
+                HARNESS_IDENTITY.token_service: record(days=days),
+                HARNESS_IDENTITY.secret_service: APP_SECRET,
+            }
+        )
+        err = io.StringIO()
+        with (
+            mock.patch("subprocess.run", keychain),
+            mock.patch.object(urllib.request, "urlopen", side_effect=Endpoint(answer)),
+            redirect_stderr(err),
+        ):
+            client.linear_gql("query { viewer { id } }", identity=HARNESS_IDENTITY)
+        return err.getvalue()
+
+    def test_linear_credentials_set_each_commands_renewal_policy(self):
+        cfg = config.load()
+        event_log.use_logs(cfg.logs_dir)
+        cli.TRACKERS[TrackerKind.LINEAR].credentials(cfg, "promote", dry=False)
+        self.assertEqual(self.renewal(3, token_http_error(401)), "")
+        self.assertEqual(
+            [(e["src"], show(e)) for e in logged()],
+            [("promote", "token-error identity=harness reason=HTTP 401")],
+        )
+        cli.TRACKERS[TrackerKind.LINEAR].credentials(cfg, "router", dry=True)
+        shown = [
+            json.loads(line) for line in self.renewal(3, AssertionError("request")).splitlines()
+        ]
+        self.assertEqual(
+            [(e["src"], e["kind"], e["identity"], round(e["days_left"])) for e in shown],
+            [("router", "token", "harness", 3)],
+        )
+        self.assertEqual(len(logged()), 1)
+
+    def test_a_local_board_sets_no_renewal_policy(self):
+        board = os.path.realpath(os.path.join(self.work, "board"))
+        cfg = replace(config.load(), tracker=TrackerKind.LOCAL, linear=None, board=board)
+        cli.TRACKERS[TrackerKind.LOCAL].credentials(cfg, "prune", dry=True)
+        self.assertIn("token-error: harness: HTTP 401", self.renewal(3, token_http_error(401)))
+
+    def test_a_local_board_writes_as_one_tracker_with_no_apps(self):
         board = os.path.realpath(os.path.join(self.work, "board"))
         cfg = replace(config.load(), tracker=TrackerKind.LOCAL, linear=None, board=board)
         local = cli.TRACKERS[TrackerKind.LOCAL]
-        self.assertIsNone(local.key(cfg, "engineer"))
-        accounts = local.accounts(None, cfg, None)
-        self.assertIs(accounts.tracker, accounts.harness)
-        self.assertIsInstance(accounts.tracker, LocalTracker)
-        self.assertEqual(accounts.tracker.board, board)
+        self.assertIsNone(local.identity(cfg, "engineer"))
+        writers = local.writers(None, cfg, None)
+        self.assertIs(writers.tracker, writers.harness)
+        self.assertIsInstance(writers.tracker, LocalTracker)
+        self.assertEqual(writers.tracker.board, board)
+        self.assertEqual((writers.humans, writers.repos, set(writers.states)), ((), {}, set(State)))
         self.assertEqual(
-            (accounts.humans, accounts.repos, set(accounts.states)), ((), {}, set(State))
-        )
-        self.assertEqual(
-            (accounts.states["in_progress"], accounts.states["handoff"]), ("running", "approved")
+            (writers.states["in_progress"], writers.states["handoff"]), ("running", "approved")
         )
         for made in (local.connect(None, cfg, say=None), local.reader(None, cfg)):
             self.assertIsInstance(made, LocalTracker)
@@ -93,16 +156,14 @@ class Wirings(run_fixtures.Base):
         board = os.path.realpath(os.path.join(self.work, "board"))
         linear_cfg = config.load()
         local_cfg = replace(linear_cfg, tracker=TrackerKind.LOCAL, linear=None, board=board)
-        row = Claim("TASK-1", SID, "engineer", ISSUE, None, None, run_fixtures.KEY, "a", "fake")
-        local_row = replace(row, issue="LOC-1", uuid="LOC-1", key=None)
+        row = Claim("TASK-1", SID, "engineer", ISSUE, None, None, "a", "fake")
+        local_row = replace(row, issue="LOC-1", uuid="LOC-1")
         linear, local = cli.TRACKERS[TrackerKind.LINEAR], cli.TRACKERS[TrackerKind.LOCAL]
         writes = linear.claimed(mock.Mock(), linear_cfg, row).tracker
-        self.assertEqual(writes.gql.keywords, {"service": run_fixtures.KEY})
+        self.assertEqual(writes.gql.keywords, {"identity": linear_cfg.linear.roles["engineer"]})
         self.assertIsInstance(local.claimed(None, local_cfg, local_row).tracker, LocalTracker)
         for wiring, cfg, claim, field, value in (
-            (linear, linear_cfg, replace(row, key=None), "key", None),
             (linear, linear_cfg, replace(row, uuid="TASK-1"), "uuid", "TASK-1"),
-            (local, local_cfg, replace(local_row, key="k"), "key", "k"),
             (local, local_cfg, replace(local_row, uuid="LOC-2"), "uuid", "LOC-2"),
             (local, local_cfg, replace(local_row, uuid=ISSUE), "uuid", ISSUE),
         ):
@@ -334,8 +395,9 @@ class Wirings(run_fixtures.Base):
         with redirect_stdout(output), self.assertRaises(SystemExit):
             cli.main(["--help"])
         self.assertIn(
-            "reaches Linear through the linear.harness_key Keychain service (the issue"
-            " commands: linear.manager_key)",
+            "reaches Linear as the [linear.harness] OAuth app, whose token any command renews"
+            " before a call when under 5 days are left (the issue commands: the [linear.manager]"
+            " OAuth app)",
             " ".join(output.getvalue().split()),
         )
 
@@ -611,12 +673,13 @@ class Queries(RunCase):
             )
         self.assertEqual(ReadyDelegate.usage_calls, ["researcher"])
 
-    def test_config_drift_never_probes_and_recorded_limits_still_block(self):
+    def test_config_drift_probes_the_recorded_client_despite_a_legacy_limit(self):
         self.start()
         FakeDelegate.end(self.cfg.issue_workdir("TASK-1"))
         self.configure(default="other")
-        runs.note_limit(
+        runs.note(
             self.cfg.runs_log,
+            "limit",
             issue="TASK-1",
             sid="1234abcd-0000-4000-8000-000000000000",
             client="fake",
@@ -625,13 +688,12 @@ class Queries(RunCase):
             attempt=1,
         )
         for tty in (False, True):
+            FakeDelegate.end(self.cfg.issue_workdir("TASK-1"))
             result, output, errors = _call(["resume", "TASK-1"], tty=tty)
-            self.assertEqual((result, output), (1, ""))
-            self.assertEqual(
-                errors, "ensemble-orchestrator: TASK-1: resume blocked by usage gate\n"
-            )
-        self.assertEqual(ReadyDelegate.usage_calls, [])
-        self.assertFalse(FakeDelegate.attach(self.cfg.issue_workdir("TASK-1")).alive())
+            self.assertEqual((result, errors), (0, ""))
+            self.assertEqual(Record.parse(output).name, "TASK-1")
+        self.assertEqual(ReadyDelegate.usage_calls, ["researcher", "researcher"])
+        self.assertTrue(FakeDelegate.attach(self.cfg.issue_workdir("TASK-1")).alive())
 
     def test_config_drift_without_a_limit_probes_before_resuming(self):
         self.start()
@@ -721,6 +783,29 @@ class OnALocalBoard(RunCase):
 
 
 class WritebackUsage(RunCase):
+    def test_writeback_renews_as_writeback(self):
+        result, _, _ = _call(
+            ["writeback", "--issue", "TASK-1", "--workdir", self.cfg.issue_workdir("TASK-1")],
+            stdin="{\n",
+        )
+        self.assertEqual(result, 2)
+        keychain = Keychain(
+            {
+                HARNESS_IDENTITY.token_service: record(days=3),
+                HARNESS_IDENTITY.secret_service: APP_SECRET,
+            }
+        )
+        with (
+            mock.patch("subprocess.run", keychain),
+            mock.patch.object(
+                urllib.request, "urlopen", side_effect=Endpoint(token_http_error(401))
+            ),
+        ):
+            client.linear_gql("query { viewer { id } }", identity=HARNESS_IDENTITY)
+        self.assertIn(
+            ("writeback", "token-error"), [(e["src"], e["kind"]) for e in logged(self.cfg.logs_dir)]
+        )
+
     def test_what_is_not_one_writable_event_exits_2_without_output(self):
         begun = json.dumps({"v": 1, "kind": "begun", "sid": SID, "attempt": 1})
         other = "9c1d2e3f-4a5b-4c6d-8e7f-a0b1c2d3e4f5"

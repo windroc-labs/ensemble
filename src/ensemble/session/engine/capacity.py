@@ -34,7 +34,12 @@ def _inventory(
     for key, host in hosts.items():
         try:
             rows = {row.name: row for row in host._capacity_rows()}
-            backend = host._capacity_namespace() if rows else None
+            try:
+                backend = host._capacity_namespace() if rows else None
+            except SessionError:
+                if host.list():
+                    raise
+                rows, backend = {}, None
         except (OSError, SessionError):
             if required is None or key == required:
                 raise

@@ -10,7 +10,7 @@ Test boundaries and commands: `docs/tests.md`.
 - Never name Linear in the team text (`src/ensemble/delegate/team/`), in `/ensemble:act-as` and `/ensemble:manage`, or in `/ensemble:board` (`skills/board/SKILL.md`) outside its `## Linear` section: only that section, the Linear layer's, does.
 - Skills and `config.toml` comments name a file by its path and a skill by its slash command (`/ensemble:act-as`), never "the act-as skill" or `ensemble:act-as`.
 - A layer's packaged `config.toml` (`src/ensemble/<package>/config.toml`) holds only its keys, each a real line (a local-only one its empty default, its comment saying what empty means); a `# local:` line only shows a value for `~/.ensemble/config.local.toml` (`tests/guard_checks/configuration.py` `explicit_keys`). Layer sections and merge rules: `src/ensemble/utils/config_file.py`'s docstring.
-- Identify Linear entities by id, never name; a role's `account` (an email) is the exception.
+- Identify Linear entities by id, never name; role app user ids come from configuration.
 - Linear's lists can lag a just-made state change: re-read an issue's state before acting on it (`src/ensemble/orchestrator/trackers/linear/ops.py:move` does).
 - Tmux implementation: `TmuxHost` runs sessions (`src/ensemble/session/hosts/tmux/host.py`); the `Viewer` shows every Host's sessions on the host tmux, holding the `Grid`, `Iterm` and `Placement` (`src/ensemble/session/viewer/`); the `TmuxCli` they share, and `TmuxPane`, a `TmuxCli` aimed at one pane: `src/ensemble/session/engine/tmux_cli.py`. `/ensemble:manage` (`skills/manage/SKILL.md`) reaches it only through `ensemble-session`.
 - Docker implementation: `src/ensemble/session/hosts/docker/` (`DockerHost`, driving the container's tmux through a `TmuxCli` over `docker exec`, and `DockerTerminal`, holding a `TmuxPane`: `host.py`; its hook callback: `hook.py`; the broker client, daemon, mounts, relay, stub and supervisor beside them; `docs/docker-host.md`).
@@ -18,14 +18,29 @@ Test boundaries and commands: `docs/tests.md`.
 - Keep `<work_dir>/logs/runs.jsonl` (`docs/board.md` › Operating).
 - A `[local_clones]` clone must not move: that breaks its worktrees. Run `git -C <new path> worktree repair`, then update the entry.
 
+## Merging
+
+Once an admin enables **Require merge queue** for `main`, add a reviewed, green PR with
+GitHub's **Merge when ready** button or `gh pr merge <number> --auto --squash`.
+The queue tests current `main` plus preceding queued PRs on `merge_group` commits and
+squash-merges automatically when required `CI` passes; no manual branch updates are needed.
+`Worker image` also reports on queue groups, building when their combined diff changes image inputs.
+Queue groups run every CI project, including diff coverage against the group's base SHA.
+
+`CI` requires every applicable job and, when broker scope is selected, `Broker ubuntu-24.04`.
+PR and merge-group checks contain no macOS job. The independent `Broker macOS` workflow
+(`.github/workflows/broker-macos.yml`) runs on pushes to `main` and manual dispatch,
+preserving macOS checks and the darwin/arm64 build artifact without blocking required CI.
+Require `CI`, never `Broker macos-15` separately.
+
 ## Releasing
 
-`<version>` is `.claude-plugin/plugin.json`'s `version`, `X.Y.Z`. In this order: bump the version and merge it, publish the Release, confirm its broker asset, then pin it in the marketplace. Installs follow the pin, so a pin ahead of its asset breaks every new Docker install.
+`<version>` is `.claude-plugin/plugin.json`'s `version`, `X.Y.Z`. In this order: bump the version and merge it, publish the Release, upload and confirm its broker asset, then pin it in the marketplace. Installs follow the pin, so a pin ahead of its asset breaks every new Docker install.
 
 1. Bump `version` to the same `X.Y.Z` in `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json` and `package.json` (nothing else), open a PR titled `ensemble X.Y.Z` and squash-merge it once CI is green (rulesets reject a direct push to `main`).
 2. Create and publish Release `v<version>`: `gh release create vX.Y.Z --target <that commit's full sha> --title 'vX.Y.Z: <summary>' --notes-file <notes>`. Notes format: first line `Changes on top of v<previous> (ensemble X.Y.Z).`; one bullet per user-facing change with its PR numbers; internal PRs in one `Internal` bullet; last an **Upgrading** section with every step a user must take (config keys, CLI verbs, paths, data the release deletes), checked against each PR body, or "Nothing to do beyond v<previous>'s steps." Steps that stay needed also go into `docs/upgrading.md`.
-3. Wait for its run of `.github/workflows/release.yml`, then confirm the broker asset, `gh release view v<version> --repo windroc-labs/ensemble --json assets` (lists `ensemble-broker-darwin-arm64.tar.gz`), and its provenance: `gh release download v<version> --repo windroc-labs/ensemble --pattern ensemble-broker-darwin-arm64.tar.gz --dir <dir>`, then `gh attestation verify <dir>/ensemble-broker-darwin-arm64.tar.gz --repo windroc-labs/ensemble --signer-workflow windroc-labs/ensemble/.github/workflows/release.yml --source-ref refs/tags/v<version> --deny-self-hosted-runners`.
-4. Only after step 3, the manager pins it in the `windroc` marketplace: in `windroc-labs/agent-plugins-marketplace`, set ensemble's `source.ref` to `v<version>` in `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json` (a PR there, squash-merged; never in the release PR). `scripts/install.sh` and the clients install the tag it pins, with that release's broker; a `sha` pin stops the installer.
+3. On a Mac with Apple silicon, Go and the Xcode command line tools, in a clone of this repo, run `sh scripts/release-broker.sh v<version>` (no workflow builds the broker): it fetches the tag, builds the broker from its commit with that commit's `src/broker/build.sh`, packs `ensemble-broker-darwin-arm64.tar.gz`, writes its sha256 to `ensemble-broker-darwin-arm64.tar.gz.sha256` and uploads both to the Release; `src/broker/install.sh` installs the asset only when it matches that sha256. Then confirm both: `gh release view v<version> --repo windroc-labs/ensemble --json assets` lists them.
+4. Only after step 3, the manager pins it in the `windroc` marketplace: in `windroc-labs/agent-plugins-marketplace`, replace ensemble's existing `source.ref` with `v<version>` in `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json` (a PR there, squash-merged; never in the release PR). Each source object must contain exactly one `ref`: duplicate keys make Codex skip ensemble. Keep `source.source` as `url` and `source.url` as `https://github.com/windroc-labs/ensemble.git`; [Codex's official marketplace format](https://developers.openai.com/plugins/build/plugins#marketplace-metadata) supports a git tag in `source.ref` for this source. Before merging the marketplace PR, register its checkout with `codex plugin marketplace add <checkout>` in an isolated home, confirm `codex plugin list` includes `ensemble@windroc`, run `codex plugin add ensemble@windroc`, and check the installed commit matches `v<version>` and the plugin manifest version is `<version>`. `scripts/install.sh` and the clients install the tag it pins, with that release's broker; a `sha` pin stops the installer.
 5. Only then update the installed plugin (`skills/manage/SKILL.md` › Git and reviews): `claude plugin marketplace update windroc`, then `claude plugin update ensemble@windroc` (a running Claude Code applies it after `/reload-plugins` or a restart); `codex plugin marketplace upgrade windroc`; OpenCode: its `plugin` entry's `#v<version>` (`docs/sessions.md` › OpenCode commander).
 
 ## Import rules

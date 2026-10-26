@@ -1,0 +1,10 @@
+{
+  "run": "https://github.com/windroc-labs/ensemble/actions/runs/40380733382/attempts/1",
+  "head_sha": "fef7ea6a7779cf8fef203d458ce418aac4ad098c",
+  "runner": "ubuntu-24.04",
+  "unit": "Per-test seconds in unit-coverage-40380733382-1-{1,2}/shard-*/durations.jsonl, including all 57 individually scheduled guards.",
+  "repository": "Per-test seconds in repository-40380733382-1-{1,2,3,4,5,6}/shard-*/durations.jsonl.",
+  "selection": "Hints retain measurements >=0.1s from 5923 unit tests and 320 repository tests, each recorded once.",
+  "membership": "Current discovery is authoritative. New IDs default to 0.01s; stale IDs never select tests. Hints affect order and assignment only.",
+  "result": "The full PR workflow completed successfully, including Linux/macOS broker legs, all test jobs, lint, coverage and CI."
+}

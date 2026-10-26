@@ -18,7 +18,14 @@ from ensemble.session import (
     Process,
     SessionError,
 )
-from ensemble.session.engine.types import LOCAL_CONTEXT, ClientContext, Hosts, Launch, Liveness
+from ensemble.session.engine.types import (
+    LOCAL_CONTEXT,
+    ClientContext,
+    Hosts,
+    Launch,
+    Liveness,
+    SessionRow,
+)
 from ensemble.session.harness import guard
 from ensemble.session.hosts.base import Interactive, InteractiveProcess, Piped
 from ensemble.session.hosts.types import CommandView, SessionView
@@ -182,6 +189,30 @@ class HostDefaults(Case):
 
     def test_signals_a_detached_run_blocks_are_hup_term_and_int(self):
         self.assertEqual(SIGNALS, (signal.SIGHUP, signal.SIGTERM, signal.SIGINT))
+
+
+class CapacityRows(Case):
+    """Admission's inventory: a row for every session listed before and after rows()."""
+
+    def host(self, listings, rows):
+        host = MinimalHost("m")
+        host.list = mock.Mock(side_effect=listings)
+        row = SessionRow("", None, "c", StatusState.WORKING, None, None, None, own=False)
+        host.rows = mock.Mock(return_value=[dataclasses.replace(row, name=n) for n in rows])
+        return host
+
+    def test_a_session_ending_between_its_listing_and_rows_is_gone_not_unavailable(self):
+        host = self.host([["a", "b"], ["a"]], ["a"])
+        self.assertEqual([row.name for row in host._capacity_rows()], ["a"])
+
+    def test_a_session_still_listed_without_a_row_makes_the_inventory_unavailable(self):
+        host = self.host([["a", "b"], ["a", "b"]], ["a"])
+        with self.assertRaisesRegex(SessionError, r"\Ahost m: inventory unavailable\Z"):
+            host._capacity_rows()
+
+    def test_a_complete_inventory_is_its_rows(self):
+        host = self.host([["a", "b"]], ["b", "a"])
+        self.assertEqual([row.name for row in host._capacity_rows()], ["b", "a"])
 
 
 def table(base: str = TWO, text: str = ""):

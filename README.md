@@ -60,7 +60,7 @@ One agent keeps you waiting; many agents by hand route every prompt, check and a
 
 Each session runs on a Host you pick: the local one (tmux), where the client runs on your Mac as you, or the Docker Host, where it runs isolated in its own container. The broker, on the Mac, keeps the logins in the login keychain and hands each container only its own credentials (GitHub tokens that last an hour), taking them back when the container closes.
 
-![Flexible hosts: each session runs on a Host you pick, locally (tmux, not isolated) or in its own Docker container (isolated, so the client runs in yolo mode by default). The broker keeps the logins and gives each container only its own credentials: GitHub tokens valid an hour and revoked at close, a Codex access token without its refresh token, a Claude setup-token copy. The container cannot reach the host keychain, optional Linear tracker keys, gh login or Docker socket, and reaches public destinations through the egress proxy; local/LAN services need explicit host:port exceptions; its work leaves only through GitHub](docs/images/system.svg)
+![Flexible hosts: each session runs on a Host you pick, locally (tmux, not isolated) or in its own Docker container (isolated, so the client runs in yolo mode by default). The broker keeps the logins and gives each container only its own credentials: GitHub tokens valid an hour and revoked at close, a Codex access token without its refresh token, a Claude setup-token copy. The container cannot reach the host keychain, optional Linear app tokens, gh login or Docker socket, and reaches public destinations through the egress proxy; local/LAN services need explicit host:port exceptions; its work leaves only through GitHub](docs/images/system.svg)
 
 Details: [Docker host](docs/docker-host.md), [Credentials](docs/credentials.md).
 
@@ -86,19 +86,22 @@ That release's installer installs that release's plugins and broker; another ins
 
 1. installs the dependencies: Homebrew with the Command Line Tools, `gh`, tmux, git, Python 3.11+, iTerm2;
 2. asks which clients you use (Claude Code, Codex, OpenCode) and whether workers run in Docker, and writes `~/.ensemble/config.local.toml`;
-3. installs and logs in only what that configuration needs: the clients with ensemble, [`updraft`](https://github.com/windroc-labs/updraft) on the host only without Docker (Docker workers install it independently in the image), OpenCode with its provider and its ensemble plugin (`opencode plugin -g`), Docker Desktop and the broker with the chosen clients' broker logins, `ctmux --install`, and the selected [board](docs/board.md#setup). A local board confirms `tracker = "local"` and creating missing board and `unassigned/` directories, without asking for Linear keys or contacting Linear. A Linear board asks for its Keychain keys and reads its config from Linear. Either board can optionally install the router and promote launchd jobs.
+3. installs and logs in only what that configuration needs: the clients with ensemble, [`updraft`](https://github.com/windroc-labs/updraft) for host Claude Code/Codex only without Docker ([host support and Docker plugins](docs/docker-host.md#plugins)), OpenCode with its provider and its ensemble plugin (`opencode plugin -g`), Docker Desktop and the broker with the chosen clients' broker logins, `ctmux --install`, and the selected [board](docs/board.md#setup). A local board confirms `tracker = "local"` and creating missing board and `unassigned/` directories, without asking for Linear apps or contacting Linear. A Linear board sets up transport-owned harness, manager and role apps with Client IDs, hidden client secrets and Keychain tokens, then reads its config from Linear. Already-enrolled apps with [`renewal = "broker"`](docs/credentials.md#linear-broker-renewal) use the installed broker's maintenance and published access tokens without reading or asking for client secrets. Either board can optionally install the router and promote launchd jobs.
 
 It asks the `sudo` password once per run and keeps it only in memory, for every `sudo` the run makes (Homebrew's included), runs each login on the spot (`gh`, Claude Code and Codex open your browser; the broker's `claude setup-token` and its paste run on the terminal's alternate screen, cleared once the broker has the token, so it stays out of the scrollback), and shows and asks before it writes your shell profile, the config or launchd jobs. A rerun keeps your last answers, skips what is done and finishes an interrupted install. Before upgrading, see [Upgrading](docs/upgrading.md).
+
+Each run refreshes the selected Claude Code/Codex marketplaces and updates ensemble to the served ref before
+reading installed plugin files. If a client cannot reach that version, installation stops with its name and reason.
 
 For OpenCode, it reuses an executable on `PATH` that runs the minimum version or a newer stable 1.x release,
 and records its path in `[session.clients.opencode] executable`. Otherwise it installs the private copy
 in `~/.ensemble/opencode`. Plugin setup and login use the selected executable; cleanup preserves an existing installation.
 
-Without `--clients` and `--docker`/`--no-docker` it starts with a checklist of what to install (each client, Docker workers, Board; Board starts unticked): arrow keys move, space ticks, Enter confirms. With no saved choice or existing setup, selecting Board asks local or Linear (default local), then whether to install launchd jobs (default no). A rerun keeps the tracker and job choices and skips completed setup; flags change them. When no choice is saved, existing tracker config and installed jobs are kept without asking. Skipping Board or jobs leaves existing config and jobs in place; uninstall jobs as [documented](docs/board.md#setup). Flags pre-answer its questions: `curl -fsSL …/scripts/install.sh | bash -s -- <flags>`.
+It shows the installation checklist only when clients or Docker has no flag or saved answer. `--clients`, `--docker`/`--no-docker` and saved choices together skip it; for example, `--docker --board linear` skips it when clients were saved. When it appears, flags pre-tick their choices, with saved choices and existing config filling the other ticks (each client, Docker workers, Board; Board starts unticked unless saved or selected with `--board`): arrow keys move, space ticks, Enter confirms. With no saved choice or existing setup, selecting Board asks local or Linear (default local), then whether to install launchd jobs (default no). A rerun keeps the tracker and job choices and skips completed setup; flags change them. When no choice is saved, existing tracker config and installed jobs are kept without asking. Skipping Board or jobs leaves existing config and jobs in place; uninstall jobs as [documented](docs/board.md#setup). Flags pre-answer its questions: `curl -fsSL …/scripts/install.sh | bash -s -- <flags>`.
 
 | Flag | Does |
 |---|---|
-| `--ref <ref>` | installs the plugins and the broker from this branch or tag of `windroc-labs/ensemble` (default `<tag>`, the release the `windroc` marketplace pins). Claude Code and Codex install `ensemble@windroc` from that marketplace, which serves one ref, so with them only that ref; another ref needs `--clients opencode`: a release tag downloads its broker, a branch builds it locally |
+| `--ref <ref>` | installs the plugins and the broker from this branch or tag of `windroc-labs/ensemble` (default `<tag>`, the release the `windroc` marketplace pins). Claude Code and Codex install `ensemble@windroc` from that marketplace, which serves one ref, so with them only that ref; another ref needs `--clients opencode`: a release tag downloads its broker, a branch builds it locally. Check [launcher precedence](#commands) when other client caches exist. |
 | `--clients <list>` | comma-separated `claude`, `codex`, `opencode`; any one alone works |
 | `--docker`, `--no-docker` | workers in Docker (Docker Desktop, the broker) or on the local tmux Host |
 | `--board <local\|linear>`, `--no-board` | sets up a local or Linear board, or skips board setup (first-run default) |
@@ -107,10 +110,10 @@ Without `--clients` and `--docker`/`--no-docker` it starts with a checklist of w
 | `--opencode-key-stdin` | reads the provider's API key from stdin; Docker imports the same key from local OpenCode's `auth.json` into the broker |
 | `--password-stdin` | reads the `sudo` password from stdin, before the key |
 
-With Docker, before any client step, it checks that each chosen client's ensemble plugin (the copy installed, OpenCode's
-only while at the `--ref`'s commit, else the `--ref` on GitHub) speaks the protocol of the broker it will use: the
-installed broker when it came from that plugin and speaks its protocol, else the release it will install it from (`v` +
-the plugin's version). It stops naming both protocols when they differ.
+With Docker, before client setup, it checks the served ref against its release broker's protocol. After refreshing
+Claude Code/Codex plugins, it checks their installed copies too. OpenCode's installed copy counts only while at the
+`--ref`'s commit; otherwise it checks `--ref` on GitHub. For installed copies it uses the installed broker when it came
+from that plugin and speaks its protocol, else the plugin's release (`v` + its version). A mismatch names both protocols.
 
 With a stdin flag, stdin cannot also carry the script:
 
@@ -140,9 +143,11 @@ Set up by hand, nothing checks these: a missing one fails the agent run.
 
 How the sessions ensemble starts load your settings, and why some commands refuse inside them: [Session settings](docs/sessions.md#session-settings).
 
+### Commands
+
 | Command | Does |
 |---|---|
-| `ctmux <name>` | Open the commander's tmux session: native windows in iTerm2, a plain tmux attach in other terminals, a switch from inside tmux. `ctmux --install` puts ctmux and the four commands `ensemble-crew`, `ensemble-session`, `ensemble-delegate` and `ensemble-orchestrator` in `~/.ensemble/bin/`: run them by that path, or add it to `PATH`. Each runs that command from the plugin installed when it runs, Claude Code's install first, then Codex's newest, then OpenCode's newest, so an upgrade needs no reinstall; rerun `--install` to refresh them. |
+| `ctmux <name>` | Open the commander's tmux session: native windows in iTerm2, a plain tmux attach in other terminals, a switch from inside tmux. `ctmux --install` puts ctmux and the four commands `ensemble-crew`, `ensemble-session`, `ensemble-delegate` and `ensemble-orchestrator` in `~/.ensemble/bin/`: run them by that path, or add it to `PATH`. Each runs that command from the plugin installed when it runs, Claude Code's install first, then Codex's newest, then OpenCode's newest, so an upgrade needs no reinstall; rerun `--install` to refresh them. An OpenCode-only `--ref` install does not override this order: an older Codex cache still wins over the new OpenCode copy. To run that ref explicitly, use its plugin's `bin/ensemble-*` or `skills/manage/scripts/ctmux` path. |
 | `/ensemble:manage` | Launch and direct workers, role runs and pipeline runs, with the commander's guidelines. |
 | `/ensemble:act-as <role>[:<task>] <input>` | Run a core role in this conversation. |
 | `/ensemble:board` | Read, find, create, edit, move and archive board issues with fixed `ensemble-orchestrator issue` commands. |

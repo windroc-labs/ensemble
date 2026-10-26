@@ -6,12 +6,10 @@ fields.
 import json
 import os
 
-from tests.orchestrator.unit.board_ids import ACCOUNTS, STATES, TEAM
+from tests.orchestrator.unit.board_ids import MANAGER_IDENTITY, MANAGER_USER, STATES, TEAM, role_id
 from tests.orchestrator.unit.issue_fixtures import (
     CLIENT_LABELS,
-    MANAGER_KEY,
     OTHER_TEAM,
-    ROLE_USERS,
     TASK_LABELS,
     IssueCase,
     Routes,
@@ -19,9 +17,7 @@ from tests.orchestrator.unit.issue_fixtures import (
     issue_row,
     label,
     project,
-    role_users,
     uid,
-    user,
 )
 
 FIELDS = ["id", "identifier", "title", "url", "state", "labels", "assignee", "project", "parent_id"]
@@ -53,13 +49,12 @@ class Filters(IssueCase):
         query, variables = gql.calls[0]
         self.assertIn("orderBy: updatedAt", query)
         want = {"first": 20, "after": None, "f": {"team": {"id": {"eq": TEAM}}}, "a": False}
-        self.assertEqual(variables, {**want, "service": MANAGER_KEY})
+        self.assertEqual(variables, {**want, "identity": MANAGER_IDENTITY})
 
     def test_every_filter_holds_at_once(self):
         gql = Routes(
             issueLabels=edges([label(4, "bug")]),
             team={"projects": edges([project(5, "Ensemble")])},
-            users=role_users,
             issue={"id": uid(7), "identifier": "TASK-7"},
             issues=edges([]),
         )
@@ -75,7 +70,7 @@ class Filters(IssueCase):
                 {"team": {"id": {"eq": TEAM}}},
                 {"or": [{"title": text}, {"description": text}]},
                 {"state": {"id": {"eq": STATES["todo"]}}},
-                {"assignee": {"id": {"eq": ROLE_USERS[ACCOUNTS["engineer"]]}}},
+                {"delegate": {"id": {"eq": role_id("engineer")}}},
                 {"labels": {"some": {"id": {"eq": TASK_LABELS["build"]}}}},
                 {"labels": {"some": {"id": {"eq": CLIENT_LABELS["codex"]}}}},
                 {"priority": {"eq": 1}},
@@ -107,15 +102,17 @@ class Filters(IssueCase):
                 self.run_list(argv, gql)
                 self.assertEqual(gql.sent("issues")[0]["f"]["and"][1], want)
 
-    def test_role_me_is_the_viewer_and_unassigned_no_assignee(self):
+    def test_role_filters_the_delegate_me_the_manager_app_unassigned_none(self):
         for spec, want in (
-            ("me", {"assignee": {"id": {"eq": uid(6)}}}),
-            ("unassigned", {"assignee": {"null": True}}),
+            ("pm", {"delegate": {"id": {"eq": role_id("pm")}}}),
+            ("me", {"delegate": {"id": {"eq": MANAGER_USER}}}),
+            ("unassigned", {"delegate": {"null": True}}),
         ):
-            gql = Routes(viewer=user(6, "Harness"), issues=edges([]))
+            gql = Routes(issues=edges([]))
             with self.subTest(spec=spec):
                 self.run_list(["--role", spec], gql)
                 self.assertEqual(gql.sent("issues")[0]["f"]["and"][1], want)
+                self.assertEqual(len(gql.calls), 1)
 
     def test_archived_issues_only_when_asked(self):
         gql = Routes(issues=edges([issue_row("TASK-1")]))
@@ -215,7 +212,6 @@ class Unresolved(IssueCase):
                 "label group",
             ),
             (["--role", "Ann"], Routes(), "--role Ann: not a role: researcher, pm, engineer, me"),
-            (["--role", "pm"], Routes(users={"nodes": []}), ACCOUNTS["pm"]),
             (["--task", "nope"], Routes(), "build, light-build"),
             (["--client", "nope"], Routes(), "codex, claude"),
             (["--parent", "nope"], Routes(), "want an issue identifier"),

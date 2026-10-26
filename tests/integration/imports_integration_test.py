@@ -47,14 +47,14 @@ def paths(name: str) -> tuple[str, ...]:
 
 
 class ImportsAlone(Case):
-    def test_each_module(self):
+    def _check_modules(self, group):
         names = [
             n for sub, root in SRC.items() for n in modules(root, f"ensemble.{sub}")
         ] + modules(REPO, "tests")
         self.assertIn("ensemble.session.engine.hosted_session", names)
         self.assertIn("ensemble.orchestrator.engine.router", names)
         self.assertIn("tests.case", names)
-        for name in names:
+        for name in names[group::4]:
             with self.subTest(name), tempfile.TemporaryDirectory() as home:
                 res = subprocess.run(
                     [*PY, "-c", CHILD, name],
@@ -66,6 +66,18 @@ class ImportsAlone(Case):
                     timeout=60,
                 )
                 self.assertEqual((res.returncode, os.listdir(home)), (0, []), res.stderr)
+
+    def test_each_module_1(self):
+        self._check_modules(0)
+
+    def test_each_module_2(self):
+        self._check_modules(1)
+
+    def test_each_module_3(self):
+        self._check_modules(2)
+
+    def test_each_module_4(self):
+        self._check_modules(3)
 
 
 if __name__ == "__main__":

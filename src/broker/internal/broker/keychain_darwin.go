@@ -111,14 +111,17 @@ static OSStatus self_access(const char *label, SecAccessRef *access) {
     CFRelease(self);
     return s;
 }
-// A broker-only item. An existing one is deleted, never updated, so a pre-planted permissive ACL does not survive.
-static OSStatus secret_put(const char *path, const char *service, const char *account, const char *label, const void *bytes, long length) {
+// A broker-only item. Replacement deletes the old item so a pre-planted permissive ACL cannot survive;
+// initial-only creation leaves an existing item untouched and fails on a duplicate.
+static OSStatus secret_put(const char *path, const char *service, const char *account, const char *label, const void *bytes, long length, int replace) {
     SecKeychainRef kc = NULL;
     OSStatus s;
     CFMutableDictionaryRef q = item_query(path, service, account, &kc, &s);
     if (!q) return s;
-    s = SecItemDelete(q);
-    if (s != errSecSuccess && s != errSecItemNotFound) goto done;
+    if (replace) {
+        s = SecItemDelete(q);
+        if (s != errSecSuccess && s != errSecItemNotFound) goto done;
+    }
     SecAccessRef access = NULL;
     s = self_access(label, &access);
     if (s != errSecSuccess) goto done;
@@ -569,7 +572,7 @@ func (k fileKeychain) Put(account string, token []byte) error {
 func (k fileKeychain) put(service, account, label string, data []byte) error {
 	p, free := cStrings(string(k), service, account, label)
 	defer free()
-	return status(C.secret_put(p[0], p[1], p[2], p[3], unsafe.Pointer(&data[0]), C.long(len(data))))
+	return status(C.secret_put(p[0], p[1], p[2], p[3], unsafe.Pointer(&data[0]), C.long(len(data)), 1))
 }
 
 func (k fileKeychain) Secret(service, account string) ([]byte, error) {
@@ -581,6 +584,24 @@ func (k fileKeychain) PutSecret(service, account string, data []byte) error {
 		return errors.New("empty secret")
 	}
 	return k.put(service, account, "ensemble "+service, data)
+}
+
+func (k fileKeychain) CreateSecret(service, account string, data []byte) error {
+	if len(data) == 0 {
+		return errors.New("empty secret")
+	}
+	p, free := cStrings(string(k), service, account, "ensemble "+service)
+	defer free()
+	return status(C.secret_put(p[0], p[1], p[2], p[3], unsafe.Pointer(&data[0]), C.long(len(data)), 0))
+}
+
+func (k fileKeychain) WriteSecret(service, account string, data []byte) error {
+	if len(data) == 0 {
+		return errors.New("empty secret")
+	}
+	p, free := cStrings(string(k), service, account)
+	defer free()
+	return status(C.codex_write(p[0], p[1], p[2], unsafe.Pointer(&data[0]), C.long(len(data))))
 }
 
 func (k fileKeychain) DeleteSecret(service, account string) error {
@@ -733,6 +754,14 @@ func (k SystemKeychain) PutSecret(service, account string, data []byte) error {
 		return err
 	}
 	return k.login().PutSecret(service, account, data)
+}
+
+// UpdateSecret is Linear's non-destructive account/registry/grant write, preserving existing ACL and data on failure.
+func (k SystemKeychain) UpdateSecret(service, account string, data []byte) error {
+	if err := CheckInstalled(); err != nil {
+		return err
+	}
+	return writeRetainedSecret(k.login(), service, account, data)
 }
 
 func (k SystemKeychain) DeleteSecret(service, account string) error {

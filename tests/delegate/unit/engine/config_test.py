@@ -239,7 +239,7 @@ class EnvironmentCheckTest(Case):
             {
                 "image": "mini-op:env",
                 "gateway": "mini-op",
-                "plugins": ["mini-op"],
+                "plugins": [],
                 "lock": "mini-op",
                 "secrets": [
                     {"item": "ensemble-env/mini-op-password", "file": "mini-password"},

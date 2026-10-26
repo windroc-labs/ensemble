@@ -88,6 +88,68 @@ class Run(unittest.TestCase):
 
 
 class Discovery(unittest.TestCase):
+    def test_parallel_repository_jobs_keep_every_selector_and_duration_hint(self):
+        commands = []
+        with mock.patch.object(
+            runner, "parallel", side_effect=lambda _t, c, _d: commands.extend(c.values()) or 0
+        ):
+            for number in (1, 2):
+                self.assertEqual(
+                    runner.main(
+                        [
+                            "Repository",
+                            "tests/integration",
+                            "--durations",
+                            "timings.json",
+                            "--parallel",
+                            "4",
+                            "--shard",
+                            f"{number}/2",
+                        ]
+                    ),
+                    0,
+                )
+        self.assertEqual([command[-1] for command in commands], [f"{i}/8" for i in range(1, 9)])
+        for command in commands:
+            self.assertEqual(
+                command[-5:-1], ["tests/integration", "--durations", "timings.json", "--shard"]
+            )
+
+    def test_duration_shards_are_balanced_deterministic_complete_and_disjoint(self):
+        cases = [unittest.FunctionTestCase(lambda: None) for _ in range(5)]
+        for number, case in enumerate(cases):
+            case.id = lambda number=number: f"sample.Case.test_{number}"
+        durations = {cases[0].id(): 20, cases[1].id(): 10, "removed.test": 999}
+        groups = [
+            list(
+                runner.tests(runner.shard(unittest.TestSuite(reversed(cases)), f"{i}/2", durations))
+            )
+            for i in (1, 2)
+        ]
+        self.assertCountEqual(
+            [test.id() for group in groups for test in group], [test.id() for test in cases]
+        )
+        self.assertEqual(groups[0], [cases[0]])
+        self.assertEqual(groups[1], cases[1:])
+        self.assertEqual(
+            [
+                test.id()
+                for test in runner.tests(runner.shard(unittest.TestSuite(cases), "1/2", durations))
+            ],
+            [test.id() for test in groups[0]],
+        )
+        for durations in (
+            {"a": -1},
+            {"a": 0},
+            {"a": float("nan")},
+            {"a": float("inf")},
+            {"a": True},
+            {"a": "1"},
+            [],
+        ):
+            with self.subTest(durations=durations), self.assertRaises(ValueError):
+                runner.shard(unittest.TestSuite(cases), "1/2", durations)
+
     def test_directory_shards_keep_selection_complete_and_disjoint(self):
         cases = [unittest.FunctionTestCase(lambda: None, description=str(i)) for i in range(7)]
         for i, case in enumerate(cases):
@@ -148,7 +210,7 @@ class Discovery(unittest.TestCase):
         self.assertEqual([argv[-1] for argv in commands], [f"{i}/8" for i in range(1, 9)])
         for value, workers in (("0/1", 4), ("2/1", 4), ("1/0", 4), ("1/1", 0)):
             with self.subTest(value=value, workers=workers), self.assertRaises(ValueError):
-                runner.unit_parallel("Unit", value, workers)
+                runner.selection_parallel("Unit", value, workers, ["--unit"])
 
     def test_unit_shards_are_deterministic_complete_and_disjoint(self):
         cases = [unittest.FunctionTestCase(lambda: None, description=str(i)) for i in range(7)]
