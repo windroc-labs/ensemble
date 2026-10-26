@@ -359,6 +359,7 @@ class ManagedProcess(InteractiveProcess):
         self.require_terminal()
         if lines is not None and (type(lines) is not int or lines < 1):
             raise ConfigError("lines: want a positive integer")
+        request = json.dumps({"lines": lines}).encode()
         with self.query:
             with self.condition:
                 # A timed-out query still owns the next reply on this ordered channel.
@@ -370,7 +371,7 @@ class ManagedProcess(InteractiveProcess):
                     raise Unanswered(f"worker {self.name}: screen unanswered")
                 self.view = None
                 self.view_pending = True
-            self.send_frame(b"q", json.dumps({"lines": lines}).encode())
+            self.send_frame(b"q", request)
             with self.condition:
                 self.condition.wait_for(
                     lambda: self.view is not None or self.failure is not None, WAIT

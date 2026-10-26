@@ -391,6 +391,34 @@ class ManagedTest(Case):
         self.assertEqual(channel.state(), Liveness.UNKNOWN)
         channel.proc.stdin.close.assert_called_once()
 
+    def test_screen_encoding_failure_does_not_leave_an_outstanding_query(self):
+        channel = self.channel(terminal=True)
+        channel.accept(b"s", b'{"pid":123}')
+
+        def write(_fd, data):
+            channel.accept(b"v", b'{"text":"current"}')
+            return len(data)
+
+        with (
+            mock.patch.object(
+                managed.select, "select", return_value=([], [channel.proc.stdin], [])
+            ),
+            mock.patch.object(os, "write", side_effect=write) as written,
+            mock.patch.object(
+                threading.Condition, "wait_for", side_effect=lambda predicate, _: predicate()
+            ),
+        ):
+            with (
+                mock.patch.object(json, "dumps", side_effect=ValueError("cannot encode query")),
+                self.assertRaisesRegex(ValueError, "cannot encode query"),
+            ):
+                channel.screen(lines=1)
+            written.assert_not_called()
+            self.assertEqual(channel.screen(lines=40), "current")
+        self.assertEqual(written.call_count, 1)
+        self.assertEqual(channel.state(), Liveness.LIVE)
+        channel.proc.stdin.close.assert_not_called()
+
     def test_never_started_name_is_absent(self):
         self.assertEqual(managed.liveness("tmux", "worker", "a" * 32), Liveness.ABSENT)
 
