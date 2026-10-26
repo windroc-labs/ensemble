@@ -754,6 +754,6 @@ the first failed check. The keychain, Linear preset and board-run checks stay ma
   has no Docker gateway address to listen on instead
   ([Docker networking how-tos](https://docs.docker.com/desktop/features/networking/networking-how-tos/)). A worker
   started before the gateway keeps that reach until its next start, restart or resume
-  ([Upgrading](upgrading.md#egress-gateway)). Same-network peers can still connect directly.
+  ([Upgrading](upgrading.md#egress-gateway)).
 - A gateway restart breaks connections on every caller network; a bad policy section can make the whole gateway
-  unhealthy and prevent new workers. Image builds remain outside this restriction.
+  unhealthy and prevent new workers.

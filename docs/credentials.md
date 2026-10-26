@@ -253,13 +253,13 @@ A read that returns bytes fails this check unless the user accepts it: mark the 
 - Its workspace volume `ensemble-ws-<name>` at its cwd.
 - Its own client state: Claude and OpenCode's read-write binds; Codex's volatile home and bound `sessions/` history.
 - Its credentials on tmpfs ([Credentials](#credentials)).
-- The network only through the egress gateway's `workers` policy: the public internet; the Mac (`host.docker.internal`) and LAN providers only through its exceptions ([Egress gateway](docker-host.md#egress-gateway)); other containers on the same worker network directly.
+- The network only through the egress gateway's `workers` policy: the public internet; the Mac (`host.docker.internal`) and LAN providers only through its exceptions ([Egress gateway](docker-host.md#egress-gateway)).
 - Every repo of every App installation.
 
 Every container runs as `agent`, with all capabilities dropped and `no-new-privileges`.
 
-That network is the internal one the gateway advertises for `workers` (`egress-workers` in contract 1), with no
-direct route out, external DNS included. The gateway's config, checkout and Docker socket are not mounted into
+The `workers` network is the internal one the gateway advertises in its `windroc.egress.network.workers.name` label
+(`egress-workers` in contract 1), with no direct route out, external DNS included. The gateway's config, checkout and Docker socket are not mounted into
 workers. Only container loopback bypasses the proxy. See [gateway operations](docker-host.md#egress-gateway)
 for the installer, policy and network-change restart commands, health checks, and public IPv4/global IPv6 limits.
 
@@ -267,7 +267,7 @@ Ollama's `host.docker.internal:11434` and every local/LAN provider `base_url` ho
 `networks.workers.exceptions` in `~/.egress/config.local.yaml`. The installer preserves an existing config and
 does not add provider exceptions. Every worker gets the exception, including Claude and Codex, so a permitted
 provider still receives the requests and credentials its own permissions allow. Host-side provider probes can
-pass before the worker's exception exists. Image builds keep their existing network access. Existing running `bridge` workers retain old access until their next
+pass before the worker's exception exists. Existing running `bridge` workers retain old access until their next
 start, restart or resume ([Upgrading](upgrading.md#egress-gateway)).
 
 ## What a container cannot reach
