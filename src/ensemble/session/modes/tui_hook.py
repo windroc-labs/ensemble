@@ -92,7 +92,7 @@ def _prepare(argv: Sequence[str], roots: Sequence[str]):
         dict.fromkeys([*roots, *(root for _, hook in hooks for root in hook["roots"]), *sys.path])
     )
     specs = {
-        hook["module"]: _check_module(hook["module"], search, kind + " hook", HookError)
+        hook["module"]: find_module(hook["module"], search, kind + " hook", HookError)
         for kind, hook in hooks
     }
     return folder, label, state, specs
@@ -118,7 +118,7 @@ def _dispatch(folder, label, payload, state, specs, *, event):
     if journaled is not None:  # a retry reruns only the Host
         payload = journaled
     elif client_hook := state.get("client_hook"):
-        client = _load_callback(client_hook["module"], "client hook", specs)
+        client = load_callback(client_hook["module"], "client hook", specs)
         payload = client.on_hook(call("client_hook", payload))
         if payload is None:
             return
@@ -129,7 +129,7 @@ def _dispatch(folder, label, payload, state, specs, *, event):
             )
     word = state["words"].get(label)
     host_hook = state.get("host_hook") if word else None
-    host = None if host_hook is None else _load_callback(host_hook["module"], "host hook", specs)
+    host = None if host_hook is None else load_callback(host_hook["module"], "host hook", specs)
     if journaled is None:
         if word != StatusState.DONE:
             payload = cut(payload)
@@ -240,7 +240,7 @@ def _check_callbacks(state, path, error):
             raise error(f"{path}: bad {hook}")
 
 
-def _check_module(name: str, search: list[str], kind: str, error):
+def find_module(name: str, search: list[str], kind: str, error):
     """What `name` and each package above it were found as over `search`, outermost first."""
     paths, specs = search, []
     parts = name.split(".")
@@ -261,9 +261,9 @@ def _check_module(name: str, search: list[str], kind: str, error):
     return specs
 
 
-def _load_callback(name: str, kind: str, specs):
-    """`name` from what _check_module found: each segment not yet loaded, from its file or, for a
-    namespace package, its directories.
+def load_callback(name: str, kind: str, specs, entry: str = "on_hook"):
+    """`name` from what find_module found: each segment not yet loaded, from its file or, for a
+    namespace package, its directories; its callable `entry` is required.
     """
     parts = name.split(".")
     for index, found in enumerate(specs[name]):
@@ -294,8 +294,8 @@ def _load_callback(name: str, kind: str, specs):
         if parent:
             setattr(sys.modules[parent], child, module)
     module = sys.modules[name]
-    if not callable(getattr(module, "on_hook", None)):
-        raise HookError(f"{kind} {name}: missing on_hook callback")
+    if not callable(getattr(module, entry, None)):
+        raise HookError(f"{kind} {name}: missing {entry} callback")
     return module
 
 

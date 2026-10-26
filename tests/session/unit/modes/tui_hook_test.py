@@ -258,6 +258,15 @@ class DeclaredRootCallback(Case):
             payloads = [json.loads(line)["payload"] for line in f]
         self.assertEqual((stderr.getvalue(), payloads), ("", [{"loaded": module}]))
 
+    def test_a_callback_loads_by_its_named_entry(self):
+        module = f"entry_{uuid.uuid4().hex}"
+        self.write(f"{module}.py", text="def on_event(call):\n    return None\n")
+        specs = {module: tui_hook.find_module(module, [self.root], "handler", ValueError)}
+        loaded = tui_hook.load_callback(module, "handler", specs, entry="on_event")
+        self.assertTrue(callable(loaded.on_event))
+        with self.assertRaisesRegex(engine_types.HookError, f"handler {module}: missing on_hook"):
+            tui_hook.load_callback(module, "handler", specs)
+
 
 class Callbacks(Case):
     """A session dir whose client callback tags the payload and whose Host callback fails once."""
