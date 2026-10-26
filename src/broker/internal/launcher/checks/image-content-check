@@ -1,0 +1,6 @@
+#!/bin/sh
+# Run over stdin as agent: even the image's Python or this check's installed copy may be unreadable.
+set -eu
+root=${1:-/opt/ensemble}
+unreadable=$(find -L "$root" \( \( -type d \( ! -readable -o ! -executable \) \) -o \( -type f ! -readable \) \) -print -quit) || exit 1
+test -z "$unreadable"
