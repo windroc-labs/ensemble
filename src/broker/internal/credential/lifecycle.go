@@ -526,8 +526,10 @@ func expiries(entries []Material) []protocol.Expiry {
 }
 
 // Acquire gives d's consumer one token per target of subject, limited to scope: each is recorded prepared (put) before
-// the next request, all are delivered and published, then all are marked delivered. On any failure it retires every token
-// it issued, except a shared provider's that failed delivery or publication, which stay prepared.
+// the next request, all are delivered and published, then all are marked delivered. On a failure it retires only its
+// rollback set (rollback), never a material the record already held: a shared provider's materials this run appended,
+// any other provider's fresh tokens even unrecorded. A shared provider's that failed delivery or publication stay
+// prepared.
 func (l Lifecycle) Acquire(ctx context.Context, d Delivery, subject string, scope map[string]string) (_ []protocol.Expiry, err error) {
 	if err := l.ready(); err != nil {
 		return nil, err
