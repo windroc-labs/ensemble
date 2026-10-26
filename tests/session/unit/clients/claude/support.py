@@ -178,7 +178,7 @@ HOOKS = {
     "PermissionRequest": HookKind.BLOCKED,
     "Notification": HookKind.BLOCKED,
     "PostToolUse": HookKind.ACTIVITY,
-    "UserPromptSubmit": HookKind.ACTIVITY,
+    "UserPromptSubmit": HookKind.TURN_STARTED,
 }
 
 MATCHER = "^(permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input|quota_auto_resume_stale)$"

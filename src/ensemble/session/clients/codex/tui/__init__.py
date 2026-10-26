@@ -45,7 +45,9 @@ from ensemble.session.engine.types import (
     Reply,
     SessionEvent,
     Spec,
+    TurnEnd,
     TurnFailed,
+    TurnStarted,
 )
 from ensemble.session.modes.client_adapters.tui import Tui
 from ensemble.utils import json_records, module_roots, read_beneath, source_path
@@ -61,7 +63,7 @@ CLIENT_PYTHONPATH = "ENSEMBLE_CLIENT_PYTHONPATH"  # START's env: the client's PY
 
 HOOKS = (
     ("SessionStart", "sessionStart", "activity"),
-    ("UserPromptSubmit", "userPromptSubmit", "activity"),
+    ("UserPromptSubmit", "userPromptSubmit", "turn_started"),
     ("PostToolUse", "postToolUse", "activity"),
     ("PermissionRequest", "permissionRequest", "blocked"),
     ("PreToolUse", "preToolUse", "blocked"),
@@ -156,6 +158,7 @@ class CodexTui(Tui):
         self.transcript, self.start, self.offset = "", 0, 0  # the native session file's cursor
         self.last = self.unseen = ""  # the turn's newest text; its Stop text not yet read
         self.retry = 0.0  # time.monotonic() before which no session file lookup runs
+        self._native_turn = ""
 
     def launch(self, spec: Spec, hook):
         common = self.common
@@ -276,15 +279,37 @@ class CodexTui(Tui):
                 ended = self.last_reply if label == "Stop" else None
         self.last = newest if ended is None else ""
         self.unseen = ended if ended and ended.strip() and ended != newest else ""
-        return found
+        return [event for event in found if not isinstance(event, TurnStarted)]
 
-    def _record(self, record: dict) -> list[Reply | TurnFailed]:
-        failed = records.failure(record)
-        if failed is not None:
+    def _record(self, record: dict) -> list[SessionEvent]:
+        payload = record.get("payload")
+        if (
+            record.get("type") == "event_msg"
+            and isinstance(payload, dict)
+            and payload.get("type") == "task_started"
+        ):
+            identifier = payload.get("turn_id")
+            self._native_turn = identifier if isinstance(identifier, str) else ""
+            if self._accept_turn(identifier):
+                self.last = self.unseen = ""
+                return [TurnStarted()]
+            return []
+        if isinstance(payload, dict) and (failed := records.failure(record)) is not None:
             kind, message = failed
             if limit_message(message):
                 return []
+            if not self._settle_turn(payload.get("turn_id") or self._native_turn, native=True):
+                return []
             return [TurnFailed(kind, message)]
+        if (
+            record.get("type") == "event_msg"
+            and isinstance(payload, dict)
+            and payload.get("type") == "task_complete"
+            and payload.get("error") is None
+            and self._settle_turn(payload.get("turn_id") or self._native_turn, native=True)
+        ):
+            text = payload.get("last_agent_message")
+            return [TurnEnd(text if isinstance(text, str) else self.last)]
         found = records.message(record)
         if found is None:
             return []
