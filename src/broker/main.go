@@ -113,18 +113,20 @@ func readOpencodeAuth(path, provider string) ([]byte, error) {
 	return []byte(entry.Key), nil
 }
 
-// readEnvValue is all of r, a pipe or file carrying login env's value verbatim, at most launcher.MaxSecretBytes bytes.
+// readEnvValue is all of r, a pipe or file carrying login env's value verbatim, at most launcher.MaxSecretBytes bytes,
+// read into one buffer that is erased unless returned.
 func readEnvValue(r io.Reader) ([]byte, error) {
-	data, err := io.ReadAll(io.LimitReader(r, launcher.MaxSecretBytes+1))
+	buf := make([]byte, launcher.MaxSecretBytes+1)
+	n, err := io.ReadFull(r, buf)
 	switch {
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return buf[:n], nil
 	case err != nil:
-		clear(data)
+		clear(buf)
 		return nil, err
-	case len(data) > launcher.MaxSecretBytes:
-		clear(data)
-		return nil, fmt.Errorf("the value must be 1 to %d bytes", launcher.MaxSecretBytes)
 	}
-	return data, nil
+	clear(buf)
+	return nil, fmt.Errorf("the value must be 1 to %d bytes", launcher.MaxSecretBytes)
 }
 
 func main() {

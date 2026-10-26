@@ -835,16 +835,48 @@ func TestLoginEnvDispatch(t *testing.T) {
 	}
 }
 
-func TestReadEnvValue(t *testing.T) {
-	for _, value := range []string{"one line", "-----BEGIN KEY-----\nabc\n-----END KEY-----\n", strings.Repeat("v", launcher.MaxSecretBytes)} {
-		if got, err := readEnvValue(strings.NewReader(value)); err != nil || string(got) != value {
-			t.Fatalf("%.20q: %.20q %v", value, got, err)
+// keptReader reads from r and keeps every buffer it was handed, so a test can check the caller erased it.
+type keptReader struct {
+	r    io.Reader
+	bufs [][]byte
+}
+
+func (k *keptReader) Read(p []byte) (int, error) {
+	k.bufs = append(k.bufs, p)
+	return k.r.Read(p)
+}
+
+// erased is whether every buffer k was handed, to its capacity, is zero.
+func (k *keptReader) erased() bool {
+	for _, b := range k.bufs {
+		b = b[:cap(b)]
+		if !bytes.Equal(b, make([]byte, len(b))) {
+			return false
 		}
 	}
-	if _, err := readEnvValue(strings.NewReader(strings.Repeat("v", launcher.MaxSecretBytes+1))); err == nil || err.Error() != "the value must be 1 to 16384 bytes" {
-		t.Fatalf("over the limit: %v", err)
+	return len(k.bufs) > 0
+}
+
+func TestReadEnvValue(t *testing.T) {
+	for _, value := range []string{"", "one line", "-----BEGIN KEY-----\nabc\n-----END KEY-----\n", strings.Repeat("v", launcher.MaxSecretBytes)} {
+		r := &keptReader{r: strings.NewReader(value)}
+		got, err := readEnvValue(r)
+		if err != nil || string(got) != value || len(r.bufs) == 0 || cap(r.bufs[0]) != launcher.MaxSecretBytes+1 {
+			t.Fatalf("%.20q: %.20q %v, buffers %d", value, got, err, len(r.bufs))
+		}
+		end := func(b []byte) *byte { return &b[:cap(b)][cap(b)-1] }
+		for _, b := range r.bufs {
+			if end(b) != end(r.bufs[0]) {
+				t.Fatalf("%.20q: read into a second buffer", value)
+			}
+		}
 	}
-	if _, err := readEnvValue(iotest.ErrReader(errors.New("closed"))); err == nil || err.Error() != "closed" {
-		t.Fatalf("read error: %v", err)
+	r := &keptReader{r: strings.NewReader(strings.Repeat("v", launcher.MaxSecretBytes+2))}
+	if _, err := readEnvValue(r); err == nil || err.Error() != "the value must be 1 to 16384 bytes" || !r.erased() {
+		t.Fatalf("over the limit: %v, erased %v", err, r.erased())
+	}
+	r = &keptReader{r: io.MultiReader(strings.NewReader("partial"), iotest.ErrReader(errors.New("closed")))}
+	if _, err := readEnvValue(r); err == nil || err.Error() != "closed" || !r.erased() {
+		t.Fatalf("read error: %v, erased %v", err, r.erased())
 	}
 }
