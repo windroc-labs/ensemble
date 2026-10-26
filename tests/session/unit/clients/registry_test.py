@@ -114,6 +114,27 @@ class Base(Case):
 
 
 class ConfigureTest(Base):
+    def test_max_runs_is_a_session_setting_not_an_adapter_setting(self):
+        self.register(fake=fake_client)
+        for limit in (0, 1, 3):
+            with self.subTest(limit=limit):
+                self.configure(FAKE + f"max_runs = {limit}\n")
+                found = registry_of(self.session_cls)
+                self.assertEqual(found.max_runs("fake"), limit)
+                self.assertEqual(found.client("fake").config, {})
+        self.configure(FAKE)
+        self.assertEqual(registry_of(self.session_cls).max_runs("fake"), 0)
+
+    def test_invalid_max_runs_is_rejected_at_configuration(self):
+        for value in (True, False, -1, "2", 1.5, [], {}):
+            with (
+                self.subTest(value=value),
+                self.assertRaisesRegex(
+                    ConfigError, r"\[clients.fake\].max_runs: want a whole number >= 0"
+                ),
+            ):
+                configured({"fake": {"implementation": FAKE_CLASS, "max_runs": value}})
+
     def test_configured_the_clients_and_tui_settings_are_read_without_a_file(self):
         self.register(fake=fake_client)
         with mock.patch("builtins.open") as opened:
@@ -297,13 +318,17 @@ class SettingsTest(Base):
 
     def test_the_session_config_with_the_local_file_on_top(self):
         with open(os.path.join(self.ensemble, "config.local.toml"), "w") as f:
-            f.write("[session.hosts.tmux]\nstatus_line = true\n")
+            f.write(
+                "[session.hosts.tmux]\nstatus_line = true\n"
+                "[session.clients.opencode]\nmax_runs = 1\n"
+            )
         found = registry.settings(read_config())
         self.assertEqual(sorted(found["clients"]), ["claude", "codex", "opencode"])
         self.assertEqual(found["hosts"].default, "tmux")
         self.assertEqual(found["viewer"], {"workers_per_column": 3, "grid_retile": "open-close"})
         self.session_cls = HostedSession.configured(**found)
         self.assertEqual(tui(self.session_cls), TuiSettings(status_line=True))
+        self.assertEqual(registry_of(self.session_cls).max_runs("opencode"), 1)
 
 
 class TuiTest(Base):
@@ -573,6 +598,7 @@ class Committed(Case):
             tables["claude"],
             {
                 "implementation": "ensemble.session.clients.claude:ClaudeClient",
+                "max_runs": 0,
                 "flags": ["--settings", PLUGIN_OFF],
                 "allow": [],
                 "modes": {

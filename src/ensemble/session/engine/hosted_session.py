@@ -6,6 +6,8 @@ recording `stderr` and each ClientBound as `client_session`, never yielded.
 from __future__ import annotations
 
 import builtins
+import hashlib
+import json
 import os
 import re
 import shutil
@@ -21,6 +23,7 @@ from ensemble.session.clients.base import Client
 from ensemble.session.clients.registry import Registry, settings
 from ensemble.session.engine import accounts
 from ensemble.session.engine.base import Session
+from ensemble.session.engine.capacity import Admission
 from ensemble.session.engine.records import RunLog
 from ensemble.session.engine.types import (
     Blocked,
@@ -209,6 +212,11 @@ def _host_class(setup: _Setup, name: str) -> tuple[type[Host], dict]:
         raise ConfigError(f"[hosts.{name}].implementation: {e}") from None
 
 
+def _host_key(setup: _Setup, name: str) -> str:
+    table = json.dumps([name, thaw(setup.hosts.tables[name])], sort_keys=True)
+    return hashlib.sha256(table.encode()).hexdigest()
+
+
 def _class_root(kind: type, table: str) -> str:
     module = sys.modules.get(kind.__module__)
     if module is None or getattr(module, "__file__", None) is None:
@@ -249,6 +257,7 @@ class HostedSession(Session):
         self._ended = False
         self._blocked = False
         self._bound = False
+        self._capacity: Admission | None = None
 
     @classmethod
     def configure(
@@ -352,27 +361,51 @@ class HostedSession(Session):
 
         if name is not None:
             check_name(name)
-        running = MODES[mode].start(
-            spec,
-            client,
-            registry=setup.registry,
-            record=_session_line(spec.workdir),
-            host=on,
-            display=display,
-            check_name=check_name,
-        )
-        if mode == Mode.TUI and name is not None:
-            cls._started(viewer, name, running, on, display)
-        return cls(
+        limit = setup.registry.max_runs(client_name)
+        selected_host = host or setup.hosts.default
+        hosts = {
+            _host_key(setup, configured): cls.host(configured)
+            for configured in setup.hosts.tables
+            if limit or configured == selected_host
+        }
+        assert spec.sid is not None
+        with Admission(
             client_name,
-            mode,
-            running.prepared.spec,
-            info=running.prepared.info,
-            running=running,
-            host=on,
-            idle_timeout=idle_timeout,
-            client=client,
-        )
+            limit,
+            name=name,
+            sid=spec.sid,
+            mode=mode,
+            hosts=hosts,
+            host=_host_key(setup, selected_host),
+        ) as capacity:
+            running = MODES[mode].start(
+                spec,
+                client,
+                registry=setup.registry,
+                record=_session_line(spec.workdir),
+                host=on,
+                display=display,
+                check_name=check_name,
+            )
+            try:
+                if mode == Mode.TUI and name is not None:
+                    cls._started(viewer, name, running, on, display)
+                session = cls(
+                    client_name,
+                    mode,
+                    running.prepared.spec,
+                    info=running.prepared.info,
+                    running=running,
+                    host=on,
+                    idle_timeout=idle_timeout,
+                    client=client,
+                )
+                capacity.started(running.state)
+            except BaseException:
+                running.close()
+                raise
+            session._capacity = capacity
+            return session
 
     @classmethod
     def _started(
@@ -653,6 +686,8 @@ class HostedSession(Session):
 
     def stop(self) -> None:
         self._running.stop()
+        if self._capacity is not None:
+            self._capacity.release_if_absent(self._running.state)
 
     def _refresh_metadata(self) -> None:
         if not self._bound:
@@ -691,6 +726,8 @@ class HostedSession(Session):
         self._running.close()
         if name is not None:
             self._viewer.close(name, self._host)
+        if self._capacity is not None:
+            self._capacity.release_if_absent(self._running.state)
 
     def session_status(self) -> SessionStatus:
         info = self.info()

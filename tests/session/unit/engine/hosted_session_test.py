@@ -54,6 +54,7 @@ from ensemble.session.engine.types import (
     Usage,
     Window,
 )
+from ensemble.session.hosts.base import Piped
 from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.session.modes import tui
 from ensemble.session.viewer import hidden as hidden_store
@@ -80,6 +81,79 @@ from tests.utils.sandbox import owned_directory
 
 UNCONFIGURED = "session not configured: call Session.configure first"
 FAKE_HOSTS = {"fake": {"implementation": "tests.session.fakes.host:FakeHost"}}
+
+
+class CapacityPiped(Piped):
+    def __init__(self):
+        self.stdout, self.stderr = io.StringIO(), io.StringIO()
+        self.code = None
+
+    def wait(self, timeout):
+        return self.code
+
+    def stop(self, *, ended):
+        self.code = 0
+
+
+class CapacityHost(ScreenHost):
+    def pipe(self, name, launch, *, metadata=None):
+        self.calls.pipe(name, launch, metadata=metadata)
+        return CapacityPiped()
+
+
+class ClientCapacityTest(HostedTuiBase):
+    def setUp(self):
+        super().setUp()
+        self.host = CapacityHost("tmux")
+        self.configure(tui=True, max_runs=1)
+
+    def test_each_mode_and_resumed_start_uses_the_same_client_capacity(self):
+        for mode, name in (("tui", "one"), ("headless", None), ("headless", "one")):
+            with self.subTest(mode=mode, name=name):
+                first = self.start(mode=mode, name=name, sid="s1")
+                for next_mode, next_name in (("headless", None), ("tui", "two")):
+                    with self.assertRaisesRegex(SessionError, "client fake.*limit 1"):
+                        self.start(mode=next_mode, name=next_name, sid="s2", resume=True)
+                first.close()
+                again = self.start(mode=mode, name=name, sid="s3", resume=True)
+                again.close()
+
+    def test_refusal_happens_before_the_session_record_and_host_launch(self):
+        first = self.start(mode="tui", name="one", sid="s1")
+        before, calls = self.written(), len(self.host.calls.mock_calls)
+        with self.assertRaisesRegex(SessionError, "one"):
+            self.start(mode="headless", sid="s2")
+        self.assertEqual(self.written(), before)
+        self.assertEqual(self.host.calls.pipe.call_count, 0)
+        self.assertGreaterEqual(len(self.host.calls.mock_calls), calls)
+        first.close()
+
+    def test_preflight_does_not_reserve_and_other_clients_remain_available(self):
+        spec = self.spec(client="fake", mode="headless", prompt="hi")
+        self.session.preflight(spec)
+        first = self.start()
+        self.start(client="quiet").close()
+        first.stop()
+        self.start().close()
+
+    def test_in_process_completion_without_events_and_stop_release_capacity(self):
+        reached, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        self.configure(client="checked", max_runs=1)
+        self.steps({"sleep": 1})
+
+        def sleep(_seconds):
+            reached.set()
+            release.wait(5)
+
+        with mock.patch("time.sleep", side_effect=sleep):
+            first = self.start(client="checked", mode="in_process", sid="a")
+            self.assertTrue(reached.wait(5))
+            with self.assertRaisesRegex(SessionError, "client checked"):
+                self.start(client="checked", mode="in_process", sid="b")
+            release.set()
+            self.assertTrue(first._capacity.finished.wait(5))
+            self.start(client="checked", mode="in_process", sid="c").close()
 
 
 def parsed(tables, default) -> Hosts:

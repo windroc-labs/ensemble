@@ -43,6 +43,12 @@ class Registry:
             isinstance(k, str) and isinstance(t, Mapping) for k, t in clients.items()
         ):
             raise ConfigError("clients: want a mapping of [clients.<name>] tables")
+        for name, table in clients.items():
+            limit = table.get("max_runs", 0)
+            if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+                raise ConfigError(
+                    f"[clients.{name}].max_runs: want a whole number >= 0, got {limit!r}"
+                )
         self.settings = Settings(freeze(clients), hosts.tables)
         self.class_loader = class_loader
 
@@ -71,4 +77,8 @@ class Registry:
         cls = self.client_class(name)
         config = thaw(self._table(name))
         config.pop("implementation", None)
+        config.pop("max_runs", None)
         return cls(config)
+
+    def max_runs(self, name: str) -> int:
+        return self._table(name).get("max_runs", 0)
