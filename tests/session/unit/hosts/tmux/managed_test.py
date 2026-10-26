@@ -1,7 +1,6 @@
 """Managed channel and conservative crash admission, without real processes."""
 
 import os
-import subprocess
 import sys
 import threading
 import time
@@ -23,9 +22,49 @@ from ensemble.session.harness import guard
 from ensemble.session.hosts.tmux import managed
 from ensemble.session.hosts.tmux.host import TmuxHost
 from tests.session.case import Case
+from tests.utils.process_fixtures import TimeoutExpired
 
 
 class ManagedTest(Case):
+    def test_attacker_owned_or_symlinked_user_root_is_never_absent(self):
+        directory = managed.location("tmux", "worker")
+        root = os.path.dirname(directory)
+        os.symlink(self.home, root)
+        self.assertEqual(managed.liveness("tmux", "worker", "a" * 32), Liveness.UNKNOWN)
+        with mock.patch.object(managed.subprocess, "Popen") as spawn, self.assertRaises(OSError):
+            TmuxHost("tmux", tmux=mock.Mock()).worker(
+                "worker", Launch((sys.executable,), cwd=self.home), terminal=False
+            )
+        spawn.assert_not_called()
+        os.unlink(root)
+        os.mkdir(root, 0o777)
+        os.chmod(root, 0o777)
+        self.assertEqual(managed.liveness("tmux", "worker", "a" * 32), Liveness.UNKNOWN)
+
+    def test_failed_spawn_records_no_worker_and_permits_later_start(self):
+        host = TmuxHost("tmux", tmux=mock.Mock())
+        with (
+            mock.patch.object(managed.subprocess, "Popen", side_effect=FileNotFoundError),
+            self.assertRaises(managed.SessionError),
+        ):
+            host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=False)
+        current = managed.load_json(managed.location("tmux", "worker") + "/current.json")
+        self.assertEqual(host.worker_liveness("worker", current["generation"]), Liveness.ABSENT)
+
+    def test_reader_start_failure_closes_both_pipe_ends_and_reaps_guard(self):
+        proc = mock.Mock()
+        host = TmuxHost("tmux", tmux=mock.Mock())
+        with (
+            mock.patch.object(managed.subprocess, "Popen", return_value=proc),
+            mock.patch.object(os, "set_blocking"),
+            mock.patch.object(threading.Thread, "start", side_effect=RuntimeError("no threads")),
+            self.assertRaisesRegex(RuntimeError, "no threads"),
+        ):
+            host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=False)
+        proc.stdin.close.assert_called_once()
+        proc.stdout.close.assert_called_once()
+        proc.wait.assert_called_once_with(timeout=managed.WAIT)
+
     def test_live_lease_and_unclean_guard_death_refuse_second_owner(self):
         generation = "a" * 32
         directory = managed.location("tmux", "worker")
@@ -85,6 +124,7 @@ class ManagedTest(Case):
         channel = self.channel()
         channel.proc.stdout.read.side_effect = [guard.json_frame(b"s", {"pid": 123}), b""]
         channel.pump()
+        channel.proc.wait.assert_called_once_with(timeout=managed.WAIT)
         self.assertEqual(channel.state(), Liveness.UNKNOWN)
         with self.assertRaises(Unanswered):
             channel.close()
@@ -165,7 +205,7 @@ class ManagedTest(Case):
         channel = self.channel()
         channel.accept(b"s", b'{"pid":123}')
         channel.accept(b"x", b'{"returncode":0}')
-        channel.proc.wait.side_effect = subprocess.TimeoutExpired("guard", 10)
+        channel.proc.wait.side_effect = TimeoutExpired("guard", 10)
         with self.assertRaises(Unanswered):
             channel.close()
 
@@ -179,7 +219,7 @@ class ManagedTest(Case):
                 metadata={"generation": "../other"},
             )
         managed.private_directory(managed.location("tmux", "worker"))
-        with mock.patch.object(subprocess, "Popen") as spawn, self.assertRaises(Unanswered):
+        with mock.patch.object(managed.subprocess, "Popen") as spawn, self.assertRaises(Unanswered):
             host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=False)
         spawn.assert_not_called()
 
@@ -192,7 +232,7 @@ class ManagedTest(Case):
         ]
         host = TmuxHost("tmux", tmux=mock.Mock())
         with (
-            mock.patch.object(subprocess, "Popen", return_value=proc) as spawn,
+            mock.patch.object(managed.subprocess, "Popen", return_value=proc) as spawn,
             mock.patch.object(os, "set_blocking"),
         ):
             channel = host.worker(

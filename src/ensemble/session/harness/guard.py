@@ -3,6 +3,7 @@ parent (WDRC-199 FR-13 to FR-15). Its argv and channel protocol: docs/sessions.m
 """
 
 import argparse
+import codecs
 import contextlib
 import ctypes
 import errno
@@ -19,6 +20,7 @@ import sys
 import termios
 import time
 import tty
+import unicodedata
 from collections import deque
 from pathlib import Path
 
@@ -28,7 +30,6 @@ HOOK_MAX = 1 << 20
 READ_SIZE = 65536
 TICK = 0.05
 DELIVERY = re.compile(r"[0-9a-f]{32}")
-ANSI = re.compile(r"\x1b(?:\][^\x07]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~]|[@-_])")
 
 
 def frame(kind: bytes, payload: bytes) -> bytes:
@@ -76,16 +77,140 @@ def hook_message(data: bytes) -> dict:
 
 
 class Screen:
-    def __init__(self, limit=1 << 20):
-        self.limit, self.data = limit, b""
+    """Bounded VT screen; visible cells and scrollback have separate ownership."""
+
+    def __init__(self, limit=1 << 20, *, rows=40, columns=120):
+        self.limit, self.rows, self.columns = limit, rows, columns
+        self.cells = [[" "] * columns for _ in range(rows)]
+        self.history = deque(maxlen=max(1, limit // columns))
+        self.row, self.column = 0, 0
+        self.saved = (0, 0)
+        self.normal: tuple[list[list[str]], int, int] | None = None
+        self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self.escape = ""
+
+    def newline(self) -> None:
+        self.row += 1
+        if self.row >= self.rows:
+            self.history.append("".join(self.cells.pop(0)).rstrip())
+            self.cells.append([" "] * self.columns)
+            self.row = self.rows - 1
+
+    def csi(self, sequence: str) -> None:
+        command, raw = sequence[-1], sequence[:-1]
+        private = raw.startswith("?")
+        try:
+            values = [int(value or 0) for value in raw.lstrip("?").split(";")]
+        except ValueError:
+            return
+        value = values[0] or 1
+        if command in "Hf":
+            self.row = min(self.rows - 1, max(0, value - 1))
+            self.column = min(self.columns - 1, max(0, (values[1] if len(values) > 1 else 1) - 1))
+        elif command in "ABCD":
+            if command in "AB":
+                self.row = max(
+                    0, min(self.rows - 1, self.row + (value if command == "B" else -value))
+                )
+            else:
+                self.column = max(
+                    0, min(self.columns - 1, self.column + (value if command == "C" else -value))
+                )
+        elif command == "G":
+            self.column = max(0, min(self.columns - 1, value - 1))
+        elif command == "d":
+            self.row = max(0, min(self.rows - 1, value - 1))
+        elif command == "J":
+            mode = values[0]
+            for row in range(self.rows):
+                if mode in (2, 3) or mode == 0 and row > self.row or mode == 1 and row < self.row:
+                    self.cells[row] = [" "] * self.columns
+            if mode in (0, 1):
+                self.erase_line(mode)
+            if mode == 3:
+                self.history.clear()
+        elif command == "K":
+            self.erase_line(values[0])
+        elif command == "P":
+            line = self.cells[self.row]
+            count = min(value, self.columns - self.column)
+            line[self.column :] = line[self.column + count :] + [" "] * count
+        elif command == "@":
+            line = self.cells[self.row]
+            line[self.column :] = ([" "] * min(value, self.columns) + line[self.column :])[
+                : self.columns - self.column
+            ]
+        elif command == "s":
+            self.saved = self.row, self.column
+        elif command == "u":
+            self.row, self.column = self.saved
+        elif private and 1049 in values and command in "hl":
+            if command == "h" and self.normal is None:
+                self.normal = self.cells, self.row, self.column
+                self.cells = [[" "] * self.columns for _ in range(self.rows)]
+                self.row, self.column = 0, 0
+            elif command == "l" and self.normal is not None:
+                self.cells, self.row, self.column = self.normal
+                self.normal = None
+
+    def erase_line(self, mode: int) -> None:
+        start = self.column if mode == 0 else 0
+        end = self.column + 1 if mode == 1 else self.columns
+        self.cells[self.row][start:end] = [" "] * (end - start)
 
     def append(self, data: bytes) -> None:
-        self.data = (self.data + data)[-self.limit :]
+        for char in self.decoder.decode(data):
+            if self.escape:
+                self.escape += char
+                if self.escape.startswith("\x1b[") and len(self.escape) > 2 and "@" <= char <= "~":
+                    self.csi(self.escape[2:])
+                    self.escape = ""
+                elif self.escape.startswith("\x1b]"):
+                    if char == "\x07" or self.escape.endswith("\x1b\\"):
+                        self.escape = ""
+                elif len(self.escape) == 2 and char not in "[]()":
+                    if char == "7":
+                        self.saved = self.row, self.column
+                    elif char == "8":
+                        self.row, self.column = self.saved
+                    self.escape = ""
+                elif self.escape.startswith(("\x1b(", "\x1b)")) and len(self.escape) == 3:
+                    self.escape = ""
+                if len(self.escape) > 256:
+                    self.escape = ""
+            elif char == "\x1b":
+                self.escape = char
+            elif char == "\r":
+                self.column = 0
+            elif char == "\n":
+                self.newline()
+            elif char == "\b":
+                self.column = max(0, self.column - 1)
+            elif char == "\t":
+                self.column = min(self.columns - 1, (self.column // 8 + 1) * 8)
+            elif char >= " " and char != "\x7f":
+                if unicodedata.combining(char):
+                    if self.column and len(self.cells[self.row][self.column - 1]) < 16:
+                        self.cells[self.row][self.column - 1] += char
+                    continue
+                if self.column >= self.columns:
+                    self.column = 0
+                    self.newline()
+                self.cells[self.row][self.column] = char
+                width = 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+                if width == 2 and self.column + 1 < self.columns:
+                    self.cells[self.row][self.column + 1] = ""
+                self.column += width
 
     def text(self, lines: int | None) -> str:
-        text = ANSI.sub("", self.data.decode("utf-8", "replace"))
-        rows = [row.replace("\r", "") for row in text.split("\n")]
-        return "\n".join(rows if lines is None else rows[-lines:])
+        rows = ["".join(row).rstrip() for row in self.cells]
+        while rows and not rows[-1]:
+            rows.pop()
+        return "\n".join(rows if lines is None else [*self.history, *rows][-lines:])[-self.limit :]
+
+    def snapshot(self) -> bytes:
+        text = self.text(None).replace("\n", "\r\n")
+        return f"\x1b[2J\x1b[H{text}\x1b[{self.row + 1};{min(self.column, self.columns - 1) + 1}H".encode()
 
 
 def parse_stat(text: str) -> tuple[int, str, bool]:
@@ -93,14 +218,15 @@ def parse_stat(text: str) -> tuple[int, str, bool]:
     return int(fields[1]), fields[19], fields[0] == "Z"
 
 
-def process_info(pid: int) -> tuple[int, str, bool] | None:
+def process_info(pid: int, library=None) -> tuple[int, str, bool] | None:
     if sys.platform == "linux":
         try:
             return parse_stat(Path(f"/proc/{pid}/stat").read_text())
         except (FileNotFoundError, ProcessLookupError):
             return None
     # Apple's proc_bsdinfo ABI: bsd/sys/proc_info.h (PROC_PIDTBSDINFO=3).
-    library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    if library is None:
+        library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
     data = ctypes.create_string_buffer(136)
     count = library.proc_pidinfo(pid, 3, 0, data, len(data))
     if count != len(data):
@@ -115,7 +241,8 @@ def process_info(pid: int) -> tuple[int, str, bool] | None:
     return parent, f"{seconds}:{micros}", status == 5
 
 
-def processes() -> dict[int, tuple[int, str, bool]]:
+def processes(required: dict[int, str] | None = None) -> dict[int, tuple[int, str, bool]]:
+    library = None
     if sys.platform == "linux":
         pids = [int(name) for name in os.listdir("/proc") if name.isdecimal()]
     else:
@@ -131,10 +258,11 @@ def processes() -> dict[int, tuple[int, str, bool]]:
     rows = {}
     for pid in pids:
         try:
-            if (info := process_info(pid)) is not None:
+            if (info := process_info(pid, library)) is not None:
                 rows[pid] = info
         except PermissionError:
-            continue  # unrelated users; owned descendants remain inspectable
+            if required is not None and pid in required:
+                raise
     return rows
 
 
@@ -210,6 +338,7 @@ class Guard:
         self.signalled = {}
         self.channel = True
         self.exit_sent = False
+        self.children_pending = False
         self.lease = os.environ.get("ENSEMBLE_GUARD_LEASE_FD")
         self.directory = os.path.dirname(args.hook_socket)
 
@@ -373,17 +502,21 @@ class Guard:
     def reap(self) -> None:
         assert self.proc is not None
         self.proc.poll()
-        if self.proc.returncode is not None:
-            while True:
-                try:
-                    if os.waitpid(-1, os.WNOHANG)[0] == 0:
-                        break
-                except ChildProcessError:
+        self.children_pending = False
+        while True:
+            try:
+                pid, status = os.waitpid(-1, os.WNOHANG)
+                if pid == 0:
+                    self.children_pending = True
                     break
+                if pid == self.proc.pid:
+                    self.proc.returncode = os.waitstatus_to_exitcode(status)
+            except ChildProcessError:
+                break
 
     def tick(self) -> bool:
         assert self.proc is not None
-        rows = processes()
+        rows = processes(self.known)
         self.known = descendants(rows, self.known, os.getpid())
         self.reap()
         if self.proc.returncode is not None:
@@ -399,16 +532,21 @@ class Guard:
         live = any(not rows[pid][2] for pid in self.known)
         if elapsed > 8 and live:
             raise OSError("worker tree exit unconfirmed")
-        return self.proc.returncode is not None and not live
+        return self.proc.returncode is not None and not live and not self.children_pending
 
     def run(self) -> int:
         try:
             self.start()
             assert self.proc is not None
             ended = False
+            scan_due = 0.0
             while True:
-                ended = self.tick() or ended
+                now = time.monotonic()
+                if now >= scan_due:
+                    ended = self.tick() or ended
+                    scan_due = now + 0.1
                 if ended and not self.streams and not self.exit_sent:
+                    self.final_hooks()
                     self.state("exited")
                     if self.channel:
                         self.emit(json_frame(b"x", {"returncode": self.proc.returncode}))
@@ -419,7 +557,10 @@ class Guard:
                 # A stalled consumer must not hold an already-reclaimed guard indefinitely.
                 if ended and self.closing is not None and time.monotonic() - self.closing > 9:
                     return 1
-                readers = [0] if self.closing is None else []
+                if self.exit_sent:
+                    time.sleep(TICK)
+                    continue
+                readers: list[int | socket.socket] = [0] if self.closing is None else []
                 if self.output_size < BUFFER_MAX - READ_SIZE - HOOK_MAX:
                     readers += list(self.streams)
                     readers += [p for p, (role, _) in self.peers.items() if role != "ack"]
@@ -437,9 +578,16 @@ class Guard:
                         peer, _ = descriptor.accept()
                         peer.settimeout(0)
                         self.peers[peer] = (self.servers[descriptor], bytearray())
+                        if self.servers[descriptor] == "display":
+                            snapshot = self.screen.snapshot()
+                            try:
+                                if peer.send(snapshot) != len(snapshot):
+                                    self.drop(peer)
+                            except OSError:
+                                self.drop(peer)
                     elif descriptor in self.peers:
                         self.peer_read(descriptor)
-                    else:
+                    elif isinstance(descriptor, int) and descriptor in self.streams:
                         self.read_stream(descriptor)
                 if self.input and not ended:
                     with contextlib.suppress(BlockingIOError, BrokenPipeError):
@@ -448,8 +596,9 @@ class Guard:
         finally:
             if self.proc is not None and not self.exit_sent:
                 self.close()
-                while not self.tick():
-                    time.sleep(TICK)
+                with contextlib.suppress(OSError):
+                    while not self.tick():
+                        time.sleep(TICK)
             for peer in list(self.peers):
                 self.drop(peer)
             for server in self.servers:
@@ -460,6 +609,21 @@ class Guard:
                 for stream in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
                     if stream is not None:
                         stream.close()
+
+    def final_hooks(self) -> None:
+        for server, role in self.servers.items():
+            if role == "hook":
+                while len(self.peers) < 64:
+                    try:
+                        peer, _ = server.accept()
+                    except BlockingIOError:
+                        break
+                    peer.settimeout(0)
+                    self.peers[peer] = ("hook", bytearray())
+        for peer, (role, _) in list(self.peers.items()):
+            if role == "hook":
+                while peer in self.peers and self.peers[peer][0] == "hook":
+                    self.peer_read(peer)
 
 
 def attach(path: str) -> int:

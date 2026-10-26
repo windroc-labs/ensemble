@@ -75,14 +75,20 @@ class ManagedIntegrationTest(Case):
                 *(["--terminal"] if terminal else []),
                 *(["--daemon"] if daemon else []),
             ],
-            env=child_env(),
+            env={**child_env(), **self.server.env()},
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             start_new_session=True,
         )
         self.addCleanup(self.cleanup_harness, proc)
-        live_tmux.wait(lambda: Path(self.home, "harness.json").exists(), what="guard start")
+
+        def started():
+            if proc.poll() is not None:
+                self.fail(f"harness exited {proc.returncode}: {proc.stderr.read().decode()}")
+            return Path(self.home, "harness.json").exists()
+
+        live_tmux.wait(started, what="guard start")
         live_tmux.wait(
             lambda: (
                 Path(self.home, "client.pid").exists() and Path(self.home, "child.pid").exists()
@@ -138,6 +144,8 @@ class ManagedIntegrationTest(Case):
         worker.proc.kill()
         worker.proc.wait(timeout=10)
         live_tmux.wait(lambda: worker.state() == Liveness.UNKNOWN, what="broken guard channel")
+        pid = int(Path(self.home, "client.pid").read_text())
+        live_tmux.wait(lambda: not self.alive(pid), what="guard death hangs up PTY client")
         self.assertEqual(
             self.host.worker_liveness(worker.name, worker.generation), Liveness.UNKNOWN
         )

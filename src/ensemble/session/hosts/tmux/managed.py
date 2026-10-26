@@ -67,6 +67,10 @@ def private_directory(path: str) -> None:
             private_directory(parent)
         with contextlib.suppress(FileExistsError):
             os.mkdir(path, 0o700)
+    check_directory(path)
+
+
+def check_directory(path: str) -> None:
     info = os.lstat(path)
     if (
         not stat.S_ISDIR(info.st_mode)
@@ -108,8 +112,10 @@ def save_json(path: str, value: dict) -> None:
     os.replace(path + ".new", path)
 
 
-def lease_file(path: str) -> int:
-    descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+def lease_file(path: str, *, create: bool = True) -> int:
+    descriptor = os.open(
+        path, os.O_RDWR | (os.O_CREAT if create else 0) | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600
+    )
     info = os.fstat(descriptor)
     if (
         not stat.S_ISREG(info.st_mode)
@@ -124,17 +130,20 @@ def lease_file(path: str) -> int:
 def liveness(host: str, name: str, generation: str) -> Liveness:
     directory = location(host, name)
     try:
+        root = os.path.dirname(directory)
+        if os.path.lexists(root):
+            check_directory(root)
         if not os.path.lexists(directory):
             return Liveness.ABSENT
-        private_directory(directory)
+        check_directory(directory)
         if not GENERATION.fullmatch(generation):
             return Liveness.UNKNOWN
         current = load_json(os.path.join(directory, "current.json"))
         if current != {"generation": generation}:
             return Liveness.UNKNOWN
         run = os.path.join(directory, generation)
-        private_directory(run)
-        descriptor = lease_file(os.path.join(run, "lease"))
+        check_directory(run)
+        descriptor = lease_file(os.path.join(run, "lease"), create=False)
         try:
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -262,6 +271,10 @@ class ManagedProcess(InteractiveProcess):
             self.fail(f"guard channel: {error}")
         finally:
             self.proc.stdout.close()
+            try:
+                self.proc.wait(timeout=WAIT)
+            except subprocess.TimeoutExpired:
+                self.fail("guard transport exit unconfirmed")
             with self.condition:
                 self.condition.notify_all()
             if self.failure is not None and sys.platform == "darwin":
@@ -415,6 +428,7 @@ def start(
     if not GENERATION.fullmatch(generation):
         raise ConfigError("worker generation: invalid")
     directory = location(host.name, name)
+    private_directory(os.path.dirname(directory))
     fresh = not os.path.lexists(directory)
     private_directory(directory)
     lock = lease_file(os.path.join(directory, "start.lock"))
@@ -452,24 +466,31 @@ def start(
             }
             for key in ("TMUX", "TMUX_PANE"):
                 environment.pop(key, None)
-            proc = subprocess.Popen(
-                argv,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                cwd=launch.cwd,
-                env=environment,
-                close_fds=True,
-                pass_fds=(lease,),
-                start_new_session=True,
-                bufsize=0,
-            )
+            try:
+                proc = subprocess.Popen(
+                    argv,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    cwd=launch.cwd,
+                    env=environment,
+                    close_fds=True,
+                    pass_fds=(lease,),
+                    start_new_session=True,
+                    bufsize=0,
+                )
+            except OSError as error:
+                save_json(
+                    os.path.join(run, "state.json"), {"generation": generation, "state": "exited"}
+                )
+                raise SessionError(f"worker {name}: cannot start guard: {error}") from error
         finally:
             os.close(lease)
-        assert proc.stdin is not None
-        os.set_blocking(proc.stdin.fileno(), False)
-        handle = ManagedProcess(name, generation, proc, terminal=terminal, tmux=host.tmux)
+        handle = None
         try:
+            assert proc.stdin is not None
+            os.set_blocking(proc.stdin.fileno(), False)
+            handle = ManagedProcess(name, generation, proc, terminal=terminal, tmux=host.tmux)
             handle.await_start()
             if terminal:
                 host.tmux.start(
@@ -502,8 +523,15 @@ def start(
                         ["set-hook", "-p", "-t", name, "pane-died", f"kill-session -t ={name}"]
                     )
         except BaseException:
-            with contextlib.suppress(SessionError):
-                handle.close()
+            if handle is not None:
+                with contextlib.suppress(SessionError):
+                    handle.close()
+            else:
+                assert proc.stdin is not None and proc.stdout is not None
+                proc.stdin.close()
+                proc.stdout.close()
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    proc.wait(timeout=WAIT)
             raise
         return handle
     finally:

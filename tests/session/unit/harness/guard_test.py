@@ -6,9 +6,7 @@ import io
 import json
 import os
 import signal
-import socket
 import struct
-import subprocess
 import sys
 import termios
 import tty
@@ -20,12 +18,144 @@ from tests.session.case import Case
 
 
 class GuardTest(Case):
+    def test_detach_ready_during_output_cannot_end_worker(self):
+        runtime = self.runtime(terminal=True)
+        peer = mock.Mock()
+        peer.send.return_value = 0
+        runtime.peers[peer] = ("display", bytearray())
+        proc = mock.Mock(returncode=0, pid=100)
+        captured = []
+        with (
+            mock.patch.object(guard.ctypes, "CDLL") as library,
+            mock.patch.object(guard.socket, "socket") as sockets,
+            mock.patch.object(os, "chmod"),
+            mock.patch.object(os, "openpty", return_value=(20, 21)),
+            mock.patch.object(guard.fcntl, "ioctl"),
+            mock.patch.object(os, "close"),
+            mock.patch.object(os, "listdir", return_value=[]),
+            mock.patch.object(os, "set_blocking"),
+            mock.patch.object(guard.subprocess, "Popen", return_value=proc),
+            mock.patch.object(os, "waitpid", side_effect=ChildProcessError),
+            mock.patch.object(
+                guard.select, "select", side_effect=[([20, peer], [], []), ([20], [], [])]
+            ),
+            mock.patch.object(os, "read", side_effect=[b"prompt", b""]),
+            mock.patch.object(
+                os, "write", side_effect=lambda _fd, data: captured.append(data) or len(data)
+            ),
+        ):
+            library.return_value.prctl.return_value = 0
+            sockets.return_value.accept.side_effect = BlockingIOError
+            self.assertEqual(runtime.run(), 0)
+        self.assertEqual(
+            [kind for kind, _ in guard.Decoder().feed(b"".join(captured))], [b"s", b"x"]
+        )
+
+    def test_new_display_receives_existing_idle_screen(self):
+        runtime = self.runtime(terminal=True)
+        runtime.args.display_socket = self.home + "/display"
+        hook_server, display_server, peer = mock.Mock(), mock.Mock(), mock.Mock()
+        hook_server.accept.side_effect = BlockingIOError
+        display_server.accept.return_value = (peer, "")
+        peer.send.side_effect = len
+        proc = mock.Mock(returncode=0, pid=100)
+        with (
+            mock.patch.object(guard.ctypes, "CDLL") as library,
+            mock.patch.object(guard.socket, "socket", side_effect=[hook_server, display_server]),
+            mock.patch.object(os, "chmod"),
+            mock.patch.object(os, "openpty", return_value=(20, 21)),
+            mock.patch.object(guard.fcntl, "ioctl"),
+            mock.patch.object(os, "close"),
+            mock.patch.object(os, "listdir", return_value=[]),
+            mock.patch.object(os, "set_blocking"),
+            mock.patch.object(guard.subprocess, "Popen", return_value=proc),
+            mock.patch.object(os, "waitpid", side_effect=ChildProcessError),
+            mock.patch.object(
+                guard.select,
+                "select",
+                side_effect=[([20], [], []), ([display_server], [], []), ([20], [], [])],
+            ),
+            mock.patch.object(os, "read", side_effect=[b"idle prompt", b""]),
+            mock.patch.object(os, "write", side_effect=lambda _fd, data: len(data)),
+        ):
+            library.return_value.prctl.return_value = 0
+            self.assertEqual(runtime.run(), 0)
+        self.assertIn(b"idle prompt", peer.send.call_args.args[0])
+
+    def test_screen_erased_dialog_does_not_survive_in_visible_text(self):
+        screen = guard.Screen(rows=3, columns=20)
+        screen.append(b"permission question\x1b[2J\x1b[Haccepted")
+        self.assertEqual(screen.text(None), "accepted")
+        self.assertNotIn("permission", screen.snapshot().decode())
+        screen.append(b"\r\x1b[2Kdone")
+        self.assertEqual(screen.text(None), "done")
+
+    def test_screen_cursor_overwrite_insert_delete_and_restore(self):
+        screen = guard.Screen(rows=3, columns=8)
+        screen.append(b"abcd\x1b[1;2H\x1b[P\x1b[2@X")
+        self.assertEqual(screen.text(None), "aX cd")
+        screen.append(b"\x1b[s\x1b[3;1Hz\x1b[uY")
+        self.assertEqual(screen.text(None), "aXYcd\n\nz")
+        screen.append(b"\x1b[1A\x1b[1B\x1b[1C\x1b[1D\x1b[2d\x1b[3GQ")
+        self.assertEqual(screen.text(None), "aXYcd\n  Q\nz")
+        screen.append(b"\x1b[1J")
+        self.assertEqual(screen.text(None), "\n\nz")
+
+    def test_screen_scrollback_is_separate_and_alternate_screen_restores(self):
+        screen = guard.Screen(rows=2, columns=8)
+        screen.append(b"a\r\nb\r\nc")
+        self.assertEqual(screen.text(None), "b\nc")
+        self.assertEqual(screen.text(3), "a\nb\nc")
+        screen.append(b"\x1b[?1049halt\x1b[?1049l")
+        self.assertEqual(screen.text(None), "b\nc")
+        screen.append(b"\x1b[3J")
+        self.assertEqual(screen.text(3), "")
+
+    def test_screen_split_unicode_osc_and_character_sets(self):
+        screen = guard.Screen(rows=2, columns=8)
+        wire = "\x1b]0;title\x07\x1b(B中é\rA\bB\tQ".encode()
+        for byte in wire:
+            screen.append(bytes([byte]))
+        self.assertNotIn("title", screen.text(None))
+        self.assertNotIn("\x1b", screen.text(None))
+        self.assertTrue(screen.text(None).startswith("B"))
+        self.assertIn("Q", screen.text(None))
+
+    def test_live_client_adopted_zombie_is_reaped_and_direct_exit_code_kept(self):
+        runtime = self.runtime()
+        runtime.proc = mock.Mock(pid=10, returncode=None)
+        with mock.patch.object(os, "waitpid", side_effect=[(12, 0), (0, 0)]) as waited:
+            runtime.reap()
+        self.assertEqual(waited.call_count, 2)
+        self.assertIsNone(runtime.proc.returncode)
+        with mock.patch.object(os, "waitpid", side_effect=[(10, 7 << 8), ChildProcessError]):
+            runtime.reap()
+        self.assertEqual(runtime.proc.returncode, 7)
+
+    def test_uninspectable_tracked_child_cannot_be_confirmed_dead(self):
+        with (
+            mock.patch.object(os, "listdir", return_value=["12"]),
+            mock.patch.object(Path, "read_text", side_effect=PermissionError),
+        ):
+            self.assertEqual(guard.processes(), {})
+            with self.assertRaises(PermissionError):
+                guard.processes({12: "original"})
+
+    def test_late_adoption_after_snapshot_prevents_false_tree_exit(self):
+        runtime = self.runtime()
+        runtime.proc = mock.Mock(pid=10, returncode=0)
+        with (
+            mock.patch.object(os, "listdir", return_value=[]),
+            mock.patch.object(os, "waitpid", return_value=(0, 0)),
+        ):
+            self.assertFalse(runtime.tick())
+
     def test_display_attach_copies_bytes_and_restores_terminal(self):
         peer = mock.Mock()
         peer.recv.side_effect = [b"terminal output", b""]
         output = io.BytesIO()
         with (
-            mock.patch.object(socket, "socket", return_value=peer),
+            mock.patch.object(guard.socket, "socket", return_value=peer),
             mock.patch.object(os, "isatty", return_value=True),
             mock.patch.object(termios, "tcgetattr", return_value=["saved"]),
             mock.patch.object(termios, "tcsetattr") as restore,
@@ -177,7 +307,7 @@ class GuardTest(Case):
         self.assertEqual(screen.text(1), "world")
         self.assertNotIn("\x1b", screen.text(None))
         screen.append(b"x" * 100)
-        self.assertLessEqual(len(screen.data), 32)
+        self.assertLessEqual(len(screen.text(None)), 32)
 
     def test_subreaper_failure_refuses_start(self):
         with (
@@ -357,9 +487,9 @@ class GuardTest(Case):
         runtime = self.runtime()
         with (
             mock.patch.object(guard.ctypes, "CDLL") as library,
-            mock.patch.object(socket, "socket"),
+            mock.patch.object(guard.socket, "socket"),
             mock.patch.object(os, "chmod"),
-            mock.patch.object(subprocess, "Popen", side_effect=FileNotFoundError),
+            mock.patch.object(guard.subprocess, "Popen", side_effect=FileNotFoundError),
             self.assertRaises(FileNotFoundError),
         ):
             library.return_value.prctl.return_value = 0
@@ -373,13 +503,17 @@ class GuardTest(Case):
         proc.stdout.fileno.return_value = 11
         proc.stderr.fileno.return_value = 12
         captured = []
+        peer = mock.Mock()
+        message = {"label": "last", "payload": {}, "delivery_id": "a" * 32}
+        peer.recv.return_value = json.dumps(message).encode() + b"\n"
+        runtime.peers[peer] = ("hook", bytearray())
         with (
             mock.patch.object(guard.ctypes, "CDLL") as library,
-            mock.patch.object(socket, "socket"),
+            mock.patch.object(guard.socket, "socket") as sockets,
             mock.patch.object(os, "chmod"),
             mock.patch.object(os, "listdir", return_value=[]),
             mock.patch.object(os, "set_blocking"),
-            mock.patch.object(subprocess, "Popen", return_value=proc),
+            mock.patch.object(guard.subprocess, "Popen", return_value=proc),
             mock.patch.object(os, "waitpid", side_effect=ChildProcessError),
             mock.patch.object(
                 guard.select, "select", side_effect=[([11, 12], [], []), ([11], [], [])]
@@ -390,7 +524,11 @@ class GuardTest(Case):
             ),
         ):
             library.return_value.prctl.return_value = 0
+            sockets.return_value.accept.side_effect = BlockingIOError
             self.assertEqual(runtime.run(), 0)
         self.assertEqual(
-            [kind for kind, _ in guard.Decoder().feed(b"".join(captured))], [b"s", b"o", b"x"]
+            [kind for kind, _ in guard.Decoder().feed(b"".join(captured))], [b"s", b"o", b"h", b"x"]
+        )
+        self.assertEqual(
+            json.loads(peer.sendall.call_args.args[0]), {"ok": True, "delivery_id": "a" * 32}
         )
