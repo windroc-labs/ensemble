@@ -479,6 +479,19 @@ def dump(text):
     return f"{layouts._checksum(text)},{text}"
 
 
+def json_layout(cell):
+    """A cell tree as tmux 3.8 prints #{window_layout}: JSON, panes with index, active and id."""
+    leaves = layouts.leaf_cells(cell)
+
+    def node(c):
+        out = {"t": {"{}": "h", "[]": "v"}.get(c.kind, "p"), "w": c.w, "h": c.h, "x": c.x, "y": c.y}
+        if c.kind:
+            return {**out, "c": [node(child) for child in c.children]}
+        return {**out, "i": leaves.index(c), **({"a": True} if c is leaves[0] else {}), "I": c.pane}
+
+    return json.dumps({"V": 2, "L": node(cell)}, separators=(",", ":"))
+
+
 def grid(cells, per_column=3, width=160, height=48, manager_width=79):
     """The grid of manager %0 in a width x height window; cells: main cells, or n for %1..%n."""
     if isinstance(cells, int):

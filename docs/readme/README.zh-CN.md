@@ -79,7 +79,7 @@ ensemble 是分层构建的：每层只做一件事，只调用它下面的一�
 |---|---|
 | `claude` CLI、Python 3.11+ | 每次 agent run |
 | [`updraft`](https://github.com/windroc-labs/updraft) 插件，host worker 使用的 client 需要安装：Claude Code `/plugin marketplace add windroc-labs/agent-plugins-marketplace`，然后 `/plugin install updraft@windroc`；Codex `codex plugin marketplace add windroc-labs/agent-plugins-marketplace`，然后 `codex plugin add updraft@windroc`. Docker worker 在镜像内独立安装（[插件](../docker-host.md#plugins)）。 | engineer 的 build task（`/updraft:build`、`/updraft:light-build`）和 PM 的 PRD 评审（`/updraft:review`）。其他情况不需要。 |
-| tmux 3.3+ | 在 `tmux` Host 上的 tui run |
+| tmux 3.3–3.8 | 在 `tmux` Host 上的 tui run |
 | [Ollama](https://ollama.com) 只听 `127.0.0.1`，上下文长度至少 65536，已拉取 tier 模型；在 `tmux` 上还要 OpenCode 1.x（`npm install -g opencode-ai@1.19.3`） | 只有 OpenCode 需要（[Docker host › OpenCode](../docker-host.md#opencode), [OpenCode sessions](../sessions.md#opencode-sessions)） |
 | `git`、已登录的 `gh` | 写代码（checkout、pull request）和 GitHub 目标。其他情况不需要。 |
 | 正在运行的 iTerm2 | 默认的 iTerm2 分屏 |
