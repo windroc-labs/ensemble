@@ -41,7 +41,7 @@ from ensemble.session import (
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import Spec as SessionSpec
 from ensemble.session.engine.types import Liveness
-from ensemble.utils import ACCOUNT_ENV
+from ensemble.utils import ACCOUNT_ENV, Stopped
 from tests.delegate.fakes.harness_session import (
     FakeViewer,
     HarnessSession,
@@ -1893,3 +1893,51 @@ class StartedTest(HarnessCase):
             f"tui session {AGENT} did not start in 120 s; "
             "agent session not checked: docker ps: timed out",
         )
+
+
+class StartFailureEndTest(HarnessCase):
+    """A run stopped by a signal ends with the start failure detach saved for its attempt, keeping
+    its exit code; without one it stays a plain stop.
+    """
+
+    FAILURE = f"tui session {AGENT} did not start in 120 s"
+
+    def stopped(self, start_failure=None, *, attempt=1):
+        """The run's Finished after a SIGHUP mid-run, detach having saved this state meanwhile."""
+        view = self.make(callback=("callback",))
+
+        def hung_up(*_args, **_kw):
+            data = self.metadata()
+            data.update(start_failure=start_failure, attempt=attempt)
+            with open(self.state_record(), "w", encoding="utf-8") as file:
+                json.dump(data, file)
+            raise Stopped(129)
+
+        callback = mock.MagicMock()
+        with (
+            mock.patch("ensemble.delegate.engine.harness_delegate.execute", side_effect=hung_up),
+            mock.patch(
+                "ensemble.delegate.engine.harness_delegate.EventCallback", return_value=callback
+            ),
+            mock.patch("sys.stderr", new_callable=io.StringIO),
+            self.assertRaises(Stopped),
+        ):
+            view.run()
+        ((finished,), _kw) = callback.call_args
+        self.assertIsInstance(finished, Finished)
+        return finished.result
+
+    def test_a_stop_after_a_start_failure_records_the_cause_with_the_real_code(self):
+        result = self.stopped(self.FAILURE)
+        expected = Result(129, None, f"stopped: {self.FAILURE}")
+        self.assertEqual(result, expected)
+        self.assertEqual(self.metadata()["result"], asdict(expected))
+
+    def test_an_outside_stop_stays_an_interruption(self):
+        result = self.stopped()
+        self.assertEqual(result, Result(129, None, "stopped: Stopped: 129"))
+        self.assertEqual(self.metadata()["result"]["error"], "stopped: Stopped: 129")
+
+    def test_another_attempts_start_failure_is_ignored(self):
+        result = self.stopped(self.FAILURE, attempt=2)
+        self.assertEqual(result.error, "stopped: Stopped: 129")

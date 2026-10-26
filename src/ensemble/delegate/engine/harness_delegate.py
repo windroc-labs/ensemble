@@ -34,6 +34,7 @@ from ensemble.delegate.engine.types import (
     Preview,
     Result,
     Spec,
+    Stopped,
 )
 from ensemble.delegate.event.reply import outcome_only
 from ensemble.delegate.event.types import Outcome
@@ -862,7 +863,7 @@ class HarnessDelegate(Delegate):
                 return execute(self._state.plan, driver=self.driver, on_event=emit)
             except BaseException as error:
                 if not finished:
-                    ended = stopped(error)
+                    ended = self._stopped(error)
                     if isinstance(error, (Exception, SystemExit)):
                         RunLog(run_dir).note(
                             "run_error",
@@ -879,6 +880,19 @@ class HarnessDelegate(Delegate):
                 raise
             finally:
                 self._clear_tmp()
+
+    def _stopped(self, error: BaseException) -> Result:
+        """A signal's stop ends as this attempt's start_failure when detach saved one."""
+        ended = stopped(error)
+        if not isinstance(error, Stopped):
+            return ended
+        try:
+            state = self._current()
+        except (ConfigError, OSError):
+            return ended
+        if state.start_failure is None:
+            return ended
+        return replace(ended, error=f"stopped: {state.start_failure}")
 
     def _clear_tmp(self) -> None:
         """agent/tmp at the run's end, never followed, keeping a deliverable file `out` directly in
