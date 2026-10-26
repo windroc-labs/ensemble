@@ -22,9 +22,7 @@ def on_docker(settings: Mapping, host: str | None) -> bool:
 
 
 def reference_lines(text: str) -> tuple[list[str], int]:
-    """(text's lines, kept ends; the Reference block's length): the leading lines up to the first
-    blank one, when the first is a `Reference:` line or, in an input without an id, a `Repo:` line.
-    """
+    """(text's lines, kept ends; the length of its Reference block, led by Reference: or Repo:)."""
     lines = text.lstrip().splitlines(keepends=True)
     if not lines or not lines[0].startswith(("Reference:", "Repo:")):
         return lines, 0
