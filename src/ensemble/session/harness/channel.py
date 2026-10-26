@@ -19,8 +19,6 @@ import stat
 import time
 import uuid
 from collections.abc import Mapping
-from enum import StrEnum
-from typing import NamedTuple
 
 from ensemble.session.engine.types import (
     Activity,
@@ -37,6 +35,7 @@ from ensemble.session.engine.types import (
     TurnStarted,
     Unanswered,
 )
+from ensemble.session.harness.types import Logged, Op
 from ensemble.session.hosts.base import HARNESS_ROOT
 from ensemble.utils import STALE_AGE, append_line, read_regular, save
 
@@ -46,11 +45,6 @@ SLICE = 0.05
 DAY = 24 * 60 * 60
 FILE_MAX = 1 << 20  # bytes of request.json, harness.json or a request read
 LOG = logging.getLogger("session")
-
-
-class Op(StrEnum):
-    CLOSE = "close"
-    STOP = "stop"
 
 
 TYPES: dict[str, type] = {
@@ -79,15 +73,6 @@ FIELDS = {  # each type's fields and the check of a decoded value
     "returncode": lambda v: type(v) is int,
     "client_id": lambda v: isinstance(v, str),
 }
-
-
-class Logged(NamedTuple):
-    """One events.jsonl record."""
-
-    seq: int
-    id: str
-    turn: str | None
-    event: SessionEvent | Stderr | ClientBound
 
 
 def encode(event: SessionEvent | Stderr | ClientBound) -> dict:

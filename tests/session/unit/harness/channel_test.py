@@ -24,7 +24,8 @@ from ensemble.session.engine.types import (
     Unanswered,
 )
 from ensemble.session.harness import channel
-from ensemble.session.harness.channel import Channel, Logged, Op, decode, encode
+from ensemble.session.harness.channel import Channel, decode, encode
+from ensemble.session.harness.types import Logged, Op
 from tests.session.case import Case
 
 EVENTS = (
