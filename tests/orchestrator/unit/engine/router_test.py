@@ -18,7 +18,7 @@ from pathlib import Path
 from unittest import mock
 
 from ensemble.delegate import ConfigError as DelegateConfigError
-from ensemble.delegate import HarnessDelegate, Outcome
+from ensemble.delegate import HarnessDelegate, Outcome, SessionBusy
 from ensemble.orchestrator import cli
 from ensemble.orchestrator.engine import (
     config,
@@ -1290,6 +1290,16 @@ class AttendedEntry(OuterBase):
                     f"router.py: {ID}: attach: attach {harness}\n"
                     f"router.py: {ID}: {harness}: ensemble-session attach-command {harness}\n",
                 )
+
+    def test_an_attended_run_whose_start_is_busy_reports_the_holder(self):
+        self.api.detach_error = SessionBusy("dummy-lock", "ensemble-x-1 (owner x)")
+        rc = self.entry("--issue", ID, "--tui", "--events", self.events)
+        self.assertEqual((rc, self.out), (1, ""))
+        self.assertIn(
+            f"launch-error {ID} error=SessionBusy: "
+            "busy: lock dummy-lock is held by ensemble-x-1 (owner x)",
+            self.said(),
+        )
 
     def test_a_resume_under_tui_is_attended_and_prints_its_record(self):
         self.todo["state"] = "In Progress"

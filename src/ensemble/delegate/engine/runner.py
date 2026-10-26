@@ -41,12 +41,13 @@ from ensemble.session import (
     Reply,
     RunLog,
     Session,
+    SessionBusy,
     SessionError,
     Stderr,
     TurnEnd,
     TurnFailed,
 )
-from ensemble.utils import holds, printable, save
+from ensemble.utils import EXIT_BUSY, holds, printable, save
 
 STOP_LIMIT = 3
 FIX = (
@@ -185,11 +186,12 @@ def to_stderr(text: str) -> None:
 
 def report(result: Result, out: str | None) -> tuple[int, str | None]:
     """(exit code, the valid outcome's status), naming the file `out` when it holds the
-    deliverable; None: no file.
+    deliverable; None: no file. Without an outcome: EXIT_BUSY when its error is SessionBusy's
+    `busy: ` text, the only busy signal (a client may exit 75 itself), else 1.
     """
     if result.outcome is None:
         say(f"delegate: {result.error}")
-        return 1, None
+        return EXIT_BUSY if SessionBusy.PATTERN.match(result.error) else 1, None
     text = result.outcome.deliverable
     if text and out is not None and holds(path := os.path.abspath(out), text):
         say(f"delegate: deliverable {path}")
@@ -298,6 +300,8 @@ class _Attempts:
         except SessionError as e:
             self.drop_stale_out()
             self.note("input", text=p.params.input)
+            if isinstance(e, SessionBusy):
+                return Result(EXIT_BUSY, None, str(e))
             return Result(1, None, f"{p.spec.mode}: {e}")
         stale = self.drop_stale_out()
         self.note("input", text=p.params.input)
