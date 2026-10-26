@@ -226,7 +226,7 @@ A read that returns bytes fails this check unless the user accepts it: mark the 
 - Its workspace volume `ensemble-ws-<name>` at its cwd.
 - Its own client state: Claude and OpenCode's read-write binds; Codex's volatile home and bound `sessions/` history.
 - Its credentials on tmpfs ([Credentials](#credentials)).
-- The network, LAN providers included, and through `host.docker.internal` Mac services listening only on `127.0.0.1` ([accepted risk](docker-host.md#risks)).
+- The network only through the egress gateway's `workers` policy: the public internet; the Mac (`host.docker.internal`) and LAN providers only through its exceptions ([Egress gateway](docker-host.md#egress-gateway)).
 - Every repo of every App installation.
 
 Every container runs as `agent`, with all capabilities dropped and `no-new-privileges`.
