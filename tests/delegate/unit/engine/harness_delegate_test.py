@@ -40,7 +40,7 @@ from ensemble.session import (
 )
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import Spec as SessionSpec
-from ensemble.session.engine.types import Liveness
+from ensemble.session.engine.types import Liveness, SessionRow
 from ensemble.utils import ACCOUNT_ENV, StatusState, Stopped
 from tests.delegate.fakes.harness_session import (
     FakeViewer,
@@ -1707,6 +1707,8 @@ class SweepTest(HarnessCase):
 
 AGENT = f"dummy-tester-{SID[:8]}"
 HARNESS = f"{AGENT}-drive"
+SCREEN = "OpenAI Codex\n\n  Booting\n\naccount/read failed during TUI bootstrap\n\n"
+TAIL = "OpenAI Codex | Booting | account/read failed during TUI bootstrap"
 
 
 class EndingHost(RecordingHost):
@@ -1844,7 +1846,7 @@ class StartedTest(HarnessCase):
 
         def failing(process):
             if self.now >= 10:
-                raise SessionError("tmux: no server")
+                raise SessionError("tmux:\n no server")
             return alive(process)
 
         with mock.patch.object(RecordingProcess, "alive", failing):
@@ -1896,9 +1898,13 @@ class StartedTest(HarnessCase):
                 raise Unanswered("docker ps: timed out")
             return attach(name, **kw)
 
-        with mock.patch.object(HarnessSession, "attach", side_effect=probing):
+        with (
+            mock.patch.object(HarnessSession, "attach", side_effect=probing),
+            mock.patch.object(HarnessSession, "screen", return_value=SCREEN, create=True),
+        ):
             message = self.failed(self.tui())
-        self.assertEqual(message, f"tui session {AGENT} did not start in 30 s")
+        self.assertEqual(message, f"tui session {AGENT} did not start in 30 s; last lines: {TAIL}")
+        self.assertEqual(self.metadata()["start_failure"], message)
         self.assertEqual(len(late), 2)
         self.assertFalse(agent.alive())
 
@@ -1924,6 +1930,60 @@ class StartedTest(HarnessCase):
             message = self.failed(self.tui())
         self.assertEqual(message, f"tui session {AGENT} did not start in 30 s")
         self.assertFalse(self.harness().alive())
+
+    def exited(self):
+        """The agent session left by a client that exited: its pane kept, its status dead, its
+        screen refused, its Host row holding SCREEN.
+        """
+        self.start_agent()
+        status = HarnessSession.status
+        row = SessionRow(AGENT, SID, "fake", StatusState.DEAD, None, None, SCREEN, own=False)
+        return (
+            mock.patch.object(
+                HarnessSession,
+                "status",
+                lambda session: replace(status(session), alive=False, state=StatusState.DEAD),
+            ),
+            mock.patch.object(
+                HarnessSession, "screen", side_effect=SessionError("not running"), create=True
+            ),
+            mock.patch.object(RecordingHost, "rows", return_value=[row], create=True),
+        )
+
+    def test_an_exited_clients_last_lines_join_the_error(self):
+        host = EndingHost("harness")
+        host.ending = lambda: self.end_with(Result(3, None, "the client exited 3"))
+        dead, refused, rows = self.exited()
+        agent = HarnessSession.live[AGENT]
+        with dead, refused, rows:
+            message = self.failed(self.tui(harness_host=host))
+        self.assertEqual(
+            message,
+            f"tui session {AGENT} did not start: its harness ended: exit 3: the client exited 3"
+            f"; last lines: {TAIL}",
+        )
+        self.assertIsNone(self.metadata()["start_failure"])
+        self.assertFalse(agent.alive())
+
+    def test_an_unreadable_tail_is_left_out(self):
+        dead, refused, _rows = self.exited()
+        with (
+            dead,
+            refused,
+            mock.patch.object(
+                RecordingHost, "rows", side_effect=SessionError("docker ps: timed out"), create=True
+            ),
+        ):
+            message = self.failed(self.tui(harness_host=EndingHost("harness")))
+        self.assertEqual(message, f"tui session {AGENT} did not start: its harness ended")
+
+    def test_a_failed_harness_close_clears_the_start_failure(self):
+        with mock.patch.object(
+            RecordingProcess, "close", side_effect=SessionError("tmux: kill failed")
+        ):
+            message = self.failed(self.tui())
+        self.assertEqual(message, f"tui session {AGENT} did not start in 30 s")
+        self.assertIsNone(self.metadata()["start_failure"])
 
 
 class StartFailureEndTest(HarnessCase):
@@ -1956,9 +2016,10 @@ class StartFailureEndTest(HarnessCase):
             view.run(hung_up)
         return self.metadata()["result"], json.loads(lines[-1])
 
-    def test_a_stop_after_a_start_failure_records_the_cause_with_the_real_code(self):
+    def test_a_stop_after_a_start_failure_records_the_cause_and_no_129(self):
         result, sent = self.stopped(self.FAILURE)
-        self.assertEqual(result, asdict(Result(129, None, f"stopped: {self.FAILURE}")))
+        self.assertEqual(result, asdict(Result(1, None, f"stopped: {self.FAILURE}")))
+        self.assertEqual(sent["returncode"], 1)
         self.assertEqual(sent["error"], f"stopped: {self.FAILURE}")
 
     def test_an_outside_stop_stays_an_interruption(self):

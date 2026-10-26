@@ -129,6 +129,7 @@ class _State:
 
 TUI_START_TIMEOUT = 30  # seconds: a detached tui run's agent session to go live
 DOCKER_START_TIMEOUT = 120  # the same on the Docker Host, its container start included
+TAIL_LINES = 5  # of a client's screen in a failed start's error
 TUI_POLL = 0.1  # seconds
 
 
@@ -864,7 +865,7 @@ class HarnessDelegate(Delegate):
                 return execute(self._state.plan, driver=self.driver, on_event=emit)
             except BaseException as error:
                 if not finished:
-                    ended = self._stopped(error)
+                    ended = self._start_failure_end(error)
                     if isinstance(error, (Exception, SystemExit)):
                         RunLog(run_dir).note(
                             "run_error",
@@ -882,7 +883,7 @@ class HarnessDelegate(Delegate):
             finally:
                 self._clear_tmp()
 
-    def _stopped(self, error: BaseException) -> Result:
+    def _start_failure_end(self, error: BaseException) -> Result:
         """A signal's stop ends as this attempt's start_failure when detach saved one."""
         ended = stopped(error)
         if not isinstance(error, Stopped):
@@ -893,7 +894,7 @@ class HarnessDelegate(Delegate):
             return ended
         if state.start_failure is None:
             return ended
-        return replace(ended, error=f"stopped: {state.start_failure}")
+        return Result(1, None, f"stopped: {state.start_failure}")
 
     def _clear_tmp(self) -> None:
         """agent/tmp at the run's end, never followed, keeping a deliverable file `out` directly in
@@ -1052,17 +1053,23 @@ class HarnessDelegate(Delegate):
                 time.sleep(TUI_POLL)
         except SessionError as error:
             why = f": {error}"
-        message = f"tui session {state.agent_name} did not start{why}"
-        if not ended:
-            self._start_failed(message)
         if agent is None and unanswered is not None:
             agent, unanswered = self._probed_agent(state)
-            if unanswered is not None:
-                message += f"; agent session not checked: {unanswered}"
-        for session in (harness, agent):
-            if session is not None:
-                with contextlib.suppress(SessionError):
-                    session.close()
+        message = f"tui session {state.agent_name} did not start{why}{self._tail(state, agent)}"
+        if unanswered is not None:
+            message += f"; agent session not checked: {unanswered}"
+        message = " ".join(message.split())
+        if not ended:
+            self._start_failed(message)
+        if harness is not None:
+            try:
+                harness.close()
+            except SessionError:
+                if not ended:
+                    self._start_failed(None)
+        if agent is not None:
+            with contextlib.suppress(SessionError):
+                agent.close()
         if busy := self._busy(state):
             raise busy
         raise SessionError(message)
@@ -1083,7 +1090,29 @@ class HarnessDelegate(Delegate):
             return ""
         return f": exit {result.returncode}" + (f": {result.error}" if result.error else "")
 
-    def _start_failed(self, cause: str) -> None:
+    def _tail(self, state: _State, agent: Session | None) -> str:
+        """`; last lines: …` of the agent's client: its screen, else its Host row's once exited."""
+        try:
+            text = "" if agent is None else agent.screen(TAIL_LINES)
+        except SessionError:
+            text = ""
+        if not text:
+            try:
+                rows = self.session_cls.host(state.host).rows()
+            except (SessionError, SessionConfigError):
+                rows = []
+            text = next(
+                (
+                    r.last_lines or ""
+                    for r in rows
+                    if (r.name, r.sid) == (state.agent_name, state.plan.sid)
+                ),
+                "",
+            )
+        lines = [line.strip() for line in text.splitlines() if line.strip()][-TAIL_LINES:]
+        return f"; last lines: {' | '.join(lines)}" if lines else ""
+
+    def _start_failed(self, cause: str | None) -> None:
         with contextlib.suppress(ConfigError, OSError), self.store.mutex():
             state = self._current()
             if not state.completed:
