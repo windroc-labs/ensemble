@@ -184,6 +184,22 @@ prefetch = false
 
 [environments]
 
+# mini-op: the test Mac mini through mini-op's image and plugin, by WDRC-108 FR-55's published names; its secrets are
+# `ensemble-broker login env` items (docs/docker-host.md › Environment secrets)
+[environments.mini-op]
+image = "mini-op:env"
+gateway = "mini-op"
+plugins = ["mini-op"]
+lock = "mini-op"
+
+[[environments.mini-op.secrets]]
+item = "ensemble-env/mini-op-password"
+file = "mini-password"
+
+[[environments.mini-op.secrets]]
+item = "ensemble-env/mini-op-ssh-key"
+file = "mini-ssh-key"
+
 # [delegates]
 #   harness_host  the [hosts.<name>] (src/ensemble/session/config.toml) the harness runs on; "" → the agent's Host.
 #                 An agent on the Docker Host needs a harness on another one, e.g. "tmux"

@@ -579,7 +579,9 @@ each replacing the keys it sets (a list whole):
 | `[roles.<role>.environment]` | `[delegate.roles.<role>.environment]` | `name` (a named environment) and keys overriding it; without `name`, overrides of the default |
 
 The packaged default is `[environment.docker]`: `image = "@worker"`, `gateway = "workers"`, `plugins = []`,
-`secrets = []`, `prefetch = false`, no `lock`. Keys:
+`secrets = []`, `prefetch = false`, no `lock`. It also ships one named environment, `[environments.mini-op]`: image
+`mini-op:env`, gateway, lock and plugin `mini-op`, and the secrets `ensemble-env/mini-op-password` (file `mini-password`)
+and `ensemble-env/mini-op-ssh-key` (file `mini-ssh-key`); no prefetch. Keys:
 
 - `image`: a local [base image](#base-images) or `"@worker"`, ensemble's worker base.
 - `gateway`: the caller network the container joins, by the egress proxy's label name
