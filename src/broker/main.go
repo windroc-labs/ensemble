@@ -332,6 +332,7 @@ func withHost(command, container string, progress io.Writer, f func(launcher.Hos
 		h.Codex = broker.NewCodex(home, nil)
 		h.Opencode = broker.OpencodeKeys{Keychain: broker.SystemKeychain{Home: home}}
 		h.Env = broker.EnvKeys{Keychain: broker.SystemKeychain{Home: home}}
+		h.Static = staticStore(home)
 		h.Progress = progress
 		h.Lock = broker.FileLock(filepath.Join(home, ".ensemble/docker/images.lock"))
 		return f(h)

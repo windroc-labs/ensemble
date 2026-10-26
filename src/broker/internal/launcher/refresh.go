@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 	"slices"
 	"time"
 
@@ -104,40 +103,11 @@ func (h Host) publishExpiry(m Manifest, expiry string) error {
 	if err != nil || value.UTC().Format(time.RFC3339) != expiry {
 		return errors.New("invalid credential deadline")
 	}
-	parent := filepath.Join(h.Home, ".ensemble/docker-state", m.Name)
-	if err := h.Safe(parent); err != nil {
-		return err
-	}
 	data, err := json.Marshal(expiry)
 	if err != nil {
 		return err
 	}
-	temporary, err := os.CreateTemp(parent, ".credential-")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(temporary.Name())
-	if _, err := temporary.Write(data); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	destination := filepath.Join(parent, m.Generation+".credential.json")
-	if err := os.Rename(temporary.Name(), destination); err != nil {
-		return err
-	}
-	directory, err := os.Open(parent)
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	return directory.Sync()
+	return h.writeState(m, m.Generation+".credential.json", data)
 }
 
 // Status lists the revocation backlog without changing credentials or emitting audit.

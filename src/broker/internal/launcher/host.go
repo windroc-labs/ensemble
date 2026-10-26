@@ -78,6 +78,7 @@ type Host struct {
 	Codex    CodexCredentials
 	Opencode ProviderKeys
 	Env      EnvSecrets
+	Static   StaticMeta // nil: no static secret records, as tests without them
 	GitHub   Tokens
 	Versions CodexVersions
 	Releases Releases                          // nil: a build that must rebuild fails

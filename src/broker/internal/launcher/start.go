@@ -133,6 +133,9 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 			return StartResult{}, err
 		}
 	}
+	if err := h.checkStatic(staticRefs(m)); err != nil {
+		return StartResult{}, err
+	}
 	if _, err := h.GitHub.Retry(ctx); err != nil {
 		times.WriteString("ensemble-broker: start revocations skipped\n")
 	}
@@ -374,6 +377,16 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 		return StartResult{}, held, err
 	}
 	exec := h.agentExec(ctx, c)
+	// Read again just before the Keychain reads, the closest to the versions injected.
+	var record *injectedRecord
+	if refs := staticRefs(m); h.Static != nil && len(refs) > 0 {
+		records, err := h.Static.Load()
+		if err != nil {
+			return StartResult{}, held, storeFailed(err, protocol.StartFailed)
+		}
+		r := injectedRecords(refs, records)
+		record = &r
+	}
 	var codexExpiry *string
 	switch m.Client {
 	case "codex":
@@ -403,6 +416,11 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 		}
 		held.secrets = append(held.secrets, s.Item)
 		h.Audit.Add(c, audit.Credential{Kind: audit.EnvSecret, Item: s.Item, Result: audit.Issued}, "")
+	}
+	if record != nil {
+		if err := h.writeInjected(m, *record); err != nil {
+			return StartResult{}, held, err
+		}
 	}
 	lap("credentials")
 	expiries := []protocol.Expiry{}
