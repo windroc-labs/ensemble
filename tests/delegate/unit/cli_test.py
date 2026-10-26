@@ -474,6 +474,24 @@ class Verifier(Harnessed):
         self.assertIn("/mini-op:run", shown["prompt"])
         self.assertFalse(os.path.exists(self.work))
 
+    def test_client_codex_is_refused_naming_the_flag(self):
+        self.configure("docker")
+        for extra in (("--dry-run",), ()):
+            with self.subTest(extra=extra):
+                code, out, err = self.verify(*extra, client="codex")
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("--client codex: role verifier runs only on claude", err)
+                self.assertFalse(os.path.exists(self.work))
+
+    def test_a_local_role_client_is_refused_naming_its_table(self):
+        self.configure("docker")
+        with open(self.local, "a", encoding="utf-8") as file:
+            file.write('[delegate.roles.verifier]\nclient = "codex"\n')
+        code, out, err = self.verify("--dry-run")
+        self.assertEqual((code, out), (2, ""))
+        for part in ("[delegate.roles.verifier]", "'codex'", "role verifier runs only on claude"):
+            self.assertIn(part, err)
+
     def test_tmux_default_host_refuses_and_still_lists(self):
         self.configure("tmux")
         code, out, err = self.verify()

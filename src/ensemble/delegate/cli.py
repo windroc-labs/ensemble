@@ -365,6 +365,8 @@ def _check(a: argparse.Namespace) -> None:
     if a.input is None:
         raise ConfigError("--input is required")
     _check_out(a)
+    if a.client and (fixed := Composer().fixed_client(a.role)) and a.client != fixed:
+        raise ConfigError(f"--client {a.client}: role {a.role} runs only on {fixed}")
     if a.events is not None and not a.detach:
         raise ConfigError("--events needs --detach")
     if a.on_event is not None and not a.detach:

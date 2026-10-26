@@ -791,6 +791,65 @@ class Client(Fake):
         self.assertEqual(got, want)
 
 
+FIXED = RUN_CONFIG.replace(
+    "[roles.writer]\n", '[roles.writer]\nclient = "w"\nfixed_client = true\n'
+)
+
+
+class FixedClient(Fake):
+    """A packaged role with fixed_client = true runs only on its table's client (WDRC-110 FR-49)."""
+
+    def setUp(self):
+        super().setUp()
+        self.configure(FIXED)
+
+    def test_the_packaged_client_is_the_role_s_whatever_the_globals_say(self):
+        self.assertEqual(self.resolved().client, "w")
+        self.local('client = "l"\n')
+        self.assertEqual([self.resolved(r).client for r in ("writer", "editor")], ["w", "l"])
+        overlay = {"client": "x"}
+        got = [self.resolved(r, overlays=(overlay,)).client for r in ("writer", "editor")]
+        self.assertEqual(got, ["w", "x"])
+        same = {"roles": {"writer": {"client": "w"}}}
+        self.assertEqual(self.resolved(overlays=(same,)).client, "w")
+
+    def test_a_local_role_table_choosing_another_client_is_refused_naming_it(self):
+        self.local('[roles.writer]\nclient = "x"\n')
+        message = self.refused("editor")
+        for part in ("[delegate.roles.writer]", "'x'", "role writer runs only on w"):
+            self.assertIn(part, message)
+
+    def test_an_overlay_role_table_choosing_another_client_is_refused_naming_it(self):
+        overlay = {"roles": {"writer": {"client": "x"}}}
+        self.assertEqual(
+            self.refused("editor", overlays=(overlay,)),
+            "run overlay: [overlay.roles.writer] client 'x': role writer runs only on w",
+        )
+
+    def test_only_the_packaged_config_sets_fixed_client(self):
+        for local in (
+            "[roles.writer]\nfixed_client = false\n",
+            "[roles.editor]\nfixed_client = true\n",
+        ):
+            with self.subTest(local=local):
+                self.local(local)
+                message = self.refused()
+                self.assertIn("fixed_client", message)
+                self.assertIn("only the packaged config.toml sets it", message)
+        self.local("")
+        overlay = {"roles": {"writer": {"fixed_client": False}}}
+        self.assertIn("unknown key 'fixed_client'", self.refused(overlays=(overlay,)))
+
+    def test_a_malformed_declaration_is_refused(self):
+        for config, part in (
+            (FIXED.replace("fixed_client = true", 'fixed_client = "yes"'), "must be true or false"),
+            (FIXED.replace('client = "w"\n', ""), "needs client"),
+        ):
+            with self.subTest(part=part):
+                self.configure(config)
+                self.assertIn(part, self.refused())
+
+
 class Accounts(Fake):
     """A role's accounts table (client name to account name): role, then global, then each
     overlay, entry by entry; never a run key.

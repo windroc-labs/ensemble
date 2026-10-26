@@ -25,7 +25,7 @@ branch = "main"
 dir = "Research/"
 ```
 
-- **Client:** `client` picks it; `ensemble-delegate run --client` overrides it for one run. The flags a role run passes its client: [Client policy](sessions.md#client-policy).
+- **Client:** `client` picks it; `ensemble-delegate run --client` overrides it for one run. A packaged role with `fixed_client = true` (`verifier`: claude) runs only on its packaged `client`: another from `--client`, `[delegate.roles.<role>]` or an overlay's role table is a configuration error naming where it came from, and a global `client` does not apply to it. The flags a role run passes its client: [Client policy](sessions.md#client-policy).
 - **Claude account:** `[delegate.roles.<role>.accounts]` `claude = "work"` runs the role's Docker Claude sessions on that registered account, keyed by client: [Docker host › Claude accounts](docker-host.md#claude-accounts).
 - **Destination:** `[output]` (`local`, `github`, `pull-request` or `orchestrator`); a lower level's `[output]` replaces the whole table.
 - **Access:** `read`, `write` and `commands` widen what the agent run may read, write and run; `templates` inlines templates into its prompt.

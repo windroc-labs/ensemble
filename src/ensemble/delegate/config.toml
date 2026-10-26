@@ -18,7 +18,8 @@
 #   tier            required: model tier 1–4 (1 = strongest); the Client maps it to a model
 #   effort          required: low | medium | high | xhigh | max; the Client maps it to its own effort value
 #   client          required: the Client that runs the agent run (a [clients.<name>] name); the orchestrator's
-#                   overlay may set it per role. The Composer passes it through unchecked
+#                   overlay may set it per role. The Composer passes it through unchecked, but for a fixed client
+#                   (Roles › fixed_client)
 #   language        the language reports and PRDs are written in (one line); "" → no rule: the model's default
 #   cwd             the dir the agent run starts in (absolute or ~ path); "" → <workdir>/agent. A resume reuses
 #                   its recorded one (<workdir>/run/run.jsonl)
@@ -119,6 +120,9 @@ host = ""
 # A caller may supply a costly-step brake at runtime; it has no configuration key here.
 #   <run key>     tier, effort, client, language, cwd, idle_timeout, show or [output], for that role
 #   accounts      [roles.<role>.accounts]: [accounts] above, for that role, entry by entry
+#   fixed_client  this file only: true makes the table's client the role's only client. Another chosen for it (--client,
+#                 [delegate.roles.<role>] in config.local.toml, an overlay's [roles.<role>]) refuses the run, naming
+#                 where it came from; a global client does not apply to it; config.local.toml cannot set the key
 
 # ── Researcher ──────────────────────────────────────────
 [roles.researcher]
@@ -153,6 +157,8 @@ type = "pull-request"
 
 # ── Verifier ────────────────────────────────────────────
 [roles.verifier]
+client = "claude"
+fixed_client = true
 
 [roles.verifier.output]
 type = "orchestrator"

@@ -76,6 +76,9 @@ class Composer:
         teams.role_tables("config snapshot", "", cfg)
         return {name: teams.index(name, self.team, cfg=cfg) for name in teams.roles(self.team, cfg)}
 
+    def fixed_client(self, role: str) -> str | None:
+        return run.fixed_clients(thaw(self.config.values)).get(role)
+
     def trusted_dirs(self) -> frozenset[str]:
         return run.trusted_dirs(cfg=thaw(self.config.values))
 
