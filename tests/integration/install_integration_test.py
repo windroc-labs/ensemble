@@ -432,6 +432,7 @@ class InstallTest(Case):
         ctty=None,
         then=(),
         provider_write=True,
+        gateway_failure=False,
     ):
         """A first run answering every question: brew profile line, clients, Docker, the
         OpenCode provider, the config, the Docker logins, the PATH line, then `then` (the board's).
@@ -458,9 +459,9 @@ class InstallTest(Case):
             (WRITE_Q, "y"),
             *plugin,
             *provider,
-            *(logins or ()),
-            (WRITE_Q, "y"),
-            *([(WRITE_Q, "y")] if "opencode" in (chosen or "") else []),
+            *((logins or ()) if not gateway_failure else ()),
+            *([(WRITE_Q, "y")] if not gateway_failure else []),
+            *([(WRITE_Q, "y")] if "opencode" in (chosen or "") and not gateway_failure else []),
             *then,
         ]
         return self.run_install(*args, answers=answers, ctty=ctty)
@@ -1009,7 +1010,7 @@ class InstallTest(Case):
         egress.mkdir()
         config = egress / "config.local.yaml"
         config.symlink_to(egress / "absent")
-        result = self.fresh("--clients", "claude", "--docker", logins=[])
+        result = self.fresh("--clients", "claude", "--docker", gateway_failure=True)
         self.assertEqual(result.code, 1)
         self.assertTrue(config.is_symlink())
         self.assertIn("symlink is unsupported", result.stderr)
@@ -1023,7 +1024,7 @@ class InstallTest(Case):
         config = egress / "config.local.yaml"
         config.symlink_to(target)
         before = (target.read_bytes(), target.stat().st_mode, target.stat().st_mtime_ns)
-        result = self.fresh("--clients", "claude", "--docker", logins=[])
+        result = self.fresh("--clients", "claude", "--docker", gateway_failure=True)
         self.assertEqual(result.code, 1)
         self.assertIn("symlink is unsupported", result.stderr)
         self.assertTrue(config.is_symlink())
@@ -1047,10 +1048,24 @@ class InstallTest(Case):
         state.parent.mkdir(parents=True, exist_ok=True)
         state.write_text(f"egress_commit={old_sha}\n")
         (self.fakes / "fail").write_text("docker egress-start")
-        result = self.fresh("--clients", "claude", "--docker", logins=[])
+        result = self.fresh("--clients", "claude", "--docker", gateway_failure=True)
         self.assertEqual(result.code, 1)
         self.assertEqual((egress / "current").resolve(), old)
         self.assertEqual(self.state()["egress_commit"], old_sha)
+        (self.fakes / "egress_unhealthy").touch()
+        (self.bin / "sleep").unlink()
+        executable(self.bin / "sleep", "#!/bin/sh\n")
+        result = self.again("--clients", "claude", "--docker")
+        self.assertEqual(result.code, 1)
+        self.assertIn("not healthy after 120 seconds", result.stderr)
+        self.assertIn("docker egress-start", self.calls())
+        self.assertEqual((egress / "current").resolve(), old)
+        self.assertEqual(self.state()["egress_commit"], old_sha)
+        self.assertEqual(
+            {p: (p.read_bytes(), p.stat().st_mode, p.stat().st_mtime_ns) for p in old.iterdir()},
+            before,
+        )
+        (self.fakes / "egress_unhealthy").unlink()
         self.assert_ok(
             self.again("--clients", "claude", "--docker", answers=DOCKER_LOGINS + ((WRITE_Q, "y"),))
         )
@@ -1084,7 +1099,7 @@ class InstallTest(Case):
 
     def test_gateway_download_failure_is_retryable(self):
         (self.fakes / "fail").write_text("gh api repos/windroc/egress-proxy/tarball/")
-        result = self.fresh("--clients", "claude", "--docker", logins=[])
+        result = self.fresh("--clients", "claude", "--docker", gateway_failure=True)
         self.assertEqual(result.code, 1)
         self.assertIn("cannot fetch pinned windroc/egress-proxy", result.stderr)
         versions = Path(self.home, ".egress/versions")
@@ -1095,7 +1110,7 @@ class InstallTest(Case):
 
     def test_gateway_start_and_health_failures_stop_before_broker_logins(self):
         (self.fakes / "fail").write_text("docker egress-start")
-        result = self.fresh("--clients", "claude", "--docker", logins=[])
+        result = self.fresh("--clients", "claude", "--docker", gateway_failure=True)
         self.assertEqual(result.code, 1)
         self.assertIn("egress-gateway", result.stderr)
         self.assertIn("docker logs egress-gateway", result.stderr)
