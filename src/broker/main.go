@@ -276,15 +276,13 @@ type buildArgs struct {
 	maxAge time.Duration
 }
 
-var noticeKeyPattern = regexp.MustCompile(`^ensemble-(claude|opencode|env)/[A-Za-z0-9._-]{1,64}@[0-9]{1,9}:(30d|7d|1d|expired|rotated)$`)
-
 // maxDelivered caps notices' --delivered keys; a container holds at most a few dozen static secrets.
 const maxDelivered = 64
 
 // noticeKeys parses notices' [--delivered KEY]...: the keys, empty for none; nil for anything else.
 func noticeKeys(args []string) []string {
 	keys := []string{}
-	for ; len(args) >= 2 && args[0] == "--delivered" && noticeKeyPattern.MatchString(args[1]); args = args[2:] {
+	for ; len(args) >= 2 && args[0] == "--delivered" && credential.NoticeKeyPattern.MatchString(args[1]); args = args[2:] {
 		keys = append(keys, args[1])
 	}
 	if len(args) != 0 || len(keys) > maxDelivered {
@@ -512,15 +510,12 @@ func loginClaude(account string, reg credential.Registration, out io.Writer) err
 	if err := broker.CheckInstalled(); err != nil {
 		return err
 	}
+	read, hidden := stdinReaders(os.Stdin, "Claude account "+account+" setup-token (hidden): ", true)
 	return newStaticLogin(home).register(credential.StaticRef(credential.Claude, account), reg, out, os.Stderr, func() error {
-		return broker.Login(account, func() ([]byte, error) {
-			fmt.Fprint(os.Stderr, "Claude account "+account+" setup-token (hidden): ")
-			defer fmt.Fprintln(os.Stderr)
-			return broker.ReadHidden()
-		}, func() ([]byte, error) {
+		return broker.Login(account, read, func() ([]byte, error) {
 			fmt.Fprint(os.Stderr, "Login keychain password, to make Claude trust only the broker (hidden): ")
 			defer fmt.Fprintln(os.Stderr)
-			return broker.ReadHidden()
+			return hidden()
 		}, broker.SystemKeychain{Home: home}, os.Stderr, out)
 	})
 }
@@ -559,19 +554,7 @@ func loginEnv(name string, reg credential.Registration, out io.Writer) error {
 	if err := broker.CheckInstalled(); err != nil {
 		return err
 	}
-	// A terminal on stdin types one hidden line; anything else carries the value, so the password comes from the
-	// controlling terminal.
-	info, err := os.Stdin.Stat()
-	terminal := err == nil && info.Mode()&os.ModeCharDevice != 0
-	read, hidden := func() ([]byte, error) { return readEnvValue(os.Stdin) }, broker.ReadHiddenTTY
-	if terminal {
-		read = func() ([]byte, error) {
-			fmt.Fprint(os.Stderr, "Environment secret "+name+" (hidden): ")
-			defer fmt.Fprintln(os.Stderr)
-			return broker.ReadHidden()
-		}
-		hidden = broker.ReadHidden
-	}
+	read, hidden := stdinReaders(os.Stdin, "Environment secret "+name+" (hidden): ", false)
 	return newStaticLogin(home).register(credential.StaticRef(credential.Env, name), reg, out, os.Stderr, func() error {
 		return broker.LoginEnv(name, read, func() ([]byte, error) {
 			fmt.Fprint(os.Stderr, "Login keychain password, to make ensemble-env/"+name+" trust only the broker (hidden): ")

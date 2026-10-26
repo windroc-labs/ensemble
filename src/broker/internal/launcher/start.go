@@ -418,7 +418,7 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 		h.Audit.Add(c, audit.Credential{Kind: audit.EnvSecret, Item: s.Item, Result: audit.Issued}, "")
 	}
 	if record != nil {
-		if err := h.writeInjected(m, *record); err != nil {
+		if err := h.writeInjected(m, *record, protocol.StartFailed); err != nil {
 			return StartResult{}, held, err
 		}
 	}

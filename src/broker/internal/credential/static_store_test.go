@@ -165,8 +165,8 @@ func TestRegisterNewerLoginWins(t *testing.T) {
 		inner, err = s.Register("ensemble-env/db", Registration{Expires: date(t, "2027-06-01")}, staticNow, func() error { return nil })
 		return err
 	})
-	if err != nil || got.Version != 1 || inner.Version != 2 {
-		t.Fatalf("%+v %+v %v", got, inner, err)
+	if err != nil || inner.Version != 2 || !reflect.DeepEqual(got, inner) {
+		t.Fatalf("a superseded login returns the newer record: %+v %+v %v", got, inner, err)
 	}
 	if m := loaded(t, s); !reflect.DeepEqual(m["ensemble-env/db"], inner) {
 		t.Fatalf("the older commit overwrote the newer login: %+v", m)
@@ -182,25 +182,6 @@ func TestRegisterNewerLoginWins(t *testing.T) {
 	}
 	if m := loaded(t, s); m["ensemble-env/db"].Version != 4 || m["ensemble-env/db"].Pending {
 		t.Fatalf("the older restore undid the newer login: %+v", m)
-	}
-}
-
-func TestMarkNotified(t *testing.T) {
-	s := tempStore(t)
-	if _, err := s.Register("ensemble-env/db", Registration{Expires: date(t, "2026-11-01")}, staticNow, func() error { return nil }); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.MarkNotified("ensemble-env/db", 1, []string{"7d"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.MarkNotified("ensemble-env/db", 1, []string{"7d", "1d"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.MarkNotified("ensemble-env/db", 9, []string{"expired"}); err != nil {
-		t.Fatal(err)
-	}
-	if got := loaded(t, s)["ensemble-env/db"].Notified; !reflect.DeepEqual(got, []string{"7d", "1d"}) {
-		t.Fatalf("%q", got)
 	}
 }
 
@@ -227,5 +208,23 @@ func TestDeliverHost(t *testing.T) {
 	}
 	if got := loaded(t, s)["ensemble-env/db"].Notified; !reflect.DeepEqual(got, []string{"30d", "7d"}) {
 		t.Fatalf("%q", got)
+	}
+}
+
+func TestRegisterNeverRestoresAnotherLoginPending(t *testing.T) {
+	s := tempStore(t)
+	got, err := s.Register("ensemble-env/db", Registration{Expires: date(t, "2027-01-01")}, staticNow, func() error {
+		_, err := s.Register("ensemble-env/db", Registration{}, staticNow, func() error { return errors.New("keychain status -25293") })
+		if err == nil {
+			t.Fatal("inner login did not fail")
+		}
+		return nil
+	})
+	want := Static{Version: 1, Provenance: Unknown}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if r := loaded(t, s)["ensemble-env/db"]; !reflect.DeepEqual(r, want) {
+		t.Fatalf("stuck: %+v", r)
 	}
 }

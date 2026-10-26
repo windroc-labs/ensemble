@@ -255,7 +255,7 @@ class Supervisor:
             LOG.warning("docker session %s: %s", self.name, reason)
 
     def _notice(self, word: str, text: str) -> None:
-        """OSError or ValueError: the events file did not take it."""
+        """OSError, ValueError: not written."""
         if self.events:
             SessionStatusLog(self.events).write(self.name, word, text)
         else:
@@ -297,9 +297,8 @@ def _recorded_client(state: str) -> str | None:
 
 
 class _Notices:
-    """A generation's static secret notices: check asks the broker, hands each to `notice` (word,
-    text), acknowledges those it took and sets `due`, when to check again (None: never). A failed
-    check retries in REFRESH_RETRY s; the first of a streak is a fixed credential_notice_failed.
+    """Static secret notices: check hands each to `notice`, acks those taken and sets `due`
+    (None: never); a failure retries, the first of a streak a fixed credential_notice_failed.
     """
 
     def __init__(self, container: str, manifest: str, broker: Broker, *, notice, clock) -> None:
@@ -328,14 +327,14 @@ class _Notices:
                 continue
             told.append(found_notice["key"])
         if told:
-            with contextlib.suppress(SessionError):  # unacknowledged: they repeat
+            with contextlib.suppress(SessionError):
                 self.broker.notices(self.container, self.manifest, delivered=told)
         self.due = None
         if found.next_check is not None:
             self.due = datetime.fromisoformat(found.next_check).timestamp()
 
     def sleep(self, stopped, seconds: float) -> bool:
-        """Waits `seconds` unless stopped, checking whenever due meanwhile; True once stopped."""
+        """True once stopped within `seconds`; checks whenever due meanwhile."""
         end = self.clock() + seconds
         while self.due is not None and self.due < end:
             if stopped.wait(max(0.0, self.due - self.clock())):
@@ -357,13 +356,11 @@ def refresh_tokens(
     clock: Callable[[], float] = time.time,
 ) -> None:
     """Until stopped: the broker's refresh at the earliest saved expiry less REFRESH_AHEAD, its
-    list saved; a failure goes to `failed` and retries in REFRESH_RETRY s. Static secret notices
-    go to `notice`, checked at once and then when due. No list and no notice due: returns.
+    list saved; a failure goes to `failed` and retries in REFRESH_RETRY s. Notices go to `notice`.
+    No list and no notice due: returns.
     """
-    manifest = os.path.join(state, f"{generation}.json")
-    notices = _Notices(
-        f"ensemble-{name}-{generation}", manifest, broker, notice=notice, clock=clock
-    )
+    container, manifest = f"ensemble-{name}-{generation}", os.path.join(state, f"{generation}.json")
+    notices = _Notices(container, manifest, broker, notice=notice, clock=clock)
     notices.check()
     if refreshes_client(state):
         _renew_client(
@@ -386,9 +383,7 @@ def refresh_tokens(
         delay = None
     while delay is not None and not notices.sleep(stopped, delay):
         try:
-            found = broker.refresh(
-                f"ensemble-{name}-{generation}", os.path.join(state, f"{generation}.json")
-            )
+            found = broker.refresh(container, manifest)
         except SessionError as error:
             failed(str(error))
             delay = REFRESH_RETRY

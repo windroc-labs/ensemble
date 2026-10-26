@@ -261,3 +261,21 @@ func TestNoticeAudit(t *testing.T) {
 		t.Fatalf("%+v", env)
 	}
 }
+
+func TestNoticeKeyPatternMatchesDue(t *testing.T) {
+	s := expiring(7, "2026-12-01T00:00:00Z")
+	newer := Static{Version: 8, Provenance: Unknown}
+	for _, at := range []time.Time{time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 11, 30, 0, 0, 0, 0, time.UTC), time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)} {
+		for _, n := range Due("ensemble-opencode/strata", s, newer, none, at) {
+			if !NoticeKeyPattern.MatchString(n.Key) {
+				t.Errorf("%q", n.Key)
+			}
+		}
+	}
+	for _, bad := range []string{"ensemble-bot/x@1:30d", "ensemble-env/db@1:2d", "ensemble-env/db:30d", "ensemble-env/@1:30d"} {
+		if NoticeKeyPattern.MatchString(bad) {
+			t.Errorf("%q matched", bad)
+		}
+	}
+}

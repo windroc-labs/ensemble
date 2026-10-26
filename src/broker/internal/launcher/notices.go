@@ -64,25 +64,23 @@ func (h Host) Notices(_ context.Context, container, path string, delivered []str
 	}
 	slices.Sort(refs)
 	told := func(key string) bool { return slices.Contains(record.Delivered, key) }
-	acked := 0
+	var acked []credential.Notice
 	for _, ref := range refs {
 		for _, n := range credential.Due(ref, record.Injected[ref], stored[ref], told, now) {
 			if slices.Contains(delivered, n.Key) {
 				record.Delivered = append(record.Delivered, n.Key)
-				h.Audit.Notice(container, n.Audit())
-				acked++
+				acked = append(acked, n)
 				continue
 			}
 			result.Notices = append(result.Notices, Notice{n.Key, n.Text})
 		}
 	}
-	if acked > 0 {
-		data, err := json.Marshal(record)
-		if err == nil {
-			err = h.writeState(m, staticFile(m), data)
+	if len(acked) > 0 {
+		if err := h.writeInjected(m, record, protocol.InternalError); err != nil {
+			return NoticesResult{}, err
 		}
-		if err != nil {
-			return NoticesResult{}, protocol.New(protocol.InternalError, "Recording "+staticFile(m)+" failed.")
+		for _, n := range acked { // audited only once their delivery is recorded
+			h.Audit.Notice(container, n.Audit())
 		}
 	}
 	if next := credential.NextCheck(record.Injected, now); next != nil {

@@ -1234,3 +1234,57 @@ func TestNoticesCommand(t *testing.T) {
 		assertError(t, errOut, out, "notices", protocol.Usage)
 	}
 }
+
+func TestPipedSecretReaders(t *testing.T) {
+	for _, c := range []struct{ in, token, value string }{
+		{"tok\n", "tok", "tok\n"}, {"tok\r\n", "tok", "tok\r\n"}, {"tok", "tok", "tok"}, {"a\nb\n", "a\nb", "a\nb\n"},
+	} {
+		for _, token := range []bool{true, false} {
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			go func() { _, _ = io.WriteString(w, c.in); w.Close() }()
+			read, _ := stdinReaders(r, "unused prompt", token)
+			got, err := read()
+			r.Close()
+			want := c.value
+			if token {
+				want = c.token
+			}
+			if err != nil || string(got) != want {
+				t.Errorf("%q token=%v: %q %v", c.in, token, got, err)
+			}
+		}
+	}
+}
+
+func TestStaticLoginPipedToken(t *testing.T) {
+	// login claude with the token piped and no terminal: --fresh-token records assumed, its absence unknown, and
+	// nothing asks for confirmation.
+	for _, c := range []struct {
+		reg  credential.Registration
+		want credential.Provenance
+	}{{credential.Registration{Fresh: true}, credential.Assumed}, {credential.Registration{}, credential.Unknown}} {
+		s, home := staticFixture(t)
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() { _, _ = io.WriteString(w, "sk-ant-oat01-piped\n"); w.Close() }()
+		read, _ := stdinReaders(r, "Claude account default setup-token (hidden): ", true)
+		var out, errOut bytes.Buffer
+		err = s.register("ensemble-claude/default", c.reg, &out, &errOut, func() error {
+			token, err := read()
+			if err == nil && string(token) != "sk-ant-oat01-piped" {
+				err = fmt.Errorf("token %q", token)
+			}
+			return err
+		})
+		r.Close()
+		records, _ := staticStore(home).Load()
+		if err != nil || records["ensemble-claude/default"].Provenance != c.want || errOut.Len() != 0 || strings.Contains(out.String(), "piped") {
+			t.Fatalf("%v: %v %+v %q %q", c.want, err, records, out.String(), errOut.String())
+		}
+	}
+}

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -87,6 +89,26 @@ func datedLogin(args []string, a app, stdout io.Writer) func() error {
 	}
 }
 
+// stdinReaders read a login's secret and then the keychain password. A terminal on stdin types the secret as one
+// hidden line after prompt; anything else carries it (a token: one line, its newline dropped), and the password comes
+// from the controlling terminal. Neither depends on a confirmation read from stdin.
+func stdinReaders(stdin *os.File, prompt string, token bool) (read, hidden func() ([]byte, error)) {
+	if info, err := stdin.Stat(); err == nil && info.Mode()&os.ModeCharDevice != 0 {
+		return func() ([]byte, error) {
+			fmt.Fprint(os.Stderr, prompt)
+			defer fmt.Fprintln(os.Stderr)
+			return broker.ReadHidden()
+		}, broker.ReadHidden
+	}
+	return func() ([]byte, error) {
+		value, err := readEnvValue(stdin)
+		if token && err == nil {
+			value = bytes.TrimSuffix(bytes.TrimSuffix(value, []byte("\n")), []byte("\r"))
+		}
+		return value, err
+	}, broker.ReadHiddenTTY
+}
+
 // staticLogin records a static secret's login: its version and expiry in store, and the notices due to the host in
 // log.
 type staticLogin struct {
@@ -109,7 +131,8 @@ func (s staticLogin) register(ref string, reg credential.Registration, out, stde
 	}
 	line := "Expiry unknown"
 	if record.ExpiresAt != "" {
-		line = "Expires " + record.ExpiresAt[:len("2006-01-02")] + " (" + string(record.Provenance) + ")"
+		expires, _ := time.Parse(time.RFC3339, record.ExpiresAt)
+		line = "Expires " + credential.Day(expires) + " (" + string(record.Provenance) + ")"
 	}
 	if _, err := fmt.Fprintln(out, line); err != nil {
 		return err

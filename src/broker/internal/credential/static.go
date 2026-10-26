@@ -3,6 +3,7 @@ package credential
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -106,7 +107,8 @@ func ParseDate(s string) (time.Time, error) {
 	return t, nil
 }
 
-func day(t time.Time) string { return t.UTC().Format(dateLayout) }
+// Day is t's UTC date, YYYY-MM-DD.
+func Day(t time.Time) string { return t.UTC().Format(dateLayout) }
 
 // Resolve is the expiry (RFC 3339, "" unknown) and provenance r gives kind k's secret registered at now. --issued and
 // --fresh-token are Claude's: its tokens last one year.
@@ -120,11 +122,11 @@ func (r Registration) Resolve(k Kind, now time.Time) (string, Provenance, error)
 	expires, p := r.Expires, Explicit
 	if !r.Issued.IsZero() {
 		if r.Issued.After(now) {
-			return "", "", fmt.Errorf("--issued %s is in the future", day(r.Issued))
+			return "", "", fmt.Errorf("--issued %s is in the future", Day(r.Issued))
 		}
 		derived := r.Issued.AddDate(1, 0, 0)
 		if !expires.IsZero() && !expires.Equal(derived) {
-			return "", "", fmt.Errorf("--issued %s means expiry %s, not %s", day(r.Issued), day(derived), day(expires))
+			return "", "", fmt.Errorf("--issued %s means expiry %s, not %s", Day(r.Issued), Day(derived), Day(expires))
 		}
 		if expires.IsZero() {
 			expires, p = derived, Derived
@@ -137,7 +139,7 @@ func (r Registration) Resolve(k Kind, now time.Time) (string, Provenance, error)
 		return "", Unknown, nil
 	}
 	if !expires.After(now) {
-		return "", "", fmt.Errorf("%s is not in the future: register a new secret", day(expires))
+		return "", "", fmt.Errorf("%s is not in the future: register a new secret", Day(expires))
 	}
 	return expires.UTC().Format(time.RFC3339), p, nil
 }
@@ -150,6 +152,22 @@ var thresholds = []struct {
 
 // Rotated is the notice of a consumer holding an older version than the one stored.
 const Rotated = "rotated"
+
+// NoticeKeyPattern matches every notice key Due can produce.
+var NoticeKeyPattern = regexp.MustCompile(`^ensemble-(claude|opencode|env)/[A-Za-z0-9._-]{1,64}@[0-9]{1,9}:(` + labels() + `)$`)
+
+func labels() string {
+	names := []string{Rotated}
+	for _, th := range thresholds {
+		names = append(names, th.name)
+	}
+	return strings.Join(names, "|")
+}
+
+// thresholdAt is when a threshold days before expires is reached.
+func thresholdAt(expires time.Time, days int) time.Time {
+	return expires.Add(-time.Duration(days) * 24 * time.Hour)
+}
 
 // Notice is one notice for one consumer; Key, <reference>@<version>:<Label>, deduplicates it. Label is the threshold
 // or Rotated; ExpiresAt the expiry it warns of ("": none).
@@ -175,7 +193,7 @@ func noticeKey(ref string, version int, label string) string {
 
 func (s Static) reached(days int, now time.Time) bool {
 	expires, ok := s.expiry()
-	return ok && !now.Before(expires.Add(-time.Duration(days)*24*time.Hour))
+	return ok && !now.Before(thresholdAt(expires, days))
 }
 
 // Due is what a consumer holding injected is due at now, delivered being its own record of keys: the most urgent
@@ -231,7 +249,7 @@ func NextCheck(records map[string]Static, now time.Time) *time.Time {
 			continue
 		}
 		for _, th := range thresholds {
-			if at := expires.Add(-time.Duration(th.days) * 24 * time.Hour); at.After(now) && at.Before(next) {
+			if at := thresholdAt(expires, th.days); at.After(now) && at.Before(next) {
 				next = at
 			}
 		}
@@ -260,14 +278,14 @@ func guidance(ref string) string {
 func Text(ref string, s Static, threshold string, now time.Time) string {
 	expires, _ := s.expiry()
 	if threshold == "expired" {
-		return fmt.Sprintf("%s expired %s (%s): %s; new starts are refused until then", ref, day(expires), s.Provenance, guidance(ref))
+		return fmt.Sprintf("%s expired %s (%s): %s; new starts are refused until then", ref, Day(expires), s.Provenance, guidance(ref))
 	}
 	days := int((expires.Sub(now) + 24*time.Hour - 1) / (24 * time.Hour))
 	in := fmt.Sprintf("in %d days", days)
 	if days == 1 {
 		in = "in 1 day"
 	}
-	return fmt.Sprintf("%s expires %s (%s), %s: %s; running sessions keep their copy until they restart", ref, day(expires), s.Provenance, in, guidance(ref))
+	return fmt.Sprintf("%s expires %s (%s), %s: %s; running sessions keep their copy until they restart", ref, Day(expires), s.Provenance, in, guidance(ref))
 }
 
 // UnknownText is status's prompt for a Claude token of unknown expiry.

@@ -122,14 +122,14 @@ func (h Host) writeState(m Manifest, file string, data []byte) error {
 	return directory.Sync()
 }
 
-// writeInjected records what m's container was started with.
-func (h Host) writeInjected(m Manifest, record injectedRecord) error {
+// writeInjected records what m's container was started with; a failure is code.
+func (h Host) writeInjected(m Manifest, record injectedRecord, code protocol.Code) error {
 	data, err := json.Marshal(record)
 	if err == nil {
 		err = h.writeState(m, staticFile(m), data)
 	}
 	if err != nil {
-		return protocol.New(protocol.StartFailed, "Recording "+staticFile(m)+" failed.")
+		return protocol.New(code, "Recording "+staticFile(m)+" failed.")
 	}
 	return nil
 }

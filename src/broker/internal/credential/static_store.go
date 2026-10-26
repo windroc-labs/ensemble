@@ -121,8 +121,9 @@ func (s StaticStore) write(records map[string]Static) error {
 }
 
 // Register is a login's seam: it resolves reg for ref's kind, records ref pending at the next version, runs store
-// (the Keychain login), then commits the expiry, or restores the prior record when store fails. Commit and restore
-// apply only while ref is still that pending version, so a concurrent login's newer record wins.
+// (the Keychain login), then commits the expiry, or restores the prior record when store fails; an unfinished prior
+// restores as unknown, never pending. Commit and restore apply only while ref is still that pending version, so a
+// concurrent login's newer record wins, and is what a superseded login returns.
 func (s StaticStore) Register(ref string, reg Registration, now time.Time, store func() error) (Static, error) {
 	kind, _, ok := StaticKind(ref)
 	if !ok {
@@ -133,15 +134,14 @@ func (s StaticStore) Register(ref string, reg Registration, now time.Time, store
 		return Static{}, err
 	}
 	var prior *Static
-	version := 0
+	version := 1
 	if err := s.update(func(m map[string]Static) bool {
 		if r, ok := m[ref]; ok {
-			prior = &r
+			if r.Pending {
+				r = Static{Version: r.Version, Provenance: Unknown}
+			}
+			prior, version = &r, r.Version+1
 		}
-		if prior != nil {
-			version = prior.Version
-		}
-		version++
 		m[ref] = Static{Version: version, Provenance: Unknown, Pending: true}
 		return true
 	}); err != nil {
@@ -170,6 +170,7 @@ func (s StaticStore) Register(ref string, reg Registration, now time.Time, store
 	record := Static{Version: version, ExpiresAt: expires, Provenance: provenance}
 	if err := s.update(func(m map[string]Static) bool {
 		if !ours(m) {
+			record = m[ref]
 			return false
 		}
 		m[ref] = record
@@ -183,24 +184,6 @@ func (s StaticStore) Register(ref string, reg Registration, now time.Time, store
 		return Static{}, fmt.Errorf("%s saved; recording its expiry in %s failed (%s); rerun the login", ref, s.Path, reason)
 	}
 	return record, nil
-}
-
-// MarkNotified adds thresholds to what ref's host was told, while ref is still committed at version.
-func (s StaticStore) MarkNotified(ref string, version int, thresholds []string) error {
-	return s.update(func(m map[string]Static) bool {
-		r, ok := m[ref]
-		if !ok || r.Pending || r.Version != version {
-			return false
-		}
-		changed := false
-		for _, th := range thresholds {
-			if !slices.Contains(r.Notified, th) {
-				r.Notified, changed = append(r.Notified, th), true
-			}
-		}
-		m[ref] = r
-		return changed
-	})
 }
 
 // DeliverHost tells the host of ref's due expiry notice once per version and threshold: it records the delivery,

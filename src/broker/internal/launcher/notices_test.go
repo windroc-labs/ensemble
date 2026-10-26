@@ -235,3 +235,28 @@ func TestNoticesSentinelAbsent(t *testing.T) {
 		}
 	}
 }
+
+func TestNoticesAuditOnlyRecordedDeliveries(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root writes anyway")
+	}
+	now := noticeNow
+	h, path, _, record := noticeHost(t, &now, func(s credential.StaticStore) {
+		login(t, s, "ensemble-env/dummy", credential.Registration{Expires: noticeNow.Add(20 * 24 * time.Hour)}, noticeNow)
+	})
+	_, logPath := audited(t, &h, "notices", container)
+	if err := os.Chmod(filepath.Dir(record), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(filepath.Dir(record), 0o700)
+	_, err := h.Notices(context.Background(), container, path, []string{"ensemble-env/dummy@1:30d"})
+	if code(t, err) != protocol.InternalError {
+		t.Fatalf("%v", err)
+	}
+	if err := h.Audit.Flush(err); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(logPath); strings.Contains(string(data), "credential-notice") {
+		t.Fatalf("audited an unrecorded delivery: %s", data)
+	}
+}
