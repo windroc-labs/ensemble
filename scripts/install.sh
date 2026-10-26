@@ -22,7 +22,7 @@ ref=
 release_tag=
 broker_mode=
 # Label contract v1; update only after checking the pinned repo's docs/label-contract.md.
-egress_commit=9ed47580dc9eb4c1fe794d12e54a8f2d3f258831
+egress_commit=122d7454d738db4a9b7e0c4a89d2cfa5ff564339
 clients_flag=
 clients=
 docker_flag=

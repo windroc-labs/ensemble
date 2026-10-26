@@ -69,6 +69,13 @@ After updating the plugin, rerun `scripts/install.sh --docker`: it installs the 
 proxy and waits for healthy. Existing configs are preserved, so one without `networks.workers` stops the installer: add it first ([Docker host › Egress proxy](docker-host.md#egress-proxy)). Add Ollama and local/LAN provider exceptions before starting their workers
 ([Egress proxy operations](docker-host.md#egress-proxy)).
 
+The pinned proxy now builds the image as `egress-proxy`. After the installer succeeds, remove the
+old image it leaves behind:
+
+```sh
+docker image rm egress-proxy-proxy
+```
+
 An already running worker stays on `bridge` during the upgrade; it is not forcibly migrated or stopped.
 Its next start, restart or resume creates a container on the proxy's internal `workers` network.
 List running broker workers still on `bridge`:

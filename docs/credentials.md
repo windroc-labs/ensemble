@@ -31,12 +31,16 @@ GitHub on the Docker Host needs no per-run login: `<B> login github ensemble-bot
 
 | Field | Value |
 |---|---|
-| Purpose | the orchestrator's target-repo check, docs fetch and duplicate search; the Delegate's ready gate (`gh pr ready`, `--undo`); `repo.py` clone, PR and API calls; the manager's PR reads |
-| Minimum permission | an account that can push to and open pull requests on every target repo; `gh auth login`'s scopes (a classic token needs at least `repo`, `read:org`, `gist`) |
+| Purpose | the orchestrator's target-repo check, docs fetch and duplicate search; the Delegate's ready gate (`gh pr ready`, `--undo`, Actions job reads); `repo.py` clone, PR and API calls; the manager's PR reads |
+| Minimum permission | an account that can push to and open pull requests on every target repo; `gh auth login`'s scopes (a classic token needs at least `repo`, `read:org`, `gist`); fine-grained tokens need Actions read to verify unstarted cancellations |
 | Stored at | the system credential store, else a plain-text file; `gh auth status` says which |
 | Readers | any process running as the user (`gh auth token`); never mounted into a container |
 | Lifetime | until revoked |
 | Revoke | `gh auth logout` removes it locally only; revoke at github.com › Settings › Applications › GitHub CLI › Revoke access (every token gh ever made) |
+
+The ready gate treats a cancelled Actions check as skipped only when its job API response
+matches the PR head and confirms no runner or steps. Missing evidence still blocks;
+all skipped or unstarted-cancelled checks together still mean CI did not run.
 
 ### GitHub App private key
 
