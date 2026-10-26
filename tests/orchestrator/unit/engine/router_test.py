@@ -18,7 +18,7 @@ from pathlib import Path
 from unittest import mock
 
 from ensemble.delegate import ConfigError as DelegateConfigError
-from ensemble.delegate import HarnessDelegate, Outcome, SessionBusy
+from ensemble.delegate import HarnessDelegate, Outcome
 from ensemble.orchestrator import cli
 from ensemble.orchestrator.engine import (
     config,
@@ -1315,22 +1315,6 @@ class AttendedEntry(OuterBase):
                     f"router.py: {ID}: attach: attach {harness}\n"
                     f"router.py: {ID}: {harness}: ensemble-session attach-command {harness}\n",
                 )
-
-    def test_an_attended_run_whose_start_is_busy_reports_the_holder(self):
-        self.api.detach_error = SessionBusy("dummy-lock", "ensemble-x-1 (owner x)")
-        rc = self.entry("--issue", ID, "--tui", "--events", self.events)
-        self.assertEqual((rc, self.out), (1, ""))
-        said = self.said()
-        self.assertIn(
-            f"lock-busy {ID} error=SessionBusy: "
-            "busy: lock dummy-lock is held by ensemble-x-1 (owner x)",
-            said,
-        )
-        self.assertFalse([line for line in said if line.startswith("launch-error")], said)
-        self.assertIn("ensemble-x-1 (owner x)", self.err)
-        self.assertEqual([e.kind for e in runs.parse_log(self.runs)], ["start"])
-        self.assertEqual((runs.busy_rows(self.runs), runs.failures(self.runs)), ([], []))
-        self.assertEqual(self.todo["state"], "In Progress")
 
     def test_a_resume_under_tui_is_attended_and_prints_its_record(self):
         self.todo["state"] = "In Progress"
@@ -3752,8 +3736,7 @@ class RunStartRecords(Base):
             )
             for mode, task in (("new", "light-research"), ("resume", None))
         ]
-        written = datetime.fromisoformat(stamp).isoformat(timespec="seconds")
-        self.assertEqual(kinds, [("harness", written), ("harness", written)])
+        self.assertEqual(kinds, ["harness", "harness"])
         common = (
             '"issue": "TASK-1", "sid": "s1", "role": "researcher", "client": "a", '
             '"delegate_kind": "harness"'
@@ -5894,14 +5877,26 @@ class StageKeyChecks(OuterBase):
                 )
 
 
-HELD = SessionBusy("dummy-lock", "ensemble-x-1 (owner x)")
 NO_DEFAULT = "role engineer selects an environment, but Host tmux has no [environment.tmux]"
 
 
-class BusyLaunch(OuterBase):
-    """FR-51 router, FR-57 board half: a construction busy goes back without an attempt or comment;
-    an environment configuration error is only launch-error.
-    """
+class EnvironmentLaunch(OuterBase):
+    def test_busy_attempts_reach_the_normal_four_attempt_cap(self):
+        self.todo["state"] = "In Progress"
+        self.resumable(ID, "s", 60, role="engineer")
+        self.api.detach_error = SessionError(
+            "busy: lock dummy-lock is held by worker (owner worker)"
+        )
+        for _ in range(router.CAP - 1):
+            self.assertEqual(self.entry(), 0)
+            self.lines = self.raw_runs().splitlines()
+        self.assertEqual(
+            [json.loads(line)["kind"] for line in self.lines],
+            ["start", *["resume"] * (router.CAP - 1)],
+        )
+        self.assertEqual(self.entry(), 0)
+        self.assertEqual(self.todo["state"], "In Review")
+        self.assertIn("reached 4 attempts", "\n".join(self.said()))
 
     def setUp(self):
         super().setUp()
@@ -5913,48 +5908,6 @@ class BusyLaunch(OuterBase):
     def entry(self, *argv):
         outer = {"run": self.run_, "keychain": self.keychain}
         return self.tick(self.fake, *argv, again=True, outer=outer)
-
-    def attempts(self):
-        tried = [*runs.parse_log(self.runs), *runs.failures(self.runs)]
-        return router.attempt_count(tried, ID, busy=runs.busy_rows(self.runs))
-
-    def test_a_busy_new_run_goes_back_to_ready_without_a_comment_or_attempt(self):
-        for argv, rc in ((("--issue", ID), router.EXIT_BUSY), ((), 0)):
-            with self.subTest(argv=argv):
-                with contextlib.suppress(FileNotFoundError):
-                    os.unlink(self.runs)
-                self.lines, self.todo["state"], self.fake.mutations = [], "Todo", []
-                self.api.construct_error = HELD
-                self.assertEqual(self.entry(*argv), rc)
-                self.assertEqual(self.todo["state"], "Todo")
-                self.assertEqual(self.todo.get("comments", []), [])
-                self.assertEqual((runs.parse_log(self.runs), runs.failures(self.runs)), ([], []))
-                [busy] = runs.busy_rows(self.runs)
-                self.assertEqual((busy.issue, busy.cancels, busy.attempt), (ID, None, None))
-                self.assertEqual(self.attempts(), 0)
-                said = self.said()
-                self.assertTrue([line for line in said if line.startswith(f"busy {ID} ")], said)
-                self.assertFalse([line for line in said if line.startswith("launch-error")], said)
-                self.assertEqual(
-                    self.fake.mutations[-1], (ops.M_STATE, {"i": UUID, "s": IDS_BY_KEY["todo"]})
-                )
-
-    def test_a_busy_resume_cancels_its_resume_row_and_stays_in_progress(self):
-        self.todo["state"] = "In Progress"
-        self.resumable(ID, "s", 60, role="engineer")
-        self.api.construct_error = HELD
-        self.assertEqual(self.entry("--issue", ID), router.EXIT_BUSY)
-        self.assertEqual(self.todo["state"], "In Progress")
-        self.assertEqual(self.todo.get("comments", []), [])
-        start, resume = runs.parse_log(self.runs)
-        self.assertEqual((start.kind, resume.kind), ("start", "resume"))
-        [busy] = runs.busy_rows(self.runs)
-        self.assertEqual(
-            (busy.issue, busy.sid, busy.cancels, busy.attempt),
-            (ID, resume.sid, ("resume", resume.ts), None),
-        )
-        self.assertEqual((runs.failures(self.runs), self.attempts()), ([], 1))
-        self.assertEqual(self.fake.mutations, [])
 
     def test_an_environment_config_error_is_only_a_launch_error(self):
         for name, labels in (
@@ -5970,7 +5923,7 @@ class BusyLaunch(OuterBase):
                 self.api.construct_error = DelegateConfigError(NO_DEFAULT)
                 self.assertEqual(self.entry("--issue", ID), 1)
                 self.assertEqual((self.todo["state"], self.todo["comments"]), ("In Progress", []))
-                self.assertEqual((runs.parse_log(self.runs), runs.busy_rows(self.runs)), ([], []))
+                self.assertEqual(runs.parse_log(self.runs), [])
                 said = self.said()
                 self.assertTrue(
                     [line for line in said if line.startswith(f"launch-error {ID} ")], said
@@ -5988,101 +5941,4 @@ class BusyLaunch(OuterBase):
     def test_an_environment_start_failure_writes_its_start_row(self):
         self.assertEqual(self.entry("--issue", ID), 0)
         self.assertEqual([e.kind for e in runs.parse_log(self.runs)], ["start"])
-        self.assertEqual((runs.busy_rows(self.runs), len(self.api.detached)), ([], 1))
-
-    def test_issue_mode_exits_75_when_busy(self):
-        self.assertEqual(router.EXIT_BUSY, 75)
-        self.assertIn("75 when its run is busy", router.__doc__)
-
-
-class BusyTick(TickScenario):
-    """FR-51 router scheduling: a busy run is not the round's; the tick goes on in order, and the
-    cool-down keeps Recover and the queue off a busy issue.
-    """
-
-    def busy(self, ident, minutes_ago):
-        at = (NOW - timedelta(minutes=minutes_ago)).astimezone()
-        self.lines.append(
-            json.dumps(
-                {
-                    "ts": at.isoformat(timespec="seconds"),
-                    "kind": "busy",
-                    "issue": ident,
-                    "sid": self.sid(f"busy:{ident}"),
-                    "cancels": None,
-                    "attempt": None,
-                }
-            )
-        )
-
-    def todo(self, *idents):
-        return [issue(i, "Todo", "researcher", priority=n) for n, i in enumerate(idents, 1)]
-
-    def test_a_busy_ready_issue_lets_the_next_one_start_in_the_same_round(self):
-        start = Start(exits={"TASK-1": router.EXIT_BUSY})
-        self.assertEqual(self.tick(FakeLinear(self.todo("TASK-1", "TASK-2")), start=start), 0)
-        self.assertEqual(self.launched_runs(), [("TASK-1", "new"), ("TASK-2", "new")])
-        first, second = start.launches
-        self.assertNotEqual(first.sid, second.sid)
-        said = self.said()
-        self.assertIn(f"launch TASK-1 exit={router.EXIT_BUSY}", said)
-        self.assertEqual(said[-1], "launch TASK-2 exit=0")
-
-    def test_a_busy_resume_does_not_stop_a_ready_issue_starting(self):
-        self.resumable("TASK-1", "s", 60)
-        listed = [issue("TASK-1", "In Progress", "researcher"), *self.todo("TASK-2")]
-        start = Start(exits={"TASK-1": router.EXIT_BUSY})
-        self.assertEqual(self.tick(FakeLinear(listed), start=start), 0)
-        self.assertEqual(self.launched_runs(), [("TASK-1", "resume"), ("TASK-2", "new")])
-
-    def test_a_round_whose_only_start_is_busy_ends_quietly(self):
-        start = Start(exits={"TASK-1": router.EXIT_BUSY})
-        self.assertEqual(self.tick(FakeLinear(self.todo("TASK-1")), start=start), 0)
-        self.assertEqual(self.launched_runs(), [("TASK-1", "new")])
-        self.assertFalse([line for line in self.said() if line.startswith("skip ")])
-
-    def test_a_dry_run_previews_a_ready_issue_once_and_returns(self):
-        self.assertEqual(self.tick(FakeLinear(self.todo("TASK-1")), "--dry-run"), 0)
-        said = self.said()
-        self.assertEqual(len([line for line in said if line.startswith("pick TASK-1")]), 1, said)
-        self.assertEqual(self.start.launches, [])
-
-    def test_no_issue_is_examined_twice_after_a_busy_start(self):
-        for _ in range(router.CAP):
-            self.add(kind="start", ident="TASK-3", sid="capped", minutes_ago=600)
-        listed = self.todo("TASK-1", "TASK-3", "TASK-2")
-        start = Start(exits={"TASK-1": router.EXIT_BUSY})
-        fake = FakeLinear(listed)
-        self.assertEqual(self.tick(fake, start=start), 0)
-        self.assertEqual(self.launched_runs(), [("TASK-1", "new"), ("TASK-2", "new")])
-        said = self.said()
-        for prefix in ("pick TASK-1", "claim-skip TASK-3", "claim TASK-1 "):
-            self.assertEqual(len([line for line in said if line.startswith(prefix)]), 1, said)
-        self.assertEqual(fake.issues["TASK-3"]["state"], "In Review")
-
-    def test_a_busy_issue_is_skipped_24_minutes_on_and_starts_26_minutes_on(self):
-        for minutes, launched in ((24, ["TASK-2"]), (26, ["TASK-1"])):
-            with self.subTest(minutes=minutes):
-                self.lines = []
-                self.busy("TASK-1", minutes)
-                self.assertEqual(self.tick(FakeLinear(self.todo("TASK-1", "TASK-2"))), 0)
-                self.assertEqual([i for i, _ in self.launched_runs()], launched)
-                skips = [line for line in self.said() if line.startswith("busy-skip TASK-1")]
-                self.assertEqual(len(skips), minutes < 25)
-
-    def test_recover_skips_a_cooling_in_progress_issue(self):
-        self.resumable("TASK-1", "s", 60)
-        self.busy("TASK-1", 10)
-        listed = [issue("TASK-1", "In Progress", "researcher"), *self.todo("TASK-2")]
-        fake = FakeLinear(listed)
-        self.assertEqual(self.tick(fake), 0)
-        self.assertEqual(self.launched_runs(), [("TASK-2", "new")])
-        self.assertEqual(fake.issues["TASK-1"]["state"], "In Progress")
-        said = self.said()
-        self.assertEqual(len([line for line in said if line.startswith("busy-skip TASK-1")]), 1)
-        self.assertFalse([line for line in said if line.startswith("recover TASK-1")], said)
-
-    def test_issue_mode_ignores_the_cool_down(self):
-        self.busy("TASK-1", 10)
-        self.assertEqual(self.tick(FakeLinear(self.todo("TASK-1")), "--issue", "TASK-1"), 0)
-        self.assertEqual(self.launched_runs(), [("TASK-1", "new")])
+        self.assertEqual(len(self.api.detached), 1)

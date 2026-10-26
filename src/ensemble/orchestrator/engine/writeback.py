@@ -87,7 +87,6 @@ LIMIT = "Usage limit,"
 # Failed attempts keep their own steps; a later valid outcome keeps the session's normal steps.
 NO_OUTCOME = "no-outcome:"
 INTERRUPTED = ("stopped: Stopped", "stopped: KeyboardInterrupt")
-BUSY = "busy: "  # a run whose lock was held at its start
 # what a failed tracker read or write raises
 ERRORS = (
     LinearError,
@@ -648,8 +647,6 @@ def _deliver(ctx, cfg, claim, event, *, now) -> bool:
         )
     # Finished: the outcome (once ledgered, never again), the limit, then the session's end
     outcome = event.outcome
-    if outcome is None and event.limit is None and (event.error or "").startswith(BUSY):
-        return _busy(ctx, cfg, attempt)
     if (
         outcome is None
         and event.limit is None
@@ -668,20 +665,6 @@ def _deliver(ctx, cfg, claim, event, *, now) -> bool:
     ended = session(end=(event.returncode, outcome, event.limit is not None))
     log("writeback", "end", ctx.ident, sid=ctx.sid, exit=event.returncode)
     return ended and ok
-
-
-def _busy(ctx, cfg, attempt) -> bool:
-    """A busy run, no comment: its row cancelled once; a cancelled start back to Ready, once."""
-    try:
-        kind = runs.note_busy_finished(cfg.runs_log, issue=ctx.ident, sid=ctx.sid, attempt=attempt)
-    except OSError as e:
-        _error(ctx, "busy-row", e)
-        return False
-    log("writeback", "busy", ctx.ident, sid=ctx.sid, cancels=kind)
-    if kind != "start":
-        return True
-    move = functools.partial(_guarded_move, ctx, ctx.issue_id, ctx.ident, "todo", "in_progress")
-    return _step(ctx, f"busy-move:{attempt}", move) is None
 
 
 def _running(ctx, attempt) -> bool:
