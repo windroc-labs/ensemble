@@ -26,6 +26,21 @@ from tests.utils.process_fixtures import TimeoutExpired
 
 
 class ManagedTest(Case):
+    def test_modified_control_keys_do_not_become_invalid_csi_sequences(self):
+        for key, expected in (
+            (KeyPress("Enter", meta=True), b"\x1b\r"),
+            (KeyPress("Escape", meta=True), b"\x1b\x1b"),
+            (KeyPress("Tab", meta=True), b"\x1b\t"),
+            (KeyPress("Tab", shift=True), b"\x1b[Z"),
+            (KeyPress("BSpace", meta=True), b"\x1b\x7f"),
+            (KeyPress("BSpace", ctrl=True), b"\x08"),
+            (KeyPress("Enter", ctrl=True), b"\r"),
+            (KeyPress(" ", ctrl=True), b"\x00"),
+            (KeyPress("?", ctrl=True), b"\x7f"),
+        ):
+            with self.subTest(key=key):
+                self.assertEqual(managed.key_bytes(key), expected)
+
     def test_attacker_owned_or_symlinked_user_root_is_never_absent(self):
         directory = managed.location("tmux", "worker")
         root = os.path.dirname(directory)

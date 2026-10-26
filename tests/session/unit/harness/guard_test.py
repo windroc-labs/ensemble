@@ -18,6 +18,24 @@ from tests.session.case import Case
 
 
 class GuardTest(Case):
+    def test_wide_character_at_right_margin_and_combining_mark_wrap_safely(self):
+        screen = guard.Screen()
+        screen.append(("a" * 119 + "中\u0301").encode())
+        self.assertEqual(screen.text(None), "a" * 119 + "\n中\u0301")
+        self.assertTrue(all(len(row) == 120 for row in screen.cells))
+
+    def test_pending_uninspectable_child_has_a_bounded_close_deadline(self):
+        runtime = self.runtime()
+        runtime.proc = mock.Mock(pid=10, returncode=0)
+        runtime.closing = 0
+        with (
+            mock.patch.object(os, "listdir", return_value=[]),
+            mock.patch.object(os, "waitpid", return_value=(0, 0)),
+            mock.patch.object(guard.time, "monotonic", return_value=10),
+            self.assertRaisesRegex(OSError, "exit unconfirmed"),
+        ):
+            runtime.tick()
+
     def test_detach_ready_during_output_cannot_end_worker(self):
         runtime = self.runtime(terminal=True)
         peer = mock.Mock()

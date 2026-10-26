@@ -154,8 +154,9 @@ class Screen:
                 self.normal = None
 
     def erase_line(self, mode: int) -> None:
-        start = self.column if mode == 0 else 0
-        end = self.column + 1 if mode == 1 else self.columns
+        column = min(self.column, self.columns - 1)
+        start = column if mode == 0 else 0
+        end = column + 1 if mode == 1 else self.columns
         self.cells[self.row][start:end] = [" "] * (end - start)
 
     def append(self, data: bytes) -> None:
@@ -190,14 +191,20 @@ class Screen:
                 self.column = min(self.columns - 1, (self.column // 8 + 1) * 8)
             elif char >= " " and char != "\x7f":
                 if unicodedata.combining(char):
-                    if self.column and len(self.cells[self.row][self.column - 1]) < 16:
-                        self.cells[self.row][self.column - 1] += char
+                    if self.column:
+                        index = min(self.columns - 1, self.column - 1)
+                        if self.cells[self.row][index] == "" and index:
+                            index -= 1
+                        if len(self.cells[self.row][index]) < 16:
+                            self.cells[self.row][index] += char
                     continue
-                if self.column >= self.columns:
+                width = min(
+                    self.columns, 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+                )
+                if self.column + width > self.columns:
                     self.column = 0
                     self.newline()
                 self.cells[self.row][self.column] = char
-                width = 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
                 if width == 2 and self.column + 1 < self.columns:
                     self.cells[self.row][self.column + 1] = ""
                 self.column += width
@@ -530,7 +537,7 @@ class Guard:
                 signal_process(pid, token, sig)
                 self.signalled[pid, token] = sig
         live = any(not rows[pid][2] for pid in self.known)
-        if elapsed > 8 and live:
+        if elapsed > 8 and (live or self.children_pending):
             raise OSError("worker tree exit unconfirmed")
         return self.proc.returncode is not None and not live and not self.children_pending
 

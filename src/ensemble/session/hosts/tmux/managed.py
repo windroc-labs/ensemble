@@ -164,11 +164,20 @@ def liveness(host: str, name: str, generation: str) -> Liveness:
 def key_bytes(key: KeyPress) -> bytes:
     if len(key.key) == 1:
         text = key.key.upper() if key.shift else key.key
-        value = (
-            bytes([ord(text.upper()) & 31])
-            if key.ctrl and "@" <= text.upper() <= "_"
-            else text.encode()
-        )
+        if key.ctrl and text in (" ", "?"):
+            value = b"\x00" if text == " " else b"\x7f"
+        else:
+            value = (
+                bytes([ord(text.upper()) & 31])
+                if key.ctrl and "@" <= text.upper() <= "_"
+                else text.encode()
+            )
+    elif key.key in ("Enter", "Escape", "Tab", "BSpace"):
+        value = KEYS[key.key]
+        if key.key == "Tab" and key.shift:
+            value = KEYS["BTab"]
+        elif key.key == "BSpace" and key.ctrl:
+            value = b"\x08"
     else:
         value = KEYS[key.key]
         modifier = 1 + key.shift + 2 * key.meta + 4 * key.ctrl
