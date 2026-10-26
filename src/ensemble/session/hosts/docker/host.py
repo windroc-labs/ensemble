@@ -42,6 +42,7 @@ from ensemble.session.engine.tmux_cli import POLL as TMUX_POLL
 from ensemble.session.engine.types import (
     COMMAND,
     MARKS,
+    PLUGIN_SOURCE,
     RESUME,
     SESSION_NAME,
     ClientContext,
@@ -150,10 +151,6 @@ VOLUME_FORMAT = '{{.Name}}\t{{.Label "' + WORKSPACE_LABEL + '"}}'
 STATE_MAX = 1 << 20
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 NO_SESSION = re.compile(r"can't find session.*|no server running on /.*", re.S)
-PLUGIN = re.compile(
-    r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}@[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}#[a-f0-9]{40}"
-    r"(?:::[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}#[a-f0-9]{40})?"
-)
 STOPS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
 
 
@@ -619,7 +616,7 @@ class DockerHost(Host):
         plugins = self.settings.get("plugins", [])
         if (
             not isinstance(plugins, list)
-            or not all(isinstance(p, str) and PLUGIN.fullmatch(p) for p in plugins)
+            or not all(isinstance(p, str) and PLUGIN_SOURCE.fullmatch(p) for p in plugins)
             or len(set(plugins)) != len(plugins)
         ):
             raise ConfigError(
