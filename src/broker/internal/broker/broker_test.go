@@ -693,18 +693,19 @@ func TestLoginGitHubStepFails(t *testing.T) {
 }
 
 // securityd can refuse the read and export entries' change with the password (seen on macOS with the partition
-// list not yet holding the broker): the keychain's dialog is the fallback, after the partition step.
+// list not yet holding the broker), or, without UI, answer that it would ask: the keychain's dialog is the fallback,
+// after the partition step.
 func TestLoginGitHubAppsDialogFallback(t *testing.T) {
-	for name, appsErr := range map[string]error{"refused": ErrAuthFailed, "other": errors.New("keychain status -25300")} {
+	for name, appsErr := range map[string]error{"refused": ErrAuthFailed, "needs dialog": ErrNeedsDialog, "other": errors.New("keychain status -25300")} {
 		k := &fakeApps{account: "1234567", key: appKey, access: added(), appsErr: appsErr}
 		ask := &askOnce{}
 		var out bytes.Buffer
 		err := LoginGitHub("ensemble-broker-bot", k, ask.read, &out)
 		want := []string{"partition ensemble-broker-bot 1234567", "apps ensemble-broker-bot 1234567"}
-		if name == "refused" {
+		if name != "other" {
 			want = append(want, "apps by dialog ensemble-broker-bot 1234567", "key ensemble-broker-bot 1234567")
 		}
-		if (err == nil) != (name == "refused") || !slices.Equal(k.steps, want) || ask.calls != 1 {
+		if (err == nil) != (name != "other") || !slices.Equal(k.steps, want) || ask.calls != 1 {
 			t.Fatalf("%s: %v steps %q asked %d times", name, err, k.steps, ask.calls)
 		}
 	}
@@ -1129,5 +1130,65 @@ func TestStaticPrefixesMatchServices(t *testing.T) {
 	}
 	if opencodeLogin("strata") != "ensemble-broker login opencode strata" || envLogin("db") != "ensemble-broker login env db" {
 		t.Fatal("login commands")
+	}
+}
+
+// stableApp is the broker's identity once signed with its designated requirement: the same on every build.
+const stableApp = InstalledPath + ` (identifier "com.github.windroc.ensemble-broker")`
+
+func TestEarlierBuild(t *testing.T) {
+	for name, want := range map[string]bool{
+		"current": true, "earlier build": true, "stable identity": true,
+		"any": false, "foreign": false, "mixed": false, "two apps": false, "other path": false, "no requirement": false,
+		"partition": false, "teamid": false, "two partitions": false, "two partition lists": false, "no decrypt": false,
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := *reinstalled()
+			switch name {
+			case "current":
+				a = brokerOnly()
+			case "stable identity":
+				a.Entries[1].Apps = []string{stableApp}
+			case "any":
+				a.Entries[1].Any = true
+			case "foreign":
+				a.Entries[1].Apps = []string{"/foreign (signature)"}
+			case "mixed":
+				a.Entries[1].Apps = append(a.Entries[1].Apps, security)
+			case "two apps":
+				a.Entries = append(a.Entries, ACLEntry{Authorizations: []string{"export_clear"}, Apps: []string{brokerApp}})
+			case "other path":
+				a.Entries[1].Apps = []string{`/tmp/ensemble-broker (cdhash H"1ce471")`}
+			case "no requirement":
+				a.Entries[1].Apps = []string{InstalledPath}
+			case "partition":
+				a.Entries[2].Partitions = []string{"apple-tool:"}
+			case "teamid":
+				a.Entries[2].Partitions = []string{"teamid:ABCDE12345"}
+			case "two partitions":
+				a.Entries[2].Partitions = append(a.Entries[2].Partitions, brokerPartition)
+			case "two partition lists":
+				a.Entries = append(a.Entries, a.Entries[2])
+			case "no decrypt":
+				a.Entries[1].Authorizations = []string{"encrypt"}
+			}
+			if got := earlierBuild(a); got != want {
+				t.Fatalf("earlierBuild = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// A guard failing on secureGuarded's own first read leaves the item unchanged and asks no password.
+func TestSecureGuardedRefusesSwappedItem(t *testing.T) {
+	k := &fakeApps{account: "1234567", access: added()}
+	ask := &askOnce{}
+	err := secureGuarded("ensemble-broker-bot", "1234567", "rerun x", k, ask.read, earlierBuild)
+	if !errors.Is(err, errNotEarlierBuild) || len(k.steps) != 0 || ask.calls != 0 {
+		t.Fatalf("%v steps %q asked %d", err, k.steps, ask.calls)
+	}
+	k = &fakeApps{account: "1234567", access: reinstalled()}
+	if err := secureGuarded("ensemble-broker-bot", "1234567", "rerun x", k, ask.read, earlierBuild); err != nil || onlyBroker(*k.access) != nil {
+		t.Fatalf("earlier build's item not re-trusted: %v %q", err, k.steps)
 	}
 }

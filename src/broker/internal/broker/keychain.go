@@ -57,6 +57,8 @@ var (
 	ErrInvalidOwnerEdit = errors.New("keychain status -25244")
 	// errAccessUnread is secureItem's first access read failing, before it changed anything.
 	errAccessUnread = errors.New("reading its access failed")
+	// errNotEarlierBuild is secureGuarded's guard refusing the item's access, before it changed anything.
+	errNotEarlierBuild = errors.New("it trusts another application")
 )
 
 func ownershipError(service, account string, err error) error {
@@ -228,6 +230,37 @@ func appsOnlyBroker(a AppAccess) error {
 		return errors.New("no entry lets the broker read it")
 	}
 	return nil
+}
+
+// earlierBuild is whether the item trusts only one build of the broker at InstalledPath, this one or an earlier one:
+// every read or export entry trusts exactly that one application, recorded with its code requirement, and the one
+// partition list holds one cdhash ID. teamid IDs are refused: the broker was only ever signed ad hoc. A permissive or
+// foreign item is never one, so only such an item is re-trusted with the keychain password.
+func earlierBuild(a AppAccess) bool {
+	previous, partition := "", ""
+	for _, entry := range a.Entries {
+		if slices.ContainsFunc(entry.Authorizations, func(auth string) bool { return slices.Contains(readAuthorizations, auth) }) {
+			if entry.Any || len(entry.Apps) != 1 {
+				return false
+			}
+			app := entry.Apps[0]
+			if !strings.HasPrefix(app, InstalledPath+" (") || !strings.HasSuffix(app, ")") || previous != "" && previous != app {
+				return false
+			}
+			previous = app
+		}
+		if slices.Contains(entry.Authorizations, "partition_id") {
+			if partition != "" || len(entry.Partitions) != 1 {
+				return false
+			}
+			partition = entry.Partitions[0]
+		}
+	}
+	if previous == "" || !strings.HasPrefix(partition, "cdhash:") {
+		return false
+	}
+	a.Broker, a.Partition = previous, partition
+	return onlyBroker(a) == nil
 }
 
 // identity names an application by its path and, when it records one, its code requirement, so a rebuilt
@@ -431,9 +464,19 @@ func LoginGitHub(app string, k AppKeychain, password func() ([]byte, error), out
 // once with password, so no keychain dialog shows unless securityd refuses the second step with the password
 // (trust). Its error says what is done and not done, and ends with rerun.
 func secureItem(item, account, rerun string, k ItemTrust, password func() ([]byte, error)) error {
+	return secureGuarded(item, account, rerun, k, password, nil)
+}
+
+// secureGuarded is secureItem, changing an item that does not yet trust only the broker only when guard (nil: any)
+// holds for the access it read first; else it fails with errNotEarlierBuild, the item unchanged, no password read.
+// The access checked is the one changed, so nothing can swap the item between the check and the change.
+func secureGuarded(item, account, rerun string, k ItemTrust, password func() ([]byte, error), guard func(AppAccess) bool) error {
 	before, err := k.AppAccess(item, account)
 	if err != nil {
 		return fmt.Errorf("keychain item %s unchanged: %w: %w", item, errAccessUnread, err)
+	}
+	if onlyBroker(before) != nil && guard != nil && !guard(before) {
+		return fmt.Errorf("keychain item %s unchanged: %w", item, errNotEarlierBuild)
 	}
 	if onlyBroker(before) != nil {
 		pw, err := password()
@@ -457,8 +500,8 @@ func secureItem(item, account, rerun string, k ItemTrust, password func() ([]byt
 
 // trust runs each step not in place before with the keychain password, stopping at the first that fails. The
 // partition step goes first: securityd takes it with the password, and it checks the password before the read
-// and export entries change. securityd has refused that second change with the password (ErrAuthFailed), so
-// then it goes through the keychain's dialog instead.
+// and export entries change. securityd has refused that second change with the password (ErrAuthFailed), or,
+// without UI, would have asked (ErrNeedsDialog), so then it goes through the keychain's dialog instead.
 func trust(item, account string, k ItemTrust, before AppAccess, password []byte) error {
 	if partitionOnlyBroker(before) != nil {
 		if err := k.TrustPartition(item, account, password); err != nil {
@@ -467,7 +510,7 @@ func trust(item, account string, k ItemTrust, before AppAccess, password []byte)
 	}
 	if appsOnlyBroker(before) != nil {
 		err := k.TrustApps(item, account, password)
-		if errors.Is(err, ErrAuthFailed) {
+		if errors.Is(err, ErrAuthFailed) || errors.Is(err, ErrNeedsDialog) {
 			if dialogErr := k.TrustAppsByDialog(item, account); dialogErr != nil {
 				err = fmt.Errorf("%w; through the keychain dialog: %w", err, dialogErr)
 			} else {

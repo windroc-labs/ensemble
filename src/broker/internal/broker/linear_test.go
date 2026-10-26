@@ -678,32 +678,6 @@ func TestLinearReenrollmentRepairsPreviousBrokerMetadata(t *testing.T) {
 	}
 }
 
-func TestLinearMetadataRecoveryRequiresPriorBrokerOnly(t *testing.T) {
-	if !previousBrokerOnly(*reinstalled()) {
-		t.Fatal("prior broker identity rejected")
-	}
-	for _, variant := range []string{"any", "foreign", "mixed", "partition", "no decrypt"} {
-		t.Run(variant, func(t *testing.T) {
-			a := *reinstalled()
-			switch variant {
-			case "any":
-				a.Entries[1].Any = true
-			case "foreign":
-				a.Entries[1].Apps = []string{"/foreign (signature)"}
-			case "mixed":
-				a.Entries[1].Apps = append(a.Entries[1].Apps, security)
-			case "partition":
-				a.Entries[2].Partitions = []string{"apple-tool:"}
-			case "no decrypt":
-				a.Entries[1].Authorizations = []string{"encrypt"}
-			}
-			if previousBrokerOnly(a) {
-				t.Fatal("untrusted metadata accepted for repair")
-			}
-		})
-	}
-}
-
 func TestLinearReenrollmentNeverAdoptsPermissiveMetadata(t *testing.T) {
 	for _, where := range []string{"registry", "app", "grant"} {
 		t.Run(where, func(t *testing.T) {
