@@ -12,6 +12,24 @@ from pathlib import Path
 TEMPLATES = Path("/opt/ensemble/templates")
 STUB = Path("/opt/ensemble/lib/hook-stub")
 SECRETS = Path("/run/ensemble/secrets")
+MINI_OP_SKILL = Path("/opt/windroc/mini-op/skills/mini-op")
+
+
+def bootstrap_skill(directory):
+    if not MINI_OP_SKILL.exists():
+        return
+    if not (MINI_OP_SKILL / "SKILL.md").is_file():
+        sys.exit("bootstrap: mini-op skill has no SKILL.md")
+    skills = directory / "skills"
+    if skills.is_symlink():
+        sys.exit("bootstrap: skills must be a directory, not a link")
+    skills.mkdir(mode=0o700, exist_ok=True)
+    destination = skills / "mini-op"
+    if destination.is_symlink() and destination.readlink() == MINI_OP_SKILL:
+        return
+    if os.path.lexists(destination):
+        sys.exit("bootstrap: mini-op skill already exists")
+    destination.symlink_to(MINI_OP_SKILL, target_is_directory=True)
 
 
 def bootstrap_claude(templates, directory, cwd):
@@ -27,6 +45,7 @@ def bootstrap_claude(templates, directory, cwd):
     fd = os.open(config, os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW)
     with os.fdopen(fd, "w") as stream:
         json.dump(data, stream)
+    bootstrap_skill(directory)
 
 
 def install_hook(stub, destination, owner=0, top=Path("/")):
@@ -62,6 +81,7 @@ def bootstrap_codex(directory, cwd, secrets=None, plugins=Path("/opt/ensemble/co
     (directory / "plugins").mkdir(mode=0o700)
     (directory / "plugins/cache").symlink_to(plugins / "plugins/cache", target_is_directory=True)
     (directory / "auth.json").symlink_to(secrets / "codex/auth.json")
+    bootstrap_skill(directory)
 
 
 def inject_codex(stream, secrets=None, directory=None):

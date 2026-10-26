@@ -27,6 +27,75 @@ def script(name):
     return runpy.run_path(str(ASSETS / name), run_name="docker_worker_script")
 
 
+class MiniOpSkill(Case):
+    def setUp(self):
+        self.code = script("bootstrap.py")
+        self.source = Path(self.home, "image/skills/mini-op")
+        self.source.mkdir(parents=True)
+        (self.source / "SKILL.md").write_text("---\nname: mini-op\n---\nRun the check.\n")
+        self.target = Path(self.home, "selected-client")
+        self.target.mkdir()
+        self.templates = Path(self.home, "templates")
+        self.templates.mkdir()
+        (self.templates / ".claude.json").write_text("{}")
+        self.plugins = Path(self.home, "plugins")
+        self.plugins.mkdir()
+        (self.plugins / "config.toml").write_text("")
+        patcher = mock.patch.dict(self.code["main"].__globals__, {"MINI_OP_SKILL": self.source})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_each_bootstrap_links_the_plain_skill_in_the_selected_client_home(self):
+        for client in ("claude", "codex"):
+            with self.subTest(client=client):
+                directory = self.target / client
+                (directory / "skills/other").mkdir(parents=True)
+                if client == "claude":
+                    self.code["bootstrap_claude"](self.templates, directory, "/work")
+                else:
+                    self.code["bootstrap_codex"](
+                        directory, "/work", Path(self.home, "fake-secrets"), self.plugins
+                    )
+                skill = directory / "skills/mini-op"
+                self.assertEqual(skill.readlink(), self.source)
+                self.assertEqual(
+                    (skill / "SKILL.md").read_text(), (self.source / "SKILL.md").read_text()
+                )
+                self.assertTrue((directory / "skills/other").is_dir())
+
+    def test_an_ordinary_image_without_mini_op_adds_no_skill(self):
+        shutil.rmtree(self.source)
+        self.code["bootstrap_skill"](self.target)
+        self.assertFalse((self.target / "skills").exists())
+
+    def test_reinstall_keeps_the_same_link(self):
+        self.code["bootstrap_skill"](self.target)
+        self.code["bootstrap_skill"](self.target)
+        self.assertEqual((self.target / "skills/mini-op").readlink(), self.source)
+
+    def test_a_malformed_image_skill_fails(self):
+        (self.source / "SKILL.md").unlink()
+        with self.assertRaisesRegex(SystemExit, "mini-op skill has no SKILL.md"):
+            self.code["bootstrap_skill"](self.target)
+
+    def test_a_conflicting_skill_is_preserved_and_refused(self):
+        skills = self.target / "skills"
+        skills.mkdir()
+        target = skills / "mini-op"
+        target.write_text("existing")
+        with self.assertRaisesRegex(SystemExit, "mini-op skill already exists"):
+            self.code["bootstrap_skill"](self.target)
+        self.assertEqual(target.read_text(), "existing")
+
+    def test_a_linked_skills_directory_is_refused(self):
+        elsewhere = Path(self.home, "elsewhere")
+        elsewhere.mkdir()
+        (self.target / "skills").symlink_to(elsewhere)
+        with self.assertRaisesRegex(SystemExit, "skills must be a directory, not a link"):
+            self.code["bootstrap_skill"](self.target)
+        self.assertEqual(list(elsewhere.iterdir()), [])
+
+
 class Bootstrap(Case):
     def setUp(self):
         self.bootstrap = script("bootstrap.py")

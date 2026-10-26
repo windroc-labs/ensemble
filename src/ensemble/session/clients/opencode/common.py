@@ -413,7 +413,11 @@ class OpenCodeCommon:
         return {
             "$schema": "https://opencode.ai/config.json",
             **({"plugin": [plugin]} if plugin is not None else {}),
-            **({"skills": {"paths": ["/opt/ensemble/plugins"]}} if context.container else {}),
+            **(
+                {"skills": {"paths": ["/opt/ensemble/plugins", "/opt/windroc/mini-op/skills"]}}
+                if context.container
+                else {}
+            ),
             "autoupdate": False,
             # A refused call ends OpenCode's turn otherwise (session/processor.ts).
             "experimental": {"continue_loop_on_deny": True},
