@@ -725,7 +725,7 @@ class TuiStart(HarnessCase):
     def test_a_timeout_closes_the_harness_and_fails_the_detach(self):
         RecordingHost.harness_starts_agent = False
         delegate = self.tui(harness_host="harness")
-        clock = iter((0.0, 1.0, 121.0))
+        clock = iter((0.0, 1.0, 31.0))
         with (
             mock.patch("time.monotonic", side_effect=lambda: next(clock)),
             mock.patch("time.sleep") as slept,
@@ -752,14 +752,14 @@ class TuiStart(HarnessCase):
             host="agent",
         )
         RecordingHost.harness_starts_agent = False
-        clock = iter((0.0, 1.0, 121.0))
+        clock = iter((0.0, 1.0, 31.0))
         with (
             mock.patch("time.monotonic", side_effect=lambda: next(clock)),
             mock.patch("time.sleep"),
             self.assertRaises(SessionError) as caught,
         ):
             delegate.detach()
-        self.assertEqual(str(caught.exception), "tui session X did not start in 120 s")
+        self.assertEqual(str(caught.exception), "tui session X did not start in 30 s")
         self.assertEqual([launch["name"] for launch in harness_launches()], ["X-drive"])
         self.assertEqual(HarnessSession.live["X"].sid, other)
         self.assertEqual(HarnessSession.live["X"].alive(), True)

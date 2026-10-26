@@ -127,7 +127,8 @@ class _State:
     start_failure: str | None = None
 
 
-TUI_START_TIMEOUT = 120  # seconds: a detached tui run's agent session to go live
+TUI_START_TIMEOUT = 30  # seconds: a detached tui run's agent session to go live
+DOCKER_START_TIMEOUT = 120  # the same on the Docker Host, its container start included
 TUI_POLL = 0.1  # seconds
 
 
@@ -1026,12 +1027,13 @@ class HarnessDelegate(Delegate):
     def _started(self, state: _State) -> None:
         """Tui: waits, outside the mutex, until the harness has this run's agent session live;
         SessionError naming why, its harness and agent session closed, when the harness ends first,
-        a Host fails or TUI_START_TIMEOUT passes; the last two first saved as start_failure, the
+        a Host fails or its start limit passes; the last two first saved as start_failure, the
         harness's end. A same-named session of another sid is not this run's.
         """
         if state.plan.spec.mode != Mode.TUI:
             return
-        deadline = time.monotonic() + TUI_START_TIMEOUT
+        limit = DOCKER_START_TIMEOUT if self.driver.docker else TUI_START_TIMEOUT
+        deadline = time.monotonic() + limit
         harness = agent = unanswered = None
         ended = False
         try:
@@ -1045,7 +1047,7 @@ class HarnessDelegate(Delegate):
                     why = f": its harness ended{self._ended()}"
                     break
                 if time.monotonic() >= deadline:
-                    why = f" in {TUI_START_TIMEOUT} s"
+                    why = f" in {limit} s"
                     break
                 time.sleep(TUI_POLL)
         except SessionError as error:

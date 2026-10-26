@@ -24,7 +24,7 @@ from ensemble.delegate.composer import Composer, RunParams
 from ensemble.delegate.engine.drivers import AgentDriver
 from ensemble.delegate.engine.harness_delegate import HarnessDelegate
 from ensemble.delegate.engine.state import RunState
-from ensemble.delegate.engine.types import Finished, Layout, Result
+from ensemble.delegate.engine.types import Begun, Finished, Layout, Result
 from ensemble.session import (
     Access,
     EnvironmentSpec,
@@ -1730,11 +1730,23 @@ class StartedTest(HarnessCase):
     def setUp(self):
         super().setUp()
         RecordingHost.harness_starts_agent = False
-        self.now = 0.0
+        self.now, self.host = 0.0, "agent"
 
-    def tui(self, harness_host: str | RecordingHost = "harness"):
-        spec = Spec("input", self.work, mode="tui", client="fake", sid=SID)
-        return self.make(spec=spec, host="agent", harness_host=harness_host)
+    def tui(self, harness_host: str | RecordingHost = "harness", *, docker=False):
+        """A tui run whose agent is on `agent`, else (docker) on the Docker Host `box`."""
+        self.host = "agent"
+        if docker:
+            self.host = "box"
+            HarnessSession.hosts["box"] = RecordingHost("box")
+            with open(self.local, "a", encoding="utf-8") as file:
+                file.write(
+                    "[session.hosts.box]\n"
+                    'implementation = "ensemble.session.hosts.docker.host:DockerHost"\n'
+                    'docker = "/usr/local/bin/docker"\n'
+                )
+        text = "Reference: T\nRepo: acme/ensemble\n\nHi." if docker else "input"
+        spec = Spec(text, self.work, mode="tui", client="fake", sid=SID)
+        return self.make(spec=spec, host=self.host, harness_host=harness_host)
 
     def start_agent(self):
         HarnessSession.start(
@@ -1746,7 +1758,7 @@ class StartedTest(HarnessCase):
                 sid=SID,
                 name=AGENT,
             ),
-            host="agent",
+            host=self.host,
         )
 
     def detach(self, delegate, *, live_at=None):
@@ -1778,16 +1790,22 @@ class StartedTest(HarnessCase):
         with open(self.state_record(), "w", encoding="utf-8") as file:
             json.dump(data, file)
 
-    def test_a_start_live_at_35_s_is_not_failed(self):
-        record = self.detach(self.tui(), live_at=35)
+    def test_a_docker_start_live_at_35_s_is_not_failed(self):
+        record = self.detach(self.tui(docker=True), live_at=35)
         self.assertEqual(record.sessions, (HARNESS, AGENT))
         self.assertTrue(self.harness().alive())
         self.assertIsNone(self.metadata()["start_failure"])
 
-    def test_a_start_not_live_by_120_s_fails_and_closes_the_harness(self):
-        message = self.failed(self.tui())
+    def test_a_docker_start_not_live_by_120_s_fails_and_closes_the_harness(self):
+        message = self.failed(self.tui(docker=True))
         self.assertEqual(message, f"tui session {AGENT} did not start in 120 s")
         self.assertEqual(self.now, 120)
+        self.assertFalse(self.harness().alive())
+
+    def test_a_tmux_start_not_live_by_30_s_fails(self):
+        message = self.failed(self.tui())
+        self.assertEqual(message, f"tui session {AGENT} did not start in 30 s")
+        self.assertEqual(self.now, 30)
         self.assertFalse(self.harness().alive())
 
     def test_a_harness_ended_first_fails_at_once_naming_its_recorded_end(self):
@@ -1836,16 +1854,17 @@ class StartedTest(HarnessCase):
         self.assertEqual(self.harness().closed, 1)
 
     def test_an_unsaved_start_failure_still_names_the_cause(self):
-        write = RunState.write
+        delegate = self.tui()
+        write = delegate.store.write
 
-        def refusing(store, payload):
+        def refusing(payload):
             if '"start_failure": "tui' in payload:
                 raise OSError("disk full")
-            write(store, payload)
+            write(payload)
 
-        with mock.patch.object(RunState, "write", refusing):
-            message = self.failed(self.tui())
-        self.assertEqual(message, f"tui session {AGENT} did not start in 120 s")
+        with mock.patch.object(delegate.store, "write", refusing):
+            message = self.failed(delegate)
+        self.assertEqual(message, f"tui session {AGENT} did not start in 30 s")
         self.assertIsNone(self.metadata()["start_failure"])
         self.assertFalse(self.harness().alive())
 
@@ -1872,14 +1891,14 @@ class StartedTest(HarnessCase):
         late = []
 
         def probing(name, **kw):
-            late.extend([self.now] if self.now >= 120 else [])
+            late.extend([self.now] if self.now >= 30 else [])
             if len(late) < 2:
                 raise Unanswered("docker ps: timed out")
             return attach(name, **kw)
 
         with mock.patch.object(HarnessSession, "attach", side_effect=probing):
             message = self.failed(self.tui())
-        self.assertEqual(message, f"tui session {AGENT} did not start in 120 s")
+        self.assertEqual(message, f"tui session {AGENT} did not start in 30 s")
         self.assertEqual(len(late), 2)
         self.assertFalse(agent.alive())
 
@@ -1890,7 +1909,7 @@ class StartedTest(HarnessCase):
             message = self.failed(self.tui())
         self.assertEqual(
             message,
-            f"tui session {AGENT} did not start in 120 s; "
+            f"tui session {AGENT} did not start in 30 s; "
             "agent session not checked: docker ps: timed out",
         )
 
@@ -1903,41 +1922,55 @@ class StartFailureEndTest(HarnessCase):
     FAILURE = f"tui session {AGENT} did not start in 120 s"
 
     def stopped(self, start_failure=None, *, attempt=1):
-        """The run's Finished after a SIGHUP mid-run, detach having saved this state meanwhile."""
+        """The stored Result and the callback's last line after a SIGHUP at the run's Begun,
+        detach having saved this state meanwhile.
+        """
         view = self.make(callback=("callback",))
+        lines = []
 
-        def hung_up(*_args, **_kw):
-            data = self.metadata()
-            data.update(start_failure=start_failure, attempt=attempt)
-            with open(self.state_record(), "w", encoding="utf-8") as file:
-                json.dump(data, file)
-            raise Stopped(129)
+        def hung_up(event):
+            if isinstance(event, Begun):
+                data = self.metadata()
+                data.update(start_failure=start_failure, attempt=attempt)
+                with open(self.state_record(), "w", encoding="utf-8") as file:
+                    json.dump(data, file)
+                raise Stopped(129)
 
-        callback = mock.MagicMock()
         with (
-            mock.patch("ensemble.delegate.engine.harness_delegate.execute", side_effect=hung_up),
-            mock.patch(
-                "ensemble.delegate.engine.harness_delegate.EventCallback", return_value=callback
-            ),
+            mock.patch("subprocess.Popen", side_effect=lambda _argv, **_kw: Child(lines)),
             mock.patch("sys.stderr", new_callable=io.StringIO),
             self.assertRaises(Stopped),
         ):
-            view.run()
-        ((finished,), _kw) = callback.call_args
-        self.assertIsInstance(finished, Finished)
-        return finished.result
+            view.run(hung_up)
+        return self.metadata()["result"], json.loads(lines[-1])
 
     def test_a_stop_after_a_start_failure_records_the_cause_with_the_real_code(self):
-        result = self.stopped(self.FAILURE)
-        expected = Result(129, None, f"stopped: {self.FAILURE}")
-        self.assertEqual(result, expected)
-        self.assertEqual(self.metadata()["result"], asdict(expected))
+        result, sent = self.stopped(self.FAILURE)
+        self.assertEqual(result, asdict(Result(129, None, f"stopped: {self.FAILURE}")))
+        self.assertEqual(sent["error"], f"stopped: {self.FAILURE}")
 
     def test_an_outside_stop_stays_an_interruption(self):
-        result = self.stopped()
-        self.assertEqual(result, Result(129, None, "stopped: Stopped: 129"))
-        self.assertEqual(self.metadata()["result"]["error"], "stopped: Stopped: 129")
+        result, sent = self.stopped()
+        self.assertEqual(result, asdict(Result(129, None, "stopped: Stopped: 129")))
+        self.assertEqual(sent["error"], "stopped: Stopped: 129")
 
     def test_another_attempts_start_failure_is_ignored(self):
-        result = self.stopped(self.FAILURE, attempt=2)
-        self.assertEqual(result.error, "stopped: Stopped: 129")
+        _result, sent = self.stopped(self.FAILURE, attempt=2)
+        self.assertEqual(sent["error"], "stopped: Stopped: 129")
+
+
+class Child:
+    """subprocess.Popen for the run's callback: takes its event line, exits 0."""
+
+    def __init__(self, lines):
+        self.lines, self.pid, self.returncode = lines, 4321, 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def communicate(self, line, timeout=None):
+        self.lines.append(line)
+        return "", ""
