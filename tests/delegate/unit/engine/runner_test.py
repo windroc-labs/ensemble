@@ -748,6 +748,7 @@ class Say(Case):
             with self.subTest(error=error):
                 stream = mock.Mock()
                 stream.write.side_effect = error
+                stream.fileno.side_effect = io.UnsupportedOperation("fileno")
                 with mock.patch("sys.stderr", stream):
                     if dead:
                         say("delegate: gone")
@@ -756,6 +757,18 @@ class Say(Case):
                             say("delegate: gone")
                         self.assertIs(raised.exception, error)
                 stream.write.assert_called_once_with("delegate: gone\n")
+
+    def test_a_dead_stderr_goes_to_devnull_so_the_exit_flush_keeps_the_exit_status(self):
+        """CPython exits 120 when that flush fails."""
+        read, write = os.pipe()
+        os.close(read)
+        stream = io.TextIOWrapper(io.BufferedWriter(io.FileIO(write, "w")))
+        self.addCleanup(stream.close)
+        with mock.patch("sys.stderr", stream):
+            say("delegate: a")
+            say("delegate: b")
+        stream.flush()
+        self.assertTrue(os.path.samestat(os.fstat(write), os.stat(os.devnull)))
 
 
 class Stopping(Case):

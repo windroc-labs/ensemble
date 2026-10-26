@@ -4,6 +4,7 @@ run.jsonl (the session's workdir). A Mode's policy (POLICIES) starts the session
 answers each turn end and IdleTimeout: go on (None), END or GiveUp.
 """
 
+import contextlib
 import errno
 import os
 import sys
@@ -165,13 +166,21 @@ def say(text: str) -> None:
 
 
 def to_stderr(text: str) -> None:
-    """Dropped once stderr is dead: EIO, its terminal hung up; EPIPE, its reader gone."""
+    """Dropped once stderr is dead: EIO, its terminal hung up; EPIPE, its reader gone. Its fd
+    then is /dev/null, else the exit-time flush fails: exit 120.
+    """
     try:
         sys.stderr.write(text)
         sys.stderr.flush()
     except OSError as error:
         if error.errno not in (errno.EIO, errno.EPIPE):
             raise
+        with contextlib.suppress(OSError, ValueError):
+            null = os.open(os.devnull, os.O_WRONLY)
+            try:
+                os.dup2(null, sys.stderr.fileno())
+            finally:
+                os.close(null)
 
 
 def report(result: Result, out: str | None) -> tuple[int, str | None]:
