@@ -77,7 +77,7 @@ Frozen for WDRC-199 (WDRC-226) before any of it runs: a session harness will own
 
 Only the channel has new members: `generation: str` identifies the worker start; `read(timeout: float) -> list[WorkerMessage]` returns ordered messages, `[]` on timeout and nothing after the last `WorkerExit`; a broken transport raises `Unanswered` until exit is confirmed. `write(data: bytes) -> None` writes headless stdin. `tick(now: float) -> float | None` runs the Host's periodic duty and returns its next due time (the default `None` means no duty). `read` and `write` are unimplemented stubs, never called yet; `generation` is an attribute, matching Docker's existing shape. The guard ([Guard protocol](#guard-protocol)) is the client's direct parent and owns its PTY when `terminal=True`.
 
-The new channel records have no previous public owner: `WorkerHook(label: str, payload: Mapping[str, object])` replaces the Docker relay's hook envelope, `WorkerOutput(data: bytes, stream: str="stdout")` replaces separate headless stdout/stderr pipe readers, and `WorkerExit(returncode: int)` replaces host exit probes. `WorkerMessage` is their union. All payloads are untrusted; retain size/shape, sid and generation binding checks (FR-36). `Host.worker_liveness(name, generation) -> Liveness` replaces attach/reclaim probes after a harness dies: `LIVE` or `UNKNOWN` refuses a second owner, `ABSENT` permits resume. Both new Host methods currently raise `SessionError`; no managed path runs.
+The new channel records have no previous public owner: `WorkerHook(label: str, payload: Mapping[str, object], delivery_id: str)` replaces the Docker relay's hook envelope and retry identity, `WorkerOutput(data: bytes, stream: str="stdout")` replaces separate headless stdout/stderr pipe readers, and `WorkerExit(returncode: int)` replaces host exit probes. `WorkerMessage` is their union. All payloads are untrusted; retain size/shape, sid and generation binding checks (FR-36). `Host.worker_liveness(name, generation) -> Liveness` replaces attach/reclaim probes after a harness dies: `LIVE` or `UNKNOWN` refuses a second owner, `ABSENT` permits resume. Both new Host methods currently raise `SessionError`; no managed path runs.
 
 | Host | Channel | Display |
 |---|---|---|
@@ -123,12 +123,14 @@ The channel is the guard's stdin (from its harness) and stdout (to it): frames o
 | harness | `q` screen | `{"lines": int or null}` |
 | harness | `c` close | `{}`: end the client, then `x` |
 | guard | `s` started | `{"pid": int}`, once, after exec |
-| guard | `h` hook | `{"label": str, "payload": object}`, one per relayed hook call |
+| guard | `h` hook | `{"label": str, "payload": object, "delivery_id": str}`, retry-stable identity |
 | guard | `o`, `e` output | raw bytes a headless client wrote to stdout, stderr |
 | guard | `v` view | `{"text": str}`: the PTY's last `q` lines, control sequences removed |
 | guard | `x` exit | `{"returncode": int}`, last; -N for signal N |
 
-EOF on its stdin is a close: its harness closed the channel or died. On close the guard sends SIGHUP to the client's process group, SIGKILL after 5 s, writes `x` and exits; it never outlives its channel. A hook command connects to `--hook-socket`, writes one `{"label", "payload"}` line and gets `{"ok": true}` once the guard has written its `h` frame (at least once: the harness drops a repeat). No frame starts a host process.
+EOF on its stdin is a close: its harness closed the channel or died. On close the guard sends SIGHUP to the client's process group, SIGKILL after 5 s, writes `x` and exits; it never outlives its channel. No frame starts a host process.
+
+A hook invocation creates one `delivery_id` (32 lowercase hex characters) before its first send and keeps it through retries; a different invocation has a fresh id even with identical label/payload. It connects to `--hook-socket`, writes one `{"label", "payload", "delivery_id"}` line and gets `{"ok": true, "delivery_id": str}` once the guard has written its `h` frame. A missing or mismatched acknowledgement retries the same request/id. The harness deduplicates by the trusted channel's generation and delivery_id, rejects an id reused with different content, and reuses the recorded normalized EventCall ids on redelivery. Identity is never inferred from label/payload equality. This replaces the relay's generation/sequence acknowledgement contract; it does not add dispatch behavior here.
 
 ## Recall a closed run
 

@@ -659,6 +659,7 @@ class WorkerHook:
 
     label: str
     payload: Mapping[str, object]
+    delivery_id: str
 
 
 @dataclass(frozen=True)
