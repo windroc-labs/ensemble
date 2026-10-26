@@ -151,6 +151,12 @@ commands = ["python3 -P {{team}}/tools/repo.py worktree --dir {{workdir}}/src *"
 [roles.engineer.output]
 type = "pull-request"
 
+# ── Verifier ────────────────────────────────────────────
+[roles.verifier]
+
+[roles.verifier.output]
+type = "orchestrator"
+
 # ── Dummy Tester ────────────────────────────────────────
 [roles.dummy-tester]
 tier = 3
@@ -199,6 +205,10 @@ file = "mini-password"
 [[environments.mini-op.secrets]]
 item = "ensemble-env/mini-op-ssh-key"
 file = "mini-ssh-key"
+
+[roles.verifier.environment]
+name = "mini-op"
+prefetch = true
 
 # [delegates]
 #   harness_host  the [hosts.<name>] (src/ensemble/session/config.toml) the harness runs on; "" → the agent's Host.

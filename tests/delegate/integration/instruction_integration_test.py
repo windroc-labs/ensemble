@@ -19,7 +19,7 @@ from tests.delegate.skills.act_as import argv, head, prefix
 from tests.utils.case import local_section
 
 SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
-ROLES = ("researcher", "pm", "engineer", "dummy-tester")
+ROLES = ("researcher", "pm", "engineer", "verifier", "dummy-tester")
 INPUT = "Compare A and B."
 ENSEMBLE = re.compile(r"python3 -P (?:-m ensemble\.[\w.]+|<team>/tools/[\w-]+\.py) \w+")
 REPO = "python3 -P <team>/tools/repo.py"

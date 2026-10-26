@@ -44,6 +44,7 @@ HEADS = [
     "researcher  local  built-in",
     "pm  local  built-in",
     "engineer  pull-request  built-in",
+    "verifier  orchestrator  built-in",
     "dummy-tester  local  built-in",
 ]
 

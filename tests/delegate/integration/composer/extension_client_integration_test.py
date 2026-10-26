@@ -34,7 +34,9 @@ class ExtensionClient(child.Case):
         tiered = self.compose("dummy-tester", "echo", overlays=[{"tier": 4}])["run"]
         self.assertEqual((tiered["client"], tiered["tier"]), ("extension", 4))
         catalog = self.child("index")
-        self.assertEqual(list(catalog), ["researcher", "pm", "engineer", "dummy-tester"])
+        self.assertEqual(
+            list(catalog), ["researcher", "pm", "engineer", "verifier", "dummy-tester"]
+        )
         self.assertIn("echo", catalog["dummy-tester"])
 
 
