@@ -299,11 +299,10 @@ func (l Lifecycle) discard(ctx context.Context, id string, entries []Material, w
 	if l.shared() {
 		return l.withdraw(id, entries, whole)
 	}
-	var backlogErr error
+	var backlogErr, recordErr error
 	ran := false
 	err := l.locked(func() error {
 		ran = true
-		var recordErr error
 		if whole {
 			entries, recordErr = l.withRecord(id, entries)
 		}
@@ -344,6 +343,9 @@ func (l Lifecycle) discard(ctx context.Context, id string, entries []Material, w
 	}
 	if revokeErr := l.revokeDirect(ctx, id, entries, ran); revokeErr != nil {
 		return revokeErr
+	}
+	if recordErr != nil {
+		return &UnrevokedError{Consumer: id, Cause: recordErr} // the unread record keeps whatever it holds
 	}
 	return err
 }

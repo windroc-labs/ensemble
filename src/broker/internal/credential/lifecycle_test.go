@@ -737,3 +737,24 @@ func TestRefreshMarkWithoutReplacement(t *testing.T) {
 		t.Fatal("the live token was retired")
 	}
 }
+
+func TestReleaseUnreadableRecordWithBacklogDown(t *testing.T) {
+	store, p := newStore(), newProvider(t, "acme")
+	l := lifecycle(store, p, nil)
+	acquire(t, l, ctrA, newContainer())
+	reads := 0
+	store.fail = func(op, service string) bool {
+		if service == records && op == "read" {
+			reads++
+			return reads >= 2 // Release's first read works; discard's fails
+		}
+		return service == backlogS
+	}
+	var unrevoked *UnrevokedError
+	if err := l.Release(bg, Consumer{Container: ctrA}); !errors.As(err, &unrevoked) {
+		t.Fatalf("release reported %v with its record unread and kept", err)
+	}
+	if _, ok := store.record(t, ctrA); !ok {
+		t.Fatal("record lost")
+	}
+}
