@@ -26,7 +26,13 @@ SAMPLES = {
         "padded 10.20.30.040",
         "padded 192.168.001.002",
     ],
-    "email address": ["mail someone@example.org now"],
+    "email address": [
+        "mail someone@example.org now",
+        "Co-authored-by: someone <someone@users.noreply.github.com>",
+        "Co-authored-by: x <123+someone@users.noreply.github.com.example.org>",
+        "Co-authored-by: x <123+someone@xusers.noreply.github.com>",
+        "Co-authored-by: x <123+-someone@users.noreply.github.com>",
+    ],
     "UUID": [
         "team = 0f8e2c4a-1b3d-4e5f-9a7b-6c8d0e2f4a6b",
         "ID 0F8E2C4A-1B3D-4E5F-9A7B-6C8D0E2F4A6B",
@@ -73,6 +79,7 @@ CLEAN = [
     "localhost 127.0.0.1 and 8.8.8.8, version 10.20.30.40.5",
     "npm install pkg@1.2.3 and @scope/name",
     "Co-Authored-By: Claude <noreply@anthropic.com>",
+    "Co-authored-by: windroc-agent <347587612+windroc-agent@users.noreply.github.com>",
     "<user>@<address>",
     "build 1.08.0.1 and 999.1.1.1",
     "to security, keychain_read or the project's key scripts.",
@@ -265,9 +272,14 @@ class PullRequestTest(Tree):
         )
 
     def test_allowed_trailer(self):
-        trailer = "Subject\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n"
-        code, out = self.run_with(FakeGit(commits=[(SHA, trailer)]), self.event())
-        self.assertEqual(code, 0, out)
+        for trailer in (
+            "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+            "Co-authored-by: windroc-agent <347587612+windroc-agent@users.noreply.github.com>",
+        ):
+            with self.subTest(trailer=trailer):
+                git = FakeGit(commits=[(SHA, f"Subject\n\n{trailer}\n")])
+                code, out = self.run_with(git, self.event())
+                self.assertEqual(code, 0, out)
 
     def test_push_event_scans_files_only(self):
         git = FakeGit()
