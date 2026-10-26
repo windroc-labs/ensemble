@@ -63,12 +63,12 @@ class Context:
     resume: bool
     project: str | None
     workdir: str
-    tracker: Tracker  # writes as the claim's or role's app
+    tracker: Tracker  # the claim's or role's app
     humans: tuple[str, ...]
     states: Mapping[str, str]
     repos: Mapping[str, str]
     target: tuple[str, str] | None
-    harness: Tracker  # posts the session comment as the harness app
+    harness: Tracker  # the session comment's app
     # look each comment step up by its ref before posting it, as on resume: its event may
     # come again after the post landed and its ledger write was lost
     redelivered: bool = False

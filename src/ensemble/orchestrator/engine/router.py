@@ -30,8 +30,8 @@ Arguments and options:
 Prerequisites and effects:
   Requires configured roles and board (Linear: [linear], the [linear.harness]
   OAuth app, whose token a run renews when under 5 days are left (--dry-run
-  never; it logs the days left), each role app's Keychain secret and token items
-  and access) and the selected Delegate/client executable. See
+  never; it logs the days left), role apps' Keychain items and access) and the
+  selected Delegate/client executable. See
   ensemble-orchestrator --help for configuration, executable lookup and Record schema.
   Execution can claim/move issues, post comments or write back ended outcomes.
   A launch prepares input, records a runs.jsonl row and detaches a LinearRun;
