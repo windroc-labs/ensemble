@@ -19,8 +19,8 @@ from ensemble.delegate.composer.base import TEAM
 from ensemble.delegate.engine.harness_delegate import HarnessDelegate
 from ensemble.delegate.engine.runner import STOP_LIMIT
 from ensemble.delegate.engine.state import RunState
-from ensemble.delegate.engine.types import Layout
-from ensemble.session import NotShowable, SessionError
+from ensemble.delegate.engine.types import Layout, Result
+from ensemble.session import NotShowable, SessionBusy, SessionError
 from ensemble.utils import Record, Status
 from tests.delegate.case import Case, committed
 from tests.delegate.cli_case import (
@@ -52,6 +52,7 @@ class Detaching:
     made: list = []
     environments: list = []
     failure: Exception | None = None
+    construct_failure: Exception | None = None
 
     @classmethod
     def create(cls, role, spec, **placement):
@@ -62,6 +63,8 @@ class Detaching:
         Detaching.environments.append(dict(os.environ))
         if isinstance(Detaching.failure, ConfigError):
             raise Detaching.failure
+        if Detaching.construct_failure is not None:
+            raise Detaching.construct_failure
 
     def detach(self, *, outer=None):
         if Detaching.failure is not None:
@@ -90,6 +93,7 @@ class Detach(Base):
         super().setUp()
         self.events = os.path.join(self.tmp, "events")
         Detaching.made, Detaching.environments, Detaching.failure = [], [], None
+        Detaching.construct_failure = None
         self.detaching = True
 
     def delegate_cls(self):
@@ -278,6 +282,17 @@ class Detach(Base):
             with self.subTest(failure=failure):
                 Detaching.failure = failure
                 self.assertEqual(self.detaches(), (code, "", f"delegate: {failure}\n"))
+
+    def test_a_busy_create_or_start_exits_75_naming_the_holder(self):
+        busy = SessionBusy("dummy-lock", "ensemble-x-1 (owner x)")
+        for attr in ("construct_failure", "failure"):
+            with self.subTest(attr=attr):
+                Detaching.construct_failure = Detaching.failure = None
+                setattr(Detaching, attr, busy)
+                self.assertEqual(
+                    self.detaches(),
+                    (75, "", "delegate: busy: lock dummy-lock is held by ensemble-x-1 (owner x)\n"),
+                )
 
     def test_on_event_is_split_once_into_the_callback_argv_never_a_shell(self):
         code, out, err = self.detaches("--on-event", "writeback --issue 'A B' $X;rm *")
@@ -776,6 +791,19 @@ class Configures(Base):
         self.assertEqual((code, out), (2, ""))
         self.assertIn("[clients.fake]", err)
         self.assertEqual((self.launches(), os.path.exists(self.work)), ([], False))
+
+    def test_busy_exits_75_naming_the_holder(self):
+        busy = SessionBusy("dummy-lock", "ensemble-x-1 (owner x)")
+        line = "delegate: busy: lock dummy-lock is held by ensemble-x-1 (owner x)\n"
+        with mock.patch.object(self.driver, "preflight", side_effect=busy):
+            self.assertEqual(self.runs(), (75, "", line))
+        self.assertFalse(os.path.exists(self.work))
+        self.ran = Result(75, None, str(busy))
+        code, out, err = self.runs()
+        self.assertEqual((code, out), (75, ""))
+        self.assertTrue(err.endswith(line), err)
+        self.ran = Result(1, None, "the agent run returned no outcome")
+        self.assertEqual(self.runs()[0], 1)
 
     def test_an_unknown_harness_host_or_delegates_key_exits_2_and_starts_nothing(self):
         for text, want in (

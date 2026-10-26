@@ -10,14 +10,30 @@ from contextlib import redirect_stderr
 from datetime import datetime
 from unittest import mock
 
-from ensemble.delegate import ConfigError, Progress, Spec
+from ensemble.delegate import ConfigError, Outcome, Progress, Spec
 from ensemble.delegate.composer import Composer
 from ensemble.delegate.engine.plan import plan
-from ensemble.delegate.engine.runner import FIX, NUDGE, STOP_LIMIT, execute, say, stopped
+from ensemble.delegate.engine.runner import (
+    FIX,
+    NUDGE,
+    STOP_LIMIT,
+    execute,
+    report,
+    say,
+    stopped,
+)
 from ensemble.delegate.engine.types import Begun, Finished, Layout, Limit, Result
 from ensemble.delegate.event.reply import marks
 from ensemble.session import ConfigError as SessionConfigError
-from ensemble.session import Exited, IdleTimeout, LimitHit, Reply, SessionError, TurnFailed
+from ensemble.session import (
+    Exited,
+    IdleTimeout,
+    LimitHit,
+    Reply,
+    SessionBusy,
+    SessionError,
+    TurnFailed,
+)
 from ensemble.session.engine.types import Activity, Blocked
 from ensemble.utils import Stopped
 from tests.delegate.case import Case
@@ -673,6 +689,22 @@ class TuiPolicy(Base):
             self.go(mode="tui")
         self.assertEqual(str(cm.exception), "client 'fake' does not support tui mode")
 
+    def test_a_busy_start_is_a_busy_result(self):
+        os.makedirs(self.work)
+        busy = SessionBusy("dummy-lock", "ensemble-x-1 (owner x)")
+        for mode in ("tui", "headless"):
+            with self.subTest(mode=mode):
+                self.fresh()
+                os.makedirs(self.work, exist_ok=True)
+                with mock.patch.object(self.driver, "start", side_effect=busy):
+                    r = self.go(mode=mode)
+                self.assertEqual(
+                    r, Result(75, None, "busy: lock dummy-lock is held by ensemble-x-1 (owner x)")
+                )
+                self.assertEqual(self.events, [Finished(r)])
+                self.assertEqual(self.kinds(), ["input", "result", "end"])
+                self.assertEqual(self.last("end")["rc"], 75)
+
     def test_the_runner_records_into_an_existing_run_dir_only(self):
         composition = Composer()
         accepted = plan(
@@ -769,6 +801,23 @@ class Say(Case):
             say("delegate: b")
         stream.flush()
         self.assertTrue(os.path.samestat(os.fstat(write), os.stat(os.devnull)))
+
+
+class Report(Case):
+    def test_report_exits_75_only_for_busy_text(self):
+        busy = "busy: lock dummy-lock is held by ensemble-x-1 (owner x)"
+        for result, code in (
+            (Result(75, None, busy), 75),
+            (Result(1, None, busy), 75),
+            (Result(1, None, f"tui: {busy}"), 1),
+            (Result(1, None, "tui: broker failed"), 1),
+            (Result(75, None, "the client exited 75"), 1),
+            (Result(0, Outcome("done", "Title", "Summary")), 0),
+        ):
+            with self.subTest(result=result), redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(report(result, None)[0], code)
+            if result.outcome is None:
+                self.assertEqual(err.getvalue(), f"delegate: {result.error}\n")
 
 
 class Stopping(Case):

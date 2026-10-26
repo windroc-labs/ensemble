@@ -15,6 +15,7 @@ from typing import Self, TextIO, TypeVar
 from ensemble.utils.text import printable
 
 Display = str | None
+EXIT_BUSY = 75
 T = TypeVar("T")
 
 

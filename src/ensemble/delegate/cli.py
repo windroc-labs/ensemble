@@ -24,9 +24,25 @@ from ensemble.delegate.engine.harness_delegate import HarnessDelegate
 from ensemble.delegate.engine.plan import run_sid
 from ensemble.delegate.engine.runner import report, say
 from ensemble.delegate.engine.types import Begun, ConfigError, Layout, Preview, Spec
-from ensemble.session import SESSION_NAME, SESSION_NAME_RULE, Mode, NotShowable, SessionError
+from ensemble.session import (
+    SESSION_NAME,
+    SESSION_NAME_RULE,
+    Mode,
+    NotShowable,
+    SessionBusy,
+    SessionError,
+)
 from ensemble.session import ConfigError as SessionConfigError
-from ensemble.utils import EVENTS_ENV, SID_ENV, STATE, LayerCommand, Once, answer_keys, nested_start
+from ensemble.utils import (
+    EVENTS_ENV,
+    EXIT_BUSY,
+    SID_ENV,
+    STATE,
+    LayerCommand,
+    Once,
+    answer_keys,
+    nested_start,
+)
 
 LIST_PARAMS = RunParams(input="", out="/ensemble-list/work/out.md", workdir="/ensemble-list/work")
 
@@ -53,7 +69,8 @@ Prerequisites and effects:
   Query keys are run workdirs, never agent session names. Omitted keys read
   one Record per stdin line; explicit keys ignore stdin. Duplicate targets
   are rejected before controls run. Batch failures retain valid results.
-  Exit 0: success; 2: usage/config error; 1: operational failure.
+  Exit 0: success; 2: usage/config error; 1: operational failure;
+  75: busy, a lock held (its holder on stderr).
 
 Environment and options:
   run --sid overrides ENSEMBLE_SID only when equal; otherwise refused.
@@ -86,7 +103,8 @@ Examples:
   Creates agent/run directories; session runs save to <workdir>/run/out.md
   unless --out changes it. Configured role destinations govern publication.
   Foreground waits and reports outcome status/deliverable path on stderr;
-  a valid outcome (including failed/needs_input) exits 0, no outcome exits 1.
+  a valid outcome (including failed/needs_input) exits 0, no outcome exits 1,
+  a held lock 75.
   Detached mode starts agent/harness sessions and prints a Record when live.
   Modes: headless runs without a terminal; tui is a text user interface (TUI);
   in_process uses the configured in-process client runtime.
@@ -322,6 +340,9 @@ def _run(
     except ConfigError as e:
         say(f"delegate: {e}")
         return 2
+    except SessionBusy as e:
+        say(f"delegate: {e}")
+        return EXIT_BUSY
     return report(result, spec.out or Layout(spec.workdir).out)[0]
 
 
@@ -329,6 +350,9 @@ def _detach(delegate_cls: type[HarnessDelegate], role: str, spec: Spec, placemen
     """Prints the run's Record line once its listed sessions are live."""
     try:
         record = delegate_cls.create(role, spec, **placement).detach()
+    except SessionBusy as e:
+        say(f"delegate: {e}")
+        return EXIT_BUSY
     except (SessionError, OSError) as e:
         say(f"delegate: {e}")
         return 1

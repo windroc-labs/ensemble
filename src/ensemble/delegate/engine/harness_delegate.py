@@ -301,6 +301,8 @@ class HarnessDelegate(Delegate):
     def _preflight(self) -> None:
         try:
             self.driver.preflight(self._state.plan.session)
+        except SessionBusy:
+            raise
         except (SessionConfigError, SessionError) as error:
             raise ConfigError(str(error)) from None
 
