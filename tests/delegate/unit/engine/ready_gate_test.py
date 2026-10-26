@@ -322,6 +322,14 @@ class Cancelled(Base):
             ],
         )
 
+    def test_repository_case_does_not_change_job_identity(self):
+        url = "https://github.com/O/N/pull/7"
+        gh = Gh(view([run_("pass"), self.check()]), api=ok(json.dumps(self.job())))
+        self.assertEqual(self.go(gh, out=outcome(url=url)).status, GateStatus.PASSED)
+        self.assertEqual(
+            gh.calls[1], ["gh", "api", "--hostname", "github.com", "repos/O/N/actions/jobs/200"]
+        )
+
 
 class Errors(Base):
     def test_a_failed_view_fails_without_touching_the_pr(self):

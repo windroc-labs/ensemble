@@ -217,7 +217,9 @@ def _unstarted(item: dict, url: str, head: str, run: Runner) -> bool:
     try:
         pr, job = urlsplit(url), urlsplit(link)
         repo = "/".join(pr.path.split("/")[1:3])
-        path = re.fullmatch(rf"/{re.escape(repo)}/actions/runs/([1-9]\d*)/job/([1-9]\d*)", job.path)
+        path = re.fullmatch(
+            rf"/{re.escape(repo)}/actions/runs/([1-9]\d*)/job/([1-9]\d*)", job.path, re.IGNORECASE
+        )
         if job.scheme != "https" or job.netloc.lower() != pr.netloc.lower() or path is None:
             return False
         data = json.loads(
