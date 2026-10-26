@@ -247,12 +247,25 @@ func (c Client) Installations(ctx context.Context, jwt string) ([]Installation, 
 
 // Issue creates an installation token for every repository of installation id, limited to permissions.
 func (c Client) Issue(ctx context.Context, jwt string, id int64, permissions map[string]string) (string, time.Time, error) {
+	return c.issue(ctx, jwt, id, map[string]any{"permissions": permissions})
+}
+
+// IssueRepo creates an installation token of installation id for repo (owner/name) alone, limited to permissions.
+func (c Client) IssueRepo(ctx context.Context, jwt string, id int64, repo string, permissions map[string]string) (string, time.Time, error) {
+	if !ValidRepo(repo) {
+		return "", time.Time{}, fmt.Errorf("invalid repository %q", repo)
+	}
+	_, name, _ := strings.Cut(repo, "/")
+	return c.issue(ctx, jwt, id, map[string]any{"permissions": permissions, "repositories": []string{name}})
+}
+
+func (c Client) issue(ctx context.Context, jwt string, id int64, body map[string]any) (string, time.Time, error) {
 	var got struct {
 		Token     string `json:"token"`
 		ExpiresAt string `json:"expires_at"`
 	}
 	path := fmt.Sprintf("/app/installations/%d/access_tokens", id)
-	if err := c.call(ctx, http.MethodPost, path, jwt, map[string]any{"permissions": permissions}, http.StatusCreated, &got); err != nil {
+	if err := c.call(ctx, http.MethodPost, path, jwt, body, http.StatusCreated, &got); err != nil {
 		return "", time.Time{}, err
 	}
 	expires, err := time.Parse(time.RFC3339, got.ExpiresAt)
@@ -260,6 +273,66 @@ func (c Client) Issue(ctx context.Context, jwt string, id int64, permissions map
 		return "", time.Time{}, errors.New("GitHub answered a token without a token or expiry")
 	}
 	return got.Token, expires.UTC(), nil
+}
+
+// RepoInstallation is the App's installation on repo (owner/name); a StatusError 404 means it is not installed there.
+func (c Client) RepoInstallation(ctx context.Context, jwt, repo string) (Installation, error) {
+	if !ValidRepo(repo) {
+		return Installation{}, fmt.Errorf("invalid repository %q", repo)
+	}
+	var got struct {
+		ID      int64 `json:"id"`
+		Account struct {
+			Login string `json:"login"`
+		} `json:"account"`
+	}
+	if err := c.call(ctx, http.MethodGet, "/repos/"+repo+"/installation", jwt, nil, http.StatusOK, &got); err != nil {
+		return Installation{}, err
+	}
+	if got.ID <= 0 || !Login.MatchString(got.Account.Login) {
+		return Installation{}, errors.New("GitHub answered an installation without a valid id and account login")
+	}
+	return Installation{got.ID, got.Account.Login}, nil
+}
+
+// DefaultBranch is repo's default branch, as token sees it.
+func (c Client) DefaultBranch(ctx context.Context, token, repo string) (string, error) {
+	if !ValidRepo(repo) {
+		return "", fmt.Errorf("invalid repository %q", repo)
+	}
+	var got struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	if err := c.call(ctx, http.MethodGet, "/repos/"+repo, token, nil, http.StatusOK, &got); err != nil {
+		return "", err
+	}
+	if got.DefaultBranch == "" {
+		return "", errors.New("GitHub answered no default branch")
+	}
+	return got.DefaultBranch, nil
+}
+
+// RefKind is "branch" when repo has branch ref, else "tag" when it has tag ref, else "". ref must be a branch or tag
+// name the caller checked: it goes into the request path as is.
+func (c Client) RefKind(ctx context.Context, token, repo, ref string) (string, error) {
+	if !ValidRepo(repo) {
+		return "", fmt.Errorf("invalid repository %q", repo)
+	}
+	for _, kind := range []struct{ prefix, name string }{{"heads/", "branch"}, {"tags/", "tag"}} {
+		var got struct {
+			Ref string `json:"ref"`
+		}
+		err := c.call(ctx, http.MethodGet, "/repos/"+repo+"/git/ref/"+kind.prefix+ref, token, nil, http.StatusOK, &got)
+		var se *StatusError
+		switch {
+		case errors.As(err, &se) && se.Status == http.StatusNotFound:
+		case err != nil:
+			return "", err
+		case got.Ref == "refs/"+kind.prefix+ref:
+			return kind.name, nil
+		}
+	}
+	return "", nil
 }
 
 // Repositories is what installation token reaches: its installation's repository_selection and every repository's
