@@ -535,7 +535,7 @@ class SettleTest(Live):
             )
         )
         self.tmux("select-layout", "-t", self.window, old)
-        self.assertEqual(self.layout(), old)
+        self.assertEqual(layout.parse_layout(self.layout()), layout.parse_layout(old))
 
     def layout(self) -> str:
         return self.tmux("display-message", "-p", "-t", self.window, "#{window_layout}")
