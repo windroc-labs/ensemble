@@ -272,7 +272,7 @@ func to(id string, c *container) Delivery { return Delivery{Consumer{Container: 
 func tokens(rec Record) map[string]State {
 	out := map[string]State{}
 	for _, m := range rec.Tokens {
-		out[m.Token] = m.Current()
+		out[m.Token] = m.State
 	}
 	return out
 }

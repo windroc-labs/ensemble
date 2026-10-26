@@ -96,15 +96,7 @@ type Material struct {
 	Token     string `json:"token"`
 	ExpiresAt string `json:"expires_at"` // RFC 3339; one that does not parse is never confirmed expired
 	Revision  int    `json:"revision,omitempty"`
-	State     State  `json:"state,omitempty"` // "": a record an older broker wrote, delivered
-}
-
-// Current is m's state, a legacy entry's being Delivered.
-func (m Material) Current() State {
-	if m.State == "" {
-		return Delivered
-	}
-	return m.State
+	State     State  `json:"state,omitempty"` // "": an entry an older broker wrote; it recorded only tokens it delivered
 }
 
 // Expired is whether m's expiry is confirmed at now.

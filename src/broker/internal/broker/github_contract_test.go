@@ -22,7 +22,7 @@ func (r *rig) states(t *testing.T) map[string]credential.State {
 	out := map[string]credential.State{}
 	if rec, ok := r.record(t); ok {
 		for _, e := range rec.Tokens {
-			out[e.Token] = e.Current()
+			out[e.Token] = e.State
 		}
 	}
 	return out

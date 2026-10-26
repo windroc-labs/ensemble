@@ -23,19 +23,24 @@ func TestRenewableRejectsStaticKinds(t *testing.T) {
 	}
 }
 
-func TestMaterialLegacyStateIsDelivered(t *testing.T) {
+func TestMaterialLegacyStateIsEmpty(t *testing.T) {
 	var rec Record
 	legacy := `{"app":"ensemble-bot","tokens":[{"account":"acme","installation":7,"token":"ghs_x","expires_at":"2026-01-01T00:00:00Z"}]}`
 	if err := json.Unmarshal([]byte(legacy), &rec); err != nil {
 		t.Fatal(err)
 	}
 	m := rec.Tokens[0]
-	if rec.Subject != "ensemble-bot" || m.Account != "acme" || m.Target != 7 || m.Token != "ghs_x" || m.Current() != Delivered || m.Revision != 0 {
+	if rec.Subject != "ensemble-bot" || m.Account != "acme" || m.Target != 7 || m.Token != "ghs_x" || m.State != "" || m.Revision != 0 {
 		t.Fatalf("%+v", rec)
 	}
 	m.State = Prepared
-	if m.Current() != Prepared {
-		t.Fatal("explicit state ignored")
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back Material
+	if err := json.Unmarshal(data, &back); err != nil || back.State != Prepared {
+		t.Fatalf("state did not round-trip: %s", data)
 	}
 }
 
