@@ -520,7 +520,8 @@ session's events, or the harness's log:
 
 Each credential renews independently: a Codex failure still renews GitHub, and the reverse. The tick keeps the last
 deadline the broker confirmed in `<generation>.deadline.json`, so while the broker fails it still closes a Codex
-session at that deadline, never later; GitHub-only and static-secret sessions have no deadline and keep retrying.
+session at that deadline. If the cached deadline has already passed, the tick first tries one broker call;
+closing can wait until that call times out. GitHub-only and static-secret sessions have no deadline and keep retrying.
 See [Codex recovery](#recovery).
 
 ### Permissions

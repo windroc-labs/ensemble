@@ -35,7 +35,7 @@ type CodexCredentials interface {
 	// Inject writes the login into container through exec, as Credentials.Inject does, records the container's grant
 	// and returns its expiry (RFC 3339).
 	Inject(ctx context.Context, container string, exec func([]string, []byte) error) (string, error)
-	// Refresh writes the current login into container and publishes its expiry before returning it.
+	// Refresh writes the current login into container and records its expiry before returning it.
 	Refresh(ctx context.Context, container string, exec func([]string, []byte) error, publish func(string) error) (string, error)
 	Release(ctx context.Context, container string) error // withdraws the container's grant; never the login
 }
@@ -88,7 +88,7 @@ type Host struct {
 	Releases Releases                          // nil: a build that must rebuild fails
 	Progress io.Writer                         // nil: none; build's notes on older images, after Docker's progress; start's phase times
 	Lock     func() (unlock func(), err error) // the image lock: build's lease and inspect, and prune
-	Audit    *audit.Recorder                   // nil: none; start, refresh and close name their container and add the client credential
+	Audit    *audit.Recorder                   // nil: none; start, maintain and close name their container and add the client credential
 	Now      func() time.Time                  // nil: host clock; mutex expiry, replaced image and check state tests supply a clock
 	Spawn    func() error                      // nil: none; starts check-clients detached, for a build
 }
