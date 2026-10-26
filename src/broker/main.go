@@ -405,7 +405,7 @@ func system() app {
 				rec = recorder(home, "status", "")
 			}
 			return withAudit(rec, func() (any, error) {
-				h := launcher.Host{GitHub: tokens(home, rec)}
+				h := launcher.Host{GitHub: tokens(home, rec), Static: staticStore(home), Audit: rec}
 				query := h.Status
 				if cleanup {
 					query = h.Cleanup
@@ -417,7 +417,11 @@ func system() app {
 				codexStatus := broker.NewCodex(home, nil).Status(ctx)
 				status.Codex = &codexStatus
 				credentials := broker.Credentials{Keychain: broker.SystemKeychain{Home: home}}
-				status.Claude = map[string]bool{"default": credentials.Usable("default")}
+				usable := credentials.Usable("default")
+				status.Claude = map[string]bool{"default": usable}
+				if status.Static, err = h.StaticStatus(cleanup, map[string]bool{credential.StaticRef(credential.Claude, "default"): usable}); err != nil {
+					return nil, err
+				}
 				return status, nil
 			})
 		},

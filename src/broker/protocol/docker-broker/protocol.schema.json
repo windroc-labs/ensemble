@@ -956,6 +956,58 @@
           ],
           "additionalProperties": false
         },
+        "static": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "reference": {
+                "type": "string",
+                "pattern": "^ensemble-(claude|opencode|env)/[A-Za-z0-9._-]{1,64}$"
+              },
+              "version": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "expires_at": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/$defs/time"
+                  }
+                ]
+              },
+              "provenance": {
+                "enum": [
+                  "explicit",
+                  "derived",
+                  "assumed",
+                  "unknown"
+                ]
+              },
+              "notice": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/$defs/text"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "reference",
+              "version",
+              "expires_at",
+              "provenance",
+              "notice"
+            ],
+            "additionalProperties": false
+          }
+        },
         "audit_warning": {
           "$ref": "#/$defs/audit_warning"
         }

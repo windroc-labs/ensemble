@@ -2700,6 +2700,26 @@
         "exit_code": null,
         "error_code": null
       }
+    },
+    {
+      "file": "status-output-static.json",
+      "definition": "status_output",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "status-output-static-secret.json",
+      "definition": "status_output",
+      "valid": false,
+      "expected": {
+        "stage": "response",
+        "exit_code": null,
+        "error_code": null
+      }
     }
   ]
 }

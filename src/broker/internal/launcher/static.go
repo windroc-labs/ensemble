@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"time"
 
 	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/protocol"
@@ -14,7 +16,7 @@ import (
 // never sees a secret through it.
 type StaticMeta interface {
 	Load() (map[string]credential.Static, error)
-	MarkNotified(ref string, version int, thresholds []string) error
+	DeliverHost(ref string, now time.Time, emit func(credential.Notice)) error
 }
 
 // staticRefs are the references of the static secrets m's container gets: its Claude token or OpenCode keys, then its
@@ -130,4 +132,59 @@ func (h Host) writeInjected(m Manifest, record injectedRecord) error {
 		return protocol.New(protocol.StartFailed, "Recording "+staticFile(m)+" failed.")
 	}
 	return nil
+}
+
+// StaticStatus is one static secret as status shows it: never its value.
+type StaticStatus struct {
+	Reference  string                `json:"reference"`
+	Version    int                   `json:"version"`
+	ExpiresAt  *string               `json:"expires_at"`
+	Provenance credential.Provenance `json:"provenance"`
+	Notice     *string               `json:"notice"` // the most urgent notice reached, or a Claude token's unknown expiry
+}
+
+// StaticStatus lists every recorded static secret, plus each legacy reference that is usable and unrecorded. Only
+// cleanup changes anything: it tells the host of each notice due to it once, recording and auditing it.
+func (h Host) StaticStatus(cleanup bool, legacy map[string]bool) ([]StaticStatus, error) {
+	if h.Static == nil {
+		return nil, nil
+	}
+	records, err := h.Static.Load()
+	if err != nil {
+		return nil, storeFailed(err, protocol.InternalError)
+	}
+	now := h.now()
+	refs := make([]string, 0, len(records)+len(legacy))
+	for ref := range records {
+		refs = append(refs, ref)
+	}
+	for ref, usable := range legacy {
+		if _, ok := records[ref]; usable && !ok {
+			refs = append(refs, ref)
+		}
+	}
+	slices.Sort(refs)
+	out := make([]StaticStatus, 0, len(refs))
+	for _, ref := range refs {
+		r := records[ref]
+		if cleanup {
+			if err := h.Static.DeliverHost(ref, now, func(n credential.Notice) { h.Audit.Notice("", n.Audit()) }); err != nil {
+				return nil, storeFailed(err, protocol.InternalError)
+			}
+		}
+		s := StaticStatus{Reference: ref, Version: r.Version, Provenance: credential.Unknown}
+		kind, _, _ := credential.StaticKind(ref)
+		if th := credential.Threshold(r, now); th != "" {
+			s.ExpiresAt, s.Provenance = &r.ExpiresAt, r.Provenance
+			text := credential.Text(ref, r, th, now)
+			s.Notice = &text
+		} else if !r.Pending && r.ExpiresAt != "" {
+			s.ExpiresAt, s.Provenance = &r.ExpiresAt, r.Provenance
+		} else if kind == credential.Claude {
+			text := credential.UnknownText(ref)
+			s.Notice = &text
+		}
+		out = append(out, s)
+	}
+	return out, nil
 }

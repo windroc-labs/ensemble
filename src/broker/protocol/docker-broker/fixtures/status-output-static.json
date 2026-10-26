@@ -1,0 +1,29 @@
+{
+  "revocations": [],
+  "claude": {
+    "default": true
+  },
+  "static": [
+    {
+      "reference": "ensemble-claude/default",
+      "version": 2,
+      "expires_at": "2027-10-26T12:00:00Z",
+      "provenance": "assumed",
+      "notice": null
+    },
+    {
+      "reference": "ensemble-env/db",
+      "version": 1,
+      "expires_at": "2026-10-31T00:00:00Z",
+      "provenance": "explicit",
+      "notice": "ensemble-env/db expires 2026-10-31 (explicit), in 5 days: rotate it at its source, then ensemble-broker login env db [--expires <date>]; running sessions keep their copy until they restart"
+    },
+    {
+      "reference": "ensemble-opencode/strata",
+      "version": 0,
+      "expires_at": null,
+      "provenance": "unknown",
+      "notice": null
+    }
+  ]
+}

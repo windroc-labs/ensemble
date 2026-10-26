@@ -179,6 +179,7 @@ type StatusResult struct {
 	Revocations []protocol.Pending    `json:"revocations"`
 	Codex       *protocol.CodexStatus `json:"codex,omitempty"`
 	Claude      map[string]bool       `json:"claude,omitempty"`
+	Static      []StaticStatus        `json:"static,omitempty"`
 }
 
 type CloseResult struct {
