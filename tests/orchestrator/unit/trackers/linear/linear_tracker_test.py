@@ -106,7 +106,8 @@ NOT_FOUND = LinearError("linear api error: [{'message': 'Entity not found: Comme
 ROUTER = {
     "RELATIONS": "b443e58b5f277fc5edad3e11004a6af6f76beb96e1858ce1920077c9f20798a8",
     "Q_RELATIONS": "c271398e2c19c59eb040a3f5988e3ddf0d7787ae9dbd824e63541dd45a4afc53",
-    "Q_RECHECK": "053a6338cfc4e79cd74b73c25e75967b994666605be9d04a2b024d89568a8fda",
+    # delegate and archivedAt
+    "Q_RECHECK": "ec5b5079d8c22e0a20466afd0878e3231cdba9d70d5a9596bfeab9fbfa0336ce",
     # its nodes' actor and botActor
     "Q_HISTORY": "1cd65dbc0ac87de669ba7cc20c4f1c60fa62bd5d97f28b94bc9cc31c6d7988ce",
 }
@@ -586,6 +587,7 @@ class ArchivePlans(Case):
                     item("TASK-6", "duplicate"),
                 ),
                 unfinished=(item("TASK-3", "started"),),
+                updated=UPDATED,
             ),
         )
 
@@ -1338,8 +1340,9 @@ class MovedAt(Case):
         self.assertEqual(found.moved_at("id-TASK-1", IssueState.READY), ago(4))
 
 
-def rechecked(state, *, delegate=None, assignee=None, project=None, labels=()):
+def rechecked(state, *, delegate=None, assignee=None, project=None, labels=(), archived=False):
     issue = {"state": {"id": state}, "delegate": delegate, "assignee": assignee, "project": project}
+    issue["archivedAt"] = "2026-10-26T04:11:00.000Z" if archived else None
     return {"issue": issue | {"labels": {"nodes": list(labels)}}}
 
 
@@ -1427,6 +1430,17 @@ class Rechecks(Case):
                 )
         with self.assertRaises(LinearError):
             tracker(Gql(Q_RECHECK=LinearError("linear api error: HTTP 400"))).recheck("TASK-9")
+
+    def test_an_archived_issue_is_refused_as_archived(self):
+        archived = linear_tracker.ARCHIVED.format(key="id-TASK-1")
+        for project, refused in ((PROJECT, archived), (None, f"{archived}; no project")):
+            with self.subTest(project=project):
+                gql = Gql(
+                    Q_RECHECK=rechecked(STATES["todo"], delegate=PM, project=project, archived=True)
+                )
+                found = tracker(gql).recheck("id-TASK-1")
+                self.assertEqual((found.ready, found.role, found.refused), (True, "pm", refused))
+        self.assertIn("issue move id-TASK-1 ready", archived)
 
     def test_a_todo_id_shared_with_another_key_stays_ready(self):
         team = replace(TEAM_OBJ, states={**TEAM_OBJ.states, "in_progress": STATES["todo"]})

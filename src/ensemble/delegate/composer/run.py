@@ -27,6 +27,7 @@ from ensemble.delegate.composer.teams import (
 )
 from ensemble.delegate.composer.types import ApprovedCommand, ConfigError, Intent, RunConfig, Team
 from ensemble.delegate.config import CONFIG
+from ensemble.delegate.engine.config import FIXED_CLIENT, fixed_clients
 from ensemble.utils import LOCAL
 
 RUN_KEYS = frozenset(
@@ -84,12 +85,13 @@ def resolve(
     if role not in known:
         raise no_charter(role, {}, team)
     source, where = label
+    cfg = config_of(config, local, cfg)
+    fixed = fixed_clients(cfg)
     for overlay in overlays:
         try:
-            _check_overlay(overlay, known, where)
+            _check_overlay(overlay, known, where, fixed)
         except ConfigError as e:
             raise ConfigError(f"{source}: {e}") from None
-    cfg = config_of(config, local, cfg)
     _check(cfg)
     values = _run_keys(cfg, role)
     run = RunConfig(
@@ -103,7 +105,10 @@ def resolve(
         **values,
     )
     for overlay in overlays:
-        run = replace(run, **_run_keys(overlay, role, OVERLAY_KEYS))
+        values = _run_keys(overlay, role, OVERLAY_KEYS)
+        if role in fixed and "client" not in overlay.get("roles", {}).get(role, {}):
+            values.pop("client", None)  # a global choice leaves a fixed role on its client
+        run = replace(run, **values)
     if not (found := charter(team, role)):
         raise no_charter(role, cfg, team)
     tasks = index(role, team, config, local, cfg=cfg)
@@ -247,10 +252,10 @@ def _check(cfg: Mapping) -> None:
     _check_output(cfg, "output", str)
     _accounts(cfg, "")
     for r, table in cfg.get("roles", {}).items():
-        _check_role(table, r, "", str, RUN_KEYS | {ENVIRONMENT_KEY})
+        _check_role(table, r, "", str, RUN_KEYS | {ENVIRONMENT_KEY, FIXED_CLIENT})
 
 
-def _check_overlay(overlay: Mapping, roles: set[str], where: str) -> None:
+def _check_overlay(overlay: Mapping, roles: set[str], where: str, fixed: Mapping[str, str]) -> None:
     """An overlay's errors name its tables in brackets."""
     if not isinstance(overlay, Mapping):
         raise ConfigError(f"[{where}] must be a table")
@@ -272,6 +277,10 @@ def _check_overlay(overlay: Mapping, roles: set[str], where: str) -> None:
         if ENVIRONMENT_KEY in table:
             raise _untrusted(f"{where}.roles.{role}.{ENVIRONMENT_KEY}")
         _check_role(table, role, f"{where}.", _boxed, OVERLAY_KEYS)
+        if role in fixed and table.get("client", fixed[role]) != fixed[role]:
+            raise ConfigError(
+                f"[{where}.roles.{role}] client {table['client']!r}: role {role} runs only on {fixed[role]}"
+            )
 
 
 def _untrusted(where: str) -> ConfigError:

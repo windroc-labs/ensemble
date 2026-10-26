@@ -152,6 +152,7 @@ STALE = timedelta(hours=2)
 LIVE = timedelta(minutes=30)
 CAP = 4
 NOT_QUEUED = "not a {state} issue {ownership}"
+NOT_LISTED = "a {state} issue {ownership}, yet not in the {state} list (it can lag a change: retry)"
 SKEW = timedelta(minutes=5)
 CAP_COMMENT = "Tried 4 times without finishing; needs a look."
 INTERRUPTED = "The previous agent run was interrupted. Moving this issue back to the {state} queue."
@@ -618,12 +619,12 @@ class Board:
         current = self.tracker.recheck(ident)
         if self.cfg.tracker is TrackerKind.LINEAR and current.ready and current.role is None:
             self.say("claim-skip", ident, once=True, reason=UNOWNED[TrackerKind.LINEAR])
-        reason = NOT_QUEUED.format(
-            state=self.tracker.state_name(IssueState.READY), ownership=OWNERSHIP[self.cfg.tracker]
-        )
+        state = self.tracker.state_name(IssueState.READY)
+        ownership = OWNERSHIP[self.cfg.tracker]
+        reason = NOT_QUEUED.format(state=state, ownership=ownership)
         reasons = [] if current.ready and current.role else [reason]
         reasons += [current.refused] if current.refused else []
-        return "; ".join(reasons) or reason
+        return "; ".join(reasons) or NOT_LISTED.format(state=state, ownership=ownership)
 
     def claim(self, issue, full, clients=()):
         ident = issue["identifier"]

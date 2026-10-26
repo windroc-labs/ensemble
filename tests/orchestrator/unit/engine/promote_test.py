@@ -1139,7 +1139,7 @@ class RequestCountTest(HostScale):
                     "linear_tracker.Q_FINISHED": 1,
                     "linear_tracker.Q_ARCHIVE": 2,
                     "linear_tracker.Q_CHILDREN": 1,
-                    "linear_tracker.M_ARCHIVE": 2,
+                    "linear_tracker.M_ARCHIVE": 1,
                 },
             },
             "quiet": {
@@ -1155,8 +1155,8 @@ class RequestCountTest(HostScale):
                     "linear_tracker.Q_SNAPSHOTS": 6,
                     "linear_tracker.Q_ISSUE": 2,
                     "linear_tracker.Q_FINISHED": 1,
-                    "linear_tracker.Q_ARCHIVE": 5,
-                    "linear_tracker.Q_CHILDREN": 2,
+                    "linear_tracker.Q_ARCHIVE": 6,
+                    "linear_tracker.Q_CHILDREN": 3,
                     "linear_tracker.M_ARCHIVE": 2,
                 },
             },
@@ -1167,5 +1167,5 @@ class RequestCountTest(HostScale):
         self.assertLessEqual(max(sum(r["prune"].values()) for r in found.values()), cap)
         self.assertEqual(
             {name: sum(sum(p.values()) for p in r.values()) for name, r in found.items()},
-            {"cold": 45, "warm": 11, "quiet": 5, "next_day": 28},
+            {"cold": 45, "warm": 10, "quiet": 5, "next_day": 30},
         )
