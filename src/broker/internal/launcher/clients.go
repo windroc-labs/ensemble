@@ -91,10 +91,6 @@ func imageClients(labels map[string]string) (ClientVersions, bool) {
 	return v, true
 }
 
-func (v ClientVersions) differs(latest ClientVersions) bool {
-	return v != latest
-}
-
 // CheckResult is check-clients' output: the latest releases and the images rebuilt to them. Latest is absent when
 // another check held the lock.
 type CheckResult struct {
@@ -298,7 +294,7 @@ func (h Host) checkVariant(ctx context.Context, key string, latest ClientVersion
 	if !found {
 		return drop("no such image")
 	}
-	if current, ok := imageClients(info.Config.Labels); ok && !current.differs(latest) {
+	if current, ok := imageClients(info.Config.Labels); ok && current == latest {
 		return false, ""
 	}
 	tmp, err := docker.TempDir(h.Home, "ensemble-build-")

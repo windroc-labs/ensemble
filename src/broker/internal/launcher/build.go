@@ -443,7 +443,7 @@ func (h Host) rebuild(ctx context.Context, tmp, key, version, plugins string, sp
 	labels := info.Config.Labels
 	clients, _ := imageClients(labels)
 	if !found || labels["ensemble.key"] != key || labels["ensemble.version"] != version || labels["ensemble.agent-uid"] != uid || labels["ensemble.agent-gid"] != gid ||
-		clients.differs(v) {
+		clients != v {
 		return BuildResult{}, protocol.New(protocol.BuildFailed, "Built image labels do not match the package.")
 	}
 	if err := h.lease(key); err != nil {

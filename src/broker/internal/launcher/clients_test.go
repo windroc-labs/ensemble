@@ -98,22 +98,6 @@ func TestImageClients(t *testing.T) {
 	}
 }
 
-func TestClientVersionsDiffer(t *testing.T) {
-	v := ClientVersions{Claude: "2.1.7", Codex: "0.170.0", Opencode: "1.20.1"}
-	if v.differs(v) {
-		t.Fatal("equal versions differ")
-	}
-	for _, other := range []ClientVersions{
-		{Claude: "2.1.8", Codex: "0.170.0", Opencode: "1.20.1"},
-		{Claude: "2.1.7", Codex: "0.169.0", Opencode: "1.20.1"},
-		{Claude: "2.1.7", Codex: "0.170.0", Opencode: "1.20.2"},
-	} {
-		if !v.differs(other) {
-			t.Fatalf("%+v does not differ from %+v", other, v)
-		}
-	}
-}
-
 // built is e's image of spec, at newReleases' versions, each later image build getting its own ID.
 func (e *buildEnv) builtImage(t *testing.T, pkg string, spec BuildSpec) BuildResult {
 	t.Helper()
