@@ -2,7 +2,8 @@
 # Installs ensemble on an Apple silicon Mac from nothing: dependencies, then your configuration
 # (clients, Docker, OpenCode provider, the board) into ~/.ensemble/config.local.toml, then only what it needs.
 # Asks sudo once, every login on the spot, and before writing your files. Rerun to finish or check.
-#   curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install.sh | bash -s -- [flags]
+#   curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh | bash -s -- [flags]
+# <tag>: the release the windroc marketplace pins for ensemble (README.md#install).
 # ENSEMBLE_INSTALL_ROOT prefixes its system paths; only tests set it.
 set -euo pipefail
 
@@ -16,7 +17,10 @@ config=$HOME/.ensemble/config.local.toml
 opencode_prefix=$HOME/.ensemble/opencode
 opencode_executable=$opencode_prefix/bin/opencode
 opencode_min=
-ref=main
+ref=
+# The broker's release (v<plugin version>) and whether install.sh downloads it or builds it: broker_plan.
+release_tag=
+broker_mode=
 # Label contract v1; update only after checking the pinned repo's docs/label-contract.md.
 egress_commit=225409bd04954ff1ea81d66e5339c812a519b4f7
 clients_flag=
@@ -77,10 +81,12 @@ usage() {
   cat <<EOF
 usage: $synopsis
 
-  curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install.sh | bash -s -- [flags]
+  curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh | bash -s -- [flags]
+  <tag>: the release the windroc marketplace pins for ensemble (README.md#install)
 
-  --ref <ref>                 git branch or tag of windroc-labs/ensemble to install the plugin and broker from (default main);
-                              another ref only without claude and codex, which install from the windroc marketplace
+  --ref <ref>                 git branch or tag of windroc-labs/ensemble to install the plugin and broker from (default
+                              <tag>); with claude or codex only <tag>, as they install from the marketplace; another
+                              release tag downloads its broker, a branch builds it
   --clients <list>            comma-separated: claude (Claude Code), codex (Codex), opencode (OpenCode)
   --docker                    run workers in Docker: Docker Desktop, the broker and its logins
   --no-docker                 run workers on the local tmux Host; no Docker
@@ -95,7 +101,7 @@ usage: $synopsis
   --password-stdin            read the sudo password from stdin (first line, before the key)
 
 With --password-stdin or --opencode-key-stdin, stdin cannot carry the script:
-  security find-generic-password -s <item> -w | bash -c "\$(curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install.sh)" scripts/install.sh --password-stdin
+  security find-generic-password -s <item> -w | bash -c "\$(curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh)" scripts/install.sh --password-stdin
 
 Without --clients and --docker/--no-docker it shows a checklist of what to install (a rerun ticks the last
 choices). It installs the dependencies, asks what the flags leave open, writes ~/.ensemble/config.local.toml,
@@ -910,7 +916,7 @@ apps() {
   if [ "$docker" = yes ]; then
     cask docker-desktop "" "$root/Applications/Docker.app"
     docker_build
-    if [ "$ref" = main ]; then skip "go: the broker comes from a release"; else formula go; fi
+    if [ "$broker_mode" = build ]; then formula go; else skip "go: the broker comes from release $release_tag"; fi
   else
     skip "Docker Desktop: Docker not chosen"
   fi
@@ -986,11 +992,145 @@ found = [p for p in json.load(sys.stdin).get("installed", []) if p.get("pluginId
 sys.exit(1 if not found else 0 if found[0].get("enabled") else 2)' "$1"
 }
 
-# The windroc marketplace has no other ref of windroc-labs/ensemble: only an OpenCode-only install takes one.
+# The ref the windroc marketplace serves ensemble at, from its manifest $1 on main: the ensemble entry's source.ref,
+# else main (the default branch). A ref goes into URLs: --ref's characters and no .. segment.
+marketplace_ref() {
+  local text served
+  text=$(curl -fsSL "https://raw.githubusercontent.com/windroc-labs/agent-plugins-marketplace/main/$1" </dev/null) \
+    || die "cannot read ensemble's ref from the windroc marketplace ($1)"
+  served=$(python3 -I -c '
+import json, re, sys
+try:
+    plugins = json.loads(sys.stdin.read())["plugins"]
+    source = next(p["source"] for p in plugins if p.get("name") == "ensemble")
+    ref = None if "sha" in source else source.get("ref", "main")
+except Exception:
+    sys.exit("no ensemble entry")
+if ref is None:
+    sys.exit("pinned by sha, not a release tag")
+if not isinstance(ref, str) or not re.fullmatch(r"[A-Za-z0-9._/-]+", ref) or ref.startswith("-") \
+        or ".." in ref.split("/"):
+    sys.exit(f"not a git ref: {ref!r}")
+print(ref)' 2>&1 <<<"$text") || die "cannot read ensemble's ref from the windroc marketplace ($1): $served"
+  printf '%s' "$served"
+}
+
+# Claude Code and Codex install ensemble@windroc from the windroc marketplace, which serves one ref of ensemble: the
+# install takes that ref, unless OpenCode alone names another.
 ref_check() {
-  if [ "$ref" != main ] && { has claude || has codex; }; then
-    die "--ref $ref: Claude Code and Codex install ensemble@windroc from the windroc marketplace (main); use --ref only with --clients opencode"
+  local claude_ref= codex_ref= served_ref
+  if [ -n "$ref" ] && ! has claude && ! has codex; then return; fi
+  if has claude || ! has codex; then claude_ref=$(marketplace_ref .claude-plugin/marketplace.json); fi
+  if has codex; then codex_ref=$(marketplace_ref .agents/plugins/marketplace.json); fi
+  if [ -n "$claude_ref" ] && [ -n "$codex_ref" ] && [ "$claude_ref" != "$codex_ref" ]; then
+    die "the windroc marketplace serves ensemble at $claude_ref to Claude Code and $codex_ref to Codex: they must match"
   fi
+  served_ref=${claude_ref:-$codex_ref}
+  if [ -z "$ref" ]; then
+    ref=$served_ref
+  elif [ "$ref" != "$served_ref" ]; then
+    die "--ref $ref: Claude Code and Codex install ensemble@windroc from the windroc marketplace, which serves ensemble at $served_ref; use --ref $served_ref, or --clients opencode for another ref"
+  fi
+}
+
+# File $2 of windroc-labs/ensemble at ref $1.
+ensemble_file() {
+  curl -fsSL "https://raw.githubusercontent.com/windroc-labs/ensemble/$1/$2" </dev/null \
+    || die "cannot read $2 at ref $1 of windroc-labs/ensemble"
+}
+
+# File $2 of plugin source $1: an installed plugin's directory, else ensemble at $ref on GitHub.
+plugin_file() {
+  if [ -z "$1" ]; then
+    ensemble_file "$ref" "$2"
+  else
+    cat -- "$1/$2" 2>/dev/null || die "cannot read $1/$2"
+  fi
+}
+
+# Parsers of the files that hold the versions, for GitHub's copy and an installed one alike; empty when absent.
+protocol_of() { sed -n 's/^PROTOCOL = "\([0-9][0-9]*\)"$/\1/p' | sed -n 1p; }
+go_protocol_of() { sed -n 's/^const Version = "\([0-9][0-9]*\)"$/\1/p' | sed -n 1p; }
+version_of() { sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9]*\(\.[0-9][0-9]*\)*\)".*/\1/p' | sed -n 1p; }
+spoken_protocol_of() { sed -n 's/.*"protocol_version": *"\([0-9][0-9]*\)".*/\1/p' | sed -n 1p; }
+
+# The ensemble plugin Claude Code ($1 claude) or Codex (codex) has installed, else empty. install.sh keeps it, so its
+# copy is the one the client runs; Codex's newest version, as skills/manage/scripts/launcher looks.
+installed_plugin() {
+  if [ "$1" = claude ]; then
+    command -v claude >/dev/null || return 0
+    claude plugin list --json </dev/null | python3 -I -c '
+import json, sys
+print(next((p.get("installPath", "") for p in json.load(sys.stdin) if p.get("id") == "ensemble@windroc"), ""))'
+  else
+    python3 -I -c '
+import glob, os, sys
+def version(path):
+    return [int(part) if part.isdigit() else -1 for part in os.path.basename(path).split(".")]
+found = sorted(glob.glob(os.path.join(glob.escape(sys.argv[1]), "*")), key=version, reverse=True)
+print(found[0] if found else "")' "${CODEX_HOME:-$HOME/.codex}/plugins/cache/windroc/ensemble"
+  fi
+}
+
+# With Docker, before any client step: the broker comes from the release of the plugin plugin_dir will pick
+# (Claude Code's, else Codex's, else OpenCode's), downloaded, or for a branch built from its sources, and must speak
+# every chosen client's plugin protocol. Only advisory: gh attestation verify authenticates the broker.
+broker_plan() {
+  local -a sources=()
+  local client source label where version want got remedy installed broker_label commit opencode= seen= agreed=
+  [ "$docker" = yes ] || return 0
+  for client in claude codex opencode; do
+    has "$client" || continue
+    if [ "$client" != opencode ]; then
+      source=$(installed_plugin "$client")
+    else
+      # OpenCode's copy counts only while it is at the commit $ref names: opencode_plugin downloads it again otherwise.
+      source=$(opencode_package "$(opencode_spec)" 2>/dev/null) || source=
+      commit=$(state_get opencode_plugin_commit)
+      if [ -z "$commit" ] || [ "$commit" != "$(ref_commit 2>/dev/null)" ]; then source=; fi
+    fi
+    [ -z "$source" ] || [ -d "$source" ] || source=
+    if [ "$client" = opencode ]; then opencode=$source; fi
+    sources+=("$source")
+  done
+  where=${sources[0]:-ref $ref}
+  version=$(plugin_file "${sources[0]}" .claude-plugin/plugin.json | version_of)
+  [ -n "$version" ] || die "no release version in .claude-plugin/plugin.json at $where"
+  release_tag=v$version
+  if [ "$ref" = main ] || [ "$ref" = "$release_tag" ] || { [ -n "${sources[0]}" ] && [ "${sources[0]}" != "$opencode" ]; }; then
+    broker_mode=release
+  else
+    broker_mode=build
+    return
+  fi
+  if [ -n "${sources[0]}" ] && installed=$(broker_current "${sources[0]}"); then
+    got=${installed%%:*}
+    broker_label="the installed broker"
+  else
+    got=$(ensemble_file "$release_tag" src/broker/internal/protocol/protocol.go | go_protocol_of)
+    [ -n "$got" ] || die "no broker protocol in src/broker/internal/protocol/protocol.go at ref $release_tag"
+    broker_label="release $release_tag"
+  fi
+  for source in "${sources[@]}"; do
+    label=${source:-ensemble $ref}
+    case $seen in *"<$label>"*) continue ;; esac
+    seen+="<$label>"
+    want=$(plugin_file "$source" src/ensemble/session/hosts/docker/broker.py | protocol_of)
+    [ -n "$want" ] || die "no broker protocol in src/ensemble/session/hosts/docker/broker.py at ${source:-ref $ref}"
+    if [ "$want" != "$got" ]; then
+      # With Claude Code or Codex, ref_check takes only the served ref: OpenCode alone may change --ref.
+      if ! has claude && ! has codex; then
+        remedy="use --ref $release_tag or a branch other than main"
+      elif [ -n "$source" ] || [ -n "${sources[0]}" ]; then
+        remedy="update the plugin (Claude Code: claude plugin marketplace update windroc, then claude plugin update ensemble@windroc; Codex: codex plugin marketplace upgrade windroc), then rerun"
+      else
+        remedy="the windroc marketplace serves ensemble at $ref, ahead of release $release_tag: wait until it serves a release, or use --clients opencode --ref $release_tag"
+      fi
+      die "$label wants broker protocol $want, but its broker, $broker_label, speaks protocol $got: $remedy"
+    fi
+    agreed+="${agreed:+, }$label"
+  done
+  say "    broker protocol $got: $agreed and $broker_label agree"
 }
 
 # Claude Code and Codex install ensemble, and updraft for host workers, from the windroc marketplace.
@@ -1007,7 +1147,9 @@ claude_plugins() {
     ledger_add claude-marketplace windroc
     claude plugin marketplace add windroc-labs/agent-plugins-marketplace </dev/null >&2
   else
-    skip "marketplace windroc"
+    rc=0
+    claude_plugin ensemble@windroc || rc=$?
+    if [ "$rc" = 1 ]; then claude plugin marketplace update windroc </dev/null >&2; else skip "marketplace windroc"; fi
   fi
   if [ "$docker" != yes ]; then ids+=(updraft@windroc); fi
   for id in "${ids[@]}"; do
@@ -1037,7 +1179,9 @@ codex_plugins() {
     ledger_add codex-marketplace windroc
     codex plugin marketplace add windroc-labs/agent-plugins-marketplace </dev/null >&2
   else
-    skip "marketplace windroc"
+    rc=0
+    codex_plugin ensemble@windroc || rc=$?
+    if [ "$rc" = 1 ]; then codex plugin marketplace upgrade windroc </dev/null >&2; else skip "marketplace windroc"; fi
   fi
   if [ "$docker" != yes ]; then ids+=(updraft@windroc); fi
   for id in "${ids[@]}"; do
@@ -1061,16 +1205,9 @@ plugin_dir() {
   if ! has claude && ! has codex; then
     pkg=$(opencode_package "$(opencode_spec)")
   elif has claude; then
-    pkg=$(claude plugin list --json </dev/null | python3 -I -c '
-import json, sys
-print(next((p.get("installPath", "") for p in json.load(sys.stdin) if p.get("id") == "ensemble@windroc"), ""))')
+    pkg=$(installed_plugin claude)
   else
-    pkg=$(python3 -I -c '
-import glob, os, sys
-def version(path):
-    return [int(part) if part.isdigit() else -1 for part in os.path.basename(path).split(".")]
-found = sorted(glob.glob(os.path.join(glob.escape(sys.argv[1]), "*")), key=version, reverse=True)
-print(found[0] if found else "")' "${CODEX_HOME:-$HOME/.codex}/plugins/cache/windroc/ensemble")
+    pkg=$(installed_plugin codex)
   fi
   [ -n "$pkg" ] && [ -d "$pkg" ] || die "no installed ensemble plugin directory"
   say "    $pkg"
@@ -1528,7 +1665,7 @@ ctmux_install() {
 # sha256 of the plugin's broker sources: a change means the broker must be reinstalled.
 broker_source() {
   (
-    cd "$pkg"
+    cd "$1"
     find src/broker -type f | LC_ALL=C sort | while IFS= read -r file; do shasum -a 256 "$file"; done
     shasum -a 256 .claude-plugin/plugin.json
   ) | shasum -a 256 | cut -d' ' -f1
@@ -1604,18 +1741,34 @@ docker_running() {
   done
 }
 
+# Prints "<spoken>:<wanted>", whatever its exit status: the protocol the installed broker reports when it was
+# installed from plugin $1's broker sources (else empty), and $1's plugin protocol. Exit 0 when both are set and
+# equal: the broker is current and broker_install keeps it, so broker_plan may trust it.
+broker_current() {
+  local got= want=
+  want=$(protocol_of <"$1/src/ensemble/session/hosts/docker/broker.py" 2>/dev/null) || want=
+  if [ -x "$broker" ] && [ "$(state_get broker_source)" = "$(broker_source "$1")" ]; then
+    got=$("$broker" version </dev/null 2>/dev/null | spoken_protocol_of) || got=
+  fi
+  printf '%s:%s\n' "$got" "$want"
+  [ -n "$want" ] && [ "$got" = "$want" ]
+}
+
+# Installs the broker unless the one installed came from this plugin's sources and speaks its protocol.
 broker_install() {
-  local source
-  source=$(broker_source)
-  if [ -x "$broker" ] && [ "$(state_get broker_source)" = "$source" ]; then
-    step broker
+  local source installed got want
+  step broker
+  if installed=$(broker_current "$pkg"); then
     skip "installed from this plugin"
     return
   fi
-  step broker
+  got=${installed%%:*}
+  want=${installed#*:}
+  if [ -n "$got" ]; then say "    installed broker speaks protocol $got, the plugin wants ${want:-unknown}: reinstalling"; fi
+  source=$(broker_source "$pkg")
   [ -e "$root/usr/local/libexec/ensemble" ] || ledger_add broker
   record_dir "$HOME/.ensemble/docker"
-  if [ "$ref" = main ]; then
+  if [ "$broker_mode" = release ]; then
     sh "$pkg/src/broker/install.sh" </dev/null >&2
   else
     sh "$pkg/src/broker/install.sh" --build </dev/null >&2
@@ -2403,6 +2556,7 @@ main() {
   dependencies
   if [ -z "$answered" ]; then answers; fi
   ref_check
+  broker_plan
   opencode_select
   config_file
   apps

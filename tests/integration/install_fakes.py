@@ -2,9 +2,10 @@
 
 Every call is logged to $LOG (argv) and $ENVLOG (environment values). State lives under
 $FAKES: brew/<name> (installed), processes (one running command line each; unkillable: those KILL misses), login/<client>, keychain/<service>, claude/ and codex/ (plugins),
-src/broker/ (the broker's Codex install and tokens), fail (a call prefix that fails once), tty_name
+src/broker/ (the broker's Codex install, tokens and protocol: the one `version` reports, else the plugin's), fail (a call prefix that fails once), tty_name
 (what `ps -o tty=` reports), kqueue_refuses (a terminal the Bun-built clients die on, as on /dev/tty),
-commit (the commit GitHub reports for every ensemble ref), linear.json (the Linear workspace: keys
+commit (the commit GitHub reports for every ensemble ref), marketplace/ (the windroc marketplace's
+manifests on main), refs/<ref>/ (ensemble files at a ref, over pkg-src/), linear.json (the Linear workspace: keys
 {key: email}, teams [{id, key, name, states, members, projects}], labels).
 """
 
@@ -28,6 +29,13 @@ BROKER = ROOT / "usr/local/libexec/ensemble/ensemble-broker"
 APPS = {"gh": "gh", "tmux": "tmux", "git": "git", "go": "go", "python": "python3", "node": "npm"}
 CASKS = {"claude-code": "claude", "codex": "codex", "docker-desktop": "docker"}
 CASK_APPS = {"docker-desktop": "Docker.app", "iterm2": "iTerm.app"}
+# The ensemble files the installer reads from GitHub: refs/<ref>/<file>, else pkg-src/<file>.
+ENSEMBLE_FILES = (
+    ".claude-plugin/plugin.json",
+    "src/ensemble/session/hosts/docker/broker.py",
+    "src/broker/internal/protocol/protocol.go",
+    "src/broker/internal/launcher/versions.go",
+)
 
 
 def out(text, stream=sys.stdout):
@@ -42,6 +50,10 @@ def mark(path, text=""):
 
 def load(path, default):
     return json.loads(path.read_text()) if path.exists() else default
+
+
+def load_text(path):
+    return path.read_text() if path.is_file() else ""
 
 
 def save(path, value):
@@ -197,12 +209,26 @@ def curl(args):
     if url.startswith("https://api.github.com/repos/windroc-labs/ensemble/commits/"):
         out((FAKES / "commit").read_text())
         return 0
+    market = "https://raw.githubusercontent.com/windroc-labs/agent-plugins-marketplace/main/"
     raw = "https://raw.githubusercontent.com/windroc-labs/ensemble/"
-    if url.startswith(raw) and url.endswith("/src/broker/internal/launcher/versions.go"):
-        out((FAKES / "pkg-src/src/broker/internal/launcher/versions.go").read_text())
-        return 0
-    out(f"curl: unexpected {url}\n", sys.stderr)
-    return 22
+    if url.startswith(market):
+        found = FAKES / "marketplace" / url.removeprefix(market)
+    elif url.startswith(raw):
+        name = next((f for f in ENSEMBLE_FILES if url.endswith("/" + f)), None)
+        ref = url.removeprefix(raw).removesuffix("/" + (name or ""))
+        found = FAKES / "refs" / ref / name if name else None
+        if found and found.with_name(found.name + ".missing").exists():
+            found = None
+        elif found and not found.is_file():
+            found = FAKES / "pkg-src" / name
+    else:
+        out(f"curl: unexpected {url}\n", sys.stderr)
+        return 22
+    if not found or not found.is_file():
+        out(f"curl: (22) The requested URL returned error: 404 {url}\n", sys.stderr)
+        return 22
+    out(found.read_text())
+    return 0
 
 
 def homebrew_sudo():
@@ -373,6 +399,8 @@ def claude(args):
         save(markets_file, [*markets, {**entry, **({"ref": ref} if ref else {})}])
     elif args[:3] == ["plugin", "marketplace", "remove"]:
         save(markets_file, [m for m in markets if m["name"] != args[3]])
+    elif args[:3] == ["plugin", "marketplace", "update"]:
+        return 0 if any(m["name"] == args[3] for m in markets) else 1
     elif args == ["plugin", "list", "--json"]:
         out(json.dumps(plugins))
     elif args[:2] == ["plugin", "install"]:
@@ -421,6 +449,9 @@ def codex(args):
         markets[marketplace_name(args[3])] = {"source": source, "ref": ref}
     elif args[:3] == ["plugin", "marketplace", "remove"]:
         markets.pop(args[3])
+    elif args[:3] == ["plugin", "marketplace", "upgrade"]:
+        if args[3] not in markets:
+            return 1
     elif args == ["plugin", "list", "--json"]:
         out(json.dumps({"installed": plugins, "available": []}))
         return 0
@@ -603,6 +634,12 @@ def broker(args):
         if warning.exists():
             response["audit_warning"] = load(warning, None)
         out(json.dumps(response))
+        return 0
+    if args == ["version"]:
+        spoken = FAKES / "src/broker/protocol"
+        client = (FAKES / "pkg-src/src/ensemble/session/hosts/docker/broker.py").read_text()
+        default = re.search(r'^PROTOCOL = "([0-9]+)"$', client, re.M)[1]
+        out(json.dumps({"protocol_version": load_text(spoken) or default}) + "\n")
         return 0
     if args[:1] in (["install-codex"], ["update-codex"]):
         if os.environ.get("FAKE_SUDO") != "1":
