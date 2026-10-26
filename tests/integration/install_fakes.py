@@ -501,7 +501,7 @@ def docker(args):
             out(recorded.read_text())
             return 0
         health = "unhealthy" if (FAKES / "egress_unhealthy").exists() else "healthy"
-        out(f"true {health} 1 egress-workers http://egress-proxy-workers:4750 workers\n")
+        out(f"true|{health}|1|egress-workers|http://egress-proxy-workers:4750|workers\n")
         return 0
     return 0 if args == ["info"] and (FAKES / "docker_running").exists() else 1
 

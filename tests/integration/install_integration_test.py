@@ -1082,12 +1082,13 @@ class InstallTest(Case):
         self.assert_ok(self.fresh("--clients", "claude", "--docker"))
         (self.bin / "sleep").unlink()
         executable(self.bin / "sleep", "#!/bin/sh\n")
-        good = "true healthy 1 egress-workers http://egress-proxy-workers:4750 workers"
+        good = "true|healthy|1|egress-workers|http://egress-proxy-workers:4750|workers"
         for status in (
             good.replace("true", "false"),
-            good.replace("healthy 1", "healthy 2"),
-            good.replace("egress-workers", "bridge"),
+            good.replace("healthy|1", "healthy|2"),
+            good.replace("|egress-workers|", "||"),
             good.replace("http://egress-proxy-workers:4750", "<no value>"),
+            "true|starting|1|||mini-op",
         ):
             with self.subTest(status=status):
                 (self.fakes / "egress_inspect").write_text(status + "\n")
@@ -1103,7 +1104,7 @@ class InstallTest(Case):
         config.write_text("version: 1\nnetworks:\n  mini-op:\n    mode: allowlist\n")
         config.chmod(0o600)
         before = (config.read_bytes(), config.stat().st_mode, config.stat().st_mtime_ns)
-        (self.fakes / "egress_inspect").write_text("true healthy 1   mini-op\n")
+        (self.fakes / "egress_inspect").write_text("true|healthy|1|||mini-op\n")
         slept = self.fakes / "slept"
         (self.bin / "sleep").unlink()
         real = shutil.which("sleep")

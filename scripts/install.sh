@@ -1764,16 +1764,13 @@ broker_logins() {
 
 # 0: ready for workers; 2: healthy contract-1 gateway whose config has no workers section; 1: not ready yet.
 egress_ready() {
-  local status
-  status=$(docker inspect --format '{{.State.Running}} {{if .State.Health}}{{.State.Health.Status}}{{end}} {{index .Config.Labels "windroc.egress.contract"}} {{index .Config.Labels "windroc.egress.network.workers.name"}} {{index .Config.Labels "windroc.egress.network.workers.proxy"}} {{index .Config.Labels "windroc.egress.networks"}}' egress-gateway </dev/null 2>/dev/null) || return 1
-  case ",${status##* }," in
-    *,workers,*) ;;
-    *) case $status in 'true healthy 1 '*) return 2 ;; *) return 1 ;; esac ;;
-  esac
-  case $status in
-    'true healthy 1 egress-workers http://egress-proxy-workers:4750 '*) return 0 ;;
-  esac
-  return 1
+  local status running health contract name proxy networks
+  status=$(docker inspect --format '{{.State.Running}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{index .Config.Labels "windroc.egress.contract"}}|{{index .Config.Labels "windroc.egress.network.workers.name"}}|{{index .Config.Labels "windroc.egress.network.workers.proxy"}}|{{index .Config.Labels "windroc.egress.networks"}}' egress-gateway </dev/null 2>/dev/null) || return 1
+  IFS='|' read -r running health contract name proxy networks <<<"$status"
+  [ "$running|$health|$contract" = "true|healthy|1" ] || return 1
+  case ",$networks," in *,workers,*) ;; *) return 2 ;; esac
+  case $name in '' | '<no value>') return 1 ;; esac
+  case $proxy in '' | '<no value>') return 1 ;; esac
 }
 
 # Download to a sibling directory so a failed fetch never leaves a usable partial version.
