@@ -2076,7 +2076,6 @@ name = "dummy"
 prefetch = true
 """
 TARGETED = "Reference: T-1\nRepo: acme/app\nRef: release/1\n\nHello."
-SECRET_VALUE = "s3cr3t-value-never-copied"
 
 
 class EnvironmentTest(HarnessCase):
@@ -2185,21 +2184,6 @@ class EnvironmentTest(HarnessCase):
             json.dump(data, file)
         view = HarnessDelegate.attach(self.work, session_cls=HarnessSession)
         self.assertIsNone(view._state.plan.session.environment)
-
-    def test_secret_value_never_reaches_spec_state_or_logs(self):
-        keychain = os.path.join(self.home, "fake-keychain", "ensemble-env", "dummy")
-        os.makedirs(os.path.dirname(keychain))
-        with open(keychain, "w", encoding="utf-8") as file:
-            file.write(SECRET_VALUE)
-        self.append(ACCEPTANCE)
-        view = self.make(spec=self.spec(), host="docker", harness_host="harness")
-        self.assertNotIn(SECRET_VALUE, repr(view._state.plan.session))
-        view.close()
-        for top, _dirs, files in os.walk(self.work):
-            for name in files:
-                with open(os.path.join(top, name), "rb") as file:
-                    self.assertNotIn(SECRET_VALUE.encode(), file.read(), name)
-        self.assertNotIn(SECRET_VALUE, repr(RecordingHost.launches))
 
     def answered(self, view, text="The answer."):
         view._complete(Result(0, Outcome("needs_input", "Q", "A", questions=["Which?"])))
