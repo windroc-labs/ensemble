@@ -8,13 +8,12 @@ from ensemble.delegate.engine.harness_delegate import HarnessDelegate
 from ensemble.delegate.engine.types import ConfigError, Progress, Spec
 from ensemble.delegate.event import DelegateEvent
 from ensemble.delegate.event.types import Outcome
-from ensemble.session import Resumable, SessionBusy, SessionError, Window
+from ensemble.session import Resumable, SessionError, Window
 
 __all__ = [
     "ConfigError",
     "Spec",
     "SessionError",
-    "SessionBusy",
     "Resumable",
     "Window",
     "Outcome",

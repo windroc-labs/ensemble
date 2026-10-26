@@ -510,12 +510,13 @@ class RunDirTest(HarnessCase):
             self.make()
         self.assertEqual(os.listdir(self.work), [])
 
-    def test_a_busy_preflight_raises_session_busy_and_leaves_no_workdir(self):
+    def test_a_custom_drivers_busy_preflight_is_an_ordinary_session_error(self):
         busy = SessionBusy("dummy-lock", "ensemble-x-1 (owner x)")
         HarnessSession.preflight_error = busy
-        with self.assertRaises(SessionBusy) as caught:
+        with self.assertRaises(SessionError) as caught:
             self.make()
-        self.assertIs(caught.exception, busy)
+        self.assertIs(type(caught.exception), SessionError)
+        self.assertEqual(str(caught.exception), str(busy))
         self.assertFalse(os.path.lexists(self.work))
 
     def test_a_live_run_refuses_a_new_one_before_making_the_agent_dir(self):
@@ -989,14 +990,12 @@ class AttendedBusyTest(HarnessCase):
         ):
             delegate._started(state)
 
-    def test_attended_tui_busy_raises_session_busy(self):
+    def test_attended_tui_busy_raises_an_ordinary_session_error_naming_the_holder(self):
         for error in (f"tui: {self.BUSY}", self.BUSY):
-            with self.subTest(error), self.assertRaises(SessionBusy) as caught:
+            with self.subTest(error), self.assertRaises(SessionError) as caught:
                 self.started(error)
-            self.assertEqual(
-                (caught.exception.lock, caught.exception.holder),
-                ("dummy-lock", "ensemble-other-x (owner other)"),
-            )
+            self.assertIs(type(caught.exception), SessionError)
+            self.assertEqual(str(caught.exception), self.BUSY)
 
     def test_a_foreign_or_unprintable_busy_message_keeps_did_not_start(self):
         for error, lock in (
@@ -1762,8 +1761,9 @@ class SweepTest(HarnessCase):
         left = HarnessSession.live[self.metadata()["agent_name"]]
         orphan, before = self.orphan(), self.record()
         HarnessSession.preflight_error = SessionBusy("dummy-lock", "ensemble-x-1 (owner x)")
-        with self.assertRaises(SessionBusy):
+        with self.assertRaises(SessionError) as caught:
             self.make()
+        self.assertIs(type(caught.exception), SessionError)
         self.assertEqual(self.record(), before)
         self.assertFalse(left.alive())
         self.assertEqual(self.kills(orphan), [(ORPHAN, signal.SIGKILL)])

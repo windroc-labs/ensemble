@@ -341,9 +341,9 @@ def _run(
     except ConfigError as e:
         say(f"delegate: {e}")
         return 2
-    except SessionBusy as e:
+    except SessionError as e:
         say(f"delegate: {e}")
-        return EXIT_BUSY
+        return EXIT_BUSY if SessionBusy.PATTERN.match(str(e)) else 1
     return report(result, spec.out or Layout(spec.workdir).out)[0]
 
 
@@ -351,12 +351,9 @@ def _detach(delegate_cls: type[HarnessDelegate], role: str, spec: Spec, placemen
     """Prints the run's Record line once its listed sessions are live."""
     try:
         record = delegate_cls.create(role, spec, **placement).detach()
-    except SessionBusy as e:
-        say(f"delegate: {e}")
-        return EXIT_BUSY
     except (SessionError, OSError) as e:
         say(f"delegate: {e}")
-        return 1
+        return EXIT_BUSY if SessionBusy.PATTERN.match(str(e)) else 1
     say(f"delegate: session {record.sid}")
     print(record.to_line(), flush=True)
     return 0

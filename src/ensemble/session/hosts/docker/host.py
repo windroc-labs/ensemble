@@ -965,7 +965,7 @@ class DockerHost(Host):
     def _preflight(
         self, name: str, launch: Launch, metadata: Mapping[str, str] | None = None
     ) -> None:
-        """With an environment: the cwd, the broker handshake and its lock's holder only."""
+        """With an environment: cwd and handshake; start owns the lock and credential checks."""
         environment = self._environment(name, metadata)
         if environment is None:
             self.validate(name, launch, missing_ok=True)
@@ -973,17 +973,6 @@ class DockerHost(Host):
         laps = _Laps()
         self._check_cwd(name, launch, missing_ok=True)
         self.broker.version()
-        lock = environment.lock
-        holder = self.broker.lock_query(lock) if lock else None
-        # its own container, still up until a resume or restart closes it, is no other holder
-        if (
-            lock
-            and holder
-            and not (
-                holder["owner"] == name and holder["container"].startswith(f"ensemble-{name}-")
-            )
-        ):
-            raise SessionBusy(lock, _holder_text(holder))
         laps("preflight")
         laps.report(f"docker timing {name}")
 
