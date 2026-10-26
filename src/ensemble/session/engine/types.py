@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
 from enum import StrEnum
 from types import MappingProxyType
-from typing import ClassVar, NamedTuple, Self
+from typing import Any, ClassVar, NamedTuple, Self
 
 from ensemble.utils import (
     ACCOUNT_ENV,
@@ -35,6 +35,7 @@ __all__ = [
     "SessionBusy",
     "Effort",
     "EnvironmentSpec",
+    "EventCall",
     "Exited",
     "HookCall",
     "HookCallback",
@@ -236,6 +237,22 @@ class HookCall:
     state: Mapping[str, object]
 
 
+@dataclass(frozen=True)
+class EventCall:
+    """A handler's on_event input (FR-6): session, an ensemble.session.Session to send, stop or
+    close through; event, the normalized event; event_id and turn, its stable ids within worker
+    generation; state, its HookCallback.state. on_event returns None.
+    """
+
+    session: Any
+    event: "SessionEvent"
+    sid: str
+    generation: str
+    event_id: str
+    turn: str | None
+    state: Mapping[str, object]
+
+
 def _member(enum, field: str, value):
     try:
         return enum(value)
@@ -429,6 +446,7 @@ class Spec(ProcessOptions):
     resume: bool = False  # resume session sid
     events: str | None = None
     environment: EnvironmentSpec | None = None
+    handlers: tuple[HookCallback, ...] = ()  # ordered on_event modules (FR-5)
 
     def __post_init__(self):
         if not printable_abs(self.workdir):
@@ -476,6 +494,10 @@ class Spec(ProcessOptions):
             raise ConfigError(f"events must be a printable path, got {self.events!r:.80}")
         if self.environment is not None and not isinstance(self.environment, EnvironmentSpec):
             raise ConfigError("environment must be None or an EnvironmentSpec")
+        if not isinstance(self.handlers, tuple) or not all(
+            isinstance(handler, HookCallback) for handler in self.handlers
+        ):
+            raise ConfigError("handlers must be a tuple of HookCallback")
 
 
 @dataclass(frozen=True)

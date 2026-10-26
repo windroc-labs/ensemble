@@ -10,7 +10,9 @@ from ensemble.session import (
     Blocked,
     Effort,
     EnvironmentSpec,
+    EventCall,
     Exited,
+    HookCallback,
     Host,
     IdleTimeout,
     Launch,
@@ -61,6 +63,8 @@ ALLOWED_CONCRETE = {
     Resumable,
     RunLog,
     Viewer,
+    HookCallback,
+    EventCall,
     *EVENTS,
 }
 
