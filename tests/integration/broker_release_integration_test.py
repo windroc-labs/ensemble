@@ -12,6 +12,7 @@ TOOLS = (
     "dirname",
     "mkdir",
     "mktemp",
+    "cp",
     "rm",
     "cat",
     "grep",
