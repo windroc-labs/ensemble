@@ -155,7 +155,7 @@ class FakeBroker:
 
     def __init__(self, order, started):
         self.order, self.started, self.error, self.closed = order, started, None, []
-        self.failing, self.max_ages, self.refreshed = {}, [], threading.Event()
+        self.failing, self.refreshed = {}, threading.Event()
 
     def version(self):
         self.order.append("version")
@@ -168,10 +168,9 @@ class FakeBroker:
             raise self.failing["probe-provider"]
         return True
 
-    def build(self, package, *, plugins=(), max_age=None):
+    def build(self, package, *, plugins=()):
         self.order.append(("build", package))
         self.plugins = plugins
-        self.max_ages.append(max_age)
         if "build" in self.failing:
             raise self.failing["build"]
         return IMAGE, DIGEST
@@ -757,7 +756,6 @@ class StartTest(Base):
                 ["exec", "-i", CONTAINER, "tmux", "display-message"],
             ],
         )
-        self.assertEqual(self.broker.max_ages, [None])
         self.assertEqual(os.listdir(self.home_dir), [])
         self.assertEqual(stat.S_IMODE(os.stat(self.home_dir).st_mode), 0o700)
         with open(manifest) as f:
@@ -1853,7 +1851,6 @@ class PreflightTest(Base):
     def test_preflight_runs_version_then_build_and_writes_nothing(self):
         self.validate()
         self.assertEqual(self.order, ["version", ("build", REPO)])
-        self.assertEqual(self.broker.max_ages, [None])
         self.assertFalse(os.path.exists(self.state))
 
     def test_resume_preflight_builds_with_the_whitelisted_plugins(self):
@@ -1870,7 +1867,6 @@ class PreflightTest(Base):
                 "beta@owner/market#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             ),
         )
-        self.assertEqual(self.broker.max_ages, [None])
         self.assertFalse(os.path.exists(self.state))
 
     def test_an_argument_over_the_linux_limit_is_refused_before_any_docker_call(self):
@@ -2508,7 +2504,6 @@ class RecoverTest(Base):
                 "beta@owner/market#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             ),
         )
-        self.assertEqual(self.broker.max_ages, [None])
         self.assertEqual(len(self.spawned), 1)
 
     def test_attach_with_the_lock_held_starts_nothing(self):
@@ -2578,7 +2573,6 @@ class RecoverTest(Base):
                     builds = self.order.count(("build", REPO))
                     self.host.attach("w")
                 self.assertEqual(self.order.count(("build", REPO)), builds)
-                self.assertEqual(self.broker.max_ages[-1], None)
                 with open(stale) as f:
                     self.assertEqual(f.read(), IMAGE)
                 self.assertEqual(

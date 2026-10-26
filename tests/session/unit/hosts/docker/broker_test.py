@@ -317,13 +317,13 @@ class ResponseTest(Case):
             ):
                 Broker(FakeBroker((0, json.dumps(bad), ""))).start(MANIFEST, clients=KEYS)
 
-    def test_build_passes_a_max_age(self):
+    def test_build_passes_only_the_package(self):
         fake = FakeBroker(success("build-cached.json"))
-        Broker(fake).build("/opt/ensemble", max_age=604800)
-        self.assertEqual(fake.calls, [[BROKER, *data("build-input-max-age.json")["argv"]]])
+        Broker(fake).build("/opt/ensemble")
+        self.assertEqual(fake.calls, [[BROKER, *data("build-input.json")["argv"]]])
         self.assertFalse(hasattr(broker, "REFRESH"))
 
-    def test_build_passes_plugins_before_the_max_age(self):
+    def test_build_passes_plugins(self):
         fake = FakeBroker(success("build-cached.json"))
         Broker(fake).build(
             "/opt/ensemble",
@@ -331,9 +331,10 @@ class ResponseTest(Case):
                 "updraft@windroc-labs/updraft#33f01c3b9e398e009f1fb1a4554ddcf19209dd4e::windroc-labs/agent-plugins-marketplace#dbea3408ab0c113bd74f414ab3a19d820e0f6e43",
                 "beta@owner/market#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             ),
-            max_age=604800,
         )
-        self.assertEqual(fake.calls, [[BROKER, *data("build-input-plugins.json")["argv"]]])
+        argv = data("build-input-plugins.json")["argv"]
+        self.assertEqual(argv[-2:], ["--max-age", "604800"])
+        self.assertEqual(fake.calls, [[BROKER, *argv[:-2]]])
 
     def test_build_progress_before_the_error_object_is_not_the_error(self):
         progress = "#5 [2/3] RUN apt-get purge -y sudo\n#5 ERROR: process exited 1\n"

@@ -300,14 +300,9 @@ class Broker:
         )
         return found["available"]
 
-    def build(
-        self, package: str, *, plugins: Sequence[str] = (), max_age: int | None = None
-    ) -> tuple[str, str]:
-        """`package`'s image tag and digest, with `plugins` installed from repository sources;
-        `max_age`: rebuild an image built at least that many seconds ago.
-        """
+    def build(self, package: str, *, plugins: Sequence[str] = ()) -> tuple[str, str]:
+        """`package`'s image tag and digest, with `plugins` installed from repository sources."""
         named = [arg for name in plugins for arg in ("--plugin", name)]
-        age = () if max_age is None else ("--max-age", str(max_age))
         found = self._parsed(
             "build",
             lambda d: (
@@ -319,7 +314,6 @@ class Broker:
             "--ensemble",
             package,
             *named,
-            *age,
         )
         return found["image"], found["digest"]
 
