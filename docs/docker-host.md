@@ -49,7 +49,8 @@ a branch or tag. No Docker selection means no gateway installation.
 
 The installer creates `~/.egress/config.local.yaml` only when absent, with just `workers` in denylist mode;
 an existing config is kept byte for byte. A config symlink is preserved and rejected: the gateway mounts
-its containing directory, so host symlink targets may not resolve inside the container. Use a regular file. A healthy same-version rerun keeps the checkout, config and container.
+its containing directory, so host symlink targets may not resolve inside the container. Use a regular file. Every rerun runs the pinned `start.sh` again, which applies a new or changed config and
+leaves the proxy running when nothing changed; the checkout and config are kept.
 The gateway is shared with other caller networks: ensemble cleanup keeps `~/.egress`. If cleanup also removes
 Docker Desktop, the gateway stops and its Docker state may be removed; reinstall Docker before using it again.
 The pinned [gateway README](https://github.com/windroc/egress-proxy/blob/9ed47580dc9eb4c1fe794d12e54a8f2d3f258831/README.md)
@@ -57,8 +58,8 @@ and `config.example.yaml` in the installed version define the config.
 
 | Operation | Command |
 | --- | --- |
-| Start, add or remove a caller section | `~/.egress/current/start.sh` (before the first successful install, rerun `scripts/install.sh --docker`) |
-| Apply a policy edit within existing sections; after the Mac changes networks | `docker restart egress-proxy` |
+| Start; apply any config change (a caller section added or removed, a policy edit) | `~/.egress/current/start.sh` (before the first successful install, rerun `scripts/install.sh --docker`) |
+| After the Mac changes networks | `docker restart egress-proxy` |
 | Health in the status column | `docker ps --filter name=egress-proxy` |
 | Detailed health | `docker inspect --format '{{json .State.Health}}' egress-proxy` |
 | Startup/config errors | `docker logs egress-proxy` |
@@ -67,7 +68,7 @@ and `config.example.yaml` in the installed version define the config.
 bare compose lacks those attachments. The gateway uses `restart: unless-stopped`, including after Docker Desktop
 restarts; after a Mac reboot, Docker Desktop must start at login. Any policy restart disconnects in-flight
 connections on **every** caller network. Running workers keep their proxy settings and need no restart.
-An edited config without a gateway restart makes health `unhealthy`. Every `start` needs `egress-proxy` running
+An edited config makes health `unhealthy` until `start.sh` applies it. Every `start` needs `egress-proxy` running
 and healthy on its internal `workers` network: otherwise, before any credential or container, it fails
 `egress_unavailable` (exit 17), naming the gateway and `start.sh`, and never falls back to `bridge`. Fix the
 config/startup error, wait for healthy, then start, restart or resume again.
@@ -511,7 +512,7 @@ OpenCode sessions run the host's Ollama models, or a configured provider's ([Ope
 Ollama needs no login; each configured provider's API key comes from the broker ([Log in](#log-in)), which writes it
 to the container's `/run/ensemble/secrets/opencode/<name>.key` at start ([Credentials](credentials.md#who-logs-in)).
 A provider is reached through the [gateway](#egress-gateway). Add the `host:port` of each local or LAN provider's
-`base_url` to `networks.workers.exceptions` in `~/.egress/config.local.yaml`, then `docker restart egress-proxy`.
+`base_url` to `networks.workers.exceptions` in `~/.egress/config.local.yaml`, then run `~/.egress/current/start.sh`.
 Use the URL's default port (80 or 443) when omitted. For example, `http://10.0.0.5:8080/v1` needs `10.0.0.5:8080`;
 Ollama needs `host.docker.internal:11434` (or your configured `ollama_port`). `localhost` is the container itself.
 The installer does not add these exceptions. They allow that host and port for **every worker**, including Claude

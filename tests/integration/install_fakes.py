@@ -492,6 +492,11 @@ def xcode_select(args):
 def docker(args):
     if args == ["egress-start"]:
         mark(FAKES / "egress_started")
+        # what start.sh would serve: the config the installer pointed it at
+        mark(
+            FAKES / "egress_served",
+            Path(os.environ["EGRESS_CONFIG_DIR"], "config.local.yaml").read_text(),
+        )
         return 0
     if args[:2] == ["inspect", "--format"] and args[-1] == "egress-proxy":
         if not (FAKES / "egress_started").exists():

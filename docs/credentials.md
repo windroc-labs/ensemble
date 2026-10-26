@@ -330,6 +330,8 @@ acceptance on a developer's Mac. The 2026-10-18 results below predate the gatewa
 
 - [ ] Fresh `scripts/install.sh --docker` ends with `egress-proxy` healthy; rerunning keeps the gateway's ID
   and start time, pinned checkout, and config bytes, mode and modification time. Repeat with an existing config.
+- [ ] After changing or recreating `~/.egress/config.local.yaml`, rerunning `scripts/install.sh --docker` makes the
+  proxy serve the new config; with no change, the proxy keeps its start time.
 - [ ] `worker --client claude`, `worker --client codex`, `worker --client opencode` pass the gateway checks in
   [Live acceptance](docker-host.md#live-acceptance). Their local/LAN negative controls use temporary reachable
   listeners; the mini's NAS already rejects it and proves no gateway isolation.

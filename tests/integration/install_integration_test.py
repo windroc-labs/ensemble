@@ -975,7 +975,7 @@ class InstallTest(Case):
             self.assertNotIn(absent, calls)
         self.assertFalse(Path(self.home, ".egress").exists())
 
-    def test_gateway_pinned_and_healthy_rerun_changes_nothing(self):
+    def test_gateway_pinned_and_healthy_rerun_runs_start_and_keeps_checkout(self):
         self.assert_ok(self.fresh("--clients", "claude", "--docker"))
         egress = Path(self.home, ".egress")
         sha = "9ed47580dc9eb4c1fe794d12e54a8f2d3f258831"
@@ -991,8 +991,27 @@ class InstallTest(Case):
         self.assertIn("docker egress-start", self.calls())
         self.assert_ok(self.again("--clients", "claude", "--docker"))
         self.assertEqual({p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before}, before)
-        self.assertNotIn("docker egress-start", self.calls())
+        # start.sh itself leaves an unchanged proxy running; the installer never restarts it
+        self.assertIn("docker egress-start", self.calls())
+        self.assertFalse(
+            any(c.split()[:2] in (["docker", "restart"], ["docker", "rm"]) for c in self.calls())
+        )
         self.assertFalse(any("tarball/" in c for c in self.calls()))
+
+    def test_egress_rerun_applies_a_changed_or_recreated_config(self):
+        self.assert_ok(self.fresh("--clients", "claude", "--docker"))
+        config = Path(self.home, ".egress", "config.local.yaml")
+        served = self.fakes / "egress_served"
+        edited = "version: 1\nnetworks:\n  workers:\n    mode: denylist\n    deny_ranges: [203.0.113.7/32]\n"
+        config.write_text(edited)
+        self.assert_ok(self.again("--clients", "claude", "--docker"))
+        self.assertEqual(served.read_text(), edited)
+        self.assertEqual(config.read_text(), edited)
+        config.unlink()
+        self.assert_ok(self.again("--clients", "claude", "--docker"))
+        default = "version: 1\nnetworks:\n  workers:\n    mode: denylist\n"
+        self.assertEqual(config.read_text(), default)
+        self.assertEqual(served.read_text(), default)
 
     def test_gateway_existing_config_preserved(self):
         egress = Path(self.home, ".egress")
@@ -3756,7 +3775,8 @@ exec /bin/rm "$@"
         changed = [c for c in self.calls() if any(w in c for w in changing)]
         self.assertEqual([c for c in changed if not c.endswith(" status")], [])
         self.assertEqual(self.ledger(), before)
-        exempt = {"sudo", "configuration", "plugin directory"}
+        # the egress step always runs the pinned start.sh, which changes nothing here
+        exempt = {"sudo", "configuration", "plugin directory", "egress gateway"}
         steps = re.findall(r"==> (.+)\n(?!    skip:)", result.stderr)
         self.assertEqual([s for s in steps if s not in exempt], [])
         for path, data in files.items():
