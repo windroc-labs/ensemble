@@ -10,6 +10,7 @@ on:
       - skills/manage/scripts/launcher
       - tests/integration/install_fakes.py
       - tests/integration/install_integration_test.py
+      - tests/integration/fixtures/legacy-*
       - tests/manager/integration/ctmux_integration_test.py
 
 permissions:
@@ -36,7 +37,7 @@ jobs:
       - name: Protect shipped source
         run: chmod -R a-w src
       - name: Installer and command launcher tests with fake credentials
-        run: python3 .github/run_tests.py 'Installer macOS' tests/integration/install_integration_test.py tests/manager/integration/ctmux_integration_test.py
+        run: python3 .github/run_tests.py 'Installer macOS' tests/integration/install_integration_test.py tests/manager/integration/ctmux_integration_test.py --parallel 4 --shard 1/1
       - name: Require unchanged checkout
         if: ${{ always() }}
         run: |

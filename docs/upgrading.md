@@ -169,7 +169,8 @@ For OpenCode, when `--ref` (default `<tag>`) names a newer commit than the one i
 OpenCode's copy and downloads it again. Each successful install selects its plugin for all `~/.ensemble/bin` commands,
 ignoring other clients’ caches and older OpenCode packages ([commands](../README.md#commands)).
 Rerun the installer once to refresh older launchers and record that selection, even if their files already exist.
-After a manual client upgrade that changes the plugin path, run that plugin’s `skills/manage/scripts/ctmux --install`.
+After a manual client upgrade that changes the plugin path, rerun the installer or, for a plugin with selection support,
+that plugin’s `skills/manage/scripts/ctmux --install`. The installer also handles older refs whose launchers predate selection support.
 After plugin refresh, when
 the plugin's broker sources changed, or the installed broker speaks another protocol, it reinstalls the broker, reusing locally usable Claude and ready Codex
 credentials and requesting any missing logins ([Log in](docker-host.md#log-in)).

@@ -103,7 +103,7 @@ darwin/arm64 binary and uploads its artifact on pushes to `main` and manual disp
 It reports no PR or merge-group checks and does not block required CI. Broker tests use
 fakes for credentials; they never call the real macOS keychain or Security API.
 Installer and launcher changes also run the separate `Installer macOS` PR workflow:
-`python3 .github/run_tests.py 'Installer macOS' tests/integration/install_integration_test.py tests/manager/integration/ctmux_integration_test.py`.
+`python3 .github/run_tests.py 'Installer macOS' tests/integration/install_integration_test.py tests/manager/integration/ctmux_integration_test.py --parallel 4 --shard 1/1`.
 It uses fake clients and credential storage in isolated homes, plus a private tmux server.
 
 Integration jobs upload `integration-<run-id>-<attempt>-<job>` artifacts containing

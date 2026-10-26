@@ -89,7 +89,7 @@ ensemble が起動する session があなたの設定をどう読み込むか�
 
 | コマンド | 内容 |
 |---|---|
-| `ctmux <name>` | commander の tmux session を開きます。iTerm2 ではネイティブウィンドウ、他のターミナルでは通常の tmux attach、tmux の中からは切り替えになります。`ctmux --install` は ctmux と 4 つのコマンド `ensemble-crew`、`ensemble-session`、`ensemble-delegate`、`ensemble-orchestrator` を `~/.ensemble/bin/` に置きます。そのパスで実行するか、`PATH` に追加してください。各コマンドは実行時にインストールされているプラグイン（Claude Code のものを優先し、次に Codex の最新版）から動くので、アップグレード後の再インストールは不要です。`--install` を再実行すると更新されます。 |
+| `ctmux <name>` | commander の tmux session を開きます。iTerm2 ではネイティブウィンドウ、他のターミナルでは通常の tmux attach、tmux の中からは切り替えになります。`ctmux --install` は ctmux と 4 つのコマンド `ensemble-crew`、`ensemble-session`、`ensemble-delegate`、`ensemble-orchestrator` を `~/.ensemble/bin/` に置きます。そのパスで実行するか、`PATH` に追加してください。各コマンドは今回のインストールで選択したプラグインを使い、他のクライアントの残存コピーには切り替わりません。手動更新でパスが変わった場合はインストーラーを再実行するか、選択機能を持つ対象プラグインの `skills/manage/scripts/ctmux --install` を実行してください。古い ref にはインストーラーを使ってください。 |
 | `/ensemble:manage` | commander のガイドラインに沿って worker、role run、pipeline run を起動・指示します。 |
 | `/ensemble:act-as <role>[:<task>] <input>` | この会話の中でコア role を実行します。 |
 | `/ensemble:board` | 固定の `ensemble-orchestrator issue` コマンドでボードの issue を読み、探し、作成し、編集し、移動し、アーカイブします。 |

@@ -1086,14 +1086,14 @@ spoken_protocol_of() { sed -n 's/.*"protocol_version": *"\([0-9][0-9]*\)".*/\1/p
 # The ensemble plugin Claude Code ($1 claude) or Codex (codex) has installed, else empty;
 # Codex's version at the served ref, ignoring caches from other installs.
 installed_plugin() {
-  local version
+  local version=${2:-}
   if [ "$1" = claude ]; then
     command -v claude >/dev/null || return 0
     claude plugin list --json </dev/null | python3 -I -c '
 import json, sys
 print(next((p.get("installPath", "") for p in json.load(sys.stdin) if p.get("id") == "ensemble@windroc"), ""))'
   else
-    version=$(ensemble_file "$ref" .claude-plugin/plugin.json | version_of)
+    if [ -z "$version" ]; then version=$(ensemble_file "$ref" .claude-plugin/plugin.json | version_of); fi
     [ -n "$version" ] || die "Codex: no ensemble version at $ref"
     printf '%s/%s' "${CODEX_HOME:-$HOME/.codex}/plugins/cache/windroc/ensemble" "$version"
   fi
@@ -1170,7 +1170,7 @@ ensemble_plugin_check() {
   case $ref in
     v[0-9]*) [ "$ref" = "v$expected" ] || die "$label: ensemble at $ref reports version $expected" ;;
   esac
-  source=$(installed_plugin "$client") || die "$label: cannot locate ensemble after updating to $ref"
+  source=$(installed_plugin "$client" "$expected") || die "$label: cannot locate ensemble after updating to $ref"
   [ -n "$source" ] && [ -d "$source" ] || die "$label: no installed ensemble directory after updating to $ref"
   got=$(version_of <"$source/.claude-plugin/plugin.json" 2>/dev/null) \
     || die "$label: cannot read ensemble version at $source after updating to $ref"
@@ -1699,12 +1699,19 @@ opencode_key() {
   fi
 }
 
+# A path adapter, owned by this installer: an older ref's launcher still discovers other clients.
+command_launcher() {
+  local target=$pkg/bin/$1
+  if [ "$1" = ctmux ]; then target=$pkg/skills/manage/scripts/ctmux; fi
+  printf '#!/bin/bash\nexec %q "$@"\n' "$target"
+}
+
 ctmux_install() {
   local name missing=
   step "ctmux --install"
   [ "$(cat "$HOME/.ensemble/plugin-root" 2>/dev/null)" = "$pkg" ] || missing=1
   for name in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
-    [ -x "$HOME/.ensemble/bin/$name" ] && cmp -s "$pkg/skills/manage/scripts/launcher" "$HOME/.ensemble/bin/$name" || missing=1
+    [ -x "$HOME/.ensemble/bin/$name" ] && cmp -s <(command_launcher "$name") "$HOME/.ensemble/bin/$name" || missing=1
   done
   if [ -n "$missing" ]; then
     record_file "$HOME/.ensemble/plugin-root"
@@ -1716,6 +1723,13 @@ ctmux_install() {
       record_dir "$HOME/.ensemble/bin"
     fi
     "$pkg/skills/manage/scripts/ctmux" --install </dev/null >&2
+    for name in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
+      command_launcher "$name" > "$state_dir/launcher.tmp"
+      install -m 755 "$state_dir/launcher.tmp" "$HOME/.ensemble/bin/$name"
+    done
+    rm -f "$state_dir/launcher.tmp"
+    printf '%s\n' "$pkg" > "$state_dir/plugin-root.tmp"
+    mv -f "$state_dir/plugin-root.tmp" "$HOME/.ensemble/plugin-root"
   else
     skip "launchers in ~/.ensemble/bin"
   fi

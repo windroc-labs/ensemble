@@ -149,8 +149,6 @@ for n in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchest
   cp "$(dirname "$0")/launcher" "$HOME/.ensemble/bin/$n"
   chmod 755 "$HOME/.ensemble/bin/$n"
 done
-cd "$(dirname "$0")/../../.." || exit
-pwd -P > "$HOME/.ensemble/plugin-root"
 """
 ITERM_DIRS = (
     "Application Support/iTerm2",
@@ -2508,7 +2506,8 @@ class InstallTest(Case):
         self.assert_ok(self.opencode_rerun())
         self.assertIn("ctmux --install", self.calls())
         for path in Path(self.ensemble, "bin").iterdir():
-            self.assertEqual(path.read_text(), "#!/bin/sh\nexit 0\n")
+            self.assertTrue(path.read_text().startswith("#!/bin/bash\nexec "))
+            self.assertIn("/node_modules/ensemble/", path.read_text())
         self.assert_ok(self.opencode_rerun())
         self.assertNotIn("ctmux --install", self.calls())
 
@@ -2519,32 +2518,18 @@ class InstallTest(Case):
         selected.write_text("previous selection\n")
         self.assert_ok(self.opencode_only())
         self.assertEqual(selected.read_text().strip(), str(self.opencode_package()))
-        self.assert_ok(self.again("--clients", "codex", "--no-docker"))
+        self.assert_ok(self.again("--clients", "codex", "--no-docker", answers=[(WRITE_Q, "y")]))
         codex = Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.7")
         self.assertEqual(selected.read_text().strip(), str(codex))
         self.assertIn("ctmux --install", self.calls())
-        self.assert_ok(self.again("--clients", "claude", "--no-docker"))
+        self.assert_ok(self.again("--clients", "claude", "--no-docker", answers=[(WRITE_Q, "y")]))
         self.assertEqual(selected.read_text().strip(), self.claude_ensemble())
         self.assertIn("ctmux --install", self.calls())
         self.assert_ok(self.cleanup("--yes"))
         self.assertEqual(selected.read_text(), "previous selection\n")
 
     def test_opencode_ref_commands_ignore_higher_and_equal_version_leftovers(self):
-        scripts = self.pkg_src / "skills/manage/scripts"
-        for name in ("ctmux", "launcher"):
-            (scripts / name).write_text(Path(REPO, "skills/manage/scripts", name).read_text())
-            (scripts / name).chmod(0o755)
-        commands = (
-            "ensemble-crew",
-            "ensemble-session",
-            "ensemble-delegate",
-            "ensemble-orchestrator",
-        )
-        (self.pkg_src / "bin").mkdir(exist_ok=True)
-        for name in commands:
-            target = self.pkg_src / "bin" / name
-            target.write_text('#!/bin/sh\nprintf "%s|%s\\n" "$0" "$*"\n')
-            target.chmod(0o755)
+        commands = self.legacy_command_package()
         # All candidates have runnable commands, including the preferred clients' stale copies.
         for relative in (
             ".codex/plugins/cache/windroc/ensemble/99.0.0",
@@ -2562,7 +2547,35 @@ class InstallTest(Case):
             json.dumps({"plugins": {"ensemble@windroc": [{"installPath": str(leftover)}]}})
         )
         self.assert_ok(self.opencode_only())
-        package = self.opencode_package()
+        self.assert_command_sources(commands, self.opencode_package())
+
+    def legacy_command_package(self):
+        """A historical ref, unchanged: neither its ctmux nor launcher supports selection."""
+        for name in ("ctmux", "launcher"):
+            target = self.pkg_src / "skills/manage/scripts" / name
+            shutil.copyfile(Path(REPO, "tests/integration/fixtures", f"legacy-{name}"), target)
+            target.chmod(0o755)
+        commands = (
+            "ensemble-crew",
+            "ensemble-session",
+            "ensemble-delegate",
+            "ensemble-orchestrator",
+        )
+        (self.pkg_src / "bin").mkdir(exist_ok=True)
+        for name in commands:
+            target = self.pkg_src / "bin" / name
+            target.write_text('#!/bin/sh\nprintf "%s|%s\\n" "$0" "$*"\n')
+            target.chmod(0o755)
+        return commands
+
+    def test_codex_command_wrappers_quote_the_selected_path(self):
+        commands = self.legacy_command_package()
+        codex = Path(self.home, "codex a'b$c`d")
+        self.env["CODEX_HOME"] = str(codex)
+        self.assert_ok(self.fresh(clients="codex"))
+        self.assert_command_sources(commands, codex / "plugins/cache/windroc/ensemble/9.8.7")
+
+    def assert_command_sources(self, commands, package):
         for name in commands:
             with self.subTest(name=name):
                 result = subprocess.run(
@@ -4524,6 +4537,7 @@ exec /bin/rm "$@"
                 "codex-marketplace\twindroc",
                 "codex-plugin\tensemble@windroc",
                 "codex-plugin\tupdraft@windroc",
+                f"file\t{h}/.ensemble/plugin-root",
                 f"dir\t{h}/.ensemble/bin",
                 f'profile\t{h}/.zprofile\texport PATH="$HOME/.ensemble/bin:$PATH"',
             ],

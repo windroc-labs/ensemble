@@ -89,7 +89,7 @@ Cómo cargan tu configuración las sessions que inicia ensemble, y por qué algu
 
 | Comando | Hace |
 |---|---|
-| `ctmux <name>` | Abre la session de tmux del commander: ventanas nativas en iTerm2, un tmux attach normal en otros terminales, un cambio de session desde dentro de tmux. `ctmux --install` pone ctmux y los cuatro comandos `ensemble-crew`, `ensemble-session`, `ensemble-delegate` y `ensemble-orchestrator` en `~/.ensemble/bin/`: ejecútalos con esa ruta o añádela a `PATH`. Cada uno ejecuta ese comando desde el plugin instalado en el momento de ejecutarse (primero la instalación de Claude Code, luego la más reciente de Codex), así que una actualización no requiere reinstalar; vuelve a ejecutar `--install` para refrescarlos. |
+| `ctmux <name>` | Abre la session de tmux del commander: ventanas nativas en iTerm2, un tmux attach normal en otros terminales, un cambio de session desde dentro de tmux. `ctmux --install` pone ctmux y los cuatro comandos `ensemble-crew`, `ensemble-session`, `ensemble-delegate` y `ensemble-orchestrator` en `~/.ensemble/bin/`: ejecútalos con esa ruta o añádela a `PATH`. Los comandos usan el plugin seleccionado en esta instalación, aunque queden copias de otros clientes. Si su ruta cambia tras una actualización manual, vuelve a ejecutar el instalador o el `skills/manage/scripts/ctmux --install` del plugin deseado si admite esta selección. Para refs antiguas, usa el instalador. |
 | `/ensemble:manage` | Lanza y dirige workers, role runs y pipeline runs, con las pautas del commander. |
 | `/ensemble:act-as <role>[:<task>] <input>` | Ejecuta un role del núcleo en esta conversación. |
 | `/ensemble:board` | Lee, busca, crea, edita, mueve y archiva issues del tablero con los comandos fijos `ensemble-orchestrator issue`. |
