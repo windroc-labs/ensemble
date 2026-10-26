@@ -27,6 +27,7 @@ jobs:
     outputs:
       full: ${{ steps.scope.outputs.full }}
       docs: ${{ steps.scope.outputs.docs }}
+      version: ${{ steps.scope.outputs.version }}
       broker: ${{ steps.scope.outputs.broker }}
       projects: ${{ steps.scope.outputs.projects }}
     steps:
@@ -171,6 +172,7 @@ jobs:
     name: Unit ${{ matrix.job }}
     runs-on: ubuntu-24.04
     needs: [changes]
+    if: ${{ needs.changes.outputs.version == 'false' }}
     env:
       TEST_PROJECTS: ${{ needs.changes.outputs.full == 'false' && needs.changes.outputs.projects || '' }}
     timeout-minutes: 15
@@ -224,7 +226,7 @@ jobs:
   coverage:
     name: Coverage
     needs: [changes, unit]
-    if: ${{ github.event_name == 'pull_request' }}
+    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.version == 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -269,7 +271,7 @@ jobs:
     name: Integration ${{ matrix.job }}
     runs-on: ubuntu-24.04
     needs: [changes]
-    if: ${{ needs.changes.outputs.docs == 'false' }}
+    if: ${{ needs.changes.outputs.docs == 'false' && needs.changes.outputs.version == 'false' }}
     timeout-minutes: 15
     env:
       INTEGRATION_WORKERS: "4"

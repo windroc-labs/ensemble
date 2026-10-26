@@ -544,10 +544,12 @@ class InstallTest(Case):
         return self.run_install(*args, answers=answers, ctty=ctty)
 
     def again(self, *args, answers=()):
-        """A rerun: the checklist, unless flags answer it, confirmed as the last run left it."""
-        flagged = "--clients" in args and {"--docker", "--no-docker"} & set(args)
-        shown = [] if flagged else [(MENU_Q, "")]
-        if self.state().get("board") == "yes" and {"--launchd", "--no-launchd"} & set(args):
+        """Flags and saved choices pre-answer a rerun's checklist."""
+        state = self.state()
+        clients = "--clients" in args or state.get("clients")
+        docker = {"--docker", "--no-docker"} & set(args) or state.get("docker")
+        shown = [] if clients and docker else [(MENU_Q, "")]
+        if state.get("board") == "yes" and {"--launchd", "--no-launchd"} & set(args):
             return self.run_install(*args, answers=[*shown, (SUDO_Q, PASSWORD), *answers])
         return self.run_install(*args, answers=[(SUDO_Q, PASSWORD), *shown, *answers])
 
@@ -830,17 +832,11 @@ class InstallTest(Case):
         self.assertNotIn("brew install --cask codex", self.calls())
         result = self.again()
         self.assert_ok(result)
-        lines = (
-            "> [x] Claude Code",
-            "  [ ] Codex",
-            "  [ ] OpenCode",
-            "  [x] Docker workers",
-            "  [ ] Board",
-        )
-        for line in lines:
-            self.assertIn(line, result.tty)
+        self.assertNotRegex(result.tty, MENU_Q)
+        self.assertEqual((self.state()["clients"], self.state()["docker"]), ("claude", "yes"))
         result = self.again("--clients", "claude,codex")
         self.assert_ok(result)
+        self.assertNotRegex(result.tty, MENU_Q)
         self.assertEqual(self.state()["clients"], "claude,codex")
         self.assertIn("brew install --cask codex", self.calls())
         self.assertIn("codex plugin add ensemble@windroc", self.calls())
@@ -856,6 +852,69 @@ class InstallTest(Case):
         self.assert_ok(result)
         self.assertIn("> [ ] Claude Code\r\n\r\x1b[K  [x] Codex", result.tty)
         self.assertEqual((self.state()["clients"], self.state()["docker"]), ("codex", "yes"))
+
+    def test_saved_clients_and_docker_board_flags_skip_checklist(self):
+        self.assert_ok(self.fresh("--clients", "claude", "--no-docker", "--no-board"))
+        self.linear()
+        result = self.again(
+            "--docker",
+            "--board",
+            "linear",
+            answers=[
+                (r"Install board launchd jobs\? \[y/N\]", "n"),
+                (WRITE_Q, "y"),
+                *DOCKER_LOGINS,
+                *self.secrets(*SLOTS),
+                *BOARD[:-1],
+            ],
+        )
+        self.assert_ok(result)
+        self.assertNotRegex(result.tty, MENU_Q)
+        self.assertEqual(
+            tuple(self.state()[key] for key in ("clients", "docker", "board", "board_tracker")),
+            ("claude", "yes", "yes", "linear"),
+        )
+
+    def test_checklist_preticks_docker_and_board_flags_with_unanswered_clients(self):
+        state = Path(self.ensemble, "install/state")
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text("docker=no\nboard=no\n")
+        self.linear()
+        result = self.fresh(
+            "--docker",
+            "--board",
+            "linear",
+            "--no-launchd",
+            clients="claude",
+            then=[*self.secrets(*SLOTS), *BOARD[:-1]],
+        )
+        self.assert_ok(result)
+        self.assertRegex(result.tty, MENU_Q)
+        self.assertIn("  [x] Docker workers", result.tty)
+        self.assertIn("  [x] Board:", result.tty)
+        self.assertEqual((self.state()["docker"], self.state()["board"]), ("yes", "yes"))
+
+    def test_checklist_negative_flags_override_saved_ticks(self):
+        state = Path(self.ensemble, "install/state")
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text("docker=yes\nboard=yes\n")
+        result = self.fresh("--no-docker", "--no-board", clients="claude")
+        self.assert_ok(result)
+        self.assertRegex(result.tty, MENU_Q)
+        self.assertIn("  [ ] Docker workers", result.tty)
+        self.assertIn("  [ ] Board:", result.tty)
+        self.assertNotIn("  [x] Docker workers", result.tty)
+        self.assertNotIn("  [x] Board:", result.tty)
+        self.assertEqual((self.state()["docker"], self.state()["board"]), ("no", "no"))
+
+    def test_checklist_preticks_client_flag_with_unanswered_docker(self):
+        result = self.fresh("--clients", "codex", "--no-board")
+        self.assert_ok(result)
+        self.assertRegex(result.tty, MENU_Q)
+        self.assertIn("> [ ] Claude Code", result.tty)
+        self.assertIn("  [x] Codex", result.tty)
+        self.assertNotIn("> [x] Claude Code", result.tty)
+        self.assertEqual((self.state()["clients"], self.state()["docker"]), ("codex", "no"))
 
     def test_config_template_and_edit(self):
         self.assert_ok(self.fresh("--docker", "--clients", "codex"))
@@ -2148,10 +2207,8 @@ class InstallTest(Case):
         )
 
     def opencode_rerun(self, *answers):
-        """A rerun of opencode_only's install: the checklist confirmed, then `answers`."""
-        return self.run_install(
-            "--password-stdin", stdin=PASSWORD + "\n", answers=[(MENU_Q, ""), *answers]
-        )
+        """A rerun of opencode_only's install with saved choices, then `answers`."""
+        return self.run_install("--password-stdin", stdin=PASSWORD + "\n", answers=answers)
 
     def opencode_package(self):
         return Path(
@@ -2219,7 +2276,8 @@ class InstallTest(Case):
         self.assertEqual(self.state()["opencode_plugin_commit"], OLD)
         result = self.opencode_rerun()
         self.assert_ok(result)
-        self.assertIn("> [ ] Claude Code", result.tty)
+        self.assertNotRegex(result.tty, MENU_Q)
+        self.assertEqual((self.state()["clients"], self.state()["docker"]), ("opencode", "no"))
         self.assertNotIn("opencode plugin", "\n".join(self.calls()))
         self.assertIn(f"==> OpenCode plugin\n    skip: {SPEC} at {OLD[:12]}\n", result.stderr)
 
@@ -3471,6 +3529,8 @@ exec /bin/rm "$@"
 
     def test_board_local_tracker_inferred(self):
         self.assert_ok(self.fresh())
+        state = Path(self.ensemble, "install/state")
+        state.write_text(state.read_text().replace("clients=claude,codex\n", ""))
         self.config().write_text(
             self.config().read_text() + '\n[orchestrator]\ntracker = "local"\n'
         )
@@ -3876,8 +3936,8 @@ exec /bin/rm "$@"
                     (self.root / "opt/homebrew/bin/python3").symlink_to(sys.executable)
                 before = self.snapshot()
                 result = self.run_install(
+                    "--no-board",
                     "--launchd",
-                    answers=[(MENU_Q, menu(("claude", "codex"), ("claude", "codex", "board")))],
                 )
                 self.assertEqual(result.code, 2)
                 self.assertIn("requires a board", result.stderr)

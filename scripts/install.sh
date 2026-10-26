@@ -103,8 +103,9 @@ usage: $synopsis
 With --password-stdin or --opencode-key-stdin, stdin cannot carry the script:
   security find-generic-password -s <item> -w | bash -c "\$(curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh)" scripts/install.sh --password-stdin
 
-Without --clients and --docker/--no-docker it shows a checklist of what to install (a rerun ticks the last
-choices). It installs the dependencies, asks what the flags leave open, writes ~/.ensemble/config.local.toml,
+It shows a checklist only when clients or Docker has no flag or saved answer. Flags pre-tick their choices;
+saved choices and existing config fill the other ticks. It installs the dependencies, asks what is still
+unanswered, writes ~/.ensemble/config.local.toml,
 then installs and logs in only what that needs. A rerun keeps the last answers unless a flag changes
 them, and skips what is done.
 EOF
@@ -643,9 +644,9 @@ checklist() {
 }
 
 # The configuration: each answer from its flag, else the last answer (State), else the config, else the default;
-# without --clients and --docker/--no-docker, the checklist shows them ticked to change.
+# the checklist appears only when clients or Docker has no flag or saved answer.
 answers() {
-  local said default client item
+  local said default client item choose=
   local -a labels ticks names=(claude codex opencode)
   step configuration
   said=$(config_says)
@@ -653,18 +654,19 @@ answers() {
   client=${said#*$'\t'}
   client=${client%%$'\t'*}
   clients=${clients_flag:-$(state_get clients)}
+  docker=${docker_flag:-$(state_get docker)}
+  if [ -z "$clients" ] || [ -z "$docker" ]; then choose=yes; fi
   if [ -z "$clients" ]; then
     case $client in claude | codex | opencode) clients=$client ;; *) clients=claude,codex ;; esac
     if opencode_flags; then clients=$(clients_of "$clients,opencode"); fi
   fi
-  docker=${docker_flag:-$(state_get docker)}
   if [ -z "$docker" ]; then
     if [ "$default" = docker ]; then docker=yes; else docker=no; fi
   fi
   board=$(state_get board)
   case $board_flag in local | linear) board=yes ;; no) board=no ;; esac
   board=${board:-no}
-  if [ -z "$clients_flag" ] || [ -z "$docker_flag" ]; then
+  if [ -n "$choose" ]; then
     labels=("Claude Code" "Codex" "OpenCode" "Docker workers (Docker Desktop and the ensemble broker)" "Board: local or Linear (launchd jobs chosen separately)")
     ticks=()
     for item in "${names[@]}"; do
