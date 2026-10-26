@@ -88,7 +88,6 @@ STANDALONE = frozenset(
         ".github/worker_codex/skills.py",
         ".github/worker_codex/state.py",
         ".github/worker_codex/reload.py",
-        ".github/worker_codex/stage.py",
     }
 )
 

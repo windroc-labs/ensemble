@@ -14,13 +14,5 @@
       "expires_at": "2026-10-17T13:00:00Z"
     }
   ],
-  "github_user_id": 343764394,
-  "client_update": {
-    "client": "codex",
-    "pinned_version": "0.164.0",
-    "image_version": "0.163.0",
-    "target_version": "0.163.0",
-    "result": "current",
-    "min_version": "0.163.0"
-  }
+  "github_user_id": 343764394
 }

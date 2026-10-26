@@ -699,7 +699,7 @@ class CodexCIReload(Case):
         self.assertTrue(exchange.summary()["natural_auth_reload_completed"])
 
     def test_ci_entrypoint_injects_managed_values_and_runs_reload_with_network_disabled(self):
-        calls, active, copied = [], {}, []
+        calls, active = [], {}
         version = b"codex-cli 0.163.0"
 
         def docker(*args, data=None):
@@ -749,8 +749,6 @@ class CodexCIReload(Case):
                 ).encode()
             elif args[-1] == "--version":
                 return version
-            elif args[0] == "cp":
-                copied.append(Path(args[1]).read_bytes())
             elif data == (self.worker["PROBES"] / "reload.py").read_bytes():
                 payload = json.loads(args[-1])
                 self.assertEqual(set(payload), {"initial", "replacement", "near", "adopted"})
@@ -767,10 +765,7 @@ class CodexCIReload(Case):
             mock.patch.dict(
                 os.environ, {"CI": "true", "GITHUB_ACTIONS": "true", "RUNNER_TEMP": self.home}
             ),
-            mock.patch.dict(
-                main.__globals__,
-                {"docker": docker, "latest_runtime": lambda *_: ("0.163.0", b"verified-bundle")},
-            ),
+            mock.patch.dict(main.__globals__, {"docker": docker}),
             mock.patch("builtins.print"),
         ):
             main("ensemble-worker:" + "a" * 64)
@@ -783,16 +778,15 @@ class CodexCIReload(Case):
         self.assertTrue(all(args[-1].endswith("/codex") for args, _ in injected))
         for program, count in (
             ("reload.py", 2),
-            ("tools.py", 4),
+            ("tools.py", 2),
             ("skills.py", 2),
             ("state.py", 2),
-            ("stage.py", 2),
         ):
             source = (self.worker["PROBES"] / program).read_bytes()
             sent = [args for args, data in calls if data == source]
             self.assertEqual(len(sent), count, program)
             self.assertTrue(all("-i" in args and "-" in args and "-c" not in args for args in sent))
-        self.assertEqual(copied, [b"verified-bundle"] * 2)
+        self.assertFalse(any("/opt/ensemble/runtime" in " ".join(args) for args, _ in calls))
 
     def test_reload_cleanup_still_kills_group_after_broken_input(self):
         code = self.reload_code()
@@ -808,123 +802,14 @@ class CodexCIReload(Case):
         process.stderr.close.assert_called_once_with()
 
 
-class CodexUpdate(Case):
+class CodexProbe(Case):
     def setUp(self):
-        self.code = script("codex-update.py")
-        self.update = self.code["update"]
-        self.target = Path(self.home, "runtime")
-        self.target.mkdir()
-
-    def bundle(self, files=None):
-        if files is None:
-            files = {
-                "bin/codex": b"native",
-                "bin/codex-code-mode-host": b"host",
-                "lib/data": b"data",
-            }
-        stream = io.BytesIO()
-        with tarfile.open(fileobj=stream, mode="w:gz") as archive:
-            for name, data in files.items():
-                entry = tarfile.TarInfo("package/vendor/aarch64-unknown-linux-musl/" + name)
-                entry.size, entry.mode = len(data), 0o755
-                archive.addfile(entry, io.BytesIO(data))
-        return stream.getvalue()
-
-    def call(self, action, data=None):
-        real_lstat = Path.lstat
-
-        def root_owned(path):
-            info = real_lstat(path)
-            return SimpleNamespace(st_mode=info.st_mode, st_uid=0, st_size=info.st_size)
-
-        with mock.patch.object(Path, "lstat", root_owned):
-            self.update(action, io.BytesIO(self.bundle() if data is None else data), self.target)
-
-    def test_stage_publish_reset(self):
-        self.call("stage")
-        stage, active = self.target / "codex.next", self.target / "codex"
-        self.assertEqual((stage / "bin/codex").read_bytes(), b"native")
-        self.assertEqual(stat.S_IMODE((stage / "bin/codex").stat().st_mode), 0o755)
-        self.assertEqual((stage / "bin/codex-code-mode-host").read_bytes(), b"host")
-        self.assertEqual((stage / "lib/data").read_bytes(), b"data")
-        self.assertFalse(active.exists())
-        self.call("publish")
-        self.assertEqual((active / "bin/codex").read_bytes(), b"native")
-        self.assertFalse(stage.exists())
-        self.call("reset")
-        self.call("reset")
-        self.assertEqual(list(self.target.iterdir()), [])
-
-    def test_refuses_empty_unknown_and_unsafe_paths(self):
-        with self.assertRaises(SystemExit):
-            self.call("stage", b"")
-        self.call("reset")
-        with self.assertRaises(SystemExit):
-            self.call("unknown")
-        self.target.chmod(0o777)
-        with self.assertRaises(SystemExit):
-            self.call("stage")
-        self.target.chmod(0o755)
-        elsewhere = self.target / "elsewhere"
-        elsewhere.write_bytes(b"untouched")
-        (self.target / "codex.next").symlink_to(elsewhere)
-        with self.assertRaises(FileExistsError):
-            self.call("stage")
-        with self.assertRaises(SystemExit):
-            self.call("publish")
-        self.call("reset")
-        self.assertEqual(elsewhere.read_bytes(), b"untouched")
-
-    def test_incomplete_bundle_never_becomes_active(self):
-        for files in (
-            {"bin/codex": b"native"},
-            {"bin/codex-code-mode-host": b"host"},
-            {"bin/codex": b"", "bin/codex-code-mode-host": b"host"},
-        ):
-            with self.subTest(files=files), self.assertRaises(SystemExit):
-                self.call("stage", self.bundle(files))
-            self.assertFalse((self.target / "codex").exists())
-            self.call("reset")
-
-    def test_publish_rechecks_every_file_and_keeps_active_on_failure(self):
-        self.call("stage")
-        self.call("publish")
-        self.call("stage")
-        companion = self.target / "codex.next/bin/codex-code-mode-host"
-        companion.chmod(0o777)
-        with self.assertRaises(SystemExit):
-            self.call("publish")
-        self.assertEqual((self.target / "codex/bin/codex-code-mode-host").read_bytes(), b"host")
-        self.call("reset")
-        self.assertFalse((self.target / "codex").exists())
-
-    def test_rejects_traversal_links_duplicates_and_writable_archive_entries(self):
-        for kind in ("traversal", "link", "duplicate", "mode"):
-            stream = io.BytesIO()
-            with tarfile.open(fileobj=stream, mode="w:gz") as archive:
-                entry = tarfile.TarInfo("package/vendor/aarch64-unknown-linux-musl/bin/codex")
-                entry.mode = 0o777 if kind == "mode" else 0o755
-                if kind == "traversal":
-                    entry.name = "package/../../escaped"
-                if kind == "link":
-                    entry.type, entry.linkname = tarfile.SYMTYPE, "/elsewhere"
-                archive.addfile(entry)
-                if kind == "duplicate":
-                    archive.addfile(entry)
-            with self.subTest(kind=kind), self.assertRaises((SystemExit, ValueError)):
-                self.call("stage", stream.getvalue())
-            self.call("reset")
-
-    def test_expanded_archive_is_bounded(self):
-        with (
-            mock.patch.dict(self.update.__globals__, {"LIMIT": 100}),
-            self.assertRaises(SystemExit),
-        ):
-            self.call("stage")
+        self.probe = script("codex-probe.py")["probe"]
+        self.clients = Path(self.home, "clients")
 
     def test_probe_resolves_npm_companion_and_runs_it(self):
         native = (
-            self.target
+            self.clients
             / "lib/node_modules/@openai/codex-linux-arm64/vendor/aarch64-unknown-linux-musl/bin/codex"
         )
         native.parent.mkdir(parents=True)
@@ -935,14 +820,21 @@ class CodexUpdate(Case):
         companion.chmod(0o755)
         with mock.patch("subprocess.run") as run:
             run.return_value.stdout = b"codex-cli 0.163.0\n"
-            self.code["probe"](self.target / "bin/codex", "0.163.0")
-        self.assertEqual(run.call_args_list[-1].args[0], [str(companion), "--help"])
+            self.probe(self.clients / "bin/codex", "0.163.0")
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            [[str(self.clients / "bin/codex"), "--version"], [str(companion), "--help"]],
+        )
+        with mock.patch("subprocess.run") as run, self.assertRaises(SystemExit):
+            run.return_value.stdout = b"codex-cli 0.164.0\n"
+            self.probe(self.clients / "bin/codex", "0.163.0")
         companion.unlink()
         with mock.patch("subprocess.run") as run, self.assertRaises(SystemExit):
-            self.code["probe"](self.target / "bin/codex", "0.163.0")
+            self.probe(self.clients / "bin/codex", "0.163.0")
+        run.assert_not_called()
 
     def test_probe_propagates_companion_startup_failure(self):
-        native = self.target / "codex.next/bin/codex"
+        native = self.clients / "bin/codex"
         native.parent.mkdir(parents=True)
         for path in (native, native.with_name("codex-code-mode-host")):
             path.write_bytes(b"binary")
@@ -951,7 +843,7 @@ class CodexUpdate(Case):
             run.return_value.stdout = b"codex-cli 0.163.0\n"
             run.side_effect = [run.return_value, OSError("host cannot start")]
             with self.assertRaises(OSError):
-                self.code["probe"](native, "0.163.0")
+                self.probe(native, "0.163.0")
 
 
 class InstallHook(Case):

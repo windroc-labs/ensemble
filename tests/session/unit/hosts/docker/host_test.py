@@ -16,7 +16,7 @@ import sys
 import threading
 import time
 import tomllib
-from dataclasses import replace
+from dataclasses import fields, replace
 from types import SimpleNamespace
 from unittest import mock
 
@@ -333,7 +333,7 @@ class ConfigTest(Base):
             (5, "", json.dumps(locked)),
         )
         self.host.broker = Broker(runner)
-        with self.assertRaisesRegex(SessionError, "protocol '18', want '25'") as caught:
+        with self.assertRaisesRegex(SessionError, "protocol '18', want '26'") as caught:
             self.host._provider_usage(request)
         self.assertIn(
             "install or upgrade it: see docs/docker-host.md#install", str(caught.exception)
@@ -1240,30 +1240,33 @@ class StartTest(Base):
                 self.assertFalse(result.startswith(self.home_dir + os.sep))
 
     def test_generation_versions_survive_later_client_setup_failure(self):
-        for audit in (data("start-output-codex.json")["client_update"], None):
-            self.broker.started = replace(self.broker.started, client_update=audit)
-            with (
-                self.subTest(audit=audit),
-                mock.patch.object(
-                    self.host, "_stage_files", side_effect=SessionError("setup failed")
-                ),
-                self.assertRaisesRegex(SessionError, "setup failed"),
-            ):
-                self.start()
-            with open(os.path.join(self.state, f"{GEN}.result.json")) as source:
-                result = json.load(source)
-            self.assertEqual(result["image_digest"], self.broker.started.image_digest)
-            if audit is None:
-                self.assertNotIn("client_update", result)
-            else:
-                self.assertEqual(result["client_update"], audit)
+        with (
+            mock.patch.object(self.host, "_stage_files", side_effect=SessionError("setup failed")),
+            self.assertRaisesRegex(SessionError, "setup failed"),
+        ):
+            self.start()
+        with open(os.path.join(self.state, f"{GEN}.result.json")) as source:
+            result = json.load(source)
+        self.assertEqual(result["image_digest"], self.broker.started.image_digest)
 
-    def test_successful_start_records_the_update_when_present(self):
-        audit = data("start-output-codex.json")["client_update"]
-        self.broker.started = replace(self.broker.started, client_update=audit)
+    def test_saved_result_has_no_client_update(self):
+        self.assertNotIn("client_update", {f.name for f in fields(Started)})
         self.start()
         with open(os.path.join(self.state, f"{GEN}.result.json")) as source:
-            self.assertEqual(json.load(source)["client_update"], audit)
+            result = json.load(source)
+        self.assertEqual(
+            set(result),
+            {
+                "container",
+                "image",
+                "image_digest",
+                "client_versions",
+                "started_at",
+                "ended_at",
+                "phases",
+                "launched_at",
+            },
+        )
 
     def test_each_start_records_and_reports_its_phase_times(self):
         result = os.path.join(self.state, f"{GEN}.result.json")

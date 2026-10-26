@@ -356,9 +356,6 @@ def timing(result: dict, hooks: str, stderr: str, name: str) -> str:
     parts.append(
         f"preflight {_seconds(rf'^docker timing {re.escape(name)}: preflight ([0-9.]+) s$', stderr)}"
     )
-    if isinstance(update := result.get("client_update"), dict):
-        took = _seconds(r"^ensemble-broker: start client_update ([0-9.]+) s$", stderr)
-        parts.append(f"client_update {update.get('result')} {took}")
     return " | ".join(parts)
 
 
@@ -380,11 +377,12 @@ def new_generation(before: set[str], after: set[str], *, step: str = "start") ->
     return next(iter(new))
 
 
-def install_steps(result: dict, stderr: str, client: str) -> list[str]:
+def install_steps(result: dict, stderr: str) -> list[str]:
     problems = [f"install step {p} at start" for p in result.get("phases") or {} if p not in PHASES]
-    allowed = BROKER_PHASES | ({"client_update"} if client == "codex" else set())
     problems += [
-        f"install step {p} at start" for p, _ in BROKER_LINE.findall(stderr) if p not in allowed
+        f"install step {p} at start"
+        for p, _ in BROKER_LINE.findall(stderr)
+        if p not in BROKER_PHASES
     ]
     return problems
 
@@ -898,11 +896,11 @@ def worker(args: Args) -> int:
     lines = audit_lines(read_text(AUDIT))
     if removed:
         print(removed_tokens(lines, removed.rsplit("-", 1)[1]), flush=True)
-    report(w.name, w.client, w.starts, digest, times)
+    report(w.name, w.starts, digest, times)
     return 0
 
 
-def report(name: str, client: str, starts: list[Start], digest: str, times: dict) -> None:
+def report(name: str, starts: list[Start], digest: str, times: dict) -> None:
     hooks = read_text(os.path.expanduser(f"~/.ensemble/tui/{name}/hooks.jsonl"))
     problems = []
     for start in starts:
@@ -911,9 +909,7 @@ def report(name: str, client: str, starts: list[Start], digest: str, times: dict
             problems.append(
                 f"{start.generation}: started on {result.get('image_digest')}, built {digest}"
             )
-        problems += [
-            f"{start.generation}: {p}" for p in install_steps(result, start.stderr, client)
-        ]
+        problems += [f"{start.generation}: {p}" for p in install_steps(result, start.stderr)]
         print(
             f"timing {name} {start.generation} ({start.step}): build {times.get('build', 0):.1f} s"
             f" | {timing(result, hooks, start.stderr, name)}",

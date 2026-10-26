@@ -51,7 +51,7 @@ func putFile(t *testing.T, path, text string) {
 }
 
 func inspectJSON(id string, labels map[string]string, created time.Time) []byte {
-	data, _ := json.Marshal([]map[string]any{{"Id": id, "Created": created, "Architecture": "arm64", "Config": map[string]any{"Labels": labels}}})
+	data, _ := json.Marshal([]map[string]any{{"Id": id, "Created": created, "Config": map[string]any{"Labels": labels}}})
 	return data
 }
 
@@ -358,12 +358,13 @@ func TestWorkerImageHasItsScripts(t *testing.T) {
 	}
 	for _, want := range []string{
 		`'exec /opt/ensemble/venv/bin/python -I /opt/ensemble/src/ensemble/session/hosts/docker/relay.py "$@"' > /opt/ensemble/bin/relay`,
-		"chmod 755 /opt/ensemble/bin/codex /opt/ensemble/bin/ensemble-session /opt/ensemble/bin/relay ",
+		"chmod 755 /opt/ensemble/bin/ensemble-session /opt/ensemble/bin/relay ",
 		"install -d -o agent -g agent -m 0700 /run/ensemble /run/ensemble/relay-queue",
-		"COPY bootstrap.py codex-update.py opencode-install.py plugin-install.py hook-stub with-secrets workspace-check gh git-credential-ensemble /opt/ensemble/lib/",
+		"COPY bootstrap.py codex-probe.py opencode-install.py plugin-install.py hook-stub with-secrets workspace-check gh git-credential-ensemble /opt/ensemble/lib/",
 		`python3 -I /opt/ensemble/lib/opencode-install.py "$(dpkg --print-architecture)" /opt/ensemble/clients`,
 		"ln -s /opt/ensemble/clients/bin/opencode /opt/ensemble/bin/opencode",
-		"COPY codex /opt/ensemble/bin/codex",
+		"python3 -I /opt/ensemble/lib/codex-probe.py /opt/ensemble/clients/bin/codex ",
+		"ln -s /opt/ensemble/clients/bin/codex /opt/ensemble/bin/codex",
 		"ln -s /opt/ensemble/lib/gh /opt/ensemble/bin/gh",
 		"ln -s /opt/ensemble/lib/git-credential-ensemble /opt/ensemble/bin/git-credential-ensemble",
 		" /opt/ensemble/lib/workspace-check /opt/ensemble/lib/gh /opt/ensemble/lib/git-credential-ensemble \\\n",
@@ -381,6 +382,11 @@ func TestWorkerImageHasItsScripts(t *testing.T) {
 	} {
 		if !strings.Contains(string(data), want) {
 			t.Errorf("Dockerfile lacks %q", want)
+		}
+	}
+	for _, gone := range []string{"/opt/ensemble/runtime", "COPY codex ", "codex-update"} {
+		if strings.Contains(string(data), gone) {
+			t.Errorf("Dockerfile still has %q", gone)
 		}
 	}
 }

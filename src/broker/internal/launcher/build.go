@@ -61,10 +61,9 @@ var builtPattern = regexp.MustCompile(`^ensemble-(?:user|worker):[0-9a-f]{64}$`)
 const imageLease = time.Hour
 
 type imageInfo struct {
-	ID           string `json:"Id"`
-	Created      time.Time
-	Architecture string
-	Config       struct {
+	ID      string `json:"Id"`
+	Created time.Time
+	Config  struct {
 		Labels map[string]string
 	}
 }

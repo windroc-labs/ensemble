@@ -419,7 +419,6 @@ class BaselineTest(Case):
         sessions = "/Users/u/.ensemble/docker-state/live/codex/sessions"
         mounts = [
             {"Type": "volume", "Name": "ensemble-ws-live", "Destination": CWD},
-            {"Type": "tmpfs", "Destination": "/opt/ensemble/runtime"},
             {"Type": "bind", "Source": sessions, "Destination": sessions},
         ]
         self.assertEqual(self.check(inspect(Mounts=mounts), (sessions,)), [])
@@ -564,7 +563,6 @@ class TimingTest(Case):
     STDERR = (
         "docker timing live: preflight 2.40 s\n"
         "ensemble-broker: start preflight 0.01 s\n"
-        "ensemble-broker: start client_update 3.25 s\n"
         f"ensemble-broker: start credentials 0.10 s {FAKE}\n"
     )
 
@@ -584,15 +582,6 @@ class TimingTest(Case):
             " | client ready 2.5 s | preflight 2.4 s",
         )
 
-    def test_codex_client_update(self):
-        result = self.result(client_update={"client": "codex", "result": "current"})
-        hooks = self.hooks("2026-10-18T14:00:01.000+02:00")
-        self.assertTrue(
-            gate.timing(result, hooks, self.STDERR, "live").endswith(
-                "client ready 1.0 s | preflight 2.4 s | client_update current 3.2 s"
-            )
-        )
-
     def test_headless_has_no_launch(self):
         result = {"phases": {"checks": 0.1, "image": 0.2, "start": 3.0, "client": 0.4}}
         self.assertIn("client ready n/a", gate.timing(result, "", "", "live"))
@@ -602,10 +591,7 @@ class TimingTest(Case):
         self.assertIn("client ready n/a", gate.timing(self.result(), hooks, "", "live"))
 
     def test_stderr_missing(self):
-        result = self.result(client_update={"client": "codex", "result": "updated"})
-        text = gate.timing(result, "", "", "live")
-        self.assertIn("preflight n/a", text)
-        self.assertIn("client_update updated n/a", text)
+        self.assertIn("preflight n/a", gate.timing(self.result(), "", "", "live"))
 
 
 class RefreshedAtTest(Case):
@@ -647,23 +633,21 @@ class InstallStepsTest(Case):
         )
     )
 
-    def test_clean_claude_and_codex(self):
-        self.assertEqual(gate.install_steps({"phases": self.PHASES}, self.BROKER, "claude"), [])
-        codex = self.BROKER + "ensemble-broker: start client_update 2.00 s\n"
-        self.assertEqual(gate.install_steps({"phases": self.PHASES}, codex, "codex"), [])
+    def test_clean(self):
+        self.assertEqual(gate.install_steps({"phases": self.PHASES}, self.BROKER), [])
 
     def test_build_phase(self):
-        (problem,) = gate.install_steps({"phases": {**self.PHASES, "build": 9.0}}, "", "claude")
+        (problem,) = gate.install_steps({"phases": {**self.PHASES, "build": 9.0}}, "")
         self.assertIn("build", problem)
 
-    def test_client_update_on_claude(self):
+    def test_client_update_is_an_install_step(self):
         stderr = self.BROKER + "ensemble-broker: start client_update 2.00 s\n"
-        (problem,) = gate.install_steps({"phases": self.PHASES}, stderr, "claude")
+        (problem,) = gate.install_steps({"phases": self.PHASES}, stderr)
         self.assertIn("client_update", problem)
 
     def test_unknown_broker_phase(self):
         stderr = self.BROKER + "ensemble-broker: start install 2.00 s\n"
-        (problem,) = gate.install_steps({"phases": self.PHASES}, stderr, "codex")
+        (problem,) = gate.install_steps({"phases": self.PHASES}, stderr)
         self.assertIn("install", problem)
 
 
@@ -738,7 +722,7 @@ class NoSecretTest(Case):
             gate.removed_tokens(lines, G1),
             *gate.baseline(inspect(HostConfig__CapDrop=[]), "live", CWD, [CLAUDE_DIR], NETWORK),
             gate.timing({"phases": {}}, "", TimingTest.STDERR, "live"),
-            *gate.install_steps({"phases": {}}, TimingTest.STDERR, "claude"),
+            *gate.install_steps({"phases": {}}, TimingTest.STDERR),
         ]
         for text in outputs:
             self.assertNotIn(FAKE, text)

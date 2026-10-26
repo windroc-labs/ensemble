@@ -317,8 +317,6 @@ def _save_result(
         "ended_at": created.ended,
         "phases": dict(phases),
     }
-    if created.started.client_update is not None:
-        result["client_update"] = dict(created.started.client_update)
     if launched is not None:
         result["launched_at"] = launched
     save(

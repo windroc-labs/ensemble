@@ -104,7 +104,7 @@ func TestStartLine(t *testing.T) {
 			manifest := validManifest(t)
 			want := []string{"claude-setup-token issued"}
 			if client == "codex" {
-				h.Codex, h.Versions, manifest = &fakeCodexCreds{}, &fakeVersions{target: "0.163.0"}, codexManifest(t)
+				h.Codex, h.Versions, manifest = &fakeCodexCreds{}, &fakeVersions{}, codexManifest(t)
 				want = []string{"codex-access-token issued"}
 			}
 			rec, path := audited(t, &h, "start", "")
@@ -299,7 +299,7 @@ func TestNoSecretsInLog(t *testing.T) {
 		h, _ := githubHost(&world{labels: goodLabels()}, &fakeTokens{})
 		manifest := githubManifest(t)
 		if client == "codex" {
-			h.Codex, h.Versions = &fakeCodexCreds{}, &fakeVersions{target: "0.163.0"}
+			h.Codex, h.Versions = &fakeCodexCreds{}, &fakeVersions{}
 			raw, _ := os.ReadFile(codexManifest(t))
 			var m map[string]any
 			_ = json.Unmarshal(raw, &m)

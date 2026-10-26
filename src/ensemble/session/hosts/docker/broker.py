@@ -22,7 +22,7 @@ from ensemble.utils import save
 # Installed by src/broker/install.sh and the worker image (src/broker/internal/launcher/assets/Dockerfile).
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
 RELAY = "/opt/ensemble/bin/relay"
-PROTOCOL = "25"
+PROTOCOL = "26"
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
 INSTALL = "install or upgrade it: see docs/docker-host.md#install"
 TIMEOUT = 1800
@@ -38,7 +38,6 @@ CONTAINER = re.compile(r"ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}")
 ENDPOINT = re.compile(r"unix:///[^\x00-\x1f\x7f]+/\.docker/run/docker\.sock")
 LOGIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}")
 TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
-VERSION = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)")
 COMMANDS = frozenset(
     {
         "version",
@@ -160,48 +159,6 @@ def _credential_expiry(value) -> bool:
 
 def _user_id(value) -> bool:
     return value is None or (type(value) is int and value >= 1)
-
-
-def _client_update(value, clients) -> bool:
-    if not isinstance(value, dict) or value.keys() != {
-        "client",
-        "pinned_version",
-        "min_version",
-        "image_version",
-        "target_version",
-        "result",
-    }:
-        return False
-    minimum = value["min_version"]
-    client = value["client"]
-    image, target, result = value["image_version"], value["target_version"], value["result"]
-    if not (
-        _text(client)
-        and client in clients
-        and _matches(VERSION, value["pinned_version"])
-        and _matches(VERSION, image)
-        and _matches(VERSION, minimum)
-        and isinstance(target, str)
-        and (target == "" or _matches(VERSION, target))
-        and isinstance(result, str)
-    ):
-        return False
-    floor = tuple(map(int, minimum.split(".")))
-    if any(
-        tuple(map(int, version.split("."))) < floor
-        for version in (value["pinned_version"], image, target)
-        if version
-    ):
-        return False
-    actual = clients[client].rsplit(" ", 1)[-1]
-    if result in {"registry_unavailable", "no_supported_release"}:
-        return target == "" and actual == image
-    if result == "current":
-        return target == image and actual == image
-    if result in {"updated", "update_failed"}:
-        expected = target if result == "updated" else image
-        return bool(target) and target != image and actual == expected
-    return False
 
 
 def _error(command: str, returncode: int, data: dict) -> BrokerError:
@@ -371,10 +328,10 @@ class Broker:
 
     def start(self, manifest: str, *, clients: frozenset[str]) -> Started:
         """`clients`: the client names the protocol requires in the response."""
-        required = {f.name for f in fields(Started)} - {"client_update"}
+        required = {f.name for f in fields(Started)}
         found = self._parsed(
             "start",
-            lambda d: required <= set(d) <= required | {"client_update"},
+            lambda d: set(d) == required,
             "--manifest",
             manifest,
         )
@@ -389,11 +346,6 @@ class Broker:
             and _expiries(started.github)
             and _user_id(started.github_user_id)
             and _credential_expiry(started.credential_expires_at)
-            and (
-                _client_update(started.client_update, started.clients)
-                if started.credential_expires_at is not None
-                else "client_update" not in found
-            )
         ):
             raise SessionError("broker: bad response to start: fields")
         return started

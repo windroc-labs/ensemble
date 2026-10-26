@@ -100,30 +100,6 @@ def single_installation(image):
         raise RuntimeError(f"synthetic Codex check: @openai/codex packages {found}")
 
 
-def latest_runtime(directory, architecture):
-    metadata = json.loads(
-        subprocess.check_output(["npm", "view", "@openai/codex@latest", "--json"], timeout=60)
-    )
-    version = metadata["version"]
-    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
-        raise ValueError("latest Codex must be stable")
-    platform = "@openai/codex-linux-" + {"amd64": "x64", "arm64": "arm64"}[architecture]
-    dependency = metadata["optionalDependencies"][platform]
-    package = (
-        dependency.removeprefix("npm:")
-        if dependency.startswith("npm:")
-        else platform + "@" + dependency
-    )
-    [packed] = json.loads(
-        subprocess.check_output(
-            ["npm", "pack", "--json", "--ignore-scripts", "--pack-destination", directory, package],
-            cwd=directory,
-            timeout=90,
-        )
-    )
-    return version, Path(directory, packed["filename"]).read_bytes()
-
-
 def main(image):
     if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("CI") != "true":
         sys.exit("worker_codex.py runs only in GitHub CI")
@@ -143,10 +119,6 @@ def main(image):
         sessions = home / "sessions"
         sessions.mkdir(parents=True)
         sessions.chmod(0o777)
-        architecture = inspected["Architecture"]
-        latest, bundle = latest_runtime(temporary, architecture)
-        archive = Path(temporary, "runtime.tgz")
-        archive.write_bytes(bundle)
         for _ in range(2):
             name = "ensemble-codex-ci-" + uuid.uuid4().hex
             try:
@@ -171,8 +143,6 @@ def main(image):
                     f"/run/ensemble:rw,noexec,nosuid,nodev,size=1048576{owner}",
                     "--tmpfs",
                     f"/run/ensemble/secrets:rw,noexec,nosuid,nodev,size=65536{owner}",
-                    "--tmpfs",
-                    "/opt/ensemble/runtime:rw,exec,nosuid,nodev,size=536870912,mode=0755,uid=0,gid=0",
                     "--mount",
                     f"type=bind,source={sessions},target={sessions}",
                     image,
@@ -186,44 +156,9 @@ def main(image):
                     *inspected["HostConfig"]["Tmpfs"]
                 }
                 docker("exec", name, PYTHON, "-I", BOOTSTRAP, "codex", str(home), "/workspace")
-                docker("cp", str(archive), name + ":/tmp/codex-runtime.tgz")
-                probe(name, "stage.py", "/tmp/codex-runtime.tgz", user="root")
                 assert (
-                    docker(
-                        "exec", name, "/opt/ensemble/runtime/codex.next/bin/codex", "--version"
-                    ).strip()
-                    == f"codex-cli {latest}".encode()
+                    probe(name, "tools.py").strip() == b"Offline Codex code-mode command turn: PASS"
                 )
-                for action in ("publish", "reset"):
-                    docker(
-                        "exec",
-                        "--user",
-                        "root",
-                        name,
-                        PYTHON,
-                        "-I",
-                        "/opt/ensemble/lib/codex-update.py",
-                        action,
-                    )
-                    actual = latest if action == "publish" else pinned
-                    assert (
-                        docker("exec", name, "codex", "--version").strip()
-                        == f"codex-cli {actual}".encode()
-                    )
-                    docker(
-                        "exec",
-                        name,
-                        PYTHON,
-                        "-I",
-                        "/opt/ensemble/lib/codex-update.py",
-                        "probe",
-                        "/opt/ensemble/bin/codex",
-                        actual,
-                    )
-                    assert (
-                        probe(name, "tools.py").strip()
-                        == b"Offline Codex code-mode command turn: PASS"
-                    )
                 probe(name, "skills.py")
                 document, replacement = synthetic_credentials()
                 near, _ = synthetic_credentials(lifetime=120)
@@ -258,7 +193,7 @@ def main(image):
                 docker("rm", "--force", name)
             assert sorted(p.name for p in home.iterdir()) == ["sessions"]
     print(
-        "Codex updates, native skills, synthetic guarded reload, tmpfs and history persistence: PASS"
+        "Codex code-mode, native skills, synthetic guarded reload, tmpfs and history persistence: PASS"
     )
 
 

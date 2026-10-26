@@ -141,104 +141,22 @@ class ResponseTest(Case):
                     "strata", "https://strata.test/v1"
                 )
 
-    def test_update_record_presence_follows_the_client_expiry(self):
-        claude = data("start-output.json")
-        claude.pop("client_update", None)
-        self.assertIsNone(
-            Broker(FakeBroker((0, json.dumps(claude), "")))
-            .start(MANIFEST, clients=KEYS)
-            .client_update
-        )
-        codex = data("start-output-codex.json")
-        self.assertEqual(
-            Broker(FakeBroker((0, json.dumps(codex), "")))
-            .start(MANIFEST, clients=KEYS)
-            .client_update,
-            codex["client_update"],
-        )
-        missing = {key: value for key, value in codex.items() if key != "client_update"}
-        for bad in (
-            missing,
-            {**claude, "client_update": codex["client_update"]},
-            {**claude, "client_update": None},
-            {**codex, "client_update": None},
-        ):
-            with self.subTest(bad=bad), self.assertRaises(SessionError):
-                Broker(FakeBroker((0, json.dumps(bad), ""))).start(MANIFEST, clients=KEYS)
-
-    def test_client_update_outcomes_and_invalid_shapes(self):
-        response = data("start-output-codex.json")
-        for result, target, actual in (
-            ("current", "0.163.0", "0.163.0"),
-            ("updated", "0.164.0", "0.164.0"),
-            ("update_failed", "0.164.0", "0.163.0"),
-            ("registry_unavailable", "", "0.163.0"),
-            ("no_supported_release", "", "0.163.0"),
-        ):
-            policy = {**response["client_update"], "result": result, "target_version": target}
-            found = {
-                **response,
-                "client_update": policy,
-                "clients": {**response["clients"], "codex": f"codex-cli {actual}"},
-            }
-            with self.subTest(result=result):
-                self.assertEqual(
-                    Broker(FakeBroker((0, json.dumps(found), "")))
-                    .start(MANIFEST, clients=KEYS)
-                    .client_update,
-                    policy,
-                )
-        for bad in (
-            None,
-            [],
-            {},
-            {**response["client_update"], "client": "unknown"},
-            {**response["client_update"], "target_version": []},
-        ):
-            with self.subTest(bad=bad), self.assertRaises(SessionError):
-                Broker(FakeBroker((0, json.dumps({**response, "client_update": bad}), ""))).start(
-                    MANIFEST, clients=KEYS
-                )
-
-    def test_rejects_inconsistent_client_update(self):
-        good = data("start-output-codex.json")
-        policy = {
-            "client": "codex",
-            "pinned_version": "0.164.0",
-            "min_version": "0.163.0",
-            "image_version": "0.163.0",
-            "target_version": "0.163.0",
-            "result": "current",
-        }
-        response = {
-            **good,
-            "client_update": policy,
-            "clients": {**good["clients"], "codex": "codex-cli 0.163.0"},
-        }
-        self.assertEqual(
-            Broker(FakeBroker((0, json.dumps(response), "")))
-            .start(MANIFEST, clients=KEYS)
-            .client_update,
-            policy,
-        )
-        for changes in (
-            {"result": "unknown"},
-            {"min_version": []},
-            {"image_version": "1.0.0"},
-            {"image_version": "0.162.999"},
-            {"pinned_version": "0.162.999"},
-            {"min_version": "0.165.0"},
-            {"min_version": "latest"},
-            {"target_version": "0.164.0"},
-            {"pinned_version": "latest"},
-            {"extra": "x"},
-        ):
-            with self.subTest(changes=changes), self.assertRaises(SessionError):
-                Broker(
-                    FakeBroker(
-                        (0, json.dumps({**response, "client_update": {**policy, **changes}}), "")
-                    )
-                ).start(MANIFEST, clients=KEYS)
+    def test_start_response_carrying_client_update_is_rejected(self):
+        update = {"client": "codex", "result": "current"}
+        for fixture in ("start-output.json", "start-output-codex.json"):
+            response = data(fixture)
+            started = Broker(FakeBroker((0, json.dumps(response), ""))).start(
+                MANIFEST, clients=KEYS
+            )
+            self.assertFalse(hasattr(started, "client_update"))
+            for value in (update, None):
+                with (
+                    self.subTest(fixture=fixture, value=value),
+                    self.assertRaisesRegex(SessionError, "^broker: bad response to start: fields$"),
+                ):
+                    Broker(
+                        FakeBroker((0, json.dumps({**response, "client_update": value}), ""))
+                    ).start(MANIFEST, clients=KEYS)
 
     def test_every_response_fixture_has_its_outcome(self):
         found = cases()

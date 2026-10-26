@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Docker broker protocol 25",
+  "title": "Docker broker protocol 26",
   "$comment": "Changes to the protocol format defined by this schema require bumping Version in src/broker/internal/protocol/protocol.go.",
   "$ref": "#/$defs/manifest",
   "$defs": {
@@ -438,7 +438,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "25"
+          "const": "26"
         }
       },
       "required": [
@@ -605,9 +605,6 @@
             }
           ]
         },
-        "client_update": {
-          "$ref": "#/$defs/client_update"
-        },
         "audit_warning": {
           "$ref": "#/$defs/audit_warning"
         }
@@ -621,30 +618,7 @@
         "github_user_id",
         "credential_expires_at"
       ],
-      "additionalProperties": false,
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "credential_expires_at": {
-                "type": "null"
-              }
-            }
-          },
-          "then": {
-            "not": {
-              "required": [
-                "client_update"
-              ]
-            }
-          },
-          "else": {
-            "required": [
-              "client_update"
-            ]
-          }
-        }
-      ]
+      "additionalProperties": false
     },
     "close_input": {
       "type": "object",
@@ -1552,57 +1526,6 @@
           }
         }
       ]
-    },
-    "client_update": {
-      "type": "object",
-      "properties": {
-        "pinned_version": {
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
-        },
-        "image_version": {
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
-        },
-        "target_version": {
-          "oneOf": [
-            {
-              "const": ""
-            },
-            {
-              "type": "string",
-              "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
-            }
-          ]
-        },
-        "result": {
-          "enum": [
-            "updated",
-            "current",
-            "registry_unavailable",
-            "no_supported_release",
-            "update_failed"
-          ]
-        },
-        "client": {
-          "enum": [
-            "codex"
-          ]
-        },
-        "min_version": {
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
-        }
-      },
-      "required": [
-        "client",
-        "pinned_version",
-        "min_version",
-        "image_version",
-        "target_version",
-        "result"
-      ],
-      "additionalProperties": false
     },
     "probe_provider_input": {
       "type": "object",
