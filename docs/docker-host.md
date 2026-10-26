@@ -565,8 +565,10 @@ to 3 s old, but the opening is sent only after a fresh capture shows no dialog; 
 ### Recovery
 
 - **Host hook failed** (timeout, could not start, callback failure or non-zero exit): the supervisor
-  invokes `ensemble-session hook --strict --event <gen>.<seq> DIR LABEL` so callback failures return
-  non-zero; ordinary client hook calls retain their default exit 0. The `hooks.jsonl` record carries
+  sends each event, with its ID `<gen>.<seq>`, as one line to a resident `ensemble-session hook --serve DIR`,
+  one process per supervisor, started by its first hook and again by the first after it exits; a
+  callback failure replies `{"ok": false}` (`hook exit 1`), and a call past 60 s kills the process
+  (`hook timeout`). Ordinary client hook calls retain their default exit 0. The `hooks.jsonl` record carries
   the event; a retry whose event is that file's last record skips the client callback and the journal
   and reruns only the Host callback with the journaled payload. The supervisor logs the failure in
   `rejected.jsonl` without advancing the successful sequence. Its `ok: false, retry: true` reply keeps the
