@@ -5941,3 +5941,96 @@ class BusyLaunch(OuterBase):
     def test_issue_mode_exits_75_when_busy(self):
         self.assertEqual(router.EXIT_BUSY, 75)
         self.assertIn("75 when its run is busy", router.__doc__)
+
+
+class BusyTick(TickScenario):
+    """FR-51 router scheduling: a busy run is not the round's; the tick goes on in order, and the
+    cool-down keeps Recover and the queue off a busy issue.
+    """
+
+    def busy(self, ident, minutes_ago):
+        at = (NOW - timedelta(minutes=minutes_ago)).astimezone()
+        self.lines.append(
+            json.dumps(
+                {
+                    "ts": at.isoformat(timespec="seconds"),
+                    "kind": "busy",
+                    "issue": ident,
+                    "sid": self.sid(f"busy:{ident}"),
+                    "cancels": None,
+                    "attempt": None,
+                }
+            )
+        )
+
+    def todo(self, *idents):
+        return [issue(i, "Todo", "researcher", priority=n) for n, i in enumerate(idents, 1)]
+
+    def test_a_busy_ready_issue_lets_the_next_one_start_in_the_same_round(self):
+        start = Start(exits={"TASK-1": router.EXIT_BUSY})
+        self.assertEqual(self.tick(FakeLinear(self.todo("TASK-1", "TASK-2")), start=start), 0)
+        self.assertEqual(self.launched_runs(), [("TASK-1", "new"), ("TASK-2", "new")])
+        first, second = start.launches
+        self.assertNotEqual(first.sid, second.sid)
+        said = self.said()
+        self.assertIn(f"launch TASK-1 exit={router.EXIT_BUSY}", said)
+        self.assertEqual(said[-1], "launch TASK-2 exit=0")
+
+    def test_a_busy_resume_does_not_stop_a_ready_issue_starting(self):
+        self.resumable("TASK-1", "s", 60)
+        listed = [issue("TASK-1", "In Progress", "researcher"), *self.todo("TASK-2")]
+        start = Start(exits={"TASK-1": router.EXIT_BUSY})
+        self.assertEqual(self.tick(FakeLinear(listed), start=start), 0)
+        self.assertEqual(self.launched_runs(), [("TASK-1", "resume"), ("TASK-2", "new")])
+
+    def test_a_round_whose_only_start_is_busy_ends_quietly(self):
+        start = Start(exits={"TASK-1": router.EXIT_BUSY})
+        self.assertEqual(self.tick(FakeLinear(self.todo("TASK-1")), start=start), 0)
+        self.assertEqual(self.launched_runs(), [("TASK-1", "new")])
+        self.assertFalse([line for line in self.said() if line.startswith("skip ")])
+
+    def test_a_dry_run_previews_a_ready_issue_once_and_returns(self):
+        self.assertEqual(self.tick(FakeLinear(self.todo("TASK-1")), "--dry-run"), 0)
+        said = self.said()
+        self.assertEqual(len([line for line in said if line.startswith("pick TASK-1")]), 1, said)
+        self.assertEqual(self.start.launches, [])
+
+    def test_no_issue_is_examined_twice_after_a_busy_start(self):
+        for _ in range(router.CAP):
+            self.add(kind="start", ident="TASK-3", sid="capped", minutes_ago=600)
+        listed = self.todo("TASK-1", "TASK-3", "TASK-2")
+        start = Start(exits={"TASK-1": router.EXIT_BUSY})
+        fake = FakeLinear(listed)
+        self.assertEqual(self.tick(fake, start=start), 0)
+        self.assertEqual(self.launched_runs(), [("TASK-1", "new"), ("TASK-2", "new")])
+        said = self.said()
+        for prefix in ("pick TASK-1", "claim-skip TASK-3", "claim TASK-1 "):
+            self.assertEqual(len([line for line in said if line.startswith(prefix)]), 1, said)
+        self.assertEqual(fake.issues["TASK-3"]["state"], "In Review")
+
+    def test_a_busy_issue_is_skipped_24_minutes_on_and_starts_26_minutes_on(self):
+        for minutes, launched in ((24, ["TASK-2"]), (26, ["TASK-1"])):
+            with self.subTest(minutes=minutes):
+                self.lines = []
+                self.busy("TASK-1", minutes)
+                self.assertEqual(self.tick(FakeLinear(self.todo("TASK-1", "TASK-2"))), 0)
+                self.assertEqual([i for i, _ in self.launched_runs()], launched)
+                skips = [line for line in self.said() if line.startswith("busy-skip TASK-1")]
+                self.assertEqual(len(skips), minutes < 25)
+
+    def test_recover_skips_a_cooling_in_progress_issue(self):
+        self.resumable("TASK-1", "s", 60)
+        self.busy("TASK-1", 10)
+        listed = [issue("TASK-1", "In Progress", "researcher"), *self.todo("TASK-2")]
+        fake = FakeLinear(listed)
+        self.assertEqual(self.tick(fake), 0)
+        self.assertEqual(self.launched_runs(), [("TASK-2", "new")])
+        self.assertEqual(fake.issues["TASK-1"]["state"], "In Progress")
+        said = self.said()
+        self.assertEqual(len([line for line in said if line.startswith("busy-skip TASK-1")]), 1)
+        self.assertFalse([line for line in said if line.startswith("recover TASK-1")], said)
+
+    def test_issue_mode_ignores_the_cool_down(self):
+        self.busy("TASK-1", 10)
+        self.assertEqual(self.tick(FakeLinear(self.todo("TASK-1")), "--issue", "TASK-1"), 0)
+        self.assertEqual(self.launched_runs(), [("TASK-1", "new")])

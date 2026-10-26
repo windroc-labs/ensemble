@@ -106,6 +106,7 @@ from ensemble.orchestrator.engine.gate import BRAKE_5H, Gate, read_usage
 from ensemble.orchestrator.engine.linear_run import LinearRun
 from ensemble.orchestrator.engine.log import linear_error, log
 from ensemble.orchestrator.engine.runs import (
+    COOL,
     busy_rows,
     cancelled_rows,
     client_of,
@@ -249,7 +250,18 @@ def client_for(pick, default) -> tuple[str | None, ClientSource, str | None]:
 
 class Board:
     def __init__(
-        self, gql, entries, cfg, *, now, dry, keychain, wiring: Wiring, gate=None, say=None
+        self,
+        gql,
+        entries,
+        cfg,
+        *,
+        now,
+        dry,
+        keychain,
+        wiring: Wiring,
+        gate=None,
+        say=None,
+        cool=True,
     ):
         self.gql, self.entries, self.now, self.dry = gql, entries, now, dry
         self.cfg, self.keychain, self.wiring, self.gate = cfg, keychain, wiring, gate
@@ -257,8 +269,22 @@ class Board:
         self.ready, self.blocked, self.live, self.statuses = None, {}, set(), {}
         self.status_errors, self.replays = {}, {}
         self.failures = failures(cfg.runs_log)
-        self.busy = busy_rows(cfg.runs_log)
+        self.busy, self.cool, self.busy_skipped = busy_rows(cfg.runs_log), cool, set()
         self.tracker = wiring.connect(gql, cfg, say=self.say)
+
+    def reread_busy(self):
+        self.busy = busy_rows(self.cfg.runs_log)
+
+    def cooling(self, issue):
+        """Whether issue's newest busy row is under COOL old (cool), said once."""
+        ident = issue["identifier"]
+        mine = [b.ts for b in self.busy if b.issue == ident]
+        if not self.cool or not mine or self.now - max(mine) >= COOL:
+            return False
+        if ident not in self.busy_skipped:
+            self.busy_skipped.add(ident)
+            self.say("busy-skip", ident, since=max(mine).isoformat())
+        return True
 
     def todo(self):
         if self.ready is None:
@@ -352,7 +378,7 @@ class Board:
         mine = [
             (i, self.current_sid(i))
             for i in self.tracker.assigned(IssueState.RUNNING)
-            if i["identifier"] not in self.live
+            if i["identifier"] not in self.live and not self.cooling(i)
         ]
         mine.sort(
             key=lambda p: (
@@ -462,9 +488,13 @@ class Board:
             )
         return False
 
-    def queue(self, full=()):
+    def queue(self, full=(), tried=()):
         return sorted(
-            (i for i in self.todo() if self.available(i, full)),
+            (
+                i
+                for i in self.todo()
+                if i["identifier"] not in tried and self.available(i, full) and not self.cooling(i)
+            ),
             key=lambda i: (rank(i), self.later(i), i["createdAt"]),
         )
 
@@ -553,13 +583,16 @@ class Board:
                     break
         return selected
 
-    def take(self, only=None, full=(), clients=()):
-        queue = self.queue(full)
+    def take(self, only=None, full=(), clients=(), tried=None):
+        """tried: the idents already examined, skipped and added to."""
+        tried = set() if tried is None else tried
+        queue = self.queue(full, tried)
         if only:
             queue = [i for i in queue if i["identifier"] == only]
 
         def pick(issue):
             ident = issue["identifier"]
+            tried.add(ident)
             if self.attempts(issue) >= CAP:
                 self.say("claim-skip", ident, to="in_review", reason=f"reached {CAP} attempts")
                 self.comment_and_move(
@@ -986,15 +1019,26 @@ def other_sid(spec, launch_sid):
     return True
 
 
-def choose(board, gate, live_ids, full, counts, *, clients, new_sid):
-    unclaimed = False
+class Candidates:
+    """A tick's runs to try in order: its resumes, then its claims, each issue once (new_sid: each
+    new run's sid); `unclaimed`: the claims ended on a queue with nothing claimable.
+    """
 
-    def resumes():
+    def __init__(self, board, gate, live_ids, full, counts, *, clients, new_sid):
+        self.board, self.gate, self.full, self.counts = board, gate, full, counts
+        self.clients, self.new_sid, self.unclaimed = clients, new_sid, False
+        self.found = itertools.chain(self._resumes(live_ids), self._claimed())
+
+    def __iter__(self):
+        return self.found
+
+    def _resumes(self, live_ids):
+        board = self.board
         for issue, sid in board.recover(live_ids):
-            if not board.available(issue, full):
+            if not board.available(issue, self.full):
                 continue
-            spec, role = board.resumption(issue, sid, new_sid), board.role(issue)
-            if spec.client in clients:
+            spec, role = board.resumption(issue, sid, self.new_sid()), board.role(issue)
+            if spec.client in self.clients:
                 reason = f"{spec.client} is full"
                 board.say("recover-skip", issue["identifier"], once=True, sid=sid, reason=reason)
                 continue
@@ -1004,38 +1048,34 @@ def choose(board, gate, live_ids, full, counts, *, clients, new_sid):
                 )
             else:
                 key = (delegate_of(board.entries, sid), spec.client)
-                blocked = gate.blocked(
+                blocked = self.gate.blocked(
                     role,
                     issue["identifier"],
                     key=key,
                 )
             if not blocked:
-                board.plan(("resume", spec, sid), counts)
+                board.plan(("resume", spec, sid), self.counts)
                 yield spec
 
-    def claimed():
-        nonlocal unclaimed
-        if not (queue := board.queue(full)):
-            return
-        board.plan(("new", len(queue)), counts)
-        if not (taken := board.take(full=full, clients=clients)):
-            unclaimed = True
-            return
-        issue, task, role, client, source = taken
-        yield Spec.from_issue(
-            issue,
-            role=role,
-            mode="new",
-            sid=new_sid,
-            task=task,
-            client=client,
-            client_source=source,
-        )
-
-    spec = board.first(itertools.chain(resumes(), claimed()))
-    if spec is None and unclaimed:
-        board.say("skip", reason="nothing claimed")
-    return spec
+    def _claimed(self):
+        board, tried = self.board, set()
+        while queue := board.queue(self.full, tried):
+            board.plan(("new", len(queue)), self.counts)
+            if not (taken := board.take(full=self.full, clients=self.clients, tried=tried)):
+                self.unclaimed = True
+                return
+            issue, task, role, client, source = taken
+            yield Spec.from_issue(
+                issue,
+                role=role,
+                mode="new",
+                sid=self.new_sid(),
+                task=task,
+                client=client,
+                client_source=source,
+            )
+            if board.dry:
+                return
 
 
 def tick(opts, cfg, gql, *, start, keychain, wiring, clock=datetime.now, launch_sid=None):
@@ -1079,14 +1119,27 @@ def tick(opts, cfg, gql, *, start, keychain, wiring, clock=datetime.now, launch_
                 say=walk,
             )
             live_ids = {i for ids in live.values() for i in ids}
-            new_sid = launch_sid or str(uuid.uuid4())
-            spec = choose(board, gate, live_ids, full, counts, clients=clients, new_sid=new_sid)
-            if not dry and spec is not None and other_sid(spec, launch_sid):
-                return 2
-            if spec is None or dry:
-                return 0
-            walk.write()  # the outer logs past the walk
-            start_run(start, begin(cfg, spec), walk)
+            found = Candidates(
+                board,
+                gate,
+                live_ids,
+                full,
+                counts,
+                clients=clients,
+                new_sid=lambda: launch_sid or str(uuid.uuid4()),
+            )
+            if dry:
+                board.first(found)
+            else:
+                for spec in found:
+                    if other_sid(spec, launch_sid):
+                        return 2
+                    walk.write()  # the outer logs past the walk
+                    if start_run(start, begin(cfg, spec), walk) != EXIT_BUSY:
+                        return 0
+                    board.reread_busy()  # a busy run is not the round's: the next one's turn
+            if found.unclaimed:
+                board.say("skip", reason="nothing claimed")
             return 0
 
 
@@ -1115,7 +1168,9 @@ def run_issue(opts, cfg, gql, start, *, keychain, wiring, clock=datetime.now, la
             print(f"router.py: {ident} has a live agent run{shown}", file=sys.stderr)
             return stop
         entries = parse_log(runs)
-        board = Board(gql, entries, cfg, now=now, dry=dry, keychain=keychain, wiring=wiring)
+        board = Board(
+            gql, entries, cfg, now=now, dry=dry, keychain=keychain, wiring=wiring, cool=False
+        )
         if issue := next(
             (i for i in board.tracker.assigned(IssueState.RUNNING) if i["identifier"] == ident),
             None,

@@ -13,6 +13,7 @@ from ensemble.orchestrator.engine.types import Claim, ConfigError
 from ensemble.utils import append_line, file_lock, repo_slug, save, timestamp
 
 KEEP = timedelta(days=7)
+COOL = timedelta(minutes=25)  # a busy issue's wait before Recover or the queue retries it
 ERRORS = (ValueError, TypeError, KeyError, OverflowError)
 
 
