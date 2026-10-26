@@ -1829,37 +1829,42 @@ linear_slots() {
   python3 -I -c '
 import os, re, sys, tomllib
 config, roles = sys.argv[1], [line.split("\t")[0] for line in sys.argv[2].splitlines()]
+# engine/config.py LINEAR_KEYS; tests/unit/install_board_test.py keeps them equal
+KNOWN = {"team", "states", "human_members", "harness", "manager", "task_label_group", "task_labels",
+         "agent_label_group", "agent_labels", "roles", "project_repos"}
+UPGRADE = "; see docs/upgrading.md#linear-apps"
 linear = {}
 if os.path.exists(config):
     with open(config, "rb") as f:
         linear = tomllib.load(f).get("orchestrator", {}).get("linear", {})
 def text(value):
     return value if isinstance(value, str) else ""
-if "harness_key" in linear:
-    sys.exit("install.sh: config.local.toml: unknown keys in [linear]: harness_key")
-if "manager_key" in linear:
-    sys.exit("install.sh: config.local.toml: unknown keys in [linear]: manager_key: the manager is an OAuth app now; "
-             "delete the key, then revoke and delete its old personal key (docs/credentials.md#linear-manager-app)")
-def app(slot, found):
-    if not isinstance(found, dict) or set(found) - {"client_id", "secret_service", "token_service", "user_id"}:
-        sys.exit(f"install.sh: config.local.toml: unknown app keys for {slot}")
+def refuse(table, extra):
+    names = ", ".join(extra)
+    sys.exit(f"install.sh: config.local.toml: unknown keys in [{table}]: {names}{UPGRADE}")
+if extra := sorted(set(linear) - KNOWN):
+    refuse("linear", extra)
+def app(slot, table, found):
+    if not isinstance(found, dict):
+        sys.exit(f"install.sh: config.local.toml: [{table}] must be a table")
+    if extra := sorted(set(found) - {"client_id", "secret_service", "token_service", "user_id"}):
+        refuse(table, extra)
     if any(not isinstance(value, str) for value in found.values()):
         sys.exit(f"install.sh: config.local.toml: {slot} app fields must be strings")
     return (slot, text(found.get("token_service")) or f"linear-app-{slot}-token",
             text(found.get("secret_service")) or f"linear-app-{slot}-secret")
-slots = [app("harness", linear.get("harness", {})), app("manager", linear.get("manager", {}))]
+slots = [app(slot, f"linear.{slot}", linear.get(slot, {})) for slot in ("harness", "manager")]
 for role in roles:
-    found = linear.get("roles", {}).get(role, {})
-    slots.append(app(role, found))
+    slots.append(app(role, f"linear.roles.{role}", linear.get("roles", {}).get(role, {})))
 used = set()
-for slot, service, account in slots:
-    if not all(re.fullmatch(r"[A-Za-z0-9._@+][A-Za-z0-9._@+-]*", v) for v in (service, account)):
-        sys.exit(f"install.sh: config.local.toml: {slot} key {service!r}: not a plain keychain name")
-    for value in (service, account):
+for slot, token, secret in slots:
+    for value in (token, secret):
+        if not re.fullmatch(r"[A-Za-z0-9._@+][A-Za-z0-9._@+-]*", value):
+            sys.exit(f"install.sh: config.local.toml: {slot} keychain service {value!r}: not a plain keychain name")
         if value in used:
             sys.exit(f"install.sh: config.local.toml: duplicate credential service {value}")
         used.add(value)
-    print(f"{slot}\t{service}\t{account}")' "$config" "$1"
+    print(f"{slot}\t{token}\t{secret}")' "$config" "$1"
 }
 
 # GraphQL reads app token records from Keychain; curl gets authorization on stdin (-K -).
@@ -1873,12 +1878,12 @@ def linear(service, query, variables):
     found = subprocess.run(["security", "find-generic-password", "-s", service, "-w"], stdin=subprocess.DEVNULL,
                            capture_output=True, text=True)
     try:
-        key = json.loads(found.stdout.strip())["access_token"]
+        token = json.loads(found.stdout.strip())["access_token"]
     except (ValueError, KeyError, TypeError):
         raise LinearError(f"no usable app token in keychain item {service}") from None
-    if found.returncode or not isinstance(key, str) or not key or not key.isprintable() or any(c.isspace() or c in "\"\\" for c in key):
-        raise LinearError(f"no usable key in keychain item {service}")
-    authorization = f"Bearer {key}"
+    if found.returncode or not isinstance(token, str) or not token or not token.isprintable() or any(c.isspace() or c in "\"\\" for c in token):
+        raise LinearError(f"no usable app token in keychain item {service}")
+    authorization = f"Bearer {token}"
     body = json.dumps({"query": query, "variables": variables})
     sent = subprocess.run(["curl", "-q", "-fsS", "--connect-timeout", "10", "--max-time", "30", "-K", "-",
                            "--data-binary", body, "-H", "Content-Type: application/json",
@@ -1896,29 +1901,29 @@ def linear(service, query, variables):
     return answer["data"]
 '
 
-linear_keys() {
-  local list=$1 slot service account new_secret new_token
-  step "Linear credentials"
+linear_apps() {
+  local list=$1 slot service secret new_secret new_token
+  step "Linear apps"
   linear_wanted || return 0
   mkdir -p "$state_dir"
   printf '{}\n' >"$state_dir/linear-apps.json"
-  while IFS=$'\t' read -r slot service account; do
+  while IFS=$'\t' read -r slot service secret; do
     [ -n "$service" ] || continue
     new_secret=no new_token=no
-    if security find-generic-password -s "$account" </dev/null >/dev/null 2>&1; then
-      skip "$account in the keychain"
+    if security find-generic-password -s "$secret" </dev/null >/dev/null 2>&1; then
+      skip "$secret in the keychain"
     else
-      ledger_add keychain "$account" "$account"
+      ledger_add keychain "$secret" "$secret"
       say "Linear app $slot: paste its client secret at security's prompt (nothing echoes)"
-      security add-generic-password -s "$account" -a "$account" -w <&3 >&3 2>&3
+      security add-generic-password -s "$secret" -a "$secret" -w <&3 >&3 2>&3
       new_secret=yes
     fi
     if ! security find-generic-password -s "$service" </dev/null >/dev/null 2>&1; then
       ledger_add keychain "$service" "$service"
       new_token=yes
     fi
-    if ! python3 -I "$pkg/scripts/install_linear_app.py" "$config" "$slot" "$service" "$account" "$state_dir/linear-apps.json"; then
-      if [ "$new_secret" = yes ]; then security delete-generic-password -s "$account" </dev/null >/dev/null 2>&1 || true; fi
+    if ! python3 -I "$pkg/scripts/install_linear_app.py" "$config" "$slot" "$service" "$secret" "$state_dir/linear-apps.json"; then
+      if [ "$new_secret" = yes ]; then security delete-generic-password -s "$secret" </dev/null >/dev/null 2>&1 || true; fi
       if [ "$new_token" = yes ]; then security delete-generic-password -s "$service" </dev/null >/dev/null 2>&1 || true; fi
       exit 1
     fi
@@ -1994,7 +1999,7 @@ def fetch(slot, query, variables=None):
         return linear(service[slot], query, variables or {})
     except LinearError as error:
         print(f"install.sh: Linear: {error}", file=sys.stderr)
-        stop(f"Linear refused the key in {service[slot]}, or cannot be reached: fix that keychain item, then rerun")
+        stop(f"Linear refused the app token in {service[slot]}, or cannot be reached: fix that keychain item, then rerun")
 def ask(question):
     os.write(3, (question + " ").encode())
     line = b""
@@ -2164,7 +2169,7 @@ board_config() {
     board_stages=$(stage_roles) || exit 1
     slots=$(linear_slots "$board_stages") || exit 1
   fi
-  linear_keys "$slots"
+  linear_apps "$slots"
   step "$board_tracker board configuration"
   board_wanted || return 0
   if [ "$board_tracker" = local ]; then

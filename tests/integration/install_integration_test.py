@@ -745,7 +745,7 @@ class InstallTest(Case):
         )
         self.assertIn("  [ ] Board: local or Linear", result.tty)
         self.assertIn("==> board launchd jobs\n    skip: board not chosen", result.stderr)
-        self.assertIn("==> Linear credentials\n    skip: board not chosen", result.stderr)
+        self.assertIn("==> Linear apps\n    skip: board not chosen", result.stderr)
 
     def test_checklist_skipped_by_flags(self):
         result = self.fresh("--clients", "claude", "--no-docker", "--no-board")
@@ -2529,7 +2529,7 @@ exec /bin/rm "$@"
             self.assert_ok(result)
             self.assertEqual("sends the API key in plaintext" in result.stderr, warned, url)
 
-    def test_linear_keys_and_board_jobs(self):
+    def test_linear_apps_and_board_jobs(self):
         """A board config completed by hand: only the missing keys are asked, then the jobs installed."""
         result = self.fresh()
         self.assert_ok(result)
@@ -2624,14 +2624,13 @@ exec /bin/rm "$@"
             result.stderr,
         )
         viewers = [c for c in calls if c.startswith("curl -q ") and "viewer" in c]
-        self.assertEqual(len(viewers), len(SLOTS))  # each app's user id, no account check
+        self.assertEqual(len(viewers), len(SLOTS))  # each app's user id
         tokens = [
             c
             for c in calls
             if c.startswith("curl -q ") and c.endswith("https://api.linear.app/oauth/token")
         ]
         self.assertEqual(len(tokens), len(SLOTS))
-        self.assertNotIn("Linear key", result.stderr)
         self.assertNotIn("API key", result.tty)
         self.assert_secret_free("k-SENTINEL", "t-SENTINEL", result=result)
         self.assertNotIn("k-SENTINEL", result.tty)
@@ -3315,8 +3314,7 @@ exec /bin/rm "$@"
         self.assertEqual(linear["agent_labels"], {"claude": uuid(44)})
         self.assertEqual(linear["harness"], app_config("harness"))
         self.assertEqual(linear["manager"], app_config("manager"))
-        self.assertNotIn("harness_key", linear)
-        self.assertNotIn("manager_key", linear)
+        self.assertLessEqual(set(linear), orchestrator_config.LINEAR_KEYS)
         self.assertEqual(linear["human_members"], ["me@example.com"])
         self.assertEqual(
             linear["roles"],
