@@ -195,15 +195,3 @@ func TestStartTokenRecordFailureRollsBack(t *testing.T) {
 		t.Fatalf("record left behind: %v", err)
 	}
 }
-
-func TestRefreshRecordsBothKinds(t *testing.T) {
-	h, manifest, _, _, _ := refreshCodexHost(t, true)
-	h.Schedule = StateSchedule{Home: h.Home, Safe: h.Safe}
-	if _, err := h.Refresh(context.Background(), container, manifest); err != nil {
-		t.Fatal(err)
-	}
-	got := h.Schedule.Read(Manifest{Name: "worker_1", Generation: tokensGeneration})
-	if !slices.Equal(got.Expires[credential.Codex], []string{"2026-10-18T12:00:00Z"}) || !slices.Equal(got.Expires[credential.GitHub], []string{expiry[0].ExpiresAt}) {
-		t.Fatalf("%+v", got)
-	}
-}

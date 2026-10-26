@@ -411,7 +411,7 @@ def _accept_started(
     name: str, generation: str, started: Started, container: str, github: str
 ) -> None:
     """The broker started `container` here, with a bot user ID exactly when `github` names an App;
-    its GitHub token expiries saved for refresh.
+    its deadline saved for the credential tick.
     """
     if (started.endpoint, started.container) != (endpoint(), container):
         raise SessionError(
@@ -421,13 +421,8 @@ def _accept_started(
     if (started.github_user_id is None) == bool(github):
         raise SessionError("broker: bad response to start: github_user_id")
     save(
-        os.path.join(state_dir(name), f"{generation}.credential.json"),
-        json.dumps(started.credential_expires_at),
-        durable=True,
-    )
-    save(
-        os.path.join(state_dir(name), f"{generation}.github.json"),
-        json.dumps(list(started.github)),
+        run_supervisor.deadline_file(state_dir(name), generation),
+        json.dumps(started.deadline),
         durable=True,
     )
 
@@ -1154,7 +1149,6 @@ class DockerHost(Host):
                     "generation": generation,
                     "sid": sid,
                     "client": metadata.get("client"),
-                    "credential_refresh": created.started.credential_expires_at is not None,
                     "display": display,
                     "record": None if record is None else record.to_line(),
                     "events": events,
@@ -1370,7 +1364,6 @@ class DockerHost(Host):
                     "generation": generation,
                     "sid": metadata.get("sid"),
                     "client": metadata.get("client"),
-                    "credential_refresh": created.started.credential_expires_at is not None,
                     "mode": PIPED,
                     "environment": None if environment is None else environment.persisted(),
                 },
@@ -1405,24 +1398,13 @@ class DockerHost(Host):
             proc,
             close=lambda: self._close_piped(name, container),
             lock=lock,
-            refresh=lambda stopped: run_supervisor.refresh_tokens(
+            maintain=lambda stopped: run_supervisor.maintain(
                 name,
                 state_dir(name),
                 generation,
                 self.broker,
                 stopped,
-                failed=lambda reason: LOG.warning(
-                    "docker session %s: %s %s",
-                    name,
-                    "client_refresh_failed"
-                    if created.started.credential_expires_at is not None
-                    else "github_refresh_failed",
-                    reason,
-                ),
-                expired=lambda reason: LOG.warning(
-                    "docker session %s: client_auth_expired %s", name, reason
-                ),
-                notice=lambda word, text: LOG.warning("docker session %s: %s %s", name, word, text),
+                report=lambda word, text: LOG.warning("docker session %s: %s %s", name, word, text),
                 root=hook_root(created.hook),
             ),
         )

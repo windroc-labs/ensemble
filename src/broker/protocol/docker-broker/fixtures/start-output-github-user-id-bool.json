@@ -1,5 +1,4 @@
 {
-  "credential_expires_at": null,
   "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
   "endpoint": "unix:///Users/example/.docker/run/docker.sock",
   "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -8,12 +7,6 @@
     "codex": "codex-cli 0.100.0",
     "opencode": "1.19.3"
   },
-  "github": [
-    {
-      "account": "acme",
-      "expires_at": "2026-10-17T13:00:00Z"
-    }
-  ],
   "github_user_id": true,
   "deadline": null
 }

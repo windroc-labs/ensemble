@@ -165,20 +165,12 @@ type Clients struct {
 }
 
 type StartResult struct {
-	Container           string            `json:"container"`
-	Endpoint            string            `json:"endpoint"`
-	ImageDigest         string            `json:"image_digest"`
-	Clients             Clients           `json:"clients"`
-	GitHub              []protocol.Expiry `json:"github"`
-	GitHubUserID        *int64            `json:"github_user_id"`
-	CredentialExpiresAt *string           `json:"credential_expires_at"`
-	Deadline            *Deadline         `json:"deadline"`
-}
-
-type RefreshResult struct {
-	Container           string            `json:"container"`
-	GitHub              []protocol.Expiry `json:"github"`
-	CredentialExpiresAt *string           `json:"credential_expires_at"`
+	Container    string    `json:"container"`
+	Endpoint     string    `json:"endpoint"`
+	ImageDigest  string    `json:"image_digest"`
+	Clients      Clients   `json:"clients"`
+	GitHubUserID *int64    `json:"github_user_id"`
+	Deadline     *Deadline `json:"deadline"`
 }
 
 type StatusResult struct {

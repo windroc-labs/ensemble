@@ -1,5 +1,5 @@
 """The root-owned broker at the PROTOCOL version (src/broker/protocol/docker-broker/protocol.schema.json): version, build, start, maintain,
-refresh, notices, close, workspace-rm and lock-query with strict response parsing. A missing, malformed or inconsistent response is a transport failure;
+close, workspace-rm and lock-query with strict response parsing. A missing, malformed or inconsistent response is a transport failure;
 a valid error response is a BrokerError.
 """
 
@@ -16,7 +16,7 @@ from dataclasses import fields
 from datetime import datetime
 
 from ensemble.session.engine.types import ConfigError, SessionError
-from ensemble.session.hosts.docker.types import Maintained, Noticed, Refreshed, Started
+from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.utils import save
 
 # Installed by src/broker/install.sh and the worker image (src/broker/internal/launcher/assets/Dockerfile).
@@ -33,7 +33,6 @@ IMAGE = re.compile(r"ensemble-worker:[0-9a-f]{64}")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 CONTAINER = re.compile(r"ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}")
 ENDPOINT = re.compile(r"unix:///[^\x00-\x1f\x7f]+/\.docker/run/docker\.sock")
-LOGIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}")
 TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 CREDENTIAL = re.compile(r"[a-z][a-z0-9-]{0,31}")
 COMMANDS = frozenset(
@@ -42,8 +41,6 @@ COMMANDS = frozenset(
         "build",
         "start",
         "maintain",
-        "refresh",
-        "notices",
         "close",
         "status",
         "workspace-rm",
@@ -54,20 +51,20 @@ COMMANDS = frozenset(
 )
 CODES = {  # code → (exit code, the commands that report it)
     "usage": (2, COMMANDS),
-    "manifest_rejected": (3, {"start", "maintain", "refresh", "notices"}),
-    "mount_rejected": (4, {"start", "maintain", "refresh", "notices"}),
-    "login_required": (5, {"start", "refresh", "probe-provider"}),
+    "manifest_rejected": (3, {"start", "maintain"}),
+    "mount_rejected": (4, {"start", "maintain"}),
+    "login_required": (5, {"start", "probe-provider"}),
     "image_rejected": (6, {"start"}),
-    "docker_unreachable": (7, {"build", "start", "refresh", "close", "workspace-rm", "lock-query"}),
+    "docker_unreachable": (7, {"build", "start", "close", "workspace-rm", "lock-query"}),
     "build_failed": (8, {"build"}),
     "start_failed": (9, {"start", "lock-query"}),
     "close_failed": (10, {"close"}),
-    "keychain_failed": (11, {"start", "refresh", "close", "status", "probe-provider"}),
+    "keychain_failed": (11, {"start", "close", "status", "probe-provider"}),
     "workspace_dirty": (12, {"workspace-rm"}),
     "workspace_rejected": (13, {"workspace-rm"}),
     "workspace_failed": (14, {"workspace-rm"}),
-    "github_failed": (15, {"start", "refresh"}),
-    "refresh_failed": (16, {"refresh"}),
+    "github_failed": (15, {"start"}),
+    "refresh_failed": (16, set()),  # in maintain results only
     "egress_unavailable": (17, {"start"}),
     "internal_error": (70, COMMANDS),
     "busy": (75, {"start"}),
@@ -137,17 +134,6 @@ def _text(value) -> bool:
 
 def _matches(pattern: re.Pattern, value) -> bool:
     return isinstance(value, str) and bool(pattern.fullmatch(value))
-
-
-def _expiries(value) -> bool:
-    return isinstance(value, list) and all(
-        isinstance(e, dict)
-        and e.keys() == {"account", "expires_at"}
-        and _matches(LOGIN, e["account"])
-        and e["expires_at"] is not None
-        and _credential_expiry(e["expires_at"])
-        for e in value
-    )
 
 
 def _credential_expiry(value) -> bool:
@@ -319,7 +305,7 @@ class Broker:
                 found = _object(err)
             if "audit_warning" in found:
                 if (
-                    command not in {"start", "maintain", "refresh", "notices", "close", "status"}
+                    command not in {"start", "maintain", "close", "status"}
                     or found.pop("audit_warning") != "audit_write_failed"
                 ):
                     raise _Bad("audit warning")
@@ -399,9 +385,7 @@ class Broker:
             and isinstance(started.clients, dict)
             and started.clients.keys() == clients
             and all(map(_text, started.clients.values()))
-            and _expiries(started.github)
             and _user_id(started.github_user_id)
-            and _credential_expiry(started.credential_expires_at)
             and _deadline(started.deadline)
         ):
             raise SessionError("broker: bad response to start: fields")
@@ -416,24 +400,6 @@ class Broker:
             lock,
         )
         return found["holder"]
-
-    def refresh(self, container: str, manifest: str) -> Refreshed:
-        """Public credential deadlines; `manifest`: the one the container was started with."""
-        found = self._parsed(
-            "refresh",
-            lambda d: (
-                d.keys() == {"container", "github", "credential_expires_at"}
-                and _matches(CONTAINER, d["container"])
-                and d["container"] == container
-                and _expiries(d["github"])
-                and _credential_expiry(d["credential_expires_at"])
-            ),
-            "--container",
-            container,
-            "--manifest",
-            manifest,
-        )
-        return Refreshed(found["github"], found["credential_expires_at"])
 
     def maintain(
         self,
@@ -467,27 +433,6 @@ class Broker:
         return Maintained(
             found["results"], found["notices"], found["next_check"], found["deadline"]
         )
-
-    def notices(
-        self, container: str, manifest: str, delivered: Sequence[str] = (), *, root: str
-    ) -> Noticed:
-        """`container`'s due notices; `delivered`: keys told; keys per `root`'s schema."""
-        found = self._parsed(
-            "notices",
-            lambda d: (
-                d.keys() == {"container", "notices", "next_check"}
-                and d["container"] == container
-                and _notices(d["notices"])
-                and _credential_expiry(d["next_check"])
-            ),
-            "--container",
-            container,
-            "--manifest",
-            manifest,
-            *(arg for key in delivered for arg in ("--delivered", key)),
-        )
-        _check_keys(found["notices"], root, "notices")
-        return Noticed(found["notices"], found["next_check"])
 
     def close(self, container: str) -> bool:
         """Whether it removed `container`; False: it was already gone."""

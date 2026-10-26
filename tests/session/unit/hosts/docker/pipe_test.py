@@ -26,7 +26,7 @@ class PipedTest(Case):
             self.proc,
             close=lambda: self.closes.append(1),
             lock=self.lock,
-            refresh=self.refresh,
+            maintain=self.refresh,
         )
 
     def refresh(self, stopped):
@@ -88,7 +88,7 @@ class PipedTest(Case):
             self.proc,
             close=mock.Mock(side_effect=OSError("x")),
             lock=self.lock,
-            refresh=self.refresh,
+            maintain=self.refresh,
         )
         with self.assertRaises(OSError):
             piped.close()

@@ -1,7 +1,6 @@
 package launcher
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -18,43 +17,6 @@ import (
 type Notice struct {
 	Key  string `json:"key"`
 	Text string `json:"text"`
-}
-
-type NoticesResult struct {
-	Container string   `json:"container"`
-	Notices   []Notice `json:"notices"`
-	NextCheck *string  `json:"next_check"` // when to check again; null: never, the container holds no static secret
-}
-
-// Notices is what the container started with path is due about its static secrets: each notice not yet delivered to
-// it, and when to check again. A key in delivered that is due is recorded delivered, with one audit line, and left
-// out. It reads only the host's records: no Docker call, no secret.
-func (h Host) Notices(_ context.Context, container, path string, delivered []string) (NoticesResult, error) {
-	h.Audit.Begin(container, nil)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return NoticesResult{}, protocol.New(protocol.ManifestRejected, "Cannot read manifest "+path+".")
-	}
-	m, err := ParseManifest(data)
-	if err != nil {
-		return NoticesResult{}, err
-	}
-	if "ensemble-"+m.Name+"-"+m.Generation != container {
-		return NoticesResult{}, protocol.New(protocol.ManifestRejected, "Manifest rejected: notices needs the container's manifest.")
-	}
-	if err := h.checkMounts(m); err != nil {
-		return NoticesResult{}, err
-	}
-	notices, next, err := h.dueNotices(container, m, delivered, h.now())
-	if err != nil {
-		return NoticesResult{}, err
-	}
-	result := NoticesResult{Container: container, Notices: notices}
-	if next != nil {
-		at := next.Format(time.RFC3339)
-		result.NextCheck = &at
-	}
-	return result, nil
 }
 
 // dueNotices is each static secret notice m's container is due and has not been told, and when to check again (nil:
