@@ -12,7 +12,7 @@ RUNBOOKS = Path(REPO, ".mini-op/runbooks")
 SCRIPTS = {
     "install-ensemble": {"install-test", "storekey-stdin"},
     "clean-ensemble": {"clean-test"},
-    "test-accounts": {"importkey", "lq", "storekey"},
+    "test-accounts": {"importkey", "lq"},
 }
 DATA = {"install-ensemble": {"strata.conf.example", "test-board.toml"}}
 NAMES = {"install-ensemble", "clean-ensemble", "manager-on-mini", "test-accounts", "gotchas"}
@@ -20,7 +20,6 @@ SECRET_READERS = (
     "install-ensemble/storekey-stdin",
     "test-accounts/importkey",
     "test-accounts/lq",
-    "test-accounts/storekey",
 )
 RETIRED = (
     "~/apm/runbooks/",

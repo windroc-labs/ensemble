@@ -1,5 +1,5 @@
 ---
-when: creating or repairing ensemble's test accounts on the mini (Outlook, GitHub and its App, the Linear workspace and its OAuth apps, the setup key), or restoring their keychain items after a mini reset
+when: creating or repairing ensemble's test accounts on the mini (Outlook, GitHub and its App, the Linear workspace and its OAuth apps), or restoring their keychain items after a mini reset
 ---
 
 # Ensemble's test accounts
@@ -49,14 +49,6 @@ Pre-rename names: the test resources made before the ensemble rename (the GitHub
 
 1. Create the five apps (harness, manager, researcher, pm, engineer) as docs/credentials.md › Linear presets says: Client credentials on, Public and Webhooks off, team access only the test team.
 2. Put each Client ID in the mini's `~/.ensemble/config.local.toml` (template: `install-ensemble/test-board.toml`). The install asks each app's client secret, stores it and the app's first token in the mini's keychain and fills each app's `user_id`.
-
-## Setup key
-
-The workspace owner's own key, for the setup calls in 4. above only; ensemble never uses it. Permissions: Read, Write (Linear then forces Create issues and Create comments on); team access only the test team.
-
-1. Settings › Security & access › Personal API keys: revoke any older setup key.
-2. New API key: name `ensemble-setup`, Only select permissions… (check `#scope-read`, `#scope-write`), Only select teams… › the test team, Create, Copy to clipboard.
-3. From mini-op, `ssh mini '~/mini-op-projects/ensemble/test-accounts/storekey <service> <account>' < /run/ensemble/secrets/env/mini-password` stores it, clears the clipboard and prints `viewer`.
 
 ## Restore the keychain items after a reset
 
