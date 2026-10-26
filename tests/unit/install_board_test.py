@@ -86,6 +86,12 @@ class BoardContract(Case):
                     "; see docs/upgrading.md#linear-apps",
                 )
 
+    def test_slots_refuse_a_linear_setting_that_is_no_table(self):
+        self.assertEqual(
+            self.slots('[orchestrator]\nlinear = "abc"\n'),
+            ([], "install.sh: config.local.toml: [linear] must be a table"),
+        )
+
     def test_slots_name_a_bad_keychain_service_by_field_never_by_value(self):
         for text, said in (
             (

@@ -330,9 +330,9 @@ For the manager and the user, on macOS with Docker Desktop; write each result in
   Handoff, next role's claim.
 - [ ] WDRC-67, after cutover: [Upgrading › Linear apps](upgrading.md#linear-apps) step 7 is done: the old credentials
   revoked in Linear and every Keychain item written down in its step 3 deleted.
-
-A failed before-cutover check stops the cutover; report it to the user.
 - [ ] [Measured readers](#measured-readers): `ensemble-opencode`.
+
+A failed WDRC-67 before-cutover check stops the cutover; report it to the user.
 
 ## Risks
 

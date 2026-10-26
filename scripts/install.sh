@@ -1842,6 +1842,8 @@ def text(value):
 def refuse(table, extra):
     names = ", ".join(extra)
     sys.exit(f"install.sh: config.local.toml: unknown keys in [{table}]: {names}{UPGRADE}")
+if not isinstance(linear, dict):
+    sys.exit("install.sh: config.local.toml: [linear] must be a table")
 if extra := sorted(set(linear) - KNOWN):
     refuse("linear", extra)
 def table_of(table, found):
@@ -1909,13 +1911,13 @@ def linear(service, query, variables):
 '
 
 linear_apps() {
-  local list=$1 slot service secret new_secret new_token
+  local list=$1 slot token secret new_secret new_token
   step "Linear apps"
   linear_wanted || return 0
   mkdir -p "$state_dir"
   printf '{}\n' >"$state_dir/linear-apps.json"
-  while IFS=$'\t' read -r slot service secret; do
-    [ -n "$service" ] || continue
+  while IFS=$'\t' read -r slot token secret; do
+    [ -n "$token" ] || continue
     new_secret=no new_token=no
     if security find-generic-password -s "$secret" </dev/null >/dev/null 2>&1; then
       skip "$secret in the keychain"
@@ -1925,13 +1927,13 @@ linear_apps() {
       security add-generic-password -s "$secret" -a "$secret" -w <&3 >&3 2>&3
       new_secret=yes
     fi
-    if ! security find-generic-password -s "$service" </dev/null >/dev/null 2>&1; then
-      ledger_add keychain "$service" "$service"
+    if ! security find-generic-password -s "$token" </dev/null >/dev/null 2>&1; then
+      ledger_add keychain "$token" "$token"
       new_token=yes
     fi
-    if ! python3 -I "$pkg/scripts/install_linear_app.py" "$config" "$slot" "$service" "$secret" "$state_dir/linear-apps.json"; then
+    if ! python3 -I "$pkg/scripts/install_linear_app.py" "$config" "$slot" "$token" "$secret" "$state_dir/linear-apps.json"; then
       if [ "$new_secret" = yes ]; then security delete-generic-password -s "$secret" </dev/null >/dev/null 2>&1 || true; fi
-      if [ "$new_token" = yes ]; then security delete-generic-password -s "$service" </dev/null >/dev/null 2>&1 || true; fi
+      if [ "$new_token" = yes ]; then security delete-generic-password -s "$token" </dev/null >/dev/null 2>&1 || true; fi
       exit 1
     fi
   done <<<"$list"
