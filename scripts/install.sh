@@ -1104,7 +1104,7 @@ print(found[0] if found else "")' "${CODEX_HOME:-$HOME/.codex}/plugins/cache/win
 # With Docker: preflight uses the served ref before client setup; otherwise use refreshed installed sources.
 # The broker comes from the release of the plugin plugin_dir will pick
 # (Claude Code's, else Codex's, else OpenCode's), downloaded, or for a branch built from its sources, and must speak
-# every chosen client's plugin protocol. Only advisory: gh attestation verify authenticates the broker.
+# every chosen client's plugin protocol. Only advisory: src/broker/install.sh checks the download's sha256.
 broker_plan() {
   local -a sources=()
   local client source label where version want got remedy installed broker_label commit opencode= seen= agreed=

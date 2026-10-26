@@ -1,6 +1,6 @@
 #!/bin/sh
 # Installs ensemble-broker root-owned and seeds the worker image definition once. Rerun to upgrade.
-# Default: this plugin version's release asset, installed only after gh attestation verify passes and it speaks
+# Default: this plugin version's release asset, installed only when it matches the release's sha256 file and speaks
 # this plugin's broker protocol.
 # --build: builds and signs it locally with Go (build.sh).
 set -eu
@@ -36,16 +36,24 @@ else
   [ -n "$version" ] || fail "no version in $manifest"
   tag="v$version"
   command -v gh >/dev/null 2>&1 \
-    || fail "gh is required to download and verify ensemble-broker (brew install gh, then gh auth login); or build it locally: sh $here/install.sh --build"
+    || fail "gh is required to download ensemble-broker (brew install gh, then gh auth login); or build it locally: sh $here/install.sh --build"
   asset="$work/$asset_name"
+  sums="$asset.sha256"
+  source=${ENSEMBLE_BROKER_ASSET:-$asset_name}
   if [ -n "${ENSEMBLE_BROKER_ASSET:-}" ]; then
     cp "$ENSEMBLE_BROKER_ASSET" "$asset"
-  elif ! gh release download "$tag" --repo "$repo" --pattern "$asset_name" --dir "$work"; then
-    fail "could not download $asset_name from release $tag of $repo (its release workflow may still be running, or the download failed): retry in a few minutes, or build locally: sh $here/install.sh --build"
+    [ -f "$ENSEMBLE_BROKER_ASSET.sha256" ] || fail "no sha256 file $ENSEMBLE_BROKER_ASSET.sha256; nothing installed"
+    cp "$ENSEMBLE_BROKER_ASSET.sha256" "$sums"
+  else
+    gh release download "$tag" --repo "$repo" --pattern "$asset_name" --dir "$work" \
+      || fail "could not download $asset_name from release $tag of $repo (it is uploaded after the Release is published, or the download failed): retry in a few minutes, or build locally: sh $here/install.sh --build"
+    gh release download "$tag" --repo "$repo" --pattern "$asset_name.sha256" --dir "$work" \
+      || fail "could not download $asset_name.sha256 from release $tag of $repo; nothing installed: retry in a few minutes, or build locally: sh $here/install.sh --build"
   fi
-  gh attestation verify "$asset" --repo "$repo" --signer-workflow "$repo/.github/workflows/release.yml" \
-    --source-ref "refs/tags/$tag" --deny-self-hosted-runners \
-    || fail "${ENSEMBLE_BROKER_ASSET:-$asset_name} failed provenance verification for $tag; nothing installed"
+  expected=$(sed -n '1s/^\([0-9a-f]\{64\}\)\([[:space:]].*\)\{0,1\}$/\1/p' "$sums")
+  actual=$(shasum -a 256 <"$asset")
+  [ -n "$expected" ] && [ "${actual%% *}" = "$expected" ] \
+    || fail "$source does not match the sha256 in $source.sha256 of release $tag; nothing installed"
   tar -xzf "$asset" -C "$work" ensemble-broker
   want=$(sed -n 's/^PROTOCOL = "\([0-9][0-9]*\)"$/\1/p' "$plugin/src/ensemble/session/hosts/docker/broker.py" 2>/dev/null) \
     || want=
