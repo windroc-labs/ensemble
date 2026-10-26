@@ -2,35 +2,42 @@ package releases
 
 import (
 	"context"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"ensemble/broker/internal/npm"
 )
 
-// serve answers every request with status and body, recording the request path.
-func serve(t *testing.T, status int, body string) (Registry, *string) {
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// serve answers every request with status and body, recording each request's URL.
+func serve(t *testing.T, status int, body string) (Registry, *[]string) {
 	t.Helper()
-	var path string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path = r.URL.EscapedPath()
-		w.WriteHeader(status)
-		_, _ = w.Write([]byte(body))
-	}))
-	t.Cleanup(server.Close)
+	var urls []string
 	r := New()
-	r.base = server.URL
-	return r, &path
+	r.http.Transport = roundTrip(func(req *http.Request) (*http.Response, error) {
+		urls = append(urls, req.URL.String())
+		h := make(http.Header)
+		if status == http.StatusFound {
+			h.Set("Location", npm.Registry+"/opencode-ai/9.9.9")
+		}
+		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: h, Request: req}, nil
+	})
+	return r, &urls
 }
 
 func TestLatestReadsTheLatestDistTag(t *testing.T) {
-	r, path := serve(t, http.StatusOK, `{"name":"@openai/codex","version":"0.164.0"}`)
+	r, urls := serve(t, http.StatusOK, `{"name":"@openai/codex","version":"0.164.0"}`)
 	got, err := r.Latest(context.Background(), "@openai/codex")
 	if err != nil || got != "0.164.0" {
 		t.Fatalf("Latest = %q, %v", got, err)
 	}
-	if *path != "/@openai%2Fcodex/latest" {
-		t.Fatalf("path %q", *path)
+	if len(*urls) != 1 || (*urls)[0] != "https://registry.npmjs.org/@openai%2Fcodex/latest" {
+		t.Fatalf("urls %q", *urls)
 	}
 }
 
@@ -38,35 +45,29 @@ func TestLatestRejects(t *testing.T) {
 	for name, c := range map[string]struct {
 		status int
 		body   string
+		want   string
 	}{
-		"another package": {http.StatusOK, `{"name":"@openai/codex-sdk","version":"0.164.0"}`},
-		"prerelease":      {http.StatusOK, `{"name":"@openai/codex","version":"0.164.0-alpha.1"}`},
-		"leading zero":    {http.StatusOK, `{"name":"@openai/codex","version":"0.0164.0"}`},
-		"not json":        {http.StatusOK, `<html>`},
-		"missing":         {http.StatusNotFound, `{}`},
-		"server error":    {http.StatusInternalServerError, `{}`},
-		"oversize":        {http.StatusOK, `{"name":"@openai/codex","version":"0.164.0","x":"` + strings.Repeat("a", maxMetadata) + `"}`},
+		"another package": {http.StatusOK, `{"name":"@openai/codex-sdk","version":"0.164.0"}`, "invalid latest @openai/codex release"},
+		"prerelease":      {http.StatusOK, `{"name":"@openai/codex","version":"0.164.0-alpha.1"}`, "invalid latest @openai/codex release"},
+		"leading zero":    {http.StatusOK, `{"name":"@openai/codex","version":"0.0164.0"}`, "invalid latest @openai/codex release"},
+		"not json":        {http.StatusOK, `<html>`, "invalid latest @openai/codex release"},
+		"missing":         {http.StatusNotFound, `{}`, "@openai/codex registry release missing"},
+		"server error":    {http.StatusInternalServerError, `{}`, "@openai/codex registry unavailable"},
+		"oversize":        {http.StatusOK, `{"name":"@openai/codex","version":"0.164.0","x":"` + strings.Repeat("a", npm.MaxMetadata) + `"}`, "@openai/codex registry response exceeds limit"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r, _ := serve(t, c.status, c.body)
-			if got, err := r.Latest(context.Background(), "@openai/codex"); err == nil {
-				t.Fatalf("Latest = %q, want an error", got)
+			if got, err := r.Latest(context.Background(), "@openai/codex"); err == nil || err.Error() != c.want {
+				t.Fatalf("Latest = %q, %v; want %q", got, err, c.want)
 			}
 		})
 	}
 }
 
 func TestLatestFollowsNoRedirect(t *testing.T) {
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"name":"opencode-ai","version":"9.9.9"}`))
-	}))
-	defer target.Close()
-	r, _ := serve(t, http.StatusOK, "")
-	redirect := httptest.NewServer(http.RedirectHandler(target.URL+"/opencode-ai/latest", http.StatusFound))
-	defer redirect.Close()
-	r.base = redirect.URL
-	if got, err := r.Latest(context.Background(), "opencode-ai"); err == nil {
-		t.Fatalf("Latest = %q through a redirect", got)
+	r, urls := serve(t, http.StatusFound, "")
+	if got, err := r.Latest(context.Background(), "opencode-ai"); err == nil || len(*urls) != 1 {
+		t.Fatalf("Latest = %q, %v through a redirect after %q", got, err, *urls)
 	}
 }
 
