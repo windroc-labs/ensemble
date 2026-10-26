@@ -32,7 +32,9 @@ case "$(basename "$0") $*" in
   "git -C "*" rev-parse "*) echo "$COMMIT" ;;
   "git -C "*" show "*) cat "$MANIFEST" ;;
   "git -C "*" archive "*) tar -cf "$5" -C "$SOURCE" . ;;
-  "gh release view"*) [ -z "${NO_RELEASE:-}" ] || { echo "release not found" >&2; exit 1; } ;;
+  "gh release view"*)
+    [ -z "${NO_RELEASE:-}" ] || { echo "release not found" >&2; exit 1; }
+    if [ -n "${DRAFT:-}" ]; then echo true; else echo false; fi ;;
   "gh release upload"*) cp "$4" "$5" "$UPLOADED" ;;
   "go build"*)
     [ "$GOOS/$GOARCH" = darwin/arm64 ] || exit 1
@@ -102,7 +104,10 @@ class Release(Case):
             calls,
         )
         self.assertIn(f"git -C {repo} show {COMMIT}:.claude-plugin/plugin.json", calls)
-        self.assertIn("gh release view v9.8.7 --repo windroc-labs/ensemble", calls)
+        self.assertIn(
+            "gh release view v9.8.7 --repo windroc-labs/ensemble --json isDraft --jq .isDraft",
+            calls,
+        )
         [archive] = [c for c in calls if " archive " in c]
         self.assertTrue(archive.endswith(f" {COMMIT}"), archive)
         [upload] = [c for c in calls if c.startswith("gh release upload")]
@@ -133,6 +138,11 @@ class Release(Case):
         result = self.release("v9.8.7", NO_RELEASE="1")
         self.assert_nothing_built_or_uploaded(result)
         self.assertIn("no published Release v9.8.7", result.stderr)
+
+    def test_draft_release_stops_before_building(self):
+        result = self.release("v9.8.7", DRAFT="1")
+        self.assert_nothing_built_or_uploaded(result)
+        self.assertIn("Release v9.8.7 is a draft: publish it first", result.stderr)
 
     def test_missing_tag_stops_before_building(self):
         result = self.release("v9.8.7", NO_TAG="1")

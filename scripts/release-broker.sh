@@ -27,7 +27,9 @@ commit=$(git -C "$root" rev-parse --verify "FETCH_HEAD^{commit}")
 version=$(git -C "$root" show "$commit:.claude-plugin/plugin.json" \
   | sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n 1p)
 [ "$tag" = "v$version" ] || fail "tag $tag is not v$version from its .claude-plugin/plugin.json"
-gh release view "$tag" --repo "$repo" >/dev/null || fail "no published Release $tag in $repo: publish it first"
+draft=$(gh release view "$tag" --repo "$repo" --json isDraft --jq .isDraft) \
+  || fail "no published Release $tag in $repo: publish it first"
+[ "$draft" = false ] || fail "Release $tag is a draft: publish it first"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 mkdir "$work/source" "$work/out"
