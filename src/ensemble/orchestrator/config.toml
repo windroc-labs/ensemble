@@ -183,7 +183,8 @@ key = ""
 
 # Project repos; optional.
 #   "<project id>"  local: "<owner>/<name>": target repo of the Linear project's Engineering, research or
-#                   product-design issues with no Repo: line; a Repo: line wins; empty table → none
+#                   product-design issues with no Repo: line; a Repo: line wins unless the stage sets mapped_only
+#                   (workflow.toml); empty table → none
 [linear.project_repos]
 
 # local: [orchestrator.linear.project_repos]
