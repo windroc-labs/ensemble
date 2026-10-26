@@ -87,6 +87,9 @@ class Tui(ABC):
             return False
         if identifier:
             self._turn_ids = seen | {identifier}
+            if not self._turn_id and self._turn_open:
+                self._turn_id = identifier
+                return False
         self._turn_id, self._turn_open = identifier, True
         return True
 

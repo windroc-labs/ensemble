@@ -674,6 +674,25 @@ class TuiTest(Base):
         self.assertEqual(run.observe(), [TurnFailed("server_overloaded", "retry")])
         self.assertEqual(run.hook_events("Stop", self.payload()), [])
 
+    def test_native_start_upgrades_an_anonymous_accepted_turn(self):
+        run, path = self.bound()
+        self.assertEqual(run.hook_events("UserPromptSubmit", self.payload()), [TurnStarted()])
+        _append(path, {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "one"}})
+        self.assertEqual(run.observe(), [])
+        self.assertEqual(
+            run.hook_events("Stop", self.payload(turn_id="one", last_assistant_message="done")),
+            [TurnEnd("done")],
+        )
+
+    def test_native_terminal_upgrades_an_anonymous_accepted_turn(self):
+        run, path = self.bound()
+        self.assertEqual(run.hook_events("UserPromptSubmit", self.payload()), [TurnStarted()])
+        failed = _failed("retry", "server_overloaded")
+        failed["payload"]["turn_id"] = "one"
+        _append(path, failed)
+        self.assertEqual(run.observe(), [TurnFailed("server_overloaded", "retry")])
+        self.assertEqual(run.hook_events("Stop", self.payload()), [])
+
     def test_native_and_hook_acceptance_share_identity_and_old_stop_cannot_end_next_turn(self):
         run, path = self.bound()
         self.assertEqual(

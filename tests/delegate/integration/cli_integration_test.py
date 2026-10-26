@@ -233,7 +233,7 @@ class Stderr(Integration):
         self.assertEqual(res.returncode, 0, res.stderr)
         said = f"No conversation found with session ID: {SID}"
         self.assertEqual([e["text"] for e in self.records() if e["kind"] == "stderr"], [said])
-        self.assertEqual(self.kinds()[-3:], ["stderr", "result", "end"])
+        self.assertEqual(self.kinds()[-4:], ["stderr", "turn_failed", "result", "end"])
         self.assertEqual(
             (self.last("result")["error"], self.last("end")["rc"]), ("the client exited 1", 1)
         )

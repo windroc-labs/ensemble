@@ -294,7 +294,7 @@ class CodexTui(Tui):
             if (
                 isinstance(identifier, str)
                 and identifier
-                and not self._turn_open
+                and (not self._turn_open or not self._turn_id)
                 and self._accept_turn(identifier)
             ):
                 accepted.append(TurnStarted())
