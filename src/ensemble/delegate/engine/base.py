@@ -15,7 +15,7 @@ from ensemble.utils import Display, Record, Status
 class Delegate(ABC):
     """One role run and its durable view; implementations own placement. Callers
     know only the run's workdir W; checkouts and clean are its layout's only outside view. An
-    implementation touches only the W entries it creates, leaving every other one alone.
+    implementation touches only the W entries it creates.
     """
 
     @classmethod
