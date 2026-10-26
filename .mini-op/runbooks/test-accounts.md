@@ -39,15 +39,16 @@ Pre-rename names: the test resources made before the ensemble rename (the GitHub
 
 1. `linear.app/signup` › Continue with email › the address; `~/apm/bin/maillink mark|follow <email>` around the request opens the emailed link.
 2. Create the workspace (name and URL by keystrokes), skip the onboarding steps, turn off onboarding emails.
-3. Create the setup key as in "Setup key" below; store it under its item (service and account: the request).
-4. Through `~/mini-op-projects/ensemble/test-accounts/lq <setup-key-service> <setup-key-account> <body-file>` (body files built on the user's Mac, scp'd to `/tmp`): states In Review and Handoff (type `started`); label groups `Agent` (Claude, Codex, OpenCode) and `Tasks` (Build, Light Build, Light Research, Deep Research); trash the onboarding issues. Record every id in the mini's `~/.ensemble/config.local.toml` (template: `install-ensemble/test-board.toml`).
-
-Board extras, with the same `lq` call (setup key): a project (`projectCreate`, the test team), mapped in `[orchestrator.linear.project_repos]` to `<test-owner>/<test-repo>`; view **Dashboard**, a copy of the real workspace's: `customViewCreate` (name Dashboard, the test team, shared, filter on the team's key), then `viewPreferencesCreate` (type organization, viewType customView, preferences layout board, issueGrouping workflowState, issueSubGrouping project): columns by status, rows by project.
+3. Create the five OAuth apps as in "5. OAuth apps" below.
+4. Run the install with `--board linear` (`install-ensemble.md`). Its Linear apps step stores each app's client secret and first token in the mini's keychain; its board configuration step then stops, as the team lacks the In Review and Handoff states and the Tasks label group. What the apps step stored stays.
+5. Through `~/mini-op-projects/ensemble/test-accounts/lq <manager-token-service> <manager-token-service> <body-file>` (the manager app's token item: `[orchestrator.linear.manager] token_service` in the mini's local config, default `linear-app-manager-token`; body files built on the user's Mac, scp'd to `/tmp`): states In Review and Handoff (type `started`); label groups `Agent` (Claude, Codex, OpenCode) and `Tasks` (Build, Light Build, Light Research, Deep Research); trash the onboarding issues.
+6. Board extras, with the same `lq` call: a project (`projectCreate`, the test team); view **Dashboard**, a copy of the real workspace's: `customViewCreate` (name Dashboard, the test team, shared, filter on the team's key), then `viewPreferencesCreate` (type organization, viewType customView, preferences layout board, issueGrouping workflowState, issueSubGrouping project): columns by status, rows by project.
+7. Run the install again: its board configuration fills the team, state and label ids still missing from the mini's local config, and asks each Linear project's GitHub repo: the project's is `<test-owner>/<test-repo>`.
 
 ## 5. OAuth apps
 
-1. Create the five apps (harness, manager, researcher, pm, engineer) as docs/credentials.md › Linear presets says: Client credentials on, Public and Webhooks off, team access only the test team. Put each Client ID in the mini's `~/.ensemble/config.local.toml` (template: `install-ensemble/test-board.toml`).
-2. `install.sh --board linear` (`install-ensemble.md`) asks each app's client secret, stores it and the app's first token in the mini's keychain and fills each app's `user_id`.
+1. Create the five apps (harness, manager, researcher, pm, engineer) as docs/credentials.md › Linear presets says: Client credentials on, Public and Webhooks off, team access only the test team.
+2. Put each Client ID in the mini's `~/.ensemble/config.local.toml` (template: `install-ensemble/test-board.toml`). The install asks each app's client secret, stores it and the app's first token in the mini's keychain and fills each app's `user_id`.
 
 ## Setup key
 

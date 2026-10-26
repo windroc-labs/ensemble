@@ -156,3 +156,9 @@ class Layout(Case):
         self.assertEqual(found, [])
         usage = (RUNBOOKS / "test-accounts/lq").read_text()
         self.assertIn("lq <service> <account> <json-body-file>", usage)
+
+    def test_lq_sends_the_manager_app_token(self):
+        text = (RUNBOOKS / "test-accounts/lq").read_text()
+        self.assertIn("linear-app-manager-token", text)
+        self.assertIn("access_token", text)
+        self.assertIn("Authorization: Bearer ", text)
