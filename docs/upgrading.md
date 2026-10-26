@@ -1,6 +1,6 @@
 # Upgrading
 
-Broker protocol 23 adds the start manifest's optional `secrets` ([environment secrets](docker-host.md#environment-secrets)).
+Broker protocol 24 adds the start manifest's optional `secrets` ([environment secrets](docker-host.md#environment-secrets)).
 Upgrade the broker with the plugin: sessions refuse a broker of another protocol.
 
 Broker protocol 22 makes `ensemble-broker status` read-only. Upgrade the broker with the
