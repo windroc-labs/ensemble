@@ -101,7 +101,7 @@ func TestPluginSourceValidation(t *testing.T) {
 func TestEmptyPluginSources(t *testing.T) {
 	e := newBuildEnv(t)
 	tmp := t.TempDir()
-	_, dirs, err := e.host().stage(e.pkg, BuildSpec{}, "", tmp)
+	_, dirs, err := e.host().stage(e.pkg, BuildSpec{}, tmp)
 	if err != nil || dirs != "" {
 		t.Fatalf("%q %v", dirs, err)
 	}
@@ -206,6 +206,7 @@ func TestImagePluginDuplicates(t *testing.T) {
 	for name, spec := range map[string]BuildSpec{
 		"twice":       {ImagePlugins: []string{"a", "b", "a"}},
 		"also source": {Plugins: []string{source}, ImagePlugins: []string{"a"}},
+		"base image":  {BaseImage: baseRef, ImagePlugins: []string{"a", "a"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := newBuildEnv(t)
@@ -234,12 +235,12 @@ func TestImagePluginsAreInTheKey(t *testing.T) {
 		}
 		return result.Image
 	}
-	none, a, ab, ba, c := key(), key("a"), key("a", "b"), key("b", "a"), key("c")
-	if ab != ba {
+	none, a, forward, reversed, c := key(), key("a"), key("a", "b"), key("b", "a"), key("c")
+	if forward != reversed {
 		t.Fatal("image plugin order changed the key")
 	}
-	if len(map[string]bool{none: true, a: true, ab: true, c: true}) != 4 {
-		t.Fatalf("keys collide: %s %s %s %s", none, a, ab, c)
+	if len(map[string]bool{none: true, a: true, forward: true, c: true}) != 4 {
+		t.Fatalf("keys collide: %s %s %s %s", none, a, forward, c)
 	}
 }
 

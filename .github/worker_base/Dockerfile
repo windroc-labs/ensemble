@@ -1,9 +1,11 @@
 # Worker image CI's base image (docs/docker-host.md#base-images): the default worker definition
 # (src/broker/worker/Dockerfile) with agent at 1000:1000, no python3, and one in-image plugin.
-ARG BASE
+ARG BASE=ci-worker:definition
 FROM ${BASE}
 USER root
-RUN if id vscode >/dev/null 2>&1; then userdel --remove vscode; fi \
+# The worker definition's PATH has no sbin directories.
+RUN export PATH=/usr/sbin:/sbin:$PATH \
+    && if id vscode >/dev/null 2>&1; then userdel --remove vscode; fi \
     && ! getent passwd 1000 && ! getent group 1000 \
     && groupmod --gid 1000 agent && usermod --uid 1000 --gid 1000 agent \
     && chown -R agent:agent /home/agent \

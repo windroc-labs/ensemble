@@ -36,7 +36,8 @@ function problem(root, name) {
   } catch (error) {
     return error.code === "EACCES" ? "unreadable" : "missing";
   }
-  if (!readable(dir)) {
+  // The directory itself may be a symlink: walk what it points to.
+  if (!readable(fs.realpathSync(dir))) {
     return "unreadable";
   }
   let data;
@@ -46,7 +47,7 @@ function problem(root, name) {
     return "misnamed";
   }
   const named = data !== null && typeof data === "object" && !Array.isArray(data) && data.name === name;
-  return named ? "" : "misnamed";
+  return named ? null : "misnamed";
 }
 
 const [root, ...names] = process.argv.slice(2);

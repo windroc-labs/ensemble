@@ -190,7 +190,7 @@ configured commit cannot be fetched, the build fails instead of falling back to 
 
 Claude loads its installation through `/opt/ensemble/plugins/<name>`, listed in `CLAUDE_CODE_PLUGIN_DIRS`, with
 `/<name>:` commands. OpenCode's container config points `skills.paths` at `/opt/ensemble/plugins`: it discovers the
-same original `skills/*/SKILL.md` files and keeps their relative references. Codex loads its own native installation. Image plugin files are root-owned and read-only for `agent`.
+same original `skills/*/SKILL.md` files and keeps their relative references. Codex loads its own native installation. Source plugin files are root-owned and read-only for `agent`.
 
 Invalid sources and duplicate plugin names fail before Docker; marketplace, installation or metadata failures
 fail the image build. Selecting a plugin trusts its code, hooks and servers beside the container's credentials.
@@ -218,7 +218,8 @@ each missing item:
 | `tmux`, `git`, `claude` (Claude Code) | sessions run them |
 | a non-root user `agent` | sessions run as it; the broker reads its UID and GID from the image (1000 works) |
 
-Commands must be on `/home/agent/.npm-global/bin:/usr/local/bin:/usr/bin:/bin`, the container's `PATH` less `/opt/ensemble/bin`. python3 is
+Commands must be on `/home/agent/.npm-global/bin:/usr/local/bin:/usr/bin:/bin`, the container's `PATH` less `/opt/ensemble/bin`,
+as `agent` finds them. python3 is
 not required. A label starting with `windroc.` or `ensemble.` also fails the build, naming it: those are the
 broker's.
 

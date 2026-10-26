@@ -667,6 +667,16 @@
       }
     },
     {
+      "file": "error-build-image-plugin-missing.json",
+      "definition": "error",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 8,
+        "error_code": "build_failed"
+      }
+    },
+    {
       "file": "error-build-base-image-absent.json",
       "definition": "error",
       "valid": true,
@@ -678,6 +688,16 @@
     },
     {
       "file": "error-build-base-image-label.json",
+      "definition": "error",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 8,
+        "error_code": "build_failed"
+      }
+    },
+    {
+      "file": "error-build-base-image-requirements.json",
       "definition": "error",
       "valid": true,
       "expected": {

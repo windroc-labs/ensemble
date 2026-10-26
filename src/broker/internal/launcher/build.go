@@ -194,16 +194,12 @@ func (h Host) checkImage(ctx context.Context, image string) (imageInfo, error) {
 	return info, nil
 }
 
-// stage snapshots the worker image definition (or records baseID, the base image's), package, plugin sources and
-// embedded assets into tmp, and returns the package version and Claude Code's plugin directories. Key-only inputs go
-// in tmp itself, outside every build context.
-func (h Host) stage(pkg string, spec BuildSpec, baseID, tmp string) (string, string, error) {
+// stage snapshots the worker image definition (none with a base image), package, plugin sources and embedded assets
+// into tmp, and returns the package version and Claude Code's plugin directories. Key-only inputs go in tmp itself,
+// outside every build context.
+func (h Host) stage(pkg string, spec BuildSpec, tmp string) (string, string, error) {
 	userDir, packageDir := filepath.Join(tmp, "user"), filepath.Join(tmp, "package")
-	if baseID != "" {
-		if err := os.WriteFile(filepath.Join(tmp, "base-image"), []byte(baseID+"\n"), 0o644); err != nil {
-			return "", "", protocol.New(protocol.BuildFailed, "Cannot stage the base image.")
-		}
-	} else {
+	if spec.BaseImage == "" {
 		definition := filepath.Join(h.Home, ".ensemble/docker/worker")
 		if info, err := os.Stat(definition); err != nil || !info.IsDir() {
 			return "", "", protocol.New(protocol.BuildFailed, "No worker image definition at "+definition+"; run sh <ensemble plugin directory>/src/broker/install.sh.")
@@ -242,8 +238,7 @@ func (h Host) stage(pkg string, spec BuildSpec, baseID, tmp string) (string, str
 		return "", "", err
 	}
 	if len(spec.ImagePlugins) > 0 {
-		names := slices.Sorted(slices.Values(spec.ImagePlugins))
-		if err := os.WriteFile(filepath.Join(tmp, "image-plugins"), []byte(strings.Join(names, "\n")+"\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(tmp, "image-plugins"), []byte(strings.Join(spec.ImagePlugins, "\n")+"\n"), 0o644); err != nil {
 			return "", "", protocol.New(protocol.BuildFailed, "Cannot stage in-image plugins.")
 		}
 	}
@@ -259,15 +254,19 @@ func (h Host) Build(ctx context.Context, pkg string, spec BuildSpec, maxAge time
 		return BuildResult{}, protocol.New(protocol.BuildFailed, "Cannot create a build directory.")
 	}
 	defer os.RemoveAll(tmp)
+	spec.ImagePlugins = slices.Sorted(slices.Values(spec.ImagePlugins))
+	version, dirs, err := h.stage(pkg, spec, tmp)
+	if err != nil {
+		return BuildResult{}, err
+	}
 	var base imageInfo
 	if spec.BaseImage != "" {
 		if base, err = h.baseImage(ctx, spec.BaseImage); err != nil {
 			return BuildResult{}, err
 		}
-	}
-	version, dirs, err := h.stage(pkg, spec, base.ID, tmp)
-	if err != nil {
-		return BuildResult{}, err
+		if err := os.WriteFile(filepath.Join(tmp, "base-image"), []byte(base.ID+"\n"), 0o644); err != nil {
+			return BuildResult{}, protocol.New(protocol.BuildFailed, "Cannot stage the base image.")
+		}
 	}
 	key, err := treeDigest(tmp)
 	if err != nil {
@@ -359,7 +358,7 @@ func (h Host) rebuild(ctx context.Context, tmp, key, version, plugins string, sp
 		return BuildResult{}, err
 	}
 	if len(spec.ImagePlugins) > 0 {
-		if err := h.checkImagePlugins(ctx, userImage, slices.Sorted(slices.Values(spec.ImagePlugins))); err != nil {
+		if err := h.checkImagePlugins(ctx, userImage, spec.ImagePlugins); err != nil {
 			return BuildResult{}, err
 		}
 	}
@@ -441,35 +440,34 @@ func (h Host) baseImage(ctx context.Context, ref string) (imageInfo, error) {
 
 // useBase checks ref's image, baseID, meets the ensemble layer's needs, tags it userImage and returns its agent's ids.
 func (h Host) useBase(ctx context.Context, ref, baseID, userImage string) (string, string, error) {
-	script, err := checks.ReadFile("checks/base-check")
-	if err != nil {
-		return "", "", protocol.New(protocol.BuildFailed, "Embedded image checks unreadable.")
-	}
-	out, err := h.Docker.Run(ctx, []string{"run", "--rm", "-i", "--pull", "never", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-		"--user", "65534:65534", "--entrypoint", "/bin/sh", baseID, "-s", checkPath}, script)
-	if err != nil {
-		return "", "", diagnosed(err, protocol.BuildFailed, "Checking base image "+ref+" failed.")
-	}
 	unexpected := protocol.New(protocol.BuildFailed, "Checking base image "+ref+" gave unexpected output.")
-	lines := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
-	if len(lines) > len(baseRequirements)+1 {
-		return "", "", unexpected
+	lines, err := h.baseCheck(ctx, ref, baseID, "65534:65534", "agent", "/usr/bin:/bin")
+	if err != nil {
+		return "", "", err
 	}
 	missing := map[string]bool{}
 	var ids []string
+	if fields := strings.Fields(strings.Join(lines, " ")); len(lines) == 1 && lines[0] == "missing agent" {
+		missing["agent"] = true
+	} else if len(lines) == 1 && len(fields) == 3 && fields[0] == "agent" && numeric(fields[1]) && numeric(fields[2]) {
+		ids = fields[1:]
+	} else {
+		return "", "", unexpected
+	}
+	// Commands are found as agent, who runs them (its home may be private); without agent, as nobody.
+	user := "65534:65534"
+	if ids != nil {
+		user = ids[0] + ":" + ids[1]
+	}
+	if lines, err = h.baseCheck(ctx, ref, baseID, user, "tools", checkPath); err != nil {
+		return "", "", err
+	}
 	for _, line := range lines {
-		fields := strings.Fields(line)
-		switch {
-		case len(fields) == 2 && fields[0] == "missing" && slices.Contains(baseRequirements, fields[1]) && !missing[fields[1]]:
-			missing[fields[1]] = true
-		case len(fields) == 3 && fields[0] == "agent" && ids == nil && numeric(fields[1]) && numeric(fields[2]):
-			ids = fields[1:]
-		default:
+		tool, ok := strings.CutPrefix(line, "missing ")
+		if !ok || tool == "agent" || !slices.Contains(baseRequirements, tool) || missing[tool] {
 			return "", "", unexpected
 		}
-	}
-	if (ids == nil) == !missing["agent"] {
-		return "", "", unexpected
+		missing[tool] = true
 	}
 	if len(missing) > 0 {
 		var lacks []string
@@ -492,7 +490,25 @@ func (h Host) useBase(ctx context.Context, ref, baseID, userImage string) (strin
 	return ids[0], ids[1], nil
 }
 
-// checkImagePlugins requires each of names, sorted, to be a plugin directory agent can read in image, its
+// baseCheck runs checks/base-check's mode with path in baseID's image as user, offline and without capabilities, and
+// returns its output lines.
+func (h Host) baseCheck(ctx context.Context, ref, baseID, user, mode, path string) ([]string, error) {
+	script, err := checks.ReadFile("checks/base-check")
+	if err != nil {
+		return nil, protocol.New(protocol.BuildFailed, "Embedded image checks unreadable.")
+	}
+	out, err := h.Docker.Run(ctx, []string{"run", "--rm", "-i", "--pull", "never", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+		"--user", user, "--entrypoint", "/bin/sh", baseID, "-s", mode, path}, script)
+	if err != nil {
+		return nil, diagnosed(err, protocol.BuildFailed, "Checking base image "+ref+" failed.")
+	}
+	if text := strings.TrimSuffix(string(out), "\n"); text != "" {
+		return strings.Split(text, "\n"), nil
+	}
+	return nil, nil
+}
+
+// checkImagePlugins requires each of names to be a plugin directory agent can read in image, its
 // plugin.json naming it.
 func (h Host) checkImagePlugins(ctx context.Context, image string, names []string) error {
 	script, err := checks.ReadFile("checks/plugin-check.js")
