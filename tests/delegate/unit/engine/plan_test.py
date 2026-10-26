@@ -18,9 +18,9 @@ from ensemble.delegate.composer.base import TEAM
 from ensemble.delegate.composer.prompt import RESUME
 from ensemble.delegate.engine.drivers import AgentDriver, InstructionDriver
 from ensemble.delegate.engine.plan import place, plan
-from ensemble.delegate.engine.types import Layout
+from ensemble.delegate.engine.types import Layout, Resolved
 from ensemble.delegate.event.reply import OUTCOME, PROGRESS
-from ensemble.session import Access, RunLog
+from ensemble.session import Access, EnvironmentSpec, RunLog
 from tests.delegate.case import REPO, SRC, packaged
 from tests.delegate.plans import SID, TASKS, Base, write_team
 from tests.delegate.repo import fail, ok
@@ -765,3 +765,65 @@ class Docker(Base):
         write_team(top)
         team = teams.team(dirs=(top,))
         self.assertIn("team_dirs", self.refused("poet", "verse", team=team, out=None))
+
+
+class PrefetchTest(Docker):
+    """A resolved environment's prefetch target: the Reference block's one Repo: and optional Ref:,
+    syntax-checked before any git call (WDRC-109 FR-52).
+    """
+
+    SPEC = EnvironmentSpec(image="dummy-env:test", gateway="workers", lock="dummy-lock")
+
+    def env(self, *, prefetch=True):
+        return Resolved(self.SPEC, prefetch=prefetch)
+
+    def test_the_target_and_ref_join_the_environment(self):
+        text = "Reference: T\nRepo: acme/app\nRef: release/1\nBase: dev\n\nBody"
+        got, _ = self.planned(input=text, environment=self.env())
+        environment = got.session.environment
+        self.assertEqual(dict(environment.prefetch), {"repo": "acme/app", "ref": "release/1"})
+        self.assertEqual(replace(environment, prefetch=None), self.SPEC)
+        self.assertEqual(got.repo, "acme/app")
+
+    def test_without_a_ref_line_the_default_branch(self):
+        got, _ = self.planned(input="Reference: T\nRepo: acme/app\n\nB", environment=self.env())
+        self.assertEqual(dict(got.session.environment.prefetch), {"repo": "acme/app"})
+
+    def test_a_clone_path_target_is_its_origin(self):
+        clone = os.path.join(self.tmp, "clone")
+        with self.origin("git@github.com:acme/ensemble.git\n"):
+            got, _ = self.planned(input=f"Reference: T\nRepo: {clone}\n\nB", environment=self.env())
+        self.assertEqual(dict(got.session.environment.prefetch), {"repo": "acme/ensemble"})
+        self.assertIn("Repo: acme/ensemble\n", got.spec.input)
+
+    def test_bad_lines_are_refused_before_any_git_call(self):
+        for lines in (
+            "Repo: acme/app\nRepo: acme/app",
+            "Repo: acme/app\nRef: a\nRef: b",
+            "Repo: acme/app\nRef: --upload-pack=x",
+            "Repo: acme/app\nRef: refs/pull/1/head",
+            "Repo: acme/app\nRef: 0123456789abcdef",
+            "Repo: acme/app\nRef: a b",
+            "Repo: not a repo!",
+            "Ref: v1",
+        ):
+            with (
+                self.subTest(lines=lines),
+                mock.patch("subprocess.run", side_effect=AssertionError("git ran")) as run,
+            ):
+                message = self.refused(input=f"Reference: T\n{lines}\n\nB", environment=self.env())
+                self.assertTrue(message.startswith("prefetch"), message)
+                run.assert_not_called()
+
+    def test_a_target_off_github_is_refused(self):
+        message = self.refused(
+            input="Reference: T\nRepo: ghe.example.com/o/x\n\nB", environment=self.env()
+        )
+        self.assertIn("prefetch", message)
+
+    def test_without_prefetch_ref_lines_are_not_read(self):
+        text = "Reference: T\nRepo: acme/app\nRef: --upload-pack=x\n\nB"
+        got, _ = self.planned(input=text, environment=self.env(prefetch=False))
+        self.assertEqual(got.session.environment, self.SPEC)
+        got, _ = self.planned(input=text)
+        self.assertIsNone(got.session.environment)

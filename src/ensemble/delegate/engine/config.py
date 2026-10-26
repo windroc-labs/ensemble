@@ -1,6 +1,7 @@
 """Delegate configuration resources and package locations; the environment tables' load checks."""
 
 import re
+import tomllib
 from collections.abc import Mapping
 
 import ensemble.session as session
@@ -31,6 +32,12 @@ def read_config(*, local: str = utils.LOCAL, path: str | None = None) -> dict:
 
 def module_roots() -> tuple[str, ...]:
     return utils.module_roots(config, session, utils)
+
+
+def packaged_environments() -> Mapping:
+    """The packaged config.toml's [environment] tables, without config.local.toml."""
+    with open(config.CONFIG, "rb") as stream:
+        return tomllib.load(stream).get("environment", {})
 
 
 def check_environments(cfg: Mapping) -> None:
