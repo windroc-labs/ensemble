@@ -87,7 +87,7 @@ class Direct(Case):
         self.assertEqual(
             argv[:6], [sys.executable, "-P", "-s", "-m", "ensemble.session.cli", "start"]
         )
-        self.assertEqual(argv[-2:], ["--", "dummy-1"])
+        self.assertIn("--worker-name=dummy-1", argv)
         self.assertEqual(
             self.spec(),
             {
@@ -163,9 +163,9 @@ class Direct(Case):
             (env["ENSEMBLE_SID"], env["ENSEMBLE_EVENTS"]), ("captured", "/captured/events")
         )
 
-    def test_leading_dash_name_follows_the_end_of_options(self):
+    def test_leading_dash_name_is_an_explicit_worker_name(self):
         self.open(name="-pane")
-        self.assertEqual(self.argv()[-2:], ["--", "-pane"])
+        self.assertIn("--worker-name=-pane", self.argv())
 
     def test_leading_dash_display_remains_one_option_value(self):
         self.open(display="-pane")

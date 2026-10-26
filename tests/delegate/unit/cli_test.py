@@ -1223,7 +1223,7 @@ class Open(Base):
             self.assertNotIn("ENSEMBLE_EVENTS", os.environ)
         argv = self.opened.call_args.args[0]
         self.assertEqual(argv[5], "start")
-        self.assertEqual(argv[-2:], ["--", "dummy-1"])
+        self.assertIn("--worker-name=dummy-1", argv)
         for key, value in (
             ("--client", "codex"),
             ("--cwd", self.tmp),

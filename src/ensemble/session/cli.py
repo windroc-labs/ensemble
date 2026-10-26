@@ -178,6 +178,7 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
         "  Starts hidden; no visible anchor needed.\n"
         "  Form: ensemble-session start NAME [SESSION_OPTIONS] -- CLIENT_FLAGS\n"
         "  Before --: Session options; after --: client flags, preserved verbatim.\n"
+        "  For a NAME starting with -, use --worker-name=NAME instead of NAME.\n"
         "  Outer help: ensemble-session start --help, before --. Help after --\n"
         "  belongs to CLIENT and may start the outer operation; use CLIENT --help.\n\n"
         "Recovery and Next help\n"
@@ -186,7 +187,13 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
         "  Missing view: ensemble-session attach-command --help",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("name", type=_name, help="required new worker name; not none")
+    p.add_argument("name", type=_name, nargs="?", help="new worker name; not none")
+    p.add_argument(
+        "--worker-name",
+        type=_name,
+        metavar="NAME",
+        help="alternative to NAME, including a leading dash: --worker-name=-pane",
+    )
     p.add_argument(
         "--client", required=True, help="required [session.clients.NAME] configuration name"
     )
@@ -694,6 +701,9 @@ def _ls(args, hosts: Hosts) -> int:
 
 
 def _start(args, flags: list[str], hosts: Hosts, start_sid: str | None, worker_cls) -> int:
+    if (args.name is None) == (args.worker_name is None):
+        raise UsageError("start: supply exactly one of NAME or --worker-name")
+    name = args.name if args.name is not None else args.worker_name
     if args.resume is not None and start_sid is not None and start_sid != args.resume:
         raise UsageError(f"{SID_ENV} {start_sid} differs from --resume {args.resume}")
     cwd = os.path.abspath(args.cwd or os.getcwd())
@@ -709,7 +719,7 @@ def _start(args, flags: list[str], hosts: Hosts, start_sid: str | None, worker_c
         env[ACCOUNT_ENV] = args.account
     events = os.environ.get(EVENTS_ENV) or None
     worker = worker_cls.new(
-        name=args.name,
+        name=name,
         sid=args.resume or start_sid or str(uuid.uuid4()),
         client=args.client,
         cwd=cwd,
