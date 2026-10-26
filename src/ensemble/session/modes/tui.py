@@ -256,15 +256,23 @@ class TuiStore:
             self._drop()
             os.unlink(lock)
 
-    def stop(self, identity: str) -> None:
+    def stop(self, terminal: Process, sid: str | None) -> None:
+        """Closes `terminal` while it holds the name or, unlisted, its @sid is sid."""
         with self._locked():
-            process = self._lookup()
+            try:
+                process = self._lookup()
+            except SessionError:
+                if sid is None or terminal.session_identity()[0] != sid:
+                    return
+                self._shut(terminal)
+                self._forget()
+                return
             actual = None if process is None else process.session_identity()[0]
             if self._sid is not None and actual != self._sid:
                 return
             if process is None:
                 self._drop()
-            elif process.identity == identity:
+            elif process.identity == terminal.identity:
                 self._close()
             else:
                 return
@@ -321,6 +329,12 @@ class TuiStore:
     def _close(self) -> None:
         try:
             process = self.process()
+        except SessionError as error:
+            raise SessionError(f"cannot close tui session {self.name}: {error}") from error
+        self._shut(process)
+
+    def _shut(self, process: Process | None) -> None:
+        try:
             if process is not None:
                 process.close()
         except SessionError as error:
@@ -810,6 +824,6 @@ class TuiMode(BaseMode):
     def stop(self) -> None:
         """Once, unless it raises; then ends (returncode: the code seen, else -SIGHUP)."""
         if self._live:
-            self._store.stop(self._terminal.identity)
+            self._store.stop(self._terminal, self.prepared.spec.sid)
             self._live = False
         self._end()
