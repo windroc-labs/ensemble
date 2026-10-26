@@ -56,7 +56,8 @@ class WorkerEnvironment(Case):
             lock="dummy-lock",
             secrets=({"item": "ensemble-env/dummy", "file": "dummy.txt"},),
         )
-        self.workers = self.enterContext(mock.patch.object(cli, "Worker"))
+        self.addCleanup(setattr, HostedSession, "_setup", None)
+        self.workers = mock.MagicMock()
         self.worker = self.workers.new.return_value
         self.record = Record(
             v=1,
@@ -73,34 +74,21 @@ class WorkerEnvironment(Case):
         self.worker.start.return_value = self.record
         self.workers.load.return_value = self.worker
         self.worker.resume.return_value = self.worker.restart.return_value = self.record
-        self.enterContext(
-            mock.patch.object(
-                cli,
-                "_configure",
-                return_value=cli.Host.parse_hosts(
-                    {
-                        "default": "docker",
-                        "docker": {
-                            "implementation": "ensemble.session.hosts.docker.host:DockerHost",
-                        },
-                    }
-                ),
-            )
-        )
-        self.enterContext(mock.patch.object(cli.Session, "display", return_value=None))
         self.enterContext(mock.patch.dict(os.environ, {"ENSEMBLE_SID": SID}))
 
     def invoke(self, *argv):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             try:
-                code = cli.main(list(argv))
+                code = cli.main(list(argv), worker_cls=self.workers)
             except SystemExit as error:
                 code = error.code
         return code, out.getvalue(), err.getvalue()
 
     def start(self, *argv):
-        return self.invoke("start", "dummy-1", "--client", "claude", "--cwd", self.home, *argv)
+        return self.invoke(
+            "start", "dummy-1", "--client", "claude", "--cwd", self.home, "--display", "none", *argv
+        )
 
     def test_resolved_environment_and_account_reach_the_persisted_worker(self):
         code, out, err = self.start(
@@ -114,7 +102,7 @@ class WorkerEnvironment(Case):
         self.assertEqual((fields["environment"], fields["sid"]), (self.environment, SID))
         self.assertEqual(fields["env"], {ACCOUNT_ENV: "work"})
         self.worker.check.assert_called_once_with(prompt="", resume=False)
-        self.worker.start.assert_called_once_with(prompt="", resume=False, hidden=False)
+        self.worker.start.assert_called_once_with(prompt="", resume=False, hidden=True)
 
     def test_bad_environment_json_is_rejected_before_a_worker_exists(self):
         valid = self.environment.persisted()
@@ -139,7 +127,10 @@ class WorkerEnvironment(Case):
     def test_busy_start_restart_and_resume_exit_75_naming_the_holder(self):
         busy = SessionBusy("dummy-lock", "ensemble-other-1 (owner other)")
         for method, argv in (
-            ("start", ("start", "dummy-1", "--client", "claude", "--cwd", self.home)),
+            (
+                "start",
+                ("start", "dummy-1", "--client", "claude", "--cwd", self.home, "--display", "none"),
+            ),
             ("restart", ("restart", "dummy-1")),
             ("resume", ("resume", "dummy-1")),
         ):

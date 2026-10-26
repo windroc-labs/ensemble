@@ -693,7 +693,7 @@ def _ls(args, hosts: Hosts) -> int:
     return 0
 
 
-def _start(args, flags: list[str], hosts: Hosts, start_sid: str | None) -> int:
+def _start(args, flags: list[str], hosts: Hosts, start_sid: str | None, worker_cls) -> int:
     if args.resume is not None and start_sid is not None and start_sid != args.resume:
         raise UsageError(f"{SID_ENV} {start_sid} differs from --resume {args.resume}")
     cwd = os.path.abspath(args.cwd or os.getcwd())
@@ -708,7 +708,7 @@ def _start(args, flags: list[str], hosts: Hosts, start_sid: str | None) -> int:
     if args.account:
         env[ACCOUNT_ENV] = args.account
     events = os.environ.get(EVENTS_ENV) or None
-    worker = Worker.new(
+    worker = worker_cls.new(
         name=args.name,
         sid=args.resume or start_sid or str(uuid.uuid4()),
         client=args.client,
@@ -731,8 +731,8 @@ def _start(args, flags: list[str], hosts: Hosts, start_sid: str | None) -> int:
     return 0
 
 
-def _worker(args, start_sid: str | None) -> int:
-    worker = Worker.load(args.name, sid=start_sid)
+def _worker(args, start_sid: str | None, worker_cls) -> int:
+    worker = worker_cls.load(args.name, sid=start_sid)
     with worker.locked():
         record = worker.restart() if args.cmd == "restart" else worker.resume()
     print(record.to_line())
@@ -751,12 +751,12 @@ def _send(args, hosts: Hosts) -> int:
     return 0
 
 
-def _run(args, flags: list[str], hosts: Hosts, start_sid: str | None) -> int:
+def _run(args, flags: list[str], hosts: Hosts, start_sid: str | None, worker_cls) -> int:
     cmd = args.cmd
     if cmd == "start":
-        return _start(args, flags, hosts, start_sid)
+        return _start(args, flags, hosts, start_sid, worker_cls)
     if cmd in ("restart", "resume"):
-        return _worker(args, start_sid)
+        return _worker(args, start_sid, worker_cls)
     if cmd in BATCH:
         return _answers(args, hosts)
     if cmd == "ls":
@@ -790,7 +790,7 @@ def _run(args, flags: list[str], hosts: Hosts, start_sid: str | None) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, worker_cls: type[Worker] = Worker) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv in (["hook", "--help"], ["hook", "-h"]):
         _parser(None).parse_args(argv)
@@ -821,7 +821,7 @@ def main(argv: list[str] | None = None) -> int:
         _say(f"{PROG}: config: {failure}")
         return 2
     try:
-        return _run(args, flags, hosts, start_sid)
+        return _run(args, flags, hosts, start_sid, worker_cls)
     except NotShowable as error:
         _say(str(error))
         return 1
