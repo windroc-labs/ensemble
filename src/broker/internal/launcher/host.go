@@ -115,12 +115,7 @@ func spawnCheck(home string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	// Appended, so a spawn never truncates a running check's log; emptied once past checkLogMax.
-	mode, path := os.O_CREATE|os.O_APPEND|os.O_WRONLY, filepath.Join(dir, "clients-check.log")
-	if info, err := os.Stat(path); err == nil && info.Size() > checkLogMax {
-		mode |= os.O_TRUNC
-	}
-	log, err := os.OpenFile(path, mode, 0o600)
+	log, err := openCheckLog(dir)
 	if err != nil {
 		return err
 	}
@@ -132,6 +127,18 @@ func spawnCheck(home string) error {
 		return err
 	}
 	return cmd.Process.Release()
+}
+
+// openCheckLog opens dir's clients-check.log for appending, first moving one past checkLogMax to clients-check.log.1:
+// a running check keeps writing to the moved file, so a spawn never loses its output.
+func openCheckLog(dir string) (*os.File, error) {
+	path := filepath.Join(dir, "clients-check.log")
+	if info, err := os.Stat(path); err == nil && info.Size() > checkLogMax {
+		if err := os.Rename(path, path+".1"); err != nil {
+			return nil, err
+		}
+	}
+	return os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 }
 
 type BuildResult struct {

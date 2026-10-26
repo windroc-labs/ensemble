@@ -192,8 +192,9 @@ containers, by a build in the last hour, or by a recorded variant a build used i
 
 Starts never update a client and never wait for a rebuild. Every successful `build` records its inputs in
 `~/.ensemble/docker/images/<key>.json` and, when the last check is an hour old or more (or none ran), starts a
-detached `ensemble-broker check-clients` (log: `~/.ensemble/docker/clients-check.log`). It looks up the three clients'
-npm `latest` releases and rebuilds, under the same key, every variant a build used in the last 7 days whose labels
+detached `ensemble-broker check-clients` (log: `~/.ensemble/docker/clients-check.log`; past 1 MiB a spawn moves it to
+`clients-check.log.1`). It looks up the three clients' npm `latest` releases and rebuilds, under the same key, every
+variant a build used in the last 7 days whose labels
 differ (a newer release, or a `latest` moved back); the first start after it finishes runs the new image. Running workers keep
 theirs. A host that runs no build runs no check: run `"$B" check-clients` by hand to check now (it prints
 `{"latest":{"claude":…,"codex":…,"opencode":…},"rebuilt":[…]}`, or `{"rebuilt":[]}` while another check runs, and
