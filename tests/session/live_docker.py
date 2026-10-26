@@ -224,17 +224,13 @@ def baseline(inspect: dict, name: str, cwd: str, plan_mounts: list[str], network
 
 def gateway_baseline(gateway: dict, network: dict, worker: dict) -> list[str]:
     labels = (gateway.get("Config") or {}).get("Labels") or {}
-    name = labels.get("windroc.egress.network.workers.name", "")
-    proxy = labels.get("windroc.egress.network.workers.proxy", "")
+    name = labels.get(f"{EGRESS}network.workers.name", "")
+    proxy = labels.get(f"{EGRESS}network.workers.proxy", "")
     state = gateway.get("State") or {}
     problems = []
-    if labels.get("windroc.egress.contract") != "1":
+    if labels.get(f"{EGRESS}contract") != "1":
         problems.append("gateway contract must be 1")
-    if (
-        "workers" not in labels.get("windroc.egress.networks", "").split(",")
-        or not name
-        or not proxy
-    ):
+    if "workers" not in labels.get(f"{EGRESS}networks", "").split(",") or not name or not proxy:
         problems.append("gateway lacks workers labels")
     if state.get("Running") is not True or (state.get("Health") or {}).get("Status") != "healthy":
         problems.append("gateway must be running and healthy")

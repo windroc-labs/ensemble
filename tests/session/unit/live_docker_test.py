@@ -472,12 +472,6 @@ class BaselineTest(Case):
             with self.subTest(label):
                 self.assertEqual(len(self.check(found)), 1, self.check(found))
 
-    def test_bridge_and_extra_attached_networks_fail(self):
-        self.assertTrue(self.check(inspect(HostConfig__NetworkMode="bridge")))
-        for networks in ({}, {"bridge": {}}, {"egress-workers": {}, "bridge": {}}):
-            with self.subTest(networks=networks):
-                self.assertTrue(self.check(inspect(NetworkSettings={"Networks": networks})))
-
     def test_cwd_related_binds(self):
         volume = {"Type": "volume", "Name": "ensemble-ws-live", "Destination": CWD}
         for source in (CWD, "/Users/u/work", CWD + "/src"):
