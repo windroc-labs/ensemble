@@ -2522,7 +2522,7 @@ class InstallTest(Case):
         codex = Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.7")
         self.assertEqual(selected.read_text().strip(), str(codex))
         self.assertIn("ctmux --install", self.calls())
-        self.assert_ok(self.again("--clients", "claude", "--no-docker", answers=[(WRITE_Q, "y")]))
+        self.assert_ok(self.again("--clients", "claude", "--no-docker"))
         self.assertEqual(selected.read_text().strip(), self.claude_ensemble())
         self.assertIn("ctmux --install", self.calls())
         self.assert_ok(self.cleanup("--yes"))
