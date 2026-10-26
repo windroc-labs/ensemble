@@ -109,11 +109,11 @@ func TestLoginEnvReadsBack(t *testing.T) {
 		fails string
 	}{
 		"other bytes": {&fakeSecrets{readBack: []byte("other")},
-			"keychain item ensemble-env/dummy: reading it failed: it holds other bytes; rerun ensemble-broker login env dummy"},
+			"keychain item ensemble-env/dummy dummy: reading it failed: it holds other bytes; rerun ensemble-broker login env dummy"},
 		"needs dialog": {&fakeSecrets{readErr: ErrNeedsDialog},
-			"keychain item ensemble-env/dummy: reading it failed: keychain status -25308; rerun ensemble-broker login env dummy"},
+			"keychain item ensemble-env/dummy dummy: reading it failed: keychain status -25308; rerun ensemble-broker login env dummy"},
 		"put fails": {&fakeSecrets{putErr: errors.New("keychain status -25299")},
-			"keychain item ensemble-env/dummy: saving it failed: keychain status -25299; rerun ensemble-broker login env dummy"},
+			"keychain item ensemble-env/dummy dummy: saving it failed: keychain status -25299; rerun ensemble-broker login env dummy"},
 	} {
 		if _, err := loginEnv(t, tc.k, &askOnce{}, envValue); err == nil || err.Error() != tc.fails {
 			t.Fatalf("%s: %v", name, err)

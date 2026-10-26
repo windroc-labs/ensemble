@@ -1,7 +1,6 @@
 package broker
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -23,10 +22,7 @@ const (
 const envScript = "mkdir -p -m 0700 " + envDir + " && umask 0377 && set -C && cat > " + envDir + `/"$1"`
 
 // EnvKeychain holds the environment secrets as broker-only items.
-type EnvKeychain interface {
-	SecretKeychain
-	ItemTrust
-}
+type EnvKeychain interface{ brokerOnlyStore }
 
 // LoginEnv reads name's value with read, stores it in a broker-only item (replacing an earlier one), makes the item
 // trust only the broker (secureItem, asking password when needed) and proves start's no-dialog read returns the value.
@@ -44,23 +40,8 @@ func LoginEnv(name string, read, password func() ([]byte, error), k EnvKeychain,
 		return fmt.Errorf("the value must be 1 to %d bytes", launcher.MaxSecretBytes)
 	}
 	service := envServicePrefix + name
-	item, rerun := "keychain item "+service, "rerun ensemble-broker login env "+name
-	if err := k.PutSecret(service, name, value); err != nil {
-		if errors.Is(err, ErrInvalidOwnerEdit) {
-			return ownershipError(service, name, err)
-		}
-		return fmt.Errorf("%s: saving it failed: %w; %s", item, err, rerun)
-	}
-	if err := secureItem(service, name, rerun+" to finish", k, password); err != nil {
+	if err := storeBrokerOnly(service, name, "rerun ensemble-broker login env "+name, value, k, password); err != nil {
 		return err
-	}
-	saved, err := k.Secret(service, name)
-	defer erase(saved)
-	if err == nil && !bytes.Equal(saved, value) {
-		err = errors.New("it holds other bytes")
-	}
-	if err != nil {
-		return fmt.Errorf("%s: reading it failed: %w; %s", item, err, rerun)
 	}
 	_, err = fmt.Fprintf(out, "Environment secret %s saved; keychain trusts only the broker\n", service)
 	return err

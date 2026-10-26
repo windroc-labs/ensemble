@@ -1,7 +1,6 @@
 package broker
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -22,10 +21,7 @@ const (
 const opencodeScript = "mkdir -p -m 0700 " + opencodeKeyDir + " && umask 0377 && set -C && cat > " + opencodeKeyDir + `/"$1".key`
 
 // OpencodeKeychain holds the providers' API keys as broker-only items.
-type OpencodeKeychain interface {
-	SecretKeychain
-	ItemTrust
-}
+type OpencodeKeychain interface{ brokerOnlyStore }
 
 // LoginOpencode reads provider's API key with read, checks it, stores it in a broker-only item (replacing an earlier
 // one), makes the item trust only the broker (secureItem, asking password when needed) and proves start's no-dialog
@@ -42,23 +38,8 @@ func LoginOpencode(provider string, read, password func() ([]byte, error), k Ope
 	if err := checkSecret("API key", key); err != nil {
 		return err
 	}
-	item, rerun := opencodeService+" "+provider, "rerun ensemble-broker login opencode "+provider
-	if err := k.PutSecret(opencodeService, provider, key); err != nil {
-		if errors.Is(err, ErrInvalidOwnerEdit) {
-			return ownershipError(opencodeService, provider, err)
-		}
-		return fmt.Errorf("keychain item %s: saving it failed: %w; %s", item, err, rerun)
-	}
-	if err := secureItem(opencodeService, provider, rerun+" to finish", k, password); err != nil {
+	if err := storeBrokerOnly(opencodeService, provider, "rerun ensemble-broker login opencode "+provider, key, k, password); err != nil {
 		return err
-	}
-	saved, err := k.Secret(opencodeService, provider)
-	defer erase(saved)
-	if err == nil && !bytes.Equal(saved, key) {
-		err = errors.New("it holds other bytes")
-	}
-	if err != nil {
-		return fmt.Errorf("keychain item %s: reading it failed: %w; %s", item, err, rerun)
 	}
 	_, err = fmt.Fprintf(out, "OpenCode provider %s API key saved; keychain trusts only the broker\n", provider)
 	return err
