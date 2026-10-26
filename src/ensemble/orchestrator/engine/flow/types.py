@@ -192,6 +192,7 @@ class Stage:
     first_failure: Literal["ready", "review"]
     approve: bool
     files: bool
+    deliverable: bool
     hint: str
     ref: bool
     mapped_only: bool

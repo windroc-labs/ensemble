@@ -58,7 +58,13 @@ GitHub on the Docker Host needs no per-run login: `<B> login github ensemble-bot
 | Stored at | broker items `ensemble-tokens` (per container) and `ensemble-revocations` (backlog); the container's `/run/ensemble/secrets/github/<owner>` (0400, tmpfs) |
 | Readers | **three-way readers** |
 | Lifetime | 1 hour; each session renews them 10 minutes before the first expires |
-| Revoke | `close` revokes them before removing the container; a failed revoke is retried at the next start, close or status until it expires; `<B> status` lists pending ones |
+| Revoke | `close` attempts revocation before removing the container, even if revocation fails; backlog entries retry at the next start, close or status until revoked or expired; `<B> status` lists pending backlog entries |
+
+If the backlog cannot be read or written and direct revocation fails, the broker retains the original
+`ensemble-tokens` record and reports pending cleanup. Retry `<B> close --container <container>` with the original container
+name, even after the container is gone. `status` does not discover these retained records. Unreadable token
+records also stay in place for recovery; fix their access and retry close. A record is removed only after
+confirmed revocation, confirmed expiry or a successful durable transfer to the backlog.
 
 ### Linear harness key
 
@@ -173,7 +179,7 @@ shows.
 | `ensemble-claude` | account name (`default` or `<name>`) | `[session.clients.claude.accounts.<name>]` | that Claude account's setup-token | `<B> login claude [<name>]` | the broker |
 | `ensemble-bot` | App ID | `[session.hosts.docker.github] app` | App private key | the user; access set by `<B> login github ensemble-bot` | the broker, once logged in |
 | `ensemble-github-users` | `ensemble-bot` | — | the App's slug and its bot user's ID, for git identity (not a secret) | `<B> login github ensemble-bot` | the broker |
-| `ensemble-tokens` | container name | — | that container's installation tokens and expiries | `<B> start`, `refresh`; removed by `close` | the broker |
+| `ensemble-tokens` | container name | — | that container's installation tokens and expiries, including retained recovery material | `<B> start`, `refresh`; `close` removes only safely retired entries | the broker |
 | `ensemble-revocations` | `pending` | — | tokens awaiting revocation | `<B> close`, `refresh` failures | the broker |
 | `ensemble-codex` | `auth` | — | the full Codex login | `<B> login codex`; renewals at `start`, `refresh` | the broker |
 | `ensemble-opencode` | provider name | `[session.clients.opencode.providers.<name>]` | that OpenCode provider's API key | `<B> login opencode <name>` | the broker |

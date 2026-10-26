@@ -29,6 +29,7 @@ def stage(role, input_, **fields):
         "first_failure": "review",
         "approve": False,
         "files": False,
+        "deliverable": False,
         "hint": "",
         "ref": False,
         "mapped_only": False,
@@ -129,6 +130,12 @@ class StageDefaults(Case):
                     got = workflow.stage({"role": "v", "input": input_, key: False})
                     self.assertFalse(getattr(got, key))
 
+    def test_deliverable_is_off_unless_set(self):
+        self.assertFalse(workflow.stage({"role": "a", "input": "build"}).deliverable)
+        self.assertTrue(
+            workflow.stage({"role": "a", "input": "build", "deliverable": True}).deliverable
+        )
+
 
 class WorkflowFile(Case):
     def write(self, text):
@@ -188,6 +195,7 @@ class WorkflowFile(Case):
                 "stage pm: first_failure: want one of ready, review: 'todo'",
             ),
             (GOOD + 'retitle = "yes"\n', "stage pm: retitle: want a bool: 'yes'"),
+            (GOOD + "deliverable = 1\n", "stage pm: deliverable: want a bool: 1"),
             (GOOD + "hint = true\n", "stage pm: hint: want a str: True"),
             (GOOD + "next = 1\n", "stage pm: next: want a str: 1"),
             (GOOD + "ref = 1\n", "stage pm: ref: want a bool: 1"),
