@@ -88,7 +88,7 @@ The harness is a Linear OAuth app, `[linear.harness]`: its client secret and its
 | Field | Value |
 |---|---|
 | Purpose | the harness's access for router (claims, bounces), promote (creates the next role's issue, relates it, moves to Done), prune (archives), a run's issue read and run comments |
-| Minimum permission | an OAuth app with Client credentials on, its team access limited to the team; each token is requested with the scopes `read,write`, fixed in code |
+| Minimum permission | an OAuth app with Client credentials on; each token is requested with the scopes `read,write`, fixed in code |
 | Stored at | the client secret: a login keychain item whose service is `linear.harness.secret_service`; the token and its expiry (JSON `{"access_token", "expires_at"}`): one whose service is `linear.harness.token_service`, written by the commands |
 | Readers | any process running as the user: read through `/usr/bin/security`, which an item made by `security add-generic-password` without `-T` trusts |
 | Lifetime | the token 30 days; any Linear call as the harness (router, promote, prune, write-back) first requests a new one with `client_credentials` when it is missing, undated, expired or has under 5 days left. A failed request with the old token still valid logs `token-error` and uses it; with it expired the command exits 2 naming the fix. `--dry-run` requests none and logs a `token` line with the days left |
@@ -102,7 +102,7 @@ commands exit 2 naming it; router, promote and prune run without it.
 | Field | Value |
 |---|---|
 | Purpose | the manager's `ensemble-orchestrator issue` commands (reads, comments, moves, creates, relations, labels, archives); its comments and moves count as other (instructions; a move to Todo restarts the attempt count), whether or not `linear.manager.user_id` is set; the id only matters for a manager move that carries a `botActor` |
-| Minimum permission | an OAuth app with Client credentials on, its team access limited to the team; each token is requested with the scopes `read,write,app:assignable`, fixed in code |
+| Minimum permission | an OAuth app with Client credentials on; each token is requested with the scopes `read,write,app:assignable`, fixed in code |
 | Stored at | the client secret: a login keychain item whose service is `linear.manager.secret_service`; the token and its expiry: one whose service is `linear.manager.token_service`, written by the `issue` commands |
 | Readers | any process running as the user: read through `/usr/bin/security`, which an item made by `security add-generic-password` without `-T` trusts |
 | Lifetime | the token 30 days; any `issue` command first requests a new one when it is missing, undated, expired or has under 5 days left. A failed request with the old token still valid prints `token-error: manager: <reason>` on stderr and uses it; with it expired the command exits 2 naming the fix |
@@ -117,7 +117,7 @@ Linear user id; runtime role discovery reads it from configuration and needs no 
 | Field | Value |
 |---|---|
 | Purpose | role write-back: comments, state moves, subscriptions, attachments and retitles; resume and Recover resolve the run's recorded role against current configuration, ignoring old start-row credentials |
-| Permission | fixed `read,write,app:assignable,app:mentionable`; restrict each app to the team |
+| Permission | fixed `read,write,app:assignable,app:mentionable` |
 | Stored at | client secret in `secret_service`; token and expiry in `token_service`, both login Keychain entries |
 | Readers | any process running as the user |
 | Lifetime | renewed through the shared transport when missing, undated, expired or under 5 days remain; dry-run never renews |
@@ -334,7 +334,7 @@ lists what it needs in Linear. By hand: create these in the Linear team, then pu
 | a `Tasks` label group, its id from `issueLabels { nodes { id name isGroup } }` | `linear.task_label_group` |
 | one label per task under `Tasks` (`build`, `light-build`, …), optional | `linear.task_labels` |
 | an `Agent` label group and one label per client, optional; set both or neither | `linear.agent_label_group`, `linear.agent_labels` |
-| one OAuth app per role, Client credentials on, Public and Webhooks off, access restricted to the team | `linear.roles.<role>.client_id`, `secret_service`, `token_service`, `user_id` |
+| one OAuth app per role, Client credentials on, Public and Webhooks off | `linear.roles.<role>.client_id`, `secret_service`, `token_service`, `user_id` |
 | the humans subscribed on In Review | `linear.human_members` |
 | the Linear project of each product repo, optional | `linear.project_repos` |
 | — (local clones of target repos, optional) | `local_clones` |
@@ -343,8 +343,8 @@ lists what it needs in Linear. By hand: create these in the Linear team, then pu
 
 The harness app:
 
-1. Linear › Settings › API › Applications › New: Public and Webhooks off, Client credentials on; on its page limit team
-   access to the team. Its Client ID → `linear.harness.client_id`.
+1. Linear › Settings › API › Applications › New: Public and Webhooks off, Client credentials on (the app page has no
+   team-access setting). Its Client ID → `linear.harness.client_id`.
 2. Store its client secret, then paste it (nothing echoes):
 
    ```sh
