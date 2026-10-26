@@ -312,7 +312,6 @@ class Host(ABC):
             try:
                 rows.append(self.attach(name).row())
             except SessionError:
-                # A listed session can end before attach or row; prove absence before skipping.
                 if name in self.list():
                     raise
         return rows
