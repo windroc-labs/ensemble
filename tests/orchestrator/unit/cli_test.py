@@ -801,13 +801,11 @@ class WritebackUsage(RunCase):
         self.assertIn("unknown key 'newer_limits'", errors)
 
     def test_a_configuration_it_cannot_load_is_logged_where_its_logs_go(self):
-        self.append_local("\n[orchestrator.client_max_runs]\nopencode = 0\n")
+        self.append_local("\n[orchestrator.usage_limit]\na = 0\n")
         result, output, errors = _call(
             ["writeback", "--issue", "TASK-1", "--workdir", "/w"], stdin="{}\n"
         )
-        refused = (
-            "orchestrator/config.toml: [client_max_runs] opencode must be a whole number >= 1: 0"
-        )
+        refused = 'orchestrator/config.toml: [usage_limit] a must be "on" or "off": 0'
         self.assertEqual((result, output, errors), (2, "", f"ensemble-orchestrator: {refused}\n"))
         row = logged(self.cfg.logs_dir)[-1]
         self.assertEqual(

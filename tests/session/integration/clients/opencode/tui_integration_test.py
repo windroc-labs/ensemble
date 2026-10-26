@@ -210,9 +210,10 @@ class TuiSessions(Case):
     def test_an_errored_last_message_ends_the_wait_at_once(self):
         self.scene([[{"errored": True}]])
         _, stream = self.start()
-        started = time.monotonic()
         self.assertEqual(stream.until(TurnEnd)[-1], TurnEnd(""))
-        self.assertLess(time.monotonic() - started, 3)
+        self.assertEqual(
+            [row["messages_read"] for row in self.logged() if "messages_read" in row], [NATIVE]
+        )
 
     def test_a_turn_never_saved_ends_after_the_wait(self):
         self.scene([[{"unsaved": True}]])

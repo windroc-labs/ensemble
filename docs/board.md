@@ -141,7 +141,7 @@ A label from the `Tasks` group picks the role's task, mapped by `[task_labels]`.
 ## Operating
 
 ```bash
-bin/ensemble-orchestrator router --issue <ID>         # run one issue now, skipping the run limits and usage gates
+bin/ensemble-orchestrator router --issue <ID>         # run one issue now, skipping role limits and usage gates
 bin/ensemble-orchestrator router --issue <ID> --tui   # the same, attended in a TUI (display, events file, exit codes: --help)
 bin/ensemble-orchestrator status <ID>                 # alive: its run; once that ends, state is its open TUI's (done, working, blocked), gone once none is open
 bin/ensemble-orchestrator attach-command <ID>         # the command that shows its agent run
@@ -158,15 +158,9 @@ Each session's `Run <sid>` comment holds its resume command. Move the issue out 
 
 ### Run limits
 
-A run starts only when both layers have room: its role has fewer live runs than `[roles.<role>] max_runs` (packaged: 3 for researcher, pm and engineer; another stage's role without a table: 1), and its client fewer than its `[client_max_runs]` entry. No client is limited by default: an unlisted client is unlimited. Set limits in `~/.ensemble/config.local.toml`, e.g. `opencode = 1`, as the host's local models run one job at a time:
+The orchestrator limits each role with `[roles.<role>] max_runs` (packaged: 3 for researcher, pm and engineer; another stage's role without a table: 1), counting its live runs in `runs.jsonl`, including runs between rounds. A tick checks the role and then the usage gate. `router --issue` skips those two gates; its run still counts toward the role limit.
 
-```toml
-[orchestrator.client_max_runs]
-opencode = 1
-claude = 3
-```
-
-Both layers count the live runs in `runs.jsonl`, a run between rounds included, a client's by the client its run records. A tick checks role, then client, then the usage gate. A full client's Todo issue logs `claim-skip` with reason `<client> is full` and the tick tries the next one; a full client's In Progress issue logs `recover-skip` and waits. `router --issue` skips both limits, but its run counts. Ad-hoc runs (`ensemble-delegate run`, `ensemble-session start`) and crew workers bypass the router and `runs.jsonl`: no limit applies to them and they count toward none, so an OpenCode crew worker adds to the local model's load.
+The session layer owns [client run limits](sessions.md#run-limits): `[session.clients.<client>] max_runs` in `~/.ensemble/config.local.toml`. These apply to every `Session.start`, including board starts, `router --issue`, ad-hoc role runs and crew workers. A full client refuses the start with `SessionError`, naming the client, limit and holders. The board records an ordinary failed run: one attempt and its normal failure comment; it does not skip the issue or wait for capacity.
 
 ### Linear MCP off
 

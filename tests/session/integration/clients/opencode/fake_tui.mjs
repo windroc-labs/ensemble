@@ -57,12 +57,15 @@ let held = null; // a lateUser turn's messages, saved together later
 function save(message) {
   (held ?? messages).push(message);
 }
-const client = { session: { messages: async () => ({ data: messages.filter((m) => {
+const client = { session: { messages: async () => {
+  log({ messages_read: native });
+  return { data: messages.filter((m) => {
   const left = hidden.get(m.info.id) ?? 0;
   if (!left) return true;
   hidden.set(m.info.id, left - 1);
   return false;
-}).sort((a, b) => Number(a.info.id.slice(4)) - Number(b.info.id.slice(4))) }) } };
+}).sort((a, b) => Number(a.info.id.slice(4)) - Number(b.info.id.slice(4))) };
+} } };
 const modules = [];
 for (const url of config.plugin ?? []) modules.push(await import(url));
 let hooks = [];

@@ -30,6 +30,7 @@ def packaged_table() -> dict:
     """The packaged session config.toml's [clients.opencode], without implementation."""
     table = dict(registry.settings(read_config(local=os.devnull))["clients"]["opencode"])
     table.pop("implementation")
+    table.pop("max_runs")
     return table
 
 

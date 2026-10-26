@@ -46,6 +46,7 @@ def packaged(local: str = os.devnull) -> CodexClient:
     """The client the packaged session config.toml, under `local`, builds."""
     table = dict(registry.settings(read_config(local=local))["clients"]["codex"])
     table.pop("implementation")
+    table.pop("max_runs")
     return CodexClient(table)
 
 

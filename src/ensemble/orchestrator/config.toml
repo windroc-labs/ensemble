@@ -41,18 +41,6 @@ implementation = "ensemble.delegate:HarnessDelegate"
 # local: [orchestrator.task_tiers]
 # local: light-build = 3
 
-# Client run limits; optional: board runs of a client at once, across roles, counted from runs.jsonl's live runs by
-# their recorded client; a run starts only when its role (max_runs) and its client both have room. router --issue
-# skips the check but its runs count; ad-hoc runs and crew workers are not counted.
-#   <client>  local: a client name as Delegate configures it: a whole number >= 1; unlisted → unlimited; empty table → no
-#             limit
-[client_max_runs]
-
-# local: [orchestrator.client_max_runs]
-# local: opencode = 1               # the host's local models run one job at a time
-# local: claude = 3
-# local: codex = 2
-
 # Per-client usage checks, owned by the orchestrator; empty table or an unlisted client means "on".
 #   <client>  "on": keep the board-start usage gate and researcher brake (80% five-hour usage).
 #             "off": neither reads nor evaluates usage, including recorded quota holds; other clients keep their setting.

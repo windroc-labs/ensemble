@@ -664,46 +664,11 @@ class ConfigurationLoading(ConfigFile, Case):
                     PIPELINE + f"[usage_limit]\na = {value}\n",
                 )
 
-    def test_client_max_runs(self):
-        for text, limits in (
-            (PIPELINE, {}),
-            (PIPELINE + "[client_max_runs]\n", {}),
-            (
-                PIPELINE + "[client_max_runs]\nopencode = 1\nghost = 2\n",
-                {"opencode": 1, "ghost": 2},
-            ),
-        ):
-            with self.subTest(limits=limits):
-                cfg = self.load(text)
-                self.assertEqual(cfg.client_max_runs, limits)
-                with self.assertRaises(TypeError):
-                    cfg.client_max_runs["new"] = 1
-        self.local("[client_max_runs]\nopencode = 1\n")
-        self.assertEqual(self.load(PIPELINE).client_max_runs, {"opencode": 1})
-
-    def test_client_max_runs_rejected(self):
-        cases = [
-            (
-                "client_max_runs = 1\n" + PIPELINE,
-                "client_max_runs must be a table of <client> = <whole number >= 1>",
-            ),
-            *[
-                (
-                    PIPELINE + f"[client_max_runs]\nopencode = {value}\n",
-                    f"[client_max_runs] opencode must be a whole number >= 1: {shown}",
-                )
-                for value, shown in (
-                    ("0", "0"),
-                    ("-1", "-1"),
-                    ('"2"', "'2'"),
-                    ("true", "True"),
-                    ("1.5", "1.5"),
-                )
-            ],
-        ]
-        for text, message in cases:
-            with self.subTest(message, text=text):
-                self.fails("orchestrator/config.toml: " + message, text)
+    def test_client_limits_belong_to_session(self):
+        self.fails(
+            "orchestrator/config.toml: unknown keys: client_max_runs",
+            PIPELINE + "[client_max_runs]\nopencode = 1\n",
+        )
 
     def test_agent_labels(self):
         for top, table, group, labels in (
@@ -936,16 +901,9 @@ class CommittedConfiguration(Case):
             committed["roles"], dict.fromkeys(("researcher", "pm", "engineer"), {"max_runs": 3})
         )
 
-    def test_packaged_client_max_runs(self):
+    def test_packaged_config_has_no_client_run_limit(self):
         local = HEADER + role("researcher") + role("pm") + role("engineer")
-        self.assertEqual(self.load(local).client_max_runs, {})
-        self.assertEqual(
-            self.load(local + "[client_max_runs]\nopencode = 1\n").client_max_runs, {"opencode": 1}
-        )
-        self.assertEqual(
-            self.load(local + "[client_max_runs]\nclaude = 3\nopencode = 2\n").client_max_runs,
-            {"opencode": 2, "claude": 3},
-        )
+        self.assertFalse(hasattr(self.load(local), "client_max_runs"))
 
     def test_without_local_names_what_is_missing(self):
         with self.assertRaises(config.ConfigError) as cm:
@@ -1004,7 +962,6 @@ class CommittedConfiguration(Case):
             CORE_LOCAL
             + '\n[orchestrator]\ntracker = "linear"\nwork_dir = "~/.ensemble"\n'
             + "[orchestrator.task_tiers]\nlight-build = 3\n"
-            + "[orchestrator.client_max_runs]\nopencode = 1\n"
             + "[orchestrator.roles.engineer]\nmax_runs = 2\n"
             + f'[orchestrator.linear]\nteam = "{TEAM}"\nhuman_members = ["me@x.com"]\n'
             + f'harness_key = "linear-api-key"\ntask_label_group = "{TASK_GROUP}"\n'
@@ -1037,8 +994,8 @@ class CommittedConfiguration(Case):
             ({"build": LABEL1}, AGENT_GROUP, {"claude": LABEL2}, {P1: "acme/x"}),
         )
         self.assertEqual(
-            (cfg.work_dir, cfg.task_tiers, cfg.client_max_runs, cfg.local_clones),
-            (os.path.realpath(self.ensemble), {"light-build": 3}, {"opencode": 1}, {}),
+            (cfg.work_dir, cfg.task_tiers, cfg.local_clones),
+            (os.path.realpath(self.ensemble), {"light-build": 3}, {}),
         )
         self.assertEqual(
             fields(cfg),

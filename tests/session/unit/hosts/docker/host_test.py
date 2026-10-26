@@ -328,6 +328,13 @@ def _free(path):
 
 
 class ConfigTest(Base):
+    def test_capacity_namespace_uses_the_fixed_endpoint_across_aliases(self):
+        alias = DockerHost(
+            "alias", {"docker": "/other/docker"}, run=self.docker, broker=self.broker
+        )
+        self.assertEqual(self.host._capacity_namespace(), f"docker:{self.ep}")
+        self.assertEqual(alias._capacity_namespace(), self.host._capacity_namespace())
+
     def test_provider_usage_rejects_broker_18_before_probing_credentials(self):
         request = SimpleNamespace(provider="strata", base_url="https://strata.test/v1")
         locked = data("error-login_required.json")
@@ -3377,6 +3384,20 @@ class ReclaimTest(Base):
 
 
 class ListTest(Base):
+    def test_admission_inventory_distinguishes_missing_docker_from_empty(self):
+        self.host.run = mock.Mock(side_effect=FileNotFoundError(2, "no docker"))
+        with self.assertRaisesRegex(SessionError, "inventory unavailable"):
+            self.host._capacity_rows()
+        os.unlink(self.ep.removeprefix("unix://"))
+        self.host.run = self.docker
+        with self.assertRaisesRegex(SessionError, "inventory unavailable"):
+            self.host._capacity_rows()
+
+    def test_admission_inventory_reads_successful_empty_and_populated_results(self):
+        self.assertEqual(self.host._capacity_rows(), [])
+        self.listed("w")
+        self.assertEqual([row.name for row in self.host._capacity_rows()], ["w"])
+
     def test_list_and_rows_from_labelled_containers(self):
         self.listed("w", "v")
         self.docker.ps += [
