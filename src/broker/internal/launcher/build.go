@@ -245,6 +245,37 @@ func (h Host) stage(pkg string, spec BuildSpec, tmp string) (string, string, err
 	return meta.Version, dirs, nil
 }
 
+// prepared is what prepare derives: the key, the package version, Claude Code's plugin directories, the base image's
+// ID ("" for none) and spec with its in-image plugins sorted.
+type prepared struct {
+	key, version, dirs, baseID string
+	spec                       BuildSpec
+}
+
+// prepare stages spec's build context into tmp and derives its key; Build and CheckClients share it so a key is
+// derived one way.
+func (h Host) prepare(ctx context.Context, pkg string, spec BuildSpec, tmp string) (prepared, error) {
+	spec.ImagePlugins = slices.Sorted(slices.Values(spec.ImagePlugins))
+	version, dirs, err := h.stage(pkg, spec, tmp)
+	if err != nil {
+		return prepared{}, err
+	}
+	var base imageInfo
+	if spec.BaseImage != "" {
+		if base, err = h.baseImage(ctx, spec.BaseImage); err != nil {
+			return prepared{}, err
+		}
+		if err := os.WriteFile(filepath.Join(tmp, "base-image"), []byte(base.ID+"\n"), 0o644); err != nil {
+			return prepared{}, protocol.New(protocol.BuildFailed, "Cannot stage the base image.")
+		}
+	}
+	key, err := treeDigest(tmp)
+	if err != nil {
+		return prepared{}, protocol.New(protocol.BuildFailed, "Cannot hash the build context.")
+	}
+	return prepared{key: key, version: version, dirs: dirs, baseID: base.ID, spec: spec}, nil
+}
+
 // Build produces ensemble-worker:<key> in two stages; an image with this key and version built less than maxAge ago
 // is reused (maxAge < 0: of any age; 0: never). Both stages rebuild without cache to refresh clients and plugins.
 // spec's plugins are part of the key.
@@ -254,24 +285,11 @@ func (h Host) Build(ctx context.Context, pkg string, spec BuildSpec, maxAge time
 		return BuildResult{}, protocol.New(protocol.BuildFailed, "Cannot create a build directory.")
 	}
 	defer os.RemoveAll(tmp)
-	spec.ImagePlugins = slices.Sorted(slices.Values(spec.ImagePlugins))
-	version, dirs, err := h.stage(pkg, spec, tmp)
+	p, err := h.prepare(ctx, pkg, spec, tmp)
 	if err != nil {
 		return BuildResult{}, err
 	}
-	var base imageInfo
-	if spec.BaseImage != "" {
-		if base, err = h.baseImage(ctx, spec.BaseImage); err != nil {
-			return BuildResult{}, err
-		}
-		if err := os.WriteFile(filepath.Join(tmp, "base-image"), []byte(base.ID+"\n"), 0o644); err != nil {
-			return BuildResult{}, protocol.New(protocol.BuildFailed, "Cannot stage the base image.")
-		}
-	}
-	key, err := treeDigest(tmp)
-	if err != nil {
-		return BuildResult{}, protocol.New(protocol.BuildFailed, "Cannot hash the build context.")
-	}
+	key, version, dirs, spec := p.key, p.version, p.dirs, p.spec
 	image := "ensemble-worker:" + key
 	info, found, err := h.leaseImage(ctx, key)
 	if err != nil {
@@ -281,7 +299,7 @@ func (h Host) Build(ctx context.Context, pkg string, spec BuildSpec, maxAge time
 	if current && (maxAge < 0 || (maxAge > 0 && time.Since(info.Created) < maxAge)) {
 		return BuildResult{Image: image, Digest: info.ID}, nil
 	}
-	result, err := h.rebuild(ctx, tmp, key, version, dirs, spec, base.ID)
+	result, err := h.rebuild(ctx, tmp, key, version, dirs, spec, p.baseID)
 	var e *protocol.Error
 	if current && maxAge > 0 && errors.As(err, &e) && e.Code == protocol.BuildFailed {
 		// An age-only refresh that fails (e.g. offline) keeps the usable image.
