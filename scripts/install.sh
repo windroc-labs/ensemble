@@ -1119,14 +1119,13 @@ broker_plan() {
     want=$(plugin_file "$source" src/ensemble/session/hosts/docker/broker.py | protocol_of)
     [ -n "$want" ] || die "no broker protocol in src/ensemble/session/hosts/docker/broker.py at ${source:-ref $ref}"
     if [ "$want" != "$got" ]; then
-      if [ -n "$source" ] && [ "$source" = "$opencode" ]; then
+      # With Claude Code or Codex, ref_check takes only the served ref: OpenCode alone may change --ref.
+      if ! has claude && ! has codex; then
         remedy="use --ref $release_tag or a branch other than main"
       elif [ -n "$source" ]; then
         remedy="update the plugin (Claude Code: claude plugin marketplace update windroc, then claude plugin update ensemble@windroc; Codex: codex plugin marketplace upgrade windroc), then rerun"
-      elif has claude || has codex; then
-        remedy="the windroc marketplace serves ensemble at $ref, ahead of release $release_tag: wait until it serves a release, or use --clients opencode --ref $release_tag"
       else
-        remedy="use --ref $release_tag or a branch other than main"
+        remedy="the windroc marketplace serves ensemble at $ref, ahead of release $release_tag: wait until it serves a release, or use --clients opencode --ref $release_tag"
       fi
       die "$label wants broker protocol $want, but its broker, $broker_label, speaks protocol $got: $remedy"
     fi

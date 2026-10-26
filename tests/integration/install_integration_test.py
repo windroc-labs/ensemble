@@ -1451,6 +1451,30 @@ class InstallTest(Case):
         )
         self.assertIn("==> broker\n    skip: installed from this plugin\n", result.stderr)
 
+    def test_mixed_run_remedy_updates_the_plugin(self):
+        """With Claude Code chosen only the served ref installs, so OpenCode's copy names the plugin update."""
+        self.assert_ok(
+            self.fresh(
+                clients="claude,opencode",
+                docker="y",
+                opencode=PROVIDER_ANSWERS,
+                logins=[
+                    (TOKEN_Q, TOKEN),
+                    (PEM_Q, ""),
+                    (OPENCODE_LOGIN_Q, "lan"),
+                    (r"API key:", KEY),
+                ],
+            )
+        )
+        (self.opencode_package() / CLIENT).write_text(f'PROTOCOL = "{OTHER}"\n')
+        result = self.again()
+        self.assertEqual(result.code, 1, result.stderr)
+        self.assertIn(
+            f"install.sh: {self.opencode_package()} wants broker protocol {OTHER}, but its broker,"
+            f" the installed broker, speaks protocol {PROTOCOL}: update the plugin (Claude Code:",
+            result.stderr,
+        )
+
     def test_other_client_plugin_against_the_installed_broker_stops(self):
         self.assert_ok(self.fresh(docker="y"))
         Path(self.claude_ensemble(), CLIENT).write_text(f'PROTOCOL = "{OTHER}"\n')
