@@ -61,6 +61,15 @@ PASSWORD = "pw-SENTINEL-sudo"
 TOKEN = "sk-ant-oat01-SENTINEL-token"
 KEY = "sk-SENTINEL-opencode-key"
 OLD, NEW = "1" * 40, "2" * 40
+CLIENT, GO = (
+    "src/ensemble/session/hosts/docker/broker.py",
+    "src/broker/internal/protocol/protocol.go",
+)
+# The repo's own broker protocol, never a literal: another protocol is one more.
+PROTOCOL = re.search(r'^PROTOCOL = "([0-9]+)"$', Path(REPO, CLIENT).read_text(), re.M)[1]
+OTHER = str(int(PROTOCOL) + 1)
+MARKET = "https://raw.githubusercontent.com/windroc-labs/agent-plugins-marketplace/main/"
+RAW = "https://raw.githubusercontent.com/windroc-labs/ensemble/"
 SPEC = "ensemble@git+https://github.com/windroc-labs/ensemble.git#main"
 API_CALL = (
     "curl -fsSL -H Accept: application/vnd.github.sha"
@@ -325,6 +334,9 @@ class InstallTest(Case):
         (self.pkg_src / ".claude-plugin").mkdir()
         (self.pkg_src / ".claude-plugin/plugin.json").write_text('{"version": "9.8.7"}\n')
         shutil.copytree(Path(REPO, "launchd"), self.pkg_src / "launchd")
+        for source in (CLIENT, GO):
+            (self.pkg_src / source).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(Path(REPO, source), self.pkg_src / source)
         self.serve()
         flow = "src/ensemble/orchestrator/engine/flow"
         (self.pkg_src / flow).mkdir(parents=True)
@@ -358,6 +370,20 @@ class InstallTest(Case):
             manifest = self.fakes / "marketplace" / path
             manifest.parent.mkdir(parents=True, exist_ok=True)
             manifest.write_text(json.dumps({"name": "windroc", "plugins": plugins}))
+
+    def at_ref(self, ref, path, text):
+        """Ensemble's file `path` at `ref` on GitHub; None: unreadable."""
+        target = self.fakes / "refs" / ref / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if text is None:
+            target.with_name(target.name + ".missing").write_text("")
+        else:
+            target.write_text(text)
+
+    def protocol_at(self, ref, protocol):
+        """Ensemble at `ref` with both sides at `protocol`."""
+        self.at_ref(ref, CLIENT, f'PROTOCOL = "{protocol}"\n')
+        self.at_ref(ref, GO, f'package protocol\n\nconst Version = "{protocol}"\n')
 
     def refused(self, *args, rerun=False):
         """A run of `args` that stops before any client step: the sudo password, then on a first
@@ -1045,6 +1071,7 @@ class InstallTest(Case):
             "open -a Docker",
             "setup-token",
             "brew install go",
+            RAW,
         ):
             self.assertNotIn(absent, calls)
         self.assertFalse(Path(self.home, ".egress").exists())
@@ -1292,6 +1319,136 @@ class InstallTest(Case):
         self.assertIn("brew install go", self.calls())
         self.assertIn("broker-install --build", self.calls())
         self.assertNotIn("agent-plugins-marketplace", "\n".join(self.calls()))
+        self.assertNotIn(f"{RAW}v9.8.7/{GO}", "\n".join(self.calls()))
+
+    def test_release_tag_broker_is_downloaded(self):
+        self.protocol_at("main", OTHER)
+        result = self.fresh(
+            "--ref",
+            "v9.8.7",
+            clients="opencode",
+            docker="y",
+            opencode=PROVIDER_ANSWERS,
+            logins=[(PEM_Q, ""), (OPENCODE_LOGIN_Q, "lan"), (r"API key:", KEY)],
+        )
+        self.assert_ok(result)
+        self.assertNotIn("brew install go", self.calls())
+        self.assertIn("broker-install ", self.calls())
+        self.assertIn("skip: go: the broker comes from release v9.8.7", result.stderr)
+        self.assertNotIn("agent-plugins-marketplace", "\n".join(self.calls()))
+
+    def test_release_ref_served_by_the_marketplace(self):
+        self.serve({"ref": "v9.8.7"})
+        self.protocol_at("main", OTHER)
+        result = self.fresh(docker="y")
+        self.assert_ok(result)
+        self.assertIn(
+            f"    broker protocol {PROTOCOL}: ensemble v9.8.7 and release v9.8.7 agree\n",
+            result.stderr,
+        )
+        self.assertEqual(self.broker_calls()[0], "broker-install ")
+        self.assertNotIn("brew install go", self.calls())
+        self.assertNotIn(f"{RAW}main/", "\n".join(self.calls()))
+        self.assertIn("ensemble is installed (ref v9.8.7, clients claude,codex", result.stderr)
+
+    def test_protocol_parsers_read_the_repo_sources(self):
+        self.assert_ok(self.fresh(clients="claude", docker="y"))
+        for path in (f"main/{CLIENT}", "main/.claude-plugin/plugin.json", f"v9.8.7/{GO}"):
+            self.assertIn(f"curl -fsSL {RAW}{path}", self.calls())
+        result = self.again("--clients", "claude", "--docker")
+        self.assert_ok(result)
+        self.assertIn(f"    broker protocol {PROTOCOL}: ", result.stderr)
+
+    def test_protocol_mismatch_stops_before_client_steps(self):
+        self.protocol_at("v9.8.7", OTHER)
+        for rerun, (clients, remedy) in enumerate(
+            (
+                (
+                    "claude,codex",
+                    "the windroc marketplace serves ensemble at main, ahead of release v9.8.7:"
+                    " wait until it serves a release, or use --clients opencode --ref v9.8.7",
+                ),
+                ("codex", "the windroc marketplace serves ensemble at main"),
+            )
+        ):
+            with self.subTest(clients=clients):
+                result = self.refused("--clients", clients, "--docker", rerun=bool(rerun))
+                self.assertIn(
+                    f"install.sh: ensemble main wants broker protocol {PROTOCOL}, but its broker,"
+                    f" release v9.8.7, speaks protocol {OTHER}: {remedy}",
+                    result.stderr,
+                )
+                calls = "\n".join(self.calls())
+                for absent in ("--cask claude", "--cask codex", "--cask docker", "login"):
+                    self.assertNotIn(absent, calls)
+                self.assertEqual(self.broker_calls(), [])
+                self.assertFalse(self.config().exists())
+
+    def test_installed_plugin_with_another_protocol_stops_up_front(self):
+        self.assert_ok(self.fresh(clients="claude", docker="y"))
+        installed = json.loads((self.fakes / "claude/plugins.json").read_text())
+        path = next(p["installPath"] for p in installed if p["id"] == "ensemble@windroc")
+        Path(path, CLIENT).write_text(f'PROTOCOL = "{OTHER}"\n')
+        result = self.refused("--clients", "claude", "--docker", rerun=True)
+        self.assertIn(
+            f"install.sh: {path} wants broker protocol {OTHER}, but its broker, release v9.8.7,"
+            f" speaks protocol {PROTOCOL}: update the plugin (Claude Code: claude plugin"
+            " marketplace update windroc, then claude plugin update ensemble@windroc; Codex:"
+            " codex plugin marketplace upgrade windroc), then rerun\n",
+            result.stderr,
+        )
+        self.assertEqual(self.broker_calls(), [])
+
+    def test_invalid_version_or_protocol_stops(self):
+        cases = (
+            (
+                "main",
+                ".claude-plugin/plugin.json",
+                '{"version": "9.8.7/../../x"}\n',
+                "no release version in .claude-plugin/plugin.json at ref main",
+            ),
+            (
+                "main",
+                CLIENT,
+                f"PROTOCOL = {PROTOCOL}\n",
+                f"no broker protocol in {CLIENT} at ref main",
+            ),
+            (
+                "v9.8.7",
+                GO,
+                'const Version = "x"\n',
+                f"no broker protocol in {GO} at ref v9.8.7",
+            ),
+            (
+                "main",
+                ".claude-plugin/plugin.json",
+                None,
+                "cannot read .claude-plugin/plugin.json at ref main of windroc-labs/ensemble",
+            ),
+        )
+        for rerun, (ref, path, text, message) in enumerate(cases):
+            with self.subTest(path=path, text=text):
+                shutil.rmtree(self.fakes / "refs", ignore_errors=True)
+                self.at_ref(ref, path, text)
+                result = self.refused("--clients", "claude", "--docker", rerun=bool(rerun))
+                self.assertIn(f"install.sh: {message}\n", result.stderr)
+
+    def test_existing_marketplace_is_refreshed_before_a_fresh_plugin(self):
+        self.assert_ok(self.fresh())
+        for client, key in (("claude", "id"), ("codex", "pluginId")):
+            path = self.fakes / client / "plugins.json"
+            kept = [p for p in json.loads(path.read_text()) if p[key] != "ensemble@windroc"]
+            path.write_text(json.dumps(kept))
+        self.assert_ok(self.again())
+        self.assertEqual(
+            self.plugin_calls(),
+            [
+                "claude plugin marketplace update windroc",
+                "claude plugin install ensemble@windroc",
+                "codex plugin marketplace upgrade windroc",
+                "codex plugin add ensemble@windroc",
+            ],
+        )
 
     def test_docker_not_running_fails(self):
         (self.fakes / "docker_wont_start").touch()

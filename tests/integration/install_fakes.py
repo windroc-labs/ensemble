@@ -213,7 +213,9 @@ def curl(args):
         name = next((f for f in ENSEMBLE_FILES if url.endswith("/" + f)), None)
         ref = url.removeprefix(raw).removesuffix("/" + (name or ""))
         found = FAKES / "refs" / ref / name if name else None
-        if found and not found.is_file():
+        if found and found.with_name(found.name + ".missing").exists():
+            found = None
+        elif found and not found.is_file():
             found = FAKES / "pkg-src" / name
     else:
         out(f"curl: unexpected {url}\n", sys.stderr)
@@ -393,6 +395,8 @@ def claude(args):
         save(markets_file, [*markets, {**entry, **({"ref": ref} if ref else {})}])
     elif args[:3] == ["plugin", "marketplace", "remove"]:
         save(markets_file, [m for m in markets if m["name"] != args[3]])
+    elif args[:3] == ["plugin", "marketplace", "update"]:
+        return 0 if any(m["name"] == args[3] for m in markets) else 1
     elif args == ["plugin", "list", "--json"]:
         out(json.dumps(plugins))
     elif args[:2] == ["plugin", "install"]:
@@ -441,6 +445,9 @@ def codex(args):
         markets[marketplace_name(args[3])] = {"source": source, "ref": ref}
     elif args[:3] == ["plugin", "marketplace", "remove"]:
         markets.pop(args[3])
+    elif args[:3] == ["plugin", "marketplace", "upgrade"]:
+        if args[3] not in markets:
+            return 1
     elif args == ["plugin", "list", "--json"]:
         out(json.dumps({"installed": plugins, "available": []}))
         return 0
