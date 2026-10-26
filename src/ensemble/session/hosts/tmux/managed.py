@@ -187,8 +187,6 @@ class ManagedProcess(InteractiveProcess):
         self.started = False
         self.view = None
         self.reader = None
-        self.guard_pid = proc.pid
-        self.client_pid = None
         if start_reader:
             self.reader = threading.Thread(target=self.pump, name=f"guard-{name}", daemon=True)
             self.reader.start()
@@ -218,7 +216,7 @@ class ManagedProcess(InteractiveProcess):
                     or value["pid"] <= 0
                 ):
                     raise ValueError("invalid guard start")
-                self.started, self.client_pid = True, value["pid"]
+                self.started = True
             elif not self.started:
                 raise ValueError("guard did not confirm exec")
             elif kind in (b"o", b"e"):
@@ -446,7 +444,12 @@ def start(
             if terminal:
                 argv += ["--terminal", "--display-socket", os.path.join(run, "display")]
             argv += ["--", *launch.argv]
-            environment = {**os.environ, **launch.env, "ENSEMBLE_GUARD_LEASE_FD": str(lease)}
+            environment = {
+                **os.environ,
+                **launch.env,
+                "ENSEMBLE_GUARD_LEASE_FD": str(lease),
+                "ENSEMBLE_GUARD_HOOK_SOCKET": os.path.join(run, "hook"),
+            }
             for key in ("TMUX", "TMUX_PANE"):
                 environment.pop(key, None)
             proc = subprocess.Popen(
@@ -494,6 +497,10 @@ def start(
                         **({"@display": display} if display is not None else {}),
                     },
                 )
+                if sys.platform == "darwin":
+                    host.tmux.checked(
+                        ["set-hook", "-p", "-t", name, "pane-died", f"kill-session -t ={name}"]
+                    )
         except BaseException:
             with contextlib.suppress(SessionError):
                 handle.close()

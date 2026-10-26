@@ -268,6 +268,8 @@ class Guard:
         self.emit(json_frame(b"s", {"pid": self.proc.pid}))
 
     def emit(self, wire: bytes, ack: socket.socket | None = None, delivery: str = "") -> None:
+        if self.output_size + len(wire) > BUFFER_MAX:
+            raise ValueError("guard output buffer full")
         self.output.append((wire, ack, delivery))
         self.output_size += len(wire)
 
@@ -431,7 +433,7 @@ class Guard:
                         else:
                             for kind, payload in self.decoder.feed(data):
                                 self.command(kind, payload)
-                    elif isinstance(descriptor, socket.socket) and descriptor in self.servers:
+                    elif not isinstance(descriptor, int) and descriptor in self.servers:
                         peer, _ = descriptor.accept()
                         peer.settimeout(0)
                         self.peers[peer] = (self.servers[descriptor], bytearray())

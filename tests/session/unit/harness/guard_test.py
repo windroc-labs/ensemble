@@ -2,11 +2,16 @@
 
 import argparse
 import errno
+import io
 import json
 import os
 import signal
 import socket
+import struct
 import subprocess
+import sys
+import termios
+import tty
 from pathlib import Path
 from unittest import mock
 
@@ -15,6 +20,99 @@ from tests.session.case import Case
 
 
 class GuardTest(Case):
+    def test_display_attach_copies_bytes_and_restores_terminal(self):
+        peer = mock.Mock()
+        peer.recv.side_effect = [b"terminal output", b""]
+        output = io.BytesIO()
+        with (
+            mock.patch.object(socket, "socket", return_value=peer),
+            mock.patch.object(os, "isatty", return_value=True),
+            mock.patch.object(termios, "tcgetattr", return_value=["saved"]),
+            mock.patch.object(termios, "tcsetattr") as restore,
+            mock.patch.object(tty, "setraw") as raw,
+            mock.patch.object(
+                guard.select,
+                "select",
+                side_effect=[([0], [], []), ([peer], [], []), ([peer], [], [])],
+            ),
+            mock.patch.object(os, "read", return_value=b"typed"),
+            mock.patch.object(sys, "stdout", buffer=output),
+        ):
+            self.assertEqual(guard.main(["--attach", self.home + "/display"]), 0)
+        self.assertEqual(output.getvalue(), b"terminal output")
+        peer.sendall.assert_called_once_with(b"typed")
+        raw.assert_called_once_with(0)
+        restore.assert_called_once_with(0, termios.TCSADRAIN, ["saved"])
+        peer.close.assert_called_once()
+
+    def test_macos_kernel_process_identity_and_enumeration(self):
+        library = mock.Mock()
+
+        def info(_pid, _kind, _arg, data, _size):
+            struct.pack_into("=I", data, 4, 2)
+            struct.pack_into("=I", data, 16, 5)
+            struct.pack_into("=QQ", data, 120, 123, 456)
+            return 136
+
+        def listing(_kind, _arg, slots, _size):
+            if slots is None:
+                return 4
+            slots[0] = 9
+            return 4
+
+        library.proc_pidinfo.side_effect = info
+        library.proc_listpids.side_effect = listing
+        with (
+            mock.patch.object(sys, "platform", "darwin"),
+            mock.patch.object(guard.ctypes, "CDLL", return_value=library),
+            mock.patch.object(os, "kill") as killed,
+        ):
+            self.assertEqual(guard.process_info(9), (5, "123:456", False))
+            self.assertEqual(guard.processes(), {9: (5, "123:456", False)})
+            guard.signal_process(9, "123:456", signal.SIGKILL)
+            killed.assert_called_once_with(9, signal.SIGKILL)
+            guard.subreaper()
+        library.proc_pidinfo.side_effect = None
+        library.proc_pidinfo.return_value = 0
+        with (
+            mock.patch.object(sys, "platform", "darwin"),
+            mock.patch.object(guard.ctypes, "CDLL", return_value=library),
+            mock.patch.object(guard.ctypes, "get_errno", return_value=errno.ESRCH),
+        ):
+            self.assertIsNone(guard.process_info(9))
+
+    def test_missing_linux_process_and_unreadable_mac_inventory(self):
+        with mock.patch.object(Path, "read_text", side_effect=FileNotFoundError):
+            self.assertIsNone(guard.process_info(9))
+        with (
+            mock.patch.object(sys, "platform", "darwin"),
+            mock.patch.object(guard.ctypes, "CDLL") as library,
+        ):
+            library.return_value.proc_listpids.return_value = 0
+            with self.assertRaises(OSError):
+                guard.processes()
+            library.return_value.proc_pidinfo.return_value = 0
+            with (
+                mock.patch.object(guard.ctypes, "get_errno", return_value=errno.EPERM),
+                self.assertRaises(PermissionError),
+            ):
+                guard.process_info(9)
+
+    def test_child_clears_signal_mask_and_claims_controlling_terminal(self):
+        with (
+            mock.patch.object(signal, "pthread_sigmask") as mask,
+            mock.patch.object(guard.fcntl, "ioctl") as ioctl,
+        ):
+            guard.child_setup(9)
+        mask.assert_called_once_with(signal.SIG_SETMASK, ())
+        ioctl.assert_called_once_with(9, termios.TIOCSCTTY, 0)
+
+    def test_guard_control_output_has_a_hard_bound(self):
+        runtime = self.runtime()
+        with self.assertRaises(ValueError):
+            runtime.emit(b"x" * (guard.BUFFER_MAX + 1))
+        self.assertFalse(runtime.output)
+
     def runtime(self, *, terminal=False):
         return guard.Guard(
             argparse.Namespace(
@@ -283,7 +381,9 @@ class GuardTest(Case):
             mock.patch.object(os, "set_blocking"),
             mock.patch.object(subprocess, "Popen", return_value=proc),
             mock.patch.object(os, "waitpid", side_effect=ChildProcessError),
-            mock.patch.object(guard.select, "select", return_value=([11, 12], [], [])),
+            mock.patch.object(
+                guard.select, "select", side_effect=[([11, 12], [], []), ([11], [], [])]
+            ),
             mock.patch.object(os, "read", side_effect=[b"last", b"", b"", b""]),
             mock.patch.object(
                 os, "write", side_effect=lambda _fd, data: captured.append(data) or len(data)
