@@ -354,7 +354,7 @@ class Pruner:
         held = None
         try:
             plan = self.tracker.archive_plan(issue.key)
-            held = self.held(plan, finished) if plan.outcome == "changed" else None
+            held = self.held(plan, issue, finished) if plan.outcome == "changed" else None
             archived = plan.outcome == "changed" and held is None
             if archived and self.dry:
                 self.budget.spend()  # the write a real tick sends
@@ -385,10 +385,9 @@ class Pruner:
         elif archived:
             self.say("prune-archived", ident)
 
-    def held(self, plan, finished):
+    def held(self, plan, root, finished):
         """First issue with a stale candidate version or an ineligible descendant, with why."""
-        root = finished[plan.ident]
-        if root.updated != plan.updated:
+        if root.ident != plan.ident or root.updated != plan.updated:
             return root, CHANGED
         for sub in plan.descendants:
             if sub.ident not in finished:

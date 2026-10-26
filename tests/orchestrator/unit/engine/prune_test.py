@@ -1726,6 +1726,32 @@ class ArchiveBound(Bound):
         self.assertEqual(gql.calls.count(linear_tracker.Q_ARCHIVE), 1)
         self.assertEqual(gql.archived, [])
 
+    def test_a_renamed_candidate_is_skipped_without_stopping_prune(self):
+        for dry in (False, True):
+            with self.subTest(dry=dry):
+                if os.path.exists(self.cache()):
+                    os.remove(self.cache())
+                issues = {"TASK-1": self.done, "TASK-2": self.done}
+                gql = gql_for(issues, owners=dict.fromkeys(issues, "u-pm"), changed=())
+
+                def renamed(query, gql=gql, **v):
+                    result = gql(query, **v)
+                    if query == linear_tracker.Q_ARCHIVE and v["i"] == "id-TASK-1":
+                        result["issue"]["identifier"] = "OPS-9"
+                    return result
+
+                code, out = self.prune(renamed, dry=dry)
+                self.assertEqual(code, 0)
+                self.assertEqual(
+                    out.splitlines()[0],
+                    "prune-skip TASK-1 reason=archive: issue TASK-1 changed since archive candidate read",
+                )
+                self.assertIn("prune-plan TASK-2" if dry else "prune-archived TASK-2", out)
+                self.assertEqual(gql.archived, [] if dry else ["id-TASK-2"])
+                if not dry:
+                    self.assertTrue(os.path.isfile(self.cache()))
+                    self.assertEqual(prune_state.load(self.cache())[0].refused, {})
+
     def test_a_refusal_named_again_unchanged_is_kept(self):
         issues = {"TASK-1": self.done, "TASK-3": ("In Progress", [(0.1, "In Progress")])}
         gql = gql_for(
