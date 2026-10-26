@@ -12,6 +12,7 @@ from ensemble.session.clients.codex import CodexClient
 from ensemble.session.clients.opencode import OpenCodeClient
 from ensemble.session.engine.base import Session
 from ensemble.session.engine.types import Effort, EventCall, HookKind, NamedKey, SessionRow, Tier
+from ensemble.session.hosts.base import Host
 from ensemble.session.viewer.types import Split
 from ensemble.utils import LayerCommand, OutcomeStatus
 
@@ -72,5 +73,7 @@ _ = SessionRow.last_lines
 _ = EventCall.event_id
 # A Tui's accepted-prompt hook kind (WDRC-226); WDRC-204's Claude adapter maps a label to it.
 _ = HookKind.TURN_STARTED
+# A resuming harness asks whether an earlier generation runs (WDRC-226); WDRC-206 calls it.
+_ = Host.worker_liveness
 # urllib calls the redirect hook src/broker/internal/launcher/assets/opencode-install.py's NoRedirect overrides.
 _ = urllib.request.HTTPRedirectHandler.redirect_request

@@ -340,6 +340,9 @@ class Host(ABC):
         """Managed worker `name` under the guard (WDRC-199 FR-13)."""
         raise SessionError(f"host {self.name} runs no managed worker")
 
+    def worker_liveness(self, name: str, generation: str) -> Liveness:
+        raise SessionError(f"host {self.name} runs no managed worker")
+
     def pipe(
         self, name: str | None, launch: Launch, *, metadata: Mapping[str, str] | None = None
     ) -> Piped:
