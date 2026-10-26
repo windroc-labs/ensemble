@@ -57,7 +57,10 @@ type Store interface {
 // is confirmed revoked or expired: a material leaves its record only for confirmed revocation, confirmed expiry or a
 // confirmed backlog write. Lock guards each read-modify-write of either item, never a provider request. Audit (nil:
 // none) gets each token's outcome, never its value. Acquire, Refresh, Release and Retry refuse a provider whose kind
-// is not renewable (ErrStatic); Pending, which asks the provider nothing, only reads the backlog.
+// is not renewable (ErrStatic); Pending, which asks the provider nothing, only reads the backlog. An Issuer that is a
+// Writer delivers its own materials, one that is an Ender ends its run; a Delivery's Publish follows each delivery. A
+// shared provider's material that failed delivery or publication stays recorded prepared: there is nothing to revoke.
+// A failed run never rolls back a material the record already held (rollback).
 type Lifecycle struct {
 	Provider Provider
 	Store    Store
@@ -276,6 +279,38 @@ func (p Pending) material() Material {
 // slot is m's grant position: its account and target.
 func (m Material) slot() [2]any { return [2]any{m.Account, m.Target} }
 
+// recording is how put recorded a material: not at all (its record could not be read, or was gone), as a new entry,
+// or by re-marking one the record already held.
+type recording int
+
+const (
+	unrecorded recording = iota
+	appended
+	held
+)
+
+// put records m, prepared, in rec at the next revision; a token rec already holds (a shared account's, not renewed
+// meanwhile) turns prepared again, keeping its revision, rather than recorded twice.
+func put(rec *Record, m *Material) recording {
+	if i := slices.IndexFunc(rec.Tokens, func(t Material) bool { return t.Token == m.Token }); i >= 0 {
+		rec.Tokens[i].State, m.Revision = Prepared, rec.Tokens[i].Revision
+		return held
+	}
+	m.Revision = desired(rec) + 1
+	rec.Tokens = append(rec.Tokens, *m)
+	return appended
+}
+
+// rollback is whether a failed run retires a material it issued, recorded as r. Never one the record already held,
+// which stays usable. A shared provider's only when the run appended it: a failed write leaves the rest of the record
+// as it was, and nothing needs revoking. Any other provider's even unrecorded: a fresh token is live at the provider.
+func (l Lifecycle) rollback(r recording) bool {
+	if l.shared() {
+		return r == appended
+	}
+	return r != held
+}
+
 // desired is rec's highest revision.
 func desired(rec *Record) int {
 	n := 0
@@ -444,10 +479,24 @@ func (l Lifecycle) withdraw(id string, entries []Material, whole bool) error {
 	return nil
 }
 
-// deliver writes m into d's consumer; a host consumer's record is its copy, so it has nothing to write.
-func (l Lifecycle) deliver(d Delivery, m Material) error {
+// deliver writes m into d's consumer, through issuer when it is a Writer, then publishes it; a host consumer's record
+// is its copy, so it has nothing to write.
+func (l Lifecycle) deliver(d Delivery, issuer Issuer, m Material) error {
+	if err := l.write(d, issuer, m); err != nil {
+		return err
+	}
+	if d.Publish != nil {
+		return d.Publish(m)
+	}
+	return nil
+}
+
+func (l Lifecycle) write(d Delivery, issuer Issuer, m Material) error {
 	if d.Exec == nil {
 		return nil
+	}
+	if w, ok := issuer.(Writer); ok {
+		return w.Write(d.Exec, m)
 	}
 	f, err := l.Provider.File(m)
 	if err != nil {
@@ -456,6 +505,15 @@ func (l Lifecycle) deliver(d Delivery, m Material) error {
 	token := []byte(m.Token)
 	defer erase(token)
 	return Deliver(d.Exec, f, token)
+}
+
+// end ends issuer's run, when it is an Ender, joining End's error to *err.
+func end(issuer Issuer, err *error) {
+	if e, ok := issuer.(Ender); ok {
+		if endErr := e.End(); endErr != nil {
+			*err = errors.Join(*err, endErr)
+		}
+	}
 }
 
 func expiries(entries []Material) []protocol.Expiry {
@@ -467,9 +525,12 @@ func expiries(entries []Material) []protocol.Expiry {
 	return out
 }
 
-// Acquire gives d's consumer one token per target of subject, limited to scope: each is recorded prepared before the
-// next request, all are delivered, then all are marked delivered. On any failure it retires every token it issued.
-func (l Lifecycle) Acquire(ctx context.Context, d Delivery, subject string, scope map[string]string) ([]protocol.Expiry, error) {
+// Acquire gives d's consumer one token per target of subject, limited to scope: each is recorded prepared (put) before
+// the next request, all are delivered and published, then all are marked delivered. On a failure it retires only its
+// rollback set (rollback), never a material the record already held: a shared provider's materials this run appended,
+// any other provider's fresh tokens even unrecorded. A shared provider's that failed delivery or publication stay
+// prepared.
+func (l Lifecycle) Acquire(ctx context.Context, d Delivery, subject string, scope map[string]string) (_ []protocol.Expiry, err error) {
 	if err := l.ready(); err != nil {
 		return nil, err
 	}
@@ -481,16 +542,24 @@ func (l Lifecycle) Acquire(ctx context.Context, d Delivery, subject string, scop
 	if err != nil {
 		return nil, err
 	}
+	defer end(issuer, &err)
 	secret := issuer.Secret()
 	targets, err := issuer.Targets(ctx)
 	if err != nil {
 		return nil, redactErr(err, secret)
 	}
 	var issued []Material
+	var how []recording // issued's
 	fail := func(err error) ([]protocol.Expiry, error) {
 		err = redactErr(err, secret)
-		if len(issued) > 0 {
-			err = rolledBack(err, l.discard(ctx, id, issued, true))
+		var retired []Material
+		for i, m := range issued {
+			if l.rollback(how[i]) {
+				retired = append(retired, m)
+			}
+		}
+		if len(retired) > 0 {
+			err = rolledBack(err, l.discard(ctx, id, retired, !l.shared()))
 		}
 		return nil, err
 	}
@@ -500,10 +569,10 @@ func (l Lifecycle) Acquire(ctx context.Context, d Delivery, subject string, scop
 			return fail(err)
 		}
 		m.Account, m.Target, m.State = target.Account, target.Target, Prepared
-		issued = append(issued, m)
+		issued, how = append(issued, m), append(how, unrecorded)
 		if _, err := l.editRecord(id, true, func(rec *Record, _ bool) {
-			m.Revision = desired(rec) + 1
-			rec.Subject, rec.Scope, rec.Tokens = subject, scope, append(rec.Tokens, m)
+			rec.Subject, rec.Scope = subject, scope
+			how[len(how)-1] = put(rec, &m)
 		}); err != nil {
 			l.noteUnrecorded(id, audit.Issued, m)
 			return fail(err)
@@ -515,7 +584,10 @@ func (l Lifecycle) Acquire(ctx context.Context, d Delivery, subject string, scop
 		return expiries(nil), nil // a subject with no targets has nothing to grant
 	}
 	for _, m := range issued {
-		if err := l.deliver(d, m); err != nil {
+		if err := l.deliver(d, issuer, m); err != nil {
+			if l.shared() {
+				return nil, redactErr(err, secret)
+			}
 			return fail(err)
 		}
 	}
@@ -537,9 +609,9 @@ func (l Lifecycle) Acquire(ctx context.Context, d Delivery, subject string, scop
 }
 
 // Refresh replaces each slot of d's consumer's record, whatever its materials' states, with a new token: recorded
-// prepared, delivered, then marked delivered while the slot's other materials turn retiring, which are then retired.
-// It issues with the record's scope when it has one, else scope (a record an older broker wrote).
-func (l Lifecycle) Refresh(ctx context.Context, d Delivery, scope map[string]string) ([]protocol.Expiry, error) {
+// prepared, delivered and published, then marked delivered while the slot's other materials turn retiring, which are
+// then retired; each is recorded as put does. It issues with the record's scope when it has one, else scope (a record an older broker wrote).
+func (l Lifecycle) Refresh(ctx context.Context, d Delivery, scope map[string]string) (_ []protocol.Expiry, err error) {
 	if err := l.ready(); err != nil {
 		return nil, err
 	}
@@ -561,16 +633,20 @@ func (l Lifecycle) Refresh(ctx context.Context, d Delivery, scope map[string]str
 	if len(rec.Scope) > 0 {
 		scope = rec.Scope
 	}
-	var slots []Material
+	var slots []Material // each slot's newest material
 	for _, m := range rec.Tokens {
-		if !slices.ContainsFunc(slots, func(s Material) bool { return s.slot() == m.slot() }) {
-			slots = append(slots, Material{Account: m.Account, Target: m.Target})
+		switch i := slices.IndexFunc(slots, func(s Material) bool { return s.slot() == m.slot() }); {
+		case i < 0:
+			slots = append(slots, m)
+		case m.Revision >= slots[i].Revision:
+			slots[i] = m
 		}
 	}
 	issuer, err := l.Provider.Begin(ctx, rec.Subject)
 	if err != nil {
 		return nil, err
 	}
+	defer end(issuer, &err)
 	secret := issuer.Secret()
 	var fresh []Material
 	for _, target := range slots {
@@ -579,10 +655,10 @@ func (l Lifecycle) Refresh(ctx context.Context, d Delivery, scope map[string]str
 			return nil, redactErr(err, secret)
 		}
 		m.Account, m.Target, m.State = target.Account, target.Target, Prepared
+		how := unrecorded
 		found, err := l.editRecord(id, false, func(rec *Record, found bool) {
 			if found {
-				m.Revision = desired(rec) + 1
-				rec.Tokens = append(rec.Tokens, m)
+				how = put(rec, &m)
 			}
 		})
 		if err != nil || !found {
@@ -590,11 +666,17 @@ func (l Lifecycle) Refresh(ctx context.Context, d Delivery, scope map[string]str
 			if err == nil {
 				err = ErrReleased
 			}
-			return nil, rolledBack(err, l.discard(ctx, id, []Material{m}, false))
+			if l.rollback(how) {
+				err = rolledBack(err, l.discard(ctx, id, []Material{m}, false))
+			}
+			return nil, err
 		}
 		l.describe(ctx, id, audit.Renewed, m, secret)
-		if err := l.deliver(d, m); err != nil {
-			return nil, rolledBack(redactErr(err, secret), l.discard(ctx, id, []Material{m}, false))
+		if err := l.deliver(d, issuer, m); err != nil {
+			if err = redactErr(err, secret); l.shared() || !l.rollback(how) {
+				return nil, err // the record keeps it prepared beside the slot's usable material
+			}
+			return nil, rolledBack(err, l.discard(ctx, id, []Material{m}, false))
 		}
 		var old []Material
 		kept := false

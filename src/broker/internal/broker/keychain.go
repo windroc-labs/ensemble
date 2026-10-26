@@ -78,6 +78,7 @@ var KeychainServices = []string{
 	"ensemble-tokens",
 	"ensemble-revocations",
 	"ensemble-codex",
+	"ensemble-codex-grants",
 	"ensemble-opencode",
 	"ensemble-env/", // prefix item: every ensemble-env/<name>
 }
