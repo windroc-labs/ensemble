@@ -197,7 +197,7 @@ class Manage(Case):
         update = rule("bumps the ensemble plugin version")
         self.assertIn("`claude plugin update ensemble@windroc`", update)
         self.assertIn("`codex plugin marketplace upgrade windroc`", update)
-        wait = "once Release `v<version>` has its broker asset and provenance (`AGENTS.md` › Releasing)"
+        wait = "once Release `v<version>` has its broker asset and sha256 file (`AGENTS.md` › Releasing)"
         self.assertLess(update.index(wait), update.index("update the installed plugin"))
 
     def test_docker_host_workers_start_no_sessions_or_containers(self):
@@ -212,22 +212,20 @@ class Manage(Case):
             self.assertIn(phrase, docker)
         self.assertIn("so a worker or role run starts no sessions of its own", body("manage"))
 
-    def test_releasing_waits_for_asset_and_provenance_before_plugin_update(self):
+    def test_releasing_uploads_and_confirms_the_asset_before_plugin_update(self):
         with open(os.path.join(REPO, "AGENTS.md"), encoding="utf-8") as f:
             releasing = re.search(r"(?ms)^## Releasing\n(.*?)(?=^## |\Z)", f.read())[1]
-        asset = "ensemble-broker-darwin-arm64.tar.gz"
         order = [
             "publish Release `v<version>`",
+            "`sh scripts/release-broker.sh v<version>`",
+            "`ensemble-broker-darwin-arm64.tar.gz.sha256`",
             "`gh release view v<version> --repo windroc-labs/ensemble --json assets`",
-            f"`gh release download v<version> --repo windroc-labs/ensemble --pattern {asset} --dir <dir>`",
-            f"`gh attestation verify <dir>/{asset} --repo windroc-labs/ensemble"
-            " --signer-workflow windroc-labs/ensemble/.github/workflows/release.yml"
-            " --source-ref refs/tags/v<version> --deny-self-hosted-runners`",
             "update the installed plugin",
         ]
         found = [releasing.find(step) for step in order]
         self.assertNotIn(-1, found, releasing)
         self.assertEqual(found, sorted(found))
+        self.assertNotIn("attestation", releasing)
         self.assertIn("A client without this plugin's `bin/` on its PATH", body("manage"))
 
     def test_a_pipeline_needs_input_has_its_own_steps(self):
