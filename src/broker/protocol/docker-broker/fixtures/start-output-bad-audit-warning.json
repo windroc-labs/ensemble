@@ -1,5 +1,5 @@
 {
-  "credential_expires_at": "2026-10-18T12:00:00Z",
+  "credential_expires_at": null,
   "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
   "endpoint": "unix:///Users/example/.docker/run/docker.sock",
   "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -14,5 +14,6 @@
       "expires_at": "2026-10-17T13:00:00Z"
     }
   ],
-  "github_user_id": 343764394
+  "github_user_id": 343764394,
+  "audit_warning": "AUDIT_SECRET_SENTINEL"
 }

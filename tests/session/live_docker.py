@@ -18,6 +18,7 @@ line per generation, and exits 1 at the first failed check:
 """
 
 import fcntl
+import ipaddress
 import json
 import os
 import re
@@ -25,15 +26,18 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from ensemble.session.engine.config import read_config
 from ensemble.session.engine.types import SessionError
 from ensemble.session.hosts.base import Host
-from ensemble.session.hosts.docker.broker import BROKER, REFRESH, Broker, plugin_root
+from ensemble.session.hosts.docker.broker import BROKER, Broker, plugin_root
 from ensemble.session.hosts.docker.host import LABEL
 from ensemble.session.hosts.docker.mounts import state_dir
 from ensemble.utils import docker_home
@@ -77,6 +81,7 @@ BROKER_PHASES = frozenset(
 )
 BROKER_LINE = re.compile(r"^ensemble-broker: start (\S+) ([0-9.]+) s$", re.MULTILINE)
 # Resource → the command docs/credentials.md › What a container cannot reach runs as `sh -c`.
+EGRESS = "windroc.egress."  # the egress proxy's label prefix
 UNREACHABLE = {
     "host keychain": r"find / \( -path /proc -o -path /sys \) -prune -o -path "
     r'"*/Library/Keychains*" -print 2>/dev/null | wc -l; command -v security | wc -c',
@@ -165,7 +170,23 @@ def _host_path(source: str) -> str:
     return source[len(prefix) - 1 :] if source.startswith(prefix) else source
 
 
-def baseline(inspect: dict, name: str, cwd: str, plan_mounts: list[str]) -> list[str]:
+def egress_proxy(docker: str) -> tuple[dict, str]:
+    """The egress proxy's inspect and workers network, by its label contract (src/broker/internal/launcher/egress.go)."""
+    ids = call(
+        [docker, "ps", "--all", "--filter", f"label={EGRESS}contract", "--format", "{{.ID}}"]
+    )[0]
+    if len(ids.split()) != 1:
+        raise SystemExit(
+            f"want one egress proxy (label {EGRESS}contract), found {len(ids.split())}"
+        )
+    (found,) = json.loads(call([docker, "inspect", ids.split()[0]])[0])
+    network = ((found.get("Config") or {}).get("Labels") or {}).get(f"{EGRESS}network.workers.name")
+    if not network:
+        raise SystemExit(f"the egress proxy has no {EGRESS}network.workers.name label")
+    return found, network
+
+
+def baseline(inspect: dict, name: str, cwd: str, plan_mounts: list[str], network: str) -> list[str]:
     host, config = inspect.get("HostConfig") or {}, inspect.get("Config") or {}
     problems = []
     if "ALL" not in (host.get("CapDrop") or []):
@@ -176,8 +197,11 @@ def baseline(inspect: dict, name: str, cwd: str, plan_mounts: list[str]) -> list
         problems.append("Config.User is not agent")
     if host.get("Privileged"):
         problems.append("HostConfig.Privileged is true")
-    if host.get("NetworkMode") != "bridge":  # the broker's --network bridge
-        problems.append(f"HostConfig.NetworkMode is {host.get('NetworkMode')}, want bridge")
+    if host.get("NetworkMode") != network:  # the broker's --network, the proxy's workers network
+        problems.append(f"HostConfig.NetworkMode is {host.get('NetworkMode')}, want {network}")
+    networks = sorted(((inspect.get("NetworkSettings") or {}).get("Networks") or {}).keys())
+    if networks != [network]:
+        problems.append(f"NetworkSettings.Networks is {networks}, want only {network}")
     if host.get("ExtraHosts"):
         problems.append(f"HostConfig.ExtraHosts is set: {host['ExtraHosts']}")
     problems += [f"HostConfig.{k} is host" for k in ("PidMode", "IpcMode") if host.get(k) == "host"]
@@ -196,6 +220,64 @@ def baseline(inspect: dict, name: str, cwd: str, plan_mounts: list[str]) -> list
     if not risky and sorted(_host_path(m.get("Source", "")) for m in binds) != sorted(plan_mounts):
         problems.append("bind mounts differ from the plan's mounts")
     return problems + risky
+
+
+def proxy_baseline(egress: dict, network: dict, worker: dict) -> list[str]:
+    labels = (egress.get("Config") or {}).get("Labels") or {}
+    name = labels.get(f"{EGRESS}network.workers.name", "")
+    proxy = labels.get(f"{EGRESS}network.workers.proxy", "")
+    state = egress.get("State") or {}
+    problems = []
+    if labels.get(f"{EGRESS}contract") != "1":
+        problems.append("proxy contract must be 1")
+    if "workers" not in labels.get(f"{EGRESS}networks", "").split(",") or not name or not proxy:
+        problems.append("proxy lacks workers labels")
+    if state.get("Running") is not True or (state.get("Health") or {}).get("Status") != "healthy":
+        problems.append("proxy must be running and healthy")
+    attached = (egress.get("NetworkSettings") or {}).get("Networks") or {}
+    if network.get("Internal") is not True or network.get("Name") != name or name not in attached:
+        problems.append("workers network must be internal and have the proxy attached")
+    env = dict(
+        item.split("=", 1) for item in (worker.get("Config") or {}).get("Env", []) if "=" in item
+    )
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        if env.get(key) != proxy:
+            problems.append(f"{key} differs from proxy label")
+    for key in ("NO_PROXY", "no_proxy"):
+        if set(env.get(key, "").split(",")) != {"localhost", "127.0.0.1", "::1"}:
+            problems.append(f"{key} must bypass only container loopback")
+    return problems
+
+
+def probe_problems(kind: str, status: str, code: int) -> list[str]:
+    valid = {
+        "public": code == 0 and status.strip() == "200 200",
+        "denied": code == 56 and status.strip() == "407 000",
+        "direct": code in (6, 7, 28) and status.strip() == "000 000",
+    }
+    return [] if valid[kind] else [f"{kind}: curl exit={code}, status={status.strip()!r}"]
+
+
+class ProbeHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, _format: str, *args: object) -> None:
+        pass
+
+
+@contextmanager
+def listener(host: str):
+    with HTTPServer((host, 0), ProbeHandler) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield server.server_port
+        finally:
+            server.shutdown()
+            thread.join()
 
 
 def loopback_only(lsof: str, port: int) -> list[str]:
@@ -274,9 +356,6 @@ def timing(result: dict, hooks: str, stderr: str, name: str) -> str:
     parts.append(
         f"preflight {_seconds(rf'^docker timing {re.escape(name)}: preflight ([0-9.]+) s$', stderr)}"
     )
-    if isinstance(update := result.get("client_update"), dict):
-        took = _seconds(r"^ensemble-broker: start client_update ([0-9.]+) s$", stderr)
-        parts.append(f"client_update {update.get('result')} {took}")
     return " | ".join(parts)
 
 
@@ -298,11 +377,12 @@ def new_generation(before: set[str], after: set[str], *, step: str = "start") ->
     return next(iter(new))
 
 
-def install_steps(result: dict, stderr: str, client: str) -> list[str]:
+def install_steps(result: dict, stderr: str) -> list[str]:
     problems = [f"install step {p} at start" for p in result.get("phases") or {} if p not in PHASES]
-    allowed = BROKER_PHASES | ({"client_update"} if client == "codex" else set())
     problems += [
-        f"install step {p} at start" for p, _ in BROKER_LINE.findall(stderr) if p not in allowed
+        f"install step {p} at start"
+        for p, _ in BROKER_LINE.findall(stderr)
+        if p not in BROKER_PHASES
     ]
     return problems
 
@@ -597,13 +677,83 @@ class Worker:
         plan = load(os.path.join(state_dir(self.name), f"{start.generation}.plan.json"))
         (found,) = json.loads(call([self.docker, "inspect", container])[0])
         mounts = [m["path"] for m in plan["mounts"]]
-        passed(baseline(found, self.name, plan["workspace"]["path"], mounts), "security baseline")
+        egress, network_name = egress_proxy(self.docker)
+        (network,) = json.loads(call([self.docker, "network", "inspect", network_name])[0])
+        passed(proxy_baseline(egress, network, found), "egress proxy and worker proxy settings")
+        passed(
+            baseline(found, self.name, plan["workspace"]["path"], mounts, network_name),
+            "security baseline",
+        )
+        self.network(container, egress["Config"]["Labels"][f"{EGRESS}network.workers.proxy"])
         for resource, command in UNREACHABLE.items():
             # grep -c exits 1 when it counts 0, the passing case
             counts = call([self.docker, "exec", container, "sh", "-c", f"{command}; true"])[0]
             if not zero_counts(counts):
                 raise SystemExit(f"FAIL cannot reach {resource}: {' '.join(counts.split())}")
             print(f"PASS cannot reach {resource}: {' '.join(counts.split())}", flush=True)
+
+    def network(self, container: str, proxy: str) -> None:
+        self.probe(container, proxy, "https://example.com", "public")
+        self.probe(container, "", "https://1.1.1.1", "direct")
+        route = call(["route", "-n", "get", "default"])[0]
+        interfaces = re.findall(r"^\s*interface:\s*(\S+)", route, re.MULTILINE)
+        if len(interfaces) != 1:
+            raise SystemExit("FAIL LAN control: no unique default interface")
+        lan = call(["ipconfig", "getifaddr", interfaces[0]])[0].strip()
+        try:
+            address = ipaddress.ip_address(lan)
+        except ValueError:
+            address = None
+        if address is None or address.version != 4 or not address.is_private or address.is_loopback:
+            raise SystemExit("FAIL LAN control: need this mini's private LAN IPv4 address")
+        for bind, target in (("127.0.0.1", "host.docker.internal"), (lan, lan)):
+            with listener(bind) as port:
+                call(
+                    [
+                        "curl",
+                        "--noproxy",
+                        "*",
+                        "-fsS",
+                        "-o",
+                        "/dev/null",
+                        "--max-time",
+                        "5",
+                        f"http://{bind}:{port}/",
+                    ]
+                )
+                print(f"PASS host control: {bind}:{port} reachable", flush=True)
+                url = f"http://{target}:{port}/"
+                self.probe(container, proxy, url, "denied")
+                self.probe(container, "", url, "direct")
+
+    def probe(self, container: str, proxy: str, url: str, kind: str) -> None:
+        argv = [
+            self.docker,
+            "exec",
+            container,
+            "curl",
+            "-sS",
+            "-o",
+            "/dev/null",
+            "--connect-timeout",
+            "3",
+            "--max-time",
+            "10",
+            "-w",
+            "%{http_connect} %{http_code}",
+        ]
+        argv += (
+            ["--noproxy", "", "--proxytunnel", "--proxy", proxy] if proxy else ["--noproxy", "*"]
+        )
+        result = subprocess.run(
+            [*argv, url],
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=20,
+            check=False,
+        )
+        passed(probe_problems(kind, result.stdout, result.returncode), f"network {kind}: {url}")
 
 
 class Checks:
@@ -684,13 +834,9 @@ def worker(args: Args) -> int:
     broker = Broker()
     broker.version()
     package = plugin_root(os.path.join(BIN, "ensemble-session"))
-    _, digest = timed(
-        times, "build", lambda: broker.build(package, plugins=plugins, max_age=REFRESH)
-    )
+    _, digest = timed(times, "build", lambda: broker.build(package, plugins=plugins))
     named = [arg for p in plugins for arg in ("--plugin", p)]
-    again = json.loads(
-        call([BROKER, "build", "--ensemble", package, *named, "--max-age", str(REFRESH)], 1920)[0]
-    )
+    again = json.loads(call([BROKER, "build", "--ensemble", package, *named], 1920)[0])
     if again.get("rebuilt") is not False or again.get("digest") != digest:
         raise SystemExit("FAIL a second build rebuilt the image or changed its digest")
     print("PASS a current image is not rebuilt", flush=True)
@@ -746,11 +892,11 @@ def worker(args: Args) -> int:
     lines = audit_lines(read_text(AUDIT))
     if removed:
         print(removed_tokens(lines, removed.rsplit("-", 1)[1]), flush=True)
-    report(w.name, w.client, w.starts, digest, times)
+    report(w.name, w.starts, digest, times)
     return 0
 
 
-def report(name: str, client: str, starts: list[Start], digest: str, times: dict) -> None:
+def report(name: str, starts: list[Start], digest: str, times: dict) -> None:
     hooks = read_text(os.path.expanduser(f"~/.ensemble/tui/{name}/hooks.jsonl"))
     problems = []
     for start in starts:
@@ -759,9 +905,7 @@ def report(name: str, client: str, starts: list[Start], digest: str, times: dict
             problems.append(
                 f"{start.generation}: started on {result.get('image_digest')}, built {digest}"
             )
-        problems += [
-            f"{start.generation}: {p}" for p in install_steps(result, start.stderr, client)
-        ]
+        problems += [f"{start.generation}: {p}" for p in install_steps(result, start.stderr)]
         print(
             f"timing {name} {start.generation} ({start.step}): build {times.get('build', 0):.1f} s"
             f" | {timing(result, hooks, start.stderr, name)}",

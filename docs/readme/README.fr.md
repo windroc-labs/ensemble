@@ -79,7 +79,7 @@ Rien de tout cela n'est vérifié. S'il en manque un, le run de l'agent échoue.
 |---|---|
 | CLI `claude`, Python 3.11+ | chaque run d'agent |
 | le plugin [`updraft`](https://github.com/windroc-labs/updraft), pour les workers sur le host : Claude Code `/plugin marketplace add windroc-labs/agent-plugins-marketplace`, puis `/plugin install updraft@windroc` ; Codex `codex plugin marketplace add windroc-labs/agent-plugins-marketplace`, puis `codex plugin add updraft@windroc`. Les workers Docker l’installent dans l’image ([plugins](../docker-host.md#plugins)). | les build tasks de l'engineer (`/updraft:build`, `/updraft:light-build`) et la revue du PRD par le PM (`/updraft:review`). Inutile sinon. |
-| tmux 3.3+ | les tui runs sur le Host `tmux` |
+| tmux 3.3–3.8 | les tui runs sur le Host `tmux` |
 | [Ollama](https://ollama.com) sur `127.0.0.1` seulement, contexte d'au moins 65536, modèle du tier téléchargé ; sur `tmux` aussi OpenCode 1.x (`npm install -g opencode-ai@1.19.3`) | OpenCode seulement ([Docker host › OpenCode](../docker-host.md#opencode), [OpenCode sessions](../sessions.md#opencode-sessions)) |
 | `git`, `gh` connecté | coder (checkouts, pull requests) et destinations GitHub. Inutile sinon. |
 | iTerm2 lancé | le split iTerm2 par défaut |

@@ -14,6 +14,7 @@ on:
       - .github/workflows/worker-image.yml
       - .github/worker_codex.py
       - .github/worker_codex/**
+      - .github/worker_base/**
   schedule:
     - cron: "17 6 * * 1"
   workflow_dispatch:
@@ -45,7 +46,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           changed=$(git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA")
-          if grep -qE '^(src/broker/|src/ensemble/session/|src/ensemble/utils/|src/ensemble/delegate/|\.claude-plugin/plugin\.json$|\.github/workflows/worker-image\.yml$|\.github/worker_codex\.py$|\.github/worker_codex/)' <<<"$changed"; then
+          if grep -qE '^(src/broker/|src/ensemble/session/|src/ensemble/utils/|src/ensemble/delegate/|\.claude-plugin/plugin\.json$|\.github/workflows/worker-image\.yml$|\.github/worker_codex\.py$|\.github/worker_codex/|\.github/worker_base/)' <<<"$changed"; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           else
             echo "No image input changed; nothing to build."
@@ -97,7 +98,9 @@ jobs:
           jq -e --arg key "${IMAGE#ensemble-worker:}" --arg version "$version" '
             .["ensemble.key"] == $key and .["ensemble.version"] == $version
             and (.["ensemble.agent-uid"] | test("^[1-9][0-9]*$"))
-            and (.["ensemble.agent-gid"] | test("^[1-9][0-9]*$"))' <<<"$labels"
+            and (.["ensemble.agent-gid"] | test("^[1-9][0-9]*$"))
+            and ([.["ensemble.claude-version"], .["ensemble.codex-version"], .["ensemble.opencode-version"]]
+              | all(test("^[0-9]+\\.[0-9]+\\.[0-9]+$")))' <<<"$labels"
       - name: Check image history holds no token
         if: ${{ steps.inputs.outputs.build != 'false' }}
         env:
@@ -113,7 +116,12 @@ jobs:
         env:
           IMAGE: ${{ steps.build.outputs.image }}
         run: |
-          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges "$IMAGE" sh -euc '
+          label() { docker image inspect "$IMAGE" --format "{{index .Config.Labels \"ensemble.$1-version\"}}"; }
+          claude=$(label claude)
+          codex=$(label codex)
+          opencode=$(label opencode)
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+            --env CLAUDE_VERSION="$claude" --env CODEX_VERSION="$codex" --env OPENCODE_VERSION="$opencode" "$IMAGE" sh -euc '
             uid=$(id -u)
             echo "uid $uid"
             test "$uid" != 0
@@ -129,10 +137,12 @@ jobs:
             python3 --version
             uv --version
             node --version
-            claude --version
-            codex --version
+            test "$(command -v claude)" = /opt/ensemble/bin/claude
+            test "$(claude --version | cut -d " " -f 1)" = "$CLAUDE_VERSION"
+            test "$(command -v codex)" = /opt/ensemble/bin/codex
+            test "$(codex --version)" = "codex-cli $CODEX_VERSION"
             test "$(command -v opencode)" = /opt/ensemble/bin/opencode
-            test "$(opencode --version)" = 1.19.3
+            test "$(opencode --version)" = "$OPENCODE_VERSION"
             client=/opt/ensemble/src/ensemble/session/clients/opencode
             test -r "$client/launcher.py"
             test -r "$client/plugin.js"
@@ -190,3 +200,50 @@ jobs:
         env:
           IMAGE: ${{ steps.build.outputs.image }}
         run: python3 .github/worker_codex.py "$IMAGE"
+      - name: Build a variant on a local base image
+        id: base
+        if: ${{ steps.inputs.outputs.build != 'false' }}
+        run: |
+          # Not the build's ensemble-user stage: it carries the reserved ensemble.key label.
+          docker build --tag ci-worker:definition src/broker/worker
+          docker build --build-arg BASE=ci-worker:definition --tag ci-base:ok .github/worker_base
+          "$RUNNER_TEMP/ensemble-broker" build --ensemble "$GITHUB_WORKSPACE" --base-image ci-base:ok --image-plugin dummy-plugin > "$RUNNER_TEMP/base.json"
+          cat "$RUNNER_TEMP/base.json"
+          image=$(jq -er 'select(.rebuilt == true) | .image' "$RUNNER_TEMP/base.json")
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+      - name: Smoke-check the base image variant
+        if: ${{ steps.inputs.outputs.build != 'false' }}
+        env:
+          IMAGE: ${{ steps.base.outputs.image }}
+        run: |
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges "$IMAGE" sh -euc '
+            test "$(id -u agent):$(id -g agent)" = 1000:1000
+            test "$(id -u)" = 1000
+            python3 -c pass
+            case ":$CLAUDE_CODE_PLUGIN_DIRS:" in
+              *:/opt/windroc/plugins/dummy-plugin:*) ;;
+              *) echo "CLAUDE_CODE_PLUGIN_DIRS=$CLAUDE_CODE_PLUGIN_DIRS"; exit 1 ;;
+            esac
+            grep -q "\"dummy-plugin\"" /opt/windroc/plugins/dummy-plugin/.claude-plugin/plugin.json
+            test "$(command -v claude)" = /opt/ensemble/bin/claude
+            claude --version'
+      - name: Check base image failures name their cause
+        if: ${{ steps.inputs.outputs.build != 'false' }}
+        run: |
+          expect_build_failed() {
+            want=$1
+            shift
+            status=0
+            "$RUNNER_TEMP/ensemble-broker" build --ensemble "$GITHUB_WORKSPACE" "$@" > /dev/null 2> "$RUNNER_TEMP/failed.err" || status=$?
+            cat "$RUNNER_TEMP/failed.err"
+            test "$status" = 8
+            grep -qF -- "$want" "$RUNNER_TEMP/failed.err"
+          }
+          expect_build_failed ci-absent:none --base-image ci-absent:none
+          if docker image inspect ci-absent:none > /dev/null 2>&1; then
+            echo "::error::ci-absent:none was pulled"
+            exit 1
+          fi
+          printf 'FROM ci-base:ok\nLABEL windroc.lock=x\n' | docker build --tag ci-base:label -
+          expect_build_failed windroc.lock --base-image ci-base:label
+          expect_build_failed absent-plugin --base-image ci-base:ok --image-plugin absent-plugin

@@ -25,8 +25,8 @@ type auditLine struct {
 	ImageDigest                                    *string `json:"image_digest"`
 	Mounts                                         *[]audit.Mount
 	Credentials                                    []struct {
-		Kind, Result string
-		ExpiresAt    *string `json:"expires_at"`
+		Kind, Result, Item string
+		ExpiresAt          *string `json:"expires_at"`
 	}
 	Error *string
 }
@@ -59,7 +59,7 @@ func readLines(t *testing.T, path string) []auditLine {
 func kinds(l auditLine) []string {
 	var out []string
 	for _, c := range l.Credentials {
-		out = append(out, c.Kind+" "+c.Result)
+		out = append(out, strings.TrimSpace(c.Kind+" "+c.Result+" "+c.Item))
 	}
 	return out
 }
@@ -104,7 +104,7 @@ func TestStartLine(t *testing.T) {
 			manifest := validManifest(t)
 			want := []string{"claude-setup-token issued"}
 			if client == "codex" {
-				h.Codex, h.Versions, manifest = &fakeCodexCreds{}, &fakeVersions{target: "0.163.0"}, codexManifest(t)
+				h.Codex, h.Versions, manifest = &fakeCodexCreds{}, &fakeVersions{}, codexManifest(t)
 				want = []string{"codex-access-token issued"}
 			}
 			rec, path := audited(t, &h, "start", "")
@@ -260,6 +260,13 @@ func TestCloseLine(t *testing.T) {
 		"inspect fails":            {"", errors.New("inspect"), container, nil},
 		"older broker: no client":  {config(`["PATH=/usr/bin"]`, `null`), nil, container, nil},
 		"malformed inspect output": {`["PATH=/usr/bin"]`, nil, container, nil},
+		"env secrets": {config(claudeEnv, `{"ensemble.client":"claude","ensemble.secrets":"ensemble-env/dummy,ensemble-env/ssh"}`), nil, container,
+			[]string{"claude-setup-token withdrawn", "env-secret withdrawn ensemble-env/dummy", "env-secret withdrawn ensemble-env/ssh"}},
+		"env secrets, invalid entries": {config(`null`, `{"ensemble.client":"codex","ensemble.secrets":"ensemble-env/dummy,,ensemble-bot,ensemble-env/Bad"}`), nil, container,
+			[]string{"codex-access-token withdrawn", "env-secret withdrawn ensemble-env/dummy"}},
+		"env secrets, absent": {config(`null`, `{"ensemble.secrets":"ensemble-env/dummy"}`), nil, "", nil},
+		"env secrets, no client": {config(`null`, `{"ensemble.client":"opencode","ensemble.secrets":"ensemble-env/dummy"}`), nil, container,
+			[]string{"env-secret withdrawn ensemble-env/dummy"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := &fakeDocker{respond: func(args []string) ([]byte, error) {
@@ -292,7 +299,7 @@ func TestNoSecretsInLog(t *testing.T) {
 		h, _ := githubHost(&world{labels: goodLabels()}, &fakeTokens{})
 		manifest := githubManifest(t)
 		if client == "codex" {
-			h.Codex, h.Versions = &fakeCodexCreds{}, &fakeVersions{target: "0.163.0"}
+			h.Codex, h.Versions = &fakeCodexCreds{}, &fakeVersions{}
 			raw, _ := os.ReadFile(codexManifest(t))
 			var m map[string]any
 			_ = json.Unmarshal(raw, &m)

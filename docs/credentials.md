@@ -5,11 +5,11 @@ and how to revoke it. The local Host (`tmux`) and the Docker Host (`[session.hos
 [Docker host](docker-host.md)) differ for the model clients; their columns are separate. `<B>` is `/usr/local/libexec/ensemble/ensemble-broker`.
 
 **Three-way readers**: a credential the broker hands to a container (the Claude setup-token copy, GitHub installation
-tokens, the Codex access token, OpenCode provider API keys) can be read by the broker, by every process in that container, and by any process
+tokens, the Codex access token, OpenCode provider API keys, environment secrets) can be read by the broker, by every process in that container, and by any process
 running as the user: `<B> start --manifest <file>` does not check its caller, and the Docker
 socket is the user's, so such a process can start a container or
 `docker exec` into one and read `/run/ensemble/secrets/`. Only the App private key and the Codex refresh token stay
-with the broker; a provider API key is the same long-lived key in every container that lists it. The user accepted this on 2026-10-18; the broker is unchanged ([Risks](#risks)).
+with the broker; a provider API key or an environment secret is the same long-lived value in every container that lists it. The user accepted this on 2026-10-18; the broker is unchanged ([Risks](#risks)).
 
 ## Who logs in
 
@@ -58,7 +58,13 @@ GitHub on the Docker Host needs no per-run login: `<B> login github ensemble-bot
 | Stored at | broker items `ensemble-tokens` (per container) and `ensemble-revocations` (backlog); the container's `/run/ensemble/secrets/github/<owner>` (0400, tmpfs) |
 | Readers | **three-way readers** |
 | Lifetime | 1 hour; each session renews them 10 minutes before the first expires |
-| Revoke | `close` revokes them before removing the container; a failed revoke is retried at the next start, close or status until it expires; `<B> status` lists pending ones |
+| Revoke | `close` attempts revocation before removing the container, even if revocation fails; backlog entries retry at the next start, close or `status --cleanup` until revoked or expired; `<B> status` lists pending backlog entries without changing them |
+
+If the backlog cannot be read or written and direct revocation fails, the broker retains the original
+`ensemble-tokens` record and reports pending cleanup. Retry `<B> close --container <container>` with the original container
+name, even after the container is gone. `status` and `status --cleanup` do not discover these retained records. Unreadable token
+records also stay in place for recovery; fix their access and retry close. A record is removed only after
+confirmed revocation, confirmed expiry or a successful durable transfer to the backlog.
 
 ### Linear harness app
 
@@ -119,6 +125,20 @@ landed before its write-back ledger was saved, Recover leaves it intact and post
 | Lifetime | refreshed by Claude Code; `/login` renews | one year |
 | Revoke | `/logout` | Unknown: no official route. `claude.ai/settings/claude-code`, cited by the community, is unverified. On a leak: run `claude setup-token` again and rerun `<B> login claude [<name>]` |
 
+### Environment secrets
+
+One per `<B> login env <name>`: a named value (a password, an API key, an ssh private key) that a start manifest
+lists in `secrets` ([Docker host › Environment secrets](docker-host.md#environment-secrets)).
+
+| Field | Value |
+|---|---|
+| Purpose | whatever the container's tools use it for; ensemble passes it only by reference, `ensemble-env/<name>` |
+| Minimum permission | whatever the value grants; issue one for ensemble alone |
+| Stored at | `ensemble-env/<name>` / `<name>`; per container `/run/ensemble/secrets/env/<file>` (0400, owner `agent`, tmpfs), written at `start` only |
+| Readers | item: the broker only, once `login env <name>` has made it trust only the broker; container copy: **three-way readers**, and since `<B> start` does not check its caller, any process running as the user can start a container listing any `ensemble-env/*` item and read it |
+| Lifetime | until replaced or deleted; a container's copy until the container goes |
+| Revoke | rotate it at its source, then `<B> login env <name>` with the new value, which replaces the item; `security delete-generic-password -s ensemble-env/<name>` deletes it; running containers keep the old copy until closed |
+
 ### Stored broker credentials
 
 `ensemble-broker status` reports local usability of the default Claude token as `claude.default`:
@@ -126,6 +146,11 @@ the item must trust this broker, allow a read without a dialog, and hold a nonem
 This does not contact Claude to check expiry or revocation. The installer checks this status before
 requesting `claude setup-token`, even without its saved login state. Codex already skips login when
 its status is `ready`.
+
+Status is read-only: it lists the stored GitHub revocation backlog, including expired entries,
+without revoking tokens, changing credential records or writing audit events. Run
+`ensemble-broker status --cleanup` to retry revocation and remove resolved or expired backlog
+entries. This explicit option preserves the former status behavior; the installer uses it.
 
 If a broker login reports `keychain status -25244` (`errSecInvalidOwnerEdit`), another process
 owns the item's access controls. In Keychain Access, select the login keychain and delete only
@@ -185,10 +210,11 @@ shows.
 | `ensemble-claude` | account name (`default` or `<name>`) | `[session.clients.claude.accounts.<name>]` | that Claude account's setup-token | `<B> login claude [<name>]` | the broker |
 | `ensemble-bot` | App ID | `[session.hosts.docker.github] app` | App private key | the user; access set by `<B> login github ensemble-bot` | the broker, once logged in |
 | `ensemble-github-users` | `ensemble-bot` | — | the App's slug and its bot user's ID, for git identity (not a secret) | `<B> login github ensemble-bot` | the broker |
-| `ensemble-tokens` | container name | — | that container's installation tokens and expiries | `<B> start`, `refresh`; removed by `close` | the broker |
+| `ensemble-tokens` | container name | — | that container's installation tokens and expiries, including retained recovery material | `<B> start`, `refresh`; `close` removes only safely retired entries | the broker |
 | `ensemble-revocations` | `pending` | — | tokens awaiting revocation | `<B> close`, `refresh` failures | the broker |
 | `ensemble-codex` | `auth` | — | the full Codex login | `<B> login codex`; renewals at `start`, `refresh` | the broker |
 | `ensemble-opencode` | provider name | `[session.clients.opencode.providers.<name>]` | that OpenCode provider's API key | `<B> login opencode <name>` | the broker |
+| `ensemble-env/<name>` | `<name>` | — | that environment secret | `<B> login env <name>` | the broker |
 | the `linear.harness.secret_service` value | any | `linear.harness.secret_service` | harness app client secret | installer or the user ([Linear presets](#linear-presets)) | any process running as the user |
 | the `linear.harness.token_service` value | the existing item's, else the service | `linear.harness.token_service` | harness app token and expiry | installer, router, promote, prune, write-back | any process running as the user |
 | the `linear.manager.secret_service` value | any | `linear.manager.secret_service` | manager app client secret | installer or the user ([Linear presets](#linear-presets)) | any process running as the user |
@@ -214,10 +240,10 @@ column, and after `!` in the manager's Claude Code prompt for the manager column
 for s in ensemble-claude ensemble-bot ensemble-github-users ensemble-tokens ensemble-revocations ensemble-codex ensemble-opencode; do security find-generic-password -s "$s" >/dev/null 2>&1; e=$?; r=$(bash -c 'perl -e "alarm 10; exec @ARGV" security find-generic-password -s "$0" -w 2>/dev/null | wc -c | tr -d " "; echo "exit=${PIPESTATUS[0]}"' "$s" | tr '\n' ' '); echo "$s exists=$e bytes/$r"; done
 ```
 
-An item must exist to be measured (`exists=0`); `exists=44` means absent: record `absent, not measured` and make it
+For each environment secret, add `ensemble-env/<name>` to the loop's list. An item must exist to be measured (`exists=0`); `exists=44` means absent: record `absent, not measured` and make it
 first. `ensemble-claude`, `ensemble-github-users`, `ensemble-codex` and `ensemble-opencode` exist after their `login`; `ensemble-bot` once
 the user stores the key; `ensemble-tokens` while a Docker session runs; `ensemble-revocations` after a `close` with the
-network off, until the next start, close or status online.
+network off, until the next start, close or `status --cleanup` online.
 
 Pass: `exists=0`, `exit=` non-zero (142 when the alarm stops it, 128 when the dialog is denied) and a byte count of `0`. Click Deny on any dialog, never Always
 Allow; if Always Allow was clicked, `/usr/bin/security` now reads the item: rerun the `login` that writes it
@@ -235,16 +261,29 @@ A read that returns bytes fails this check unless the user accepts it: mark the 
 | `ensemble-revocations` | absent, not measured | absent, not measured |
 | `ensemble-codex` | exists=0, exit=128, bytes=0 | exists=0, exit=128, bytes=0 |
 | `ensemble-opencode` | pending | pending |
+| `ensemble-env/<name>` | pending | pending |
 
 ## What a container reaches
 
 - Its workspace volume `ensemble-ws-<name>` at its cwd.
 - Its own client state: Claude and OpenCode's read-write binds; Codex's volatile home and bound `sessions/` history.
 - Its credentials on tmpfs ([Credentials](#credentials)).
-- The network, LAN providers included, and through `host.docker.internal` Mac services listening only on `127.0.0.1` ([accepted risk](docker-host.md#risks)).
+- The network only through the egress proxy's `workers` policy: the public internet; the Mac (`host.docker.internal`) and LAN providers only through its exceptions ([Egress proxy](docker-host.md#egress-proxy)).
 - Every repo of every App installation.
 
 Every container runs as `agent`, with all capabilities dropped and `no-new-privileges`.
+
+The `workers` network is the internal one the proxy advertises in its `windroc.egress.network.workers.name` label
+(`egress-workers` in contract 1), with no direct route out, external DNS included. The proxy's config, checkout and Docker socket are not mounted into
+workers. Only container loopback bypasses the proxy. See [egress proxy operations](docker-host.md#egress-proxy)
+for the installer, policy and network-change restart commands, health checks, and public IPv4/global IPv6 limits.
+
+Ollama's `host.docker.internal:11434` and every local/LAN provider `base_url` host and port must be listed in
+`networks.workers.exceptions` in `~/.egress/config.local.yaml`. The installer preserves an existing config and
+does not add provider exceptions. Every worker gets the exception, including Claude and Codex, so a permitted
+provider still receives the requests and credentials its own permissions allow. Host-side provider probes can
+pass before the worker's exception exists. Existing running `bridge` workers retain old access until their next
+start, restart or resume ([Upgrading](upgrading.md#egress-proxy)).
 
 ## What a container cannot reach
 
@@ -310,7 +349,16 @@ scopes are `read,write,app:assignable`.
 
 ## Live checks
 
-For the manager and the user, on macOS with Docker Desktop; write each result in this page. Last run 2026-10-18.
+For the manager and the user, through mini-op on the test Mac mini with Docker Desktop. Never run real-machine
+acceptance on a developer's Mac. The 2026-10-18 results below predate the egress proxy.
+
+- [ ] Fresh `scripts/install.sh --docker` ends with `egress-proxy` healthy; rerunning keeps the proxy's ID
+  and start time, pinned checkout, and config bytes, mode and modification time. Repeat with an existing config.
+- [ ] After changing or recreating `~/.egress/config.local.yaml`, rerunning `scripts/install.sh --docker` makes the
+  proxy serve the new config; with no change, the proxy keeps its start time.
+- [ ] `worker --client claude`, `worker --client codex`, `worker --client opencode` pass the proxy checks in
+  [Live acceptance](docker-host.md#live-acceptance). Their local/LAN negative controls use temporary reachable
+  listeners; the mini's NAS already rejects it and proves no proxy isolation.
 
 - [x] [Measured readers](#measured-readers): six services, manager and shell.
 - [x] [What a container cannot reach](#what-a-container-cannot-reach): four commands, a Claude and a Codex worker
@@ -339,10 +387,13 @@ A failed WDRC-67 before-cutover check stops the cutover; report it to the user.
 - **Three-way readers** of handed-out credentials: accepted by the user on 2026-10-18; the broker is unchanged.
 - The Linear app items (client secrets and tokens) trust `/usr/bin/security`: any process running as the user reads them without a dialog.
 - Each broker release changes its ad-hoc code identity: rerun `login claude`, each `login claude <name>`,
-  `login github ensemble-bot`, `login codex` and each `login opencode <name>` ([Log in](docker-host.md#log-in)).
+  `login github ensemble-bot`, `login codex`, each `login opencode <name>` and each `login env <name>`
+  ([Log in](docker-host.md#log-in)).
 - Config picks a Docker Claude session's account ([Claude accounts](docker-host.md#claude-accounts)); it is no
   access control: any process running as the user can start a container with any logged-in account (`<B> start`
   does not check its caller).
+- An environment secret reaches whoever can start a container: `<B> start` does not check its caller, so any process
+  running as the user can list any `ensemble-env/*` item in a manifest and read the copy (**three-way readers**).
 - `<B> probe-provider --provider NAME --base-url URL` also does not check its caller: any process running as
   the user can choose an endpoint and have the broker send that provider's stored API key to it.
 - An OpenCode provider whose `base_url` is `http://` gets its API key in plaintext: anyone on the LAN path, or on the

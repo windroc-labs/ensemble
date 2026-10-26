@@ -24,6 +24,7 @@ type fakeTokens struct {
 	ready, user, issue, refresh, revoke, retry error
 	pending                                    []protocol.Pending
 	onRevoke                                   func()
+	revokeContexts                             []error
 	permissions                                []map[string]string // each Issue's and Refresh's set
 }
 
@@ -54,8 +55,9 @@ func (f *fakeTokens) Refresh(_ context.Context, app string, permissions map[stri
 	}
 	return expiry, exec([]string{"write"}, []byte("ghs_token"))
 }
-func (f *fakeTokens) Revoke(_ context.Context, c string) error {
+func (f *fakeTokens) Revoke(ctx context.Context, c string) error {
 	f.calls = append(f.calls, "revoke "+c)
+	f.revokeContexts = append(f.revokeContexts, ctx.Err())
 	if f.onRevoke != nil {
 		f.onRevoke()
 	}
@@ -63,6 +65,11 @@ func (f *fakeTokens) Revoke(_ context.Context, c string) error {
 }
 func (f *fakeTokens) Retry(context.Context) ([]protocol.Pending, error) {
 	f.calls = append(f.calls, "retry")
+	return f.pending, f.retry
+}
+
+func (f *fakeTokens) Pending() ([]protocol.Pending, error) {
+	f.calls = append(f.calls, "pending")
 	return f.pending, f.retry
 }
 
@@ -236,11 +243,27 @@ func TestRefresh(t *testing.T) {
 
 func TestStatus(t *testing.T) {
 	pending := []protocol.Pending{{Container: container, Account: "acme", ExpiresAt: "2026-10-17T13:00:00Z"}}
-	got, err := Host{GitHub: &fakeTokens{pending: pending}}.Status(context.Background())
+	tokens := &fakeTokens{pending: pending}
+	got, err := Host{GitHub: tokens}.Status(context.Background())
 	if err != nil || !slices.Equal(got.Revocations, pending) {
 		t.Fatalf("%+v %v", got, err)
 	}
+	if !slices.Equal(tokens.calls, []string{"pending"}) {
+		t.Fatalf("status performed maintenance: %v", tokens.calls)
+	}
 	if _, err := (Host{GitHub: &fakeTokens{retry: protocol.New(protocol.KeychainFailed, "x")}}).Status(context.Background()); protoErr(t, err).Code != protocol.KeychainFailed {
+		t.Fatal(err)
+	}
+}
+
+func TestCleanup(t *testing.T) {
+	pending := []protocol.Pending{{Container: container, Account: "acme", ExpiresAt: "2026-10-17T13:00:00Z"}}
+	tokens := &fakeTokens{pending: pending}
+	got, err := (Host{GitHub: tokens}).Cleanup(context.Background())
+	if err != nil || !slices.Equal(got.Revocations, pending) || !slices.Equal(tokens.calls, []string{"retry"}) {
+		t.Fatalf("%+v %v %v", got, err, tokens.calls)
+	}
+	if _, err := (Host{GitHub: &fakeTokens{retry: protocol.New(protocol.KeychainFailed, "x")}}).Cleanup(context.Background()); protoErr(t, err).Code != protocol.KeychainFailed {
 		t.Fatal(err)
 	}
 }

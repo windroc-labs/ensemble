@@ -147,6 +147,25 @@ class CredentialsInventory(Sample):
                 )
                 self.assertNotIn("tail", found[0])
 
+    def test_a_prefix_item_needs_its_table_row(self):
+        services = [*SERVICES, "ensemble-env/"]
+        row = "| `ensemble-env/<name>` | `<name>` | — | a secret | login | the broker |\n"
+        self.assertEqual(_violations(self.config(), services, inventory() + row), [])
+        missing = ["docs/credentials.md: missing keychain prefix item row `ensemble-env/<name>`"]
+        for text in (
+            "",
+            "`ensemble-env/` is named in prose\n",
+            "see `ensemble-env/<name>` in prose\n",
+            "| `ensemble-env/` | — |\n",
+            "| `ensemble-other/<name>` | — |\n",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(_violations(self.config(), services, inventory() + text), missing)
+
+    def test_services_reads_a_commented_prefix_entry(self):
+        go = GO.replace("\n\n}", '\n\t"ensemble-env/", // prefix item\n}')
+        self.assertEqual(_services(go), ([*SERVICES, "ensemble-env/"], []))
+
     def test_services_reads_only_the_declared_list(self):
         go = 'const codexService = "ensemble-codex"\n' + GO + 'var other = []string{"x"}\n'
         self.assertEqual(_services(go), (SERVICES, []))

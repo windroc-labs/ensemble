@@ -2,6 +2,7 @@
 
 import io
 import json
+import logging
 import os
 import stat
 import tempfile
@@ -68,6 +69,68 @@ class PluginRootTest(Case):
 
 
 class ResponseTest(Case):
+    def test_a_warning_sink_failure_keeps_the_success(self):
+        def unavailable(_message):
+            raise OSError("AUDIT_SINK_SECRET_SENTINEL")
+
+        output = io.StringIO()
+        handler = logging.StreamHandler(output)
+        logger = logging.getLogger("session")
+        logger.addHandler(handler)
+        self.addCleanup(logger.removeHandler, handler)
+        response = {**data("close-output.json"), "audit_warning": "audit_write_failed"}
+        result = Broker(FakeBroker((0, json.dumps(response), "")), warning=unavailable).close(
+            CONTAINER
+        )
+        self.assertIs(result, response["removed"])
+        self.assertIn("audit_write_failed", output.getvalue())
+        self.assertNotIn("AUDIT_SINK_SECRET_SENTINEL", output.getvalue())
+
+    def test_audit_warning_preserves_success_and_failure(self):
+        output = io.StringIO()
+        handler = logging.StreamHandler(output)
+        logger = logging.getLogger("session")
+        logger.addHandler(handler)
+        self.addCleanup(logger.removeHandler, handler)
+        for fixture in ("start-output.json", "refresh-output.json", "close-output.json"):
+            response = {**data(fixture), "audit_warning": "audit_write_failed"}
+            definition = fixture.removesuffix(".json").replace("-", "_")
+            _, call = CALLS[definition]
+            fake = FakeBroker((0, json.dumps(response), ""))
+            result = call(Broker(fake))
+            self.assertIsNotNone(result)
+            self.assertEqual(len(fake.calls), 1)
+        response = {
+            **data("error-start-cleanup-failed.json"),
+            "audit_warning": "audit_write_failed",
+        }
+        fake = FakeBroker((response["exit_code"], "", json.dumps(response)))
+        with self.assertRaises(BrokerError) as caught:
+            Broker(fake).start(MANIFEST, clients=KEYS)
+        expected = response["error"]
+        self.assertEqual(caught.exception.code, expected["code"])
+        self.assertEqual(caught.exception.cleanup, expected["cleanup"])
+        self.assertEqual(caught.exception.container, expected.get("container"))
+        self.assertEqual(caught.exception.cause, expected.get("cause"))
+        self.assertEqual(output.getvalue().count("audit_write_failed"), 4)
+
+    def test_invalid_audit_warning_is_rejected_without_leaking_its_value(self):
+        for value in (None, False, [], {}, "SECRET_AUDIT_SENTINEL"):
+            for failed in (False, True):
+                response = data(
+                    "error-start-cleanup-failed.json" if failed else "start-output.json"
+                )
+                response["audit_warning"] = value
+                wire = json.dumps(response)
+                fake = FakeBroker((response["exit_code"], "", wire) if failed else (0, wire, ""))
+                with (
+                    self.subTest(value=value, failed=failed),
+                    self.assertRaises(SessionError) as caught,
+                ):
+                    Broker(fake).start(MANIFEST, clients=KEYS)
+                self.assertNotIsInstance(caught.exception, BrokerError)
+                self.assertNotIn("SECRET_AUDIT_SENTINEL", str(caught.exception))
+
     def test_provider_probe_response_is_only_a_boolean(self):
         for value in (True, False):
             runner = FakeBroker((0, json.dumps({"available": value}), ""))
@@ -78,104 +141,22 @@ class ResponseTest(Case):
                     "strata", "https://strata.test/v1"
                 )
 
-    def test_update_record_presence_follows_the_client_expiry(self):
-        claude = data("start-output.json")
-        claude.pop("client_update", None)
-        self.assertIsNone(
-            Broker(FakeBroker((0, json.dumps(claude), "")))
-            .start(MANIFEST, clients=KEYS)
-            .client_update
-        )
-        codex = data("start-output-codex.json")
-        self.assertEqual(
-            Broker(FakeBroker((0, json.dumps(codex), "")))
-            .start(MANIFEST, clients=KEYS)
-            .client_update,
-            codex["client_update"],
-        )
-        missing = {key: value for key, value in codex.items() if key != "client_update"}
-        for bad in (
-            missing,
-            {**claude, "client_update": codex["client_update"]},
-            {**claude, "client_update": None},
-            {**codex, "client_update": None},
-        ):
-            with self.subTest(bad=bad), self.assertRaises(SessionError):
-                Broker(FakeBroker((0, json.dumps(bad), ""))).start(MANIFEST, clients=KEYS)
-
-    def test_client_update_outcomes_and_invalid_shapes(self):
-        response = data("start-output-codex.json")
-        for result, target, actual in (
-            ("current", "0.163.0", "0.163.0"),
-            ("updated", "0.164.0", "0.164.0"),
-            ("update_failed", "0.164.0", "0.163.0"),
-            ("registry_unavailable", "", "0.163.0"),
-            ("no_supported_release", "", "0.163.0"),
-        ):
-            policy = {**response["client_update"], "result": result, "target_version": target}
-            found = {
-                **response,
-                "client_update": policy,
-                "clients": {**response["clients"], "codex": f"codex-cli {actual}"},
-            }
-            with self.subTest(result=result):
-                self.assertEqual(
-                    Broker(FakeBroker((0, json.dumps(found), "")))
-                    .start(MANIFEST, clients=KEYS)
-                    .client_update,
-                    policy,
-                )
-        for bad in (
-            None,
-            [],
-            {},
-            {**response["client_update"], "client": "unknown"},
-            {**response["client_update"], "target_version": []},
-        ):
-            with self.subTest(bad=bad), self.assertRaises(SessionError):
-                Broker(FakeBroker((0, json.dumps({**response, "client_update": bad}), ""))).start(
-                    MANIFEST, clients=KEYS
-                )
-
-    def test_rejects_inconsistent_client_update(self):
-        good = data("start-output-codex.json")
-        policy = {
-            "client": "codex",
-            "pinned_version": "0.164.0",
-            "min_version": "0.163.0",
-            "image_version": "0.163.0",
-            "target_version": "0.163.0",
-            "result": "current",
-        }
-        response = {
-            **good,
-            "client_update": policy,
-            "clients": {**good["clients"], "codex": "codex-cli 0.163.0"},
-        }
-        self.assertEqual(
-            Broker(FakeBroker((0, json.dumps(response), "")))
-            .start(MANIFEST, clients=KEYS)
-            .client_update,
-            policy,
-        )
-        for changes in (
-            {"result": "unknown"},
-            {"min_version": []},
-            {"image_version": "1.0.0"},
-            {"image_version": "0.162.999"},
-            {"pinned_version": "0.162.999"},
-            {"min_version": "0.165.0"},
-            {"min_version": "latest"},
-            {"target_version": "0.164.0"},
-            {"pinned_version": "latest"},
-            {"extra": "x"},
-        ):
-            with self.subTest(changes=changes), self.assertRaises(SessionError):
-                Broker(
-                    FakeBroker(
-                        (0, json.dumps({**response, "client_update": {**policy, **changes}}), "")
-                    )
-                ).start(MANIFEST, clients=KEYS)
+    def test_start_response_carrying_client_update_is_rejected(self):
+        update = {"client": "codex", "result": "current"}
+        for fixture in ("start-output.json", "start-output-codex.json"):
+            response = data(fixture)
+            started = Broker(FakeBroker((0, json.dumps(response), ""))).start(
+                MANIFEST, clients=KEYS
+            )
+            self.assertFalse(hasattr(started, "client_update"))
+            for value in (update, None):
+                with (
+                    self.subTest(fixture=fixture, value=value),
+                    self.assertRaisesRegex(SessionError, "^broker: bad response to start: fields$"),
+                ):
+                    Broker(
+                        FakeBroker((0, json.dumps({**response, "client_update": value}), ""))
+                    ).start(MANIFEST, clients=KEYS)
 
     def test_every_response_fixture_has_its_outcome(self):
         found = cases()
@@ -271,6 +252,8 @@ class ResponseTest(Case):
         )
         with self.assertRaisesRegex(SessionError, "bad response to refresh: error fields"):
             Broker(FakeBroker(fails("start_failed", 9, cause=cause))).refresh(CONTAINER, MANIFEST)
+        with self.assertRaisesRegex(SessionError, "bad response to refresh: error fields"):
+            Broker(FakeBroker(fails("egress_unavailable", 17))).refresh(CONTAINER, MANIFEST)
 
     def test_parsed_successes(self):
         self.assertEqual(
@@ -334,13 +317,13 @@ class ResponseTest(Case):
             ):
                 Broker(FakeBroker((0, json.dumps(bad), ""))).start(MANIFEST, clients=KEYS)
 
-    def test_build_passes_a_max_age(self):
+    def test_build_passes_only_the_package(self):
         fake = FakeBroker(success("build-cached.json"))
-        Broker(fake).build("/opt/ensemble", max_age=broker.REFRESH)
-        self.assertEqual(fake.calls, [[BROKER, *data("build-input-max-age.json")["argv"]]])
-        self.assertEqual(broker.REFRESH, 7 * 24 * 3600)
+        Broker(fake).build("/opt/ensemble")
+        self.assertEqual(fake.calls, [[BROKER, *data("build-input.json")["argv"]]])
+        self.assertFalse(hasattr(broker, "REFRESH"))
 
-    def test_build_passes_plugins_before_the_max_age(self):
+    def test_build_passes_plugins(self):
         fake = FakeBroker(success("build-cached.json"))
         Broker(fake).build(
             "/opt/ensemble",
@@ -348,9 +331,10 @@ class ResponseTest(Case):
                 "updraft@windroc-labs/updraft#33f01c3b9e398e009f1fb1a4554ddcf19209dd4e::windroc-labs/agent-plugins-marketplace#dbea3408ab0c113bd74f414ab3a19d820e0f6e43",
                 "beta@owner/market#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             ),
-            max_age=604800,
         )
-        self.assertEqual(fake.calls, [[BROKER, *data("build-input-plugins.json")["argv"]]])
+        argv = data("build-input-plugins.json")["argv"]
+        self.assertEqual(argv[-2:], ["--max-age", "604800"])
+        self.assertEqual(fake.calls, [[BROKER, *argv[:-2]]])
 
     def test_build_progress_before_the_error_object_is_not_the_error(self):
         progress = "#5 [2/3] RUN apt-get purge -y sudo\n#5 ERROR: process exited 1\n"

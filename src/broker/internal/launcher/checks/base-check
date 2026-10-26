@@ -1,0 +1,24 @@
+# Usage: sh -s agent|tools PATH (this file on stdin), in a base image; exits 0 either way, so a non-zero exit means
+# the check itself failed.
+# agent: prints "agent <uid> <gid>" for its non-root user agent, else "missing agent".
+# tools: run as agent, prints "missing <command>" for each command the ensemble layer needs that PATH lacks.
+PATH=$2
+export PATH
+case $1 in
+agent)
+	if uid=$(id -u agent 2>/dev/null) && gid=$(id -g agent 2>/dev/null) && [ "$uid" != 0 ] && [ "$gid" != 0 ]; then
+		echo "agent $uid $gid"
+	else
+		echo "missing agent"
+	fi
+	;;
+tools)
+	for tool in apt-get dpkg node npm tmux git; do
+		command -v "$tool" >/dev/null 2>&1 || echo "missing $tool"
+	done
+	;;
+*)
+	exit 2
+	;;
+esac
+exit 0

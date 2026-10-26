@@ -26,28 +26,30 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | build --ensemble DIR [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--max-age SECONDS] | start --manifest FILE | refresh --container NAME --manifest FILE | close --container NAME | status | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force]"
+const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | lock-query --lock NAME | refresh --container NAME --manifest FILE | close --container NAME | status [--cleanup] | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients"
 
 var containerPattern = regexp.MustCompile(`^ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}$`)
 var secondsPattern = regexp.MustCompile(`^[0-9]{1,9}$`)
-var pluginPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}@[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}#[a-f0-9]{40}(?:::[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}#[a-f0-9]{40})?$`)
 var volumePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$`)
 
 // step runs a command; progress is the broker's stderr, for build's Docker progress and start's phase times.
 type step func(ctx context.Context, arg string, progress io.Writer) (any, error)
 
 type app struct {
-	build         func(ctx context.Context, pkg string, plugins []string, maxAge time.Duration, progress io.Writer) (any, error)
+	build         func(ctx context.Context, pkg string, spec launcher.BuildSpec, maxAge time.Duration, progress io.Writer) (any, error)
 	start, close  step
 	refresh       func(ctx context.Context, container, manifest string) (any, error)
-	status        func(ctx context.Context) (any, error)
+	status        func(ctx context.Context, cleanup bool) (any, error)
+	lockQuery     func(ctx context.Context, name string) (any, error)
 	probeOpencode func(ctx context.Context, provider, base string) (any, error)
 	workspaceRm   func(ctx context.Context, volume string, force bool) (any, error)
 	login         func(account string, out io.Writer) error                                // login claude [NAME]
 	loginGitHub   func(ctx context.Context, app string, key *keyFile, out io.Writer) error // key: nil without --key-file
 	loginCodex    func(context.Context, io.Writer) error
 	loginOpencode func(provider, authFile string, out io.Writer) error
+	loginEnv      func(name string, out io.Writer) error // login env NAME: the value on stdin
 	installCodex  func(context.Context, string, bool) (any, error)
+	checkClients  func(ctx context.Context, progress io.Writer) (any, error)
 }
 
 // keyFile is login github's --key-file content and --app-id.
@@ -111,6 +113,22 @@ func readOpencodeAuth(path, provider string) ([]byte, error) {
 	return []byte(entry.Key), nil
 }
 
+// readEnvValue is all of r, a pipe or file carrying login env's value verbatim, at most launcher.MaxSecretBytes bytes,
+// read into one buffer that is erased unless returned.
+func readEnvValue(r io.Reader) ([]byte, error) {
+	buf := make([]byte, launcher.MaxSecretBytes+1)
+	n, err := io.ReadFull(r, buf)
+	switch {
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return buf[:n], nil
+	case err != nil:
+		clear(buf)
+		return nil, err
+	}
+	clear(buf)
+	return nil, fmt.Errorf("the value must be 1 to %d bytes", launcher.MaxSecretBytes)
+}
+
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr, system())
@@ -143,7 +161,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 				}
 				return emit(stdout, result)
 			}
-		case "version", "build", "start", "refresh", "close", "status", "workspace-rm", "probe-provider":
+		case "version", "build", "start", "refresh", "close", "status", "workspace-rm", "probe-provider", "lock-query", "check-clients":
 			command = args[0]
 		case "login":
 			var login func() error
@@ -169,6 +187,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 				login = func() error { return a.loginOpencode(args[2], "", stdout) }
 			case len(args) == 5 && args[1] == "opencode" && launcher.ValidProvider(args[2]) && args[3] == "--auth-file" && isPath(args[4]):
 				login = func() error { return a.loginOpencode(args[2], args[4], stdout) }
+			case len(args) == 3 && args[1] == "env" && launcher.ValidEnvName(args[2]):
+				login = func() error { return a.loginEnv(args[2], stdout) }
 			}
 			if login != nil {
 				if err := login(); err != nil {
@@ -195,7 +215,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 	case command == "build" && len(args) >= 3 && args[1] == "--ensemble" && isPath(args[2]) && buildOptions(args[3:]) != nil:
 		o := buildOptions(args[3:])
 		s, arg = func(ctx context.Context, pkg string, progress io.Writer) (any, error) {
-			return a.build(ctx, pkg, o.plugins, o.maxAge, progress)
+			return a.build(ctx, pkg, o.spec, o.maxAge, progress)
 		}, args[2]
 	case command == "start" && len(args) == 3 && args[1] == "--manifest" && isPath(args[2]):
 		s, arg = a.start, args[2]
@@ -205,8 +225,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 		s, arg = func(ctx context.Context, container string, _ io.Writer) (any, error) {
 			return a.refresh(ctx, container, manifest)
 		}, args[2]
-	case command == "status" && len(args) == 1:
-		s = func(ctx context.Context, _ string, _ io.Writer) (any, error) { return a.status(ctx) }
+	case command == "status" && (len(args) == 1 || len(args) == 2 && args[1] == "--cleanup"):
+		s = func(ctx context.Context, _ string, _ io.Writer) (any, error) { return a.status(ctx, len(args) == 2) }
+	case command == "lock-query" && len(args) == 3 && args[1] == "--lock" && launcher.ValidLock(args[2]):
+		s, arg = func(ctx context.Context, lock string, _ io.Writer) (any, error) { return a.lockQuery(ctx, lock) }, args[2]
 	case command == "probe-provider" && len(args) == 5 && args[1] == "--provider" && launcher.ValidProvider(args[2]) && args[3] == "--base-url" && broker.ValidOpencodeURL(args[4]):
 		s = func(ctx context.Context, _ string, _ io.Writer) (any, error) {
 			return a.probeOpencode(ctx, args[2], args[4])
@@ -219,6 +241,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 		s, arg = func(ctx context.Context, volume string, _ io.Writer) (any, error) {
 			return a.workspaceRm(ctx, volume, force)
 		}, args[2]
+	case command == "check-clients" && len(args) == 1:
+		s = func(ctx context.Context, _ string, progress io.Writer) (any, error) {
+			return a.checkClients(ctx, progress)
+		}
 	default:
 		return fail(stderr, command, protocol.New(protocol.Usage, usage))
 	}
@@ -234,15 +260,22 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 }
 
 type buildArgs struct {
-	plugins []string
-	maxAge  time.Duration
+	spec   launcher.BuildSpec
+	maxAge time.Duration
 }
 
-// buildOptions parses build's [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--max-age SECONDS], else nil.
+// buildOptions parses build's [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]...
+// [--image-plugin NAME]... [--max-age SECONDS], else nil.
 func buildOptions(args []string) *buildArgs {
 	o := &buildArgs{maxAge: -1}
-	for len(args) >= 2 && args[0] == "--plugin" && pluginPattern.MatchString(args[1]) {
-		o.plugins, args = append(o.plugins, args[1]), args[2:]
+	if len(args) >= 2 && args[0] == "--base-image" && launcher.ValidBaseImage(args[1]) {
+		o.spec.BaseImage, args = args[1], args[2:]
+	}
+	for len(args) >= 2 && args[0] == "--plugin" && launcher.PluginSourcePattern.MatchString(args[1]) {
+		o.spec.Plugins, args = append(o.spec.Plugins, args[1]), args[2:]
+	}
+	for len(args) >= 2 && args[0] == "--image-plugin" && launcher.PluginNamePattern.MatchString(args[1]) {
+		o.spec.ImagePlugins, args = append(o.spec.ImagePlugins, args[1]), args[2:]
 	}
 	if len(args) == 2 && args[0] == "--max-age" && secondsPattern.MatchString(args[1]) {
 		n, _ := strconv.Atoi(args[1])
@@ -283,19 +316,21 @@ func withHost(command, container string, progress io.Writer, f func(launcher.Hos
 		return nil, err
 	}
 	rec := recorder(home, command, container)
-	defer func() { rec.Flush(err) }()
-	d, clean, err := docker.New(home)
-	if err != nil {
-		return nil, err
-	}
-	defer clean()
-	d.Progress = progress
-	h := launcher.NewHost(home, d.Endpoint(), d, broker.Credentials{Keychain: broker.SystemKeychain{Home: home}}, tokens(home, rec), rec)
-	h.Codex = broker.NewCodex(home, nil)
-	h.Opencode = broker.OpencodeKeys{Keychain: broker.SystemKeychain{Home: home}}
-	h.Progress = progress
-	h.Lock = broker.FileLock(filepath.Join(home, ".ensemble/docker/images.lock"))
-	return f(h)
+	return withAudit(rec, func() (any, error) {
+		d, clean, err := docker.New(home)
+		if err != nil {
+			return nil, err
+		}
+		defer clean()
+		d.Progress = progress
+		h := launcher.NewHost(home, d.Endpoint(), d, broker.Credentials{Keychain: broker.SystemKeychain{Home: home}}, tokens(home, rec), rec)
+		h.Codex = broker.NewCodex(home, nil)
+		h.Opencode = broker.OpencodeKeys{Keychain: broker.SystemKeychain{Home: home}}
+		h.Env = broker.EnvKeys{Keychain: broker.SystemKeychain{Home: home}}
+		h.Progress = progress
+		h.Lock = broker.FileLock(filepath.Join(home, ".ensemble/docker/images.lock"))
+		return f(h)
+	})
 }
 
 // tokens is the broker's GitHub App token store in the account's login keychain, reporting to rec (nil: none).
@@ -307,6 +342,9 @@ func tokens(home string, rec *audit.Recorder) broker.GitHub {
 
 func system() app {
 	return app{
+		lockQuery: func(ctx context.Context, lock string) (any, error) {
+			return withHost("lock-query", "", nil, func(h launcher.Host) (any, error) { return h.LockQuery(ctx, lock) })
+		},
 		probeOpencode: func(ctx context.Context, provider, base string) (any, error) {
 			home, err := accountHome()
 			if err != nil {
@@ -315,8 +353,11 @@ func system() app {
 			available, err := (broker.OpencodeKeys{Keychain: broker.SystemKeychain{Home: home}}).Probe(ctx, provider, base, nil)
 			return map[string]bool{"available": available}, err
 		},
-		build: func(ctx context.Context, pkg string, plugins []string, maxAge time.Duration, progress io.Writer) (any, error) {
-			return withHost("build", "", progress, func(h launcher.Host) (any, error) { return h.Build(ctx, pkg, plugins, maxAge) })
+		build: func(ctx context.Context, pkg string, spec launcher.BuildSpec, maxAge time.Duration, progress io.Writer) (any, error) {
+			return withHost("build", "", progress, func(h launcher.Host) (any, error) { return h.Build(ctx, pkg, spec, maxAge) })
+		},
+		checkClients: func(ctx context.Context, progress io.Writer) (any, error) {
+			return withHost("check-clients", "", progress, func(h launcher.Host) (any, error) { return h.CheckClients(ctx) })
 		},
 		start: func(ctx context.Context, manifest string, progress io.Writer) (any, error) {
 			return withHost("start", "", progress, func(h launcher.Host) (any, error) { return h.Start(ctx, manifest) })
@@ -324,22 +365,31 @@ func system() app {
 		refresh: func(ctx context.Context, container, manifest string) (any, error) {
 			return withHost("refresh", container, nil, func(h launcher.Host) (any, error) { return h.Refresh(ctx, container, manifest) })
 		},
-		status: func(ctx context.Context) (_ any, err error) {
+		status: func(ctx context.Context, cleanup bool) (_ any, err error) {
 			home, err := accountHome()
 			if err != nil {
 				return nil, err
 			}
-			rec := recorder(home, "status", "")
-			defer func() { rec.Flush(err) }()
-			status, err := launcher.Host{GitHub: tokens(home, rec)}.Status(ctx)
-			if err != nil {
-				return nil, err
+			var rec *audit.Recorder
+			if cleanup {
+				rec = recorder(home, "status", "")
 			}
-			codexStatus := broker.NewCodex(home, nil).Status(ctx)
-			status.Codex = &codexStatus
-			credentials := broker.Credentials{Keychain: broker.SystemKeychain{Home: home}}
-			status.Claude = map[string]bool{"default": credentials.Usable("default")}
-			return status, nil
+			return withAudit(rec, func() (any, error) {
+				h := launcher.Host{GitHub: tokens(home, rec)}
+				query := h.Status
+				if cleanup {
+					query = h.Cleanup
+				}
+				status, err := query(ctx)
+				if err != nil {
+					return nil, err
+				}
+				codexStatus := broker.NewCodex(home, nil).Status(ctx)
+				status.Codex = &codexStatus
+				credentials := broker.Credentials{Keychain: broker.SystemKeychain{Home: home}}
+				status.Claude = map[string]bool{"default": credentials.Usable("default")}
+				return status, nil
+			})
 		},
 		close: func(ctx context.Context, container string, _ io.Writer) (any, error) {
 			return withHost("close", container, nil, func(h launcher.Host) (any, error) { return h.Close(ctx, container) })
@@ -407,6 +457,33 @@ func system() app {
 				fmt.Fprint(os.Stderr, "Login keychain password, to make the "+provider+" API key trust only the broker (hidden): ")
 				defer fmt.Fprintln(os.Stderr)
 				return broker.ReadHidden()
+			}, broker.SystemKeychain{Home: home}, out)
+		},
+		loginEnv: func(name string, out io.Writer) error {
+			home, err := accountHome()
+			if err != nil {
+				return err
+			}
+			if err := broker.CheckInstalled(); err != nil {
+				return err
+			}
+			// A terminal on stdin types one hidden line; anything else carries the value, so the password comes from the
+			// controlling terminal.
+			info, err := os.Stdin.Stat()
+			terminal := err == nil && info.Mode()&os.ModeCharDevice != 0
+			read, hidden := func() ([]byte, error) { return readEnvValue(os.Stdin) }, broker.ReadHiddenTTY
+			if terminal {
+				read = func() ([]byte, error) {
+					fmt.Fprint(os.Stderr, "Environment secret "+name+" (hidden): ")
+					defer fmt.Fprintln(os.Stderr)
+					return broker.ReadHidden()
+				}
+				hidden = broker.ReadHidden
+			}
+			return broker.LoginEnv(name, read, func() ([]byte, error) {
+				fmt.Fprint(os.Stderr, "Login keychain password, to make ensemble-env/"+name+" trust only the broker (hidden): ")
+				defer fmt.Fprintln(os.Stderr)
+				return hidden()
 			}, broker.SystemKeychain{Home: home}, out)
 		},
 		installCodex: func(ctx context.Context, version string, update bool) (any, error) {

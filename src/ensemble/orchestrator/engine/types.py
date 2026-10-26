@@ -415,6 +415,7 @@ class Related:
 class Invalid:
     reason: str
     mapped: bool = False
+    line: Literal["Repo", "Ref"] = "Repo"  # the description line the bounce says to fix
 
 
 @dataclass(frozen=True)
@@ -429,6 +430,7 @@ class Target:
     branch: str = ""
     clone: str = ""
     host: str = "github.com"
+    ref: str = ""  # a checked Ref: line's branch or tag
 
 
 KEYCHAIN_NAME = re.compile(r"[A-Za-z0-9._@+][A-Za-z0-9._@+-]*")  # safe on a security -i line

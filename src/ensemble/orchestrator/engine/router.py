@@ -803,6 +803,7 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
     workdir = cfg.issue_workdir(a.issue)
     delegate_cls = LinearRun.kind_cls(cfg, kind)
     if build:
+        stage = config.TASKS[role]
         try:
             repo = target.check(
                 issue,
@@ -812,6 +813,8 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
                 workdir=workdir,
                 roles=cfg.roles,
                 host=cfg.repo_host(role),
+                ref=stage.ref,
+                mapped_only=stage.mapped_only,
             )
         except (OSError, subprocess.TimeoutExpired) as e:
             return fail(a.issue, "transient", f"repo check: {one_line(e)}", 3)

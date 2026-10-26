@@ -336,6 +336,24 @@ class HelpTest(Case):
                 self.assertEqual(stream.buffer.read.call_count, 2)
                 self.assertEqual(out.getvalue(), "")
 
+    def test_strict_and_event_are_no_hook_options_but_bad_arguments_exiting_0(self):
+        for tail in (
+            ["--strict", "/session", "stop"],
+            ["/session", "stop", "--strict"],
+            ["--event", "g.1", "/session", "stop"],
+        ):
+            stream = mock.Mock(buffer=mock.Mock(read=mock.Mock(side_effect=[b"{}", b""])))
+            with (
+                self.subTest(tail=tail),
+                mock.patch.object(sys, "stdin", stream),
+                mock.patch("builtins.open", side_effect=OSError("no state")),
+                contextlib.redirect_stderr(io.StringIO()) as err,
+                contextlib.redirect_stdout(io.StringIO()) as out,
+            ):
+                self.assertEqual(cli.main(["hook", *tail]), 0)
+                self.assertIn("usage: ensemble-session hook", err.getvalue())
+                self.assertEqual(out.getvalue(), "")
+
     def test_configured_display_is_last_and_fallback_is_useful(self):
         hosts = cli._configure()
         self.assertTrue(

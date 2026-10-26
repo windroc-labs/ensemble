@@ -5,7 +5,7 @@
   "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "clients": {
     "claude": "2.1.0",
-    "codex": "codex-cli 0.163.0",
+    "codex": "codex-cli 0.100.0",
     "opencode": "1.19.3"
   },
   "github": [
@@ -15,12 +15,5 @@
     }
   ],
   "github_user_id": 343764394,
-  "client_update": {
-    "client": "codex",
-    "pinned_version": "0.164.0",
-    "image_version": "0.163.0",
-    "target_version": "0.163.0",
-    "result": "current",
-    "min_version": "0.163.0"
-  }
+  "audit_warning": "audit_write_failed"
 }

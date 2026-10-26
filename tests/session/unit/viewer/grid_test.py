@@ -35,6 +35,7 @@ from tests.session.tmux_fixtures import (
     grid_read,
     grid_set,
     hold,
+    json_layout,
     mute,
     opening_commands,
     osa,
@@ -902,6 +903,21 @@ class TileApplicationTest(TileFixture):
                     if want
                     else [self.UNMUTE],
                 )
+
+    def test_tile_reads_a_json_layout(self):
+        # tmux 3.8 prints JSON: 13 workers stacked in one column re-tile into columns of 3, the
+        # same calls as from the old format, select-layout given the old format
+        panes = [f"%{i}" for i in range(14)]
+        rows = [(f"${i + 1}", f"w{i}", "mgr", f"%{i}") for i in range(1, 14)]
+        stacked = grid(13, 13)
+        old = self.tile(layouts.render_layout(stacked), panes, rows, n="3")
+        new = self.tile(json_layout(stacked), panes, rows, n="3")
+        self.assertEqual(new.calls, old.calls)
+        self.assertEqual(new.calls[4][-1], layouts.render_layout(grid(13, 3)))
+
+    def test_a_json_grid_is_steady(self):
+        fake = self.tile(json_layout(grid(3)), ["%0", "%1", "%2", "%3"], self.W3)
+        self.assertEqual(fake.calls, [self.SOCKET, self.READ, self.PANES, SESSIONS, self.UNMUTE])
 
 
 class TileCoordinationTest(TileFixture):

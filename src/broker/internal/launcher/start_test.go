@@ -64,6 +64,11 @@ type world struct {
 	rmErr           error
 	rmSilent        bool // rm --force exits 0 without echoing: the container was absent
 	unreachable     bool
+	proxies         *string              // the proxy listing's output; nil: the one healthy proxy
+	proxy           func(map[string]any) // edits the proxy's inspect object
+	network         func(map[string]any) // edits the workers network's inspect object
+	noNetwork       bool
+	egressErr       error // the proxy listing's error
 }
 
 func (w *world) docker() *fakeDocker {
@@ -73,6 +78,16 @@ func (w *world) docker() *fakeDocker {
 			return nil, docker.ErrUnreachable
 		}
 		switch strings.Join(args[:2], " ") {
+		case "ps --all":
+			if w.proxies != nil {
+				return []byte(*w.proxies), w.egressErr
+			}
+			return []byte(proxyID + "\n"), w.egressErr
+		case "network inspect":
+			if w.noNetwork {
+				return nil, &docker.CommandError{Exit: 1, Stderr: "Error: No such network: " + args[2]}
+			}
+			return inspectObject(networkObject(), w.network), nil
 		case "image inspect":
 			if w.imageMissing {
 				return nil, noImage
@@ -99,6 +114,9 @@ func (w *world) docker() *fakeDocker {
 		case "volume rm":
 			return []byte(volume + "\n"), nil
 		case "container inspect":
+			if args[2] == proxyID {
+				return inspectObject(proxyObject(), w.proxy), nil
+			}
 			if w.exists {
 				return []byte("[{}]"), nil
 			}
@@ -142,6 +160,51 @@ func (w *world) docker() *fakeDocker {
 		}
 		return nil, errors.New("unexpected " + strings.Join(args, " "))
 	}}
+}
+
+const (
+	proxyID        = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	workersID      = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	workersNetwork = "egress-workers"
+	workersProxy   = "http://egress-proxy-workers:4750"
+)
+
+// proxyObject is a healthy contract-v1 proxy's docker inspect object, attached to egress-workers.
+func proxyObject() map[string]any {
+	return map[string]any{
+		"Id":   proxyID,
+		"Name": "/egress-proxy",
+		"Config": map[string]any{"Labels": map[string]any{
+			"windroc.egress.contract":              "1",
+			"windroc.egress.networks":              "mini-op,workers",
+			"windroc.egress.network.workers.name":  workersNetwork,
+			"windroc.egress.network.workers.proxy": workersProxy,
+			"windroc.egress.network.mini-op.name":  "egress-mini-op",
+			"windroc.egress.network.mini-op.proxy": "http://egress-proxy-mini-op:4750",
+			"com.docker.compose.service":           "proxy",
+		}},
+		"State": map[string]any{"Running": true, "Health": map[string]any{"Status": "healthy"}},
+		"NetworkSettings": map[string]any{"Networks": map[string]any{
+			workersNetwork:   map[string]any{"NetworkID": workersID},
+			"egress-mini-op": map[string]any{"NetworkID": strings.Repeat("d", 64)},
+		}},
+	}
+}
+
+func networkObject() map[string]any {
+	return map[string]any{"Name": workersNetwork, "Id": workersID, "Internal": true}
+}
+
+// inspectObject is docker inspect's one-element array of object, edit applied first.
+func inspectObject(object map[string]any, edit func(map[string]any)) []byte {
+	if edit != nil {
+		edit(object)
+	}
+	data, err := json.Marshal([]any{object})
+	if err != nil {
+		panic(err)
+	}
+	return data
 }
 
 func writeManifest(t *testing.T, data []byte) string {
@@ -226,6 +289,17 @@ func TestRuntimeFixtures(t *testing.T) {
 				w.runErr = &docker.CommandError{Exit: 125, Stderr: "docker: Error response from daemon: mounts denied: \nThe path /Users/example/src/project is not shared from the host and is not known to Docker.\n\nRun 'docker run --help' for more information"}
 				w.rmErr = &docker.CommandError{Exit: 1, Stderr: "Error: No such container: " + container}
 			}
+			switch ctx.Egress {
+			case "stopped":
+				w.proxy = func(g map[string]any) { g["State"].(map[string]any)["Running"] = false }
+			case "unhealthy":
+				w.proxy = func(g map[string]any) { g["State"].(map[string]any)["Health"] = map[string]any{"Status": "unhealthy"} }
+			case "missing":
+				none := ""
+				w.proxies = &none
+			case "not_internal":
+				w.network = func(n map[string]any) { n["Internal"] = false }
+			}
 			creds := &fakeCreds{}
 			switch ctx.Login {
 			case "missing":
@@ -264,6 +338,9 @@ func TestRuntimeFixtures(t *testing.T) {
 			if e.Cleanup != protocol.NotNeeded {
 				t.Fatalf("cleanup %s", e.Cleanup)
 			}
+			if e.Code == protocol.EgressUnavailable && len(creds.calls) != 0 {
+				t.Fatalf("credentials touched before refusing: %q", creds.calls)
+			}
 			if e.Code != protocol.StartFailed && (hasCall(d, "run") || hasCall(d, "volume create")) {
 				t.Fatalf("created a container before rejecting: %q", d.verbs())
 			}
@@ -288,7 +365,10 @@ func TestRunArguments(t *testing.T) {
 	run := detached(d)
 	cwd, claude := home+"/src/project", home+"/.ensemble/docker-state/worker_1/claude"
 	want := []string{"run", "--detach", "--name", container, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "agent",
-		"--network", "bridge", "--workdir", cwd, "--env", "CLAUDE_CONFIG_DIR=" + claude,
+		"--network", workersNetwork, "--env", "HTTP_PROXY=" + workersProxy, "--env", "HTTPS_PROXY=" + workersProxy,
+		"--env", "http_proxy=" + workersProxy, "--env", "https_proxy=" + workersProxy,
+		"--env", "NO_PROXY=localhost,127.0.0.1,::1", "--env", "no_proxy=localhost,127.0.0.1,::1",
+		"--workdir", cwd, "--env", "CLAUDE_CONFIG_DIR=" + claude,
 		"--env", "npm_config_cache=" + cwd + "/.ensemble-cache", "--env", "UV_CACHE_DIR=" + cwd + "/.ensemble-cache", "--env", "PIP_CACHE_DIR=" + cwd + "/.ensemble-cache",
 		"--label", "ensemble.session=worker_1", "--label", "ensemble.generation=0123456789abcdef0123456789abcdef", "--label", "ensemble.client=claude", "--label", "team=crew",
 		"--mount", "type=volume,source=" + volume + ",target=" + cwd + ",volume-nocopy", "--mount", "type=bind,source=" + claude + ",target=" + claude,
@@ -395,7 +475,7 @@ func TestStartOrder(t *testing.T) {
 		}
 		steps = append(steps, step)
 	}
-	wantSteps := []string{"image inspect", "container inspect", "volume inspect", "volume create", "volume inspect", "ps --filter", "run --rm", "run --detach",
+	wantSteps := []string{"ps --all", "container inspect", "network inspect", "image inspect", "container inspect", "volume inspect", "volume create", "volume inspect", "ps --filter", "run --rm", "run --detach",
 		"agent /opt/ensemble/venv/bin/python -I /opt/ensemble/lib/bootstrap.py",
 		"root /opt/ensemble/venv/bin/python -I /opt/ensemble/lib/bootstrap.py",
 		"agent claude --version", "agent /opt/ensemble/clients/bin/codex --version", "agent /opt/ensemble/clients/bin/opencode --version",
@@ -406,7 +486,7 @@ func TestStartOrder(t *testing.T) {
 	if inject := d.calls[len(d.calls)-1]; !slices.Equal(inject, []string{"exec", "--interactive", "--user", "agent", container, "inject"}) {
 		t.Fatalf("inject %q", inject)
 	}
-	boot, hook := d.calls[8], d.calls[9]
+	boot, hook := d.calls[11], d.calls[12]
 	if !slices.Equal(boot[len(boot)-3:], []string{"claude", home + "/.ensemble/docker-state/worker_1/claude", home + "/src/project"}) ||
 		!slices.Equal(hook[len(hook)-2:], []string{"hook", "/usr/local/bin/ensemble-session"}) {
 		t.Fatalf("%q %q", boot, hook)
@@ -597,5 +677,37 @@ func TestStartPhaseTimes(t *testing.T) {
 		if _, err := h.Start(context.Background(), validManifest(t)); err == nil || progress.Len() != 0 {
 			t.Fatalf("%s: %v, progress %q", name, err, progress.String())
 		}
+	}
+}
+
+func TestCodexStartRunsNoClientUpdate(t *testing.T) {
+	h, d := startHost(&world{labels: goodLabels()}, &fakeCreds{})
+	v := defaultVersions()
+	h.Versions, h.Codex = v, &fakeCodexCreds{}
+	var progress strings.Builder
+	h.Progress = &progress
+	got, err := h.Start(context.Background(), codexManifest(t))
+	if err != nil || got.Clients.Codex != "codex-cli 0.163.0" || !slices.Equal(v.calls, []string{"verify"}) {
+		t.Fatalf("%+v %v %v", got, err, v.calls)
+	}
+	for _, call := range d.calls {
+		joined := strings.Join(call, " ")
+		if strings.Contains(joined, "codex-update") || strings.Contains(joined, "codex-probe") || strings.Contains(joined, "/opt/ensemble/runtime") {
+			t.Fatalf("client update step: %v", call)
+		}
+	}
+	if strings.Contains(progress.String(), "client_update") || strings.Contains(progress.String(), "update-codex") {
+		t.Fatal(progress.String())
+	}
+	data, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := fields["client_update"]; present {
+		t.Fatal(string(data))
 	}
 }

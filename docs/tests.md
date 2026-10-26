@@ -8,6 +8,7 @@ Lint (tool versions pinned in `.github/workflows/test.yml`):
 
 ```bash
 python3 .github/comment_budget.py
+python3 .github/mini_op_guard.py
 ruff check --no-cache
 ruff format --check --no-cache
 python3 -m tests.unit_imports
@@ -21,6 +22,15 @@ python3 .github/integration_jobs.py --check
 actionlint -shellcheck= -pyflakes=
 typos --config pyproject.toml
 ```
+
+`.github/mini_op_guard.py` rejects private and CGNAT IPv4 addresses, email addresses, UUIDs, `.local`
+host names and literal keychain item names in every file under `.mini-op/` (mini-op's project runbooks);
+on a pull request that changes `.mini-op/` it also scans the PR's title, body and commit messages. CI's
+`mini-op guard` job runs it on every event, whatever the test scope, and the `edited` trigger reruns it
+when a title or body changes. Its findings name the place and the pattern, never the matched text.
+An item name counts only when it holds a digit or one of `-._@:+`, so prose after a command name passes;
+names of letters only, and names that look like no pattern (a team key, a workspace slug), need a
+search by value before a PR.
 
 Pre-commit hook, enabled once per clone with `git config core.hooksPath .githooks`: `.githooks/pre-commit`
 runs `ruff check --fix`, then `ruff format`, on the staged version of each staged `.py` file, re-stages
@@ -128,6 +138,7 @@ flowchart LR
     I[Integration: 8 jobs x 4 processes] --> CI
     R --> CI
     B[Broker: Linux and macOS when full] --> CI
+    M[mini-op guard: every event] --> CI
 ```
 Unit shards use sorted test IDs; integration shards use recorded durations. Every ID
 occurs exactly once. Coverage applies to pull requests; `CI` requires every applicable result.

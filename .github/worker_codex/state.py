@@ -14,12 +14,8 @@ for path in (str(home), "/run/ensemble", "/run/ensemble/secrets"):
     kind, options = mounts[path]
     assert kind == "tmpfs"
     assert {"noexec", "nosuid", "nodev"} <= options
-kind, options = mounts["/opt/ensemble/runtime"]
-assert kind == "tmpfs" and "noexec" not in options
-assert {"nosuid", "nodev"} <= options
-runtime = Path("/opt/ensemble/runtime")
-assert runtime.stat().st_uid == 0 and not runtime.stat().st_mode & 0o022
-assert not (runtime / "codex").exists()
+assert "/opt/ensemble/runtime" not in mounts and not Path("/opt/ensemble/runtime").exists()
+assert os.readlink("/opt/ensemble/bin/codex") == "/opt/ensemble/clients/bin/codex"
 secret = Path("/run/ensemble/secrets/codex/auth.json")
 assert stat.S_IMODE(secret.stat().st_mode) == 0o400
 assert secret.stat().st_uid == os.getuid() != 0

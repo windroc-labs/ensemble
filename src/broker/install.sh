@@ -1,6 +1,7 @@
 #!/bin/sh
 # Installs ensemble-broker root-owned and seeds the worker image definition once. Rerun to upgrade.
-# Default: this plugin version's release asset, installed only after gh attestation verify passes.
+# Default: this plugin version's release asset, installed only after gh attestation verify passes and it speaks
+# this plugin's broker protocol.
 # --build: builds and signs it locally with Go (build.sh).
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
@@ -29,7 +30,8 @@ else
   platform=$(uname -sm)
   [ "$platform" = "Darwin arm64" ] \
     || fail "release assets are built for Darwin arm64 only, not $platform; build it locally: sh $here/install.sh --build"
-  manifest="$(dirname "$(dirname "$here")")/.claude-plugin/plugin.json"
+  plugin=$(dirname "$(dirname "$here")")
+  manifest="$plugin/.claude-plugin/plugin.json"
   version=$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$manifest" 2>/dev/null | sed -n 1p)
   [ -n "$version" ] || fail "no version in $manifest"
   tag="v$version"
@@ -45,6 +47,11 @@ else
     --source-ref "refs/tags/$tag" --deny-self-hosted-runners \
     || fail "${ENSEMBLE_BROKER_ASSET:-$asset_name} failed provenance verification for $tag; nothing installed"
   tar -xzf "$asset" -C "$work" ensemble-broker
+  want=$(sed -n 's/^PROTOCOL = "\([0-9][0-9]*\)"$/\1/p' "$plugin/src/ensemble/session/hosts/docker/broker.py" 2>/dev/null) \
+    || want=
+  got=$("$work/ensemble-broker" version 2>/dev/null | sed -n 's/.*"protocol_version": *"\([0-9][0-9]*\)".*/\1/p')
+  [ -n "$want" ] && [ "$got" = "$want" ] \
+    || fail "$tag's ensemble-broker speaks protocol ${got:-unknown}, this plugin wants ${want:-unknown}: install the plugin at $tag (docs/upgrading.md), or build the broker from this plugin with sh $here/install.sh --build, which needs Go and resets every broker login; nothing installed"
 fi
 if [ ! -e "$worker" ]; then
   mkdir -p "$worker"
