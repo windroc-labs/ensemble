@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import functools
+import json
 import os
 import re
 import sys
@@ -36,9 +37,11 @@ from ensemble.session.engine.types import (
     SESSION_NAME,
     SESSION_NAME_RULE,
     ConfigError,
+    EnvironmentSpec,
     Hosts,
     KeyPress,
     NotShowable,
+    SessionBusy,
     SessionError,
     SessionInfo,
     SessionRow,
@@ -51,6 +54,7 @@ from ensemble.session.viewer import display as displays
 from ensemble.utils import (
     ACCOUNT_ENV,
     EVENTS_ENV,
+    EXIT_BUSY,
     SID_ENV,
     Record,
     Status,
@@ -89,6 +93,16 @@ def _env(item: str) -> tuple[str, str]:
     if not (eq and key) or "\0" in key or not value.isprintable():
         raise argparse.ArgumentTypeError(f"want NAME=VALUE, VALUE printable, not {item!r:.80}")
     return key, value
+
+
+def _environment(value: str) -> EnvironmentSpec:
+    try:
+        environment = EnvironmentSpec.from_fields(json.loads(value))
+    except (ValueError, RecursionError, ConfigError) as error:
+        raise argparse.ArgumentTypeError(f"environment spec: {error}") from None
+    if environment.prefetch is not None:
+        raise argparse.ArgumentTypeError("environment spec: worker prefetch is not supported")
+    return environment
 
 
 def _display_help(hosts: Hosts | None) -> str:
@@ -178,6 +192,12 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
     )
     p.add_argument("--cwd", help="its directory (default: this one)")
     p.add_argument("--host", metavar="NAME", help="its Host (default: [session.hosts].default)")
+    p.add_argument(
+        "--environment-spec",
+        type=_environment,
+        metavar="JSON",
+        help="resolved container environment JSON from delegate; no prefetch or environment name",
+    )
     p.add_argument(
         "--resume", metavar="SID", help=f"resume conversation SID; else ${SID_ENV}, else new id"
     )
@@ -698,6 +718,7 @@ def _start(args, flags: list[str], hosts: Hosts, start_sid: str | None) -> int:
         env=env,
         events=None if events is None else os.path.abspath(events),
         display=Session.display(args.display, host=host),
+        environment=args.environment_spec,
     )
     worker.check(prompt=args.prompt, resume=args.resume is not None)
     with worker.locked():
@@ -807,6 +828,9 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as error:
         _say(f"{PROG}: {error}")
         return 2
+    except SessionBusy as error:
+        _say(f"{PROG}: {error}")
+        return EXIT_BUSY
     except (SessionError, OSError) as error:
         _say(f"{PROG}: {error}")
         return 1
