@@ -55,7 +55,8 @@ type Store interface {
 // Records, account Consumer.ID()) or the backlog (Backlog's service and account) holds every token issued until it
 // is confirmed revoked or expired: a material leaves its record only for confirmed revocation, confirmed expiry or a
 // confirmed backlog write. Lock guards each read-modify-write of either item, never a provider request. Audit (nil:
-// none) gets each token's outcome, never its value.
+// none) gets each token's outcome, never its value. Every operation refuses a provider whose kind is not renewable
+// (ErrStatic).
 type Lifecycle struct {
 	Provider Provider
 	Store    Store
@@ -64,15 +65,6 @@ type Lifecycle struct {
 	Backlog  [2]string
 	Lock     func() (unlock func(), err error)
 	Audit    *audit.Recorder
-}
-
-// New is l once its provider's kind is renewable; every operation checks that again, for a Lifecycle built as a
-// literal.
-func New(l Lifecycle) (Lifecycle, error) {
-	if err := l.ready(); err != nil {
-		return Lifecycle{}, err
-	}
-	return l, nil
 }
 
 func (l Lifecycle) ready() error {

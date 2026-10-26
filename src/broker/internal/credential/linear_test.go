@@ -14,10 +14,7 @@ func TestHostConsumerLinearContract(t *testing.T) {
 	store, p := newStore(), newProvider(t, "workspace")
 	p.kind = Linear
 	p.revoke = func(string) Revocation { return Revocation{Outcome: Unsupported} }
-	l, err := New(lifecycle(store, p, nil))
-	if err != nil {
-		t.Fatal(err)
-	}
+	l := lifecycle(store, p, nil)
 	host := Delivery{Consumer: Consumer{Host: "linear-app"}}
 	got, err := l.Acquire(bg, host, "linear-app", map[string]string{"scope": "read"})
 	if err != nil {

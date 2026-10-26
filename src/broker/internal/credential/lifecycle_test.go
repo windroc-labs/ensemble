@@ -26,13 +26,12 @@ func acquire(t *testing.T, l Lifecycle, id string, c *container) []protocol.Expi
 	return got
 }
 
-func TestNewRefusesStaticProvider(t *testing.T) {
+// TestStaticProviderRefused: every operation checks its provider's kind, so no static credential runs through renewal
+// or revocation.
+func TestStaticProviderRefused(t *testing.T) {
 	p := newProvider(t, "acme")
 	p.kind = Claude
-	if _, err := New(lifecycle(newStore(), p, nil)); !errors.Is(err, ErrStatic) {
-		t.Fatalf("New: %v", err)
-	}
-	l := lifecycle(newStore(), p, nil) // a literal, past New
+	l := lifecycle(newStore(), p, nil)
 	c := newContainer()
 	if _, err := l.Acquire(bg, to(ctrA, c), "app", nil); !errors.Is(err, ErrStatic) {
 		t.Fatalf("Acquire: %v", err)
@@ -50,9 +49,7 @@ func TestNewRefusesStaticProvider(t *testing.T) {
 		t.Fatalf("static kind reached the provider %q or a container %q", p.calls, c.argv)
 	}
 	p.kind = GitHub
-	if _, err := New(lifecycle(newStore(), p, nil)); err != nil {
-		t.Fatal(err)
-	}
+	acquire(t, l, ctrA, c)
 }
 
 func TestRevocationOutcomes(t *testing.T) {
