@@ -31,6 +31,7 @@ from ensemble.session.hosts.types import SessionView
 from ensemble.utils import ProcessControl, load_class
 from tests.session.case import Case
 from tests.session.hosted_support import SID
+from tests.session.tmux_fixtures import FakeTmux
 from tests.session.tmux_host_support import LINE, PROCESS, Base
 
 TuiError = tmux_cli.TuiError
@@ -509,6 +510,25 @@ class CloseTest(Base):
         with self.assertRaises(SessionError) as caught:
             process.close()
         self.assertEqual(str(caught.exception), "tmux: boom; process group w1: termination denied")
+
+    def test_a_pane_whose_process_exited_during_close_is_gone(self):
+        # tmux prints #{pane_pid} empty once the pane's process exited
+        for answers, kill in (
+            (["4242 $3 %7 "], []),
+            (["4242 $3 %7 4343", "4242 $3 %7 "], [["tmux", "kill-pane", "-t", "%7"]]),
+        ):
+            with self.subTest(answers=answers):
+                self.active({"live": True}, {"live": False})
+                printed = iter(answers)
+                fake = FakeTmux(
+                    results={
+                        "display-message": lambda _argv, printed=printed: (0, next(printed) + "\n"),
+                        "kill-pane": (1, "", "can't find pane: %7\n"),
+                    }
+                )
+                process = TmuxProcess("w1", PROCESS, tmux=TmuxCli(fake), control=self.control)
+                process.close()
+                self.assertEqual([c for c in fake.calls if c[1] == "kill-pane"], kill)
 
     def test_attach_wraps_a_failed_kind_read_as_a_driver_error(self):
         self.tmux.option.side_effect = TuiError("tmux: lost server")

@@ -1,7 +1,7 @@
 """A tui client's hook: drains stdin, checks callback sources, binds identity and journals
 hooks.jsonl before notifying the optional Host. No stdout; failures log a traceback and stderr line.
-The CLI defaults to exit 0; --strict reports failure; an --event retry of the last journaled event
-reruns only the Host. session.json declares client_hook and host_hook via HookCallback.fields().
+The CLI exits 0; --serve takes many calls, where a retry of the last journaled event reruns only
+the Host. session.json declares client_hook and host_hook via HookCallback.fields().
 Resolve modules over hook roots, all callbacks' roots, then sys.path.
 Call on_hook(HookCall); load external modules from declared roots without changing sys.path.
 """
@@ -12,6 +12,7 @@ import fcntl
 import importlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import re
@@ -21,6 +22,7 @@ import traceback
 from collections.abc import Sequence
 from contextlib import suppress
 from datetime import datetime
+from types import SimpleNamespace
 
 from ensemble.session.engine.types import MARKS, HookCall, HookError, StatusState
 from ensemble.session.hosts.base import TUI_STATE
@@ -99,7 +101,7 @@ def _prepare(argv: Sequence[str], roots: Sequence[str]):
 def main(argv: Sequence[str], stdin, *, roots: Sequence[str], event: str | None = None) -> None:
     payload = read_payload(stdin)
     if event is not None and not LABEL.fullmatch(event):
-        raise HookError("usage: --event <relay event [A-Za-z0-9_.-]{1,64}>")
+        raise HookError("usage: relay event <[A-Za-z0-9_.-]{1,64}>")
     folder, label, state, specs = _prepare(argv, roots)
     _dispatch(folder, label, payload, state, specs, event=event)
 
@@ -341,9 +343,9 @@ def append(path: str, record: dict) -> None:
 
 
 def run(argv: Sequence[str], stdin, *, roots: Sequence[str], event: str | None = None) -> bool:
-    """One hook call, as `ensemble-session hook [--event ID] DIR LABEL` runs it with its own source
-    roots, its payload stdin's bytes (stdin may be None): returns success, never raises or writes
-    stdout; a failure keeps its traceback in DIR/hook.log and one stderr line.
+    """One hook call, as `ensemble-session hook DIR LABEL` runs it with its own source roots (`event`:
+    serve's relay event), its payload stdin's bytes (stdin may be None): returns success, never
+    raises or writes stdout; a failure keeps its traceback in DIR/hook.log and one stderr line.
     """
     try:
         main(argv, stdin.buffer, roots=roots, event=event)
@@ -363,3 +365,46 @@ def run(argv: Sequence[str], stdin, *, roots: Sequence[str], event: str | None =
         return False
     else:
         return True
+
+
+def serve(argv: Sequence[str], requests, replies, *, roots: Sequence[str]) -> None:
+    """`hook --serve DIR`: per {label, event, payload} line, one run() and its {"ok"} line."""
+    for line in requests:
+        request = _request(line)
+        ok = request is not None and run(
+            [*argv, request["label"]],
+            SimpleNamespace(buffer=io.BytesIO(json.dumps(request["payload"]).encode())),
+            roots=roots,
+            event=request["event"],
+        )
+        try:
+            replies.write(json.dumps({"ok": ok}).encode() + b"\n")
+            replies.flush()
+        except OSError:
+            return
+
+
+def _request(line: bytes) -> dict | None:
+    try:
+        request = json.loads(line)
+    except (ValueError, RecursionError):
+        return None
+    if (
+        isinstance(request, dict)
+        and set(request) == {"label", "event", "payload"}
+        and isinstance(request["label"], str)
+        and (request["event"] is None or isinstance(request["event"], str))
+        and isinstance(request["payload"], dict)
+    ):
+        return request
+    return None
+
+
+def private_stdio():
+    """Dups of fds 0 and 1, which then hold /dev/null."""
+    requests, replies = os.fdopen(os.dup(0), "rb"), os.fdopen(os.dup(1), "wb")
+    null = os.open(os.devnull, os.O_RDWR)
+    os.dup2(null, 0)
+    os.dup2(null, 1)
+    os.close(null)
+    return requests, replies
