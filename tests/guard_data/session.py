@@ -215,3 +215,10 @@ EMBEDDED_PROGRAMS_ALLOWED = {
 
 
 EMBEDDED_PROGRAM_ARGV_RETURNS = {"ensemble.session.hosts.docker.daemon.docker_call": 0}
+
+
+# (path under SESSION_SRC, word): a role name the session uses as a plain word (NFR-5)
+ROLE_WORDS_ALLOWED = {
+    ("clients/claude/tui.py", "pm"): "the AM/PM half of a reset time",
+    ("clients/claude/usage.py", "pm"): "the AM/PM half of a reset time",
+}
