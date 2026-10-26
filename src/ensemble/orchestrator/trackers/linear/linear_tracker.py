@@ -4,6 +4,7 @@ attachments are a run's."""
 
 import functools
 import re
+from dataclasses import dataclass
 from typing import TypeVar
 
 from ensemble.orchestrator.engine import config
@@ -33,7 +34,17 @@ from ensemble.orchestrator.engine.flow.types import (
     Snapshot,
     SubIssue,
 )
-from ensemble.orchestrator.engine.types import MOVES, UUID_RE, IssueError, LinearError, State
+from ensemble.orchestrator.engine.types import (
+    MOVES,
+    UNOWNED,
+    UUID_RE,
+    IssueError,
+    LinearApp,
+    LinearError,
+    LinearSettings,
+    State,
+    TrackerKind,
+)
 from ensemble.orchestrator.trackers.linear import ops
 from ensemble.orchestrator.trackers.linear.ops import DONE, HISTORY, call, client_id, last_move
 from ensemble.utils import LOCAL, one_line, parse_time
@@ -87,7 +98,7 @@ Q_CHILDREN = (
 )
 Q_FINISHED = (
     """query($t: ID, $d: [ID!], $s: [ID!], $a: [ID!], $c: String, $after: String) {
-  issues(filter: { team: { id: { eq: $t } }, or: [{ state: { id: { in: $d } }, assignee: { id: { in: $a } } },
+  issues(filter: { team: { id: { eq: $t } }, or: [{ state: { id: { in: $d } }, delegate: { id: { in: $a } } },
   { state: { id: { in: $s } } }] }, first: 50, after: $c) {
   nodes { id identifier updatedAt """
     + STAMPS
@@ -98,14 +109,14 @@ Q_FINISHED = (
 )
 M_ARCHIVE = "mutation($i: String!) { issueArchive(id: $i) { success } }"
 Q_HANDOFF = """query($t: ID, $s: ID, $a: [ID!]) { issues(filter: { team: { id: { eq: $t } }, state: { id: { eq: $s } },
-  project: { null: false }, assignee: { id: { in: $a } } }, first: 100) {
-  nodes { id identifier url title priority createdAt project { id name } assignee { id } attachments { nodes { title url } } } } }"""
+  project: { null: false }, delegate: { id: { in: $a } } }, first: 100) {
+  nodes { id identifier url title priority createdAt project { id name } delegate { id } attachments { nodes { title url } } } } }"""
 Q_DETAIL = (
     """query($i: String!, $after: String) { issue(id: $i) { state { id }
   """
     + HISTORY
     + """
-  comments(first: 250) { nodes { body createdAt user { email name isMe } } }
+  comments(first: 250) { nodes { body createdAt user { id email name } } }
   relations(first: 250) { nodes { relatedIssue { id } } }
   inverseRelations(first: 250) { nodes { issue { id } } } } }"""
 )
@@ -128,7 +139,7 @@ ATTACHED = ("already been linked", "Duplicate attachment", "Unable to create iss
 RELATIONS = "inverseRelations(first: 50) { nodes { type issue { identifier state { type } } } }"
 Q_RELATIONS = "query($i: String!) { issue(id: $i) { " + RELATIONS + " } }"
 Q_RECHECK = (
-    "query($i: String!) { issue(id: $i) { state { id } assignee { id email } project { id name } "
+    "query($i: String!) { issue(id: $i) { state { id } delegate { id } assignee { id email } project { id name } "
     "labels { nodes { id name parent { id } } } archivedAt } }"
 )
 ARCHIVED = (
@@ -139,7 +150,7 @@ ARCHIVED = (
 Q_HISTORY = (
     "query($i: String!, $after: String) { issue(id: $i) { "
     "history(first: 250, after: $after, orderBy: createdAt) { "
-    "nodes { createdAt toStateId actor { email isMe } botActor { type } } "
+    "nodes { createdAt toStateId actor { id } botActor { type } } "
     "pageInfo { hasNextPage endCursor } } } }"
 )
 _NODES = (
@@ -167,7 +178,7 @@ GROUP_BY_TYPE = {
 }
 Q_READ = """query($i: String!) { issue(id: $i) { id identifier url title description createdAt
   project { id }
-  comments(first: 250) { nodes { body createdAt user { email name isMe } } }
+  comments(first: 250) { nodes { body createdAt user { id email name } } }
   attachments(first: 50) { nodes { url } }
   labels(first: 50) { nodes { id } }
   relations(first: 50) { nodes { relatedIssue { identifier title state { name } } } }
@@ -177,11 +188,11 @@ Q_READ = """query($i: String!) { issue(id: $i) { id identifier url title descrip
 def q_issues(fields=""):
     return (
         (
-            "query($f: IssueFilter) { issues(filter: $f, first: 100) { nodes { id identifier url priority createdAt "
-            "project { id name } assignee { id email } "
+            "query($f: IssueFilter, $c: String) { issues(filter: $f, first: 100, after: $c) { nodes { id identifier url priority createdAt "
+            "project { id name } delegate { id } assignee { id email } "
         )
         + fields
-        + " } } }"
+        + " } pageInfo { hasNextPage endCursor } } }"
     )
 
 
@@ -218,14 +229,6 @@ def is_record(attachment):
     return attachment["url"].startswith(URL)
 
 
-def is_comment(comment):
-    # isMe means the harness account because callers query with its key
-    return (
-        bool((comment["user"] or {}).get("isMe"))
-        and re.match(f"Run {UUID_RE.pattern} · ", comment["body"]) is not None
-    )
-
-
 def finished_at(issue, finished):
     """The latest of issue's move into finished and its canceledAt and completedAt (the history
     read can lack a move into Duplicate that canceledAt holds); None: unknown."""
@@ -239,30 +242,46 @@ def _quiet(*_, **__):
     pass
 
 
-def _selves(roles):
-    return frozenset(r.account.lower() for r in roles.values())
+@dataclass(frozen=True)
+class Selves:
+    """The app user ids origin is decided by: self is the harness or a role app, or Linear
+    automation's move (no actor, or a botActor); manager (None: unset) is other even with a
+    botActor."""
 
+    harness: str
+    roles: frozenset[str]
+    manager: str | None = None
 
-def _origin(user, selves) -> Origin:
-    return "self" if user.get("isMe") or (user.get("email") or "").lower() in selves else "other"
+    @classmethod
+    def of(cls, linear: LinearSettings) -> "Selves":
+        roles = frozenset(r.user_id for r in linear.roles.values())
+        return cls(linear.harness.user_id, roles, linear.manager.user_id or None)
 
+    def origin(self, user) -> Origin:
+        uid = user.get("id")
+        return "self" if uid == self.harness or uid in self.roles else "other"
 
-def _move_origin(node, selves) -> Origin:
-    """Linear automation's (no actor, or a bot) is self."""
-    if node["botActor"] or not node["actor"]:
-        return "self"
-    return _origin(node["actor"], selves)
+    def move_origin(self, node) -> Origin:
+        actor = node["actor"]
+        if self.manager is not None and actor and actor.get("id") == self.manager:
+            return "other"
+        if node["botActor"] or not actor:
+            return "self"
+        return self.origin(actor)
+
+    def is_run(self, comment) -> bool:
+        """The harness app's session comment."""
+        return (comment["user"] or {}).get("id") == self.harness and re.match(
+            f"Run {UUID_RE.pattern} · ", comment["body"]
+        ) is not None
 
 
 class LinearTracker(Tracker):
     """states: {State key: state id}; team_id; finished: ops.Team.finished; roles: {user id: role};
-    humans: human_members emails, subscribed on notify; selves: the role accounts' emails, lowercased;
-    say: the caller's logger. A method needing one not given raises TypeError. service: the key each call is made as, with
-    timeout when given; None: gql as given. A comment's ref: its client id's parts. A home is a Linear
-    project; a note's account its user's email. Origin self: the harness account (isMe: router,
-    promote and the run reader query with linear.harness_key), a role account or Linear automation;
-    other: any other user. A comment with no user (an integration's, such as GitHub's) is not
-    returned. task_group, agent_group: the task and Agent label groups; label_tasks,
+    humans: human_members emails, subscribed on notify; selves: Selves, who counts as self;
+    say: caller's logger; missing method dependencies raise TypeError. identity and timeout bind
+    gql; None leaves it as given. Comment refs are client id parts; home is a project.
+    Userless comments are omitted. task_group, agent_group: label groups; label_tasks,
     label_clients: {label id: task or client}, which recheck's picks read."""
 
     batch = SNAPSHOT_BATCH
@@ -278,15 +297,16 @@ class LinearTracker(Tracker):
         humans=(),
         selves=None,
         say=_quiet,
-        service=None,
+        identity=None,
         timeout=None,
         task_group=None,
         label_tasks=None,
         agent_group=None,
         label_clients=None,
     ):
-        if service is not None:
-            bound = {"service": service} | ({} if timeout is None else {"timeout": timeout})
+        self.comment_namespace = (identity.user_id,) if isinstance(identity, LinearApp) else ()
+        if identity is not None:
+            bound = {"identity": identity} | ({} if timeout is None else {"timeout": timeout})
             gql = functools.partial(gql, **bound)
         self.gql, self.state_ids, self.team_id, self.roles = gql, states, team_id, roles
         self.finished_ids, self.humans, self.selves = finished, humans, selves
@@ -314,10 +334,10 @@ class LinearTracker(Tracker):
 
     @classmethod
     def connect(cls, gql, cfg, *, say):
-        """Checks the team and task label group, then reads the role accounts; keeps the task and
-        Agent label maps. Calls gql as the harness_key service."""
+        """Checks the team and task label group, then uses configured role app ids; keeps the task and
+        Agent label maps. Calls gql as linear.harness."""
         linear = config.linear_settings(cfg, "router")
-        gql = functools.partial(gql, service=linear.harness_key)
+        gql = functools.partial(gql, identity=linear.harness)
         found = ops.team(gql, linear)
         ops.task_group(gql, linear)
         return cls(
@@ -325,9 +345,9 @@ class LinearTracker(Tracker):
             states=found.states,
             team_id=found.id,
             finished=found.finished,
-            roles=ops.role_ids(gql, linear.roles),
+            roles=ops.role_ids(linear.roles),
             humans=linear.human_members,
-            selves=_selves(linear.roles),
+            selves=Selves.of(linear),
             say=say,
             task_group=linear.task_label_group,
             label_tasks={i: task for task, i in linear.task_labels.items()},
@@ -345,37 +365,52 @@ class LinearTracker(Tracker):
             finished=team.finished,
             roles=roles,
             humans=linear.human_members,
-            selves=_selves(linear.roles),
+            selves=Selves.of(linear),
         )
 
     @classmethod
     def reader(cls, gql, linear):
-        """A run's issue read, as the harness_key service."""
+        """A run's issue read, as linear.harness."""
         return cls(
             gql,
             states=linear.states,
             team_id=linear.team,
-            selves=_selves(linear.roles),
-            service=linear.harness_key,
+            selves=Selves.of(linear),
+            identity=linear.harness,
         )
 
     def role(self, issue):
-        return _need("roles", self.roles)[issue["assignee"]["id"]]
+        return _need("roles", self.roles).get((issue.get("delegate") or {}).get("id"))
 
     def assigned(self, state):
         return self._listed(state)
 
     def _listed(self, state, fields=""):
-        """state's issues with a project, assigned to a role account; the first 100."""
+        """Page state's project issues, return the first 100 role delegates; an unowned Todo one
+        logs claim-skip."""
         if state not in LISTED:
             raise ValueError(f"no list of {state} issues")
         flt = {
             "team": {"id": {"eq": _need("team_id", self.team_id)}},
             "project": {"null": False},
-            "assignee": {"id": {"in": list(_need("roles", self.roles))}},
             "state": {"id": {"eq": _need("states", self.state_ids)[LISTED[state]]}},
         }
-        return self.gql(q_issues(fields), f=flt)["issues"]["nodes"]
+        found, cursors, variables = [], set(), {"f": flt}
+        while True:
+            page = self.gql(q_issues(fields), **variables)["issues"]
+            for issue in page["nodes"]:
+                if self.role(issue) is not None:
+                    found.append(issue)
+                elif state is IssueState.READY:
+                    self.say(
+                        "claim-skip",
+                        issue["identifier"],
+                        once=True,
+                        reason=UNOWNED[TrackerKind.LINEAR],
+                    )
+            if not page["pageInfo"]["hasNextPage"]:
+                return found[:100]
+            variables["c"] = ops.advance("role issues", page["pageInfo"]["endCursor"], cursors)
 
     def ready(self):
         """Relations come with the list; when that read fails, a logged todo-error, the plain list
@@ -409,7 +444,7 @@ class LinearTracker(Tracker):
         refused += [] if found["project"] else ["no project"]
         return Recheck(
             ready,
-            role=_need("roles", self.roles).get((found["assignee"] or {}).get("id")),
+            role=self.role(found),
             refused="; ".join(refused) or None,
             assignee=found["assignee"],
             home=found["project"],
@@ -423,7 +458,7 @@ class LinearTracker(Tracker):
         if key not in self.hist:
             self.hist[key] = self.gql(Q_HISTORY, i=key)["issue"]["history"]["nodes"]
         moved = {_need("states", self.state_ids)[LISTED[state]]}
-        keep = None if by is None else (lambda n: _move_origin(n, selves) == by)
+        keep = None if by is None else (lambda n: selves.move_origin(n) == by)
         return last_move(self.hist[key], moved, keep)
 
     def read(self, ident):
@@ -494,10 +529,10 @@ class LinearTracker(Tracker):
                     c["createdAt"],
                     c["user"].get("email"),
                     c["user"].get("name"),
-                    _origin(c["user"], selves),
+                    selves.origin(c["user"]),
                 )
                 for c in node["comments"]["nodes"]
-                if c["user"] and not is_comment(c)
+                if c["user"] and not selves.is_run(c)
             ),
             key=lambda n: parse_time(n.at),
         )
@@ -651,7 +686,7 @@ class LinearTracker(Tracker):
                 n["createdAt"],
                 n["project"]["id"],
                 n["project"]["name"],
-                roles[n["assignee"]["id"]],
+                roles[n["delegate"]["id"]],
                 tuple(
                     (a["title"], a["url"]) for a in n["attachments"]["nodes"] if not is_record(a)
                 ),
@@ -675,8 +710,8 @@ class LinearTracker(Tracker):
                     c["createdAt"],
                     c["body"],
                     c["user"]["name"],
-                    _origin(c["user"], selves),
-                    run=is_comment(c),
+                    selves.origin(c["user"]),
+                    run=selves.is_run(c),
                 )
                 for c in issue["comments"]["nodes"]
                 if c["user"]
@@ -700,7 +735,8 @@ class LinearTracker(Tracker):
                     "id": client_id(*once),
                     "teamId": _need("team_id", self.team_id),
                     "projectId": home,
-                    "assigneeId": self.users[owner],
+                    "delegateId": self.users[owner],
+                    "assigneeId": None,
                     "stateId": self.ids[IssueState.READY],
                     "priority": priority,
                     "title": title,
@@ -719,7 +755,9 @@ class LinearTracker(Tracker):
         )
 
     def comment(self, key, body, ref=None):
-        ops.comment(self.gql, key, body, None if ref is None else client_id(*ref))
+        ops.comment(
+            self.gql, key, body, None if ref is None else client_id(*self.comment_namespace, *ref)
+        )
 
     def move(self, key, to, *, frm=None):
         _need("states", self.state_ids)
@@ -768,10 +806,10 @@ class LinearTracker(Tracker):
         call(self.gql, M_UNARCHIVE, "issueUnarchive", i=key)
 
     def find_comment(self, key, ref):
-        return ops.find_comment(self.gql, client_id(*ref), key)
+        return ops.find_comment(self.gql, client_id(*self.comment_namespace, *ref), key)
 
     def put_comment(self, key, body, ref):
-        cid = client_id(*ref)
+        cid = client_id(*self.comment_namespace, *ref)
         try:
             done = self.gql(M_UPDATE, c=cid, b=body)["commentUpdate"]
         except LinearError as e:

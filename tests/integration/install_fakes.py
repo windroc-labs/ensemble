@@ -5,8 +5,9 @@ $FAKES: brew/<name> (installed), processes (one running command line each; unkil
 src/broker/ (the broker's Codex install, tokens and protocol: the one `version` reports, else the plugin's), fail (a call prefix that fails once), tty_name
 (what `ps -o tty=` reports), kqueue_refuses (a terminal the Bun-built clients die on, as on /dev/tty),
 commit (the commit GitHub reports for every ensemble ref), marketplace/ (the windroc marketplace's
-manifests on main), refs/<ref>/ (ensemble files at a ref, over pkg-src/), linear.json (the Linear workspace: keys
-{key: email}, teams [{id, key, name, states, members, projects}], labels).
+manifests on main), refs/<ref>/ (ensemble files at a ref, over pkg-src/), linear.json (the Linear workspace: apps
+{client_id: {secret, access_token, user_id}}, teams [{id, key, name, states, members, projects}],
+labels).
 """
 
 import hashlib
@@ -15,12 +16,14 @@ import json
 import os
 import plistlib
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tarfile
 import termios
 from pathlib import Path
+from urllib.parse import parse_qs
 
 FAKES = Path(os.environ.get("FAKES", "/nonexistent"))
 ROOT = Path(os.environ.get("ENSEMBLE_INSTALL_ROOT", "/nonexistent"))
@@ -153,22 +156,51 @@ mkdir -p "{root}/Library/Developer/CommandLineTools"
 
 
 LINEAR = "https://api.linear.app/graphql"
+LINEAR_TOKEN = "https://api.linear.app/oauth/token"
+
+
+def linear_token(args):
+    """Client credentials arrive only on stdin; enforce the app's exact fixed scopes."""
+    if args[:1] != ["-q"] or args[args.index("--data-binary") + 1] != "@-":
+        return 2
+    form = parse_qs(sys.stdin.read(), strict_parsing=True)
+    workspace = load(FAKES / "linear.json", {})
+    client = form.get("client_id", [""])[0]
+    app = workspace.get("apps", {}).get(client)
+    scope = {"client-harness": "read,write", "client-manager": "read,write,app:assignable"}.get(
+        client, "read,write,app:assignable,app:mentionable"
+    )
+    if (
+        app is None
+        or form.get("grant_type") != ["client_credentials"]
+        or form.get("client_secret") != [app["secret"]]
+        or form.get("scope") != [scope]
+    ):
+        out("curl: (22) OAuth credentials refused\n", sys.stderr)
+        return 22
+    out(json.dumps({"access_token": app["access_token"], "expires_in": 30 * 86400}))
+    return 0
 
 
 def linear(args):
-    """Linear's GraphQL API: the key from the -K - config on stdin, the query from --data-binary."""
+    """Linear's GraphQL API: the app token from the -K - config on stdin, the query from --data-binary."""
     if args[:1] != ["-q"]:
         out("curl: Linear call without -q first\n", sys.stderr)
         return 2
     auth = re.fullmatch(r'header = "Authorization: (.*)"\n', sys.stdin.read())
     workspace = load(FAKES / "linear.json", {})
-    if not auth or auth.group(1) not in workspace.get("keys", {}):
+    value = auth.group(1) if auth else ""
+    app = next(
+        (a for a in workspace.get("apps", {}).values() if value == "Bearer " + a["access_token"]),
+        None,
+    )
+    if app is None:
         out("curl: (22) The requested URL returned error: 400\n", sys.stderr)
         return 22
     sent = json.loads(args[args.index("--data-binary") + 1])
     query, variables = sent["query"], sent.get("variables") or {}
     if "viewer" in query:
-        data = {"viewer": {"email": workspace["keys"][auth.group(1)]}}
+        data = {"viewer": {"id": app["user_id"]}}
     elif "teams(" in query:
         data = {
             "teams": {
@@ -200,6 +232,8 @@ def curl(args):
     url = args[-1]
     if url == LINEAR:
         return linear(args)
+    if url == LINEAR_TOKEN:
+        return linear_token(args)
     if url == "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh":
         out(HOMEBREW_INSTALLER.format(prefix=PREFIX, apps=FAKES / "apps", root=ROOT))
         return 0
@@ -403,14 +437,29 @@ def claude(args):
         return 0 if any(m["name"] == args[3] for m in markets) else 1
     elif args == ["plugin", "list", "--json"]:
         out(json.dumps(plugins))
-    elif args[:2] == ["plugin", "install"]:
+    elif args[:2] in (["plugin", "install"], ["plugin", "update"]):
+        found = [p for p in plugins if p["id"] == args[2]]
+        if args[1] == "update":
+            if not found:
+                return 1
+            if (FAKES / "claude/update_noop").exists():
+                return 0
+            manifest = Path(found[0]["installPath"], ".claude-plugin/plugin.json")
+            if (
+                manifest.exists()
+                and manifest.read_text()
+                == (FAKES / "pkg-src/.claude-plugin/plugin.json").read_text()
+            ):
+                return 0
         name, market = args[2].split("@")
         source = next(m for m in markets if m["name"] == market)
         path = FAKES / "claude/cache" / str(len(list((FAKES / "claude").glob("cache/*"))))
         if name == "ensemble":
             shutil.copytree(FAKES / "pkg-src", path)
             mark(path / "REF", source.get("ref", ""))
-        save(plugins_file, [*plugins, {"id": args[2], "enabled": True, "installPath": str(path)}])
+        kept = [p for p in plugins if p["id"] != args[2]]
+        enabled = found[0]["enabled"] if found else True
+        save(plugins_file, [*kept, {"id": args[2], "enabled": enabled, "installPath": str(path)}])
     elif args[:2] == ["plugin", "enable"]:
         save(plugins_file, [{**p, "enabled": p["enabled"] or p["id"] == args[2]} for p in plugins])
     elif args[:2] == ["plugin", "uninstall"]:
@@ -456,11 +505,15 @@ def codex(args):
         out(json.dumps({"installed": plugins, "available": []}))
         return 0
     elif args[:2] == ["plugin", "add"]:
+        if (FAKES / "codex/update_noop").exists():
+            return 0
+        plugins = [p for p in plugins if p["pluginId"] != args[2]]
         plugins.append({"pluginId": args[2], "installed": True, "enabled": True})
         if args[2] == "ensemble@windroc":
-            cache = codex_home() / "plugins/cache/windroc/ensemble/9.8.7"
-            shutil.rmtree(cache, ignore_errors=True)
-            shutil.copytree(FAKES / "pkg-src", cache)
+            version = load(FAKES / "pkg-src/.claude-plugin/plugin.json", {})["version"]
+            cache = codex_home() / "plugins/cache/windroc/ensemble" / version
+            if not cache.exists():
+                shutil.copytree(FAKES / "pkg-src", cache)
             mark(cache / "REF", markets["windroc"].get("ref", ""))
     elif args[:2] == ["plugin", "remove"]:
         if not any(p["pluginId"] == args[2] for p in plugins):
@@ -497,6 +550,14 @@ def hidden_line(prompt):
 
 
 def security(args):
+    if args == ["-i"]:
+        words = shlex.split(sys.stdin.read())
+        if words[:1] != ["add-generic-password"] or "-X" not in words:
+            return 2
+        store_key(
+            words[words.index("-s") + 1], bytes.fromhex(words[words.index("-X") + 1]).decode()
+        )
+        return 0
     if args[:1] == ["find-generic-password"]:
         item = FAKES / "keychain" / args[args.index("-s") + 1]
         if not item.exists():

@@ -65,6 +65,73 @@ Admission checks all configured Hosts; an unavailable inventory fails closed. Sh
 
 The orchestrator's [role limits](board.md#run-limits) and usage gate remain separate. Direct client commands outside `Session.start`, including `client-resume`'s native client handoff, do not create ensemble sessions.
 
+## Session harness interfaces
+
+Frozen for WDRC-199 (WDRC-226) before any of it runs: a session harness will own each worker from start to close and call the handlers its caller registers. Today no session reads `Spec.handlers`, no client yields `TurnStarted` and no Host runs a managed worker; the tickets that implement each part change none of these signatures.
+
+**Handlers.** `Spec.handlers` is an ordered tuple of `HookCallback(module, state, roots)`, default `()`. The harness records each event before it calls each handler module's `on_event(EventCall)` in event order; a failure is retried with the same ids and never stops supervision. `EventCall` carries `session` (an `ensemble.session.Session` to send, stop or close through), `event`, `sid`, `generation` (the worker's start), `event_id`, `turn` (`None` outside a turn) and the handler's `state`. `on_event` returns `None`; returning or failing never closes the worker, only a close request through `session` does. Every event field (reply text, Blocked reason, TurnFailed detail) is untrusted worker output.
+
+**Events.** `SessionEvent` is `TurnStarted | Activity | Reply | TurnEnd | TurnFailed | Blocked | LimitHit | Exited`. `TurnStarted` marks a turn its client accepted (the first prompt, a `send` or text typed into its terminal), never a replayed record. A Tui adapter is to normalize a `HookKind.TURN_STARTED` label to it, and a Headless adapter's `events()` and an InProcess adapter's `run()` are to yield it as a turn starts. `TurnEnd(reply, pending)` carries the turn's full last reply; `TurnFailed` and `TurnEnd` exclude each other within a turn; `Exited` comes once, last.
+
+**Managed workers.** `Host.worker(name, launch, *, terminal, display=None, events=None, metadata=None) -> InteractiveProcess` replaces the worker-launch paths `terminal`, `detach` and `pipe`. It evolves the existing `InteractiveProcess`, which already inherits `send(action: Paste | Key)`, `press(keys: Sequence[KeyPress])`, `screen(lines=None)`, `state() -> Liveness`, `close() -> None` and `returncode() -> int | None`; there is no parallel `WorkerHandle`. Managed `close()` returns only after confirmed worker exit, else raises `SessionError` (`Unanswered` when unknown); `returncode()` supplies the confirmed exit code, never a guessed SIGHUP code. Headless handles reject `send`, `press` and `screen` with `NotShowable`; their input uses `write`.
+
+Only the channel has new members: `generation: str` identifies the worker start; `read(timeout: float) -> list[WorkerMessage]` returns ordered messages, `[]` on timeout and nothing after the last `WorkerExit`; a broken transport raises `Unanswered` until exit is confirmed. `write(data: bytes) -> None` writes headless stdin. `tick(now: float) -> float | None` runs the Host's periodic duty and returns its next due time (the default `None` means no duty). `read` and `write` are unimplemented stubs, never called yet; `generation` is an attribute, matching Docker's existing shape. The guard ([Guard protocol](#guard-protocol)) is the client's direct parent and owns its PTY when `terminal=True`.
+
+The new channel records have no previous public owner: `WorkerHook(label: str, payload: Mapping[str, object], delivery_id: str)` replaces the Docker relay's hook envelope and retry identity, `WorkerOutput(data: bytes, stream: str="stdout")` replaces separate headless stdout/stderr pipe readers, and `WorkerExit(returncode: int)` replaces host exit probes. `WorkerMessage` is their union. All payloads are untrusted; retain size/shape, sid and generation binding checks (FR-36). `Host.worker_liveness(name, generation) -> Liveness` replaces attach/reclaim probes after a harness dies: `LIVE` or `UNKNOWN` refuses a second owner, `ABSENT` permits resume. Both new Host methods currently raise `SessionError`; no managed path runs.
+
+| Host | Channel | Display |
+|---|---|---|
+| tmux | the guard's stdin and stdout over local pipes | a tmux session running `guard.py --attach` on its display socket |
+| Docker | `docker exec -i` into the container, the guard there | `docker exec -it … guard.py --attach`; `tick` runs the broker's credential maintenance |
+
+**Extension migration.** The old methods remain callable only during this implementation transition. The final Host must implement `worker` and `worker_liveness`; there is no permanent unowned fallback. Adapt an existing `InteractiveProcess` subclass to the guard channel and confirmed-close contract. Move status/Record publication to the harness and display targeting to `Host.attach_target`; remove the obsolete methods below. A Tui maps its accepted-prompt hook to `HookKind.TURN_STARTED`; headless `events` and in-process `run` yield `TurnStarted` on accepted input. Native `on_hook(HookCall)` stays separate from registered `on_event(EventCall)`: the former converts client payloads, the latter receives normalized events. `EventCall` lives in `harness/types.py`, depending on `Session`; shared `engine.types` never imports the session API. Session users keep the default empty handlers tuple and handle the added event in exhaustive matches.
+
+### End-state removals
+
+These are approved-list candidates for deletion, not optional deprecations. This interface-only PR leaves used legacy paths executable; the implementation tickets remove them after their replacements work. `InteractiveProcess` survives as the sole managed handle. Its existing `Process`/`Interactive` bases are folded into it, preserving the reused declarations rather than duplicating them.
+
+| Removed interface | Replacement | Deletion owner |
+|---|---|---|
+| `Host.terminal`, `Host.detach`, `Host.pipe` | `Host.worker` (`terminal=True` or `False`) | WDRC-204/206 local, WDRC-205 headless, WDRC-207 Docker; WDRC-208 removes delegate callers; WDRC-211 removes ABCs |
+| `Host.attach`, `Host.reclaim` | `Session.attach` control view and `Host.worker_liveness` for crash-resume admission | WDRC-206/207; WDRC-210 crew callers; WDRC-211 ABCs |
+| `Host.events_path`, `Host.prepare_events`, `Host.hook_callback` | harness-owned records/dispatch and `WorkerHook` on the guard channel | WDRC-204/207; WDRC-211 ABCs |
+| public `Process` (both session surfaces), `Interactive` (extension), their exported members | fold preserved `name`, `send`, `press`, `screen`, `state`, `close`, `returncode` into existing `InteractiveProcess` | WDRC-211 after WDRC-204..210 migrate callers |
+| `InteractiveProcess.alive`, `.wait_exit`, `.kill`, `.identity`, `.token`, `.session_identity` | channel `state`, `generation`, `read`/`WorkerExit`, confirmed `close`; no caller-owned kill | WDRC-206/207 implementations; WDRC-211 base cleanup |
+| `InteractiveProcess.activity`, `.status`, `.mark`, `.row`, `.record`, `.publish`, `.display` | harness event/state/Record ownership; `Host.attach_target` retains display targeting | WDRC-204/207; WDRC-211 base cleanup |
+| extension `Piped`, `Lines`, all their exported members; internal `LocalPiped` | `InteractiveProcess.read`/`write`, `WorkerOutput`/`WorkerExit` | WDRC-205/207; WDRC-211 exports/ABC cleanup |
+| Docker `supervisor.py` (`HookWorker`, `Supervisor`, `main`, maintenance/deadline helpers) and Host `_supervise` | harness dispatch/lifecycle; Docker handle `tick` reuses broker maintenance policy | WDRC-207 |
+| Docker `relay.py` (`Queue`, `Daemon`, `answer`, `pump`, `connect`, `main`, relay request/reply protocol) and Host `_serve_relay` | guard hook socket and the same worker's long-lived `h`/output/exit channel | WDRC-207; retain equivalent input validation, no second relay daemon |
+| delegate harness worker ownership, runner-driven supervision/attempt lifetime | session `Spec.handlers`/`EventCall`; attempt-only Result and delegation policy | WDRC-208; WDRC-209 consumes attempt events |
+
+For WDRC-211, the cumulative snapshot diff against `wdrc-199-session-harness` must be this freeze's additions/changes **plus** the removals above: delete `ensemble.session.Process` and every `Process.*` key; delete extension `Process`, `Interactive`, `Piped`, `Lines` and all their member keys; delete the eight Host methods above on both surfaces; delete the listed obsolete `InteractiveProcess` members; change its base to `abc.ABC` after folding the preserved members. No other exports, fields, defaults or signatures change. `tests/delegate_interface.json` stays byte-for-byte unchanged. These removals are not claimed as already implemented in this PR.
+
+**Ownership.** `Session.start` will create the owner; `Session.attach` gets a control view, never a second owner; `events()` only observes, so closing its iterator, the caller exiting or a display detaching leaves the worker supervised; `stop`, `close` and `Session.retire` ask the owner and return only once it confirmed the worker ended, else raise `SessionError` (`Unanswered` when it cannot tell), so a caller releases a lock or removes a roster entry only after a confirmed end (FR-16, FR-23, FR-24).
+
+**Delegate.** `Delegate.run`, `alive`, `status`, `resume` and `close` keep their signatures and the `Result` and `Outcome` formats. `run()` returns once a task attempt has its Result while the session and its handler go on; `alive()` and `Status.alive` say whether an attempt is active, so a run waiting on `needs_input` is not alive. `resume(input=...)` (CLI `--input`) accepts an answer or continuation even while the unlocked TUI/harness lives; the active-attempt check must not reject it just because the owner lives. If the worker died, resume creates new processes from the original transcript and refuses a live/unknown old generation. A directly accepted input after a terminal attempt opens the next attempt through `TurnStarted`; resume has already counted its attempt, so the same event does not count twice. In-attempt nudges/repair and replay never open another attempt.
+
+Each attempt preserves `Begun`/`Progress`/one `Finished`, the existing Result/Outcome formats and Record `ctl`/`resume` control routing; subsequent attempts do not reuse the previous outcome or its completion marker. `close()` ends an active attempt once, never emits another failure for an ended attempt, and asks the session owner to close. Locks and roster entries remain until confirmed resource termination; close failures remain traceable. This is the target contract, not behavior implemented by this freeze. Delegate persisted `plan.session.handlers` lists are restored to tuples only when the key exists; old records default to `()` and no callbacks are reconstructed or invoked here.
+
+### Guard protocol
+
+`src/ensemble/session/harness/guard.py` (standard library only, run by path) is the one guard program of every Host; not implemented yet. `guard.py [--terminal] --hook-socket PATH [--display-socket PATH] -- ARGV...` runs ARGV, with the cwd and environment it is given, in a process group of its own; with `--terminal` the guard owns its PTY. `guard.py --attach PATH` connects the calling terminal to a running guard's display socket: a display only, so detaching or killing it never ends the worker.
+
+The channel is the guard's stdin (from its harness) and stdout (to it): frames of one kind byte, a 4-byte big-endian payload length (at most 64 MiB) and the payload; a JSON payload is one UTF-8 object.
+
+| From | Kind | Payload |
+|---|---|---|
+| harness | `i` input | raw bytes for the PTY, else the client's stdin |
+| harness | `q` screen | `{"lines": int or null}` |
+| harness | `c` close | `{}`: end the client, then `x` |
+| guard | `s` started | `{"pid": int}`, once, after exec |
+| guard | `h` hook | `{"label": str, "payload": object, "delivery_id": str}`, retry-stable identity |
+| guard | `o`, `e` output | raw bytes a headless client wrote to stdout, stderr |
+| guard | `v` view | `{"text": str}`: the PTY's last `q` lines, control sequences removed |
+| guard | `x` exit | `{"returncode": int}`, last; -N for signal N |
+
+EOF on its stdin is a close: its harness closed the channel or died. On close the guard sends SIGHUP to the client's process group, SIGKILL after 5 s, writes `x` and exits; it never outlives its channel. No frame starts a host process.
+
+A hook invocation creates one `delivery_id` (32 lowercase hex characters) before its first send and keeps it through retries; a different invocation has a fresh id even with identical label/payload. It connects to `--hook-socket`, writes one `{"label", "payload", "delivery_id"}` line and gets `{"ok": true, "delivery_id": str}` once the guard has written its `h` frame. A missing or mismatched acknowledgement retries the same request/id. The harness deduplicates by the trusted channel's generation and delivery_id, rejects an id reused with different content, and reuses the recorded normalized EventCall ids on redelivery. Identity is never inferred from label/payload equality. This replaces the relay's generation/sequence acknowledgement contract; it does not add dispatch behavior here.
+
 ## Recall a closed run
 
 `ensemble-crew close <ID>` ends a board run's sessions and drops its roster entry; its conversation stays. To continue it:
@@ -110,7 +177,7 @@ Every session, crew workers and role runs, gets one permission mode from the Hos
 | Codex | `-s danger-full-access -c approval_policy="on-request" -c approvals_reviewer="auto_review"` | `--dangerously-bypass-approvals-and-sandbox` |
 | OpenCode | none: its config's `permission.bash = "ask"` asks for every shell call but the run's pre-approved commands; headless refuses the call, the TUI shows the ask and the session is `blocked` | `--auto`, plus backend `allow` for `bash`, `read`, `external_directory` and `doom_loop`; edit denies stay |
 
-OpenCode's pre-approved commands match a command's text without its redirections, so an allowed `git status` also allows `git status > <file>`. An OpenCode run edits only its cwd and Access dirs, never `.git` or OpenCode's own config, and reads its Access reads without editing them; a refused call does not end its turn. OpenCode matches these paths case-sensitively: on a case-insensitive disk (macOS's default) only `.git` is denied in every spelling, so `OPENCODE.JSON` or a read dir spelled in another case stays editable, and its `apply_patch` tool (models named `gpt-…`) checks only a moved file's source.
+OpenCode's pre-approved commands match a command's text without its redirections, so an allowed `git status` also allows `git status > <file>`. An OpenCode run edits only its cwd and Access dirs, never `.git` or OpenCode's own config, and reads its Access reads without editing them; a refused call does not end its turn. External-directory grants cover both supplied symlink paths and resolved targets, so installed-plugin tasks under `~/.ensemble/links/` remain readable; read-only edit denies cover both spellings. Write-directory edit grants remain resolved-only: use the resolved path for writes through a supplied directory alias. OpenCode matches these paths case-sensitively: on a case-insensitive disk (macOS's default) only `.git` is denied in every spelling, so `OPENCODE.JSON` or a read dir spelled in another case stays editable, and its `apply_patch` tool (models named `gpt-…`) checks only a moved file's source.
 
 `yolo` asks for nothing: no permission prompt, approval or sandbox; the container is the boundary ([Docker host](docker-host.md#permissions)). OpenCode approves tools at the backend, so toggling its TUI approval mode cannot restore those prompts; question dialogs still wait for an answer. When the selected OpenCode mode includes `--auto`, permission requests emit no `blocked`; questions still do, as do permission requests in modes without `--auto`. Claude refuses it as root; the container's clients run as `agent`. `danger-full-access` ignores writable roots and team dirs; a Docker container cannot run Codex's sandbox ([Permissions](docker-host.md#permissions)). For `workspace-write` outside the Docker Host:
 

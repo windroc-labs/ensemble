@@ -1,17 +1,13 @@
 import importlib
 import os
 import types
+import unittest
 
 from tests.case import REPO, SRC, Case
 from tests.checks import MODULES, checks, discover
 
 
 class RealTree(Case):
-    def test_each_guard_is_clean(self):
-        for name, found in checks(REPO):
-            with self.subTest(name):
-                self.assertEqual(found, [])
-
     def test_src_modules_load_from_src(self):
         for root in (r for sub, r in SRC.items() if sub != "orchestrator"):
             src = os.path.realpath(root)
@@ -25,7 +21,45 @@ class RealTree(Case):
                     self.assertEqual(os.path.commonpath([src, real]), src)
 
 
+def _guard_test(name):
+    def test(self):
+        self.assertEqual(list(checks(REPO, names={name})), [(name, [])])
+
+    return test
+
+
+for _guard_name, _guard in discover():
+    setattr(RealTree, f"test_guard_{_guard_name}", _guard_test(_guard_name))
+
+
 class Discovery(Case):
+    def test_selected_checks_keep_root_rules_and_reject_unknown_names(self):
+        module = types.ModuleType(__name__)
+        module.first = lambda root: [root]
+        module.private_imports = lambda root: [root]
+        self.assertEqual(
+            list(checks("/repo", names={"private_imports"}, modules=(module,))),
+            [("private_imports", ["/repo/src"])],
+        )
+        self.assertEqual(
+            list(checks("/repo", names={"first"}, modules=(module,))), [("first", ["/repo"])]
+        )
+        self.assertEqual(
+            list(checks("/repo", modules=(module,))),
+            [("first", ["/repo"]), ("private_imports", ["/repo/src"])],
+        )
+        with self.assertRaisesRegex(ValueError, "unknown guard"):
+            list(checks("/repo", names={"missing"}, modules=(module,)))
+
+    def test_each_discovered_guard_has_exactly_one_schedulable_test(self):
+        names = unittest.defaultTestLoader.getTestCaseNames(RealTree)
+        self.assertEqual(
+            sorted(
+                name.removeprefix("test_guard_") for name in names if name.startswith("test_guard_")
+            ),
+            [name for name, _ in discover()],
+        )
+
     def test_every_concern_module_contributes_its_public_functions_once_by_name(self):
         found = discover()
         names = [name for name, _ in found]

@@ -9,6 +9,7 @@ from ensemble import utils
 from ensemble.session import extension
 from ensemble.session.clients import base as clients_base
 from ensemble.session.engine import types as engine_types
+from ensemble.session.harness import types as harness_types
 from ensemble.session.hosts import base as hosts_base
 from ensemble.session.hosts import types as hosts_types
 from ensemble.session.modes.base import BaseMode
@@ -70,10 +71,15 @@ TYPES = {
             "SessionBusy",
             "NotShowable",
             "Unanswered",
+            "WorkerMessage",
+            "WorkerHook",
+            "WorkerOutput",
+            "WorkerExit",
         ),
         engine_types,
     ),
     "SessionView": hosts_types,
+    "EventCall": harness_types,
     "CommandView": hosts_types,
     "Lines": hosts_base,
     "Record": utils,

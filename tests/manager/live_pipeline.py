@@ -13,16 +13,14 @@ from tests.manager.case import REPO
 from tests.manager.live_crew import MANAGER, LiveCrew
 from tests.orchestrator.integration import fake_gh, fake_linear, fake_python, fake_transport
 from tests.orchestrator.integration.flow_fixtures import (
-    ACCOUNTS,
     GH,
     HARNESS,
-    HARNESS_EMAIL,
     HUMAN,
-    KEYS,
     LIGHT_RESEARCH,
     PROJECT,
     ROLES,
     TASK_LABELS,
+    TOKENS,
 )
 from tests.orchestrator.integration.flow_fixtures import REPO as PROJECT_REPO
 from tests.orchestrator.unit import board_ids, run_fixtures
@@ -48,15 +46,16 @@ class LivePipeline(LiveCrew):
                 + run_fixtures.CORE_LOCAL
             )
         self.fake = fake_linear.FakeLinear(harness=HARNESS)
-        self.fake.user(HARNESS_EMAIL, "Harness", HARNESS)
-        ids = {r: self.fake.user(ACCOUNTS[r], r.title(), KEYS[r]) for r in ROLES}
-        self.fake.user(HUMAN, "Me")
+        self.fake.user("Harness", HARNESS, uid=board_ids.HARNESS_USER)
+        for r in ROLES:
+            self.fake.user(r.title(), TOKENS[r], uid=board_ids.role_id(r))
+        self.fake.user("Me", email=HUMAN)
         self.fake.label_group(board_ids.TASK_GROUP, "Tasks", {LIGHT_RESEARCH: "Light Research"})
         self.seam = fake_linear.seam(self, self.fake, fake_linear.serve(self, self.fake))
         self.fake.issue(
             "ENG: Session registry",
             identifier=ID,
-            assignee=ids["engineer"],
+            delegate=board_ids.role_id("engineer"),
             project=PROJECT,
             description="Add a session registry.",
         )

@@ -32,6 +32,7 @@ from ensemble.session.engine.types import (
     SessionRow,
     StatusState,
     TuiSettings,
+    WorkerMessage,
 )
 from ensemble.session.hosts.types import CommandView, SessionView
 from ensemble.utils import (
@@ -61,9 +62,7 @@ def tui_lock(name: str) -> str:
 
 
 class Process(ABC):
-    """close: ends it and forgets it, absent is fine; kill: its process group; wait_exit: until that
-    group ends too.
-    """
+    """close: end/forget, absent is fine; kill: process group; wait_exit: await the whole group."""
 
     name: str
 
@@ -162,7 +161,19 @@ class Interactive(ABC):
     def press(self, keys: Sequence[KeyPress]) -> None: ...
 
 
-class InteractiveProcess(Process, Interactive): ...
+class InteractiveProcess(Process, Interactive):
+    """Managed contract: docs/sessions.md › Session harness interfaces. Channel not implemented."""
+
+    generation: str
+
+    def read(self, timeout: float) -> list[WorkerMessage]:
+        raise NotImplementedError
+
+    def write(self, data: bytes) -> None:
+        raise NotImplementedError
+
+    def tick(self, now: float) -> float | None:
+        return None
 
 
 class Lines(Iterable[str], AbstractContextManager[object], Protocol): ...
@@ -217,10 +228,8 @@ def check_sid(name: str, process: Process | None, sid: str | None) -> None:
 
 
 class Host(ABC):
-    """settings: [hosts.<name>] minus implementation and isolated. Launch.env is passed verbatim;
-    on exit, events gets `exited <rc>` / `dead`.
-    attach: a Process, unknown → SessionError. list: its sessions' names, sorted. A display is kept
-    as given; the Viewer reads it.
+    """settings excludes implementation/isolated; Launch.env passes verbatim. Exit events:
+    `exited <rc>` / `dead`; unknown attach: SessionError; list: sorted names. Viewer reads display.
     """
 
     attachable: ClassVar[bool] = False
@@ -296,6 +305,22 @@ class Host(ABC):
         Host writes prompt to prompt_file."""
         ...
 
+    def worker(
+        self,
+        name: str,
+        launch: Launch,
+        *,
+        terminal: bool,
+        display: Display = None,
+        events: str | None = None,
+        metadata: Mapping[str, str] | None = None,
+    ) -> InteractiveProcess:
+        """Managed worker `name` under the guard (WDRC-199 FR-13)."""
+        raise SessionError(f"host {self.name} runs no managed worker")
+
+    def worker_liveness(self, name: str, generation: str) -> Liveness:
+        raise SessionError(f"host {self.name} runs no managed worker")
+
     def pipe(
         self, name: str | None, launch: Launch, *, metadata: Mapping[str, str] | None = None
     ) -> Piped:
@@ -314,7 +339,7 @@ class Host(ABC):
     def _capacity_rows(self) -> list[SessionRow]:
         names = set(self.list())
         rows = self.rows()
-        if names - {row.name for row in rows}:
+        if (missing := names - {row.name for row in rows}) and missing & set(self.list()):
             raise SessionError(f"host {self.name}: inventory unavailable")
         return rows
 

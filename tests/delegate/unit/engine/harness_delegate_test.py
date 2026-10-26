@@ -247,30 +247,27 @@ class DockerPreflightTest(HarnessCase):
         self.assertFalse(os.path.exists(self.work))
 
 
-class FixedClientTest(HarnessCase):
-    """verifier on another client, from the router's gate overlay or a Spec's client, is a
-    ConfigError before anything is written (WDRC-110 FR-49, FR-81).
-    """
+class VerifierClientTest(HarnessCase):
+    """verifier uses the router's client overlay and an explicit Spec client (WDRC-196)."""
 
-    def test_the_gate_s_overlay_choosing_codex_is_refused(self):
-        overlays = ({}, {"roles": {"verifier": {"client": "codex"}}})  # gate.py _probe's shape
-        with self.assertRaises(ConfigError) as caught:
-            HarnessDelegate.usage("verifier", overlays=overlays, session_cls=HarnessSession)
-        self.assertIn("client 'codex': role verifier runs only on claude", str(caught.exception))
+    def test_the_gate_s_overlay_selects_each_client(self):
+        for client in ("codex", "opencode", "claude"):
+            with self.subTest(client=client), mock.patch.object(HarnessSession, "usage") as usage:
+                overlays = ({}, {"roles": {"verifier": {"client": client}}})
+                HarnessDelegate.usage("verifier", overlays=overlays, session_cls=HarnessSession)
+                usage.assert_called_once_with(client)
 
-    def test_a_spec_choosing_codex_is_refused_before_any_write(self):
+    def test_a_spec_selects_each_client_over_the_overlay(self):
         self.settings(default="docker", harness_host="harness")  # mini-op needs a Docker default
         HarnessSession.hosts["agent"] = RecordingHost("docker")
-        spec = Spec(
-            "Repo: windroc-labs/ensemble", self.work, task="verify", sid=SID, client="codex"
-        )
-        with self.assertRaises(ConfigError) as caught:
-            self.make(role="verifier", spec=spec)
-        self.assertEqual(
-            str(caught.exception),
-            "role verifier runs only on claude, not codex: chosen for this run",
-        )
-        self.assertFalse(os.path.exists(self.work))
+        for client in ("codex", "opencode", "claude"):
+            with self.subTest(client=client):
+                spec = Spec(
+                    "Repo: windroc-labs/ensemble", self.work, task="verify", sid=SID, client=client
+                )
+                self.make(role="verifier", spec=spec, overlays=({"client": "fake"},))
+                self.assertEqual(self.metadata()["plan"]["session"]["client"], client)
+                shutil.rmtree(self.work)
 
 
 class VerifierDockerTest(HarnessCase):
@@ -311,8 +308,7 @@ class VerifierDockerTest(HarnessCase):
             return support.FakeProc(
                 argv, err=json.dumps({"exit_code": code, "error": error}).encode(), code=code
             )
-        free = "-empty" if command == "lock-query" else ""  # mini-op's lock is free
-        return support.FakeProc(argv, out=support.text(f"{command}-output{free}.json").encode())
+        return support.FakeProc(argv, out=support.text(f"{command}-output.json").encode())
 
     def failure(self):
         spec = Spec(
@@ -439,6 +435,24 @@ class RunDirTest(HarnessCase):
     def stored(self):
         with open(self.record(), encoding="utf-8") as file:
             return json.load(file)
+
+    def test_session_handlers_round_trip_with_and_without_the_saved_key(self):
+        self.make()
+        original = self.stored()
+        self.assertEqual(original["plan"]["session"]["handlers"], [])
+        for present in (True, False):
+            with self.subTest(present=present):
+                data = json.loads(json.dumps(original))
+                if not present:
+                    del data["plan"]["session"]["handlers"]
+                with open(self.record(), "w", encoding="utf-8") as file:
+                    json.dump(data, file)
+                view = HarnessDelegate.attach(self.work)
+                self.assertEqual(view._state.plan.session.handlers, ())
+                view._save(view._state)
+                self.assertEqual(self.stored(), original)
+                again = HarnessDelegate.attach(self.work)
+                self.assertEqual(again._state.plan.session, view._state.plan.session)
 
     def test_the_default_session_class_is_null(self):
         self.make(session_cls=Session, driver=AgentDriver(HarnessSession))

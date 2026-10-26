@@ -19,7 +19,6 @@ from ensemble.utils import Record
 from tests.delegate.replies import option
 from tests.orchestrator.case import REPO
 from tests.orchestrator.integration.flow_fixtures import (
-    ACCOUNTS,
     ENTRY,
     MANAGER,
     PROJECT,
@@ -33,6 +32,7 @@ from tests.orchestrator.integration.segments import (
     lookup,
     tui_scene,
 )
+from tests.orchestrator.unit.board_ids import role_id
 from tests.session import live_tmux
 
 SESSION_CLI = os.path.join(REPO, "bin", "ensemble-session")
@@ -115,7 +115,7 @@ class Attended(Segment):
         The stopped harness's last write-back may or may not have run: its session comment says
         running or interrupted, and no write-back end of the session is counted after the stop.
         """
-        ident, account = self.pm_ready(), ACCOUNTS["pm"]
+        ident, app = self.pm_ready(), role_id("pm")
         sid = self.claim(ident, "pm", self.agent_script("pm", "open", ident), tui=True)
         with self.step("agent: started, then waiting"):
             with open(self.pending.gate, "w"):
@@ -123,8 +123,8 @@ class Attended(Segment):
             live_tmux.wait(
                 lambda: "start" in self.ledger(ident).get(sid, []), TIMEOUT, "the start step"
             )
-            self.expect(ident, comments=[(account, "start")], ledger={sid: ["running:1", "start"]})
-            self.expect_problem(lookup(account))
+            self.expect(ident, comments=[(app, "start")], ledger={sid: ["running:1", "start"]})
+            self.expect_problem(lookup(app))
         with self.step("harness stopped"):
             stop(ident, sid)
             harness, tui = self.harness("pm", ident, sid), config.tui_name("pm", ident, sid)
@@ -180,7 +180,7 @@ class Refused(TmuxFlow):
         self.fake.issue(
             "PRD: Session registry",
             identifier=ID,
-            assignee=self.ids[ACCOUNTS["pm"]],
+            delegate=role_id("pm"),
             project=PROJECT,
         )
         self.events = os.path.join(self.root, "events")

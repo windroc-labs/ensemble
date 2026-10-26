@@ -8,9 +8,9 @@ from ensemble.orchestrator.trackers.linear import linear_tracker, ops
 from ensemble.utils import parse_time
 from tests.orchestrator.case import Case
 from tests.orchestrator.unit.board_ids import (
-    ACCOUNTS,
     DUPLICATE,
     FINISHED,
+    ROLES,
     STATES,
     TASK_GROUP,
     TEAM,
@@ -32,81 +32,26 @@ from tests.orchestrator.unit.linear_fixtures import (
 
 
 class RoleIds(Case):
-    def test_role_ids(self):
-        roles = {r: SimpleNamespace(account=a) for r, a in ACCOUNTS.items()}
-
-        def gql(_query, **variables):
-            return {"users": {"nodes": [{"id": "u-" + variables["e"]}]}}
-
-        self.assertEqual(ops.role_ids(gql, roles), {f"u-{a}": r for r, a in ACCOUNTS.items()})
-        with self.assertRaises(LinearError) as cm:
-            ops.role_ids(lambda _q, **_v: {"users": {"nodes": []}}, {"engineer": roles["engineer"]})
-        self.assertEqual(
-            str(cm.exception),
-            (
-                "orchestrator/config.toml [linear.roles.engineer]: account 'engineer@agents.test' not found in Linear"
-            ),
-        )
+    def test_role_ids_are_configured_without_transport(self):
+        roles = {r: SimpleNamespace(user_id=f"app-{r}") for r in ROLES}
+        self.assertEqual(ops.role_ids(roles), {f"app-{r}": r for r in ROLES})
 
 
 class TeamAndRoles(Case):
-    """The team and the role accounts in one Q_SETUP read, checked as team() and role_ids() check."""
-
-    def linear(self, **accounts):
-        roles = {r: SimpleNamespace(account=a) for r, a in (accounts or ACCOUNTS).items()}
-        return SimpleNamespace(team=TEAM, states=dict(STATES), roles=roles)
-
-    def gql(self, teams, emails):
+    def test_only_the_team_is_read(self):
         calls = []
 
         def gql(query, **v):
             calls.append((query, v))
-            nodes = [{"id": f"u-{e.lower()}", "email": e} for e in emails]
-            return {"teams": {"nodes": teams}, "users": {"nodes": nodes}}
+            return {"teams": {"nodes": [team_node()]}}
 
-        gql.calls = calls
-        return gql
-
-    def test_one_read(self):
-        linear = self.linear()
-        gql = self.gql([team_node()], [a.upper() for a in ACCOUNTS.values()])
-        found = ops.team_and_roles(gql, linear)
-        self.assertEqual(
-            found,
-            (
-                ops.Team(TEAM, "Team", dict(STATES), FINISHED),
-                {f"u-{a.lower()}": r for r, a in ACCOUNTS.items()},
-            ),
-        )
-        users = {"or": [{"email": {"eqIgnoreCase": a}} for a in ACCOUNTS.values()]}
-        self.assertEqual(gql.calls, [(ops.Q_SETUP, {"t": TEAM, "u": users})])
-
-    def test_team_checks_come_first(self):
-        other = [i for k, i in STATES.items() if k != "done"]
-        for message, teams in {
-            f"linear.team {TEAM} not found in Linear": [],
-            f"[linear.states] not workflow states of team 'Team': done {STATES['done']}": [
-                team_node(other)
-            ],
-        }.items():
-            with self.subTest(message), self.assertRaises(LinearError) as cm:
-                ops.team_and_roles(self.gql(teams, []), self.linear())
-            self.assertEqual(str(cm.exception), "orchestrator/config.toml: " + message)
-
-    def test_the_first_role_account_not_found(self):
-        linear = self.linear(pm="pm@agents.test", engineer="engineer@agents.test")
-        with self.assertRaises(LinearError) as cm:
-            ops.team_and_roles(self.gql([team_node()], []), linear)
-        self.assertEqual(
-            str(cm.exception),
-            "orchestrator/config.toml [linear.roles.pm]: account 'pm@agents.test' not found in Linear",
-        )
-
-    def test_no_roles_reads_the_team_alone(self):
-        linear = SimpleNamespace(team=TEAM, states=dict(STATES), roles={})
-        gql = self.gql([team_node()], [])
-        self.assertEqual(ops.team_and_roles(gql, linear)[1], {})
-        self.assertEqual(gql.calls, [(ops.Q_TEAM, {"t": TEAM})])
+        for roles in ({}, {"pm": SimpleNamespace(user_id="app-pm")}):
+            calls.clear()
+            linear = SimpleNamespace(team=TEAM, states=dict(STATES), roles=roles)
+            found, ids = ops.team_and_roles(gql, linear)
+            self.assertEqual(found, ops.Team(TEAM, "Team", dict(STATES), FINISHED))
+            self.assertEqual(ids, {app.user_id: r for r, app in roles.items()})
+            self.assertEqual(calls, [(ops.Q_TEAM, {"t": TEAM})])
 
 
 class TeamCheck(Case):

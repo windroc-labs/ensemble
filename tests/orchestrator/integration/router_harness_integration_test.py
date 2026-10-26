@@ -9,14 +9,13 @@ import unittest
 
 from tests.delegate.replies import block, mark
 from tests.orchestrator.integration.flow_fixtures import (
-    ACCOUNTS,
-    HARNESS_EMAIL,
     PROJECT,
     TIMEOUT,
     UPDRAFT,
     BinFlow,
 )
 from tests.orchestrator.integration.segments import agent_calls
+from tests.orchestrator.unit.board_ids import HARNESS_USER, role_id
 from tests.session import live_tmux
 
 ID = "TASK-7"
@@ -39,7 +38,7 @@ class MinimalPath(BinFlow):
         self.fake.issue(
             "ENG: Session registry",
             identifier=ID,
-            assignee=self.ids[ACCOUNTS["engineer"]],
+            delegate=role_id("engineer"),
             project=PROJECT,
             description="Add a session registry.",
         )
@@ -59,9 +58,9 @@ class MinimalPath(BinFlow):
         self.wait_end(sid, ID)
         self.assertEqual(self.state(ID), "in_review")
         (author, session), *rest = self.comments(ID)
-        self.assertEqual(author, HARNESS_EMAIL)
+        self.assertEqual(author, HARNESS_USER)
         self.assertRegex(session, rf"^Run {sid} · done · .* · exit 0\n")
-        engineer = ACCOUNTS["engineer"]
+        engineer = role_id("engineer")
         self.assertEqual(
             rest,
             [
@@ -73,7 +72,7 @@ class MinimalPath(BinFlow):
             self.ledger(ID),
             {sid: ["running:1", "start", "comment", f"attach:{PR}", "move:in_review", "outcome"]},
         )
-        self.assertEqual(len(self.sent("linear.M_COMMENT_ID", HARNESS_EMAIL)), 1)
+        self.assertEqual(len(self.sent("linear.M_COMMENT_ID", HARNESS_USER)), 1)
 
 
 if __name__ == "__main__":

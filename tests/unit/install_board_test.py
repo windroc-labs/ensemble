@@ -6,7 +6,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from ensemble.orchestrator.engine.config import REQUIRED
+from ensemble.orchestrator.engine.config import LINEAR_KEYS, REQUIRED, AppKey
 from ensemble.orchestrator.engine.flow.workflow import Workflow
 from tests.case import REPO, Case
 
@@ -32,7 +32,99 @@ class BoardContract(Case):
             for keys in values["required"]
         }
         self.assertLessEqual(set(REQUIRED), covered)
-        self.assertIn("linear.manager_key", covered)
+        self.assertLessEqual({f"linear.manager.{key}" for key in AppKey}, covered)
+
+    def slots(self, text, stages="pm\tdesign"):
+        """linear_slots over a config.local.toml holding text: (stdout lines, exit message or None)."""
+        path = Path(self.home, "config.toml")
+        path.write_text(text)
+        out = io.StringIO()
+        with mock.patch.object(sys, "argv", ["-c", str(path), stages]), redirect_stdout(out):
+            try:
+                exec(embedded("linear_slots"), {})
+            except SystemExit as stop:
+                return out.getvalue().splitlines(), str(stop.code)
+        return out.getvalue().splitlines(), None
+
+    def test_slots_list_each_app_harness_and_manager_first(self):
+        self.assertEqual(
+            self.slots(""),
+            (
+                [
+                    f"{slot}\tlinear-app-{slot}-token\tlinear-app-{slot}-secret"
+                    for slot in ("harness", "manager", "pm")
+                ],
+                None,
+            ),
+        )
+
+    def test_slots_refuse_unknown_linear_keys_pointing_to_the_upgrade_steps(self):
+        self.assertEqual(
+            self.slots('[orchestrator.linear]\ntypo = 1\nother = ""\n'),
+            (
+                [],
+                "install.sh: config.local.toml: unknown keys in [linear]: other, typo; "
+                "see docs/upgrading.md#linear-apps",
+            ),
+        )
+
+    def test_slots_refuse_unknown_app_keys_naming_table_and_key(self):
+        for text, table, names in (
+            ('[orchestrator.linear.roles.pm]\ntoken = "x"\n', "linear.roles.pm", "token"),
+            ('[orchestrator.linear.roles.writer]\ntoken = "x"\n', "linear.roles.writer", "token"),
+            (
+                '[orchestrator.linear.harness]\ntypo = "x"\ntoken = "y"\n',
+                "linear.harness",
+                "token, typo",
+            ),
+        ):
+            with self.subTest(table=table):
+                _, stop = self.slots(text)
+                self.assertEqual(
+                    stop,
+                    f"install.sh: config.local.toml: unknown keys in [{table}]: {names}"
+                    "; see docs/upgrading.md#linear-apps",
+                )
+
+    def test_slots_refuse_a_linear_setting_that_is_no_table(self):
+        self.assertEqual(
+            self.slots('[orchestrator]\nlinear = "abc"\n'),
+            ([], "install.sh: config.local.toml: [linear] must be a table"),
+        )
+
+    def test_slots_name_a_bad_keychain_service_by_field_never_by_value(self):
+        for text, said in (
+            (
+                '[orchestrator.linear.manager]\ntoken_service = "a b"\n',
+                "linear.manager.token_service: not a plain keychain name",
+            ),
+            (
+                '[orchestrator.linear.roles.pm]\nsecret_service = "pasted secret"\n',
+                "linear.roles.pm.secret_service: not a plain keychain name",
+            ),
+            (
+                '[orchestrator.linear.harness]\nsecret_service = "secret-1"\n'
+                '[orchestrator.linear.manager]\nsecret_service = "secret-1"\n',
+                "linear.manager.secret_service is also linear.harness.secret_service",
+            ),
+        ):
+            with self.subTest(said=said):
+                _, stop = self.slots(text)
+                self.assertEqual(stop, f"install.sh: config.local.toml: {said}")
+                self.assertNotIn("a b", stop)
+                self.assertNotIn("pasted secret", stop)
+                self.assertNotIn("secret-1", stop)
+
+    def test_slots_know_exactly_the_orchestrators_linear_keys(self):
+        values = {}
+        path = Path(self.home, "config.toml")
+        path.write_text("")
+        with (
+            mock.patch.object(sys, "argv", ["-c", str(path), "pm\tdesign"]),
+            redirect_stdout(io.StringIO()),
+        ):
+            exec(embedded("linear_slots"), values)
+        self.assertEqual(values["KNOWN"], LINEAR_KEYS)
 
     def test_stage_snapshot_is_passed_to_board_helpers(self):
         script = Path(REPO, "scripts/install.sh").read_text()

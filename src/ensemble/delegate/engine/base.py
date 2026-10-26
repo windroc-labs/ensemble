@@ -15,7 +15,7 @@ from ensemble.utils import Display, Record, Status
 class Delegate(ABC):
     """One role run and its durable view; implementations own placement. Callers
     know only the run's workdir W; checkouts and clean are its layout's only outside view. An
-    implementation touches only the W entries it creates, leaving every other one alone.
+    implementation touches only the W entries it creates.
     """
 
     @classmethod
@@ -84,14 +84,16 @@ class Delegate(ABC):
     def detach(self, *, outer: Outer | None = None) -> Record: ...
 
     @abstractmethod
-    def run(self, on_event: Callable[[Event], None] | None = None) -> Result: ...
+    def run(self, on_event: Callable[[Event], None] | None = None) -> Result:
+        """FR-28: attempt Result; handlers stay registered."""
 
     @abstractmethod
-    def alive(self) -> bool: ...
+    def alive(self) -> bool:
+        """FR-28: active attempt, independent of worker liveness."""
 
     @abstractmethod
     def status(self) -> Status:
-        """alive: its run's; once that ends, state is its left tui's word, else gone."""
+        """FR-28: needs_input is waiting, alive=False."""
 
     @abstractmethod
     def content(self) -> str: ...
@@ -109,10 +111,12 @@ class Delegate(ABC):
     def attach_command(self) -> str | None: ...
 
     @abstractmethod
-    def close(self) -> None: ...
+    def close(self) -> None:
+        """FR-28: confirmed owner close before lock release; finish an attempt once."""
 
     @abstractmethod
     def session_status(self) -> SessionStatus: ...
 
     @abstractmethod
-    def resume(self, *, mode: str | None = None, input: str | None = None) -> Record: ...
+    def resume(self, *, mode: str | None = None, input: str | None = None) -> Record:
+        """FR-28: next attempt/input, even with a living idle owner."""

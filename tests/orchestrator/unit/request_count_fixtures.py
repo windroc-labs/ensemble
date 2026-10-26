@@ -1,5 +1,5 @@
 """A promote run, prune included, against a counting fake Linear at a real host's scale: 297 work
-dirs (30 with agent files), 3 role accounts; requests counted by phase and query constant."""
+dirs (30 with agent files), 3 role apps; requests counted by phase and query constant."""
 
 import importlib
 import io
@@ -16,9 +16,11 @@ from ensemble.orchestrator.engine.types import TrackerKind
 from ensemble.orchestrator.trackers import linear as linear_pkg
 from tests.orchestrator.prune_fixtures import NOW, PRUNE_QUERIES, PruneScenario, gql_for, write
 from tests.orchestrator.unit import promote_fixtures as tp
+from tests.orchestrator.unit.board_ids import role_id
 from tests.orchestrator.unit.run_fixtures import CORE_LOCAL
 
 SETUP, PROMOTE, PRUNE = "setup", "promote", "prune"
+ENGINEER_ID = role_id("engineer")
 
 
 def _names():
@@ -47,12 +49,12 @@ class Counted:
         self.promote_fake, self.prune_fake = promote_fake, prune_fake
         self.phase, self.counts = SETUP, {}
 
-    def __call__(self, query, *, service, **v):
+    def __call__(self, query, *, identity, **v):
         name = NAMES.get(query, f"unnamed: {query[:80]}")
         self.counts.setdefault(self.phase, Counter())[name] += 1
         if query in PRUNE_QUERIES:
             return self.prune_fake(query, **v)
-        return self.promote_fake(query, service=service, **v)
+        return self.promote_fake(query, identity=identity, **v)
 
 
 class HostScale(PruneScenario):
@@ -85,7 +87,7 @@ class HostScale(PruneScenario):
     def _board(self):
         issues, owners, children, archived = {}, {}, {}, set()
 
-        def add(n, state, moves, owner="u-engineer", *, gone=False):
+        def add(n, state, moves, owner=ENGINEER_ID, *, gone=False):
             ident = f"TASK-{n}"
             issues[ident], owners[ident] = (state, moves), owner
             if gone:
@@ -95,7 +97,7 @@ class HostScale(PruneScenario):
         done = [(50, "In Progress"), (3, "Done")]
         agent = [add(n, "Done", done) for n in range(1, 5)]  # due: closed, cleaned, archived
         agent.append(add(5, "Canceled", [(50, "Todo"), (3, "Canceled")], owner=None))
-        agent.append(add(6, "Done", done, owner="u-researcher"))
+        agent.append(add(6, "Done", done, owner=role_id("researcher")))
         agent += [add(n, "Done", [(50, "In Progress"), (1, "Done")]) for n in (7, 8)]  # quarantine
         agent += [add(n, "In Review", [(20, "In Review")]) for n in range(9, 19)]
         agent += [add(n, "In Progress", [(5, "In Progress")]) for n in range(19, 24)]
@@ -110,7 +112,7 @@ class HostScale(PruneScenario):
             add(n, "Canceled", [(200, "Todo"), (60, "Canceled")], owner=None, gone=True)
             for n in range(231, 251)
         ]
-        bare += [add(n, "Done", old, owner="u-researcher") for n in range(251, 257)]  # reports stay
+        bare += [add(n, "Done", old, owner=role_id("researcher")) for n in range(251, 257)]
         bare += [add(n, "Done", old) for n in range(257, 264)]
         children["TASK-257"] = {"TASK-901": "started"}  # refused
         children["TASK-258"] = {"TASK-902": "completed"}

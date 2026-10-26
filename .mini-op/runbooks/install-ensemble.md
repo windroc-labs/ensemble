@@ -4,13 +4,13 @@ when: installing, rerunning, upgrading or testing ensemble's install.sh on the m
 
 # Install ensemble on the mini
 
-Rules, waiting and answering: mini-op's rules (`/mini-op:run` loads them). Accounts, keys and the GitHub App: `test-accounts.md`. Gotchas for this environment: `gotchas.md` beside this runbook.
+Rules, waiting and answering: mini-op's rules (the `mini-op` skill loads them). Accounts, keys and the GitHub App: `test-accounts.md`. Gotchas for this environment: `gotchas.md` beside this runbook.
 
 Names and addresses (accounts, keychain items, the GitHub user, the Strata settings) come from the request or the mini's `~/.ensemble/config.local.toml`; never write them into this repo. Before putting one into an ssh command line, check it matches `^[A-Za-z0-9][A-Za-z0-9._@+:-]*$`; if not, stop and ask the user.
 
 ## 6. Then
 
-1. Fill the mini's `~/.ensemble/config.local.toml` from the template `~/mini-op-projects/ensemble/install-ensemble/test-board.toml` (`install-ensemble/test-board.toml` beside this runbook), its ids and keychain names from the test workspace (docs/credentials.md › Linear presets).
+1. Fill the mini's `~/.ensemble/config.local.toml` from the template `~/mini-op-projects/ensemble/install-ensemble/test-board.toml` (`install-ensemble/test-board.toml` beside this runbook), each app's Client ID from the test workspace; the install fills the ids (`test-accounts.md` 4., docs/credentials.md › Linear presets).
 2. Install script tests (TASK-812), in a real Terminal window on the mini so the user watches every prompt:
    1. Trim the Dock to Terminal, Chrome, iTerm and System Settings (`defaults write com.apple.dock persistent-apps …`, `killall Dock`).
    2. The Strata key into the mini's keychain; the Terminal runs in the logged-in session, whose keychain is unlocked. When `/run/ensemble/secrets/env/strata-key` exists, pipe it in with the mini's password, the item's service and account from the request or the mini's local config (each checked as above):

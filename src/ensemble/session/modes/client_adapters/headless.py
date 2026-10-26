@@ -1,6 +1,5 @@
-"""launch(spec) (it may keep state for events) builds a Launch whose env, never its resume, carries
-Access.env and Spec.env (the Client is their only owner); events() turns the client's output into
-SessionEvents, Stderr and ClientBound (JsonHeadless: parse(record) per JSON line).
+"""launch may keep state; Launch.env (not resume) carries Access.env/Spec.env. events normalizes
+output; JsonHeadless calls parse per JSON line.
 """
 
 from abc import ABC, abstractmethod
@@ -32,7 +31,8 @@ class Headless(ABC):
     def launch(self, spec: Spec) -> Launch: ...
 
     @abstractmethod
-    def events(self, lines: Iterable[str]) -> Iterator[SessionEvent | Stderr | ClientBound]: ...
+    def events(self, lines: Iterable[str]) -> Iterator[SessionEvent | Stderr | ClientBound]:
+        """FR-26 target: TurnStarted on accepted input, TurnEnd/TurnFailed on terminal records."""
 
 
 class JsonHeadless(Headless):

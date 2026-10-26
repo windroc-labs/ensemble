@@ -17,10 +17,7 @@ from ensemble.orchestrator.engine import config
 from tests.delegate.replies import block, mark, option
 from tests.orchestrator.case import PYTHONPATH
 from tests.orchestrator.integration.flow_fixtures import (
-    ACCOUNTS,
-    HARNESS_EMAIL,
     HUMAN,
-    KEYS,
     PROJECT,
     REPO,
     TIMEOUT,
@@ -30,9 +27,10 @@ from tests.orchestrator.integration.flow_fixtures import (
     usage,
 )
 from tests.orchestrator.integration.segments import FIRST_WRITE, agent_calls, lookup
+from tests.orchestrator.unit.board_ids import HARNESS_USER, role_id
 from tests.session import live_tmux
 
-ENGINEER = ACCOUNTS["engineer"]
+ENGINEER = role_id("engineer")
 ID, TITLE, BRANCH = "TASK-7", "ENG: Session registry", "TASK-7-session-registry"
 PR = f"https://github.com/{REPO}/pull/1"
 STARTED, READY = "Building the session registry.", "Added the session registry."
@@ -52,7 +50,6 @@ LONG = "\n".join(f"Requirement {n}: the registry keeps session {n} → its run."
 HARNESS_OPS = {
     "linear.Q_TEAM",
     "linear.Q_TASK_GROUP",
-    "linear.Q_USER",
     "router.issues",
     "router.issues+relations",
     "router.Q_RECHECK",
@@ -115,7 +112,8 @@ class Router(TmuxFlow):
         self.fake.issue(
             TITLE,
             identifier=ID,
-            assignee=self.ids[ENGINEER],
+            delegate=ENGINEER,
+            assignee=self.ids[HUMAN],
             project=PROJECT,
             description="Add a session registry.",
         )
@@ -123,6 +121,7 @@ class Router(TmuxFlow):
     def claim(self, mode="start", argv=("--issue", ID)):
         res = self.router(*argv)
         self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.issue(ID)["assignee"], self.ids[HUMAN])
         last = self.runs()[-1]
         self.assertEqual(
             (last["kind"], last["issue"], last["role"], last["client"]),
@@ -148,10 +147,10 @@ class Router(TmuxFlow):
         self.assertEqual(self.state(ID), "in_review")
         self.assertEqual(
             self.history(ID),
-            [("todo", "in_progress", HARNESS_EMAIL), ("in_progress", "in_review", ENGINEER)],
+            [("todo", "in_progress", HARNESS_USER), ("in_progress", "in_review", ENGINEER)],
         )
         (author, session), *rest = self.comments(ID)
-        self.assertEqual(author, HARNESS_EMAIL)
+        self.assertEqual(author, HARNESS_USER)
         self.assertRegex(session, rf"^Run {sid} · done · .* · exit 0\n")
         self.assertEqual(
             rest,
@@ -164,7 +163,7 @@ class Router(TmuxFlow):
         self.assertEqual(self.subscribers(ID), [HUMAN])
         ledger = [*LEDGER[:2], *(["running:2"] if resumed else []), *LEDGER[2:]]
         self.assertEqual(self.ledger(ID), {sid: ledger})
-        [running] = [v["b"] for v in self.sent("linear.M_COMMENT_ID", HARNESS_EMAIL)]
+        [running] = [v["b"] for v in self.sent("linear.M_COMMENT_ID", HARNESS_USER)]
         self.assertTrue(running.startswith(f"Run {sid} · running · "), running)
 
     def test_claim_to_in_review(self):
@@ -185,7 +184,6 @@ class Router(TmuxFlow):
                     "uuid": self.issue(ID)["id"],
                     "project": PROJECT["id"],
                     "target": REPO,
-                    "key": KEYS["engineer"],
                     "task": None,
                 }
             ],
@@ -195,13 +193,11 @@ class Router(TmuxFlow):
         self.assertIn(f"Branch: {BRANCH}", lines)
         self.assertEqual(self.problems(), [FIRST_WRITE, *LOOKUPS])
         self.assertEqual(
-            {(r.op, r.account) for r in self.requests()},
-            {(op, HARNESS_EMAIL) for op in HARNESS_OPS} | {(op, ENGINEER) for op in ENGINEER_OPS},
+            {(r.op, r.caller) for r in self.requests()},
+            {(op, HARNESS_USER) for op in HARNESS_OPS} | {(op, ENGINEER) for op in ENGINEER_OPS},
         )
         self.assertTrue(
-            self.sent("sessions.M_UPDATE", HARNESS_EMAIL)[-1]["b"].startswith(
-                f"Run {sid} · done · "
-            )
+            self.sent("sessions.M_UPDATE", HARNESS_USER)[-1]["b"].startswith(f"Run {sid} · done · ")
         )
 
     def test_a_crash_mid_run_resumes_the_session(self):
@@ -224,7 +220,7 @@ class Router(TmuxFlow):
         live_tmux.wait(lambda: not self.live(harness), TIMEOUT, f"{harness} to end")
         self.assertEqual(self.state(ID), "in_progress")
         [(author, session)] = [c for c in self.comments(ID) if c[1].startswith(f"Run {sid} · ")]
-        self.assertEqual(author, HARNESS_EMAIL)
+        self.assertEqual(author, HARNESS_USER)
         self.assertTrue(session.startswith(f"Run {sid} · running · "), session)
         self.assertEqual(self.ledger(ID), {sid: ["running:1", "start"]})
         self.assertEqual([e for e in self.logged() if e["kind"] == "end"], [])
@@ -248,7 +244,7 @@ class Router(TmuxFlow):
         self.assertEqual(self.problems(), [FIRST_WRITE, *LOOKUPS])
 
     def test_a_linear_failure_mid_write_back_is_written_back_by_recover(self):
-        self.fake.fail("linear.M_STATE", "503", account=ENGINEER)
+        self.fake.fail("linear.M_STATE", "503", caller=ENGINEER)
         self.scene([START, DONE])
         sid = self.claim()
         self.wait_end(sid, ID)
@@ -296,8 +292,8 @@ class Router(TmuxFlow):
         err = "router.py: Linear unavailable: teams: HTTP 503\n" if "--issue" in argv else ""
         self.assertEqual((res.returncode, res.stdout, res.stderr), (1, "", err))
         self.assertEqual(
-            [(r.op, r.account, r.result) for r in self.requests()],
-            [("linear.Q_TEAM", HARNESS_EMAIL, "503")],
+            [(r.op, r.caller, r.result) for r in self.requests()],
+            [("linear.Q_TEAM", HARNESS_USER, "503")],
         )
         self.assertEqual(
             [{k: v for k, v in e.items() if k != "ts"} for e in self.logged()],
@@ -375,7 +371,7 @@ class Router(TmuxFlow):
         self.assertEqual((delegate_end["sid"], delegate_end["rc"]), (sid, 128 + signal.SIGTERM))
         live_tmux.wait(lambda: gone(agent["pid"]), TIMEOUT, f"fake claude {agent['pid']} to end")
         [(author, session)] = [c for c in self.comments(ID) if c[1].startswith(f"Run {sid} · ")]
-        self.assertEqual(author, HARNESS_EMAIL)
+        self.assertEqual(author, HARNESS_USER)
         self.assertRegex(session, rf"^Run {sid} · interrupted · .* · exit {128 + signal.SIGTERM}\n")
         self.assertEqual(
             (self.state(ID), self.ledger(ID)), ("in_progress", {sid: ["running:1", "start"]})
