@@ -501,7 +501,7 @@ class EgressProxyTest(Case):
         with mock.patch.object(gate, "call", side_effect=lambda _argv: next(replies)) as call:
             return gate.egress_proxy("docker")[1], call
 
-    def test_the_proxys_workers_network(self):
+    def test_the_proxy_workers_network(self):
         labels = {"windroc.egress.network.workers.name": NETWORK}
         found, call = self.network(self.PROXY + "\n", labels)
         self.assertEqual(found, NETWORK)
