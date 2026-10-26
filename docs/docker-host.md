@@ -518,7 +518,7 @@ An engineer opens its draft PR as the App's bot; the host marks it ready for you
 ### Environments
 
 A session `Spec` may carry an `EnvironmentSpec` (`ensemble.session`): `image` (a local [base image](#base-images), or
-`EnvironmentSpec.WORKER`, `"@worker"`, for `~/.ensemble/docker/worker`), `gateway` (the caller network), `secrets`
+`EnvironmentSpec.WORKER`, `"@worker"`, for `~/.ensemble/docker/worker`), `gateway` (the egress proxy's caller network key), `secrets`
 (`item`, `file` pairs, [Environment secrets](#environment-secrets)), `plugins` (in-image names or pinned sources, over
 `plugins` above), optional `lock` ([Broker locks](#broker-locks)) and optional `prefetch` (`repo`, `ref`,
 [Prefetch](#prefetch)). Only a Docker-kind Host runs one; another Host's `start` refuses it as a configuration error
@@ -526,7 +526,7 @@ before starting anything.
 
 | Step | With an environment |
 |---|---|
-| preflight | the cwd, the broker handshake and, with a lock, `lock-query`: a holder raises `SessionBusy` naming its container and owner; no build, base image, gateway or secret check |
+| preflight | the cwd, the broker handshake and, with a lock, `lock-query`: a holder raises `SessionBusy` naming its container and owner; no build, base image, egress proxy or secret check |
 | start | `build` on its image and plugins; the manifest gets `gateway`, `secrets`, `lock` with `lock_owner` (the session name) and `prefetch`; with `prefetch` no GitHub App or bot identity |
 | busy reply | `SessionBusy` (lock, holder), from start, restart, resume and a worker's restart |
 
