@@ -87,15 +87,11 @@ commands exit 2 naming it; router, promote and prune run without it.
 | Lifetime | the token 30 days; any `issue` command first requests a new one when it is missing, undated, expired or has under 5 days left. A failed request with the old token still valid prints `token-error: manager: <reason>` on stderr and uses it; with it expired the command exits 2 naming the fix |
 | Revoke | as the harness app, with `linear.manager`'s services |
 
-Before this app, the manager used a personal API key, a setting now refused as an unknown key. Once the app works, revoke
-that key in Linear › Settings › Account › Security & Access, then `security delete-generic-password -s <its service>`
-(the installer's default: `linear-manager`).
-
 ### Linear role apps
 
 Each `[orchestrator.linear.roles.<role>]` holds `client_id`, `secret_service`, `token_service` and
-`user_id`. All four are required; `account` and `key` are unknown keys. `user_id` is the installed app's
-Linear user id; runtime role discovery needs no role token or email lookup.
+`user_id`. All four are required; any other key is refused. `user_id` is the installed app's
+Linear user id; runtime role discovery reads it from configuration and needs no role token.
 
 | Field | Value |
 |---|---|
@@ -109,8 +105,8 @@ Linear user id; runtime role discovery needs no role token or email lookup.
 
 Changing an app's client secret revokes its tokens: store the new secret and delete the token entry so
 the next call requests one. New runs record the role, never a credential service; existing run rows stay unchanged.
-Deterministic comments use the current app user id as their namespace. If an old member's comment landed
-before its write-back ledger was saved, Recover leaves it intact and posts the missing step as the app.
+Deterministic comments use the current app user id as their namespace. If a comment posted before the switch to apps
+landed before its write-back ledger was saved, Recover leaves it intact and posts the missing step as the app.
 
 ### Claude Code login
 
@@ -258,7 +254,7 @@ once for each client's worker: Claude, Codex, OpenCode. Each prints counts only.
 | Resource | Command | Pass | Claude | Codex | OpenCode |
 |---|---|---|---|---|---|
 | host keychain | `docker exec "$C" sh -c 'find / \( -path /proc -o -path /sys \) -prune -o -path "*/Library/Keychains*" -print 2>/dev/null \| wc -l; command -v security \| wc -c'` | `0`, `0` | `0`, `0` | `0`, `0` | pending |
-| Linear keys | `docker exec "$C" sh -c 'env \| grep -ci linear; find / \( -path /proc -o -path /sys \) -prune -o -name config.local.toml -print 2>/dev/null \| wc -l'` | `0`, `0` | `0`, `0` | `0`, `0` | pending |
+| Linear tokens | `docker exec "$C" sh -c 'env \| grep -ci linear; find / \( -path /proc -o -path /sys \) -prune -o -name config.local.toml -print 2>/dev/null \| wc -l'` | `0`, `0` | `0`, `0` | `0`, `0` | pending |
 | host `gh` login | `docker exec "$C" sh -c 'find / \( -path /proc -o -path /sys \) -prune -o -path "*/gh/hosts.yml" -print 2>/dev/null \| wc -l; env \| grep -c "^GH_TOKEN="'` | `0`, `0` | `0`, `0` | `0`, `0` | pending |
 | Docker socket | `docker exec "$C" sh -c 'find / \( -path /proc -o -path /sys \) -prune -o -type s -name "*docker*" -print 2>/dev/null \| wc -l; command -v docker \| wc -c; env \| grep -c "^DOCKER_HOST="'` | `0`, `0`, `0` | `0`, `0`, `0` | `0`, `0`, `0` | pending |
 
@@ -271,7 +267,8 @@ With `--board linear`, `scripts/install.sh` asks for each harness, manager and r
 stores its secret and first token with expiry in Keychain, and fills the app user ids ([Setup](board.md#setup)).
 Default services are `linear-app-<slot>-secret` and `linear-app-<slot>-token`; configured services are preserved.
 Reruns reuse valid tokens with over five days left. Cleanup removes only the credential items this installer created.
-The old manager key setting left in `config.local.toml` stops the installer ([Linear manager app](#linear-manager-app)). The table
+A key the orchestrator does not know, in `[orchestrator.linear]` or an app table, stops the installer
+([Upgrading](upgrading.md#linear-apps)). The table
 lists what it needs in Linear. By hand: create these in the Linear team, then put each id in `~/.ensemble/config.local.toml`: a `linear.<key>` under
 `[orchestrator.linear]` (`linear.states.todo` is `todo` in `[orchestrator.linear.states]`, `linear.roles.pm.client_id` is
 `client_id` in `[orchestrator.linear.roles.pm]`), `local_clones` under `[orchestrator]` ([Setup](board.md#setup)).
@@ -324,12 +321,23 @@ For the manager and the user, on macOS with Docker Desktop; write each result in
   board run's PR, each exits 0.
 - [ ] [Live acceptance](docker-host.md#live-acceptance): `worker --client opencode` exits 0, with a configured provider
   logged in (`login opencode <name>`).
+- [ ] WDRC-67, before cutover: the harness app claims, moves, comments (the comment has `user` with `isMe` true),
+  creates an issue, a relation and an attachment, archives, and subscribes the user.
+- [ ] WDRC-67, before cutover: the manager app creates and edits issues, comments (`user` is the manager app user)
+  and moves an issue (the move's actor is recognisable by its app user id).
+- [ ] WDRC-67, before cutover: the harness and manager apps both fail to read or write another team's issue.
+- [ ] WDRC-67, after cutover: each role app fails on another team's issue and runs one round: claim, write-back,
+  Handoff, next role's claim.
+- [ ] WDRC-67, after cutover: [Upgrading › Linear apps](upgrading.md#linear-apps) step 7 is done: the old credentials
+  revoked in Linear and every Keychain item written down in its step 3 deleted.
+
+A failed before-cutover check stops the cutover; report it to the user.
 - [ ] [Measured readers](#measured-readers): `ensemble-opencode`.
 
 ## Risks
 
 - **Three-way readers** of handed-out credentials: accepted by the user on 2026-10-18; the broker is unchanged.
-- The Linear key items trust `/usr/bin/security`: any process running as the user reads them without a dialog.
+- The Linear app items (client secrets and tokens) trust `/usr/bin/security`: any process running as the user reads them without a dialog.
 - Each broker release changes its ad-hoc code identity: rerun `login claude`, each `login claude <name>`,
   `login github ensemble-bot`, `login codex` and each `login opencode <name>` ([Log in](docker-host.md#log-in)).
 - Config picks a Docker Claude session's account ([Claude accounts](docker-host.md#claude-accounts)); it is no
@@ -349,4 +357,3 @@ For the manager and the user, on macOS with Docker Desktop; write each result in
 [GitHub private keys]: https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps
 [GitHub installation tokens]: https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app
 [GitHub revoke]: https://docs.github.com/en/rest/apps/installations#revoke-an-installation-access-token
-[Linear API keys]: https://linear.app/docs/api-and-webhooks#api-keys

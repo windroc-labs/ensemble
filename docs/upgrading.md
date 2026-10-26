@@ -11,6 +11,28 @@ all five launchers already exist. Python imports and user configuration stay the
 Docker-host users must rerun `scripts/install.sh` after the release containing this layout change
 to reinstall the broker. An older broker fails on the new layout with `session/src unreadable`.
 
+## Linear apps
+
+The Linear board's harness, manager and roles are OAuth apps now; member accounts and personal API keys are gone.
+On a Linear board, switch once, in this order:
+
+1. Create the five apps (harness, manager, one per role) in Linear › Settings › API › Applications: Client
+   credentials on, Public and Webhooks off, team access limited to the team ([Linear presets](credentials.md#linear-presets)).
+2. Stop the board's launchd jobs and start no router by hand; wait until no run is left.
+3. Write down the value of each old setting, `linear.harness_key`, `linear.manager_key` and each
+   `[orchestrator.linear.roles.<role>]` `key`: it names the Keychain item holding that personal key. Unset, it
+   was `linear-<slot>` (`linear-harness`, `linear-manager`, `linear-<role>`). Then delete those settings and each
+   role's `account` from `~/.ensemble/config.local.toml`: the installer and the orchestrator refuse them as unknown keys.
+4. Update ensemble, then rerun `scripts/install.sh --board linear`: it asks each app's Client ID and client secret.
+5. Delegate every issue not Done, Canceled or Duplicate from a role's member account to that role's app, and
+   from the harness's to the manager app: Linear's bulk edit, or `ensemble-orchestrator issue edit <ID> --role <role>`
+   (`--role me` for the manager app).
+6. Start the jobs again and let each role run one round ([Live checks](credentials.md#live-checks)).
+7. Revoke the old personal keys in Linear › Settings › Account › Security & Access, run
+   `security delete-generic-password -s <service>` for each item written down in step 3, deactivate the old member
+   accounts and remove their emails from `linear.human_members`. If the manager's old key was your own account's,
+   revoke only that key: keep your account and email.
+
 ## With scripts/install.sh
 
 On a machine already set up, by hand or by [`scripts/install.sh`](../README.md#install), run the same command again, with
