@@ -19,11 +19,12 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
-	"ensemble/broker/internal/npm"
 )
 
-const installRoot = "/usr/local/libexec/ensemble/codex"
+const (
+	installRoot     = "/usr/local/libexec/ensemble/codex"
+	maxInstallation = 1 << 20
+)
 
 var ErrNotInstalled = errors.New("pinned Codex is not installed")
 
@@ -152,8 +153,8 @@ func (r Runtime) metadataRecord() (Installation, error) {
 		return i, err
 	}
 	defer f.Close()
-	b, err := io.ReadAll(io.LimitReader(f, npm.MaxMetadata+1))
-	if err != nil || len(b) > npm.MaxMetadata {
+	b, err := io.ReadAll(io.LimitReader(f, maxInstallation+1))
+	if err != nil || len(b) > maxInstallation {
 		return i, errors.New("Codex metadata exceeds limit")
 	}
 	dec := json.NewDecoder(bytes.NewReader(b))
