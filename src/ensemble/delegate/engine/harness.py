@@ -2,11 +2,11 @@
 process on its harness Host. It attaches to the run by its workdir, drives it to its Result and
 appends the run's one events outcome line.
 
-Exits 0 on a valid outcome, 1 without one, 75 when its start found its lock held (error `busy: …`),
-2 when the run is refused (usage, its state, config), 128 + n on signal n. Host.detach starts it
-with SIGNALS blocked; they are unblocked only while the run executes, so a late signal cannot drop
-the outcome line. The first stop signal ignores later ones instead of blocking them, since a
-callback started afterwards would inherit a blocked mask.
+Exits 0 on a valid outcome, 1 without one, 75 busy, 2 when the run is refused (usage, its state,
+config), 128 + n on signal n. Host.detach starts it with SIGNALS blocked; they are unblocked only
+while the run executes, so a late signal cannot drop the outcome line. The first stop signal ignores
+later ones instead of blocking them, since a callback started afterwards would inherit a blocked
+mask.
 """
 
 import signal

@@ -3,7 +3,6 @@ resumes it; only a LayerCommand, in the exact form that command prints, so a for
 nothing else), and Status, the line `<ctl> status` prints per Record (alive: its owner's own;
 state: its sessions' StatusState word, live after an ended owner left one open; hidden: hide closed what show opened; cwd, optional: where the run works). Display is opaque: only the
 session layer interprets it. answer_keys is the one batch rule of every ctl's queries. json_records yields JSON objects from text or byte lines.
-EXIT_BUSY is the exit code of a starter whose lock is held.
 """
 
 import json
@@ -16,7 +15,7 @@ from typing import Self, TextIO, TypeVar
 from ensemble.utils.text import printable
 
 Display = str | None
-EXIT_BUSY = 75  # a held lock: ensemble-delegate run, its harness, ensemble-crew role
+EXIT_BUSY = 75
 T = TypeVar("T")
 
 

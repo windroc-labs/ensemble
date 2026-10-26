@@ -412,22 +412,6 @@ class RunDirTest(HarnessCase):
         self.assertIs(caught.exception, busy)
         self.assertFalse(os.path.lexists(self.work))
 
-    def test_a_busy_preflight_over_an_earlier_run_leaves_its_record(self):
-        self.make(spec=Spec("input", self.work, mode="tui", client="fake", sid=SID)).run()
-        left = HarnessSession.live[self.metadata()["agent_name"]]
-        with open(self.record(), "rb") as file:
-            before = file.read()
-        HarnessSession.preflight_error = SessionBusy("dummy-lock", "ensemble-x-1 (owner x)")
-        with (
-            mock.patch("ensemble.delegate.engine.harness_delegate.sweep") as swept,
-            self.assertRaises(SessionBusy),
-        ):
-            self.make()
-        with open(self.record(), "rb") as file:
-            self.assertEqual(file.read(), before)
-        self.assertFalse(left.alive())
-        swept.assert_called_once()
-
     def test_a_live_run_refuses_a_new_one_before_making_the_agent_dir(self):
         self.make()
         os.rmdir(os.path.join(self.work, "agent"))
@@ -1666,6 +1650,17 @@ class SweepTest(HarnessCase):
         self.assertEqual(self.kills(orphan), [(ORPHAN, signal.SIGKILL)])
         self.assertEqual(self.seen, [(1, 0)])
         self.assertEqual(self.metadata()["attempt"], 2)
+
+    def test_a_busy_preflight_over_an_earlier_run_leaves_its_record(self):
+        self.make(spec=Spec("input", self.work, mode="tui", client="fake", sid=SID)).run()
+        left = HarnessSession.live[self.metadata()["agent_name"]]
+        orphan, before = self.orphan(), self.record()
+        HarnessSession.preflight_error = SessionBusy("dummy-lock", "ensemble-x-1 (owner x)")
+        with self.assertRaises(SessionBusy):
+            self.make()
+        self.assertEqual(self.record(), before)
+        self.assertFalse(left.alive())
+        self.assertEqual(self.kills(orphan), [(ORPHAN, signal.SIGKILL)])
 
     def test_resume_kills_the_left_group_before_it_launches_a_harness(self):
         view = self.crashed()

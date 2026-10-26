@@ -29,9 +29,7 @@ class Delegate(ABC):
         callback: Sequence[str] | None = None,
         overlays: Sequence[Mapping] = (),
     ) -> Delegate:
-        """Build and save a run without starting its sessions; SessionBusy, saving nothing, when
-        its session's preflight finds its lock held.
-        """
+        """Build and save a run without starting its sessions; SessionBusy on a held lock."""
 
     @classmethod
     @abstractmethod

@@ -186,8 +186,7 @@ def to_stderr(text: str) -> None:
 
 def report(result: Result, out: str | None) -> tuple[int, str | None]:
     """(exit code, the valid outcome's status), naming the file `out` when it holds the
-    deliverable; None: no file. Without an outcome: EXIT_BUSY when its error is SessionBusy's
-    `busy: ` text, the only busy signal (a client may exit 75 itself), else 1.
+    deliverable; None: no file.
     """
     if result.outcome is None:
         say(f"delegate: {result.error}")
