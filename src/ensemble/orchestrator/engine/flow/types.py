@@ -194,6 +194,8 @@ class Stage:
     files: bool
     deliverable: bool
     hint: str
+    ref: bool
+    mapped_only: bool
 
 
 ISSUE_ID = r"[A-Z][A-Z0-9]*-\d+"
