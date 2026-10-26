@@ -126,6 +126,7 @@ BROKER_INSTALL = """#!/bin/sh
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 echo "broker-install $*" >> "$LOG"
+[ ! -e "$FAKES/broker_install_fails" ] || exit 1
 rm -f "$FAKES/src/broker/protocol"
 target="$ENSEMBLE_INSTALL_ROOT/usr/local/libexec/ensemble"
 sudo mkdir -p "$target"
@@ -1419,6 +1420,35 @@ class InstallTest(Case):
             f"    broker protocol {OTHER}: {path} and the installed broker agree\n", result.stderr
         )
         self.assertNotIn(f"{RAW}v9.8.7/{GO}", "\n".join(self.calls()))
+        self.assertIn("==> broker\n    skip: installed from this plugin\n", result.stderr)
+
+    def test_failing_broker_install_names_the_broker_step(self):
+        (self.fakes / "broker_install_fails").write_text("")
+        result = self.fresh("--clients", "claude", "--docker", gateway_failure=True)
+        self.assertEqual(result.code, 1)
+        self.assertIn(
+            "install.sh: broker failed; rerun the same command to continue\n", result.stderr
+        )
+
+    def test_opencode_rerun_keeps_a_current_hand_built_broker(self):
+        self.assert_ok(
+            self.fresh(
+                clients="opencode",
+                docker="y",
+                opencode=PROVIDER_ANSWERS,
+                logins=[(PEM_Q, ""), (OPENCODE_LOGIN_Q, "lan"), (r"API key:", KEY)],
+            )
+        )
+        (self.opencode_package() / CLIENT).write_text(f'PROTOCOL = "{OTHER}"\n')
+        (self.fakes / "src/broker").mkdir(parents=True, exist_ok=True)
+        (self.fakes / "src/broker/protocol").write_text(OTHER)
+        result = self.again()
+        self.assert_ok(result)
+        self.assertIn(
+            f"    broker protocol {OTHER}: {self.opencode_package()} and the installed broker"
+            " agree\n",
+            result.stderr,
+        )
         self.assertIn("==> broker\n    skip: installed from this plugin\n", result.stderr)
 
     def test_other_client_plugin_against_the_installed_broker_stops(self):

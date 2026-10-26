@@ -1075,27 +1075,35 @@ print(found[0] if found else "")' "${CODEX_HOME:-$HOME/.codex}/plugins/cache/win
 # every chosen client's plugin protocol. Only advisory: gh attestation verify authenticates the broker.
 broker_plan() {
   local -a sources=()
-  local client source label where version want got remedy current broker_label seen= agreed=
+  local client source label where version want got remedy installed broker_label opencode= seen= agreed=
   [ "$docker" = yes ] || return 0
   for client in claude codex opencode; do
     has "$client" || continue
-    source=
-    if [ "$client" != opencode ]; then source=$(installed_plugin "$client"); fi
+    if [ "$client" != opencode ]; then
+      source=$(installed_plugin "$client")
+    else
+      # OpenCode's copy counts only while it is at the commit $ref names: opencode_plugin downloads it again otherwise.
+      source=$(opencode_package "$(opencode_spec)" 2>/dev/null) || source=
+      if [ -z "$(state_get opencode_plugin_commit)" ] || [ "$(state_get opencode_plugin_commit)" != "$(ref_commit)" ]; then
+        source=
+      fi
+    fi
     [ -z "$source" ] || [ -d "$source" ] || source=
+    if [ "$client" = opencode ]; then opencode=$source; fi
     sources+=("$source")
   done
   where=${sources[0]:-ref $ref}
   version=$(plugin_file "${sources[0]}" .claude-plugin/plugin.json | version_of)
   [ -n "$version" ] || die "no release version in .claude-plugin/plugin.json at $where"
   release_tag=v$version
-  if [ -n "${sources[0]}" ] || [ "$ref" = main ] || [ "$ref" = "$release_tag" ]; then
+  if [ "$ref" = main ] || [ "$ref" = "$release_tag" ] || { [ -n "${sources[0]}" ] && [ "${sources[0]}" != "$opencode" ]; }; then
     broker_mode=release
   else
     broker_mode=build
     return
   fi
-  if [ -n "${sources[0]}" ] && current=$(broker_current "${sources[0]}"); then
-    got=${current%%:*}
+  if [ -n "${sources[0]}" ] && installed=$(broker_current "${sources[0]}"); then
+    got=${installed%%:*}
     broker_label="the installed broker"
   else
     got=$(ensemble_file "$release_tag" src/broker/internal/protocol/protocol.go | go_protocol_of)
@@ -1109,7 +1117,9 @@ broker_plan() {
     want=$(plugin_file "$source" src/ensemble/session/hosts/docker/broker.py | protocol_of)
     [ -n "$want" ] || die "no broker protocol in src/ensemble/session/hosts/docker/broker.py at ${source:-ref $ref}"
     if [ "$want" != "$got" ]; then
-      if [ -n "$source" ]; then
+      if [ -n "$source" ] && [ "$source" = "$opencode" ]; then
+        remedy="use --ref $release_tag or a branch other than main"
+      elif [ -n "$source" ]; then
         remedy="update the plugin (Claude Code: claude plugin marketplace update windroc, then claude plugin update ensemble@windroc; Codex: codex plugin marketplace upgrade windroc), then rerun"
       elif has claude || has codex; then
         remedy="the windroc marketplace serves ensemble at $ref, ahead of release $release_tag: wait until it serves a release, or use --clients opencode --ref $release_tag"
@@ -1731,10 +1741,9 @@ docker_running() {
   done
 }
 
-# Installs the broker unless the one installed came from this plugin's sources and speaks its protocol.
-# "<spoken>:<wanted>": the protocol the installed broker reports when it was installed from plugin $1's broker
-# sources (else empty), and $1's plugin protocol. Exit 0 when both are set and equal: the broker is current and
-# broker_install keeps it, so broker_plan may trust it.
+# Prints "<spoken>:<wanted>", whatever its exit status: the protocol the installed broker reports when it was
+# installed from plugin $1's broker sources (else empty), and $1's plugin protocol. Exit 0 when both are set and
+# equal: the broker is current and broker_install keeps it, so broker_plan may trust it.
 broker_current() {
   local got= want=
   want=$(protocol_of <"$1/src/ensemble/session/hosts/docker/broker.py" 2>/dev/null) || want=
@@ -1745,15 +1754,16 @@ broker_current() {
   [ -n "$want" ] && [ "$got" = "$want" ]
 }
 
+# Installs the broker unless the one installed came from this plugin's sources and speaks its protocol.
 broker_install() {
-  local source current got want
+  local source installed got want
   step broker
-  if current=$(broker_current "$pkg"); then
+  if installed=$(broker_current "$pkg"); then
     skip "installed from this plugin"
     return
   fi
-  got=${current%%:*}
-  want=${current#*:}
+  got=${installed%%:*}
+  want=${installed#*:}
   if [ -n "$got" ]; then say "    installed broker speaks protocol $got, the plugin wants ${want:-unknown}: reinstalling"; fi
   source=$(broker_source "$pkg")
   [ -e "$root/usr/local/libexec/ensemble" ] || ledger_add broker

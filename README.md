@@ -103,9 +103,10 @@ Without `--clients` and `--docker`/`--no-docker` it starts with a checklist of w
 | `--opencode-key-stdin` | reads the provider's API key from stdin; Docker imports the same key from local OpenCode's `auth.json` into the broker |
 | `--password-stdin` | reads the `sudo` password from stdin, before the key |
 
-With Docker, before any client step, it checks that each chosen client's ensemble plugin (an installed one, else the
-`--ref` on GitHub) speaks the broker protocol of the release it will install the broker from (`v` + the plugin's
-version), and stops naming both protocols when they differ.
+With Docker, before any client step, it checks that each chosen client's ensemble plugin (the copy installed, OpenCode's
+only while at the `--ref`'s commit, else the `--ref` on GitHub) speaks the protocol of the broker it will use: the
+installed broker when it came from that plugin and speaks its protocol, else the release it will install it from (`v` +
+the plugin's version). It stops naming both protocols when they differ.
 
 With a stdin flag, stdin cannot also carry the script:
 
