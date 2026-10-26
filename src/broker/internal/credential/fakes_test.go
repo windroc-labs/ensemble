@@ -241,7 +241,7 @@ type writingProvider struct{ *fakeProvider }
 type writingIssuer struct{ *fakeProvider }
 
 func (p writingProvider) Begin(context.Context, string) (Issuer, error) {
-	return writingIssuer{p.fakeProvider}, nil
+	return writingIssuer(p), nil
 }
 
 func (i writingIssuer) Write(exec func([]string, []byte) error, m Material) error {

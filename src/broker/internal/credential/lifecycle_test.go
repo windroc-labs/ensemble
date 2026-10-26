@@ -1016,4 +1016,9 @@ func TestRefreshReissuedTokenNotDuplicated(t *testing.T) {
 	if len(rec.Tokens) != 1 || rec.Tokens[0].State != Prepared {
 		t.Fatalf("record after failed redelivery %+v", rec.Tokens)
 	}
+	acquire(t, l, ctrA, newContainer())
+	rec, _ = store.record(t, ctrA)
+	if len(rec.Tokens) != 1 || rec.Tokens[0].State != Delivered || rec.Tokens[0].Revision != 1 {
+		t.Fatalf("record after a second acquire %+v", rec.Tokens)
+	}
 }

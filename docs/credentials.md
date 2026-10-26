@@ -216,6 +216,7 @@ shows.
 | `ensemble-tokens` | container name | — | that container's installation tokens and expiries, including retained recovery material | `<B> start`, `refresh`; `close` removes only safely retired entries | the broker |
 | `ensemble-revocations` | `pending` | — | tokens awaiting revocation | `<B> close`, `refresh` failures | the broker |
 | `ensemble-codex` | `auth` | — | the full Codex login | `<B> login codex`; renewals at `start`, `refresh` | the broker |
+| `ensemble-codex-grants` | container name | — | that container's Codex grant: the login's fingerprint, expiry, revision and delivery state; no token | `<B> start`, `refresh`; `close` deletes it | the broker |
 | `ensemble-opencode` | provider name | `[session.clients.opencode.providers.<name>]` | that OpenCode provider's API key | `<B> login opencode <name>` | the broker |
 | `ensemble-env/<name>` | `<name>` | — | that environment secret | `<B> login env <name>` | the broker |
 | the `linear.harness_key` value | any | `linear.harness_key` | harness Linear API key | the user ([Linear presets](#linear-presets)) | any process running as the user |

@@ -278,6 +278,17 @@ func (p Pending) material() Material {
 // slot is m's grant position: its account and target.
 func (m Material) slot() [2]any { return [2]any{m.Account, m.Target} }
 
+// put records m, prepared, in rec at the next revision; a token rec already holds (a shared account's, not renewed
+// meanwhile) turns prepared again, keeping its revision, rather than recorded twice.
+func put(rec *Record, m *Material) {
+	if i := slices.IndexFunc(rec.Tokens, func(t Material) bool { return t.Token == m.Token }); i >= 0 {
+		rec.Tokens[i].State, m.Revision = Prepared, rec.Tokens[i].Revision
+		return
+	}
+	m.Revision = desired(rec) + 1
+	rec.Tokens = append(rec.Tokens, *m)
+}
+
 // desired is rec's highest revision.
 func desired(rec *Record) int {
 	n := 0
@@ -492,8 +503,8 @@ func expiries(entries []Material) []protocol.Expiry {
 	return out
 }
 
-// Acquire gives d's consumer one token per target of subject, limited to scope: each is recorded prepared before the
-// next request, all are delivered and published, then all are marked delivered. On any failure it retires every token
+// Acquire gives d's consumer one token per target of subject, limited to scope: each is recorded prepared (put) before
+// the next request, all are delivered and published, then all are marked delivered. On any failure it retires every token
 // it issued, except a shared provider's that failed delivery or publication, which stay prepared.
 func (l Lifecycle) Acquire(ctx context.Context, d Delivery, subject string, scope map[string]string) (_ []protocol.Expiry, err error) {
 	if err := l.ready(); err != nil {
@@ -529,8 +540,8 @@ func (l Lifecycle) Acquire(ctx context.Context, d Delivery, subject string, scop
 		m.Account, m.Target, m.State = target.Account, target.Target, Prepared
 		issued = append(issued, m)
 		if _, err := l.editRecord(id, true, func(rec *Record, _ bool) {
-			m.Revision = desired(rec) + 1
-			rec.Subject, rec.Scope, rec.Tokens = subject, scope, append(rec.Tokens, m)
+			rec.Subject, rec.Scope = subject, scope
+			put(rec, &m)
 		}); err != nil {
 			l.noteUnrecorded(id, audit.Issued, m)
 			return fail(err)
@@ -568,8 +579,7 @@ func (l Lifecycle) Acquire(ctx context.Context, d Delivery, subject string, scop
 
 // Refresh replaces each slot of d's consumer's record, whatever its materials' states, with a new token: recorded
 // prepared, delivered and published, then marked delivered while the slot's other materials turn retiring, which are
-// then retired. A token the slot already holds (a shared account's, not renewed meanwhile) turns prepared again rather
-// than recorded twice. It issues with the record's scope when it has one, else scope (a record an older broker wrote).
+// then retired; each is recorded as put does. It issues with the record's scope when it has one, else scope (a record an older broker wrote).
 func (l Lifecycle) Refresh(ctx context.Context, d Delivery, scope map[string]string) (_ []protocol.Expiry, err error) {
 	if err := l.ready(); err != nil {
 		return nil, err
@@ -615,15 +625,9 @@ func (l Lifecycle) Refresh(ctx context.Context, d Delivery, scope map[string]str
 		}
 		m.Account, m.Target, m.State = target.Account, target.Target, Prepared
 		found, err := l.editRecord(id, false, func(rec *Record, found bool) {
-			if !found {
-				return
+			if found {
+				put(rec, &m)
 			}
-			if i := slices.IndexFunc(rec.Tokens, func(t Material) bool { return t.Token == m.Token }); i >= 0 {
-				rec.Tokens[i].State, m.Revision = Prepared, rec.Tokens[i].Revision
-				return
-			}
-			m.Revision = desired(rec) + 1
-			rec.Tokens = append(rec.Tokens, m)
 		})
 		if err != nil || !found {
 			l.noteUnrecorded(id, audit.Renewed, m)
