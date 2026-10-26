@@ -1176,6 +1176,7 @@ class IssueOps(ServerCase):
                     "description": "Old",
                     "priority": 0,
                     "assignee": None,
+                    "delegate": None,
                     "project": None,
                     "team": {"id": TEAM, "key": "TASK"},
                     "labels": {"nodes": labels, "pageInfo": pages(labels)},
