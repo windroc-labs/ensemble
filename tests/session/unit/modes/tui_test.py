@@ -2601,3 +2601,62 @@ class PromptFileTest(Base):
         ):
             self.start(run=self.seen, prompt=BIG)
         self.host.calls.terminal.assert_not_called()
+
+
+class OwnerTest(Base):
+    """A start a session harness performs names its harness dir in session.json."""
+
+    def owner(self, name: str = "a" * 32) -> str:
+        path = os.path.join(self.ensemble, "harness", name)
+        os.makedirs(path, 0o700, exist_ok=True)
+        return path
+
+    def test_an_owned_start_writes_its_owner(self):
+        owner = self.owner()
+        tui.TuiMode.start(
+            Spec(
+                workdir=self.tmp,
+                access=Access(cwd=self.tmp),
+                name=NAME,
+                client="fake",
+                sid=SID,
+                events=self.events,
+            ),
+            self.client,
+            registry=self.session_cls._config().registry,
+            record=self.recorded.append,
+            host=self.host,
+            owner=owner,
+        )
+        self.assertEqual(tui.TuiMode.snapshot(NAME)["owner"], owner)
+
+    def test_an_unowned_start_writes_no_owner(self):
+        self.start()
+        self.assertNotIn("owner", tui.TuiMode.snapshot(NAME))
+
+    def test_an_owner_outside_the_harness_root_is_refused(self):
+        path = os.path.join(self.dir, "session.json")
+        outside = os.path.join(self.tmp, "a" * 32)
+        os.mkdir(outside)
+        link = os.path.join(self.ensemble, "harness", "b" * 32)
+        os.makedirs(os.path.dirname(link), exist_ok=True)
+        os.symlink(outside, link)
+        for owner in (
+            outside,
+            link,
+            self.owner("short"),
+            self.owner("A" * 32),
+            os.path.join(self.ensemble, "harness"),
+            "rel/" + "a" * 32,
+            5,
+        ):
+            with self.subTest(owner=owner):
+                self.write_state(self.state(owner=owner))
+                with self.assertRaises(SessionError) as caught:
+                    tui.TuiMode.snapshot(NAME)
+                self.assertEqual(str(caught.exception), f"no tui session w1: {path}: bad owner")
+        self.write_state(self.state(owner=self.owner()))
+        self.assertEqual(tui.TuiMode.snapshot(NAME)["owner"], self.owner())
+
+    def test_a_tui_mode_writes_its_own_run_records(self):
+        self.assertTrue(tui.TuiMode.records)

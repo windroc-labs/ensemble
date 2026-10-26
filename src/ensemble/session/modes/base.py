@@ -110,6 +110,7 @@ def _select_account(spec: Spec, client: Client) -> str:
 
 class BaseMode(ABC):
     kind: ClassVar[Mode]
+    records: ClassVar[bool] = True  # False: its owner already wrote its run records
 
     def __init__(self, prepared: Prepared) -> None:
         """Built by start (TuiMode.attach too) from what it started."""
@@ -143,9 +144,11 @@ class BaseMode(ABC):
         host: Host,
         display: Display = None,
         check_name: Callable[[str], None] | None = None,
+        owner: str | None = None,
     ) -> Self:
         """The session started; spec.sid set; registry: tui settings and identity_drop; host: the
-        selected execution Host; display: a tui session's, kept as given (other modes refuse one).
+        selected execution Host; display: a tui session's, kept as given (other modes refuse one);
+        owner: the dir of the session harness starting it (only a tui start takes one).
         """
 
     @property
@@ -179,6 +182,11 @@ class BaseMode(ABC):
     def close(self) -> None:
         """Ends the run for good; a tui one also drops its state."""
         self.stop()
+
+    @classmethod
+    def _unowned(cls, owner: str | None) -> None:
+        if owner is not None:
+            raise ConfigError(f"owner: {cls.kind.value} mode has no session harness")
 
     @classmethod
     def _unsupported(cls, spec: Spec) -> ConfigError:

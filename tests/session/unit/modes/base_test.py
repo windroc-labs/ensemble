@@ -18,6 +18,7 @@ from ensemble.session.modes import base, headless, in_process, tui
 from ensemble.session.modes.base import BaseMode, child_env, identity_drop
 from ensemble.session.modes.client_adapters.headless import Headless
 from ensemble.utils import ACCOUNT_ENV as ACCOUNT
+from ensemble.utils import load_class
 from tests.session.case import HOSTS, Case
 from tests.session.fakes.terminal import MemoryHost
 
@@ -405,3 +406,36 @@ def params(function):
         (None if p.kind is inspect.Parameter.POSITIONAL_ONLY else p.name, p.kind, p.default)
         for p in inspect.signature(function).parameters.values()
     ]
+
+
+class OwnerTest(Case):
+    """Only a tui start can be owned by a session harness; the others refuse an owner first."""
+
+    def test_headless_and_in_process_refuse_an_owner(self):
+        spec = Spec(workdir="/w", access=Access(cwd="/w"), client="fake", sid="s1")
+        for mode in (headless.HeadlessMode, in_process.InProcessMode):
+            with (
+                self.subTest(mode=mode.kind),
+                self.assertRaisesRegex(
+                    ConfigError, f"\\Aowner: {mode.kind.value} mode has no session harness\\Z"
+                ),
+            ):
+                mode.start(
+                    spec,
+                    mock.Mock(spec=Client),
+                    registry=mock.Mock(spec=Registry),
+                    record=mock.Mock(),
+                    host=MemoryHost(),
+                    owner="/h",
+                )
+
+    def test_every_mode_writes_its_own_run_records(self):
+        for mode in KINDS:
+            with self.subTest(mode=mode.kind):
+                self.assertTrue(mode.records)
+
+    def test_only_a_tmux_host_is_harnessed(self):
+        self.assertFalse(Host._harnessed)
+        self.assertFalse(MemoryHost._harnessed)
+        tmux = Host.parse_hosts({**HOSTS, "default": "tmux"}).tables["tmux"]["implementation"]
+        self.assertTrue(load_class(tmux, Host)._harnessed)
