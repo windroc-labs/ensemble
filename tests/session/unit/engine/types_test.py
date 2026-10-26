@@ -20,7 +20,6 @@ from ensemble.session import (
 from ensemble.session.engine import types as engine_types
 from ensemble.session.engine.types import (
     ClientBound,
-    EventCall,
     HookCallback,
     HookError,
     HookKind,
@@ -36,6 +35,7 @@ from ensemble.session.engine.types import (
     Tier,
     TurnStarted,
 )
+from ensemble.session.harness.types import EventCall
 from ensemble.utils import StatusState
 from tests.session.case import Case
 

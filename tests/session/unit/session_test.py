@@ -1,6 +1,7 @@
 """Session public exports."""
 
 import inspect
+import typing
 from unittest import mock
 
 from ensemble import session
@@ -33,6 +34,7 @@ from ensemble.session import (
     Window,
 )
 from ensemble.session.engine import types
+from ensemble.session.engine.base import Session
 from ensemble.session.engine.hosted_session import HostedSession
 from tests.session.case import HOSTS, Case
 
@@ -70,6 +72,11 @@ ALLOWED_CONCRETE = {
 
 
 class Exports(Case):
+    def test_event_call_types_the_session_it_controls_without_a_reverse_import(self):
+        self.assertEqual(EventCall.__module__, "ensemble.session.harness.types")
+        self.assertIs(typing.get_type_hints(EventCall)["session"], Session)
+        self.assertFalse(hasattr(types, "EventCall"))
+
     def test_the_types_are_engine_types(self):
         for name in session.__all__:
             if hasattr(types, name):

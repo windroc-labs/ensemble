@@ -162,42 +162,31 @@ class Interactive(ABC):
     def press(self, keys: Sequence[KeyPress]) -> None: ...
 
 
-class InteractiveProcess(Process, Interactive): ...
+class InteractiveProcess(Process, Interactive):
+    """The managed worker contract (docs/sessions.md › Session harness interfaces).
+    Input, screen and liveness reuse Interactive and Process. Managed close() returns only after
+    confirmed worker exit, else raises SessionError (Unanswered if unknown); returncode() supplies
+    the confirmed code. Legacy terminals do not implement the channel yet.
+    """
+
+    generation: str  # this worker start's identity, bound to every channel message
+
+    def read(self, timeout: float) -> list[WorkerMessage]:
+        """Channel order, up to timeout seconds; [] on timeout, nothing after WorkerExit.
+        Broken transport raises Unanswered until exit is confirmed; EOF alone is no proof.
+        """
+        raise NotImplementedError
+
+    def write(self, data: bytes) -> None:
+        """Raw headless stdin over the existing channel; terminal input uses send/press."""
+        raise NotImplementedError
+
+    def tick(self, now: float) -> float | None:
+        """Host periodic duty in the harness; next due time, or None when there is no duty."""
+        return None
 
 
 class Lines(Iterable[str], AbstractContextManager[object], Protocol): ...
-
-
-class WorkerHandle(ABC):
-    """A managed worker (docs/sessions.md › Session harness interfaces)."""
-
-    @property
-    @abstractmethod
-    def generation(self) -> str: ...
-
-    @abstractmethod
-    def read(self, timeout: float) -> list[WorkerMessage]: ...
-
-    @abstractmethod
-    def send(self, action: Paste | Key) -> None: ...
-
-    @abstractmethod
-    def press(self, keys: Sequence[KeyPress]) -> None: ...
-
-    @abstractmethod
-    def write(self, data: bytes) -> None: ...
-
-    @abstractmethod
-    def screen(self, lines: int | None = None) -> str: ...
-
-    @abstractmethod
-    def state(self) -> Liveness: ...
-
-    @abstractmethod
-    def close(self, timeout: float) -> int | None: ...
-
-    def tick(self, now: float) -> float | None:
-        return None
 
 
 class Piped(ABC):
@@ -336,7 +325,7 @@ class Host(ABC):
         display: Display = None,
         events: str | None = None,
         metadata: Mapping[str, str] | None = None,
-    ) -> WorkerHandle:
+    ) -> InteractiveProcess:
         """Managed worker `name` under the guard (WDRC-199 FR-13)."""
         raise SessionError(f"host {self.name} runs no managed worker")
 

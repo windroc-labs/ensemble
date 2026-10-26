@@ -20,7 +20,7 @@ from ensemble.session import (
 )
 from ensemble.session.engine.types import LOCAL_CONTEXT, ClientContext, Hosts, Launch, Liveness
 from ensemble.session.harness import guard
-from ensemble.session.hosts.base import Interactive, InteractiveProcess, Piped, WorkerHandle
+from ensemble.session.hosts.base import Interactive, InteractiveProcess, Piped
 from ensemble.session.hosts.types import CommandView, SessionView
 from ensemble.utils import STOP_WAIT, Status, StatusState
 from tests.session.case import Case
@@ -311,11 +311,22 @@ class ManagedWorkerTest(Case):
         self.assertEqual(host.calls.mock_calls, [])
 
     def test_a_worker_has_no_periodic_duty_unless_its_host_gives_one(self):
-        class Bare(WorkerHandle):
-            generation = "g1"
-            read = send = press = write = screen = state = close = None
+        self.assertIsNone(InteractiveProcess.tick(mock.sentinel.worker, 0.0))
 
-        self.assertIsNone(Bare().tick(0.0))
+    def test_channel_operations_remain_unimplemented(self):
+        worker = mock.sentinel.worker
+        for operation in (
+            lambda: InteractiveProcess.read(worker, 0.0),
+            lambda: InteractiveProcess.write(worker, b"input"),
+        ):
+            with self.subTest(operation=operation), self.assertRaises(NotImplementedError):
+                operation()
+
+    def test_managed_workers_reuse_existing_input_and_lifecycle_members(self):
+        for name in ("send", "press"):
+            self.assertIs(getattr(InteractiveProcess, name), getattr(Interactive, name))
+        for name in ("screen", "state", "close", "returncode"):
+            self.assertIs(getattr(InteractiveProcess, name), getattr(Process, name))
 
     def test_the_guard_is_not_implemented_yet(self):
         with self.assertRaisesRegex(NotImplementedError, "FR-13"):

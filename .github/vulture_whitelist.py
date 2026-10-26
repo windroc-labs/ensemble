@@ -11,7 +11,8 @@ from ensemble.session.clients.claude import ClaudeClient
 from ensemble.session.clients.codex import CodexClient
 from ensemble.session.clients.opencode import OpenCodeClient
 from ensemble.session.engine.base import Session
-from ensemble.session.engine.types import Effort, EventCall, HookKind, NamedKey, SessionRow, Tier
+from ensemble.session.engine.types import Effort, HookKind, NamedKey, SessionRow, Tier
+from ensemble.session.harness.types import EventCall
 from ensemble.session.hosts.base import Host
 from ensemble.session.viewer.types import Split
 from ensemble.utils import LayerCommand, OutcomeStatus

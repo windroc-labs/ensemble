@@ -16,7 +16,6 @@ from ensemble.session.engine.types import (
     ConfigError,
     Effort,
     EnvironmentSpec,
-    EventCall,
     Exited,
     HookCallback,
     IdleTimeout,
@@ -40,6 +39,7 @@ from ensemble.session.engine.types import (
     Usage,
     Window,
 )
+from ensemble.session.harness.types import EventCall
 from ensemble.session.hosts.base import SIGNALS, Host, Process
 from ensemble.session.viewer.viewer import Viewer
 

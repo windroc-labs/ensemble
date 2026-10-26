@@ -12,7 +12,6 @@ from ensemble.session.engine.types import (
     ConfigError,
     Effort,
     EnvironmentSpec,
-    EventCall,
     Exited,
     HookCall,
     HookCallback,
@@ -50,6 +49,7 @@ from ensemble.session.engine.types import (
     WorkerMessage,
     WorkerOutput,
 )
+from ensemble.session.harness.types import EventCall
 from ensemble.session.hosts.base import (
     Host,
     Interactive,
@@ -57,7 +57,6 @@ from ensemble.session.hosts.base import (
     Lines,
     Piped,
     Process,
-    WorkerHandle,
 )
 from ensemble.session.hosts.types import CommandView, SessionView
 from ensemble.session.modes.client_adapters.headless import Headless, JsonHeadless
@@ -77,7 +76,6 @@ __all__ = [
     "Process",
     "Piped",
     "Lines",
-    "WorkerHandle",
     "WorkerMessage",
     "WorkerHook",
     "WorkerOutput",
