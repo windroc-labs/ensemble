@@ -92,12 +92,16 @@ Run `python3 .github/run_tests.py Protocol tests/unit/docker_broker_protocol_tes
 The Go broker (`src/broker/`, Go from `src/broker/go.mod`): `sh with-go-state.sh gofmt -l .`,
 `sh with-go-state.sh go vet ./...`, `sh with-go-state.sh go test ./...`,
 `sh with-go-state.sh go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...` in `src/broker/`; run every
-Go tool through `src/broker/with-go-state.sh` (state in `.cache/go/`). CI's `Broker` jobs run them on
-Linux and macOS and build the darwin/arm64 binary for full scope, including changes to
+Go tool through `src/broker/with-go-state.sh` (state in `.cache/go/`). CI's required
+`Broker ubuntu-24.04` job runs them on Linux and builds the Linux binary for full scope, including changes to
 `src/broker/**`, `src/broker/protocol/docker-broker/**`, `.github/workflows/test.yml`, and every push to
-`main`. Docs-only, version-only and upper-layer-only PRs skip Go setup, checks, builds and artifact
-upload and both broker runners. The required `CI` aggregate validates scope before
-skipping its broker API gate; `Worker image` retains its own scope check.
+`main`. Docs-only, version-only and upper-layer-only PRs skip the Linux broker runner.
+The required `CI` aggregate depends on that job and validates its result against scope;
+`Worker image` retains its own scope check. The independent `Broker macOS` workflow
+(`.github/workflows/broker-macos.yml`) runs the same Go checks on `macos-15`, builds the
+darwin/arm64 binary and uploads its artifact on pushes to `main` and manual dispatch only.
+It reports no PR or merge-group checks and does not block required CI. Broker tests use
+fakes for credentials; they never call the real macOS keychain or Security API.
 
 Integration jobs upload `integration-<run-id>-<attempt>-<job>` artifacts containing
 the discovered IDs, assigned IDs, expected load, Python/tmux versions, runner type, supervised
@@ -149,7 +153,7 @@ flowchart LR
     U --> CI
     I[Integration: 8 jobs x 4 processes] --> CI
     R --> CI
-    B[Broker: Linux and macOS when full] --> CI
+    B[Broker: Linux when full] --> CI
     M[mini-op guard: every event] --> CI
 ```
 Unit and repository workers use timing hints; integration shards use recorded durations. Every ID
@@ -178,15 +182,10 @@ Code changes also run Pyright in that runner; `Lint design` keeps the architectu
 a non-full decision, skipped unit, coverage and integration jobs only for the decision that
 allows them, and rejects failures,
 cancellation or unexpected skips. The explicit `broker` output controls Go steps;
-`CI` validates it against full and docs scope and checks both broker matrix legs through
-the current run/attempt jobs API in
-`.github/ci_broker.py`. Linux must succeed. macOS must succeed or be confirmed cancelled
-without a runner or steps; cancellation after starting and actual failures block.
-The aggregate does not depend on the broker matrix, so it can cancel an unstarted
-macOS leg after every other CI job finishes. Its `always()` job and gate step survive
-ordinary cancellation; the overall run can show cancelled while required `CI` is green.
-API errors, missing evidence and cancellation races fail closed. Fork PR tokens cannot
-cancel runs, so a queued macOS leg on a fork needs a rerun when runners are available.
+`CI` validates it against full and docs scope in `.github/ci_scope.py`. The Linux broker
+must succeed when selected and must be skipped otherwise. The aggregate's `always()`
+condition checks failures and cancellations even when dependencies fail or are skipped.
+No broker API polling, workflow cancellation or write permission is needed.
 
 ```bash
 python3 .github/ci_scope.py --event pull_request --paths skills/manage/SKILL.md

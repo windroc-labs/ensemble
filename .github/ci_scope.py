@@ -236,6 +236,7 @@ def gate(needs: dict, event: str) -> list[str]:
         "coverage": "success" if event != "push" and "true" not in (docs, version) else "skipped",
         "integration": "skipped" if "true" in (docs, version) else "success",
         "mini-op": "success",
+        "broker": "success" if broker == "true" else "skipped",
     }
     for job, wanted in expected.items():
         data = needs.get(job)

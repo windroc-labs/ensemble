@@ -27,14 +27,11 @@ squash-merges automatically when required `CI` passes; no manual branch updates 
 `Worker image` also reports on queue groups, building when their combined diff changes image inputs.
 Queue groups run every CI project, including diff coverage against the group's base SHA.
 
-`CI` requires every applicable job and, when broker scope is selected, the Linux broker leg. It waits for a running
-`Broker macos-15` and blocks on its failure or cancellation after starting. If macOS
-remains queued after every other CI job finishes, the gate requests ordinary workflow
-cancellation, then accepts only terminal macOS cancellation with no runner or steps.
-The aggregate's `always()` job and step survive; the workflow may show **cancelled** with
-a green required `CI`. Missing API evidence or a start during cancellation blocks.
-Require `CI`, never the macOS leg separately. Fork PR tokens cannot cancel runs; if a
-fork's macOS leg remains queued, CI fails closed and needs a rerun when runners are available.
+`CI` requires every applicable job and, when broker scope is selected, `Broker ubuntu-24.04`.
+PR and merge-group checks contain no macOS job. The independent `Broker macOS` workflow
+(`.github/workflows/broker-macos.yml`) runs on pushes to `main` and manual dispatch,
+preserving macOS checks and the darwin/arm64 build artifact without blocking required CI.
+Require `CI`, never `Broker macos-15` separately.
 
 ## Releasing
 

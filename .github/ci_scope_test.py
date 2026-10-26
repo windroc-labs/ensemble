@@ -478,6 +478,7 @@ class Aggregate(unittest.TestCase):
                 "coverage",
                 "integration",
                 "mini-op",
+                "broker",
             )
         }
         result["changes"]["outputs"] = {
@@ -491,6 +492,7 @@ class Aggregate(unittest.TestCase):
         coverage = event == "pull_request" and not (docs or version)
         result["coverage"]["result"] = "success" if coverage else "skipped"
         result["integration"]["result"] = "skipped" if docs or version else "success"
+        result["broker"]["result"] = "success" if full else "skipped"
         return result
 
     def test_expected_full_upper_and_push_results_pass(self):
@@ -507,9 +509,18 @@ class Aggregate(unittest.TestCase):
         self.assertTrue(scope.gate(needs, "merge_group"))
         self.assertTrue(scope.gate(self.needs(full=False), "merge_group"))
 
-    def test_broker_matrix_is_checked_by_the_separate_api_gate(self):
+    def test_linux_broker_is_required_without_a_macos_result(self):
         needs = self.needs()
-        needs.pop("broker", None)
+        self.assertEqual(scope.gate(needs, "pull_request"), [])
+        self.assertEqual(scope.gate(needs, "merge_group"), [])
+        needs.pop("broker")
+        self.assertIn("broker: expected success, got None", scope.gate(needs, "pull_request"))
+
+    def test_linux_broker_must_run_when_broker_scope_is_selected(self):
+        needs = self.needs(full=False)
+        needs["changes"]["outputs"]["broker"] = "true"
+        self.assertIn("broker: expected success, got 'skipped'", scope.gate(needs, "pull_request"))
+        needs["broker"]["result"] = "success"
         self.assertEqual(scope.gate(needs, "pull_request"), [])
 
     def test_failure_cancel_and_unexpected_skip_always_fail(self):
@@ -525,6 +536,9 @@ class Aggregate(unittest.TestCase):
     def test_expected_skip_is_not_failure_or_cancel_and_unexpected_success_fails(self):
         for job, kwargs in (
             ("repository", {"full": False}),
+            ("broker", {"full": False}),
+            ("broker", {"full": False, "docs": True}),
+            ("broker", {"full": False, "version": True}),
             ("coverage", {"event": "push"}),
             ("integration", {"full": False, "docs": True}),
             ("unit", {"full": False, "docs": True}),
@@ -656,14 +670,11 @@ class Workflow(unittest.TestCase):
     def test_queue_group_and_broker_gate_wiring(self):
         self.assertIn("  merge_group:\n    types: [checks_requested]", WORKFLOW.read_text())
         ci = job("ci")
-        self.assertNotRegex(ci, r"needs:.*\bbroker\b")
+        self.assertRegex(ci, r"needs:.*\bbroker\b")
         self.assertIn("if: ${{ always() }}", ci)
-        self.assertIn("actions: write", ci)
-        self.assertIn(
-            "if: ${{ always() && steps.gate.outcome == 'success' && needs.changes.outputs.broker == 'true' }}",
-            ci,
-        )
-        self.assertIn("run: python3 .github/ci_broker.py", ci)
+        self.assertNotIn("actions: write", ci)
+        self.assertNotIn("ci_broker.py", ci)
+        self.assertIn("run: python3 .github/ci_scope.py --gate", ci)
         self.assertIn("github.event_name != 'push'", job("unit"))
         self.assertIn("github.event.merge_group.base_sha", job("coverage"))
         worker = WORKFLOW.with_name("worker-image.yml").read_text()
