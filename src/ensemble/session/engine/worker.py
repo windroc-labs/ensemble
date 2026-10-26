@@ -28,6 +28,7 @@ from ensemble.session.engine.types import (
     Access,
     Blocked,
     ConfigError,
+    EnvironmentSpec,
     Exited,
     Mode,
     SessionError,
@@ -77,7 +78,9 @@ def _text(value) -> bool:
 
 @dataclass(frozen=True)
 class WorkerState:
-    """What a worker's resume replays; token: its last launch's Process.token."""
+    """What a worker's resume replays; token: its last launch's Process.token; environment: its
+    start's, absent from a pre-upgrade worker.json.
+    """
 
     name: str
     sid: str
@@ -89,6 +92,7 @@ class WorkerState:
     events: str | None = None
     display: Display = None
     token: str | None = None
+    environment: EnvironmentSpec | None = None
 
     def __post_init__(self):
         checks = {
@@ -112,6 +116,8 @@ class WorkerState:
             "events": self.events is None or printable_abs(self.events),
             "display": self.display is None or _text(self.display),
             "token": self.token is None or _text(self.token),
+            "environment": self.environment is None
+            or isinstance(self.environment, EnvironmentSpec),
         }
         if bad := [name for name, ok in checks.items() if not ok]:
             raise ConfigError(f"worker {bad[0]}: {getattr(self, bad[0])!r:.80} is not valid")
@@ -120,16 +126,28 @@ class WorkerState:
     @classmethod
     def from_json(cls, data) -> WorkerState:
         names = {"version", *(name for name in cls.__dataclass_fields__)}
-        if not isinstance(data, dict) or set(data) != names or data["version"] != VERSION:
+        if (
+            not isinstance(data, dict)
+            or not names - {"environment"} <= set(data) <= names
+            or data["version"] != VERSION
+        ):
             raise ConfigError(f"want version {VERSION} with exactly {', '.join(sorted(names))}")
         if not isinstance(data["flags"], list) or not isinstance(data["env"], dict):
             raise ConfigError("flags: want a list; env: want an object")
         fields = {k: v for k, v in data.items() if k != "version"}
-        return cls(**{**fields, "flags": tuple(data["flags"])})
+        environment = fields.get("environment")
+        if environment is not None:
+            environment = EnvironmentSpec.from_fields(environment)
+        return cls(**{**fields, "flags": tuple(data["flags"]), "environment": environment})
 
     def to_json(self) -> str:
         data = {name: getattr(self, name) for name in self.__dataclass_fields__}
-        data.update(version=VERSION, flags=list(self.flags), env=dict(self.env))
+        data.update(
+            version=VERSION,
+            flags=list(self.flags),
+            env=dict(self.env),
+            environment=None if self.environment is None else self.environment.persisted(),
+        )
         return json.dumps(data, indent=2, sort_keys=True) + "\n"
 
     def workdir(self) -> str:
@@ -162,6 +180,7 @@ class WorkerState:
             events=self.events,
             flags=self.flags,
             env=self.env,
+            environment=self.environment,
         )
 
 
