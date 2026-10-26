@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Docker broker protocol 21",
+  "title": "Docker broker protocol 22",
   "$comment": "Changes to the protocol format defined by this schema require bumping Version in src/broker/internal/protocol/protocol.go.",
   "$ref": "#/$defs/manifest",
   "$defs": {
@@ -413,7 +413,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "21"
+          "const": "22"
         }
       },
       "required": [
@@ -574,6 +574,9 @@
         },
         "client_update": {
           "$ref": "#/$defs/client_update"
+        },
+        "audit_warning": {
+          "$ref": "#/$defs/audit_warning"
         }
       },
       "required": [
@@ -643,6 +646,9 @@
         },
         "removed": {
           "type": "boolean"
+        },
+        "audit_warning": {
+          "$ref": "#/$defs/audit_warning"
         }
       },
       "required": [
@@ -744,6 +750,9 @@
               "$ref": "#/$defs/time"
             }
           ]
+        },
+        "audit_warning": {
+          "$ref": "#/$defs/audit_warning"
         }
       },
       "required": [
@@ -761,6 +770,9 @@
           "prefixItems": [
             {
               "const": "status"
+            },
+            {
+              "const": "--cleanup"
             }
           ],
           "items": false,
@@ -812,6 +824,9 @@
             "default"
           ],
           "additionalProperties": false
+        },
+        "audit_warning": {
+          "$ref": "#/$defs/audit_warning"
         }
       },
       "required": [
@@ -965,6 +980,9 @@
               }
             }
           ]
+        },
+        "audit_warning": {
+          "$ref": "#/$defs/audit_warning"
         }
       },
       "required": [
@@ -1346,6 +1364,31 @@
             }
           }
         }
+      ],
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "audit_warning"
+            ]
+          },
+          "then": {
+            "properties": {
+              "error": {
+                "properties": {
+                  "command": {
+                    "enum": [
+                      "start",
+                      "refresh",
+                      "close",
+                      "status"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
       ]
     },
     "github_login": {
@@ -1629,6 +1672,9 @@
         "holder"
       ],
       "additionalProperties": false
+    },
+    "audit_warning": {
+      "const": "audit_write_failed"
     }
   }
 }

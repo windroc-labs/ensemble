@@ -610,6 +610,33 @@ class IssueBounce(Base):
                     ],
                 )
 
+    def test_a_ref_bounce_names_the_ref_line(self):
+        reason = "Ref: 'gone': no such branch or tag in acme/x"
+        gql = Gql(issue=None)
+        writeback.bounce(self.ctx(gql=gql), issue("Ref: gone"), Invalid(reason, line="Ref"))
+        self.assertEqual(
+            gql.calls,
+            [
+                sub(HUMANS[0]),
+                sub(HUMANS[1]),
+                comment(
+                    f"Question: repo check failed: {reason}. Fix the description's `Ref:` line, "
+                    "then move this issue back to Todo."
+                ),
+                reread(),
+                move("in_review"),
+            ],
+        )
+        gql = Gql(issue=self.src(), states=self.DONE)
+        writeback.bounce(self.ctx(gql=gql), issue(HANDOFF), Invalid(reason, line="Ref"))
+        self.assertIn(
+            comment(
+                f"Repo check failed: {reason}. To build it, move PRD-3 to Handoff again with a "
+                "comment `Ref: <branch or tag>` naming the ref."
+            ),
+            gql.calls,
+        )
+
     def test_question_subscribe_failure_noted(self):
         gql = Gql(
             fail=lambda name, v: False if name == "subscribe" and v["e"] == HUMANS[0] else None
@@ -2734,3 +2761,151 @@ class RecoverReplay(Events):
             sorted(os.listdir(self.workdir)),
             sorted([*before, writeback.LEDGER, writeback.LOCK]),
         )
+
+
+DELIVERABLE_FLOW = board_ids.PACKAGED_FLOW.replace(
+    "files = true\n", "files = true\ndeliverable = true\n"
+)
+
+REPORT = (
+    "# Verification\n\nPassed.\n\n```bash\nssh mini echo ok\n```\n\n"
+    + "".join(f"- step {n}: `check {n}` ok\n" for n in range(300))
+    + "\n```text\nend of log\n```\n"
+)
+
+
+class DeliverableReport(Base):
+    """A deliverable stage's done outcome: its summary unquoted, then the saved report (FR-76)."""
+
+    DONE = Outcome(status="done", title="ENG-7: x", summary="Passed: all checks.", url=PR)
+    LEAD = "Build ready: Passed: all checks."
+
+    def setUp(self):
+        super().setUp()
+        config.TASKS.load(board_ids.workflow_file(DELIVERABLE_FLOW))
+
+    def comments(self, gql):
+        return [c for c in gql.calls if c[0] == "comment"]
+
+    def test_the_report_follows_the_done_comment_byte_for_byte(self):
+        self.assertGreater(len(REPORT.encode()), 4096)
+        gql = Gql()
+        ctx = self.ctx(gql=gql)
+        self.write(ctx, "run/out.md", REPORT)
+        self.assertTrue(writeback.finish(ctx, self.DONE))
+        calls = expect(body=self.LEAD, state="in_review", attach=PR, attach_title="ENG-7: x")
+        calls.insert(calls.index(post("comment", self.LEAD)) + 1, post("deliverable", REPORT))
+        self.assertEqual(gql.calls, calls)
+        self.assertEqual(
+            self.steps(ctx),
+            {SID: ["comment", "deliverable", f"attach:{PR}", "move:in_review", "outcome"]},
+        )
+
+    def test_a_role_with_a_docs_dir_posts_its_document(self):
+        gql = Gql()
+        ctx = replace(self.ctx(gql=gql), document=os.path.join(self.tmp, "docs", "document.md"))
+        os.makedirs(os.path.dirname(ctx.document))
+        with open(ctx.document, "w") as f:
+            f.write(REPORT)
+        self.write(ctx, "run/out.md", "not this")
+        self.assertTrue(writeback.finish(ctx, self.DONE))
+        self.assertEqual(
+            self.comments(gql), [post("comment", self.LEAD), post("deliverable", REPORT)]
+        )
+
+    def test_no_report_notes_why_in_the_done_comment(self):
+        for name, make, reason in (
+            ("missing", lambda _ctx: None, "FileNotFoundError"),
+            ("empty", lambda ctx: self.write(ctx, "run/out.md", " \n"), "empty"),
+            (
+                "too big",
+                lambda ctx: self.write(ctx, "run/out.md", "x" * 1_000_001),
+                "ValueError: over 1000000 bytes",
+            ),
+        ):
+            with self.subTest(name):
+                gql = Gql()
+                ctx = self.ctx(gql=gql)
+                make(ctx)
+                self.assertTrue(writeback.finish(ctx, self.DONE))
+                [(_, sent)] = self.comments(gql)
+                self.assertTrue(
+                    sent["b"].startswith(f"{self.LEAD}\n\nCould not post the report `out.md`: "),
+                    sent["b"],
+                )
+                self.assertIn(reason, sent["b"])
+                self.assertEqual(gql.calls[-2:], [reread(), move("in_review")])
+
+    def test_failed_and_needs_input_write_back_as_without_the_key(self):
+        for o in (
+            Outcome(status="failed", title="ENG-7: x", summary="mini unreachable", url=PR),
+            Outcome(status="needs_input", title="ENG-7: x", summary="?", questions=["Which ref?"]),
+        ):
+            with self.subTest(o.status):
+                calls = []
+                for flow in (DELIVERABLE_FLOW, board_ids.PACKAGED_FLOW):
+                    config.TASKS.load(board_ids.workflow_file(flow))
+                    gql = Gql()
+                    ctx = self.ctx(gql=gql)
+                    self.write(ctx, "run/out.md", REPORT)
+                    self.assertTrue(writeback.finish(ctx, o))
+                    calls.append(gql.calls)
+                self.assertEqual(calls[0], calls[1])
+
+    def test_a_failed_report_post_stops_before_the_move_and_a_retry_posts_it_once(self):
+        broken = Gql(
+            fail=lambda name, v: (
+                LinearError("linear api error: down")
+                if name == "comment" and v.get("b") == REPORT
+                else None
+            )
+        )
+        ctx = self.ctx(gql=broken)
+        self.write(ctx, "run/out.md", REPORT)
+        self.assertFalse(writeback.finish(ctx, self.DONE))
+        self.assertNotIn(move("in_review"), broken.calls)
+        self.assertEqual(self.steps(ctx), {SID: ["comment"]})
+        again = Gql()
+        self.assertTrue(writeback.finish(replace(ctx, tracker=tracker(again)), self.DONE))
+        self.assertEqual(self.comments(again), [post("deliverable", REPORT)])
+
+
+class DeliverableReplay(Events):
+    """Recover posts a deliverable stage's report from the run dir: the run record's outcome
+    carries no deliverable.
+    """
+
+    def setUp(self):
+        super().setUp()
+        config.TASKS.load(board_ids.workflow_file(DELIVERABLE_FLOW))
+        os.makedirs(os.path.join(self.workdir, "run"), exist_ok=True)
+        with open(os.path.join(self.workdir, "run", "out.md"), "w") as f:
+            f.write(REPORT)
+
+    def replay(self):
+        data = outcome_data()
+        return writeback.replay(
+            self.cfg,
+            RUN_ISSUE,
+            RUN_SID,
+            Outcome(**data | {"status": OutcomeStatus(data["status"])}),
+            accounts=self.accounts(),
+            now=lambda: next(self.now),
+        )
+
+    def posted(self):
+        return [
+            v["b"]
+            for service, op, v in self.linear.calls
+            if service == CLAIM_KEY and op == "comment"
+        ]
+
+    def test_recover_posts_the_report_from_the_run_dir(self):
+        self.assertTrue(self.deliver(delegate_event("begun")))
+        self.assertTrue(self.replay())
+        self.assertEqual(self.posted(), ["Build ready: Ready.", REPORT])
+
+    def test_a_callback_then_a_replay_post_the_report_once(self):
+        self.assertTrue(self.deliver(self.finished(outcome=outcome_data(deliverable=REPORT))))
+        self.assertIsNone(self.replay())
+        self.assertEqual(self.posted(), ["Build ready: Ready.", REPORT])

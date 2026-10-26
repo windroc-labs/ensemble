@@ -2,6 +2,7 @@
 
 import io
 import json
+import logging
 import os
 import stat
 import tempfile
@@ -68,6 +69,68 @@ class PluginRootTest(Case):
 
 
 class ResponseTest(Case):
+    def test_a_warning_sink_failure_keeps_the_success(self):
+        def unavailable(_message):
+            raise OSError("AUDIT_SINK_SECRET_SENTINEL")
+
+        output = io.StringIO()
+        handler = logging.StreamHandler(output)
+        logger = logging.getLogger("session")
+        logger.addHandler(handler)
+        self.addCleanup(logger.removeHandler, handler)
+        response = {**data("close-output.json"), "audit_warning": "audit_write_failed"}
+        result = Broker(FakeBroker((0, json.dumps(response), "")), warning=unavailable).close(
+            CONTAINER
+        )
+        self.assertIs(result, response["removed"])
+        self.assertIn("audit_write_failed", output.getvalue())
+        self.assertNotIn("AUDIT_SINK_SECRET_SENTINEL", output.getvalue())
+
+    def test_audit_warning_preserves_success_and_failure(self):
+        output = io.StringIO()
+        handler = logging.StreamHandler(output)
+        logger = logging.getLogger("session")
+        logger.addHandler(handler)
+        self.addCleanup(logger.removeHandler, handler)
+        for fixture in ("start-output.json", "refresh-output.json", "close-output.json"):
+            response = {**data(fixture), "audit_warning": "audit_write_failed"}
+            definition = fixture.removesuffix(".json").replace("-", "_")
+            _, call = CALLS[definition]
+            fake = FakeBroker((0, json.dumps(response), ""))
+            result = call(Broker(fake))
+            self.assertIsNotNone(result)
+            self.assertEqual(len(fake.calls), 1)
+        response = {
+            **data("error-start-cleanup-failed.json"),
+            "audit_warning": "audit_write_failed",
+        }
+        fake = FakeBroker((response["exit_code"], "", json.dumps(response)))
+        with self.assertRaises(BrokerError) as caught:
+            Broker(fake).start(MANIFEST, clients=KEYS)
+        expected = response["error"]
+        self.assertEqual(caught.exception.code, expected["code"])
+        self.assertEqual(caught.exception.cleanup, expected["cleanup"])
+        self.assertEqual(caught.exception.container, expected.get("container"))
+        self.assertEqual(caught.exception.cause, expected.get("cause"))
+        self.assertEqual(output.getvalue().count("audit_write_failed"), 4)
+
+    def test_invalid_audit_warning_is_rejected_without_leaking_its_value(self):
+        for value in (None, False, [], {}, "SECRET_AUDIT_SENTINEL"):
+            for failed in (False, True):
+                response = data(
+                    "error-start-cleanup-failed.json" if failed else "start-output.json"
+                )
+                response["audit_warning"] = value
+                wire = json.dumps(response)
+                fake = FakeBroker((response["exit_code"], "", wire) if failed else (0, wire, ""))
+                with (
+                    self.subTest(value=value, failed=failed),
+                    self.assertRaises(SessionError) as caught,
+                ):
+                    Broker(fake).start(MANIFEST, clients=KEYS)
+                self.assertNotIsInstance(caught.exception, BrokerError)
+                self.assertNotIn("SECRET_AUDIT_SENTINEL", str(caught.exception))
+
     def test_provider_probe_response_is_only_a_boolean(self):
         for value in (True, False):
             runner = FakeBroker((0, json.dumps({"available": value}), ""))

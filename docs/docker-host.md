@@ -241,6 +241,17 @@ It prints the container name (`C` below) and client versions.
 
 Every `start`, `refresh` and `close` appends to `~/Library/Logs/ensemble/broker.jsonl`, recording credentials issued, renewed, withdrawn or revoked, never a token or key. Past 10 MiB it rotates to `broker.jsonl.1`. An unwritable log may lose records. OpenCode provider keys have no audit line. No container mounts it.
 
+Audit persistence failure adds `audit_warning: "audit_write_failed"` to the broker's JSON
+response, alongside the original success fields or error envelope. The operation's exit code,
+result and cleanup details still apply: do not repeat a successful start because its audit
+write failed. The host logs a fixed warning; interactive maintenance also writes
+`credential_audit_warning` to the session event file. Audit records do not replace credential
+recovery storage.
+
+`ensemble-broker status` only reads credential status and the stored revocation backlog; it
+emits no audit. `ensemble-broker status --cleanup` explicitly retries that backlog and audits
+resolved entries, preserving the former status behavior. See [credential status](credentials.md).
+
 ```sh
 jq 'select(.session=="NAME")' ~/Library/Logs/ensemble/broker.jsonl
 ```

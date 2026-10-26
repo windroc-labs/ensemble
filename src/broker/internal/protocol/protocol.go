@@ -8,7 +8,9 @@ import (
 	"unicode/utf8"
 )
 
-const Version = "21"
+const Version = "22"
+
+const AuditWriteFailed = "audit_write_failed"
 
 type Code string
 
@@ -89,6 +91,7 @@ type Error struct {
 	CleanupError string  `json:"cleanup_error,omitempty"`
 	Container    string  `json:"container,omitempty"`
 	Holder       *Holder `json:"holder,omitempty"`
+	AuditWarning string  `json:"-"` // independent envelope metadata, never part of the operation error
 }
 
 func New(code Code, message string) *Error {
@@ -149,9 +152,10 @@ func Envelope(command string, e *Error) []byte {
 		clean.CleanupError = ""
 	}
 	data, err := json.Marshal(struct {
-		ExitCode int  `json:"exit_code"`
-		Error    wire `json:"error"`
-	}{Exit(clean.Code), wire{command, &clean}})
+		ExitCode     int    `json:"exit_code"`
+		Error        wire   `json:"error"`
+		AuditWarning string `json:"audit_warning,omitempty"`
+	}{Exit(clean.Code), wire{command, &clean}, clean.AuditWarning})
 	if err != nil {
 		panic(err)
 	}

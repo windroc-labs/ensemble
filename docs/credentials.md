@@ -58,7 +58,13 @@ GitHub on the Docker Host needs no per-run login: `<B> login github ensemble-bot
 | Stored at | broker items `ensemble-tokens` (per container) and `ensemble-revocations` (backlog); the container's `/run/ensemble/secrets/github/<owner>` (0400, tmpfs) |
 | Readers | **three-way readers** |
 | Lifetime | 1 hour; each session renews them 10 minutes before the first expires |
-| Revoke | `close` revokes them before removing the container; a failed revoke is retried at the next start, close or status until it expires; `<B> status` lists pending ones |
+| Revoke | `close` attempts revocation before removing the container, even if revocation fails; backlog entries retry at the next start, close or `status --cleanup` until revoked or expired; `<B> status` lists pending backlog entries without changing them |
+
+If the backlog cannot be read or written and direct revocation fails, the broker retains the original
+`ensemble-tokens` record and reports pending cleanup. Retry `<B> close --container <container>` with the original container
+name, even after the container is gone. `status` and `status --cleanup` do not discover these retained records. Unreadable token
+records also stay in place for recovery; fix their access and retry close. A record is removed only after
+confirmed revocation, confirmed expiry or a successful durable transfer to the backlog.
 
 ### Linear harness key
 
@@ -114,6 +120,11 @@ the item must trust this broker, allow a read without a dialog, and hold a nonem
 This does not contact Claude to check expiry or revocation. The installer checks this status before
 requesting `claude setup-token`, even without its saved login state. Codex already skips login when
 its status is `ready`.
+
+Status is read-only: it lists the stored GitHub revocation backlog, including expired entries,
+without revoking tokens, changing credential records or writing audit events. Run
+`ensemble-broker status --cleanup` to retry revocation and remove resolved or expired backlog
+entries. This explicit option preserves the former status behavior; the installer uses it.
 
 If a broker login reports `keychain status -25244` (`errSecInvalidOwnerEdit`), another process
 owns the item's access controls. In Keychain Access, select the login keychain and delete only
@@ -173,7 +184,7 @@ shows.
 | `ensemble-claude` | account name (`default` or `<name>`) | `[session.clients.claude.accounts.<name>]` | that Claude account's setup-token | `<B> login claude [<name>]` | the broker |
 | `ensemble-bot` | App ID | `[session.hosts.docker.github] app` | App private key | the user; access set by `<B> login github ensemble-bot` | the broker, once logged in |
 | `ensemble-github-users` | `ensemble-bot` | — | the App's slug and its bot user's ID, for git identity (not a secret) | `<B> login github ensemble-bot` | the broker |
-| `ensemble-tokens` | container name | — | that container's installation tokens and expiries | `<B> start`, `refresh`; removed by `close` | the broker |
+| `ensemble-tokens` | container name | — | that container's installation tokens and expiries, including retained recovery material | `<B> start`, `refresh`; `close` removes only safely retired entries | the broker |
 | `ensemble-revocations` | `pending` | — | tokens awaiting revocation | `<B> close`, `refresh` failures | the broker |
 | `ensemble-codex` | `auth` | — | the full Codex login | `<B> login codex`; renewals at `start`, `refresh` | the broker |
 | `ensemble-opencode` | provider name | `[session.clients.opencode.providers.<name>]` | that OpenCode provider's API key | `<B> login opencode <name>` | the broker |
@@ -202,7 +213,7 @@ for s in ensemble-claude ensemble-bot ensemble-github-users ensemble-tokens ense
 An item must exist to be measured (`exists=0`); `exists=44` means absent: record `absent, not measured` and make it
 first. `ensemble-claude`, `ensemble-github-users`, `ensemble-codex` and `ensemble-opencode` exist after their `login`; `ensemble-bot` once
 the user stores the key; `ensemble-tokens` while a Docker session runs; `ensemble-revocations` after a `close` with the
-network off, until the next start, close or status online.
+network off, until the next start, close or `status --cleanup` online.
 
 Pass: `exists=0`, `exit=` non-zero (142 when the alarm stops it, 128 when the dialog is denied) and a byte count of `0`. Click Deny on any dialog, never Always
 Allow; if Always Allow was clicked, `/usr/bin/security` now reads the item: rerun the `login` that writes it

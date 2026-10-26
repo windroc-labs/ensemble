@@ -45,7 +45,7 @@ class DockerBrokerProtocol(Case):
         Draft202012Validator.check_schema(schema)
         index = json.loads((PROTOCOL / "fixtures/index.json").read_text())
         self.assertTrue(index["cases"])
-        self.assertEqual(index["protocol_version"], "21")
+        self.assertEqual(index["protocol_version"], "22")
         names = [case["file"] for case in index["cases"]]
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual(

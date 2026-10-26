@@ -152,11 +152,25 @@ func TestStatusWritesOnlyRetryLines(t *testing.T) {
 	}
 }
 
-func TestFlushIgnoresAppendError(t *testing.T) {
+func TestFlushReportsAppendError(t *testing.T) {
 	r, s := recorder("close", ctr)
 	s.err = errors.New("disk full")
-	r.Flush(nil) // no panic, no output: the caller's result stands
-	if s.calls != 1 {
+	if err := r.Flush(nil); !errors.Is(err, s.err) || s.calls != 1 {
 		t.Fatal(s.calls)
+	}
+	if err := r.Flush(nil); err != nil || s.calls != 1 {
+		t.Fatal("a second flush must not retry or create another warning")
+	}
+}
+
+func TestFlushNoWriteHasNoError(t *testing.T) {
+	var r *Recorder
+	if err := r.Flush(nil); err != nil {
+		t.Fatal(err)
+	}
+	r, s := recorder("status", "")
+	s.err = errors.New("must not be called")
+	if err := r.Flush(nil); err != nil || s.calls != 0 {
+		t.Fatal("empty flush attempted a write")
 	}
 }
