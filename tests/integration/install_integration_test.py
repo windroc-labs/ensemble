@@ -2678,9 +2678,7 @@ class InstallTest(Case):
     def test_installer_claude_adapters_follow_an_update(self):
         commands = self.legacy_command_package()
         self.assert_ok(self.opencode_only())
-        self.assert_ok(
-            self.again("--clients", "claude,opencode", "--no-docker", answers=[(WRITE_Q, "y")])
-        )
+        self.assert_ok(self.again("--clients", "claude,opencode", "--no-docker"))
         self.assertEqual(
             json.loads(Path(self.ensemble, "plugin-root").read_text())["client"], "claude"
         )
