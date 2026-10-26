@@ -334,6 +334,23 @@ class Launch(CliCase):
                 self.assertTrue(line.startswith("crew: ensemble-"), line)
                 self.assertTrue(line.endswith(f": {reason}"), line)
 
+    def test_a_busy_role_start_exits_75_and_leaves_no_entry(self):
+        busy = "delegate: busy: lock dummy-lock is held by ensemble-x-1 (owner x)"
+        result, stdout, stderr = self.start(
+            "role", "--manager", "mgr", "pm", code=75, output="", stderr=f"{busy}\n"
+        )
+        self.assertEqual((result, stdout, self.roster.entries()), (75, "", {}))
+        [line] = stderr.splitlines()
+        self.assertTrue(line.startswith("crew: ensemble-delegate run --role pm "), line)
+        self.assertTrue(line.endswith(f": {busy}"), line)
+
+    def test_only_a_role_start_maps_exit_75(self):
+        for verb, key in (("worker", "w1"), ("issue", "TASK-12")):
+            with self.subTest(verb=verb):
+                result, stdout, _ = self.start(verb, "--manager", "mgr", key, code=75, output="")
+                self.assertEqual((result, stdout), (1, ""))
+                self.assertEqual(self.roster.entries()[key].state.value, "lost")
+
     def test_other_failures_keep_lost_and_generic_run_keeps_exit_two(self):
         for arguments, code, output in (
             (("worker", "--manager", "mgr", "a"), 1, ""),

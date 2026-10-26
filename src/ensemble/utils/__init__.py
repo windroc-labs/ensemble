@@ -75,6 +75,7 @@ from ensemble.utils.paths import (
 from ensemble.utils.process_control import ProcessControl
 from ensemble.utils.quota import exhausted, summary
 from ensemble.utils.record import (
+    EXIT_BUSY,
     Display,
     LayerCommand,
     OutcomeStatus,
@@ -126,6 +127,7 @@ __all__ = [
     "DOCKER_STATE",
     "Display",
     "EVENTS_ENV",
+    "EXIT_BUSY",
     "GUARD",
     "GitError",
     "Invalid",

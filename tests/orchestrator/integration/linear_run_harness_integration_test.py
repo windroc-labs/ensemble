@@ -39,7 +39,6 @@ class HarnessRun(HarnessCase):
         )
         self.cfg = Config(
             task_tiers={},
-            client_max_runs={},
             usage_limit={},
             roles={},
             local_clones={},

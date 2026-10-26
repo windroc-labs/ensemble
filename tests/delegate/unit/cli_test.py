@@ -19,8 +19,8 @@ from ensemble.delegate.composer.base import TEAM
 from ensemble.delegate.engine.harness_delegate import HarnessDelegate
 from ensemble.delegate.engine.runner import STOP_LIMIT
 from ensemble.delegate.engine.state import RunState
-from ensemble.delegate.engine.types import Layout
-from ensemble.session import NotShowable, SessionError
+from ensemble.delegate.engine.types import Layout, Result
+from ensemble.session import NotShowable, SessionBusy, SessionError
 from ensemble.utils import Record, Status
 from tests.delegate.case import Case, committed
 from tests.delegate.cli_case import (
@@ -52,6 +52,7 @@ class Detaching:
     made: list = []
     environments: list = []
     failure: Exception | None = None
+    construct_failure: Exception | None = None
 
     @classmethod
     def create(cls, role, spec, **placement):
@@ -62,6 +63,8 @@ class Detaching:
         Detaching.environments.append(dict(os.environ))
         if isinstance(Detaching.failure, ConfigError):
             raise Detaching.failure
+        if Detaching.construct_failure is not None:
+            raise Detaching.construct_failure
 
     def detach(self, *, outer=None):
         if Detaching.failure is not None:
@@ -90,6 +93,7 @@ class Detach(Base):
         super().setUp()
         self.events = os.path.join(self.tmp, "events")
         Detaching.made, Detaching.environments, Detaching.failure = [], [], None
+        Detaching.construct_failure = None
         self.detaching = True
 
     def delegate_cls(self):
@@ -278,6 +282,17 @@ class Detach(Base):
             with self.subTest(failure=failure):
                 Detaching.failure = failure
                 self.assertEqual(self.detaches(), (code, "", f"delegate: {failure}\n"))
+
+    def test_a_busy_create_or_start_exits_75_naming_the_holder(self):
+        busy = SessionBusy("dummy-lock", "ensemble-x-1 (owner x)")
+        for attr in ("construct_failure", "failure"):
+            with self.subTest(attr=attr):
+                Detaching.construct_failure = Detaching.failure = None
+                setattr(Detaching, attr, busy)
+                self.assertEqual(
+                    self.detaches(),
+                    (75, "", "delegate: busy: lock dummy-lock is held by ensemble-x-1 (owner x)\n"),
+                )
 
     def test_on_event_is_split_once_into_the_callback_argv_never_a_shell(self):
         code, out, err = self.detaches("--on-event", "writeback --issue 'A B' $X;rm *")
@@ -930,6 +945,19 @@ class Configures(Base):
         self.assertIn("[clients.fake]", err)
         self.assertEqual((self.launches(), os.path.exists(self.work)), ([], False))
 
+    def test_busy_exits_75_naming_the_holder(self):
+        busy = SessionBusy("dummy-lock", "ensemble-x-1 (owner x)")
+        line = "delegate: busy: lock dummy-lock is held by ensemble-x-1 (owner x)\n"
+        with mock.patch.object(self.driver, "preflight", side_effect=busy):
+            self.assertEqual(self.runs(), (75, "", line))
+        self.assertFalse(os.path.exists(self.work))
+        self.ran = Result(75, None, str(busy))
+        code, out, err = self.runs()
+        self.assertEqual((code, out), (75, ""))
+        self.assertTrue(err.endswith(line), err)
+        self.ran = Result(1, None, "the agent run returned no outcome")
+        self.assertEqual(self.runs()[0], 1)
+
     def test_an_unknown_harness_host_or_delegates_key_exits_2_and_starts_nothing(self):
         for text, want in (
             (
@@ -1174,14 +1202,112 @@ class Prompt(Case):
         self.assertFalse(os.path.exists(self.work))
 
 
+class Open(Base):
+    def setUp(self):
+        super().setUp()
+        self.config = Path(self.ensemble, "config.local.toml")
+        self.config.write_text(
+            '[session.hosts]\ndefault = "docker"\n'
+            '[delegate.environments.dummy]\nimage = "dummy-env:test"\nlock = "dummy-lock"\n'
+        )
+        self.opened = self.enterContext(
+            mock.patch("subprocess.run", return_value=types.SimpleNamespace(returncode=0))
+        )
+
+    def test_open_has_no_role_and_passes_optional_values_and_launcher_identity(self):
+        with mock.patch.dict(os.environ, {"ENSEMBLE_SID": SID, "ENSEMBLE_EVENTS": "/events"}):
+            self.assertEqual(
+                self.cli(
+                    "open",
+                    "dummy-1",
+                    "--environment",
+                    "dummy",
+                    "--client",
+                    "codex",
+                    "--account",
+                    "work",
+                    "--cwd",
+                    self.tmp,
+                    "--display",
+                    "none",
+                ),
+                (0, "", ""),
+            )
+            self.assertNotIn("ENSEMBLE_SID", os.environ)
+            self.assertNotIn("ENSEMBLE_EVENTS", os.environ)
+        argv = self.opened.call_args.args[0]
+        self.assertEqual(argv[5:7], ["start", "dummy-1"])
+        for key, value in (
+            ("--client", "codex"),
+            ("--cwd", self.tmp),
+        ):
+            self.assertEqual(argv[argv.index(key) + 1], value)
+        self.assertIn("--account=work", argv)
+        self.assertIn("--display=none", argv)
+        env = self.opened.call_args.kwargs["env"]
+        self.assertEqual((env["ENSEMBLE_SID"], env["ENSEMBLE_EVENTS"]), (SID, "/events"))
+        self.assertFalse(os.path.exists(self.work))
+
+    def test_open_preserves_the_session_status(self):
+        for code in (0, 1, 2, 75):
+            with self.subTest(code=code):
+                self.opened.return_value = types.SimpleNamespace(returncode=code)
+                self.assertEqual(
+                    self.cli("open", "dummy-1", "--environment", "dummy"), (code, "", "")
+                )
+
+    def test_config_errors_and_spawn_errors_are_reported_cleanly(self):
+        self.opened.side_effect = OSError("session unavailable")
+        self.assertEqual(
+            self.cli("open", "dummy-1", "--environment", "dummy"),
+            (1, "", "delegate: session unavailable\n"),
+        )
+        self.opened.reset_mock()
+        code, out, err = self.cli("open", "dummy-1", "--environment", "unknown")
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("unknown", err)
+        self.config.write_text("[")
+        self.assertEqual(self.cli("open", "dummy-1", "--environment", "dummy")[:2], (2, ""))
+        self.opened.assert_not_called()
+
+    def test_invalid_names_missing_unknown_empty_and_repeated_options_start_nothing(self):
+        for argv in (
+            ("open", "none", "--environment", "dummy"),
+            ("open", "a.b", "--environment", "dummy"),
+            ("open", "--environment", "dummy", "--", "-worker"),
+            ("open", "dummy-1"),
+            ("open", "dummy-1", "--environment", "dummy", "--role", "engineer"),
+            *(
+                ("open", "dummy-1", "--environment", "dummy", flag, "")
+                for flag in ("--client", "--account", "--cwd", "--display", "--environment")
+            ),
+            *(
+                ("open", "dummy-1", "--environment", "dummy", flag, "x", flag, "y")
+                for flag in ("--client", "--account", "--cwd", "--display", "--environment")
+            ),
+        ):
+            with self.subTest(argv=argv):
+                self.assertEqual(self.cli(*argv)[:2], (2, ""))
+        self.opened.assert_not_called()
+
+    def test_nested_open_is_refused_and_help_starts_nothing(self):
+        with mock.patch.dict(os.environ, {"ENSEMBLE_AGENT_SESSION": "1"}):
+            code, out, err = self.cli("open", "dummy-1", "--environment", "dummy")
+            self.assertEqual((code, out), (2, ""))
+            self.assertIn("refused inside an agent session", err)
+            self.assertEqual(self.cli("open", "--help")[0], 0)
+        self.opened.assert_not_called()
+
+
 class Commands(Base):
-    def test_help_lists_exactly_the_ten_subcommands(self):
+    def test_help_lists_all_subcommands(self):
         code, out, err = self.cli("--help")
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(
             re.search(r"\{([a-z,-]+)\}", out)[1].split(","),
             [
                 "run",
+                "open",
                 "status",
                 "content",
                 "outcome",
@@ -1505,6 +1631,7 @@ class AdhocWorkdir(Base):
 
 HELP_COMMANDS = [
     "run",
+    "open",
     "status",
     "content",
     "outcome",
@@ -1575,7 +1702,7 @@ class HelpContracts(Case):
 
     def test_every_query_explains_cardinality_and_record_input(self):
         for name in HELP_COMMANDS:
-            if name in {"run", "prompt"}:
+            if name in {"run", "open", "prompt"}:
                 continue
             with self.subTest(name=name):
                 text = self.help(name)

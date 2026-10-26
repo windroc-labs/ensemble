@@ -63,6 +63,23 @@ class Case(case.Case):
 
 
 class Parse(Case):
+    def test_legacy_busy_rows_neither_offset_attempts_nor_survive_trim(self):
+        start = json.loads(row("start", "TASK-1", "s", minutes=30))
+        busy = {
+            "kind": "busy",
+            "ts": stamp(NOW),
+            "issue": "TASK-1",
+            "sid": "s",
+            "cancels": {"kind": "start", "ts": start["ts"]},
+            "attempt": 1,
+        }
+        self.write([json.dumps(start), json.dumps(busy), row("resume", "TASK-1", "s")])
+        self.assertEqual(len(runs.parse_log(self.log)), 2)
+        runs.trim(self.log, now=NOW)
+        self.assertEqual(
+            [json.loads(line)["kind"] for line in self.read().splitlines()], ["start", "resume"]
+        )
+
     def test_parse_log_is_utc_entries_in_file_order(self):
         self.assertEqual(runs.parse_log(os.path.join(self.tmp, "nope")), [])
         self.write(

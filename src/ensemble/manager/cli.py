@@ -11,8 +11,8 @@ from pathlib import Path
 
 from ensemble.manager import Crew, Roster, RosterError, Spec, State
 from ensemble.manager.engine.holder import Holder
-from ensemble.manager.engine.types import Lease, StaleHolder, StatusError
-from ensemble.utils import STATE, LayerCommand, nested_start, printable
+from ensemble.manager.engine.types import Lease, StaleHolder, StartBusy, StatusError
+from ensemble.utils import EXIT_BUSY, STATE, LayerCommand, nested_start, printable
 
 LEASE_FREE = ("env", "-u", "ENSEMBLE_HOLDER_ID", "-u", "ENSEMBLE_HOLDER_GENERATION")
 ENDED = "this environment's ENSEMBLE_HOLDER_ID/ENSEMBLE_HOLDER_GENERATION name an ended holder"
@@ -304,7 +304,8 @@ Prerequisites and effects:
   user-started commander. Help still works. State: ~/.ensemble/managers/NAME/.
   run/worker/reopen/issue/role give starters empty stdin; supply literal input.
   hold instead inherits the caller's input for its foreground command.
-  Exit 0: success; 2: usage/invalid value; 1: operational/lease failure.
+  Exit 0: success; 2: usage/invalid value; 1: operational/lease failure;
+  75: role run busy, a lock held.
   hold instead propagates its child's status, signals as 128 + signal number.
   Scalar options use the last value; boolean flags may repeat.
 
@@ -798,6 +799,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     try:
         return args.func(args)
+    except StartBusy as error:
+        _report_error(error)
+        return EXIT_BUSY
     except ValueError as error:
         _report_error(error)
         return 2

@@ -311,6 +311,8 @@ class HarnessDelegate(Delegate):
     def _preflight(self) -> None:
         try:
             self.driver.preflight(self._state.plan.session)
+        except SessionBusy as error:
+            raise SessionError(str(error)) from None
         except (SessionConfigError, SessionError) as error:
             raise ConfigError(str(error)) from None
 
@@ -1040,7 +1042,7 @@ class HarnessDelegate(Delegate):
 
     def _started(self, state: _State) -> None:
         """Tui: waits, outside the mutex, until this run's agent session has its client running;
-        else SessionError naming why (SessionBusy: its result names its lock held), its harness and
+        else SessionError naming why (a held lock names its holder), its harness and
         agent session closed. A Host failure or the passed start limit is saved as the attempt's
         start_failure before the close, and the harness then ends with it; a harness that ended
         first is not. A same-named session of another sid is not this run's.
@@ -1088,7 +1090,7 @@ class HarnessDelegate(Delegate):
             with contextlib.suppress(SessionError):
                 agent.close()
         if busy := self._busy(state):
-            raise busy
+            raise SessionError(str(busy))
         raise SessionError(message)
 
     def _probed_agent(self, state: _State) -> tuple[Session | None, Unanswered | None]:

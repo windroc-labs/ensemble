@@ -9,14 +9,16 @@ agent session ensemble started (ENSEMBLE_AGENT_SESSION), start, restart, resume 
 refuse.
 
 stdout holds only machine output: Records, Status lines, ls rows, read and reply text, attach
-commands. Exit 0 done, 2 a usage or config error, 1 a failed key or other failure. A batch answers
-its keys in order; a failed key gets one stderr line and no stdout line, and the exit is 1.
+commands. Exit 0 done, 2 a usage or config error, 75 a held environment lock on start, restart or
+resume, 1 a failed key or other failure. A batch answers its keys in order; a failed key gets one
+stderr line and no stdout line, and the exit is 1.
 """
 
 from __future__ import annotations
 
 import argparse
 import functools
+import json
 import os
 import re
 import sys
@@ -36,9 +38,11 @@ from ensemble.session.engine.types import (
     SESSION_NAME,
     SESSION_NAME_RULE,
     ConfigError,
+    EnvironmentSpec,
     Hosts,
     KeyPress,
     NotShowable,
+    SessionBusy,
     SessionError,
     SessionInfo,
     SessionRow,
@@ -51,6 +55,7 @@ from ensemble.session.viewer import display as displays
 from ensemble.utils import (
     ACCOUNT_ENV,
     EVENTS_ENV,
+    EXIT_BUSY,
     SID_ENV,
     Record,
     Status,
@@ -91,6 +96,16 @@ def _env(item: str) -> tuple[str, str]:
     return key, value
 
 
+def _environment(value: str) -> EnvironmentSpec:
+    try:
+        environment = EnvironmentSpec.from_fields(json.loads(value))
+    except (ValueError, RecursionError, ConfigError) as error:
+        raise argparse.ArgumentTypeError(f"environment spec: {error}") from None
+    if environment.prefetch is not None:
+        raise argparse.ArgumentTypeError("environment spec: worker prefetch is not supported")
+    return environment
+
+
 def _display_help(hosts: Hosts | None) -> str:
     """Each configured Host's display_help; a Host that cannot load fails its command later."""
     try:
@@ -126,6 +141,7 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
             "  Host is [session.hosts].default. Help needs no running tools/services.\n"
             "  Query commands print stdout; failures print stderr. Exit 0: success;\n"
             "  1: session/Host operation failed; 2: usage/configuration or nested start.\n"
+            "  75: environment lock held on start, restart or resume; stderr names its holder.\n"
             "  A Record is a serialized JSON control/identity line: name, session ids,\n"
             "  display and control/resume commands. Pass original Records unchanged,\n"
             "  one per stdin line, only to commands whose help permits them. Explicit\n"
@@ -178,6 +194,12 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
     )
     p.add_argument("--cwd", help="its directory (default: this one)")
     p.add_argument("--host", metavar="NAME", help="its Host (default: [session.hosts].default)")
+    p.add_argument(
+        "--environment-spec",
+        type=_environment,
+        metavar="JSON",
+        help="resolved container environment JSON from delegate; no prefetch or environment name",
+    )
     p.add_argument(
         "--resume", metavar="SID", help=f"resume conversation SID; else ${SID_ENV}, else new id"
     )
@@ -673,7 +695,7 @@ def _ls(args, hosts: Hosts) -> int:
     return 0
 
 
-def _start(args, flags: list[str], hosts: Hosts, start_sid: str | None) -> int:
+def _start(args, flags: list[str], hosts: Hosts, start_sid: str | None, worker_cls) -> int:
     if args.resume is not None and start_sid is not None and start_sid != args.resume:
         raise UsageError(f"{SID_ENV} {start_sid} differs from --resume {args.resume}")
     cwd = os.path.abspath(args.cwd or os.getcwd())
@@ -688,7 +710,7 @@ def _start(args, flags: list[str], hosts: Hosts, start_sid: str | None) -> int:
     if args.account:
         env[ACCOUNT_ENV] = args.account
     events = os.environ.get(EVENTS_ENV) or None
-    worker = Worker.new(
+    worker = worker_cls.new(
         name=args.name,
         sid=args.resume or start_sid or str(uuid.uuid4()),
         client=args.client,
@@ -698,6 +720,7 @@ def _start(args, flags: list[str], hosts: Hosts, start_sid: str | None) -> int:
         env=env,
         events=None if events is None else os.path.abspath(events),
         display=Session.display(args.display, host=host),
+        environment=args.environment_spec,
     )
     worker.check(prompt=args.prompt, resume=args.resume is not None)
     with worker.locked():
@@ -710,8 +733,8 @@ def _start(args, flags: list[str], hosts: Hosts, start_sid: str | None) -> int:
     return 0
 
 
-def _worker(args, start_sid: str | None) -> int:
-    worker = Worker.load(args.name, sid=start_sid)
+def _worker(args, start_sid: str | None, worker_cls) -> int:
+    worker = worker_cls.load(args.name, sid=start_sid)
     with worker.locked():
         record = worker.restart() if args.cmd == "restart" else worker.resume()
     print(record.to_line())
@@ -730,12 +753,12 @@ def _send(args, hosts: Hosts) -> int:
     return 0
 
 
-def _run(args, flags: list[str], hosts: Hosts, start_sid: str | None) -> int:
+def _run(args, flags: list[str], hosts: Hosts, start_sid: str | None, worker_cls) -> int:
     cmd = args.cmd
     if cmd == "start":
-        return _start(args, flags, hosts, start_sid)
+        return _start(args, flags, hosts, start_sid, worker_cls)
     if cmd in ("restart", "resume"):
-        return _worker(args, start_sid)
+        return _worker(args, start_sid, worker_cls)
     if cmd in BATCH:
         return _answers(args, hosts)
     if cmd == "ls":
@@ -769,7 +792,7 @@ def _run(args, flags: list[str], hosts: Hosts, start_sid: str | None) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, worker_cls: type[Worker] = Worker) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv in (["hook", "--help"], ["hook", "-h"]):
         _parser(None).parse_args(argv)
@@ -800,13 +823,16 @@ def main(argv: list[str] | None = None) -> int:
         _say(f"{PROG}: config: {failure}")
         return 2
     try:
-        return _run(args, flags, hosts, start_sid)
+        return _run(args, flags, hosts, start_sid, worker_cls)
     except NotShowable as error:
         _say(str(error))
         return 1
     except ConfigError as error:
         _say(f"{PROG}: {error}")
         return 2
+    except SessionBusy as error:
+        _say(f"{PROG}: {error}")
+        return EXIT_BUSY
     except (SessionError, OSError) as error:
         _say(f"{PROG}: {error}")
         return 1

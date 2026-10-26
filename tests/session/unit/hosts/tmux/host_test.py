@@ -9,6 +9,7 @@ import signal
 import time
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from ensemble.session import ConfigError, Host, Launch, SessionError
@@ -40,6 +41,29 @@ OTHER = "1f8fad5b-d9cb-469f-a165-70867728950e"
 
 
 class ClassTest(Case):
+    def test_capacity_namespace_uses_the_actual_server_socket_not_the_alias_settings(self):
+        tmux = mock.create_autospec(TmuxCli, instance=True)
+        tmux.checked.return_value = SimpleNamespace(stdout="/fake/server.sock\n")
+        first = TmuxHost("first", {"status_line": False}, tmux=tmux)
+        alias = TmuxHost("alias", {"status_line": True}, tmux=tmux)
+        self.assertEqual(first._capacity_namespace(), alias._capacity_namespace())
+        self.assertEqual(first._capacity_namespace(), "tmux:/fake/server.sock")
+        tmux.checked.assert_called_with(["display-message", "-p", "#{socket_path}"])
+        tmux.checked.return_value = SimpleNamespace(stdout="/fake/other.sock\n")
+        self.assertNotEqual(first._capacity_namespace(), "tmux:/fake/server.sock")
+
+    def test_unknown_capacity_namespace_fails_closed(self):
+        tmux = mock.create_autospec(TmuxCli, instance=True)
+        host = TmuxHost("first", tmux=tmux)
+        tmux.checked.side_effect = TuiError("offline")
+        with self.assertRaisesRegex(SessionError, "inventory.*offline"):
+            host._capacity_namespace()
+        tmux.checked.side_effect = None
+        for value in ("", "\n", "invalid\npath"):
+            tmux.checked.return_value = SimpleNamespace(stdout=value)
+            with self.subTest(value=value), self.assertRaises(SessionError):
+                host._capacity_namespace()
+
     def test_an_attachable_host_loaded_by_its_config_name(self):
         cls = load_class("ensemble.session.hosts.tmux:TmuxHost", Host)
         self.assertIs(cls, TmuxHost)

@@ -57,6 +57,7 @@ var staticKinds = []struct {
 	setup func(*Host)
 }{
 	{"ensemble-claude/default", nil, func(*Host) {}},
+	{"ensemble-claude/work", withClaudeAccount("work"), func(*Host) {}},
 	{"ensemble-opencode/strata", func(f map[string]any) {
 		f["client"], f["opencode_dir"], f["opencode_providers"] = "opencode", strings.TrimSuffix(f["claude_dir"].(string), "claude")+"opencode", []string{"strata"}
 		delete(f, "claude_dir")

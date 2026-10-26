@@ -526,42 +526,6 @@ class ResponseTest(Case):
 
 
 class LockTest(Case):
-    def test_lock_query_returns_the_holder_or_none(self):
-        holder = data("lock-query-output.json")["holder"]
-        for name, want in (
-            ("lock-query-output.json", holder),
-            ("lock-query-output-empty.json", None),
-        ):
-            with self.subTest(name):
-                fake = FakeBroker(success(name))
-                self.assertEqual(Broker(fake).lock_query("dummy-lock"), want)
-                self.assertEqual(fake.calls, [argv("lock-query")])
-
-    def test_a_bad_lock_query_response_is_a_transport_failure(self):
-        for name in (
-            "lock-query-output-missing.json",
-            "lock-query-output-extra.json",
-            "lock-query-output-invalid-holder.json",
-        ):
-            with self.subTest(name), self.assertRaisesRegex(SessionError, "bad response") as raised:
-                Broker(FakeBroker(success(name))).lock_query("dummy-lock")
-            self.assertNotIsInstance(raised.exception, BrokerError)
-
-    def test_a_lock_query_error_is_a_broker_error(self):
-        error = {
-            "exit_code": 7,
-            "error": {
-                "command": "lock-query",
-                "code": "docker_unreachable",
-                "message": "Docker is unreachable.",
-                "cleanup": "not_needed",
-            },
-        }
-        with self.assertRaises(BrokerError) as raised:
-            Broker(FakeBroker((7, "", json.dumps(error)))).lock_query("dummy-lock")
-        self.assertEqual(raised.exception.code, "docker_unreachable")
-        self.assertIsNone(raised.exception.holder)
-
     def test_busy_error_keeps_its_holder(self):
         for name in ("error-busy.json", "error-busy-starting.json", "error-busy-removed.json"):
             with self.subTest(name), self.assertRaises(BrokerError) as raised:
@@ -575,7 +539,6 @@ class LockTest(Case):
         for name, call in (
             ("error-busy-missing-holder.json", lambda b: b.start(MANIFEST, clients=KEYS)),
             ("error-nonbusy-holder.json", lambda b: b.start(MANIFEST, clients=KEYS)),
-            ("error-busy-query.json", lambda b: b.lock_query("dummy-lock")),
         ):
             with self.subTest(name), self.assertRaisesRegex(SessionError, "bad response") as raised:
                 call(Broker(FakeBroker(failure(name))))

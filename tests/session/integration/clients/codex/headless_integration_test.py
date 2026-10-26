@@ -190,7 +190,11 @@ class HeadlessSessions(Case):
 
     def direct_launch(self, prompt, *, resume=False):
         client = CodexClient(
-            {key: value for key, value in self.clients["codex"].items() if key != "implementation"},
+            {
+                key: value
+                for key, value in self.clients["codex"].items()
+                if key not in {"implementation", "max_runs"}
+            },
         )
         run = client.headless()
         launch = run.launch(

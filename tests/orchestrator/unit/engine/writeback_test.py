@@ -20,6 +20,7 @@ from ensemble.orchestrator import cli
 from ensemble.orchestrator.engine import (
     config,
     log,
+    router,
     runs,
     writeback,
 )
@@ -2887,3 +2888,58 @@ class DeliverableReplay(Events):
         self.assertTrue(self.deliver(self.finished(outcome=outcome_data(deliverable=REPORT))))
         self.assertIsNone(self.replay())
         self.assertEqual(self.posted(), ["Build ready: Ready.", REPORT])
+
+
+BUSY_ERROR = "busy: lock dummy-lock is held by ensemble-x-1 (owner x)"
+
+
+class BusyFinished(Events):
+    def _failure_comment(self, error):
+        bodies = [v["body"] for v in self.linear.comments.values() if error in v["body"]]
+        self.assertEqual(len(bodies), 1)
+        return bodies[0]
+
+    def test_client_capacity_failure_comments_and_counts_one_attempt(self):
+        error = "client fake reached max_runs limit 1; held by: worker-one"
+        for _ in range(2):
+            self.assertTrue(self.deliver(self.finished(1, error=error)))
+        self._failure_comment(error)
+        self.assertEqual(router.attempt_count(runs.parse_log(self.cfg.runs_log), RUN_ISSUE), 1)
+        self.assertEqual(self.linear.state, self.cfg.linear.states["in_review"])
+
+    def test_busy_start_is_a_normal_failure_comment_and_attempt_once(self):
+        for _ in range(2):
+            self.assertTrue(self.deliver(self.finished(75, error=BUSY_ERROR)))
+        body = self._failure_comment(BUSY_ERROR)
+        self.assertIn(BUSY_ERROR, body)
+        self.assertEqual(self.linear.state, self.cfg.linear.states["in_review"])
+        self.assertEqual(router.attempt_count(runs.parse_log(self.cfg.runs_log), RUN_ISSUE), 1)
+        with open(self.cfg.runs_log) as stream:
+            self.assertNotIn("busy", [json.loads(line)["kind"] for line in stream])
+
+    def test_busy_resume_is_a_normal_failure_and_keeps_its_attempt(self):
+        runs.note(
+            self.cfg.runs_log,
+            "resume",
+            now=lambda: BEFORE + timedelta(minutes=10),
+            issue=RUN_ISSUE,
+            sid=RUN_SID,
+            role="engineer",
+            client="fake",
+            delegate_kind="fake",
+        )
+        for _ in range(2):
+            self.assertTrue(self.deliver(self.finished(75, error=BUSY_ERROR, attempt=2)))
+        body = self._failure_comment(BUSY_ERROR)
+        self.assertIn(BUSY_ERROR, body)
+        self.assertEqual(self.linear.state, self.cfg.linear.states["in_review"])
+        self.assertEqual(router.attempt_count(runs.parse_log(self.cfg.runs_log), RUN_ISSUE), 2)
+
+    def test_an_environment_start_failure_comments_naming_the_image_or_gateway(self):
+        for attempt, error, named in (
+            (1, "new: base image dummy-env:test is not on this Mac", "dummy-env:test"),
+            (2, "resume: gateway container windroc-gateway is not running", "windroc-gateway"),
+        ):
+            with self.subTest(named=named):
+                self.assertTrue(self.deliver(self.finished(1, error=error, attempt=attempt)))
+                self.assertIn(named, self._failure_comment(error))

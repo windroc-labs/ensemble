@@ -10,6 +10,8 @@
 # [clients.<name>]  one table per client, loaded only by src/ensemble/session/clients/registry.py; <name> is the
 #                    client name a Spec's client names, independent of the module and class
 #   implementation   required: "module.path:Class", the Client subclass that runs it
+#   max_runs         session-wide concurrent starts for this client, across every caller and mode; 0 or absent:
+#                    unlimited. The session owns this key, not the Client adapter (docs/sessions.md › Run limits)
 #   any other key    the client's own (its class's `keys`); a key it does not list is a config error
 # [clients.<name>.modes]  its permission modes, auto and yolo (skips every permission and approval), each a list of
 #                    flags added to every launch, a resume's included, after flags; an isolated Host's sessions get
@@ -40,6 +42,7 @@
 #   account          a display string, e.g. its login email
 [clients.claude]
 implementation = "ensemble.session.clients.claude:ClaudeClient"
+max_runs = 0
 flags = ["--settings", '{"enabledPlugins": {"ensemble@windroc": false}}']
 allow = []
 # local: [session.clients.claude]
@@ -75,6 +78,7 @@ max = "max"
 #                    grants a directory, hooks, session or cwd (docs/sessions.md › Client policy)
 [clients.codex]
 implementation = "ensemble.session.clients.codex:CodexClient"
+max_runs = 0
 flags = [
     "-c", "plugins.ensemble@windroc.enabled=false",
     "-c", "plugins.browser@openai-bundled.enabled=false",
@@ -141,6 +145,9 @@ max = "max"
 # [clients.opencode.efforts]  effort → its --variant (a model without that variant ignores it)
 [clients.opencode]
 implementation = "ensemble.session.clients.opencode:OpenCodeClient"
+max_runs = 0
+# local: [session.clients.opencode]
+# local: max_runs = 1
 flags = []
 executable = ""
 ollama_port = 11434
