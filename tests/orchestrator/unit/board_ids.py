@@ -77,7 +77,7 @@ STATE_NAMES = dict(
     )
 )
 
-ACCOUNTS = {r: f"{r}@agents.test" for r in ("researcher", "pm", "engineer")}
+ROLES = ("researcher", "pm", "engineer")
 
 
 # the packaged workflow's text, for a fixture that changes it

@@ -1344,7 +1344,7 @@ def rechecked(state, *, delegate=None, assignee=None, project=None, labels=()):
 
 
 PM, PROJECT = (
-    {"id": role_id("pm"), "email": "pm@agents.test"},
+    {"id": role_id("pm"), "email": None},
     {"id": "p-1", "name": "Deep Research"},
 )
 AGENTS = "00000000-0000-4000-8000-000000000081"
@@ -1827,7 +1827,7 @@ def run_issue(**over):
                 {
                     "body": "as the role",
                     "createdAt": "2026-09-02T12:00:00.000Z",
-                    "user": {"id": role_id("pm"), "email": "PM@agents.test", "name": "PM"},
+                    "user": {"id": role_id("pm"), "email": None, "name": "PM"},
                 },
                 {
                     "body": f"Run {SID} · started",
@@ -1912,7 +1912,7 @@ class RunIssue(Case):
                 "p-1",
                 (
                     Note("first", "2026-09-01T12:00:00.000Z", "ann@x.com", "Ann", "other"),
-                    Note("as the role", "2026-09-02T12:00:00.000Z", "PM@agents.test", "PM", "self"),
+                    Note("as the role", "2026-09-02T12:00:00.000Z", None, "PM", "self"),
                 ),
                 (Link("https://github.com/o/r/pull/1"),),
                 (Linked("TASK-2", "Two", "Done"), Linked("TASK-4", "Four", "Todo")),

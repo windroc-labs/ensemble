@@ -8,9 +8,9 @@ from ensemble.orchestrator.trackers.linear import linear_tracker, ops
 from ensemble.utils import parse_time
 from tests.orchestrator.case import Case
 from tests.orchestrator.unit.board_ids import (
-    ACCOUNTS,
     DUPLICATE,
     FINISHED,
+    ROLES,
     STATES,
     TASK_GROUP,
     TEAM,
@@ -33,8 +33,8 @@ from tests.orchestrator.unit.linear_fixtures import (
 
 class RoleIds(Case):
     def test_role_ids_are_configured_without_transport(self):
-        roles = {r: SimpleNamespace(user_id=f"app-{r}") for r in ACCOUNTS}
-        self.assertEqual(ops.role_ids(roles), {f"app-{r}": r for r in ACCOUNTS})
+        roles = {r: SimpleNamespace(user_id=f"app-{r}") for r in ROLES}
+        self.assertEqual(ops.role_ids(roles), {f"app-{r}": r for r in ROLES})
 
 
 class TeamAndRoles(Case):

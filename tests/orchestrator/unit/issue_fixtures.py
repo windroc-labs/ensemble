@@ -30,10 +30,10 @@ from ensemble.orchestrator.trackers.linear import (
 from tests.orchestrator.case import Case
 from tests.orchestrator.unit import promote_fixtures as tp
 from tests.orchestrator.unit.board_ids import (
-    ACCOUNTS,
     HEADER,
     MANAGER_IDENTITY,
     MANAGER_LINE,
+    ROLES,
     STATES,
     TASK_GROUP,
     TEAM,
@@ -67,7 +67,7 @@ def names_cfg(**fields):
     cfg = {
         "team": TEAM,
         "states": dict(STATES),
-        "roles": {r: role_app(r) for r in ACCOUNTS},
+        "roles": {r: role_app(r) for r in ROLES},
         "manager": MANAGER_IDENTITY,
         "task_label_group": TASK_GROUP,
         "task_labels": dict(TASK_LABELS),

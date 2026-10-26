@@ -9,12 +9,11 @@ from datetime import UTC, datetime, timedelta
 from ensemble.orchestrator.engine.promote import GRACE, NO_INSTRUCTIONS
 from ensemble.orchestrator.trackers.linear import ops
 from tests.orchestrator.integration.flow_fixtures import (
-    ACCOUNTS,
-    HARNESS_EMAIL,
     HUMAN,
     PROJECT,
     BinFlow,
 )
+from tests.orchestrator.unit.board_ids import HARNESS_USER, role_id
 
 SOURCE, TITLE = "TASK-12", "Session registries in agent harnesses"
 INSTRUCTIONS = "Write the PRD for a session registry."
@@ -27,7 +26,7 @@ class Bounce(BinFlow):
         """
         now, researcher, human = (
             datetime.now(UTC),
-            self.ids[ACCOUNTS["researcher"]],
+            role_id("researcher"),
             self.ids[HUMAN],
         )
         self.fake.issue(
@@ -47,14 +46,14 @@ class Bounce(BinFlow):
 
     def assert_bounced(self, child, comments):
         self.assertEqual(self.state(SOURCE), "in_review")
-        self.assertEqual(self.history(SOURCE)[-1], ("handoff", "in_review", HARNESS_EMAIL))
+        self.assertEqual(self.history(SOURCE)[-1], ("handoff", "in_review", HARNESS_USER))
         self.assertEqual(self.subscribers(SOURCE), [HUMAN])
         with self.fake.lock:
             self.assertIsNone(self.fake.find(child))
             self.assertEqual(self.fake.relations, [])
         self.assertEqual(self.comments(SOURCE)[:-1], comments)
         author, body = self.comments(SOURCE)[-1]
-        self.assertEqual(author, HARNESS_EMAIL)
+        self.assertEqual(author, HARNESS_USER)
         return body
 
     def test_a_handoff_without_instructions_goes_back_to_in_review(self):
@@ -75,7 +74,7 @@ class Bounce(BinFlow):
         `handoff-failed`: a `Handoff failed:` comment, back to In Review.
         """
         child = self.handoff(ago=GRACE + timedelta(hours=1), instructions=INSTRUCTIONS)
-        self.fake.fail("promote.M_CREATE", "error", account=HARNESS_EMAIL)
+        self.fake.fail("promote.M_CREATE", "error", caller=HARNESS_USER)
         self.promote_tick()
         body = self.assert_bounced(child, [(HUMAN, INSTRUCTIONS)])
         self.assertTrue(body.startswith("Handoff failed: "), body)

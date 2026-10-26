@@ -14,15 +14,16 @@ from typing import NamedTuple
 from ensemble.orchestrator.engine.config import BOARD_ENV
 from ensemble.orchestrator.engine.router import CAP
 from tests.orchestrator.integration.flow_fixtures import (
-    ACCOUNTS,
     BIN,
     HUMAN,
     LIGHT_RESEARCH,
     PROJECT,
+    ROLES,
     TIMEOUT,
     BinFlow,
     usage,
 )
+from tests.orchestrator.unit.board_ids import role_id
 
 AGENT_GROUP = "00000000-0000-4000-8000-000000000101"
 CLAUDE = "00000000-0000-4000-8000-000000000102"
@@ -173,8 +174,8 @@ class LocalBoard(BinFlow):
 
     def seed_linear(self):
         self.fake.label_group(AGENT_GROUP, "Agent", {CLAUDE: "Claude"})
-        owners = {"unassigned": None, "me": self.ids[HUMAN], None: self.ids[ACCOUNTS["pm"]]}
-        owners.update((role, self.ids[account]) for role, account in ACCOUNTS.items())
+        owners = {"unassigned": None, "me": self.ids[HUMAN], None: role_id("pm")}
+        owners.update((role, role_id(role)) for role in ROLES)
         for seed in ISSUES:
             labels = [LIGHT_RESEARCH] if seed.task else []
             labels += [CLAUDE] if seed.client else []

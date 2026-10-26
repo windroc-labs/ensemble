@@ -8,12 +8,12 @@ import unittest
 
 from ensemble.orchestrator.engine import router as routing
 from tests.orchestrator.integration.flow_fixtures import (
-    HARNESS_EMAIL,
     HUMAN,
     LIGHT_RESEARCH,
     RESEARCH_DIR,
 )
 from tests.orchestrator.integration.segments import RESEARCH, Segment
+from tests.orchestrator.unit.board_ids import HARNESS_USER
 
 BLOCKER = "Pick a session store"
 
@@ -88,8 +88,8 @@ class ResearcherToPm(Segment):
             self.expect(
                 ident,
                 state="in_review",
-                history=[("todo", "in_review", HARNESS_EMAIL)],
-                comments=[(HARNESS_EMAIL, "cap")],
+                history=[("todo", "in_review", HARNESS_USER)],
+                comments=[(HARNESS_USER, "cap")],
                 subscribers=[HUMAN],
             )
         self.assertEqual(len(self.runs()), routing.CAP)

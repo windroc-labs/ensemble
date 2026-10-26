@@ -18,14 +18,13 @@ from tests.delegate.workdir import checkout_path
 from tests.orchestrator.config_fixtures import HARNESS_DELEGATE
 from tests.orchestrator.integration import fake_linear
 from tests.orchestrator.integration.flow_fixtures import (
-    ACCOUNTS,
-    HARNESS_EMAIL,
     HUMAN,
     PROJECT,
     TIMEOUT,
     Flow,
     TmuxFlow,
 )
+from tests.orchestrator.unit.board_ids import HARNESS_USER, role_id
 from tests.utils.sandbox import git_run
 
 SOURCE, TITLE = "TASK-12", "Session registries in agent harnesses"
@@ -56,7 +55,7 @@ class Tick(Flow):
     def assert_requests(self, writes, problems=()):
         self.assertEqual(self.problems(), list(problems))
         requests = self.requests()
-        self.assertEqual({r.account for r in requests}, {HARNESS_EMAIL})
+        self.assertEqual({r.caller for r in requests}, {HARNESS_USER})
         self.assertEqual([r.op for r in requests if r.op in MUTATIONS], writes)
 
 
@@ -65,7 +64,7 @@ class Promote(Tick):
         super().setUp()
         now, researcher, human = (
             datetime.now(UTC),
-            self.ids[ACCOUNTS["researcher"]],
+            role_id("researcher"),
             self.ids[HUMAN],
         )
         self.fake.issue(
@@ -103,7 +102,7 @@ class Promote(Tick):
                 child["project"],
                 child["title"],
             ),
-            ("todo", self.ids[ACCOUNTS["pm"]], None, PROJECT, f"PRD: {TITLE}"),
+            ("todo", role_id("pm"), None, PROJECT, f"PRD: {TITLE}"),
         )
         self.assertEqual(
             child["description"].split("\n\n")[:2],
@@ -114,14 +113,14 @@ class Promote(Tick):
         self.assertEqual(
             self.history(SOURCE),
             [
-                ("in_progress", "in_review", ACCOUNTS["researcher"]),
+                ("in_progress", "in_review", role_id("researcher")),
                 ("in_review", "handoff", HUMAN),
-                ("handoff", "done", HARNESS_EMAIL),
+                ("handoff", "done", HARNESS_USER),
             ],
         )
         self.assertEqual(
             self.comments(SOURCE),
-            [(HUMAN, INSTRUCTIONS), (HARNESS_EMAIL, f"Promoted to {child['identifier']}.")],
+            [(HUMAN, INSTRUCTIONS), (HARNESS_USER, f"Promoted to {child['identifier']}.")],
         )
         return child["identifier"]
 
@@ -151,32 +150,32 @@ class Promote(Tick):
         self.assert_requests(WRITES[:3] + WRITES[2:], failed)
 
     def test_a_failed_move_is_retried_without_a_second_child(self):
-        self.fake.fail("linear.M_STATE", "error", account=HARNESS_EMAIL)
+        self.fake.fail("linear.M_STATE", "error", caller=HARNESS_USER)
         self.tick()
         [error] = self.events()
         self.assertEqual(
             (error["src"], error["kind"], error["issue"]), ("promote", "handoff-error", SOURCE)
         )
         self.assertIn("linear.M_STATE: injected error", error["error"])
-        self.assert_move_retried([("linear.M_STATE", HARNESS_EMAIL, "error")])
+        self.assert_move_retried([("linear.M_STATE", HARNESS_USER, "error")])
 
     def test_a_linear_outage_moving_the_source_is_retried_without_a_second_child(self):
-        self.fake.fail("linear.M_STATE", "503", account=HARNESS_EMAIL)
+        self.fake.fail("linear.M_STATE", "503", caller=HARNESS_USER)
         self.outage("issueUpdate")
-        self.assert_move_retried([("linear.M_STATE", HARNESS_EMAIL, "503")])
+        self.assert_move_retried([("linear.M_STATE", HARNESS_USER, "503")])
 
     def test_a_linear_outage_reading_the_handoffs_is_retried(self):
         self.fake.fail("promote.Q_HANDOFF", "503")
         self.outage("issues")
         self.assertEqual(self.state(SOURCE), "handoff")
-        self.assert_requests([], [("promote.Q_HANDOFF", HARNESS_EMAIL, "503")])
+        self.assert_requests([], [("promote.Q_HANDOFF", HARNESS_USER, "503")])
 
         self.tick()
         child = self.assert_promoted()
         self.assertEqual(
             self.events()[1:], [{"src": "promote", "kind": "promote", "issue": SOURCE, "to": child}]
         )
-        self.assert_requests(WRITES, [("promote.Q_HANDOFF", HARNESS_EMAIL, "503")])
+        self.assert_requests(WRITES, [("promote.Q_HANDOFF", HARNESS_USER, "503")])
 
 
 class PruneSessionDelegate(FakeDelegate):
@@ -210,7 +209,7 @@ class Prune(Tick, TmuxFlow):
         self.assertEqual(res.returncode, 0, res.stderr)
 
     def test_prune_after_done(self):
-        engineer = self.ids[ACCOUNTS["engineer"]]
+        engineer = role_id("engineer")
         done_id = self.fake.issue(
             "ENG: Session registry",
             identifier=DONE,

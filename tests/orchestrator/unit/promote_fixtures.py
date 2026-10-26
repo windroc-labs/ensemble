@@ -13,7 +13,6 @@ from ensemble.orchestrator.engine.types import LinearError
 from ensemble.orchestrator.trackers.linear import linear_tracker, ops
 from tests.orchestrator.unit import run_fixtures
 from tests.orchestrator.unit.board_ids import (
-    ACCOUNTS,
     HEADER,
     PACKAGED_FLOW,
     STATE_NAMES,
@@ -37,16 +36,10 @@ STATES = {
 
 PROJECTS = {"Deep Research": "p-dr", "Product Design": "p-pd"}
 
-ROLE = ACCOUNTS
-
 HUMAN = {"email": "me@x.com", "name": "Me"}
 
 # a role app's: self, as the harness's
-AGENT = {
-    "id": role_id("researcher"),
-    "email": "Researcher@agents.test",
-    "name": "researcher@agents.test",
-}
+AGENT = {"id": role_id("researcher"), "email": None, "name": "Researcher"}
 
 # not in human_members, not a role or the harness: other, as the user's
 MANAGER = {"email": "manager@x.com", "name": "Manager"}

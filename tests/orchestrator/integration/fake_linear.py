@@ -46,7 +46,7 @@ from tests.orchestrator.unit.board_ids import STATES, TEAM
 @dataclass
 class Request:
     op: str | None
-    account: str | None
+    caller: str | None
     variables: dict
     result: str
 
@@ -55,7 +55,7 @@ class Request:
 class _Failure:
     op: str
     kind: str
-    account: str | None
+    caller: str | None
     times: int
     seconds: float
 
@@ -159,13 +159,13 @@ def stamp(t=None):
     return t.strftime("%Y-%m-%dT%H:%M:%S.") + f"{t.microsecond // 1000:03d}Z"
 
 
-def _key(service):
+def _token(service):
     return "lin_api_" + hashlib.sha256(service.encode()).hexdigest()[:32]
 
 
 def _record(service):
-    """An OAuth app's token entry: _key(service) as its token, good for years."""
-    return json.dumps({"access_token": _key(service), "expires_at": "2099-01-01T00:00:00+00:00"})
+    """An OAuth app's token entry: _token(service) as its token, good for years."""
+    return json.dumps({"access_token": _token(service), "expires_at": "2099-01-01T00:00:00+00:00"})
 
 
 def _errors(message):
@@ -275,30 +275,26 @@ class FakeLinear:
         self.users, self.issues, self.labels, self.projects, self.relations = {}, {}, {}, {}, []
         self.clock = itertools.count()
 
-    def user(self, email, name, service=None, *, app=False, uid=None):
-        """app: service is an OAuth app's token entry (the harness), its calls Bearer ones."""
+    def user(self, name, service=None, *, uid=None, email=None):
+        """service: an OAuth app's token entry, its calls Bearer _token(service); without one, a
+        human (seed it an email).
+        """
         with self.lock:
+            uid = uid or str(uuid.uuid4())
             if any(
-                u["email"].lower() == email.lower() or (service and u["service"] == service)
+                u["id"] == uid
+                or (service and u["service"] == service)
+                or (email and u["email"] and u["email"].lower() == email.lower())
                 for u in self.users.values()
             ):
-                raise ValueError(f"user {email} or service {service} seeded twice")
-            uid = uid or str(uuid.uuid4())
-            self.users[uid] = {
-                "id": uid,
-                "email": email,
-                "name": name,
-                "service": service,
-                "app": app,
-            }
+                raise ValueError(f"user {uid}, service {service} or email {email} seeded twice")
+            self.users[uid] = {"id": uid, "email": email, "name": name, "service": service}
             return uid
 
     def keys(self):
         with self.lock:
             return {
-                u["service"]: (_record if u["app"] else _key)(u["service"])
-                for u in self.users.values()
-                if u["service"]
+                u["service"]: _record(u["service"]) for u in self.users.values() if u["service"]
             }
 
     def label_group(self, id, name, labels):
@@ -378,38 +374,42 @@ class FakeLinear:
                 (i for i in self.issues.values() if i["identifier"] == ref), None
             )
 
-    def fail(self, op, kind, *, account=None, times=1, seconds=3):
+    def fail(self, op, kind, *, caller=None, times=1, seconds=3):
+        """caller: only this app user id's calls fail."""
         with self.lock:
             if (
                 op not in OPS
                 or kind not in KINDS
                 or (kind == "unsuccessful" and not texts()[op].startswith("mutation"))
                 or times < 1
-                or (
-                    account is not None
-                    and not any(
-                        u["service"] and u["email"].lower() == account.lower()
-                        for u in self.users.values()
-                    )
-                )
+                or (caller is not None and not (self.users.get(caller) or {}).get("service"))
             ):
                 raise ValueError(
-                    f"fail({op!r}, {kind!r}, account={account!r}, times={times!r}): a misuse"
+                    f"fail({op!r}, {kind!r}, caller={caller!r}, times={times!r}): a misuse"
                 )
-            self.failures.append(_Failure(op, kind, account, times, seconds))
+            self.failures.append(_Failure(op, kind, caller, times, seconds))
 
-    def answer(self, query, variables, key):
-        key = key.removeprefix("Bearer ") if isinstance(key, str) else key
+    def answer(self, query, variables, authorization):
+        """authorization: the Authorization header, `Bearer <token>`; anything else is a 401."""
+        token = (
+            authorization[len("Bearer ") :]
+            if isinstance(authorization, str) and authorization.startswith("Bearer ")
+            else None
+        )
         with self.lock:
             caller = next(
-                (u for u in self.users.values() if u["service"] and _key(u["service"]) == key),
+                (
+                    u
+                    for u in self.users.values()
+                    if token and u["service"] and _token(u["service"]) == token
+                ),
                 None,
             )
-            account = caller and caller["email"]
+            uid = caller and caller["id"]
             if not isinstance(query, str) or not isinstance(variables, (dict, type(None))):
                 return self._log(
                     op=None,
-                    account=account,
+                    caller=uid,
                     variables={},
                     result="error",
                     status=400,
@@ -419,7 +419,7 @@ class FakeLinear:
             if caller is None:
                 return self._log(
                     op=op or query,
-                    account=None,
+                    caller=None,
                     variables=variables,
                     result="unauthorized",
                     status=401,
@@ -428,18 +428,18 @@ class FakeLinear:
             if op is None:
                 return self._log(
                     op=query,
-                    account=account,
+                    caller=uid,
                     variables=variables,
                     result="unknown",
                     status=200,
                     body=_errors("fake: unknown query"),
                 )
-            failure = self._failure(op, account)
+            failure = self._failure(op, uid)
             kind = failure.kind if failure else "ok"
             if kind in ("error", "503"):
                 return self._log(
                     op=op,
-                    account=account,
+                    caller=uid,
                     variables=variables,
                     result=kind,
                     status=int(kind) if kind == "503" else 200,
@@ -458,7 +458,7 @@ class FakeLinear:
                 )
                 return self._log(
                     op=op,
-                    account=account,
+                    caller=uid,
                     variables=variables,
                     result="error",
                     status=200,
@@ -466,7 +466,7 @@ class FakeLinear:
                 )
             return self._log(
                 op=op,
-                account=account,
+                caller=uid,
                 variables=variables,
                 result=kind,
                 status=200,
@@ -479,7 +479,7 @@ class FakeLinear:
         keys = self.keys()
         if service not in keys:
             raise LinearError(f"fake transport: no key for {service}")
-        status, body, delay = self.answer(query, variables, _key(service))
+        status, body, delay = self.answer(query, variables, f"Bearer {_token(service)}")
         if delay:
             time.sleep(min(delay, timeout))
             if delay >= timeout:
@@ -498,13 +498,13 @@ class FakeLinear:
             raise LinearError(f"linear api error: {body['errors']}")
         return body["data"]
 
-    def _log(self, *, op, account, variables, result, status, body, delay=0):
-        self.requests.append(Request(op, account, variables, result))
+    def _log(self, *, op, caller, variables, result, status, body, delay=0):
+        self.requests.append(Request(op, caller, variables, result))
         return status, body, delay
 
-    def _failure(self, op, account):
+    def _failure(self, op, caller):
         for f in self.failures:
-            if f.op == op and (f.account is None or f.account.lower() == account.lower()):
+            if f.op == op and f.caller in (None, caller):
                 f.times -= 1
                 if f.times <= 0:
                     self.failures.remove(f)
@@ -920,7 +920,10 @@ class FakeLinear:
 
     def _subscribe(self, caller, v):
         rec = self._get(v["i"])
-        user = next((u for u in self.users.values() if u["email"].lower() == v["e"].lower()), None)
+        user = next(
+            (u for u in self.users.values() if u["email"] and u["email"].lower() == v["e"].lower()),
+            None,
+        )
         if user is None:
             raise Problem(f"Entity not found: {'User'}")
         if user["email"] not in rec["subscribers"]:
