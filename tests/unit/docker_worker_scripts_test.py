@@ -41,9 +41,38 @@ class MiniOpSkill(Case):
         self.plugins = Path(self.home, "plugins")
         self.plugins.mkdir()
         (self.plugins / "config.toml").write_text("")
-        patcher = mock.patch.dict(self.code["main"].__globals__, {"MINI_OP_SKILL": self.source})
+        self.image = Path("/opt/windroc/mini-op/skills/mini-op")
+        real_stat = os.stat
+
+        def image_stat(path, *args, **kwargs):
+            if isinstance(path, (str, os.PathLike)):
+                requested = Path(path)
+                if requested == self.image or self.image in requested.parents:
+                    path = self.source / requested.relative_to(self.image)
+            return real_stat(path, *args, **kwargs)
+
+        patcher = mock.patch("os.stat", side_effect=image_stat)
         patcher.start()
         self.addCleanup(patcher.stop)
+        real_symlink, real_readlink = os.symlink, os.readlink
+
+        def image_symlink(source, destination, *args, **kwargs):
+            return real_symlink(
+                self.source if Path(source) == self.image else source, destination, *args, **kwargs
+            )
+
+        def image_readlink(path, *args, **kwargs):
+            result = real_readlink(path, *args, **kwargs)
+            return (
+                str(self.image)
+                if Path(path).is_relative_to(self.target) and result == str(self.source)
+                else result
+            )
+
+        for operation, fake in (("symlink", image_symlink), ("readlink", image_readlink)):
+            patcher = mock.patch(f"os.{operation}", side_effect=fake)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def test_each_bootstrap_links_the_plain_skill_in_the_selected_client_home(self):
         for client in ("claude", "codex"):
@@ -57,7 +86,7 @@ class MiniOpSkill(Case):
                         directory, "/work", Path(self.home, "fake-secrets"), self.plugins
                     )
                 skill = directory / "skills/mini-op"
-                self.assertEqual(skill.readlink(), self.source)
+                self.assertEqual(skill.readlink(), self.image)
                 self.assertEqual(
                     (skill / "SKILL.md").read_text(), (self.source / "SKILL.md").read_text()
                 )
@@ -71,7 +100,7 @@ class MiniOpSkill(Case):
     def test_reinstall_keeps_the_same_link(self):
         self.code["bootstrap_skill"](self.target)
         self.code["bootstrap_skill"](self.target)
-        self.assertEqual((self.target / "skills/mini-op").readlink(), self.source)
+        self.assertEqual((self.target / "skills/mini-op").readlink(), self.image)
 
     def test_a_malformed_image_skill_fails(self):
         (self.source / "SKILL.md").unlink()
