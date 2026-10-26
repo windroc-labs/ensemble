@@ -276,6 +276,8 @@ class RetentionCleanup(PruneScenario):
         self.assertEqual(pruner.writable, (self.work, *temp_dirs()))
 
     def test_archives_pm_and_engineer_issues_finished_2h(self):
+        self.assertIn("delegate: { id: { in: $a } }", linear_tracker.Q_FINISHED)
+        self.assertNotIn("assignee", linear_tracker.Q_FINISHED)
         gql = gql_for(
             {
                 "TASK-1": ("Done", [(30, "In Progress"), (2, "Done")]),

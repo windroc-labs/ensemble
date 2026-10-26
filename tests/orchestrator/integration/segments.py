@@ -473,7 +473,7 @@ class Segment(TmuxFlow):
         ident = self.fake.issue(
             title,
             state="backlog",
-            assignee=self.ids[ACCOUNTS[role]],
+            delegate=self.ids[ACCOUNTS[role]],
             project=PROJECT,
             description=description,
             labels=labels,
@@ -610,12 +610,13 @@ class Segment(TmuxFlow):
         )
         self.assertEqual(
             (
+                child["delegate"],
                 child["assignee"],
                 fake_linear.NAMES[child["state"]],
                 child["project"],
                 child["title"],
             ),
-            (self.ids[ACCOUNTS[nxt]], "todo", src["project"], title),
+            (self.ids[ACCOUNTS[nxt]], None, "todo", src["project"], title),
         )
         cutoff = max(
             h["createdAt"]
@@ -653,8 +654,8 @@ class Segment(TmuxFlow):
         self.assertIn(ident, self.want)
         rec = self.issue(ident)
         self.assertEqual(
-            (rec["assignee"], fake_linear.NAMES[rec["state"]], rec["project"]),
-            (self.ids[ACCOUNTS["pm"]], "todo", PROJECT),
+            (rec["delegate"], rec["assignee"], fake_linear.NAMES[rec["state"]], rec["project"]),
+            (self.ids[ACCOUNTS["pm"]], None, "todo", PROJECT),
         )
 
     def moved_to_todo(self, ident):
@@ -730,7 +731,7 @@ class Segment(TmuxFlow):
             src = self.fake.issue(
                 RESEARCH[0],
                 state="done",
-                assignee=self.ids[ACCOUNTS["researcher"]],
+                delegate=self.ids[ACCOUNTS["researcher"]],
                 project=PROJECT,
                 description=RESEARCH[1],
             )

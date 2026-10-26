@@ -6,7 +6,8 @@ Usage: ensemble-orchestrator router [--dry-run] [--issue ID]
 
 Arguments and options:
   (no mode)     One scheduled tick: role max_runs, client_max_runs and usage
-                gates; starts at most one run assigned to a role account.
+                gates; starts at most one role's run. Linear uses the app
+                delegate (Agent field); local boards use the role directory.
   --issue ID    Only this issue identifier, e.g. TASK-1; bypass max_runs,
                 client_max_runs and usage gates (its run still counts toward
                 them).
@@ -35,9 +36,10 @@ Prerequisites and effects:
   Execution can claim/move issues, post comments or write back ended outcomes.
   A launch prepares input, records a runs.jsonl row and detaches a LinearRun;
   the router exits while the Delegate harness writes events back to the board.
-  Other events go to orchestrator.jsonl (src router); an idle tick
-  writes none, a usage-blocked tick only its usage-skip lines. Preview plans
-  print JSON lines to stderr. Output files follow Delegate configuration.
+  Other events go to orchestrator.jsonl (src router). A tick without diagnostics
+  writes none; Linear issues without a configured role delegate log claim-skip,
+  and usage-blocked candidates log usage-skip. Preview plans print JSON lines
+  to stderr. Output files follow Delegate configuration.
 
 Exit conditions:
   Tick: 2 on configuration or host usage probe failure, 1 when Linear is unavailable (each logged
@@ -118,6 +120,8 @@ from ensemble.orchestrator.engine.runs import (
     trim,
 )
 from ensemble.orchestrator.engine.types import (
+    OWNERSHIP,
+    UNOWNED,
     UUID_RE,
     ClientSource,
     ConfigError,
@@ -147,7 +151,7 @@ from ensemble.utils import (
 STALE = timedelta(hours=2)
 LIVE = timedelta(minutes=30)
 CAP = 4
-NOT_QUEUED = "not a {state} issue assigned to a role account"
+NOT_QUEUED = "not a {state} issue {ownership}"
 SKEW = timedelta(minutes=5)
 CAP_COMMENT = "Tried 4 times without finishing; needs a look."
 INTERRUPTED = "The previous agent run was interrupted. Moving this issue back to the {state} queue."
@@ -221,7 +225,7 @@ def rank(issue):
     return issue["priority"] or 5  # 0 = no priority = lowest
 
 
-def task_for(pick, role, role_tasks, ready):
+def task_for(pick, role, role_tasks, ready, *, owner="assignee"):
     if pick.error is not None:
         return None, pick.error
     if pick.name is None:
@@ -229,7 +233,7 @@ def task_for(pick, role, role_tasks, ready):
     if pick.name not in role_tasks:
         return None, (
             f'Task "{pick.name}" is not one of {role}\'s tasks ({", ".join(role_tasks)}). '
-            f"Fix the task or the assignee, then move the issue back to {ready()}."
+            f"Fix the task or the {owner}, then move the issue back to {ready()}."
         )
     return pick.name, None
 
@@ -248,6 +252,7 @@ class Board:
     ):
         self.gql, self.entries, self.now, self.dry = gql, entries, now, dry
         self.cfg, self.keychain, self.wiring, self.gate = cfg, keychain, wiring, gate
+        self.owner_field = "delegate" if cfg.tracker is TrackerKind.LINEAR else "assignee"
         self.say: Callable[..., None] = say or functools.partial(log, "router", dry=dry)
         self.ready, self.blocked, self.live, self.statuses = None, {}, set(), {}
         self.status_errors, self.replays = {}, {}
@@ -449,7 +454,7 @@ class Board:
                 )
                 if logged == role:
                     return True
-                why = f"role ({logged}) is not the assignee's ({role})"
+                why = f"role ({logged}) is not the {self.owner_field}'s ({role})"
                 self.say("recover", ident, to="in_review", reason=why)
                 self.comment_and_move(
                     issue,
@@ -554,6 +559,7 @@ class Board:
             role,
             self.cfg.roles[role].tasks,
             lambda: self.tracker.state_name(IssueState.READY),
+            owner=self.owner_field,
         )
         client, source, client_error = client_for(current.client, self.cfg.roles[role].run.client)
         if client_error or task_error or client == resumed:
@@ -610,7 +616,11 @@ class Board:
     def unqueued(self, ident):
         """Why ident is not queued, with the tracker's refusal."""
         current = self.tracker.recheck(ident)
-        reason = NOT_QUEUED.format(state=self.tracker.state_name(IssueState.READY))
+        if self.cfg.tracker is TrackerKind.LINEAR and current.ready and current.role is None:
+            self.say("claim-skip", ident, once=True, reason=UNOWNED[TrackerKind.LINEAR])
+        reason = NOT_QUEUED.format(
+            state=self.tracker.state_name(IssueState.READY), ownership=OWNERSHIP[self.cfg.tracker]
+        )
         reasons = [] if current.ready and current.role else [reason]
         reasons += [current.refused] if current.refused else []
         return "; ".join(reasons) or reason
@@ -623,7 +633,7 @@ class Board:
         if not current.ready:
             skip = f"no longer {self.tracker.state_name(IssueState.READY)}"
         elif role is None:
-            skip = "not assigned to a role"
+            skip = UNOWNED[self.cfg.tracker]
         elif role in full:
             skip = f"{role} is full"
         elif current.refused:
@@ -640,6 +650,7 @@ class Board:
             role,
             self.cfg.roles[role].tasks,
             lambda: self.tracker.state_name(IssueState.READY),
+            owner=self.owner_field,
         )
         client, source, client_error = client_for(current.client, self.cfg.roles[role].run.client)
         if self.dry:
@@ -762,7 +773,7 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
     if role is not None and role not in cfg.roles:
         return fail(a.issue, "config-error", f"role {role!r} is not configured", 2)
     tasks = cfg.roles[role].tasks if role is not None else ()
-    reason = a.role_error(role, tasks)
+    reason = a.role_error(role, tasks, cfg.tracker)
     if role is None or reason:
         return fail(a.issue, "config-error", reason, 2)
     identity = wiring.identity(cfg, role)

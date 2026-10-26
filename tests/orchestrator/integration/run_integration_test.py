@@ -86,7 +86,7 @@ class Run(TmuxFlow):
             identifier=ID,
             id=UUID,
             state="in_progress",
-            assignee=self.ids[ACCOUNTS[role]],
+            delegate=self.ids[ACCOUNTS[role]],
             project=PROJECT,
         )
 

@@ -35,11 +35,13 @@ from ensemble.orchestrator.engine.flow.types import (
 )
 from ensemble.orchestrator.engine.types import (
     MOVES,
+    UNOWNED,
     UUID_RE,
     IssueError,
     LinearApp,
     LinearError,
     State,
+    TrackerKind,
 )
 from ensemble.orchestrator.trackers.linear import ops
 from ensemble.orchestrator.trackers.linear.ops import DONE, HISTORY, call, client_id, last_move
@@ -94,7 +96,7 @@ Q_CHILDREN = (
 )
 Q_FINISHED = (
     """query($t: ID, $d: [ID!], $s: [ID!], $a: [ID!], $c: String, $after: String) {
-  issues(filter: { team: { id: { eq: $t } }, or: [{ state: { id: { in: $d } }, assignee: { id: { in: $a } } },
+  issues(filter: { team: { id: { eq: $t } }, or: [{ state: { id: { in: $d } }, delegate: { id: { in: $a } } },
   { state: { id: { in: $s } } }] }, first: 50, after: $c) {
   nodes { id identifier updatedAt """
     + STAMPS
@@ -105,8 +107,8 @@ Q_FINISHED = (
 )
 M_ARCHIVE = "mutation($i: String!) { issueArchive(id: $i) { success } }"
 Q_HANDOFF = """query($t: ID, $s: ID, $a: [ID!]) { issues(filter: { team: { id: { eq: $t } }, state: { id: { eq: $s } },
-  project: { null: false }, assignee: { id: { in: $a } } }, first: 100) {
-  nodes { id identifier url title priority createdAt project { id name } assignee { id } attachments { nodes { title url } } } } }"""
+  project: { null: false }, delegate: { id: { in: $a } } }, first: 100) {
+  nodes { id identifier url title priority createdAt project { id name } delegate { id } attachments { nodes { title url } } } } }"""
 Q_DETAIL = (
     """query($i: String!, $after: String) { issue(id: $i) { state { id }
   """
@@ -135,7 +137,7 @@ ATTACHED = ("already been linked", "Duplicate attachment", "Unable to create iss
 RELATIONS = "inverseRelations(first: 50) { nodes { type issue { identifier state { type } } } }"
 Q_RELATIONS = "query($i: String!) { issue(id: $i) { " + RELATIONS + " } }"
 Q_RECHECK = (
-    "query($i: String!) { issue(id: $i) { state { id } assignee { id email } project { id name } "
+    "query($i: String!) { issue(id: $i) { state { id } delegate { id } assignee { id email } project { id name } "
     "labels { nodes { id name parent { id } } } } }"
 )
 # ops.HISTORY's nodes with their actors: nested objects there would multiply Q_FINISHED's complexity
@@ -180,11 +182,11 @@ Q_READ = """query($i: String!) { issue(id: $i) { id identifier url title descrip
 def q_issues(fields=""):
     return (
         (
-            "query($f: IssueFilter) { issues(filter: $f, first: 100) { nodes { id identifier url priority createdAt "
-            "project { id name } assignee { id email } "
+            "query($f: IssueFilter, $c: String) { issues(filter: $f, first: 100, after: $c) { nodes { id identifier url priority createdAt "
+            "project { id name } delegate { id } assignee { id email } "
         )
         + fields
-        + " } } }"
+        + " } pageInfo { hasNextPage endCursor } } }"
     )
 
 
@@ -362,22 +364,37 @@ class LinearTracker(Tracker):
         )
 
     def role(self, issue):
-        return _need("roles", self.roles)[issue["assignee"]["id"]]
+        return _need("roles", self.roles).get((issue.get("delegate") or {}).get("id"))
 
     def assigned(self, state):
         return self._listed(state)
 
     def _listed(self, state, fields=""):
-        """state's issues with a project, assigned to a role account; the first 100."""
+        """Page state's project issues, return the first 100 role delegates; an unowned Todo one
+        logs claim-skip."""
         if state not in LISTED:
             raise ValueError(f"no list of {state} issues")
         flt = {
             "team": {"id": {"eq": _need("team_id", self.team_id)}},
             "project": {"null": False},
-            "assignee": {"id": {"in": list(_need("roles", self.roles))}},
             "state": {"id": {"eq": _need("states", self.state_ids)[LISTED[state]]}},
         }
-        return self.gql(q_issues(fields), f=flt)["issues"]["nodes"]
+        found, cursors, variables = [], set(), {"f": flt}
+        while True:
+            page = self.gql(q_issues(fields), **variables)["issues"]
+            for issue in page["nodes"]:
+                if self.role(issue) is not None:
+                    found.append(issue)
+                elif state is IssueState.READY:
+                    self.say(
+                        "claim-skip",
+                        issue["identifier"],
+                        once=True,
+                        reason=UNOWNED[TrackerKind.LINEAR],
+                    )
+            if not page["pageInfo"]["hasNextPage"]:
+                return found[:100]
+            variables["c"] = ops.advance("role issues", page["pageInfo"]["endCursor"], cursors)
 
     def ready(self):
         """Relations come with the list; when that read fails, a logged todo-error, the plain list
@@ -409,7 +426,7 @@ class LinearTracker(Tracker):
         nodes = found["labels"]["nodes"]
         return Recheck(
             ready,
-            role=_need("roles", self.roles).get((found["assignee"] or {}).get("id")),
+            role=self.role(found),
             refused=None if found["project"] else "no project",
             assignee=found["assignee"],
             home=found["project"],
@@ -650,7 +667,7 @@ class LinearTracker(Tracker):
                 n["createdAt"],
                 n["project"]["id"],
                 n["project"]["name"],
-                roles[n["assignee"]["id"]],
+                roles[n["delegate"]["id"]],
                 tuple(
                     (a["title"], a["url"]) for a in n["attachments"]["nodes"] if not is_record(a)
                 ),
@@ -699,7 +716,8 @@ class LinearTracker(Tracker):
                     "id": client_id(*once),
                     "teamId": _need("team_id", self.team_id),
                     "projectId": home,
-                    "assigneeId": self.users[owner],
+                    "delegateId": self.users[owner],
+                    "assigneeId": None,
                     "stateId": self.ids[IssueState.READY],
                     "priority": priority,
                     "title": title,

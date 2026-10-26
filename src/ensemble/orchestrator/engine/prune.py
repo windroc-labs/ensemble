@@ -9,8 +9,8 @@ configured one) reports agent files in (Delegate.checkouts not None):
   <work_dir>/work or a temp dir: `worktree prune`, then deletes each <ID>-* branch but the default
   that origin/<branch> or origin/<default> holds, else keeps and reports it (git reads refs only,
   so code an agent run planted, such as filters or hooks, never runs outside auto mode's review);
-- archives every finished issue of the team, a Done one only when assigned to the pm or engineer
-  role account (a researcher's report stays), any other whatever its assignee, none included, unless
+- archives every finished issue of the team, a Done one only when delegated to the pm or engineer
+  app (a researcher's report stays), any other whatever its assignee, none included, unless
   it (reopened since) or a sub-issue, at any depth, is unfinished, every page of them read first
   (Tracker.archive; Linear archives sub-issues with their parent, theirs too): skipped until each
   is finished or archived.
@@ -117,8 +117,8 @@ Prerequisites and effects:
   preserve the default branch and unpushed branches. No fetch is performed.
   Clones under work_dir/work or temporary directories are skipped.
   Archive team issues finished at least 2 hours ago: Canceled/Duplicate
-  whatever the assignee (none or researcher too), Done only when assigned to
-  pm/engineer role accounts (researcher reports stay). Unknown finish times
+  whatever the assignee (none or researcher too), Done only when delegated to
+  pm/engineer apps (researcher reports stay). Unknown finish times
   are skipped, and so is an issue with an unfinished sub-issue at any depth
   (archiving it archives its sub-issues and theirs).
   For issues in any other state but Todo/In Progress, 7 days after both their
@@ -129,7 +129,7 @@ Prerequisites and effects:
   After 7 days, remove whole workdirs without agent files, including run records
   and delivery ledgers, only when their configured Delegate confirms no live
   run. Unconfigured run kinds are skipped.
-  One setup read (team and role accounts), then at most 33 Linear requests: 3
+  One team read (role app ids come from config), then at most 33 requests: 3
   change-feed pages, 10 issue reads, 20 archive requests; work past a cap
   waits for a later run, and an issue whose sub-issues alone need more is
   not archived. logs/prune.json caches what was read, read again when Linear

@@ -117,7 +117,7 @@ LIGHT, DEEP, STRAY, ORPHAN_LABEL = (
 
 
 RECHECK = (
-    "query($i: String!) { issue(id: $i) { state { id } assignee { id email } project { id name } "
+    "query($i: String!) { issue(id: $i) { state { id } delegate { id } assignee { id email } project { id name } "
     "labels { nodes { id name parent { id } } } } }"
 )
 
@@ -160,7 +160,8 @@ def issue(
         "url": f"https://linear.app/x/{ident}",
         "state": state,
         "project": project and {"id": IDS[project], "name": project},
-        "assignee": who(role),
+        "delegate": who(role),
+        "assignee": None,
         "priority": priority,
         "createdAt": created,
         "inverseRelations": {"nodes": list(inverse)},
@@ -326,6 +327,7 @@ class FakeLinear:
                 "issue": {
                     "state": {"id": STATES[i["state"]]},
                     "assignee": i["assignee"],
+                    "delegate": i.get("delegate"),
                     "project": i["project"],
                     "labels": {"nodes": i["labels"]},
                 }
@@ -360,18 +362,22 @@ class FakeLinear:
             if "inverseRelations" in query
             else {"state", "labels", "inverseRelations"}
         )
+        nodes = [
+            {k: x for k, x in i.items() if k not in drop}
+            for i in self.issues.values()
+            if f["team"]["id"]["eq"] == TEAM
+            and f["project"] == {"null": False}
+            and i["project"]
+            and i["state"] == NAMES[f["state"]["id"]["eq"]]
+        ]
+        start = int(v.get("c") or 0)
         return {
             "issues": {
-                "nodes": [
-                    {k: x for k, x in i.items() if k not in drop}
-                    for i in self.issues.values()
-                    if f["team"]["id"]["eq"] == TEAM
-                    and f["project"] == {"null": False}
-                    and i["project"]
-                    and i["assignee"]
-                    and (i["assignee"]["id"] in f["assignee"]["id"]["in"])
-                    and (i["state"] == NAMES[f["state"]["id"]["eq"]])
-                ]
+                "nodes": nodes[start : start + 100],
+                "pageInfo": {
+                    "hasNextPage": start + 100 < len(nodes),
+                    "endCursor": str(start + 100),
+                },
             }
         }
 

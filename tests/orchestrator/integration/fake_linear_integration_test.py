@@ -86,6 +86,7 @@ class ServerCase(Case):
             "Session registry",
             identifier="TASK-7",
             state="in_progress",
+            delegate=self.engineer,
             assignee=self.engineer,
             project=PROJECT,
         )
@@ -378,13 +379,20 @@ class GraphQLProjection(ServerCase):
             self.fake.issue(
                 f"Finished {n}",
                 state=("done", "canceled")[n % 2],
-                assignee=self.engineer,
+                delegate=self.engineer,
+                assignee=self.human,
             )["identifier"]
             for n in range(51)
         ]
-        archived = self.fake.issue("Archived", state="done", assignee=self.engineer)["identifier"]
+        archived = self.fake.issue(
+            "Archived", state="done", delegate=self.engineer, assignee=self.human
+        )["identifier"]
         ops.call(self.gql, linear_tracker.M_ARCHIVE, "issueArchive", i=archived)
         self.fake.issue("Someone else's", state="done", assignee=self.human)
+        self.fake.issue("Role assignee only", state="done", assignee=self.engineer)
+        self.fake.issue(
+            "Foreign delegate", state="done", delegate=self.human, assignee=self.engineer
+        )
         pages, cursor = [], None
         while True:
             page = self.gql(
@@ -403,13 +411,57 @@ class GraphQLProjection(ServerCase):
         self.assertEqual(sum(pages, []), finished)
         self.assertTrue(self.fake.find(archived)["archived"])
 
+    def test_create_with_delegate_defaults_omitted_assignee_to_caller_but_keeps_explicit_null(self):
+        for assignment, want in (({}, self.harness), ({"assigneeId": None}, None)):
+            with self.subTest(assignment=assignment):
+                new = {
+                    "id": str(uuid.uuid4()),
+                    "teamId": TEAM,
+                    "delegateId": self.engineer,
+                    "title": "Delegated work",
+                    **assignment,
+                }
+                ops.call(self.gql, linear_tracker.M_CREATE, "issueCreate", **{"in": new})
+                made = self.fake.find(new["id"])
+                self.assertEqual((made["delegate"], made["assignee"]), (self.engineer, want))
+
+    def test_board_filters_and_projects_delegate_independently_of_assignee(self):
+        delegated = self.fake.issue(
+            "Delegated", delegate=self.engineer, assignee=self.human, project=PROJECT
+        )
+        self.fake.issue("Only assigned", assignee=self.engineer, project=PROJECT)
+        page = self.gql(
+            linear_tracker.q_issues(),
+            f={
+                "delegate": {"id": {"eq": self.engineer}},
+                "state": {"id": {"eq": STATES["todo"]}},
+            },
+        )["issues"]
+        self.assertEqual([n["id"] for n in page["nodes"]], [delegated["id"]])
+        self.assertEqual(page["nodes"][0]["delegate"], {"id": self.engineer})
+        checked = self.gql(linear_tracker.Q_RECHECK, i=delegated["id"])["issue"]
+        self.assertEqual(checked["delegate"], {"id": self.engineer})
+        self.assertEqual(checked["assignee"]["id"], self.human)
+
+    def test_board_cursor_returns_the_next_page(self):
+        seeded = [self.fake.issue(f"Ready {n}")["id"] for n in range(101)]
+        query = linear_tracker.q_issues()
+        flt = {"state": {"id": {"eq": STATES["todo"]}}}
+        first = self.gql(query, f=flt)["issues"]
+        self.assertEqual([n["id"] for n in first["nodes"]], seeded[:100])
+        self.assertTrue(first["pageInfo"]["hasNextPage"])
+        second = self.gql(query, f=flt, c=first["pageInfo"]["endCursor"])["issues"]
+        self.assertEqual([n["id"] for n in second["nodes"]], seeded[100:])
+        self.assertFalse(second["pageInfo"]["hasNextPage"])
+
     def test_issue_create_takes_the_next_number_and_refuses_a_used_id(self):
         self.fake.issue("Older", identifier="TASK-3")
         new = {
             "id": ops.client_id("src", "pm", "2026-10-09T07:00:00.000Z"),
             "teamId": TEAM,
             "projectId": PROJECT["id"],
-            "assigneeId": self.engineer,
+            "delegateId": self.engineer,
+            "assigneeId": None,
             "stateId": STATES["todo"],
             "priority": 2,
             "title": "PRD: Widgets",
@@ -426,12 +478,22 @@ class GraphQLProjection(ServerCase):
         self.assertEqual(
             {
                 k: child[k]
-                for k in ("id", "state", "assignee", "project", "priority", "title", "description")
+                for k in (
+                    "id",
+                    "state",
+                    "delegate",
+                    "assignee",
+                    "project",
+                    "priority",
+                    "title",
+                    "description",
+                )
             },
             {
                 "id": new["id"],
                 "state": STATES["todo"],
-                "assignee": self.engineer,
+                "delegate": self.engineer,
+                "assignee": None,
                 "project": PROJECT,
                 "priority": 2,
                 "title": "PRD: Widgets",
@@ -452,11 +514,12 @@ class GraphQLProjection(ServerCase):
         blocker = self.fake.issue("Blocker", state="in_progress")
         ready = self.fake.issue(
             "Ready",
-            assignee=self.engineer,
+            delegate=self.engineer,
+            assignee=self.human,
             project=PROJECT,
             labels=[LABEL],
         )
-        self.fake.issue("No project", assignee=self.engineer)
+        self.fake.issue("No project", delegate=self.engineer, assignee=self.human)
         self.fake.issue("Someone else's", assignee=self.human, project=PROJECT)
         ops.call(
             self.gql,
@@ -473,7 +536,7 @@ class GraphQLProjection(ServerCase):
         flt = {
             "team": {"id": {"eq": TEAM}},
             "project": {"null": False},
-            "assignee": {"id": {"in": [self.engineer]}},
+            "delegate": {"id": {"in": [self.engineer]}},
             "state": {"id": {"eq": STATES["todo"]}},
         }
         nodes = self.gql(linear_tracker.q_issues(linear_tracker.RELATIONS), f=flt)["issues"][
@@ -488,7 +551,8 @@ class GraphQLProjection(ServerCase):
             self.gql(linear_tracker.Q_RECHECK, i=ready["id"])["issue"],
             {
                 "state": {"id": STATES["todo"]},
-                "assignee": {"id": self.engineer, "email": ENGINEER_EMAIL},
+                "delegate": {"id": self.engineer},
+                "assignee": {"id": self.human, "email": "Me@X.com"},
                 "project": PROJECT,
                 "labels": {"nodes": [{"id": LABEL, "name": "build", "parent": {"id": TASK_GROUP}}]},
             },
@@ -672,16 +736,16 @@ class GraphQLQueries(ServerCase):
         later = self.fake.issue(
             "Later",
             state="backlog",
-            assignee=self.engineer,
+            delegate=self.engineer,
             project=PROJECT,
         )
-        ready = self.fake.issue("Ready", assignee=self.engineer, project=PROJECT)
+        ready = self.fake.issue("Ready", delegate=self.engineer, project=PROJECT)
 
         def listed(state):
             flt = {
                 "team": {"id": {"eq": TEAM}},
                 "project": {"null": False},
-                "assignee": {"id": {"in": [self.engineer]}},
+                "delegate": {"id": {"in": [self.engineer]}},
                 "state": {"id": {"eq": state}},
             }
             return [
@@ -782,7 +846,8 @@ class GraphQLQueries(ServerCase):
             "Research",
             identifier="TASK-9",
             state="in_review",
-            assignee=self.engineer,
+            delegate=self.engineer,
+            assignee=self.human,
             project=PROJECT,
             priority=2,
             created=created,
@@ -809,7 +874,7 @@ class GraphQLQueries(ServerCase):
                     "priority": 2,
                     "createdAt": created,
                     "project": PROJECT,
-                    "assignee": {"id": self.engineer},
+                    "delegate": {"id": self.engineer},
                     "attachments": {"nodes": [{"title": "PR", "url": PR}]},
                 }
             ],

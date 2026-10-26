@@ -31,7 +31,7 @@ class Bounce(BinFlow):
             self.ids[HUMAN],
         )
         self.fake.issue(
-            TITLE, identifier=SOURCE, state="in_progress", assignee=researcher, project=PROJECT
+            TITLE, identifier=SOURCE, state="in_progress", delegate=researcher, project=PROJECT
         )
         self.fake.move(SOURCE, "in_review", actor=researcher, at=now - ago - timedelta(minutes=20))
         if instructions:

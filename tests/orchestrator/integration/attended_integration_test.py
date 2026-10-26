@@ -180,7 +180,7 @@ class Refused(TmuxFlow):
         self.fake.issue(
             "PRD: Session registry",
             identifier=ID,
-            assignee=self.ids[ACCOUNTS["pm"]],
+            delegate=self.ids[ACCOUNTS["pm"]],
             project=PROJECT,
         )
         self.events = os.path.join(self.root, "events")

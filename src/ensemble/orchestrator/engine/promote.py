@@ -55,10 +55,11 @@ Prerequisites and effects:
   file in <next role>/ready/ with the source's parent in place of a project,
   and an unreadable board exits 2 (promote.py: <path>: <reason>).
   Configuration: ensemble-orchestrator --help
-  For each Handoff issue in a project, assigned to a configured role with next:
-  create that next role's issue in the same project, assigned to its account,
+  For each Handoff issue in a project, delegated to a role app with next:
+  create that next role's issue in the same project, delegated to its app,
+  with an empty assignee,
   in Todo with source links and the user's instructions (comments by anyone but
-  the harness and role accounts); relate the issues and move the source to
+  the harness and role apps); relate the issues and move the source to
   Done. Existing next-stage issues are reused. Required instructions absent:
   return the source to In Review with a comment.
   Every tick also prunes: close finished runs, delete agent files and archive

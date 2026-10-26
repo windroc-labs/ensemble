@@ -12,6 +12,7 @@ from ensemble.utils import append_line, file_lock, one_line, printable, timestam
 
 LOGS_DIR = None
 CAPTURED = None
+RECENT: dict[str, dict[str, datetime]] | None = None
 
 
 def use_logs(path):
@@ -22,14 +23,18 @@ def use_logs(path):
 @contextlib.contextmanager
 def captured():
     """Each line logged inside, a dedupe-skipped one too, as (line, shown, said): whether stderr
-    showed it, and the logger's own stderr text for it (else None).
+    showed it, and the logger's own stderr text for it (else None). Nested captures share
+    once-history timestamps; the outer invocation loads each path once and releases them on exit.
     """
-    global CAPTURED
-    outer, CAPTURED = CAPTURED, []
+    global CAPTURED, RECENT
+    outer, recent = CAPTURED, RECENT
+    CAPTURED = []
+    if RECENT is None:
+        RECENT = {}
     try:
         yield CAPTURED
     finally:
-        CAPTURED = outer
+        CAPTURED, RECENT = outer, recent
 
 
 ONCE = ("src", "kind", "issue", "entry", "reason")
@@ -77,15 +82,20 @@ def _line(src, kind, issue=None, *, now=datetime.now, **fields):
 
 def _log(line, logs, *, once, dry, quiet=False, told=False, said=None, now=datetime.now):
     path, key = os.path.join(logs, "orchestrator.jsonl") if logs else None, _key(line)
-    if once and not dry and path and key in _recent_keys(path, now=now):
-        _capture(line, told, said)
-        return
+    at = datetime.fromisoformat(line["ts"])
+    if once and not dry and path:
+        recent = _recent_keys(path, now=now)
+        if key in recent and recent[key] >= now(UTC) - WINDOW:
+            _capture(line, told, said)
+            return
     text = json.dumps(line, ensure_ascii=False)
     try:
         if not dry and path and logs:
             os.makedirs(logs, exist_ok=True)
             _rotate(path)
             append_line(path, text + "\n")
+            if RECENT is not None and path in RECENT:
+                RECENT[path][key] = max(at, RECENT[path].get(key, at))
     except OSError:
         pass
     shown = told
@@ -180,16 +190,22 @@ def _key(line):
 
 
 def _recent_keys(path, *, now=datetime.now):
-    cutoff, keys = now(UTC) - WINDOW, set()
+    if RECENT is not None and path in RECENT:
+        return RECENT[path]
+    cutoff, keys = now(UTC) - WINDOW, {}
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
             for raw in f:
                 try:
                     line = json.loads(raw)
-                    if datetime.fromisoformat(line["ts"]) >= cutoff:
-                        keys.add(_key(line))
+                    at = datetime.fromisoformat(line["ts"])
+                    if at >= cutoff:
+                        key = _key(line)
+                        keys[key] = max(at, keys.get(key, at))
                 except (ValueError, TypeError, KeyError):
                     pass
     except OSError:
         pass
+    if RECENT is not None:
+        RECENT[path] = keys
     return keys

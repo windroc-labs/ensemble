@@ -157,9 +157,9 @@ class Pick:
 
 @dataclass(frozen=True)
 class Recheck:
-    """ready: still READY; role: the assignee's, None if unassigned or not a role's; refused: None,
-    or why not claimable, a skip reason shown as-is; assignee, home: opaque, for the claim; task,
-    client: the picks."""
+    """ready: still READY; role: the delegate's (local: assignee's), or None; refused: None, or why
+    not claimable, a skip reason shown as-is; assignee, home: opaque, for the claim; task, client:
+    the picks."""
 
     ready: bool
     role: str | None

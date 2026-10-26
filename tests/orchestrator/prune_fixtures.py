@@ -107,7 +107,8 @@ def gql_for(
     changed=None,
     elsewhere=(),
 ):
-    """children: sub-issue state types by parent, any depth, as Linear lists them (archived ones
+    """owners: delegate app user ids by issue, independent of assignee.
+    children: sub-issue state types by parent, any depth, as Linear lists them (archived ones
     left out); stamps: canceledAt and completedAt, hours before NOW, by issue (none: null);
     reread: the state an issue's archive read finds, by issue (none: its own); changed: the idents
     the change feed lists (gql.changed, settable later; None: every issue), each updated just now,

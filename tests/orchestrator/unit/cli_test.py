@@ -47,6 +47,13 @@ class Commands(Case):
 class Wirings(run_fixtures.Base):
     """Each tracker kind's engine wiring: its run reader, role keys and write-back accounts."""
 
+    def test_router_help_identifies_linear_delegate_ownership(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(router.main(["--help"], trackers=cli.TRACKERS), 0)
+        self.assertIn("delegate (Agent field)", output.getvalue())
+        self.assertNotIn("assigned to a role account", output.getvalue())
+
     def test_linear_writes_as_the_role_key_and_the_harness_app(self):
         cfg = config.load()
         gql = mock.Mock(return_value={})

@@ -38,7 +38,7 @@ class Writeback(Flow):
             identifier=ID,
             id=UUID,
             state="in_progress",
-            assignee=self.ids[ACCOUNTS["researcher"]],
+            delegate=self.ids[ACCOUNTS["researcher"]],
             project=PROJECT,
         )
 

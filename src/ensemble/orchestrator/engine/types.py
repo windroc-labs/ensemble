@@ -48,6 +48,15 @@ class TrackerKind(StrEnum):
     LOCAL = "local"
 
 
+# an issue's role owner: Linear reads its delegate, a local board its assignee directory
+UNOWNED = MappingProxyType(
+    {TrackerKind.LINEAR: "no configured role delegate", TrackerKind.LOCAL: "not assigned to a role"}
+)
+OWNERSHIP = MappingProxyType(
+    {TrackerKind.LINEAR: "delegated to a role app", TrackerKind.LOCAL: "assigned to a role account"}
+)
+
+
 @dataclass(frozen=True)
 class LinearKey:
     """The manager's personal API key, by its Keychain service."""
@@ -439,7 +448,7 @@ UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 @dataclass(frozen=True, kw_only=True)
 class Spec:
     """A run the router claimed or resumes: its issue's identity, its role (the tracker's for its
-    assignee), its session and client."""
+    owner: Linear's delegate, a local board's assignee), its session and client."""
 
     uuid: str
     issue: str
@@ -472,9 +481,11 @@ class Spec:
             return f"bad issue or session id: {self.issue} {self.sid}"
         return None
 
-    def role_error(self, role: str | None, tasks: tuple[str, ...]) -> str | None:
+    def role_error(
+        self, role: str | None, tasks: tuple[str, ...], tracker: TrackerKind
+    ) -> str | None:
         if role is None:
-            return "not assigned to a role"
+            return UNOWNED[tracker]
         if self.task is not None and self.task not in tasks:
             return f"task {self.task!r} is not one of {role}'s tasks ({', '.join(tasks)})"
         return None

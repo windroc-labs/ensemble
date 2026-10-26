@@ -98,7 +98,8 @@ class FakeLinear:
             relations=[],
             inverse=[],
             attachments=[],
-            assignee=role and {"id": role_id(role)},
+            delegate=role and {"id": role_id(role)},
+            assignee=None,
             project=project and {"id": PROJECTS[project], "name": project},
         )
         self.issues[ident].update(kw)
@@ -154,8 +155,8 @@ class FakeLinear:
                         for i in self.issues.values()
                         if i["state"] == "Handoff"
                         and i["project"]
-                        and i["assignee"]
-                        and (i["assignee"]["id"] in v["a"])
+                        and i["delegate"]
+                        and (i["delegate"]["id"] in v["a"])
                     ]
                 }
             }
