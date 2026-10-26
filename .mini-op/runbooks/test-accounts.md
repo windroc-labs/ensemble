@@ -1,10 +1,10 @@
 ---
-when: creating or repairing ensemble's test accounts on the mini (Outlook, GitHub and its App, the Linear workspace, role accounts, API keys), or restoring their keychain items after a mini reset
+when: creating or repairing ensemble's test accounts on the mini (Outlook, GitHub and its App, the Linear workspace and its OAuth apps, the setup key), or restoring their keychain items after a mini reset
 ---
 
 # Ensemble's test accounts
 
-How the manager builds ensemble's live-test accounts on the Mac mini: its own email, a GitHub account and App, its own Linear workspace with role accounts, and their keys in the mini's keychain. Machine access, the browser and reconnecting mini-op to a reset mini: mini-op's `setup-test-env` runbook. Rules, driving the mini: mini-op's rules (`/mini-op:run` loads them). Gotchas for this environment: `gotchas.md` beside this runbook.
+How the manager builds ensemble's live-test accounts on the Mac mini: its own email, a GitHub account and App, its own Linear workspace with an OAuth app each for the harness, the manager and every role, and their client secrets and tokens in the mini's keychain. Machine access, the browser and reconnecting mini-op to a reset mini: mini-op's `setup-test-env` runbook. Rules, driving the mini: mini-op's rules (`/mini-op:run` loads them). Gotchas for this environment: `gotchas.md` beside this runbook.
 
 Names, addresses and ids (accounts, keychain items, the workspace and its team, the GitHub user, App and repo) come from the request or the mini's `~/.ensemble/config.local.toml` (template: `install-ensemble/test-board.toml`); never write them into this repo. Before putting a name into an ssh command line, check it matches `^[A-Za-z0-9][A-Za-z0-9._@+:-]*$` (an email: `^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$`); if not, stop and ask the user. This runbook's scripts run from `~/mini-op-projects/ensemble/test-accounts/`; the Linear logins use mini-op's `~/apm/bin/linearlogin` and `~/apm/bin/maillink`.
 
@@ -39,27 +39,22 @@ Pre-rename names: the test resources made before the ensemble rename (the GitHub
 
 1. `linear.app/signup` › Continue with email › the address; `~/apm/bin/maillink mark|follow <email>` around the request opens the emailed link.
 2. Create the workspace (name and URL by keystrokes), skip the onboarding steps, turn off onboarding emails.
-3. Create the manager's key as in "API keys" below; store it under the manager key's item (`[orchestrator.linear] manager_key` and its account: the mini's local config).
-4. Through `~/mini-op-projects/ensemble/test-accounts/lq <manager-key-service> <manager-key-account> <body-file>` (body files built on the user's Mac, scp'd to `/tmp`): states In Review and Handoff (type `started`); label groups `Agent` (Claude, Codex, OpenCode) and `Tasks` (Build, Light Build, Light Research, Deep Research); trash the onboarding issues. Record every id in the mini's `~/.ensemble/config.local.toml` (template: `install-ensemble/test-board.toml`).
+3. Create the setup key as in "Setup key" below; store it under its item (service and account: the request).
+4. Through `~/mini-op-projects/ensemble/test-accounts/lq <setup-key-service> <setup-key-account> <body-file>` (body files built on the user's Mac, scp'd to `/tmp`): states In Review and Handoff (type `started`); label groups `Agent` (Claude, Codex, OpenCode) and `Tasks` (Build, Light Build, Light Research, Deep Research); trash the onboarding issues. Record every id in the mini's `~/.ensemble/config.local.toml` (template: `install-ensemble/test-board.toml`).
 
-Board extras, with the same `lq` call (manager key): a project (`projectCreate`, the test team), mapped in `[orchestrator.linear.project_repos]` to `<test-owner>/<test-repo>`; view **Dashboard**, a copy of the real workspace's: `customViewCreate` (name Dashboard, the test team, shared, filter on the team's key), then `viewPreferencesCreate` (type organization, viewType customView, preferences layout board, issueGrouping workflowState, issueSubGrouping project): columns by status, rows by project.
+Board extras, with the same `lq` call (setup key): a project (`projectCreate`, the test team), mapped in `[orchestrator.linear.project_repos]` to `<test-owner>/<test-repo>`; view **Dashboard**, a copy of the real workspace's: `customViewCreate` (name Dashboard, the test team, shared, filter on the team's key), then `viewPreferencesCreate` (type organization, viewType customView, preferences layout board, issueGrouping workflowState, issueSubGrouping project): columns by status, rows by project.
 
-## 5. Role accounts
+## 5. OAuth apps
 
-1. Invite each role account (harness, researcher, pm, engineer; addresses: `[orchestrator.linear.roles.<role>] account` in the mini's local config): `organizationInviteCreate(role: admin, teamIds: [team])`. The free plan invites admins only.
-2. Per role, one at a time: `ssh mini '~/apm/bin/linearlogin --code <email>'` in the background (logs out, requests the login mail, enters its code, prints where it lands). Then by hand with OpenCLI: Join, the onboarding steps (profile name `Agent <role>`, Skip, Finish), then the key.
+1. Create the five apps (harness, manager, researcher, pm, engineer) as docs/credentials.md › Linear presets says: Client credentials on, Public and Webhooks off, team access only the test team. Put each Client ID in the mini's `~/.ensemble/config.local.toml` (template: `install-ensemble/test-board.toml`).
+2. `install.sh --board linear` (`install-ensemble.md`) asks each app's client secret, stores it and the app's first token in the mini's keychain and fills each app's `user_id`.
 
-## API keys
+## Setup key
 
-Minimum permissions, from `docs/credentials.md`; team access only the test team:
+The workspace owner's own key, for the setup calls in 4. above only; ensemble never uses it. Permissions: Read, Write (Linear then forces Create issues and Create comments on); team access only the test team.
 
-| Account | Permissions |
-|---|---|
-| manager, harness | Read, Write (Linear then forces Create issues and Create comments on) |
-| researcher, pm, engineer | Read, Write (the same: Linear does not allow Write without Create issues) |
-
-1. Settings › Security & access › Personal API keys: revoke any older key of the account.
-2. New API key: name `ensemble-<account>`, Only select permissions… (check `#scope-read`, `#scope-write`), Only select teams… › the test team, Create, Copy to clipboard.
+1. Settings › Security & access › Personal API keys: revoke any older setup key.
+2. New API key: name `ensemble-setup`, Only select permissions… (check `#scope-read`, `#scope-write`), Only select teams… › the test team, Create, Copy to clipboard.
 3. From mini-op, `ssh mini '~/mini-op-projects/ensemble/test-accounts/storekey <service> <account>' < /run/ensemble/secrets/env/mini-password` stores it, clears the clipboard and prints `viewer`.
 
 ## Restore the keychain items after a reset

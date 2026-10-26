@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 usage='lq <service> <account> <json-body-file>   send that GraphQL body to the Linear API; the key in
-the keychain item <service>/<account> (the manager key: the mini'"'"'s ~/.ensemble/config.local.toml or
-the request) goes to curl as its Authorization header through stdin. Prints the reply. Exits 0, 1
+the keychain item <service>/<account> (the workspace owner'"'"'s setup key, named in the
+request) goes to curl as its Authorization header through stdin. Prints the reply. Exits 0, 1
 (the file is unreadable, the key is not in the keychain, or curl failed) or 2 (usage error).'
 [[ $# -eq 1 && $1 == -h ]] && { print -r -- $usage; exit 0; }
 name='^[A-Za-z0-9][A-Za-z0-9._@+:-]*$'

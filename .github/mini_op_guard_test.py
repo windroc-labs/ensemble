@@ -78,7 +78,7 @@ CLEAN = [
     "to security, keychain_read or the project's key scripts.",
     "per-runbook dirs: install-test, clean-test, importkey, lq and storekey,",
     "plus storekey-stdin for the Strata key and the templates",
-    "Board extras, with the same `lq` call (manager key)",
+    "Board extras, with the same `lq` call (setup key)",
     "lq reads the body",
     "and then storekey asks for the key",
     'the "lq and storekey" scripts',

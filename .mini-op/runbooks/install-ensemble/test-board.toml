@@ -1,6 +1,8 @@
 # The test board's settings, a template for the mini's ~/.ensemble/config.local.toml: copy it there
 # and fill every <…> from the test Linear workspace and GitHub account (docs/credentials.md › Linear
-# presets). The filled values live only on the mini; never commit them.
+# presets). Each app's Keychain services default to linear-app-<slot>-secret and -token; install.sh
+# asks each app's client secret and fills its user_id. The filled values live only on the mini; never
+# commit them.
 [orchestrator]
 tracker = "linear"
 
@@ -8,9 +10,13 @@ tracker = "linear"
 team = "<team id>"
 task_label_group = "<Tasks label group id>"
 agent_label_group = "<Agent label group id>"
-harness_key = "<harness key service>"
-manager_key = "<manager key service>"
 human_members = ["<the test manager account's address>"]
+
+[orchestrator.linear.harness]
+client_id = "<harness app's Client ID>"
+
+[orchestrator.linear.manager]
+client_id = "<manager app's Client ID>"
 
 [orchestrator.linear.states]
 backlog     = "<Backlog state id>"
@@ -33,16 +39,13 @@ codex    = "<Codex label id>"
 opencode = "<OpenCode label id>"
 
 [orchestrator.linear.roles.researcher]
-account = "<researcher account's address>"
-key = "<researcher key service>"
+client_id = "<researcher app's Client ID>"
 
 [orchestrator.linear.roles.pm]
-account = "<pm account's address>"
-key = "<pm key service>"
+client_id = "<pm app's Client ID>"
 
 [orchestrator.linear.roles.engineer]
-account = "<engineer account's address>"
-key = "<engineer key service>"
+client_id = "<engineer app's Client ID>"
 
 [orchestrator.linear.project_repos]
 "<project id>" = "<test owner>/<test repo>"
