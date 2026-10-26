@@ -678,7 +678,8 @@ class InstallTest(Case):
         profile = Path(self.home, ".zprofile").read_text()
         self.assertIn(f'eval "$({self.root}/opt/homebrew/bin/brew shellenv)"\n', profile)
         self.assertTrue(result.stderr.endswith(RELOAD + "\n"), result.stderr)
-        self.assertIn("| (_| | (_| |  __/ | | | ||_____| |_) | | | | | |\n", result.stderr)
+        self.assertIn("| |___| | | \\__ \\  __/ | | | | | |_) | |  __/\n", result.stderr)
+        self.assertNotIn("| (_| | (_| |  __/ | | | ||_____| |_) | | | | | |", result.stderr)
         self.assertIn(
             "ensemble is installed (ref main, clients claude,codex, Docker no).\n"
             "Welcome onboard, and congrats: your crew is ready.",
