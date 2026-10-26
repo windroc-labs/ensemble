@@ -1,5 +1,5 @@
 """The root-owned broker at the PROTOCOL version (src/broker/protocol/docker-broker/protocol.schema.json): version, build, start, refresh,
-notices, close and workspace-rm with strict response parsing. A missing, malformed or inconsistent response is a transport failure;
+notices, close, workspace-rm and lock-query with strict response parsing. A missing, malformed or inconsistent response is a transport failure;
 a valid error response is a BrokerError.
 """
 
@@ -49,6 +49,7 @@ COMMANDS = frozenset(
         "status",
         "workspace-rm",
         "probe-provider",
+        "lock-query",
         "unknown",
     }
 )
@@ -58,9 +59,9 @@ CODES = {  # code → (exit code, the commands that report it)
     "mount_rejected": (4, {"start", "refresh", "notices"}),
     "login_required": (5, {"start", "refresh", "probe-provider"}),
     "image_rejected": (6, {"start"}),
-    "docker_unreachable": (7, {"build", "start", "refresh", "close", "workspace-rm"}),
+    "docker_unreachable": (7, {"build", "start", "refresh", "close", "workspace-rm", "lock-query"}),
     "build_failed": (8, {"build"}),
-    "start_failed": (9, {"start"}),
+    "start_failed": (9, {"start", "lock-query"}),
     "close_failed": (10, {"close"}),
     "keychain_failed": (11, {"start", "refresh", "close", "status", "probe-provider"}),
     "workspace_dirty": (12, {"workspace-rm"}),
@@ -70,9 +71,10 @@ CODES = {  # code → (exit code, the commands that report it)
     "refresh_failed": (16, {"refresh"}),
     "egress_unavailable": (17, {"start"}),
     "internal_error": (70, COMMANDS),
+    "busy": (75, {"start"}),
 }
 ERROR_KEYS = frozenset({"command", "code", "message", "cleanup"})
-ERROR_OPTIONAL = frozenset({"cause", "cleanup_error", "container"})
+ERROR_OPTIONAL = frozenset({"cause", "cleanup_error", "container", "holder"})
 LOG = logging.getLogger("session")
 AUDIT_WARNING = (
     "audit_write_failed: broker audit persistence failed; the credential/resource operation "
@@ -90,7 +92,9 @@ class BrokerError(SessionError):
         container: str | None,
         *,
         cause: str | None = None,
+        holder: Mapping[str, str] | None = None,
     ) -> None:
+        """holder: a busy lock's {"container", "owner"}."""
         self.exit_code, self.code, self.message, self.cleanup, self.container, self.cause = (
             exit_code,
             code,
@@ -99,6 +103,7 @@ class BrokerError(SessionError):
             container,
             cause,
         )
+        self.holder = holder
         super().__init__(f"broker: {message}" + (f" ({cause})" if cause else ""))
 
 
@@ -158,6 +163,14 @@ def _credential_expiry(value) -> bool:
     return True
 
 
+def _holder_ok(value) -> bool:
+    return (
+        isinstance(value, dict)
+        and value.keys() == {"container", "owner"}
+        and all(map(_text, value.values()))
+    )
+
+
 def _user_id(value) -> bool:
     return value is None or (type(value) is int and value >= 1)
 
@@ -171,6 +184,7 @@ def _error(command: str, returncode: int, data: dict) -> BrokerError:
         and isinstance(error, dict)
         and ERROR_KEYS <= set(error) <= ERROR_KEYS | ERROR_OPTIONAL
         and all(isinstance(error[key], str) for key in ERROR_KEYS)
+        and ("holder" in error) == (error["code"] == "busy")
     ):
         raise _Bad("error shape")
     code, cleanup, container = error["code"], error["cleanup"], error.get("container")
@@ -184,10 +198,17 @@ def _error(command: str, returncode: int, data: dict) -> BrokerError:
         and (cleanup != "failed" or container is not None)
         and (container is None or _matches(CONTAINER, container))
         and all(_text(error[key]) for key in ("message", "cause", "cleanup_error") if key in error)
+        and ("holder" not in error or _holder_ok(error["holder"]) and cleanup != "failed")
     ):
         raise _Bad("error fields")
     return BrokerError(
-        exit_code, code, error["message"], cleanup, container, cause=error.get("cause")
+        exit_code,
+        code,
+        error["message"],
+        cleanup,
+        container,
+        cause=error.get("cause"),
+        holder=error.get("holder"),
     )
 
 
@@ -304,9 +325,22 @@ class Broker:
         )
         return found["available"]
 
-    def build(self, package: str, *, plugins: Sequence[str] = ()) -> tuple[str, str]:
-        """`package`'s image tag and digest, with `plugins` installed from repository sources."""
-        named = [arg for name in plugins for arg in ("--plugin", name)]
+    def build(
+        self,
+        package: str,
+        *,
+        plugins: Sequence[str] = (),
+        base_image: str | None = None,
+        image_plugins: Sequence[str] = (),
+    ) -> tuple[str, str]:
+        """`package`'s image tag and digest on `base_image` (None: ~/.ensemble/docker/worker), with
+        `plugins` installed from repository sources and `image_plugins` from the base image.
+        """
+        named = [
+            *(("--base-image", base_image) if base_image else ()),
+            *(arg for name in plugins for arg in ("--plugin", name)),
+            *(arg for name in image_plugins for arg in ("--image-plugin", name)),
+        ]
         found = self._parsed(
             "build",
             lambda d: (
@@ -344,6 +378,16 @@ class Broker:
         ):
             raise SessionError("broker: bad response to start: fields")
         return started
+
+    def lock_query(self, lock: str) -> dict[str, str] | None:
+        """The running holder of `lock`, {"container", "owner"}, or None; takes nothing."""
+        found = self._parsed(
+            "lock-query",
+            lambda d: d.keys() == {"holder"} and (d["holder"] is None or _holder_ok(d["holder"])),
+            "--lock",
+            lock,
+        )
+        return found["holder"]
 
     def refresh(self, container: str, manifest: str) -> Refreshed:
         """Public credential deadlines; `manifest`: the one the container was started with."""
@@ -462,11 +506,16 @@ def write_manifest(
     permissions: Mapping[str, str] | None = None,
     providers: tuple[str, ...] = (),
     account: str = "",
+    gateway: str | None = None,
+    secrets: Sequence[Mapping[str, str]] = (),
+    lock: str | None = None,
+    lock_owner: str | None = None,
+    prefetch: Mapping[str, str] | None = None,
 ) -> None:
     """The start manifest, 0600; home: (its manifest field, the client home's path); github: the
     App whose tokens the container gets, "": none; permissions: each token's repository
     permissions; providers: those whose API keys it gets; account: the one whose credential it
-    gets, "": the default.
+    gets, "": the default. An environment's gateway, secrets, lock and prefetch go in when set.
     """
     field, home_path = home
     client = field.removesuffix("_dir")
@@ -483,5 +532,9 @@ def write_manifest(
         "labels": {},
         **({f"{client}_providers": list(providers)} if providers else {}),
         **({f"{client}_account": account} if account else {}),
+        **({"gateway": gateway} if gateway else {}),
+        **({"secrets": [dict(secret) for secret in secrets]} if secrets else {}),
+        **({"lock": lock, "lock_owner": lock_owner} if lock else {}),
+        **({"prefetch": dict(prefetch)} if prefetch else {}),
     }
     save(path, json.dumps(manifest), durable=True)

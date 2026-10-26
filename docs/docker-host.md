@@ -18,10 +18,19 @@ Needs Docker Desktop (running) and `gh` (logged in).
 
 `scripts/install.sh --docker` installs and starts Docker Desktop and the [egress proxy](#egress-proxy).
 
-**Rosetta** stays off and `scripts/install.sh` never installs it: the worker image is arm64. For an amd64-only base image in
-your Dockerfile, run `softwareupdate --install-rosetta`, then turn on Docker Desktop › Settings › General › **Use Rosetta
-for x86_64/amd64 emulation on Apple Silicon**. Rosetta cannot be uninstalled, so `scripts/install-cleanup.sh` cannot
-undo it.
+**First start**: when `scripts/install.sh` installed Docker Desktop, it accepts the license and runs the privileged
+setup through Docker Desktop's own `install --accept-license`, then runs `open -a Docker` and waits up to 5 minutes
+for the engine. Before that start it presets Rosetta off and the onboarding done in Docker Desktop's
+`~/Library/Group Containers/group.com.docker/settings-store.json`, keeping any setting already there, so no Rosetta
+prompt or "Welcome to Docker" sign-in window shows. macOS 27 may deny a shell access to that Group Container: then
+install.sh prints `Docker Desktop presets not written (Rosetta off, onboarding done): …` and goes on without them,
+and Docker Desktop shows its Welcome window on first start (Skip). Either way it may open its Containers window,
+which you can close.
+
+**Rosetta**: `scripts/install.sh` presets it off where it can ([First start](#install)) and never installs it: the
+worker image is arm64. For an amd64-only base image in your Dockerfile, run `softwareupdate --install-rosetta`, then
+turn on Docker Desktop › Settings › General › **Use Rosetta for x86_64/amd64 emulation on Apple Silicon**. Rosetta
+cannot be uninstalled, so `scripts/install-cleanup.sh` cannot undo it.
 
 ```sh
 sh "$PKG/src/broker/install.sh"
@@ -535,6 +544,26 @@ included: every Docker session can read and write exactly those private repos.
 
 An engineer opens its draft PR as the App's bot; the host marks it ready for your review, and revision rounds push to the same branch. Then [review before pulling](#review-before-pulling).
 
+### Environments
+
+A session `Spec` may carry an `EnvironmentSpec` (`ensemble.session`): `image` (a local [base image](#base-images), or
+`EnvironmentSpec.WORKER`, `"@worker"`, for `~/.ensemble/docker/worker`), `gateway` (the egress proxy's caller network key), `secrets`
+(`item`, `file` pairs, [Environment secrets](#environment-secrets)), `plugins` (in-image names or pinned sources, over
+`plugins` above), optional `lock` ([Broker locks](#broker-locks)) and optional `prefetch` (`repo`, `ref`,
+[Prefetch](#prefetch)). Only a Docker-kind Host runs one; another Host's `start` refuses it as a configuration error
+before starting anything.
+
+| Step | With an environment |
+|---|---|
+| preflight | the cwd, the broker handshake and, with a lock, `lock-query`: a holder other than the session's own container raises `SessionBusy` naming its container and owner; no build, base image, egress proxy or secret check |
+| start | `build` on its image and plugins; the manifest gets `gateway`, `secrets`, `lock` with `lock_owner` (the session name) and `prefetch`; with `prefetch` no GitHub App or bot identity |
+| busy reply | `SessionBusy` (lock, holder), from start, restart, resume and a worker's restart |
+
+`host.json` keeps a start's environment and a worker's `worker.json` keeps the one it was given. A resume giving none
+(`ensemble-session resume`, `ensemble-crew reopen`) of the same sid runs the stored one; one giving another (prefetch aside) is refused;
+state from before environments runs without one. Each new container takes the lock again and resolves its secrets
+again; only a workspace the start creates is prefetched.
+
 ### Codex
 
 Install or upgrade the broker first ([Install](#install)). `<version>` is an exact stable npm version, at least `0.163.0` for both the pinned host installation and the image. A lower host version needs `update-codex`; a lower image needs a [rebuild](#build).
@@ -635,7 +664,7 @@ The image supplies OpenCode 1.x and its provider config; none of the Mac's OpenC
 Each start, restart or resume runs a new generation in a new container from the current image. `restart` closes the
 running container first; `resume` (after `close`, or once the container is gone) starts one in the same cwd. Both
 keep the client history and [workspace volume](#workspace-volumes) and continue the conversation; a new start
-clears client history, while workspace retention follows [Workspace volumes](#workspace-volumes). A resume whose conversation file is missing or a symlink fails before any container with
+clears client history, emptying the client state dir in place, while workspace retention follows [Workspace volumes](#workspace-volumes). A resume whose conversation file is missing or a symlink fails before any container with
 `no native history to resume`. Resume with `ensemble-session resume <name>`, never `client-resume`, which runs the
 client on the host. Claude, Codex and [OpenCode](#opencode) terminals and headless runs are supported;
 other clients, detached sessions and a start while a container of that name exists fail before creation.
