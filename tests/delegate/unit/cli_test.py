@@ -1188,14 +1188,111 @@ class Prompt(Case):
         self.assertFalse(os.path.exists(self.work))
 
 
+class Open(Base):
+    def setUp(self):
+        super().setUp()
+        self.config = Path(self.ensemble, "config.local.toml")
+        self.config.write_text(
+            '[session.hosts]\ndefault = "docker"\n'
+            '[delegate.environments.dummy]\nimage = "dummy-env:test"\nlock = "dummy-lock"\n'
+        )
+        self.opened = self.enterContext(
+            mock.patch("subprocess.run", return_value=types.SimpleNamespace(returncode=0))
+        )
+
+    def test_open_has_no_role_and_passes_optional_values_and_launcher_identity(self):
+        with mock.patch.dict(os.environ, {"ENSEMBLE_SID": SID, "ENSEMBLE_EVENTS": "/events"}):
+            self.assertEqual(
+                self.cli(
+                    "open",
+                    "dummy-1",
+                    "--environment",
+                    "dummy",
+                    "--client",
+                    "codex",
+                    "--account",
+                    "work",
+                    "--cwd",
+                    self.tmp,
+                    "--display",
+                    "none",
+                ),
+                (0, "", ""),
+            )
+            self.assertNotIn("ENSEMBLE_SID", os.environ)
+            self.assertNotIn("ENSEMBLE_EVENTS", os.environ)
+        argv = self.opened.call_args.args[0]
+        self.assertEqual(argv[5:7], ["start", "dummy-1"])
+        for key, value in (
+            ("--client", "codex"),
+            ("--account", "work"),
+            ("--cwd", self.tmp),
+            ("--display", "none"),
+        ):
+            self.assertEqual(argv[argv.index(key) + 1], value)
+        env = self.opened.call_args.kwargs["env"]
+        self.assertEqual((env["ENSEMBLE_SID"], env["ENSEMBLE_EVENTS"]), (SID, "/events"))
+        self.assertFalse(os.path.exists(self.work))
+
+    def test_open_preserves_the_session_status(self):
+        for code in (0, 1, 2, 75):
+            with self.subTest(code=code):
+                self.opened.return_value = types.SimpleNamespace(returncode=code)
+                self.assertEqual(
+                    self.cli("open", "dummy-1", "--environment", "dummy"), (code, "", "")
+                )
+
+    def test_config_errors_and_spawn_errors_are_reported_cleanly(self):
+        self.opened.side_effect = OSError("session unavailable")
+        self.assertEqual(
+            self.cli("open", "dummy-1", "--environment", "dummy"),
+            (1, "", "delegate: session unavailable\n"),
+        )
+        self.opened.reset_mock()
+        code, out, err = self.cli("open", "dummy-1", "--environment", "unknown")
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("unknown", err)
+        self.config.write_text("[")
+        self.assertEqual(self.cli("open", "dummy-1", "--environment", "dummy")[:2], (2, ""))
+        self.opened.assert_not_called()
+
+    def test_invalid_names_missing_unknown_empty_and_repeated_options_start_nothing(self):
+        for argv in (
+            ("open", "none", "--environment", "dummy"),
+            ("open", "a.b", "--environment", "dummy"),
+            ("open", "dummy-1"),
+            ("open", "dummy-1", "--environment", "dummy", "--role", "engineer"),
+            *(
+                ("open", "dummy-1", "--environment", "dummy", flag, "")
+                for flag in ("--client", "--account", "--cwd", "--display", "--environment")
+            ),
+            *(
+                ("open", "dummy-1", "--environment", "dummy", flag, "x", flag, "y")
+                for flag in ("--client", "--account", "--cwd", "--display", "--environment")
+            ),
+        ):
+            with self.subTest(argv=argv):
+                self.assertEqual(self.cli(*argv)[:2], (2, ""))
+        self.opened.assert_not_called()
+
+    def test_nested_open_is_refused_and_help_starts_nothing(self):
+        with mock.patch.dict(os.environ, {"ENSEMBLE_AGENT_SESSION": "1"}):
+            code, out, err = self.cli("open", "dummy-1", "--environment", "dummy")
+            self.assertEqual((code, out), (2, ""))
+            self.assertIn("refused inside an agent session", err)
+            self.assertEqual(self.cli("open", "--help")[0], 0)
+        self.opened.assert_not_called()
+
+
 class Commands(Base):
-    def test_help_lists_exactly_the_ten_subcommands(self):
+    def test_help_lists_all_subcommands(self):
         code, out, err = self.cli("--help")
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(
             re.search(r"\{([a-z,-]+)\}", out)[1].split(","),
             [
                 "run",
+                "open",
                 "status",
                 "content",
                 "outcome",
@@ -1519,6 +1616,7 @@ class AdhocWorkdir(Base):
 
 HELP_COMMANDS = [
     "run",
+    "open",
     "status",
     "content",
     "outcome",
@@ -1589,7 +1687,7 @@ class HelpContracts(Case):
 
     def test_every_query_explains_cardinality_and_record_input(self):
         for name in HELP_COMMANDS:
-            if name in {"run", "prompt"}:
+            if name in {"run", "open", "prompt"}:
                 continue
             with self.subTest(name=name):
                 text = self.help(name)

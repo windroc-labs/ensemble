@@ -54,6 +54,7 @@ SURFACES = {
         "delegate",
         [
             "run",
+            "open",
             "status",
             "content",
             "outcome",
