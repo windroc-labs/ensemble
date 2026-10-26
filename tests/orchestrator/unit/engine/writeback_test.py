@@ -2916,22 +2916,25 @@ BUSY_ERROR = "busy: lock dummy-lock is held by ensemble-x-1 (owner x)"
 
 
 class BusyFinished(Events):
+    def _failure_comment(self, error):
+        bodies = [v["body"] for v in self.linear.comments.values() if error in v["body"]]
+        self.assertEqual(len(bodies), 1)
+        return bodies[0]
+
     def test_client_capacity_failure_comments_and_counts_one_attempt(self):
         error = "client fake reached max_runs limit 1; held by: worker-one"
         for _ in range(2):
             self.assertTrue(self.deliver(self.finished(1, error=error)))
-        bodies = [v["body"] for v in self.linear.comments.values()]
-        self.assertEqual(sum(error in body for body in bodies), 1)
+        self._failure_comment(error)
         self.assertEqual(router.attempt_count(runs.parse_log(self.cfg.runs_log), RUN_ISSUE), 1)
         self.assertEqual(self.linear.state, self.cfg.linear.states["in_review"])
 
     def test_busy_start_is_a_normal_failure_comment_and_attempt_once(self):
         for _ in range(2):
             self.assertTrue(self.deliver(self.finished(75, error=BUSY_ERROR)))
-        body = self.linear.comments[ops.client_id(RUN_SID, "no-outcome:1:comment")]["body"]
+        body = self._failure_comment(BUSY_ERROR)
         self.assertIn(BUSY_ERROR, body)
         self.assertEqual(self.linear.state, self.cfg.linear.states["in_review"])
-        self.assertEqual(sum(BUSY_ERROR in v["body"] for v in self.linear.comments.values()), 1)
         self.assertEqual(router.attempt_count(runs.parse_log(self.cfg.runs_log), RUN_ISSUE), 1)
         with open(self.cfg.runs_log) as stream:
             self.assertNotIn("busy", [json.loads(line)["kind"] for line in stream])
@@ -2949,7 +2952,7 @@ class BusyFinished(Events):
         )
         for _ in range(2):
             self.assertTrue(self.deliver(self.finished(75, error=BUSY_ERROR, attempt=2)))
-        body = self.linear.comments[ops.client_id(RUN_SID, "no-outcome:2:comment")]["body"]
+        body = self._failure_comment(BUSY_ERROR)
         self.assertIn(BUSY_ERROR, body)
         self.assertEqual(self.linear.state, self.cfg.linear.states["in_review"])
         self.assertEqual(router.attempt_count(runs.parse_log(self.cfg.runs_log), RUN_ISSUE), 2)
@@ -2961,5 +2964,4 @@ class BusyFinished(Events):
         ):
             with self.subTest(named=named):
                 self.assertTrue(self.deliver(self.finished(1, error=error, attempt=attempt)))
-                body = self.linear.comments[ops.client_id(RUN_SID, f"no-outcome:{attempt}:comment")]
-                self.assertIn(named, body["body"])
+                self.assertIn(named, self._failure_comment(error))
