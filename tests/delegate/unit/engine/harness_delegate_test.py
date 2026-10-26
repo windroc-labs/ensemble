@@ -896,7 +896,7 @@ class AttendedBusyTest(HarnessCase):
             with self.subTest(error=error, lock=lock), self.assertRaises(SessionError) as caught:
                 self.started(error, lock)
             self.assertNotIsInstance(caught.exception, SessionBusy)
-            self.assertRegex(str(caught.exception), "did not start$")
+            self.assertRegex(str(caught.exception), r"^tui session \S+ did not start\b")
 
 
 class LaunchTest(HarnessCase):
