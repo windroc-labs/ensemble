@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -756,5 +757,23 @@ func TestReleaseUnreadableRecordWithBacklogDown(t *testing.T) {
 	}
 	if _, ok := store.record(t, ctrA); !ok {
 		t.Fatal("record lost")
+	}
+}
+
+// TestRefreshUsesRecordedScope: a renewal never widens a grant; a record an older broker wrote, with no scope, renews
+// with the caller's.
+func TestRefreshUsesRecordedScope(t *testing.T) {
+	recorded, caller := map[string]string{"contents": "read"}, map[string]string{"contents": "write"}
+	store, p := newStore(), newProvider(t)
+	store.seed(t, ctrA, Record{Subject: "app", Scope: recorded, Tokens: []Material{{Account: "acme", Target: 1, Token: "ghs_old", State: Delivered}}})
+	store.seed(t, ctrB, Record{Subject: "app", Tokens: []Material{{Account: "acme", Target: 1, Token: "ghs_legacy"}}})
+	l := lifecycle(store, p, nil)
+	for _, id := range []string{ctrA, ctrB} {
+		if _, err := l.Refresh(bg, to(id, newContainer()), caller); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(p.scopes) != 2 || !maps.Equal(p.scopes[0], recorded) || !maps.Equal(p.scopes[1], caller) {
+		t.Fatalf("scopes %v", p.scopes)
 	}
 }

@@ -121,6 +121,7 @@ type fakeProvider struct {
 	revoked  []string
 	calls    []string
 	held     *bool
+	scopes   []map[string]string // each Issue's
 	log      *[]string
 }
 
@@ -150,8 +151,9 @@ func (p *fakeProvider) Begin(context.Context, string) (Issuer, error) {
 
 func (p *fakeProvider) Targets(context.Context) ([]Material, error) { return p.targets, nil }
 
-func (p *fakeProvider) Issue(_ context.Context, _ map[string]string, target Material) (Material, error) {
+func (p *fakeProvider) Issue(_ context.Context, scope map[string]string, target Material) (Material, error) {
 	p.unlocked("issue")
+	p.scopes = append(p.scopes, scope)
 	p.n++
 	if p.onIssue != nil {
 		p.onIssue(p.n)
