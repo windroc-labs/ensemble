@@ -4198,6 +4198,16 @@ exec /bin/rm "$@"
         ):
             self.assertIn(record, self.ledger())
 
+    def test_relative_tool_path_not_recorded(self):
+        """A relative path from the environment cannot be confirmed missing: one line, no record."""
+        self.env["UV_CACHE_DIR"] = "uv-cache"
+        result = self.fresh("--no-docker")
+        self.assert_ok(result)
+        self.assertEqual(
+            result.stderr.count(f"{NOT_TOLD}uv-cache: cannot tell whether it is there"), 1
+        )
+        self.assertFalse([record for record in self.ledger() if "uv-cache" in record])
+
     def test_ledger_with_docker_and_opencode(self):
         self.assert_ok(self.full())
         h, ledger = self.home, self.ledger()

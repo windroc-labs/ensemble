@@ -321,12 +321,13 @@ recorded() { [ -f "$ledger" ] && grep -qxF -- "$(
   printf '%s' "$*"
 )" "$ledger"; }
 
-# Exit 0 when path $1 is confirmed missing, 1 when it is there, 2 when macOS may deny it: `test -e` is false on any
-# lstat failure, so missing means its parent directory is missing too, or lists without it. Shell only: python3 may
-# be the Command Line Tools' failing shim until homebrew installs them.
+# Exit 0 when absolute path $1 is confirmed missing, 1 when it is there, 2 when it cannot tell (macOS may deny it, or
+# $1 is relative): `test -e` is false on any lstat failure, so missing means its parent directory is missing too, or
+# lists without it. Shell only: python3 may be the Command Line Tools' failing shim until homebrew installs them.
 path_state() {
   local parent=${1%/*} listing rc=0
   if [ -e "$1" ] || [ -L "$1" ]; then return 1; fi
+  case $1 in /*[!/]) ;; *) return 2 ;; esac
   [ -n "$parent" ] || parent=/
   if [ ! -e "$parent" ] && [ ! -L "$parent" ]; then
     path_state "$parent" || rc=$?
@@ -334,7 +335,8 @@ path_state() {
   fi
   [ -d "$parent" ] || return 2
   listing=$(ls -A -- "$parent" 2>/dev/null) || return 2
-  if grep -qxF -- "${1##*/}" <<<"$listing"; then return 2; fi
+  grep -qxF -- "${1##*/}" <<<"$listing" || rc=$?
+  [ "$rc" = 1 ] || return 2
 }
 
 # Exit 0 when path $1 is confirmed missing; a path macOS may deny counts as there (it may be the user's: never

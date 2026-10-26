@@ -246,8 +246,9 @@ validate() {
 # Exit 0 when path $1 is confirmed missing (install.sh's path_state): `test -e` is false on any lstat failure, so its
 # parent directory must be missing too, or list without it.
 absent() {
-  local parent=${1%/*} listing
+  local parent=${1%/*} listing rc=0
   if [ -e "$1" ] || [ -L "$1" ]; then return 1; fi
+  case $1 in /*[!/]) ;; *) return 1 ;; esac
   [ -n "$parent" ] || parent=/
   if [ ! -e "$parent" ] && [ ! -L "$parent" ]; then
     absent "$parent"
@@ -255,7 +256,8 @@ absent() {
   fi
   [ -d "$parent" ] || return 1
   listing=$(ls -A -- "$parent" 2>/dev/null) || return 1
-  ! grep -qxF -- "${1##*/}" <<<"$listing"
+  grep -qxF -- "${1##*/}" <<<"$listing" || rc=$?
+  [ "$rc" = 1 ]
 }
 
 # Stops before anything is removed while a recorded app or group container may be there and the terminal lacks Full
