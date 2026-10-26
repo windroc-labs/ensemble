@@ -5,7 +5,6 @@ import io
 import json
 import os
 import re
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -153,7 +152,7 @@ class Repository(unittest.TestCase):
             rev, path = args[4].split(":", 1)
             blobs = {"fork": MANIFESTS if base is None else base, "head": head}.get(rev, {})
             if args[3] != "show" or path not in blobs:
-                raise subprocess.CalledProcessError(128, args)
+                raise scope.subprocess.CalledProcessError(128, args)
             blob = blobs[path]
             return blob if isinstance(blob, bytes) else blob.encode()
 
