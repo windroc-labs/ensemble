@@ -96,6 +96,7 @@ func TestEgressRefusals(t *testing.T) {
 					t.Fatalf("%+v", e)
 				}
 				if !strings.Contains(e.Message, tc.want) || !strings.HasSuffix(e.Message, egressHint) ||
+					!strings.Contains(e.Message, "workers") || // the caller network, by key or network name
 					!strings.Contains(e.Message, "Start the egress proxy (~/.egress/current/start.sh") ||
 					(!strings.Contains(e.Message, "egress-proxy") && !strings.Contains(e.Message, "my-proxy")) {
 					t.Fatalf("message %q lacks %q, the proxy or ~/.egress/current/start.sh", e.Message, tc.want)
@@ -326,6 +327,10 @@ func TestEgressRefusalsByKey(t *testing.T) {
 			delete(g["NetworkSettings"].(map[string]any)["Networks"].(map[string]any), miniOpNetwork)
 		}}, 2, "is not attached to network egress-mini-op"},
 		{"not internal", "mini-op", world{network: func(n map[string]any) { n["Internal"] = false }}, 3, "Egress network egress-mini-op of proxy egress-proxy is not internal"},
+		{"proxy stopped", "mini-op", world{proxy: func(g map[string]any) {
+			g["State"] = map[string]any{"Running": false, "Health": map[string]any{"Status": "unhealthy"}}
+		}}, 2, "Egress proxy egress-proxy is not running. Caller network mini-op needs it."},
+		{"no proxy", "mini-op", world{proxies: new(string)}, 1, "Caller network mini-op needs it."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := tc.world

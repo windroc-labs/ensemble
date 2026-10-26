@@ -105,8 +105,17 @@ func inspectOne[T any](out []byte) (T, error) {
 
 // checkProxy applies the contract's consumer rules to the egress proxy itself: exactly one, its contract version, running
 // and healthy. Start runs it before any credential or Docker object is touched, so a refusal leaves nothing to
-// withdraw or remove; there is no fallback network.
-func (h Host) checkProxy(ctx context.Context) (egressProxy, error) {
+// withdraw or remove; there is no fallback network. A refusal names caller network key, the one start needs.
+func (h Host) checkProxy(ctx context.Context, key string) (egressProxy, error) {
+	px, err := h.inspectProxy(ctx)
+	var e *protocol.Error
+	if errors.As(err, &e) && e.Code == protocol.EgressUnavailable {
+		e.Message = strings.TrimSuffix(e.Message, egressHint) + " Caller network " + key + " needs it." + egressHint
+	}
+	return px, err
+}
+
+func (h Host) inspectProxy(ctx context.Context) (egressProxy, error) {
 	out, err := h.Docker.Run(ctx, []string{"ps", "--all", "--no-trunc", "--filter", "label=" + contractLabel, "--format", "{{.ID}}"}, nil)
 	if err != nil {
 		return egressProxy{}, failure(err, protocol.EgressUnavailable, "Cannot list egress proxy containers."+egressHint)

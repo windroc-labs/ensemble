@@ -221,8 +221,8 @@ func startLine(t *testing.T, a audited) string {
 	return string(data)
 }
 
-// cloneScript run for real against a local repo standing in for github.com: the clone holds the ref and no
-// credential anywhere, its remote URL included.
+// TestCloneScriptLeavesNoCredential runs cloneScript for real against a local repo standing in for github.com: the
+// clone holds the ref and no credential anywhere, its remote URL included.
 func TestCloneScriptLeavesNoCredential(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("no git")
