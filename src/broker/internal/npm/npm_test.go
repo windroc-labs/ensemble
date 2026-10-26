@@ -51,10 +51,10 @@ func TestFetchErrors(t *testing.T) {
 		want  string
 	}{
 		"another origin": {reply(http.StatusOK, "x"), "https://evil.example/x", 4, "Thing download origin rejected"},
-		"transport":      {func(*http.Request) (*http.Response, error) { return nil, errors.New("dial: secret") }, Registry + "/x", 4, "Thing registry unavailable"},
-		"missing":        {reply(http.StatusNotFound, "secret"), Registry + "/x", 4, "Thing registry release missing"},
-		"server error":   {reply(http.StatusInternalServerError, "secret"), Registry + "/x", 4, "Thing registry unavailable"},
-		"over the limit": {reply(http.StatusOK, "secret"), Registry + "/x", 4, "Thing registry response exceeds limit"},
+		"transport":      {func(*http.Request) (*http.Response, error) { return nil, errors.New("dial: secret") }, registry + "/x", 4, "Thing registry unavailable"},
+		"missing":        {reply(http.StatusNotFound, "secret"), registry + "/x", 4, "Thing registry release missing"},
+		"server error":   {reply(http.StatusInternalServerError, "secret"), registry + "/x", 4, "Thing registry unavailable"},
+		"over the limit": {reply(http.StatusOK, "secret"), registry + "/x", 4, "Thing registry response exceeds limit"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b, err := fetch(t, c.rt, c.raw, c.limit)
@@ -65,18 +65,12 @@ func TestFetchErrors(t *testing.T) {
 	}
 }
 
-func TestFetchMissingIsErrMissing(t *testing.T) {
-	if _, err := fetch(t, reply(http.StatusNotFound, ""), Registry+"/x", 4); !errors.Is(err, ErrMissing) {
-		t.Fatalf("error %v", err)
-	}
-}
-
 func TestFetchFollowsNoRedirect(t *testing.T) {
 	requests := 0
 	_, err := fetch(t, func(r *http.Request) (*http.Response, error) {
 		requests++
-		return &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": []string{Registry + "/y"}}, Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
-	}, Registry+"/x", 4)
+		return &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": []string{registry + "/y"}}, Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
+	}, registry+"/x", 4)
 	if err == nil || err.Error() != "Thing registry unavailable" || requests != 1 {
 		t.Fatalf("error %v after %d requests", err, requests)
 	}
@@ -85,7 +79,7 @@ func TestFetchFollowsNoRedirect(t *testing.T) {
 func TestFetchRejectsAnOversizeContentLengthUnread(t *testing.T) {
 	_, err := fetch(t, func(r *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, ContentLength: 5, Body: io.NopCloser(unread{t}), Header: make(http.Header), Request: r}, nil
-	}, Registry+"/x", 4)
+	}, registry+"/x", 4)
 	if err == nil || err.Error() != "Thing registry unavailable" {
 		t.Fatalf("error %v", err)
 	}

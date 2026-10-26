@@ -4,7 +4,6 @@ package npm
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -12,22 +11,20 @@ import (
 )
 
 const (
-	Registry    = "https://registry.npmjs.org"
+	registry    = "https://registry.npmjs.org"
 	MaxMetadata = 1 << 20
 )
-
-var ErrMissing = errors.New("registry release missing")
 
 // Allowed reports whether raw is an https registry.npmjs.org URL whose path starts with "/", with no userinfo, query,
 // fragment or opaque part.
 func Allowed(raw string) bool {
 	u, err := url.Parse(raw)
-	return err == nil && u.Scheme == "https" && u.Host == "registry.npmjs.org" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && u.Opaque == "" && strings.HasPrefix(u.Path, "/")
+	return err == nil && u.Scheme+"://"+u.Host == registry && u.User == nil && u.RawQuery == "" && u.Fragment == "" && u.Opaque == "" && strings.HasPrefix(u.Path, "/")
 }
 
 // Package is the URL of name at version (a version or a dist-tag).
 func Package(name, version string) string {
-	return Registry + "/" + strings.ReplaceAll(name, "/", "%2F") + "/" + version
+	return registry + "/" + strings.ReplaceAll(name, "/", "%2F") + "/" + version
 }
 
 // Fetch GETs raw through client, following no redirect, and returns a body of at most limit bytes.
@@ -50,7 +47,7 @@ func Fetch(ctx context.Context, client *http.Client, subject, raw string, limit 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, fmt.Errorf("%s %w", subject, ErrMissing)
+		return nil, errors.New(subject + " registry release missing")
 	}
 	if resp.StatusCode != http.StatusOK || resp.ContentLength > limit {
 		return nil, unavailable

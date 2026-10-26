@@ -23,7 +23,7 @@ func serve(t *testing.T, status int, body string) (Registry, *[]string) {
 		urls = append(urls, req.URL.String())
 		h := make(http.Header)
 		if status == http.StatusFound {
-			h.Set("Location", npm.Registry+"/opencode-ai/9.9.9")
+			h.Set("Location", npm.Package("opencode-ai", "9.9.9"))
 		}
 		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: h, Request: req}, nil
 	})
