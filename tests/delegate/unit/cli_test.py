@@ -481,31 +481,45 @@ class Verifier(Harnessed):
                     {"item": "ensemble-env/mini-op-password", "file": "mini-password"},
                     {"item": "ensemble-env/mini-op-ssh-key", "file": "mini-ssh-key"},
                 ],
-                "plugins": ["mini-op"],
+                "plugins": [],
                 "lock": "mini-op",
                 "prefetch": {"repo": "windroc-labs/ensemble", "ref": "main"},
             },
         )
-        self.assertIn("/mini-op:run", shown["prompt"])
+        self.assertIn("`mini-op` skill", shown["prompt"])
         self.assertFalse(os.path.exists(self.work))
 
-    def test_client_codex_is_refused_naming_the_flag(self):
+    def test_each_client_is_accepted_with_the_mini_op_environment(self):
         self.configure("docker")
-        for extra in (("--dry-run",), ()):
-            with self.subTest(extra=extra):
-                code, out, err = self.verify(*extra, client="codex")
-                self.assertEqual((code, out), (2, ""))
-                self.assertIn("--client codex: role verifier runs only on claude", err)
+        for client in ("codex", "opencode", "claude"):
+            with self.subTest(client=client):
+                code, out, err = self.verify("--dry-run", client=client)
+                self.assertEqual(code, 0, err)
+                shown = json.loads(out)
+                self.assertEqual(shown["client"], client)
+                self.assertEqual(shown["environment"]["image"], "mini-op:env")
+                self.assertEqual(shown["environment"]["plugins"], [])
                 self.assertFalse(os.path.exists(self.work))
 
-    def test_a_local_role_client_is_refused_naming_its_table(self):
+    def test_a_local_role_client_is_accepted(self):
         self.configure("docker")
         with open(self.local, "a", encoding="utf-8") as file:
             file.write('[delegate.roles.verifier]\nclient = "codex"\n')
         code, out, err = self.verify("--dry-run")
-        self.assertEqual((code, out), (2, ""))
-        for part in ("[delegate.roles.verifier]", "'codex'", "role verifier runs only on claude"):
-            self.assertIn(part, err)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(out)["client"], "codex")
+
+    def test_global_client_applies_and_the_flag_overrides_it(self):
+        self.configure("docker")
+        with open(self.local, encoding="utf-8") as file:
+            local = file.read()
+        with open(self.local, "w", encoding="utf-8") as file:
+            file.write(local.replace("[delegate]\n", '[delegate]\nclient = "opencode"\n'))
+        for given, expected in ((None, "opencode"), ("codex", "codex")):
+            with self.subTest(client=given):
+                code, out, err = self.verify("--dry-run", client=given)
+                self.assertEqual(code, 0, err)
+                self.assertEqual(json.loads(out)["client"], expected)
 
     def test_missing_repo_is_refused_before_the_task_runs(self):
         self.configure("docker")

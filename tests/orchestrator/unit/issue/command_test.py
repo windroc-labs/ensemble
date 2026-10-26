@@ -6,7 +6,9 @@ import io
 import json
 import os
 import urllib.error
+import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
 
@@ -32,15 +34,20 @@ from ensemble.orchestrator.issue.output import partial_message, refusal
 from ensemble.orchestrator.trackers.linear import client
 from ensemble.orchestrator.trackers.local.issues import LocalIssues
 from tests.orchestrator.case import Case
-from tests.orchestrator.process_fixtures import CalledProcessError, CompletedProcess, TimeoutExpired
-from tests.orchestrator.unit import promote_fixtures as tp
-from tests.orchestrator.unit.board_ids import ACCOUNTS, STATES, TASK_GROUP
+from tests.orchestrator.process_fixtures import CalledProcessError, TimeoutExpired
+from tests.orchestrator.unit.board_ids import (
+    HARNESS_LINE,
+    MANAGER_APP,
+    MANAGER_IDENTITY,
+    MANAGER_LINE,
+    STATES,
+    TASK_GROUP,
+    role_id,
+)
 from tests.orchestrator.unit.issue_fixtures import (
     CLIENT_LABELS,
     CONFIG,
-    MANAGER_KEY,
     OTHER_TEAM,
-    ROLE_USERS,
     TASK_LABELS,
     ArchiveGql,
     EditGql,
@@ -48,12 +55,14 @@ from tests.orchestrator.unit.issue_fixtures import (
     IssueCase,
     LabelGql,
     RelationGql,
+    Routes,
     SecondFails,
     WriteGql,
     comment,
     conn,
     create_gql,
     issue_node,
+    issue_row,
     label,
     project,
     rel,
@@ -61,8 +70,32 @@ from tests.orchestrator.unit.issue_fixtures import (
     uid,
     write_issue,
 )
+from tests.orchestrator.unit.issue_fixtures import (
+    edges as page_edges,
+)
+from tests.orchestrator.unit.keychain_fixtures import (
+    NEW,
+    OLD,
+    SECRET,
+    Endpoint,
+    Keychain,
+    leaks,
+    record,
+    renewed,
+    token_http_error,
+)
 
-KEY = "lin_api_TESTSECRET0123456789"
+
+# The manager app's Keychain with a token days from expiry and its client secret.
+def manager_tokens(days=10.0):
+    return Keychain(
+        {
+            MANAGER_IDENTITY.token_service: record(days=days),
+            MANAGER_IDENTITY.secret_service: SECRET,
+        }
+    )
+
+
 RAW_BODY = 'say "hi", `ls`, $HOME and ${x} \\n\nline two\n中文正文\n'
 
 
@@ -121,7 +154,7 @@ class Help(Case):
             "most\n  recently updated first",
             "1-50 (default 20)",
             "--role SPEC",
-            "unassigned (no assignee)",
+            "unassigned (no delegate; a local board: no assignee), on Linear by the\n  delegate",
             "ensemble-orchestrator issue list --role me",
             "ensemble-orchestrator issue list --state ready --task build --priority high",
             "ensemble-orchestrator issue lookup --help",
@@ -136,7 +169,7 @@ class Help(Case):
         text = output.getvalue()
         for phrase in (
             "backlog, ready, running, review, approved, done, canceled",
-            "me (the\n  linear.manager_key account) or unassigned",
+            "me (the\n  [linear.manager] OAuth app) or unassigned",
             "none, urgent, high, medium, low",
             "Linear only (a local board exits 2): lookup, label swap, --label, --project,\n"
             "  --milestone.",
@@ -327,7 +360,7 @@ class Read(IssueCase):
         self.assertEqual(view["parent"]["identifier"], "TASK-9")
         self.assertIsNone(view["continue"])
         self.assertFalse(os.path.exists(os.path.join(self.root, "logs", "runs.jsonl")))
-        self.assertEqual(gql.call_args.kwargs["service"], MANAGER_KEY)
+        self.assertEqual(gql.call_args.kwargs["identity"], MANAGER_IDENTITY)
 
     def test_cut_fields_name_the_full_read(self):
         node = issue_node("TASK-2", comments=conn([comment(n) for n in range(1, 7)]))
@@ -451,7 +484,7 @@ class Move(IssueCase):
             },
         )
         self.assertTrue(out.endswith(b"\n"))
-        self.assertEqual(gql.call_args.kwargs["service"], MANAGER_KEY)
+        self.assertEqual(gql.call_args.kwargs["identity"], MANAGER_IDENTITY)
         self.assertEqual(gql.call_args.args[0].split("(")[0], "mutation")
         self.assertEqual(gql.call_args.kwargs["s"], STATES["handoff"])
 
@@ -535,15 +568,20 @@ class Edit(IssueCase):
                 )
                 self.assertEqual(gql.call_args.kwargs["in"], want)
                 self.assertNotIn("中文".encode(), out)
-                self.assertEqual(gql.call_args.kwargs["service"], MANAGER_KEY)
+                self.assertEqual(gql.call_args.kwargs["identity"], MANAGER_IDENTITY)
 
-    def test_a_role_alone_changes_the_assignee(self):
-        for role, want in (("engineer", ROLE_USERS[ACCOUNTS["engineer"]]), ("unassigned", None)):
-            gql = EditGql((self.BUILD,), [], fields={"assignee": {"id": "u-other"}})
+    def test_a_role_alone_sets_the_delegate_and_clears_the_assignee(self):
+        other = {"id": "u-other"}
+        for role, want in (
+            ("engineer", {"delegateId": role_id("engineer"), "assigneeId": None}),
+            ("me", {"delegateId": MANAGER_IDENTITY.user_id, "assigneeId": None}),
+            ("unassigned", {"delegateId": None, "assigneeId": None}),
+        ):
+            gql = EditGql((self.BUILD,), [], fields={"assignee": other, "delegate": other})
             with self.subTest(role=role):
                 code, out, err = self.run_main(["edit", "TASK-2", "--role", role], gql)
                 self.assertEqual((code, err, json.loads(out)["result"]), (0, "", "changed"))
-                self.assertEqual([w[1]["in"] for w in gql.writes], [{"assigneeId": want}])
+                self.assertEqual([w[1]["in"] for w in gql.writes], [want])
 
     def test_a_project_alone_changes_the_project(self):
         for value in (uid(4), "Ensemble"):
@@ -704,11 +742,18 @@ class Create(IssueCase):
         self.assertEqual((code, err), (0, ""))
         fields = gql.writes[0][1]["in"]
         self.assertEqual(
-            (fields["stateId"], fields["labelIds"], fields["assigneeId"], fields["priority"]),
+            (
+                fields["stateId"],
+                fields["labelIds"],
+                fields["delegateId"],
+                fields["assigneeId"],
+                fields["priority"],
+            ),
             (
                 STATES["in_progress"],
                 [TASK_LABELS["build"], CLIENT_LABELS["codex"]],
-                ROLE_USERS[ACCOUNTS["engineer"]],
+                role_id("engineer"),
+                None,
                 4,
             ),
         )
@@ -993,7 +1038,7 @@ class Failures(IssueCase):
                 ["read", "TASK-2"],
                 Gql(None, fail=CalledProcessError(44, ["security"])),
                 2,
-                "linear.manager_key Keychain service 'linear-api-key-manager': CalledProcessError",
+                "Linear manager app: Keychain (CalledProcessError)",
             ),
             (["read", "TASK-2"], Gql(None, fail=FileNotFoundError("security")), 2, "Keychain"),
             (["read", "TASK-2"], Gql(None, fail=TimeoutExpired("security", 30)), 2, "Keychain"),
@@ -1007,18 +1052,41 @@ class Failures(IssueCase):
 
     def test_configuration_errors_exit_two(self):
         with open(self.config, "w") as f:
-            f.write(CONFIG.replace('linear.harness_key = "linear-api-key"\n', ""))
+            f.write(CONFIG.replace(HARNESS_LINE, ""))
         code, out, err = self.run_main(["read", "TASK-2"], Gql(issue_node()))
         self.assertEqual((code, out), (2, b""))
-        self.assertIn("required, unset: linear.harness_key:", err)
+        self.assertIn(
+            "required, unset: linear.harness.client_id, linear.harness.secret_service", err
+        )
 
-    def test_unset_manager_key_exits_two_before_any_call(self):
+    def test_an_incomplete_manager_app_exits_two_before_any_call(self):
+        for drop in ([], ["client_id"], ["secret_service", "token_service"], list(MANAGER_APP)):
+            with self.subTest(drop=drop):
+                kept = {k: v for k, v in MANAGER_APP.items() if k not in drop}
+                line = "linear.manager = {{ {} }}\n".format(
+                    ", ".join(f'{k} = "{v}"' for k, v in kept.items())
+                )
+                with open(self.config, "w") as f:
+                    f.write(CONFIG.replace(MANAGER_LINE, line))
+                gql = Gql(issue_node())
+                code, out, err = self.run_main(["read", "TASK-2"], gql)
+                if not drop:
+                    self.assertEqual(code, 0, err)
+                    continue
+                self.assertEqual((code, out, gql.calls), (2, b"", []))
+                self.assertIn(
+                    "ensemble-orchestrator issue needs the manager's Linear OAuth app: required, "
+                    "unset: " + ", ".join(f"linear.manager.{k}" for k in drop),
+                    err,
+                )
+
+    def test_an_unknown_linear_key_exits_two(self):
         with open(self.config, "w") as f:
-            f.write(tp.CONFIG)
+            f.write('linear.typo = "x"\n' + CONFIG)
         gql = Gql(issue_node())
         code, out, err = self.run_main(["read", "TASK-2"], gql)
         self.assertEqual((code, out, gql.calls), (2, b"", []))
-        self.assertIn("linear.manager_key is unset", err)
+        self.assertIn("unknown keys in [linear]: typo", err)
 
     def test_diagnostics_stay_within_eight_kib(self):
         gql = Gql(None, fail=LinearError("linear api error: " + "错" * 9000))
@@ -1050,27 +1118,117 @@ class Failures(IssueCase):
         self.assertLessEqual(len(err.encode("utf-8")), 8192)
         self.assertNotIn("[{", err)
 
-    def test_an_unusable_keychain_key_is_configuration(self):
-        for key in ("", "lin api"):
-            found = CompletedProcess([], 0, stdout=key + "\n", stderr="")
-            with self.subTest(key=key), mock.patch("subprocess.run", return_value=found):
+    def test_an_unusable_token_without_a_secret_is_configuration(self):
+        for value in ("", "lin api"):
+            keychain = Keychain({MANAGER_IDENTITY.token_service: value})
+            with self.subTest(value=value), mock.patch("subprocess.run", keychain):
                 code, out, err = self.run_main(["read", "TASK-2"], client.linear_gql)
             self.assertEqual((code, out), (2, b""))
-            self.assertIn("Keychain", err)
-            if key:
-                self.assertNotIn(key, err)
+            self.assertIn("Linear manager app has no token and renewal failed", err)
+            if value:
+                self.assertNotIn(value, err)
 
     def test_an_auth_failure_shows_no_credential(self):
-        found = CompletedProcess([], 0, stdout=KEY + "\n", stderr="")
         refused = urllib.error.HTTPError(client.URL, 401, "Unauthorized", {}, io.BytesIO(b"{}"))
         with (
-            mock.patch("subprocess.run", return_value=found),
+            mock.patch("subprocess.run", manager_tokens()),
             mock.patch("urllib.request.urlopen", side_effect=refused),
         ):
             code, out, err = self.run_main(["read", "TASK-2"], client.linear_gql)
         self.assertEqual(code, 1)
         self.assertIn("HTTP 401", err)
-        self.assertNotIn(KEY, out.decode() + err)
+        self.assertEqual(leaks([out.decode(), err]), [])
+
+
+class ManagerToken(IssueCase):
+    """The issue commands call as the manager app over the real transport, renewing its token."""
+
+    def run_issue(self, days, argv, answer=None, data=None):
+        self.keychain = manager_tokens(days)
+        routes = data or Routes(issues=page_edges([issue_row("TASK-1")]))
+        self.endpoint = Endpoint(answer, data=lambda q, v: routes(q, **v))
+        with (
+            mock.patch("subprocess.run", self.keychain),
+            mock.patch.object(urllib.request, "urlopen", side_effect=self.endpoint),
+        ):
+            return self.run_main(argv, client.linear_gql)
+
+    def stored(self):
+        return json.loads(self.keychain.value(MANAGER_IDENTITY.token_service))
+
+    def test_4_days_left_renews_first(self):
+        since = datetime.now(UTC)
+        code, out, err = self.run_issue(4, ["list"])
+        self.assertEqual((code, err), (0, ""), err)
+        self.assertEqual(json.loads(out)["items"][0]["identifier"], "TASK-1")
+        [token] = self.endpoint.tokens
+        self.assertEqual(
+            (token["grant_type"], token["client_id"], token["scope"]),
+            ("client_credentials", "client-manager", "read,write,app:assignable"),
+        )
+        renewed(self, self.keychain.value(MANAGER_IDENTITY.token_service), since)
+        self.assertEqual(
+            {r.get_header("Authorization") for r in self.endpoint.graphql}, {f"Bearer {NEW}"}
+        )
+
+    def test_6_days_left_requests_no_token(self):
+        code, _, err = self.run_issue(6, ["list"])
+        self.assertEqual((code, err), (0, ""), err)
+        self.assertEqual(self.endpoint.tokens, [])
+        self.assertEqual(self.stored()["access_token"], OLD)
+        self.assertEqual(
+            {r.get_header("Authorization") for r in self.endpoint.graphql}, {f"Bearer {OLD}"}
+        )
+
+    def test_a_failed_renewal_of_a_usable_token_reports_on_stderr(self):
+        two_pages = Routes(
+            issues=[
+                page_edges([issue_row("TASK-1")], more=True, cursor="c1"),
+                page_edges([issue_row("TASK-2")]),
+            ]
+        )
+        path = os.path.join(self.root, "list.json")
+        for failure in (token_http_error(401), urllib.error.URLError("down")):
+            with self.subTest(failure=type(failure).__name__):
+                code, out, err = self.run_issue(
+                    3, ["list", "--full", "--output", path], failure, two_pages
+                )
+                self.assertEqual(code, 0, err)
+                self.assertEqual(len(self.endpoint.graphql), 2)
+                self.assertEqual(len(self.endpoint.tokens), 1)
+                self.assertEqual(self.stored()["access_token"], OLD)
+                self.assertEqual(err.count("\n"), 1)
+                self.assertTrue(
+                    err.startswith("ensemble-orchestrator issue: token-error: manager: "), err
+                )
+                self.assertEqual(leaks([out.decode(), err]), [])
+                two_pages.routes["issues"] = [
+                    page_edges([issue_row("TASK-1")], more=True, cursor="c1"),
+                    page_edges([issue_row("TASK-2")]),
+                ]
+
+    def test_an_expired_token_whose_renewal_fails_exits_2(self):
+        for days, state in ((-1, "token expired"), (None, "has no token")):
+            with self.subTest(state=state):
+                if days is None:
+                    self.keychain = Keychain({MANAGER_IDENTITY.secret_service: SECRET})
+                    self.endpoint = Endpoint(token_http_error(401))
+                    with (
+                        mock.patch("subprocess.run", self.keychain),
+                        mock.patch.object(urllib.request, "urlopen", side_effect=self.endpoint),
+                    ):
+                        code, out, err = self.run_main(["list"], client.linear_gql)
+                else:
+                    code, out, err = self.run_issue(days, ["list"], token_http_error(401))
+                self.assertEqual((code, out), (2, b""))
+                self.assertEqual(self.endpoint.graphql, [])
+                self.assertEqual(
+                    err,
+                    f"ensemble-orchestrator issue: Linear manager app {state} and renewal "
+                    "failed: HTTP 401; fix: check linear.manager.client_id and the client secret "
+                    "in Keychain service linear-app-manager-secret (rotated: store the new "
+                    "secret), then rerun\n",
+                )
 
 
 LOCAL = CONFIG.replace('tracker = "linear"\n', 'tracker = "local"\n')
@@ -1504,18 +1662,17 @@ class Full(IssueCase):
         self.assertFalse(os.path.exists(path))
 
     def test_an_auth_failure_writes_no_file_and_shows_no_credential(self):
-        found = CompletedProcess([], 0, stdout=KEY + "\n", stderr="")
         refused = urllib.error.HTTPError(client.URL, 401, "Unauthorized", {}, io.BytesIO(b"{}"))
         path = os.path.join(self.root, "TASK-2.json")
         with (
-            mock.patch("subprocess.run", return_value=found),
+            mock.patch("subprocess.run", manager_tokens()),
             mock.patch("urllib.request.urlopen", side_effect=refused),
         ):
             code, out, err = self.run_main(
                 ["read", "TASK-2", "--full", "--output", path], client.linear_gql
             )
         self.assertEqual(code, 1)
-        self.assertNotIn(KEY, out.decode() + err)
+        self.assertEqual(leaks([out.decode(), err]), [])
         self.assertFalse(os.path.exists(path))
 
 

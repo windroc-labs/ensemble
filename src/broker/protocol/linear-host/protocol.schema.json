@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Linear host broker protocol 1",
+  "$defs": {
+    "identity": {
+      "type": "object",
+      "required": ["name", "kind", "client_id", "user_id", "secret_service", "token_service"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "pattern": "^[A-Za-z0-9._@+-]{1,128}$"},
+        "kind": {"enum": ["harness", "manager", "role"]},
+        "client_id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[!-~]+$"},
+        "user_id": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+        "secret_service": {"type": "string", "pattern": "^[A-Za-z0-9._@+-]{1,128}$"},
+        "token_service": {"type": "string", "pattern": "^[A-Za-z0-9._@+-]{1,128}$"}
+      }
+    },
+    "maintained": {
+      "type": "object",
+      "required": ["version", "renewed", "expires_at"],
+      "additionalProperties": false,
+      "properties": {
+        "version": {"const": 1},
+        "renewed": {"type": "boolean"},
+        "expires_at": {"type": "string", "format": "date-time", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?Z$"},
+        "audit_warning": {"const": "audit_write_failed"}
+      }
+    },
+    "enrolled": {
+      "type": "object",
+      "required": ["version", "enrolled"],
+      "additionalProperties": false,
+      "properties": {"version": {"const": 1}, "enrolled": {"const": true}}
+    }
+  }
+}

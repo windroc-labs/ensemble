@@ -1,6 +1,6 @@
 """ensemble-orchestrator issue create: plan resolves every reference before anything is written; create
-makes the issue in the configured team with only the given fields (backlog unless --state), then
-each blocking relation. Creating the issue is never retried; a relation that fails leaves the issue
+makes the issue in the configured team with only the given fields (backlog unless --state; --role
+the delegate) and no assignee, then each blocking relation. Creating the issue is never retried; a relation that fails leaves the issue
 made, and RelationsFailed names the failed ones.
 """
 
@@ -45,7 +45,7 @@ def plan(gql, new, linear):
     labels = [] if new.task is None else [issue_names.task_label(linear, new.task)]
     if new.client is not None:
         labels.append(issue_names.client_label(linear, new.client))
-    who = None if new.role is None else issue_names.assignee(gql, linear, new.role)
+    who = None if new.role is None else issue_names.delegate(linear, new.role)
     labels += (issue_refs.label(gql, team, value)["id"] for value in dict.fromkeys(new.labels))
     if labels:
         fields["labelIds"] = list(dict.fromkeys(labels))
@@ -57,8 +57,10 @@ def plan(gql, new, linear):
         fields["projectMilestoneId"] = issue_refs.milestone(gql, project_id, new.milestone)["id"]
     if new.parent is not None:
         fields["parentId"] = issue_refs.issue(gql, new.parent)["id"]
+    # else Linear makes the caller the assignee
+    fields["assigneeId"] = None
     if who is not None:
-        fields["assigneeId"] = who
+        fields["delegateId"] = who
     if new.priority is not None:
         fields["priority"] = PRIORITY_NUMBERS[new.priority]
     relations = _relations(gql, {"--blocks": new.blocks, "--blocked-by": new.blocked_by})

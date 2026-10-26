@@ -16,8 +16,8 @@ from ensemble.orchestrator.engine.flow import handoff
 from ensemble.orchestrator.trackers.linear import ops
 from tests.delegate.workdir import session_cwd
 from tests.orchestrator.integration import fake_linear
-from tests.orchestrator.integration.flow_fixtures import HARNESS_EMAIL
 from tests.orchestrator.integration.segments import BUILD, REPORT, Segment
+from tests.orchestrator.unit.board_ids import HARNESS_USER
 
 REWORK = "Add a section on stale sessions."
 
@@ -71,7 +71,7 @@ class PmToEngineer(Segment):
         self.agent_run()
         self.handoff(ident, BUILD)
         with self.step("promote: linear 503"):
-            self.fake.fail("promote.M_RELATE", "503", account=HARNESS_EMAIL)
+            self.fake.fail("promote.M_RELATE", "503", caller=HARNESS_USER)
             events = len(self.logged())
             res = self.promote_now()
             self.assertEqual((res.returncode, res.stdout, res.stderr), (1, "", ""))
@@ -102,7 +102,7 @@ class PmToEngineer(Segment):
             self.assertEqual([v["in"]["id"] for v in self.sent("promote.M_CREATE")], [key])
             child = made["identifier"]
             self.track(child, state="todo")
-            self.expect_problem(("promote.M_RELATE", HARNESS_EMAIL, "503"))
+            self.expect_problem(("promote.M_RELATE", HARNESS_USER, "503"))
         self.assertEqual(self.promote(ident, "pm", "engineer"), child)
         self.assertEqual([v["in"]["id"] for v in self.sent("promote.M_CREATE")], [key])
 
@@ -160,8 +160,8 @@ class PmToEngineer(Segment):
             self.expect(
                 ident,
                 state="todo",
-                history=[("in_progress", "todo", HARNESS_EMAIL)],
-                comments=[(HARNESS_EMAIL, "interrupted")],
+                history=[("in_progress", "todo", HARNESS_USER)],
+                comments=[(HARNESS_USER, "interrupted")],
             )
         self.pm_done(ident)
 

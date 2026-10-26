@@ -11,6 +11,7 @@ import threading
 import time
 import tomllib
 from collections import namedtuple
+from datetime import UTC, datetime
 from pathlib import Path
 
 from ensemble.orchestrator.engine import config as orchestrator_config
@@ -165,13 +166,29 @@ ITERM_FILES = (
     "Cookies/com.googlecode.iterm2.binarycookies",
     "HTTPStorages/com.googlecode.iterm2.binarycookies",
 )
-KEY_Q = r"password data for new item:"
+SECRET_Q = r"password data for new item:"
 SLOTS = ("harness", "manager", "researcher", "pm", "engineer")
 STATES = ("Backlog", "Todo", "In Progress", "In Review", "Handoff", "Done", "Canceled")
 
 
 def uuid(n):
     return f"00000000-0000-4000-8000-{n:012d}"
+
+
+def app_config(slot):
+    return {
+        "client_id": f"client-{slot}",
+        "secret_service": f"linear-app-{slot}-secret",
+        "token_service": f"linear-app-{slot}-token",
+        "user_id": uuid(100 + (*SLOTS, "reviewer").index(slot)),
+    }
+
+
+def app_table(slot):
+    table = slot if slot in ("harness", "manager") else f"roles.{slot}"
+    return f"\n[orchestrator.linear.{table}]\n" + "".join(
+        f'{key} = "{value}"\n' for key, value in app_config(slot).items()
+    )
 
 
 def label(n, name, parent=None):
@@ -184,7 +201,14 @@ def label(n, name, parent=None):
 
 
 LINEAR = {
-    "keys": {f"k-SENTINEL-{slot}": f"{slot}@example.com" for slot in SLOTS},
+    "apps": {
+        f"client-{slot}": {
+            "secret": f"k-SENTINEL-{slot}",
+            "access_token": f"t-SENTINEL-{slot}",
+            "user_id": app_config(slot)["user_id"],
+        }
+        for slot in (*SLOTS, "reviewer")
+    },
     "teams": [
         {
             "id": uuid(1),
@@ -192,11 +216,6 @@ LINEAR = {
             "name": "Engineering",
             "states": [{"id": uuid(10 + i), "name": name} for i, name in enumerate(STATES)],
             "members": [
-                *(
-                    {"email": f"{slot}@example.com", "active": True}
-                    for slot in SLOTS
-                    if slot != "manager"
-                ),
                 {"email": "me@example.com", "active": True},
                 {"email": "gone@example.com", "active": False},
             ],
@@ -219,17 +238,10 @@ BOARD = ((PROJECT_Q, "acme/widget"), *DOCS, (WRITE_Q, "y"), (WRITE_Q, "y"))
 STATE_KEYS = ("backlog", "todo", "in_progress", "in_review", "handoff", "done", "canceled")
 HAND_CONFIG = (
     f'[orchestrator]\ntracker = "linear"\n\n[orchestrator.linear]\nteam = "{uuid(1)}"\n'
-    f'harness_key = "linear-harness"\nmanager_key = "linear-manager"\ntask_label_group = "{uuid(40)}"\n\n'
+    f'task_label_group = "{uuid(40)}"\n\n'
     "[orchestrator.linear.states]\n"
     + "".join(f'{key} = "{uuid(10 + i)}"\n' for i, key in enumerate(STATE_KEYS))
-    + "".join(
-        f'\n[orchestrator.linear.roles.{role}]\naccount = "{account}"\nkey = "linear-{role}"\n'
-        for role, account in (
-            ("researcher", "researcher@example.com"),
-            ("pm", "me+pm@example.com"),
-            ("engineer", "engineer@example.com"),
-        )
-    )
+    + "".join(app_table(slot) for slot in SLOTS)
     + "".join(
         f'\n[delegate.roles.{role}.output]\ntype = "github"\nrepo = "acme/docs"\nbranch = "main"\ndir = "{d}"\n'
         for role, d in (("researcher", "Research/"), ("pm", "Product Design/"))
@@ -332,6 +344,11 @@ class InstallTest(Case):
         self.tcc.parent.mkdir(parents=True)
         self.tcc.write_text("granted")
         self.pkg_src = self.fakes / "pkg-src"
+        (self.pkg_src / "scripts").mkdir(parents=True)
+        shutil.copyfile(
+            Path(REPO, "scripts/install_linear_app.py"),
+            self.pkg_src / "scripts/install_linear_app.py",
+        )
         executable(self.pkg_src / "src/broker/install.sh", BROKER_INSTALL)
         self.versions = self.pkg_src / "src/broker/internal/codex/versions.go"
         self.versions.parent.mkdir(parents=True)
@@ -527,10 +544,12 @@ class InstallTest(Case):
         return self.run_install(*args, answers=answers, ctty=ctty)
 
     def again(self, *args, answers=()):
-        """A rerun: the checklist, unless flags answer it, confirmed as the last run left it."""
-        flagged = "--clients" in args and {"--docker", "--no-docker"} & set(args)
-        shown = [] if flagged else [(MENU_Q, "")]
-        if self.state().get("board") == "yes" and {"--launchd", "--no-launchd"} & set(args):
+        """Flags and saved choices pre-answer a rerun's checklist."""
+        state = self.state()
+        clients = "--clients" in args or state.get("clients")
+        docker = {"--docker", "--no-docker"} & set(args) or state.get("docker")
+        shown = [] if clients and docker else [(MENU_Q, "")]
+        if state.get("board") == "yes" and {"--launchd", "--no-launchd"} & set(args):
             return self.run_install(*args, answers=[*shown, (SUDO_Q, PASSWORD), *answers])
         return self.run_install(*args, answers=[(SUDO_Q, PASSWORD), *shown, *answers])
 
@@ -541,9 +560,23 @@ class InstallTest(Case):
         """The fake Linear workspace: LINEAR with `changes`."""
         (self.fakes / "linear.json").write_text(json.dumps({**LINEAR, **changes}))
 
-    def keys(self, *slots):
-        """The answers pasting each slot's key at security's prompt."""
-        return [(KEY_Q, f"k-SENTINEL-{slot}") for slot in slots]
+    def secrets(self, *slots, config=None):
+        """Hidden credentials, then each missing public OAuth Client ID."""
+        if config is None:
+            config = self.config().read_text() if self.config().exists() else ""
+        data = tomllib.loads(config)
+        linear = data.get("orchestrator", {}).get("linear", {})
+        answers = []
+        for slot in slots:
+            answers.append((SECRET_Q, f"k-SENTINEL-{slot}"))
+            app = (
+                linear.get(slot, {})
+                if slot in ("harness", "manager")
+                else linear.get("roles", {}).get(slot, {})
+            )
+            if not app.get("client_id"):
+                answers.append((f"Linear OAuth Client ID for {slot}:", f"client-{slot}"))
+        return answers
 
     def configured(self, text, then=(), board="linear"):
         """A first run with Board ticked over a config.local.toml of `text` that already has the
@@ -781,7 +814,7 @@ class InstallTest(Case):
         )
         self.assertIn("  [ ] Board: local or Linear", result.tty)
         self.assertIn("==> board launchd jobs\n    skip: board not chosen", result.stderr)
-        self.assertIn("==> Linear keys\n    skip: board not chosen", result.stderr)
+        self.assertIn("==> Linear apps\n    skip: board not chosen", result.stderr)
 
     def test_checklist_skipped_by_flags(self):
         result = self.fresh("--clients", "claude", "--no-docker", "--no-board")
@@ -799,17 +832,11 @@ class InstallTest(Case):
         self.assertNotIn("brew install --cask codex", self.calls())
         result = self.again()
         self.assert_ok(result)
-        lines = (
-            "> [x] Claude Code",
-            "  [ ] Codex",
-            "  [ ] OpenCode",
-            "  [x] Docker workers",
-            "  [ ] Board",
-        )
-        for line in lines:
-            self.assertIn(line, result.tty)
+        self.assertNotRegex(result.tty, MENU_Q)
+        self.assertEqual((self.state()["clients"], self.state()["docker"]), ("claude", "yes"))
         result = self.again("--clients", "claude,codex")
         self.assert_ok(result)
+        self.assertNotRegex(result.tty, MENU_Q)
         self.assertEqual(self.state()["clients"], "claude,codex")
         self.assertIn("brew install --cask codex", self.calls())
         self.assertIn("codex plugin add ensemble@windroc", self.calls())
@@ -825,6 +852,69 @@ class InstallTest(Case):
         self.assert_ok(result)
         self.assertIn("> [ ] Claude Code\r\n\r\x1b[K  [x] Codex", result.tty)
         self.assertEqual((self.state()["clients"], self.state()["docker"]), ("codex", "yes"))
+
+    def test_saved_clients_and_docker_board_flags_skip_checklist(self):
+        self.assert_ok(self.fresh("--clients", "claude", "--no-docker", "--no-board"))
+        self.linear()
+        result = self.again(
+            "--docker",
+            "--board",
+            "linear",
+            answers=[
+                (r"Install board launchd jobs\? \[y/N\]", "n"),
+                (WRITE_Q, "y"),
+                *DOCKER_LOGINS,
+                *self.secrets(*SLOTS),
+                *BOARD[:-1],
+            ],
+        )
+        self.assert_ok(result)
+        self.assertNotRegex(result.tty, MENU_Q)
+        self.assertEqual(
+            tuple(self.state()[key] for key in ("clients", "docker", "board", "board_tracker")),
+            ("claude", "yes", "yes", "linear"),
+        )
+
+    def test_checklist_preticks_docker_and_board_flags_with_unanswered_clients(self):
+        state = Path(self.ensemble, "install/state")
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text("docker=no\nboard=no\n")
+        self.linear()
+        result = self.fresh(
+            "--docker",
+            "--board",
+            "linear",
+            "--no-launchd",
+            clients="claude",
+            then=[*self.secrets(*SLOTS), *BOARD[:-1]],
+        )
+        self.assert_ok(result)
+        self.assertRegex(result.tty, MENU_Q)
+        self.assertIn("  [x] Docker workers", result.tty)
+        self.assertIn("  [x] Board:", result.tty)
+        self.assertEqual((self.state()["docker"], self.state()["board"]), ("yes", "yes"))
+
+    def test_checklist_negative_flags_override_saved_ticks(self):
+        state = Path(self.ensemble, "install/state")
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text("docker=yes\nboard=yes\n")
+        result = self.fresh("--no-docker", "--no-board", clients="claude")
+        self.assert_ok(result)
+        self.assertRegex(result.tty, MENU_Q)
+        self.assertIn("  [ ] Docker workers", result.tty)
+        self.assertIn("  [ ] Board:", result.tty)
+        self.assertNotIn("  [x] Docker workers", result.tty)
+        self.assertNotIn("  [x] Board:", result.tty)
+        self.assertEqual((self.state()["docker"], self.state()["board"]), ("no", "no"))
+
+    def test_checklist_preticks_client_flag_with_unanswered_docker(self):
+        result = self.fresh("--clients", "codex", "--no-board")
+        self.assert_ok(result)
+        self.assertRegex(result.tty, MENU_Q)
+        self.assertIn("> [ ] Claude Code", result.tty)
+        self.assertIn("  [x] Codex", result.tty)
+        self.assertNotIn("> [x] Claude Code", result.tty)
+        self.assertEqual((self.state()["clients"], self.state()["docker"]), ("codex", "no"))
 
     def test_config_template_and_edit(self):
         self.assert_ok(self.fresh("--docker", "--clients", "codex"))
@@ -989,7 +1079,15 @@ class InstallTest(Case):
             ],
         )
         self.assert_ok(self.again())
-        self.assertEqual(self.plugin_calls(), [])
+        self.assertEqual(
+            self.plugin_calls(),
+            [
+                "claude plugin marketplace update windroc",
+                "claude plugin update ensemble@windroc",
+                "codex plugin marketplace upgrade windroc",
+                "codex plugin add ensemble@windroc",
+            ],
+        )
         result = self.again("--ref", "next")
         self.assertEqual(result.code, 1)
         self.assertEqual(self.plugin_calls(), [])
@@ -1002,8 +1100,12 @@ class InstallTest(Case):
         self.assertEqual(
             self.plugin_calls(),
             [
+                "claude plugin marketplace update windroc",
+                "claude plugin update ensemble@windroc",
                 "claude plugin enable ensemble@windroc",
                 "claude plugin enable updraft@windroc",
+                "codex plugin marketplace upgrade windroc",
+                "codex plugin add ensemble@windroc",
             ],
         )
 
@@ -1083,9 +1185,12 @@ class InstallTest(Case):
             "open -a Docker",
             "setup-token",
             "brew install go",
-            RAW,
         ):
             self.assertNotIn(absent, calls)
+        self.assertEqual(
+            [call for call in self.calls() if call.startswith(f"curl -fsSL {RAW}")],
+            [f"curl -fsSL {RAW}main/.claude-plugin/plugin.json"] * 2,
+        )
         self.assertFalse(Path(self.home, ".egress").exists())
 
     def test_egress_pinned_and_healthy_rerun_runs_start_and_keeps_checkout(self):
@@ -1436,6 +1541,113 @@ class InstallTest(Case):
         installed = json.loads((self.fakes / "claude/plugins.json").read_text())
         return next(p["installPath"] for p in installed if p["id"] == "ensemble@windroc")
 
+    def stale_plugin_upgrade(self, clients):
+        self.assert_ok(self.fresh(clients=clients, docker="y"))
+        old = []
+        for client in clients.split(","):
+            path = (
+                Path(self.claude_ensemble())
+                if client == "claude"
+                else Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.7")
+            )
+            (path / CLIENT).unlink()
+            old.append(path)
+        (self.pkg_src / ".claude-plugin/plugin.json").write_text('{"version": "9.8.8"}\n')
+        self.serve({"ref": "v9.8.8"})
+        result = self.again()
+        self.assert_ok(result)
+        self.assertIn("ref v9.8.8", result.stderr)
+        self.assertIn("broker-install ", self.broker_calls())
+        calls = self.plugin_calls()
+        if "claude" in clients:
+            self.assertIn("claude plugin marketplace update windroc", calls)
+            self.assertIn("claude plugin update ensemble@windroc", calls)
+            self.assertNotEqual(Path(self.claude_ensemble()), old[0])
+        if "codex" in clients:
+            self.assertIn("codex plugin marketplace upgrade windroc", calls)
+            self.assertIn("codex plugin add ensemble@windroc", calls)
+            self.assertTrue(
+                Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.8", CLIENT).is_file()
+            )
+
+    def test_stale_claude_cache_updates_before_source_reads(self):
+        self.stale_plugin_upgrade("claude")
+
+    def test_stale_codex_cache_updates_before_source_reads(self):
+        self.stale_plugin_upgrade("codex")
+
+    def test_both_stale_clients_update_to_the_pinned_release(self):
+        self.stale_plugin_upgrade("claude,codex")
+
+    def test_plugin_refresh_failures_name_the_client(self):
+        self.assert_ok(self.fresh())
+        for command, client in (
+            ("claude plugin marketplace update windroc", "Claude Code"),
+            ("claude plugin update ensemble@windroc", "Claude Code"),
+            ("codex plugin marketplace upgrade windroc", "Codex"),
+            ("codex plugin add ensemble@windroc", "Codex"),
+        ):
+            with self.subTest(command=command):
+                (self.fakes / "fail").write_text(command)
+                result = self.again()
+                self.assertEqual(result.code, 1, result.stderr)
+                self.assertIn(f"install.sh: {client}:", result.stderr)
+                self.assertNotIn("==> plugin directory", result.stderr)
+
+    def test_successful_noop_update_rejects_stale_plugins_without_docker(self):
+        self.assert_ok(self.fresh())
+        for client, label in (("claude", "Claude Code"), ("codex", "Codex")):
+            with self.subTest(client=client):
+                path = (
+                    Path(self.claude_ensemble())
+                    if client == "claude"
+                    else Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.7")
+                )
+                manifest = path / ".claude-plugin/plugin.json"
+                original = manifest.read_text()
+                manifest.write_text('{"version": "0.1.0"}\n')
+                marker = self.fakes / client / "update_noop"
+                marker.touch()
+                result = self.again()
+                self.assertEqual(result.code, 1, result.stderr)
+                self.assertIn(f"install.sh: {label}:", result.stderr)
+                self.assertIn("0.1.0", result.stderr)
+                self.assertIn("9.8.7", result.stderr)
+                self.assertNotIn("==> plugin directory", result.stderr)
+                marker.unlink()
+                manifest.write_text(original)
+
+    def test_updated_plugin_with_unreadable_metadata_names_the_client(self):
+        self.assert_ok(self.fresh(docker="y"))
+        for client, label in (("claude", "Claude Code"), ("codex", "Codex")):
+            path = (
+                Path(self.claude_ensemble())
+                if client == "claude"
+                else Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.7")
+            )
+            marker = self.fakes / client / "update_noop"
+            marker.touch()
+            for filename, text in (
+                (".claude-plugin/plugin.json", None),
+                (".claude-plugin/plugin.json", "{}\n"),
+                (CLIENT, None),
+                (CLIENT, 'PROTOCOL = "invalid"\n'),
+            ):
+                with self.subTest(client=client, filename=filename, text=text):
+                    target = path / filename
+                    original = target.read_text()
+                    if text is None:
+                        target.unlink()
+                    else:
+                        target.write_text(text)
+                    result = self.again()
+                    self.assertEqual(result.code, 1, result.stderr)
+                    self.assertIn(f"install.sh: {label}:", result.stderr)
+                    self.assertIn(str(path), result.stderr)
+                    self.assertNotIn("==> plugin directory", result.stderr)
+                    target.write_text(original)
+            marker.unlink()
+
     def test_rerun_keeps_a_current_hand_built_broker(self):
         self.assert_ok(self.fresh(clients="claude", docker="y"))
         path = self.claude_ensemble()
@@ -1446,7 +1658,7 @@ class InstallTest(Case):
         self.assertIn(
             f"    broker protocol {OTHER}: {path} and the installed broker agree\n", result.stderr
         )
-        self.assertNotIn(f"{RAW}v9.8.7/{GO}", "\n".join(self.calls()))
+        self.assertIn(f"{RAW}v9.8.7/{GO}", "\n".join(self.calls()))
         self.assertIn("==> broker\n    skip: installed from this plugin\n", result.stderr)
 
     def test_failing_broker_install_names_the_broker_step(self):
@@ -1498,7 +1710,7 @@ class InstallTest(Case):
         self.assertEqual(result.code, 1, result.stderr)
         self.assertIn(
             f"install.sh: {self.opencode_package()} wants broker protocol {OTHER}, but its broker,"
-            f" the installed broker, speaks protocol {PROTOCOL}: update the plugin (Claude Code:",
+            f" release v9.8.7, speaks protocol {PROTOCOL}: update the plugin (Claude Code:",
             result.stderr,
         )
 
@@ -1521,8 +1733,8 @@ class InstallTest(Case):
         result = self.again()
         self.assertEqual(result.code, 1, result.stderr)
         self.assertIn(
-            f"install.sh: ensemble main wants broker protocol {OTHER}, but its broker, the installed"
-            f" broker, speaks protocol {PROTOCOL}: update the plugin (Claude Code:",
+            f"install.sh: ensemble main wants broker protocol {OTHER}, but its broker, release"
+            f" v9.8.7, speaks protocol {PROTOCOL}: the windroc marketplace serves ensemble at main",
             result.stderr,
         )
 
@@ -1531,7 +1743,8 @@ class InstallTest(Case):
         Path(self.claude_ensemble(), CLIENT).write_text(f'PROTOCOL = "{OTHER}"\n')
         (self.fakes / "src/broker/protocol").write_text(OTHER)
         codex = Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.7")
-        result = self.refused("--clients", "claude,codex", "--docker", rerun=True)
+        result = self.again("--clients", "claude,codex", "--docker")
+        self.assertEqual(result.code, 1, result.stderr)
         self.assertIn(
             f"install.sh: {codex} wants broker protocol {PROTOCOL}, but its broker, the installed"
             f" broker, speaks protocol {OTHER}: update the plugin",
@@ -1555,7 +1768,8 @@ class InstallTest(Case):
         # 9.8.10 is newer than 9.8.7 by version, older by text.
         shutil.copytree(cache / "9.8.7", cache / "9.8.10")
         (cache / "9.8.10" / CLIENT).write_text(f'PROTOCOL = "{OTHER}"\n')
-        result = self.refused("--clients", "codex", "--docker", rerun=True)
+        result = self.again("--clients", "codex", "--docker")
+        self.assertEqual(result.code, 1, result.stderr)
         self.assertIn(
             f"install.sh: {cache / '9.8.10'} wants broker protocol {OTHER}, but its broker, release"
             f" v9.8.7, speaks protocol {PROTOCOL}: update the plugin",
@@ -1566,7 +1780,8 @@ class InstallTest(Case):
         self.assert_ok(self.fresh(clients="claude", docker="y"))
         path = self.claude_ensemble()
         Path(path, CLIENT).write_text(f'PROTOCOL = "{OTHER}"\n')
-        result = self.refused("--clients", "claude", "--docker", rerun=True)
+        result = self.again("--clients", "claude", "--docker")
+        self.assertEqual(result.code, 1, result.stderr)
         self.assertIn(
             f"install.sh: {path} wants broker protocol {OTHER}, but its broker, release v9.8.7,"
             f" speaks protocol {PROTOCOL}: update the plugin (Claude Code: claude plugin"
@@ -2117,10 +2332,8 @@ class InstallTest(Case):
         )
 
     def opencode_rerun(self, *answers):
-        """A rerun of opencode_only's install: the checklist confirmed, then `answers`."""
-        return self.run_install(
-            "--password-stdin", stdin=PASSWORD + "\n", answers=[(MENU_Q, ""), *answers]
-        )
+        """A rerun of opencode_only's install with saved choices, then `answers`."""
+        return self.run_install("--password-stdin", stdin=PASSWORD + "\n", answers=answers)
 
     def opencode_package(self):
         return Path(
@@ -2188,7 +2401,8 @@ class InstallTest(Case):
         self.assertEqual(self.state()["opencode_plugin_commit"], OLD)
         result = self.opencode_rerun()
         self.assert_ok(result)
-        self.assertIn("> [ ] Claude Code", result.tty)
+        self.assertNotRegex(result.tty, MENU_Q)
+        self.assertEqual((self.state()["clients"], self.state()["docker"]), ("opencode", "no"))
         self.assertNotIn("opencode plugin", "\n".join(self.calls()))
         self.assertIn(f"==> OpenCode plugin\n    skip: {SPEC} at {OLD[:12]}\n", result.stderr)
 
@@ -3223,28 +3437,38 @@ exec /bin/rm "$@"
             self.assert_ok(result)
             self.assertEqual("sends the API key in plaintext" in result.stderr, warned, url)
 
-    def test_linear_keys_and_board_jobs(self):
+    def test_linear_apps_and_board_jobs(self):
         """A board config completed by hand: only the missing keys are asked, then the jobs installed."""
         result = self.fresh()
         self.assert_ok(result)
         self.assertIn("==> board launchd jobs\n    skip: board not chosen", result.stderr)
         self.config().write_text(self.config().read_text() + "\n" + HAND_CONFIG)
         (self.fakes / "keychain").mkdir(exist_ok=True)
-        (self.fakes / "keychain/linear-manager").write_text("k-SENTINEL-manager")
+        (self.fakes / "keychain/linear-app-manager-secret").write_text("k-SENTINEL-manager")
         self.linear()
         result = self.again(
             "--board",
             "linear",
             "--launchd",
-            answers=[*self.keys("harness", "researcher", "pm", "engineer"), (WRITE_Q, "y")],
+            answers=[*self.secrets("harness", "researcher", "pm", "engineer"), (WRITE_Q, "y")],
         )
         self.assert_ok(result)
-        self.assertEqual((self.fakes / "keychain/linear-harness").read_text(), "k-SENTINEL-harness")
-        self.assertEqual((self.fakes / "keychain/linear-pm").read_text(), "k-SENTINEL-pm")
+        self.assertEqual(
+            (self.fakes / "keychain/linear-app-harness-secret").read_text(), "k-SENTINEL-harness"
+        )
+        self.assertEqual(
+            (self.fakes / "keychain/linear-app-pm-secret").read_text(), "k-SENTINEL-pm"
+        )
         calls = self.calls()
-        self.assertIn("security add-generic-password -s linear-pm -a me+pm@example.com -w", calls)
-        self.assertIn("security add-generic-password -s linear-harness -a linear-harness -w", calls)
-        self.assertIn("skip: linear-manager in the keychain", result.stderr)
+        self.assertIn(
+            "security add-generic-password -s linear-app-pm-secret -a linear-app-pm-secret -w",
+            calls,
+        )
+        self.assertIn(
+            "security add-generic-password -s linear-app-harness-secret -a linear-app-harness-secret -w",
+            calls,
+        )
+        self.assertIn("skip: linear-app-manager-secret in the keychain", result.stderr)
         self.assertIn(
             "==> linear board configuration\n    skip: has the Linear board configuration",
             result.stderr,
@@ -3266,7 +3490,7 @@ exec /bin/rm "$@"
                 f"launchctl bootstrap gui/501 {agents}/com.windroc.ensemble.{job}.plist", calls
             )
         self.assertTrue(Path(self.ensemble, "logs").is_dir())
-        self.assert_secret_free("k-SENTINEL", result=result)
+        self.assert_secret_free("k-SENTINEL", "t-SENTINEL", result=result)
         result = self.again()
         self.assert_ok(result)
         self.assertNotIn("exists; remove it", result.stderr)
@@ -3282,46 +3506,70 @@ exec /bin/rm "$@"
         self.assertEqual(mine.read_text(), "<plist>mine</plist>")
         self.assertFalse([c for c in self.calls() if c.startswith(("launchctl", "security add"))])
 
-    def test_board_keys_stored_and_verified(self):
+    def test_board_secrets_stored_and_verified(self):
         self.linear()
-        result = self.fresh("--board", "linear", "--launchd", then=[*self.keys(*SLOTS), *BOARD])
+        result = self.fresh("--board", "linear", "--launchd", then=[*self.secrets(*SLOTS), *BOARD])
         self.assert_ok(result)
         for slot in SLOTS:
             self.assertEqual(
-                (self.fakes / f"keychain/linear-{slot}").read_text(), f"k-SENTINEL-{slot}"
+                (self.fakes / f"keychain/linear-app-{slot}-secret").read_text(),
+                f"k-SENTINEL-{slot}",
             )
+            held = json.loads((self.fakes / f"keychain/linear-app-{slot}-token").read_text())
+            self.assertEqual(held["access_token"], f"t-SENTINEL-{slot}")
+            self.assertGreater(datetime.fromisoformat(held["expires_at"]), datetime.now(UTC))
+            for kind in ("secret", "token"):
+                self.assertIn(
+                    f"keychain\tlinear-app-{slot}-{kind}\tlinear-app-{slot}-{kind}", self.ledger()
+                )
         calls = self.calls()
-        self.assertIn("security add-generic-password -s linear-pm -a linear-pm -w", calls)
         self.assertIn(
-            "Linear key linear-pm (pm account): paste its API key at security's prompt (nothing echoes)",
+            "security add-generic-password -s linear-app-pm-secret -a linear-app-pm-secret -w",
+            calls,
+        )
+        self.assertIn(
+            "Linear app pm: paste its client secret at security's prompt (nothing echoes)",
             result.stderr,
         )
         viewers = [c for c in calls if c.startswith("curl -q ") and "viewer" in c]
-        self.assertEqual(len(viewers), 2 * len(SLOTS))  # each new key's check, then the plan's
-        self.assertIn("keychain\tlinear-pm\tlinear-pm", self.ledger())
-        self.assert_secret_free("k-SENTINEL", result=result)
+        self.assertEqual(len(viewers), len(SLOTS))  # each app's user id
+        tokens = [
+            c
+            for c in calls
+            if c.startswith("curl -q ") and c.endswith("https://api.linear.app/oauth/token")
+        ]
+        self.assertEqual(len(tokens), len(SLOTS))
+        self.assertNotIn("API key", result.tty)
+        self.assert_secret_free("k-SENTINEL", "t-SENTINEL", result=result)
         self.assertNotIn("k-SENTINEL", result.tty)
+        self.assertNotIn("t-SENTINEL", result.tty)
 
-    def test_board_refused_key_is_deleted(self):
+    def test_board_refused_secret_is_deleted(self):
         self.linear()
         result = self.fresh(
             "--board",
             "linear",
             "--launchd",
-            then=[*self.keys("harness", "manager"), (KEY_Q, "k-SENTINEL-wrong")],
+            then=[
+                *self.secrets("harness", "manager"),
+                (SECRET_Q, "k-SENTINEL-wrong"),
+                ("Linear OAuth Client ID for researcher:", "client-researcher"),
+            ],
         )
         self.assertNotEqual(result.code, 0)
         self.assertIn(
-            "Linear refused the key in linear-researcher, or cannot be reached: rerun to paste it again",
+            "install.sh: Linear researcher: token request failed",
             result.stderr,
         )
-        self.assertFalse((self.fakes / "keychain/linear-researcher").exists())
-        self.assertTrue((self.fakes / "keychain/linear-manager").exists())
-        self.assert_secret_free("k-SENTINEL", result=result)
+        self.assertFalse((self.fakes / "keychain/linear-app-researcher-secret").exists())
+        self.assertFalse((self.fakes / "keychain/linear-app-researcher-token").exists())
+        self.assertTrue((self.fakes / "keychain/linear-app-manager-token").exists())
+        self.assert_secret_free("k-SENTINEL", "t-SENTINEL", result=result)
         self.assertNotIn("k-SENTINEL", result.tty)
+        self.assertNotIn("t-SENTINEL", result.tty)
 
     def assert_no_linear(self, result, *, keychain=True):
-        self.assertNotRegex(result.tty, KEY_Q)
+        self.assertNotRegex(result.tty, SECRET_Q)
         self.assertFalse([c for c in self.calls() if c.startswith("curl -q")])
         if keychain:
             self.assertFalse(
@@ -3406,6 +3654,8 @@ exec /bin/rm "$@"
 
     def test_board_local_tracker_inferred(self):
         self.assert_ok(self.fresh())
+        state = Path(self.ensemble, "install/state")
+        state.write_text(state.read_text().replace("clients=claude,codex\n", ""))
         self.config().write_text(
             self.config().read_text() + '\n[orchestrator]\ntracker = "local"\n'
         )
@@ -3483,9 +3733,15 @@ exec /bin/rm "$@"
 
     def test_board_switch_from_local_to_linear(self):
         self.linear()
+        existing = HAND_CONFIG.replace('tracker = "linear"', 'tracker = "local"')
         result = self.configured(
-            HAND_CONFIG.replace('tracker = "linear"', 'tracker = "local"'),
-            then=[*self.keys(*SLOTS), (PROJECT_Q, "acme/widget"), (WRITE_Q, "y"), (WRITE_Q, "y")],
+            existing,
+            then=[
+                *self.secrets(*SLOTS, config=existing),
+                (PROJECT_Q, "acme/widget"),
+                (WRITE_Q, "y"),
+                (WRITE_Q, "y"),
+            ],
         )
         self.assert_ok(result)
         self.assertEqual(
@@ -3493,7 +3749,7 @@ exec /bin/rm "$@"
         )
         orchestrator_config.load()
         self.assert_jobs(installed=True)
-        self.assert_secret_free("k-SENTINEL", result=result)
+        self.assert_secret_free("k-SENTINEL", "t-SENTINEL", result=result)
 
     def test_board_local_initialization_declined(self):
         result = self.fresh(
@@ -3599,11 +3855,13 @@ exec /bin/rm "$@"
         runtime = board / ".state/router.json"
         runtime.parent.mkdir()
         runtime.write_text("{}")
-        key = self.fakes / "keychain/linear-pm"
+        key = self.fakes / "keychain/linear-app-pm-secret"
         key.parent.mkdir(exist_ok=True)
         key.write_text("fake key")
         ledger = Path(self.ensemble, "install/added")
-        ledger.write_text(ledger.read_text() + "keychain\tlinear-pm\tlinear-pm\n")
+        ledger.write_text(
+            ledger.read_text() + "keychain\tlinear-app-pm-secret\tlinear-app-pm-secret\n"
+        )
         self.assertIn(f"board-dir\t{board}", self.ledger())
         self.assertIn(f"dir\t{self.ensemble}/bin", self.ledger())
         self.assertIn(f"dir\t{self.ensemble}/logs", self.ledger())
@@ -3614,7 +3872,10 @@ exec /bin/rm "$@"
         for directory in (board, data.parent):
             self.assertEqual(result.stderr.count(f"kept {directory}: not empty"), 1)
         self.assertFalse(key.exists())
-        self.assertIn("security delete-generic-password -s linear-pm -a linear-pm", self.calls())
+        self.assertIn(
+            "security delete-generic-password -s linear-app-pm-secret -a linear-app-pm-secret",
+            self.calls(),
+        )
         self.assertIn("claude plugin uninstall ensemble@windroc", self.calls())
         self.assertFalse(self.config().exists())
         self.assertEqual(self.ledger(), [f"dir\t{self.ensemble}"])
@@ -3665,7 +3926,7 @@ exec /bin/rm "$@"
             "--board",
             "linear",
             "--no-launchd",
-            then=[*self.keys(*SLOTS), *BOARD[:-1]],
+            then=[*self.secrets(*SLOTS), *BOARD[:-1]],
         )
         self.assert_ok(result)
         self.assertEqual(
@@ -3673,7 +3934,7 @@ exec /bin/rm "$@"
         )
         orchestrator_config.load()
         self.assert_jobs(installed=False)
-        self.assert_secret_free("k-SENTINEL", result=result)
+        self.assert_secret_free("k-SENTINEL", "t-SENTINEL", result=result)
         result = self.again()
         self.assert_ok(result)
         self.assert_jobs(installed=False)
@@ -3733,7 +3994,7 @@ exec /bin/rm "$@"
                 (r"Install board launchd jobs\? \[y/N\]", "y"),
                 (WRITE_Q, "y"),
                 (WRITE_Q, "y"),
-                *self.keys(*SLOTS),
+                *self.secrets(*SLOTS),
                 *BOARD,
             ]
         )
@@ -3743,7 +4004,7 @@ exec /bin/rm "$@"
         )
         orchestrator_config.load()
         self.assert_jobs(installed=True)
-        self.assert_secret_free("k-SENTINEL", result=result)
+        self.assert_secret_free("k-SENTINEL", "t-SENTINEL", result=result)
         result = self.again()
         self.assert_ok(result)
         self.assertNotIn("Board tracker [local/linear]", result.tty)
@@ -3800,8 +4061,8 @@ exec /bin/rm "$@"
                     (self.root / "opt/homebrew/bin/python3").symlink_to(sys.executable)
                 before = self.snapshot()
                 result = self.run_install(
+                    "--no-board",
                     "--launchd",
-                    answers=[(MENU_Q, menu(("claude", "codex"), ("claude", "codex", "board")))],
                 )
                 self.assertEqual(result.code, 2)
                 self.assertIn("requires a board", result.stderr)
@@ -3880,7 +4141,6 @@ exec /bin/rm "$@"
 
     def test_board_custom_workflow_roles(self):
         self.linear(
-            keys={**LINEAR["keys"], "k-SENTINEL-reviewer": "reviewer@example.com"},
             labels=[*LINEAR["labels"], label(46, "foreign-task", 40)],
         )
         Path(self.home, "wf.toml").write_text(
@@ -3892,25 +4152,22 @@ exec /bin/rm "$@"
         slots = ("harness", "manager", "researcher", "engineer", "reviewer")
         board = [(PROJECT_Q, ""), (WRITE_Q, "y"), (WRITE_Q, "y")]  # no document role: no docs repo
         result = self.configured(
-            '[orchestrator]\nworkflow = "~/wf.toml"\n', then=[*self.keys(*slots), *board]
+            '[orchestrator]\nworkflow = "~/wf.toml"\n', then=[*self.secrets(*slots), *board]
         )
         self.assert_ok(result)
         self.assertEqual(
-            (self.fakes / "keychain/linear-reviewer").read_text(), "k-SENTINEL-reviewer"
+            (self.fakes / "keychain/linear-app-reviewer-secret").read_text(), "k-SENTINEL-reviewer"
         )
-        self.assertFalse([c for c in self.calls() if "linear-pm" in c])
+        self.assertFalse([c for c in self.calls() if "linear-app-pm" in c])
         roles = self.board_config()["roles"]
         self.assertEqual(sorted(roles), ["engineer", "researcher", "reviewer"])
-        self.assertEqual(
-            roles["reviewer"], {"account": "reviewer@example.com", "key": "linear-reviewer"}
-        )
+        self.assertEqual(roles["reviewer"], app_config("reviewer"))
         self.assertEqual(
             self.board_config()["task_labels"], {"build": uuid(41), "light-build": uuid(42)}
         )
 
     def test_board_tasks_from_team_dirs_charter(self):
         self.linear(
-            keys={**LINEAR["keys"], "k-SENTINEL-reviewer": "reviewer@example.com"},
             labels=[*LINEAR["labels"], label(46, "triage", 40)],
         )
         team = Path(self.home, "custom-team")
@@ -3922,7 +4179,7 @@ exec /bin/rm "$@"
         slots = ("harness", "manager", "reviewer")
         result = self.configured(
             '[delegate]\nteam_dirs = ["~/custom-team"]\n[orchestrator]\nworkflow = "~/wf.toml"\n',
-            then=[*self.keys(*slots), (PROJECT_Q, ""), (WRITE_Q, "y"), (WRITE_Q, "y")],
+            then=[*self.secrets(*slots), (PROJECT_Q, ""), (WRITE_Q, "y"), (WRITE_Q, "y")],
         )
         self.assert_ok(result)
         self.assertEqual(self.board_config()["task_labels"], {"triage": uuid(46)})
@@ -3934,7 +4191,7 @@ exec /bin/rm "$@"
         (team / "roles/engineer.md").write_text("# Engineer\n\n## Tasks\n- `triage`: Review.\n")
         result = self.configured(
             '[delegate]\nteam_dirs = ["~/custom-team"]\n',
-            then=self.keys(*SLOTS),
+            then=self.secrets(*SLOTS),
         )
         self.assertNotEqual(result.code, 0)
         self.assertIn("charter engineer is defined more than once", result.stderr)
@@ -3949,12 +4206,12 @@ exec /bin/rm "$@"
         self.assertIn(f"install.sh: {said}", result.stderr)
         self.assertNotIn("[orchestrator", self.config().read_text())
         self.assertFalse([c for c in self.calls() if c.startswith("launchctl")])
-        self.assert_secret_free("k-SENTINEL", result=result)
+        self.assert_secret_free("k-SENTINEL", "t-SENTINEL", result=result)
 
     def test_board_fresh_install(self):
-        """Keys, the config from Linear (shown before writing) and the jobs; a rerun redoes none of it."""
+        """Secrets, the config from Linear (shown before writing) and the jobs; a rerun redoes none of it."""
         self.linear(labels=[*LINEAR["labels"], label(46, "design", 40)])
-        result = self.fresh("--board", "linear", "--launchd", then=[*self.keys(*SLOTS), *BOARD])
+        result = self.fresh("--board", "linear", "--launchd", then=[*self.secrets(*SLOTS), *BOARD])
         self.assert_ok(result)
         data = tomllib.loads(self.config().read_text())
         self.assertEqual(data["orchestrator"]["tracker"], "linear")
@@ -3965,15 +4222,20 @@ exec /bin/rm "$@"
         self.assertEqual(linear["task_labels"], {"build": uuid(41), "light-build": uuid(42)})
         self.assertEqual(linear["agent_label_group"], uuid(43))
         self.assertEqual(linear["agent_labels"], {"claude": uuid(44)})
-        self.assertEqual(
-            (linear["harness_key"], linear["manager_key"]), ("linear-harness", "linear-manager")
-        )
+        self.assertEqual(linear["harness"], app_config("harness"))
+        self.assertEqual(linear["manager"], app_config("manager"))
+        self.assertLessEqual(set(linear), orchestrator_config.LINEAR_KEYS)
         self.assertEqual(linear["human_members"], ["me@example.com"])
         self.assertEqual(
             linear["roles"],
-            {r: {"account": f"{r}@example.com", "key": f"linear-{r}"} for r in SLOTS[2:]},
+            {r: app_config(r) for r in SLOTS[2:]},
         )
         self.assertEqual(linear["project_repos"], {uuid(30): "acme/widget"})
+        # the config gates of router --dry-run, promote --dry-run and issue list
+        cfg = orchestrator_config.load()
+        orchestrator_config.linear_settings(cfg, "router")
+        orchestrator_config.linear_settings(cfg, "promote")
+        orchestrator_config.manager_app(cfg.linear)
         self.assertIn(
             "    Tasks label design: not a task of the board's roles; left out", result.stderr
         )
@@ -3993,13 +4255,14 @@ exec /bin/rm "$@"
                 f"launchctl bootstrap gui/501 {agents}/com.windroc.ensemble.{job}.plist",
                 self.calls(),
             )
-        self.assert_secret_free("k-SENTINEL", result=result)
+        self.assert_secret_free("k-SENTINEL", "t-SENTINEL", result=result)
         self.assertNotIn("k-SENTINEL", result.tty)
+        self.assertNotIn("t-SENTINEL", result.tty)
         config = self.config().read_text()
         result = self.again()
         self.assert_ok(result)
         for slot in SLOTS:
-            self.assertIn(f"skip: linear-{slot} in the keychain", result.stderr)
+            self.assertIn(f"skip: linear-app-{slot}-secret in the keychain", result.stderr)
         for said in ("has the Linear board configuration", "router installed", "promote installed"):
             self.assertIn(f"skip: {said}", result.stderr)
         changing = ("curl -q", "security add", "launchctl")
@@ -4008,7 +4271,7 @@ exec /bin/rm "$@"
 
     def test_board_config_declined(self):
         self.linear()
-        board = [*self.keys(*SLOTS), (PROJECT_Q, ""), *DOCS, (WRITE_Q, "n")]
+        board = [*self.secrets(*SLOTS), (PROJECT_Q, ""), *DOCS, (WRITE_Q, "n")]
         result = self.fresh("--board", "linear", "--launchd", then=board)
         self.assert_ok(result)
         self.assertIn("skip: declined", result.stderr)
@@ -4021,14 +4284,17 @@ exec /bin/rm "$@"
     def test_board_fills_only_missing(self):
         self.linear()
         mine = (
-            f'[orchestrator.linear]\nteam = "{uuid(1)}"\nharness_key = "my-harness"\n\n'
+            f'[orchestrator.linear]\nteam = "{uuid(1)}"\n\n'
+            '[orchestrator.linear.harness]\nsecret_service = "my-harness"\n\n'
             f'[orchestrator.linear.task_labels]\nbuild = "{uuid(99)}"\n'
         )
-        result = self.configured(mine, then=[*self.keys(*SLOTS), *BOARD])
+        result = self.configured(mine, then=[*self.secrets(*SLOTS), *BOARD])
         self.assert_ok(result)
         self.assertEqual((self.fakes / "keychain/my-harness").read_text(), "k-SENTINEL-harness")
         linear = self.board_config()
-        self.assertEqual((linear["team"], linear["harness_key"]), (uuid(1), "my-harness"))
+        self.assertEqual(
+            (linear["team"], linear["harness"]["secret_service"]), (uuid(1), "my-harness")
+        )
         self.assertEqual(linear["task_labels"], {"build": uuid(99), "light-build": uuid(42)})
         self.assertFalse([c for c in self.calls() if "teams(" in c])
 
@@ -4036,7 +4302,7 @@ exec /bin/rm "$@"
         self.linear()
         mine = '[delegate.roles.pm.output]\ntype = "github"\nrepo = "me/docs"\nbranch = "trunk"\ndir = "PRD/"\n'
         board = [(PROJECT_Q, ""), (WRITE_Q, "y"), (WRITE_Q, "y")]
-        result = self.configured(mine, then=[*self.keys(*SLOTS), *board])
+        result = self.configured(mine, then=[*self.secrets(*SLOTS), *board])
         self.assert_ok(result)
         roles = tomllib.loads(self.config().read_text())["delegate"]["roles"]
         self.assertEqual(roles["pm"]["output"]["dir"], "PRD/")
@@ -4051,7 +4317,7 @@ exec /bin/rm "$@"
         self.linear(teams=[LINEAR["teams"][0], ops])
         team_q = r"Linear team for the board \(ENG, OPS\):"
         board = [(team_q, "NOPE"), (team_q, "OPS"), *DOCS, (WRITE_Q, "y"), (WRITE_Q, "y")]
-        result = self.fresh("--board", "linear", "--launchd", then=[*self.keys(*SLOTS), *board])
+        result = self.fresh("--board", "linear", "--launchd", then=[*self.secrets(*SLOTS), *board])
         self.assert_ok(result)
         self.assertEqual(self.board_config()["team"], uuid(2))
 
@@ -4059,47 +4325,64 @@ exec /bin/rm "$@"
         team = LINEAR["teams"][0]
         states = [s for s in team["states"] if s["name"] != "Handoff"]
         self.linear(teams=[{**team, "states": states}])
-        result = self.fresh("--board", "linear", "--launchd", then=self.keys(*SLOTS))
+        result = self.fresh("--board", "linear", "--launchd", then=self.secrets(*SLOTS))
         self.assert_board_stopped(
             result, "Linear team ENG lacks states: Handoff (docs/credentials.md#linear-presets)"
         )
 
     def test_board_without_tasks_group_stops(self):
         self.linear(labels=[x for x in LINEAR["labels"] if x["name"] != "Tasks"])
-        result = self.fresh("--board", "linear", "--launchd", then=self.keys(*SLOTS))
+        result = self.fresh("--board", "linear", "--launchd", then=self.secrets(*SLOTS))
         self.assert_board_stopped(
             result,
             "Linear team ENG has no Tasks label group (docs/credentials.md#linear-presets)",
         )
 
-    def test_board_same_account_stops(self):
-        self.linear(keys={**LINEAR["keys"], "k-SENTINEL-pm": "researcher@example.com"})
-        result = self.fresh("--board", "linear", "--launchd", then=self.keys(*SLOTS))
+    def test_board_same_app_stops(self):
+        self.linear(
+            apps={
+                **LINEAR["apps"],
+                "client-pm": {
+                    **LINEAR["apps"]["client-pm"],
+                    "user_id": app_config("researcher")["user_id"],
+                },
+            }
+        )
+        result = self.fresh("--board", "linear", "--launchd", then=self.secrets(*SLOTS[:-1]))
         self.assert_board_stopped(
-            result, "the keys in linear-researcher and linear-pm are the same Linear account"
+            result, "Linear pm: the apps for researcher and pm are the same Linear app"
         )
 
-    def test_board_existing_bad_key_kept(self):
+    def test_board_existing_bad_secret_kept(self):
         (self.fakes / "keychain").mkdir()
-        (self.fakes / "keychain/linear-harness").write_text("k-SENTINEL-stale")
+        (self.fakes / "keychain/linear-app-harness-secret").write_text("k-SENTINEL-stale")
         self.linear()
-        result = self.fresh("--board", "linear", "--launchd", then=self.keys(*SLOTS[1:]))
+        result = self.fresh(
+            "--board",
+            "linear",
+            "--launchd",
+            then=[("Linear OAuth Client ID for harness:", "client-harness")],
+        )
         self.assert_board_stopped(
             result,
-            "Linear refused the key in linear-harness, or cannot be reached: fix that keychain item, then rerun",
+            "Linear harness: token request failed",
         )
-        self.assertEqual((self.fakes / "keychain/linear-harness").read_text(), "k-SENTINEL-stale")
+        self.assertEqual(
+            (self.fakes / "keychain/linear-app-harness-secret").read_text(), "k-SENTINEL-stale"
+        )
 
     def test_board_hostile_linear_names_stop(self):
         """Linear's strings are checked before they reach the terminal or the config."""
         team = LINEAR["teams"][0]
         hostile = "W\x1b]52;c;aGk=\x07"
         self.linear(teams=[{**team, "projects": [{"id": uuid(30), "name": hostile}]}])
-        result = self.fresh("--board", "linear", "--launchd", then=self.keys(*SLOTS))
+        result = self.fresh("--board", "linear", "--launchd", then=self.secrets(*SLOTS))
         self.assert_board_stopped(result, f"Linear returned an invalid project name ({uuid(30)})")
         members = [*team["members"], {"email": "x\x1b[2J@example.com", "active": True}]
         self.linear(teams=[{**team, "members": members}])
-        again = self.again()
+        again = self.again(
+            answers=[(f"Linear OAuth Client ID for {slot}:", f"client-{slot}") for slot in SLOTS]
+        )
         self.assert_board_stopped(again, "Linear returned an invalid member email")
         for text in (result.stdout, result.stderr, result.tty, again.stderr, again.tty):
             self.assertNotIn("\x1b]52", text)
@@ -4109,7 +4392,7 @@ exec /bin/rm "$@"
         quoted, astral = 'a" = "b', "\U0001f916 bot"
         labels = [*LINEAR["labels"], label(46, quoted, 43), label(47, astral, 43)]
         self.linear(labels=labels)
-        result = self.fresh("--board", "linear", "--launchd", then=[*self.keys(*SLOTS), *BOARD])
+        result = self.fresh("--board", "linear", "--launchd", then=[*self.secrets(*SLOTS), *BOARD])
         self.assert_ok(result)
         agents = self.board_config()["agent_labels"]
         self.assertEqual((agents[quoted], agents[astral]), (uuid(46), uuid(47)))
@@ -4231,7 +4514,7 @@ exec /bin/rm "$@"
         self.assertNotIn(f"dir\t{h}/.ensemble", ledger)
         self.assertNotIn("keychain\tensemble-github-users\tensemble-bot", ledger)
 
-    def test_rerun_skips_everything(self):
+    def test_rerun_refreshes_plugins_and_reuses_completed_setup(self):
         self.assert_ok(self.full())
         before = self.ledger()
         files = {
@@ -4253,10 +4536,20 @@ exec /bin/rm "$@"
         changing += ("security add", "launchctl", "npm install", "setup-token", "-codex ")
         changing += ("auth login", "login codex", "login claude", "login opencode", "codex login")
         changed = [c for c in self.calls() if any(w in c for w in changing)]
-        self.assertEqual([c for c in changed if not c.endswith(" status")], [])
+        self.assertEqual(
+            [c for c in changed if not c.endswith(" status")],
+            ["codex plugin add ensemble@windroc"],
+        )
         self.assertEqual(self.ledger(), before)
-        # the egress step always runs the pinned start.sh, which changes nothing here
-        exempt = {"sudo", "configuration", "plugin directory", "egress proxy"}
+        # Plugin refresh and the pinned egress start.sh run again; their current files stay unchanged.
+        exempt = {
+            "sudo",
+            "configuration",
+            "plugin directory",
+            "egress proxy",
+            "Claude Code plugins",
+            "Codex plugins",
+        }
         steps = re.findall(r"==> (.+)\n(?!    skip:)", result.stderr)
         self.assertEqual([s for s in steps if s not in exempt], [])
         for path, data in files.items():
@@ -4624,16 +4917,13 @@ exec /bin/rm "$@"
         self.assertFalse(Path(self.ensemble, "install").exists())
 
     def board_install(self):
-        """A fresh install, then the Linear board set up and the installer run again for its keys and jobs."""
+        """A fresh install, then the Linear board set up and the installer run again for its apps and jobs."""
         self.assert_ok(self.fresh("--no-docker"))
         first = self.run_calls()
-        linear = (
-            '\n[orchestrator]\ntracker = "linear"\n\n[orchestrator.linear]\n'
-            'harness_key = "linear-harness"\nmanager_key = "linear-manager"\n'
-        )
+        linear = '\n[orchestrator]\ntracker = "linear"\n\n[orchestrator.linear]\n'
         self.config().write_text(self.config().read_text() + linear)
         self.linear()
-        board = [*self.keys(*SLOTS), (PROJECT_Q, ""), *DOCS, (WRITE_Q, "y"), (WRITE_Q, "y")]
+        board = [*self.secrets(*SLOTS), (PROJECT_Q, ""), *DOCS, (WRITE_Q, "y"), (WRITE_Q, "y")]
         self.assert_ok(self.again("--board", "linear", "--launchd", answers=board))
         return first + self.run_calls()
 

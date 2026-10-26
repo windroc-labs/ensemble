@@ -1,5 +1,5 @@
 """The issue command's Linear backend: list and lookup pages, and each method's Keychain or process
-failure as the IssueError naming the manager key's service.
+failure as the IssueError naming the manager app's Keychain (a KeychainError keeps its own text).
 """
 
 from ensemble.orchestrator.engine.types import (
@@ -13,7 +13,6 @@ from ensemble.orchestrator.trackers.linear.issues import LinearIssues
 from tests.orchestrator.case import Case
 from tests.orchestrator.process_fixtures import CalledProcessError, TimeoutExpired
 from tests.orchestrator.unit.issue_fixtures import (
-    MANAGER_KEY,
     Gql,
     Routes,
     edges,
@@ -29,7 +28,7 @@ TEAMS = LookupQuery(resource=Resource.TEAMS, query=None, team=None, project=None
 
 
 def backend(gql):
-    return LinearIssues(gql, names_cfg(manager_key=MANAGER_KEY))
+    return LinearIssues(gql, names_cfg())
 
 
 def calls(issues):
@@ -52,12 +51,11 @@ def calls(issues):
 
 
 class Keychain(Case):
-    def test_every_method_names_the_service_and_the_error_type(self):
+    def test_every_method_names_the_manager_apps_keychain_and_the_error_type(self):
         for error in (
             CalledProcessError(44, ["security"]),
             TimeoutExpired("security", 30),
             FileNotFoundError("security"),
-            KeychainError("no usable key"),
         ):
             for name, call in calls(backend(Gql(None, fail=error))).items():
                 with self.subTest(error=type(error).__name__, method=name):
@@ -65,9 +63,15 @@ class Keychain(Case):
                         call()
                     self.assertEqual(
                         str(cm.exception),
-                        f"linear.manager_key Keychain service {MANAGER_KEY!r}: "
-                        f"{type(error).__name__}",
+                        f"Linear manager app: Keychain ({type(error).__name__})",
                     )
+
+    def test_a_keychain_error_keeps_its_identity_and_fix(self):
+        failure = KeychainError("Linear manager app token expired and renewal failed: x; fix: y")
+        for name, call in calls(backend(Gql(None, fail=failure))).items():
+            with self.subTest(method=name), self.assertRaises(IssueError) as cm:
+                call()
+            self.assertEqual(str(cm.exception), str(failure))
 
     def test_another_linear_failure_passes_unchanged(self):
         failure = LinearError("linear api error: boom")

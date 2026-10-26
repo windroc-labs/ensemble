@@ -1,5 +1,5 @@
 """ensemble-orchestrator issue edit: one issueUpdate naming only what changes among title, description,
-assignee, project, task, client and priority; a task or client replaces the issue's labels of that
+delegate (--role, which also clears the assignee), project, task, client and priority; a task or client replaces the issue's labels of that
 group, every other label staying. Every given value already so: unchanged, nothing written.
 """
 
@@ -14,7 +14,8 @@ from ensemble.orchestrator.trackers.linear import (
 
 Q_READ = (
     "query($i: String!) { viewer { id name } issue(id: $i) { id identifier url title description "
-    f"priority assignee {{ id }} project {{ id }} team {{ id key }} {issue_label.labels_page()} }} }}"
+    f"priority assignee {{ id }} delegate {{ id }} project {{ id }} team {{ id key }} "
+    f"{issue_label.labels_page()} }} }}"
 )
 M_EDIT = (
     "mutation($i: String!, $in: IssueUpdateInput!) { issueUpdate(id: $i, input: $in) { success } }"
@@ -22,9 +23,9 @@ M_EDIT = (
 
 
 def edit(gql, linear, change):
-    """Change change.id's title, description, assignee, project, task, client and priority as
+    """Change change.id's title, description, delegate, project, task, client and priority as
     given."""
-    who = None if change.role is None else issue_names.assignee(gql, linear, change.role)
+    who = None if change.role is None else issue_names.delegate(linear, change.role)
     groups = {}
     if change.task is not None:
         groups["--task"] = (issue_names.task_label(linear, change.task), linear.task_label_group)
@@ -46,8 +47,11 @@ def edit(gql, linear, change):
     priority = None if change.priority is None else PRIORITY_NUMBERS[change.priority]
     if priority is not None and priority != node["priority"]:
         update["priority"] = priority
-    if change.role is not None and who != (node["assignee"] or {}).get("id"):
-        update["assigneeId"] = who
+    if change.role is not None:
+        if who != (node["delegate"] or {}).get("id"):
+            update["delegateId"] = who
+        if node["assignee"] is not None:
+            update["assigneeId"] = None
     if project is not None and project != (node["project"] or {}).get("id"):
         update["projectId"] = project
     if scoped := [*groups, "--project"] if project is not None else list(groups):

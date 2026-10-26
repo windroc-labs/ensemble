@@ -18,7 +18,7 @@ from ensemble.orchestrator.trackers.linear import (
     ops,
 )
 from tests.orchestrator.case import Case
-from tests.orchestrator.unit.board_ids import HEADER, STATE_NAMES, STATES, role
+from tests.orchestrator.unit.board_ids import HEADER, STATE_NAMES, STATES, comment_id, role
 from tests.utils.case import local_section
 
 ID, UUID = "TASK-7", "11111111-2222-4333-8444-555555555555"
@@ -27,11 +27,9 @@ SID = "0b6f2c1e-6d0a-4c1b-9a51-3f1f6b0e2a7d"
 
 PROJECT = "121166b1-191a-4461-bec4-42f1c2dc0ddd"
 
-ENGINEER, RESEARCHER = "engineer@agents.test", "researcher@agents.test"
+HARNESS, TOKEN = "linear-app-harness-token", "linear-app-engineer-token"
 
-HARNESS, KEY = "linear-api-key", "linear-api-key-engineer"
-
-SESSION = ops.client_id(SID, "session")
+SESSION = comment_id("harness", SID, "session")
 
 NOT_FOUND = LinearError("linear api error: [{'message': 'Entity not found: Comment'}]")
 
@@ -40,7 +38,7 @@ URL = f"https://linear.app/t/issue/{ID}"
 USER_NOTE = {
     "body": "Use SQLite.",
     "createdAt": "2026-09-02T00:00:00.000Z",
-    "user": {"email": "ME@x.com", "name": "Me", "isMe": False},
+    "user": {"id": "u-me", "email": "ME@x.com", "name": "Me"},
 }
 
 CORE_LOCAL = """[delegate.roles.researcher.output]
@@ -147,11 +145,11 @@ class Gql:
         self.fail, self.issue, self.calls, self.timeouts, self.comments = fail, issue, [], [], {}
         self.found = []
 
-    def __call__(self, query, *, service, timeout=30, **v):
+    def __call__(self, query, *, identity, timeout=30, **v):
         if query == linear_tracker.Q_STATE_NAME:
             return {"workflowState": {"name": STATE_NAMES[v["i"]]}}
         name = NAMES[query]
-        self.calls.append((name, service, v))
+        self.calls.append((name, identity.service, v))
         self.timeouts.append(timeout)
         if (e := self.fail(name, v)) is not None:
             raise e

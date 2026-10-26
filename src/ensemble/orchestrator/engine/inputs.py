@@ -239,13 +239,13 @@ def gather(issue, role, docs, *, run=None) -> Sources:
 
 
 def _user(note):
-    return f"{note.name or note.account}, {note.at}:\n{note.body}"
+    return f"{note.name or note.author}, {note.at}:\n{note.body}"
 
 
 def _quoted(note):
     return "\n".join(
         [
-            f"- {note.name or note.account}, {note.at}:",
+            f"- {note.name or note.author}, {note.at}:",
             *(f"  > {line}" for line in note.body.splitlines()),
         ]
     )

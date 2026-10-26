@@ -85,7 +85,7 @@ EGRESS = "windroc.egress."  # the egress proxy's label prefix
 UNREACHABLE = {
     "host keychain": r"find / \( -path /proc -o -path /sys \) -prune -o -path "
     r'"*/Library/Keychains*" -print 2>/dev/null | wc -l; command -v security | wc -c',
-    "Linear keys": r"env | grep -ci linear; find / \( -path /proc -o -path /sys \) -prune -o "
+    "Linear tokens": r"env | grep -ci linear; find / \( -path /proc -o -path /sys \) -prune -o "
     r"-name config.local.toml -print 2>/dev/null | wc -l",
     "host `gh` login": r"find / \( -path /proc -o -path /sys \) -prune -o -path "
     r'"*/gh/hosts.yml" -print 2>/dev/null | wc -l; env | grep -c "^GH_TOKEN="',

@@ -76,9 +76,61 @@ def _docs(path: str) -> bool:
     return _owner(path) == "docs" or (_owner(path) == path and path.endswith(".md"))
 
 
-def classify(root: Path, paths: list[str], event: str) -> dict:
+# The release PR's files (tests/guard_checks/plugin.py MANIFESTS); AGENTS.md › Releasing.
+VERSION_FILES = (".claude-plugin/plugin.json", ".codex-plugin/plugin.json", "package.json")
+RELEASE_VERSION = re.compile(r"\d+\.\d+\.\d+")
+
+
+def _blob(root: Path, rev: str, path: str) -> str | None:
+    try:
+        data = subprocess.check_output(
+            ["git", "-C", str(root), "show", f"{rev}:{path}"], stderr=subprocess.DEVNULL
+        )
+        return data.decode("utf-8")
+    except (subprocess.CalledProcessError, UnicodeDecodeError):
+        return None
+
+
+def _version_edit(old: str | None, new: str | None) -> bool:
+    if old is None or new is None:
+        return False
+    try:
+        before, after = json.loads(old), json.loads(new)
+    except ValueError:
+        return False
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return False
+    was, now = before.get("version"), after.get("version")
+    if not isinstance(was, str) or not isinstance(now, str) or was == now:
+        return False
+    if RELEASE_VERSION.fullmatch(now) is None:
+        return False
+    # The text, not just the parsed object: a reformat is more than the version.
+    field, bump = f'"version": {json.dumps(was)}', f'"version": {json.dumps(now)}'
+    return old.count(field) == 1 and old.replace(field, bump) == new
+
+
+def version_only(root: Path, base: str, head: str, paths: list[str]) -> bool:
+    """Each changed path is a version file whose one edit is its top-level release version."""
+    if not paths or any(path not in VERSION_FILES for path in paths):
+        return False
+    command = ["git", "-C", str(root), "merge-base", base, head]
+    fork = subprocess.check_output(command).decode().strip()
+    return all(_version_edit(_blob(root, fork, path), _blob(root, head, path)) for path in paths)
+
+
+def classify(
+    root: Path, paths: list[str], event: str, base: str | None = None, head: str | None = None
+) -> dict:
     projects = layer_map(root)
-    full = {"full": True, "docs": False, "broker": True, "projects": list(projects), "reason": ""}
+    full = {
+        "full": True,
+        "docs": False,
+        "version": False,
+        "broker": True,
+        "projects": list(projects),
+        "reason": "",
+    }
     if event != "pull_request":
         return {**full, "reason": f"Event {event} requires every layer"}
     if not paths:
@@ -90,9 +142,20 @@ def classify(root: Path, paths: list[str], event: str) -> dict:
         return {
             "full": False,
             "docs": True,
+            "version": False,
             "broker": False,
             "projects": upper,
             "reason": "Docs-only changes",
+        }
+    if base and head and version_only(root, base, head, paths):
+        # Lint design checks the versions agree; no test reads their value.
+        return {
+            "full": False,
+            "docs": False,
+            "version": True,
+            "broker": False,
+            "projects": upper,
+            "reason": "Version-only changes",
         }
     for path in paths:
         if _owner(path) not in upper:
@@ -100,6 +163,7 @@ def classify(root: Path, paths: list[str], event: str) -> dict:
     return {
         "full": False,
         "docs": False,
+        "version": False,
         "broker": False,
         "projects": upper,
         "reason": "Changes touch only upper-layer projects",
@@ -138,15 +202,15 @@ def gate(needs: dict, event: str) -> list[str]:
     if not isinstance(needs, dict):
         return ["CI_NEEDS must be an object containing all required jobs"]
     failures = []
-    if event not in ("pull_request", "push"):
+    if event not in ("pull_request", "push", "merge_group"):
         failures.append(f"Unsupported CI event: {event}")
     changes = needs.get("changes")
     output = changes.get("outputs") if isinstance(changes, dict) else None
     full = output.get("full") if isinstance(output, dict) else None
     if full not in ("true", "false") or not isinstance(full, str):
         failures.append("changes.outputs.full must be exactly true or false")
-    if event == "push" and full != "true":
-        failures.append("changes.outputs.full must be true on push")
+    if event in ("push", "merge_group") and full != "true":
+        failures.append(f"changes.outputs.full must be true on {event}")
     docs = output.get("docs") if isinstance(output, dict) else None
     if docs not in ("true", "false") or not isinstance(docs, str):
         failures.append("changes.outputs.docs must be exactly true or false")
@@ -159,14 +223,18 @@ def gate(needs: dict, event: str) -> list[str]:
         failures.append("changes.outputs.broker must be true for full scope")
     if docs == "true" and broker != "false":
         failures.append("changes.outputs.docs requires broker false")
+    version = output.get("version") if isinstance(output, dict) else None
+    if version not in ("true", "false") or not isinstance(version, str):
+        failures.append("changes.outputs.version must be exactly true or false")
+    if version == "true" and (full, docs, broker) != ("false", "false", "false"):
+        failures.append("changes.outputs.version requires full, docs and broker false")
     expected = {
         "changes": "success",
         "lint": "success",
         "repository": "skipped" if full == "false" else "success",
-        "unit": "success",
-        "coverage": "success" if event == "pull_request" else "skipped",
-        "integration": "skipped" if docs == "true" else "success",
-        "broker": "success",
+        "unit": "skipped" if version == "true" else "success",
+        "coverage": "success" if event != "push" and version != "true" else "skipped",
+        "integration": "skipped" if "true" in (docs, version) else "success",
         "mini-op": "success",
     }
     for job, wanted in expected.items():
@@ -209,12 +277,13 @@ def main(argv=None, *, root=None) -> int:
             if not args.base or not args.head:
                 raise ValueError("Pull requests require --paths or both --base and --head")
             paths = changed_paths(root, args.base, args.head)
-        result = classify(root, paths or [], args.event)
+        result = classify(root, paths or [], args.event, args.base, args.head)
         print(json.dumps(result))
         if args.github_output:
             with args.github_output.open("a", encoding="utf-8") as output:
                 output.write(
                     f"full={str(result['full']).lower()}\ndocs={str(result['docs']).lower()}\n"
+                    f"version={str(result['version']).lower()}\n"
                     f"broker={str(result['broker']).lower()}\n"
                     f"projects={json.dumps(result['projects'])}\n"
                 )

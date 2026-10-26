@@ -11,22 +11,24 @@ from ensemble.orchestrator.engine.flow.types import (
     Note,
 )
 from ensemble.orchestrator.trackers.linear import linear_tracker
-from ensemble.orchestrator.trackers.linear.linear_tracker import LinearTracker
+from ensemble.orchestrator.trackers.linear.linear_tracker import LinearTracker, Selves
 from tests.orchestrator.case import Case
-from tests.orchestrator.unit.board_ids import PACKAGED_FLOW, workflow_file
+from tests.orchestrator.unit.board_ids import HARNESS_USER, PACKAGED_FLOW, workflow_file
 
 SID = "0b6f2c1e-6d0a-4c1b-9a51-3f1f6b0e2a7d"
 
-SELVES = frozenset({"agent@example.com"})
+SELVES = Selves(HARNESS_USER, frozenset())
 
 URL = "https://linear.app/t/issue/ENG-7"
 
 
 def comment(body, at, *, email="ann@example.com", name="Ann", me=False, user=True):
+    """me: the harness app's."""
+    uid = HARNESS_USER if me else f"u-{email}"
     return {
         "body": body,
         "createdAt": at,
-        "user": {"email": email, "name": name, "isMe": me} if user else None,
+        "user": {"id": uid, "email": email, "name": name} if user else None,
     }
 
 
@@ -62,9 +64,7 @@ def read(**over):
     return LinearTracker(FakeGql(payload(**over)), selves=SELVES).issue("ENG-7")
 
 
-def note(
-    body, at="2026-09-02T00:00:00.000Z", email="agent@example.com", name="Agent", origin="self"
-):
+def note(body, at="2026-09-02T00:00:00.000Z", email=None, name="Agent", origin="self"):
     return Note(body, at, email, name, origin)
 
 
@@ -187,7 +187,7 @@ class ReadIssue(Case):
                     comment(
                         session,
                         "2026-09-02T00:00:00.000Z",
-                        email="agent@example.com",
+                        email=None,
                         name="Agent",
                         me=True,
                     ),

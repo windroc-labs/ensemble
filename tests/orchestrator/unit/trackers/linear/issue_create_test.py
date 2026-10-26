@@ -16,11 +16,10 @@ from ensemble.orchestrator.engine.types import (
 from ensemble.orchestrator.issue.output import receipt_payload
 from ensemble.orchestrator.trackers.linear import client, issue_create
 from tests.orchestrator.case import Case
-from tests.orchestrator.unit.board_ids import ACCOUNTS, STATES, TEAM
+from tests.orchestrator.unit.board_ids import MANAGER_USER, STATES, TEAM, role_id
 from tests.orchestrator.unit.issue_fixtures import (
     CLIENT_LABELS,
     NEW,
-    ROLE_USERS,
     TASK_LABELS,
     VIEWER,
     by_name,
@@ -77,7 +76,8 @@ class Create(Case):
                 "projectId": uid(7),
                 "projectMilestoneId": uid(8),
                 "parentId": "id-TASK-1",
-                "assigneeId": ROLE_USERS[ACCOUNTS["engineer"]],
+                "assigneeId": None,
+                "delegateId": role_id("engineer"),
                 "priority": 2,
             },
         )
@@ -100,6 +100,7 @@ class Create(Case):
                 "title": "Fix login",
                 "description": BODY,
                 "stateId": STATES["backlog"],
+                "assigneeId": None,
             },
         )
         self.assertEqual(len(fake.writes), 1)
@@ -111,13 +112,21 @@ class Create(Case):
                 run(fake, state=IssueState(state))
                 self.assertEqual(fake.writes[0][1]["in"]["stateId"], STATES[key])
 
-    def test_role_me_is_the_viewer_and_unassigned_leaves_it_unassigned(self):
-        fake = create_gql()
-        run(fake, role="me")
-        self.assertEqual(fake.writes[0][1]["in"]["assigneeId"], VIEWER["id"])
-        fake = create_gql()
-        run(fake, role="unassigned")
-        self.assertNotIn("assigneeId", fake.writes[0][1]["in"])
+    def test_each_role_sets_the_delegate_and_every_create_clears_the_assignee(self):
+        for role, delegate in (
+            ("pm", role_id("pm")),
+            ("me", MANAGER_USER),
+            ("unassigned", None),
+            (None, None),
+        ):
+            fake = create_gql()
+            with self.subTest(role=role):
+                run(fake, role=role)
+                fields = fake.writes[0][1]["in"]
+                self.assertIsNone(fields["assigneeId"])
+                self.assertEqual(fields.get("delegateId"), delegate)
+                self.assertEqual("delegateId" in fields, delegate is not None)
+                self.assertNotIn("query { viewer { id } }", [q for q, _ in fake.calls])
 
     def test_each_priority_is_its_linear_number(self):
         for name, number in (("none", 0), ("urgent", 1), ("high", 2), ("medium", 3), ("low", 4)):
