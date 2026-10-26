@@ -24,6 +24,7 @@ HARNESS = f"{TUI}-drive"
 
 KEYS = {
     "client",
+    "environment",
     "mode",
     "sid",
     "workdir",
