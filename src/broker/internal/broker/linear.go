@@ -190,6 +190,27 @@ func (l Linear) Enroll(a LinearIdentity) error {
 		return errLinear
 	}
 	defer unlock()
+	passwordSource := l.password
+	var password []byte
+	var passwordErr error
+	asked := false
+	l.password = func() ([]byte, error) {
+		if !asked {
+			asked = true
+			if passwordSource == nil {
+				passwordErr = errLinear
+			} else {
+				password, passwordErr = passwordSource()
+			}
+		}
+		return bytes.Clone(password), passwordErr
+	}
+	defer func() { erase(password) }()
+	for _, item := range [][2]string{{linearService, "registry"}, {linearService, "app/" + a.TokenService}, {linearGrantsService, "host/" + a.TokenService}} {
+		if l.repairMetadata(item[0], item[1]) != nil {
+			return errLinear
+		}
+	}
 	account, err := l.reserve(a)
 	if err != nil {
 		return err
@@ -356,7 +377,7 @@ func (p *linearProvider) Issue(ctx context.Context, scope map[string]string, _ c
 	if !expires.IsZero() {
 		a.Current.ExpiresAt = expires.UTC().Format(time.RFC3339Nano)
 	}
-	if !linearClean(a.Current.AccessToken) || !now.Before(renewAt) || !now.Before(expires) {
+	if !linearClean(a.Current.AccessToken) || now.After(renewAt) || !now.Before(expires) {
 		l.Audit.Renewing("")
 		secret, err := l.keys.Secret(a.Identity.SecretService, a.RootAccount)
 		if err != nil {
@@ -403,7 +424,7 @@ func (l Linear) request(ctx context.Context, a LinearIdentity, secret string) (l
 		Token   string `json:"access_token"`
 		Seconds int64  `json:"expires_in"`
 	}
-	if err != nil || len(data) > 65536 || json.Unmarshal(data, &result) != nil || !linearClean(result.Token) || result.Seconds <= 0 || result.Seconds > int64((365*24*time.Hour)/time.Second) {
+	if err != nil || len(data) > 65536 || json.Unmarshal(data, &result) != nil || !linearClean(result.Token) || result.Token == secret || result.Seconds <= 0 || result.Seconds > int64((365*24*time.Hour)/time.Second) {
 		return linearAccess{}, 0, errLinear
 	}
 	lifetime := time.Duration(result.Seconds) * time.Second

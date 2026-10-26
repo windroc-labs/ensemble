@@ -178,7 +178,7 @@ rejects an incomplete binding and never opens an interactive root read. Host tok
 ACL to the broker and `/usr/bin/security`; it verifies both bytes and access after writing.
 
 Each real host call invokes one-shot maintenance, then rereads the published entry. No worker, supervisor or Docker
-process is needed. The broker renews five days before expiry (half the issued lifetime for tokens under ten days),
+process is needed. The broker renews once fewer than five days remain (past half the issued lifetime for tokens under ten days),
 with WDRC-67's fixed scopes. Per-identity cross-process locks cover renewal and publication; unrelated identities
 use different locks. A failed publication retries the saved token without another renewal while it is still current.
 
@@ -403,10 +403,13 @@ container's own tmux socket is not Docker's, so the socket search names `docker`
 
 ## Linear presets
 
-With `--board linear`, `scripts/install.sh` asks for each harness, manager and role app's Client ID and hidden client secret,
-stores its secret and first token with expiry in Keychain, and fills the app user ids ([Setup](board.md#setup)).
+With `--board linear`, `scripts/install.sh` asks for each transport-owned harness, manager and role app's Client ID
+and hidden client secret, stores its secret and first token with expiry in Keychain, and fills the app user ids
+([Setup](board.md#setup)). A configured app using broker renewal instead keeps its configured identity, invokes
+host maintenance and reads the published token; the installer never reads its root or requests/writes its token.
 Default services are `linear-app-<slot>-secret` and `linear-app-<slot>-token`; configured services are preserved.
-Reruns reuse valid tokens with over five days left. Cleanup removes only the credential items this installer created.
+Transport-owned reruns reuse valid tokens with over five days left; the broker decides enrolled apps' renewal timing.
+Cleanup removes only the credential items this installer created.
 A key the orchestrator does not know, in `[orchestrator.linear]` or an app table, stops the installer
 ([Upgrading](upgrading.md#linear-apps)). The table
 lists what it needs in Linear. By hand: create these in the Linear team, then put each id in `~/.ensemble/config.local.toml`: a `linear.<key>` under

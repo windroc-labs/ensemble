@@ -117,7 +117,10 @@ stopped; do not change its writer back as an automatic fallback.
 
 An interrupted enrollment keeps its reservation and pending record. Rerun the exact same enrollment to complete
 root trust; a changed client ID, user ID or service is rejected. After broker reinstallation, rerun enrollment to
-repair its root trust. Failed publication retains authoritative material; rerun maintenance. For a deliberate
+repair the registry, selected app record, host grant and root trust. This repair accepts only metadata restricted
+to a prior broker code identity at the installed path; permissive or foreign-reader records stay refused. It asks
+for the login Keychain password once per enrollment, preserves reservations and cached tokens, and releases the
+registry transaction before interactive repair. Failed publication retains authoritative material; rerun maintenance. For a deliberate
 identity replacement, stop callers and remove only that identity's reservation from `ensemble-linear` / `registry`
 and its `app/<token_service>` and host grant records through a controlled Keychain recovery; preserve every other
 identity and all GitHub recovery material. There is no automatic rebinding command.

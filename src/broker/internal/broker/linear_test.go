@@ -29,11 +29,12 @@ func linearApp(name string) LinearIdentity {
 type linearKeysFake struct {
 	mu sync.Mutex
 	fakeApps
-	items        map[string][]byte
-	fail         string
-	failWriteKey string
-	destructive  bool // models the existing native PutSecret's delete-before-add failure
-	untrusted    map[string]bool
+	items          map[string][]byte
+	fail           string
+	failWriteKey   string
+	destructive    bool // models the existing native PutSecret's delete-before-add failure
+	untrusted      map[string]bool
+	metadataAccess map[string]AppAccess
 }
 
 func (k *linearKeysFake) Secret(s, a string) ([]byte, error) {
@@ -80,6 +81,16 @@ func (k *linearKeysFake) AppAccess(s, a string) (AppAccess, error) {
 		if k.untrusted[s+"/"+a] {
 			return *added(), nil
 		}
+		if access, ok := k.metadataAccess[s+"/"+a]; ok {
+			copy := access
+			copy.Entries = slices.Clone(access.Entries)
+			for i, e := range copy.Entries {
+				copy.Entries[i].Apps = slices.Clone(e.Apps)
+				copy.Entries[i].Partitions = slices.Clone(e.Partitions)
+				copy.Entries[i].Authorizations = slices.Clone(e.Authorizations)
+			}
+			return copy, nil
+		}
 		return brokerOnly(), nil
 	}
 	return k.fakeApps.AppAccess(s, a)
@@ -93,6 +104,56 @@ func (k *linearKeysFake) UpdateSecret(s, a string, v []byte) error {
 	}
 	k.items[s+"/"+a] = bytes.Clone(v)
 	return nil
+}
+
+func (k *linearKeysFake) repairMetadata(s, a string, partition bool) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.frozen {
+		return nil
+	}
+	if k.metadataAccess == nil {
+		k.metadataAccess = map[string]AppAccess{}
+	}
+	access, ok := k.metadataAccess[s+"/"+a]
+	if !ok {
+		access = brokerOnly()
+	}
+	for i, e := range access.Entries {
+		if partition && slices.Contains(e.Authorizations, "partition_id") {
+			access.Entries[i].Partitions = []string{brokerPartition}
+		}
+		if !partition && slices.ContainsFunc(e.Authorizations, func(auth string) bool { return slices.Contains(readAuthorizations, auth) }) {
+			access.Entries[i].Any = false
+			access.Entries[i].Apps = []string{brokerApp}
+		}
+	}
+	k.metadataAccess[s+"/"+a] = access
+	return nil
+}
+func (k *linearKeysFake) TrustApps(s, a string, password []byte) error {
+	if s == linearService || s == linearGrantsService {
+		return k.repairMetadata(s, a, false)
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.fakeApps.TrustApps(s, a, password)
+}
+func (k *linearKeysFake) TrustPartition(s, a string, password []byte) error {
+	if s == linearService || s == linearGrantsService {
+		return k.repairMetadata(s, a, true)
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.fakeApps.TrustPartition(s, a, password)
+}
+func (k *linearKeysFake) TrustAppsByDialog(s, a string) error {
+	if s == linearService || s == linearGrantsService {
+		return k.repairMetadata(s, a, false)
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.fakeApps.TrustAppsByDialog(s, a)
 }
 
 type linearHostFake struct {
@@ -467,6 +528,174 @@ func TestLinearPublicationRejectsUnconfirmedValueOrTrust(t *testing.T) {
 			}}
 			if err := h.Publish(context.Background(), "token-verifier", "token-verifier", value); err == nil || strings.Contains(err.Error(), "SENTINEL") {
 				t.Fatalf("invalid confirmation %v", err)
+			}
+		})
+	}
+}
+
+func TestLinearReenrollmentRepairsPreviousBrokerMetadata(t *testing.T) {
+	l, k, h, calls := linearRig(t)
+	a := linearApp("harness")
+	enrollLinear(t, l, k, a)
+	if _, err := l.Maintain(context.Background(), a); err != nil {
+		t.Fatal(err)
+	}
+	before := map[string][]byte{}
+	k.metadataAccess = map[string]AppAccess{}
+	for _, entry := range [][2]string{{linearService, "registry"}, {linearService, "app/" + a.TokenService}, {linearGrantsService, "host/" + a.TokenService}} {
+		key := entry[0] + "/" + entry[1]
+		before[key] = bytes.Clone(k.items[key])
+		k.metadataAccess[key] = *reinstalled()
+	}
+	k.access = reinstalled()
+	if _, err := l.Maintain(context.Background(), a); err == nil {
+		t.Fatal("stale broker metadata accepted")
+	}
+	passwordReads := 0
+	rebuilt := NewLinear(t.TempDir(), func() ([]byte, error) { passwordReads++; return []byte(keychainPass), nil })
+	rebuilt.keys, rebuilt.host, rebuilt.http, rebuilt.now = k, h, l.http, l.now
+	k.frozen = true
+	if err := rebuilt.Enroll(a); err == nil {
+		t.Fatal("failed metadata restriction accepted")
+	}
+	for key, value := range before {
+		if !bytes.Equal(value, k.items[key]) {
+			t.Fatal("failed repair discarded metadata")
+		}
+	}
+	k.frozen = false
+	passwordReads = 0
+	if err := rebuilt.Enroll(a); err != nil {
+		t.Fatalf("reinstall enrollment: %v", err)
+	}
+	if passwordReads != 1 {
+		t.Fatalf("password reads %d", passwordReads)
+	}
+	for key, value := range before {
+		if !bytes.Equal(value, k.items[key]) {
+			t.Fatalf("recovery changed metadata bytes for %s", key)
+		}
+	}
+	if got, err := rebuilt.Maintain(context.Background(), a); err != nil || got.Renewed || len(*calls) != 1 {
+		t.Fatalf("cached material lost after recovery %+v %v", got, err)
+	}
+}
+
+func TestLinearMetadataRecoveryRequiresPriorBrokerOnly(t *testing.T) {
+	if !previousBrokerOnly(*reinstalled()) {
+		t.Fatal("prior broker identity rejected")
+	}
+	for _, variant := range []string{"any", "foreign", "mixed", "partition", "no decrypt"} {
+		t.Run(variant, func(t *testing.T) {
+			a := *reinstalled()
+			switch variant {
+			case "any":
+				a.Entries[1].Any = true
+			case "foreign":
+				a.Entries[1].Apps = []string{"/foreign (signature)"}
+			case "mixed":
+				a.Entries[1].Apps = append(a.Entries[1].Apps, security)
+			case "partition":
+				a.Entries[2].Partitions = []string{"apple-tool:"}
+			case "no decrypt":
+				a.Entries[1].Authorizations = []string{"encrypt"}
+			}
+			if previousBrokerOnly(a) {
+				t.Fatal("untrusted metadata accepted for repair")
+			}
+		})
+	}
+}
+
+func TestLinearReenrollmentNeverAdoptsPermissiveMetadata(t *testing.T) {
+	for _, where := range []string{"registry", "app", "grant"} {
+		t.Run(where, func(t *testing.T) {
+			l, k, _, _ := linearRig(t)
+			a := linearApp("harness")
+			enrollLinear(t, l, k, a)
+			if _, err := l.Maintain(context.Background(), a); err != nil {
+				t.Fatal(err)
+			}
+			k.untrusted = map[string]bool{}
+			switch where {
+			case "registry":
+				k.untrusted[linearService+"/registry"] = true
+			case "app":
+				k.untrusted[linearService+"/app/"+a.TokenService] = true
+			case "grant":
+				k.untrusted[linearGrantsService+"/host/"+a.TokenService] = true
+			}
+			asked := false
+			l.password = func() ([]byte, error) { asked = true; return []byte(keychainPass), nil }
+			if err := l.Enroll(a); err == nil || asked {
+				t.Fatal("permissive metadata adopted during recovery")
+			}
+		})
+	}
+}
+
+func TestLinearOAuthFailuresKeepDurableCurrentMaterial(t *testing.T) {
+	cases := map[string]string{"malformed": "{", "object": "[]", "missing": `{}`, "unclean": `{"access_token":"bad\nvalue","expires_in":60}`, "root echo": `{"access_token":"ROOT-SENTINEL","expires_in":60}`, "zero": `{"access_token":"NEW","expires_in":0}`, "negative": `{"access_token":"NEW","expires_in":-1}`, "boolean": `{"access_token":"NEW","expires_in":true}`, "fraction": `{"access_token":"NEW","expires_in":1.5}`, "huge": `{"access_token":"NEW","expires_in":999999999999}`, "oversized": strings.Repeat("x", 65537), "transport": "", "status": ""}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			l, k, h, _ := linearRig(t)
+			a := linearApp("harness")
+			enrollLinear(t, l, k, a)
+			if _, err := l.Maintain(context.Background(), a); err != nil {
+				t.Fatal(err)
+			}
+			before, _ := k.Secret(linearService, "app/"+a.TokenService)
+			published := bytes.Clone(h.value)
+			writes := h.writes
+			l.now = func() time.Time { return linearNow.Add(26 * 24 * time.Hour) }
+			l.http = &http.Client{Transport: linearRoundTrip(func(*http.Request) (*http.Response, error) {
+				if name == "transport" {
+					return nil, errors.New("ROOT-SENTINEL")
+				}
+				status := 200
+				if name == "status" {
+					status = 401
+				}
+				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body))}, nil
+			})}
+			_, err := l.Maintain(context.Background(), a)
+			if err == nil || strings.Contains(err.Error(), "SENTINEL") {
+				t.Fatalf("invalid response accepted or leaked: %v", err)
+			}
+			after, _ := k.Secret(linearService, "app/"+a.TokenService)
+			if !bytes.Equal(before, after) || !bytes.Equal(published, h.value) || h.writes != writes {
+				t.Fatal("failed OAuth replaced durable or published access material")
+			}
+		})
+	}
+}
+
+func TestLinearRenewalBoundaries(t *testing.T) {
+	for lifetime, renewAfter := range map[time.Duration]time.Duration{30 * 24 * time.Hour: 25 * 24 * time.Hour, time.Minute: 30 * time.Second} {
+		t.Run(lifetime.String(), func(t *testing.T) {
+			l, k, _, _ := linearRig(t)
+			a := linearApp("harness")
+			enrollLinear(t, l, k, a)
+			clock := linearNow
+			l.now = func() time.Time { return clock }
+			requests := 0
+			l.http = &http.Client{Transport: linearRoundTrip(func(*http.Request) (*http.Response, error) {
+				requests++
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{"access_token":"TOKEN-%d","expires_in":%d}`, requests, int64(lifetime/time.Second))))}, nil
+			})}
+			if _, err := l.Maintain(context.Background(), a); err != nil {
+				t.Fatal(err)
+			}
+			boundary := linearNow.Add(renewAfter)
+			for _, at := range []time.Time{boundary.Add(-time.Nanosecond), boundary} {
+				clock = at
+				if got, err := l.Maintain(context.Background(), a); err != nil || got.Renewed || requests != 1 {
+					t.Fatalf("renewed before strictly due %+v %v requests %d", got, err, requests)
+				}
+			}
+			clock = boundary.Add(time.Nanosecond)
+			if got, err := l.Maintain(context.Background(), a); err != nil || !got.Renewed || requests != 2 {
+				t.Fatalf("did not renew after boundary %+v %v requests %d", got, err, requests)
 			}
 		})
 	}
