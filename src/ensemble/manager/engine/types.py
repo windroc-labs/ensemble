@@ -49,7 +49,7 @@ class StartRefused(ValueError):
 
 
 class StartBusy(RuntimeError):
-    """A role start exited EXIT_BUSY before printing anything: its lock is held, nothing started."""
+    """A run/role starter exited EXIT_BUSY with no output: its lock is held, nothing started."""
 
 
 class Stale(RosterError):
