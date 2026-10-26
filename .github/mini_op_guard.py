@@ -40,7 +40,7 @@ ITEM_ARGS = {
 COMMANDS = re.compile(
     r"(?<![\w-])("
     + "|".join(re.escape(c) for c in sorted(ITEM_ARGS, key=len, reverse=True))
-    + r")(?![\w-])((?:[ \t]+[^\s|;&)`<>]+)*)"
+    + r")(?![\w-])(?=((?:[ \t]+[^\s|;&)`<>]+)*))"
 )
 SECURITY = re.compile(WORD.format("security") + r"|\w-(?:generic|internet)-password\b")
 OPTION = re.compile(r"(?<=\s)-[sal][ \t]+([^\s|;&)`<>]+)")
@@ -57,8 +57,11 @@ def _literal(value):
 
 
 def _named(value):
-    """A literal that cannot be a plain prose word."""
-    return _literal(value) and re.search(r"[\d._@:+-]", value.strip("'\"`")) is not None
+    """A literal that cannot be a plain prose word or another command's name."""
+    value = value.strip("'\"`.,")
+    return (
+        _literal(value) and value not in ITEM_ARGS and re.search(r"[\d._@:+-]", value) is not None
+    )
 
 
 def _items(line):

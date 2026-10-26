@@ -57,6 +57,8 @@ SAMPLES = {
         "1. keychain_read made-up-item acct",
         "keychain_read made-up-item>out",
         "keychain_read item2 acct",
+        "storekey writes it, then keychain_read made-up-item acct checks it",
+        "The lq step calls keychain_read made-up-item acct",
     ],
 }
 CLEAN = [
@@ -81,6 +83,8 @@ CLEAN = [
     "and then storekey asks for the key",
     'the "lq and storekey" scripts',
     "keychain_read <service> <account> > /tmp/x",
+    "lq and storekey-stdin.",
+    "run storekey and storekey-stdin first",
 ]
 
 
