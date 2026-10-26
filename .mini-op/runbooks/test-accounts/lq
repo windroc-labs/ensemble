@@ -32,7 +32,8 @@ rc=$?
 unset token
 print -r -- $body
 (( rc == 0 )) || { print -u2 -r -- "lq: curl exited $rc"; exit 1; }
-# Linear answers a refused mutation with HTTP 200 and a top-level "errors" array.
+# Linear answers a refused mutation with HTTP 200 and an "errors" array; any "errors": [ key in
+# the reply, at any depth, counts as one.
 [[ $body =~ '"errors"[[:space:]]*:[[:space:]]*\[' ]] || exit 0
 rest=${body[MEND+1,-1]} found=
 message='"message"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)"'
