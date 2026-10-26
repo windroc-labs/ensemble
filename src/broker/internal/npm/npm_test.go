@@ -18,6 +18,11 @@ type unread struct{ t *testing.T }
 
 func (u unread) Read([]byte) (int, error) { u.t.Fatal("body read"); return 0, io.EOF }
 
+// failing is a body whose read fails.
+type failing struct{}
+
+func (failing) Read([]byte) (int, error) { return 0, errors.New("reset: secret") }
+
 func reply(status int, body string) roundTrip {
 	return func(r *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: r}, nil
@@ -55,6 +60,9 @@ func TestFetchErrors(t *testing.T) {
 		"missing":        {reply(http.StatusNotFound, "secret"), registry + "/x", 4, "Thing registry release missing"},
 		"server error":   {reply(http.StatusInternalServerError, "secret"), registry + "/x", 4, "Thing registry unavailable"},
 		"over the limit": {reply(http.StatusOK, "secret"), registry + "/x", 4, "Thing registry response exceeds limit"},
+		"read error": {func(r *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, ContentLength: -1, Body: io.NopCloser(failing{}), Header: make(http.Header), Request: r}, nil
+		}, registry + "/x", 4, "Thing registry response exceeds limit"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b, err := fetch(t, c.rt, c.raw, c.limit)
