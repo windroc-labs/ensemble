@@ -6,7 +6,6 @@ recording `stderr` and each ClientBound as `client_session`, never yielded.
 from __future__ import annotations
 
 import builtins
-import contextlib
 import os
 import re
 import shutil
@@ -47,7 +46,6 @@ from ensemble.session.engine.types import (
     StatusState,
     Stderr,
     TurnEnd,
-    Unanswered,
     Usage,
 )
 from ensemble.session.hosts.base import Host, host_resume
@@ -84,8 +82,6 @@ def _request(spec: Spec, idle_timeout: float | None) -> tuple[str, Mode]:
 POLL = 0.5
 PROBE_DIR = f"{STATE}/probe"
 PROBE_TIMEOUT = 120
-SHOW_TRIES = 3  # an Unanswered show
-SHOW_RETRY_WAIT = 1  # seconds
 UNCONFIGURED = "session not configured: call Session.configure first"
 MODES: dict[Mode, type[BaseMode]] = {
     mode.kind: mode for mode in (headless.HeadlessMode, tui.TuiMode, in_process.InProcessMode)
@@ -717,10 +713,6 @@ class HostedSession(Session):
 
     def show(self, *, display: Display = None, command: str | None = None) -> str | None:
         viewer, name = self._shown("show")
-        for _ in range(SHOW_TRIES - 1):
-            with contextlib.suppress(Unanswered):
-                return viewer.show(name, self._host, display=display, command=command)
-            time.sleep(SHOW_RETRY_WAIT)
         return viewer.show(name, self._host, display=display, command=command)
 
     def hide(self) -> None:

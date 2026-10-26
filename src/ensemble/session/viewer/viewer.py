@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import time
 from collections.abc import Mapping
 
 from ensemble.session.engine import tmux_cli
@@ -15,6 +16,7 @@ from ensemble.session.engine.types import (
     ConfigError,
     NotShowable,
     SessionError,
+    Unanswered,
 )
 from ensemble.session.hosts.base import Host
 from ensemble.session.hosts.types import CommandView, SessionView
@@ -30,6 +32,8 @@ HIDDEN = "hidden"  # started hidden; only NO_DISPLAY sets it
 NO_PANE_HINT = ": run from tmux or iTerm2, or pass split_from"
 VIEW_TAG = "viewer"
 LOG = logging.getLogger("session")
+SHOW_TRIES = 3
+SHOW_RETRY_WAIT = 1  # seconds
 
 Parts = tuple[str | None, str | None, str | None, bool]
 
@@ -117,13 +121,13 @@ class Viewer:
         """None once shown, else an attach command; display None: the session's stored one;
         command: a shell command run instead, `{{session}}` the session name.
         """
-        target = self._target(name, host)
-        if display is None:
-            display = host.attach(name).display()
-        if isinstance(target, CommandView):
-            self._view(name, target)
-        elif self._tmux.status(target.session) is None:
-            raise SessionError(f"no tmux session {name}")
+        for _ in range(SHOW_TRIES - 1):
+            with contextlib.suppress(Unanswered):
+                target, display = self._viewed(name, host, display)
+                break
+            time.sleep(SHOW_RETRY_WAIT)
+        else:
+            target, display = self._viewed(name, host, display)
         try:
             if command is None:
                 opener, split, split_from, _ = parts(display)
@@ -151,6 +155,19 @@ class Viewer:
             return None
         LOG.warning("show %s: %s", name, why)
         return printed(target)
+
+    def _viewed(
+        self, name: str, host: Host, display: Display
+    ) -> tuple[SessionView | CommandView, Display]:
+        """show's steps before placement, retried while Unanswered."""
+        target = self._target(name, host)
+        if display is None:
+            display = host.attach(name).display()
+        if isinstance(target, CommandView):
+            self._view(name, target)
+        elif self._tmux.status(target.session) is None:
+            raise SessionError(f"no tmux session {name}")
+        return target, display
 
     def hide(self, name: str, host: Host, *, if_closed: bool = False) -> None:
         """Undoes show: hidden until a show (if_closed: only once its pane was closed by hand)."""
