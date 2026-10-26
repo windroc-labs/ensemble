@@ -127,7 +127,7 @@ class HandleTest(Base):
     def test_transcript_path_is_dropped_before_the_hook_runs(self):
         self.assertEqual(self.supervisor.handle(request()), {"gen": GEN, "seq": 1, "ok": True})
         ((argv, kw),) = self.ran
-        self.assertEqual(argv, [HOOK, "hook", "--strict", TUI, "Stop"])
+        self.assertEqual(argv, [HOOK, "hook", "--strict", "--event", f"{GEN}.1", TUI, "Stop"])
         self.assertEqual(json.loads(kw["input"]), {"session_id": "s"})
         self.assertEqual(kw["timeout"], supervisor.HOOK_WAIT)
         self.assertEqual(kw["stdout"], kw["stderr"])
@@ -341,8 +341,13 @@ class HookCommandTest(Base):
             self.assertFalse(os.path.exists(self.supervisor.seq_file))
             self.assertTrue(self.supervisor.handle(line)["ok"])
             self.assertTrue(self.supervisor.handle(line)["ok"])
-        self.assertEqual(calls, [[HOOK, "hook", "--strict", folder, "Stop"]] * 2)
+        self.assertEqual(
+            calls, [[HOOK, "hook", "--strict", "--event", f"{GEN}.1", folder, "Stop"]] * 2
+        )
         self.assertEqual(len(popen.calls), 3)
+        with open(os.path.join(folder, "hooks.jsonl")) as stream:
+            records = [json.loads(line) for line in stream]
+        self.assertEqual([(r["label"], r["event"]) for r in records], [("Stop", f"{GEN}.1")])
         self.assertEqual(self.rejected()[-1]["reason"], "hook exit 1")
         with open(os.path.join(folder, "hook.log")) as stream:
             self.assertIn("temporary docker failure", stream.read())
