@@ -19,6 +19,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 
 from ensemble.session.engine.status_log import SessionStatusLog
 from ensemble.session.engine.types import (
@@ -1018,6 +1019,45 @@ def _tmux_key(key) -> str:
     return "".join(prefixes) + TMUX_KEYS.get(key.key, key.key)
 
 
+@dataclass(frozen=True)
+class NoAnswer:
+    """A probe tmux did not answer."""
+
+    message: str
+
+
+Probe = tuple[bool, PaneStatus | int | None] | NoAnswer
+
+
+def liveness(found: Probe) -> Liveness:
+    if isinstance(found, NoAnswer):
+        return Liveness.UNKNOWN
+    own, value = found
+    if not own or value is None:
+        return Liveness.ABSENT
+    return Liveness.UNKNOWN if value == PaneStatus.UNKNOWN else Liveness.LIVE
+
+
+def exit_code(found: Probe) -> int | None:
+    if isinstance(found, NoAnswer):
+        return None
+    own, value = found
+    if not own or value is None:
+        return -signal.SIGHUP
+    return value if isinstance(value, int) else None
+
+
+def running(found: Probe, name: str) -> bool:
+    if isinstance(found, NoAnswer):
+        raise SessionError(found.message)
+    own, value = found
+    if not own:
+        return False
+    if value == PaneStatus.UNKNOWN:
+        raise SessionError(f"tmux session {name}: tmux failed")
+    return value == PaneStatus.RUNNING
+
+
 class TmuxPane:
     """Session name's captured pane (id), owned while it still runs process (its PROCESS)."""
 
@@ -1032,39 +1072,22 @@ class TmuxPane:
         except TuiError as e:
             raise SessionError(f"tmux session {self.name}: {e}") from None
 
-    def _state(self):
+    def probe(self) -> Probe:
         """Whether it is still owned, and the pane's status(): one call."""
         try:
             found, value = self.tmux.process_status(self.id)
         except TuiError as e:
-            raise SessionError(f"tmux session {self.name}: {e}") from None
+            return NoAnswer(f"tmux session {self.name}: {e}")
         return found == self.process, value
 
     def state(self) -> Liveness:
-        try:
-            own, value = self._state()
-        except SessionError:
-            return Liveness.UNKNOWN
-        if not own or value is None:
-            return Liveness.ABSENT
-        return Liveness.UNKNOWN if value == PaneStatus.UNKNOWN else Liveness.LIVE
+        return liveness(self.probe())
 
     def returncode(self) -> int | None:
-        try:
-            own, value = self._state()
-        except SessionError:
-            return None
-        if not own or value is None:
-            return -signal.SIGHUP
-        return value if isinstance(value, int) else None
+        return exit_code(self.probe())
 
     def alive(self) -> bool:
-        own, state = self._state()
-        if not own:
-            return False
-        if state == PaneStatus.UNKNOWN:
-            raise SessionError(f"tmux session {self.name}: tmux failed")
-        return state == PaneStatus.RUNNING
+        return running(self.probe(), self.name)
 
     def option(self, key: str) -> str | None:
         if not self.own():
