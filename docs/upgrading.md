@@ -1,5 +1,11 @@
 # Upgrading
 
+Broker protocol 26 drops `start`'s `client_update`: a start never updates Codex; the image carries Claude Code,
+Codex and OpenCode at their latest releases and `ensemble-broker check-clients` rebuilds it when one moves
+([Docker host › Client releases](docker-host.md#client-releases)). Upgrade the broker with the plugin. Drop
+`npm install -g @anthropic-ai/claude-code` (and `@openai/codex`) from `~/.ensemble/docker/worker/Dockerfile` to shrink
+the image: the ensemble layer installs its own, and a base image no longer needs `claude`.
+
 Broker protocol 25 makes `start` require the egress proxy ([Docker host › Egress
 proxy](docker-host.md#egress-proxy)): without it running and healthy, a start fails
 `egress_unavailable` (exit 17) before any credential. Upgrade the broker with the plugin, then rerun

@@ -36,10 +36,12 @@ The asset appears a few minutes after a Release is published; until then it exit
 instead builds and ad-hoc signs it locally with the hardened runtime (needs Go, `brew install go`, and the Xcode
 command line tools).
 
-To upgrade, rerun it (your Dockerfile is never overwritten), then [log in](#log-in) again. Claude Code upgrades with
-the image. The image pins `gh`, Codex and OpenCode; rebuild an image whose client is below the broker's minimum version.
-A worker runs only that Codex, `/opt/ensemble/bin/codex`, first on `PATH`: a Codex your Dockerfile installs is never run,
-so drop it to shrink the image (a Dockerfile seeded before this change has `@openai/codex` in its `npm install -g` line).
+To upgrade, rerun it (your Dockerfile is never overwritten), then [log in](#log-in) again. The image pins `gh`, and
+Claude Code, Codex and OpenCode each at its npm `latest` release when the image was built; the broker rebuilds it when
+one moves ([Client releases](#client-releases)). A worker runs only those clients, `/opt/ensemble/bin/claude`, `codex`
+and `opencode`, first on `PATH`: a Claude Code or Codex your Dockerfile installs is never run, so drop it to shrink the
+image (a Dockerfile seeded before this change has `@anthropic-ai/claude-code` or `@openai/codex` in an `npm install -g`
+line).
 
 ### Egress proxy
 
@@ -175,12 +177,32 @@ both and writes the App's slug to `github.app`.
 The full form is `build --ensemble DIR [--base-image IMAGE] [--plugin SOURCE]... [--image-plugin NAME]... [--max-age
 SECONDS]`, in that order.
 
-A changed Dockerfile or ensemble version gives a new key. No build log shows a secret. Rebuilds skip Docker's cache,
-so they install npm's latest Claude Code. `--max-age N` rebuilds an image N or more seconds old under the same key (a
-start passes 604800, 7 days); if that rebuild fails (e.g. offline) it keeps the image, printing `ensemble-broker: kept
-<image>: refreshing it failed: <reason>`, except `--max-age 0`, which fails.
+A changed Dockerfile or ensemble version gives a new key. No build log shows a secret. Rebuilds skip Docker's cache.
+A build that must rebuild first looks up each client's npm `latest` and installs exactly those versions, recorded in
+the image's `ensemble.claude-version`, `ensemble.codex-version` and `ensemble.opencode-version` labels; if the lookup
+fails it fails `build_failed`. A build that finds a current image returns it at once, with no lookup. `--max-age N`
+rebuilds an image N or more seconds old under the same key (starts pass none); if that rebuild fails (e.g. offline) it
+keeps the image, printing `ensemble-broker: kept <image>: refreshing it failed: <reason>`, except `--max-age 0`, which
+fails.
 
 After a rebuild, `build` removes unused older images, keeping those used by containers or recent builds.
+
+### Client releases
+
+Starts never update a client and never wait for a rebuild. Every successful `build` records its inputs in
+`~/.ensemble/docker/images/<key>.json` and, when the last check is an hour old or more (or none ran), starts a
+detached `ensemble-broker check-clients` (log: `~/.ensemble/docker/clients-check.log`). It looks up the three clients'
+npm `latest` releases and rebuilds, under the same key, every variant built in the last hour whose labels differ (a
+newer release, or a `latest` moved back); the first start after it finishes runs the new image. Running workers keep
+theirs. A host that runs no build runs no check: run `"$B" check-clients` by hand to check now (it prints
+`{"latest":{"claude":…,"codex":…,"opencode":…},"rebuilt":[…]}`, or `{"rebuilt":[]}` while another check runs, and
+fails `build_failed`, exit 8, on any failure).
+
+While the registry is unreachable or a rebuild fails, starts use the current image; the next `build` prints
+`ensemble-broker: client check failed: <reason>; starts use the current image` once per distinct failure.
+Trust: the image adopts each client's `latest` within a check, trusting registry.npmjs.org over TLS and its
+integrity hashes; Codex installs without lifecycle scripts, Claude Code runs only its own postinstall. An OpenCode
+`latest` outside 1.x is refused (the session supports only 1.x).
 
 ### Plugins
 
@@ -253,8 +275,9 @@ A base image can also carry plugins of its own: [Base images](#base-images).
 `--base-image IMAGE` takes a local image tag or ID as stage 1 in place of `~/.ensemble/docker/worker`; the result is
 still `ensemble-worker:<key>`. The broker never pulls or rebuilds it: an image absent locally fails the build naming
 it. The key covers the base image's local ID, so rebuilding the base image gives a new key and the next build
-rebuilds the variant; the same ID under two tags shares one variant. The 7-day refresh (`--max-age`) rebuilds only
-the ensemble layer; updating the base image's Claude Code and plugins is yours. The broker tags the base image as
+rebuilds the variant; the same ID under two tags shares one variant. A [client release](#client-releases) rebuilds
+only the ensemble layer, which carries all three clients, so a base image's own Claude Code is never run; updating the
+base image's plugins is yours. The broker tags the base image as
 `ensemble-user:<key>`, so removing older images can delete a base image that has no tag of its own once no variant
 or container uses it: tag your base images.
 
@@ -264,8 +287,8 @@ each missing item:
 | Requirement | Why |
 |---|---|
 | `apt-get`, `dpkg` (Debian) | the ensemble layer installs tini, python3, python3-venv, curl, ripgrep and gh |
-| `node`, `npm` | the ensemble layer installs Codex and OpenCode |
-| `tmux`, `git`, `claude` (Claude Code) | sessions run them |
+| `node`, `npm` | the ensemble layer installs Claude Code, Codex and OpenCode |
+| `tmux`, `git` | sessions run them |
 | a non-root user `agent` | sessions run as it; the broker reads its UID and GID from the image (1000 works) |
 
 Commands must be on `/home/agent/.npm-global/bin:/usr/local/bin:/usr/bin:/bin`, the container's `PATH` less
@@ -449,7 +472,7 @@ Install or upgrade the broker first ([Install](#install)). `<version>` is an exa
 | Browser login, as yourself | `/usr/local/libexec/ensemble/ensemble-broker login codex` |
 | Inspect | `/usr/local/libexec/ensemble/ensemble-broker status` |
 
-Each start, restart or resume selects the latest supported stable container Codex. The broker stages the integrity-checked platform package's complete vendor tree, including `codex-code-mode-host`, in the executable runtime tmpfs and publishes it with one directory rename. Before injecting credentials it verifies the version and starts the companion with `--help`; the image build checks its npm installation the same way. Lookup, incomplete packages, installation or probe failures restore and verify the image version. A below-minimum host or image is refused. The host installation is upgraded only by your explicit command.
+A container runs the image's Codex as it is: a start makes no registry lookup and updates nothing ([Client releases](#client-releases)). The image build verifies its version and starts `codex-code-mode-host` with `--help`. A below-minimum host or image is refused. The host installation is upgraded only by your explicit command.
 
 ### Claude accounts
 
@@ -583,7 +606,8 @@ to 3 s old, but the opening is sent only after a fresh capture shows no dialog; 
   the kill, never lost. `next-event` restarts nothing: it reads only the events file. Until the daemon is restarted,
   the hook stub gives up on an event after 10 s and it is lost; `status` still shows the worker running, replies still come from
   the transcript.
-- **Older image** after an upgrade or rebuild: the command warns `restart it to upgrade`; restart the worker.
+- **Older image** after an upgrade (a new image key): the command warns `restart it to upgrade`; restart the worker. A
+  [client release](#client-releases) rebuild keeps the key and never warns.
 - **Container gone** (Docker Desktop restart, `docker rm`): the worker shows `dead`; `ensemble-session resume NAME`
   continues the conversation in a new container. Events queued in the old one are lost.
 - **Egress proxy not ready** (`egress_unavailable`): run `~/.egress/current/start.sh`, as the error says (before
