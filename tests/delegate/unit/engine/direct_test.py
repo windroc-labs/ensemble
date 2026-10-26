@@ -43,7 +43,7 @@ class Direct(Case):
             mock.patch("subprocess.run", return_value=SimpleNamespace(returncode=0))
         )
 
-    def open(self, name="dummy-1", **options):
+    def open(self, **options):
         def literal(value):
             if isinstance(value, dict):
                 return (
@@ -72,7 +72,7 @@ class Direct(Case):
             "delegate", {k: v for k, v in self.cfg.items() if k != "hosts"}
         )
         Path(self.ensemble, "config.local.toml").write_text(local)
-        return direct.open_worker(name, "dummy", **options)
+        return direct.open_worker("dummy-1", "dummy", **options)
 
     def argv(self):
         return self.started.call_args.args[0]
@@ -85,9 +85,8 @@ class Direct(Case):
         self.assertEqual(self.open(cwd=self.home), 0)
         argv = self.argv()
         self.assertEqual(
-            argv[:6], [sys.executable, "-P", "-s", "-m", "ensemble.session.cli", "start"]
+            argv[:7], [sys.executable, "-P", "-s", "-m", "ensemble.session.cli", "start", "dummy-1"]
         )
-        self.assertIn("--worker-name=dummy-1", argv)
         self.assertEqual(
             self.spec(),
             {
@@ -162,10 +161,6 @@ class Direct(Case):
         self.assertEqual(
             (env["ENSEMBLE_SID"], env["ENSEMBLE_EVENTS"]), ("captured", "/captured/events")
         )
-
-    def test_leading_dash_name_is_an_explicit_worker_name(self):
-        self.open(name="-pane")
-        self.assertIn("--worker-name=-pane", self.argv())
 
     def test_leading_dash_display_remains_one_option_value(self):
         self.open(display="-pane")

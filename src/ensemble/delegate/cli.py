@@ -226,8 +226,10 @@ Recovery and next help:
 
 
 def _worker_name(value: str) -> str:
-    if not SESSION_NAME.fullmatch(value):
-        raise argparse.ArgumentTypeError(f"want {SESSION_NAME_RULE}, not {value!r:.80}")
+    if not SESSION_NAME.fullmatch(value) or value.startswith("-"):
+        raise argparse.ArgumentTypeError(
+            f"want {SESSION_NAME_RULE}, not starting with -, not {value!r:.80}"
+        )
     return value
 
 
@@ -268,7 +270,9 @@ Recovery and next help:
   Environment configuration and acceptance: docs/docker-host.md
 """,
     )
-    ap.add_argument("name", type=_worker_name, help="new worker's session name")
+    ap.add_argument(
+        "name", type=_worker_name, help="new worker's session name; must not start with -"
+    )
     ap.add_argument(
         "--environment",
         required=True,

@@ -667,7 +667,8 @@ ensemble-crew run dummy-1 -- ensemble-delegate open dummy-1 --environment dummy
 
 Choose one command: the first prints a plain worker Record; the second tracks that Record in `ensemble-crew
 status`. `open` uses the default Host, which must be Docker-kind and have `[environment.<host>]`, then overlays the
-named environment. It applies no role settings. `--client` defaults to delegate's global `client`; `--cwd` defaults
+named environment. Worker names match `[A-Za-z0-9_-]+`, except `none`, and cannot start with `-` (the Record resume
+key). It applies no role settings. `--client` defaults to delegate's global `client`; `--cwd` defaults
 to the current directory; `--display` has session's usual placement syntax. Under crew it uses `ENSEMBLE_SID` and
 `ENSEMBLE_EVENTS`. No charter, task, prompt, outcome or delegate harness is created.
 

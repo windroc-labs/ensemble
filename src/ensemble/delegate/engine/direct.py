@@ -44,6 +44,7 @@ def open_worker(
         "-m",
         "ensemble.session.cli",
         "start",
+        name,
     ]
     for flag, value in (
         ("--host", host),
@@ -56,7 +57,6 @@ def open_worker(
     for flag, value in (("--account", account), ("--display", display)):
         if value is not None:
             argv.append(f"{flag}={value}")
-    argv.append(f"--worker-name={name}")
     child_env = {**os.environ, **source_path(config.module_roots())}
     for key, value in ((SID_ENV, sid), (EVENTS_ENV, events)):
         child_env.pop(key, None)

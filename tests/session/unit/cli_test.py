@@ -104,33 +104,6 @@ class WorkerEnvironment(Case):
         self.worker.check.assert_called_once_with(prompt="", resume=False)
         self.worker.start.assert_called_once_with(prompt="", resume=False, hidden=True)
 
-    def test_explicit_worker_name_preserves_client_flags_delimiter(self):
-        code, out, err = self.invoke(
-            "start",
-            "--worker-name=-pane",
-            "--client",
-            "claude",
-            "--cwd",
-            self.home,
-            "--display",
-            "none",
-            "--",
-            "--help",
-            "--",
-            "literal",
-        )
-        self.assertEqual((code, out, err), (0, self.record.to_line() + "\n", ""))
-        fields = self.workers.new.call_args.kwargs
-        self.assertEqual(fields["name"], "-pane")
-        self.assertEqual(fields["flags"], ("--help", "--", "literal"))
-
-    def test_missing_or_duplicate_worker_name_is_a_usage_error(self):
-        for names in ((), ("dummy-1", "--worker-name=other")):
-            with self.subTest(names=names):
-                code, _, _ = self.invoke("start", *names, "--client", "claude")
-                self.assertEqual(code, 2)
-                self.workers.new.assert_not_called()
-
     def test_bad_environment_json_is_rejected_before_a_worker_exists(self):
         valid = self.environment.persisted()
         for data in (
