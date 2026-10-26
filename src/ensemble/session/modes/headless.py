@@ -57,7 +57,7 @@ class HeadlessMode(BaseMode):
             spec, client, registry=registry, host=host, display=display
         )
         if metadata is not None:
-            host._preflight(prepared.spec.name or "", _launch(prepared))
+            host._preflight(prepared.spec.name or "", _launch(prepared), metadata)
         return prepared
 
     @classmethod

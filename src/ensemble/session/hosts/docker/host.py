@@ -597,6 +597,7 @@ class DockerHost(Host):
 
     _inherit_env = False  # the container gets only the launch's own env (D10)
     attachable = True
+    _environments = True
 
     def __init__(
         self,
@@ -908,7 +909,9 @@ class DockerHost(Host):
     def _resume_argv(self, name: str) -> tuple[str, ...]:
         return (*RESUME, name)
 
-    def _preflight(self, name: str, launch: Launch) -> None:
+    def _preflight(
+        self, name: str, launch: Launch, metadata: Mapping[str, str] | None = None
+    ) -> None:
         self.validate(name, launch, missing_ok=True)
 
     def validate(self, name: str, launch: Launch, *, missing_ok: bool = False) -> None:

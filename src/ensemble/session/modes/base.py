@@ -198,6 +198,11 @@ class BaseMode(ABC):
         """spec with `host`'s client env for `name`, and the metadata its Host keeps."""
         home = host._client_env(name, spec.client or "", client_home, resume=spec.resume)
         metadata = {
+            **(
+                {"environment": json.dumps(spec.environment.persisted())}
+                if spec.environment is not None
+                else {}
+            ),
             "sid": spec.sid or "",
             "client": spec.client or "session",
             "generation": uuid.uuid4().hex,
