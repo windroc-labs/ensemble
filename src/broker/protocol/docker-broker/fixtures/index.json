@@ -2301,6 +2301,67 @@
       }
     },
     {
+      "file": "check-clients-input.json",
+      "definition": "check_clients_input",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "check-clients-input-extra.json",
+      "definition": "check_clients_input",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 2,
+        "error_code": "usage"
+      }
+    },
+    {
+      "file": "check-clients-output.json",
+      "definition": "check_clients_output",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "check-clients-output-skipped.json",
+      "definition": "check_clients_output",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      },
+      "note": "Another check held the lock: nothing checked."
+    },
+    {
+      "file": "check-clients-output-bad-version.json",
+      "definition": "check_clients_output",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "check-clients-output-missing-client.json",
+      "definition": "check_clients_output",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
       "file": "error-busy.json",
       "definition": "error",
       "valid": true,

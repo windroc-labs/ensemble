@@ -861,7 +861,8 @@
                 "workspace-rm",
                 "unknown",
                 "probe-provider",
-                "lock-query"
+                "lock-query",
+                "check-clients"
               ]
             },
             "code": {
@@ -1019,7 +1020,8 @@
                     "workspace-rm",
                     "unknown",
                     "probe-provider",
-                    "lock-query"
+                    "lock-query",
+                    "check-clients"
                   ]
                 }
               }
@@ -1142,7 +1144,8 @@
                 },
                 "command": {
                   "enum": [
-                    "build"
+                    "build",
+                    "check-clients"
                   ]
                 }
               }
@@ -1347,7 +1350,8 @@
                     "workspace-rm",
                     "unknown",
                     "probe-provider",
-                    "lock-query"
+                    "lock-query",
+                    "check-clients"
                   ]
                 }
               }
@@ -1637,6 +1641,64 @@
       },
       "required": [
         "holder"
+      ],
+      "additionalProperties": false
+    },
+    "client_version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "check_clients_input": {
+      "type": "object",
+      "properties": {
+        "argv": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": "check-clients"
+            }
+          ],
+          "items": false,
+          "minItems": 1
+        }
+      },
+      "required": [
+        "argv"
+      ],
+      "additionalProperties": false
+    },
+    "check_clients_output": {
+      "type": "object",
+      "properties": {
+        "latest": {
+          "type": "object",
+          "properties": {
+            "claude": {
+              "$ref": "#/$defs/client_version"
+            },
+            "codex": {
+              "$ref": "#/$defs/client_version"
+            },
+            "opencode": {
+              "$ref": "#/$defs/client_version"
+            }
+          },
+          "required": [
+            "claude",
+            "codex",
+            "opencode"
+          ],
+          "additionalProperties": false
+        },
+        "rebuilt": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/image"
+          }
+        }
+      },
+      "required": [
+        "rebuilt"
       ],
       "additionalProperties": false
     },

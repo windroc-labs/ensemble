@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"ensemble/broker/internal/docker"
+	"ensemble/broker/internal/fixtures"
 	"ensemble/broker/internal/protocol"
 )
 
@@ -121,6 +123,8 @@ type buildEnv struct {
 	locks, lockFail int
 	locked          bool
 	releases        *fakeReleases
+	// ids, when set, gives each image build its own ID, the tag's inspected ID; nil: every image is sha256:a….
+	ids map[string]string
 }
 
 // fakeReleases answers Latest from latest, failing with err; it records each package asked.
@@ -178,6 +182,9 @@ func newBuildEnv(t *testing.T) *buildEnv {
 				}
 			}
 			e.built[tag] = labels
+			if e.ids != nil {
+				e.ids[tag] = fmt.Sprintf("sha256:%064x", len(e.fake.calls))
+			}
 			if k, ok := strings.CutPrefix(tag, "ensemble-worker:"); ok {
 				e.key = k
 			}
@@ -212,7 +219,11 @@ func newBuildEnv(t *testing.T) *buildEnv {
 			if !ok {
 				return nil, noImage
 			}
-			return inspectJSON("sha256:"+strings.Repeat("a", 64), labels, time.Now().Add(-e.age)), nil
+			id, ok := e.ids[args[len(args)-1]]
+			if !ok {
+				id = "sha256:" + strings.Repeat("a", 64)
+			}
+			return inspectJSON(id, labels, time.Now().Add(-e.age)), nil
 		case "container":
 			if args[1] == "ls" {
 				return []byte(e.containers), e.listErr
@@ -255,7 +266,7 @@ func TestBuildCacheAndStages(t *testing.T) {
 	if !first.Rebuilt || first.Image != "ensemble-worker:"+e.key || first.Digest != "sha256:"+strings.Repeat("a", 64) {
 		t.Fatalf("%+v", first)
 	}
-	if got := e.fake.verbs(); !slices.Equal(got, []string{"image inspect", "build --progress=plain", "run --rm", "build --progress=plain", "image inspect", "container ls", "image ls", "image ls"}) {
+	if got := e.fake.verbs(); !slices.Equal(got, []string{"image inspect", "build --progress=plain", "run --rm", "image inspect", "build --progress=plain", "image inspect", "container ls", "image ls", "image ls"}) {
 		t.Fatalf("%q", got)
 	}
 	stage1 := e.fake.calls[1]
@@ -267,7 +278,7 @@ func TestBuildCacheAndStages(t *testing.T) {
 	if !slices.Equal(probe, wantProbe) {
 		t.Fatalf("%q", probe)
 	}
-	stage2 := e.fake.calls[3]
+	stage2 := e.fake.calls[4]
 	want := []string{"build", "--progress=plain", "--no-cache", "--build-arg", "USER_IMAGE=ensemble-user:" + e.key, "--build-arg", "ENSEMBLE_VERSION=1.2.3", "--build-arg", "AGENT_UID=1001", "--build-arg", "AGENT_GID=1002", "--build-arg", "ENSEMBLE_PLUGIN_DIRS=",
 		"--build-arg", "CLAUDE_VERSION=2.1.7", "--build-arg", "CODEX_VERSION=0.170.0", "--build-arg", "OPENCODE_VERSION=1.20.1", "--label", "ensemble.key=" + e.key, "--tag", "ensemble-worker:" + e.key}
 	if !slices.Equal(stage2[:len(want)], want) || len(stage2) != len(want)+1 {
@@ -437,7 +448,7 @@ func TestBuildContextOutsideTMPDIR(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := filepath.Join(e.home, ".ensemble/docker/tmp") + "/"
-	for _, i := range []int{1, 3} {
+	for _, i := range []int{1, 4} {
 		if dir := e.fake.calls[i][len(e.fake.calls[i])-1]; !strings.HasPrefix(dir, base) {
 			t.Fatalf("build context %s outside %s", dir, base)
 		}
@@ -509,6 +520,8 @@ func TestBuildRemovesOlderImages(t *testing.T) {
 		stale := time.Now().Add(-imageLease - time.Minute)
 		for _, key := range []string{old, kept} {
 			putFile(t, e.leasePath(key), "")
+			putFile(t, e.leasePath(key)+".json", "{}")
+			putFile(t, e.leasePath(key)+".replaced", "[]")
 		}
 		if err := os.Chtimes(e.leasePath(old), stale, stale); err != nil {
 			t.Fatal(err)
@@ -519,11 +532,13 @@ func TestBuildRemovesOlderImages(t *testing.T) {
 		if got := removed(e); !slices.Equal(got, []string{"ensemble-worker:" + old, "ensemble-user:" + old}) {
 			t.Fatalf("%q", got)
 		}
-		if _, err := os.Stat(e.leasePath(old)); !os.IsNotExist(err) {
-			t.Fatalf("a removed key keeps its lease: %v", err)
-		}
-		if _, err := os.Stat(e.leasePath(kept)); err != nil {
-			t.Fatal(err)
+		for _, suffix := range []string{"", ".json", ".replaced"} {
+			if _, err := os.Stat(e.leasePath(old) + suffix); !os.IsNotExist(err) {
+				t.Fatalf("a removed key keeps its %q file: %v", suffix, err)
+			}
+			if _, err := os.Stat(e.leasePath(kept) + suffix); err != nil {
+				t.Fatal(err)
+			}
 		}
 	})
 }
@@ -732,7 +747,7 @@ func TestBuildHoldsTheImageLock(t *testing.T) {
 	if _, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1); err != nil {
 		t.Fatal(err)
 	}
-	want := [][]string{{"image inspect"}, {"container ls", "image ls", "image rm", "image ls"}, {"image inspect"}}
+	want := [][]string{{"image inspect"}, {"image inspect"}, {"container ls", "image ls", "image rm", "image ls"}, {"image inspect"}}
 	if !slices.EqualFunc(e.held, want, slices.Equal) {
 		t.Fatalf("%q", e.held)
 	}
@@ -749,9 +764,17 @@ func TestBuildHoldsTheImageLock(t *testing.T) {
 			t.Fatalf("%v %q", err, e.fake.verbs())
 		}
 	})
+	t.Run("a rebuild that cannot take it to record the replaced image", func(t *testing.T) {
+		e := newBuildEnv(t)
+		e.lockFail = 2
+		_, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1)
+		if message, _ := buildFailure(t, err); message != "Taking the image lock ~/.ensemble/docker/images.lock failed." || packageBuild(e.fake.calls) != nil {
+			t.Fatalf("%s %q", message, e.fake.verbs())
+		}
+	})
 	t.Run("a prune that cannot take it keeps every image", func(t *testing.T) {
 		e := newBuildEnv(t)
-		e.images, e.lockFail = "ensemble-worker:"+strings.Repeat("1", 64)+" sha256:"+strings.Repeat("c", 64)+"\n", 2
+		e.images, e.lockFail = "ensemble-worker:"+strings.Repeat("1", 64)+" sha256:"+strings.Repeat("c", 64)+"\n", 3
 		if got, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1); err != nil || !got.Rebuilt {
 			t.Fatalf("%+v %v", got, err)
 		}
@@ -971,7 +994,7 @@ func TestBaseImageStages(t *testing.T) {
 	if err != nil || !result.Rebuilt || result.Image != "ensemble-worker:"+e.key {
 		t.Fatalf("%+v %v", result, err)
 	}
-	if got := e.fake.verbs(); !slices.Equal(got, []string{"image inspect", "image inspect", "run --rm", "run --rm", "tag " + baseID, "run --rm", "build --progress=plain", "image inspect", "container ls", "image ls", "image ls"}) {
+	if got := e.fake.verbs(); !slices.Equal(got, []string{"image inspect", "image inspect", "run --rm", "run --rm", "tag " + baseID, "run --rm", "image inspect", "build --progress=plain", "image inspect", "container ls", "image ls", "image ls"}) {
 		t.Fatalf("%q", got)
 	}
 	userImage := "ensemble-user:" + e.key
@@ -984,7 +1007,7 @@ func TestBaseImageStages(t *testing.T) {
 	if check := e.fake.calls[5]; !slices.Contains(check, "node") || !slices.Contains(check, userImage) {
 		t.Fatalf("%q", check)
 	}
-	layer := e.fake.calls[6]
+	layer := e.fake.calls[7]
 	for _, arg := range []string{"USER_IMAGE=" + userImage, "AGENT_UID=1000", "AGENT_GID=1000", "ENSEMBLE_PLUGIN_DIRS=/opt/windroc/plugins/dummy-plugin", "--no-cache"} {
 		if !slices.Contains(layer, arg) {
 			t.Fatalf("%s absent: %q", arg, layer)
@@ -1147,5 +1170,297 @@ func TestWorkerImageInstallsClientsAtBuildArgVersions(t *testing.T) {
 	}
 	if strings.Count(text, "npm install") != 1 || strings.Contains(text, "@0.163.0") {
 		t.Error("Dockerfile installs a client another way")
+	}
+}
+
+// writeCheckState writes the client check state as check-clients would.
+func (e *buildEnv) writeCheckState(t *testing.T, checkedAt time.Time, failure string) {
+	t.Helper()
+	data, err := json.Marshal(map[string]any{"checked_at": checkedAt, "failure": failure})
+	if err != nil {
+		t.Fatal(err)
+	}
+	putFile(t, filepath.Join(e.home, ".ensemble/docker/clients-check.json"), string(data))
+}
+
+// private reads path, failing unless it is a 0600 file.
+func private(t *testing.T, path string) string {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil || info.Mode() != 0o600 {
+		t.Fatalf("%s: %v %v", path, info, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func TestBuildSpawnsClientCheckWhenDue(t *testing.T) {
+	ctx := context.Background()
+	for name, tc := range map[string]struct {
+		state string // "": none
+		age   time.Duration
+		due   bool
+	}{
+		"absent":     {due: true},
+		"old":        {state: "ok", age: clientCheckInterval, due: true},
+		"fresh":      {state: "ok", age: clientCheckInterval - time.Minute},
+		"unreadable": {state: "{", due: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newBuildEnv(t)
+			switch tc.state {
+			case "ok":
+				e.writeCheckState(t, time.Now().Add(-tc.age), "")
+			case "{":
+				putFile(t, filepath.Join(e.home, ".ensemble/docker/clients-check.json"), "{")
+			}
+			spawns := 0
+			h := e.host()
+			h.Spawn = func() error { spawns++; return nil }
+			for _, wantRebuilt := range []bool{true, false} {
+				if got, err := h.Build(ctx, e.pkg, BuildSpec{}, -1); err != nil || got.Rebuilt != wantRebuilt {
+					t.Fatalf("%+v %v", got, err)
+				}
+			}
+			if want := map[bool]int{true: 2, false: 0}[tc.due]; spawns != want {
+				t.Fatalf("spawned %d times, want %d", spawns, want)
+			}
+		})
+	}
+	t.Run("a spawn failure is a note", func(t *testing.T) {
+		e := newBuildEnv(t)
+		h := e.host()
+		h.Spawn = func() error { return errors.New("exec format error") }
+		if got, err := h.Build(ctx, e.pkg, BuildSpec{}, -1); err != nil || !got.Rebuilt {
+			t.Fatalf("%+v %v", got, err)
+		}
+		if !strings.HasSuffix(e.progress.String(), "ensemble-broker: cannot start the client check: exec format error\n") {
+			t.Fatalf("%q", e.progress.String())
+		}
+	})
+	t.Run("a failed build spawns nothing", func(t *testing.T) {
+		e := newBuildEnv(t)
+		e.failStage = "ensemble-user"
+		h := e.host()
+		h.Spawn = func() error { t.Fatal("spawned"); return nil }
+		if _, err := h.Build(ctx, e.pkg, BuildSpec{}, -1); err == nil {
+			t.Fatal("built")
+		}
+	})
+}
+
+func TestBuildReportsCheckFailureOnce(t *testing.T) {
+	ctx := context.Background()
+	e := newBuildEnv(t)
+	if _, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(e.home, ".ensemble/docker/clients-check.reported")
+	build := func() string {
+		t.Helper()
+		e.progress.Reset()
+		if _, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1); err != nil {
+			t.Fatal(err)
+		}
+		return e.progress.String()
+	}
+	const failed = "ensemble-worker:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" + ": Building the ensemble image stage failed."
+	note := func(failure string) string {
+		return "ensemble-broker: client check failed: " + failure + "; starts use the current image\n"
+	}
+	e.writeCheckState(t, time.Now(), failed)
+	if got := build(); got != note(failed) {
+		t.Fatalf("%q", got)
+	}
+	if got := private(t, marker); got != failed {
+		t.Fatalf("marker %q", got)
+	}
+	if got := build(); got != "" {
+		t.Fatalf("reported twice: %q", got)
+	}
+	e.writeCheckState(t, time.Now().Add(time.Minute), failed)
+	if got := build(); got != "" {
+		t.Fatalf("a later check with the same failure reported: %q", got)
+	}
+	e.writeCheckState(t, time.Now(), "")
+	if got := build(); got != "" || private(t, marker) != "" {
+		t.Fatalf("%q", got)
+	}
+	e.writeCheckState(t, time.Now(), failed)
+	if got := build(); got != note(failed) {
+		t.Fatalf("a failure after a clear not reported: %q", got)
+	}
+	e.writeCheckState(t, time.Now(), "registry: @openai/codex registry unavailable")
+	if got := build(); got != note("registry: @openai/codex registry unavailable") {
+		t.Fatalf("a new failure not reported: %q", got)
+	}
+	t.Run("no state, no marker", func(t *testing.T) {
+		e := newBuildEnv(t)
+		if _, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(e.home, ".ensemble/docker/clients-check.reported")); !os.IsNotExist(err) {
+			t.Fatalf("marker written: %v", err)
+		}
+	})
+}
+
+func TestBuildRecordsVariant(t *testing.T) {
+	ctx := context.Background()
+	plugin := "x@owner/repo#" + strings.Repeat("a", 40)
+	e := newBaseEnv(t)
+	got, err := e.host().Build(ctx, e.pkg, BuildSpec{BaseImage: baseRef, Plugins: []string{plugin}, ImagePlugins: []string{"beta", "alpha"}}, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := filepath.Join(e.home, ".ensemble/docker/images", strings.TrimPrefix(got.Image, "ensemble-worker:")+".json")
+	want := `{"package":"` + e.pkg + `","base_image":"dummy-env:test","plugins":["` + plugin + `"],"image_plugins":["alpha","beta"]}`
+	if data := private(t, record); !fixtures.SameJSON(t, []byte(data), []byte(want)) {
+		t.Fatalf("%s", data)
+	}
+	e = newBuildEnv(t)
+	got, err = e.host().Build(ctx, e.pkg, BuildSpec{}, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = filepath.Join(e.home, ".ensemble/docker/images", strings.TrimPrefix(got.Image, "ensemble-worker:")+".json")
+	if data := private(t, record); !fixtures.SameJSON(t, []byte(data), []byte(`{"package":"`+e.pkg+`","base_image":"","plugins":[],"image_plugins":[]}`)) {
+		t.Fatalf("%s", data)
+	}
+	t.Run("a write failure is a note", func(t *testing.T) {
+		if err := os.Remove(record); err != nil {
+			t.Fatal(err)
+		}
+		putFile(t, filepath.Join(record, "blocker"), "")
+		e.progress.Reset()
+		if again, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1); err != nil || again.Rebuilt {
+			t.Fatalf("%+v %v", again, err)
+		}
+		if !strings.HasPrefix(e.progress.String(), "ensemble-broker: cannot record "+got.Image+" for the client check: ") {
+			t.Fatalf("%q", e.progress.String())
+		}
+	})
+}
+
+func TestBuildDuringCheckRebuildDoesNotWait(t *testing.T) {
+	ctx := context.Background()
+	e := newBuildEnv(t)
+	first, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.releases.latest["@openai/codex"] = "0.171.0"
+	building, release := make(chan struct{}), make(chan struct{})
+	inner := e.fake.respond
+	e.fake.respond = func(args []string) ([]byte, error) {
+		if args[0] == "build" && slices.Contains(args, "CODEX_VERSION=0.171.0") {
+			close(building)
+			<-release
+		}
+		return inner(args)
+	}
+	done := make(chan error)
+	go func() {
+		_, err := e.host().CheckClients(ctx)
+		done <- err
+	}()
+	<-building
+	// The fake image lock fails rather than waits: a check holding it across docker build fails this build.
+	got, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1)
+	close(release)
+	if err != nil || got != (BuildResult{Image: first.Image, Digest: first.Digest}) {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRebuildRecordsReplacedImage(t *testing.T) {
+	ctx := context.Background()
+	e := newBuildEnv(t)
+	e.ids = map[string]string{}
+	clock := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	h := e.host()
+	h.Now = func() time.Time { return clock }
+	first, err := h.Build(ctx, e.pkg, BuildSpec{}, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaced := filepath.Join(e.home, ".ensemble/docker/images", strings.TrimPrefix(first.Image, "ensemble-worker:")+".replaced")
+	if _, err := os.Stat(replaced); !os.IsNotExist(err) {
+		t.Fatalf("a first build replaced nothing: %v", err)
+	}
+	other, stale := "sha256:"+strings.Repeat("e", 64), "sha256:"+strings.Repeat("f", 64)
+	putFile(t, replaced, `[{"id":"`+other+`","at":"2026-10-26T11:55:00Z"},{"id":"`+stale+`","at":"2026-10-26T11:49:59Z"}]`)
+	// A long build: the clock moves on while the ensemble layer builds.
+	inner := e.fake.respond
+	e.fake.respond = func(args []string) ([]byte, error) {
+		if args[0] == "build" && slices.Contains(args, "--build-arg") {
+			clock = clock.Add(4 * time.Minute)
+		}
+		return inner(args)
+	}
+	again, err := h.Build(ctx, e.pkg, BuildSpec{}, 0)
+	if err != nil || !again.Rebuilt || again.Digest == first.Digest {
+		t.Fatalf("%+v %v", again, err)
+	}
+	want := `[{"id":"` + other + `","at":"2026-10-26T11:55:00Z"},{"id":"` + first.Digest + `","at":"2026-10-26T12:04:00Z"}]`
+	if got := private(t, replaced); !fixtures.SameJSON(t, []byte(got), []byte(want)) {
+		t.Fatalf("%s", got)
+	}
+	t.Run("an inspect failure fails the rebuild before docker build", func(t *testing.T) {
+		e := newBuildEnv(t)
+		if _, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1); err != nil {
+			t.Fatal(err)
+		}
+		inner := e.fake.respond
+		inspects := 0
+		e.fake.respond = func(args []string) ([]byte, error) {
+			if args[0] == "image" && args[1] == "inspect" {
+				if inspects++; inspects == 2 {
+					return nil, &docker.CommandError{Exit: 1, Stderr: "boom"}
+				}
+			}
+			return inner(args)
+		}
+		calls := len(e.fake.calls)
+		_, err := e.host().Build(ctx, e.pkg, BuildSpec{}, 0)
+		if message, _ := buildFailure(t, err); message != "Cannot inspect the worker image." || packageBuild(e.fake.calls[calls:]) != nil {
+			t.Fatalf("%s %q", message, e.fake.verbs()[calls:])
+		}
+	})
+}
+
+func TestPruneKeepsReplacedImageForGrace(t *testing.T) {
+	young, old := "sha256:"+strings.Repeat("3", 64), "sha256:"+strings.Repeat("4", 64)
+	e := newBuildEnv(t)
+	e.dangling = young + "\n" + old + "\n"
+	clock := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	h := e.host()
+	h.Now = func() time.Time { return clock }
+	putFile(t, filepath.Join(e.home, ".ensemble/docker/images", strings.Repeat("1", 64)+".replaced"), `[{"id":"`+young+`","at":"2026-10-26T11:51:00Z"}]`)
+	putFile(t, filepath.Join(e.home, ".ensemble/docker/images", strings.Repeat("2", 64)+".replaced"), `[{"id":"`+old+`","at":"2026-10-26T11:50:00Z"}]`)
+	removed := func() []string {
+		var ids []string
+		for _, c := range e.fake.calls {
+			if strings.Join(c[:2], " ") == "image rm" {
+				ids = append(ids, c[2])
+			}
+		}
+		e.fake.calls = nil
+		return ids
+	}
+	h.prune(context.Background(), "")
+	if got := removed(); !slices.Equal(got, []string{old}) {
+		t.Fatalf("%q", got)
+	}
+	clock = clock.Add(time.Minute)
+	h.prune(context.Background(), "")
+	if got := removed(); !slices.Equal(got, []string{young, old}) {
+		t.Fatalf("%q", got)
 	}
 }

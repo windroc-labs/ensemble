@@ -6,6 +6,10 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"syscall"
 	"time"
 
 	"ensemble/broker/internal/audit"
@@ -76,7 +80,8 @@ type Host struct {
 	Progress io.Writer                         // nil: none; build's notes on older images, after Docker's progress; start's phase times
 	Lock     func() (unlock func(), err error) // the image lock: build's lease and inspect, and prune
 	Audit    *audit.Recorder                   // nil: none; start, refresh and close name their container and add the client credential
-	Now      func() time.Time                  // nil: host clock; mutex expiry tests supply a clock
+	Now      func() time.Time                  // nil: host clock; mutex expiry, replaced image and check state tests supply a clock
+	Spawn    func() error                      // nil: none; starts check-clients detached, for a build
 }
 
 // NewHost wires the real filesystem; tests build Host with fakes. rec is the command's audit recorder, the one tokens
@@ -93,7 +98,33 @@ func NewHost(home, endpoint string, d docker.Runner, creds Credentials, tokens T
 		Docker:   d,
 		Versions: codex.New(),
 		Releases: releases.New(),
+		Spawn:    func() error { return spawnCheck(home) },
 	}
+}
+
+// spawnCheck starts this executable's check-clients in a session of its own, outliving the build, its output in
+// ~/.ensemble/docker/clients-check.log.
+func spawnCheck(home string) error {
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(home, ".ensemble/docker")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	log, err := os.OpenFile(filepath.Join(dir, "clients-check.log"), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer log.Close()
+	cmd := exec.Command(self, "check-clients")
+	cmd.Stdout, cmd.Stderr = log, log
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
 }
 
 type BuildResult struct {

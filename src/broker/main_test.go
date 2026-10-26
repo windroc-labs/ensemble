@@ -53,7 +53,8 @@ func recording(calls *[]call) app {
 		probeOpencode: func(ctx context.Context, provider, base string) (any, error) {
 			return result("probe-provider")(ctx, provider+" "+base, nil)
 		},
-		workspaceRm: func(ctx context.Context, volume string, _ bool) (any, error) { return workspaceRm(ctx, volume, nil) }}
+		workspaceRm:  func(ctx context.Context, volume string, _ bool) (any, error) { return workspaceRm(ctx, volume, nil) },
+		checkClients: func(ctx context.Context, p io.Writer) (any, error) { return result("check-clients")(ctx, "", p) }}
 }
 
 func invoke(a app, args ...string) (int, string, string) {
@@ -104,6 +105,42 @@ func TestLockQueryCommand(t *testing.T) {
 	}
 }
 
+func TestCheckClientsCommand(t *testing.T) {
+	calls := 0
+	a := app{checkClients: func(_ context.Context, progress io.Writer) (any, error) {
+		calls++
+		fmt.Fprintln(progress, "ensemble-broker: removed ensemble-worker:x")
+		return launcher.CheckResult{Latest: launcher.ClientVersions{Claude: "2.1.7", Codex: "0.170.0", Opencode: "1.20.1"},
+			Rebuilt: []string{"ensemble-worker:" + strings.Repeat("a", 64)}}, nil
+	}}
+	code, out, errOut := invoke(a, "check-clients")
+	if code != 0 || errOut != "ensemble-broker: removed ensemble-worker:x\n" || calls != 1 {
+		t.Fatalf("%d %q %q calls=%d", code, out, errOut, calls)
+	}
+	for _, c := range fixtures.Cases(t, "check_clients_output") {
+		if c.File == "check-clients-output.json" && !fixtures.SameJSON(t, []byte(out), c.Data) {
+			t.Fatalf("%s: %s", c.File, out)
+		}
+	}
+	code, out, errOut = invoke(a, "check-clients", "--now")
+	if code != 2 || calls != 1 {
+		t.Fatalf("extra args: %d %q %q", code, out, errOut)
+	}
+	assertError(t, errOut, out, "check-clients", protocol.Usage)
+	a.checkClients = func(context.Context, io.Writer) (any, error) {
+		return nil, protocol.New(protocol.BuildFailed, "Cannot look up the latest client releases.")
+	}
+	code, out, errOut = invoke(a, "check-clients")
+	assertError(t, errOut, out, "check-clients", protocol.BuildFailed)
+	if code != 8 {
+		t.Fatalf("exit %d", code)
+	}
+	_, _, errOut = invoke(app{}, "frobnicate")
+	if !strings.Contains(errOut, " | check-clients") {
+		t.Fatalf("usage %q", errOut)
+	}
+}
+
 func TestLoginOwnershipFailureExit(t *testing.T) {
 	a := app{loginOpencode: func(string, string, io.Writer) error {
 		return fmt.Errorf("cannot save item: %w", broker.ErrInvalidOwnerEdit)
@@ -136,7 +173,7 @@ func TestProbeOpencodeCommand(t *testing.T) {
 }
 
 func TestInputFixtures(t *testing.T) {
-	for _, c := range fixtures.Cases(t, "version_input", "build_input", "start_input", "refresh_input", "close_input", "status_input", "workspace_rm_input", "probe_provider_input", "lock_query_input") {
+	for _, c := range fixtures.Cases(t, "version_input", "build_input", "start_input", "refresh_input", "close_input", "status_input", "workspace_rm_input", "probe_provider_input", "lock_query_input", "check_clients_input") {
 		t.Run(c.File, func(t *testing.T) {
 			var in struct{ Argv []string }
 			if err := json.Unmarshal(c.Data, &in); err != nil {
@@ -154,7 +191,7 @@ func TestInputFixtures(t *testing.T) {
 					want.arg = in.Argv[2] + " " + in.Argv[4]
 				case "refresh":
 					want.arg = in.Argv[2] + " " + in.Argv[4]
-				case "version", "status":
+				case "version", "status", "check-clients":
 				default:
 					want.arg = in.Argv[2]
 				}
