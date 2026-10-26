@@ -71,6 +71,7 @@ PANES = "#{pane_dead} #{pane_tty} #{pane_id}"
 
 
 PROCESS_ID = re.compile(r"[0-9]+ \$[0-9]+ %[0-9]+ [0-9]+")
+PROCESS_GONE = re.compile(r"[0-9]+ (\$[0-9]+)? (%[0-9]+ [0-9]*| )| *")
 
 
 USER_OPTION = re.compile(r"@[A-Za-z0-9_-]+")
@@ -260,12 +261,12 @@ def _out_of_mode(target: str, *command: str) -> list[str]:
 
 
 def _process_id(found: str) -> str | None:
-    if " " not in found or re.fullmatch(r"[0-9]+  %[0-9]+ [0-9]+", found):
-        # A pane can outlive its session while tmux formats its remaining identity fields.
+    """found: as tmux printed it, less its newline (unstripped); None: its pane is going away."""
+    if PROCESS_ID.fullmatch(found):
+        return found
+    if PROCESS_GONE.fullmatch(found):
         return None
-    if not PROCESS_ID.fullmatch(found):
-        raise TuiError(f"bad tmux process {found!r:.80}")
-    return found
+    raise TuiError(f"bad tmux process {found!r:.80}")
 
 
 def _command(argv: Sequence[str], env: Mapping[str, str]) -> list[str]:
@@ -503,7 +504,7 @@ class TmuxCli:
                 return None, None
             raise TuiError(f"tmux: {error(res)}")
         identity, _, dead = res.stdout.rstrip("\n").partition("\t")
-        found = _process_id(identity.strip())
+        found = _process_id(identity)
         return found, None if found is None else self._dead_status(dead)
 
     def _dead_status(self, text: str):
@@ -593,7 +594,7 @@ class TmuxCli:
             if absent(res):
                 return None
             raise TuiError(f"tmux: {error(res)}")
-        return _process_id(res.stdout.strip())
+        return _process_id(res.stdout.removesuffix("\n"))
 
     def sessions(self) -> list[str] | None:
         """Names: [] without a server, None when tmux fails."""
