@@ -68,7 +68,11 @@ type world struct {
 	proxy           func(map[string]any) // edits the proxy's inspect object
 	network         func(map[string]any) // edits the workers network's inspect object
 	noNetwork       bool
-	egressErr       error // the proxy listing's error
+	egressErr       error  // the proxy listing's error
+	nonce           string // the prefetch-start label a volume create set
+	otherNonce      bool   // a racing start created the volume with its own prefetch-start label
+	volumeRmErr     error
+	prefetchErr     error // the prefetch helper's run
 }
 
 func (w *world) docker() *fakeDocker {
@@ -101,7 +105,14 @@ func (w *world) docker() *fakeDocker {
 		case "volume inspect":
 			switch w.volume {
 			case "matching":
-				return []byte(`{"ensemble.kind":"ws","ensemble.workspace":"` + home + `/src/project"}` + "\n"), nil
+				nonce := ""
+				switch {
+				case w.otherNonce:
+					nonce = `,"ensemble.prefetch-start":"other"`
+				case w.nonce != "":
+					nonce = `,"ensemble.prefetch-start":"` + w.nonce + `"`
+				}
+				return []byte(`{"ensemble.kind":"ws","ensemble.workspace":"` + home + `/src/project"` + nonce + `}` + "\n"), nil
 			case "mismatched":
 				return []byte(`{"ensemble.kind":"ws","ensemble.workspace":"/elsewhere"}` + "\n"), nil
 			case "unlabeled":
@@ -109,12 +120,21 @@ func (w *world) docker() *fakeDocker {
 			}
 			return nil, &docker.CommandError{Exit: 1, Stderr: "Error response from daemon: get " + volume + ": no such volume"}
 		case "volume create":
+			for i, a := range args {
+				if a == "--label" && strings.HasPrefix(args[i+1], "ensemble.prefetch-start=") {
+					w.nonce = strings.TrimPrefix(args[i+1], "ensemble.prefetch-start=")
+				}
+			}
 			w.volume = "matching"
 			if w.createUnlabeled {
 				w.volume = "unlabeled"
 			}
 			return []byte(volume + "\n"), nil
 		case "volume rm":
+			if w.volumeRmErr != nil {
+				return nil, w.volumeRmErr
+			}
+			w.volume = ""
 			return []byte(volume + "\n"), nil
 		case "container inspect":
 			if args[2] == proxyID {
@@ -127,6 +147,9 @@ func (w *world) docker() *fakeDocker {
 		}
 		switch args[0] {
 		case "run":
+			if slices.Contains(args, "ensemble.prefetch=1") {
+				return nil, w.prefetchErr
+			}
 			if args[1] == "--rm" {
 				return nil, w.chownErr
 			}

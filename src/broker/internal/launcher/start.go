@@ -149,10 +149,23 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		}
 		return StartResult{}, taken(c)
 	}
-	if err := h.ensureVolume(ctx, m, info); err != nil {
+	created, err := h.ensureVolume(ctx, m, info)
+	if err != nil {
 		return StartResult{}, err
 	}
 	lap("checks")
+	if created && m.Prefetch != nil {
+		// Registered before the lock's, so it runs after every rollback of the container.
+		defer func() {
+			if retErr != nil {
+				h.dropWorkspace(ctx, m.Workspace, retErr)
+			}
+		}()
+		if err := h.prefetch(ctx, c, m, info, px); err != nil {
+			return StartResult{}, err
+		}
+		lap("prefetch")
+	}
 	var held holding
 	if m.Lock != "" {
 		mutex, err := h.acquireMutex(ctx, m.Lock, info.ID)

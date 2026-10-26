@@ -69,7 +69,10 @@ func (f *fakeTokens) Prefetch(_ context.Context, repo, ref, dir, c string, run f
 	if f.prefetch != nil {
 		return f.prefetch
 	}
-	return run([]string{"clone", repo, ref, dir}, []byte("ghs_prefetch"))
+	if err := run([]string{"clone", repo, ref, dir}, []byte("ghs_prefetch")); err != nil {
+		return protocol.New(protocol.StartFailed, "Prefetching "+repo+" at "+ref+" failed.")
+	}
+	return nil
 }
 func (f *fakeTokens) Retry(context.Context) ([]protocol.Pending, error) {
 	f.calls = append(f.calls, "retry")
