@@ -173,6 +173,8 @@ changing access. A different binding requires explicit recovery rather than sile
 ```
 
 The first command may ask for the login Keychain password on the controlling terminal to restrict root access.
+It may also open a macOS SecurityAgent dialog to change access permissions on the client secret's Keychain item:
+enter the login Keychain password and click **Allow**. This dialog is separate from the terminal prompt.
 It persists a pending binding before changing the ACL; rerun the same enrollment after a failure. Maintenance
 rejects an incomplete binding and never opens an interactive root read. Host token publication narrows the read
 ACL to the broker and `/usr/bin/security`; it verifies both bytes and access after writing.

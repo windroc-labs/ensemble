@@ -296,6 +296,7 @@ Invalid sources and duplicate plugin names fail before Docker; marketplace, inst
 fail the image build. Selecting a plugin trusts its code, hooks and servers beside the container's credentials.
 `scripts/install.sh --docker` installs ensemble on the host and leaves updraft installation to the image;
 `--no-docker` also installs updraft for the selected host Claude/Codex clients.
+OpenCode on the tmux host has no `/updraft:*` commands, so engineer build tasks cannot run there; use Docker workers.
 A base image can also carry plugins of its own: [Base images](#base-images).
 
 ### Base images
