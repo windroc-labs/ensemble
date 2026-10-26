@@ -17,6 +17,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"ensemble/broker/internal/npm"
 )
 
 const nativeEntry = "package/vendor/aarch64-apple-darwin/bin/codex"
@@ -292,7 +294,7 @@ func TestRegistryValidation(t *testing.T) {
 					return &http.Response{StatusCode: 302, Header: http.Header{"Location": []string{"https://evil.example/"}}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
 				})
 			case "oversize":
-				data[key] = bytes.Repeat([]byte(" "), maxMetadata+1)
+				data[key] = bytes.Repeat([]byte(" "), npm.MaxMetadata+1)
 			}
 			if name != "oversize" {
 				data[key], _ = json.Marshal(m)
