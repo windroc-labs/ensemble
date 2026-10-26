@@ -28,9 +28,10 @@ var errMissing = errors.New("missing")
 // memStore is a persistent fake Keychain: a new Lifecycle over it sees what an earlier one wrote. fail injects a
 // failure by operation (read, write, delete) and service; its error carries a sentinel no output may show.
 type memStore struct {
-	items map[string][]byte
-	fail  func(op, service string) bool
-	log   *[]string
+	items     map[string][]byte
+	fail      func(op, service string) bool
+	failAfter func(op, service string) bool // the write lands, then reports failure, as a partly failed Keychain call
+	log       *[]string
 }
 
 func newStore() *memStore { return &memStore{items: map[string][]byte{}} }
@@ -61,6 +62,9 @@ func (s *memStore) PutSecret(service, account string, data []byte) error {
 		*s.log = append(*s.log, "write "+service)
 	}
 	s.items[service+"/"+account] = slices.Clone(data)
+	if s.failAfter != nil && s.failAfter("write", service) {
+		return errors.New("keychain broke after writing: STORE_SENTINEL")
+	}
 	return nil
 }
 

@@ -1022,3 +1022,72 @@ func TestRefreshReissuedTokenNotDuplicated(t *testing.T) {
 		t.Fatalf("record after a second acquire %+v", rec.Tokens)
 	}
 }
+
+// once is true the first time it is asked about a write to the records, then false.
+func once() func(op, service string) bool {
+	done := false
+	return func(op, service string) bool {
+		if op != "write" || service != records || done {
+			return false
+		}
+		done = true
+		return true
+	}
+}
+
+// TestSharedRollbackKeepsHeldMaterial: a failed run of a shared provider rolls back only what it appended; a material
+// the record already held (the account not renewed meanwhile) stays as it was, never withdrawn.
+func TestSharedRollbackKeepsHeldMaterial(t *testing.T) {
+	for name, c := range map[string]struct {
+		fixed     string // the provider's one token, re-issued every time; "": a new token per issue
+		lands     bool   // the failing write lands before it reports failure
+		run       func(l Lifecycle) error
+		wantState State
+	}{
+		"refresh held, write fails": {fixed: "acct_1", wantState: Delivered, run: func(l Lifecycle) error {
+			_, err := l.Refresh(bg, to(ctrA, newContainer()), nil)
+			return err
+		}},
+		"refresh held, write lands then fails": {fixed: "acct_1", lands: true, wantState: Prepared, run: func(l Lifecycle) error {
+			_, err := l.Refresh(bg, to(ctrA, newContainer()), nil)
+			return err
+		}},
+		"refresh appended, write lands then fails": {lands: true, wantState: Delivered, run: func(l Lifecycle) error {
+			_, err := l.Refresh(bg, to(ctrA, newContainer()), nil)
+			return err
+		}},
+		"acquire held, write fails": {fixed: "acct_1", wantState: Delivered, run: func(l Lifecycle) error {
+			_, err := l.Acquire(bg, to(ctrA, newContainer()), "app", nil)
+			return err
+		}},
+		"acquire appended, write lands then fails": {lands: true, wantState: Delivered, run: func(l Lifecycle) error {
+			_, err := l.Acquire(bg, to(ctrA, newContainer()), "app", nil)
+			return err
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store, fp := newStore(), newProvider(t, "account")
+			fp.fixed = c.fixed
+			l := lifecycle(store, sharedProvider{fp}, nil)
+			acquire(t, l, ctrA, newContainer())
+			before, _ := store.record(t, ctrA)
+			if c.lands {
+				store.failAfter = once()
+			} else {
+				store.fail = once()
+			}
+			if err := c.run(l); !errors.Is(err, ErrStore) {
+				t.Fatalf("%v", err)
+			}
+			rec, ok := store.record(t, ctrA)
+			want := before.Tokens[0]
+			want.State = c.wantState
+			if !ok || len(rec.Tokens) != 1 || rec.Tokens[0] != want {
+				t.Fatalf("record %+v (found %v), want [%+v]", rec.Tokens, ok, want)
+			}
+			if fp.revokes() != 0 || len(store.backlog(t)) != 0 {
+				t.Fatalf("shared material revoked: %q", fp.calls)
+			}
+		})
+	}
+}

@@ -60,6 +60,7 @@ type Store interface {
 // is not renewable (ErrStatic); Pending, which asks the provider nothing, only reads the backlog. An Issuer that is a
 // Writer delivers its own materials, one that is an Ender ends its run; a Delivery's Publish follows each delivery. A
 // shared provider's material that failed delivery or publication stays recorded prepared: there is nothing to revoke.
+// A failed run never rolls back a material the record already held (rollback).
 type Lifecycle struct {
 	Provider Provider
 	Store    Store
@@ -278,15 +279,36 @@ func (p Pending) material() Material {
 // slot is m's grant position: its account and target.
 func (m Material) slot() [2]any { return [2]any{m.Account, m.Target} }
 
+// recording is how put recorded a material: not at all (its record could not be read, or was gone), as a new entry,
+// or by re-marking one the record already held.
+type recording int
+
+const (
+	unrecorded recording = iota
+	appended
+	held
+)
+
 // put records m, prepared, in rec at the next revision; a token rec already holds (a shared account's, not renewed
 // meanwhile) turns prepared again, keeping its revision, rather than recorded twice.
-func put(rec *Record, m *Material) {
+func put(rec *Record, m *Material) recording {
 	if i := slices.IndexFunc(rec.Tokens, func(t Material) bool { return t.Token == m.Token }); i >= 0 {
 		rec.Tokens[i].State, m.Revision = Prepared, rec.Tokens[i].Revision
-		return
+		return held
 	}
 	m.Revision = desired(rec) + 1
 	rec.Tokens = append(rec.Tokens, *m)
+	return appended
+}
+
+// rollback is whether a failed run retires a material it issued, recorded as r. Never one the record already held,
+// which stays usable. A shared provider's only when the run appended it: a failed write leaves the rest of the record
+// as it was, and nothing needs revoking. Any other provider's even unrecorded: a fresh token is live at the provider.
+func (l Lifecycle) rollback(r recording) bool {
+	if l.shared() {
+		return r == appended
+	}
+	return r != held
 }
 
 // desired is rec's highest revision.
@@ -525,10 +547,17 @@ func (l Lifecycle) Acquire(ctx context.Context, d Delivery, subject string, scop
 		return nil, redactErr(err, secret)
 	}
 	var issued []Material
+	var how []recording // issued's
 	fail := func(err error) ([]protocol.Expiry, error) {
 		err = redactErr(err, secret)
-		if len(issued) > 0 {
-			err = rolledBack(err, l.discard(ctx, id, issued, true))
+		var retired []Material
+		for i, m := range issued {
+			if l.rollback(how[i]) {
+				retired = append(retired, m)
+			}
+		}
+		if len(retired) > 0 {
+			err = rolledBack(err, l.discard(ctx, id, retired, !l.shared()))
 		}
 		return nil, err
 	}
@@ -538,10 +567,10 @@ func (l Lifecycle) Acquire(ctx context.Context, d Delivery, subject string, scop
 			return fail(err)
 		}
 		m.Account, m.Target, m.State = target.Account, target.Target, Prepared
-		issued = append(issued, m)
+		issued, how = append(issued, m), append(how, unrecorded)
 		if _, err := l.editRecord(id, true, func(rec *Record, _ bool) {
 			rec.Subject, rec.Scope = subject, scope
-			put(rec, &m)
+			how[len(how)-1] = put(rec, &m)
 		}); err != nil {
 			l.noteUnrecorded(id, audit.Issued, m)
 			return fail(err)
@@ -624,9 +653,10 @@ func (l Lifecycle) Refresh(ctx context.Context, d Delivery, scope map[string]str
 			return nil, redactErr(err, secret)
 		}
 		m.Account, m.Target, m.State = target.Account, target.Target, Prepared
+		how := unrecorded
 		found, err := l.editRecord(id, false, func(rec *Record, found bool) {
 			if found {
-				put(rec, &m)
+				how = put(rec, &m)
 			}
 		})
 		if err != nil || !found {
@@ -634,11 +664,14 @@ func (l Lifecycle) Refresh(ctx context.Context, d Delivery, scope map[string]str
 			if err == nil {
 				err = ErrReleased
 			}
-			return nil, rolledBack(err, l.discard(ctx, id, []Material{m}, false))
+			if l.rollback(how) {
+				err = rolledBack(err, l.discard(ctx, id, []Material{m}, false))
+			}
+			return nil, err
 		}
 		l.describe(ctx, id, audit.Renewed, m, secret)
 		if err := l.deliver(d, issuer, m); err != nil {
-			if err = redactErr(err, secret); l.shared() {
+			if err = redactErr(err, secret); l.shared() || !l.rollback(how) {
 				return nil, err // the record keeps it prepared beside the slot's usable material
 			}
 			return nil, rolledBack(err, l.discard(ctx, id, []Material{m}, false))

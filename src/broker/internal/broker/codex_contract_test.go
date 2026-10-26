@@ -366,3 +366,28 @@ func TestCodexGrantErrors(t *testing.T) {
 		t.Fatalf("%#v", err)
 	}
 }
+
+// TestCodexFailedGrantWriteKeepsDeliveredGrant: a refresh whose grant write fails, the login not renewed meanwhile,
+// leaves the container's delivered grant as it was.
+func TestCodexFailedGrantWriteKeepsDeliveredGrant(t *testing.T) {
+	c, n, k := renewalFixture(t)
+	k.data = codexAuth(codexNow.Add(time.Hour).Unix()) // not due: every refresh re-issues the same login
+	if _, err := c.Inject(context.Background(), codexA, nopExec); err != nil {
+		t.Fatal(err)
+	}
+	granted := grantState(t, c, codexA)
+	working := c.grants
+	c.grants = brokenGrants{working.(*secrets)}
+	_, err := c.Refresh(context.Background(), codexA, nopExec, nopPublish)
+	var e *protocol.Error
+	if !errors.As(err, &e) || e.Code != protocol.KeychainFailed {
+		t.Fatalf("%#v", err)
+	}
+	c.grants = working
+	if g := grantState(t, c, codexA); g != granted {
+		t.Fatalf("grant %+v, was %+v", g, granted)
+	}
+	if _, err := c.Refresh(context.Background(), codexA, nopExec, nopPublish); err != nil || n.refreshes != 0 {
+		t.Fatalf("refreshes %d: %v", n.refreshes, err)
+	}
+}
