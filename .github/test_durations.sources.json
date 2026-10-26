@@ -1,0 +1,9 @@
+{
+  "run": "https://github.com/windroc-labs/ensemble/actions/runs/40367232925/attempts/1",
+  "head_sha": "798364dc01c19b2b2c8dca71f3eda767b5fce868",
+  "runner": "ubuntu-24.04",
+  "unit": "Per-test seconds in unit-coverage-40367232925-1-{1,2}/shard-*/durations.jsonl; hints retain tests >=0.1s.",
+  "repository": "Estimates from consecutive timestamped unittest result lines in all eight successful Repository tests jobs; the first test in each job defaults to 1s. The old isolated-import test estimate is divided equally among its four complete disjoint slices.",
+  "membership": "Current discovery is authoritative. New IDs default to 0.01s; stale IDs never select tests. Hints affect order and assignment only.",
+  "baseline_result": "Test jobs passed; aggregate failed after unstarted macOS cancellation. These hints do not claim the entire workflow passed."
+}
