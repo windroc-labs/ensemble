@@ -25,9 +25,11 @@ client_id = "<pm app's Client ID>"
 [orchestrator.linear.roles.engineer]
 client_id = "<engineer app's Client ID>"
 
-[orchestrator.client_max_runs]
-opencode = 1
-claude = 1
+[session.clients.opencode]
+max_runs = 1
+
+[session.clients.claude]
+max_runs = 1
 
 [delegate.roles.researcher.output]
 type = "github"
