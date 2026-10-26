@@ -86,7 +86,11 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	if err := h.checkMounts(m); err != nil {
 		return StartResult{}, err
 	}
-	route, err := h.checkEgress(ctx)
+	px, err := h.checkProxy(ctx, m.Gateway)
+	if err != nil {
+		return StartResult{}, err
+	}
+	route, err := h.caller(ctx, px, m.Gateway)
 	if err != nil {
 		return StartResult{}, err
 	}
@@ -145,10 +149,26 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		}
 		return StartResult{}, taken(c)
 	}
-	if err := h.ensureVolume(ctx, m, info); err != nil {
+	lostName := false
+	created, err := h.ensureVolume(ctx, m, info)
+	if err != nil {
 		return StartResult{}, err
 	}
 	lap("checks")
+	if created && m.Prefetch != nil {
+		// Registered before the lock's, so it runs after every rollback of the container. A start that lost the
+		// container name to another leaves the workspace to that one.
+		defer func() {
+			var e *protocol.Error
+			if errors.As(retErr, &e) && !lostName {
+				h.removeVolume(ctx, m.Workspace, e)
+			}
+		}()
+		if err := h.prefetch(ctx, c, m, info, px); err != nil {
+			return StartResult{}, err
+		}
+		lap("prefetch")
+	}
 	var held holding
 	if m.Lock != "" {
 		mutex, err := h.acquireMutex(ctx, m.Lock, info.ID)
@@ -192,6 +212,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	}
 	result, held, err = h.create(ctx, c, m, info, route, facts, lap)
 	if errors.Is(err, errTaken) {
+		lostName = true
 		return StartResult{}, taken(c)
 	}
 	if err != nil {

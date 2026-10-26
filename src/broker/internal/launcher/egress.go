@@ -16,7 +16,7 @@ import (
 )
 
 // The egress proxy's label contract, version 1 (windroc/egress-proxy docs/label-contract.md): the broker finds the
-// proxy and its workers network only through these labels and Docker health, and never probes the proxy.
+// proxy and each caller network it serves only through these labels and Docker health, and never probes the proxy.
 const (
 	egressPrefix    = "windroc.egress."
 	contractLabel   = egressPrefix + "contract"
@@ -31,8 +31,16 @@ const (
 // networkPattern is a Docker network name; never a flag.
 var networkPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
-// egress is the proxy check's result: the network a client container joins and the proxy URL it uses there.
+// egress is a caller network check's result: the network a client container joins and the proxy URL it uses there.
 type egress struct{ Network, Proxy string }
+
+// egressProxy is one start's snapshot of the healthy egress proxy: its name, labels and attached networks. Every caller network
+// a start uses is checked against the same snapshot.
+type egressProxy struct {
+	name     string
+	labels   map[string]string
+	attached map[string]string // network name -> network ID
+}
 
 type proxyInfo struct {
 	ID     string `json:"Id"`
@@ -76,14 +84,14 @@ func validProxy(s string) bool {
 	return err == nil && port > 0 && port <= 65535
 }
 
-// workers is the workers network and proxy the proxy's labels name, if valid.
-func workers(labels map[string]string) (egress, bool) {
+// callerLabels is the network and proxy the proxy's labels name for caller network key, if listed and valid.
+func callerLabels(labels map[string]string, key string) (egress, bool) {
 	keys := strings.Split(labels[networksLabel], ",")
 	for i := range keys {
 		keys[i] = strings.TrimSpace(keys[i])
 	}
-	e := egress{Network: labels[egressPrefix+"network."+workersKey+".name"], Proxy: labels[egressPrefix+"network."+workersKey+".proxy"]}
-	return e, slices.Contains(keys, workersKey) && networkPattern.MatchString(e.Network) && validProxy(e.Proxy)
+	e := egress{Network: labels[egressPrefix+"network."+key+".name"], Proxy: labels[egressPrefix+"network."+key+".proxy"]}
+	return e, slices.Contains(keys, key) && networkPattern.MatchString(e.Network) && validProxy(e.Proxy)
 }
 
 func inspectOne[T any](out []byte) (T, error) {
@@ -95,29 +103,39 @@ func inspectOne[T any](out []byte) (T, error) {
 	return found[0], nil
 }
 
-// checkEgress applies the contract's consumer rules for the workers network. It runs before any credential or Docker
-// object is touched, so a refusal leaves nothing to withdraw or remove; there is no fallback network.
-func (h Host) checkEgress(ctx context.Context) (egress, error) {
+// checkProxy applies the contract's consumer rules to the egress proxy itself: exactly one, its contract version, running
+// and healthy. Start runs it before any credential or Docker object is touched, so a refusal leaves nothing to
+// withdraw or remove; there is no fallback network. A refusal names caller network key, the one start needs.
+func (h Host) checkProxy(ctx context.Context, key string) (egressProxy, error) {
+	px, err := h.inspectProxy(ctx)
+	var e *protocol.Error
+	if errors.As(err, &e) && e.Code == protocol.EgressUnavailable {
+		e.Message = strings.TrimSuffix(e.Message, egressHint) + " Caller network " + key + " needs it." + egressHint
+	}
+	return px, err
+}
+
+func (h Host) inspectProxy(ctx context.Context) (egressProxy, error) {
 	out, err := h.Docker.Run(ctx, []string{"ps", "--all", "--no-trunc", "--filter", "label=" + contractLabel, "--format", "{{.ID}}"}, nil)
 	if err != nil {
-		return egress{}, failure(err, protocol.EgressUnavailable, "Cannot list egress proxy containers."+egressHint)
+		return egressProxy{}, failure(err, protocol.EgressUnavailable, "Cannot list egress proxy containers."+egressHint)
 	}
 	ids := strings.Fields(string(out))
 	switch {
 	case len(ids) == 0:
-		return egress{}, refuse("No egress proxy container (label %s) found; expected %s.", contractLabel, proxyName)
+		return egressProxy{}, refuse("No egress proxy container (label %s) found; expected %s.", contractLabel, proxyName)
 	case len(ids) > 1:
-		return egress{}, refuse("Found %d egress proxy containers (label %s); keep only %s.", len(ids), contractLabel, proxyName)
+		return egressProxy{}, refuse("Found %d egress proxy containers (label %s); keep only %s.", len(ids), contractLabel, proxyName)
 	case !containerIDPattern.MatchString(ids[0]):
-		return egress{}, refuse("Cannot inspect egress proxy %s.", proxyName)
+		return egressProxy{}, refuse("Cannot inspect egress proxy %s.", proxyName)
 	}
 	out, err = h.Docker.Run(ctx, []string{"container", "inspect", ids[0]}, nil)
 	if err != nil {
-		return egress{}, failure(err, protocol.EgressUnavailable, "Cannot inspect egress proxy "+proxyName+"."+egressHint)
+		return egressProxy{}, failure(err, protocol.EgressUnavailable, "Cannot inspect egress proxy "+proxyName+"."+egressHint)
 	}
 	px, err := inspectOne[proxyInfo](out)
 	if err != nil {
-		return egress{}, refuse("Cannot inspect egress proxy %s.", proxyName)
+		return egressProxy{}, refuse("Cannot inspect egress proxy %s.", proxyName)
 	}
 	name := strings.TrimPrefix(px.Name, "/")
 	if !networkPattern.MatchString(name) {
@@ -126,23 +144,34 @@ func (h Host) checkEgress(ctx context.Context) (egress, error) {
 	labels := px.Config.Labels
 	switch {
 	case labels[contractLabel] != contractVersion:
-		return egress{}, refuse("Egress proxy %s has label contract version %s; this broker knows %s.", name, clip(labels[contractLabel]), contractVersion)
+		return egressProxy{}, refuse("Egress proxy %s has label contract version %s; this broker knows %s.", name, clip(labels[contractLabel]), contractVersion)
 	case !px.State.Running || px.State.Paused: // a paused proxy keeps its last health but proxies nothing
-		return egress{}, refuse("Egress proxy %s is not running.", name)
+		return egressProxy{}, refuse("Egress proxy %s is not running.", name)
 	case px.State.Health == nil:
-		return egress{}, refuse("Egress proxy %s is without a health check, not healthy.", name)
+		return egressProxy{}, refuse("Egress proxy %s is without a health check, not healthy.", name)
 	case px.State.Health.Status != "healthy":
-		return egress{}, refuse("Egress proxy %s is %s, not healthy.", name, clip(px.State.Health.Status))
+		return egressProxy{}, refuse("Egress proxy %s is %s, not healthy.", name, clip(px.State.Health.Status))
 	}
-	e, ok := workers(labels)
+	attached := map[string]string{}
+	for network, a := range px.NetworkSettings.Networks {
+		attached[network] = a.NetworkID
+	}
+	return egressProxy{name: name, labels: labels, attached: attached}, nil
+}
+
+// caller applies the contract's consumer rules for caller network key on px: listed with a valid network and proxy,
+// that network internal and px attached to it.
+func (h Host) caller(ctx context.Context, px egressProxy, key string) (egress, error) {
+	name := px.name
+	e, ok := callerLabels(px.labels, key)
 	if !ok {
-		return egress{}, refuse("Egress proxy %s has no valid workers network labels.", name)
+		return egress{}, refuse("Egress proxy %s has no valid %s network labels.", name, key)
 	}
-	attached, ok := px.NetworkSettings.Networks[e.Network]
-	if !ok || attached.NetworkID == "" {
+	attached := px.attached[e.Network]
+	if attached == "" {
 		return egress{}, refuse("Egress proxy %s is not attached to network %s.", name, e.Network)
 	}
-	out, err = h.Docker.Run(ctx, []string{"network", "inspect", e.Network}, nil)
+	out, err := h.Docker.Run(ctx, []string{"network", "inspect", e.Network}, nil)
 	if docker.Absent(err) {
 		return egress{}, refuse("Egress network %s of proxy %s does not exist.", e.Network, name)
 	}
@@ -157,7 +186,7 @@ func (h Host) checkEgress(ctx context.Context) (egress, error) {
 		return egress{}, refuse("Egress network %s of proxy %s does not exist.", e.Network, name)
 	case !network.Internal:
 		return egress{}, refuse("Egress network %s of proxy %s is not internal.", e.Network, name)
-	case network.ID != attached.NetworkID:
+	case network.ID != attached:
 		return egress{}, refuse("Egress proxy %s is not attached to network %s.", name, e.Network)
 	}
 	return e, nil

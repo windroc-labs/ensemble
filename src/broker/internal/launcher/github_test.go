@@ -22,6 +22,7 @@ var expiry = []protocol.Expiry{{Account: "acme", ExpiresAt: "2026-10-17T13:00:00
 type fakeTokens struct {
 	calls                                      []string
 	ready, user, issue, refresh, revoke, retry error
+	prefetch                                   error
 	pending                                    []protocol.Pending
 	onRevoke                                   func()
 	revokeContexts                             []error
@@ -62,6 +63,16 @@ func (f *fakeTokens) Revoke(ctx context.Context, c string) error {
 		f.onRevoke()
 	}
 	return f.revoke
+}
+func (f *fakeTokens) Prefetch(_ context.Context, repo, ref, dir, c string, run func([]string, []byte) error) error {
+	f.calls = append(f.calls, "prefetch "+repo+" "+ref+" "+dir+" "+c)
+	if f.prefetch != nil {
+		return f.prefetch
+	}
+	if err := run([]string{"/bin/sh", "-c", "clone-script", "sh", repo, ref, dir}, []byte("ghs_prefetch")); err != nil {
+		return protocol.New(protocol.StartFailed, "Prefetching "+repo+" at "+ref+" failed.")
+	}
+	return nil
 }
 func (f *fakeTokens) Retry(context.Context) ([]protocol.Pending, error) {
 	f.calls = append(f.calls, "retry")

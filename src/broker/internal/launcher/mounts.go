@@ -2,12 +2,15 @@ package launcher
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"ensemble/broker/internal/audit"
 	"ensemble/broker/internal/docker"
@@ -155,34 +158,58 @@ func (h Host) volumeLabels(ctx context.Context, volume string) (map[string]strin
 	return labels, nil
 }
 
+// randomHex is 16 random bytes in hex: a throwaway name or nonce.
+func randomHex() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// removeVolume removes volume v, which this start created, on a context of its own; a failed removal adds the command
+// to e.
+func (h Host) removeVolume(ctx context.Context, v string, e *protocol.Error) {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if _, err := h.Docker.Run(rctx, []string{"volume", "rm", v}, nil); err != nil {
+		e.Message += " Remove it with docker volume rm " + v + " before retrying."
+	}
+}
+
 // ensureVolume gives m its workspace volume: created with its labels and an agent-owned root, or an
-// existing one whose labels match and that no container mounts.
-func (h Host) ensureVolume(ctx context.Context, m Manifest, info imageInfo) error {
+// existing one whose labels match and that no container mounts. created: this start made it, which a prefetching
+// start knows by its own nonceLabel value.
+func (h Host) ensureVolume(ctx context.Context, m Manifest, info imageInfo) (created bool, _ error) {
 	v := m.Workspace
 	labels, err := h.volumeLabels(ctx, v)
-	created := docker.Absent(err)
+	created = docker.Absent(err)
 	if created {
-		create := []string{"volume", "create", "--label", kindLabel + "=" + kind, "--label", workspaceLabel + "=" + m.CWD, v}
-		if _, err := h.Docker.Run(ctx, create, nil); err != nil {
-			return failure(err, protocol.StartFailed, "Creating workspace volume "+v+" failed.")
+		create := []string{"volume", "create", "--label", kindLabel + "=" + kind, "--label", workspaceLabel + "=" + m.CWD}
+		nonce := ""
+		if m.Prefetch != nil {
+			nonce = randomHex()
+			create = append(create, "--label", nonceLabel+"="+nonce)
+		}
+		if _, err := h.Docker.Run(ctx, append(create, v), nil); err != nil {
+			return false, failure(err, protocol.StartFailed, "Creating workspace volume "+v+" failed.")
 		}
 		// create succeeds on a name a racing start made first, so read back what exists.
 		labels, err = h.volumeLabels(ctx, v)
+		if err == nil && nonce != "" {
+			created = labels[nonceLabel] == nonce
+		}
 	}
 	// Until its root is the agent's, a volume this start created is removed on failure: a later start would skip the chown.
-	undo := func(e *protocol.Error) error {
+	undo := func(e *protocol.Error) (bool, error) {
 		if created {
-			if _, rmErr := h.Docker.Run(context.WithoutCancel(ctx), []string{"volume", "rm", v}, nil); rmErr != nil {
-				e.Message += " Remove it with docker volume rm " + v + " before retrying."
-			}
+			h.removeVolume(ctx, v, e)
 		}
-		return e
+		return false, e
 	}
 	if err != nil {
 		return undo(failure(err, protocol.StartFailed, "Cannot inspect workspace volume "+v+"."))
 	}
 	if labels[kindLabel] != kind || labels[workspaceLabel] != m.CWD {
-		return protocol.Newf(protocol.MountRejected, "Volume %s is not the workspace for %s (%s %q, %s %q).",
+		return false, protocol.Newf(protocol.MountRejected, "Volume %s is not the workspace for %s (%s %q, %s %q).",
 			v, m.CWD, kindLabel, labels[kindLabel], workspaceLabel, labels[workspaceLabel])
 	}
 	out, err := h.Docker.Run(ctx, []string{"ps", "--filter", "volume=" + v, "--format", "{{.Names}}"}, nil)
@@ -190,10 +217,10 @@ func (h Host) ensureVolume(ctx context.Context, m Manifest, info imageInfo) erro
 		return undo(failure(err, protocol.StartFailed, "Cannot list the containers using "+v+"."))
 	}
 	if users := strings.Fields(string(out)); len(users) > 0 {
-		return protocol.Newf(protocol.MountRejected, "Workspace volume %s is mounted by running container %s; close it first.", v, users[0])
+		return false, protocol.Newf(protocol.MountRejected, "Workspace volume %s is mounted by running container %s; close it first.", v, users[0])
 	}
 	if !created {
-		return nil
+		return false, nil
 	}
 	l := info.Config.Labels
 	chown := []string{"run", "--rm", "--network", "none", "--cap-drop", "ALL", "--cap-add", "CHOWN", "--security-opt", "no-new-privileges", "--user", "0:0",
@@ -201,5 +228,5 @@ func (h Host) ensureVolume(ctx context.Context, m Manifest, info imageInfo) erro
 	if _, err := h.Docker.Run(ctx, chown, nil); err != nil {
 		return undo(failure(err, protocol.StartFailed, "Giving workspace volume "+v+" to agent failed."))
 	}
-	return nil
+	return true, nil
 }
