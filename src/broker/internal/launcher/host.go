@@ -82,6 +82,7 @@ type Host struct {
 	Opencode ProviderKeys
 	Env      EnvSecrets
 	Static   StaticMeta // nil: no static secret records, as tests without them
+	Schedule Schedule   // nil: no token record, as tests without one; every token provider is then always due
 	GitHub   Tokens
 	Versions CodexVersions
 	Releases Releases                          // nil: a build that must rebuild fails
@@ -103,6 +104,7 @@ func NewHost(home, endpoint string, d docker.Runner, creds Credentials, tokens T
 		Audit:    rec,
 		IsDir:    isDir,
 		Safe:     realSafe,
+		Schedule: StateSchedule{Home: home, Safe: realSafe},
 		Docker:   d,
 		Versions: codex.New(),
 		Releases: releases.New(),

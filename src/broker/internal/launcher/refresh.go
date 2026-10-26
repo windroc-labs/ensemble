@@ -67,7 +67,7 @@ func (h Host) Refresh(ctx context.Context, container, path string) (RefreshResul
 			if err := h.publishExpiry(m, expiry); err != nil {
 				return protocol.New(protocol.RefreshFailed, "Publishing the Codex credential deadline failed; retry refresh.")
 			}
-			return nil
+			return h.recordTokens(m, credential.Codex, []string{expiry}, nil)
 		})
 		if err != nil {
 			codexErr = injected(err, protocol.RefreshFailed, "Writing Codex credentials into "+container+" failed.")
@@ -81,6 +81,8 @@ func (h Host) Refresh(ctx context.Context, container, path string) (RefreshResul
 			githubErr = injected(err, protocol.RefreshFailed, "GitHub renewal for "+container+" failed.")
 		} else if expiries, err := h.GitHub.Refresh(ctx, m.GitHubApp, m.GitHubPermissions, container, h.agentExec(ctx, container)); err != nil {
 			githubErr = injected(err, protocol.RefreshFailed, "Writing a GitHub token into "+container+" failed.")
+		} else if err := h.recordTokens(m, credential.GitHub, expiryTimes(expiries), nil); err != nil {
+			githubErr = injected(err, protocol.RefreshFailed, "")
 		} else {
 			result.GitHub = expiries
 		}
