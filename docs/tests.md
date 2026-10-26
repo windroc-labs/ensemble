@@ -85,7 +85,7 @@ The Go broker (`src/broker/`, Go from `src/broker/go.mod`): `sh with-go-state.sh
 Go tool through `src/broker/with-go-state.sh` (state in `.cache/go/`). CI's `Broker` jobs run them on
 Linux and macOS and build the darwin/arm64 binary for full scope, including changes to
 `src/broker/**`, `src/broker/protocol/docker-broker/**`, `.github/workflows/test.yml`, and every push to
-`main`. Docs-only and upper-layer-only PRs skip Go setup, checks, builds and artifact
+`main`. Docs-only, version-only and upper-layer-only PRs skip Go setup, checks, builds and artifact
 upload; both `Broker` jobs still report success, like the required `Worker image` check.
 
 Integration jobs upload `integration-<run-id>-<attempt>-<job>` artifacts containing
@@ -148,15 +148,19 @@ occurs exactly once. Coverage applies to pull requests; `CI` requires every appl
 |---|---|---|
 | PR touching only `src/ensemble/manager/`, `src/ensemble/orchestrator/`, their `tests/<layer>/`, `skills/manage/`, `skills/board/`, `hooks/` and `launchd/` | both upper layers | intentionally skipped |
 | PR touching only root `*.md` files and/or `docs/` | upper-layer unit tests (they check the docs skills cite); integration, type and design lints skipped | intentionally skipped |
+| PR changing only the release `version` (`X.Y.Z`) of `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json` and/or `package.json` | skipped, with coverage; every lint runs (`Lint design` checks the versions agree) | intentionally skipped |
 | PR touching a lower layer, `tests/`, `.github/`, shared config, an unknown path, or an empty diff | all layers, plus shared unit tests | run |
 | push to `main` | all layers, plus shared unit tests | run |
 
 `.github/ci_scope.py` derives layer names from the import-linter `layers` contract and
 their `src/ensemble/<layer>/` packages. Layers before `ensemble.delegate` form the upper group; every
-other path selects the full suite. Renames consider both endpoints. `TEST_PROJECTS`
+other path selects the full suite. Renames consider both endpoints. Version-only scope reads
+each version file at the merge base and the head: any other byte changed, a reformat included,
+selects the full suite, and `--paths` (no content) never selects it. `TEST_PROJECTS`
 passes the selected group to discovery. Static lint remains required; `Lint style` checks
 unit import boundaries on every change. `CI` accepts a skipped repository job only for
-the upper-only decision, and rejects failures,
+a non-full decision, skipped unit, coverage and integration jobs only for the decision that
+allows them, and rejects failures,
 cancellation or unexpected skips. The explicit `broker` output controls Go steps;
 `CI` validates it against full and docs scope and always requires the `broker` job's
 result to be success, even when its Go steps are intentionally skipped.
