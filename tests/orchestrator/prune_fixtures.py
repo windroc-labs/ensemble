@@ -28,7 +28,15 @@ from tests.delegate.fakes.delegate import FakeDelegate
 from tests.delegate.workdir import checkout_path
 from tests.orchestrator.case import Case
 from tests.orchestrator.unit import promote_fixtures as tp
-from tests.orchestrator.unit.board_ids import DUPLICATE, FINISHED, TEAM, team_node
+from tests.orchestrator.unit.board_ids import (
+    DUPLICATE,
+    FINISHED,
+    HARNESS_IDENTITY,
+    NO_MANAGER,
+    TEAM,
+    role_id,
+    team_node,
+)
 from tests.orchestrator.unit.board_ids import STATES as IDS_BY_KEY
 from tests.orchestrator.unit.fake_api import FakeApi
 from tests.orchestrator.unit.outage import FAILURES, FIELDS, failing
@@ -53,9 +61,9 @@ STATE_IDS = {
 
 
 ROLES = {
-    "u-researcher": "researcher",
-    "u-pm": "pm",
-    "u-engineer": "engineer",
+    role_id("researcher"): "researcher",
+    role_id("pm"): "pm",
+    role_id("engineer"): "engineer",
     "u-dummy-tester": "dummy-tester",
 }
 
@@ -100,7 +108,8 @@ def gql_for(
     changed=None,
     elsewhere=(),
 ):
-    """children: sub-issue state types by parent, any depth, as Linear lists them (archived ones
+    """owners: delegate app user ids by issue, independent of assignee.
+    children: sub-issue state types by parent, any depth, as Linear lists them (archived ones
     left out), archived with their parent; stamps: canceledAt and completedAt, hours before NOW, by issue (none: null);
     reread: the state an issue's archive read finds, by issue (none: its own); changed: the idents
     the change feed lists (gql.changed, settable later; None: every issue), each updated just now,
@@ -313,8 +322,8 @@ class PruneScenario(Case):
             team=TEAM,
             states=dict(IDS_BY_KEY),
             human_members=(),
-            harness_key="harness",
-            manager_key="",
+            harness=HARNESS_IDENTITY,
+            manager=NO_MANAGER,
             task_label_group="",
             task_labels={},
             agent_label_group="",
@@ -447,7 +456,7 @@ class PruneScenario(Case):
         fake.moved("DR-1", 30, "Handoff", frm=tp.STATES["In Review"])
 
         def gql(query, **v):
-            if query in (ops.Q_SETUP, ops.Q_TEAM, ops.Q_USER):
+            if query == ops.Q_TEAM:
                 self.setup_queries.append(query)
             return (prune_gql if query in PRUNE_QUERIES else fake)(query, **v)
 

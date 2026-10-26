@@ -23,6 +23,7 @@ func (SystemKeychain) TrustPartition(string, string, []byte) error { return errP
 func (SystemKeychain) AppAccess(string, string) (AppAccess, error) { return AppAccess{}, errPlatform }
 func (SystemKeychain) Secret(string, string) ([]byte, error)       { return nil, errPlatform }
 func (SystemKeychain) PutSecret(string, string, []byte) error      { return errPlatform }
+func (SystemKeychain) UpdateSecret(string, string, []byte) error   { return errPlatform }
 func (SystemKeychain) DeleteSecret(string, string) error           { return errPlatform }
 func (SystemKeychain) CreateCodex() error                          { return errPlatform }
 func (SystemKeychain) WriteCodex([]byte) error                     { return errPlatform }

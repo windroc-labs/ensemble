@@ -323,7 +323,7 @@ class Launch(CliCase):
                 self.assertEqual(self.roster.entries(), {})
 
     def test_a_refused_launch_prints_its_layers_reason(self):
-        reason = "router.py: pick-none TASK-12 reason=not a Todo issue assigned to a role account"
+        reason = "router.py: pick-none TASK-12 reason=not a Todo issue delegated to a role app"
         for verb, key in (("issue", "TASK-12"), ("role", "pm"), ("worker", "w1")):
             with self.subTest(verb=verb):
                 result, stdout, stderr = self.start(

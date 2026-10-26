@@ -1,4 +1,4 @@
-"""The issue command's Backend over the issue_* modules, gql bound to linear.manager_key's service."""
+"""The issue command's Backend over the issue_* modules, gql bound to the manager's app."""
 
 import contextlib
 import subprocess
@@ -27,11 +27,10 @@ class LinearIssues:
     def _keychain(self):
         try:
             yield
-        except (subprocess.SubprocessError, OSError, KeychainError) as error:
-            service = self.linear.manager_key
-            raise IssueError(
-                f"linear.manager_key Keychain service {service!r}: {type(error).__name__}"
-            ) from None
+        except KeychainError as error:
+            raise IssueError(str(error)) from None
+        except (subprocess.SubprocessError, OSError) as error:
+            raise IssueError(f"Linear manager app: Keychain ({type(error).__name__})") from None
 
     def view(self, ident, *, full):
         with self._keychain():

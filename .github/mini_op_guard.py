@@ -32,7 +32,6 @@ WORD = r"(?<![\w/.-]){}(?![\w-])"
 ITEM_ARGS = {
     "keychain_read": (0, 1),
     "keychain_has": (0, 1),
-    "storekey": (0, 1),
     "storekey-stdin": (0, 1),
     "lq": (0, 1),
     "importkey": (1, 2),

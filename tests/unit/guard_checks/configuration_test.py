@@ -116,7 +116,7 @@ class ExplicitKeys(Sample):
                         'cwd = ""\n# local: cwd = "/x"\n[output]\ntype = "local"\ndir = ""\n[roles.a.output]\ntype = "x"\n# local: [roles.b]\n# local: cwd = "/y"\n# local: [roles.b.output]\n# local: dir = "d"\n'
                     ),
                     orch: (
-                        '[labels]\n# local: [labels]\n# local: x = "1"\n[roles.a]\nkey = ""\n# local: [roles.c]\n# local: key = "k"\n# local: [core.roles.a]\n# local: cwd = "/z"\n'
+                        '[labels]\n# local: [labels]\n# local: x = "1"\n[roles.a]\nnote = ""\n# local: [roles.c]\n# local: note = "k"\n# local: [core.roles.a]\n# local: cwd = "/z"\n'
                     ),
                 },
                 [],
@@ -126,7 +126,7 @@ class ExplicitKeys(Sample):
                 {
                     orch: (
                         '[labels]\n# local: [orchestrator.labels]\n# local: x = "1"\n'
-                        '[roles.a]\nkey = ""\n# local: [orchestrator.roles.b]\n# local: key = "k"\n'
+                        '[roles.a]\nnote = ""\n# local: [orchestrator.roles.b]\n# local: note = "k"\n'
                         "# local: [orchestrator]\n# local: typo = 1\n# local: [session]\n"
                     )
                 },

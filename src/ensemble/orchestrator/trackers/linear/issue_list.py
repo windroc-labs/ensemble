@@ -28,8 +28,8 @@ def source(gql, query, linear):
     if query.state is not None:
         match.append({"state": _id(issue_names.state_id(linear, query.state))})
     if query.role is not None:
-        who = issue_names.assignee(gql, linear, query.role)
-        match.append({"assignee": {"null": True} if who is None else _id(who)})
+        who = issue_names.delegate(linear, query.role)
+        match.append({"delegate": {"null": True} if who is None else _id(who)})
     if query.task is not None:
         match.append({"labels": {"some": _id(issue_names.task_label(linear, query.task))}})
     if query.client is not None:

@@ -47,16 +47,19 @@ Arguments and options:
 
 Prerequisites and effects:
   Requires Python 3.11+ and configured Delegate settings; on Linear
-  ([orchestrator] tracker = "linear") also Linear access and the
-  linear.harness_key Keychain service. On a local board ($ENSEMBLE_BOARD_DIR)
+  ([orchestrator] tracker = "linear") also Linear access as the
+  [linear.harness] OAuth app (its client secret and token: Keychain items);
+  promote renews its token when under 5 days are
+  left (--dry-run: never; it logs the days left). On a local board ($ENSEMBLE_BOARD_DIR)
   no job runs it on a timer: run it on demand. There the next issue is a
   file in <next role>/ready/ with the source's parent in place of a project,
   and an unreadable board exits 2 (promote.py: <path>: <reason>).
   Configuration: ensemble-orchestrator --help
-  For each Handoff issue in a project, assigned to a configured role with next:
-  create that next role's issue in the same project, assigned to its account,
+  For each Handoff issue in a project, delegated to a role app with next:
+  create that next role's issue in the same project, delegated to its app,
+  with an empty assignee,
   in Todo with source links and the user's instructions (comments by anyone but
-  the harness and role accounts); relate the issues and move the source to
+  the harness and role apps); relate the issues and move the source to
   Done. Existing next-stage issues are reused. Required instructions absent:
   return the source to In Review with a comment.
   Every tick also prunes: close finished runs, delete agent files and archive
@@ -311,6 +314,7 @@ def main(argv, *, trackers, gql, now=None, config_path=None, pruner=None):
     event_log.use_logs(cfg.logs_dir)
     now = now or datetime.now(UTC)
     try:
+        trackers[cfg.tracker].credentials(cfg, "promote", dry=dry)
         board = trackers[cfg.tracker].board(gql, cfg)
         promoter = Promoter(cfg, board(gql), now, dry, tasks=config.TASKS, wait="--now" not in argv)
         promoter.run()

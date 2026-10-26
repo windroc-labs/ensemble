@@ -15,7 +15,7 @@ from unittest import mock
 from ensemble import delegate, utils
 from ensemble.orchestrator.engine import config
 from ensemble.orchestrator.engine.flow import workflow
-from ensemble.orchestrator.engine.types import State, TrackerKind
+from ensemble.orchestrator.engine.types import AppKind, LinearApp, State, TrackerKind
 from ensemble.utils import temp_dirs
 from tests.delegate.fakes.delegate import FakeDelegate
 from tests.orchestrator.case import REPO, ROOTS, Case
@@ -32,12 +32,20 @@ from tests.orchestrator.config_fixtures import (
 )
 from tests.orchestrator.process_fixtures import DEVNULL, CompletedProcess
 from tests.orchestrator.unit.board_ids import (
+    HARNESS_APP,
+    HARNESS_LINE,
     HEADER,
+    MANAGER_APP,
+    MANAGER_IDENTITY,
+    MANAGER_LINE,
+    MANAGER_USER,
     PACKAGED_FLOW,
     STATES,
     TASK_GROUP,
     TEAM,
     role,
+    role_app,
+    role_id,
     workflow_line,
 )
 from tests.utils.case import local_section
@@ -67,16 +75,16 @@ def old_key(key):
 
 ROLES = {
     "researcher": (
-        "researcher@agents.test",
-        "linear-api-key-researcher",
+        role_id("researcher"),
+        "linear-app-researcher-token",
         ("deep-research", "research", "light-research"),
         1,
         "pm",
     ),
-    "pm": ("pm@agents.test", "linear-api-key-pm", ("product-design",), 1, "engineer"),
+    "pm": (role_id("pm"), "linear-app-pm-token", ("product-design",), 1, "engineer"),
     "engineer": (
-        "engineer@agents.test",
-        "linear-api-key-engineer",
+        role_id("engineer"),
+        "linear-app-engineer-token",
         ("build", "light-build"),
         1,
         None,
@@ -85,10 +93,11 @@ ROLES = {
 
 
 def fields(cfg):
-    """Each role's account, key, tasks, max_runs and its stage's next (None: the last)."""
+    """Each role's app user id, token service, tasks, max_runs and its stage's next (None: the last)."""
     return {
         r: (
-            *dataclasses.astuple(cfg.linear.roles[r]),
+            cfg.linear.roles[r].user_id,
+            cfg.linear.roles[r].token_service,
             x.tasks,
             x.max_runs,
             config.TASKS[r].next or None,
@@ -153,14 +162,19 @@ class CatalogDelegate(FakeDelegate):
         )
 
 
+HARNESS = LinearApp("harness", AppKind.HARNESS, "linear.harness", **HARNESS_APP)
+
 LINEAR_DEFAULTS = {
-    **dict.fromkeys(
-        ("team", "harness_key", "manager_key", "task_label_group", "agent_label_group"), ""
-    ),
+    **dict.fromkeys(("team", "task_label_group", "agent_label_group"), ""),
+    "harness": {**dict.fromkeys(config.AppKey, ""), "renewal": "transport"},
+    "manager": {**dict.fromkeys(config.AppKey, ""), "renewal": "transport"},
     "states": dict.fromkeys(State, ""),
     "human_members": [],
     **dict.fromkeys(("task_labels", "agent_labels", "project_repos"), {}),
-    "roles": dict.fromkeys(("researcher", "pm", "engineer"), {"account": "", "key": ""}),
+    "roles": dict.fromkeys(
+        ("researcher", "pm", "engineer"),
+        {**dict.fromkeys(config.AppKey, ""), "renewal": "transport"},
+    ),
 }
 
 
@@ -194,6 +208,61 @@ A = "engineer-TASK-12-0b6f2c1e"
 
 
 class ConfigurationLoading(ConfigFile, Case):
+    def test_app_renewal_writer_is_explicit_and_validated(self):
+        for table in ("linear.harness", "linear.manager", "linear.roles.engineer"):
+            with self.subTest(table=table):
+                if table.endswith("harness"):
+                    text = PIPELINE.replace(
+                        HARNESS_LINE, HARNESS_LINE.replace(" }", ', renewal = "broker" }')
+                    )
+                elif table.endswith("manager"):
+                    text = MANAGER_LINE.replace(" }", ', renewal = "broker" }') + PIPELINE
+                else:
+                    text = PIPELINE.replace(f"[{table}]", f'[{table}]\nrenewal = "broker"')
+                found = self.load(text).linear
+                app = (
+                    found.harness
+                    if table.endswith("harness")
+                    else found.manager
+                    if table.endswith("manager")
+                    else found.roles["engineer"]
+                )
+                self.assertEqual(app.renewal, "broker")
+                with self.assertRaisesRegex(config.ConfigError, "renewal"):
+                    self.load(text.replace('renewal = "broker"', 'renewal = "other"'))
+
+    def test_role_apps_require_all_four_fields_and_reject_other_keys(self):
+        app = {
+            "client_id": "client-dummy",
+            "secret_service": "dummy-secret",
+            "token_service": "dummy-token",
+            "user_id": "00000000-0000-4000-8000-000000000301",
+        }
+
+        def text(fields):
+            return (
+                BARE
+                + "[linear.roles.dummy-tester]\n"
+                + "".join(f"{k} = {json.dumps(v)}\n" for k, v in fields.items())
+            )
+
+        found = self.load(text(app)).linear.roles["dummy-tester"]
+        self.assertEqual(found.scopes, "read,write,app:assignable,app:mentionable")
+        self.assertEqual(found.user_id, app["user_id"])
+        for key in app:
+            for fields in ({k: v for k, v in app.items() if k != key}, app | {key: ""}):
+                with (
+                    self.subTest(key=key, fields=fields),
+                    self.assertRaisesRegex(config.ConfigError, f"linear.roles.dummy-tester.{key}"),
+                ):
+                    self.load(text(fields))
+        for key in ("typo", "token"):
+            with (
+                self.subTest(key=key),
+                self.assertRaisesRegex(config.ConfigError, f"has unknown keys: {key}"),
+            ):
+                self.load(text(app | {key: "old"}))
+
     def test_stage_order(self):
         self.assertEqual(self.load(PIPELINE).stages, {"researcher": 0, "pm": 1, "engineer": 2})
         researcher_last = workflow_line(PACKAGED_FLOW.replace('next = "pm"\n', ""))
@@ -209,7 +278,6 @@ class ConfigurationLoading(ConfigFile, Case):
         upper = "ABCDEF00-0000-4000-8000-000000000021"
         solo = role("dummy-tester")
         x = BARE + "[roles.dummy-tester]\n[linear.roles.dummy-tester]\n"
-        account = "linear.roles.dummy-tester.account"
         cases = [
             (
                 HEADER
@@ -230,27 +298,10 @@ class ConfigurationLoading(ConfigFile, Case):
                 BASE.replace(solo, role("dummy-tester", 'tasks = ["x"]', "read_only = []")),
                 "[roles.dummy-tester] has unknown keys: read_only, tasks",
             ),
-            # a stage needs no [roles.<role>] table, but its account and key
-            (BARE, missing(f"{account}, linear.roles.dummy-tester.key")),
-            (BARE + "[roles.dummy-tester]\n", missing(f"{account}, linear.roles.dummy-tester.key")),
-            (x + 'key = "k-x"\n', missing(account)),
-            (x + 'account = ""\nkey = "k-x"\n', missing(account)),
+            (BARE, missing(", ".join(f"linear.roles.dummy-tester.{k}" for k in config.AppKey))),
+            (x + "max_runs = 2\n", "[linear.roles.dummy-tester] has unknown keys: max_runs"),
             (
-                x + 'account = 5\nkey = "k-x"\n',
-                "[linear.roles.dummy-tester] account must be the role's Linear email: 5",
-            ),
-            (x + 'account = "x@agents.test"\n', missing("linear.roles.dummy-tester.key")),
-            (x + 'account = "x@agents.test"\nkey = ""\n', missing("linear.roles.dummy-tester.key")),
-            (
-                x + 'account = "x@agents.test"\nkey = ["k"]\n',
-                "[linear.roles.dummy-tester] key must be a Keychain service name: ['k']",
-            ),
-            (
-                x + 'account = "x@agents.test"\nkey = "k-x"\nmax_runs = 2\n',
-                "[linear.roles.dummy-tester] has unknown keys: max_runs",
-            ),
-            (
-                BASE + '[linear.roles.ghost]\naccount = "g@agents.test"\nkey = "k-g"\n',
+                BASE + '[linear.roles.ghost]\nclient_id = "g"\n',
                 "[linear.roles.ghost] names no stage of the workflow",
             ),
             (BASE + "[roles.ghost]\n", "[roles.ghost] names no stage of the workflow"),
@@ -258,9 +309,9 @@ class ConfigurationLoading(ConfigFile, Case):
             (
                 BASE.replace(
                     "[roles.dummy-tester]\n",
-                    '[roles.dummy-tester]\naccount = "s@agents.test"\nkey = "k"\n',
+                    '[roles.dummy-tester]\ntypo = "s"\ntoken = "k"\n',
                 ),
-                "[roles.dummy-tester] has unknown keys: account, key",
+                "[roles.dummy-tester] has unknown keys: token, typo",
             ),
             ("linear.typo = 1\nlinear.other = 2\n" + BASE, "unknown keys in [linear]: other, typo"),
             (HEADER + "linear.roles = 5\n[roles.x]\n", "[linear.roles] must be a table"),
@@ -280,12 +331,43 @@ class ConfigurationLoading(ConfigFile, Case):
                 }.items()
             ],
             (
-                BASE.replace('linear.harness_key = "linear-api-key"\n', ""),
-                missing("linear.harness_key"),
+                BASE.replace(HARNESS_LINE, ""),
+                missing(
+                    "linear.harness.client_id, linear.harness.secret_service, "
+                    "linear.harness.token_service, linear.harness.user_id"
+                ),
+            ),
+            *[
+                (
+                    BASE.replace(f'{key} = "{HARNESS_APP[key]}"', f'{key} = ""'),
+                    missing(f"linear.harness.{key}"),
+                )
+                for key in HARNESS_APP
+            ],
+            (
+                BASE.replace('user_id = "', 'typo = 1, user_id = "', 1),
+                "[linear.harness] has unknown keys: typo",
             ),
             (
-                BASE.replace('harness_key = "linear-api-key"', "harness_key = 1"),
-                "linear.harness_key must be a Keychain service name: 1",
+                BASE.replace(HARNESS_LINE, 'linear.harness = "x"\n'),
+                "[linear.harness] must be a table",
+            ),
+            *[
+                (
+                    BASE.replace(f'{key} = "{HARNESS_APP[key]}"', f"{key} = {value}"),
+                    f"linear.harness.{key} must be {what}: {shown}",
+                )
+                for key, value, shown, what in (
+                    ("client_id", '"a b"', "'a b'", "a Linear OAuth app Client ID"),
+                    ("client_id", "1", "1", "a Linear OAuth app Client ID"),
+                    ("secret_service", '"x -s y"', "'x -s y'", "a Keychain service name"),
+                    ("token_service", '"-x"', "'-x'", "a Keychain service name"),
+                    ("user_id", '"harness"', "'harness'", "a Linear user id (UUID)"),
+                )
+            ],
+            (
+                BASE.replace('"linear-app-harness-secret"', '"linear-app-harness-token"'),
+                "linear.harness.secret_service 'linear-app-harness-token' is also linear.harness.token_service",
             ),
             (
                 BASE.replace(TEAM, "Acme's Agents"),
@@ -296,7 +378,9 @@ class ConfigurationLoading(ConfigFile, Case):
             (
                 'tracker = "linear"\n' + HEADER[HEADER.index("delegates = ") :] + body,
                 missing(
-                    "linear.team, linear.harness_key, linear.task_label_group, linear.states.todo, "
+                    "linear.team, linear.harness.client_id, linear.harness.secret_service, "
+                    "linear.harness.token_service, linear.harness.user_id, "
+                    "linear.task_label_group, linear.states.todo, "
                     "linear.states.in_progress, linear.states.in_review, linear.states.handoff, "
                     "linear.states.done, linear.states.canceled, linear.states.backlog"
                 ),
@@ -324,7 +408,7 @@ class ConfigurationLoading(ConfigFile, Case):
                 missing("linear.states.backlog"),
             ),
             (
-                BASE.replace(" }\n", ', triage = "x" }\n', 1),
+                BASE.replace(STATES_LINE, STATES_LINE.replace(" }\n", ', triage = "x" }\n')),
                 "[linear.states] has unknown keys: triage",
             ),
             (
@@ -391,32 +475,16 @@ class ConfigurationLoading(ConfigFile, Case):
                 "[roles.dummy-tester] names no stage of the workflow",
             ),
             (
-                PIPELINE.replace("linear-api-key-pm", "linear-api-key-researcher"),
-                "[linear.roles.pm] key 'linear-api-key-researcher' is also [linear.roles.researcher]'s",
+                PIPELINE.replace("linear-app-pm-", "linear-app-researcher-"),
+                "linear.roles.pm.secret_service 'linear-app-researcher-secret' is also linear.roles.researcher.secret_service",
             ),
             (
-                PIPELINE.replace("linear-api-key-engineer", "linear-api-key"),
-                "[linear.roles.engineer] key 'linear-api-key' is linear.harness_key",
+                PIPELINE.replace("linear-app-engineer-", "linear-app-harness-"),
+                "linear.roles.engineer.secret_service 'linear-app-harness-secret' is also linear.harness.secret_service",
             ),
             (
-                'linear.manager_key = "linear-api-key"\n' + PIPELINE,
-                "linear.manager_key 'linear-api-key' is linear.harness_key",
-            ),
-            (
-                'linear.manager_key = "linear-api-key-pm"\n' + PIPELINE,
-                "linear.manager_key 'linear-api-key-pm' is [linear.roles.pm]'s key",
-            ),
-            (
-                "linear.manager_key = 1\n" + PIPELINE,
-                "linear.manager_key must be a Keychain service name: 1",
-            ),
-            (
-                "linear.manager_key = false\n" + PIPELINE,
-                "linear.manager_key must be a Keychain service name: False",
-            ),
-            (
-                "linear.manager_key = 0\n" + PIPELINE,
-                "linear.manager_key must be a Keychain service name: 0",
+                PIPELINE.replace("linear-app-pm-token", "linear-app-harness-secret"),
+                "linear.roles.pm.token_service 'linear-app-harness-secret' is also linear.harness.secret_service",
             ),
             *[
                 (
@@ -479,10 +547,94 @@ class ConfigurationLoading(ConfigFile, Case):
                 self.assertTrue(msg.startswith(f"orchestrator/config.toml: {table}.{key} "), msg)
                 self.assertIn(repr(value), msg)
 
-    def test_manager_key_loaded_empty_by_default(self):
-        self.assertEqual(self.load(PIPELINE).linear.manager_key, "")
-        cfg = self.load('linear.manager_key = "linear-manager"\n' + PIPELINE)
-        self.assertEqual(cfg.linear.manager_key, "linear-manager")
+    def test_a_complete_manager_app_loads_as_the_manager_identity(self):
+        linear = self.load(MANAGER_LINE + PIPELINE).linear
+        self.assertEqual(linear.manager, MANAGER_IDENTITY)
+        self.assertEqual(config.manager_app(linear), MANAGER_IDENTITY)
+        self.assertEqual(MANAGER_IDENTITY.scopes, "read,write,app:assignable")
+
+    def test_an_incomplete_manager_app_loads_but_issue_refuses_it(self):
+        none = dict.fromkeys(MANAGER_APP, "")
+        for given in ({}, {"user_id": MANAGER_USER}, {**MANAGER_APP, "secret_service": ""}):
+            with self.subTest(given=given):
+                table = "[linear.manager]\n" + "".join(f'{k} = "{v}"\n' for k, v in given.items())
+                linear = self.load(PIPELINE + table).linear
+                self.assertEqual(linear.manager.user_id, given.get("user_id", ""))
+                unset = [f"linear.manager.{k}" for k in MANAGER_APP if not {**none, **given}[k]]
+                with self.assertRaises(config.ConfigError) as cm:
+                    config.manager_app(linear)
+                self.assertEqual(
+                    str(cm.exception),
+                    "orchestrator/config.toml: ensemble-orchestrator issue needs the manager's "
+                    f"Linear OAuth app: required, unset: {', '.join(unset)}: set them in "
+                    f"{config.LOCAL} (orchestrator/config.toml's `# local:` lines)",
+                )
+                self.assertIsNone(cm.exception.logs_dir)
+
+    def test_manager_app_values_are_checked_when_set(self):
+        def table(**fields):
+            return (
+                PIPELINE
+                + "[linear.manager]\n"
+                + "".join(f"{k} = {json.dumps(v)}\n" for k, v in fields.items())
+            )
+
+        for text, message in (
+            (
+                table(user_id="manager"),
+                "linear.manager.user_id must be a Linear user id (UUID): 'manager'",
+            ),
+            (table(user_id=1), "linear.manager.user_id must be a Linear user id (UUID): 1"),
+            (
+                table(client_id="client manager"),
+                "linear.manager.client_id must be a Linear OAuth app Client ID: 'client manager'",
+            ),
+            (
+                table(secret_service="a b"),
+                "linear.manager.secret_service must be a Keychain service name: 'a b'",
+            ),
+            (
+                table(token_service=False),
+                "linear.manager.token_service must be a Keychain service name: False",
+            ),
+            (
+                table(secret_service="linear-app-manager-x", token_service="linear-app-manager-x"),
+                "linear.manager.secret_service 'linear-app-manager-x' is also linear.manager.token_service",
+            ),
+            (
+                table(user_id=HARNESS_APP["user_id"]),
+                f"linear.manager.user_id '{HARNESS_APP['user_id']}' is also linear.harness.user_id",
+            ),
+            (
+                table(user_id=role_id("pm")),
+                f"linear.manager.user_id '{role_id('pm')}' is also linear.roles.pm.user_id",
+            ),
+            (
+                table(client_id="client-harness"),
+                "linear.manager.client_id 'client-harness' is also linear.harness.client_id",
+            ),
+            (
+                table(client_id="client-pm"),
+                "linear.manager.client_id 'client-pm' is also linear.roles.pm.client_id",
+            ),
+            (
+                table(token_service="linear-app-harness-token"),
+                "linear.manager.token_service 'linear-app-harness-token' is also linear.harness.token_service",
+            ),
+            (
+                table(secret_service="linear-app-pm-token"),
+                "linear.manager.secret_service 'linear-app-pm-token' is also linear.roles.pm.token_service",
+            ),
+            (
+                table(token_service="linear-app-engineer-secret"),
+                "linear.manager.token_service 'linear-app-engineer-secret' is also "
+                "linear.roles.engineer.secret_service",
+            ),
+            (table(typo="x"), "[linear.manager] has unknown keys: typo"),
+            ("linear.manager = 1\n" + PIPELINE, "[linear.manager] must be a table"),
+        ):
+            with self.subTest(message):
+                self.fails("orchestrator/config.toml: " + message, text)
 
     def test_loads(self):
         cfg = self.load(PIPELINE)
@@ -490,15 +642,15 @@ class ConfigurationLoading(ConfigFile, Case):
             (
                 cfg.linear.team,
                 cfg.linear.states,
-                cfg.linear.harness_key,
+                cfg.linear.harness,
                 cfg.linear.task_label_group,
             ),
-            (TEAM, STATES, "linear-api-key", TASK_GROUP),
+            (TEAM, STATES, HARNESS, TASK_GROUP),
         )
         pm = cfg.linear.roles["pm"]
         self.assertEqual(
-            (pm.account, pm.key, cfg.roles["pm"].max_runs),
-            ("pm@agents.test", "linear-api-key-pm", 1),
+            (pm.user_id, pm.token_service, cfg.roles["pm"].max_runs),
+            (role_id("pm"), "linear-app-pm-token", 1),
         )
         self.assertEqual(
             (
@@ -562,7 +714,7 @@ class ConfigurationLoading(ConfigFile, Case):
         self.assertIsNotNone(cm.exception.logs_dir)
 
     def test_a_stage_role_the_delegate_does_not_know(self):
-        # reported before the stage's missing Linear account
+        # reported before the stage's missing Linear app
         flow = os.path.join(self.dir, "flow.toml")
         write(flow, '[[stage]]\nrole = "ghostwriter"\ninput = "research"\n')
         self.fails(
@@ -795,7 +947,7 @@ class ConfigurationLoading(ConfigFile, Case):
         for obj, attr in (
             (cfg, "linear"),
             (cfg.linear, "team"),
-            (cfg.linear.roles["pm"], "key"),
+            (cfg.linear.roles["pm"], "client_id"),
             (cfg, "roles"),
             (cfg, "work_dir"),
             (cfg.roles["pm"], "max_runs"),
@@ -954,12 +1106,12 @@ class CommittedConfiguration(Case):
             str(cm.exception),
             "orchestrator/config.toml: "
             + missing(
-                "linear.team, linear.harness_key, linear.task_label_group, linear.states.todo, "
+                "linear.team, linear.harness.client_id, linear.harness.secret_service, "
+                "linear.harness.token_service, linear.harness.user_id, "
+                "linear.task_label_group, linear.states.todo, "
                 "linear.states.in_progress, linear.states.in_review, linear.states.handoff, "
                 "linear.states.done, linear.states.canceled, linear.states.backlog, "
-                "linear.roles.researcher.account, "
-                "linear.roles.pm.account, linear.roles.engineer.account, linear.roles.researcher.key, "
-                "linear.roles.pm.key, linear.roles.engineer.key"
+                + ", ".join(f"linear.roles.{r}.{k}" for k in config.AppKey for r in ROLES)
             ),
         )
 
@@ -995,8 +1147,8 @@ class CommittedConfiguration(Case):
         )
 
     def test_every_linear_key_under_orchestrator_linear_loads(self):
-        accounts = "".join(
-            f'[orchestrator.linear.roles.{r}]\naccount = "{r}@agents.test"\nkey = "linear-api-key-{r}"\n'
+        apps = "".join(
+            role(r).split(f"[roles.{r}]")[0].replace("[linear.", "[orchestrator.linear.")
             for r in ("researcher", "pm", "engineer")
         )
         write(
@@ -1007,13 +1159,14 @@ class CommittedConfiguration(Case):
             + "[orchestrator.client_max_runs]\nopencode = 1\n"
             + "[orchestrator.roles.engineer]\nmax_runs = 2\n"
             + f'[orchestrator.linear]\nteam = "{TEAM}"\nhuman_members = ["me@x.com"]\n'
-            + f'harness_key = "linear-api-key"\ntask_label_group = "{TASK_GROUP}"\n'
+            + HARNESS_LINE.replace("linear.harness", "harness")
+            + f'task_label_group = "{TASK_GROUP}"\n'
             + f'agent_label_group = "{AGENT_GROUP}"\n'
             + "[orchestrator.linear.states]\n"
             + "".join(f'{k} = "{v}"\n' for k, v in STATES.items())
             + f'[orchestrator.linear.task_labels]\nbuild = "{LABEL1}"\n'
             + f'[orchestrator.linear.agent_labels]\nclaude = "{LABEL2}"\n'
-            + accounts
+            + apps
             + f'[orchestrator.linear.project_repos]\n"{P1}" = "acme/x"\n',
         )
         cfg = self.load()
@@ -1021,11 +1174,11 @@ class CommittedConfiguration(Case):
             (
                 cfg.linear.team,
                 cfg.linear.human_members,
-                cfg.linear.harness_key,
+                cfg.linear.harness,
                 cfg.linear.task_label_group,
                 cfg.linear.states,
             ),
-            (TEAM, ("me@x.com",), "linear-api-key", TASK_GROUP, STATES),
+            (TEAM, ("me@x.com",), HARNESS, TASK_GROUP, STATES),
         )
         self.assertEqual(
             (
@@ -1209,8 +1362,8 @@ class TrackerChoice(ConfigFile, Case):
         linear = cfg.linear
         self.assertIsInstance(linear, config.LinearSettings)
         self.assertEqual(
-            (linear.team, linear.states, linear.harness_key, linear.task_label_group),
-            (TEAM, STATES, "linear-api-key", TASK_GROUP),
+            (linear.team, linear.states, linear.harness, linear.task_label_group),
+            (TEAM, STATES, HARNESS, TASK_GROUP),
         )
         self.assertEqual(
             (linear.human_members, linear.task_labels, linear.agent_label_group),
@@ -1219,9 +1372,12 @@ class TrackerChoice(ConfigFile, Case):
         self.assertEqual((linear.agent_labels, linear.project_repos), ({}, {P1: "acme/x"}))
         self.assertEqual(
             dict(linear.roles),
-            {r: config.LinearRole(account, key) for r, (account, key, *_) in ROLES.items()},
+            {r: role_app(r) for r in ROLES},
         )
         self.assertIs(config.linear_settings(cfg, "promote"), linear)
+
+    def test_local_board_leaves_linear_manager_unread(self):
+        self.assertIsNone(self.load(LOCAL_BOARD + '[linear.manager]\nuser_id = "manager"\n').linear)
 
     def test_linear_settings_on_local(self):
         cfg = self.load(LOCAL_BOARD)
@@ -1245,7 +1401,10 @@ class TrackerChoice(ConfigFile, Case):
                 self.assertIsNone(e.logs_dir)
 
     def test_local_config_has_no_linear_settings(self):
-        cfg = self.load(LOCAL_BOARD + '[linear]\nteam = "not-a-uuid"\nharness_key = ""\n')
+        cfg = self.load(
+            LOCAL_BOARD
+            + '[linear]\nteam = "not-a-uuid"\nharness = { client_id = "a b", user_id = "x" }\n'
+        )
         self.assertIsNone(cfg.linear)
         self.assertEqual(list(cfg.roles), ["researcher", "pm", "engineer"])
         self.fails(
@@ -1530,11 +1689,8 @@ class RunnableRoles(ConfigFile, Case):
         self.assertEqual(list(self.runs(text)), ["researcher", "pm", "engineer"])
 
     def test_a_stage_without_role_table_runs_one(self):
-        accounts = "".join(
-            f'[linear.roles.{r}]\naccount = "{r}@agents.test"\nkey = "linear-api-key-{r}"\n'
-            for r in ("researcher", "pm", "engineer")
-        )
-        roles = self.runs(HEADER + accounts + "[roles.pm]\nmax_runs = 2\n")
+        apps = "".join(role(r).split(f"[roles.{r}]")[0] for r in ("researcher", "pm", "engineer"))
+        roles = self.runs(HEADER + apps + "[roles.pm]\nmax_runs = 2\n")
         self.assertEqual(
             {r: x.max_runs for r, x in roles.items()}, {"researcher": 1, "pm": 2, "engineer": 1}
         )
@@ -1951,13 +2107,13 @@ class LocalOverlay(ConfigFile, Case):
             fields(cfg),
             {
                 "researcher": (
-                    "researcher@agents.test",
-                    "linear-api-key-researcher",
+                    role_id("researcher"),
+                    "linear-app-researcher-token",
                     ROLES["researcher"][2],
                     2,
                     "pm",
                 ),
-                "pm": ("pm@agents.test", "linear-api-key-pm", ROLES["pm"][2], 1, None),
+                "pm": (role_id("pm"), "linear-app-pm-token", ROLES["pm"][2], 1, None),
             },
         )
         self.assertEqual(cfg.linear.project_repos, {P1: "acme/x", P2: "acme/y"})
@@ -1992,9 +2148,9 @@ class LocalOverlay(ConfigFile, Case):
                 "orchestrator/config.toml: linear.states.done must be a Linear workflow state id (UUID): 'Done'",
             ),
             (
-                "linear.harness_key = 1\n",
+                'linear.harness.token_service = "a b"\n',
                 BASE,
-                "orchestrator/config.toml: linear.harness_key must be a Keychain service name: 1",
+                "orchestrator/config.toml: linear.harness.token_service must be a Keychain service name: 'a b'",
             ),
             (
                 'linear = "x"\n',
@@ -2020,7 +2176,7 @@ class LocalOverlay(ConfigFile, Case):
                 )
                 for key, flat in (
                     ("team", f'team = "{TEAM}"\n'),
-                    ("harness_key", 'harness_key = "linear-api-key"\n'),
+                    ("harness", '[harness]\nclient_id = "client-harness"\n'),
                     ("human_members", 'human_members = ["a@x.com"]\n'),
                     ("states", f'[states]\ndone = "{STATES["done"]}"\n'),
                     ("task_labels", f'[task_labels]\nbuild = "{LABEL1}"\n'),
@@ -2028,9 +2184,9 @@ class LocalOverlay(ConfigFile, Case):
                 )
             ],
             (
-                '[roles.researcher]\naccount = "researcher@agents.test"\nkey = "k"\n',
+                '[roles.researcher]\ntypo = "r"\ntoken = "k"\n',
                 BASE,
-                "orchestrator/config.toml: [roles.researcher] has unknown keys: account, key",
+                "orchestrator/config.toml: [roles.researcher] has unknown keys: token, typo",
             ),
             (
                 role("researcher", 'max_runs = "2"'),

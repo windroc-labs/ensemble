@@ -7,6 +7,7 @@ from ensemble.orchestrator.engine.types import (
     KeychainError,
     LinearError,
     Spec,
+    TrackerKind,
 )
 from tests.orchestrator.case import Case
 
@@ -29,14 +30,17 @@ class RunSpec(Case):
     def test_identity_and_role_validation(self):
         spec = self.spec()
         self.assertIsNone(spec.identity_error())
-        self.assertIsNone(spec.role_error("engineer", ("build",)))
+        self.assertIsNone(spec.role_error("engineer", ("build",), TrackerKind.LINEAR))
         self.assertEqual(
             self.spec(issue="bad", sid="bad").identity_error(),
             "bad issue or session id: bad bad",
         )
-        self.assertEqual(spec.role_error(None, ()), "not assigned to a role")
         self.assertEqual(
-            self.spec(task="unknown").role_error("engineer", ("build",)),
+            spec.role_error(None, (), TrackerKind.LINEAR), "no configured role delegate"
+        )
+        self.assertEqual(spec.role_error(None, (), TrackerKind.LOCAL), "not assigned to a role")
+        self.assertEqual(
+            self.spec(task="unknown").role_error("engineer", ("build",), TrackerKind.LINEAR),
             "task 'unknown' is not one of engineer's tasks (build)",
         )
 

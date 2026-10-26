@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any, Literal
 
 from ensemble import delegate
@@ -47,10 +48,54 @@ class TrackerKind(StrEnum):
     LOCAL = "local"
 
 
+# an issue's role owner: Linear reads its delegate, a local board its assignee directory
+UNOWNED = MappingProxyType(
+    {TrackerKind.LINEAR: "no configured role delegate", TrackerKind.LOCAL: "not assigned to a role"}
+)
+OWNERSHIP = MappingProxyType(
+    {TrackerKind.LINEAR: "delegated to a role app", TrackerKind.LOCAL: "assigned to a role"}
+)
+
+
+class AppKind(StrEnum):
+    """Which of ensemble's Linear OAuth apps: its token request's scopes."""
+
+    HARNESS = "harness"
+    ROLE = "role"
+    MANAGER = "manager"
+
+
+SCOPES = MappingProxyType(
+    {
+        AppKind.HARNESS: "read,write",
+        AppKind.ROLE: "read,write,app:assignable,app:mentionable",
+        AppKind.MANAGER: "read,write,app:assignable",
+    }
+)
+
+
 @dataclass(frozen=True)
-class LinearRole:
-    account: str
-    key: str
+class LinearApp:
+    """A Linear OAuth app: name in messages and logs, table its config table (fix messages),
+    secret_service and token_service the Keychain services of its client secret and token record."""
+
+    name: str
+    kind: AppKind
+    table: str
+    client_id: str
+    secret_service: str
+    token_service: str
+    user_id: str
+    renewal: str = "transport"
+
+    @property
+    def scopes(self) -> str:
+        return SCOPES[self.kind]
+
+    @property
+    def service(self) -> str:
+        """The Keychain service of what its calls send: its token record's."""
+        return self.token_service
 
 
 @dataclass(frozen=True)
@@ -60,14 +105,15 @@ class LinearSettings:
     team: str
     states: Mapping[str, str]
     human_members: tuple[str, ...]
-    harness_key: str
-    manager_key: str
+    harness: LinearApp
+    # unset keys are ""; calls take it from config.manager_app
+    manager: LinearApp
     task_label_group: str
     task_labels: Mapping[str, str]
     agent_label_group: str
     agent_labels: Mapping[str, str]
     project_repos: Mapping[str, str]
-    roles: Mapping[str, LinearRole]
+    roles: Mapping[str, LinearApp]
 
 
 @dataclass(frozen=True)
@@ -122,7 +168,7 @@ class Config:
 
 
 @dataclass(frozen=True)
-class Accounts:
+class Writers:
     """A run's write-back side of its tracker: tracker writes as the run's role, harness posts the
     session comment; states: each State's value as Tracker.move returns it; humans: who In Review
     notifies (lowercase); repos: project → owner/name."""
@@ -136,9 +182,7 @@ class Accounts:
 
 @dataclass(frozen=True)
 class Claim:
-    """A run's claim context as its sid's runs.jsonl start row recorded it; `key`: the role's
-    Keychain service then, its write-back's Linear account (None: a tracker without accounts).
-    """
+    """The run's start context; role selects its current configured write-back identity."""
 
     issue: str
     sid: str
@@ -146,7 +190,6 @@ class Claim:
     uuid: str
     project: str | None
     target: tuple[str, str] | None
-    key: str | None
     client: str
     delegate_kind: str
 
@@ -158,10 +201,12 @@ class Wiring:
 
     connect: Connect  # the router's board
     reader: Callable[[Any, Config], Tracker]  # a run's issue read and Related-work search
-    accounts: Callable[[Any, Config, str | None], Accounts]  # a role key's write-back accounts
-    claimed: Callable[[Any, Config, Claim], Accounts]
-    key: Callable[[Config, str], str | None]  # a role's account key; None: none to check
+    writers: Callable[[Any, Config, LinearApp | None], Writers]  # write-back writers
+    claimed: Callable[[Any, Config, Claim], Writers]
+    identity: Callable[[Config, str], LinearApp | None]  # a role's; None: none to check
     board: Callable[[Any, Config], Callable[[Any], Tracker]]
+    # (cfg, src, *, dry): command src's token renewal policy; dry: show each app's token, renew none
+    credentials: Callable[..., None]
 
 
 class State(StrEnum):
@@ -274,7 +319,12 @@ class LinearError(Exception):
 
 
 class KeychainError(LinearError):
-    """The harness_key Keychain item holds no usable key."""
+    """A Keychain item, or an app's token renewal, left no usable credential; identity: the app's
+    name when it is an app's."""
+
+    def __init__(self, msg: str, identity: str | None = None):
+        super().__init__(msg)
+        self.identity = identity
 
 
 class GraphQLErrors(LinearError):
@@ -384,13 +434,14 @@ class Target:
     ref: str = ""  # a checked Ref: line's branch or tag
 
 
+KEYCHAIN_NAME = re.compile(r"[A-Za-z0-9._@+][A-Za-z0-9._@+-]*")  # safe on a security -i line
 UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
 @dataclass(frozen=True, kw_only=True)
 class Spec:
     """A run the router claimed or resumes: its issue's identity, its role (the tracker's for its
-    assignee), its session and client."""
+    owner: Linear's delegate, a local board's assignee), its session and client."""
 
     uuid: str
     issue: str
@@ -423,9 +474,11 @@ class Spec:
             return f"bad issue or session id: {self.issue} {self.sid}"
         return None
 
-    def role_error(self, role: str | None, tasks: tuple[str, ...]) -> str | None:
+    def role_error(
+        self, role: str | None, tasks: tuple[str, ...], tracker: TrackerKind
+    ) -> str | None:
         if role is None:
-            return "not assigned to a role"
+            return UNOWNED[tracker]
         if self.task is not None and self.task not in tasks:
             return f"task {self.task!r} is not one of {role}'s tasks ({', '.join(tasks)})"
         return None
