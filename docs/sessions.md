@@ -195,7 +195,18 @@ A commander can run in OpenCode 1.x (checked against 1.19.3). Install ensemble i
 {"plugin": ["ensemble@git+https://github.com/windroc-labs/ensemble.git#v<version>"]}
 ```
 
-OpenCode installs that tag once, into `${XDG_CACHE_HOME:-~/.cache}/opencode/packages/<spec>/node_modules/ensemble`, and never refreshes the same spec: to update, set the new release's `#v<version>`, restart OpenCode, and delete the old spec's directory. A checkout instead: `"plugin": ["file://<checkout>/.opencode-plugin/ensemble.js"]`. `opencode plugin` installs npm packages only. `ctmux --install`'s commands find the installed copy ([Install](../README.md#install)); start `opencode` in the `ctmux` shell, then run `/ensemble:manage`.
+OpenCode installs that tag once, into `${XDG_CACHE_HOME:-~/.cache}/opencode/packages/<spec>/node_modules/ensemble`, and never refreshes the same spec. A checkout instead: `"plugin": ["file://<checkout>/.opencode-plugin/ensemble.js"]`. `opencode plugin` installs npm packages only. Installed commands keep their selected plugin path ([Install](../README.md#install)); start `opencode` in the `ctmux` shell, then run `/ensemble:manage`.
+
+For a manual release upgrade:
+
+```mermaid
+flowchart LR
+    T[Set new #v&lt;version&gt;] --> R[Restart OpenCode]
+    R --> S[Refresh command selection]
+    S --> D[Delete old spec directory]
+```
+
+Refresh command selection by rerunning the installer or the new plugin's `skills/manage/scripts/ctmux --install`; older refs require the installer ([Upgrading](upgrading.md)).
 
 The plugin adds:
 
