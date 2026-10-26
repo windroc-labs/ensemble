@@ -167,7 +167,7 @@ class Config:
 
 
 @dataclass(frozen=True)
-class Accounts:
+class Writers:
     """A run's write-back side of its tracker: tracker writes as the run's role, harness posts the
     session comment; states: each State's value as Tracker.move returns it; humans: who In Review
     notifies (lowercase); repos: project → owner/name."""
@@ -200,8 +200,8 @@ class Wiring:
 
     connect: Connect  # the router's board
     reader: Callable[[Any, Config], Tracker]  # a run's issue read and Related-work search
-    accounts: Callable[[Any, Config, LinearApp | None], Accounts]  # write-back accounts
-    claimed: Callable[[Any, Config, Claim], Accounts]
+    writers: Callable[[Any, Config, LinearApp | None], Writers]  # write-back writers
+    claimed: Callable[[Any, Config, Claim], Writers]
     identity: Callable[[Config, str], LinearApp | None]  # a role's; None: none to check
     board: Callable[[Any, Config], Callable[[Any], Tracker]]
     # (cfg, src, *, dry): command src's token renewal policy; dry: show each app's token, renew none

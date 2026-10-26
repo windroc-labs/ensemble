@@ -60,21 +60,21 @@ class Wirings(run_fixtures.Base):
         linear = cli.TRACKERS[TrackerKind.LINEAR]
         identity = linear.identity(cfg, "engineer")
         self.assertEqual(identity, cfg.linear.roles["engineer"])
-        accounts = linear.accounts(gql, cfg, identity)
+        writers = linear.writers(gql, cfg, identity)
         self.assertEqual(
-            (accounts.states, accounts.humans, accounts.repos),
+            (writers.states, writers.humans, writers.repos),
             (cfg.linear.states, ("me@x.com",), {run_fixtures.PROJECT: "acme/ensemble"}),
         )
         self.assertEqual(
-            (accounts.tracker.state_ids, accounts.tracker.team_id),
+            (writers.tracker.state_ids, writers.tracker.team_id),
             (cfg.linear.states, cfg.linear.team),
         )
         gql.return_value = {"comment": None}
-        accounts.tracker.find_comment(ISSUE, (SID, "start"))
+        writers.tracker.find_comment(ISSUE, (SID, "start"))
         gql.assert_called_with(
             ops.Q_COMMENT, identity=identity, c=ops.client_id(identity.user_id, SID, "start")
         )
-        accounts.harness.find_comment(ISSUE, (SID, "session"))
+        writers.harness.find_comment(ISSUE, (SID, "session"))
         gql.assert_called_with(
             ops.Q_COMMENT,
             identity=HARNESS_IDENTITY,
@@ -141,15 +141,13 @@ class Wirings(run_fixtures.Base):
         cfg = replace(config.load(), tracker=TrackerKind.LOCAL, linear=None, board=board)
         local = cli.TRACKERS[TrackerKind.LOCAL]
         self.assertIsNone(local.identity(cfg, "engineer"))
-        accounts = local.accounts(None, cfg, None)
-        self.assertIs(accounts.tracker, accounts.harness)
-        self.assertIsInstance(accounts.tracker, LocalTracker)
-        self.assertEqual(accounts.tracker.board, board)
+        writers = local.writers(None, cfg, None)
+        self.assertIs(writers.tracker, writers.harness)
+        self.assertIsInstance(writers.tracker, LocalTracker)
+        self.assertEqual(writers.tracker.board, board)
+        self.assertEqual((writers.humans, writers.repos, set(writers.states)), ((), {}, set(State)))
         self.assertEqual(
-            (accounts.humans, accounts.repos, set(accounts.states)), ((), {}, set(State))
-        )
-        self.assertEqual(
-            (accounts.states["in_progress"], accounts.states["handoff"]), ("running", "approved")
+            (writers.states["in_progress"], writers.states["handoff"]), ("running", "approved")
         )
         for made in (local.connect(None, cfg, say=None), local.reader(None, cfg)):
             self.assertIsInstance(made, LocalTracker)

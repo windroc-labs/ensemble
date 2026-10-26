@@ -30,8 +30,8 @@ Arguments and options:
 Prerequisites and effects:
   Requires configured roles and board (Linear: [linear], the [linear.harness]
   OAuth app, whose token a run renews when under 5 days are left (--dry-run
-  never; it logs the days left), role Keychain keys and access) and the
-  selected Delegate/client executable. See
+  never; it logs the days left), each role app's Keychain secret and token items
+  and access) and the selected Delegate/client executable. See
   ensemble-orchestrator --help for configuration, executable lookup and Record schema.
   Execution can claim/move issues, post comments or write back ended outcomes.
   A launch prepares input, records a runs.jsonl row and detaches a LinearRun;
@@ -136,7 +136,7 @@ from ensemble.orchestrator.engine.types import (
     Unavailable,
     Wiring,
 )
-from ensemble.orchestrator.trackers.linear.client import has_key, linear_gql
+from ensemble.orchestrator.trackers.linear.client import has_token, linear_gql
 from ensemble.utils import (
     CLIENT_ENV,
     EVENTS_ENV,
@@ -418,7 +418,7 @@ class Board:
                 ident,
                 sid,
                 outcome,
-                accounts=functools.partial(self.wiring.claimed, self.gql, self.cfg),
+                writers=functools.partial(self.wiring.claimed, self.gql, self.cfg),
                 dry=self.dry,
             )
         except (ConfigError, ValueError) as error:
@@ -798,15 +798,15 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
     except writeback.ERRORS as e:
         return fail(a.issue, "transient", f"issue read: {one_line(e)}", 3)
     a = replace(a, uuid=issue.id)
-    accounts = wiring.accounts(gql, cfg, identity)
-    ctx = writeback.for_run(cfg, role, a, accounts)
+    writers = wiring.writers(gql, cfg, identity)
+    ctx = writeback.for_run(cfg, role, a, writers)
     workdir = cfg.issue_workdir(a.issue)
     delegate_cls = LinearRun.kind_cls(cfg, kind)
     if build:
         try:
             repo = target.check(
                 issue,
-                accounts.repos,
+                writers.repos,
                 run=run,
                 delegate=delegate_cls,
                 workdir=workdir,
@@ -829,7 +829,7 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
             (cfg.repo_host(name) for name in cfg.roles if config.TASKS[name].input == "build"),
             cfg.docs.host,
         )
-        repo = target.research_repo(issue, accounts.repos, host=host)
+        repo = target.research_repo(issue, writers.repos, host=host)
     slug = f"{repo.owner}/{repo.name}" if build and repo else None
     if repo is not None:
         repo = target.with_clone(
@@ -1236,7 +1236,7 @@ def main(
 ):
     gql = gql or linear_gql
     run = run or config.shell
-    keychain = keychain or has_key
+    keychain = keychain or has_token
     if argv in (["--help"], ["-h"]):
         print(_help_text())
         return 0

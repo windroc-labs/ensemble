@@ -385,8 +385,8 @@ def _load_config(cfg, local, board):
     linear = cfg.setdefault("linear", {})
     if not isinstance(linear, dict):
         raise ConfigError("orchestrator/config.toml: [linear] must be a table")
-    accounts = linear.setdefault("roles", {})
-    if not isinstance(accounts, dict):
+    role_tables = linear.setdefault("roles", {})
+    if not isinstance(role_tables, dict):
         raise ConfigError("orchestrator/config.toml: [linear.roles] must be a table")
     roles = _stage_roles(cfg, linear)
     if extra := sorted(set(cfg) - TOP_KEYS):

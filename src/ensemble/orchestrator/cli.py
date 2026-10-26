@@ -25,10 +25,10 @@ from ensemble.orchestrator.engine.linear_run import LinearRun
 from ensemble.orchestrator.engine.types import (
     MOVES,
     UUID_RE,
-    Accounts,
     ConfigError,
     TrackerKind,
     Wiring,
+    Writers,
 )
 from ensemble.orchestrator.issue import command as issue_command
 from ensemble.orchestrator.trackers.linear import client, ops
@@ -312,10 +312,10 @@ def _linear_reader(gql, cfg):
     return LinearTracker.reader(gql, cfg.linear)
 
 
-def _linear_accounts(gql, cfg, identity):
+def _linear_writers(gql, cfg, identity):
     """identity's tracker and the harness's, for the session comment."""
     linear = cfg.linear
-    return Accounts(
+    return Writers(
         LinearTracker(
             gql,
             states=linear.states,
@@ -336,7 +336,7 @@ def _linear_claimed(gql, cfg, claim):
         raise ConfigError(
             f"{claim.issue}: session {claim.sid}'s role {claim.role!r} has no configured Linear app"
         )
-    return _linear_accounts(gql, cfg, _linear_identity(cfg, claim.role))
+    return _linear_writers(gql, cfg, _linear_identity(cfg, claim.role))
 
 
 def _linear_identity(cfg, role):
@@ -344,7 +344,7 @@ def _linear_identity(cfg, role):
 
 
 def _linear_board_factory(gql, cfg):
-    """The team and role accounts read once, in one request; each tracker calls its transport as
+    """The team read once, in one request; each tracker calls its transport as
     linear.harness."""
     linear = cfg.linear
     team, roles = ops.team_and_roles(partial(gql, identity=linear.harness), linear)
@@ -382,17 +382,17 @@ def _local_board_factory(transport, cfg):
     return lambda _: LocalTracker(cfg.board, cfg.roles, prefix=cfg.local_prefix)
 
 
-def _local_accounts(transport, cfg, identity):
+def _local_writers(transport, cfg, identity):
     """One board writes everything; it notifies no one and maps no project repos."""
     del identity
     board = _local_board(transport, cfg)
-    return Accounts(board, board, {s: LOCAL_STATES[MOVES[s]].value for s in MOVES}, (), {})
+    return Writers(board, board, {s: LOCAL_STATES[MOVES[s]].value for s in MOVES}, (), {})
 
 
 def _local_claimed(transport, cfg, claim):
     """A local board's row: its issue id as the uuid."""
     _start_row(claim, "uuid", claim.uuid == claim.issue)
-    return _local_accounts(transport, cfg, None)
+    return _local_writers(transport, cfg, None)
 
 
 def _start_row(claim, field, valid):
@@ -407,7 +407,7 @@ TRACKERS = MappingProxyType(
         TrackerKind.LINEAR: Wiring(
             connect=LinearTracker.connect,
             reader=_linear_reader,
-            accounts=_linear_accounts,
+            writers=_linear_writers,
             claimed=_linear_claimed,
             identity=_linear_identity,
             board=_linear_board_factory,
@@ -416,7 +416,7 @@ TRACKERS = MappingProxyType(
         TrackerKind.LOCAL: Wiring(
             connect=_local_board,
             reader=_local_board,
-            accounts=_local_accounts,
+            writers=_local_writers,
             claimed=_local_claimed,
             identity=lambda *_: None,
             board=_local_board_factory,
@@ -444,8 +444,8 @@ def _writeback(cfg, issue, workdir):
         if len(lines) != 1:
             raise ValueError(f"want one DelegateEvent line on stdin, got {len(lines)}")
         event = DelegateEvent.parse(lines[0])
-        accounts = partial(TRACKERS[cfg.tracker].claimed, client.linear_gql, cfg)
-        return 0 if writeback.deliver(cfg, issue, workdir, event, accounts=accounts) else 1
+        writers = partial(TRACKERS[cfg.tracker].claimed, client.linear_gql, cfg)
+        return 0 if writeback.deliver(cfg, issue, workdir, event, writers=writers) else 1
     except (ValueError, ConfigError) as error:
         print(f"ensemble-orchestrator writeback: {error}", file=sys.stderr)
         _refused(issue, error)

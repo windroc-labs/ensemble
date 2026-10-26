@@ -209,7 +209,7 @@ BOTH_DIRECTIONS = (
 class Note:
     body: str
     at: str
-    account: str | None
+    author: str | None
     name: str | None
     origin: Origin
 

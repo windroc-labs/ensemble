@@ -5165,7 +5165,7 @@ class RoleAppTokens(TickBase):
             }
         )
         self.endpoint = Endpoint(token_http_error(401))
-        self.keychain = client.has_key
+        self.keychain = client.has_token
         self.enterContext(mock.patch("subprocess.run", self.items))
         self.enterContext(mock.patch("urllib.request.urlopen", self.endpoint))
 
