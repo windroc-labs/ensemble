@@ -3375,6 +3375,19 @@ class ListTest(Base):
         self.listed("w")
         self.assertEqual([row.name for row in self.host._capacity_rows()], ["w"])
 
+    def test_admission_inventory_counts_a_container_removed_before_its_row_as_dead(self):
+        self.listed("w")
+        self.record()
+
+        def removed(_argv):
+            self.docker.ps.clear()
+            return done(1, "", f"Error response from daemon: No such container: {CONTAINER}")
+
+        self.docker.replies = {("tmux", "-u", "list-sessions"): removed}
+        (row,) = self.host._capacity_rows()
+        self.assertEqual((row.name, row.client, row.state), ("w", "agent", StatusState.DEAD))
+        self.assertEqual(self.host.list(), [])
+
     def test_list_and_rows_from_labelled_containers(self):
         self.listed("w", "v")
         self.docker.ps += [
