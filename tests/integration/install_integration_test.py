@@ -2276,7 +2276,8 @@ class InstallTest(Case):
         self.assertEqual(self.state()["opencode_plugin_commit"], OLD)
         result = self.opencode_rerun()
         self.assert_ok(result)
-        self.assertIn("> [ ] Claude Code", result.tty)
+        self.assertNotRegex(result.tty, MENU_Q)
+        self.assertEqual((self.state()["clients"], self.state()["docker"]), ("opencode", "no"))
         self.assertNotIn("opencode plugin", "\n".join(self.calls()))
         self.assertIn(f"==> OpenCode plugin\n    skip: {SPEC} at {OLD[:12]}\n", result.stderr)
 
