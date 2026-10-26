@@ -1,5 +1,6 @@
 """GUARD: git options disabling fsmonitor and hooks; git: retries lock failures; common_dir: a
-worktree's clone. Repository specs, origin URLs and checkout paths identify and locate repos.
+worktree's clone. Repository specs, origin URLs and checkout paths identify and locate repos;
+check_ref vets branch and tag names.
 """
 
 import os
@@ -85,6 +86,8 @@ URL = re.compile(
     r"(?:(https?|ssh)://(?:[^@/\s]+@)?|[^@/:\s]+@)([^/:\s]+)(?::(\d{1,5}))?[:/]([^/\s]+)/([^/\s]+?)(?:\.git)?/?"
 )
 SLUG = re.compile(r"[A-Za-z0-9._-]{1,100}")
+REF_CHARS = re.compile(r"[A-Za-z0-9._/-]+")
+SHA = re.compile(r"[0-9a-fA-F]{7,64}")
 
 
 def repo_slug(value) -> tuple[str, str] | None:
@@ -159,6 +162,33 @@ def check_slug(slug: str | None, branch: str = "") -> str:
     if not SLUG.fullmatch(slug):
         raise Invalid(f"unsafe checkout name {slug[:80]!r}")
     return slug
+
+
+def check_ref(ref: str) -> str:
+    """ref when it names a branch or tag (WDRC-109 FR-52), else Invalid."""
+    if not ref:
+        why = "empty"
+    elif len(ref) > 255:
+        why = "longer than 255 characters"
+    elif not REF_CHARS.fullmatch(ref):
+        why = "want letters, digits, ., _, / or -"
+    elif ref.startswith("-"):
+        why = "starts with -"
+    elif ref == "HEAD" or ref.startswith("refs/"):
+        why = "want a branch or tag name, not a full ref"
+    elif SHA.fullmatch(ref):
+        why = "looks like a commit SHA"
+    elif (
+        ".." in ref
+        or ref.endswith(".")
+        or any(
+            not part or part.startswith(".") or part.endswith(".lock") for part in ref.split("/")
+        )
+    ):
+        why = "not a valid git ref name"
+    else:
+        return ref
+    raise Invalid(f"unsafe ref {ref[:80]!r}: {why}")
 
 
 def checkout(base: str, owner: str, name: str, slug: str) -> str:

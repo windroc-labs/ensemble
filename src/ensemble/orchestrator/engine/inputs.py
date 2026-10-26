@@ -368,6 +368,7 @@ def _build(issue, sources, target, docs):
         _repo(target),
         _checkout(issue),
         f"Branch: {target.branch}",
+        *([f"Ref: {target.ref}"] if target.ref else []),
         "Links: " + ", ".join([issue.url, *([prd.url] if prd else [])]),
     ]
     return _join(

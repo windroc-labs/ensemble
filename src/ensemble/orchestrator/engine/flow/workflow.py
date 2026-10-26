@@ -68,6 +68,9 @@ def stage(table: Mapping, at: str = "stage") -> Stage:
                 raise ValueError(f"{at}: {key}: want one of {', '.join(want)}: {value!r}")
         elif type(value) is not want:
             raise ValueError(f"{at}: {key}: want a {want.__name__}: {value!r}")
+    for key in ("ref", "mapped_only"):
+        if table.get(key) and table["input"] != "build":
+            raise ValueError(f'{at}: {key}: only for input = "build"')
     return Stage(**{**_defaults(role), **table})
 
 
@@ -86,6 +89,8 @@ def _defaults(role):
         "files": False,
         "deliverable": False,
         "hint": "",
+        "ref": False,
+        "mapped_only": False,
     }
 
 
