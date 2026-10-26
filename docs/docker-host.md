@@ -203,6 +203,12 @@ both and writes the App's slug to `github.app`.
 The full form is `build --ensemble DIR [--base-image IMAGE] [--plugin SOURCE]... [--image-plugin NAME]... [--max-age
 SECONDS]`, in that order.
 
+The caller's umask does not affect ensemble image content or its key: staged package directories and executables
+use `0755`, other package files `0644`. The staging root stays private; the user's worker definition keeps its source
+modes. Before bootstrap and credential injection, start checks `/opt/ensemble` as `agent`, including symlink targets.
+Unreadable content fails `start_failed` with `Image content under /opt/ensemble is unreadable by agent; rebuild with
+ensemble-broker build.` Upgrade the broker and rebuild an affected older image before starting it again.
+
 A changed Dockerfile or ensemble version gives a new key. No build log shows a secret. Rebuilds skip Docker's cache.
 A build that must rebuild first looks up each client's npm `latest` and installs exactly those versions, recorded in
 the image's `ensemble.claude-version`, `ensemble.codex-version` and `ensemble.opencode-version` labels; if the lookup

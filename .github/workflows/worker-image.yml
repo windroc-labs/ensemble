@@ -85,10 +85,43 @@ jobs:
           mapfile -t plugins < <(python3 -c 'import tomllib; print(*tomllib.load(open("src/ensemble/session/config.toml", "rb"))["hosts"]["docker"]["plugins"], sep="\n")')
           args=()
           for plugin in "${plugins[@]}"; do args+=(--plugin "$plugin"); done
+          umask 077
           "$RUNNER_TEMP/ensemble-broker" build --ensemble "$GITHUB_WORKSPACE" "${args[@]}" > "$RUNNER_TEMP/build.json"
           cat "$RUNNER_TEMP/build.json"
           image=$(jq -er 'select(.rebuilt == true) | .image' "$RUNNER_TEMP/build.json")
           echo "image=$image" >> "$GITHUB_OUTPUT"
+          umask 022
+          "$RUNNER_TEMP/ensemble-broker" build --ensemble "$GITHUB_WORKSPACE" "${args[@]}" > "$RUNNER_TEMP/reused.json"
+          jq -e --arg image "$image" '.image == $image and .rebuilt == false' "$RUNNER_TEMP/reused.json"
+      - name: Check image content readability as agent
+        if: ${{ steps.inputs.outputs.build != 'false' }}
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+        run: |
+          docker run --rm -i --network none --cap-drop ALL --security-opt no-new-privileges "$IMAGE" /bin/sh -s < src/broker/internal/launcher/checks/image-content-check
+      - name: Check unreadable content fixtures are rejected
+        if: ${{ steps.inputs.outputs.build != 'false' }}
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+        run: |
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/src/broker/internal/launcher/checks/image-content-check,target=/tmp/image-content-check,readonly" "$IMAGE" sh -euc '
+            fixture=$(mktemp -d)
+            trap '\''chmod -R u+rwX "$fixture"; rm -rf "$fixture"'\'' EXIT
+            mkdir "$fixture/content" "$fixture/private"
+            printf "fixture data\n" > "$fixture/content/file"
+            sh /tmp/image-content-check "$fixture/content"
+            chmod 000 "$fixture/content/file"
+            if sh /tmp/image-content-check "$fixture/content"; then exit 1; fi
+            chmod 644 "$fixture/content/file"
+            chmod 600 "$fixture/content"
+            if sh /tmp/image-content-check "$fixture/content"; then exit 1; fi
+            chmod 755 "$fixture/content"
+            printf "fixture data\n" > "$fixture/private/file"
+            chmod 000 "$fixture/private/file"
+            ln -s "$fixture/private/file" "$fixture/content/link"
+            if sh /tmp/image-content-check "$fixture/content"; then exit 1; fi
+            if sh /tmp/image-content-check "$fixture/absent"; then exit 1; fi'
       - name: Check image labels
         if: ${{ steps.inputs.outputs.build != 'false' }}
         env:
@@ -159,6 +192,15 @@ jobs:
             test "$(command -v python3)" = /opt/ensemble/bin/python3
             python3 -c "import ensemble.delegate"
             python3 -P /opt/ensemble/team/tools/repo.py --help
+            relay serve 0123456789abcdef0123456789abcdef &
+            relay_pid=$!
+            for attempt in $(seq 1 50); do
+              if test -S /run/ensemble/relay.sock; then break; fi
+              sleep 0.1
+            done
+            test -S /run/ensemble/relay.sock
+            kill "$relay_pid"
+            wait "$relay_pid" || test "$?" = 143
             plugin=/opt/ensemble/plugins/updraft
             test "$CLAUDE_CODE_PLUGIN_DIRS" = "$plugin"
             test "$(stat -c %u:%g "$plugin" "$plugin/skills/light-build/SKILL.md" | sort -u)" = 0:0
@@ -209,10 +251,15 @@ jobs:
           # Not the build's ensemble-user stage: it carries the reserved ensemble.key label.
           docker build --tag ci-worker:definition src/broker/worker
           docker build --build-arg BASE=ci-worker:definition --tag ci-base:ok .github/worker_base
+          umask 077
           "$RUNNER_TEMP/ensemble-broker" build --ensemble "$GITHUB_WORKSPACE" --base-image ci-base:ok --image-plugin dummy-plugin > "$RUNNER_TEMP/base.json"
           cat "$RUNNER_TEMP/base.json"
           image=$(jq -er 'select(.rebuilt == true) | .image' "$RUNNER_TEMP/base.json")
           echo "image=$image" >> "$GITHUB_OUTPUT"
+          umask 022
+          "$RUNNER_TEMP/ensemble-broker" build --ensemble "$GITHUB_WORKSPACE" --base-image ci-base:ok --image-plugin dummy-plugin > "$RUNNER_TEMP/base-reused.json"
+          jq -e --arg image "$image" '.image == $image and .rebuilt == false' "$RUNNER_TEMP/base-reused.json"
+          docker run --rm -i --network none --cap-drop ALL --security-opt no-new-privileges "$image" /bin/sh -s < src/broker/internal/launcher/checks/image-content-check
       - name: Smoke-check the base image variant
         if: ${{ steps.inputs.outputs.build != 'false' }}
         env:
