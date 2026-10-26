@@ -1767,7 +1767,7 @@ class Events(RunCase):
             uuid=UUID,
             project="p1",
             target="acme/ensemble",
-            **{"key": "pre-app-engineer-key", **fields},
+            **fields,
         )
 
     def writers(self):

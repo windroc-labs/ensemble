@@ -546,7 +546,6 @@ def start(sid, **fields):
             "uuid": UUID,
             "project": "p1",
             "target": "acme/ensemble",
-            "key": "ensemble-engineer",
         }
         | fields
     )
@@ -556,7 +555,6 @@ class ClaimOf(Case):
     def test_claim_ignores_old_credentials_and_needs_none(self):
         for fields in ({}, {"key": "pre-app-key"}, {"key": None}, {"key": 7}):
             row = json.loads(start(SID_A))
-            row.pop("key")
             row.update(fields)
             before = json.dumps(row)
             self.write([before])
@@ -570,8 +568,8 @@ class ClaimOf(Case):
         self.write(
             [
                 start(SID_A),
-                start(SID_B, role="researcher", key="ensemble-researcher", target=None),
-                json.dumps({**json.loads(start(SID_A)), "kind": "resume", "key": "changed"}),
+                start(SID_B, role="researcher", target=None),
+                json.dumps({**json.loads(start(SID_A)), "kind": "resume", "target": "acme/other"}),
             ]
         )
         self.assertEqual(
@@ -596,7 +594,7 @@ class ClaimOf(Case):
         self.assertEqual((found.project, found.target), (None, None))
 
     def test_a_local_boards_start_row_has_its_issue_id_and_no_key(self):
-        self.write([start(SID_A, uuid="LOC-1", key=None)])
+        self.write([start(SID_A, uuid="LOC-1")])
         found = runs.claim(self.log, "TASK-1", SID_A)
         self.assertEqual(found.uuid, "LOC-1")
 
