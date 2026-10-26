@@ -489,7 +489,7 @@ A failed WDRC-67 before-cutover check stops the cutover; report it to the user.
 ## Risks
 
 - **Three-way readers** of handed-out credentials: accepted by the user on 2026-10-18; the broker is unchanged.
-- The Linear app items (client secrets and tokens) trust `/usr/bin/security`: any process running as the user reads them without a dialog.
+- Transport-owned Linear client secrets and published access tokens trust `/usr/bin/security`: any process running as the user reads them without a dialog. Enrolled client secrets trust only the broker; published access tokens trust both the broker and `/usr/bin/security` ([Keychain items](#keychain-items)).
 - Each broker release changes its ad-hoc code identity: rerun `login claude`, each `login claude <name>`,
   `login github ensemble-bot`, `login codex`, each `login opencode <name>` and each `login env <name>`
   ([Log in](docker-host.md#log-in)).

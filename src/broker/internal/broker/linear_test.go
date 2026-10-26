@@ -635,7 +635,7 @@ func TestLinearReenrollmentNeverAdoptsPermissiveMetadata(t *testing.T) {
 }
 
 func TestLinearOAuthFailuresKeepDurableCurrentMaterial(t *testing.T) {
-	cases := map[string]string{"malformed": "{", "object": "[]", "missing": `{}`, "unclean": `{"access_token":"bad\nvalue","expires_in":60}`, "root echo": `{"access_token":"ROOT-SENTINEL","expires_in":60}`, "zero": `{"access_token":"NEW","expires_in":0}`, "negative": `{"access_token":"NEW","expires_in":-1}`, "boolean": `{"access_token":"NEW","expires_in":true}`, "fraction": `{"access_token":"NEW","expires_in":1.5}`, "huge": `{"access_token":"NEW","expires_in":999999999999}`, "oversized": strings.Repeat("x", 65537), "transport": "", "status": ""}
+	cases := map[string]string{"malformed": "{", "object": "[]", "missing": `{}`, "unclean": `{"access_token":"bad\nvalue","expires_in":60}`, "root echo": `{"access_token":"ROOT-SENTINEL","expires_in":60}`, "zero": `{"access_token":"NEW","expires_in":0}`, "negative": `{"access_token":"NEW","expires_in":-1}`, "boolean": `{"access_token":"NEW","expires_in":true}`, "fraction": `{"access_token":"NEW","expires_in":1.5}`, "huge": `{"access_token":"NEW","expires_in":999999999999}`, "oversized": strings.Repeat("x", 65537), "transport": "", "status": `{"access_token":"NEW","expires_in":60}`}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
 			l, k, h, _ := linearRig(t)
