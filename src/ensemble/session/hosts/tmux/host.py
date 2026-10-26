@@ -39,7 +39,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.hosts.base import Host, InteractiveProcess, Process
 from ensemble.session.hosts.reclaimed import ReclaimedGroup
-from ensemble.session.hosts.tmux import hook
+from ensemble.session.hosts.tmux import hook, managed
 from ensemble.session.hosts.types import SessionView
 from ensemble.utils import CONFIG_NAME, Display, ProcessControl, Record, sid_error
 
@@ -221,6 +221,23 @@ class TmuxHost(Host):
 
     def attach_target(self, name: str) -> SessionView:
         return SessionView(_session(name))
+
+    def worker(
+        self,
+        name: str,
+        launch: Launch,
+        *,
+        terminal: bool,
+        display: Display = None,
+        events: str | None = None,
+        metadata: Mapping[str, str] | None = None,
+    ) -> InteractiveProcess:
+        return managed.start(
+            self, name, launch, terminal=terminal, display=display, events=events, metadata=metadata
+        )
+
+    def worker_liveness(self, name: str, generation: str) -> Liveness:
+        return managed.liveness(self.name, _session(name), generation)
 
     def detach(
         self,
