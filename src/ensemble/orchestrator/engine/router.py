@@ -44,7 +44,8 @@ Exit conditions:
   unknown run inventory; 2 when busy,
   already live or unclaimable; 0 if an ended outcome was written back. Otherwise
   launch result: 0 detached/bounced, 1 launch failure, 2 issue config error,
-  3 transient error. --dry-run: 0 for the plan; setup failures still apply.
+  3 transient error, 75 when its run is busy (a lock held): a new run back in
+  Ready, a resume left In Progress. --dry-run: 0 for the plan; setup failures still apply.
   A nonzero --issue (not --dry-run) also prints its orchestrator.jsonl lines about
   the issue that stderr did not show, e.g. router.py: pick-none TASK-1 reason=...
   ENSEMBLE_SID is read once and removed: new run identity, or must match a
@@ -105,14 +106,14 @@ from ensemble.orchestrator.engine.gate import BRAKE_5H, Gate, read_usage
 from ensemble.orchestrator.engine.linear_run import LinearRun
 from ensemble.orchestrator.engine.log import linear_error, log
 from ensemble.orchestrator.engine.runs import (
-    Entry,
     busy_rows,
-    cancelled,
+    cancelled_rows,
     client_of,
     delegate_of,
     failures,
     latest,
     note,
+    note_busy,
     parse_log,
     started_task,
     trim,
@@ -135,6 +136,7 @@ from ensemble.orchestrator.trackers.linear.client import has_key, linear_gql
 from ensemble.utils import (
     CLIENT_ENV,
     EVENTS_ENV,
+    EXIT_BUSY,
     SID_ENV,
     exhausted,
     nested_start,
@@ -156,6 +158,8 @@ USAGE = (
     "[--tui [--display D] [--events FILE]] | --brake ROLE"
 )
 FLAGS = {"--dry-run": "dry", "--tui": "tui"}
+# the Delegate's error for a run's environment on a Host without its default table (FR-57)
+ENVIRONMENT_ERROR = re.compile(r"\[environment\.[^\]\s]+\]")
 VALUED = {"--issue": "issue", "--display": "display", "--events": "events"}
 
 
@@ -185,8 +189,7 @@ def first_line_time(entries, sid):
 def attempt_count(entries, issue, since=None, busy=()):
     """entries' rows of issue after since, less those a busy row cancels."""
     counted = [e for e in entries if e.issue == issue and (since is None or e.ts > since)]
-    runs = [e for e in counted if isinstance(e, Entry)]
-    return len(counted) - sum(1 for e in runs if any(cancelled(b, e) for b in busy))
+    return len(counted) - cancelled_rows(busy, counted)
 
 
 def live_sessions(cfg, entries, *, say):
@@ -655,10 +658,10 @@ def begin(cfg, spec: Spec) -> Spec:
     return spec
 
 
-def record(cfg, spec: Spec, *, role, key, now, target=None) -> str:
+def record(cfg, spec: Spec, *, role, key, now, target=None) -> tuple[str, str]:
     """The run's runs.jsonl row, an attempt toward CAP: a start row holds the claim's context (issue
     uuid, project, target, the role's key), which its write-back reads, and its task, which picks
-    a resume's tier; returns its Delegate kind.
+    a resume's tier; returns its Delegate kind and the row's ts.
     """
     if spec.mode == "new":
         kind, claim = (
@@ -673,7 +676,7 @@ def record(cfg, spec: Spec, *, role, key, now, target=None) -> str:
         )
     else:
         kind, claim = delegate_of(parse_log(cfg.runs_log), spec.sid), {}
-    note(
+    ts = note(
         cfg.runs_log,
         "start" if spec.mode == "new" else "resume",
         issue=spec.issue,
@@ -684,7 +687,7 @@ def record(cfg, spec: Spec, *, role, key, now, target=None) -> str:
         now=now,
         **claim,
     )
-    return kind
+    return kind, ts
 
 
 def fail(ident, kind, reason, rc):
@@ -706,7 +709,8 @@ def outer(
     """Prepares the issue's input, then detaches its LinearRun, attended (tui mode) when given.
     Its runs.jsonl row, an attempt toward CAP, comes once Recover can read the run back: a resume's
     first, a new run's once its LinearRun (its Delegate's state) is built, before its detach; a new
-    run failing before then leaves a `failed` row, an attempt that Recover cannot read back.
+    run failing before then leaves a `failed` row, an attempt that Recover cannot read back, unless
+    it is busy (EXIT_BUSY).
     """
     rc = None
     try:
@@ -715,7 +719,11 @@ def outer(
         )
         return rc
     finally:
-        if a.mode == "new" and rc != 0 and a.sid not in {e.sid for e in parse_log(cfg.runs_log)}:
+        if (
+            a.mode == "new"
+            and rc not in (0, EXIT_BUSY)
+            and a.sid not in {e.sid for e in parse_log(cfg.runs_log)}
+        ):
             note(cfg.runs_log, "failed", issue=a.issue, sid=a.sid, now=now)
 
 
@@ -730,7 +738,11 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
     if role is None or reason:
         return fail(a.issue, "config-error", reason, 2)
     key = wiring.key(cfg, role)
-    kind = record(cfg, a, role=role, key=key, now=now) if a.mode == "resume" else cfg.delegate_kind
+    kind, resumed = (
+        record(cfg, a, role=role, key=key, now=now)
+        if a.mode == "resume"
+        else (cfg.delegate_kind, None)
+    )
     if key is not None and not keychain(key):
         return fail(a.issue, "config-error", f"no Keychain item for role key {key}", 2)
     if a.mode == "resume":
@@ -836,19 +848,42 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
                     else {}
                 ),
             )
+        except delegate.SessionBusy as busy:
+            return _busy(a, ctx, resumed, busy, now=now, runs=cfg.runs_log)
         except delegate.ConfigError as error:
-            if a.mode == "new" and a.client_source == "label":
+            label = a.mode == "new" and a.client_source == "label"
+            if label and not ENVIRONMENT_ERROR.search(str(error)):
                 return _label_client_error(a, ctx, error)
             raise
         if a.mode == "new":
             record(cfg, a, role=role, key=key, target=slug, now=now)
-        detached = linear_run.detach()
+        try:
+            detached = linear_run.detach()
+        except delegate.SessionBusy as busy:  # attended: its write-back handles it
+            log("router", "lock-busy", a.issue, error=one_line(busy))
+            return 1
     except (ConfigError, delegate.ConfigError, delegate.SessionError) as e:
         log("router", "launch-error", a.issue, error=one_line(e))
         return 1
     if attended:
         announce(a.issue, linear_run, detached)
     return 0
+
+
+def _busy(a, ctx, resumed, busy, *, now, runs):
+    """A run whose lock is held at construction: no attempt, no comment; a new run back to Ready, a
+    resume's row (resumed: its ts) cancelled.
+    """
+    note_busy(runs, issue=a.issue, sid=a.sid, cancels=resumed and ("resume", resumed), now=now)
+    log("router", "busy", a.issue, sid=a.sid, error=one_line(busy))
+    if a.mode == "new":
+        try:
+            left = ctx.tracker.move(ctx.issue_id, IssueState.READY, frm=IssueState.RUNNING)
+        except writeback.ERRORS as e:
+            return fail(a.issue, "transient", f"busy move: {one_line(e)}", EXIT_BUSY)
+        if left is not None:
+            log("router", "move-skip", a.issue, step="busy", state=left)
+    return EXIT_BUSY
 
 
 def _label_client_message(client, error, ready):
@@ -1051,7 +1086,8 @@ def tick(opts, cfg, gql, *, start, keychain, wiring, clock=datetime.now, launch_
             if spec is None or dry:
                 return 0
             walk.write()  # the outer logs past the walk
-            return start_run(start, begin(cfg, spec), walk)
+            start_run(start, begin(cfg, spec), walk)
+            return 0
 
 
 def run_issue(opts, cfg, gql, start, *, keychain, wiring, clock=datetime.now, launch_sid=None):
@@ -1311,6 +1347,7 @@ def _route(opts, cfg, launch_sid, *, trackers, now, gql, run, keychain, start, d
 
 
 def start_run(start, args, say):
+    """EXIT_BUSY when the run was busy, else 0."""
     try:
         result = start(args)
     except (Exception, SystemExit) as error:  # noqa: BLE001  # A recorded launch may fail.
@@ -1322,4 +1359,6 @@ def start_run(start, args, say):
         )
     else:
         say("launch", args.issue, exit=result)
+        if result == EXIT_BUSY:
+            return EXIT_BUSY
     return 0

@@ -255,6 +255,11 @@ def cancelled(busy: Busy, entry: Entry) -> bool:
     return (busy.issue, busy.sid, busy.cancels) == (entry.issue, entry.sid, (entry.kind, entry.ts))
 
 
+def cancelled_rows(busy, rows) -> int:
+    """How many of rows (Entries; other rows never count) a busy row cancels."""
+    return sum(1 for e in rows if isinstance(e, Entry) and any(cancelled(b, e) for b in busy))
+
+
 def failures(path):
     return [f for line in _lines(path) if (f := _failure(line))]
 

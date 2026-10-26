@@ -1295,11 +1295,17 @@ class AttendedEntry(OuterBase):
         self.api.detach_error = SessionBusy("dummy-lock", "ensemble-x-1 (owner x)")
         rc = self.entry("--issue", ID, "--tui", "--events", self.events)
         self.assertEqual((rc, self.out), (1, ""))
+        said = self.said()
         self.assertIn(
-            f"launch-error {ID} error=SessionBusy: "
+            f"lock-busy {ID} error=SessionBusy: "
             "busy: lock dummy-lock is held by ensemble-x-1 (owner x)",
-            self.said(),
+            said,
         )
+        self.assertFalse([line for line in said if line.startswith("launch-error")], said)
+        self.assertIn("ensemble-x-1 (owner x)", self.err)
+        self.assertEqual([e.kind for e in runs.parse_log(self.runs)], ["start"])
+        self.assertEqual((runs.busy_rows(self.runs), runs.failures(self.runs)), ([], []))
+        self.assertEqual(self.todo["state"], "In Progress")
 
     def test_a_resume_under_tui_is_attended_and_prints_its_record(self):
         self.todo["state"] = "In Progress"
@@ -3721,7 +3727,8 @@ class RunStartRecords(Base):
             )
             for mode, task in (("new", "light-research"), ("resume", None))
         ]
-        self.assertEqual(kinds, ["harness", "harness"])
+        written = datetime.fromisoformat(stamp).isoformat(timespec="seconds")
+        self.assertEqual(kinds, [("harness", written), ("harness", written)])
         common = (
             '"issue": "TASK-1", "sid": "s1", "role": "researcher", "client": "a", '
             '"delegate_kind": "harness"'
@@ -5833,3 +5840,104 @@ class StageKeyChecks(OuterBase):
                 self.assertEqual(
                     self.REF_REMOTE in [c[0][:3] for c in self.run_.calls], bool(header)
                 )
+
+
+HELD = SessionBusy("dummy-lock", "ensemble-x-1 (owner x)")
+NO_DEFAULT = "role engineer selects an environment, but Host tmux has no [environment.tmux]"
+
+
+class BusyLaunch(OuterBase):
+    """FR-51 router, FR-57 board half: a construction busy goes back without an attempt or comment;
+    an environment configuration error is only launch-error.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.todo = issue(ID, "Todo", "engineer")
+        self.todo["project"] = {"id": PROJECT, "name": "Ensemble"}
+        self.fake = ClaimLinear(self.todo, node(comments=[USER_NOTE]))
+        self.fake.ids[UUID] = ID
+
+    def entry(self, *argv):
+        outer = {"run": self.run_, "keychain": self.keychain}
+        return self.tick(self.fake, *argv, again=True, outer=outer)
+
+    def attempts(self):
+        tried = [*runs.parse_log(self.runs), *runs.failures(self.runs)]
+        return router.attempt_count(tried, ID, busy=runs.busy_rows(self.runs))
+
+    def test_a_busy_new_run_goes_back_to_ready_without_a_comment_or_attempt(self):
+        for argv, rc in ((("--issue", ID), router.EXIT_BUSY), ((), 0)):
+            with self.subTest(argv=argv):
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(self.runs)
+                self.lines, self.todo["state"], self.fake.mutations = [], "Todo", []
+                self.api.construct_error = HELD
+                self.assertEqual(self.entry(*argv), rc)
+                self.assertEqual(self.todo["state"], "Todo")
+                self.assertEqual(self.todo.get("comments", []), [])
+                self.assertEqual((runs.parse_log(self.runs), runs.failures(self.runs)), ([], []))
+                [busy] = runs.busy_rows(self.runs)
+                self.assertEqual((busy.issue, busy.cancels, busy.attempt), (ID, None, None))
+                self.assertEqual(self.attempts(), 0)
+                said = self.said()
+                self.assertTrue([line for line in said if line.startswith(f"busy {ID} ")], said)
+                self.assertFalse([line for line in said if line.startswith("launch-error")], said)
+                self.assertEqual(
+                    self.fake.mutations[-1], (ops.M_STATE, {"i": UUID, "s": IDS_BY_KEY["todo"]})
+                )
+
+    def test_a_busy_resume_cancels_its_resume_row_and_stays_in_progress(self):
+        self.todo["state"] = "In Progress"
+        self.resumable(ID, "s", 60, role="engineer")
+        self.api.construct_error = HELD
+        self.assertEqual(self.entry("--issue", ID), router.EXIT_BUSY)
+        self.assertEqual(self.todo["state"], "In Progress")
+        self.assertEqual(self.todo.get("comments", []), [])
+        start, resume = runs.parse_log(self.runs)
+        self.assertEqual((start.kind, resume.kind), ("start", "resume"))
+        [busy] = runs.busy_rows(self.runs)
+        self.assertEqual(
+            (busy.issue, busy.sid, busy.cancels, busy.attempt),
+            (ID, resume.sid, ("resume", resume.ts), None),
+        )
+        self.assertEqual((runs.failures(self.runs), self.attempts()), ([], 1))
+        self.assertEqual(self.fake.mutations, [])
+
+    def test_an_environment_config_error_is_only_a_launch_error(self):
+        for name, labels in (
+            ("default client", []),
+            ("label client", [label("selected", AGENT_B, AGENT_GROUP)]),
+        ):
+            with self.subTest(name):
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(self.runs)
+                self.write_config(AGENT_TOP + OUTER + AGENT_LABELS)
+                self.lines, self.todo["state"], self.todo["comments"] = [], "Todo", []
+                self.todo["labels"] = labels
+                self.api.construct_error = DelegateConfigError(NO_DEFAULT)
+                self.assertEqual(self.entry("--issue", ID), 1)
+                self.assertEqual((self.todo["state"], self.todo["comments"]), ("In Progress", []))
+                self.assertEqual((runs.parse_log(self.runs), runs.busy_rows(self.runs)), ([], []))
+                said = self.said()
+                self.assertTrue(
+                    [line for line in said if line.startswith(f"launch-error {ID} ")], said
+                )
+                self.assertIn("[environment.tmux]", "\n".join(said))
+
+    def test_a_label_client_config_error_still_comments(self):
+        self.write_config(AGENT_TOP + OUTER + AGENT_LABELS)
+        self.todo["labels"] = [label("selected", AGENT_B, AGENT_GROUP)]
+        self.api.construct_error = DelegateConfigError("b: not installed")
+        self.assertEqual(self.entry("--issue", ID), 1)
+        self.assertEqual(self.todo["state"], "In Review")
+        self.assertEqual(len(self.todo["comments"]), 1)
+
+    def test_an_environment_start_failure_writes_its_start_row(self):
+        self.assertEqual(self.entry("--issue", ID), 0)
+        self.assertEqual([e.kind for e in runs.parse_log(self.runs)], ["start"])
+        self.assertEqual((runs.busy_rows(self.runs), len(self.api.detached)), ([], 1))
+
+    def test_issue_mode_exits_75_when_busy(self):
+        self.assertEqual(router.EXIT_BUSY, 75)
+        self.assertIn("75 when its run is busy", router.__doc__)
