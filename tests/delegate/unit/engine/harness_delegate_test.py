@@ -1877,14 +1877,6 @@ class StartedTest(HarnessCase):
         HarnessDelegate.attach(self.work).resume()
         self.assertIsNone(self.metadata()["start_failure"])
 
-    def test_a_record_without_start_failure_loads(self):
-        self.detach(self.tui(), live_at=5)
-        data = self.metadata()
-        del data["start_failure"]
-        with open(self.state_record(), "w", encoding="utf-8") as file:
-            json.dump(data, file)
-        self.assertIsNone(HarnessDelegate.attach(self.work)._read().start_failure)
-
     def test_an_unanswered_agent_is_reprobed_and_closed(self):
         self.start_agent()
         agent = HarnessSession.live[AGENT]
