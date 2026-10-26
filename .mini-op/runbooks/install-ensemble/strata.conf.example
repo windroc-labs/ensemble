@@ -1,0 +1,6 @@
+# install-test's Strata OpenCode settings under OC=1: install.sh's --opencode-<key> <value>.
+# Copy to ~/.mini-op-local/ensemble/strata.conf on the mini and fill it in there, from the request
+# or the Strata host's settings; never commit the values.
+url=
+model=
+context=
