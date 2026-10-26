@@ -7,12 +7,6 @@ on:
     types: [checks_requested]
   pull_request:
     types: [opened, synchronize, reopened, edited]
-  workflow_dispatch:
-    inputs:
-      docs-base:
-        description: Full commit SHA before a docs-only change (empty runs full CI)
-        type: string
-        required: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -52,7 +46,7 @@ jobs:
         id: scope
         env:
           EVENT: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.inputs.docs-base }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python3 .github/ci_scope.py --event "$EVENT" --base "$BASE_SHA" --head "$HEAD_SHA" --github-output "$GITHUB_OUTPUT"
 
@@ -277,7 +271,7 @@ jobs:
           python3 -m coverage combine --rcfile=/dev/null --keep --data-file="$RUNNER_TEMP/coverage-data" "${files[@]}"
       - name: Diff coverage of changed src lines
         env:
-          BASE_REF: ${{ github.event.merge_group.base_sha || format('origin/{0}', github.base_ref || github.event.repository.default_branch) }}
+          BASE_REF: ${{ github.event.merge_group.base_sha || format('origin/{0}', github.base_ref) }}
         run: python3 .github/coverage_gate.py "$RUNNER_TEMP/coverage-data" "$BASE_REF"
       - name: Require unchanged checkout
         if: ${{ always() }}

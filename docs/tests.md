@@ -183,16 +183,6 @@ ordinary cancellation; the overall run can show cancelled while required `CI` is
 API errors, missing evidence and cancellation races fail closed. Fork PR tokens cannot
 cancel runs, so a queued macOS leg on a fork needs a rerun when runners are available.
 
-To measure docs-only behavior before merging CI changes, push a docs-only commit after
-the CI implementation, then dispatch this branch with `docs-base` set to the full SHA
-of that implementation. The manual run uses the same changed-path classifier and
-aggregate as a PR. Only a docs-only diff permits reduced scope; no base, code changes,
-checked docs or unknown paths run full CI. PR, push and merge-group scope stays unchanged.
-
-```bash
-gh workflow run test.yml --repo windroc-labs/ensemble --ref <branch> -f docs-base=<full-commit-sha>
-```
-
 ```bash
 python3 .github/ci_scope.py --event pull_request --paths skills/manage/SKILL.md
 python3 .github/ci_scope.py --event pull_request --paths src/ensemble/session/cli.py

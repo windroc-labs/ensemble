@@ -131,7 +131,7 @@ def classify(
         "projects": list(projects),
         "reason": "",
     }
-    if event not in ("pull_request", "workflow_dispatch"):
+    if event != "pull_request":
         return {**full, "reason": f"Event {event} requires every layer"}
     if not paths:
         return {**full, "reason": "Empty change list requires every layer"}
@@ -147,8 +147,6 @@ def classify(
             "projects": upper,
             "reason": "Docs-only changes",
         }
-    if event == "workflow_dispatch":
-        return {**full, "reason": "Manual runs require full scope unless the diff is docs-only"}
     if base and head and version_only(root, base, head, paths):
         # Lint design checks the versions agree; no test reads their value.
         return {
@@ -204,7 +202,7 @@ def gate(needs: dict, event: str) -> list[str]:
     if not isinstance(needs, dict):
         return ["CI_NEEDS must be an object containing all required jobs"]
     failures = []
-    if event not in ("pull_request", "push", "merge_group", "workflow_dispatch"):
+    if event not in ("pull_request", "push", "merge_group"):
         failures.append(f"Unsupported CI event: {event}")
     changes = needs.get("changes")
     output = changes.get("outputs") if isinstance(changes, dict) else None
@@ -218,8 +216,6 @@ def gate(needs: dict, event: str) -> list[str]:
         failures.append("changes.outputs.docs must be exactly true or false")
     if docs == "true" and full != "false":
         failures.append("changes.outputs.docs requires full false")
-    if event == "workflow_dispatch" and full == "false" and docs != "true":
-        failures.append("Manual runs permit reduced scope only for docs-only changes")
     broker = output.get("broker") if isinstance(output, dict) else None
     if broker not in ("true", "false") or not isinstance(broker, str):
         failures.append("changes.outputs.broker must be exactly true or false")
@@ -277,10 +273,7 @@ def main(argv=None, *, root=None) -> int:
         if args.paths is not None and (args.base or args.head):
             raise ValueError("Use --paths or --base and --head, not both")
         paths = args.paths
-        manual_diff = args.event == "workflow_dispatch" and bool(args.base)
-        if manual_diff and re.fullmatch(r"[0-9a-f]{40}", args.base) is None:
-            raise ValueError("Manual docs-base must be a full commit SHA")
-        if (args.event == "pull_request" or manual_diff) and paths is None:
+        if args.event == "pull_request" and paths is None:
             if not args.base or not args.head:
                 raise ValueError("Pull requests require --paths or both --base and --head")
             paths = changed_paths(root, args.base, args.head)
