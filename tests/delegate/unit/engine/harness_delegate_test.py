@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import signal
+from collections.abc import Callable
 from dataclasses import asdict, replace
 from types import SimpleNamespace
 from unittest import mock
@@ -45,6 +46,7 @@ from tests.delegate.fakes.harness_session import (
     FakeViewer,
     HarnessSession,
     RecordingHost,
+    RecordingProcess,
     ShowingHost,
     harness_launches,
 )
@@ -1701,3 +1703,193 @@ class SweepTest(HarnessCase):
         )
         HarnessSession.start(agent, host=state["host"])
         return HarnessDelegate.attach(self.work, session_cls=HarnessSession)
+
+
+AGENT = f"dummy-tester-{SID[:8]}"
+HARNESS = f"{AGENT}-drive"
+
+
+class EndingHost(RecordingHost):
+    """Its harness has ended by the time detach returns, after `ending` ran."""
+
+    ending: Callable[[], None] | None = None
+
+    def detach(self, name, launch, **kw):
+        process = super().detach(name, launch, **kw)
+        if self.ending is not None:
+            self.ending()
+        process.live = False
+        return process
+
+
+class StartedTest(HarnessCase):
+    """detach's wait for a tui run's agent session: TUI_START_TIMEOUT bounds it, its SessionError
+    names why, and a start it gives up on while the harness may live is saved before the close.
+    """
+
+    def setUp(self):
+        super().setUp()
+        RecordingHost.harness_starts_agent = False
+        self.now = 0.0
+
+    def tui(self, harness_host: str | RecordingHost = "harness"):
+        spec = Spec("input", self.work, mode="tui", client="fake", sid=SID)
+        return self.make(spec=spec, host="agent", harness_host=harness_host)
+
+    def start_agent(self):
+        HarnessSession.start(
+            SessionSpec(
+                workdir=self.home,
+                access=Access(cwd=self.home),
+                client="fake",
+                mode=Mode.TUI,
+                sid=SID,
+                name=AGENT,
+            ),
+            host="agent",
+        )
+
+    def detach(self, delegate, *, live_at=None):
+        """detach on a fake clock 5 s on per poll; the agent session goes live at `live_at` s."""
+
+        def sleep(_seconds):
+            self.now += 5
+            if live_at is not None and self.now >= live_at and AGENT not in HarnessSession.live:
+                self.start_agent()
+
+        with (
+            mock.patch("time.monotonic", side_effect=lambda: self.now),
+            mock.patch("time.sleep", side_effect=sleep),
+        ):
+            return delegate.detach()
+
+    def failed(self, delegate, **kw) -> str:
+        with self.assertRaises(SessionError) as caught:
+            self.detach(delegate, **kw)
+        return str(caught.exception)
+
+    def harness(self):
+        return RecordingHost.processes["harness", HARNESS]
+
+    def end_with(self, result):
+        """The stored run ended with `result`, as its harness records it."""
+        data = self.metadata()
+        data.update(completed=True, result=asdict(result))
+        with open(self.state_record(), "w", encoding="utf-8") as file:
+            json.dump(data, file)
+
+    def test_a_start_live_at_35_s_is_not_failed(self):
+        record = self.detach(self.tui(), live_at=35)
+        self.assertEqual(record.sessions, (HARNESS, AGENT))
+        self.assertTrue(self.harness().alive())
+        self.assertIsNone(self.metadata()["start_failure"])
+
+    def test_a_start_not_live_by_120_s_fails_and_closes_the_harness(self):
+        message = self.failed(self.tui())
+        self.assertEqual(message, f"tui session {AGENT} did not start in 120 s")
+        self.assertEqual(self.now, 120)
+        self.assertFalse(self.harness().alive())
+
+    def test_a_harness_ended_first_fails_at_once_naming_its_recorded_end(self):
+        host = EndingHost("harness")
+        host.ending = lambda: self.end_with(Result(1, None, "stopped: SessionError: no relay"))
+        message = self.failed(self.tui(harness_host=host))
+        self.assertEqual(
+            message,
+            f"tui session {AGENT} did not start: its harness ended: exit 1: "
+            "stopped: SessionError: no relay",
+        )
+        self.assertEqual(self.now, 0)
+        self.assertIsNone(self.metadata()["start_failure"])
+        self.assertEqual(self.metadata()["result"]["returncode"], 1)
+
+    def test_a_harness_ended_without_a_result_says_only_that_it_ended(self):
+        message = self.failed(self.tui(harness_host=EndingHost("harness")))
+        self.assertEqual(message, f"tui session {AGENT} did not start: its harness ended")
+        self.assertIsNone(self.metadata()["start_failure"])
+
+    def test_a_timeout_saves_its_cause_before_closing(self):
+        seen = []
+        close = RecordingProcess.close
+
+        def closing(process):
+            seen.append(self.metadata()["start_failure"])
+            close(process)
+
+        with mock.patch.object(RecordingProcess, "close", closing):
+            message = self.failed(self.tui())
+        self.assertEqual(seen, [message])
+        self.assertEqual(self.metadata()["start_failure"], message)
+
+    def test_a_host_error_is_the_cause(self):
+        alive = RecordingProcess.alive
+
+        def failing(process):
+            if self.now >= 10:
+                raise SessionError("tmux: no server")
+            return alive(process)
+
+        with mock.patch.object(RecordingProcess, "alive", failing):
+            message = self.failed(self.tui())
+        self.assertEqual(message, f"tui session {AGENT} did not start: tmux: no server")
+        self.assertEqual(self.metadata()["start_failure"], message)
+        self.assertEqual(self.harness().closed, 1)
+
+    def test_an_unsaved_start_failure_still_names_the_cause(self):
+        write = RunState.write
+
+        def refusing(store, payload):
+            if '"start_failure": "tui' in payload:
+                raise OSError("disk full")
+            write(store, payload)
+
+        with mock.patch.object(RunState, "write", refusing):
+            message = self.failed(self.tui())
+        self.assertEqual(message, f"tui session {AGENT} did not start in 120 s")
+        self.assertIsNone(self.metadata()["start_failure"])
+        self.assertFalse(self.harness().alive())
+
+    def test_a_new_launch_clears_the_start_failure(self):
+        self.failed(self.tui())
+        self.assertIsNotNone(self.metadata()["start_failure"])
+        RecordingHost.harness_starts_agent = True
+        HarnessDelegate.attach(self.work).resume()
+        self.assertIsNone(self.metadata()["start_failure"])
+
+    def test_a_record_without_start_failure_loads(self):
+        self.detach(self.tui(), live_at=5)
+        data = self.metadata()
+        del data["start_failure"]
+        with open(self.state_record(), "w", encoding="utf-8") as file:
+            json.dump(data, file)
+        self.assertIsNone(HarnessDelegate.attach(self.work)._read().start_failure)
+
+    def test_an_unanswered_agent_is_reprobed_and_closed(self):
+        self.start_agent()
+        agent = HarnessSession.live[AGENT]
+        attach = HarnessSession.attach
+
+        late = []
+
+        def probing(name, **kw):
+            late.extend([self.now] if self.now >= 120 else [])
+            if len(late) < 2:
+                raise Unanswered("docker ps: timed out")
+            return attach(name, **kw)
+
+        with mock.patch.object(HarnessSession, "attach", side_effect=probing):
+            message = self.failed(self.tui())
+        self.assertEqual(message, f"tui session {AGENT} did not start in 120 s")
+        self.assertEqual(len(late), 2)
+        self.assertFalse(agent.alive())
+
+    def test_a_still_unanswered_agent_is_named(self):
+        with mock.patch.object(
+            HarnessSession, "attach", side_effect=Unanswered("docker ps: timed out")
+        ):
+            message = self.failed(self.tui())
+        self.assertEqual(
+            message,
+            f"tui session {AGENT} did not start in 120 s; "
+            "agent session not checked: docker ps: timed out",
+        )
