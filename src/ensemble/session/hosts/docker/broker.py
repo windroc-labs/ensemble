@@ -392,16 +392,6 @@ class Broker:
             raise SessionError("broker: bad response to start: fields")
         return started
 
-    def lock_query(self, lock: str) -> dict[str, str] | None:
-        """The running holder of `lock`, {"container", "owner"}, or None; takes nothing."""
-        found = self._parsed(
-            "lock-query",
-            lambda d: d.keys() == {"holder"} and (d["holder"] is None or _holder_ok(d["holder"])),
-            "--lock",
-            lock,
-        )
-        return found["holder"]
-
     def maintain(
         self,
         container: str,
