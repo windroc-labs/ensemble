@@ -230,7 +230,7 @@ class ConfigurationLoading(ConfigFile, Case):
                     self.assertRaisesRegex(config.ConfigError, f"linear.roles.dummy-tester.{key}"),
                 ):
                     self.load(text(fields))
-        for key in ("account", "key"):
+        for key in ("typo", "token"):
             with (
                 self.subTest(key=key),
                 self.assertRaisesRegex(config.ConfigError, f"has unknown keys: {key}"),
@@ -283,9 +283,9 @@ class ConfigurationLoading(ConfigFile, Case):
             (
                 BASE.replace(
                     "[roles.dummy-tester]\n",
-                    '[roles.dummy-tester]\naccount = "s@agents.test"\nkey = "k"\n',
+                    '[roles.dummy-tester]\ntypo = "s"\ntoken = "k"\n',
                 ),
-                "[roles.dummy-tester] has unknown keys: account, key",
+                "[roles.dummy-tester] has unknown keys: token, typo",
             ),
             ("linear.typo = 1\nlinear.other = 2\n" + BASE, "unknown keys in [linear]: other, typo"),
             (HEADER + "linear.roles = 5\n[roles.x]\n", "[linear.roles] must be a table"),
@@ -318,12 +318,6 @@ class ConfigurationLoading(ConfigFile, Case):
                 )
                 for key in HARNESS_APP
             ],
-            (
-                BASE.replace(
-                    HARNESS_LINE, 'linear.harness_key = "linear-app-harness-token"\n' + HARNESS_LINE
-                ),
-                "unknown keys in [linear]: harness_key",
-            ),
             (
                 BASE.replace('user_id = "', 'typo = 1, user_id = "', 1),
                 "[linear.harness] has unknown keys: typo",
@@ -527,14 +521,6 @@ class ConfigurationLoading(ConfigFile, Case):
                 self.assertTrue(msg.startswith(f"orchestrator/config.toml: {table}.{key} "), msg)
                 self.assertIn(repr(value), msg)
 
-    def test_manager_key_is_an_unknown_key(self):
-        for value in ('"linear-manager"', '""', "1"):
-            with self.subTest(value=value):
-                self.fails(
-                    "orchestrator/config.toml: unknown keys in [linear]: manager_key",
-                    f"linear.manager_key = {value}\n" + PIPELINE,
-                )
-
     def test_a_complete_manager_app_loads_as_the_manager_identity(self):
         linear = self.load(MANAGER_LINE + PIPELINE).linear
         self.assertEqual(linear.manager, MANAGER_IDENTITY)
@@ -618,7 +604,7 @@ class ConfigurationLoading(ConfigFile, Case):
                 "linear.manager.token_service 'linear-app-engineer-secret' is also "
                 "linear.roles.engineer.secret_service",
             ),
-            (table(account="x"), "[linear.manager] has unknown keys: account"),
+            (table(typo="x"), "[linear.manager] has unknown keys: typo"),
             ("linear.manager = 1\n" + PIPELINE, "[linear.manager] must be a table"),
         ):
             with self.subTest(message):
@@ -2167,9 +2153,9 @@ class LocalOverlay(ConfigFile, Case):
                 )
             ],
             (
-                '[roles.researcher]\naccount = "researcher@agents.test"\nkey = "k"\n',
+                '[roles.researcher]\ntypo = "r"\ntoken = "k"\n',
                 BASE,
-                "orchestrator/config.toml: [roles.researcher] has unknown keys: account, key",
+                "orchestrator/config.toml: [roles.researcher] has unknown keys: token, typo",
             ),
             (
                 role("researcher", 'max_runs = "2"'),
