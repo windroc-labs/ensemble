@@ -68,6 +68,11 @@ func (f *fakeTokens) Retry(context.Context) ([]protocol.Pending, error) {
 	return f.pending, f.retry
 }
 
+func (f *fakeTokens) Pending() ([]protocol.Pending, error) {
+	f.calls = append(f.calls, "pending")
+	return f.pending, f.retry
+}
+
 func githubManifest(t *testing.T) string {
 	data, err := os.ReadFile(filepath.Join(fixtures.Dir(), "manifest-github-app.json"))
 	if err != nil {
@@ -238,11 +243,27 @@ func TestRefresh(t *testing.T) {
 
 func TestStatus(t *testing.T) {
 	pending := []protocol.Pending{{Container: container, Account: "acme", ExpiresAt: "2026-10-17T13:00:00Z"}}
-	got, err := Host{GitHub: &fakeTokens{pending: pending}}.Status(context.Background())
+	tokens := &fakeTokens{pending: pending}
+	got, err := Host{GitHub: tokens}.Status(context.Background())
 	if err != nil || !slices.Equal(got.Revocations, pending) {
 		t.Fatalf("%+v %v", got, err)
 	}
+	if !slices.Equal(tokens.calls, []string{"pending"}) {
+		t.Fatalf("status performed maintenance: %v", tokens.calls)
+	}
 	if _, err := (Host{GitHub: &fakeTokens{retry: protocol.New(protocol.KeychainFailed, "x")}}).Status(context.Background()); protoErr(t, err).Code != protocol.KeychainFailed {
+		t.Fatal(err)
+	}
+}
+
+func TestCleanup(t *testing.T) {
+	pending := []protocol.Pending{{Container: container, Account: "acme", ExpiresAt: "2026-10-17T13:00:00Z"}}
+	tokens := &fakeTokens{pending: pending}
+	got, err := (Host{GitHub: tokens}).Cleanup(context.Background())
+	if err != nil || !slices.Equal(got.Revocations, pending) || !slices.Equal(tokens.calls, []string{"retry"}) {
+		t.Fatalf("%+v %v %v", got, err, tokens.calls)
+	}
+	if _, err := (Host{GitHub: &fakeTokens{retry: protocol.New(protocol.KeychainFailed, "x")}}).Cleanup(context.Background()); protoErr(t, err).Code != protocol.KeychainFailed {
 		t.Fatal(err)
 	}
 }

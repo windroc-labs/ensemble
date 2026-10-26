@@ -1326,6 +1326,24 @@ class InstallTest(Case):
             login = "ensemble-broker login codex" in calls
             self.assertEqual(login, status["state"] != "ready", status)
 
+    def test_broker_audit_warning_preserves_ready_credentials(self):
+        self.assert_ok(self.fresh(docker="y"))
+        warning = self.fakes / "src/broker/audit_warning.json"
+        for value, message in (
+            ("audit_write_failed", "audit_write_failed: broker audit persistence failed"),
+            ("AUDIT_SECRET_SENTINEL", "invalid audit warning metadata"),
+        ):
+            warning.write_text(json.dumps(value))
+            result = self.again()
+            self.assert_ok(result)
+            self.assertIn(message, result.stderr)
+            self.assertIn("the operation result still applies", result.stderr)
+            self.assertNotIn("AUDIT_SECRET_SENTINEL", result.stdout + result.stderr + result.tty)
+            calls = self.calls()
+            self.assertIn("ensemble-broker status --cleanup", calls)
+            self.assertNotIn("ensemble-broker login claude", calls)
+            self.assertNotIn("ensemble-broker login codex", calls)
+
     def test_opencode_config_and_flags(self):
         flags = ("--clients", "claude,opencode", "--no-docker")
         flags += ("--opencode-provider", "lan", "--opencode-url", "http://10.0.0.5:8080/v1")

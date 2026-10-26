@@ -1644,9 +1644,14 @@ store_app_key() {
 
 # Claude's default credential or pinned Codex: install, update, login, ready or busy.
 broker_need() {
-  "$broker" status </dev/null | python3 -I -c '
+  "$broker" status --cleanup </dev/null | python3 -I -c '
 import json, sys
 data = json.load(sys.stdin)
+if "audit_warning" in data:
+    if data["audit_warning"] == "audit_write_failed":
+        print("audit_write_failed: broker audit persistence failed; the operation result still applies. Do not repeat a successful start.", file=sys.stderr)
+    else:
+        print("ensemble-broker: invalid audit warning metadata; the operation result still applies.", file=sys.stderr)
 if sys.argv[1] == "claude":
     print("ready" if (data.get("claude") or {}).get("default") is True else "login")
     sys.exit(0)

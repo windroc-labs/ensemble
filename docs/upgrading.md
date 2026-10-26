@@ -1,5 +1,11 @@
 # Upgrading
 
+Broker protocol 22 makes `ensemble-broker status` read-only. Upgrade the broker with the
+plugin, and change automation that relied on status retrying GitHub revocations to
+`ensemble-broker status --cleanup`. The installer already uses this compatibility option.
+Protocol 22 also carries optional `audit_warning: "audit_write_failed"` metadata independently
+of success or failure; custom clients must display it while preserving the operation result.
+
 ## Egress gateway
 
 Ship the installer and worker gateway enforcement (WDRC-139) in the same release. After updating the plugin,

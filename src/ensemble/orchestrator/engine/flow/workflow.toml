@@ -15,7 +15,14 @@
 #   first_failure         the state a failed first run's issue moves to: ready or review (default)
 #   approve               a done run's comment ends with the approve line; default false
 #   files                 write-back's comment lists the run's files; default false
+#   deliverable           a done run's comment is its done lead and summary, unquoted, and a second comment
+#                         holds its deliverable as saved (<workdir>/run/out.md, or the role's document), in full;
+#                         default false
 #   hint                  added after the needs-input comment's footer; default ""
+#   ref                   build only: the description's optional Ref: line (a branch or tag) is checked and passed
+#                         in the input's Ref: header; default false (Ref: lines are not read)
+#   mapped_only           build only: the target repo must be the issue's mapped repo (config.toml's repo mapping);
+#                         default false (a Repo: line wins)
 
 [[stage]]
 role = "researcher"

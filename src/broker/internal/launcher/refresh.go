@@ -113,8 +113,17 @@ func (h Host) publishExpiry(m Manifest, expiry string) error {
 	return directory.Sync()
 }
 
-// Status retries the revocation backlog and lists what is still pending.
-func (h Host) Status(ctx context.Context) (StatusResult, error) {
+// Status lists the revocation backlog without changing credentials or emitting audit.
+func (h Host) Status(_ context.Context) (StatusResult, error) {
+	pending, err := h.GitHub.Pending()
+	if err != nil {
+		return StatusResult{}, err
+	}
+	return StatusResult{Revocations: pending}, nil
+}
+
+// Cleanup explicitly retries the revocation backlog and lists what is still pending.
+func (h Host) Cleanup(ctx context.Context) (StatusResult, error) {
 	pending, err := h.GitHub.Retry(ctx)
 	if err != nil {
 		return StatusResult{}, err
