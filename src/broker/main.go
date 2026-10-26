@@ -26,18 +26,17 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | build --ensemble DIR [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--max-age SECONDS] | start --manifest FILE | lock-query --lock NAME | refresh --container NAME --manifest FILE | close --container NAME | status [--cleanup] | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force]"
+const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | lock-query --lock NAME | refresh --container NAME --manifest FILE | close --container NAME | status [--cleanup] | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force]"
 
 var containerPattern = regexp.MustCompile(`^ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}$`)
 var secondsPattern = regexp.MustCompile(`^[0-9]{1,9}$`)
-var pluginPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}@[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}#[a-f0-9]{40}(?:::[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}#[a-f0-9]{40})?$`)
 var volumePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$`)
 
 // step runs a command; progress is the broker's stderr, for build's Docker progress and start's phase times.
 type step func(ctx context.Context, arg string, progress io.Writer) (any, error)
 
 type app struct {
-	build         func(ctx context.Context, pkg string, plugins []string, maxAge time.Duration, progress io.Writer) (any, error)
+	build         func(ctx context.Context, pkg string, spec launcher.BuildSpec, maxAge time.Duration, progress io.Writer) (any, error)
 	start, close  step
 	refresh       func(ctx context.Context, container, manifest string) (any, error)
 	status        func(ctx context.Context, cleanup bool) (any, error)
@@ -215,7 +214,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 	case command == "build" && len(args) >= 3 && args[1] == "--ensemble" && isPath(args[2]) && buildOptions(args[3:]) != nil:
 		o := buildOptions(args[3:])
 		s, arg = func(ctx context.Context, pkg string, progress io.Writer) (any, error) {
-			return a.build(ctx, pkg, o.plugins, o.maxAge, progress)
+			return a.build(ctx, pkg, o.spec, o.maxAge, progress)
 		}, args[2]
 	case command == "start" && len(args) == 3 && args[1] == "--manifest" && isPath(args[2]):
 		s, arg = a.start, args[2]
@@ -256,15 +255,22 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 }
 
 type buildArgs struct {
-	plugins []string
-	maxAge  time.Duration
+	spec   launcher.BuildSpec
+	maxAge time.Duration
 }
 
-// buildOptions parses build's [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--max-age SECONDS], else nil.
+// buildOptions parses build's [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]...
+// [--image-plugin NAME]... [--max-age SECONDS], else nil.
 func buildOptions(args []string) *buildArgs {
 	o := &buildArgs{maxAge: -1}
-	for len(args) >= 2 && args[0] == "--plugin" && pluginPattern.MatchString(args[1]) {
-		o.plugins, args = append(o.plugins, args[1]), args[2:]
+	if len(args) >= 2 && args[0] == "--base-image" && launcher.ValidBaseImage(args[1]) {
+		o.spec.BaseImage, args = args[1], args[2:]
+	}
+	for len(args) >= 2 && args[0] == "--plugin" && launcher.PluginSourcePattern.MatchString(args[1]) {
+		o.spec.Plugins, args = append(o.spec.Plugins, args[1]), args[2:]
+	}
+	for len(args) >= 2 && args[0] == "--image-plugin" && launcher.PluginNamePattern.MatchString(args[1]) {
+		o.spec.ImagePlugins, args = append(o.spec.ImagePlugins, args[1]), args[2:]
 	}
 	if len(args) == 2 && args[0] == "--max-age" && secondsPattern.MatchString(args[1]) {
 		n, _ := strconv.Atoi(args[1])
@@ -342,8 +348,8 @@ func system() app {
 			available, err := (broker.OpencodeKeys{Keychain: broker.SystemKeychain{Home: home}}).Probe(ctx, provider, base, nil)
 			return map[string]bool{"available": available}, err
 		},
-		build: func(ctx context.Context, pkg string, plugins []string, maxAge time.Duration, progress io.Writer) (any, error) {
-			return withHost("build", "", progress, func(h launcher.Host) (any, error) { return h.Build(ctx, pkg, plugins, maxAge) })
+		build: func(ctx context.Context, pkg string, spec launcher.BuildSpec, maxAge time.Duration, progress io.Writer) (any, error) {
+			return withHost("build", "", progress, func(h launcher.Host) (any, error) { return h.Build(ctx, pkg, spec, maxAge) })
 		},
 		start: func(ctx context.Context, manifest string, progress io.Writer) (any, error) {
 			return withHost("start", "", progress, func(h launcher.Host) (any, error) { return h.Start(ctx, manifest) })

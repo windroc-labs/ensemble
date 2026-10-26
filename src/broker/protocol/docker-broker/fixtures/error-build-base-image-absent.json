@@ -1,0 +1,9 @@
+{
+  "exit_code": 8,
+  "error": {
+    "command": "build",
+    "code": "build_failed",
+    "message": "Base image dummy-env:test is not a local image; build or load it first (ensemble-broker never pulls it).",
+    "cleanup": "not_needed"
+  }
+}

@@ -323,6 +323,56 @@
       }
     },
     {
+      "file": "build-input-image-plugins.json",
+      "definition": "build_input",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "build-input-image-plugin-path.json",
+      "definition": "build_input",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 2,
+        "error_code": "usage"
+      }
+    },
+    {
+      "file": "build-input-base-image.json",
+      "definition": "build_input",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "build-input-base-image-missing.json",
+      "definition": "build_input",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 2,
+        "error_code": "usage"
+      }
+    },
+    {
+      "file": "build-input-base-image-bad.json",
+      "definition": "build_input",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 2,
+        "error_code": "usage"
+      }
+    },
+    {
       "file": "build-output.json",
       "definition": "build_output",
       "valid": true,
@@ -598,6 +648,56 @@
     },
     {
       "file": "error-build_failed.json",
+      "definition": "error",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 8,
+        "error_code": "build_failed"
+      }
+    },
+    {
+      "file": "error-build-image-plugin.json",
+      "definition": "error",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 8,
+        "error_code": "build_failed"
+      }
+    },
+    {
+      "file": "error-build-image-plugin-missing.json",
+      "definition": "error",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 8,
+        "error_code": "build_failed"
+      }
+    },
+    {
+      "file": "error-build-base-image-absent.json",
+      "definition": "error",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 8,
+        "error_code": "build_failed"
+      }
+    },
+    {
+      "file": "error-build-base-image-label.json",
+      "definition": "error",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 8,
+        "error_code": "build_failed"
+      }
+    },
+    {
+      "file": "error-build-base-image-requirements.json",
       "definition": "error",
       "valid": true,
       "expected": {
