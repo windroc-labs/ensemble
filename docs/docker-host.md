@@ -218,10 +218,9 @@ each missing item:
 | `tmux`, `git`, `claude` (Claude Code) | sessions run them |
 | a non-root user `agent` | sessions run as it; the broker reads its UID and GID from the image (1000 works) |
 
-Commands must be on `/home/agent/.npm-global/bin:/usr/local/bin:/usr/bin:/bin`, the container's `PATH` less `/opt/ensemble/bin`,
-as `agent` finds them. python3 is
-not required. A label starting with `windroc.` or `ensemble.` also fails the build, naming it: those are the
-broker's.
+Commands must be on `/home/agent/.npm-global/bin:/usr/local/bin:/usr/bin:/bin`, the container's `PATH` less
+`/opt/ensemble/bin`, as `agent` finds them. python3 is not required. A label starting with `windroc.` or `ensemble.`
+also fails the build, naming it: those are the broker's.
 
 `--image-plugin NAME` adds a plugin the base image (or `~/.ensemble/docker/worker`) already holds in
 `/opt/windroc/plugins/NAME/`, on top of the `--plugin` sources: its `.claude-plugin/plugin.json` must have `"name":
