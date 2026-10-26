@@ -14,7 +14,8 @@ configured one) reports agent files in (Delegate.checkouts not None):
   it (reopened since) or a sub-issue, at any depth, is unfinished, every page of them read first
   (Tracker.archive; Linear archives sub-issues with their parent, theirs too): skipped until each
   is finished or archived. A finished sub-issue it would not archive itself (not listed, or its
-  finish time unknown or under 2 hours ago) keeps the parent too.
+  finish time unknown or under 2 hours ago) keeps the parent too. A candidate whose version
+  differs from the archive plan's waits for a consistent read next tick.
 
 For each stalled issue (any state but Todo, In Progress or a finished one) whose latest move into its
 state and latest recorded run are both at least 7 days old, it deletes its agent files' checkouts and
@@ -87,6 +88,7 @@ OVERLAP = timedelta(minutes=10)  # Linear's lists lag a change
 CACHE = "prune.json"
 TOO_BIG = "archive: too many sub-issues to read in one tick"
 QUARANTINED = "finished under 2 hours ago"
+CHANGED = "changed since archive candidate read"
 HELP = """Clean finished issues' recorded runs and files, then archive eligible issues.
 
 Usage: ensemble-orchestrator prune [--dry-run]
@@ -317,7 +319,7 @@ class Pruner:
         except TRACKER_ERRORS as e:
             self.error(error=f"archive: {one_line(e)}")
             return
-        finished = self.finished = {issue.ident: issue.since for issue in found}
+        finished = self.finished = {issue.ident: issue for issue in found}
         self.see(issue.updated for issue in found)
         due = []
         for issue in found:
@@ -372,8 +374,9 @@ class Pruner:
             self.say("prune-skip", ident, once=True, reason=_kept(plan))
         elif held is not None:
             sub, why = held
-            reason = f"archive: sub-issue {sub.ident} {why}"
-            if why != QUARANTINED:  # time alone ends a quarantine: planned again next tick
+            kind = "issue" if sub.ident == ident else "sub-issue"
+            reason = f"archive: {kind} {sub.ident} {why}"
+            if why not in (QUARANTINED, CHANGED):  # time or a caught-up list can clear these
                 versions = {ident: issue.updated, sub.ident: sub.updated}
                 refused[ident] = Refusal(versions, reason, self.now)
             self.say("prune-skip", ident, once=True, reason=reason)
@@ -383,12 +386,17 @@ class Pruner:
             self.say("prune-archived", ident)
 
     def held(self, plan, finished):
-        """plan's first descendant this tick would not archive itself (finished: the candidates'
-        finish times), with why; None: none."""
+        """First issue with a stale candidate version or an ineligible descendant, with why."""
+        root = finished[plan.ident]
+        if root.updated != plan.updated:
+            return root, CHANGED
         for sub in plan.descendants:
             if sub.ident not in finished:
                 return sub, "not an archive candidate"
-            since = finished[sub.ident]
+            candidate = finished[sub.ident]
+            if candidate.updated != sub.updated:
+                return sub, CHANGED
+            since = candidate.since
             if since is None:
                 return sub, "finish time unknown"
             if self.now - since < QUARANTINE:

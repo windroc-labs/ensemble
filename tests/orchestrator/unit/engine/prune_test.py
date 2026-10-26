@@ -1673,6 +1673,43 @@ class ArchiveBound(Bound):
         self.assertEqual(self.tick(gql, now=NOW + timedelta(hours=1)), (0, "prune-archived TASK-1"))
         self.assertEqual(gql.archived, ["id-TASK-1"])
 
+    def test_a_changed_archive_candidate_waits_for_a_consistent_list(self):
+        for changed in ("TASK-1", "TASK-2"):
+            for dry in (False, True):
+                with self.subTest(changed=changed, dry=dry):
+                    if os.path.exists(self.cache()):
+                        os.remove(self.cache())
+                    issues = {"TASK-1": self.done}
+                    children = {}
+                    if changed == "TASK-2":
+                        issues[changed] = self.done
+                        children = {"TASK-1": {changed: "completed"}}
+                    gql = gql_for(
+                        issues,
+                        owners=dict.fromkeys(issues, "u-pm"),
+                        children=children,
+                        changed=(),
+                    )
+
+                    def recompleted(query, gql=gql, issues=issues, changed=changed, **v):
+                        result = gql(query, **v)
+                        if query == linear_tracker.Q_FINISHED:
+                            issues[changed] = ("Done", [(1, "Done")])
+                        return result
+
+                    code, out = self.prune(recompleted, dry=dry)
+                    self.assertEqual(code, 0)
+                    self.assertIn("changed since archive candidate read", out)
+                    self.assertEqual(gql.archived, [])
+                    if not dry:
+                        self.assertEqual(prune_state.load(self.cache())[0].refused, {})
+                    self.assertNotIn("prune-archived", self.tick(gql, dry=dry)[1])
+                    self.assertEqual(gql.archived, [])
+                    code, out = self.tick(gql, now=NOW + timedelta(hours=1), dry=dry)
+                    self.assertEqual(code, 0)
+                    self.assertIn("prune-plan" if dry else "prune-archived", out)
+                    self.assertEqual(gql.archived, [] if dry else ["id-TASK-1"])
+
     def test_a_parent_held_by_a_sub_issue_is_replanned_only_on_change(self):
         gql = gql_for(
             {"TASK-1": self.done, "TASK-2": self.done},

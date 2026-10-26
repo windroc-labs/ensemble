@@ -1302,7 +1302,7 @@ class IssueOps(ServerCase):
         self.assertEqual(self.issues.archive("TASK-7").result, "changed")
         self.assertEqual((self.task7["archived"], child["archived"]), (True, True))
         self.assertEqual(self.issues.archive("TASK-7").result, "unchanged")
-        self.assertIn("issue_write.Q_COMMENT", self.ops())
+        self.assertIn("issue_archive.Q_ISSUE", self.ops())
 
 
 class RefusedKeychain(Case):

@@ -567,6 +567,7 @@ class ArchivePlans(Case):
                     item("TASK-6", "duplicate"),
                 ),
                 unfinished=(item("TASK-3", "started"),),
+                updated=UPDATED,
             ),
         )
 

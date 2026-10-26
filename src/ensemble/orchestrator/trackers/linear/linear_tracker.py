@@ -595,6 +595,7 @@ class LinearTracker(Tracker):
             archived,
             found[1:],
             () if archived else tuple(s for s in found if not s.finished),
+            updated=found[0].updated,
         )
 
     def _descendants(self, root):
