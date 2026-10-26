@@ -83,7 +83,7 @@ CLEAN = [
     'the "lq and importkey" scripts',
     "keychain_read <service> <account> > /tmp/x",
     "lq and storekey-stdin.",
-    "run storekey and storekey-stdin first",
+    "run importkey and storekey-stdin first",
 ]
 
 

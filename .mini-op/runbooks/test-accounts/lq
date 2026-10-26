@@ -3,9 +3,9 @@ usage='lq <service> <account> <json-body-file>   send that GraphQL body to the L
 app: the access token in its token record, the keychain item <service>/<account> (the mini'"'"'s
 ~/.ensemble/config.local.toml [orchestrator.linear.manager] token_service, default
 linear-app-manager-token, its account the same name; install.sh writes it), goes to curl as a Bearer
-Authorization header through stdin. Prints the reply. An expired token: rerun the install, which
-renews it. Exits 0, 1 (the file is unreadable, the item holds no token record, or curl failed) or 2
-(usage error).'
+Authorization header through stdin. Prints the reply. Exits 0, 1 (the file is unreadable, the item
+holds no token record, or curl failed, an error status from Linear included: an expired token is a
+401, renewed by rerunning the install) or 2 (usage error).'
 [[ $# -eq 1 && $1 == -h ]] && { print -r -- $usage; exit 0; }
 name='^[A-Za-z0-9][A-Za-z0-9._@+:-]*$'
 [[ $# -eq 3 && $1 =~ $name && $2 =~ $name && -n $3 && $3 != -* ]] ||
@@ -25,7 +25,7 @@ unset record match
 [[ -n $token ]] || { print -u2 -r -- "lq: $s/$a holds no app token record"; exit 1; }
 # The token reaches curl only through a builtin print pipe, never its argv.
 print -r -- "Authorization: Bearer $token" |
-  curl -s https://api.linear.app/graphql -H @- -H "Content-Type: application/json" \
+  curl -s --fail-with-body https://api.linear.app/graphql -H @- -H "Content-Type: application/json" \
     --data-binary @"$3"
 st=($pipestatus)
 unset token
