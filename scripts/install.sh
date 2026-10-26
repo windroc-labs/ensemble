@@ -1051,6 +1051,7 @@ plugin_file() {
 protocol_of() { sed -n 's/^PROTOCOL = "\([0-9][0-9]*\)"$/\1/p' | sed -n 1p; }
 go_protocol_of() { sed -n 's/^const Version = "\([0-9][0-9]*\)"$/\1/p' | sed -n 1p; }
 version_of() { sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9]*\(\.[0-9][0-9]*\)*\)".*/\1/p' | sed -n 1p; }
+spoken_protocol_of() { sed -n 's/.*"protocol_version": *"\([0-9][0-9]*\)".*/\1/p' | sed -n 1p; }
 
 # The ensemble plugin Claude Code ($1 claude) or Codex (codex) has installed, else empty. install.sh keeps it, so its
 # copy is the one the client runs; Codex's newest version, as skills/manage/scripts/launcher looks.
@@ -1725,15 +1726,20 @@ docker_running() {
   done
 }
 
+# Installs the broker unless the one installed came from this plugin's sources and speaks its protocol.
 broker_install() {
-  local source
+  local source want= got=
   source=$(broker_source)
   if [ -x "$broker" ] && [ "$(state_get broker_source)" = "$source" ]; then
-    step broker
+    want=$(protocol_of <"$pkg/src/ensemble/session/hosts/docker/broker.py" 2>/dev/null) || want=
+    got=$("$broker" version </dev/null 2>/dev/null | spoken_protocol_of) || got=
+  fi
+  step broker
+  if [ -n "$want" ] && [ "$got" = "$want" ]; then
     skip "installed from this plugin"
     return
   fi
-  step broker
+  if [ -n "$got" ]; then say "    installed broker speaks protocol $got, the plugin wants ${want:-unknown}: reinstalling"; fi
   [ -e "$root/usr/local/libexec/ensemble" ] || ledger_add broker
   record_dir "$HOME/.ensemble/docker"
   if [ "$broker_mode" = release ]; then

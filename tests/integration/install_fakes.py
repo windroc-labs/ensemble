@@ -2,7 +2,7 @@
 
 Every call is logged to $LOG (argv) and $ENVLOG (environment values). State lives under
 $FAKES: brew/<name> (installed), processes (one running command line each; unkillable: those KILL misses), login/<client>, keychain/<service>, claude/ and codex/ (plugins),
-src/broker/ (the broker's Codex install and tokens), fail (a call prefix that fails once), tty_name
+src/broker/ (the broker's Codex install, tokens and protocol: the one `version` reports, else the plugin's), fail (a call prefix that fails once), tty_name
 (what `ps -o tty=` reports), kqueue_refuses (a terminal the Bun-built clients die on, as on /dev/tty),
 commit (the commit GitHub reports for every ensemble ref), marketplace/ (the windroc marketplace's
 manifests on main), refs/<ref>/ (ensemble files at a ref, over pkg-src/), linear.json (the Linear workspace: keys
@@ -50,6 +50,10 @@ def mark(path, text=""):
 
 def load(path, default):
     return json.loads(path.read_text()) if path.exists() else default
+
+
+def load_text(path):
+    return path.read_text() if path.is_file() else ""
 
 
 def save(path, value):
@@ -630,6 +634,12 @@ def broker(args):
         if warning.exists():
             response["audit_warning"] = load(warning, None)
         out(json.dumps(response))
+        return 0
+    if args == ["version"]:
+        spoken = FAKES / "src/broker/protocol"
+        client = (FAKES / "pkg-src/src/ensemble/session/hosts/docker/broker.py").read_text()
+        default = re.search(r'^PROTOCOL = "([0-9]+)"$', client, re.M)[1]
+        out(json.dumps({"protocol_version": load_text(spoken) or default}) + "\n")
         return 0
     if args[:1] in (["install-codex"], ["update-codex"]):
         if os.environ.get("FAKE_SUDO") != "1":

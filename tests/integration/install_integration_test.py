@@ -126,6 +126,7 @@ BROKER_INSTALL = """#!/bin/sh
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 echo "broker-install $*" >> "$LOG"
+rm -f "$FAKES/src/broker/protocol"
 target="$ENSEMBLE_INSTALL_ROOT/usr/local/libexec/ensemble"
 sudo mkdir -p "$target"
 { cat "$FAKES/apps/ensemble-broker"; echo "# $(cksum < "$here/internal/codex/versions.go")"; } > "$target/ensemble-broker"
@@ -1383,6 +1384,22 @@ class InstallTest(Case):
                     self.assertNotIn(absent, calls)
                 self.assertEqual(self.broker_calls(), [])
                 self.assertFalse(self.config().exists())
+
+    def test_rerun_reinstalls_a_broker_with_another_protocol(self):
+        self.assert_ok(self.fresh(clients="claude", docker="y"))
+        (self.fakes / "src/broker/protocol").write_text(OTHER)
+        result = self.again("--clients", "claude", "--docker")
+        self.assert_ok(result)
+        self.assertIn(
+            f"    installed broker speaks protocol {OTHER}, the plugin wants {PROTOCOL}:"
+            " reinstalling\n",
+            result.stderr,
+        )
+        self.assertIn("broker-install ", self.broker_calls())
+        result = self.again("--clients", "claude", "--docker")
+        self.assert_ok(result)
+        self.assertIn("==> broker\n    skip: installed from this plugin\n", result.stderr)
+        self.assertNotIn("broker-install ", self.broker_calls())
 
     def test_installed_plugin_with_another_protocol_stops_up_front(self):
         self.assert_ok(self.fresh(clients="claude", docker="y"))
