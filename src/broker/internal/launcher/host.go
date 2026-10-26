@@ -60,7 +60,7 @@ type Tokens interface {
 	BotUserID(app string) (int64, error) // login_required or keychain_failed for the bot user ID login github saved
 	Issue(ctx context.Context, app string, permissions map[string]string, container string, exec func(argv []string, stdin []byte) error) ([]protocol.Expiry, error)
 	Refresh(ctx context.Context, app string, permissions map[string]string, container string, exec func(argv []string, stdin []byte) error) ([]protocol.Expiry, error)
-	Revoke(ctx context.Context, container string) error
+	Release(ctx context.Context, container string) error // retires the container's grant; never shared credentials
 	// Prefetch clones ref ("": the default branch) of repo into dir through run, which starts the helper container
 	// with argv and the token as stdin, and revokes the token once run returns.
 	Prefetch(ctx context.Context, repo, ref, dir, container string, run func(argv []string, stdin []byte) error) error

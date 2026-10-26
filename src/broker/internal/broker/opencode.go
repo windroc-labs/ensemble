@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/launcher"
 	"ensemble/broker/internal/protocol"
@@ -16,9 +17,6 @@ const (
 	opencodeService = "ensemble-opencode"
 	opencodeKeyDir  = docker.SecretsDir + "/opencode"
 )
-
-// opencodeScript writes stdin to $1's key file, 0400; set -C refuses one already there.
-const opencodeScript = "mkdir -p -m 0700 " + opencodeKeyDir + " && umask 0377 && set -C && cat > " + opencodeKeyDir + `/"$1".key`
 
 // OpencodeKeychain holds the providers' API keys as broker-only items.
 type OpencodeKeychain interface{ brokerOnlyStore }
@@ -63,11 +61,11 @@ func opencodeError(provider string, err error) *protocol.Error {
 // Ready reads only each item's access, so it never prompts.
 func (o OpencodeKeys) Ready(providers []string) error {
 	for _, p := range providers {
-		access, err := o.Keychain.AppAccess(opencodeService, p)
+		trusted, err := trustedItem(o.Keychain, opencodeService, p)
 		if err != nil {
 			return opencodeError(p, err)
 		}
-		if onlyBroker(access) != nil {
+		if !trusted {
 			return protocol.New(protocol.LoginRequired, "The OpenCode provider "+p+" API key trusts another broker build: run ensemble-broker login opencode "+p+".")
 		}
 	}
@@ -78,12 +76,11 @@ func (o OpencodeKeys) Ready(providers []string) error {
 // dialog. Errors are opencodeError's, wrap docker.ErrUnreachable or are opaque: no Docker stderr, no keychain detail.
 func (o OpencodeKeys) Inject(providers []string, exec func(argv []string, stdin []byte) error) error {
 	for _, p := range providers {
-		key, err := o.Keychain.Secret(opencodeService, p)
+		key, err := readSecret(o.Keychain, opencodeService, p)
 		if err != nil {
-			erase(key)
 			return opencodeError(p, err)
 		}
-		err = exec([]string{"/bin/sh", "-c", opencodeScript, "sh", p}, key)
+		err = credential.Deliver(exec, credential.File{Dir: opencodeKeyDir, Name: p + ".key"}, key)
 		erase(key)
 		if errors.Is(err, docker.ErrUnreachable) {
 			return fmt.Errorf("API key injection: %w", docker.ErrUnreachable)

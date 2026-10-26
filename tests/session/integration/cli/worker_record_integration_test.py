@@ -71,6 +71,7 @@ class RecordTest(RecordCase):
                 "env": {"WORKER_KEY": "v"},
                 "events": self.events,
                 "display": MANAGER,
+                "environment": None,
             },
         )
 
