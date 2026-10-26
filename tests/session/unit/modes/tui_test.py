@@ -2189,7 +2189,6 @@ class PrepareTest(Base):
                 "perm": HookKind.BLOCKED,
                 "note": HookKind.BLOCKED,
                 "use": HookKind.ACTIVITY,
-                "begin": HookKind.TURN_STARTED,
                 "odd": "other",
             }
 
@@ -2204,7 +2203,6 @@ class PrepareTest(Base):
                     "perm": "blocked",
                     "note": "blocked",
                     "use": "working",
-                    "begin": "working",
                 },
             ),
         )

@@ -43,7 +43,7 @@ SESSION_INTERFACE_MODULES = ("ensemble.session", "ensemble.session.extension")
 
 
 SUBPACKAGES = {
-    SESSION: {"clients", "hosts", "modes", "viewer"},
+    SESSION: {"clients", "harness", "hosts", "modes", "viewer"},
 }
 
 

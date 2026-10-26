@@ -45,8 +45,20 @@ from ensemble.session.engine.types import (
     Unanswered,
     Usage,
     Window,
+    WorkerExit,
+    WorkerHook,
+    WorkerMessage,
+    WorkerOutput,
 )
-from ensemble.session.hosts.base import Host, Interactive, InteractiveProcess, Lines, Piped, Process
+from ensemble.session.hosts.base import (
+    Host,
+    Interactive,
+    InteractiveProcess,
+    Lines,
+    Piped,
+    Process,
+    WorkerHandle,
+)
 from ensemble.session.hosts.types import CommandView, SessionView
 from ensemble.session.modes.client_adapters.headless import Headless, JsonHeadless
 from ensemble.session.modes.client_adapters.in_process import InProcess
@@ -65,6 +77,11 @@ __all__ = [
     "Process",
     "Piped",
     "Lines",
+    "WorkerHandle",
+    "WorkerMessage",
+    "WorkerHook",
+    "WorkerOutput",
+    "WorkerExit",
     "Interactive",
     "InteractiveProcess",
     "Spec",

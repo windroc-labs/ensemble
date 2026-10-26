@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Any, ClassVar, NamedTuple, Self
+from typing import TYPE_CHECKING, ClassVar, NamedTuple, Self
 
 from ensemble.utils import (
     ACCOUNT_ENV,
@@ -22,6 +22,9 @@ from ensemble.utils import (
     printable_abs,
     sid_error,
 )
+
+if TYPE_CHECKING:
+    from ensemble.session.engine.base import Session
 
 __all__ = [
     "Access",
@@ -72,6 +75,10 @@ __all__ = [
     "TurnStarted",
     "Usage",
     "Window",
+    "WorkerExit",
+    "WorkerHook",
+    "WorkerMessage",
+    "WorkerOutput",
     "StatusState",
 ]
 
@@ -123,6 +130,11 @@ class Resumable(StrEnum):
 
 
 class HookKind(StrEnum):
+    """A Tui hook label's kind, the event its adapter normalizes it to; TURN_STARTED: its client
+    accepted a turn (the first prompt, a send or text typed into its terminal), to yield one
+    TurnStarted per accepted turn, never for a replayed record (WDRC-199 FR-10).
+    """
+
     TURN_END = "turn_end"
     TURN_FAILED = "turn_failed"
     BLOCKED = "blocked"
@@ -244,7 +256,7 @@ class EventCall:
     generation; state, its HookCallback.state. on_event returns None.
     """
 
-    session: Any
+    session: "Session"
     event: "SessionEvent"
     sid: str
     generation: str
@@ -656,6 +668,37 @@ class Exited:
 
 
 SessionEvent = TurnStarted | Activity | Reply | TurnEnd | TurnFailed | Blocked | LimitHit | Exited
+
+
+@dataclass(frozen=True)
+class WorkerHook:
+    """A hook call a managed worker's guard relayed over its channel (WDRC-199 FR-15): the label
+    and payload the client's hook gave; untrusted worker output (FR-36), so its reader checks its
+    size and shape before use.
+    """
+
+    label: str
+    payload: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class WorkerOutput:
+    """Bytes a managed headless worker wrote to `stream`, "stdout" or "stderr" (FR-12, FR-15); its
+    reader parses complete lines only.
+    """
+
+    data: bytes
+    stream: str = "stdout"
+
+
+@dataclass(frozen=True)
+class WorkerExit:
+    """The client's exit as its guard saw it: returncode, -N when signal N ended it (FR-16)."""
+
+    returncode: int
+
+
+WorkerMessage = WorkerHook | WorkerOutput | WorkerExit
 
 
 @dataclass(frozen=True)

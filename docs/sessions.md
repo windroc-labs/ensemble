@@ -65,6 +65,47 @@ Admission checks all configured Hosts; an unavailable inventory fails closed. Sh
 
 The orchestrator's [role limits](board.md#run-limits) and usage gate remain separate. Direct client commands outside `Session.start`, including `client-resume`'s native client handoff, do not create ensemble sessions.
 
+## Session harness interfaces
+
+Frozen for WDRC-199 (WDRC-226) before any of it runs: a session harness will own each worker from start to close and call the handlers its caller registers. Today no session reads `Spec.handlers`, no client yields `TurnStarted` and no Host runs a managed worker; the tickets that implement each part change none of these signatures.
+
+**Handlers.** `Spec.handlers` is an ordered tuple of `HookCallback(module, state, roots)`, default `()`. The harness records each event before it calls each handler module's `on_event(EventCall)` in event order; a failure is retried with the same ids and never stops supervision. `EventCall` carries `session` (an `ensemble.session.Session` to send, stop or close through), `event`, `sid`, `generation` (the worker's start), `event_id`, `turn` (`None` outside a turn) and the handler's `state`. `on_event` returns `None`; returning or failing never closes the worker, only a close request through `session` does. Every event field (reply text, Blocked reason, TurnFailed detail) is untrusted worker output.
+
+**Events.** `SessionEvent` is `TurnStarted | Activity | Reply | TurnEnd | TurnFailed | Blocked | LimitHit | Exited`. `TurnStarted` marks a turn its client accepted (the first prompt, a `send` or text typed into its terminal), never a replayed record. A Tui adapter is to normalize a `HookKind.TURN_STARTED` label to it, and a Headless adapter's `events()` and an InProcess adapter's `run()` are to yield it as a turn starts. `TurnEnd(reply, pending)` carries the turn's full last reply; `TurnFailed` and `TurnEnd` exclude each other within a turn; `Exited` comes once, last.
+
+**Managed workers.** `Host.worker(name, launch, *, terminal, display, events, metadata)` starts a `WorkerHandle`: the guard ([Guard protocol](#guard-protocol)) runs the client as its direct parent and, with `terminal`, owns its PTY. The handle is the harness's end of one channel: `read()` gives `WorkerHook`, `WorkerOutput` and a last `WorkerExit`; `send`, `press` and `write` are input; `screen`, `state`; `close(timeout)` ends the worker and returns its confirmed returncode, else `None`; `tick(now)` runs its Host's periodic duty. A Host without managed workers raises `SessionError` from `worker()`, the default.
+
+| Host | Channel | Display |
+|---|---|---|
+| tmux | the guard's stdin and stdout over local pipes | a tmux session running `guard.py --attach` on its display socket |
+| Docker | `docker exec -i` into the container, the guard there | `docker exec -it … guard.py --attach`; `tick` runs the broker's credential maintenance |
+
+An extension Host keeps working unchanged: `worker()` is optional, and its sessions keep today's unowned path until it implements it. An extension Tui adds a `HookKind.TURN_STARTED` label for its client's accepted-prompt hook.
+
+**Ownership.** `Session.start` will create the owner; `Session.attach` gets a control view, never a second owner; `events()` only observes, so closing its iterator, the caller exiting or a display detaching leaves the worker supervised; `stop`, `close` and `Session.retire` ask the owner.
+
+**Delegate.** `Delegate.run`, `alive`, `status`, `resume` and `close` keep their signatures and the `Result` and `Outcome` formats. `run()` returns once a task attempt has its Result while the session and its handler go on; `alive()` and `Status.alive` say whether an attempt is active, so a run waiting on `needs_input` is not alive; `resume()` and an accepted answer start the next attempt; `close()` ends the session through its owner, and a locked run releases its lock only after its container is confirmed stopped.
+
+### Guard protocol
+
+`src/ensemble/session/harness/guard.py` (standard library only, run by path) is the one guard program of every Host; not implemented yet. `guard.py [--terminal] --hook-socket PATH [--display-socket PATH] -- ARGV...` runs ARGV, with the cwd and environment it is given, in a process group of its own; with `--terminal` the guard owns its PTY. `guard.py --attach PATH` connects the calling terminal to a running guard's display socket: a display only, so detaching or killing it never ends the worker.
+
+The channel is the guard's stdin (from its harness) and stdout (to it): frames of one kind byte, a 4-byte big-endian payload length (at most 64 MiB) and the payload; a JSON payload is one UTF-8 object.
+
+| From | Kind | Payload |
+|---|---|---|
+| harness | `i` input | raw bytes for the PTY, else the client's stdin |
+| harness | `w` resize | `{"cols": int, "rows": int}` |
+| harness | `q` screen | `{"lines": int or null}` |
+| harness | `c` close | `{}`: end the client, then `x` |
+| guard | `s` started | `{"pid": int}`, once, after exec |
+| guard | `h` hook | `{"label": str, "payload": object}`, one per relayed hook call |
+| guard | `o`, `e` output | raw bytes a headless client wrote to stdout, stderr |
+| guard | `v` view | `{"text": str}`: the PTY's last `q` lines, control sequences removed |
+| guard | `x` exit | `{"returncode": int}`, last; -N for signal N |
+
+EOF on its stdin is a close: its harness closed the channel or died. On close the guard sends SIGHUP to the client's process group, SIGKILL after 5 s, writes `x` and exits; it never outlives its channel. A hook command connects to `--hook-socket`, writes one `{"label", "payload"}` line and gets `{"ok": true}` once the guard has written its `h` frame (at least once: the harness drops a repeat). No frame starts a host process.
+
 ## Recall a closed run
 
 `ensemble-crew close <ID>` ends a board run's sessions and drops its roster entry; its conversation stays. To continue it:

@@ -84,7 +84,8 @@ class Delegate(ABC):
     def detach(self, *, outer: Outer | None = None) -> Record: ...
 
     @abstractmethod
-    def run(self, on_event: Callable[[Event], None] | None = None) -> Result: ...
+    def run(self, on_event: Callable[[Event], None] | None = None) -> Result:
+        """Its task attempt's Result; its session goes on (docs/sessions.md › Session harness)."""
 
     @abstractmethod
     def alive(self) -> bool: ...
@@ -109,10 +110,12 @@ class Delegate(ABC):
     def attach_command(self) -> str | None: ...
 
     @abstractmethod
-    def close(self) -> None: ...
+    def close(self) -> None:
+        """Ends its session through its owner (WDRC-199 FR-23, FR-24, FR-34)."""
 
     @abstractmethod
     def session_status(self) -> SessionStatus: ...
 
     @abstractmethod
-    def resume(self, *, mode: str | None = None, input: str | None = None) -> Record: ...
+    def resume(self, *, mode: str | None = None, input: str | None = None) -> Record:
+        """Starts its next task attempt (WDRC-199 FR-17, FR-18, FR-22, FR-30)."""

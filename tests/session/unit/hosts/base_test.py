@@ -19,10 +19,12 @@ from ensemble.session import (
     SessionError,
 )
 from ensemble.session.engine.types import LOCAL_CONTEXT, ClientContext, Hosts, Launch, Liveness
-from ensemble.session.hosts.base import Interactive, InteractiveProcess, Piped
+from ensemble.session.harness import guard
+from ensemble.session.hosts.base import Interactive, InteractiveProcess, Piped, WorkerHandle
 from ensemble.session.hosts.types import CommandView, SessionView
 from ensemble.utils import STOP_WAIT, Status, StatusState
 from tests.session.case import Case
+from tests.session.fakes.terminal import MemoryHost
 from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired
 
 TWO = """[hosts]
@@ -295,3 +297,24 @@ class ParseHosts(Case):
         with mock.patch("importlib.import_module") as imp:
             self.assertEqual(Host.parse_hosts(found).default, "a")
         imp.assert_not_called()
+
+
+class ManagedWorkerTest(Case):
+    """The managed worker contract frozen for WDRC-199: no Host runs one yet."""
+
+    def test_a_host_without_managed_workers_refuses_to_start_one(self):
+        host = MemoryHost("h1")
+        with self.assertRaisesRegex(SessionError, r"\Ahost h1 runs no managed worker\Z"):
+            host.worker("w1", Launch(("client",), cwd="/w"), terminal=True)
+        self.assertEqual(host.calls.mock_calls, [])
+
+    def test_a_worker_has_no_periodic_duty_unless_its_host_gives_one(self):
+        class Bare(WorkerHandle):
+            generation = "g1"
+            read = send = press = write = screen = state = close = None
+
+        self.assertIsNone(Bare().tick(0.0))
+
+    def test_the_guard_is_not_implemented_yet(self):
+        with self.assertRaisesRegex(NotImplementedError, "FR-13"):
+            guard.main([])

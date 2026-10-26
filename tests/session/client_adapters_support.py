@@ -23,12 +23,7 @@ class StubTui(Tui):
 
 
 class LabeledTui(StubTui):
-    hooks = {
-        "end": HookKind.TURN_END,
-        "wait": HookKind.BLOCKED,
-        "work": HookKind.ACTIVITY,
-        "begin": HookKind.TURN_STARTED,
-    }
+    hooks = {"end": HookKind.TURN_END, "wait": HookKind.BLOCKED, "work": HookKind.ACTIVITY}
 
 
 class DetailedTui(LabeledTui):

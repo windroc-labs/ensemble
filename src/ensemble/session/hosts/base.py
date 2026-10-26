@@ -32,6 +32,7 @@ from ensemble.session.engine.types import (
     SessionRow,
     StatusState,
     TuiSettings,
+    WorkerMessage,
 )
 from ensemble.session.hosts.types import CommandView, SessionView
 from ensemble.utils import (
@@ -167,6 +168,38 @@ class InteractiveProcess(Process, Interactive): ...
 class Lines(Iterable[str], AbstractContextManager[object], Protocol): ...
 
 
+class WorkerHandle(ABC):
+    """A managed worker (docs/sessions.md › Session harness interfaces)."""
+
+    @property
+    @abstractmethod
+    def generation(self) -> str: ...
+
+    @abstractmethod
+    def read(self, timeout: float) -> list[WorkerMessage]: ...
+
+    @abstractmethod
+    def send(self, action: Paste | Key) -> None: ...
+
+    @abstractmethod
+    def press(self, keys: Sequence[KeyPress]) -> None: ...
+
+    @abstractmethod
+    def write(self, data: bytes) -> None: ...
+
+    @abstractmethod
+    def screen(self, lines: int | None = None) -> str: ...
+
+    @abstractmethod
+    def state(self) -> Liveness: ...
+
+    @abstractmethod
+    def close(self, timeout: float) -> int | None: ...
+
+    def tick(self, now: float) -> float | None:
+        return None
+
+
 class Piped(ABC):
     """wait: exit code or None, no side effect; stop (ended: pipes at EOF), then close: frees once
     what its Host holds."""
@@ -293,6 +326,19 @@ class Host(ABC):
         """metadata: private sid/client/generation, apart from the published Record; a container
         Host writes prompt to prompt_file."""
         ...
+
+    def worker(
+        self,
+        name: str,
+        launch: Launch,
+        *,
+        terminal: bool,
+        display: Display = None,
+        events: str | None = None,
+        metadata: Mapping[str, str] | None = None,
+    ) -> WorkerHandle:
+        """Managed worker `name` under the guard (WDRC-199 FR-13)."""
+        raise SessionError(f"host {self.name} runs no managed worker")
 
     def pipe(
         self, name: str | None, launch: Launch, *, metadata: Mapping[str, str] | None = None

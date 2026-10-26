@@ -26,6 +26,7 @@ ABCS = {
     "Piped": hosts_base,
     "Interactive": hosts_base,
     "InteractiveProcess": hosts_base,
+    "WorkerHandle": hosts_base,
 }
 TYPES = {
     **dict.fromkeys(
@@ -70,6 +71,10 @@ TYPES = {
             "SessionBusy",
             "NotShowable",
             "Unanswered",
+            "WorkerMessage",
+            "WorkerHook",
+            "WorkerOutput",
+            "WorkerExit",
         ),
         engine_types,
     ),

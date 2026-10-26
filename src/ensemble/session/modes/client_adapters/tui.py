@@ -19,7 +19,6 @@ from ensemble.session.engine.types import (
     Spec,
     TurnEnd,
     TurnFailed,
-    TurnStarted,
 )
 
 
@@ -105,6 +104,4 @@ class Tui(ABC):
             found.append(Blocked(self.blocked_reason(payload)))
         elif kind == HookKind.ACTIVITY:
             found.append(Activity(self.activity(payload)))
-        elif kind == HookKind.TURN_STARTED:
-            found.append(TurnStarted())
         return found

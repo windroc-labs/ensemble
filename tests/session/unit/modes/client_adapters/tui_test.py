@@ -12,7 +12,6 @@ from ensemble.session.engine.types import (
     Paste,
     Permission,
     TurnEnd,
-    TurnStarted,
 )
 from ensemble.session.modes.client_adapters import tui
 from ensemble.session.modes.client_adapters.tui import Tui
@@ -84,7 +83,6 @@ class TuiTest(Case):
             ("end", TurnEnd("r", 1)),
             ("wait", Blocked("ask")),
             ("work", Activity("Bash")),
-            ("begin", TurnStarted()),
         ):
             with self.subTest(label=label):
                 self.assertEqual(self.run.hook_events(label, payload), [event])
@@ -96,7 +94,6 @@ class TuiTest(Case):
             ("end", TurnEnd("r", 0)),
             ("wait", Blocked("")),
             ("work", Activity("")),
-            ("begin", TurnStarted()),
         ):
             with self.subTest(label=label):
                 self.assertEqual(run.hook_events(label, payload), [event])
