@@ -1196,7 +1196,7 @@ class InstallTest(Case):
     def test_egress_pinned_and_healthy_rerun_runs_start_and_keeps_checkout(self):
         self.assert_ok(self.fresh("--clients", "claude", "--docker"))
         egress = Path(self.home, ".egress")
-        sha = "9ed47580dc9eb4c1fe794d12e54a8f2d3f258831"
+        sha = "122d7454d738db4a9b7e0c4a89d2cfa5ff564339"
         checkout = egress / "versions" / sha
         self.assertEqual((egress / "current").resolve(), checkout)
         config = egress / "config.local.yaml"
@@ -1309,7 +1309,7 @@ class InstallTest(Case):
         )
         self.assertEqual(
             (egress / "current").resolve(),
-            egress / "versions" / "9ed47580dc9eb4c1fe794d12e54a8f2d3f258831",
+            egress / "versions" / "122d7454d738db4a9b7e0c4a89d2cfa5ff564339",
         )
         self.assertEqual(
             {p: (p.read_bytes(), p.stat().st_mode, p.stat().st_mtime_ns) for p in old.iterdir()},
@@ -1391,7 +1391,7 @@ class InstallTest(Case):
         )
 
     def test_egress_incomplete_checkout_is_kept_and_rejected(self):
-        version = Path(self.home, ".egress/versions/9ed47580dc9eb4c1fe794d12e54a8f2d3f258831")
+        version = Path(self.home, ".egress/versions/122d7454d738db4a9b7e0c4a89d2cfa5ff564339")
         version.mkdir(parents=True)
         executable(version / "start.sh", "#!/bin/sh\n")
         (version / "COMMIT").write_text("0" * 40 + "\n")

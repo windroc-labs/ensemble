@@ -55,7 +55,7 @@ line).
 ### Egress proxy
 
 Selecting Docker in `scripts/install.sh` also fetches private `windroc/egress-proxy` using your logged-in `gh`
-access, pinned to commit `9ed47580dc9eb4c1fe794d12e54a8f2d3f258831` (label contract 1). It installs under
+access, pinned to commit `122d7454d738db4a9b7e0c4a89d2cfa5ff564339` (label contract 1). It installs under
 `~/.egress/versions/<commit>`, runs that version's `start.sh`, and waits up to 120 seconds for
 `egress-proxy` to become healthy. `~/.egress/current` points to the installed version. It does not follow
 a branch or tag. No Docker selection means no proxy installation.
@@ -66,7 +66,7 @@ its containing directory, so host symlink targets may not resolve inside the con
 leaves the proxy running when nothing changed; the checkout and config are kept.
 The proxy is shared with other caller networks: ensemble cleanup keeps `~/.egress`. If cleanup also removes
 Docker Desktop, the proxy stops and its Docker state may be removed; reinstall Docker before using it again.
-The pinned [egress-proxy README](https://github.com/windroc/egress-proxy/blob/9ed47580dc9eb4c1fe794d12e54a8f2d3f258831/README.md)
+The pinned [egress-proxy README](https://github.com/windroc/egress-proxy/blob/122d7454d738db4a9b7e0c4a89d2cfa5ff564339/README.md)
 and `config.example.yaml` in the installed version define the config.
 
 | Operation | Command |
