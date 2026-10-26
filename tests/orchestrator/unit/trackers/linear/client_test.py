@@ -45,12 +45,10 @@ from tests.orchestrator.unit.outage import FAILURES, failing
 
 class BrokerToken(Case):
     def setUp(self):
-        patch = mock.patch.object(client, "_maintained", set(), create=True)
-        patch.start()
-        self.addCleanup(patch.stop)
+        self.app = dataclasses.replace(HARNESS, client_id=self.id(), renewal="broker")
 
     def test_metadata_validation_and_audit_warning(self):
-        app = dataclasses.replace(HARNESS, renewal="broker")
+        app = self.app
         reply = {"version": 1, "renewed": False, "expires_at": "2026-11-26T12:00:00Z"}
         for value in (
             {**reply, "version": True},
@@ -120,7 +118,7 @@ class BrokerToken(Case):
             with self.subTest(identity=name):
                 client.use()
                 app = dataclasses.replace(
-                    HARNESS,
+                    self.app,
                     name=name,
                     kind=kind,
                     token_service=f"linear-{name}-token",
@@ -146,7 +144,7 @@ class BrokerToken(Case):
                 )
 
     def test_two_requests_maintain_once_and_read_current_publication(self):
-        app = dataclasses.replace(HARNESS, renewal="broker")
+        app = self.app
         keychain = Keychain({app.token_service: record(days=1)})
         first, endpoint = self.call(app, keychain)
         self.assertEqual(endpoint.graphql[0].get_header("Authorization"), f"Bearer {NEW}")
@@ -164,7 +162,7 @@ class BrokerToken(Case):
             ("verifier", types.AppKind.ROLE),
         ):
             app = dataclasses.replace(
-                HARNESS,
+                self.app,
                 name=name,
                 kind=kind,
                 token_service=f"linear-{name}-token",
@@ -176,7 +174,7 @@ class BrokerToken(Case):
             self.assertEqual((len(first), len(second)), (1, 0))
 
     def test_policy_changes_do_not_forget_successful_maintenance(self):
-        app = dataclasses.replace(HARNESS, renewal="broker")
+        app = self.app
         keychain = Keychain({app.token_service: record()})
         first, _ = self.call(app, keychain)
         client.use(renew=False)
@@ -186,7 +184,7 @@ class BrokerToken(Case):
         self.assertEqual((len(first), len(dry), len(second)), (1, 0, 0))
 
     def test_dry_run_does_not_suppress_later_maintenance(self):
-        app = dataclasses.replace(HARNESS, renewal="broker")
+        app = self.app
         keychain = Keychain({app.token_service: record(days=1)})
         client.use(renew=False)
         dry, _ = self.call(app, keychain)
@@ -196,7 +194,7 @@ class BrokerToken(Case):
         self.assertEqual(endpoint.graphql[0].get_header("Authorization"), f"Bearer {NEW}")
 
     def test_failed_maintenance_is_not_remembered_as_success(self):
-        app = dataclasses.replace(HARNESS, renewal="broker")
+        app = self.app
         keychain = Keychain({app.token_service: record()})
         reports = []
         client.use(report=lambda *args: reports.append(args))
@@ -209,7 +207,7 @@ class BrokerToken(Case):
         self.assertEqual(endpoint.graphql[0].get_header("Authorization"), f"Bearer {NEW}")
 
     def test_unusable_publication_after_success_fails_without_maintenance(self):
-        app = dataclasses.replace(HARNESS, renewal="broker")
+        app = self.app
         keychain = Keychain({app.token_service: record()})
         first, _ = self.call(app, keychain)
         self.assertEqual(len(first), 1)
@@ -221,7 +219,7 @@ class BrokerToken(Case):
                 self.assertNotIn("dry run", str(raised.exception))
 
     def test_broker_outage_preserves_valid_or_undated_old_token_and_reports_once(self):
-        app = dataclasses.replace(HARNESS, renewal="broker")
+        app = self.app
         for value in (record(days=1), OLD):
             reported = []
             client.use(report=lambda name, reason, found=reported: found.append((name, reason)))
@@ -233,7 +231,7 @@ class BrokerToken(Case):
             self.assertNotIn(APP_SECRET, repr(reported))
 
     def test_expired_missing_and_malformed_broker_reply_fail_safely(self):
-        app = dataclasses.replace(HARNESS, renewal="broker")
+        app = self.app
         for entries, kwargs in (
             ({}, {"failure": True}),
             ({app.token_service: record(days=-1)}, {"failure": True}),
@@ -248,7 +246,7 @@ class BrokerToken(Case):
             self.assertNotIn(APP_SECRET, str(raised.exception))
 
     def test_dry_run_never_invokes_broker_root_or_writer(self):
-        app = dataclasses.replace(HARNESS, renewal="broker")
+        app = self.app
         shown = []
         client.use(renew=False, show=lambda name, status: shown.append((name, status)))
         keychain = Keychain({app.token_service: record(days=1)})
