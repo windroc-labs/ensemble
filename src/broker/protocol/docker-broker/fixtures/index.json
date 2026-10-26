@@ -1,5 +1,5 @@
 {
-  "protocol_version": "22",
+  "protocol_version": "25",
   "cases": [
     {
       "file": "manifest-valid.json",
@@ -192,6 +192,16 @@
       }
     },
     {
+      "file": "manifest-egress-label.json",
+      "definition": "manifest",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
       "file": "manifest-non-string-label.json",
       "definition": "manifest",
       "valid": false,
@@ -314,6 +324,56 @@
     },
     {
       "file": "build-input-plugin-path.json",
+      "definition": "build_input",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 2,
+        "error_code": "usage"
+      }
+    },
+    {
+      "file": "build-input-image-plugins.json",
+      "definition": "build_input",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "build-input-image-plugin-path.json",
+      "definition": "build_input",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 2,
+        "error_code": "usage"
+      }
+    },
+    {
+      "file": "build-input-base-image.json",
+      "definition": "build_input",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "build-input-base-image-missing.json",
+      "definition": "build_input",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 2,
+        "error_code": "usage"
+      }
+    },
+    {
+      "file": "build-input-base-image-bad.json",
       "definition": "build_input",
       "valid": false,
       "expected": {
@@ -598,6 +658,56 @@
     },
     {
       "file": "error-build_failed.json",
+      "definition": "error",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 8,
+        "error_code": "build_failed"
+      }
+    },
+    {
+      "file": "error-build-image-plugin.json",
+      "definition": "error",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 8,
+        "error_code": "build_failed"
+      }
+    },
+    {
+      "file": "error-build-image-plugin-missing.json",
+      "definition": "error",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 8,
+        "error_code": "build_failed"
+      }
+    },
+    {
+      "file": "error-build-base-image-absent.json",
+      "definition": "error",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 8,
+        "error_code": "build_failed"
+      }
+    },
+    {
+      "file": "error-build-base-image-label.json",
+      "definition": "error",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 8,
+        "error_code": "build_failed"
+      }
+    },
+    {
+      "file": "error-build-base-image-requirements.json",
       "definition": "error",
       "valid": true,
       "expected": {
@@ -925,6 +1035,90 @@
         "docker": "unreachable"
       },
       "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation."
+    },
+    {
+      "file": "runtime-egress-stopped.json",
+      "definition": "manifest",
+      "valid": true,
+      "expected": {
+        "stage": "runtime",
+        "exit_code": 17,
+        "error_code": "egress_unavailable"
+      },
+      "context": {
+        "home": "/Users/example",
+        "cwd_exists": true,
+        "volume": "absent",
+        "claude_dir_has_symlink": false,
+        "login": "present",
+        "image": "broker_built",
+        "docker": "reachable",
+        "egress": "stopped"
+      },
+      "note": "Schema-valid; broker must refuse from the fake egress gateway state before any credential or container."
+    },
+    {
+      "file": "runtime-egress-unhealthy.json",
+      "definition": "manifest",
+      "valid": true,
+      "expected": {
+        "stage": "runtime",
+        "exit_code": 17,
+        "error_code": "egress_unavailable"
+      },
+      "context": {
+        "home": "/Users/example",
+        "cwd_exists": true,
+        "volume": "absent",
+        "claude_dir_has_symlink": false,
+        "login": "present",
+        "image": "broker_built",
+        "docker": "reachable",
+        "egress": "unhealthy"
+      },
+      "note": "Schema-valid; broker must refuse from the fake egress gateway state before any credential or container."
+    },
+    {
+      "file": "runtime-egress-missing.json",
+      "definition": "manifest",
+      "valid": true,
+      "expected": {
+        "stage": "runtime",
+        "exit_code": 17,
+        "error_code": "egress_unavailable"
+      },
+      "context": {
+        "home": "/Users/example",
+        "cwd_exists": true,
+        "volume": "absent",
+        "claude_dir_has_symlink": false,
+        "login": "present",
+        "image": "broker_built",
+        "docker": "reachable",
+        "egress": "missing"
+      },
+      "note": "Schema-valid; broker must refuse from the fake egress gateway state before any credential or container."
+    },
+    {
+      "file": "runtime-egress-not-internal.json",
+      "definition": "manifest",
+      "valid": true,
+      "expected": {
+        "stage": "runtime",
+        "exit_code": 17,
+        "error_code": "egress_unavailable"
+      },
+      "context": {
+        "home": "/Users/example",
+        "cwd_exists": true,
+        "volume": "absent",
+        "claude_dir_has_symlink": false,
+        "login": "present",
+        "image": "broker_built",
+        "docker": "reachable",
+        "egress": "not_internal"
+      },
+      "note": "Schema-valid; broker must refuse from the fake egress gateway state before any credential or container."
     },
     {
       "file": "runtime-docker-sharing-denied.json",
@@ -1367,6 +1561,16 @@
       }
     },
     {
+      "file": "error-egress_unavailable.json",
+      "definition": "error",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 17,
+        "error_code": "egress_unavailable"
+      }
+    },
+    {
       "file": "error-close-keychain_failed.json",
       "definition": "error",
       "valid": true,
@@ -1708,6 +1912,66 @@
     },
     {
       "file": "manifest-opencode-providers-bad-name.json",
+      "definition": "manifest",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "manifest-secrets.json",
+      "definition": "manifest",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "manifest-secrets-broker-item.json",
+      "definition": "manifest",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "manifest-secrets-path.json",
+      "definition": "manifest",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "manifest-secrets-dot.json",
+      "definition": "manifest",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "manifest-secrets-empty-file.json",
+      "definition": "manifest",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "manifest-secrets-extra-field.json",
       "definition": "manifest",
       "valid": false,
       "expected": {

@@ -1,9 +1,9 @@
-"""A tui client's hook, run as `ensemble-session hook DIR LABEL`: drains stdin, checks callback
-sources, binds client identity, and appends one hooks.jsonl record before notifying its optional
-Host callback. Never stdout, always exits 0; failures retain a traceback and one stderr line.
-session.json's client_hook and host_hook are HookCallback.fields(): a callback module is found over
-the hook's own source roots, then every callback's declared roots, then sys.path, each its on_hook
-given a HookCall; one outside sys.path loads from its roots, sys.path unchanged.
+"""A tui client's hook: drains stdin, checks callback sources, binds identity and journals
+hooks.jsonl before notifying the optional Host. No stdout; failures log a traceback and stderr line.
+The CLI defaults to exit 0; --strict reports failure; an --event retry of the last journaled event
+reruns only the Host. session.json declares client_hook and host_hook via HookCallback.fields().
+Resolve modules over hook roots, all callbacks' roots, then sys.path.
+Call on_hook(HookCall); load external modules from declared roots without changing sys.path.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from datetime import datetime
 
 from ensemble.session.engine.types import MARKS, HookCall, HookError, StatusState
 from ensemble.session.hosts.base import TUI_STATE
+from ensemble.utils import read_regular
 
 PAYLOAD_MAX = 64 << 20  # bytes of stdin parsed
 
@@ -95,13 +96,15 @@ def _prepare(argv: Sequence[str], roots: Sequence[str]):
     return folder, label, state, specs
 
 
-def main(argv: Sequence[str], stdin, *, roots: Sequence[str]) -> None:
+def main(argv: Sequence[str], stdin, *, roots: Sequence[str], event: str | None = None) -> None:
     payload = read_payload(stdin)
+    if event is not None and not LABEL.fullmatch(event):
+        raise HookError("usage: --event <relay event [A-Za-z0-9_.-]{1,64}>")
     folder, label, state, specs = _prepare(argv, roots)
-    _dispatch(folder, label, payload, state, specs)
+    _dispatch(folder, label, payload, state, specs, event=event)
 
 
-def _dispatch(folder, label, payload, state, specs):
+def _dispatch(folder, label, payload, state, specs, *, event):
     _validate_state(state, os.path.join(folder, TUI_STATE), HookError)
 
     def call(kind, given) -> HookCall:
@@ -109,7 +112,10 @@ def _dispatch(folder, label, payload, state, specs):
             label, given, state["sid"], state["workdir"], state["events"], state[kind]["state"]
         )
 
-    if client_hook := state.get("client_hook"):
+    journaled = None if event is None else _journaled(os.path.join(folder, HOOKS), event, label)
+    if journaled is not None:  # a retry reruns only the Host
+        payload = journaled
+    elif client_hook := state.get("client_hook"):
         client = _load_callback(client_hook["module"], "client hook", specs)
         payload = client.on_hook(call("client_hook", payload))
         if payload is None:
@@ -122,12 +128,31 @@ def _dispatch(folder, label, payload, state, specs):
     word = state["words"].get(label)
     host_hook = state.get("host_hook") if word else None
     host = None if host_hook is None else _load_callback(host_hook["module"], "host hook", specs)
-    if word != StatusState.DONE:
-        payload = cut(payload)
-    stamp = datetime.now().astimezone().isoformat(timespec="milliseconds")
-    append(os.path.join(folder, HOOKS), {"ts": stamp, "label": label, "payload": payload})
+    if journaled is None:
+        if word != StatusState.DONE:
+            payload = cut(payload)
+        stamp = datetime.now().astimezone().isoformat(timespec="milliseconds")
+        record = {"ts": stamp, "label": label, "payload": payload}
+        append(os.path.join(folder, HOOKS), record if event is None else {**record, "event": event})
     if host is not None:
         host.on_hook(word, call("host_hook", payload))
+
+
+def _journaled(path: str, event: str, label: str) -> dict | None:
+    """The payload of the last hooks.jsonl record when it journaled `event` under `label`."""
+    data = read_regular(path) or b""
+    try:
+        record = json.loads(data.rstrip(b"\n").rpartition(b"\n")[2])
+    except (ValueError, RecursionError):
+        return None
+    if (
+        isinstance(record, dict)
+        and record.get("event") == event
+        and record.get("label") == label
+        and isinstance(record.get("payload"), dict)
+    ):
+        return record["payload"]
+    return None
 
 
 def read_payload(stream) -> dict:
@@ -315,13 +340,13 @@ def append(path: str, record: dict) -> None:
         raise HookError(f"{path}: short write")
 
 
-def run(argv: Sequence[str], stdin, *, roots: Sequence[str]) -> None:
-    """One hook call, as `ensemble-session hook DIR LABEL` runs it with its own source roots, its
-    payload stdin's bytes (stdin may be None): never raises, never writes stdout; a failure keeps
-    its traceback in DIR/hook.log and one stderr line.
+def run(argv: Sequence[str], stdin, *, roots: Sequence[str], event: str | None = None) -> bool:
+    """One hook call, as `ensemble-session hook [--event ID] DIR LABEL` runs it with its own source
+    roots, its payload stdin's bytes (stdin may be None): returns success, never raises or writes
+    stdout; a failure keeps its traceback in DIR/hook.log and one stderr line.
     """
     try:
-        main(argv, stdin.buffer, roots=roots)
+        main(argv, stdin.buffer, roots=roots, event=event)
     except Exception as e:  # noqa: BLE001  # the hook must never fail the client
         if argv and _abs(argv[0]):
             with (
@@ -335,3 +360,6 @@ def run(argv: Sequence[str], stdin, *, roots: Sequence[str]) -> None:
             ):
                 file.write(traceback.format_exc())
         say(str(e) if isinstance(e, HookError) else f"{type(e).__name__}: {e}")
+        return False
+    else:
+        return True

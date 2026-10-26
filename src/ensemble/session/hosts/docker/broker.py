@@ -22,7 +22,7 @@ from ensemble.utils import save
 # Installed by src/broker/install.sh and the worker image (src/broker/internal/launcher/assets/Dockerfile).
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
 RELAY = "/opt/ensemble/bin/relay"
-PROTOCOL = "22"
+PROTOCOL = "25"
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
 INSTALL = "install or upgrade it: see docs/docker-host.md#install"
 TIMEOUT = 1800
@@ -68,6 +68,7 @@ CODES = {  # code → (exit code, the commands that report it)
     "workspace_failed": (14, {"workspace-rm"}),
     "github_failed": (15, {"start", "refresh"}),
     "refresh_failed": (16, {"refresh"}),
+    "egress_unavailable": (17, {"start"}),
     "internal_error": (70, COMMANDS),
 }
 ERROR_KEYS = frozenset({"command", "code", "message", "cleanup"})

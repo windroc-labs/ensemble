@@ -8,7 +8,7 @@ import (
 	"unicode/utf8"
 )
 
-const Version = "22"
+const Version = "25"
 
 const AuditWriteFailed = "audit_write_failed"
 
@@ -30,6 +30,7 @@ const (
 	WorkspaceFailed   Code = "workspace_failed"
 	GitHubFailed      Code = "github_failed"
 	RefreshFailed     Code = "refresh_failed"
+	EgressUnavailable Code = "egress_unavailable"
 	InternalError     Code = "internal_error"
 	Busy              Code = "busy"
 )
@@ -38,7 +39,7 @@ var exits = map[Code]int{
 	Usage: 2, ManifestRejected: 3, MountRejected: 4, LoginRequired: 5, ImageRejected: 6,
 	DockerUnreachable: 7, BuildFailed: 8, StartFailed: 9, CloseFailed: 10, KeychainFailed: 11,
 	WorkspaceDirty: 12, WorkspaceRejected: 13, WorkspaceFailed: 14, GitHubFailed: 15, RefreshFailed: 16,
-	InternalError: 70, Busy: 75,
+	EgressUnavailable: 17, InternalError: 70, Busy: 75,
 }
 
 func Exit(c Code) int {

@@ -334,6 +334,8 @@ class ResponseTest(Case):
         )
         with self.assertRaisesRegex(SessionError, "bad response to refresh: error fields"):
             Broker(FakeBroker(fails("start_failed", 9, cause=cause))).refresh(CONTAINER, MANIFEST)
+        with self.assertRaisesRegex(SessionError, "bad response to refresh: error fields"):
+            Broker(FakeBroker(fails("egress_unavailable", 17))).refresh(CONTAINER, MANIFEST)
 
     def test_parsed_successes(self):
         self.assertEqual(

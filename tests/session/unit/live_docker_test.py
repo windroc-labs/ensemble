@@ -46,6 +46,9 @@ def withdrawn(kind="claude-setup-token"):
     return {"kind": kind, "result": "withdrawn"}
 
 
+NETWORK = "egress-workers"
+
+
 def inspect(**changes):
     found = {
         "Config": {"User": "agent", "Env": [f"GH_TOKEN={FAKE}"]},
@@ -53,11 +56,11 @@ def inspect(**changes):
             "CapDrop": ["ALL"],
             "SecurityOpt": ["no-new-privileges"],
             "Privileged": False,
-            "NetworkMode": "egress-workers",
+            "NetworkMode": NETWORK,
             "PidMode": "",
             "IpcMode": "private",
         },
-        "NetworkSettings": {"Networks": {"egress-workers": {}}},
+        "NetworkSettings": {"Networks": {NETWORK: {}}},
         "Mounts": [
             {"Type": "volume", "Name": "ensemble-ws-live", "Destination": CWD},
             {"Type": "bind", "Source": CLAUDE_DIR, "Destination": CLAUDE_DIR},
@@ -386,7 +389,7 @@ class RemovedTokensTest(Case):
 
 class BaselineTest(Case):
     def check(self, found, plan=(CLAUDE_DIR,)):
-        return gate.baseline(found, "live", CWD, list(plan))
+        return gate.baseline(found, "live", CWD, list(plan), NETWORK)
 
     def test_compliant_claude(self):
         self.assertEqual(self.check(inspect()), [])
@@ -405,7 +408,9 @@ class BaselineTest(Case):
         bind = {"Type": "bind", "Source": "/host_mnt" + CLAUDE_DIR, "Destination": CLAUDE_DIR}
         self.assertEqual(self.check(inspect(Mounts=[volume, bind])), [])
         inside = {"Type": "bind", "Source": "/host_mnt" + CWD + "/src", "Destination": "/w"}
-        problems = gate.baseline(inspect(Mounts=[volume, inside]), "live", CWD, [CWD + "/src"])
+        problems = gate.baseline(
+            inspect(Mounts=[volume, inside]), "live", CWD, [CWD + "/src"], NETWORK
+        )
         self.assertEqual(len(problems), 1, problems)
         self.assertIn("cwd", problems[0])
 
@@ -429,6 +434,8 @@ class BaselineTest(Case):
             "privileged": inspect(HostConfig__Privileged=True),
             "network": inspect(HostConfig__NetworkMode="host"),
             "network none": inspect(HostConfig__NetworkMode="none"),
+            "network bridge": inspect(HostConfig__NetworkMode="bridge"),
+            "second network": inspect(NetworkSettings={"Networks": {NETWORK: {}, "bridge": {}}}),
             "extra hosts": inspect(HostConfig__ExtraHosts=["host.docker.internal:host-gateway"]),
             "pid": inspect(HostConfig__PidMode="host"),
             "ipc": inspect(HostConfig__IpcMode="host"),
@@ -457,7 +464,7 @@ class BaselineTest(Case):
                 found = inspect(
                     Mounts=[volume, {"Type": "bind", "Source": source, "Destination": "/w"}]
                 )
-                problems = gate.baseline(found, "live", CWD, [source])
+                problems = gate.baseline(found, "live", CWD, [source], NETWORK)
                 self.assertEqual(len(problems), 1, problems)
                 self.assertIn("cwd", problems[0])
 
@@ -465,9 +472,48 @@ class BaselineTest(Case):
         volume = {"Type": "volume", "Name": "ensemble-ws-live", "Destination": CWD}
         sock = "/var/run/docker.sock"
         found = inspect(Mounts=[volume, {"Type": "bind", "Source": sock, "Destination": sock}])
-        problems = gate.baseline(found, "live", CWD, [sock])
+        problems = gate.baseline(found, "live", CWD, [sock], NETWORK)
         self.assertEqual(len(problems), 1, problems)
         self.assertIn("docker.sock", problems[0])
+
+
+class EgressGatewayTest(Case):
+    GATEWAY = "e" * 64
+
+    def network(self, listing, labels=None):
+        found = [{"Config": {"Labels": labels or {}}}]
+        replies = iter([(listing, ""), (json.dumps(found), "")])
+        with mock.patch.object(gate, "call", side_effect=lambda _argv: next(replies)) as call:
+            return gate.egress_gateway("docker")[1], call
+
+    def test_the_gateways_workers_network(self):
+        labels = {"windroc.egress.network.workers.name": NETWORK}
+        found, call = self.network(self.GATEWAY + "\n", labels)
+        self.assertEqual(found, NETWORK)
+        self.assertEqual(
+            call.call_args_list[0].args[0],
+            [
+                "docker",
+                "ps",
+                "--all",
+                "--filter",
+                "label=windroc.egress.contract",
+                "--format",
+                "{{.ID}}",
+            ],
+        )
+
+    def test_no_single_gateway_or_label_fails_naming_the_gateway(self):
+        for listing, labels in (
+            ("", None),
+            (self.GATEWAY + "\n" + "c" * 64 + "\n", None),
+            (self.GATEWAY + "\n", {}),
+        ):
+            with (
+                self.subTest(listing=listing, labels=labels),
+                self.assertRaisesRegex(SystemExit, "egress gateway"),
+            ):
+                self.network(listing, labels)
 
 
 class DrainedTest(Case):
@@ -675,7 +721,7 @@ class NoSecretTest(Case):
         outputs = [
             *gate.reclaimed(lines, G1, "claude"),
             gate.removed_tokens(lines, G1),
-            *gate.baseline(inspect(HostConfig__CapDrop=[]), "live", CWD, [CLAUDE_DIR]),
+            *gate.baseline(inspect(HostConfig__CapDrop=[]), "live", CWD, [CLAUDE_DIR], NETWORK),
             gate.timing({"phases": {}}, "", TimingTest.STDERR, "live"),
             *gate.install_steps({"phases": {}}, TimingTest.STDERR, "claude"),
         ]

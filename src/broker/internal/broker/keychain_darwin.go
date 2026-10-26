@@ -425,21 +425,21 @@ static OSStatus item_access(const char *path, const char *service, const char *a
     if (item) CFRelease(item);
     return s;
 }
-static int hidden_token(char *buffer, size_t capacity) {
+static int hidden_token(int fd, char *buffer, size_t capacity) {
     struct termios old, hidden;
-    if (tcgetattr(STDIN_FILENO, &old) != 0) return -1;
+    if (tcgetattr(fd, &old) != 0) return -1;
     hidden = old;
     hidden.c_lflag &= ~(ECHO | ECHONL);
-    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &hidden) != 0) return -1;
+    if (tcsetattr(fd, TCSAFLUSH, &hidden) != 0) return -1;
     size_t n = 0;
     char c;
     int result = -1;
-    while (read(STDIN_FILENO, &c, 1) == 1) {
+    while (read(fd, &c, 1) == 1) {
         if (c == '\n' || c == '\r') { result = (int)n; break; }
         if (n + 1 >= capacity) break;
         buffer[n++] = c;
     }
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &old);
+    tcsetattr(fd, TCSAFLUSH, &old);
     memset_s(&c, sizeof c, 0, sizeof c); // on overflow c holds a byte of the secret
     return result;
 }
@@ -480,10 +480,23 @@ func CheckInstalled() error {
 	return nil
 }
 
-// ReadHidden reads one line from the terminal with echo off.
-func ReadHidden() ([]byte, error) {
+// ReadHidden reads one line from the terminal on stdin with echo off.
+func ReadHidden() ([]byte, error) { return readHidden(os.Stdin) }
+
+// ReadHiddenTTY reads one line from the controlling terminal with echo off, for a login whose stdin carries a value.
+func ReadHiddenTTY() ([]byte, error) {
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return nil, errors.New("needs an interactive terminal")
+	}
+	defer tty.Close()
+	return readHidden(tty)
+}
+
+// readHidden reads one line from terminal f with echo off.
+func readHidden(f *os.File) ([]byte, error) {
 	buf := make([]byte, maxToken+2)
-	n := C.hidden_token((*C.char)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)))
+	n := C.hidden_token(C.int(f.Fd()), (*C.char)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)))
 	if n < 0 {
 		erase(buf)
 		return nil, errors.New("needs an interactive terminal")

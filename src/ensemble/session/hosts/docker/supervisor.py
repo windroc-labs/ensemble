@@ -1,9 +1,11 @@
 """A Docker session's host run supervisor (argv: name, state dir, TUI dir, events or "", hook
 command, generation, the supervisor.lock fd its starter holds, then connector, dead-wait and
 dead-check argv as JSON). Each relay request that passes its checks and is newer than <gen>.seq runs
-`<hook> hook <TUI dir> <label>` once; every line gets one reply. SIGTERM closes the connector's
-stdin; lines already sent still run. A confirmed client exit writes the dead line. The session's
-GitHub tokens (<gen>.github.json) are refreshed REFRESH_AHEAD s before the earliest expiry.
+`<hook> hook --strict --event <gen>.<seq> <TUI dir> <label>`; only success records seq, failures
+request retry, and a retry reruns only the Host callback. Every line gets one reply. SIGTERM
+closes the connector's stdin; lines already sent still run. A confirmed client exit writes the dead
+line. The session's GitHub tokens (<gen>.github.json) are refreshed REFRESH_AHEAD s before the
+earliest expiry.
 """
 
 import base64
@@ -89,7 +91,10 @@ class Supervisor:
             why = "directory"
         elif seq > self._seen():
             body.pop("transcript_path", None)
-            why = self._hook(request["argv"][2], body)
+            why = self._hook(request["argv"][2], body, f"{gen}.{seq}")
+            if why:
+                self.reject(gen, seq, why)
+                return {"gen": gen, "seq": seq, "ok": False, "retry": True}
             with contextlib.suppress(OSError):
                 save(self.seq_file, str(seq), durable=True)
         if why:
@@ -103,10 +108,10 @@ class Supervisor:
         except (OSError, ValueError):
             return 0
 
-    def _hook(self, label: str, body: dict) -> str | None:
+    def _hook(self, label: str, body: dict, event: str) -> str | None:
         try:
             res = self.run(
-                [self.hook, "hook", self.tui_dir, label],
+                [self.hook, "hook", "--strict", "--event", event, self.tui_dir, label],
                 input=json.dumps(body).encode(),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,

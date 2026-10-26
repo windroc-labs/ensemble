@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"ensemble/broker/internal/audit"
@@ -40,7 +41,7 @@ func recording(calls *[]call) app {
 		}
 	}
 	build, workspaceRm := result("build"), result("workspace-rm")
-	return app{build: func(ctx context.Context, arg string, _ []string, _ time.Duration, p io.Writer) (any, error) {
+	return app{build: func(ctx context.Context, arg string, _ launcher.BuildSpec, _ time.Duration, p io.Writer) (any, error) {
 		return build(ctx, arg, p)
 	},
 		start: result("start"), close: result("close"),
@@ -63,7 +64,7 @@ func invoke(a app, args ...string) (int, string, string) {
 
 func TestVersion(t *testing.T) {
 	code, out, errOut := invoke(app{}, "version")
-	if code != 0 || out != `{"protocol_version":"22"}`+"\n" || errOut != "" {
+	if code != 0 || out != `{"protocol_version":"25"}`+"\n" || errOut != "" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
 	for _, c := range fixtures.Cases(t, "version_output") {
@@ -210,6 +211,20 @@ func TestUsageErrors(t *testing.T) {
 		{"build", []string{"build", "--ensemble", "/x", "--plugin", "../x"}},
 		{"build", []string{"build", "--ensemble", "/x", "--plugin", "a@"}},
 		{"build", []string{"build", "--ensemble", "/x", "--max-age", "1", "--plugin", "a"}},
+		{"build", []string{"build", "--ensemble", "/x", "--image-plugin"}},
+		{"build", []string{"build", "--ensemble", "/x", "--image-plugin", "../x"}},
+		{"build", []string{"build", "--ensemble", "/x", "--image-plugin", ".x"}},
+		{"build", []string{"build", "--ensemble", "/x", "--image-plugin", "a@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+		{"build", []string{"build", "--ensemble", "/x", "--image-plugin", "a", "--plugin", "b@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+		{"build", []string{"build", "--ensemble", "/x", "--max-age", "1", "--image-plugin", "a"}},
+		{"build", []string{"build", "--ensemble", "/x", "--base-image"}},
+		{"build", []string{"build", "--ensemble", "/x", "--base-image", "-x"}},
+		{"build", []string{"build", "--ensemble", "/x", "--base-image", "Dummy:test"}},
+		{"build", []string{"build", "--ensemble", "/x", "--base-image", "localhost:5000/env:1"}},
+		{"build", []string{"build", "--ensemble", "/x", "--base-image", "env@sha256:" + strings.Repeat("c", 64)}},
+		{"build", []string{"build", "--ensemble", "/x", "--base-image", strings.Repeat("a", 256)}},
+		{"build", []string{"build", "--ensemble", "/x", "--base-image", "a", "--base-image", "b"}},
+		{"build", []string{"build", "--ensemble", "/x", "--plugin", "b@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "--base-image", "a"}},
 		{"start", []string{"start", "--manifest", "/bad\npath"}},
 		{"start", []string{"start", "--manifest", "/bad\xffpath"}},
 		{"close", []string{"close", "--container", "other"}},
@@ -246,6 +261,11 @@ func TestUsageErrors(t *testing.T) {
 		{"unknown", []string{"login", "opencode", "ollama"}},
 		{"unknown", []string{"login", "opencode", "a/b"}},
 		{"unknown", []string{"login", "opencode", "strata", "x"}},
+		{"unknown", []string{"login", "env"}},
+		{"unknown", []string{"login", "env", ""}},
+		{"unknown", []string{"login", "env", "Dummy"}},
+		{"unknown", []string{"login", "env", "a/b"}},
+		{"unknown", []string{"login", "env", "dummy", "value"}},
 	} {
 		code, out, errOut := invoke(a, tc.args...)
 		if code != 2 {
@@ -453,7 +473,7 @@ func TestBuildMaxAge(t *testing.T) {
 		999999999 * time.Second: {"--max-age", "999999999"},
 	} {
 		got := time.Duration(-2)
-		a := app{build: func(_ context.Context, _ string, _ []string, maxAge time.Duration, _ io.Writer) (any, error) {
+		a := app{build: func(_ context.Context, _ string, _ launcher.BuildSpec, maxAge time.Duration, _ io.Writer) (any, error) {
 			got = maxAge
 			return map[string]string{}, nil
 		}}
@@ -464,23 +484,30 @@ func TestBuildMaxAge(t *testing.T) {
 }
 
 func TestBuildPlugins(t *testing.T) {
+	widget := "widget@vendor/plugin#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa::vendor/catalogue#cccccccccccccccccccccccccccccccccccccccc"
+	b, a := "b@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "a@o/m.x#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	for _, c := range []struct {
-		args    []string
-		plugins []string
-		maxAge  time.Duration
+		args   []string
+		spec   launcher.BuildSpec
+		maxAge time.Duration
 	}{
-		{nil, nil, -1},
-		{[]string{"--plugin", "widget@vendor/plugin#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa::vendor/catalogue#cccccccccccccccccccccccccccccccccccccccc"}, []string{"widget@vendor/plugin#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa::vendor/catalogue#cccccccccccccccccccccccccccccccccccccccc"}, -1},
-		{[]string{"--plugin", "b@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "--plugin", "a@o/m.x#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "--max-age", "60"}, []string{"b@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "a@o/m.x#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, time.Minute},
+		{nil, launcher.BuildSpec{}, -1},
+		{[]string{"--plugin", widget}, launcher.BuildSpec{Plugins: []string{widget}}, -1},
+		{[]string{"--plugin", b, "--plugin", a, "--max-age", "60"}, launcher.BuildSpec{Plugins: []string{b, a}}, time.Minute},
+		{[]string{"--image-plugin", "dummy-plugin"}, launcher.BuildSpec{ImagePlugins: []string{"dummy-plugin"}}, -1},
+		{[]string{"--plugin", b, "--image-plugin", "z", "--image-plugin", "a.b_c-d", "--max-age", "0"}, launcher.BuildSpec{Plugins: []string{b}, ImagePlugins: []string{"z", "a.b_c-d"}}, 0},
+		{[]string{"--base-image", "dummy-env:test"}, launcher.BuildSpec{BaseImage: "dummy-env:test"}, -1},
+		{[]string{"--base-image", "sha256:" + strings.Repeat("c", 64), "--plugin", b, "--image-plugin", "z", "--max-age", "60"}, launcher.BuildSpec{BaseImage: "sha256:" + strings.Repeat("c", 64), Plugins: []string{b}, ImagePlugins: []string{"z"}}, time.Minute},
 	} {
-		var plugins []string
+		var spec launcher.BuildSpec
 		maxAge := time.Duration(-2)
-		a := app{build: func(_ context.Context, _ string, p []string, m time.Duration, _ io.Writer) (any, error) {
-			plugins, maxAge = p, m
+		app := app{build: func(_ context.Context, _ string, s launcher.BuildSpec, m time.Duration, _ io.Writer) (any, error) {
+			spec, maxAge = s, m
 			return map[string]string{}, nil
 		}}
-		if code, _, errOut := invoke(a, append([]string{"build", "--ensemble", "/pkg"}, c.args...)...); code != 0 || !slices.Equal(plugins, c.plugins) || maxAge != c.maxAge {
-			t.Fatalf("%q: exit %d plugins %q max age %v: %s", c.args, code, plugins, maxAge, errOut)
+		if code, _, errOut := invoke(app, append([]string{"build", "--ensemble", "/pkg"}, c.args...)...); code != 0 || !slices.Equal(spec.Plugins, c.spec.Plugins) ||
+			!slices.Equal(spec.ImagePlugins, c.spec.ImagePlugins) || spec.BaseImage != c.spec.BaseImage || maxAge != c.maxAge {
+			t.Fatalf("%q: exit %d spec %+v max age %v: %s", c.args, code, spec, maxAge, errOut)
 		}
 	}
 }
@@ -499,7 +526,7 @@ func TestWorkspaceRmForce(t *testing.T) {
 }
 
 func TestChannels(t *testing.T) {
-	failing := app{build: func(context.Context, string, []string, time.Duration, io.Writer) (any, error) {
+	failing := app{build: func(context.Context, string, launcher.BuildSpec, time.Duration, io.Writer) (any, error) {
 		return nil, protocol.New(protocol.BuildFailed, "stage failed")
 	}, close: func(context.Context, string, io.Writer) (any, error) {
 		return nil, errors.New("surprise")
@@ -560,7 +587,17 @@ func (s *scripted) Run(_ context.Context, args []string, stdin []byte) ([]byte, 
 	if s.fail != "" && strings.Contains(joined, s.fail) {
 		return nil, &docker.CommandError{Exit: 1, Stderr: "failed: " + string(stdin)}
 	}
+	gateway := strings.Repeat("e", 64)
 	switch {
+	case strings.HasPrefix(joined, "ps --all") && strings.Contains(joined, "--filter label=windroc.egress.contract "):
+		return []byte(gateway + "\n"), nil
+	case joined == "container inspect "+gateway:
+		return []byte(`[{"Id":"` + gateway + `","Name":"/egress-gateway","State":{"Running":true,"Health":{"Status":"healthy"}},` +
+			`"Config":{"Labels":{"windroc.egress.contract":"1","windroc.egress.networks":"workers",` +
+			`"windroc.egress.network.workers.name":"egress-workers","windroc.egress.network.workers.proxy":"http://egress-proxy-workers:4750"}},` +
+			`"NetworkSettings":{"Networks":{"egress-workers":{"NetworkID":"` + strings.Repeat("f", 64) + `"}}}}]`), nil
+	case strings.HasPrefix(joined, "network inspect"):
+		return []byte(`[{"Name":"egress-workers","Id":"` + strings.Repeat("f", 64) + `","Internal":true}]`), nil
 	case strings.HasPrefix(joined, "image inspect"):
 		return []byte(`[{"Id":"sha256:` + strings.Repeat("b", 64) + `","Config":{"Labels":{"ensemble.key":"` + strings.Repeat("a", 64) +
 			`","ensemble.version":"1.2.3","ensemble.agent-uid":"1001","ensemble.agent-gid":"1002"}}}]`), nil
@@ -621,7 +658,7 @@ func TestTokenNeverLeaves(t *testing.T) {
 func TestBuildProgressGoesToStderr(t *testing.T) {
 	result := map[string]any{"image": "ensemble-worker:k", "digest": "sha256:d", "rebuilt": true}
 	build := func(fail bool) app {
-		return app{build: func(_ context.Context, _ string, _ []string, _ time.Duration, progress io.Writer) (any, error) {
+		return app{build: func(_ context.Context, _ string, _ launcher.BuildSpec, _ time.Duration, progress io.Writer) (any, error) {
 			_, _ = io.WriteString(progress, "#1 [1/3] FROM base\n#2 DONE\n")
 			if fail {
 				return nil, protocol.New(protocol.BuildFailed, "stage failed")
@@ -840,5 +877,69 @@ func TestLoginGitHubKeyFileDispatch(t *testing.T) {
 		if code, out, errOut := invoke(a, "login", "github", "ensemble-bot", "--key-file", file, "--app-id", "1234567"); code != 1 || out != "" || errOut != want || called {
 			t.Fatalf("%s: exit %d %q %q called %v", file, code, out, errOut, called)
 		}
+	}
+}
+
+func TestLoginEnvDispatch(t *testing.T) {
+	var got string
+	a := app{loginEnv: func(name string, out io.Writer) error {
+		got = name
+		_, err := io.WriteString(out, "ok\n")
+		return err
+	}}
+	if code, out, errOut := invoke(a, "login", "env", "dummy"); code != 0 || got != "dummy" || out != "ok\n" || errOut != "" {
+		t.Fatalf("exit %d name %q %q %q", code, got, out, errOut)
+	}
+	a = app{loginEnv: func(string, io.Writer) error { return errors.New("the value must be 1 to 16384 bytes") }}
+	if code, out, errOut := invoke(a, "login", "env", "dummy"); code != 1 || out != "" || errOut != "ensemble-broker: the value must be 1 to 16384 bytes\n" {
+		t.Fatalf("%d %q %q", code, out, errOut)
+	}
+}
+
+// keptReader reads from r and keeps every buffer it was handed, so a test can check the caller erased it.
+type keptReader struct {
+	r    io.Reader
+	bufs [][]byte
+}
+
+func (k *keptReader) Read(p []byte) (int, error) {
+	k.bufs = append(k.bufs, p)
+	return k.r.Read(p)
+}
+
+// erased is whether every buffer k was handed, to its capacity, is zero.
+func (k *keptReader) erased() bool {
+	for _, b := range k.bufs {
+		b = b[:cap(b)]
+		if !bytes.Equal(b, make([]byte, len(b))) {
+			return false
+		}
+	}
+	return len(k.bufs) > 0
+}
+
+func TestReadEnvValue(t *testing.T) {
+	for _, value := range []string{"", "one line", "-----BEGIN KEY-----\nabc\n-----END KEY-----\n", strings.Repeat("v", launcher.MaxSecretBytes)} {
+		r := &keptReader{r: strings.NewReader(value)}
+		got, err := readEnvValue(r)
+		if err != nil || string(got) != value || len(r.bufs) == 0 || cap(r.bufs[0]) != launcher.MaxSecretBytes+1 {
+			t.Fatalf("%.20q: %.20q %v, buffers %d", value, got, err, len(r.bufs))
+		}
+		end := func(b []byte) *byte { return &b[:cap(b)][cap(b)-1] }
+		for _, b := range r.bufs {
+			if end(b) != end(r.bufs[0]) {
+				t.Fatalf("%.20q: read into a second buffer", value)
+			}
+		}
+	}
+	for _, n := range []int{launcher.MaxSecretBytes + 1, launcher.MaxSecretBytes + 2} {
+		r := &keptReader{r: strings.NewReader(strings.Repeat("v", n))}
+		if _, err := readEnvValue(r); err == nil || err.Error() != "the value must be 1 to 16384 bytes" || !r.erased() {
+			t.Fatalf("%d bytes: %v, erased %v", n, err, r.erased())
+		}
+	}
+	r := &keptReader{r: io.MultiReader(strings.NewReader("partial"), iotest.ErrReader(errors.New("closed")))}
+	if _, err := readEnvValue(r); err == nil || err.Error() != "closed" || !r.erased() {
+		t.Fatalf("read error: %v, erased %v", err, r.erased())
 	}
 }

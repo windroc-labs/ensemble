@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -27,6 +28,9 @@ type Runner interface {
 }
 
 var ErrUnreachable = errors.New("Docker Desktop daemon unreachable")
+
+// networkNotFound is the daemon's answer for a missing network, as newer CLIs pass it through.
+var networkNotFound = regexp.MustCompile(`network \S+ not found`)
 
 type CommandError struct {
 	Exit   int
@@ -54,11 +58,12 @@ func Diagnostic(err error) string {
 	return err.Error()
 }
 
-// Absent reports whether Docker says the image, object, container or volume does not exist.
+// Absent reports whether Docker says the image, object, container, volume or network does not exist.
 func Absent(err error) bool {
 	var ce *CommandError
 	return errors.As(err, &ce) && (strings.Contains(ce.Stderr, "No such image") || strings.Contains(ce.Stderr, "No such object") ||
-		strings.Contains(ce.Stderr, "No such container") || strings.Contains(ce.Stderr, "no such volume"))
+		strings.Contains(ce.Stderr, "No such container") || strings.Contains(ce.Stderr, "no such volume") ||
+		strings.Contains(ce.Stderr, "No such network") || networkNotFound.MatchString(ce.Stderr))
 }
 
 // Conflict reports whether Docker refused a container name another container holds.

@@ -1,0 +1,9 @@
+{
+  "exit_code": 8,
+  "error": {
+    "command": "build",
+    "code": "build_failed",
+    "message": "In-image plugin dummy-plugin: /opt/windroc/plugins/dummy-plugin/.claude-plugin/plugin.json must name it \"dummy-plugin\".",
+    "cleanup": "not_needed"
+  }
+}

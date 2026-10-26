@@ -89,10 +89,10 @@ func (w *lockWorld) respond(args []string) ([]byte, error, bool) {
 		slices.Sort(ids)
 		return []byte(strings.Join(ids, "\n")), nil, true
 	case "container":
-		if args[1] != "inspect" {
+		ref := args[len(args)-1]
+		if args[1] != "inspect" || ref == gatewayID { // the egress gateway is the base world's
 			return nil, nil, false
 		}
-		ref := args[len(args)-1]
 		for _, c := range w.objects {
 			if c.id == ref || c.name == ref {
 				out := lockInspect(c.id, c.name, c.state, c.labels)
@@ -291,7 +291,7 @@ func TestLockRecheckCleanup(t *testing.T) {
 		w := newLockWorld()
 		queries := 0
 		w.before = func(a []string) {
-			if a[0] == "ps" && strings.HasPrefix(flag(a, "--filter"), "label=") {
+			if a[0] == "ps" && strings.HasPrefix(flag(a, "--filter"), "label=windroc.lock=") {
 				queries++
 				if queries == 2 {
 					w.mu.Lock()
@@ -368,7 +368,7 @@ func TestExpiredMutexInterleavings(t *testing.T) {
 						<-secondRun
 					}
 				}
-				if both && a[0] == "ps" && strings.HasPrefix(flag(a, "--filter"), "label=") {
+				if both && a[0] == "ps" && strings.HasPrefix(flag(a, "--filter"), "label=windroc.lock=") {
 					mu.Lock()
 					queries++
 					post := queries > 2
@@ -486,7 +486,7 @@ func TestMutexCleanup(t *testing.T) {
 			defer cancel()
 			queries := 0
 			w.before = func(a []string) {
-				if a[0] == "ps" && strings.HasPrefix(flag(a, "--filter"), "label=") {
+				if a[0] == "ps" && strings.HasPrefix(flag(a, "--filter"), "label=windroc.lock=") {
 					queries++
 				}
 			}

@@ -1,0 +1,15 @@
+{
+  "argv": [
+    "build",
+    "--ensemble",
+    "/opt/ensemble",
+    "--plugin",
+    "beta@owner/market#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "--image-plugin",
+    "dummy-plugin",
+    "--image-plugin",
+    "other.plugin",
+    "--max-age",
+    "604800"
+  ]
+}
