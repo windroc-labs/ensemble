@@ -87,7 +87,7 @@ commands exit 2 naming it; router, promote and prune run without it.
 | Lifetime | the token 30 days; any `issue` command first requests a new one when it is missing, undated, expired or has under 5 days left. A failed request with the old token still valid prints `token-error: manager: <reason>` on stderr and uses it; with it expired the command exits 2 naming the fix |
 | Revoke | as the harness app, with `linear.manager`'s services |
 
-Before this app, the manager used a personal API key (`manager_key`, now an unknown key). Once the app works, revoke
+Before this app, the manager used a personal API key, a setting now refused as an unknown key. Once the app works, revoke
 that key in Linear › Settings › Account › Security & Access, then `security delete-generic-password -s <its service>`
 (the installer's default: `linear-manager`).
 
@@ -271,7 +271,7 @@ With `--board linear`, `scripts/install.sh` asks for each harness, manager and r
 stores its secret and first token with expiry in Keychain, and fills the app user ids ([Setup](board.md#setup)).
 Default services are `linear-app-<slot>-secret` and `linear-app-<slot>-token`; configured services are preserved.
 Reruns reuse valid tokens with over five days left. Cleanup removes only the credential items this installer created.
-A `manager_key` left in `config.local.toml` stops the installer ([Linear manager app](#linear-manager-app)). The table
+The old manager key setting left in `config.local.toml` stops the installer ([Linear manager app](#linear-manager-app)). The table
 lists what it needs in Linear. By hand: create these in the Linear team, then put each id in `~/.ensemble/config.local.toml`: a `linear.<key>` under
 `[orchestrator.linear]` (`linear.states.todo` is `todo` in `[orchestrator.linear.states]`, `linear.roles.pm.client_id` is
 `client_id` in `[orchestrator.linear.roles.pm]`), `local_clones` under `[orchestrator]` ([Setup](board.md#setup)).
