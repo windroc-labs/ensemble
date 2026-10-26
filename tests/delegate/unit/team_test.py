@@ -282,13 +282,20 @@ class Shipped(Case):
             whitelist = {s.split("@", 1)[0] for s in tomllib.load(f)["hosts"]["docker"]["plugins"]}
         packaged = read_config(local=os.devnull)
         named = packaged["environments"]
+        checked = set()
         for role in roles():
             selected = packaged["roles"].get(role, {}).get("environment", {}).get("name")
             extra = set(named[selected]["plugins"]) if selected else set()
             texts = [composed(role)[0], *(task_text(t) for t in catalog()[role])]
+            checked.add(f"roles/{role}.md")
+            checked.update(f"tasks/{task}.md" for task in catalog()[role])
             called = {m for text in texts for m in prefix.findall(text)}
             with self.subTest(role=role):
                 self.assertLessEqual(called, whitelist | extra)
+        for path, text in team_texts().items():
+            if path not in checked:
+                with self.subTest(path=path):
+                    self.assertLessEqual(set(prefix.findall(text)), whitelist)
         self.assertIn("mini-op", {m for m in prefix.findall(task_text("verify"))})
 
     def test_product_design_reviews_the_prd_with_updraft_review_to_its_default_cap(self):
