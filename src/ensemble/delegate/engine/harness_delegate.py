@@ -128,8 +128,8 @@ class _State:
 
 
 TUI_START_TIMEOUT = 30  # seconds: a detached tui run's agent session to go live
-DOCKER_START_TIMEOUT = 120  # the same on the Docker Host, its container start included
-TAIL_LINES = 5  # of a client's screen in a failed start's error
+DOCKER_START_TIMEOUT = 120  # on Docker, its container start included
+TAIL_LINES = 5  # client screen lines in a start error
 TUI_POLL = 0.1  # seconds
 
 
