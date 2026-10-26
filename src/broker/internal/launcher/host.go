@@ -39,6 +39,14 @@ type ProviderKeys interface {
 	Inject(providers []string, exec func(argv []string, stdin []byte) error) error
 }
 
+// EnvSecrets is the broker package's side of a start's environment secrets, which the launcher never sees: each item
+// is a reference, ensemble-env/<name>. Errors are as Credentials'.
+type EnvSecrets interface {
+	Ready(items []string) error
+	// Inject writes one secret's value through exec, as Credentials.Inject does, to the file s.File.
+	Inject(s Secret, exec func(argv []string, stdin []byte) error) error
+}
+
 // Tokens is the broker package's GitHub side: a container's installation tokens, which the launcher never sees.
 // Errors are *protocol.Error, wrap docker.ErrUnreachable, or are opaque, carrying no Docker stderr.
 type Tokens interface {
@@ -60,6 +68,7 @@ type Host struct {
 	Creds    Credentials
 	Codex    CodexCredentials
 	Opencode ProviderKeys
+	Env      EnvSecrets
 	GitHub   Tokens
 	Versions CodexVersions
 	Progress io.Writer                         // nil: none; build's notes on older images, after Docker's progress; start's phase times
@@ -129,8 +138,12 @@ type WorkspaceResult struct {
 	Removed bool   `json:"removed"`
 }
 
-// clientLabel names the client a container was started for; manifest labels cannot use the ensemble. prefix.
-const clientLabel = "ensemble.client"
+// clientLabel names the client a container was started for, secretsLabel the environment secrets it got (their
+// references, comma-joined; never a value); manifest labels cannot use the ensemble. prefix.
+const (
+	clientLabel  = "ensemble.client"
+	secretsLabel = "ensemble.secrets"
+)
 
 // clientKind is the audit kind of the credential client's container holds; "" for none.
 func clientKind(client string) string {

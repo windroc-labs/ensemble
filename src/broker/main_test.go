@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"ensemble/broker/internal/audit"
@@ -63,7 +64,7 @@ func invoke(a app, args ...string) (int, string, string) {
 
 func TestVersion(t *testing.T) {
 	code, out, errOut := invoke(app{}, "version")
-	if code != 0 || out != `{"protocol_version":"23"}`+"\n" || errOut != "" {
+	if code != 0 || out != `{"protocol_version":"24"}`+"\n" || errOut != "" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
 	for _, c := range fixtures.Cases(t, "version_output") {
@@ -260,6 +261,11 @@ func TestUsageErrors(t *testing.T) {
 		{"unknown", []string{"login", "opencode", "ollama"}},
 		{"unknown", []string{"login", "opencode", "a/b"}},
 		{"unknown", []string{"login", "opencode", "strata", "x"}},
+		{"unknown", []string{"login", "env"}},
+		{"unknown", []string{"login", "env", ""}},
+		{"unknown", []string{"login", "env", "Dummy"}},
+		{"unknown", []string{"login", "env", "a/b"}},
+		{"unknown", []string{"login", "env", "dummy", "value"}},
 	} {
 		code, out, errOut := invoke(a, tc.args...)
 		if code != 2 {
@@ -861,5 +867,69 @@ func TestLoginGitHubKeyFileDispatch(t *testing.T) {
 		if code, out, errOut := invoke(a, "login", "github", "ensemble-bot", "--key-file", file, "--app-id", "1234567"); code != 1 || out != "" || errOut != want || called {
 			t.Fatalf("%s: exit %d %q %q called %v", file, code, out, errOut, called)
 		}
+	}
+}
+
+func TestLoginEnvDispatch(t *testing.T) {
+	var got string
+	a := app{loginEnv: func(name string, out io.Writer) error {
+		got = name
+		_, err := io.WriteString(out, "ok\n")
+		return err
+	}}
+	if code, out, errOut := invoke(a, "login", "env", "dummy"); code != 0 || got != "dummy" || out != "ok\n" || errOut != "" {
+		t.Fatalf("exit %d name %q %q %q", code, got, out, errOut)
+	}
+	a = app{loginEnv: func(string, io.Writer) error { return errors.New("the value must be 1 to 16384 bytes") }}
+	if code, out, errOut := invoke(a, "login", "env", "dummy"); code != 1 || out != "" || errOut != "ensemble-broker: the value must be 1 to 16384 bytes\n" {
+		t.Fatalf("%d %q %q", code, out, errOut)
+	}
+}
+
+// keptReader reads from r and keeps every buffer it was handed, so a test can check the caller erased it.
+type keptReader struct {
+	r    io.Reader
+	bufs [][]byte
+}
+
+func (k *keptReader) Read(p []byte) (int, error) {
+	k.bufs = append(k.bufs, p)
+	return k.r.Read(p)
+}
+
+// erased is whether every buffer k was handed, to its capacity, is zero.
+func (k *keptReader) erased() bool {
+	for _, b := range k.bufs {
+		b = b[:cap(b)]
+		if !bytes.Equal(b, make([]byte, len(b))) {
+			return false
+		}
+	}
+	return len(k.bufs) > 0
+}
+
+func TestReadEnvValue(t *testing.T) {
+	for _, value := range []string{"", "one line", "-----BEGIN KEY-----\nabc\n-----END KEY-----\n", strings.Repeat("v", launcher.MaxSecretBytes)} {
+		r := &keptReader{r: strings.NewReader(value)}
+		got, err := readEnvValue(r)
+		if err != nil || string(got) != value || len(r.bufs) == 0 || cap(r.bufs[0]) != launcher.MaxSecretBytes+1 {
+			t.Fatalf("%.20q: %.20q %v, buffers %d", value, got, err, len(r.bufs))
+		}
+		end := func(b []byte) *byte { return &b[:cap(b)][cap(b)-1] }
+		for _, b := range r.bufs {
+			if end(b) != end(r.bufs[0]) {
+				t.Fatalf("%.20q: read into a second buffer", value)
+			}
+		}
+	}
+	for _, n := range []int{launcher.MaxSecretBytes + 1, launcher.MaxSecretBytes + 2} {
+		r := &keptReader{r: strings.NewReader(strings.Repeat("v", n))}
+		if _, err := readEnvValue(r); err == nil || err.Error() != "the value must be 1 to 16384 bytes" || !r.erased() {
+			t.Fatalf("%d bytes: %v, erased %v", n, err, r.erased())
+		}
+	}
+	r := &keptReader{r: io.MultiReader(strings.NewReader("partial"), iotest.ErrReader(errors.New("closed")))}
+	if _, err := readEnvValue(r); err == nil || err.Error() != "closed" || !r.erased() {
+		t.Fatalf("read error: %v, erased %v", err, r.erased())
 	}
 }

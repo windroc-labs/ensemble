@@ -1,5 +1,5 @@
 // Package broker owns the broker's keychain secrets: each Claude account's setup-token (login, access, injection into a
-// container) and the GitHub App private keys (login).
+// container), the GitHub App private keys (login) and the environment secrets (login, injection into a container).
 // It never decides how a container starts: the launcher calls it through Credentials with an exec bound to one container.
 package broker
 
@@ -68,7 +68,8 @@ const AppKeyService = "ensemble-bot"
 
 // KeychainServices are every keychain service the broker reads or writes, one literal each: docs/credentials.md names
 // them all (tests/guard_checks/credentials.py reads this list). Declare each service as a package-level `...Service`
-// string constant: TestKeychainServices pins this list to exactly those.
+// string constant, and each prefix item, an entry ending in "/" that stands for every service starting with it, as a
+// `...ServicePrefix` one: TestKeychainServices pins this list to exactly those.
 var KeychainServices = []string{
 	"ensemble-claude",
 	"ensemble-bot",
@@ -77,6 +78,7 @@ var KeychainServices = []string{
 	"ensemble-revocations",
 	"ensemble-codex",
 	"ensemble-opencode",
+	"ensemble-env/", // prefix item: every ensemble-env/<name>
 }
 
 // SecretKeychain holds broker-only items: created trusting only the broker, read without a dialog.
@@ -84,6 +86,37 @@ type SecretKeychain interface {
 	Secret(service, account string) ([]byte, error)
 	PutSecret(service, account string, data []byte) error
 	DeleteSecret(service, account string) error // an absent item is success
+}
+
+// brokerOnlyStore holds broker-only items and changes their access: storeBrokerOnly's side.
+type brokerOnlyStore interface {
+	SecretKeychain
+	ItemTrust
+}
+
+// storeBrokerOnly saves value in item service/account (replacing an earlier one), makes the item trust only the
+// broker (secureItem, asking password when needed) and proves start's no-dialog read returns value. Errors name the
+// item and end with rerun; none holds value.
+func storeBrokerOnly(service, account, rerun string, value []byte, k brokerOnlyStore, password func() ([]byte, error)) error {
+	item := service + " " + account
+	if err := k.PutSecret(service, account, value); err != nil {
+		if errors.Is(err, ErrInvalidOwnerEdit) {
+			return ownershipError(service, account, err)
+		}
+		return fmt.Errorf("keychain item %s: saving it failed: %w; %s", item, err, rerun)
+	}
+	if err := secureItem(service, account, rerun+" to finish", k, password); err != nil {
+		return err
+	}
+	saved, err := k.Secret(service, account)
+	defer erase(saved)
+	if err == nil && !bytes.Equal(saved, value) {
+		err = errors.New("it holds other bytes")
+	}
+	if err != nil {
+		return fmt.Errorf("keychain item %s: reading it failed: %w; %s", item, err, rerun)
+	}
+	return nil
 }
 
 // ItemTrust reads and changes the access of the generic-password item service and account name.

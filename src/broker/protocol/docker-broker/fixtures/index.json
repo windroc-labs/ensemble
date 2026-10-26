@@ -1,5 +1,5 @@
 {
-  "protocol_version": "23",
+  "protocol_version": "24",
   "cases": [
     {
       "file": "manifest-valid.json",
@@ -1808,6 +1808,66 @@
     },
     {
       "file": "manifest-opencode-providers-bad-name.json",
+      "definition": "manifest",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "manifest-secrets.json",
+      "definition": "manifest",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "manifest-secrets-broker-item.json",
+      "definition": "manifest",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "manifest-secrets-path.json",
+      "definition": "manifest",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "manifest-secrets-dot.json",
+      "definition": "manifest",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "manifest-secrets-empty-file.json",
+      "definition": "manifest",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "manifest-secrets-extra-field.json",
       "definition": "manifest",
       "valid": false,
       "expected": {

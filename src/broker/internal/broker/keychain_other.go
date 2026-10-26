@@ -6,8 +6,9 @@ import "errors"
 
 var errPlatform = errors.New("the broker's keychain and terminal access require macOS")
 
-func CheckInstalled() error       { return errPlatform }
-func ReadHidden() ([]byte, error) { return nil, errPlatform }
+func CheckInstalled() error          { return errPlatform }
+func ReadHidden() ([]byte, error)    { return nil, errPlatform }
+func ReadHiddenTTY() ([]byte, error) { return nil, errPlatform }
 
 type SystemKeychain struct{ Home string }
 
