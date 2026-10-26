@@ -592,7 +592,8 @@ and `ensemble-env/mini-op-ssh-key` (file `mini-ssh-key`); no prefetch. Keys:
 - `lock`: a [lock](#broker-locks) name. A locked run's session closes as soon as the run ends (outcome, failure,
   give-up, usage limit), before its result goes out: no TUI is left for a pane to follow; the workspace and history
   stay, so `ensemble-crew reopen` continues.
-- `prefetch`: `true` prefetches the input's Reference block: exactly one `Repo:` line (a clone path names its origin)
+- `prefetch`: `true` prefetches the input's Reference block (its leading lines, opening with `Reference:` or, in an
+  input without an id, `Repo:`): exactly one `Repo:` line (a clone path names its origin)
   and at most one `Ref:` line (the [Prefetch](#prefetch) ref rule; none: the default branch). Both are checked before
   any git or GitHub call; `Base:` is not read.
 
