@@ -154,7 +154,7 @@ bin/ensemble-orchestrator resume <ID>                 # resume an interrupted at
 tmux ls                                         # running agent runs
 ```
 
-Run `bin/ensemble-orchestrator` by its absolute path; `--help` lists each command's options. Issue operations (`bin/ensemble-orchestrator issue …`: read, list, create (`--parent` splits), edit, move, comment, relate, archive; on Linear also look up and swap a label), in abstract states, roles, task and client names: `/ensemble:board` ([skills/board/SKILL.md](../skills/board/SKILL.md)), their one guide. Events go to `<work_dir>/logs/orchestrator.jsonl`. Keep `<work_dir>/logs/runs.jsonl`: deleting it breaks resume, Recover, write-back and the first-claim search.
+Run `bin/ensemble-orchestrator` by its absolute path; `--help` lists each command's options. Issue operations (`bin/ensemble-orchestrator issue …`: read, list, create (`--parent` splits), edit, move, comment, relate, archive; on Linear also look up and swap a label), in abstract states, roles, task and client names: `/ensemble:board` ([skills/board/SKILL.md](../skills/board/SKILL.md)), their one guide. A successful detached `router --issue <ID>` launch without `--tui` prints nothing; its router events go only to `<work_dir>/logs/orchestrator.jsonl`. Errors can still print diagnostics; `--dry-run` prints the plan and `--tui` prints the Record and attach commands. Keep `<work_dir>/logs/runs.jsonl`: deleting it breaks resume, Recover, write-back and the first-claim search.
 
 A run that ended leaves its TUI open for pane follow-ups; the issue's next run, new or resumed, closes it.
 
@@ -227,11 +227,12 @@ Use the installed `ensemble-orchestrator` absolute path. `--issue` skips the usa
 
 ### OpenCode
 
-An issue with the Agent group's `OpenCode` label runs OpenCode on the host's Ollama models. Use local models only for live-test issues (the user's rule; nothing enforces it). Docker workers discover the image's updraft skills, including build and light-build, through `skills.paths` ([Plugins](docker-host.md#plugins)). Beyond [Setup](#setup):
+An issue with the Agent group's `OpenCode` label runs OpenCode on the host's Ollama models or a configured provider. Use local models only for live-test issues (the user's rule; nothing enforces it). Docker workers discover the image's updraft skills, including build and light-build, through `skills.paths` ([Plugins](docker-host.md#plugins)). Beyond [Setup](#setup):
 
-1. Ollama and its model: [Docker host › OpenCode](docker-host.md#opencode).
+1. Ollama and its model, or a configured provider, with the required local/LAN egress exceptions: [Docker host › OpenCode](docker-host.md#opencode).
 2. The Docker Host, with the harness on tmux: `[session.hosts] default = "docker"` and `[delegate.delegates] harness_host = "tmux"` ([Docker host › Role runs](docker-host.md#role-runs)). A board run's cwd is untrusted, so on tmux OpenCode refuses to start ([OpenCode sessions](sessions.md#opencode-sessions)). This puts every client's board runs in containers.
 3. An `OpenCode` label in the Agent group, mapped as in [Agent label](#agent-label): `opencode = "<its label id>"` under `[orchestrator.linear.agent_labels]`.
+4. For an engineer run, the broker's GitHub App login and installation on the target repo: [Docker host › Log in](docker-host.md#log-in) and [Create the GitHub App](docker-host.md#create-the-github-app). The worker needs them to clone, push and open a PR; the installer's `skip: no GitHub App key` leaves this setup incomplete.
 
 The usage gate probes only the provider of the default `[session.clients.opencode] model`, independently of task tiers: Ollama uses the host's `127.0.0.1:<ollama_port>/api/tags`; configured providers use their `base_url` plus `/models`. A 2xx response permits the run; an unreachable or unauthorized endpoint stays `usage unknown`. Docker probes run in broker protocol 19 and later with its existing Keychain API key; tmux probes read the selected provider's API entry from OpenCode `auth.json`. Keys stay out of argv, diagnostics and responses; redirects are refused. Task-tier overrides still select each run's model, but do not change the usage probe.
 
