@@ -38,6 +38,7 @@ CALLS = {
     "version_output": ("version", lambda b: b.version()),
     "build_output": ("build", lambda b: b.build("/opt/ensemble")),
     "start_output": ("start", lambda b: b.start(MANIFEST, clients=KEYS)),
+    "maintain_output": ("maintain", lambda b: b.maintain(CONTAINER, MANIFEST, root=REPO)),
     "refresh_output": ("refresh", lambda b: b.refresh(CONTAINER, MANIFEST)),
     "notices_output": ("notices", lambda b: b.notices(CONTAINER, MANIFEST, root=REPO)),
     "close_output": ("close", lambda b: b.close(CONTAINER)),
@@ -48,6 +49,7 @@ COMMANDS = {
     "version": CALLS["version_output"],
     "build": CALLS["build_output"],
     "start": CALLS["start_output"],
+    "maintain": CALLS["maintain_output"],
     "refresh": CALLS["refresh_output"],
     "notices": CALLS["notices_output"],
     "close": CALLS["close_output"],
@@ -285,6 +287,87 @@ class ResponseTest(Case):
         )
         self.assertEqual((empty.notices, empty.next_check), ([], None))
 
+    def test_maintain_keeps_each_components_outcome_and_passes_its_options(self):
+        good = data("maintain-output.json")
+        fake = FakeBroker((0, json.dumps(good), ""))
+        found = Broker(fake).maintain(
+            CONTAINER, MANIFEST, ["ensemble-env/db@2:7d"], renew=True, root=REPO
+        )
+        self.assertEqual(
+            fake.calls,
+            [
+                [
+                    BROKER,
+                    *("maintain", "--container", CONTAINER, "--manifest", MANIFEST, "--renew"),
+                    *("--delivered", "ensemble-env/db@2:7d"),
+                ]
+            ],
+        )
+        self.assertEqual(
+            (found.results, found.notices, found.next_check, found.deadline),
+            (good["results"], [], "2026-10-17T12:01:00Z", good["deadline"]),
+        )
+        self.assertEqual(found.results[0]["error"]["code"], "refresh_failed")
+        self.assertEqual(found.results[1]["expires_at"], "2026-10-17T13:00:00Z")
+        plain = FakeBroker(success("maintain-output-static.json"))
+        static = Broker(plain).maintain(CONTAINER, MANIFEST, root=REPO)
+        self.assertEqual(plain.calls, [argv("maintain")])
+        self.assertEqual((static.results, static.deadline, len(static.notices)), ([], None, 1))
+
+    def test_maintain_rejects_malformed_replies(self):
+        good = data("maintain-output.json")
+        failed, ok = good["results"]
+        for change in (
+            {"container": "ensemble-other-0123456789abcdef0123456789abcdef"},
+            {"next_check": "tomorrow"},
+            {"deadline": good["deadline"] | {"action": "stop"}},
+            {"deadline": good["deadline"] | {"reason": "two\nlines"}},
+            {"deadline": good["deadline"] | {"at": "2026-13-01T00:00:00Z"}},
+            {"deadline": {"at": good["deadline"]["at"]}},
+            {"results": {}},
+            {"results": [ok | {"credential": "GitHub"}]},
+            {"results": [ok | {"token": "ghs_x"}]},
+            {"results": [ok | {"expires_at": "soon"}]},
+            {"results": [failed | {"error": {"code": "refresh_failed"}}]},
+            {"results": [failed | {"error": {"message": "No."}}]},
+            {"results": [failed | {"error": {"code": "other", "message": "No."}}]},
+            {"results": [failed | {"error": failed["error"] | {"message": "a\nforged"}}]},
+            {"results": [failed | {"error": failed["error"] | {"cause": "\x07"}}]},
+            {"notices": [{"key": "ensemble-bot/x@1:30d", "text": "x"}]},
+            {"github": []},
+        ):
+            with (
+                self.subTest(change=change),
+                self.assertRaisesRegex(SessionError, "bad response to maintain"),
+            ):
+                Broker(FakeBroker((0, json.dumps(good | change), ""))).maintain(
+                    CONTAINER, MANIFEST, root=REPO
+                )
+        missing = {k: v for k, v in good.items() if k != "deadline"}
+        with self.assertRaisesRegex(SessionError, "bad response to maintain"):
+            Broker(FakeBroker((0, json.dumps(missing), ""))).maintain(
+                CONTAINER, MANIFEST, root=REPO
+            )
+
+    def test_start_requires_a_valid_deadline(self):
+        response = data("start-output-codex.json")
+        started = Broker(FakeBroker((0, json.dumps(response), ""))).start(MANIFEST, clients=KEYS)
+        self.assertEqual(started.deadline, response["deadline"])
+        for change in (
+            {"deadline": {"at": "x", "action": "close", "reason": "r"}},
+            {"deadline": 1},
+        ):
+            with (
+                self.subTest(change=change),
+                self.assertRaisesRegex(SessionError, "bad response to start"),
+            ):
+                Broker(FakeBroker((0, json.dumps(response | change), ""))).start(
+                    MANIFEST, clients=KEYS
+                )
+        without = {k: v for k, v in response.items() if k != "deadline"}
+        with self.assertRaisesRegex(SessionError, "bad response to start"):
+            Broker(FakeBroker((0, json.dumps(without), ""))).start(MANIFEST, clients=KEYS)
+
     def test_notice_keys_are_the_schemas(self):
         with open(os.path.join(REPO, broker.SCHEMA), encoding="utf-8") as f:
             schema = json.load(f)["$defs"]["notice_key"]["pattern"]
@@ -375,6 +458,7 @@ class ResponseTest(Case):
                 github=[{"account": "acme", "expires_at": "2026-10-17T13:00:00Z"}],
                 github_user_id=343764394,
                 credential_expires_at=None,
+                deadline=None,
             ),
         )
         self.assertEqual(

@@ -45,19 +45,34 @@ func (h Host) Notices(_ context.Context, container, path string, delivered []str
 	if err := h.checkMounts(m); err != nil {
 		return NoticesResult{}, err
 	}
-	result := NoticesResult{Container: container, Notices: []Notice{}}
+	notices, next, err := h.dueNotices(container, m, delivered, h.now())
+	if err != nil {
+		return NoticesResult{}, err
+	}
+	result := NoticesResult{Container: container, Notices: notices}
+	if next != nil {
+		at := next.Format(time.RFC3339)
+		result.NextCheck = &at
+	}
+	return result, nil
+}
+
+// dueNotices is each static secret notice m's container is due and has not been told, and when to check again (nil:
+// never). A key in delivered that is due is recorded delivered, with one audit line, and left out. It reads only the
+// host's records: no Docker call, no secret. Its errors are internal_error.
+func (h Host) dueNotices(container string, m Manifest, delivered []string, now time.Time) ([]Notice, *time.Time, error) {
+	notices := []Notice{}
 	if h.Static == nil {
-		return result, nil
+		return notices, nil, nil
 	}
 	record, found, err := h.readInjected(m)
 	if err != nil || !found {
-		return result, err
+		return notices, nil, err
 	}
 	stored, err := h.Static.Load()
 	if err != nil {
-		return NoticesResult{}, storeFailed(err, protocol.InternalError)
+		return nil, nil, storeFailed(err, protocol.InternalError)
 	}
-	now := h.now()
 	refs := make([]string, 0, len(record.Injected))
 	for ref := range record.Injected {
 		refs = append(refs, ref)
@@ -72,22 +87,18 @@ func (h Host) Notices(_ context.Context, container, path string, delivered []str
 				acked = append(acked, n)
 				continue
 			}
-			result.Notices = append(result.Notices, Notice{n.Key, n.Text})
+			notices = append(notices, Notice{n.Key, n.Text})
 		}
 	}
 	if len(acked) > 0 {
 		if err := h.writeInjected(m, record, protocol.InternalError); err != nil {
-			return NoticesResult{}, err
+			return nil, nil, err
 		}
 		for _, n := range acked { // audited only once their delivery is recorded
 			h.Audit.Notice(container, n.Audit())
 		}
 	}
-	if next := credential.NextCheck(record.Injected, now); next != nil {
-		at := next.Format(time.RFC3339)
-		result.NextCheck = &at
-	}
-	return result, nil
+	return notices, credential.NextCheck(record.Injected, now), nil
 }
 
 // readInjected is m's container's injected record; false when its start recorded none.

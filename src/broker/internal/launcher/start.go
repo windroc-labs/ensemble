@@ -454,7 +454,12 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	if err := h.startTokens(ctx, c, m, codexExpiry, expiries); err != nil {
 		return StartResult{}, held, err
 	}
-	return StartResult{Container: c, Endpoint: h.Endpoint, ImageDigest: info.ID, Clients: clients, GitHub: expiries, CredentialExpiresAt: codexExpiry}, held, nil
+	delivered := TokenRecord{Expires: map[credential.Kind][]string{credential.GitHub: expiryTimes(expiries)}}
+	if codexExpiry != nil {
+		delivered.Expires[credential.Codex] = []string{*codexExpiry}
+	}
+	return StartResult{Container: c, Endpoint: h.Endpoint, ImageDigest: info.ID, Clients: clients, GitHub: expiries, CredentialExpiresAt: codexExpiry,
+		Deadline: deadlineOf(delivered, heldKinds(m))}, held, nil
 }
 
 // startTokens records the expiries a start delivered; on failure it retires the GitHub grant, which the container

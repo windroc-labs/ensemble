@@ -471,7 +471,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "28"
+          "const": "29"
         }
       },
       "required": [
@@ -638,6 +638,16 @@
             }
           ]
         },
+        "deadline": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/deadline"
+            }
+          ]
+        },
         "audit_warning": {
           "$ref": "#/$defs/audit_warning"
         }
@@ -649,7 +659,8 @@
         "clients",
         "github",
         "github_user_id",
-        "credential_expires_at"
+        "credential_expires_at",
+        "deadline"
       ],
       "additionalProperties": false
     },
@@ -893,6 +904,212 @@
       ],
       "additionalProperties": false
     },
+    "deadline": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/time"
+        },
+        "action": {
+          "enum": [
+            "close"
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "at",
+        "action",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "maintain_input": {
+      "type": "object",
+      "properties": {
+        "argv": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": "maintain"
+            },
+            {
+              "const": "--container"
+            },
+            {
+              "$ref": "#/$defs/container"
+            },
+            {
+              "const": "--manifest"
+            },
+            {
+              "$ref": "#/$defs/path"
+            }
+          ],
+          "items": {
+            "anyOf": [
+              {
+                "const": "--renew"
+              },
+              {
+                "const": "--delivered"
+              },
+              {
+                "$ref": "#/$defs/notice_key"
+              }
+            ]
+          },
+          "not": {
+            "contains": {
+              "const": "--renew"
+            },
+            "minContains": 2
+          },
+          "minItems": 5,
+          "maxItems": 134
+        }
+      },
+      "required": [
+        "argv"
+      ],
+      "additionalProperties": false
+    },
+    "maintain_result": {
+      "type": "object",
+      "properties": {
+        "credential": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,31}$"
+        },
+        "expires_at": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/time"
+            }
+          ]
+        },
+        "error": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "enum": [
+                    "usage",
+                    "manifest_rejected",
+                    "mount_rejected",
+                    "login_required",
+                    "image_rejected",
+                    "docker_unreachable",
+                    "build_failed",
+                    "start_failed",
+                    "close_failed",
+                    "keychain_failed",
+                    "workspace_dirty",
+                    "workspace_rejected",
+                    "workspace_failed",
+                    "github_failed",
+                    "refresh_failed",
+                    "egress_unavailable",
+                    "internal_error",
+                    "busy"
+                  ]
+                },
+                "message": {
+                  "$ref": "#/$defs/text"
+                },
+                "cause": {
+                  "$ref": "#/$defs/text"
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "credential",
+        "expires_at",
+        "error"
+      ],
+      "additionalProperties": false
+    },
+    "maintain_output": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "$ref": "#/$defs/container"
+        },
+        "next_check": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/time"
+            }
+          ]
+        },
+        "deadline": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/deadline"
+            }
+          ]
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/maintain_result"
+          }
+        },
+        "notices": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "$ref": "#/$defs/notice_key"
+              },
+              "text": {
+                "$ref": "#/$defs/text"
+              }
+            },
+            "required": [
+              "key",
+              "text"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "audit_warning": {
+          "$ref": "#/$defs/audit_warning"
+        }
+      },
+      "required": [
+        "container",
+        "next_check",
+        "deadline",
+        "results",
+        "notices"
+      ],
+      "additionalProperties": false
+    },
     "status_input": {
       "type": "object",
       "properties": {
@@ -1031,6 +1248,7 @@
                 "version",
                 "build",
                 "start",
+                "maintain",
                 "refresh",
                 "notices",
                 "close",
@@ -1191,6 +1409,7 @@
                     "version",
                     "build",
                     "start",
+                    "maintain",
                     "refresh",
                     "notices",
                     "close",
@@ -1219,6 +1438,7 @@
                 "command": {
                   "enum": [
                     "start",
+                    "maintain",
                     "refresh",
                     "notices"
                   ]
@@ -1240,6 +1460,7 @@
                 "command": {
                   "enum": [
                     "start",
+                    "maintain",
                     "refresh",
                     "notices"
                   ]
@@ -1524,6 +1745,7 @@
                     "version",
                     "build",
                     "start",
+                    "maintain",
                     "refresh",
                     "notices",
                     "close",

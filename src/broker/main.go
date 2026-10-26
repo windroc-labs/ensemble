@@ -27,7 +27,7 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | (login claude, opencode and env also take --expires YYYY-MM-DD; claude --issued YYYY-MM-DD or --fresh-token instead) | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | lock-query --lock NAME | refresh --container NAME --manifest FILE | notices --container NAME --manifest FILE [--delivered KEY]... | close --container NAME | status [--cleanup] | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients"
+const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | (login claude, opencode and env also take --expires YYYY-MM-DD; claude --issued YYYY-MM-DD or --fresh-token instead) | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | lock-query --lock NAME | maintain --container NAME --manifest FILE [--renew] [--delivered KEY]... | refresh --container NAME --manifest FILE | notices --container NAME --manifest FILE [--delivered KEY]... | close --container NAME | status [--cleanup] | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients"
 
 var containerPattern = regexp.MustCompile(`^ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}$`)
 var secondsPattern = regexp.MustCompile(`^[0-9]{1,9}$`)
@@ -41,6 +41,7 @@ type app struct {
 	start, close  step
 	refresh       func(ctx context.Context, container, manifest string) (any, error)
 	notices       func(ctx context.Context, container, manifest string, delivered []string) (any, error)
+	maintain      func(ctx context.Context, container, manifest string, delivered []string, renew bool) (any, error)
 	status        func(ctx context.Context, cleanup bool) (any, error)
 	lockQuery     func(ctx context.Context, name string) (any, error)
 	probeOpencode func(ctx context.Context, provider, base string) (any, error)
@@ -165,7 +166,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 				}
 				return emit(stdout, result)
 			}
-		case "version", "build", "start", "refresh", "notices", "close", "status", "workspace-rm", "probe-provider", "lock-query", "check-clients":
+		case "version", "build", "start", "maintain", "refresh", "notices", "close", "status", "workspace-rm", "probe-provider", "lock-query", "check-clients":
 			command = args[0]
 		case "login":
 			var login func() error
@@ -237,6 +238,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 		s, arg = func(ctx context.Context, container string, _ io.Writer) (any, error) {
 			return a.notices(ctx, container, manifest, delivered)
 		}, args[2]
+	case command == "maintain" && len(args) >= 5 && args[1] == "--container" && containerPattern.MatchString(args[2]) &&
+		args[3] == "--manifest" && isPath(args[4]) && maintainOptions(args[5:]) != nil:
+		manifest, o := args[4], maintainOptions(args[5:])
+		s, arg = func(ctx context.Context, container string, _ io.Writer) (any, error) {
+			return a.maintain(ctx, container, manifest, o.delivered, o.renew)
+		}, args[2]
 	case command == "status" && (len(args) == 1 || len(args) == 2 && args[1] == "--cleanup"):
 		s = func(ctx context.Context, _ string, _ io.Writer) (any, error) { return a.status(ctx, len(args) == 2) }
 	case command == "lock-query" && len(args) == 3 && args[1] == "--lock" && launcher.ValidLock(args[2]):
@@ -276,7 +283,7 @@ type buildArgs struct {
 	maxAge time.Duration
 }
 
-// maxDelivered caps notices' --delivered keys; a container holds at most a few dozen static secrets.
+// maxDelivered caps notices' and maintain's --delivered keys; a container holds at most a few dozen static secrets.
 const maxDelivered = 64
 
 // noticeKeys parses notices' [--delivered KEY]...: the keys, empty for none; nil for anything else.
@@ -289,6 +296,31 @@ func noticeKeys(args []string) []string {
 		return nil
 	}
 	return keys
+}
+
+type maintainArgs struct {
+	delivered []string
+	renew     bool
+}
+
+// maintainOptions parses maintain's --renew (at most once) and --delivered KEY pairs, in any order; nil for anything
+// else.
+func maintainOptions(args []string) *maintainArgs {
+	o := &maintainArgs{delivered: []string{}}
+	for len(args) > 0 {
+		switch {
+		case args[0] == "--renew" && !o.renew:
+			o.renew, args = true, args[1:]
+		case len(args) >= 2 && args[0] == "--delivered" && credential.NoticeKeyPattern.MatchString(args[1]):
+			o.delivered, args = append(o.delivered, args[1]), args[2:]
+		default:
+			return nil
+		}
+	}
+	if len(o.delivered) > maxDelivered {
+		return nil
+	}
+	return o
 }
 
 // buildOptions parses build's [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]...
@@ -421,6 +453,11 @@ func system() app {
 					return nil, err
 				}
 				return status, nil
+			})
+		},
+		maintain: func(ctx context.Context, container, manifest string, delivered []string, renew bool) (any, error) {
+			return withHost("maintain", container, nil, func(h launcher.Host) (any, error) {
+				return h.Maintain(ctx, container, manifest, delivered, renew)
 			})
 		},
 		notices: func(ctx context.Context, container, manifest string, delivered []string) (any, error) {

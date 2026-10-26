@@ -172,6 +172,7 @@ type StartResult struct {
 	GitHub              []protocol.Expiry `json:"github"`
 	GitHubUserID        *int64            `json:"github_user_id"`
 	CredentialExpiresAt *string           `json:"credential_expires_at"`
+	Deadline            *Deadline         `json:"deadline"`
 }
 
 type RefreshResult struct {

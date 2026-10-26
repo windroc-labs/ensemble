@@ -13,6 +13,7 @@ class Started:
     github: Sequence[Mapping[str, str]]  # each GitHub token's {"account", "expires_at"}
     github_user_id: int | None  # the App's bot user ID; None without an App
     credential_expires_at: str | None
+    deadline: Mapping[str, str] | None
 
 
 @dataclass(frozen=True)
@@ -25,3 +26,11 @@ class Refreshed:
 class Noticed:
     notices: list[dict]  # each {"key", "text"}: a static secret notice the session is due
     next_check: str | None  # when to check again; None: never
+
+
+@dataclass(frozen=True)
+class Maintained:
+    results: list[dict]  # each {"credential", "expires_at", "error"}
+    notices: list[dict]
+    next_check: str | None
+    deadline: Mapping[str, str] | None  # {"at", "action", "reason"}

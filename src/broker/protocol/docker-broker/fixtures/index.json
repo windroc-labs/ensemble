@@ -1,5 +1,5 @@
 {
-  "protocol_version": "28",
+  "protocol_version": "29",
   "cases": [
     {
       "file": "manifest-valid.json",
@@ -2714,6 +2714,136 @@
     {
       "file": "status-output-static-secret.json",
       "definition": "status_output",
+      "valid": false,
+      "expected": {
+        "stage": "response",
+        "exit_code": null,
+        "error_code": null
+      }
+    },
+    {
+      "file": "maintain-input.json",
+      "definition": "maintain_input",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "maintain-input-delivered-renew.json",
+      "definition": "maintain_input",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "maintain-input-bad-key.json",
+      "definition": "maintain_input",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 2,
+        "error_code": "usage"
+      }
+    },
+    {
+      "file": "maintain-input-double-renew.json",
+      "definition": "maintain_input",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 2,
+        "error_code": "usage"
+      }
+    },
+    {
+      "file": "maintain-output.json",
+      "definition": "maintain_output",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "maintain-output-static.json",
+      "definition": "maintain_output",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "maintain-output-audit-warning.json",
+      "definition": "maintain_output",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "maintain-output-secret.json",
+      "definition": "maintain_output",
+      "valid": false,
+      "expected": {
+        "stage": "response",
+        "exit_code": null,
+        "error_code": null
+      }
+    },
+    {
+      "file": "maintain-output-bad-action.json",
+      "definition": "maintain_output",
+      "valid": false,
+      "expected": {
+        "stage": "response",
+        "exit_code": null,
+        "error_code": null
+      }
+    },
+    {
+      "file": "maintain-output-bad-credential.json",
+      "definition": "maintain_output",
+      "valid": false,
+      "expected": {
+        "stage": "response",
+        "exit_code": null,
+        "error_code": null
+      }
+    },
+    {
+      "file": "maintain-output-forged-message.json",
+      "definition": "maintain_output",
+      "valid": false,
+      "expected": {
+        "stage": "response",
+        "exit_code": null,
+        "error_code": null
+      }
+    },
+    {
+      "file": "error-maintain-manifest_rejected.json",
+      "definition": "error",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "error-maintain-refresh_failed.json",
+      "definition": "error",
       "valid": false,
       "expected": {
         "stage": "response",

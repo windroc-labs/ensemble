@@ -243,6 +243,7 @@ class Base(Case):
             [],
             github_user_id=None,
             credential_expires_at=None,
+            deadline=None,
         )
         self.broker = FakeBroker(self.order, started)
         self.host = DockerHost(
@@ -343,7 +344,7 @@ class ConfigTest(Base):
             (5, "", json.dumps(locked)),
         )
         self.host.broker = Broker(runner)
-        with self.assertRaisesRegex(SessionError, "protocol '18', want '28'") as caught:
+        with self.assertRaisesRegex(SessionError, "protocol '18', want '29'") as caught:
             self.host._provider_usage(request)
         self.assertIn(
             "install or upgrade it: see docs/docker-host.md#install", str(caught.exception)
@@ -1323,6 +1324,7 @@ class StartTest(StartBase):
             [],
             github_user_id=None,
             credential_expires_at=None,
+            deadline=None,
         )
         result = os.path.join(self.state, f"{GEN}.result.json")
         for resume in ("0", "1"):

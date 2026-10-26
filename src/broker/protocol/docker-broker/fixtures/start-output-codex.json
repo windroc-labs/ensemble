@@ -14,5 +14,10 @@
       "expires_at": "2026-10-17T13:00:00Z"
     }
   ],
-  "github_user_id": 343764394
+  "github_user_id": 343764394,
+  "deadline": {
+    "at": "2026-10-18T12:00:00Z",
+    "action": "close",
+    "reason": "Client authentication expired; run /usr/local/libexec/ensemble/ensemble-broker login codex on the host, then resume."
+  }
 }

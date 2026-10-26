@@ -53,6 +53,9 @@ func recording(calls *[]call) app {
 		notices: func(ctx context.Context, container, _ string, _ []string) (any, error) {
 			return result("notices")(ctx, container, nil)
 		},
+		maintain: func(ctx context.Context, container, _ string, _ []string, _ bool) (any, error) {
+			return result("maintain")(ctx, container, nil)
+		},
 		status: func(ctx context.Context, _ bool) (any, error) { return result("status")(ctx, "", nil) },
 		probeOpencode: func(ctx context.Context, provider, base string) (any, error) {
 			return result("probe-provider")(ctx, provider+" "+base, nil)
@@ -69,7 +72,7 @@ func invoke(a app, args ...string) (int, string, string) {
 
 func TestVersion(t *testing.T) {
 	code, out, errOut := invoke(app{}, "version")
-	if code != 0 || out != `{"protocol_version":"28"}`+"\n" || errOut != "" {
+	if code != 0 || out != `{"protocol_version":"29"}`+"\n" || errOut != "" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
 	for _, c := range fixtures.Cases(t, "version_output") {
@@ -177,7 +180,7 @@ func TestProbeOpencodeCommand(t *testing.T) {
 }
 
 func TestInputFixtures(t *testing.T) {
-	for _, c := range fixtures.Cases(t, "version_input", "build_input", "start_input", "refresh_input", "notices_input", "close_input", "status_input", "workspace_rm_input", "probe_provider_input", "lock_query_input", "check_clients_input") {
+	for _, c := range fixtures.Cases(t, "version_input", "build_input", "start_input", "maintain_input", "refresh_input", "notices_input", "close_input", "status_input", "workspace_rm_input", "probe_provider_input", "lock_query_input", "check_clients_input") {
 		t.Run(c.File, func(t *testing.T) {
 			var in struct{ Argv []string }
 			if err := json.Unmarshal(c.Data, &in); err != nil {
@@ -1232,6 +1235,53 @@ func TestNoticesCommand(t *testing.T) {
 			t.Fatalf("%q: %d %q", args, code, got)
 		}
 		assertError(t, errOut, out, "notices", protocol.Usage)
+	}
+}
+
+func TestMaintainArgs(t *testing.T) {
+	const c = "ensemble-worker_1-0123456789abcdef0123456789abcdef"
+	type got struct {
+		args  []string
+		renew bool
+	}
+	var calls []got
+	a := app{maintain: func(_ context.Context, container, manifest string, delivered []string, renew bool) (any, error) {
+		calls = append(calls, got{append([]string{container, manifest}, delivered...), renew})
+		return launcher.MaintainResult{Container: container, Results: []launcher.ProviderResult{}, Notices: []launcher.Notice{}}, nil
+	}}
+	base := []string{"maintain", "--container", c, "--manifest", "/tmp/m.json"}
+	for _, tc := range []struct {
+		extra []string
+		want  got
+	}{
+		{nil, got{[]string{c, "/tmp/m.json"}, false}},
+		{[]string{"--renew"}, got{[]string{c, "/tmp/m.json"}, true}},
+		{[]string{"--delivered", "ensemble-env/db@2:7d", "--renew", "--delivered", "ensemble-claude/work@1:rotated"},
+			got{[]string{c, "/tmp/m.json", "ensemble-env/db@2:7d", "ensemble-claude/work@1:rotated"}, true}},
+	} {
+		calls = nil
+		code, out, errOut := invoke(a, append(slices.Clone(base), tc.extra...)...)
+		if code != 0 || errOut != "" || out != `{"container":"`+c+`","next_check":null,"deadline":null,"results":[],"notices":[]}`+"\n" ||
+			len(calls) != 1 || !slices.Equal(calls[0].args, tc.want.args) || calls[0].renew != tc.want.renew {
+			t.Fatalf("%q: %d %q %q %+v", tc.extra, code, out, errOut, calls)
+		}
+	}
+	many := slices.Clone(base)
+	for range maxDelivered + 1 {
+		many = append(many, "--delivered", "ensemble-env/db@2:7d")
+	}
+	calls = nil
+	for _, args := range [][]string{
+		append(slices.Clone(base), "--renew", "--renew"), append(slices.Clone(base), "--delivered"),
+		append(slices.Clone(base), "--delivered", "ensemble-bot/x@1:7d"), append(slices.Clone(base), "extra"),
+		{"maintain", "--container", "bad", "--manifest", "/tmp/m.json"}, {"maintain", "--container", c, "--manifest", "relative"},
+		{"maintain", "--manifest", "/tmp/m.json", "--container", c}, many,
+	} {
+		code, out, errOut := invoke(a, args...)
+		if code != 2 || out != "" || calls != nil {
+			t.Fatalf("%q: %d %+v", args, code, calls)
+		}
+		assertError(t, errOut, out, "maintain", protocol.Usage)
 	}
 }
 
