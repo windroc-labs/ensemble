@@ -1729,10 +1729,9 @@ rel = "skills/manage/scripts/ctmux" if name == "ctmux" else "bin/" + name
 try:
     with open(selection, encoding="utf-8") as f:
         text = f.read().rstrip("\n")
-    try:
-        data = json.loads(text)
-    except ValueError:
-        data = {"root": text, "client": client, "source": source}
+    data = json.loads(text)
+    if not isinstance(data, dict) or any(not isinstance(data.get(key), str) for key in ("root", "client", "source")):
+        raise ValueError("expected a selection object with root, client and source strings")
     root, client, source = data["root"], data["client"], data["source"]
 except (OSError, ValueError, TypeError, KeyError) as e:
     sys.exit(f"{name}: cannot read {selection}: {e}; rerun install.sh or the plugin's ctmux --install")

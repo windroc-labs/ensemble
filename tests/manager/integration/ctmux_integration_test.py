@@ -277,6 +277,27 @@ class FakeTmux(Case):
         self.assertEqual((process.returncode, err), (0, ""))
         self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", selected))
 
+    def test_malformed_selection_records_fail_without_running_a_plugin(self):
+        self.install()
+        selection = os.path.join(self.ensemble, "plugin-root")
+        valid = {"root": REPO, "client": "", "source": ""}
+        malformed = [REPO + "\n", json.dumps(REPO), "null", "[]", "{}"]
+        for field in valid:
+            malformed.append(json.dumps({k: v for k, v in valid.items() if k != field}))
+            malformed.append(json.dumps({**valid, field: None}))
+        for text in malformed:
+            with self.subTest(record=text):
+                with open(selection, "w", encoding="utf-8") as f:
+                    f.write(text)
+                process, out, err, calls = self.ctmux("s1", script=self.dst)
+                self.assertNotEqual(process.returncode, 0)
+                self.assertEqual((out, calls), ("", []))
+                self.assertIn(f"ctmux: cannot read {selection}:", err)
+                self.assertIn("rerun install.sh or the plugin's ctmux --install", err)
+                self.assertNotIn("Traceback", err)
+                with open(selection, encoding="utf-8") as f:
+                    self.assertEqual(f.read(), text)
+
     def test_a_missing_selected_command_fails_without_using_another_plugin(self):
         selected = self.opencode_install("0.5.0")
         self.install(script=os.path.join(selected, "skills", "manage", "scripts", "ctmux"))

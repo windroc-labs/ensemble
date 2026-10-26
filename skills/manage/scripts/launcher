@@ -82,10 +82,10 @@ except (OSError, UnicodeError) as e:
 else:
     try:
         data = json.loads(text)
-    except ValueError:
-        data = identify(text)
-    if not isinstance(data, dict) or not isinstance(data.get("root"), str):
-        data = identify(text)
+        if not isinstance(data, dict) or any(not isinstance(data.get(key), str) for key in ("root", "client", "source")):
+            raise ValueError("expected a selection object with root, client and source strings")
+    except ValueError as e:
+        sys.exit(f"{name}: cannot read {selection}: {e}; rerun install.sh or the plugin's ctmux --install")
     root = data["root"]
     path = os.path.join(root, rel)
     if os.path.isabs(root) and "\n" not in root:

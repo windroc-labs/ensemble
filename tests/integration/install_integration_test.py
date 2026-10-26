@@ -2592,6 +2592,34 @@ class InstallTest(Case):
         self.assert_ok(self.opencode_only())
         self.assert_command_sources(commands, self.opencode_package())
 
+    def test_installer_adapters_reject_malformed_selection_records(self):
+        commands = ("ctmux", *self.legacy_command_package())
+        self.assert_ok(self.opencode_only())
+        selection = Path(self.ensemble, "plugin-root")
+        valid = json.loads(selection.read_text())
+        malformed = [valid["root"] + "\n", json.dumps(valid["root"]), "null", "[]", "{}"]
+        for field in valid:
+            malformed.append(json.dumps({k: v for k, v in valid.items() if k != field}))
+            malformed.append(json.dumps({**valid, field: None}))
+        for text in malformed:
+            selection.write_text(text)
+            for name in commands:
+                with self.subTest(record=text, name=name):
+                    result = subprocess.run(
+                        [str(Path(self.ensemble, "bin", name))],
+                        env=self.env,
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, "")
+                    self.assertIn(f"{name}: cannot read {selection}:", result.stderr)
+                    self.assertIn("rerun install.sh or the plugin's ctmux --install", result.stderr)
+                    self.assertNotIn("Traceback", result.stderr)
+                    self.assertEqual(selection.read_text(), text)
+
     def legacy_command_package(self):
         """A historical ref, unchanged: neither its ctmux nor launcher supports selection."""
         for name in ("ctmux", "launcher"):
