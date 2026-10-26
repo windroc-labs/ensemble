@@ -229,11 +229,13 @@ class RequestTest(Base):
         with open(outside, "w") as f:
             f.write('{"op": "close"}')
         os.symlink(outside, os.path.join(folder, "f" * 32 + ".json"))
+        with open(os.path.join(folder, ".tmp-being-saved"), "w") as f:
+            f.write('{"op": "close"}')
         with open(os.path.join(folder, "9" * 32 + ".json"), "w") as f:
             f.write('{"op": "close", "pad": "' + "x" * channel.FILE_MAX + '"}')
         with self.assertLogs("session", "WARNING"):
             self.assertEqual(self.channel.requests(), [(good, "stop")])
-        self.assertEqual(os.listdir(folder), [])
+        self.assertEqual(os.listdir(folder), [".tmp-being-saved"])
 
 
 class StatusTest(Base):

@@ -17,6 +17,7 @@ import uuid
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from dataclasses import fields as dataclass_fields
 from typing import Any, ClassVar, cast
 
 from ensemble.session.clients.base import Client
@@ -26,9 +27,11 @@ from ensemble.session.engine.base import Session
 from ensemble.session.engine.capacity import Admission
 from ensemble.session.engine.records import RunLog
 from ensemble.session.engine.types import (
+    Access,
     ClientBound,
     ConfigError,
     Exited,
+    HookCallback,
     Hosts,
     IdleTimeout,
     KeyPress,
@@ -342,6 +345,78 @@ class HostedSession(Session):
     ) -> HostedSession:
         """spec.sid: its id, else a new one; display: kept by its Host."""
         return cls._begin(spec, display=display, host=host, idle_timeout=idle_timeout)
+
+    @classmethod
+    def harness_request(
+        cls, spec: Spec, *, display: Display, host: str | None, roots: Sequence[str]
+    ) -> dict:
+        """What a session harness needs to start `spec` as this class would: its JSON request.
+        Secret-bearing (spec.env): the entry writes it 0600 and the harness deletes it once read.
+        """
+        if spec.environment is not None:
+            raise ConfigError("environment: a session harness runs none yet")
+        setup = cls._config()
+        fields = {f.name: getattr(spec, f.name) for f in dataclass_fields(spec)}
+        fields.update(
+            access={
+                f.name: thaw(getattr(spec.access, f.name)) for f in dataclass_fields(spec.access)
+            },
+            env=dict(spec.env),
+            handlers=[
+                {"module": h.module, "state": thaw(h.state), "roots": list(h.roots)}
+                for h in spec.handlers
+            ],
+            environment=None,
+        )
+        return {
+            "spec": thaw(fields),
+            "display": display,
+            "host": host,
+            "config": {
+                "client_tables": thaw(setup.registry.settings.clients),
+                "hosts": {"default": setup.hosts.default, "tables": thaw(setup.hosts.tables)},
+                "viewer": thaw(setup.viewer),
+            },
+            "roots": list(roots),
+        }
+
+    @classmethod
+    def from_harness_request(
+        cls, request: Mapping
+    ) -> tuple[Spec, Display, str | None, tuple[str, ...]]:
+        """harness_request's inverse, this class configured from it: its Spec, display, host and
+        import roots; ConfigError when it is not one.
+        """
+        try:
+            config, fields = request["config"], dict(request["spec"])
+            cls.configure(
+                clients=config["client_tables"],
+                hosts=Hosts(config["hosts"]["default"], config["hosts"]["tables"]),
+                viewer=config["viewer"],
+            )
+            access: dict[str, Any] = {
+                k: tuple(v) if isinstance(v, list) else v for k, v in fields["access"].items()
+            }
+            fields.update(
+                access=Access(**access),
+                flags=tuple(fields["flags"]),
+                reply_tags=None if fields["reply_tags"] is None else tuple(fields["reply_tags"]),
+                handlers=tuple(
+                    HookCallback(h["module"], h["state"], tuple(h["roots"]))
+                    for h in fields["handlers"]
+                ),
+            )
+            spec = Spec(**fields)
+            display, host, roots = request["display"], request["host"], request["roots"]
+        except (KeyError, TypeError, AttributeError) as error:
+            raise ConfigError(f"session harness request: {error!r:.200}") from None
+        if not (display is None or isinstance(display, str)) or not (
+            host is None or isinstance(host, str)
+        ):
+            raise ConfigError("session harness request: bad display or host")
+        if not isinstance(roots, list) or not all(map(printable_abs, roots)):
+            raise ConfigError("session harness request: bad roots")
+        return spec, display, host, tuple(roots)
 
     @classmethod
     def own(
@@ -933,6 +1008,10 @@ class Owned:
         final = self._session._step(0)[0]
         self._session.close()
         return final
+
+    def returncode(self) -> int | None:
+        """Its worker's exit code once pump said it ended."""
+        return self._session._running.returncode(0)
 
     def confirm_end(self, timeout: float) -> int | None:
         """Its worker's return code once its terminal is gone from its Host, else None after

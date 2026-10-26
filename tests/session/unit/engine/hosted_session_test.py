@@ -3006,3 +3006,42 @@ class OwnedTest(HostedTuiBase):
         self.own()
         with self.assertRaisesRegex(SessionError, "w1"):
             view.screen()
+
+
+class HarnessRequestTest(HostedTuiBase):
+    """harness_request and from_harness_request: a start sent to a session harness and back."""
+
+    def test_a_spec_round_trips_and_configures_the_harness_class(self):
+        spec = self.spec(
+            access=Access(cwd=self.workdir, dirs=(self.dir,), commands=("git",), env={"A": "1"}),
+            client="fake",
+            mode="tui",
+            name="w1",
+            sid=SID,
+            prompt="hello",
+            env={"TOKEN": "t"},
+            flags=("--x",),
+            handlers=(engine_types.HookCallback("pkg.mod", {"k": [1]}, (self.dir,)),),
+        )
+        request = json.loads(
+            json.dumps(
+                self.session.harness_request(spec, display="d", host="tmux", roots=(self.dir,))
+            )
+        )
+        fresh = type("Fresh", (HostedSession,), {"__module__": __name__})
+        self.assertEqual(fresh.from_harness_request(request), (spec, "d", "tmux", (self.dir,)))
+        self.assertEqual(fresh._config().hosts, self.session._config().hosts)
+
+    def test_a_malformed_request_is_a_config_error(self):
+        good = self.session.harness_request(
+            self.spec(client="fake", mode="tui"), display=None, host=None, roots=()
+        )
+        fresh = type("Fresh", (HostedSession,), {"__module__": __name__})
+        for bad in (
+            {},
+            {**good, "spec": {**good["spec"], "nope": 1}},
+            {**good, "roots": ["relative"]},
+            {**good, "host": 5},
+        ):
+            with self.subTest(bad=bad), self.assertRaises(ConfigError):
+                fresh.from_harness_request(bad)

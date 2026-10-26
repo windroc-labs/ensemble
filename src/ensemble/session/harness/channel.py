@@ -43,6 +43,7 @@ HEX = re.compile(r"[0-9a-f]{32}")
 REQUEST_WAIT = 15
 SLICE = 0.05
 DAY = 24 * 60 * 60
+SAVING = ".tmp-"  # utils.save's temp file prefix
 FILE_MAX = 1 << 20  # bytes of request.json, harness.json or a request read
 LOG = logging.getLogger("session")
 
@@ -269,6 +270,8 @@ class Channel:
             return []
         found = []
         for entry in entries:
+            if entry.name.startswith(SAVING):
+                continue  # a request being written: save renames it into place
             ident, suffix = entry.name[:-5], entry.name[-5:]
             body = None
             if suffix == ".json" and HEX.fullmatch(ident) and entry.is_file(follow_symlinks=False):
