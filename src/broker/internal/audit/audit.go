@@ -1,5 +1,5 @@
-// Package audit is the broker's credential lifecycle log: one JSON line per start, refresh and close, and one per
-// container whose backlog tokens a retry revoked or dropped. No type here holds a token, key or other secret.
+// Package audit is the broker's credential lifecycle log: one JSON line per start, refresh and close, one per
+// container whose backlog tokens a retry revoked or dropped, and one per static secret notice delivered. No type here holds a token, key or other secret.
 package audit
 
 import (
@@ -14,6 +14,7 @@ const (
 	CodexAccessToken = "codex-access-token"
 	GitHubToken      = "github-installation-token"
 	EnvSecret        = "env-secret"
+	OpencodeAPIKey   = "opencode-api-key" // notice lines only
 
 	Issued           = "issued"
 	Renewed          = "renewed"
@@ -21,12 +22,14 @@ const (
 	Revoked          = "revoked"
 	Pending          = "pending"           // in the backlog, with a reason
 	ExpiredUnrevoked = "expired-unrevoked" // dropped from the backlog at expiry
+	Notified         = "notified"          // a static secret notice delivered, with its threshold
 
 	// Events: a command line's is its command; a retry line's is retryEvent.
 	startEvent   = "start"
 	refreshEvent = "refresh"
 	closeEvent   = "close"
 	retryEvent   = "revocation-retry"
+	noticeEvent  = "credential-notice"
 )
 
 var containerName = regexp.MustCompile(`^ensemble-([A-Za-z0-9_-]+)-([0-9a-f]{32})$`)
@@ -60,7 +63,8 @@ type Credential struct {
 	Reason       string // pending only
 	ExpiresAt    *string
 	Account      string // GitHub only
-	Item         string // environment secrets only: the keychain reference, never the value
+	Item         string // environment secrets and notices: the reference, never the value
+	Notice       string // notices only: the threshold or rotated
 	Installation int64  // GitHub; 0 when unknown
 	Repos        *Repositories
 }
@@ -87,7 +91,9 @@ func (c Credential) MarshalJSON() ([]byte, error) {
 		RepositorySelection json.RawMessage `json:"repository_selection,omitempty"`
 		Repositories        json.RawMessage `json:"repositories,omitempty"`
 		RepositoriesError   string          `json:"repositories_error,omitempty"`
-	}{Kind: c.Kind, Result: c.Result, ExpiresAt: c.ExpiresAt, Account: c.Account, Item: c.Item, Installation: c.Installation}
+		Notice              string          `json:"notice,omitempty"`
+	}{Kind: c.Kind, Result: c.Result, ExpiresAt: c.ExpiresAt, Account: c.Account, Item: c.Item, Installation: c.Installation,
+		Notice: c.Notice}
 	if c.Result == Pending {
 		reason := c.Reason
 		if reason == "" {
@@ -118,7 +124,7 @@ type StartFacts struct {
 type Line struct {
 	Time        time.Time
 	Command     string // the broker subcommand that wrote it
-	Event       string // start, refresh, close or revocation-retry
+	Event       string // start, refresh, close, revocation-retry or credential-notice
 	Container   string
 	Start       *StartFacts // read only when Event is start
 	Credentials []Credential

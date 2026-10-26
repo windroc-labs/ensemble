@@ -19,3 +19,9 @@ class Started:
 class Refreshed:
     github: list[dict]
     credential_expires_at: str | None
+
+
+@dataclass(frozen=True)
+class Noticed:
+    notices: list[dict]  # each {"key", "text"}: a static secret notice the session is due
+    next_check: str | None  # when to check again; None: never

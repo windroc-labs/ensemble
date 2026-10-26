@@ -5,12 +5,11 @@ import json
 import os
 from collections.abc import Mapping
 
+from ensemble.delegate.engine.config import docker_kind
 from ensemble.delegate.engine.types import ConfigError
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import Host
 from ensemble.utils import GUARD, GitError, Invalid, Repo, Runner, origin, run_git, sh
-
-DOCKER_HOST = "ensemble.session.hosts.docker.host:DockerHost"
 
 
 def on_docker(settings: Mapping, host: str | None) -> bool:
@@ -19,10 +18,10 @@ def on_docker(settings: Mapping, host: str | None) -> bool:
         hosts = Host.parse_hosts(settings.get("hosts"))
     except SessionConfigError as error:
         raise ConfigError(str(error)) from None
-    return hosts.tables.get(host or hosts.default, {}).get("implementation") == DOCKER_HOST
+    return docker_kind(hosts.tables.get(host or hosts.default))
 
 
-def _reference(text: str) -> tuple[list[str], int]:
+def reference_lines(text: str) -> tuple[list[str], int]:
     """(text's lines, kept ends; the Reference block's length)."""
     lines = text.lstrip().splitlines(keepends=True)
     if not lines or not lines[0].startswith("Reference:"):
@@ -32,7 +31,7 @@ def _reference(text: str) -> tuple[list[str], int]:
 
 def repo_lines(text: str) -> list[str]:
     """The distinct `Repo:` values in the leading Reference block."""
-    lines, n = _reference(text)
+    lines, n = reference_lines(text)
     return sorted(
         {line.removeprefix("Repo:").strip() for line in lines[:n] if line.startswith("Repo:")}
     )
@@ -40,7 +39,7 @@ def repo_lines(text: str) -> list[str]:
 
 def with_repo(text: str, repo: str) -> str:
     """`text`, its Reference `Repo:` lines naming `repo`."""
-    lines, n = _reference(text)
+    lines, n = reference_lines(text)
     for i in range(n):
         if lines[i].startswith("Repo:"):
             lines[i] = f"Repo: {repo}" + lines[i][len(lines[i].rstrip("\r\n")) :]
@@ -53,10 +52,10 @@ def reference_repo(text: str, *, run: Runner | None = None) -> str | None:
     found = repo_lines(text)
     if len(found) > 1:
         raise ConfigError(f"the Reference block names more than one Repo: {', '.join(found)}")
-    return _github(found[0], run or sh) if found else None
+    return github_repo(found[0], run or sh) if found else None
 
 
-def _github(spec: str, run: Runner) -> str | None:
+def github_repo(spec: str, run: Runner) -> str | None:
     if spec.startswith(("/", "~")):
         clone = os.path.realpath(os.path.expanduser(spec))
         try:

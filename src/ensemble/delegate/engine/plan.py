@@ -10,15 +10,22 @@ from collections.abc import Mapping
 from dataclasses import replace
 
 from ensemble.delegate.composer import Composer, RunConfig
-from ensemble.delegate.engine.container import reference_repo, repo_lines, users_env, with_repo
+from ensemble.delegate.engine.container import (
+    github_repo,
+    reference_repo,
+    repo_lines,
+    users_env,
+    with_repo,
+)
 from ensemble.delegate.engine.drivers import Driver
+from ensemble.delegate.engine.environment import prefetch_target
 from ensemble.delegate.engine.runner import say
-from ensemble.delegate.engine.types import ConfigError, Layout, Plan, Spec
+from ensemble.delegate.engine.types import ConfigError, Layout, Plan, Resolved, Spec
 from ensemble.delegate.event.reply import OUTCOME, PROGRESS
-from ensemble.session import Access, Mode, RunLog
+from ensemble.session import Access, EnvironmentSpec, Mode, RunLog
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import Spec as SessionSpec
-from ensemble.utils import ACCOUNT_ENV, thaw, under
+from ensemble.utils import ACCOUNT_ENV, sh, thaw, under
 
 
 def _own(f):
@@ -82,6 +89,7 @@ def plan(
     driver: Driver,
     composition: Composer,
     accounts: Mapping[str, str] | None = None,
+    environment: Resolved | None = None,
 ) -> Plan:
     if not driver.session_based and spec.resume:
         raise ConfigError("instruction has no session to resume")
@@ -114,7 +122,14 @@ def plan(
         team=composition.team,
     )
     docker = driver.docker and spec.mode in (Mode.TUI, Mode.HEADLESS)
-    repo = reference_repo(spec.input) if docker else None
+    if environment is not None and not docker:
+        lost = next((k for k in ("lock", "secrets") if getattr(environment.spec, k)), None)
+        if lost := "prefetch" if environment.prefetch else lost:
+            raise ConfigError(
+                f"mode {spec.mode}: environment {lost} needs a container: tui or headless"
+            )
+        environment = None
+    environment_spec, repo = _environment(environment, spec.input) if docker else (None, None)
     if docker:
         spec = replace(spec, input=_on_docker(run, spec, repo, composition))
     resume = spec.sid if spec.resume else None
@@ -162,6 +177,7 @@ def plan(
         flags=flags,
         env=env,
         reply_tags=(PROGRESS, OUTCOME),
+        environment=environment_spec,
     )
     _check_team_dirs(
         composition, intent.writes, client=client, spec=session, layout=layout, driver=driver
@@ -170,6 +186,19 @@ def plan(
     return replace(
         planned, session=replace(session, prompt=composition.render(run, planned.params))
     )
+
+
+def _environment(
+    environment: Resolved | None, text: str
+) -> tuple[EnvironmentSpec | None, str | None]:
+    """(the session's environment, the Reference repo); a prefetch's lines checked before git."""
+    if environment is None or not environment.prefetch:
+        return None if environment is None else environment.spec, reference_repo(text)
+    target, ref = prefetch_target(text)
+    if (repo := github_repo(target, sh)) is None:
+        raise ConfigError(f"prefetch: Repo: {target} names no github.com repository")
+    found = {"repo": repo} | ({"ref": ref} if ref else {})
+    return replace(environment.spec, prefetch=found), repo
 
 
 def _on_docker(run: RunConfig, spec: Spec, repo: str | None, composition: Composer) -> str:

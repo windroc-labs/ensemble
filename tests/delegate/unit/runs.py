@@ -48,13 +48,14 @@ STOP = turn("Working.")
 
 class FakeHandle:
     """ensemble.session.Session as the Delegate uses it: events() goes on through `events` across
-    calls, up to an Exited (none left: AssertionError); send (raising `fail`) and stop (raising
-    `stop_fail`) recorded in `calls`; show's commands (raising `show_fail`) in `shown`; status: live,
+    calls, up to an Exited (none left: AssertionError); send (raising `fail`), stop (raising
+    `stop_fail`) and close (raising `close_fail`) recorded in `calls`; show's commands (raising `show_fail`) in `shown`; status: live,
     `hidden` as set. start: the Delegate Driver's stand-in.
     """
 
     showable = True
     show_fail: Exception | None = None
+    close_fail: Exception | None = None
     hidden = False
 
     def __init__(self, events, fail=None, stop_fail=None):
@@ -104,3 +105,8 @@ class FakeHandle:
         self.calls.append(("stop",))
         if self.stop_fail:
             raise self.stop_fail
+
+    def close(self):
+        self.calls.append(("close",))
+        if self.close_fail:
+            raise self.close_fail

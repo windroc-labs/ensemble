@@ -25,6 +25,7 @@ from tests.guard_data.orchestrator import (
 from tests.guard_data.session import (
     CLIENTS_HOME,
     PLUGIN_SOURCE_CONFIG,
+    ROLE_WORDS_ALLOWED,
     SESSION_SRC,
     STATUS_LOG_CLOCK,
     STATUS_LOG_HOME,
@@ -122,6 +123,28 @@ def session_names(repo: str) -> list[str]:
         for word in forbidden
         if word in text
     )
+
+
+def session_roles(repo: str) -> list[str]:
+    """NFR-5: the session names no role (a team/roles/*.md stem) and reads no roles config."""
+    roles_dir = os.path.join(repo, DELEGATE_SRC, "team", "roles")
+    roles = {name.removesuffix(".md") for name in os.listdir(roles_dir) if name.endswith(".md")}
+    words = {**dict.fromkeys(roles, "names role"), "roles": "reads role config"}
+    found = []
+    for rel, text in _files(os.path.join(repo, SESSION_SRC), ".py"):
+        for line, word in _code_words(text, ast.parse(text, rel)):
+            if word in words and (rel, word) not in ROLE_WORDS_ALLOWED:
+                found.append(f"{SESSION_SRC}{rel}:{line}: {words[word]} {word}")
+    for rel, text in _files(os.path.join(repo, SESSION_SRC), ".toml"):
+        for line, raw in enumerate(text.splitlines(), 1):
+            code = TOML_CODE.match(raw).group(0)
+            found += [
+                f"{SESSION_SRC}{rel}:{line}: {words[word]} {word}"
+                for word in sorted(words)
+                if re.search(rf"(?<![\w-]){re.escape(word)}(?![\w-])", code)
+                and (rel, word) not in ROLE_WORDS_ALLOWED
+            ]
+    return sorted(dict.fromkeys(found))
 
 
 def delegate_package_names(repo: str) -> list[str]:

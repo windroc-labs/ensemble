@@ -13,11 +13,13 @@ from unittest import mock
 
 from ensemble.session import (
     ConfigError,
+    EnvironmentSpec,
     Host,
     Mode,
     NotShowable,
     Process,
     Session,
+    SessionBusy,
     SessionError,
 )
 from ensemble.session.engine import worker
@@ -29,6 +31,7 @@ from tests.session.case import Case
 
 SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 OTHER = "1f8fad5b-d9cb-469f-a165-70867728950e"
+ENVIRONMENT = EnvironmentSpec(image="dummy-env:test", gateway="workers", lock="dummy-lock")
 
 
 class Killed(BaseException):
@@ -345,6 +348,51 @@ class ViewTest(Base):
         Worker.load("w1", session_cls=self.session_cls, say=self.said.append).restart()
         self.session.show.assert_not_called()
         self.session.hide.assert_not_called()
+
+
+class EnvironmentTest(Base):
+    def test_environment_is_stored_and_reused(self):
+        found = state(environment=ENVIRONMENT)
+        data = json.loads(found.to_json())
+        self.assertEqual(data["environment"], ENVIRONMENT.persisted())
+        self.assertEqual(WorkerState.from_json(data), found)
+        self.assertIs(found.spec(prompt="", resume=True).environment, ENVIRONMENT)
+        self.assertIsNone(json.loads(state().to_json())["environment"])
+        self.worker(environment=ENVIRONMENT).start(prompt="", resume=False)
+        for again in ("restart", "resume"):
+            self.session_cls.start.reset_mock()
+            self.session.events.return_value = iter([IdleTimeout(worker.EARLY)])
+            self.handle.wait_exit.return_value = True
+            loaded = Worker.load("w1", session_cls=self.session_cls, say=self.said.append)
+            with self.subTest(again):
+                getattr(loaded, again)()
+                spec = self.session_cls.start.call_args.args[0]
+                self.assertEqual((spec.environment, spec.resume), (ENVIRONMENT, True))
+
+    def test_a_bad_environment_is_a_config_error(self):
+        with self.assertRaisesRegex(ConfigError, "environment"):
+            state(environment=ENVIRONMENT.persisted())
+        data = json.loads(state().to_json())
+        for value in ({"image": "x"}, "dummy", []):
+            with self.subTest(value), self.assertRaises(ConfigError):
+                WorkerState.from_json({**data, "environment": value})
+
+    def test_pre_upgrade_worker_json_loads_without_environment(self):
+        data = json.loads(state().to_json())
+        del data["environment"]
+        found = WorkerState.from_json(data)
+        self.assertIsNone(found.environment)
+        self.assertIsNone(found.spec(prompt="", resume=True).environment)
+
+    def test_restart_while_held_raises_session_busy(self):
+        self.worker(environment=ENVIRONMENT).start(prompt="", resume=False)
+        busy = SessionBusy("dummy-lock", "ensemble-other-x (owner other)")
+        self.session_cls.start.side_effect = busy
+        self.handle.wait_exit.return_value = True
+        loaded = Worker.load("w1", session_cls=self.session_cls, say=self.said.append)
+        with self.assertRaises(SessionBusy) as raised:
+            loaded.restart()
+        self.assertIs(raised.exception, busy)
 
 
 class StaleTest(Base):

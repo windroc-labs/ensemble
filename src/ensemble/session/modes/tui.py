@@ -33,6 +33,7 @@ from ensemble.session.engine.types import (
     Mode,
     NotShowable,
     Prepared,
+    SessionBusy,
     SessionError,
     SessionEvent,
     SessionInfo,
@@ -437,10 +438,10 @@ class _Start:
     prompt_file: tuple[str, str] | None = None  # (path, text) this mode writes
 
     def validate(self) -> None:
-        self.store.host.validate(self.store.name, self.launch)
+        self.store.host._validate(self.store.name, self.launch, self.metadata)
 
     def preflight(self) -> None:
-        self.store.host._preflight(self.store.name, self.launch)
+        self.store.host._preflight(self.store.name, self.launch, self.metadata)
 
     @property
     def launch(self) -> Launch:
@@ -497,6 +498,8 @@ class TuiMode(BaseMode):
         try:
             pending.preflight()
             _stale(pending.store)
+        except SessionBusy:
+            raise
         except SessionError as error:
             raise ConfigError(str(error)) from error
         return pending.prepared
@@ -558,6 +561,8 @@ class TuiMode(BaseMode):
         try:
             pending.validate()
             host.prepare_events(prepared.spec.events)
+        except SessionBusy:
+            raise
         except SessionError as error:
             raise SessionError(f"cannot start tui session {store.name}: {error}") from error
 
@@ -572,6 +577,8 @@ class TuiMode(BaseMode):
                     events=prepared.spec.events,
                     metadata=pending.metadata,
                 )
+            except SessionBusy:
+                raise
             except SessionError as error:
                 raise SessionError(f"cannot start tui session {store.name}: {error}") from error
 

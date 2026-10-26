@@ -10,6 +10,7 @@ from typing import TypedDict
 from ensemble.delegate.composer import ConfigError, RunConfig, RunParams, Team
 from ensemble.delegate.composer.types import DELIVERABLE, TMP
 from ensemble.delegate.event.types import Outcome
+from ensemble.session import EnvironmentSpec
 from ensemble.session import Spec as SessionSpec
 from ensemble.utils import Stopped as Stopped
 
@@ -239,3 +240,11 @@ class Gated:
     outcome: Outcome
     status: GateStatus
     reason: str
+
+
+@dataclass(frozen=True)
+class Resolved:
+    """A run's environment from the config layers (engine/environment.py)."""
+
+    spec: EnvironmentSpec
+    prefetch: bool
