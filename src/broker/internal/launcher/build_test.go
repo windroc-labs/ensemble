@@ -170,6 +170,54 @@ func TestPrepareUmask(t *testing.T) {
 	}
 }
 
+func TestSnapshotSymlinkKeyUnderUmask(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	putFile(t, filepath.Join(src, "file"), "content")
+	if err := os.Mkdir(filepath.Join(src, "dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	links := map[string]string{"file-link": "file", "dir-link": "dir", "dangling": "missing"}
+	for name, target := range links {
+		if err := os.Symlink(target, filepath.Join(src, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	previous := syscall.Umask(0o022)
+	defer syscall.Umask(previous)
+	var key string
+	for _, mask := range []int{0o022, 0o077} {
+		syscall.Umask(mask)
+		if err := snapshotTree(src, dst); err != nil {
+			t.Fatal(err)
+		}
+		got, err := treeDigest(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if key != "" && got != key {
+			t.Errorf("umask %03o changed snapshot key: %s != %s", mask, got, key)
+		}
+		key = got
+		for name, target := range links {
+			if got, err := os.Readlink(filepath.Join(dst, name)); err != nil || got != target {
+				t.Fatalf("%s target = %q, %v; want %q", name, got, err, target)
+			}
+		}
+	}
+	if err := os.Remove(filepath.Join(src, "dangling")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("other-missing", filepath.Join(src, "dangling")); err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshotTree(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := treeDigest(dst); err != nil || got == key {
+		t.Fatalf("changed symlink target must change key: %s, %v", got, err)
+	}
+}
+
 func TestSnapshotPreservesModesUnderUmask(t *testing.T) {
 	src, dst := t.TempDir(), filepath.Join(t.TempDir(), "snapshot")
 	putFile(t, filepath.Join(src, "Dockerfile"), "FROM base")

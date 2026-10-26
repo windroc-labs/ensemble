@@ -26,7 +26,8 @@ import (
 //go:embed assets/*
 var assets embed.FS
 
-// checks run in an image before the ensemble layer is built on it; they never enter a build context.
+// checks run via stdin before building the ensemble layer or during session startup;
+// they never enter a build context.
 //
 //go:embed checks/*
 var checks embed.FS
@@ -171,7 +172,13 @@ func treeDigest(root string) (string, error) {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(h, "%d:%s:%o:", len(rel), rel, info.Mode())
+		mode := info.Mode()
+		if mode&os.ModeSymlink != 0 {
+			// Darwin applies umask to new symlinks. Hash Linux's fixed link mode:
+			// target permissions, not link permissions, govern access in the image.
+			mode = os.ModeSymlink | 0o777
+		}
+		fmt.Fprintf(h, "%d:%s:%o:", len(rel), rel, mode)
 		switch {
 		case info.Mode().IsRegular():
 			file, err := os.Open(path)
