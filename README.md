@@ -101,7 +101,7 @@ It shows the installation checklist only when clients or Docker has no flag or s
 
 | Flag | Does |
 |---|---|
-| `--ref <ref>` | installs the plugins and the broker from this branch or tag of `windroc-labs/ensemble` (default `<tag>`, the release the `windroc` marketplace pins). Claude Code and Codex install `ensemble@windroc` from that marketplace, which serves one ref, so with them only that ref; another ref needs `--clients opencode`: a release tag downloads its broker, a branch builds it locally. Check [launcher precedence](#commands) when other client caches exist. |
+| `--ref <ref>` | installs the plugins and the broker from this branch or tag of `windroc-labs/ensemble` (default `<tag>`, the release the `windroc` marketplace pins). Claude Code and Codex install `ensemble@windroc` from that marketplace, which serves one ref, so with them only that ref; another ref needs `--clients opencode`: a release tag downloads its broker, a branch builds it locally. The installed commands select this install’s plugin even when other client caches exist. |
 | `--clients <list>` | comma-separated `claude`, `codex`, `opencode`; any one alone works |
 | `--docker`, `--no-docker` | workers in Docker (Docker Desktop, the broker) or on the local tmux Host |
 | `--board <local\|linear>`, `--no-board` | sets up a local or Linear board, or skips board setup (first-run default) |
@@ -147,7 +147,7 @@ How the sessions ensemble starts load your settings, and why some commands refus
 
 | Command | Does |
 |---|---|
-| `ctmux <name>` | Open the commander's tmux session: native windows in iTerm2, a plain tmux attach in other terminals, a switch from inside tmux. `ctmux --install` puts ctmux and the four commands `ensemble-crew`, `ensemble-session`, `ensemble-delegate` and `ensemble-orchestrator` in `~/.ensemble/bin/`: run them by that path, or add it to `PATH`. Each runs that command from the plugin installed when it runs, Claude Code's install first, then Codex's newest, then OpenCode's newest, so an upgrade needs no reinstall; rerun `--install` to refresh them. An OpenCode-only `--ref` install does not override this order: an older Codex cache still wins over the new OpenCode copy. To run that ref explicitly, use its plugin's `bin/ensemble-*` or `skills/manage/scripts/ctmux` path. |
+| `ctmux <name>` | Open the commander's tmux session: native windows in iTerm2, a plain tmux attach in other terminals, a switch from inside tmux. `ctmux --install` puts ctmux and the four commands `ensemble-crew`, `ensemble-session`, `ensemble-delegate` and `ensemble-orchestrator` in `~/.ensemble/bin/`: run them by that path, or add it to `PATH`. `--install` records this plugin’s absolute path in `~/.ensemble/plugin-root`; all five commands use it, including after an OpenCode-only `--ref` install with other client caches present. Rerun the installer, or the desired plugin’s `skills/manage/scripts/ctmux --install`, to select another install or refresh the launchers. A missing selected command stops with a repair instruction. Launchers without a source record retain Claude Code → newest Codex → newest OpenCode discovery; equal versions use ascending path order. |
 | `/ensemble:manage` | Launch and direct workers, role runs and pipeline runs, with the commander's guidelines. |
 | `/ensemble:act-as <role>[:<task>] <input>` | Run a core role in this conversation. |
 | `/ensemble:board` | Read, find, create, edit, move and archive board issues with fixed `ensemble-orchestrator issue` commands. |

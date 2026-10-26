@@ -245,6 +245,62 @@ class FakeTmux(Case):
             (process.returncode, out, err, calls), (0, "".join(f"{p}\n" for p in paths), "", [])
         )
 
+    def legacy_install(self):
+        """Exercise discovery for launchers copied before source selection was recorded."""
+        self.install()
+        os.unlink(os.path.join(self.ensemble, "plugin-root"))
+
+    def test_install_pins_the_source_despite_other_clients_and_equal_version_packages(self):
+        selected = self.opencode_install("0.5.0", spec="selected ref with spaces")
+        self.install(script=os.path.join(selected, "skills", "manage", "scripts", "ctmux"))
+        record(self.home, plugin(os.path.join(self.home, "cache", "9.0.0")))
+        plugin(os.path.join(self.codex, "9.0.0"))
+        self.opencode_install("9.0.0")
+        self.opencode_install("0.5.0", spec="equal-version-leftover")
+        for name in COMMANDS:
+            with self.subTest(name=name):
+                if name == "ctmux":
+                    process, _, err, calls = self.ctmux("s1", script=self.dst)
+                    self.assertEqual((process.returncode, err), (0, ""))
+                    self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", selected))
+                else:
+                    target = os.path.join(selected, "bin", name)
+                    executable(target, '#!/bin/sh\nprintf "%s\\n" "$0"\n')
+                    process, out, err, _ = self.ctmux(script=os.path.join(self.installed, name))
+                    self.assertEqual((process.returncode, out, err), (0, target + "\n", ""))
+
+    def test_reinstall_switches_source_even_when_launcher_bytes_match(self):
+        self.install()
+        selected = self.opencode_install("0.5.0")
+        self.install(script=os.path.join(selected, "skills", "manage", "scripts", "ctmux"))
+        process, _, err, calls = self.ctmux("s1", script=self.dst)
+        self.assertEqual((process.returncode, err), (0, ""))
+        self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", selected))
+
+    def test_a_missing_selected_command_fails_without_using_another_plugin(self):
+        selected = self.opencode_install("0.5.0")
+        self.install(script=os.path.join(selected, "skills", "manage", "scripts", "ctmux"))
+        record(self.home, REPO)
+        os.unlink(os.path.join(selected, "bin", "ensemble-crew"))
+        process, out, err, calls = self.ctmux(script=os.path.join(self.installed, "ensemble-crew"))
+        self.assertNotEqual(process.returncode, 0)
+        self.assertEqual((out, calls), ("", []))
+        self.assertIn(selected, err)
+        self.assertIn("--install", err)
+
+    def test_legacy_equal_versions_use_path_order_instead_of_creation_order(self):
+        self.legacy_install()
+        for spec in ("z-last", "a-first"):
+            self.opencode_install("0.5.0", spec=spec)
+        for _ in range(2):
+            process, _, err, calls = self.ctmux("s1", script=self.dst)
+            self.assertEqual((process.returncode, err), (0, ""))
+            expected = os.path.join(self.opencode, "a-first", "node_modules", "ensemble")
+            self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", expected))
+            # Reverse creation order without changing either candidate's version or path.
+            shutil.rmtree(os.path.join(self.opencode, "z-last"))
+            self.opencode_install("0.5.0", spec="z-last")
+
     def test_install_writes_each_launcher_exact_mode_755_and_a_rerun_refreshes_them(self):
         with open(LAUNCHER, "rb") as f:
             source = f.read()
@@ -261,7 +317,7 @@ class FakeTmux(Case):
                 self.assertEqual(f.read(), source, name)
 
     def test_the_installed_ctmux_runs_the_recorded_plugins_and_follows_an_upgrade(self):
-        self.install()
+        self.legacy_install()
         for version in ("0.5.0", "0.6.0"):
             with self.subTest(version=version):
                 root = plugin(os.path.join(self.home, "cache", version))
@@ -271,7 +327,7 @@ class FakeTmux(Case):
                 self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", root))
 
     def test_without_a_claude_record_the_newest_codex_install_runs(self):
-        self.install()
+        self.legacy_install()
         for version in ("0.9.0", "0.10.0"):
             plugin(os.path.join(self.codex, version))
         _, _, err, calls = self.ctmux("s1", script=self.dst)
@@ -281,7 +337,7 @@ class FakeTmux(Case):
         )
 
     def test_a_claude_record_wins_over_a_codex_install(self):
-        self.install()
+        self.legacy_install()
         plugin(os.path.join(self.codex, "9.0.0"))
         record(self.home, root := plugin(os.path.join(self.home, "cache", "0.5.0")))
         _, _, _, calls = self.ctmux("s1", script=self.dst)
@@ -296,7 +352,7 @@ class FakeTmux(Case):
         return root
 
     def test_without_claude_or_codex_the_newest_opencode_install_runs(self):
-        self.install()
+        self.legacy_install()
         for version in ("0.9.0", "0.10.0"):
             self.opencode_install(version)
         newest = os.path.join(
@@ -316,7 +372,7 @@ class FakeTmux(Case):
         self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", root))
 
     def test_claude_and_codex_installs_win_over_an_opencode_install(self):
-        self.install()
+        self.legacy_install()
         self.opencode_install("9.0.0")
         plugin(os.path.join(self.codex, "0.5.0"))
         _, _, _, calls = self.ctmux("s1", script=self.dst)
@@ -328,7 +384,7 @@ class FakeTmux(Case):
         self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", root))
 
     def test_a_launcher_passes_its_arguments_stdin_and_status(self):
-        self.install()
+        self.legacy_install()
         root = os.path.join(self.home, "cache", "0.5.0")
         os.makedirs(os.path.join(root, "bin"))
         executable(
@@ -349,7 +405,7 @@ class FakeTmux(Case):
         self.assertEqual((done.returncode, done.stdout), (3, f"{crew}|status|--manager|a b|in"))
 
     def test_a_claude_record_entry_without_an_install_path_is_skipped(self):
-        self.install()
+        self.legacy_install()
         record(
             self.home, {"scope": "user"}, root := plugin(os.path.join(self.home, "cache", "0.5.0"))
         )
@@ -367,7 +423,7 @@ class FakeTmux(Case):
         self.assertEqual([call[2] for call in calls], ["has"])
 
     def test_with_no_install_a_launcher_fails_naming_where_it_looked(self):
-        self.install()
+        self.legacy_install()
         process, out, err, calls = self.ctmux("s1", script=self.dst)
         self.assertNotEqual(process.returncode, 0)
         self.assertEqual((out, calls), ("", []))
@@ -483,7 +539,7 @@ class PrivateServer(Case):
         names = self.server.tmux("list-sessions", "-F", "#{session_name}").stdout.split()
         self.assertEqual(sorted(names), ["s1", "s1-", "s1-x"])
 
-    def test_installed_launchers_run_off_path_and_follow_an_upgrade_without_a_reinstall(self):
+    def test_installed_launchers_run_off_path_and_switch_source_on_reinstall(self):
         installed = os.path.join(self.ensemble, "bin")
         record(self.home, REPO)
         done = self.ctmux("--install")
@@ -492,6 +548,10 @@ class PrivateServer(Case):
         for name, root in (("s1", REPO), ("s2", upgraded)):
             with self.subTest(root=root):
                 record(self.home, root)
+                done = self.ctmux(
+                    "--install", script=os.path.join(root, "skills/manage/scripts/ctmux")
+                )
+                self.assertEqual((done.returncode, done.stderr), (0, ""))
                 if os.path.exists(self.shell + ".log"):
                     os.unlink(self.shell + ".log")
                 done = self.ctmux(name, script=os.path.join(installed, "ctmux"))

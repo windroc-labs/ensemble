@@ -1084,20 +1084,18 @@ version_of() { sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9]*\(\.[0-9][0-9]*\)
 spoken_protocol_of() { sed -n 's/.*"protocol_version": *"\([0-9][0-9]*\)".*/\1/p' | sed -n 1p; }
 
 # The ensemble plugin Claude Code ($1 claude) or Codex (codex) has installed, else empty;
-# Codex's newest version, as skills/manage/scripts/launcher looks.
+# Codex's version at the served ref, ignoring caches from other installs.
 installed_plugin() {
+  local version
   if [ "$1" = claude ]; then
     command -v claude >/dev/null || return 0
     claude plugin list --json </dev/null | python3 -I -c '
 import json, sys
 print(next((p.get("installPath", "") for p in json.load(sys.stdin) if p.get("id") == "ensemble@windroc"), ""))'
   else
-    python3 -I -c '
-import glob, os, sys
-def version(path):
-    return [int(part) if part.isdigit() else -1 for part in os.path.basename(path).split(".")]
-found = sorted(glob.glob(os.path.join(glob.escape(sys.argv[1]), "*")), key=version, reverse=True)
-print(found[0] if found else "")' "${CODEX_HOME:-$HOME/.codex}/plugins/cache/windroc/ensemble"
+    version=$(ensemble_file "$ref" .claude-plugin/plugin.json | version_of)
+    [ -n "$version" ] || die "Codex: no ensemble version at $ref"
+    printf '%s/%s' "${CODEX_HOME:-$HOME/.codex}/plugins/cache/windroc/ensemble" "$version"
   fi
 }
 
@@ -1262,7 +1260,7 @@ codex_plugins() {
 }
 
 # The installed plugin: the whole repo (at $ref for OpenCode), source of the broker, ctmux and jobs. Claude Code's
-# install first, else Codex's newest, else OpenCode's, as skills/manage/scripts/launcher looks.
+# install first, else Codex's served version, else OpenCode's. ctmux --install selects this source for launchers.
 plugin_dir() {
   step "plugin directory"
   if ! has claude && ! has codex; then
@@ -1704,10 +1702,12 @@ opencode_key() {
 ctmux_install() {
   local name missing=
   step "ctmux --install"
+  [ "$(cat "$HOME/.ensemble/plugin-root" 2>/dev/null)" = "$pkg" ] || missing=1
   for name in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
     [ -x "$HOME/.ensemble/bin/$name" ] && cmp -s "$pkg/skills/manage/scripts/launcher" "$HOME/.ensemble/bin/$name" || missing=1
   done
   if [ -n "$missing" ]; then
+    record_file "$HOME/.ensemble/plugin-root"
     if [ -d "$HOME/.ensemble/bin" ]; then
       for name in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
         record_file "$HOME/.ensemble/bin/$name"

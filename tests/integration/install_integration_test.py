@@ -54,6 +54,7 @@ REAL = (
     "gzip",
     "ln",
     "ls",
+    "install",
 )
 FAKED = ("uname", "id", "sudo", "curl", "security", "open", "launchctl", "shasum")
 FAKED += ("xcode-select", "ps", "sw_vers", "lipo", "pgrep", "pkill", "defaults")
@@ -148,6 +149,8 @@ for n in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchest
   cp "$(dirname "$0")/launcher" "$HOME/.ensemble/bin/$n"
   chmod 755 "$HOME/.ensemble/bin/$n"
 done
+cd "$(dirname "$0")/../../.." || exit
+pwd -P > "$HOME/.ensemble/plugin-root"
 """
 ITERM_DIRS = (
     "Application Support/iTerm2",
@@ -1762,18 +1765,16 @@ class InstallTest(Case):
             result.stderr,
         )
 
-    def test_codex_plugin_from_its_newest_cache_dir(self):
+    def test_codex_plugin_uses_the_served_version_despite_a_newer_leftover(self):
         self.assert_ok(self.fresh(clients="codex", docker="y"))
         cache = Path(self.home, ".codex/plugins/cache/windroc/ensemble")
         # 9.8.10 is newer than 9.8.7 by version, older by text.
         shutil.copytree(cache / "9.8.7", cache / "9.8.10")
         (cache / "9.8.10" / CLIENT).write_text(f'PROTOCOL = "{OTHER}"\n')
         result = self.again("--clients", "codex", "--docker")
-        self.assertEqual(result.code, 1, result.stderr)
-        self.assertIn(
-            f"install.sh: {cache / '9.8.10'} wants broker protocol {OTHER}, but its broker, release"
-            f" v9.8.7, speaks protocol {PROTOCOL}: update the plugin",
-            result.stderr,
+        self.assert_ok(result)
+        self.assertEqual(
+            Path(self.ensemble, "plugin-root").read_text().strip(), str(cache / "9.8.7")
         )
 
     def test_installed_plugin_with_another_protocol_stops_up_front(self):
@@ -2510,6 +2511,70 @@ class InstallTest(Case):
             self.assertEqual(path.read_text(), "#!/bin/sh\nexit 0\n")
         self.assert_ok(self.opencode_rerun())
         self.assertNotIn("ctmux --install", self.calls())
+
+    def test_switching_clients_updates_the_source_with_identical_launchers_and_cleanup_restores_it(
+        self,
+    ):
+        selected = Path(self.ensemble, "plugin-root")
+        selected.write_text("previous selection\n")
+        self.assert_ok(self.opencode_only())
+        self.assertEqual(selected.read_text().strip(), str(self.opencode_package()))
+        self.assert_ok(self.again("--clients", "codex", "--no-docker"))
+        codex = Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.7")
+        self.assertEqual(selected.read_text().strip(), str(codex))
+        self.assertIn("ctmux --install", self.calls())
+        self.assert_ok(self.again("--clients", "claude", "--no-docker"))
+        self.assertEqual(selected.read_text().strip(), self.claude_ensemble())
+        self.assertIn("ctmux --install", self.calls())
+        self.assert_ok(self.cleanup("--yes"))
+        self.assertEqual(selected.read_text(), "previous selection\n")
+
+    def test_opencode_ref_commands_ignore_higher_and_equal_version_leftovers(self):
+        scripts = self.pkg_src / "skills/manage/scripts"
+        for name in ("ctmux", "launcher"):
+            (scripts / name).write_text(Path(REPO, "skills/manage/scripts", name).read_text())
+            (scripts / name).chmod(0o755)
+        commands = (
+            "ensemble-crew",
+            "ensemble-session",
+            "ensemble-delegate",
+            "ensemble-orchestrator",
+        )
+        (self.pkg_src / "bin").mkdir(exist_ok=True)
+        for name in commands:
+            target = self.pkg_src / "bin" / name
+            target.write_text('#!/bin/sh\nprintf "%s|%s\\n" "$0" "$*"\n')
+            target.chmod(0o755)
+        # All candidates have runnable commands, including the preferred clients' stale copies.
+        for relative in (
+            ".codex/plugins/cache/windroc/ensemble/99.0.0",
+            ".codex/plugins/cache/windroc/ensemble/9.8.7",
+            ".cache/opencode/packages/higher/node_modules/ensemble",
+            ".cache/opencode/packages/equal/node_modules/ensemble",
+        ):
+            leftover = Path(self.home, relative)
+            shutil.copytree(self.pkg_src, leftover)
+            version = "99.0.0" if "higher" in relative or "99.0.0" in relative else "9.8.7"
+            (leftover / "package.json").write_text(json.dumps({"version": version}))
+        claude = Path(self.home, ".claude/plugins/installed_plugins.json")
+        claude.parent.mkdir(parents=True, exist_ok=True)
+        claude.write_text(
+            json.dumps({"plugins": {"ensemble@windroc": [{"installPath": str(leftover)}]}})
+        )
+        self.assert_ok(self.opencode_only())
+        package = self.opencode_package()
+        for name in commands:
+            with self.subTest(name=name):
+                result = subprocess.run(
+                    [str(Path(self.ensemble, "bin", name)), "argument with spaces"],
+                    env=self.env,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, f"{package / 'bin' / name}|argument with spaces\n")
 
     def test_opencode_new_commit_reinstalls_broker(self):
         result = self.fresh(

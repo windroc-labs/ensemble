@@ -2,14 +2,17 @@
 # A tmux session for the manager, attached as README's ctmux row says. Its shell runs under
 # this plugin's bin/ensemble-crew hold, which keeps the manager's lease while the shell lives; start
 # the client there.
-# --install (re)writes ~/.ensemble/bin's launchers, each running this command from the plugin
-# installed at the time.
+# --install (re)writes ~/.ensemble/bin's launchers and selects this plugin for every command.
 if [ "$1" = --install ]; then
+  root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd -P) || exit
   bin=$HOME/.ensemble/bin
   mkdir -p "$bin" || exit
   for name in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
     install -m 755 "$(dirname -- "$0")/launcher" "$bin/$name" && echo "$bin/$name" || exit
   done
+  selection=$(mktemp "$HOME/.ensemble/.plugin-root.XXXXXX") || exit
+  trap 'rm -f -- "$selection"' EXIT
+  printf '%s\n' "$root" > "$selection" && mv -f -- "$selection" "$HOME/.ensemble/plugin-root" || exit
   exit
 fi
 s=${1:?usage: ctmux <session-name> | ctmux --install}
