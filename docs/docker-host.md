@@ -418,6 +418,15 @@ SIGTERM and, 60 s later, SIGKILL. From just before the broker's `start` until th
 SIGINT and SIGHUP back (an ignored one stays ignored); on one it removes its container, then the signal acts. Stopped
 later, it leaves its worker running.
 
+**Probes**: each tmux call is one `docker exec`. A running session's handle (the delegate harness's, polling every
+0.5 s) shares one pane probe and one screen capture between its liveness, exit code and screen reads; while the probe
+and screen stay unchanged, the interval doubles from 0.5 s to 3 s, and a change, `send` or key press resets it.
+An idle session costs at most 1 exec per second (about 0.7), a busy one 2 per 0.5 s tick (10 before). A client
+exit or a dialog or usage limit on screen is seen within 3.5 s plus the exec time (0.5 s before); turn ends and other
+hook events arrive through the hook journal, unaffected. That handle's status, liveness and unsized screen may be up
+to 3 s old; a new handle (another `ensemble-session` command) probes at once. Waiting for a killed client checks
+every 0.1 s, backing off to 1 s.
+
 **Claude settings**: a new start copies the host's model and effort settings, plus its web-search limit. No other host setting, credential, hook, plugin, status line or permission reaches it. `--model`/`--effort` and role config still win; a resume keeps the session's settings.
 
 ### Recovery
