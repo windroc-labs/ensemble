@@ -20,6 +20,7 @@ from ensemble.orchestrator import cli
 from ensemble.orchestrator.engine import (
     config,
     log,
+    router,
     runs,
     writeback,
 )
@@ -2909,3 +2910,85 @@ class DeliverableReplay(Events):
         self.assertTrue(self.deliver(self.finished(outcome=outcome_data(deliverable=REPORT))))
         self.assertIsNone(self.replay())
         self.assertEqual(self.posted(), ["Build ready: Ready.", REPORT])
+
+
+BUSY_ERROR = "busy: lock dummy-lock is held by ensemble-x-1 (owner x)"
+
+
+class BusyFinished(Events):
+    """FR-51 write-back: a busy Finished cancels its run's row without comments; a start goes
+    back to Ready, a resume stays In Progress.
+    """
+
+    def busy(self, attempt=1):
+        return self.finished(75, error=BUSY_ERROR, attempt=attempt)
+
+    def comments(self):
+        return [v for _, op, v in self.linear.calls if op in ("comment", "update")]
+
+    def attempts(self, since=None):
+        log = self.cfg.runs_log
+        tried = [*runs.parse_log(log), *runs.failures(log)]
+        return router.attempt_count(tried, RUN_ISSUE, since, busy=runs.busy_rows(log))
+
+    def resume(self, at):
+        return runs.note(
+            self.cfg.runs_log,
+            "resume",
+            now=lambda: at,
+            issue=RUN_ISSUE,
+            sid=RUN_SID,
+            role="engineer",
+            client="fake",
+            delegate_kind="fake",
+        )
+
+    def test_a_busy_start_goes_back_to_ready_once_without_comments(self):
+        for _ in range(2):
+            self.assertTrue(self.deliver(self.busy()))
+        self.assertEqual(self.comments(), [])
+        self.assertEqual(
+            [v["s"] for _, v in self.linear.writes("state")], [self.cfg.linear.states["todo"]]
+        )
+        [busy] = runs.busy_rows(self.cfg.runs_log)
+        self.assertEqual((busy.cancels, busy.attempt), (("start", BEFORE.astimezone(UTC)), 1))
+        self.assertEqual(self.ledger()[RUN_SID]["steps"], ["busy-move:1"])
+        self.assertEqual(self.attempts(), 0)
+        said = self.said()
+        self.assertIn(f"writeback busy {RUN_ISSUE} sid={RUN_SID} cancels=start", said)
+        self.assertFalse([line for line in said if " end " in line or "no-outcome" in line])
+
+    def test_an_attended_busy_start_leaves_one_busy_row(self):
+        self.assertTrue(self.deliver(self.busy()))
+        self.assertEqual(len(runs.busy_rows(self.cfg.runs_log)), 1)
+        self.assertEqual(self.linear.state, self.cfg.linear.states["todo"])
+
+    def test_preflight_then_start_busy_resumes_cancel_different_rows(self):
+        between = (BEFORE + timedelta(minutes=20)).astimezone(UTC)
+        before = (self.attempts(), self.attempts(between))
+        first = self.resume(BEFORE + timedelta(minutes=10))
+        runs.note_busy(self.cfg.runs_log, issue=RUN_ISSUE, sid=RUN_SID, cancels=("resume", first))
+        self.resume(BEFORE + timedelta(minutes=30))
+        self.assertTrue(self.deliver(self.busy(attempt=2)))
+        self.assertEqual((self.attempts(), self.attempts(between)), before)
+        self.assertEqual(before, (1, 0))
+        cancelled = [b.cancels for b in runs.busy_rows(self.cfg.runs_log)]
+        self.assertEqual(
+            cancelled,
+            [
+                ("resume", (BEFORE + timedelta(minutes=10)).astimezone(UTC)),
+                ("resume", (BEFORE + timedelta(minutes=30)).astimezone(UTC)),
+            ],
+        )
+        self.assertEqual((self.linear.writes("state"), self.comments()), ([], []))
+
+    def test_an_environment_start_failure_comments_naming_the_image_or_gateway(self):
+        for attempt, error, named in (
+            (1, "new: base image dummy-env:test is not on this Mac", "dummy-env:test"),
+            (2, "resume: gateway container windroc-gateway is not running", "windroc-gateway"),
+        ):
+            with self.subTest(named=named):
+                self.assertTrue(self.deliver(self.finished(1, error=error, attempt=attempt)))
+                body = self.linear.comments[ops.client_id(RUN_SID, f"no-outcome:{attempt}:comment")]
+                self.assertIn(named, body["body"])
+        self.assertEqual(runs.busy_rows(self.cfg.runs_log), [])
