@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 import os
@@ -22,13 +23,12 @@ TOOLS = (
     "sed",
     "tar",
     "gzip",
+    "shasum",
 )
 ASSET = "ensemble-broker-darwin-arm64.tar.gz"
 TARGET = "/usr/local/libexec/ensemble"
-VERIFY = (
-    "--repo windroc-labs/ensemble --signer-workflow windroc-labs/ensemble/.github/workflows/release.yml"
-    " --source-ref refs/tags/v9.8.7 --deny-self-hosted-runners"
-)
+SUMS = f"{ASSET}.sha256"
+DOWNLOAD = "gh release download v9.8.7 --repo windroc-labs/ensemble --pattern"
 # The released binary's stand-in: answers version with $ASSET_PROTOCOL and marks that it ran.
 RELEASED_BINARY = b"""#!/bin/sh
 : > "$RAN"
@@ -46,12 +46,9 @@ case "$(basename "$0") $*" in
   "sudo install -d"*) [ ! -e "$HOME/.ensemble/docker/worker/Dockerfile" ] || : > "$SEEDED" ;;
   "sudo install -o"*) cp "$8" "$INSTALLED" ;;
   "gh release download"*)
-    [ -n "${RELEASED:-}" ] || { echo "release not found" >&2; exit 1; }
-    cp "$RELEASED" "$9/$7" ;;
-  "gh attestation verify"*)
-    signer=windroc-labs/ensemble/.github/workflows/release.yml
-    want="attestation verify $3 --repo windroc-labs/ensemble --signer-workflow $signer"
-    [ "$*" = "$want --source-ref ${ATTESTED_REF:-none} --deny-self-hosted-runners" ] || exit 1 ;;
+    case "$7" in *.sha256) from=${RELEASED_SUMS:-} ;; *) from=${RELEASED:-} ;; esac
+    [ -n "$from" ] || { echo "release asset not found" >&2; exit 1; }
+    cp "$from" "$9/$7" ;;
 esac
 """
 
@@ -81,6 +78,8 @@ class Install(Case):
             member.size = len(RELEASED_BINARY)
             member.mode = 0o755
             archive.addfile(member, io.BytesIO(RELEASED_BINARY))
+        self.sums = Path(self.home, "asset.tar.gz.sha256")
+        self.sums.write_text(f"{hashlib.sha256(self.asset.read_bytes()).hexdigest()}  {ASSET}\n")
         self.ran = Path(self.home, "asset-ran")
         self.installed = Path(self.home, "installed")
         self.seeded = Path(self.home, "seeded-before-sudo")
@@ -110,6 +109,11 @@ class Install(Case):
             capture_output=True,
             text=True,
             timeout=60,
+        )
+
+    def install_release(self, *args, **env):
+        return self.run_script(
+            "install.sh", *args, RELEASED=str(self.asset), RELEASED_SUMS=str(self.sums), **env
         )
 
     def calls(self):
@@ -167,19 +171,14 @@ class Install(Case):
         self.assertFalse(self.installed.exists())
         self.assertFalse(Path(self.ensemble, "docker").exists())
 
-    def test_downloads_verifies_and_installs_the_release_asset(self):
+    def test_downloads_checks_and_installs_the_release_asset(self):
         self.fake("gh", "sudo")
-        result = self.run_script(
-            "install.sh", RELEASED=str(self.asset), ATTESTED_REF="refs/tags/v9.8.7"
-        )
+        result = self.install_release()
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = self.calls()
         work = calls[0].rsplit(" ", 1)[1]
-        self.assertEqual(
-            calls[0],
-            f"gh release download v9.8.7 --repo windroc-labs/ensemble --pattern {ASSET} --dir {work}",
-        )
-        self.assertEqual(calls[1], f"gh attestation verify {work}/{ASSET} {VERIFY}")
+        self.assertEqual(calls[0], f"{DOWNLOAD} {ASSET} --dir {work}")
+        self.assertEqual(calls[1], f"{DOWNLOAD} {SUMS} --dir {work}")
         self.assert_installed(calls[2:], f"{work}/ensemble-broker")
         self.assertEqual(self.installed.read_bytes(), RELEASED_BINARY)
         seeded = Path(self.ensemble, "docker/worker/Dockerfile")
@@ -189,41 +188,79 @@ class Install(Case):
 
     def test_missing_asset_fails_naming_retry_and_build(self):
         self.fake("gh", "sudo")
-        result = self.run_script("install.sh", ATTESTED_REF="refs/tags/v9.8.7")
+        result = self.run_script("install.sh", RELEASED_SUMS=str(self.sums))
         self.assert_nothing_installed(result)
         self.assertEqual(len(self.calls()), 1)
         self.assertIn(f"could not download {ASSET} from release v9.8.7", result.stderr)
         self.assertIn("retry in a few minutes", result.stderr)
         self.assertIn(f"sh {self.plugin.resolve()}/src/broker/install.sh --build", result.stderr)
 
-    def test_local_asset_is_verified_then_installed(self):
+    def test_missing_sha256_file_aborts_before_install(self):
         self.fake("gh", "sudo")
-        result = self.run_script(
-            "install.sh", ENSEMBLE_BROKER_ASSET=str(self.asset), ATTESTED_REF="refs/tags/v9.8.7"
-        )
+        result = self.run_script("install.sh", RELEASED=str(self.asset))
+        self.assert_nothing_installed(result)
+        self.assertEqual(len(self.calls()), 2)
+        self.assertIn(f"could not download {SUMS} from release v9.8.7", result.stderr)
+        self.assertIn("nothing installed", result.stderr)
+        self.assertIn(f"sh {self.plugin.resolve()}/src/broker/install.sh --build", result.stderr)
+        self.assertFalse(self.ran.exists())
+
+    def test_sha256_mismatch_aborts_before_install(self):
+        self.fake("gh", "sudo")
+        for sums in (f"{'0' * 64}  {ASSET}\n", "", "not a sha256\n"):
+            self.sums.write_text(sums)
+            result = self.install_release()
+            self.assert_nothing_installed(result)
+            self.assertIn(
+                f"{ASSET} does not match the sha256 in {SUMS} of release v9.8.7; nothing installed",
+                result.stderr,
+            )
+            self.assertFalse(self.ran.exists())
+
+    def test_sha256_file_names_only_the_digest_first(self):
+        self.fake("gh", "sudo")
+        self.sums.write_text(hashlib.sha256(self.asset.read_bytes()).hexdigest() + "\n")
+        result = self.install_release()
         self.assertEqual(result.returncode, 0, result.stderr)
-        calls = self.calls()
-        self.assertRegex(calls[0], rf"^gh attestation verify (/\S+)/{ASSET} {VERIFY}$")
-        work = calls[0].split()[3].rsplit("/", 1)[0]
-        self.assertNotEqual(work, self.home)
-        self.assert_installed(calls[1:], f"{work}/ensemble-broker")
         self.assertEqual(self.installed.read_bytes(), RELEASED_BINARY)
 
-    def test_unattested_asset_aborts_before_install(self):
+    def test_no_call_verifies_an_attestation(self):
+        self.fake("gh", "sudo")
+        result = self.install_release()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse([c for c in self.calls() if "attestation" in c])
+        self.assertNotIn("attestation", (BROKER / "install.sh").read_text())
+
+    def test_local_asset_is_checked_against_its_sha256_file_then_installed(self):
         self.fake("gh", "sudo")
         result = self.run_script("install.sh", ENSEMBLE_BROKER_ASSET=str(self.asset))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls()
+        self.assertRegex(calls[0], r"^sudo install -d ")
+        work = calls[1].split()[8].rsplit("/", 1)[0]
+        self.assertNotEqual(work, self.home)
+        self.assert_installed(calls, f"{work}/ensemble-broker")
+        self.assertEqual(self.installed.read_bytes(), RELEASED_BINARY)
+
+    def test_local_asset_without_its_sha256_file_aborts(self):
+        self.fake("gh", "sudo")
+        self.sums.unlink()
+        result = self.run_script("install.sh", ENSEMBLE_BROKER_ASSET=str(self.asset))
         self.assert_nothing_installed(result)
-        self.assertIn("failed provenance verification for v9.8.7; nothing installed", result.stderr)
+        self.assertIn(f"no sha256 file {self.sums}; nothing installed", result.stderr)
+        self.assertFalse(self.ran.exists())
+
+    def test_local_asset_with_another_sha256_aborts(self):
+        self.fake("gh", "sudo")
+        self.sums.write_text(f"{'f' * 64}  {ASSET}\n")
+        result = self.run_script("install.sh", ENSEMBLE_BROKER_ASSET=str(self.asset))
+        self.assert_nothing_installed(result)
+        self.assertIn(f"{self.asset} does not match the sha256 in {self.sums}", result.stderr)
         self.assertFalse(self.ran.exists())
 
     def test_asset_with_another_protocol_aborts_before_install(self):
         self.fake("gh", "sudo")
-        result = self.run_script(
-            "install.sh",
-            RELEASED=str(self.asset),
-            ATTESTED_REF="refs/tags/v9.8.7",
-            ASSET_PROTOCOL="6",
-        )
+        result = self.install_release(ASSET_PROTOCOL="6")
         self.assert_nothing_installed(result)
         self.assertTrue(self.ran.exists())
         self.assertIn(
@@ -241,22 +278,9 @@ class Install(Case):
             ("7", "PROTOCOL = 7\n", "speaks protocol 7, this plugin wants unknown"),
         ):
             self.client.write_text(client)
-            result = self.run_script(
-                "install.sh",
-                RELEASED=str(self.asset),
-                ATTESTED_REF="refs/tags/v9.8.7",
-                ASSET_PROTOCOL=asset,
-            )
+            result = self.install_release(ASSET_PROTOCOL=asset)
             self.assert_nothing_installed(result)
             self.assertIn(named, result.stderr)
-
-    def test_asset_attested_for_another_tag_aborts(self):
-        self.fake("gh", "sudo")
-        result = self.run_script(
-            "install.sh", ENSEMBLE_BROKER_ASSET=str(self.asset), ATTESTED_REF="refs/tags/v9.8.6"
-        )
-        self.assert_nothing_installed(result)
-        self.assertIn("failed provenance verification for v9.8.7", result.stderr)
 
     def test_missing_gh_fails_naming_build(self):
         self.fake("sudo")
@@ -322,9 +346,7 @@ class Install(Case):
         worker.mkdir(parents=True)
         (worker / "Dockerfile").write_text("FROM mine\n")
         for args in ([], ["--build"], []):
-            result = self.run_script(
-                "install.sh", *args, RELEASED=str(self.asset), ATTESTED_REF="refs/tags/v9.8.7"
-            )
+            result = self.install_release(*args)
             self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((worker / "Dockerfile").read_text(), "FROM mine\n")
         self.assertEqual(os.listdir(worker), ["Dockerfile"])
