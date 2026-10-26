@@ -285,7 +285,7 @@ ledger_valid() {
     profile:3) under_home "$2" && case $3 in *$'\t'* | *$'\n'* | '') false ;; esac ;;
     docker-block:2) under_home "$2" && case ${2##*/} in .zshrc | .bashrc | .bash_profile | .zprofile) true ;; *) false ;; esac ;;
     homebrew:2) [ "$2" = "$root/opt/homebrew" ] ;;
-    clt:1 | broker:1) true ;;
+    clt:1 | broker:1 | plugin-root:1) true ;;
     agent-tree:2) [ "$2" = "$HOME/.ensemble" ] ;;
     config:2) case $2 in created | backup) true ;; *) false ;; esac ;;
     formula:2) case $2 in gh | tmux | git | python | go | node) true ;; *) false ;; esac ;;
@@ -1714,7 +1714,15 @@ ctmux_install() {
     [ -x "$HOME/.ensemble/bin/$name" ] && cmp -s <(command_launcher "$name") "$HOME/.ensemble/bin/$name" || missing=1
   done
   if [ -n "$missing" ]; then
-    record_file "$HOME/.ensemble/plugin-root"
+    if ! recorded file "$HOME/.ensemble/plugin-root" && ! recorded plugin-root; then
+      if absent "$HOME/.ensemble/plugin-root"; then
+        record_file "$HOME/.ensemble/plugin-root"
+      else
+        cp -P "$HOME/.ensemble/plugin-root" "$state_dir/plugin-root.orig.tmp"
+        mv -f "$state_dir/plugin-root.orig.tmp" "$state_dir/plugin-root.orig"
+        ledger_add plugin-root
+      fi
+    fi
     if [ -d "$HOME/.ensemble/bin" ]; then
       for name in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
         record_file "$HOME/.ensemble/bin/$name"

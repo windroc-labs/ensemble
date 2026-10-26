@@ -2517,6 +2517,8 @@ class InstallTest(Case):
         selected = Path(self.ensemble, "plugin-root")
         selected.write_text("previous selection\n")
         self.assert_ok(self.opencode_only())
+        backup = Path(self.ensemble, "install/plugin-root.orig")
+        self.assertEqual(backup.read_text(), "previous selection\n")
         self.assertEqual(selected.read_text().strip(), str(self.opencode_package()))
         self.assert_ok(self.again("--clients", "codex", "--no-docker", answers=[(WRITE_Q, "y")]))
         codex = Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.7")
@@ -2525,6 +2527,47 @@ class InstallTest(Case):
         self.assert_ok(self.again("--clients", "claude", "--no-docker"))
         self.assertEqual(selected.read_text().strip(), self.claude_ensemble())
         self.assertIn("ctmux --install", self.calls())
+        self.assertEqual(backup.read_text(), "previous selection\n")
+        self.assertEqual(self.ledger().count("plugin-root"), 1)
+        self.assert_ok(self.cleanup("--yes"))
+        self.assertEqual(selected.read_text(), "previous selection\n")
+
+    def test_cleanup_restores_an_empty_source_record(self):
+        selected = Path(self.ensemble, "plugin-root")
+        selected.touch()
+        self.assert_ok(self.opencode_only())
+        self.assert_ok(self.cleanup("--yes"))
+        self.assertEqual(selected.read_bytes(), b"")
+
+    def test_cleanup_restores_a_dangling_source_record_link(self):
+        selected = Path(self.ensemble, "plugin-root")
+        selected.symlink_to("previous-selection")
+        self.assert_ok(self.opencode_only())
+        self.assert_ok(self.cleanup("--yes"))
+        self.assertTrue(selected.is_symlink())
+        self.assertEqual(selected.readlink(), Path("previous-selection"))
+
+    def test_cleanup_removes_a_new_source_record_after_reinstall(self):
+        selected = Path(self.ensemble, "plugin-root")
+        self.assert_ok(self.opencode_only())
+        self.assert_ok(self.opencode_rerun())
+        self.assertFalse(Path(self.ensemble, "install/plugin-root.orig").exists())
+        self.assertNotIn("plugin-root", self.ledger())
+        self.assert_ok(self.cleanup("--yes"))
+        self.assertFalse(selected.exists())
+
+    def test_cleanup_missing_source_backup_keeps_record_for_retry(self):
+        selected = Path(self.ensemble, "plugin-root")
+        selected.write_text("previous selection\n")
+        self.assert_ok(self.opencode_only())
+        backup = Path(self.ensemble, "install/plugin-root.orig")
+        original = backup.read_bytes()
+        backup.unlink()
+        result = self.cleanup("--yes")
+        self.assertEqual(result.code, 1, result.stderr)
+        self.assertIn(f"no {backup} to restore", result.stderr)
+        self.assertIn("plugin-root", self.ledger())
+        backup.write_bytes(original)
         self.assert_ok(self.cleanup("--yes"))
         self.assertEqual(selected.read_text(), "previous selection\n")
 
