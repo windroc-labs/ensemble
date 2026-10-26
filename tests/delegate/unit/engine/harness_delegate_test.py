@@ -307,8 +307,7 @@ class VerifierDockerTest(HarnessCase):
             return support.FakeProc(
                 argv, err=json.dumps({"exit_code": code, "error": error}).encode(), code=code
             )
-        free = "-empty" if command == "lock-query" else ""  # mini-op's lock is free
-        return support.FakeProc(argv, out=support.text(f"{command}-output{free}.json").encode())
+        return support.FakeProc(argv, out=support.text(f"{command}-output.json").encode())
 
     def failure(self):
         spec = Spec(

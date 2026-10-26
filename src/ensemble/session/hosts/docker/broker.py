@@ -45,7 +45,6 @@ COMMANDS = frozenset(
         "status",
         "workspace-rm",
         "probe-provider",
-        "lock-query",
         "unknown",
     }
 )
@@ -55,9 +54,9 @@ CODES = {  # code → (exit code, the commands that report it)
     "mount_rejected": (4, {"start", "maintain"}),
     "login_required": (5, {"start", "probe-provider"}),
     "image_rejected": (6, {"start"}),
-    "docker_unreachable": (7, {"build", "start", "close", "workspace-rm", "lock-query"}),
+    "docker_unreachable": (7, {"build", "start", "close", "workspace-rm"}),
     "build_failed": (8, {"build"}),
-    "start_failed": (9, {"start", "lock-query"}),
+    "start_failed": (9, {"start"}),
     "close_failed": (10, {"close"}),
     "keychain_failed": (11, {"start", "close", "status", "probe-provider"}),
     "workspace_dirty": (12, {"workspace-rm"}),
