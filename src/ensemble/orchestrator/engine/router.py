@@ -105,6 +105,9 @@ from ensemble.orchestrator.engine.gate import BRAKE_5H, Gate, read_usage
 from ensemble.orchestrator.engine.linear_run import LinearRun
 from ensemble.orchestrator.engine.log import linear_error, log
 from ensemble.orchestrator.engine.runs import (
+    Entry,
+    busy_rows,
+    cancelled,
     client_of,
     delegate_of,
     failures,
@@ -179,8 +182,11 @@ def first_line_time(entries, sid):
     )
 
 
-def attempt_count(entries, issue, since=None):
-    return sum(1 for e in entries if e.issue == issue and (since is None or e.ts > since))
+def attempt_count(entries, issue, since=None, busy=()):
+    """entries' rows of issue after since, less those a busy row cancels."""
+    counted = [e for e in entries if e.issue == issue and (since is None or e.ts > since)]
+    runs = [e for e in counted if isinstance(e, Entry)]
+    return len(counted) - sum(1 for e in runs if any(cancelled(b, e) for b in busy))
 
 
 def live_sessions(cfg, entries, *, say):
@@ -248,6 +254,7 @@ class Board:
         self.ready, self.blocked, self.live, self.statuses = None, {}, set(), {}
         self.status_errors, self.replays = {}, {}
         self.failures = failures(cfg.runs_log)
+        self.busy = busy_rows(cfg.runs_log)
         self.tracker = wiring.connect(gql, cfg, say=self.say)
 
     def todo(self):
@@ -281,7 +288,7 @@ class Board:
 
     def attempts(self, issue):
         tried = [*self.entries, *self.failures]
-        n = attempt_count(tried, issue["identifier"])
+        n = attempt_count(tried, issue["identifier"], busy=self.busy)
         return (
             n
             if n < CAP
@@ -289,6 +296,7 @@ class Board:
                 tried,
                 issue["identifier"],
                 self.tracker.moved_at(issue["id"], IssueState.READY, by="other"),
+                self.busy,
             )
         )
 

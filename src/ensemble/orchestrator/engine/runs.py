@@ -1,6 +1,7 @@
 """The runs log (runs.jsonl): one durable JSON line per run event; its readers: start and resume
 lines as Entries, a sid's start row as its Claim and its task (`started_task`), live limit rows
-(`limits`), `failed` rows (a new run that failed before its LinearRun) as Failures, `trim` to KEEP.
+(`limits`), `failed` rows (a new run that failed before its LinearRun) as Failures, `busy` rows (a
+run whose lock was held; one may cancel a start or resume row) as Busy, `trim` to KEEP.
 """
 
 import json
@@ -30,13 +31,57 @@ class Failure(NamedTuple):
     issue: str
 
 
+class Busy(NamedTuple):
+    ts: datetime
+    issue: str
+    sid: str
+    cancels: tuple[str, datetime] | None  # the cancelled row's kind and ts
+    attempt: int | None  # the busy Finished's; None: the router's
+
+
 def _row(kind, now, fields):
     return json.dumps({"ts": timestamp(now=now), "kind": kind, **fields}, ensure_ascii=False) + "\n"
 
 
-def note(path, kind, *, now=datetime.now, **fields):
+def note(path, kind, *, now=datetime.now, **fields) -> str:
+    """Returns the row's ts."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    append_line(path, _row(kind, now, fields), durable=True, locked=True)
+    line = _row(kind, now, fields)
+    append_line(path, line, durable=True, locked=True)
+    return json.loads(line)["ts"]
+
+
+def note_busy(path, *, issue, sid, cancels: tuple[str, str] | None, now=datetime.now):
+    """The router's busy row; cancels: the (kind, ts) of the row it cancels."""
+    shown = cancels and {"kind": cancels[0], "ts": cancels[1]}
+    note(path, "busy", issue=issue, sid=sid, cancels=shown, attempt=None, now=now)
+
+
+def note_busy_finished(path, *, issue, sid, attempt) -> str | None:
+    """A busy Finished's row, cancelling the (issue, sid) latest start or resume row unless a busy
+    row cancels it or has this attempt already; the kind of the row this attempt's busy row cancels.
+    """
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with file_lock(path):
+        lines = _lines(path)
+        found = [b for line in lines if (b := _busy(line)) and (b.issue, b.sid) == (issue, sid)]
+        if mine := next((b for b in found if b.attempt == attempt), None):
+            return mine.cancels and mine.cancels[0]
+        rows = [(e, line) for line in lines if (e := parse_line(line)) and e.sid == sid]
+        rows = [(e, line) for e, line in rows if e.issue == issue]
+        if not rows:
+            return None
+        newest, line = max(enumerate(rows), key=lambda r: (r[1][0].ts, r[0]))[1]
+        if any(cancelled(b, newest) for b in found):
+            return None
+        fields = {
+            "issue": issue,
+            "sid": sid,
+            "cancels": {"kind": newest.kind, "ts": json.loads(line)["ts"]},
+            "attempt": attempt,
+        }
+        append_line(path, _row("busy", datetime.now, fields), durable=True)
+        return newest.kind
 
 
 def note_limit(path, *, issue, sid, client, resets_at, delegate_kind, attempt):
@@ -181,6 +226,35 @@ def _failure(line):
     return None
 
 
+def _busy(line):
+    try:
+        d = json.loads(line)
+        cancels, attempt = d["cancels"], d["attempt"]
+        if (
+            d["kind"] == "busy"
+            and isinstance(d["issue"], str)
+            and isinstance(d["sid"], str)
+            and (attempt is None or type(attempt) is int and attempt >= 0)
+        ):
+            if cancels is not None:
+                if cancels["kind"] not in ("start", "resume"):
+                    return None
+                cancels = cancels["kind"], datetime.fromisoformat(cancels["ts"]).astimezone(UTC)
+            ts = datetime.fromisoformat(d["ts"]).astimezone(UTC)
+            return Busy(ts, d["issue"], d["sid"], cancels, attempt)
+    except ERRORS:
+        pass
+    return None
+
+
+def busy_rows(path):
+    return [b for line in _lines(path) if (b := _busy(line))]
+
+
+def cancelled(busy: Busy, entry: Entry) -> bool:
+    return (busy.issue, busy.sid, busy.cancels) == (entry.issue, entry.sid, (entry.kind, entry.ts))
+
+
 def failures(path):
     return [f for line in _lines(path) if (f := _failure(line))]
 
@@ -218,14 +292,16 @@ def trim(path, now):
         lines = _lines(path)
         entries = [e for line in lines if (e := parse_line(line))]
         newest = latest(entries)
+        kept = {e for e in entries if e.ts >= now - KEEP or e.sid == newest[e.issue].sid}
         keep = [
             line
             for line in lines
-            if (e := parse_line(line))
-            and (e.ts >= now - KEEP or e.sid == newest[e.issue].sid)
+            if parse_line(line) in kept
             or _limit(line, now)
             or (f := _failure(line))
             and f.ts >= now - KEEP
+            or (b := _busy(line))
+            and (any(cancelled(b, e) for e in kept) if b.cancels else b.ts >= now - KEEP)
         ]
         if len(keep) < len(lines):
             save(path, "".join(keep))
