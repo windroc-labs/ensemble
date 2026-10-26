@@ -605,5 +605,50 @@ assert "callback_package" not in sys.modules
         self.assertNothingWritten()
 
 
+class ServeTest(HookBase):
+    """`ensemble-session hook --serve DIR`: one process answers each request line."""
+
+    NOISY = (
+        "import os, sys\n"
+        "def on_hook(call):\n"
+        "    print('noise')\n"
+        "    sys.stdout.flush()\n"
+        "    os.write(1, b'raw noise\\n')\n"
+        "    sys.stdin.read()\n"
+        "    os.read(0, 64)\n"
+        "    if call.payload.get('fail'):\n"
+        "        raise RuntimeError('asked to fail')\n"
+        "    return call.payload\n"
+    )
+
+    def test_one_process_answers_every_request_and_callback_stdio_never_reaches_it(self):
+        with open(os.path.join(self.root, "noisy.py"), "w") as file:
+            file.write(self.NOISY)
+        self.state["client_hook"] = self.callback("noisy")
+        write_state(self.dir, self.state)
+        payloads = ({"n": 1}, {"n": 2, "fail": True}, {"n": 3})
+        lines = [
+            json.dumps({"label": "stop", "event": f"g.{n}", "payload": p}).encode() + b"\n"
+            for n, p in enumerate(payloads, 1)
+        ]
+        env = {**self.env, "PATH": os.pathsep.join((self.env["PATH"], "/usr/bin", "/bin"))}
+        res = subprocess.run(
+            [COMMAND, "hook", "--serve", self.dir],
+            input=b"".join(lines),
+            capture_output=True,
+            env=env,
+            timeout=60,
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(
+            [json.loads(line) for line in res.stdout.splitlines()],
+            [{"ok": True}, {"ok": False}, {"ok": True}],
+        )
+        self.assertEqual(
+            [(r["event"], r["payload"]["n"]) for r in self.records()], [("g.1", 1), ("g.3", 3)]
+        )
+        self.assertIn("asked to fail", res.stderr.decode())
+
+
 if __name__ == "__main__":
     unittest.main()

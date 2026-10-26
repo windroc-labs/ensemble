@@ -1,7 +1,8 @@
 """A tui client's hook: drains stdin, checks callback sources, binds identity and journals
 hooks.jsonl before notifying the optional Host. No stdout; failures log a traceback and stderr line.
 The CLI defaults to exit 0; --strict reports failure; an --event retry of the last journaled event
-reruns only the Host. session.json declares client_hook and host_hook via HookCallback.fields().
+reruns only the Host; --serve takes many calls. session.json declares client_hook and host_hook via
+HookCallback.fields().
 Resolve modules over hook roots, all callbacks' roots, then sys.path.
 Call on_hook(HookCall); load external modules from declared roots without changing sys.path.
 """
@@ -12,6 +13,7 @@ import fcntl
 import importlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import re
@@ -21,6 +23,7 @@ import traceback
 from collections.abc import Sequence
 from contextlib import suppress
 from datetime import datetime
+from types import SimpleNamespace
 
 from ensemble.session.engine.types import MARKS, HookCall, HookError, StatusState
 from ensemble.session.hosts.base import TUI_STATE
@@ -363,3 +366,46 @@ def run(argv: Sequence[str], stdin, *, roots: Sequence[str], event: str | None =
         return False
     else:
         return True
+
+
+def serve(argv: Sequence[str], requests, replies, *, roots: Sequence[str]) -> None:
+    """`hook --serve DIR`: per {label, event, payload} line, one run() and its {"ok"} line."""
+    for line in requests:
+        request = _request(line)
+        ok = request is not None and run(
+            [*argv, request["label"]],
+            SimpleNamespace(buffer=io.BytesIO(json.dumps(request["payload"]).encode())),
+            roots=roots,
+            event=request["event"],
+        )
+        try:
+            replies.write(json.dumps({"ok": ok}).encode() + b"\n")
+            replies.flush()
+        except OSError:
+            return
+
+
+def _request(line: bytes) -> dict | None:
+    try:
+        request = json.loads(line)
+    except (ValueError, RecursionError):
+        return None
+    if (
+        isinstance(request, dict)
+        and set(request) == {"label", "event", "payload"}
+        and isinstance(request["label"], str)
+        and (request["event"] is None or isinstance(request["event"], str))
+        and isinstance(request["payload"], dict)
+    ):
+        return request
+    return None
+
+
+def private_stdio():
+    """Dups of fds 0 and 1, which then hold /dev/null."""
+    requests, replies = os.fdopen(os.dup(0), "rb"), os.fdopen(os.dup(1), "wb")
+    null = os.open(os.devnull, os.O_RDWR)
+    os.dup2(null, 0)
+    os.dup2(null, 1)
+    os.close(null)
+    return requests, replies

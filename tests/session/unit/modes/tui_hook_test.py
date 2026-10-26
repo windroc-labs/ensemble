@@ -259,8 +259,8 @@ class DeclaredRootCallback(Case):
         self.assertEqual((stderr.getvalue(), payloads), ("", [{"loaded": module}]))
 
 
-class RelayEvent(Case):
-    """A relay event's retry after its Host callback failed reruns only that callback."""
+class Callbacks(Case):
+    """A session dir whose client callback tags the payload and whose Host callback fails once."""
 
     CLIENT = (
         "calls = []\n"
@@ -303,6 +303,10 @@ class RelayEvent(Case):
         with open(os.path.join(self.dir, tui_hook.HOOKS), encoding="utf-8") as f:
             return [json.loads(line) for line in f]
 
+
+class RelayEvent(Callbacks):
+    """A relay event's retry after its Host callback failed reruns only that callback."""
+
     def test_a_retried_event_journals_once_and_reruns_only_the_host(self):
         self.assertFalse(self.run_hook("g1.1"))
         self.assertTrue(self.run_hook("g1.1"))
@@ -327,6 +331,55 @@ class RelayEvent(Case):
                 tui_hook.main([self.dir, "stop"], io.BytesIO(b"{}"), roots=ROOTS, event=event)
         self.assertNotIn(self.names["client"], sys.modules)
         self.assertFalse(os.path.exists(os.path.join(self.dir, tui_hook.HOOKS)))
+
+
+class Serve(Callbacks):
+    """serve: one reply line per request line, each request run as one hook call."""
+
+    def serve(self, *lines):
+        replies = io.BytesIO()
+        with redirect_stderr(io.StringIO()):
+            tui_hook.serve([self.dir], io.BytesIO(b"".join(lines)), replies, roots=ROOTS)
+        return [json.loads(line) for line in replies.getvalue().splitlines()]
+
+    def request(self, event, label="stop", payload=None):
+        found = {
+            "label": label,
+            "event": event,
+            "payload": {"n": 1} if payload is None else payload,
+        }
+        return json.dumps(found).encode() + b"\n"
+
+    def test_each_request_gets_its_reply_in_order_and_a_retry_journals_once(self):
+        replies = self.serve(self.request("g1.1"), self.request("g1.1"), self.request(None))
+        self.assertEqual(replies, [{"ok": False}, {"ok": True}, {"ok": True}])
+        self.assertEqual([r.get("event") for r in self.records()], ["g1.1", None])
+        self.assertEqual((len(self.calls("client")), len(self.calls("host"))), (2, 3))
+
+    def test_a_malformed_request_replies_false_and_serving_goes_on(self):
+        self.assertEqual(
+            self.serve(self.request("g1.1")), [{"ok": False}]
+        )  # the Host's one failure
+        good = self.request("g1.2")
+        for line in (
+            b"junk\n",
+            b"[]\n",
+            b'{"label": "stop", "payload": {}}\n',
+            b'{"label": 1, "event": null, "payload": {}}\n',
+            b'{"label": "stop", "event": 2, "payload": {}}\n',
+            b'{"label": "stop", "event": null, "payload": []}\n',
+            b'{"label": "stop", "event": null, "payload": {}, "x": 1}\n',
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(self.serve(line, good), [{"ok": False}, {"ok": True}])
+
+    def test_a_call_that_fails_its_own_checks_replies_false(self):
+        self.assertEqual(self.serve(self.request(None, label="a b")), [{"ok": False}])
+        with open(os.path.join(self.dir, "hook.log"), encoding="utf-8") as f:
+            self.assertIn("usage", f.read())
+
+    def test_no_request_no_reply(self):
+        self.assertEqual(self.serve(), [])
 
 
 class Source(Case):
