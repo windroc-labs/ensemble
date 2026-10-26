@@ -11,10 +11,11 @@ from ensemble.delegate import ConfigError, Outcome
 from ensemble.orchestrator.engine import run_comments
 from ensemble.orchestrator.engine.types import LinearError, Stopped
 from ensemble.orchestrator.trackers.linear import linear_tracker, ops
-from ensemble.orchestrator.trackers.linear.linear_tracker import LinearTracker
+from ensemble.orchestrator.trackers.linear.linear_tracker import LinearTracker, Selves
 from ensemble.session import SessionStatus
 from tests.orchestrator import case
 from tests.orchestrator.process_fixtures import CalledProcessError
+from tests.orchestrator.unit.board_ids import HARNESS_USER, MANAGER_USER, role_id
 
 SID = "0b6f2c1e-6d0a-4c1b-9a51-3f1f6b0e2a7d"
 
@@ -273,21 +274,23 @@ class Record(Case):
         self.assertEqual(fake.comments[CID]["body"], text(f"running · #1 · {T2}"))
         self.assertEqual([fake.comments[c["id"]] for c in others], others)
 
-    def test_is_comment(self):
+    def test_is_run_by_the_harness_app_id(self):
         body = run_comments.body(self.record())
-        self.assertTrue(linear_tracker.is_comment({"user": {"isMe": True}, "body": body}))
+        selves = Selves(HARNESS_USER, frozenset({role_id("pm")}), MANAGER_USER)
+        harness = {"id": HARNESS_USER}
+        self.assertTrue(selves.is_run({"user": harness, "body": body}))
         for name, c in (
-            ("human, same body", {"user": {"isMe": False}, "body": body}),
-            (
-                "harness, no prefix",
-                {"user": {"isMe": True}, "body": "Repo check failed: no Repo: line"},
-            ),
-            ("sid not a uuid", {"user": {"isMe": True}, "body": "Run s-1 · x"}),
+            ("user, same body", {"user": {"id": "u-me"}, "body": body}),
+            ("role app, same body", {"user": {"id": role_id("pm")}, "body": body}),
+            ("manager app, same body", {"user": {"id": MANAGER_USER}, "body": body}),
+            ("isMe, same body", {"user": {"id": "u-me", "isMe": True}, "body": body}),
+            ("harness, no prefix", {"user": harness, "body": "Repo check failed: no Repo: line"}),
+            ("sid not a uuid", {"user": harness, "body": "Run s-1 · x"}),
             ("no user", {"user": None, "body": body}),
-            ("prefix not at the start", {"user": {"isMe": True}, "body": "see " + body}),
+            ("prefix not at the start", {"user": harness, "body": "see " + body}),
         ):
             with self.subTest(name):
-                self.assertFalse(linear_tracker.is_comment(c))
+                self.assertFalse(selves.is_run(c))
 
     def test_is_record_by_url(self):
         self.assertTrue(

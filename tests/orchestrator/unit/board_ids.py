@@ -33,6 +33,8 @@ TASK_GROUP = "00000000-0000-4000-8000-000000000002"
 # The Linear tracker, then dotted keys and inline tables: fixtures may append top-level keys (a
 # Linear one as linear.<key>) or tables ([linear.<table>] included) after it.
 HARNESS_USER = "00000000-0000-4000-8000-000000000201"
+# The manager app's user: [linear.manager] user_id where a fixture sets it.
+MANAGER_USER = "00000000-0000-4000-8000-000000000202"
 # The harness app: its token entry is "linear-api-key", what a fake transport keys the harness by.
 HARNESS_APP = {
     "client_id": "client-harness",

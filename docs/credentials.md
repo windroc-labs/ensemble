@@ -281,6 +281,7 @@ lists what it needs in Linear. By hand: create these in the Linear team, then pu
 | — (local clones of target repos, optional) | `local_clones` |
 | the harness's OAuth app (below): its Client ID, its client secret's and token's Keychain items, its Linear user id | `linear.harness.client_id`, `linear.harness.secret_service`, `linear.harness.token_service`, `linear.harness.user_id` |
 | the manager's API key, of an account neither the harness nor a role (yours, or one more member), a Keychain item (below) | `linear.manager_key` |
+| the manager's OAuth app's Linear user id, optional: its comments and moves count as yours | `linear.manager.user_id` |
 
 The harness app:
 

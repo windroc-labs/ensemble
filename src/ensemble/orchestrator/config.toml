@@ -135,6 +135,15 @@ user_id = ""
 # local: token_service = "linear-app-harness-token"
 # local: user_id = "00000000-0000-0000-0000-000000000000"
 
+# The manager's Linear OAuth app; optional.
+#   user_id  local: the app's Linear user id; its comments and moves count as the user's, also a move Linear credits
+#            to a botActor; "" → none
+[linear.manager]
+user_id = ""
+
+# local: [orchestrator.linear.manager]
+# local: user_id = "00000000-0000-4000-8000-000000000001"
+
 # The team's workflow states the code uses.
 #   <state>  local, required for each of backlog, todo, in_progress, in_review, handoff, done, canceled: its Linear state id
 [linear.states]

@@ -112,6 +112,7 @@ class LinearSettings:
     states: Mapping[str, str]
     human_members: tuple[str, ...]
     harness: LinearApp
+    manager_user_id: str  # "": unset
     manager_key: str
     task_label_group: str
     task_labels: Mapping[str, str]

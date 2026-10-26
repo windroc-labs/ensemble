@@ -35,6 +35,7 @@ from tests.orchestrator.unit.board_ids import (
     HARNESS_APP,
     HARNESS_LINE,
     HEADER,
+    MANAGER_USER,
     PACKAGED_FLOW,
     STATES,
     TASK_GROUP,
@@ -163,6 +164,7 @@ HARNESS = LinearApp("harness", AppKind.HARNESS, "linear.harness", **HARNESS_APP)
 LINEAR_DEFAULTS = {
     **dict.fromkeys(("team", "manager_key", "task_label_group", "agent_label_group"), ""),
     "harness": dict.fromkeys(("client_id", "secret_service", "token_service", "user_id"), ""),
+    "manager": {"user_id": ""},
     "states": dict.fromkeys(State, ""),
     "human_members": [],
     **dict.fromkeys(("task_labels", "agent_labels", "project_repos"), {}),
@@ -546,6 +548,36 @@ class ConfigurationLoading(ConfigFile, Case):
         self.assertEqual(self.load(PIPELINE).linear.manager_key, "")
         cfg = self.load('linear.manager_key = "linear-manager"\n' + PIPELINE)
         self.assertEqual(cfg.linear.manager_key, "linear-manager")
+
+    def test_manager_user_id_is_optional_and_another_app_user(self):
+        self.assertEqual(self.load(PIPELINE).linear.manager_user_id, "")
+        cfg = self.load(PIPELINE + f'[linear.manager]\nuser_id = "{MANAGER_USER}"\n')
+        self.assertEqual(cfg.linear.manager_user_id, MANAGER_USER)
+        for text, message in (
+            (
+                PIPELINE + '[linear.manager]\nuser_id = "manager"\n',
+                "linear.manager.user_id must be a Linear user id (UUID): 'manager'",
+            ),
+            (
+                PIPELINE + "[linear.manager]\nuser_id = 1\n",
+                "linear.manager.user_id must be a Linear user id (UUID): 1",
+            ),
+            (
+                PIPELINE + f'[linear.manager]\nuser_id = "{HARNESS_APP["user_id"]}"\n',
+                f"linear.manager.user_id '{HARNESS_APP['user_id']}' is also linear.harness.user_id",
+            ),
+            (
+                PIPELINE + f'[linear.manager]\nuser_id = "{role_id("pm")}"\n',
+                f"linear.manager.user_id '{role_id('pm')}' is also linear.roles.pm.user_id",
+            ),
+            (
+                PIPELINE + '[linear.manager]\nclient_id = "client-manager"\n',
+                "[linear.manager] has unknown keys: client_id",
+            ),
+            ("linear.manager = 1\n" + PIPELINE, "[linear.manager] must be a table"),
+        ):
+            with self.subTest(message):
+                self.fails("orchestrator/config.toml: " + message, text)
 
     def test_loads(self):
         cfg = self.load(PIPELINE)
@@ -1286,6 +1318,9 @@ class TrackerChoice(ConfigFile, Case):
             {r: role_app(r) for r in ROLES},
         )
         self.assertIs(config.linear_settings(cfg, "promote"), linear)
+
+    def test_local_board_leaves_linear_manager_unread(self):
+        self.assertIsNone(self.load(LOCAL_BOARD + '[linear.manager]\nuser_id = "manager"\n').linear)
 
     def test_linear_settings_on_local(self):
         cfg = self.load(LOCAL_BOARD)
