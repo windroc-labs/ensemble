@@ -96,6 +96,7 @@ PEM_Q = r"private key \(\.pem; [^)]*\), empty to skip:"
 DOCKER_LOGINS = ((TOKEN_Q, TOKEN), (PEM_Q, ""))
 DOCKER_PRESETS = {"UseVirtualizationFrameworkRosetta": False, "DisplayedOnboarding": True}
 PRESETS_NOT_WRITTEN = "    Docker Desktop presets not written (Rosetta off, onboarding done): "
+NOT_TOLD = "    not recorded for cleanup: "
 REMOVE_Q = r"Remove all of this\? \[y/N\]"
 SHARED = (
     "say",
@@ -1723,6 +1724,34 @@ class InstallTest(Case):
         self.assertEqual(result.stderr.count(PRESETS_NOT_WRITTEN), 1, result.stderr)
         self.assertEqual(self.docker_settings().read_text(), "[]")
         self.assertEqual([p.name for p in self.docker_group().iterdir()], ["settings-store.json"])
+
+    def test_docker_group_container_unreadable_parent(self):
+        """A container whose lstat macOS denies may be the user's: never recorded, so cleanup keeps it."""
+        group = self.docker_group()
+        group.mkdir(parents=True)
+        (group / "data").write_text("user's")
+        group.parent.chmod(0o600)
+        self.addCleanup(lambda: group.parent.exists() and group.parent.chmod(0o700))
+        result = self.fresh(clients="claude", docker="y")
+        self.assert_ok(result)
+        self.assertEqual(
+            result.stderr.count(f"{NOT_TOLD}{group}: cannot tell whether it is there"), 1
+        )
+        self.assertNotIn(f"dir\t{group}", self.ledger())
+        self.assert_ok(self.cleanup("--yes"))
+        group.parent.chmod(0o700)
+        self.assertEqual((group / "data").read_text(), "user's")
+
+    def test_dangling_symlink_not_recorded(self):
+        """A dangling symlink is there, not missing: cleanup leaves it (Docker Desktop writes through it)."""
+        plist = Path(self.home, "Library/Preferences/com.docker.docker.plist")
+        plist.parent.mkdir(parents=True)
+        Path(self.home, "dotfiles").mkdir()
+        plist.symlink_to(Path(self.home, "dotfiles/docker.plist"))
+        self.assert_ok(self.fresh(clients="claude", docker="y"))
+        self.assertNotIn(f"file\t{plist}", self.ledger())
+        self.assert_ok(self.cleanup("--yes"))
+        self.assertTrue(plist.is_symlink())
 
     def docker_group(self):
         return Path(self.home, "Library/Group Containers/group.com.docker")

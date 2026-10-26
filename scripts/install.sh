@@ -321,11 +321,29 @@ recorded() { [ -f "$ledger" ] && grep -qxF -- "$(
   printf '%s' "$*"
 )" "$ledger"; }
 
-# Records directory $1 when it does not exist yet.
-record_dir() { [ -e "$1" ] || [ -L "$1" ] || ledger_add dir "$1"; }
+# Exit 0 when path $1 is confirmed missing: its lstat fails with ENOENT. `test -e` is false on any lstat failure, so a
+# path macOS denies may be the user's: it counts as there, never recorded and so never removed by the cleanup.
+absent() {
+  local rc=0
+  if [ -e "$1" ] || [ -L "$1" ]; then return 1; fi
+  python3 -I -c '
+import os, sys
+try:
+    os.lstat(sys.argv[1])
+except FileNotFoundError:
+    sys.exit(0)
+except OSError:
+    sys.exit(2)
+sys.exit(1)' "$1" || rc=$?
+  if [ "$rc" = 2 ]; then say "    not recorded for cleanup: $1: cannot tell whether it is there"; fi
+  [ "$rc" = 0 ]
+}
 
-# Records file $1 when it does not exist yet.
-record_file() { [ -e "$1" ] || ledger_add file "$1"; }
+# Records directory $1 when it is confirmed missing.
+record_dir() { if absent "$1"; then ledger_add dir "$1"; fi; }
+
+# Records file $1 when it is confirmed missing.
+record_file() { if absent "$1"; then ledger_add file "$1"; fi; }
 
 # Per-user files under ~/Library that Docker Desktop and iTerm2 write once running, from their casks' zap stanzas:
 # directories, then files (preferences plists, cookies).
@@ -473,7 +491,7 @@ profile_line() {
   if [ -f "$file" ] && grep -qxF -- "$1" "$file"; then
     skip "in $file"
   elif consent "$file" "$1"; then
-    if [ ! -e "$file" ]; then ledger_add profile-file "$file"; fi
+    if absent "$file"; then ledger_add profile-file "$file"; fi
     ledger_add profile "$file" "$1"
     if [ -s "$file" ] && [ -n "$(tail -c 1 "$file")" ]; then printf '\n' >>"$file"; fi
     printf '%s\n' "$1" >>"$file"
@@ -891,7 +909,7 @@ apps() {
   record_dir "$HOME/.config/gh"
   if has claude; then
     record_dir "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-    if [ -z "${CLAUDE_CONFIG_DIR:-}" ] && [ ! -e "$HOME/.claude.json" ]; then ledger_add file "$HOME/.claude.json"; fi
+    if [ -z "${CLAUDE_CONFIG_DIR:-}" ]; then record_file "$HOME/.claude.json"; fi
   fi
   if has codex; then record_dir "${CODEX_HOME:-$HOME/.codex}"; fi
   if [ "$docker" = yes ]; then
@@ -904,7 +922,7 @@ apps() {
     # Docker Desktop adds its CLI completion block to the shell's rc files, creating them if needed: the cleanup
     # removes the block where it was not before, and a file that was not there once empty.
     for rc in .zshrc .bashrc .bash_profile .zprofile; do
-      if [ ! -e "$HOME/$rc" ]; then
+      if absent "$HOME/$rc"; then
         ledger_add profile-file "$HOME/$rc"
       elif ! grep -qF "# End of Docker Desktop section." "$HOME/$rc"; then
         ledger_add docker-block "$HOME/$rc"
@@ -1355,7 +1373,7 @@ opencode_plugin() {
     fi
   done
   for name in opencode.jsonc package.json package-lock.json .gitignore; do
-    [ -e "$conf/$name" ] || ledger_add file "$conf/$name"
+    record_file "$conf/$name"
   done
   record_dir "$conf/node_modules"
   record_dir "${XDG_CACHE_HOME:-$HOME/.cache}/opencode/packages"
@@ -1647,7 +1665,7 @@ ctmux_install() {
   if [ -n "$missing" ]; then
     if [ -d "$HOME/.ensemble/bin" ]; then
       for name in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
-        [ -e "$HOME/.ensemble/bin/$name" ] || ledger_add file "$HOME/.ensemble/bin/$name"
+        record_file "$HOME/.ensemble/bin/$name"
       done
     else
       record_dir "$HOME/.ensemble/bin"
@@ -2374,7 +2392,7 @@ $wanted"; then
       return 0
     fi
     while IFS= read -r directory; do
-      [ -e "$directory" ] || ledger_add board-dir "$directory"
+      if absent "$directory"; then ledger_add board-dir "$directory"; fi
     done <<<"$wanted"
   fi
   mkdir -p "$board_dir/unassigned"
