@@ -27,7 +27,7 @@ squash-merges automatically when required `CI` passes; no manual branch updates 
 `Worker image` also reports on queue groups, building when their combined diff changes image inputs.
 Queue groups run every CI project, including diff coverage against the group's base SHA.
 
-`CI` requires every applicable job and the Linux broker leg. It waits for a running
+`CI` requires every applicable job and, when broker scope is selected, the Linux broker leg. It waits for a running
 `Broker macos-15` and blocks on its failure or cancellation after starting. If macOS
 remains queued after every other CI job finishes, the gate requests ordinary workflow
 cancellation, then accepts only terminal macOS cancellation with no runner or steps.

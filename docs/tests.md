@@ -69,8 +69,8 @@ Subtest annotations use the method ID and keep parameters in the error text; sel
 that method runs all its subtests.
 
 The `repository` matrix runs four jobs, each with four independently supervised workers.
-The unit matrix keeps two jobs with four workers each. Both use `--durations
-.github/test_durations.json` to assign the longest estimated tests to the least loaded
+The unit matrix keeps two jobs with four workers each. Both use
+`--durations .github/test_durations.json` to assign the longest estimated tests to the least loaded
 worker, with deterministic tie-breaking. Discovery supplies every test exactly once;
 missing IDs default to 0.01 seconds and stale hints never select tests. Without
 `--durations`, `--shard` retains its sorted-ID slicing behavior.
@@ -136,7 +136,7 @@ python3 .github/coverage_gate.py /tmp/coverage-data origin/main
 flowchart LR
     S[Contract-based path scope] --> U
     S --> I
-    S --> R[Repository tests when full]
+    S --> R[Repository: 4 jobs x 4 workers when full]
     S --> B
     L[Lint groups] --> CI[Required CI aggregate]
     U[Unit: 2 jobs x 4 processes] --> C[Combine every coverage shard]
@@ -182,6 +182,16 @@ macOS leg after every other CI job finishes. Its `always()` job and gate step su
 ordinary cancellation; the overall run can show cancelled while required `CI` is green.
 API errors, missing evidence and cancellation races fail closed. Fork PR tokens cannot
 cancel runs, so a queued macOS leg on a fork needs a rerun when runners are available.
+
+To measure docs-only behavior before merging CI changes, push a docs-only commit after
+the CI implementation, then dispatch this branch with `docs-base` set to the full SHA
+of that implementation. The manual run uses the same changed-path classifier and
+aggregate as a PR. Only a docs-only diff permits reduced scope; no base, code changes,
+checked docs or unknown paths run full CI. PR, push and merge-group scope stays unchanged.
+
+```bash
+gh workflow run test.yml --repo windroc-labs/ensemble --ref <branch> -f docs-base=<full-commit-sha>
+```
 
 ```bash
 python3 .github/ci_scope.py --event pull_request --paths skills/manage/SKILL.md
