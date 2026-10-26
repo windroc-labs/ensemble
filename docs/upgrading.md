@@ -61,7 +61,7 @@ The Linear board's harness, manager and roles are OAuth apps now; member account
 On a Linear board, switch once, in this order:
 
 1. Create the five apps (harness, manager, one per role) in Linear › Settings › API › Applications: Client
-   credentials on, Public and Webhooks off, team access limited to the team ([Linear presets](credentials.md#linear-presets)).
+   credentials on, Public and Webhooks off ([Linear presets](credentials.md#linear-presets)).
 2. Stop the board's launchd jobs and start no router by hand; wait until no run is left.
 3. Write down the value of each old setting, `linear.harness_key`, `linear.manager_key` and each
    `[orchestrator.linear.roles.<role>]` `key`: it names the Keychain item holding that personal key. Unset, it

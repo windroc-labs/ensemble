@@ -148,6 +148,12 @@ jobs:
           python-version: "3.11"
       - name: Install pinned test dependencies
         run: python3 -m pip install coverage=="$COVERAGE_VERSION" import-linter=="$IMPORT_LINTER_VERSION" ruff==0.16.9 jsonschema==4.26.0
+      - name: Install zsh
+        run: |
+          if ! command -v zsh >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends zsh
+          fi
       - name: Protect shipped source
         run: chmod -R a-w src
       - name: Repository integration tests
