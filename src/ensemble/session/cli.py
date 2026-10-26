@@ -9,8 +9,9 @@ agent session ensemble started (ENSEMBLE_AGENT_SESSION), start, restart, resume 
 refuse.
 
 stdout holds only machine output: Records, Status lines, ls rows, read and reply text, attach
-commands. Exit 0 done, 2 a usage or config error, 1 a failed key or other failure. A batch answers
-its keys in order; a failed key gets one stderr line and no stdout line, and the exit is 1.
+commands. Exit 0 done, 2 a usage or config error, 75 a held environment lock on start, restart or
+resume, 1 a failed key or other failure. A batch answers its keys in order; a failed key gets one
+stderr line and no stdout line, and the exit is 1.
 """
 
 from __future__ import annotations
@@ -140,6 +141,7 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
             "  Host is [session.hosts].default. Help needs no running tools/services.\n"
             "  Query commands print stdout; failures print stderr. Exit 0: success;\n"
             "  1: session/Host operation failed; 2: usage/configuration or nested start.\n"
+            "  75: environment lock held on start, restart or resume; stderr names its holder.\n"
             "  A Record is a serialized JSON control/identity line: name, session ids,\n"
             "  display and control/resume commands. Pass original Records unchanged,\n"
             "  one per stdin line, only to commands whose help permits them. Explicit\n"
