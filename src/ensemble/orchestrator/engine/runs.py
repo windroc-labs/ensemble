@@ -1,7 +1,4 @@
-"""The runs log (runs.jsonl): one durable JSON line per run event; its readers: start and resume
-lines as Entries, a sid's start row as its Claim and its task (`started_task`), `failed` rows
-(a new run that failed before its LinearRun) as Failures, `trim` to KEEP.
-"""
+"""Durable runs.jsonl events: run entries, start-row claims/tasks and failed launches; trim to KEEP."""
 
 import json
 import os

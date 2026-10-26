@@ -720,8 +720,7 @@ An unregistered account, an account selected for Codex or OpenCode, or a registe
   selection picks, so the gate skips Claude runs only when every account is over a threshold (`usage-skip`, reason
   `usage`) or none has a reading (`usage unknown`). A worker's or role's selected account is gated the same way, not
   by its own usage. With one account, or on tmux, the
-  gate probes the host's Claude login. The board's limit hold stays per
-  client: one account's usage limit holds every board run on Claude.
+  gate probes the host's Claude login.
 - The tmux Host checks a selection as above, then ignores it: the session runs on your own Claude login.
 
 ### OpenCode
