@@ -1844,27 +1844,34 @@ def refuse(table, extra):
     sys.exit(f"install.sh: config.local.toml: unknown keys in [{table}]: {names}{UPGRADE}")
 if extra := sorted(set(linear) - KNOWN):
     refuse("linear", extra)
-def app(slot, table, found):
+def table_of(table, found):
     if not isinstance(found, dict):
         sys.exit(f"install.sh: config.local.toml: [{table}] must be a table")
     if extra := sorted(set(found) - {"client_id", "secret_service", "token_service", "user_id"}):
         refuse(table, extra)
     if any(not isinstance(value, str) for value in found.values()):
-        sys.exit(f"install.sh: config.local.toml: {slot} app fields must be strings")
-    return (slot, text(found.get("token_service")) or f"linear-app-{slot}-token",
-            text(found.get("secret_service")) or f"linear-app-{slot}-secret")
-slots = [app(slot, f"linear.{slot}", linear.get(slot, {})) for slot in ("harness", "manager")]
-for role in roles:
-    slots.append(app(role, f"linear.roles.{role}", linear.get("roles", {}).get(role, {})))
-used = set()
-for slot, token, secret in slots:
-    for value in (token, secret):
+        sys.exit(f"install.sh: config.local.toml: [{table}] app fields must be strings")
+    return found
+role_tables = linear.get("roles", {})
+if not isinstance(role_tables, dict):
+    sys.exit("install.sh: config.local.toml: [linear.roles] must be a table")
+# every role table, a stage role or not, as the orchestrator checks them all
+for name in sorted(role_tables):
+    table_of(f"linear.roles.{name}", role_tables[name])
+slots = [(slot, f"linear.{slot}", table_of(f"linear.{slot}", linear.get(slot, {}))) for slot in ("harness", "manager")]
+slots += [(role, f"linear.roles.{role}", role_tables.get(role, {})) for role in roles]
+used = {}
+for slot, table, found in slots:
+    services = [(field, text(found.get(field)) or f"linear-app-{slot}-{kind}")
+                for field, kind in (("token_service", "token"), ("secret_service", "secret"))]
+    for field, value in services:
+        where = f"{table}.{field}"
         if not re.fullmatch(r"[A-Za-z0-9._@+][A-Za-z0-9._@+-]*", value):
-            sys.exit(f"install.sh: config.local.toml: {slot} keychain service {value!r}: not a plain keychain name")
+            sys.exit(f"install.sh: config.local.toml: {where}: not a plain keychain name")
         if value in used:
-            sys.exit(f"install.sh: config.local.toml: duplicate credential service {value}")
-        used.add(value)
-    print(f"{slot}\t{token}\t{secret}")' "$config" "$1"
+            sys.exit(f"install.sh: config.local.toml: {where} is also {used[value]}")
+        used[value] = where
+    print(f"{slot}\t{services[0][1]}\t{services[1][1]}")' "$config" "$1"
 }
 
 # GraphQL reads app token records from Keychain; curl gets authorization on stdin (-K -).

@@ -3321,6 +3321,11 @@ exec /bin/rm "$@"
             {r: app_config(r) for r in SLOTS[2:]},
         )
         self.assertEqual(linear["project_repos"], {uuid(30): "acme/widget"})
+        # the config gates of router --dry-run, promote --dry-run and issue list
+        cfg = orchestrator_config.load()
+        orchestrator_config.linear_settings(cfg, "router")
+        orchestrator_config.linear_settings(cfg, "promote")
+        orchestrator_config.manager_app(cfg.linear)
         self.assertIn(
             "    Tasks label design: not a task of the board's roles; left out", result.stderr
         )

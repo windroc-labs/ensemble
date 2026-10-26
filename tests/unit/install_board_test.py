@@ -69,25 +69,45 @@ class BoardContract(Case):
         )
 
     def test_slots_refuse_unknown_app_keys_naming_table_and_key(self):
-        for text, table in (
-            ('[orchestrator.linear.roles.pm]\ntoken = "x"\n', "linear.roles.pm"),
-            ('[orchestrator.linear.harness]\ntypo = "x"\ntoken = "y"\n', "linear.harness"),
+        for text, table, names in (
+            ('[orchestrator.linear.roles.pm]\ntoken = "x"\n', "linear.roles.pm", "token"),
+            ('[orchestrator.linear.roles.writer]\ntoken = "x"\n', "linear.roles.writer", "token"),
+            (
+                '[orchestrator.linear.harness]\ntypo = "x"\ntoken = "y"\n',
+                "linear.harness",
+                "token, typo",
+            ),
         ):
             with self.subTest(table=table):
                 _, stop = self.slots(text)
                 self.assertEqual(
                     stop,
-                    f"install.sh: config.local.toml: unknown keys in [{table}]: "
-                    + ("token" if "roles" in table else "token, typo")
-                    + "; see docs/upgrading.md#linear-apps",
+                    f"install.sh: config.local.toml: unknown keys in [{table}]: {names}"
+                    "; see docs/upgrading.md#linear-apps",
                 )
 
-    def test_slots_refuse_a_non_plain_keychain_service(self):
-        _, stop = self.slots('[orchestrator.linear.manager]\ntoken_service = "a b"\n')
-        self.assertEqual(
-            stop,
-            "install.sh: config.local.toml: manager keychain service 'a b': not a plain keychain name",
-        )
+    def test_slots_name_a_bad_keychain_service_by_field_never_by_value(self):
+        for text, said in (
+            (
+                '[orchestrator.linear.manager]\ntoken_service = "a b"\n',
+                "linear.manager.token_service: not a plain keychain name",
+            ),
+            (
+                '[orchestrator.linear.roles.pm]\nsecret_service = "pasted secret"\n',
+                "linear.roles.pm.secret_service: not a plain keychain name",
+            ),
+            (
+                '[orchestrator.linear.harness]\nsecret_service = "secret-1"\n'
+                '[orchestrator.linear.manager]\nsecret_service = "secret-1"\n',
+                "linear.manager.secret_service is also linear.harness.secret_service",
+            ),
+        ):
+            with self.subTest(said=said):
+                _, stop = self.slots(text)
+                self.assertEqual(stop, f"install.sh: config.local.toml: {said}")
+                self.assertNotIn("a b", stop)
+                self.assertNotIn("pasted secret", stop)
+                self.assertNotIn("secret-1", stop)
 
     def test_slots_know_exactly_the_orchestrators_linear_keys(self):
         values = {}
