@@ -573,7 +573,7 @@ func TestMutexFailureRevokesIssuedTokens(t *testing.T) {
 			if revocationFails {
 				tokens.revoke = protocol.New(protocol.KeychainFailed, "revocation queued for retry")
 			}
-			tokens.onRevoke = func() {
+			tokens.onRelease = func() {
 				w.mu.Lock()
 				defer w.mu.Unlock()
 				if !slices.ContainsFunc(tokens.calls, func(c string) bool { return strings.HasPrefix(c, "issue ") }) {

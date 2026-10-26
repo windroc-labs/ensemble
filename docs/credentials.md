@@ -58,7 +58,11 @@ GitHub on the Docker Host needs no per-run login: `<B> login github ensemble-bot
 | Stored at | broker items `ensemble-tokens` (per container) and `ensemble-revocations` (backlog); the container's `/run/ensemble/secrets/github/<owner>` (0400, tmpfs) |
 | Readers | **three-way readers** |
 | Lifetime | 1 hour; each session renews them 10 minutes before the first expires |
-| Revoke | `close` attempts revocation before removing the container, even if revocation fails; backlog entries retry at the next start, close or `status --cleanup` until revoked or expired; `<B> status` lists pending backlog entries without changing them |
+| Revoke | `close` releases the container's grant: it attempts revocation before removing the container, even if revocation fails; backlog entries retry at the next start, close or `status --cleanup` until revoked or expired; `<B> status` lists pending backlog entries without changing them |
+
+The `ensemble-tokens` record holds each token's state: prepared (issued, not yet confirmed in the container),
+delivered, or retiring (replaced, awaiting revocation). Start and refresh report a token only once it is delivered;
+a refresh or close interrupted at any step leaves the record consistent, and the next refresh or close finishes it.
 
 If the backlog cannot be read or written and direct revocation fails, the broker retains the original
 `ensemble-tokens` record and reports pending cleanup. Retry `<B> close --container <container>` with the original container

@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"ensemble/broker/internal/docker"
+	"ensemble/broker/internal/launcher"
 	"ensemble/broker/internal/protocol"
 )
 
@@ -868,7 +869,8 @@ func TestInject(t *testing.T) {
 	if err := (Credentials{Keychain: k}).Inject("default", e.run); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"/bin/sh", "-c", "umask 0377 && set -C && cat > " + docker.SecretsDir + "/claude"}
+	script := "mkdir -p -m 0700 " + docker.SecretsDir + " && umask 0377 && set -C && cat > " + docker.SecretsDir + `/"$1"`
+	want := []string{"/bin/sh", "-c", script, "sh", "claude"}
 	if !reflect.DeepEqual(e.argv, [][]string{want}) || string(e.stdin[0]) != token {
 		t.Fatalf("%q %q", e.argv, e.stdin)
 	}
@@ -1053,6 +1055,62 @@ func TestCheckServices(t *testing.T) {
 		errs := checkServices(tc.list, tc.services, tc.prefixes)
 		if !strings.Contains(fmt.Sprint(errs), tc.want) {
 			t.Errorf("%s: %v, want %q", name, errs, tc.want)
+		}
+	}
+}
+
+type accessOf func(service, account string) (AppAccess, error)
+
+func (f accessOf) AppAccess(service, account string) (AppAccess, error) { return f(service, account) }
+
+func TestTrustedItem(t *testing.T) {
+	for name, tc := range map[string]struct {
+		access  AppAccess
+		err     error
+		trusted bool
+	}{
+		"broker only":  {brokerOnly(), nil, true},
+		"other app":    {*added(), nil, false},
+		"absent":       {AppAccess{}, ErrNotFound, false},
+		"read refused": {AppAccess{}, ErrNeedsDialog, false},
+	} {
+		var asked []string
+		trusted, err := trustedItem(accessOf(func(service, account string) (AppAccess, error) {
+			asked = append(asked, service+"/"+account)
+			return tc.access, tc.err
+		}), "ensemble-env/x", "x")
+		if trusted != tc.trusted || !errors.Is(err, tc.err) || !slices.Equal(asked, []string{"ensemble-env/x/x"}) {
+			t.Errorf("%s: %v %v %q", name, trusted, err, asked)
+		}
+	}
+}
+
+// TestStaticSecretErrorsHideKeychainDetail puts a sentinel in every Keychain error a static secret's start path can
+// get; no error it returns names it.
+func TestStaticSecretErrorsHideKeychainDetail(t *testing.T) {
+	const sentinel = "KEYCHAIN_SENTINEL"
+	leak := errors.New("keychain status -25293: " + sentinel)
+	exec := (&fakeExec{}).run
+	var errs []error
+	claude := &fakeKeychain{token: []byte(token)}
+	claude.accessErr = leak
+	errs = append(errs, Credentials{Keychain: claude}.Ready("default"))
+	errs = append(errs, Credentials{Keychain: &fakeKeychain{token: []byte(token), getErr: leak}}.Inject("default", exec))
+	keys := providerKeys("strata")
+	keys.accessErr = leak
+	errs = append(errs, OpencodeKeys{Keychain: keys}.Ready([]string{"strata"}))
+	keys = providerKeys("strata")
+	keys.readErr = leak
+	errs = append(errs, OpencodeKeys{Keychain: keys}.Inject([]string{"strata"}, exec))
+	env := envKeys("dummy")
+	env.accessErr = leak
+	errs = append(errs, EnvKeys{Keychain: env}.Ready([]string{"ensemble-env/dummy"}))
+	env = envKeys("dummy")
+	env.readErr = leak
+	errs = append(errs, EnvKeys{Keychain: env}.Inject(launcher.Secret{Item: "ensemble-env/dummy", File: "dummy.txt"}, exec))
+	for i, err := range errs {
+		if err == nil || strings.Contains(err.Error(), sentinel) || errors.Is(err, leak) {
+			t.Errorf("%d: %v", i, err)
 		}
 	}
 }

@@ -283,15 +283,23 @@ func TestStatusErrorRedactsCredentials(t *testing.T) {
 }
 
 func TestRevoke(t *testing.T) {
-	for status, ok := range map[int]bool{204: true, 401: true, 404: true, 500: false, 403: false} {
+	for status, want := range map[int]string{204: "revoked", 401: "invalid", 404: "invalid", 500: "failed", 403: "failed"} {
 		c := client(t, func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodDelete || r.URL.Path != "/installation/token" || r.Header.Get("Authorization") != "Bearer ghs_old" {
 				t.Errorf("request %s %s", r.Method, r.URL)
 			}
 			w.WriteHeader(status)
 		})
-		if err := c.Revoke(context.Background(), "ghs_old"); (err == nil) != ok {
-			t.Errorf("%d: %v", status, err)
+		err := c.Revoke(context.Background(), "ghs_old")
+		got := "failed"
+		switch {
+		case err == nil:
+			got = "revoked"
+		case errors.Is(err, ErrAlreadyInvalid):
+			got = "invalid"
+		}
+		if got != want {
+			t.Errorf("%d: %s, want %s (%v)", status, got, want, err)
 		}
 	}
 }

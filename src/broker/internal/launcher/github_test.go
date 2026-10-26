@@ -24,7 +24,7 @@ type fakeTokens struct {
 	ready, user, issue, refresh, revoke, retry error
 	prefetch                                   error
 	pending                                    []protocol.Pending
-	onRevoke                                   func()
+	onRelease                                  func()
 	revokeContexts                             []error
 	permissions                                []map[string]string // each Issue's and Refresh's set
 }
@@ -56,11 +56,11 @@ func (f *fakeTokens) Refresh(_ context.Context, app string, permissions map[stri
 	}
 	return expiry, exec([]string{"write"}, []byte("ghs_token"))
 }
-func (f *fakeTokens) Revoke(ctx context.Context, c string) error {
+func (f *fakeTokens) Release(ctx context.Context, c string) error {
 	f.calls = append(f.calls, "revoke "+c)
 	f.revokeContexts = append(f.revokeContexts, ctx.Err())
-	if f.onRevoke != nil {
-		f.onRevoke()
+	if f.onRelease != nil {
+		f.onRelease()
 	}
 	return f.revoke
 }
@@ -195,7 +195,7 @@ func TestCloseRevokesFirst(t *testing.T) {
 		order = append(order, args[0])
 		return []byte(container + "\n"), nil
 	}}
-	tokens := &fakeTokens{onRevoke: func() { order = append(order, "revoke") }}
+	tokens := &fakeTokens{onRelease: func() { order = append(order, "revoke") }}
 	got, err := Host{Docker: d, GitHub: tokens}.Close(context.Background(), container)
 	if err != nil || !got.Removed || !slices.Equal(order, []string{"revoke", "rm"}) {
 		t.Fatalf("%+v %v %v", got, err, order)
@@ -276,5 +276,26 @@ func TestCleanup(t *testing.T) {
 	}
 	if _, err := (Host{GitHub: &fakeTokens{retry: protocol.New(protocol.KeychainFailed, "x")}}).Cleanup(context.Background()); protoErr(t, err).Code != protocol.KeychainFailed {
 		t.Fatal(err)
+	}
+}
+
+func TestRefreshRejectsStaticOnlyManifest(t *testing.T) {
+	for name, edit := range map[string]func(map[string]any){
+		"claude":             func(map[string]any) {},
+		"claude and secrets": withSecrets(dummySecrets),
+	} {
+		tokens := &fakeTokens{}
+		h, d := githubHost(&world{labels: goodLabels()}, tokens)
+		codexCreds := &fakeCodexCreds{}
+		h.Codex = codexCreds
+		path := editedManifest(t, edit)
+		_, err := h.Refresh(context.Background(), "ensemble-worker_1-0123456789abcdef0123456789abcdef", path)
+		e := protoErr(t, err)
+		if e.Code != protocol.ManifestRejected || !strings.Contains(e.Message, "renewable credentials") {
+			t.Fatalf("%s: %+v", name, e)
+		}
+		if len(d.calls)+len(tokens.calls)+codexCreds.ready+codexCreds.injected != 0 {
+			t.Fatalf("%s: docker %q tokens %q", name, d.calls, tokens.calls)
+		}
 	}
 }

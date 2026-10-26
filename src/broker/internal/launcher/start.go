@@ -180,7 +180,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 				if retErr == nil {
 					if m.GitHubApp != "" {
 						rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-						revoked := h.GitHub.Revoke(rctx, c)
+						revoked := h.GitHub.Release(rctx, c)
 						cancel()
 						if revoked != nil {
 							cleanup.Message += " " + injected(revoked, protocol.KeychainFailed, "Revoking the GitHub tokens failed; retry their pending revocation.").Message
