@@ -1523,6 +1523,42 @@ class StartTest(StartBase):
                 self.supervisor.terminate.assert_called()
                 self.assertEqual(self.order[-1], ("close", CONTAINER))
 
+    def exited(self, screen):
+        """start's SessionError with a client that exits 3 at once, its pane showing `screen`."""
+        self.docker.replies = {
+            ("tmux", "start-server"): (0, PROCESS + "\n", ""),
+            ("tmux", "display-message"): pane("1 3 "),
+            ("tmux", "capture-pane"): (0, screen, ""),
+        }
+        self.order.clear()
+        with (
+            mock.patch("time.sleep"),
+            mock.patch("time.monotonic", side_effect=range(0, 10000, 5)),
+            self.assertRaises(SessionError) as raised,
+        ):
+            self.start()
+        self.assertEqual(self.order[-1], ("close", CONTAINER))
+        return str(raised.exception)
+
+    def test_a_client_that_exits_before_ready_reports_its_code_and_tail(self):
+        error = self.exited("OpenAI Codex\n\n  account/read failed during TUI bootstrap\n\n")
+        self.assertTrue(
+            error.startswith(
+                f"docker session w: {CONTAINER}: the client exited 3: "
+                "OpenAI Codex | account/read failed during TUI bootstrap"
+            ),
+            error,
+        )
+        captured = [i for i, call in enumerate(self.order) if "capture-pane" in call]
+        self.assertLess(captured[0], self.order.index(("close", CONTAINER)))
+
+    def test_a_dead_client_without_a_tail_reports_its_code(self):
+        error = self.exited("\n\n")
+        self.assertTrue(
+            error.startswith(f"docker session w: {CONTAINER}: the client exited 3"), error
+        )
+        self.assertNotIn("exited 3:", error)
+
     def test_a_bot_user_id_that_does_not_match_the_app_rolls_back(self):
         for github, user_id in (("ensemble-bot", None), ("", 343764394)):
             with self.subTest(github=github, user_id=user_id):

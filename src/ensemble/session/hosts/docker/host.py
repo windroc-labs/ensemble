@@ -122,6 +122,7 @@ RECORD = "host.json"
 PIPE_LOCK = "pipe.lock"  # held by a headless run's harness while its client runs
 PIPED = "pipe"
 READY_WAIT = 10
+TAIL_LINES = 5  # of an exited client's screen in its start error
 IMAGE_PYTHON = "/opt/ensemble/venv/bin/python"
 STATE_ROOT = "/run/ensemble"  # the client context's Container.state_root
 _ARG_STRLEN_MAX = 131072  # Linux exec's limit on one argument, its NUL included
@@ -382,6 +383,16 @@ class _Laps:
     def report(self, head: str) -> None:
         for phase, seconds in self.phases.items():
             print(f"{head}: {phase} {seconds:.2f} s", file=sys.stderr)
+
+
+def _tail(tmux: TmuxCli, name: str) -> str:
+    """`: <last lines>` of a client's pane on one line, read before its rollback; empty unread."""
+    try:
+        text = _text(tmux.read(name, 4 * TAIL_LINES))
+    except TuiError:
+        return ""
+    lines = [line.strip() for line in text.splitlines() if line.strip()][-TAIL_LINES:]
+    return f": {' | '.join(lines)}" if lines else ""
 
 
 def _wait(ready, timeout: float, poll: float = POLL, cap: float | None = None) -> bool:
@@ -1176,8 +1187,17 @@ class DockerHost(Host):
             )
             _save_record(name, {**_record(name), "process": process})
             laps("tmux")
-            if not _wait(lambda: tmux.status(name) == PaneStatus.RUNNING, READY_WAIT):
+            status = None
+
+            def settled() -> bool:
+                nonlocal status
+                status = tmux.status(name)
+                return status == PaneStatus.RUNNING or isinstance(status, int)
+
+            if not _wait(settled, READY_WAIT):
                 raise SessionError(f"{container}: the client did not start in {READY_WAIT} s")
+            if isinstance(status, int):
+                raise SessionError(f"{container}: the client exited {status}{_tail(tmux, name)}")
             laps("client")
             launched = datetime.now().astimezone().isoformat(timespec="milliseconds")
             _save_result(name, created, laps.phases, launched)
