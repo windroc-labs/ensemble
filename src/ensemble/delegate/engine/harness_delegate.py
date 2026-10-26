@@ -423,6 +423,8 @@ class HarnessDelegate(Delegate):
             session["reply_tags"] = tuple(session["reply_tags"])
             if session.get("environment") is not None:
                 session["environment"] = EnvironmentSpec.from_fields(session["environment"])
+            if "handlers" in session:  # Spec takes a tuple; a run sets none yet (FR-28)
+                session["handlers"] = tuple(session["handlers"])
             accepted = Plan(
                 spec,
                 SessionSpec(**session),

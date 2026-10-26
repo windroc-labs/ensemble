@@ -40,11 +40,24 @@ from ensemble.session.engine.types import (
     TuiSettings,
     TurnEnd,
     TurnFailed,
+    TurnStarted,
     Unanswered,
     Usage,
     Window,
+    WorkerExit,
+    WorkerHook,
+    WorkerMessage,
+    WorkerOutput,
 )
-from ensemble.session.hosts.base import Host, Interactive, InteractiveProcess, Lines, Piped, Process
+from ensemble.session.harness.types import EventCall
+from ensemble.session.hosts.base import (
+    Host,
+    Interactive,
+    InteractiveProcess,
+    Lines,
+    Piped,
+    Process,
+)
 from ensemble.session.hosts.types import CommandView, SessionView
 from ensemble.session.modes.client_adapters.headless import Headless, JsonHeadless
 from ensemble.session.modes.client_adapters.in_process import InProcess
@@ -63,6 +76,10 @@ __all__ = [
     "Process",
     "Piped",
     "Lines",
+    "WorkerMessage",
+    "WorkerHook",
+    "WorkerOutput",
+    "WorkerExit",
     "Interactive",
     "InteractiveProcess",
     "Spec",
@@ -74,6 +91,7 @@ __all__ = [
     "HookKind",
     "HookCallback",
     "HookCall",
+    "EventCall",
     "Paste",
     "Key",
     "KeyPress",
@@ -89,6 +107,7 @@ __all__ = [
     "Reply",
     "TurnEnd",
     "TurnFailed",
+    "TurnStarted",
     "TuiSettings",
     "Stderr",
     "SessionInfo",

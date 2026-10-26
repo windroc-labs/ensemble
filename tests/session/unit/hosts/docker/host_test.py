@@ -159,7 +159,6 @@ class FakeBroker:
 
     def __init__(self, order, started):
         self.order, self.started, self.error, self.closed = order, started, None, []
-        self.holder = None
         self.failing, self.refreshed = {}, threading.Event()
 
     def version(self):
@@ -179,10 +178,6 @@ class FakeBroker:
         if "build" in self.failing:
             raise self.failing["build"]
         return IMAGE, DIGEST
-
-    def lock_query(self, lock):
-        self.order.append(("lock-query", lock))
-        return self.holder
 
     def start(self, manifest, *, clients):
         self.order.append(("start", manifest, clients))
@@ -1748,6 +1743,11 @@ class EnvironmentTest(StartBase):
                 self.host._preflight("w", self.launch, {**self.METADATA, "resume": "1"})
         self.assertFalse(any(isinstance(c, tuple) and c[0] == "lock-query" for c in self.order))
 
+    def test_preflight_of_a_resume_in_an_environment_sends_version_only(self):
+        self.resumable(ENVIRONMENT.persisted())
+        self.host._preflight("w", self.launch, {**self.METADATA, "resume": "1"})
+        self.assertEqual(self.order, ["version"])
+
     def test_another_sids_record_is_not_the_stored_environment(self):
         self.resumable(ENVIRONMENT.persisted())
         self.record(sid="another", environment=ENVIRONMENT.persisted())
@@ -1755,12 +1755,11 @@ class EnvironmentTest(StartBase):
         self.assertEqual(self.broker.built, {})
         self.assertIsNone(self.host_record()["environment"])
 
-    def test_no_lock_sends_no_lock_query_and_no_lock_fields(self):
+    def test_no_lock_sends_no_lock_fields(self):
         unlocked = carried(replace(ENVIRONMENT, lock=None))
         self.host._preflight("w", self.launch, {**self.METADATA, "environment": unlocked})
         self.assertEqual(self.order, ["version"])
         self.start(environment=unlocked)
-        self.assertNotIn(("lock-query", "dummy-lock"), self.order)
         self.assertFalse({"lock", "lock_owner"} & set(self.manifest()))
 
     def test_build_uses_the_base_image_and_plugins(self):
@@ -1770,7 +1769,6 @@ class EnvironmentTest(StartBase):
         self.assertEqual(
             self.broker.built, {"base_image": "dummy-env:test", "image_plugins": ("dummy-plugin",)}
         )
-        self.assertNotIn(("lock-query", "dummy-lock"), self.order)
 
     def test_worker_image_sends_no_base_image(self):
         worker_image = replace(ENVIRONMENT, image=EnvironmentSpec.WORKER, plugins=())

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds ensemble-broker at <output>, signs it ad hoc with the hardened runtime and checks the signature.
-# The one home of the build and signing identity: install.sh --build, CI and the release workflow call it.
+# The one home of the build and signing identity: install.sh --build, CI and scripts/release-broker.sh call it.
 set -eu
 [ $# -eq 1 ] || { echo 'build.sh: usage: sh build.sh <output>' >&2; exit 2; }
 here=$(cd "$(dirname "$0")" && pwd)

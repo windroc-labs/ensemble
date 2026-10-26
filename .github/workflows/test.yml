@@ -3,6 +3,8 @@ name: CI
 on:
   push:
     branches: [main]
+  merge_group:
+    types: [checks_requested]
   pull_request:
     types: [opened, synchronize, reopened, edited]
 
@@ -27,6 +29,7 @@ jobs:
     outputs:
       full: ${{ steps.scope.outputs.full }}
       docs: ${{ steps.scope.outputs.docs }}
+      version: ${{ steps.scope.outputs.version }}
       broker: ${{ steps.scope.outputs.broker }}
       projects: ${{ steps.scope.outputs.projects }}
     steps:
@@ -57,7 +60,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: ${{ fromJSON(needs.changes.outputs.docs == 'true' && '["style"]' || '["style", "types", "design"]') }}
+        group: ${{ fromJSON(needs.changes.outputs.docs == 'true' && '["style"]' || '["style", "design"]') }}
     steps:
       - name: Check out
         uses: actions/checkout@v7.0.1
@@ -71,9 +74,11 @@ jobs:
         run: |
           case '${{ matrix.group }}' in
             style) python3 -m pip install ruff==0.16.9 vulture==2.16 ;;
-            types) python3 -m pip install pyright==1.1.414 ;;
             design) python3 -m pip install import-linter=="$IMPORT_LINTER_VERSION" pylint==4.1.3 ;;
           esac
+      - name: Install pinned Pyright
+        if: ${{ matrix.group == 'style' && needs.changes.outputs.docs == 'false' }}
+        run: python3 -m pip install pyright==1.1.414
       - name: Protect shipped source
         if: ${{ !cancelled() }}
         run: chmod -R a-w src
@@ -88,8 +93,11 @@ jobs:
       - name: Unit import boundaries
         if: ${{ !cancelled() && matrix.group == 'style' }}
         run: python3 -m tests.unit_imports
+      - name: Docs reference checks
+        if: ${{ !cancelled() && matrix.group == 'style' && needs.changes.outputs.docs == 'true' }}
+        run: python3 .github/run_tests.py 'Docs references' tests/manager/unit/skills tests/orchestrator/unit/skills
       - name: Pyright
-        if: ${{ !cancelled() && matrix.group == 'types' }}
+        if: ${{ !cancelled() && matrix.group == 'style' && needs.changes.outputs.docs == 'false' }}
         run: pyright
       - name: Import contracts
         if: ${{ !cancelled() && matrix.group == 'design' }}
@@ -136,7 +144,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        job: ["1", "2", "3", "4", "5", "6", "7", "8"]
+        job: ["1", "2", "3", "4", "5", "6"]
     steps:
       - name: Check out
         uses: actions/checkout@v7.0.1
@@ -148,10 +156,28 @@ jobs:
           python-version: "3.11"
       - name: Install pinned test dependencies
         run: python3 -m pip install coverage=="$COVERAGE_VERSION" import-linter=="$IMPORT_LINTER_VERSION" ruff==0.16.9 jsonschema==4.26.0
+      - name: Install zsh
+        run: |
+          if ! command -v zsh >/dev/null; then
+            sudo apt-get install -y --no-install-recommends zsh || {
+              sudo apt-get update
+              sudo apt-get install -y --no-install-recommends zsh
+            }
+          fi
       - name: Protect shipped source
         run: chmod -R a-w src
       - name: Repository integration tests
-        run: python3 -X faulthandler .github/run_tests.py 'Repository integration ${{ matrix.job }}' tests/integration --shard '${{ matrix.job }}/${{ strategy.job-total }}'
+        env:
+          RUN_TESTS_REPORT_DIR: ${{ runner.temp }}/repository
+        run: python3 -X faulthandler .github/run_tests.py 'Repository integration ${{ matrix.job }}' tests/integration --durations .github/test_durations.json --parallel 4 --shard '${{ matrix.job }}/${{ strategy.job-total }}'
+      - name: Preserve repository timings
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: repository-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.job }}
+          path: ${{ runner.temp }}/repository/
+          if-no-files-found: error
+          retention-days: 30
       - name: Require unchanged checkout
         if: ${{ always() }}
         run: |
@@ -165,6 +191,7 @@ jobs:
     name: Unit ${{ matrix.job }}
     runs-on: ubuntu-24.04
     needs: [changes]
+    if: ${{ needs.changes.outputs.docs == 'false' && needs.changes.outputs.version == 'false' }}
     env:
       TEST_PROJECTS: ${{ needs.changes.outputs.full == 'false' && needs.changes.outputs.projects || '' }}
     timeout-minutes: 15
@@ -186,20 +213,20 @@ jobs:
       - name: Protect shipped source
         run: chmod -R a-w src
       - name: Install pinned coverage
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name != 'push' }}
         run: python3 -m pip install coverage=="$COVERAGE_VERSION"
       - name: Install Docker protocol test dependency
         run: python3 -m pip install jsonschema==4.26.0
       - name: Unit tests
         id: unit
         env:
-          RUN_TESTS_COVERAGE: ${{ github.event_name == 'pull_request' && 'collect' || '' }}
+          RUN_TESTS_COVERAGE: ${{ github.event_name != 'push' && 'collect' || '' }}
           RUN_TESTS_REPORT_DIR: ${{ runner.temp }}/unit
         run: |
           echo "shards=$(( ${{ strategy.job-total }} * 4 ))" >> "$GITHUB_OUTPUT"
-          python3 -X faulthandler .github/run_tests.py 'Unit ${{ matrix.job }}' --unit --parallel 4 --shard '${{ matrix.job }}/${{ strategy.job-total }}'
+          python3 -X faulthandler .github/run_tests.py 'Unit ${{ matrix.job }}' --unit --durations .github/test_durations.json --parallel 4 --shard '${{ matrix.job }}/${{ strategy.job-total }}'
       - name: Preserve unit coverage
-        if: ${{ always() && github.event_name == 'pull_request' }}
+        if: ${{ always() && github.event_name != 'push' }}
         uses: actions/upload-artifact@v7.0.2
         with:
           name: unit-coverage-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.job }}
@@ -218,7 +245,7 @@ jobs:
   coverage:
     name: Coverage
     needs: [changes, unit]
-    if: ${{ github.event_name == 'pull_request' }}
+    if: ${{ github.event_name != 'push' && needs.changes.outputs.docs == 'false' && needs.changes.outputs.version == 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -248,8 +275,8 @@ jobs:
           python3 -m coverage combine --rcfile=/dev/null --keep --data-file="$RUNNER_TEMP/coverage-data" "${files[@]}"
       - name: Diff coverage of changed src lines
         env:
-          BASE_REF: ${{ github.base_ref }}
-        run: python3 .github/coverage_gate.py "$RUNNER_TEMP/coverage-data" "origin/$BASE_REF"
+          BASE_REF: ${{ github.event.merge_group.base_sha || format('origin/{0}', github.base_ref) }}
+        run: python3 .github/coverage_gate.py "$RUNNER_TEMP/coverage-data" "$BASE_REF"
       - name: Require unchanged checkout
         if: ${{ always() }}
         run: |
@@ -263,7 +290,7 @@ jobs:
     name: Integration ${{ matrix.job }}
     runs-on: ubuntu-24.04
     needs: [changes]
-    if: ${{ needs.changes.outputs.docs == 'false' }}
+    if: ${{ needs.changes.outputs.docs == 'false' && needs.changes.outputs.version == 'false' }}
     timeout-minutes: 15
     env:
       INTEGRATION_WORKERS: "4"
@@ -284,8 +311,10 @@ jobs:
       - name: Install tmux
         run: |
           if ! command -v tmux >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends tmux
+            sudo apt-get install -y --no-install-recommends tmux || {
+              sudo apt-get update
+              sudo apt-get install -y --no-install-recommends tmux
+            }
           fi
       - name: Protect shipped source
         run: chmod -R a-w src
@@ -317,14 +346,11 @@ jobs:
           fi
 
   broker:
-    name: Broker ${{ matrix.os }}
+    name: Broker ubuntu-24.04
     needs: [changes]
-    runs-on: ${{ matrix.os }}
+    if: ${{ needs.changes.outputs.broker == 'true' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, macos-15]
     defaults:
       run:
         working-directory: src/broker
@@ -334,14 +360,11 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        # Keep both required checks reporting success when Go work is out of scope.
-        if: ${{ needs.changes.outputs.broker == 'true' }}
         uses: actions/setup-go@v7.0.0
         with:
           go-version-file: src/broker/go.mod
           cache: false
       - name: Gofmt
-        if: ${{ needs.changes.outputs.broker == 'true' }}
         run: |
           unformatted=$(sh with-go-state.sh gofmt -l .)
           if [[ -n "$unformatted" ]]; then
@@ -349,31 +372,13 @@ jobs:
             exit 1
           fi
       - name: Go vet
-        if: ${{ needs.changes.outputs.broker == 'true' }}
         run: sh with-go-state.sh go vet ./...
       - name: Staticcheck
-        if: ${{ needs.changes.outputs.broker == 'true' }}
         run: sh with-go-state.sh go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
       - name: Go test
-        if: ${{ needs.changes.outputs.broker == 'true' }}
         run: sh with-go-state.sh go test ./...
       - name: Go build
-        if: ${{ needs.changes.outputs.broker == 'true' && runner.os == 'Linux' }}
         run: sh with-go-state.sh go build -trimpath -o "$RUNNER_TEMP/ensemble-broker" .
-      - name: Build darwin/arm64 binary with cgo
-        if: ${{ needs.changes.outputs.broker == 'true' && runner.os == 'macOS' }}
-        env:
-          GOOS: darwin
-          GOARCH: arm64
-        run: sh build.sh "$RUNNER_TEMP/ensemble-broker-darwin-arm64"
-      - name: Upload darwin/arm64 binary
-        if: ${{ needs.changes.outputs.broker == 'true' && runner.os == 'macOS' }}
-        uses: actions/upload-artifact@v7.0.2
-        with:
-          name: ensemble-broker-darwin-arm64
-          path: ${{ runner.temp }}/ensemble-broker-darwin-arm64
-          if-no-files-found: error
-          retention-days: 30
       - name: Require unchanged checkout
         if: ${{ always() }}
         run: |
@@ -424,7 +429,7 @@ jobs:
         uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.11"
-      - name: Require every check and test job
+      - name: Require every applicable job
         env:
           CI_NEEDS: ${{ toJSON(needs) }}
         run: python3 .github/ci_scope.py --gate

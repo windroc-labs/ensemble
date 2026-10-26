@@ -15,8 +15,6 @@ from ensemble.orchestrator.engine.router import BUSY, LIVE
 from tests.delegate.replies import block, mark, option
 from tests.delegate.workdir import session_cwd
 from tests.orchestrator.integration.flow_fixtures import (
-    ACCOUNTS,
-    HARNESS_EMAIL,
     HUMAN,
     LIGHT_RESEARCH,
     MANAGER,
@@ -28,10 +26,10 @@ from tests.orchestrator.integration.flow_fixtures import (
     usage,
 )
 from tests.orchestrator.integration.segments import agent_calls
-from tests.orchestrator.unit.board_ids import TASK_GROUP
+from tests.orchestrator.unit.board_ids import HARNESS_USER, TASK_GROUP, role_id
 from tests.session import live_tmux
 
-ENGINEER = ACCOUNTS["engineer"]
+ENGINEER = role_id("engineer")
 ID, OTHER, SOURCE = "TASK-7", "TASK-8", "TASK-12"
 STARTED, READY = "Building the session registry.", "Added the session registry."
 PR = f"https://github.com/{REPO}/pull/1"
@@ -51,11 +49,12 @@ MYSTERY = "00000000-0000-4000-8000-000000000031"
 
 
 class Parity(BinFlow):
-    def seed(self, ident, title, assignee=ENGINEER, **fields):
+    def seed(self, ident, title, delegate=ENGINEER, **fields):
         self.fake.issue(
             title,
             identifier=ident,
-            assignee=self.ids[assignee],
+            delegate=delegate,
+            assignee=self.ids[HUMAN],
             project=PROJECT,
             description=f"{title}.",
             **fields,
@@ -236,23 +235,23 @@ class Recover(Parity):
         self.assertEqual((option(second, "--resume"), option(second, "--session-id")), (sid, None))
         self.assertEqual(self.state(ID), "in_review")
 
-    def test_a_logged_role_not_the_assignees_is_not_resumed_and_goes_to_in_review(self):
+    def test_a_logged_role_not_the_delegates_is_not_resumed_and_goes_to_in_review(self):
         """v1 CLAUDE.md › Architecture: Recover resumes a session only while its runs.jsonl
-        `role` is the assignee's (v1 router_test.test_fr22_a_logged_role_not_the_assignees_goes_to_review).
+        `role` is the delegate's; a changed delegate invalidates the saved role.
         """
         sid = self.interrupted()
         with self.fake.lock:
-            self.fake.find(ID)["assignee"] = self.ids[ACCOUNTS["pm"]]
+            self.fake.find(ID)["delegate"] = role_id("pm")
         self.scene([START, DONE], usage=usage(0.5))
         self.tick()
         self.assertEqual([(r["kind"], r["sid"]) for r in self.runs()], [("start", sid)])
         self.assertEqual(len(agent_calls(self.calls())), 1)
-        why = "role (engineer) is not the assignee's (pm)"
+        why = "role (engineer) is not the delegate's (pm)"
         self.assertIn(f"router recover {ID} to=in_review reason={why}", self.routed())
         self.assertEqual(self.state(ID), "in_review")
-        self.assertEqual(self.history(ID)[-1], ("in_progress", "in_review", HARNESS_EMAIL))
+        self.assertEqual(self.history(ID)[-1], ("in_progress", "in_review", HARNESS_USER))
         author, body = self.comments(ID)[-1]
-        self.assertEqual(author, HARNESS_EMAIL)
+        self.assertEqual(author, HARNESS_USER)
         self.assertTrue(body.startswith(f"The interrupted agent run's {why}; needs a look."), body)
         self.assertEqual(self.subscribers(ID), [HUMAN])
 
@@ -265,7 +264,7 @@ class Refusals(Parity):
 
     def test_a_new_run_whose_target_check_fails_is_bounced_and_starts_no_agent_run(self):
         """v1 CLAUDE.md › Architecture: router.outer, a build role: `target.check` Invalid on a
-        new agent run → `writeback.bounce`, no agent run; the bounce acts as the role's account
+        new agent run → `writeback.bounce`, no agent run; the bounce acts as the role's app
         and its move to In Review subscribes each human_members email.
         """
         self.seed(ID, "ENG: Session registry")
@@ -277,7 +276,7 @@ class Refusals(Parity):
         self.assertEqual(self.state(ID), "in_review")
         self.assertEqual(
             self.history(ID),
-            [("todo", "in_progress", HARNESS_EMAIL), ("in_progress", "in_review", ENGINEER)],
+            [("todo", "in_progress", HARNESS_USER), ("in_progress", "in_review", ENGINEER)],
         )
         [(author, body)] = self.comments(ID)
         self.assertEqual(author, ENGINEER)
@@ -293,12 +292,13 @@ class Refusals(Parity):
         source is unarchived, gets the `Repo check failed:` comment and goes Done → In Review;
         the issue gets it too and is Canceled; no agent run.
         """
-        now, pm = datetime.now(UTC), self.ids[ACCOUNTS["pm"]]
+        now, pm = datetime.now(UTC), role_id("pm")
         self.fake.issue(
             "PRD: Session registry",
             identifier=SOURCE,
             state="in_progress",
-            assignee=pm,
+            delegate=pm,
+            assignee=self.ids[HUMAN],
             project=PROJECT,
         )
         self.fake.move(SOURCE, "in_review", actor=pm, at=now - timedelta(minutes=40))
@@ -349,9 +349,9 @@ class Refusals(Parity):
                     f"router claim-skip {ident} to=in_review reason=bad task label", self.routed()
                 )
                 self.assertEqual(self.state(ident), "in_review")
-                self.assertEqual(self.history(ident), [("todo", "in_review", HARNESS_EMAIL)])
+                self.assertEqual(self.history(ident), [("todo", "in_review", HARNESS_USER)])
                 [(author, body)] = self.comments(ident)
-                self.assertEqual(author, HARNESS_EMAIL)
+                self.assertEqual(author, HARNESS_USER)
                 self.assertTrue(body.startswith(said), body)
                 self.assertIn("then move the issue back to Todo.", body)
                 self.assertEqual(self.subscribers(ident), [HUMAN])

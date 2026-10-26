@@ -5,8 +5,8 @@
 #   role                  a role the Delegate knows (a charter in core or [delegate] team_dirs)
 #   input                 research, design or build: the role's input layout and write-back
 #   next                  the stage promote hands this stage's Handoff issues to; "" (default) → the last stage
-#   require_instructions  true (default) → a Handoff issue with no comment by anyone but the harness and role
-#                         accounts goes back to In Review
+#   require_instructions  true (default) → a Handoff issue with no comment by anyone but the harness and the
+#                         role apps goes back to In Review
 #   title_prefix          the title prefix of this stage's issues ("<title_prefix>: <title>"); "" (default) → none
 #   retitle               a done run retitles the issue "<title_prefix>: <outcome title>"; default false
 #   start, done, failed   the lead of write-back's start, done and failed comments; "" → none;

@@ -17,9 +17,20 @@ next = ""
 
 [linear]
 team = ""
-harness_key = ""
 task_label_group = ""
 agent_label_group = ""
+
+[linear.harness]
+client_id = ""
+secret_service = ""
+token_service = ""
+user_id = ""
+
+[linear.manager]
+client_id = ""
+secret_service = ""
+token_service = ""
+user_id = ""
 
 [linear.states]
 todo = ""
@@ -30,20 +41,27 @@ done = ""
 [linear.agent_labels]
 
 [linear.roles.pm]
-account = ""
-key = ""
+client_id = ""
+secret_service = ""
+token_service = ""
+user_id = ""
 """
 
 KEYS = [
-    "linear.harness_key",
     "linear.task_label_group",
     "linear.agent_label_group",
+    "linear.harness.client_id",
+    "linear.harness.secret_service",
+    "linear.harness.token_service",
+    "linear.harness.user_id",
+    "linear.manager.client_id",
+    "linear.manager.secret_service",
+    "linear.manager.token_service",
+    "linear.manager.user_id",
     "linear.states.todo",
     "linear.states.done",
     "linear.task_labels",
     "linear.agent_labels",
-    "linear.roles.pm.key",
-    "linear.roles.pm.account",
 ]
 
 SERVICES = ["ensemble-claude", "ensemble-tokens"]
@@ -106,10 +124,10 @@ class CredentialsInventory(Sample):
         )
 
     def test_a_key_named_without_its_linear_prefix_is_missing(self):
-        text = inventory(missing={"linear.harness_key"}) + "`harness_key`\n"
+        text = inventory(missing={"linear.task_label_group"}) + "`task_label_group`\n"
         self.assertEqual(
             _violations(self.config(), SERVICES, text),
-            ["docs/credentials.md: missing config key `linear.harness_key`"],
+            ["docs/credentials.md: missing config key `linear.task_label_group`"],
         )
 
     def test_a_missing_service_is_reported(self):

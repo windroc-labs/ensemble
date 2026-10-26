@@ -1,6 +1,5 @@
-"""check(spec) refuses with ConfigError; run(spec) runs the session on a thread of the caller's
-process, stopped at its next yield, changing no global state (cwd, environ, signals): it applies
-spec.access.cwd, not its env.
+"""check refuses with ConfigError. Today run uses the caller's thread, stopping at its next yield;
+no global cwd/env/signals change; applies access.cwd, not env. Target: harness thread.
 """
 
 from abc import ABC, abstractmethod
@@ -11,7 +10,8 @@ from ensemble.session.engine.types import ClientBound, SessionEvent, Spec, Stder
 
 class InProcess(ABC):
     @abstractmethod
-    def run(self, spec: Spec) -> Iterable[SessionEvent | Stderr | ClientBound]: ...
+    def run(self, spec: Spec) -> Iterable[SessionEvent | Stderr | ClientBound]:
+        """FR-26 target: in the harness, TurnStarted on accepted input."""
 
     def check(self, spec: Spec) -> None:
         return None

@@ -68,8 +68,13 @@ __all__ = [
     "Tier",
     "TurnEnd",
     "TurnFailed",
+    "TurnStarted",
     "Usage",
     "Window",
+    "WorkerExit",
+    "WorkerHook",
+    "WorkerMessage",
+    "WorkerOutput",
     "StatusState",
 ]
 
@@ -121,10 +126,16 @@ class Resumable(StrEnum):
 
 
 class HookKind(StrEnum):
+    """A Tui hook label's kind, the event its adapter normalizes it to; TURN_STARTED: its client
+    accepted a turn (the first prompt, a send or text typed into its terminal), to yield one
+    TurnStarted per accepted turn, never for a replayed record (WDRC-199 FR-10).
+    """
+
     TURN_END = "turn_end"
     TURN_FAILED = "turn_failed"
     BLOCKED = "blocked"
     ACTIVITY = "activity"
+    TURN_STARTED = "turn_started"
 
 
 class Tier(StrEnum):
@@ -145,9 +156,9 @@ class HookError(Exception):
 
 @dataclass(frozen=True)
 class HookCallback:
-    """A Tui's or Host's tui hook callback: module's on_hook, a regular file found over the
-    session's source roots, then every callback's roots (each its install's), then sys.path;
-    state: its JSON data.
+    """Tui: on_hook(HookCall); Host: on_hook(word, HookCall).
+    Spec.handlers: on_event(EventCall) -> None. Resolve module's regular file over session
+    roots, all callbacks' roots, then sys.path; state is JSON data.
     """
 
     module: str
@@ -427,6 +438,7 @@ class Spec(ProcessOptions):
     resume: bool = False  # resume session sid
     events: str | None = None
     environment: EnvironmentSpec | None = None
+    handlers: tuple[HookCallback, ...] = ()  # ordered on_event modules (FR-5)
 
     def __post_init__(self):
         if not printable_abs(self.workdir):
@@ -474,6 +486,10 @@ class Spec(ProcessOptions):
             raise ConfigError(f"events must be a printable path, got {self.events!r:.80}")
         if self.environment is not None and not isinstance(self.environment, EnvironmentSpec):
             raise ConfigError("environment must be None or an EnvironmentSpec")
+        if not isinstance(self.handlers, tuple) or not all(
+            isinstance(handler, HookCallback) for handler in self.handlers
+        ):
+            raise ConfigError("handlers must be a tuple of HookCallback")
 
 
 @dataclass(frozen=True)
@@ -586,6 +602,13 @@ class ClientBound:
 
 
 @dataclass(frozen=True)
+class TurnStarted:
+    """A turn its client accepted: the first prompt, a send or text typed into its terminal; never
+    a replayed record.
+    """
+
+
+@dataclass(frozen=True)
 class Activity:
     detail: str = ""
 
@@ -624,7 +647,39 @@ class Exited:
     returncode: int
 
 
-SessionEvent = Activity | Reply | TurnEnd | TurnFailed | Blocked | LimitHit | Exited
+SessionEvent = TurnStarted | Activity | Reply | TurnEnd | TurnFailed | Blocked | LimitHit | Exited
+
+
+@dataclass(frozen=True)
+class WorkerHook:
+    """A hook call a managed worker's guard relayed over its channel (WDRC-199 FR-15): the label
+    and payload the client's hook gave; untrusted worker output (FR-36), so its reader checks its
+    size and shape before use.
+    """
+
+    label: str
+    payload: Mapping[str, object]
+    delivery_id: str
+
+
+@dataclass(frozen=True)
+class WorkerOutput:
+    """Bytes a managed headless worker wrote to `stream`, "stdout" or "stderr" (FR-12, FR-15); its
+    reader parses complete lines only.
+    """
+
+    data: bytes
+    stream: str = "stdout"
+
+
+@dataclass(frozen=True)
+class WorkerExit:
+    """The client's exit as its guard saw it: returncode, -N when signal N ended it (FR-16)."""
+
+    returncode: int
+
+
+WorkerMessage = WorkerHook | WorkerOutput | WorkerExit
 
 
 @dataclass(frozen=True)

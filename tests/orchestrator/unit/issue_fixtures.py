@@ -22,21 +22,26 @@ from ensemble.orchestrator.trackers.linear import (
     client,
     issue_edit,
     issue_label,
-    issue_names,
     issue_read,
     issue_refs,
     issue_relation,
     linear_tracker,
-    ops,
 )
 from tests.orchestrator.case import Case
 from tests.orchestrator.unit import promote_fixtures as tp
-from tests.orchestrator.unit.board_ids import ACCOUNTS, HEADER, STATES, TASK_GROUP, TEAM
+from tests.orchestrator.unit.board_ids import (
+    HEADER,
+    MANAGER_IDENTITY,
+    MANAGER_LINE,
+    ROLES,
+    STATES,
+    TASK_GROUP,
+    TEAM,
+    role_app,
+)
 from tests.orchestrator.unit.run_fixtures import CORE_LOCAL
 
 OTHER_TEAM = "00000000-0000-4000-8000-0000000000f2"
-
-MANAGER_KEY = "linear-api-key-manager"
 
 
 def uid(n):
@@ -46,9 +51,7 @@ def uid(n):
 TASK_LABELS = {"build": uid(0xB1), "light-build": uid(0xB2)}
 CLIENT_GROUP = uid(0xC0)
 CLIENT_LABELS = {"codex": uid(0xC1), "claude": uid(0xC2)}
-# each role's account's Linear user id
-ROLE_USERS = {account: uid(0xA0 + n) for n, account in enumerate(ACCOUNTS.values())}
-CONFIG = f'linear.manager_key = "{MANAGER_KEY}"\n' + tp.CONFIG.replace(
+CONFIG = MANAGER_LINE + tp.CONFIG.replace(
     HEADER,
     HEADER
     + "linear.task_labels = { "
@@ -64,7 +67,8 @@ def names_cfg(**fields):
     cfg = {
         "team": TEAM,
         "states": dict(STATES),
-        "roles": {r: SimpleNamespace(account=a) for r, a in ACCOUNTS.items()},
+        "roles": {r: role_app(r) for r in ROLES},
+        "manager": MANAGER_IDENTITY,
         "task_label_group": TASK_GROUP,
         "task_labels": dict(TASK_LABELS),
         "agent_label_group": CLIENT_GROUP,
@@ -90,12 +94,6 @@ def issue_change(ident, **given):
     """An IssueEdit of ident changing only the given fields."""
     none = ("title", "body", "role", "project", "task", "client", "priority")
     return IssueEdit(**{"id": ident, **dict.fromkeys(none), **given})
-
-
-def role_users(variables):
-    """A Routes users answer to ops.Q_USER: the user of a role account, else none."""
-    found = ROLE_USERS.get(variables["e"])
-    return {"nodes": [{"id": found}] if found else []}
 
 
 class IssueCase(Case):
@@ -551,7 +549,7 @@ def _issue_ref(variables):
 
 def create_gql(**overrides):
     """A strict CreateGql knowing team TEAM's labels bug, ops (workspace) and old (retired), project
-    Ensemble with milestone M1, the role accounts' users, and every issue but NOPE-*.
+    Ensemble with milestone M1, and every issue but NOPE-*.
     """
     routes = {
         "issueLabels": by_name(
@@ -559,7 +557,6 @@ def create_gql(**overrides):
         ),
         "team": lambda v: {"projects": by_name(project(7, "Ensemble"))(v)},
         "project": lambda v: {"projectMilestones": by_name(milestone(8, "M1", uid(7)))(v)},
-        "users": role_users,
         "issue": _issue_ref,
         "viewer": VIEWER,
     }
@@ -644,9 +641,9 @@ class LabelGql:
 
 class EditGql(LabelGql):
     """LabelGql whose issue TASK-2 also holds `fields` (title, description, priority, assignee,
-    project; team to move it), answering `ensemble-orchestrator issue edit`'s read, its --role
-    lookups (the role accounts' users, the viewer) and its --project ones from `projects`
-    (project() nodes), strictly as Routes; the mutation applies its label changes.
+    delegate, project; team to move it), answering `ensemble-orchestrator issue edit`'s read and
+    its --project lookups from `projects` (project() nodes), strictly
+    as Routes; the mutation applies its label changes.
     """
 
     def __init__(self, catalog, carried, *, fields=None, projects=(), **options):
@@ -657,6 +654,7 @@ class EditGql(LabelGql):
             "description": "Old body",
             "priority": 0,
             "assignee": None,
+            "delegate": None,
             "project": None,
             **(fields or {}),
         }
@@ -678,11 +676,6 @@ class EditGql(LabelGql):
         return {"team": {"projects": edges(found[: variables["first"]])}}
 
     def __call__(self, query, **variables):
-        if query in (ops.Q_USER, issue_names.Q_VIEWER):
-            self.calls.append((query, variables))
-            return (
-                {"users": role_users(variables)} if query == ops.Q_USER else {"viewer": self.viewer}
-            )
         if "project(" in query or "ProjectFilter" in query:
             self.calls.append((query, variables))
             return self._project(query, variables)

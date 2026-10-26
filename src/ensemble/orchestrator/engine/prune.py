@@ -9,13 +9,12 @@ configured one) reports agent files in (Delegate.checkouts not None):
   <work_dir>/work or a temp dir: `worktree prune`, then deletes each <ID>-* branch but the default
   that origin/<branch> or origin/<default> holds, else keeps and reports it (git reads refs only,
   so code an agent run planted, such as filters or hooks, never runs outside auto mode's review);
-- archives every finished issue of the team, a Done one only when assigned to the pm or engineer
-  role account (a researcher's report stays), any other whatever its assignee, none included, unless
+- archives every finished issue of the team, a Done one only when delegated to the pm or engineer
+  app (a researcher's report stays), any other whatever its assignee, none included, unless
   it (reopened since) or a sub-issue, at any depth, is unfinished, every page of them read first
   (Tracker.archive; Linear archives sub-issues with their parent, theirs too): skipped until each
-  is finished or archived. A finished sub-issue it would not archive itself (not listed, or its
-  finish time unknown or under 2 hours ago) keeps the parent too. A candidate whose version
-  differs from the archive plan's waits for a consistent read next tick.
+  is finished or archived. Descendants must be candidates finished at least 2 hours ago;
+  unknown finish times or mismatched candidate/plan versions hold the parent.
 
 For each stalled issue (any state but Todo, In Progress or a finished one) whose latest move into its
 state and latest recorded run are both at least 7 days old, it deletes its agent files' checkouts and
@@ -104,8 +103,9 @@ Arguments and options:
 Prerequisites and effects:
   Requires configured Delegate settings and access to the configured
   work_dir/local clones; on Linear ([orchestrator] tracker = "linear") also
-  Linear access and linear.harness_key Keychain credentials. A local board
-  ($ENSEMBLE_BOARD_DIR) needs no account; no job runs it on a timer: run it
+  Linear access as the [linear.harness] OAuth app (Keychain items), renewing
+  its token as promote does. A local board
+  ($ENSEMBLE_BOARD_DIR) needs no Linear app; no job runs it on a timer: run it
   (or promote) on demand. It archives by moving issue files flat into
   <board>/archive/; an unreadable board exits 2 (prune.py: <path>: <reason>).
   Configuration and executable lookup: ensemble-orchestrator --help
@@ -120,11 +120,11 @@ Prerequisites and effects:
   preserve the default branch and unpushed branches. No fetch is performed.
   Clones under work_dir/work or temporary directories are skipped.
   Archive team issues finished at least 2 hours ago: Canceled/Duplicate
-  whatever the assignee (none or researcher too), Done only when assigned to
-  pm/engineer role accounts (researcher reports stay). Unknown finish times
+  whatever the assignee (none or researcher too), Done only when delegated to
+  pm/engineer apps (researcher reports stay). Unknown finish times
   are skipped, and so is an issue with a sub-issue at any depth that prune
   would not archive itself: unfinished, finished under 2 hours ago or at an
-  unknown time, or a Done one of another assignee (archiving an issue
+  unknown time, or a Done one without a pm/engineer delegate (archiving an issue
   archives its sub-issues and theirs).
   For issues in any other state but Todo/In Progress, 7 days after both their
   latest move into it and their latest recorded run, delete their checkouts
@@ -134,7 +134,7 @@ Prerequisites and effects:
   After 7 days, remove whole workdirs without agent files, including run records
   and delivery ledgers, only when their configured Delegate confirms no live
   run. Unconfigured run kinds are skipped.
-  One setup read (team and role accounts), then at most 33 Linear requests: 3
+  One team read (role app ids come from config), then at most 33 requests: 3
   change-feed pages, 10 issue reads, 20 archive requests; work past a cap
   waits for a later run, and an issue whose sub-issues alone need more is
   not archived. logs/prune.json caches what was read, read again when Linear
@@ -386,7 +386,7 @@ class Pruner:
             self.say("prune-archived", ident)
 
     def held(self, plan, root, finished):
-        """First issue with a stale candidate version or an ineligible descendant, with why."""
+        """First stale candidate or ineligible descendant, with why."""
         if root.ident != plan.ident or root.updated != plan.updated:
             return root, CHANGED
         for sub in plan.descendants:
@@ -664,6 +664,7 @@ def main(argv, *, trackers, gql, now=None, config_path=None, pruner=Pruner):
         return 2
     event_log.use_logs(cfg.logs_dir)
     try:
+        trackers[cfg.tracker].credentials(cfg, "prune", dry=dry)
         board = trackers[cfg.tracker].board(gql, cfg)
         code = pruner(
             board, gql, now or datetime.now(UTC), dry=dry, work=cfg.workdirs, cfg=cfg

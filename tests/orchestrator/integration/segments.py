@@ -20,20 +20,20 @@ from ensemble.utils import Record
 from tests.delegate.replies import block, mark, option
 from tests.orchestrator.integration import fake_linear
 from tests.orchestrator.integration.flow_fixtures import (
-    ACCOUNTS,
-    HARNESS_EMAIL,
     HUMAN,
     MANAGER,
     PRD_DIR,
     PROJECT,
     REPO,
     RESEARCH_DIR,
+    ROLES,
     TIMEOUT,
     TmuxFlow,
 )
+from tests.orchestrator.unit.board_ids import HARNESS_USER, role_id
 from tests.session import live_tmux
 
-ROLE_OF = {a: r for r, a in ACCOUNTS.items()}
+ROLE_OF = {role_id(r): r for r in ROLES}
 
 DIRS = {"researcher": RESEARCH_DIR, "pm": PRD_DIR}
 
@@ -52,7 +52,7 @@ RUN_KEYS = ("kind", "issue", "sid", "role", "client")
 
 SESSION = re.compile(r"(running|done|failed|needs_input|interrupted|limit|no outcome) · ")
 
-FIRST_WRITE = ("sessions.M_UPDATE", HARNESS_EMAIL, "error")
+FIRST_WRITE = ("sessions.M_UPDATE", HARNESS_USER, "error")
 
 HARNESS_TEXTS = {
     routing.CAP_COMMENT: "cap",
@@ -84,11 +84,11 @@ STOP = {
 GIVE_UP = 4
 
 
-def lookup(account):
+def lookup(caller):
     """A resumed run's look for an unledgered comment step's comment (FR-54): not found, then
     posted.
     """
-    return ("linear.Q_COMMENT", account, "error")
+    return ("linear.Q_COMMENT", caller, "error")
 
 
 def tui_scene(script):
@@ -183,12 +183,12 @@ class Segment(TmuxFlow):
         want.ledger.update(ledger or {})
 
     def expect_session(self, ident, sid, status):
-        comments, entry = self.want[ident].comments, (HARNESS_EMAIL, f"session {sid} {status}")
+        comments, entry = self.want[ident].comments, (HARNESS_USER, f"session {sid} {status}")
         at = next(
             (
                 i
                 for i, (a, k) in enumerate(comments)
-                if a == HARNESS_EMAIL and k.startswith(f"session {sid} ")
+                if a == HARNESS_USER and k.startswith(f"session {sid} ")
             ),
             None,
         )
@@ -213,7 +213,7 @@ class Segment(TmuxFlow):
             (
                 m[1]
                 for a, body in self.comments(ident)
-                if a == HARNESS_EMAIL
+                if a == HARNESS_USER
                 and body.startswith(prefix)
                 and (m := SESSION.match(body, len(prefix)))
             ),
@@ -228,7 +228,7 @@ class Segment(TmuxFlow):
                 return "start"
             if found := [k for text, k in self.texts.items() if text in body]:
                 return found[0]
-        elif author == HARNESS_EMAIL and (kind := self.harness_kind(body)):
+        elif author == HARNESS_USER and (kind := self.harness_kind(body)):
             return kind
         return f"unrecognized: {body.splitlines()[0] if body else ''}"
 
@@ -399,17 +399,17 @@ class Segment(TmuxFlow):
             self.pending = None
             if p.tui:  # left open after the outcome or the give-up
                 self.assertTrue(self.live(config.tui_name(p.role, p.ident, p.sid)))
-            want, task, account, report = (
+            want, task, app, report = (
                 self.want[p.ident],
                 config.TASKS[p.role],
-                ACCOUNTS[p.role],
+                role_id(p.role),
                 p.script.report,
             )
             self.expect_session(p.ident, p.sid, report["status"] if report else "no outcome")
             ledgered = want.ledger.get(p.sid, [])
             first = "start" not in ledgered
             comments, steps, changes = (
-                [(account, "start")] if first else [],
+                [(app, "start")] if first else [],
                 [*ledgered, *(["start"] if first else [])],
                 {},
             )
@@ -428,7 +428,7 @@ class Segment(TmuxFlow):
                         else report["title"]
                     )
                 steps.append("comment")
-                comments += [(account, k) for k in p.script.texts.values()]
+                comments += [(app, k) for k in p.script.texts.values()]
                 if outcome == "done" and url:
                     steps.append(f"attach:{url}")
                     if all(a["url"] != url for a in want.attachments):
@@ -437,22 +437,22 @@ class Segment(TmuxFlow):
                 steps.append("outcome")
                 if state == "in_review" and HUMAN not in want.subscribers:
                     changes["subscribers"] = [HUMAN]
-                changes.update(state=state, history=[("in_progress", state, account)])
+                changes.update(state=state, history=[("in_progress", state, app)])
             else:
                 attempt = sum(s.startswith("running:") for s in ledgered)
                 prefix = f"no-outcome:{attempt}:"
                 state = "in_review" if p.resumed else writeback.FIRST_FAILURE[task.first_failure]
                 self.texts["the agent run returned no outcome"] = "run-error"
-                comments.append((account, "run-error"))
+                comments.append((app, "run-error"))
                 steps += [prefix + "comment", prefix + f"move:{state}", prefix + "outcome"]
-                changes.update(state=state, history=[("in_progress", state, account)])
+                changes.update(state=state, history=[("in_progress", state, app)])
                 if state == "in_review" and HUMAN not in want.subscribers:
                     changes["subscribers"] = [HUMAN]
             # write-back looks each comment step up before posting it: its event may come again
             posts = [
                 s for s in steps if s not in ledgered and (s == "start" or s.endswith("comment"))
             ]
-            self.expect_problem(*[lookup(account)] * len(posts))
+            self.expect_problem(*[lookup(app)] * len(posts))
             self.expect(p.ident, comments=comments, ledger={p.sid: steps}, **changes)
 
     def wait_written_back(self, p):
@@ -473,7 +473,7 @@ class Segment(TmuxFlow):
         ident = self.fake.issue(
             title,
             state="backlog",
-            assignee=self.ids[ACCOUNTS[role]],
+            delegate=role_id(role),
             project=PROJECT,
             description=description,
             labels=labels,
@@ -549,7 +549,7 @@ class Segment(TmuxFlow):
             self.expect(
                 ident,
                 state="in_progress",
-                history=[("todo", "in_progress", HARNESS_EMAIL)],
+                history=[("todo", "in_progress", HARNESS_USER)],
                 ledger={sid: ["running:1"]},
             )
             self.expect_session(ident, sid, "running")
@@ -581,8 +581,8 @@ class Segment(TmuxFlow):
             self.expect(
                 ident,
                 state="done",
-                history=[("handoff", "done", HARNESS_EMAIL)],
-                comments=[(HARNESS_EMAIL, f"promoted {child}")],
+                history=[("handoff", "done", HARNESS_USER)],
+                comments=[(HARNESS_USER, f"promoted {child}")],
             )
             self.track(child, state="todo", title=title)
         return child
@@ -610,12 +610,13 @@ class Segment(TmuxFlow):
         )
         self.assertEqual(
             (
+                child["delegate"],
                 child["assignee"],
                 fake_linear.NAMES[child["state"]],
                 child["project"],
                 child["title"],
             ),
-            (self.ids[ACCOUNTS[nxt]], "todo", src["project"], title),
+            (role_id(nxt), None, "todo", src["project"], title),
         )
         cutoff = max(
             h["createdAt"]
@@ -639,11 +640,11 @@ class Segment(TmuxFlow):
         ]
         self.assertEqual(child["description"].partition("\n\n## Comments\n")[0], "\n\n".join(head))
         made = [
-            (r.account, r.variables["in"]["id"])
+            (r.caller, r.variables["in"]["id"])
             for r in self.requests()
             if r.op == "promote.M_CREATE"
         ]
-        self.assertEqual({a for a, _ in made}, {HARNESS_EMAIL})
+        self.assertEqual({a for a, _ in made}, {HARNESS_USER})
         ids = [i for _, i in made]
         self.assertIn(child["id"], ids)
         self.assertEqual(len(ids), len(set(ids)), f"promote.M_CREATE made an issue twice: {ids}")
@@ -653,8 +654,8 @@ class Segment(TmuxFlow):
         self.assertIn(ident, self.want)
         rec = self.issue(ident)
         self.assertEqual(
-            (rec["assignee"], fake_linear.NAMES[rec["state"]], rec["project"]),
-            (self.ids[ACCOUNTS["pm"]], "todo", PROJECT),
+            (rec["delegate"], rec["assignee"], fake_linear.NAMES[rec["state"]], rec["project"]),
+            (role_id("pm"), None, "todo", PROJECT),
         )
 
     def moved_to_todo(self, ident):
@@ -730,7 +731,7 @@ class Segment(TmuxFlow):
             src = self.fake.issue(
                 RESEARCH[0],
                 state="done",
-                assignee=self.ids[ACCOUNTS["researcher"]],
+                delegate=role_id("researcher"),
                 project=PROJECT,
                 description=RESEARCH[1],
             )

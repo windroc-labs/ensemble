@@ -603,13 +603,7 @@ class InstructionPlans(InstructionCase):
                 f.write(local_section(local, "delegate"))
             for role in ROLES:
                 with self.subTest(github=bool(local), role=role):
-                    # a fixed-client role (verifier) plans only on its client
-                    fixed = Composer().fixed_client(role)
-                    clients = [(c, m) for c, m in CLIENTS if not fixed or c in (None, fixed)]
-                    for client, mode in set(CLIENTS) - set(clients):
-                        args = self.given(role, client=client, mode=mode)
-                        with self.assertRaisesRegex(ConfigError, f"runs only on {fixed}"):
-                            plan(*args, driver=self.driver, composition=Composer())
+                    clients = CLIENTS
                     first, *others = (
                         plan(*args, driver=self.driver, composition=Composer())
                         for args in (

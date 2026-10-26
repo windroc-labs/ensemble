@@ -18,11 +18,20 @@ from ensemble.session import (
     Process,
     SessionError,
 )
-from ensemble.session.engine.types import LOCAL_CONTEXT, ClientContext, Hosts, Launch, Liveness
+from ensemble.session.engine.types import (
+    LOCAL_CONTEXT,
+    ClientContext,
+    Hosts,
+    Launch,
+    Liveness,
+    SessionRow,
+)
+from ensemble.session.harness import guard
 from ensemble.session.hosts.base import Interactive, InteractiveProcess, Piped
 from ensemble.session.hosts.types import CommandView, SessionView
 from ensemble.utils import STOP_WAIT, Status, StatusState
 from tests.session.case import Case
+from tests.session.fakes.terminal import MemoryHost
 from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired
 
 TWO = """[hosts]
@@ -182,6 +191,30 @@ class HostDefaults(Case):
         self.assertEqual(SIGNALS, (signal.SIGHUP, signal.SIGTERM, signal.SIGINT))
 
 
+class CapacityRows(Case):
+    """Admission's inventory: a row for every session listed before and after rows()."""
+
+    def host(self, listings, rows):
+        host = MinimalHost("m")
+        host.list = mock.Mock(side_effect=listings)
+        row = SessionRow("", None, "c", StatusState.WORKING, None, None, None, own=False)
+        host.rows = mock.Mock(return_value=[dataclasses.replace(row, name=n) for n in rows])
+        return host
+
+    def test_a_session_ending_between_its_listing_and_rows_is_gone_not_unavailable(self):
+        host = self.host([["a", "b"], ["a"]], ["a"])
+        self.assertEqual([row.name for row in host._capacity_rows()], ["a"])
+
+    def test_a_session_still_listed_without_a_row_makes_the_inventory_unavailable(self):
+        host = self.host([["a", "b"], ["a", "b"]], ["a"])
+        with self.assertRaisesRegex(SessionError, r"\Ahost m: inventory unavailable\Z"):
+            host._capacity_rows()
+
+    def test_a_complete_inventory_is_its_rows(self):
+        host = self.host([["a", "b"]], ["b", "a"])
+        self.assertEqual([row.name for row in host._capacity_rows()], ["b", "a"])
+
+
 def table(base: str = TWO, text: str = ""):
     return tomllib.loads(base + text).get("hosts")
 
@@ -295,3 +328,37 @@ class ParseHosts(Case):
         with mock.patch("importlib.import_module") as imp:
             self.assertEqual(Host.parse_hosts(found).default, "a")
         imp.assert_not_called()
+
+
+class ManagedWorkerTest(Case):
+    """The managed worker contract frozen for WDRC-199: no Host runs one yet."""
+
+    def test_a_host_without_managed_workers_refuses_to_start_one(self):
+        host = MemoryHost("h1")
+        with self.assertRaisesRegex(SessionError, r"\Ahost h1 runs no managed worker\Z"):
+            host.worker("w1", Launch(("client",), cwd="/w"), terminal=True)
+        with self.assertRaisesRegex(SessionError, r"\Ahost h1 runs no managed worker\Z"):
+            host.worker_liveness("w1", "g1")
+        self.assertEqual(host.calls.mock_calls, [])
+
+    def test_a_worker_has_no_periodic_duty_unless_its_host_gives_one(self):
+        self.assertIsNone(InteractiveProcess.tick(mock.sentinel.worker, 0.0))
+
+    def test_channel_operations_remain_unimplemented(self):
+        worker = mock.sentinel.worker
+        for operation in (
+            lambda: InteractiveProcess.read(worker, 0.0),
+            lambda: InteractiveProcess.write(worker, b"input"),
+        ):
+            with self.subTest(operation=operation), self.assertRaises(NotImplementedError):
+                operation()
+
+    def test_managed_workers_reuse_existing_input_and_lifecycle_members(self):
+        for name in ("send", "press"):
+            self.assertIs(getattr(InteractiveProcess, name), getattr(Interactive, name))
+        for name in ("screen", "state", "close", "returncode"):
+            self.assertIs(getattr(InteractiveProcess, name), getattr(Process, name))
+
+    def test_the_guard_is_not_implemented_yet(self):
+        with self.assertRaisesRegex(NotImplementedError, "FR-13"):
+            guard.main([])

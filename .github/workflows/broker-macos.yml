@@ -1,0 +1,61 @@
+name: Broker macOS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  broker:
+    name: Broker macos-15
+    runs-on: macos-15
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: src/broker
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: src/broker/go.mod
+          cache: false
+      - name: Gofmt
+        run: |
+          unformatted=$(sh with-go-state.sh gofmt -l .)
+          if [[ -n "$unformatted" ]]; then
+            printf '%s\n' "$unformatted"
+            exit 1
+          fi
+      - name: Go vet
+        run: sh with-go-state.sh go vet ./...
+      - name: Staticcheck
+        run: sh with-go-state.sh go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
+      - name: Go test
+        run: sh with-go-state.sh go test ./...
+      - name: Build darwin/arm64 binary with cgo
+        env:
+          GOOS: darwin
+          GOARCH: arm64
+        run: sh build.sh "$RUNNER_TEMP/ensemble-broker-darwin-arm64"
+      - name: Upload darwin/arm64 binary
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: ensemble-broker-darwin-arm64
+          path: ${{ runner.temp }}/ensemble-broker-darwin-arm64
+          if-no-files-found: error
+          retention-days: 30
+      - name: Require unchanged checkout
+        if: ${{ always() }}
+        run: |
+          status=$(git -c core.fsmonitor=false -c core.hooksPath=/dev/null status --porcelain)
+          if [[ -n "$status" ]]; then
+            printf '%s\n' "$status"
+            exit 1
+          fi

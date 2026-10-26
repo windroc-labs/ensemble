@@ -81,6 +81,8 @@ var KeychainServices = []string{
 	"ensemble-codex-grants",
 	"ensemble-opencode",
 	"ensemble-env/", // prefix item: every ensemble-env/<name>
+	"ensemble-linear",
+	"ensemble-linear-grants",
 }
 
 // SecretKeychain holds broker-only items: created trusting only the broker, read without a dialog.
