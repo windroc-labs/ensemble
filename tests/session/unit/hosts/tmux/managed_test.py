@@ -1,5 +1,6 @@
 """Managed channel and conservative crash admission, without real processes."""
 
+import json
 import os
 import sys
 import threading
@@ -288,6 +289,107 @@ class ManagedTest(Case):
             mock.patch.object(os, "write", side_effect=write),
         ):
             self.assertEqual(channel.screen(3), "current screen")
+
+    def test_screen_timeout_drains_delayed_reply_before_next_query(self):
+        channel = self.channel(terminal=True)
+        channel.accept(b"s", b'{"pid":123}')
+        requests = []
+        replies = iter(("old one-line screen", "new forty-line screen"))
+        requests_at_reply = []
+
+        def write(_fd, data):
+            requests.extend(json.loads(payload) for _, payload in guard.Decoder().feed(data))
+            return len(data)
+
+        def wait(predicate, _timeout):
+            if not predicate():
+                requests_at_reply.append(list(requests))
+                channel.accept(b"v", json.dumps({"text": next(replies)}).encode())
+            return predicate()
+
+        with (
+            mock.patch.object(
+                managed.select, "select", return_value=([], [channel.proc.stdin], [])
+            ),
+            mock.patch.object(os, "write", side_effect=write),
+        ):
+            with (
+                mock.patch.object(
+                    threading.Condition, "wait_for", side_effect=lambda predicate, _: predicate()
+                ),
+                self.assertRaisesRegex(Unanswered, "screen unanswered"),
+            ):
+                channel.screen(lines=1)
+            with mock.patch.object(threading.Condition, "wait_for", side_effect=wait):
+                self.assertEqual(channel.screen(lines=40), "new forty-line screen")
+        self.assertEqual(requests, [{"lines": 1}, {"lines": 40}])
+        self.assertEqual(requests_at_reply, [[{"lines": 1}], [{"lines": 1}, {"lines": 40}]])
+        self.assertEqual(channel.state(), Liveness.LIVE)
+        channel.proc.stdin.close.assert_not_called()
+
+    def test_screen_repeated_timeouts_keep_one_outstanding_query(self):
+        channel = self.channel(terminal=True)
+        channel.accept(b"s", b'{"pid":123}')
+        requests = []
+
+        def write(_fd, data):
+            requests.extend(json.loads(payload) for _, payload in guard.Decoder().feed(data))
+            return len(data)
+
+        with (
+            mock.patch.object(
+                managed.select, "select", return_value=([], [channel.proc.stdin], [])
+            ),
+            mock.patch.object(os, "write", side_effect=write),
+            mock.patch.object(
+                threading.Condition, "wait_for", side_effect=lambda predicate, _: predicate()
+            ),
+        ):
+            for lines in (1, 40, 80):
+                with self.assertRaisesRegex(Unanswered, "screen unanswered"):
+                    channel.screen(lines=lines)
+            self.assertEqual(requests, [{"lines": 1}])
+            channel.accept(b"v", b'{"text":"late"}')
+
+            def reply(predicate, _timeout):
+                if not predicate():
+                    channel.accept(b"v", b'{"text":""}')
+                return predicate()
+
+            with mock.patch.object(threading.Condition, "wait_for", side_effect=reply):
+                self.assertEqual(channel.screen(lines=2), "")
+        self.assertEqual(requests, [{"lines": 1}, {"lines": 2}])
+
+    def test_screen_failure_while_draining_does_not_send_another_query(self):
+        channel = self.channel(terminal=True)
+        channel.accept(b"s", b'{"pid":123}')
+
+        def fail(predicate, _timeout):
+            if not predicate():
+                channel.fail("broken transport")
+            return predicate()
+
+        with (
+            mock.patch.object(
+                managed.select, "select", return_value=([], [channel.proc.stdin], [])
+            ),
+            mock.patch.object(os, "write", side_effect=lambda _fd, data: len(data)) as written,
+        ):
+            with (
+                mock.patch.object(
+                    threading.Condition, "wait_for", side_effect=lambda predicate, _: predicate()
+                ),
+                self.assertRaisesRegex(Unanswered, "screen unanswered"),
+            ):
+                channel.screen(lines=1)
+            with (
+                mock.patch.object(threading.Condition, "wait_for", side_effect=fail),
+                self.assertRaisesRegex(Unanswered, "broken transport"),
+            ):
+                channel.screen(lines=40)
+        self.assertEqual(written.call_count, 1)
+        self.assertEqual(channel.state(), Liveness.UNKNOWN)
+        channel.proc.stdin.close.assert_called_once()
 
     def test_never_started_name_is_absent(self):
         self.assertEqual(managed.liveness("tmux", "worker", "a" * 32), Liveness.ABSENT)

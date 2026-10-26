@@ -204,6 +204,7 @@ class ManagedProcess(InteractiveProcess):
         self.failure = None
         self.started = False
         self.view = None
+        self.view_pending = False
         self.reader = None
         if start_reader:
             self.reader = threading.Thread(target=self.pump, name=f"guard-{name}", daemon=True)
@@ -247,6 +248,7 @@ class ManagedProcess(InteractiveProcess):
                 if not isinstance(value, dict) or not isinstance(value.get("text"), str):
                     raise ValueError("invalid guard view")
                 self.view = value["text"]
+                self.view_pending = False
             elif kind == b"x":
                 value = json.loads(data)
                 if not isinstance(value, dict) or type(value.get("returncode")) is not int:
@@ -359,7 +361,15 @@ class ManagedProcess(InteractiveProcess):
             raise ConfigError("lines: want a positive integer")
         with self.query:
             with self.condition:
+                # A timed-out query still owns the next reply on this ordered channel.
+                self.condition.wait_for(
+                    lambda: not self.view_pending or self.failure is not None, WAIT
+                )
+                self.checked()
+                if self.view_pending:
+                    raise Unanswered(f"worker {self.name}: screen unanswered")
                 self.view = None
+                self.view_pending = True
             self.send_frame(b"q", json.dumps({"lines": lines}).encode())
             with self.condition:
                 self.condition.wait_for(
