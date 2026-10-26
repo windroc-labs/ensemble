@@ -86,7 +86,8 @@ Go tool through `src/broker/with-go-state.sh` (state in `.cache/go/`). CI's `Bro
 Linux and macOS and build the darwin/arm64 binary for full scope, including changes to
 `src/broker/**`, `src/broker/protocol/docker-broker/**`, `.github/workflows/test.yml`, and every push to
 `main`. Docs-only, version-only and upper-layer-only PRs skip Go setup, checks, builds and artifact
-upload; both `Broker` jobs still report success, like the required `Worker image` check.
+upload and both broker runners. The required `CI` aggregate validates scope before
+skipping its broker API gate; `Worker image` retains its own scope check.
 
 Integration jobs upload `integration-<run-id>-<attempt>-<job>` artifacts containing
 the discovered IDs, assigned IDs, expected load, Python/tmux versions, runner type, supervised
@@ -147,7 +148,7 @@ occurs exactly once. Coverage applies to pull requests and merge groups; `CI` re
 | Change/event | Unit and integration tests | Repository tests |
 |---|---|---|
 | PR touching only `src/ensemble/manager/`, `src/ensemble/orchestrator/`, their `tests/<layer>/`, `skills/manage/`, `skills/board/`, `hooks/` and `launchd/` | both upper layers | intentionally skipped |
-| PR touching only root `*.md` files and/or `docs/` | upper-layer unit tests (they check the docs skills cite); integration, type and design lints skipped | intentionally skipped |
+| PR touching only root `*.md` files and/or `docs/` | upper skill unit tests in `Lint style` (they check the docs skills cite); unit matrix, coverage, integration, broker, type and design jobs skipped | intentionally skipped |
 | PR changing only the release `version` (`X.Y.Z`) of `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json` and/or `package.json` | skipped, with coverage; every lint runs (`Lint design` checks the versions agree) | intentionally skipped |
 | PR touching a lower layer, `tests/`, `.github/`, shared config, an unknown path, or an empty diff | all layers, plus shared unit tests | run |
 | push to `main` or `merge_group` | all layers, plus shared unit tests | run |

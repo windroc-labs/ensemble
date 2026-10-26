@@ -91,6 +91,9 @@ jobs:
       - name: Unit import boundaries
         if: ${{ !cancelled() && matrix.group == 'style' }}
         run: python3 -m tests.unit_imports
+      - name: Docs reference checks
+        if: ${{ !cancelled() && matrix.group == 'style' && needs.changes.outputs.docs == 'true' }}
+        run: python3 .github/run_tests.py 'Docs references' tests/manager/unit/skills tests/orchestrator/unit/skills
       - name: Pyright
         if: ${{ !cancelled() && matrix.group == 'types' }}
         run: pyright
@@ -174,7 +177,7 @@ jobs:
     name: Unit ${{ matrix.job }}
     runs-on: ubuntu-24.04
     needs: [changes]
-    if: ${{ needs.changes.outputs.version == 'false' }}
+    if: ${{ needs.changes.outputs.docs == 'false' && needs.changes.outputs.version == 'false' }}
     env:
       TEST_PROJECTS: ${{ needs.changes.outputs.full == 'false' && needs.changes.outputs.projects || '' }}
     timeout-minutes: 15
@@ -228,7 +231,7 @@ jobs:
   coverage:
     name: Coverage
     needs: [changes, unit]
-    if: ${{ github.event_name != 'push' && needs.changes.outputs.version == 'false' }}
+    if: ${{ github.event_name != 'push' && needs.changes.outputs.docs == 'false' && needs.changes.outputs.version == 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -329,6 +332,7 @@ jobs:
   broker:
     name: Broker ${{ matrix.os }}
     needs: [changes]
+    if: ${{ needs.changes.outputs.broker == 'true' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -344,7 +348,6 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        # Keep both required checks reporting success when Go work is out of scope.
         if: ${{ needs.changes.outputs.broker == 'true' }}
         uses: actions/setup-go@v7.0.0
         with:
@@ -443,7 +446,7 @@ jobs:
           CI_NEEDS: ${{ toJSON(needs) }}
         run: python3 .github/ci_scope.py --gate
       - name: Require broker results or confirmed unstarted macOS cancellation
-        if: ${{ always() && steps.gate.outcome == 'success' }}
+        if: ${{ always() && steps.gate.outcome == 'success' && needs.changes.outputs.broker == 'true' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 .github/ci_broker.py
