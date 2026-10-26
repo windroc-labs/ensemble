@@ -17,7 +17,6 @@ opencode_prefix=$HOME/.ensemble/opencode
 opencode_executable=$opencode_prefix/bin/opencode
 opencode_min=
 ref=
-served_ref=
 # The broker's release (v<plugin version>) and whether install.sh downloads it or builds it: broker_plan.
 release_tag=
 broker_mode=
@@ -1017,7 +1016,7 @@ print(ref)' 2>&1 <<<"$text") || die "cannot read ensemble's ref from the windroc
 # Claude Code and Codex install ensemble@windroc from the windroc marketplace, which serves one ref of ensemble: the
 # install takes that ref, unless OpenCode alone names another.
 ref_check() {
-  local claude_ref= codex_ref=
+  local claude_ref= codex_ref= served_ref
   if [ -n "$ref" ] && ! has claude && ! has codex; then return; fi
   if has claude || ! has codex; then claude_ref=$(marketplace_ref .claude-plugin/marketplace.json); fi
   if has codex; then codex_ref=$(marketplace_ref .agents/plugins/marketplace.json); fi
