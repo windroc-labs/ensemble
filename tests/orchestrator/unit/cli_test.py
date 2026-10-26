@@ -673,12 +673,13 @@ class Queries(RunCase):
             )
         self.assertEqual(ReadyDelegate.usage_calls, ["researcher"])
 
-    def test_config_drift_never_probes_and_recorded_limits_still_block(self):
+    def test_config_drift_probes_the_recorded_client_despite_a_legacy_limit(self):
         self.start()
         FakeDelegate.end(self.cfg.issue_workdir("TASK-1"))
         self.configure(default="other")
-        runs.note_limit(
+        runs.note(
             self.cfg.runs_log,
+            "limit",
             issue="TASK-1",
             sid="1234abcd-0000-4000-8000-000000000000",
             client="fake",
@@ -687,13 +688,12 @@ class Queries(RunCase):
             attempt=1,
         )
         for tty in (False, True):
+            FakeDelegate.end(self.cfg.issue_workdir("TASK-1"))
             result, output, errors = _call(["resume", "TASK-1"], tty=tty)
-            self.assertEqual((result, output), (1, ""))
-            self.assertEqual(
-                errors, "ensemble-orchestrator: TASK-1: resume blocked by usage gate\n"
-            )
-        self.assertEqual(ReadyDelegate.usage_calls, [])
-        self.assertFalse(FakeDelegate.attach(self.cfg.issue_workdir("TASK-1")).alive())
+            self.assertEqual((result, errors), (0, ""))
+            self.assertEqual(Record.parse(output).name, "TASK-1")
+        self.assertEqual(ReadyDelegate.usage_calls, ["researcher", "researcher"])
+        self.assertTrue(FakeDelegate.attach(self.cfg.issue_workdir("TASK-1")).alive())
 
     def test_config_drift_without_a_limit_probes_before_resuming(self):
         self.start()

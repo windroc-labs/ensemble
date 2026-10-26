@@ -341,19 +341,7 @@ class Undone(Run):
                 end=LIMITED,
             ),
         )
-        self.assertEqual(
-            self.said(), steps("running:1", "start", "limit", "limit-move:1", "limit-row:1", end=-9)
-        )
-        self.assertEqual(self.records(ID)[-3]["kind"], "limit")
-        note = {
-            "kind": "limit",
-            "issue": ID,
-            "sid": SID,
-            "client": "claude",
-            "resets_at": RESETS,
-            "delegate_kind": "harness",
-            "attempt": 1,
-        }
+        self.assertEqual(self.said(), steps("running:1", "start", "limit", "limit-move:1", end=-9))
         start = {
             "kind": "start",
             "issue": ID,
@@ -366,7 +354,7 @@ class Undone(Run):
             "target": None,
             "task": None,
         }
-        self.assertEqual(self.runs(), [start, note])
+        self.assertEqual(self.runs(), [start])
         self.assertEqual(self.state(ID), "in_review")
 
         n = len(self.requests())
@@ -378,8 +366,7 @@ class Undone(Run):
             ),
         )
         resumed = {k: start[k] for k in ("issue", "sid", "role", "client", "delegate_kind")}
-        again = {**note, "attempt": 2}
-        self.assertEqual(self.runs(), [start, note, {"kind": "resume", **resumed}, again])
+        self.assertEqual(self.runs(), [start, {"kind": "resume", **resumed}])
         self.assertEqual([s for _, s in self.stored()].count(cid("limit")), 1)
         researcher = role_id("researcher")
         self.assertEqual(

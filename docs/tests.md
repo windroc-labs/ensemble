@@ -214,4 +214,4 @@ Live tests run a real client by hand, outside CI: [Docker host › Live acceptan
 | delegate harness: a missing outcome takes "no outcome" | ✅, though whether a weak model omits it is not controllable | |
 | delegate harness: `[ensemble-progress:…]` marks, `ensemble-outcome` parsing, one fix-up resume | | ✅ |
 | `live_docker.py role --repo` (a headless engineer's PR URL) | | ✅, and needs coding ability |
-| orchestrator write-back (outcome → Linear comments, state, `limit` row), `live_docker.py pr` | | ✅ |
+| orchestrator write-back (outcome → Linear comments and state; usage-limit notification), `live_docker.py pr` | | ✅ |

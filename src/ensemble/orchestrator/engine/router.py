@@ -1082,7 +1082,7 @@ def tick(opts, cfg, gql, *, start, keychain, wiring, clock=datetime.now, launch_
             except (OSError, UnicodeDecodeError) as e:
                 say("skip", reason="trim failed", error=one_line(e))
         with Held(dry) as walk:
-            gate = Gate(runs, now, dry=dry, say=walk, cfg=cfg)
+            gate = Gate(dry=dry, say=walk, cfg=cfg)
             board = Board(
                 gql,
                 entries,

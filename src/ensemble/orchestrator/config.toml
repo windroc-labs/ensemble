@@ -55,7 +55,7 @@ implementation = "ensemble.delegate:HarnessDelegate"
 
 # Per-client usage checks, owned by the orchestrator; empty table or an unlisted client means "on".
 #   <client>  "on": keep the board-start usage gate and researcher brake (80% five-hour usage).
-#             "off": neither reads nor evaluates usage, including recorded quota holds; other clients keep their setting.
+#             "off": neither reads nor evaluates usage; other clients keep their setting.
 [usage_limit]
 
 # local: [orchestrator.usage_limit]
