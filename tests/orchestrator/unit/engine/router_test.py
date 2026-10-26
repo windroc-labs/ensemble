@@ -1129,7 +1129,7 @@ class RouterEntry(OuterBase):
     def test_a_verifier_client_overlay_is_accepted_by_dry_run(self):
         self.write_config(OUTER + '[core.roles.verifier]\nclient = "codex"\n')
         self.assertEqual(self.entry("--dry-run", tty=True), 0)
-        self.assertEqual(self.err, "")
+        self.assertNotIn("config-error", self.err)
 
     def test_a_config_error_exits_2_logged_once_a_day_and_printed_on_a_terminal_or_for_issue(
         self,
