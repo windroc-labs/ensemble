@@ -45,6 +45,7 @@ type keys = broker.SystemKeychain
 
 type app struct {
 	keychain      func(interactive bool) (keys, error)
+	legacy        func() ([]string, error)                                    // old-name items the one-time rename left (legacy.go)
 	linear        func(ctx context.Context, k keys, enroll bool) (any, error) // bounded identity JSON on stdin
 	build         func(ctx context.Context, k keys, pkg string, spec launcher.BuildSpec, maxAge time.Duration, progress io.Writer) (any, error)
 	start, close  step
@@ -149,6 +150,17 @@ func main() {
 	os.Exit(code)
 }
 
+// noKeychain is a keychain without items.
+type noKeychain struct{}
+
+func (noKeychain) Services(string) ([]string, error) { return nil, nil }
+func (noKeychain) Accounts(string) ([]string, error) { return nil, nil }
+
+func exists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
+}
+
 func accountHome() (string, error) {
 	u, err := user.Current()
 	if err != nil || !strings.HasPrefix(u.HomeDir, "/") {
@@ -163,6 +175,10 @@ func isPath(s string) bool {
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (code int) {
 	if len(args) == 1 && args[0] == "linear-maintain" || len(args) == 2 && args[0] == "login" && args[1] == "linear" {
+		if err := a.legacyError(); err != nil {
+			fmt.Fprintln(stderr, "ensemble-broker:", err)
+			return 1
+		}
 		k, err := a.keychain(args[0] == "login")
 		var result any
 		if err == nil {
@@ -179,7 +195,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 		switch args[0] {
 		case "install-codex", "update-codex":
 			if len(args) == 2 && codex.ValidVersion(args[1]) {
-				result, err := a.installCodex(ctx, args[1], args[0] == "update-codex")
+				err := a.legacyError()
+				var result any
+				if err == nil {
+					result, err = a.installCodex(ctx, args[1], args[0] == "update-codex")
+				}
 				if err != nil {
 					fmt.Fprintln(stderr, "ensemble-broker:", err)
 					return 1
@@ -221,7 +241,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 				login = datedLogin(args, a, stdout)
 			}
 			if login != nil {
-				k, err := a.keychain(true)
+				err := a.legacyError()
+				var k keys
+				if err == nil {
+					k, err = a.keychain(true)
+				}
 				if err == nil {
 					err = login(k)
 				}
@@ -287,6 +311,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 		return fail(stderr, command, protocol.New(protocol.Usage, replaced))
 	default:
 		return fail(stderr, command, protocol.New(protocol.Usage, usage))
+	}
+	if err := a.legacyError(); err != nil {
+		return fail(stderr, command, protocol.New(protocol.KeychainFailed, err.Error()))
 	}
 	k, err := a.keychain(false)
 	var result any
@@ -421,6 +448,19 @@ func system() app {
 				k = k.Interactive()
 			}
 			return k, nil
+		},
+		legacy: func() ([]string, error) {
+			home, err := accountHome()
+			if err != nil {
+				return nil, err
+			}
+			var k legacyKeychain = keys{Home: home}
+			// Not the installed broker (credential access refuses it anyway), or root's install-codex without a
+			// login keychain: only the static secrets' keys to check.
+			if broker.CheckInstalled() != nil || !exists(filepath.Join(home, "Library/Keychains/login.keychain-db")) {
+				k = noKeychain{}
+			}
+			return legacyState(home, k)
 		},
 		linear: linearSystem,
 		lockQuery: func(ctx context.Context, k keys, lock string) (any, error) {

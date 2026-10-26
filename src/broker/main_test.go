@@ -69,6 +69,9 @@ func invoke(a app, args ...string) (int, string, string) {
 	if a.keychain == nil {
 		a.keychain = func(bool) (keys, error) { return keys{Home: "/nonexistent"}, nil }
 	}
+	if a.legacy == nil {
+		a.legacy = func() ([]string, error) { return nil, nil }
+	}
 	var out, errOut bytes.Buffer
 	code := run(context.Background(), args, &out, &errOut, a)
 	return code, out.String(), errOut.String()
