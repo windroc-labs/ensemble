@@ -156,9 +156,9 @@ class HookError(Exception):
 
 @dataclass(frozen=True)
 class HookCallback:
-    """Native Tui/Host: on_hook(HookCall); Spec.handlers: on_event(EventCall) -> None.
-    Resolve module's regular file over session roots, then all callbacks' roots, then
-    sys.path; state is JSON data.
+    """Tui: on_hook(HookCall); Host: on_hook(word, HookCall).
+    Spec.handlers: on_event(EventCall) -> None. Resolve module's regular file over session
+    roots, all callbacks' roots, then sys.path; state is JSON data.
     """
 
     module: str
