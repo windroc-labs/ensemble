@@ -84,6 +84,8 @@ CLI help retains both flags and all three entry modes. The isolated-import check
 its complete module list into four disjoint slices, retaining fresh children, empty
 HOME/cwd, layer-specific paths and unchanged `sys.path` assertions for every module.
 Compare job times including setup and cleanup; the target is about 2.5 minutes.
+Runner tool setup tries the existing apt index first, refreshing it only if installation
+fails. This retains zsh/tmux coverage without refreshing unrelated repositories on every job.
 
 Docker protocol fixtures need `python3 -m pip install jsonschema==4.26.0` (test only).
 Run `python3 .github/run_tests.py Protocol tests/unit/docker_broker_protocol_test.py tests/unit/docker_relay_protocol_test.py`.
