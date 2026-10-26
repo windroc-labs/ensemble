@@ -109,6 +109,9 @@ var (
 	jwtToken    = regexp.MustCompile(`[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*){2,}`)
 )
 
+// Redact removes every GitHub token, JWT and private key from text, and bearer ("": none) wherever it appears.
+func Redact(text, bearer string) string { return redact(text, bearer) }
+
 // redact removes credentials before truncation so no partial token can escape at the boundary.
 func redact(text, bearer string) string {
 	if strings.Contains(text, "PRIVATE KEY") {

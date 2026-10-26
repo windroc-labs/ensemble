@@ -8,15 +8,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
 	"ensemble/broker/internal/audit"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/github"
+	"ensemble/broker/internal/launcher"
 	"ensemble/broker/internal/protocol"
 )
 
@@ -28,6 +31,19 @@ const (
 	revocationsAccount = "pending"
 	tokenDir           = docker.SecretsDir + "/github"
 )
+
+// cloneScript shallow-clones branch or tag $2 of github.com/$1 into $3 with the prefetch token on stdin, kept only in
+// $HOME (the helper's tmpfs). git reads it through a command-line credential helper, so the clone's config and remote
+// URL never hold it, and runs none of the repo's hooks.
+const cloneScript = `set -eu
+umask 077
+cat > "$HOME/token"
+exec git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c credential.helper= ` +
+	`-c 'credential.helper=!f() { test "$1" = get || exit 0; echo username=x-access-token; printf "password=%s\n" "$(cat "$HOME/token")"; }; f' ` +
+	`clone --quiet --depth 1 --branch "$2" -- "https://github.com/$1.git" "$3"`
+
+// prefetchPermissions is all a prefetch token may do: read its one repository's contents.
+var prefetchPermissions = map[string]string{"contents": "read"}
 
 // writeScript replaces $1's token file with stdin; the temporary name is a dot file, which no reader matches.
 const writeScript = "mkdir -p -m 0700 " + tokenDir + " && umask 0377 && rm -f " + tokenDir + `/."$1".new && cat > ` + tokenDir +
@@ -509,6 +525,78 @@ func (g GitHub) Issue(ctx context.Context, app string, permissions map[string]st
 		}
 	}
 	return expiries(issued), nil
+}
+
+// Prefetch clones ref ("": the default branch) of repo into dir through run, which starts the helper container with
+// argv and stdin. The token it gives run reads only repo's contents; it sits in container's record while in use, so
+// closing container retires it should the broker die, and is revoked once run returns.
+func (g GitHub) Prefetch(ctx context.Context, repo, ref, dir, container string, run func(argv []string, stdin []byte) error) error {
+	jwt, err := g.jwt(AppKeyService)
+	if err != nil {
+		return err
+	}
+	in, err := g.API.RepoInstallation(ctx, jwt, repo)
+	var se *github.StatusError
+	if errors.As(err, &se) && se.Status == http.StatusNotFound {
+		return protocol.New(protocol.GitHubFailed, "GitHub App "+AppKeyService+" is not installed on "+repo+"; install it there or drop prefetch.")
+	}
+	if err != nil {
+		return apiError(err)
+	}
+	token, expires, err := g.API.IssueRepo(ctx, jwt, in.ID, repo, prefetchPermissions)
+	if err != nil {
+		return apiError(err)
+	}
+	e := tokenEntry{in.Account, in.ID, token, expires.Format(time.RFC3339)}
+	if _, err := g.editRecord(container, true, func(rec *tokenRecord, _ bool) { rec.Tokens = append(rec.Tokens, e) }); err != nil {
+		g.note(container, audit.Issued, "", e, &unlisted)
+		_ = g.discard(context.WithoutCancel(ctx), container, []tokenEntry{e}, false)
+		return tokensError(err)
+	}
+	g.issued(ctx, container, audit.Issued, e)
+	defer g.retire(ctx, container, e)
+	if ref == "" {
+		if ref, err = g.API.DefaultBranch(ctx, token, repo); err != nil {
+			return apiError(err)
+		}
+		if !launcher.ValidRef(ref) {
+			return protocol.Newf(protocol.GitHubFailed, "GitHub named %q the default branch of %s, not a usable branch name.", ref[:min(len(ref), 80)], repo)
+		}
+	} else {
+		kind, err := g.API.RefKind(ctx, token, repo, ref)
+		if err != nil {
+			return apiError(err)
+		}
+		if kind == "" {
+			return protocol.Newf(protocol.ManifestRejected, "Manifest rejected: prefetch ref %s is no branch or tag of %s.", ref, repo)
+		}
+	}
+	stdin := []byte(token)
+	defer erase(stdin)
+	if err := run([]string{"/bin/sh", "-c", cloneScript, "sh", repo, ref, dir}, stdin); err != nil {
+		if errors.Is(err, docker.ErrUnreachable) {
+			return protocol.New(protocol.DockerUnreachable, "Cannot reach Docker Desktop; start it and retry.")
+		}
+		e := protocol.Newf(protocol.StartFailed, "Prefetching %s at %s failed.", repo, ref)
+		e.Cause = github.Redact(strings.ReplaceAll(docker.Diagnostic(err), token, "[redacted]"), token)
+		return e
+	}
+	return nil
+}
+
+// retire revokes a prefetch token on a context of its own, so a cancelled start still revokes it; a token GitHub does
+// not confirm revoked goes to the backlog.
+func (g GitHub) retire(ctx context.Context, container string, e tokenEntry) {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if g.API.Revoke(rctx, e.Token) != nil {
+		_ = g.discard(rctx, container, []tokenEntry{e}, false)
+		return
+	}
+	g.note(container, audit.Revoked, "", e, nil)
+	_, _ = g.editRecord(container, false, func(rec *tokenRecord, _ bool) {
+		rec.Tokens = slices.DeleteFunc(rec.Tokens, func(t tokenEntry) bool { return t.Token == e.Token })
+	})
 }
 
 // Refresh replaces each of container's tokens with one limited to permissions: a new one is recorded and written in
