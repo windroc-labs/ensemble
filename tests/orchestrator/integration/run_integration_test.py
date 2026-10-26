@@ -342,6 +342,7 @@ class Undone(Run):
             ),
         )
         self.assertEqual(self.said(), steps("running:1", "start", "limit", "limit-move:1", end=-9))
+        self.assertEqual(self.records(ID)[-3]["kind"], "limit")
         start = {
             "kind": "start",
             "issue": ID,
