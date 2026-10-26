@@ -2,9 +2,12 @@
 
 import os
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from unittest import mock
 
 from ensemble.orchestrator.engine import runs
 from ensemble.orchestrator.engine.gate import Gate
+from ensemble.session import Usage, Window
 from tests.orchestrator.case import Case
 from tests.orchestrator.gate_fixtures import quota_config, quota_provider
 
@@ -13,6 +16,42 @@ SHARED = ("first", "shared-client")
 
 
 class DelegateQuotaKeys(Case):
+    def test_available_codex_and_claude_usage_ignores_legacy_records_each_tick(self):
+        until = "2026-11-01T12:39:00+00:00"
+        usage = Usage(
+            Window(10, None), Window(49, datetime(2026, 11, 2, 1, 56, tzinfo=UTC).timestamp())
+        )
+        for client in ("codex", "claude"):
+            with self.subTest(client=client):
+                path = os.path.join(self.home, client, "runs.jsonl")
+                runs.note(
+                    path,
+                    "limit",
+                    issue="TASK-0",
+                    sid="s",
+                    client=client,
+                    resets_at=until,
+                    delegate_kind="first",
+                    attempt=1,
+                )
+                before = Path(path).read_text()
+                provider = quota_provider(client, 10)
+                events = []
+                for _ in range(2):
+                    gate = Gate(
+                        lambda event, *args, events=events, **fields: events.append(
+                            (event, args, fields)
+                        ),
+                        cfg=quota_config(provider, "first"),
+                        dry=False,
+                    )
+                    with mock.patch.object(provider, "usage", return_value=usage) as probe:
+                        self.assertFalse(gate.blocked("engineer", "TASK-1", key=("first", client)))
+                        self.assertFalse(gate.blocked("pm", "TASK-2", key=("first", client)))
+                        probe.assert_called_once()
+                self.assertEqual(events, [])
+                self.assertEqual(Path(path).read_text(), before)
+
     def test_role_tiers_do_not_change_the_client_probe_cache(self):
         provider = quota_provider("shared-client", 10)
         core = {"roles": {"engineer": {"tier": 1}, "pm": {"tier": 4}}}
@@ -25,12 +64,11 @@ class DelegateQuotaKeys(Case):
             [(core, {"roles": {"engineer": {"client": "shared-client"}}})],
         )
 
-    def gate(self, provider, *, kind="first", say=None, client=None, core=None, log=None):
+    def gate(self, provider, *, kind="first", say=None, client=None, core=None):
         cfg = quota_config(
             provider, kind, core=core, clients=None if client is None else {"engineer": client}
         )
-        path = log or os.path.join(self.home, "missing-runs.jsonl")
-        return Gate(path, NOW, say, cfg=cfg, dry=False)
+        return Gate(say, cfg=cfg, dry=False)
 
     def test_the_configured_overlay_client_keys_limits_and_reaches_the_probe(self):
         core = {"roles": {"engineer": {"client": "overlay-client"}}}
@@ -45,8 +83,9 @@ class DelegateQuotaKeys(Case):
             (["engineer"], [(core, {"roles": {"engineer": {"client": "overlay-client"}}})]),
         )
         log = os.path.join(self.home, "runs.jsonl")
-        runs.note_limit(
+        runs.note(
             log,
+            "limit",
             issue="TASK-0",
             sid="s",
             client="overlay-client",
@@ -54,9 +93,9 @@ class DelegateQuotaKeys(Case):
             delegate_kind="first",
             attempt=1,
         )
-        gate = self.gate(provider, client="overlay-client", core=core, log=log)
-        self.assertTrue(gate.blocked("engineer", "TASK-1", key=("first", "overlay-client")))
-        self.assertEqual(provider.queried, ["engineer"])
+        gate = self.gate(provider, client="overlay-client", core=core)
+        self.assertFalse(gate.blocked("engineer", "TASK-1", key=("first", "overlay-client")))
+        self.assertEqual(provider.queried, ["engineer", "engineer"])
 
     def test_roles_sharing_a_client_share_one_probe(self):
         provider = quota_provider("shared-client", 95)

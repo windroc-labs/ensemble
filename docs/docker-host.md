@@ -720,8 +720,7 @@ An unregistered account, an account selected for Codex or OpenCode, or a registe
   selection picks, so the gate skips Claude runs only when every account is over a threshold (`usage-skip`, reason
   `usage`) or none has a reading (`usage unknown`). A worker's or role's selected account is gated the same way, not
   by its own usage. With one account, or on tmux, the
-  gate probes the host's Claude login. The board's limit hold stays per
-  client: one account's usage limit holds every board run on Claude.
+  gate probes the host's Claude login.
 - The tmux Host checks a selection as above, then ignores it: the session runs on your own Claude login.
 
 ### OpenCode
@@ -973,7 +972,8 @@ the first failed check. The keychain, Linear preset and board-run checks stay ma
 - Claude's client state is a read-write bind: a worker can leave settings, hooks, `CLAUDE.md`, symlinks or large files there for
   its later generations; host readers must not follow symlinks.
 - A headless run's output comes from its container, where client and tools share uid `agent`: a forged rate-limit line
-  pauses the board for that client until its reset time, as a forged transcript record can for a TUI run.
+  can end that run and trigger its usage-limit notification and move to review, as can a forged transcript record
+  for a TUI run.
 - A harness killed with `kill -9` leaves its headless client running, with its token, until the next Docker start or
   close.
 - A worker reaches the Mac's services, `127.0.0.1`-only ones included, and the LAN only through the egress proxy's

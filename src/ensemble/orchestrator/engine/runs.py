@@ -1,7 +1,4 @@
-"""The runs log (runs.jsonl): one durable JSON line per run event; its readers: start and resume
-lines as Entries, a sid's start row as its Claim and its task (`started_task`), live limit rows
-(`limits`), `failed` rows (a new run that failed before its LinearRun) as Failures, `trim` to KEEP.
-"""
+"""Durable runs.jsonl events: run entries, start-row claims/tasks and failed launches; trim to KEEP."""
 
 import json
 import os
@@ -37,31 +34,6 @@ def _row(kind, now, fields):
 def note(path, kind, *, now=datetime.now, **fields):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     append_line(path, _row(kind, now, fields), durable=True, locked=True)
-
-
-def note_limit(path, *, issue, sid, client, resets_at, delegate_kind, attempt):
-    """Once per (issue, sid, attempt): a redelivery after a lost ledger write appends none."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    fields = {
-        "issue": issue,
-        "sid": sid,
-        "client": client,
-        "resets_at": resets_at,
-        "delegate_kind": delegate_kind,
-        "attempt": attempt,
-    }
-    key = ("limit", issue, sid, attempt)
-    with file_lock(path):
-        if not any(_limit_key(line) == key for line in _lines(path)):
-            append_line(path, _row("limit", datetime.now, fields), durable=True)
-
-
-def _limit_key(line):
-    try:
-        d = json.loads(line)
-    except ValueError:
-        return None
-    return isinstance(d, dict) and tuple(d.get(k) for k in ("kind", "issue", "sid", "attempt"))
 
 
 def _client(d):
@@ -152,23 +124,6 @@ def started_task(path, issue, sid) -> str | None:
     return None
 
 
-def _limit(line, now):
-    try:
-        d = json.loads(line)
-        if (
-            d["kind"] == "limit"
-            and _client(d)
-            and _text(d["delegate_kind"])
-            and isinstance(d["resets_at"], str)
-        ):
-            at = datetime.fromisoformat(d["resets_at"])
-            if at.utcoffset() is not None and now < at <= now + KEEP:
-                return (d["delegate_kind"], d["client"]), at
-    except ERRORS:
-        pass
-    return None
-
-
 def _failure(line):
     try:
         d = json.loads(line)
@@ -195,14 +150,6 @@ def parse_log(path):
     return [e for line in _lines(path) if (e := parse_line(line))]
 
 
-def limits(path, now):
-    found = {}
-    for key, at in filter(None, (_limit(line, now) for line in _lines(path))):
-        if key not in found or at > found[key]:
-            found[key] = at
-    return found
-
-
 def latest(entries):
     found = {}
     for entry in entries:
@@ -221,7 +168,6 @@ def trim(path, now):
             for line in lines
             if (e := parse_line(line))
             and (e.ts >= now - KEEP or e.sid == newest[e.issue].sid)
-            or _limit(line, now)
             or (f := _failure(line))
             and f.ts >= now - KEEP
         ]

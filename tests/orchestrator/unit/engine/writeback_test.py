@@ -2469,18 +2469,7 @@ class LimitEvents(Events):
             if row["kind"] == "limit"
         ]
 
-    def row(self, resets_at="2026-10-11T18:00:00+08:00", attempt=1):
-        return {
-            "kind": "limit",
-            "issue": RUN_ISSUE,
-            "sid": RUN_SID,
-            "client": "fake",
-            "resets_at": resets_at,
-            "delegate_kind": "fake",
-            "attempt": attempt,
-        }
-
-    def test_a_limit_comments_moves_and_records_its_row_then_ends_the_session(self):
+    def test_a_limit_comments_moves_and_ends_the_session_without_a_quota_row(self):
         self.assertTrue(self.deliver(delegate_event("begun")))
         n = len(self.linear.calls)
         self.assertTrue(self.deliver(self.limited()))
@@ -2505,10 +2494,8 @@ class LimitEvents(Events):
                 (harness, "find", {"c": RUN_SESSION}),
             ],
         )
-        self.assertEqual(self.rows(), [self.row()])
-        self.assertEqual(
-            self.ledger()[RUN_SID]["steps"], ["running:1", "limit", "limit-move:1", "limit-row:1"]
-        )
+        self.assertEqual(self.rows(), [])
+        self.assertEqual(self.ledger()[RUN_SID]["steps"], ["running:1", "limit", "limit-move:1"])
 
     def test_an_outcome_with_a_limit_writes_both_and_moves_once(self):
         both = self.finished(-9, outcome=outcome_data(), limit={"resets_at": None})
@@ -2522,11 +2509,10 @@ class LimitEvents(Events):
                 "outcome",
                 "limit",
                 "limit-move:1",
-                "limit-row:1",
             ],
         )
         self.assertEqual(len(self.linear.writes("state")), 1)
-        self.assertEqual(self.rows(), [self.row(None)])
+        self.assertEqual(self.rows(), [])
         self.assertEqual(
             self.linear.comments[RUN_SESSION]["body"],
             session_body(f"done · #1 · {STARTED} → {RESTARTED} · exit -9"),
@@ -2600,7 +2586,7 @@ class LimitEvents(Events):
     def test_a_linear_failure_in_the_limit_is_a_step_error_never_raised(self):
         self.cfg = replace(self.cfg, linear=replace(self.cfg.linear, human_members=HUMANS))
         for index, (op, step) in enumerate(
-            (("reread", "limit-move:1"), ("state", "limit-move:1"), ("subscribe", "limit-row:1"))
+            (("reread", "limit-move:1"), ("state", "limit-move:1"), ("subscribe", "limit"))
         ):
             with self.subTest(op=op):
                 sid = f"0b6f2c1e-6d0a-4c1b-9a51-3f1f6b0e2b{index:02d}"
@@ -2634,13 +2620,13 @@ class LimitEvents(Events):
                         self.said(),
                     )
 
-    def test_the_same_limit_twice_moves_once_and_records_one_row(self):
+    def test_the_same_limit_twice_moves_once_without_a_quota_row(self):
         self.assertTrue(self.deliver(self.limited()))
         n = len(self.linear.calls)
         self.assertTrue(self.deliver(self.limited()))
         self.assertEqual(self.linear.calls[n:], [])
         self.assertEqual(len(self.linear.writes("state")), 1)
-        self.assertEqual(self.rows(), [self.row()])
+        self.assertEqual(self.rows(), [])
 
     def test_a_later_attempts_limit_moves_again_without_a_second_comment(self):
         self.assertTrue(self.deliver(self.limited()))
@@ -2652,60 +2638,11 @@ class LimitEvents(Events):
             ["reread", "state"],
         )
         self.assertEqual(len([c for c in self.linear.comments if c != RUN_SESSION]), 1)
-        self.assertEqual(self.rows(), [self.row(), self.row(attempt=2)])
+        self.assertEqual(self.rows(), [])
         self.assertEqual(
             self.ledger()[RUN_SID]["steps"],
-            ["limit", "limit-move:1", "limit-row:1", "limit-move:2", "limit-row:2"],
+            ["limit", "limit-move:1", "limit-move:2"],
         )
-
-    def test_a_failed_row_still_ends_the_session_and_a_replay_records_it(self):
-        os.chmod(self.cfg.runs_log, 0o400)
-        self.addCleanup(os.chmod, self.cfg.runs_log, 0o600)
-        self.assertFalse(self.deliver(self.limited()))
-        self.assertEqual(self.ledger()[RUN_SID]["steps"], ["limit", "limit-move:1"])
-        self.assertIn("ended_at", self.ledger()[RUN_SID]["attempts"]["1"])
-        self.assertTrue(
-            any(
-                line.startswith(f"writeback step-error {RUN_ISSUE} sid={RUN_SID} step=limit-row:1 ")
-                for line in self.said()
-            )
-        )
-        os.chmod(self.cfg.runs_log, 0o600)
-        n = len(self.linear.calls)
-        self.assertTrue(self.deliver(self.limited()))
-        self.assertEqual(self.linear.calls[n:], [])
-        self.assertEqual(self.rows(), [self.row()])
-
-    def test_a_redelivered_limit_records_one_row(self):
-        again = self.limited()
-        results, threads = self.racing(writeback.runs, "note_limit", lambda: self.deliver(again))
-        self.assertTrue(self.deliver(self.limited()))
-        threads[0].join()
-        self.assertEqual(results, [True])
-        self.assertEqual(self.rows(), [self.row()])
-        self.assertEqual(self.ledger()[RUN_SID]["steps"], ["limit", "limit-move:1", "limit-row:1"])
-        limit = board_ids.comment_id("engineer", RUN_SID, "limit")
-        self.assertEqual(len([v for _, v in self.linear.writes("comment") if v["c"] == limit]), 1)
-
-    def test_a_ledger_write_lost_after_the_row_records_one_row_on_redelivery(self):
-        real, ledger, lost = (
-            os.replace,
-            os.path.join(self.workdir, writeback.LEDGER),
-            [],
-        )
-
-        def replace(src, dst):
-            if str(dst) == ledger and self.rows() and not lost:
-                lost.append(str(dst))
-                raise OSError("disk full")
-            real(src, dst)
-
-        with mock.patch.object(os, "replace", replace):
-            self.assertFalse(self.deliver(self.limited()))
-        self.assertEqual((lost, self.rows()), ([ledger], [self.row()]))
-        self.assertTrue(self.deliver(self.limited()))
-        self.assertEqual(self.rows(), [self.row()])
-        self.assertEqual(self.ledger()[RUN_SID]["steps"], ["limit", "limit-move:1", "limit-row:1"])
 
     def test_two_writers_lose_no_step(self):
         one, two = (delegate_event("progress", name="build", text=t) for t in ("one", "two"))

@@ -520,10 +520,8 @@ def _session(ctx, cfg, client, attempt, *, now, end=None) -> bool:
     return error is None
 
 
-def _limited(ctx, runs_log, claim, attempt, resets_at) -> bool:
-    """A usage limit: its comment once per sid; this attempt's guarded move to In Review and its
-    runs.jsonl row, each once.
-    """
+def _limited(ctx, attempt, resets_at) -> bool:
+    """A usage limit: its comment once per sid and guarded move to In Review per attempt."""
     at = local_time(resets_at)
     move = f"limit-move:{attempt}"
     moved = move in _done(ctx) or (
@@ -541,20 +539,7 @@ def _limited(ctx, runs_log, claim, attempt, resets_at) -> bool:
         )
         is None
     )
-    noted = _step(
-        ctx,
-        f"limit-row:{attempt}",
-        lambda: runs.note_limit(
-            runs_log,
-            issue=ctx.ident,
-            sid=ctx.sid,
-            client=claim.client,
-            resets_at=at,
-            delegate_kind=claim.delegate_kind,
-            attempt=attempt,
-        ),
-    )
-    return moved and noted is None
+    return moved
 
 
 def _claim(cfg, issue, sid) -> Claim:
@@ -659,7 +644,7 @@ def _deliver(ctx, cfg, claim, event, *, now) -> bool:
     else:
         ok = outcome is None or "outcome" in _done(ctx) or finish(ctx, outcome)
     if event.limit is not None:
-        ok = _limited(ctx, cfg.runs_log, claim, attempt, event.limit["resets_at"]) and ok
+        ok = _limited(ctx, attempt, event.limit["resets_at"]) and ok
     elif outcome is None:
         log("writeback", "no-outcome", ctx.ident, sid=ctx.sid, error=event.error or "no result")
     ended = session(end=(event.returncode, outcome, event.limit is not None))

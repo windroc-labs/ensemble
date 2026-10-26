@@ -5,7 +5,6 @@ from collections.abc import Callable
 
 from ensemble import delegate
 from ensemble.orchestrator.engine.log import log
-from ensemble.orchestrator.engine.runs import limits
 from ensemble.orchestrator.engine.types import ConfigError
 from ensemble.utils import exhausted, summary
 
@@ -32,25 +31,20 @@ def _probe(role, cfg, provider, client):
 
 
 class Gate:
-    def __init__(self, runs, now, say=None, *, cfg, dry):
+    def __init__(self, say=None, *, cfg, dry):
         self.cfg = cfg
-        self.limits, self.dry, self.seen = limits(runs, now), dry, {}
+        self.dry, self.seen = dry, {}
         self.say: Callable[..., None] = say or functools.partial(log, "router", dry=dry)
 
     def blocked(self, role, ident, *, key, reject_config=False):
         kind, client = key
         if not self.cfg.usage_limit.get(client, True):
             return False
-        if key in self.limits:
-            reason, fields = "limit", {"until": self.limits[key].isoformat()}
-            if self.dry:
-                self.say("usage", client=client, **fields, allowed=False)
-        else:
-            if key not in self.seen:
-                self.seen[key] = self._check(role, client, kind)
-            reason, fields, error = self.seen[key]
-            if reject_config and error is not None:
-                raise error
+        if key not in self.seen:
+            self.seen[key] = self._check(role, client, kind)
+        reason, fields, error = self.seen[key]
+        if reject_config and error is not None:
+            raise error
         if reason:
             self.say("usage-skip", ident, once=True, client=client, reason=reason, **fields)
         return reason is not None
