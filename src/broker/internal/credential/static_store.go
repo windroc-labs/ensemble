@@ -219,7 +219,7 @@ func (s StaticStore) DeliverHost(ref string, now time.Time, emit func(Notice)) e
 		}
 		due = Due(ref, r, r, told, now)
 		for _, n := range due {
-			r.Notified = append(r.Notified, strings.TrimPrefix(n.Key, prefix))
+			r.Notified = append(r.Notified, n.Label)
 		}
 		m[ref] = r
 		return len(due) > 0

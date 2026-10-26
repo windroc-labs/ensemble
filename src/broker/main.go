@@ -20,13 +20,14 @@ import (
 	"ensemble/broker/internal/audit"
 	"ensemble/broker/internal/broker"
 	"ensemble/broker/internal/codex"
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/github"
 	"ensemble/broker/internal/launcher"
 	"ensemble/broker/internal/protocol"
 )
 
-const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | lock-query --lock NAME | refresh --container NAME --manifest FILE | close --container NAME | status [--cleanup] | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients"
+const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | (login claude, opencode and env also take --expires YYYY-MM-DD; claude --issued YYYY-MM-DD or --fresh-token instead) | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | lock-query --lock NAME | refresh --container NAME --manifest FILE | close --container NAME | status [--cleanup] | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients"
 
 var containerPattern = regexp.MustCompile(`^ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}$`)
 var secondsPattern = regexp.MustCompile(`^[0-9]{1,9}$`)
@@ -48,8 +49,10 @@ type app struct {
 	loginCodex    func(context.Context, io.Writer) error
 	loginOpencode func(provider, authFile string, out io.Writer) error
 	loginEnv      func(name string, out io.Writer) error // login env NAME: the value on stdin
-	installCodex  func(context.Context, string, bool) (any, error)
-	checkClients  func(ctx context.Context, progress io.Writer) (any, error)
+	// a login claude, opencode or env with an expiry option; authFile: opencode's --auth-file, "" without
+	dated        func(kind credential.Kind, name, authFile string, reg credential.Registration, out io.Writer) error
+	installCodex func(context.Context, string, bool) (any, error)
+	checkClients func(ctx context.Context, progress io.Writer) (any, error)
 }
 
 // keyFile is login github's --key-file content and --app-id.
@@ -189,6 +192,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 				login = func() error { return a.loginOpencode(args[2], args[4], stdout) }
 			case len(args) == 3 && args[1] == "env" && launcher.ValidEnvName(args[2]):
 				login = func() error { return a.loginEnv(args[2], stdout) }
+			default:
+				login = datedLogin(args, a, stdout)
 			}
 			if login != nil {
 				if err := login(); err != nil {
@@ -397,24 +402,7 @@ func system() app {
 		workspaceRm: func(ctx context.Context, volume string, force bool) (any, error) {
 			return withHost("workspace-rm", "", nil, func(h launcher.Host) (any, error) { return h.WorkspaceRm(ctx, volume, force) })
 		},
-		login: func(account string, out io.Writer) error {
-			home, err := accountHome()
-			if err != nil {
-				return err
-			}
-			if err := broker.CheckInstalled(); err != nil {
-				return err
-			}
-			return broker.Login(account, func() ([]byte, error) {
-				fmt.Fprint(os.Stderr, "Claude account "+account+" setup-token (hidden): ")
-				defer fmt.Fprintln(os.Stderr)
-				return broker.ReadHidden()
-			}, func() ([]byte, error) {
-				fmt.Fprint(os.Stderr, "Login keychain password, to make Claude trust only the broker (hidden): ")
-				defer fmt.Fprintln(os.Stderr)
-				return broker.ReadHidden()
-			}, broker.SystemKeychain{Home: home}, os.Stderr, out)
-		},
+		login: func(account string, out io.Writer) error { return loginClaude(account, credential.Registration{}, out) },
 		loginGitHub: func(ctx context.Context, app string, key *keyFile, out io.Writer) error {
 			home, err := accountHome()
 			if err != nil {
@@ -439,52 +427,17 @@ func system() app {
 			return tokens(home, nil).SaveUser(ctx, out)
 		},
 		loginOpencode: func(provider, authFile string, out io.Writer) error {
-			home, err := accountHome()
-			if err != nil {
-				return err
-			}
-			if err := broker.CheckInstalled(); err != nil {
-				return err
-			}
-			return broker.LoginOpencode(provider, func() ([]byte, error) {
-				if authFile != "" {
-					return readOpencodeAuth(authFile, provider)
-				}
-				fmt.Fprint(os.Stderr, "OpenCode provider "+provider+" API key (hidden): ")
-				defer fmt.Fprintln(os.Stderr)
-				return broker.ReadHidden()
-			}, func() ([]byte, error) {
-				fmt.Fprint(os.Stderr, "Login keychain password, to make the "+provider+" API key trust only the broker (hidden): ")
-				defer fmt.Fprintln(os.Stderr)
-				return broker.ReadHidden()
-			}, broker.SystemKeychain{Home: home}, out)
+			return loginOpencode(provider, authFile, credential.Registration{}, out)
 		},
-		loginEnv: func(name string, out io.Writer) error {
-			home, err := accountHome()
-			if err != nil {
-				return err
+		loginEnv: func(name string, out io.Writer) error { return loginEnv(name, credential.Registration{}, out) },
+		dated: func(kind credential.Kind, name, authFile string, reg credential.Registration, out io.Writer) error {
+			switch kind {
+			case credential.Claude:
+				return loginClaude(name, reg, out)
+			case credential.Opencode:
+				return loginOpencode(name, authFile, reg, out)
 			}
-			if err := broker.CheckInstalled(); err != nil {
-				return err
-			}
-			// A terminal on stdin types one hidden line; anything else carries the value, so the password comes from the
-			// controlling terminal.
-			info, err := os.Stdin.Stat()
-			terminal := err == nil && info.Mode()&os.ModeCharDevice != 0
-			read, hidden := func() ([]byte, error) { return readEnvValue(os.Stdin) }, broker.ReadHiddenTTY
-			if terminal {
-				read = func() ([]byte, error) {
-					fmt.Fprint(os.Stderr, "Environment secret "+name+" (hidden): ")
-					defer fmt.Fprintln(os.Stderr)
-					return broker.ReadHidden()
-				}
-				hidden = broker.ReadHidden
-			}
-			return broker.LoginEnv(name, read, func() ([]byte, error) {
-				fmt.Fprint(os.Stderr, "Login keychain password, to make ensemble-env/"+name+" trust only the broker (hidden): ")
-				defer fmt.Fprintln(os.Stderr)
-				return hidden()
-			}, broker.SystemKeychain{Home: home}, out)
+			return loginEnv(name, reg, out)
 		},
 		installCodex: func(ctx context.Context, version string, update bool) (any, error) {
 			if err := broker.CheckInstalled(); err != nil {
@@ -507,4 +460,82 @@ func system() app {
 			}).Login(ctx, out)
 		},
 	}
+}
+
+// loginClaude is login claude: account's setup-token, registered with reg.
+func loginClaude(account string, reg credential.Registration, out io.Writer) error {
+	home, err := accountHome()
+	if err != nil {
+		return err
+	}
+	if err := broker.CheckInstalled(); err != nil {
+		return err
+	}
+	return newStaticLogin(home).register(credential.StaticRef(credential.Claude, account), reg, out, os.Stderr, func() error {
+		return broker.Login(account, func() ([]byte, error) {
+			fmt.Fprint(os.Stderr, "Claude account "+account+" setup-token (hidden): ")
+			defer fmt.Fprintln(os.Stderr)
+			return broker.ReadHidden()
+		}, func() ([]byte, error) {
+			fmt.Fprint(os.Stderr, "Login keychain password, to make Claude trust only the broker (hidden): ")
+			defer fmt.Fprintln(os.Stderr)
+			return broker.ReadHidden()
+		}, broker.SystemKeychain{Home: home}, os.Stderr, out)
+	})
+}
+
+// loginOpencode is login opencode: provider's API key, from authFile ("": the terminal), registered with reg.
+func loginOpencode(provider, authFile string, reg credential.Registration, out io.Writer) error {
+	home, err := accountHome()
+	if err != nil {
+		return err
+	}
+	if err := broker.CheckInstalled(); err != nil {
+		return err
+	}
+	return newStaticLogin(home).register(credential.StaticRef(credential.Opencode, provider), reg, out, os.Stderr, func() error {
+		return broker.LoginOpencode(provider, func() ([]byte, error) {
+			if authFile != "" {
+				return readOpencodeAuth(authFile, provider)
+			}
+			fmt.Fprint(os.Stderr, "OpenCode provider "+provider+" API key (hidden): ")
+			defer fmt.Fprintln(os.Stderr)
+			return broker.ReadHidden()
+		}, func() ([]byte, error) {
+			fmt.Fprint(os.Stderr, "Login keychain password, to make the "+provider+" API key trust only the broker (hidden): ")
+			defer fmt.Fprintln(os.Stderr)
+			return broker.ReadHidden()
+		}, broker.SystemKeychain{Home: home}, out)
+	})
+}
+
+// loginEnv is login env: name's value, registered with reg.
+func loginEnv(name string, reg credential.Registration, out io.Writer) error {
+	home, err := accountHome()
+	if err != nil {
+		return err
+	}
+	if err := broker.CheckInstalled(); err != nil {
+		return err
+	}
+	// A terminal on stdin types one hidden line; anything else carries the value, so the password comes from the
+	// controlling terminal.
+	info, err := os.Stdin.Stat()
+	terminal := err == nil && info.Mode()&os.ModeCharDevice != 0
+	read, hidden := func() ([]byte, error) { return readEnvValue(os.Stdin) }, broker.ReadHiddenTTY
+	if terminal {
+		read = func() ([]byte, error) {
+			fmt.Fprint(os.Stderr, "Environment secret "+name+" (hidden): ")
+			defer fmt.Fprintln(os.Stderr)
+			return broker.ReadHidden()
+		}
+		hidden = broker.ReadHidden
+	}
+	return newStaticLogin(home).register(credential.StaticRef(credential.Env, name), reg, out, os.Stderr, func() error {
+		return broker.LoginEnv(name, read, func() ([]byte, error) {
+			fmt.Fprint(os.Stderr, "Login keychain password, to make ensemble-env/"+name+" trust only the broker (hidden): ")
+			defer fmt.Fprintln(os.Stderr)
+			return hidden()
+		}, broker.SystemKeychain{Home: home}, out)
+	})
 }

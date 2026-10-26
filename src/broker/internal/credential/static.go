@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"ensemble/broker/internal/audit"
 )
 
 // A static secret's reference, its safe name: the prefix of its kind, then its name. The broker package pins each
@@ -149,8 +151,23 @@ var thresholds = []struct {
 // Rotated is the notice of a consumer holding an older version than the one stored.
 const Rotated = "rotated"
 
-// Notice is one notice for one consumer; Key, <reference>@<version>:<threshold|rotated>, deduplicates it.
-type Notice struct{ Key, Reference, Text string }
+// Notice is one notice for one consumer; Key, <reference>@<version>:<Label>, deduplicates it. Label is the threshold
+// or Rotated; ExpiresAt the expiry it warns of ("": none).
+type Notice struct{ Key, Reference, Label, ExpiresAt, Text string }
+
+// auditKinds are the audit log's kinds of the static secrets.
+var auditKinds = map[Kind]string{Claude: audit.ClaudeSetupToken, Opencode: audit.OpencodeAPIKey, Env: audit.EnvSecret}
+
+// Audit is n's audit record: its reference and label, never a secret.
+func (n Notice) Audit() audit.Credential {
+	k, _, _ := StaticKind(n.Reference)
+	c := audit.Credential{Kind: auditKinds[k], Item: n.Reference, Result: audit.Notified, Notice: n.Label}
+	if n.ExpiresAt != "" {
+		expires := n.ExpiresAt
+		c.ExpiresAt = &expires
+	}
+	return c
+}
 
 func noticeKey(ref string, version int, label string) string {
 	return fmt.Sprintf("%s@%d:%s", ref, version, label)
@@ -175,14 +192,14 @@ func Due(ref string, injected, stored Static, delivered func(key string) bool, n
 			told = told || delivered(noticeKey(ref, injected.Version, more.name))
 		}
 		if !told {
-			out = append(out, Notice{noticeKey(ref, injected.Version, th.name), ref, Text(ref, injected, th.name, now)})
+			out = append(out, Notice{noticeKey(ref, injected.Version, th.name), ref, th.name, injected.ExpiresAt, Text(ref, injected, th.name, now)})
 		}
 		break
 	}
 	if !stored.Pending && stored.Version > injected.Version {
 		if key := noticeKey(ref, stored.Version, Rotated); !delivered(key) {
 			text := fmt.Sprintf("%s was replaced (version %d); this session holds version %d until it restarts", ref, stored.Version, injected.Version)
-			out = append(out, Notice{key, ref, text})
+			out = append(out, Notice{Key: key, Reference: ref, Label: Rotated, Text: text})
 		}
 	}
 	return out

@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"ensemble/broker/internal/audit"
 )
 
 var staticNow = time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
@@ -241,5 +243,21 @@ func TestStaticExpired(t *testing.T) {
 		if got := c.s.Expired(staticNow); got != c.want {
 			t.Errorf("%+v: %v", c.s, got)
 		}
+	}
+}
+
+func TestNoticeAudit(t *testing.T) {
+	s := expiring(2, "2026-11-01T00:00:00Z")
+	expiry := Due("ensemble-claude/default", s, s, none, staticNow)[0].Audit()
+	if expiry.Kind != audit.ClaudeSetupToken || expiry.Item != "ensemble-claude/default" || expiry.Result != audit.Notified ||
+		expiry.Notice != "7d" || expiry.ExpiresAt == nil || *expiry.ExpiresAt != "2026-11-01T00:00:00Z" {
+		t.Fatalf("%+v", expiry)
+	}
+	rotated := Due("ensemble-opencode/strata", Static{Version: 1, Provenance: Unknown}, Static{Version: 2, Provenance: Unknown}, none, staticNow)[0].Audit()
+	if rotated.Kind != audit.OpencodeAPIKey || rotated.Notice != "rotated" || rotated.ExpiresAt != nil {
+		t.Fatalf("%+v", rotated)
+	}
+	if env := (Notice{Reference: "ensemble-env/db", Label: "1d"}).Audit(); env.Kind != audit.EnvSecret {
+		t.Fatalf("%+v", env)
 	}
 }
