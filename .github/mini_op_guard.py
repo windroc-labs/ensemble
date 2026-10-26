@@ -35,15 +35,15 @@ ITEM_ARGS = {
     "lq": (0, 1),
     "importkey": (1, 2),
 }
-# A command name counts only where a shell would run it: at a line start, after a path, a
-# separator, a quote or backtick, or a keyword; in prose its next words are not item names.
+# A command name anywhere, then its words; an item name holds a digit or one of -._@:+, so prose
+# after a command name (plain words) passes. A name of letters only is left to FR-212's search.
 COMMANDS = re.compile(
-    r"(?:^[ \t]*|[/;|&(`'\"][ \t]*|\b(?:if|then|else|elif|do|while|until|exec|time|!)[ \t]+)("
+    r"(?<![\w-])("
     + "|".join(re.escape(c) for c in sorted(ITEM_ARGS, key=len, reverse=True))
-    + r")(?![\w-])((?:[ \t]+[^\s|;&)`]+)*)"
+    + r")(?![\w-])((?:[ \t]+[^\s|;&)`<>]+)*)"
 )
 SECURITY = re.compile(WORD.format("security") + r"|\w-(?:generic|internet)-password\b")
-OPTION = re.compile(r"(?<=\s)-[sal][ \t]+([^\s|;&)`]+)")
+OPTION = re.compile(r"(?<=\s)-[sal][ \t]+([^\s|;&)`<>]+)")
 SHA = re.compile(r"[0-9a-f]{40}")
 
 
@@ -56,11 +56,16 @@ def _literal(value):
     return NAME.fullmatch(value.strip("'\"`")) is not None
 
 
+def _named(value):
+    """A literal that cannot be a plain prose word."""
+    return _literal(value) and re.search(r"[\d._@:+-]", value.strip("'\"`")) is not None
+
+
 def _items(line):
     """Whether the line passes a literal item name to a keychain reader or writer."""
     for match in COMMANDS.finditer(line):
         args = match[2].split()
-        if any(i < len(args) and _literal(args[i]) for i in ITEM_ARGS[match[1]]):
+        if any(i < len(args) and _named(args[i]) for i in ITEM_ARGS[match[1]]):
             return True
     return bool(SECURITY.search(line)) and any(_literal(v) for v in OPTION.findall(line))
 
@@ -88,11 +93,23 @@ def classes(line):
     return found
 
 
+def _logical(text):
+    """Each line with its number, a backslash-continued line joined to the next."""
+    pending, start = "", 0
+    for number, line in enumerate(text.splitlines(), 1):
+        start = start or number
+        if line.endswith("\\"):
+            pending += line[:-1] + " "
+            continue
+        yield start, pending + line
+        pending, start = "", 0
+    if pending:
+        yield start, pending
+
+
 def scan(label, text):
     return [
-        f"{label}:{number}: {kind}"
-        for number, line in enumerate(text.splitlines(), 1)
-        for kind in classes(line)
+        f"{label}:{number}: {kind}" for number, line in _logical(text) for kind in classes(line)
     ]
 
 

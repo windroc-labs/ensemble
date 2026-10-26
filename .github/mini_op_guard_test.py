@@ -47,6 +47,16 @@ SAMPLES = {
         "ssh mini 'source ~/apm/lib/keychain.zsh; keychain_has made-up-item'",
         "if keychain_has made-up-item; then",
         "  lq made-up-item acct body.json",
+        "if ! keychain_has made-up-item; then",
+        "while ! keychain_has made-up-item; do",
+        "{ keychain_read made-up-item; }",
+        "ssh mini keychain_has made-up-item",
+        "sudo keychain_read made-up-item acct",
+        "REF=x lq made-up-item acct b.json",
+        "- keychain_read made-up-item acct",
+        "1. keychain_read made-up-item acct",
+        "keychain_read made-up-item>out",
+        "keychain_read item2 acct",
     ],
 }
 CLEAN = [
@@ -67,6 +77,10 @@ CLEAN = [
     "per-runbook dirs: install-test, clean-test, importkey, lq and storekey,",
     "plus storekey-stdin for the Strata key and the templates",
     "Board extras, with the same `lq` call (manager key)",
+    "lq reads the body",
+    "and then storekey asks for the key",
+    'the "lq and storekey" scripts',
+    "keychain_read <service> <account> > /tmp/x",
 ]
 
 
@@ -114,6 +128,12 @@ class GuardTest(Tree):
         code, out = self.run_guard()
         self.assertEqual(code, 0, out)
         self.assertIn("mini-op guard: 1 files clean", out)
+
+    def test_continued_line_is_joined(self):
+        self.write(".mini-op/runbooks/x.md", "ok\nkeychain_read \\\n  made-up-item acct\n")
+        code, out = self.run_guard()
+        self.assertEqual(code, 1)
+        self.assertIn(".mini-op/runbooks/x.md:2: keychain item literal\n", out)
 
     def test_flagged_name_redacted(self):
         self.write(".mini-op/runbooks/a.md", "fine\n")

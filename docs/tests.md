@@ -28,6 +28,9 @@ host names and literal keychain item names in every file under `.mini-op/` (mini
 on a pull request that changes `.mini-op/` it also scans the PR's title, body and commit messages. CI's
 `mini-op guard` job runs it on every event, whatever the test scope, and the `edited` trigger reruns it
 when a title or body changes. Its findings name the place and the pattern, never the matched text.
+An item name counts only when it holds a digit or one of `-._@:+`, so prose after a command name passes;
+names of letters only, and names that look like no pattern (a team key, a workspace slug), need a
+search by value before a PR.
 
 Pre-commit hook, enabled once per clone with `git config core.hooksPath .githooks`: `.githooks/pre-commit`
 runs `ruff check --fix`, then `ruff format`, on the staged version of each staged `.py` file, re-stages
