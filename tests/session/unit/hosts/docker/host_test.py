@@ -2115,6 +2115,26 @@ class TerminalTest(Base):
         self.docker.order.clear()
         self.assertEqual((process.returncode(), process.state()), (3, Liveness.LIVE))
         self.assertEqual(tmux(), [])
+        now[0] += docker_host.PROBE_MIN - 0.01
+        process.state()
+        self.assertEqual(tmux(), [])
+        now[0] += 0.01
+        process.state()
+        self.assertEqual(tmux(), ["display-message"])
+
+    def test_an_unchanged_alive_keeps_the_interval(self):
+        process, now, tmux = self.probing()
+        for _ in range(20):
+            self.tick(process)
+            now[0] += 0.5
+        self.assertTrue(process.alive())
+        self.docker.order.clear()
+        now[0] += docker_host.PROBE_MAX - 0.01
+        process.state()
+        self.assertEqual(tmux(), [])
+        now[0] += 0.01
+        process.state()
+        self.assertEqual(tmux(), ["display-message"])
 
     def test_alive_renews_the_snapshot_so_the_next_screen_is_fresh(self):
         process, now, tmux = self.probing()
