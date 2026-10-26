@@ -87,6 +87,9 @@ func (w *world) docker() *fakeDocker {
 			if w.noNetwork {
 				return nil, &docker.CommandError{Exit: 1, Stderr: "Error: No such network: " + args[2]}
 			}
+			if args[2] == miniOpNetwork {
+				return inspectObject(map[string]any{"Name": miniOpNetwork, "Id": miniOpID, "Internal": true}, w.network), nil
+			}
 			return inspectObject(networkObject(), w.network), nil
 		case "image inspect":
 			if w.imageMissing {
@@ -167,6 +170,9 @@ const (
 	workersID      = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 	workersNetwork = "egress-workers"
 	workersProxy   = "http://egress-proxy-workers:4750"
+	miniOpID       = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	miniOpNetwork  = "egress-mini-op"
+	miniOpProxy    = "http://egress-proxy-mini-op:4750"
 )
 
 // proxyObject is a healthy contract-v1 proxy's docker inspect object, attached to egress-workers.
@@ -179,14 +185,14 @@ func proxyObject() map[string]any {
 			"windroc.egress.networks":              "mini-op,workers",
 			"windroc.egress.network.workers.name":  workersNetwork,
 			"windroc.egress.network.workers.proxy": workersProxy,
-			"windroc.egress.network.mini-op.name":  "egress-mini-op",
-			"windroc.egress.network.mini-op.proxy": "http://egress-proxy-mini-op:4750",
+			"windroc.egress.network.mini-op.name":  miniOpNetwork,
+			"windroc.egress.network.mini-op.proxy": miniOpProxy,
 			"com.docker.compose.service":           "proxy",
 		}},
 		"State": map[string]any{"Running": true, "Health": map[string]any{"Status": "healthy"}},
 		"NetworkSettings": map[string]any{"Networks": map[string]any{
-			workersNetwork:   map[string]any{"NetworkID": workersID},
-			"egress-mini-op": map[string]any{"NetworkID": strings.Repeat("d", 64)},
+			workersNetwork: map[string]any{"NetworkID": workersID},
+			miniOpNetwork:  map[string]any{"NetworkID": miniOpID},
 		}},
 	}
 }

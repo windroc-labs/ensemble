@@ -285,3 +285,66 @@ func TestEgressListingIgnoresBlankLines(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A manifest's gateway picks the caller network: the container joins it alone, with its proxy.
+func TestStartOnCallerNetwork(t *testing.T) {
+	h, d, _, _, _, _ := credentialHost(&world{labels: goodLabels()})
+	path := editedFixture(t, "manifest-valid.json", func(f map[string]any) { f["gateway"] = "mini-op" })
+	if _, err := h.Start(context.Background(), path); err != nil {
+		t.Fatal(err)
+	}
+	run := detached(d)
+	if got := networkArgs(run); !slices.Equal(got, []string{miniOpNetwork}) {
+		t.Fatalf("--network values %q in %q", got, run)
+	}
+	env := envArgs(run)
+	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
+		if env[key] != miniOpProxy {
+			t.Fatalf("%s=%q", key, env[key])
+		}
+	}
+	if !slices.Equal(d.verbs()[:3], proxyCalls) || !slices.Equal(d.calls[2], []string{"network", "inspect", miniOpNetwork}) {
+		t.Fatalf("proxy check first: %q", d.calls[:3])
+	}
+}
+
+// A gateway key the egress proxy does not serve validly is egress_unavailable naming the key, never busy.
+func TestEgressRefusalsByKey(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		gateway string
+		world   world
+		calls   int
+		want    string
+	}{
+		{"unlisted", "nope", world{}, 2, "has no valid nope network labels"},
+		{"listed without labels", "nope", world{proxy: labelsEdit(func(l map[string]any) { l["windroc.egress.networks"] = "mini-op,workers,nope" })}, 2,
+			"has no valid nope network labels"},
+		{"bad proxy", "mini-op", world{proxy: labelsEdit(func(l map[string]any) { l["windroc.egress.network.mini-op.proxy"] = "https://x:1" })}, 2,
+			"has no valid mini-op network labels"},
+		{"not attached", "mini-op", world{proxy: func(g map[string]any) {
+			delete(g["NetworkSettings"].(map[string]any)["Networks"].(map[string]any), miniOpNetwork)
+		}}, 2, "is not attached to network egress-mini-op"},
+		{"not internal", "mini-op", world{network: func(n map[string]any) { n["Internal"] = false }}, 3, "Egress network egress-mini-op of proxy egress-proxy is not internal"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := tc.world
+			w.labels = goodLabels()
+			h, d, creds, _, _, _ := credentialHost(&w)
+			path := editedFixture(t, "manifest-valid.json", func(f map[string]any) { f["gateway"] = tc.gateway })
+			_, err := h.Start(context.Background(), path)
+			e := protoErr(t, err)
+			if e.Code != protocol.EgressUnavailable || e.Code == protocol.Busy || e.Holder != nil {
+				t.Fatalf("%+v", e)
+			}
+			for _, want := range []string{tc.want, "egress-proxy", "~/.egress/current/start.sh"} {
+				if !strings.Contains(e.Message, want) {
+					t.Fatalf("message %q lacks %q", e.Message, want)
+				}
+			}
+			if got := d.verbs(); !slices.Equal(got, proxyCalls[:tc.calls]) || len(creds.calls) != 0 {
+				t.Fatalf("docker calls %q, credential calls %q", got, creds.calls)
+			}
+		})
+	}
+}

@@ -86,7 +86,11 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	if err := h.checkMounts(m); err != nil {
 		return StartResult{}, err
 	}
-	route, err := h.checkEgress(ctx)
+	px, err := h.checkProxy(ctx)
+	if err != nil {
+		return StartResult{}, err
+	}
+	route, err := h.caller(ctx, px, m.Gateway)
 	if err != nil {
 		return StartResult{}, err
 	}
