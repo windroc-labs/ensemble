@@ -13,6 +13,7 @@ from ensemble.session.engine.types import (
     ClientBound,
     LimitHit,
     Reply,
+    Stderr,
     TurnEnd,
     TurnFailed,
     TurnStarted,
@@ -235,6 +236,30 @@ class ArgvTest(Base):
 
 
 class ParseTest(Base):
+    def test_foreign_result_cannot_complete_the_bound_session(self):
+        self.parse(INIT)
+        self.assertEqual(
+            self.parse(
+                {"type": "result", "session_id": "other", "subtype": "success", "result": "foreign"}
+            ),
+            [],
+        )
+
+    def test_truncated_record_invalidates_prior_success(self):
+        found = list(
+            self.run.events(
+                [
+                    stream_line({"type": "result", "subtype": "success", "result": "done"}),
+                    '{"type":"result"',
+                ]
+            )
+        )
+        self.assertTrue(
+            any(
+                isinstance(event, TurnFailed) and event.error == "invalid_output" for event in found
+            )
+        )
+
     def test_error_result_and_permission_denial_cannot_be_success(self):
         for fields, kind in (
             (
@@ -284,8 +309,12 @@ class ParseTest(Base):
             [
                 ClientBound(SID),
                 TurnStarted(),
+                Stderr("invalid JSON event"),
+                TurnFailed("invalid_output", "invalid JSON event"),
                 Reply("one"),
                 Reply("two"),
+                Stderr("invalid JSON event"),
+                TurnFailed("invalid_output", "invalid JSON event"),
                 Reply("three"),
                 TurnEnd("three", 0),
             ],
@@ -293,7 +322,7 @@ class ParseTest(Base):
 
     def test_init_binds_the_sid_it_launched(self):
         self.assertEqual(self.parse(INIT), [ClientBound(SID), TurnStarted()])
-        self.assertEqual(self.parse({**INIT, "session_id": "other"}), [ClientBound(SID)])
+        self.assertEqual(self.parse({**INIT, "session_id": "other"}), [])
         self.assertEqual(list(ClaudeClient({}).headless().parse(INIT)), [])
         for record in (
             {**INIT, "subtype": "other"},

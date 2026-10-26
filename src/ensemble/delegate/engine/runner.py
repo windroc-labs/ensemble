@@ -325,6 +325,8 @@ class _Attempts:
             if failed:
                 if self.policy.stops_failed:
                     self.stop(handle)
+                if rc and failed.error == "process_exit":
+                    return Result(rc, None, diagnostic)
                 detail = f" ({failed.detail})" if failed.detail else ""
                 return Result(rc, None, f"the client's turn failed: {failed.error}{detail}")
             if (block := outcome_block(last or "")) is None:
@@ -394,6 +396,8 @@ class _Attempts:
         failed: TurnFailed | None = None
         replied: str | None = None
         for event in handle.events():
+            if failed is not None and not isinstance(event, Exited | Stderr):
+                continue
             answer = None
             if isinstance(event, Reply):
                 last = replied = self.reply(event.text)
@@ -411,9 +415,11 @@ class _Attempts:
                 if not limit:
                     answer = self.policy.idle(event.seconds)
             elif isinstance(event, TurnFailed):
-                self.note("turn_failed", error=event.error, detail=event.detail)
+                if not limit:
+                    self.note("turn_failed", error=event.error, detail=event.detail)
                 failed = event
-                break
+                if self.plan.spec.mode != Mode.HEADLESS:
+                    break
             elif isinstance(event, LimitHit):
                 self.note("limit", resets_at=event.resets_at)
                 limit = Limit(event.resets_at)

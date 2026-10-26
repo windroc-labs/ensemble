@@ -681,6 +681,7 @@ class EventsTest(Base):
             found,
             [
                 Stderr("opencode: invalid JSON event"),
+                TurnFailed("invalid_output", "opencode: invalid JSON event"),
                 Activity("text"),
                 TurnFailed("no_session", "opencode ended before it started a session"),
             ],

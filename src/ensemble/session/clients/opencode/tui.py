@@ -143,6 +143,12 @@ class OpenCodeTui(Homed, Tui):
         native = self.session_id(payload)
         if not native or self.client and native != self.client:
             return []
+        if (
+            label == "message.completed"
+            and self._turn_id
+            and payload.get("turn_id") != self._turn_id
+        ):
+            return []
         found = super().hook_events(label, payload)
         if label == "message.completed" and (text := _text(payload, "text")).strip():
             found.append(Reply(text))

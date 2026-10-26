@@ -17,7 +17,7 @@ from ensemble.session import SessionError
 from ensemble.utils import Record
 from tests.delegate.case import PY, PYTHONPATH, REPO, Case
 from tests.delegate.integration.cli import DONE, RUN, SID
-from tests.delegate.replies import block, mark
+from tests.delegate.replies import block, completed_steps, mark
 from tests.delegate.unit.runs import said
 from tests.session import fake_client, live_tmux
 from tests.session.fakes.host import FakeHost
@@ -170,7 +170,7 @@ class HarnessHosts(Case):
             ignore=shutil.ignore_patterns("__pycache__"),
         )
         with open(self.scenario, "w", encoding="utf-8") as file:
-            json.dump([said(START, block(DONE))], file)
+            json.dump(completed_steps([said(START, block(DONE))]), file)
         self.configure(
             "[session.clients.extension]\n"
             'implementation = "extension_client:FakeClient"\n'

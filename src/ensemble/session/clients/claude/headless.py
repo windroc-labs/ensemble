@@ -3,6 +3,8 @@ the prompt last after "--" so a leading "-" stays the prompt. parse turns init, 
 and rate-limit records into events, one LimitHit per run.
 """
 
+import os
+
 from ensemble.session.clients.claude.common import ClaudeCommon
 from ensemble.session.engine.types import (
     Activity,
@@ -27,12 +29,13 @@ class ClaudeHeadless(JsonHeadless):
         self.sid = ""
         self.spec: Spec | None = None
         self.started = False
+        self._native = ""
 
     def launch(self, spec: Spec):
         common = self.common
         self.sid, self.spec = spec.sid or "", spec
         self.started, self.limit_sent, self.resets_at = False, False, None
-        return common.launch(
+        launched = common.launch(
             spec,
             head=("-p",),
             output=("--output-format", "stream-json", "--verbose"),
@@ -40,6 +43,8 @@ class ClaudeHeadless(JsonHeadless):
             env=common.ENV,
             permission=self._context.permission,
         )
+        self._native = os.path.basename(launched.transcript).removesuffix(".jsonl") or self.sid
+        return launched
 
     def _home(self):
         return self.common.home()
@@ -49,6 +54,9 @@ class ClaudeHeadless(JsonHeadless):
             self.common.save(self.spec)
 
     def parse(self, record):
+        native = record.get("session_id")
+        if native is not None and native != self._native:
+            return
         kind = record.get("type")
         if kind == "system":
             native = record.get("session_id")

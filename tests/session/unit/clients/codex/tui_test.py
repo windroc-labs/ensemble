@@ -663,6 +663,17 @@ class TuiTest(Base):
             )
             self.assertEqual(run.hook_events("UserPromptSubmit", self.payload(turn_id=turn)), [])
 
+    def test_idless_hook_cannot_overwrite_an_identified_native_turn(self):
+        run, path = self.bound()
+        _append(path, {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "one"}})
+        self.assertEqual(run.observe(), [TurnStarted()])
+        self.assertEqual(run.hook_events("UserPromptSubmit", self.payload()), [])
+        failed = _failed("retry", "server_overloaded")
+        failed["payload"]["turn_id"] = "one"
+        _append(path, failed)
+        self.assertEqual(run.observe(), [TurnFailed("server_overloaded", "retry")])
+        self.assertEqual(run.hook_events("Stop", self.payload()), [])
+
     def test_native_and_hook_acceptance_share_identity_and_old_stop_cannot_end_next_turn(self):
         run, path = self.bound()
         self.assertEqual(

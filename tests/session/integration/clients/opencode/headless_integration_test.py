@@ -99,11 +99,12 @@ class HeadlessSessions(Case):
         self.assertEqual(call["config"]["permission"]["bash"], "ask")
         self.assertEqual(call["env"]["OPENCODE_DISABLE_AUTOUPDATE"], "1")
 
-    def test_rejected_bash_ends_the_turn(self):
+    def test_rejected_headless_permission_fails_the_turn(self):
         self.scene([{"bash": "rm -rf build"}, {"text": "I could not run it."}])
         events = self.run_session("Clean up.")
         self.assertIn(Activity("bash"), events)
-        self.assertIn(TurnEnd("I could not run it."), events)
+        self.assertIn(TurnFailed("permission_required", fake_opencode.REJECTED), events)
+        self.assertFalse(any(isinstance(event, TurnEnd) for event in events))
         self.assertEqual(self.calls()[0]["refused"], ["rm -rf build"])
 
     def test_a_resume_continues_the_same_session(self):

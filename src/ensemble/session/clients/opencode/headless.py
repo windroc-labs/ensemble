@@ -3,7 +3,6 @@ prompt on stdin (`run` quotes an argument holding a space). The first sessionID 
 parts are Replies, tools Activity, an error the failed turn; the end is the turn's, its last text.
 """
 
-import json
 import os
 import sys
 
@@ -27,12 +26,14 @@ from ensemble.session.engine.types import (
     TurnFailed,
     TurnStarted,
 )
-from ensemble.session.modes.client_adapters.headless import Headless
+from ensemble.session.modes.client_adapters.headless import JsonHeadless
 
 SESSION_TIMEOUT = 120  # seconds a run may take to print its first sessionID
 
 
-class OpenCodeHeadless(Homed, Headless):
+class OpenCodeHeadless(Homed, JsonHeadless):
+    _invalid_output = "opencode: invalid JSON event"
+
     def __init__(self, common: OpenCodeCommon):
         self.common = common
         self.cwd, self.sid = "", ""
@@ -82,14 +83,7 @@ class OpenCodeHeadless(Homed, Headless):
         )
 
     def events(self, lines):
-        for line in lines:
-            try:
-                record = json.loads(line)
-            except (ValueError, RecursionError):
-                yield Stderr("opencode: invalid JSON event")
-                continue
-            if isinstance(record, dict):
-                yield from self.parse(record)
+        yield from super().events(lines)
         if not self.bound:
             yield TurnFailed("no_session", "opencode ended before it started a session")
         elif not self.failed and not self.finished:

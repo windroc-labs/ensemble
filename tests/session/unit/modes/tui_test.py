@@ -45,6 +45,8 @@ from ensemble.session.engine.types import (
     SessionInfo,
     Spec,
     TurnEnd,
+    TurnFailed,
+    TurnStarted,
 )
 from ensemble.session.engine.worker import WorkerState
 from ensemble.session.hosts.base import InteractiveProcess, Process
@@ -1666,6 +1668,15 @@ class CloseStopTest(Base):
 
 
 class PollTest(Base):
+    def test_accepted_turn_without_terminal_fails_before_exit(self):
+        mode = self.started()
+        self.run.hooks = {**self.run.hooks, "start": HookKind.TURN_STARTED}
+        self.append(record("start"))
+        self.assertEqual(mode.poll(0), ([TurnStarted()], False))
+        mode._terminal.calls.returncode.return_value = -9
+        self.assertEqual(mode.poll(0), ([TurnFailed("process_exit", "worker exited -9")], True))
+        self.assertEqual(mode.poll(0), ([], True))
+
     def test_records_become_the_runs_events_in_order_bound_once(self):
         mode = self.started()
         self.append(

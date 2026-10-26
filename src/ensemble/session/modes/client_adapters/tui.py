@@ -80,6 +80,8 @@ class Tui(ABC):
 
     def _accept_turn(self, identifier: object) -> bool:
         identifier = identifier if isinstance(identifier, str) else ""
+        if not identifier and self._turn_id:
+            return False
         seen = getattr(self, "_turn_ids", frozenset())
         if identifier and identifier in seen:
             return False

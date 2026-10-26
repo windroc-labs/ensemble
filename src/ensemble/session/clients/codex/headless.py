@@ -2,7 +2,6 @@
 turns.
 """
 
-import json
 import os
 
 from ensemble.session.clients.codex.common import (
@@ -27,10 +26,12 @@ from ensemble.session.engine.types import (
     TurnFailed,
     TurnStarted,
 )
-from ensemble.session.modes.client_adapters.headless import Headless
+from ensemble.session.modes.client_adapters.headless import JsonHeadless
 
 
-class CodexHeadless(Headless):
+class CodexHeadless(JsonHeadless):
+    _invalid_output = "codex: invalid JSON event"
+
     def _home(self):
         return self.common.home()
 
@@ -70,16 +71,6 @@ class CodexHeadless(Headless):
 
     def commit(self) -> None:
         self.state = self.common.commit(self.state)
-
-    def events(self, lines):
-        for line in lines:
-            try:
-                record = json.loads(line)
-            except (ValueError, RecursionError):
-                yield Stderr("codex: invalid JSON event")
-                continue
-            if isinstance(record, dict):
-                yield from self.parse(record)
 
     def parse(self, record):
         kind = record.get("type")

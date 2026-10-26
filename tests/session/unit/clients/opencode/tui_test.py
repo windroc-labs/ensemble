@@ -326,6 +326,13 @@ class EventsTest(Base):
             run.hook_events("session.idle", {"session_id": SES, "turn_id": "msg-first"}), []
         )
         self.assertEqual(
+            run.hook_events(
+                "message.completed",
+                {"session_id": SES, "turn_id": "msg-first", "text": "late old reply"},
+            ),
+            [],
+        )
+        self.assertEqual(
             run.hook_events("turn.started", {"session_id": "ses_foreign", "turn_id": "other"}), []
         )
 

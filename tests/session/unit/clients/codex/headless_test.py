@@ -102,7 +102,12 @@ class HeadlessTest(Base):
     def test_activity_and_invalid_record_diagnostics(self):
         run = self.client.headless()
         self.assertEqual(
-            list(run.events(["not json", "[]"])), [Stderr("codex: invalid JSON event")]
+            list(run.events(["not json", "[]"])),
+            [
+                Stderr("codex: invalid JSON event"),
+                TurnFailed("invalid_output", "codex: invalid JSON event"),
+            ]
+            * 2,
         )
         self.assertEqual(
             list(run.parse({"type": "thread.started", "thread_id": "not-a-uuid"})),
