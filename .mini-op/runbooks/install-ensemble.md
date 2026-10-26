@@ -4,7 +4,7 @@ when: installing, rerunning, upgrading or testing ensemble's install.sh on the m
 
 # Install ensemble on the mini
 
-Rules, waiting and answering: mini-op's rules (`/mini-op:run` loads them). Accounts, keys and the GitHub App: `test-accounts.md`. Gotchas for this environment: `gotchas.md` beside this runbook.
+Rules, waiting and answering: mini-op's rules (the `mini-op` skill loads them). Accounts, keys and the GitHub App: `test-accounts.md`. Gotchas for this environment: `gotchas.md` beside this runbook.
 
 Names and addresses (accounts, keychain items, the GitHub user, the Strata settings) come from the request or the mini's `~/.ensemble/config.local.toml`; never write them into this repo. Before putting one into an ssh command line, check it matches `^[A-Za-z0-9][A-Za-z0-9._@+:-]*$`; if not, stop and ask the user.
 
