@@ -18,5 +18,4 @@ RUN apt-get update && apt-get install -y --no-install-recommends tmux git gh pyt
 USER agent
 ENV NPM_CONFIG_PREFIX=/home/agent/.npm-global
 ENV PATH=/home/agent/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
-RUN npm install -g @anthropic-ai/claude-code
 WORKDIR /home/agent

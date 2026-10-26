@@ -1,5 +1,5 @@
 {
-  "protocol_version": "25",
+  "protocol_version": "26",
   "cases": [
     {
       "file": "manifest-valid.json",
@@ -1731,46 +1731,6 @@
       }
     },
     {
-      "file": "start-output-missing-update.json",
-      "definition": "start_output",
-      "valid": false,
-      "expected": {
-        "stage": "response",
-        "exit_code": null,
-        "error_code": null
-      }
-    },
-    {
-      "file": "start-output-invalid-update.json",
-      "definition": "start_output",
-      "valid": false,
-      "expected": {
-        "stage": "response",
-        "exit_code": null,
-        "error_code": null
-      }
-    },
-    {
-      "file": "start-output-claude-update.json",
-      "definition": "start_output",
-      "valid": false,
-      "expected": {
-        "stage": "response",
-        "exit_code": null,
-        "error_code": null
-      }
-    },
-    {
-      "file": "start-output-update-client-claude.json",
-      "definition": "start_output",
-      "valid": false,
-      "expected": {
-        "stage": "response",
-        "exit_code": null,
-        "error_code": null
-      }
-    },
-    {
       "file": "start-output-missing-github-user-id.json",
       "definition": "start_output",
       "valid": false,
@@ -2333,6 +2293,67 @@
     {
       "file": "lock-query-output-invalid-holder.json",
       "definition": "lock_query_output",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "check-clients-input.json",
+      "definition": "check_clients_input",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "check-clients-input-extra.json",
+      "definition": "check_clients_input",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 2,
+        "error_code": "usage"
+      }
+    },
+    {
+      "file": "check-clients-output.json",
+      "definition": "check_clients_output",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "check-clients-output-skipped.json",
+      "definition": "check_clients_output",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      },
+      "note": "Another check held the lock: nothing checked."
+    },
+    {
+      "file": "check-clients-output-bad-version.json",
+      "definition": "check_clients_output",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "check-clients-output-missing-client.json",
+      "definition": "check_clients_output",
       "valid": false,
       "expected": {
         "stage": "schema",

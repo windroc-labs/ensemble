@@ -1,14 +1,18 @@
+import base64
 import errno
 import hashlib
 import http.client
 import io
 import json
 import os
+import re
 import runpy
 import shutil
 import stat
 import tarfile
 import tempfile
+import urllib.request
+import urllib.response
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -663,7 +667,6 @@ class CodexCIReload(Case):
             documents[0]["tokens"]["access_token"], documents[1]["tokens"]["access_token"]
         )
         self.assertEqual(documents[0]["last_refresh"], documents[1]["last_refresh"])
-        self.assertIn("0.163.0", (ASSETS / "Dockerfile").read_text())
 
     def test_reload_natural_auth_adopts_replacement_after_cached_near_expiry_value(self):
         code = self.reload_code()
@@ -699,8 +702,8 @@ class CodexCIReload(Case):
         self.assertTrue(exchange.summary()["natural_auth_reload_completed"])
 
     def test_ci_entrypoint_injects_managed_values_and_runs_reload_with_network_disabled(self):
-        calls, active, copied = [], {}, []
-        version = b"codex-cli 0.163.0"
+        calls, active = [], {}
+        version = b"codex-cli 0.170.0"
 
         def docker(*args, data=None):
             calls.append((args, data))
@@ -714,6 +717,7 @@ class CodexCIReload(Case):
                                 "Labels": {
                                     "ensemble.agent-uid": "1000",
                                     "ensemble.agent-gid": "1000",
+                                    "ensemble.codex-version": "0.170.0",
                                 }
                             },
                         }
@@ -749,8 +753,6 @@ class CodexCIReload(Case):
                 ).encode()
             elif args[-1] == "--version":
                 return version
-            elif args[0] == "cp":
-                copied.append(Path(args[1]).read_bytes())
             elif data == (self.worker["PROBES"] / "reload.py").read_bytes():
                 payload = json.loads(args[-1])
                 self.assertEqual(set(payload), {"initial", "replacement", "near", "adopted"})
@@ -767,10 +769,7 @@ class CodexCIReload(Case):
             mock.patch.dict(
                 os.environ, {"CI": "true", "GITHUB_ACTIONS": "true", "RUNNER_TEMP": self.home}
             ),
-            mock.patch.dict(
-                main.__globals__,
-                {"docker": docker, "latest_runtime": lambda *_: ("0.163.0", b"verified-bundle")},
-            ),
+            mock.patch.dict(main.__globals__, {"docker": docker}),
             mock.patch("builtins.print"),
         ):
             main("ensemble-worker:" + "a" * 64)
@@ -783,16 +782,15 @@ class CodexCIReload(Case):
         self.assertTrue(all(args[-1].endswith("/codex") for args, _ in injected))
         for program, count in (
             ("reload.py", 2),
-            ("tools.py", 4),
+            ("tools.py", 2),
             ("skills.py", 2),
             ("state.py", 2),
-            ("stage.py", 2),
         ):
             source = (self.worker["PROBES"] / program).read_bytes()
             sent = [args for args, data in calls if data == source]
             self.assertEqual(len(sent), count, program)
             self.assertTrue(all("-i" in args and "-" in args and "-c" not in args for args in sent))
-        self.assertEqual(copied, [b"verified-bundle"] * 2)
+        self.assertFalse(any("/opt/ensemble/runtime" in " ".join(args) for args, _ in calls))
 
     def test_reload_cleanup_still_kills_group_after_broken_input(self):
         code = self.reload_code()
@@ -808,123 +806,14 @@ class CodexCIReload(Case):
         process.stderr.close.assert_called_once_with()
 
 
-class CodexUpdate(Case):
+class CodexProbe(Case):
     def setUp(self):
-        self.code = script("codex-update.py")
-        self.update = self.code["update"]
-        self.target = Path(self.home, "runtime")
-        self.target.mkdir()
-
-    def bundle(self, files=None):
-        if files is None:
-            files = {
-                "bin/codex": b"native",
-                "bin/codex-code-mode-host": b"host",
-                "lib/data": b"data",
-            }
-        stream = io.BytesIO()
-        with tarfile.open(fileobj=stream, mode="w:gz") as archive:
-            for name, data in files.items():
-                entry = tarfile.TarInfo("package/vendor/aarch64-unknown-linux-musl/" + name)
-                entry.size, entry.mode = len(data), 0o755
-                archive.addfile(entry, io.BytesIO(data))
-        return stream.getvalue()
-
-    def call(self, action, data=None):
-        real_lstat = Path.lstat
-
-        def root_owned(path):
-            info = real_lstat(path)
-            return SimpleNamespace(st_mode=info.st_mode, st_uid=0, st_size=info.st_size)
-
-        with mock.patch.object(Path, "lstat", root_owned):
-            self.update(action, io.BytesIO(self.bundle() if data is None else data), self.target)
-
-    def test_stage_publish_reset(self):
-        self.call("stage")
-        stage, active = self.target / "codex.next", self.target / "codex"
-        self.assertEqual((stage / "bin/codex").read_bytes(), b"native")
-        self.assertEqual(stat.S_IMODE((stage / "bin/codex").stat().st_mode), 0o755)
-        self.assertEqual((stage / "bin/codex-code-mode-host").read_bytes(), b"host")
-        self.assertEqual((stage / "lib/data").read_bytes(), b"data")
-        self.assertFalse(active.exists())
-        self.call("publish")
-        self.assertEqual((active / "bin/codex").read_bytes(), b"native")
-        self.assertFalse(stage.exists())
-        self.call("reset")
-        self.call("reset")
-        self.assertEqual(list(self.target.iterdir()), [])
-
-    def test_refuses_empty_unknown_and_unsafe_paths(self):
-        with self.assertRaises(SystemExit):
-            self.call("stage", b"")
-        self.call("reset")
-        with self.assertRaises(SystemExit):
-            self.call("unknown")
-        self.target.chmod(0o777)
-        with self.assertRaises(SystemExit):
-            self.call("stage")
-        self.target.chmod(0o755)
-        elsewhere = self.target / "elsewhere"
-        elsewhere.write_bytes(b"untouched")
-        (self.target / "codex.next").symlink_to(elsewhere)
-        with self.assertRaises(FileExistsError):
-            self.call("stage")
-        with self.assertRaises(SystemExit):
-            self.call("publish")
-        self.call("reset")
-        self.assertEqual(elsewhere.read_bytes(), b"untouched")
-
-    def test_incomplete_bundle_never_becomes_active(self):
-        for files in (
-            {"bin/codex": b"native"},
-            {"bin/codex-code-mode-host": b"host"},
-            {"bin/codex": b"", "bin/codex-code-mode-host": b"host"},
-        ):
-            with self.subTest(files=files), self.assertRaises(SystemExit):
-                self.call("stage", self.bundle(files))
-            self.assertFalse((self.target / "codex").exists())
-            self.call("reset")
-
-    def test_publish_rechecks_every_file_and_keeps_active_on_failure(self):
-        self.call("stage")
-        self.call("publish")
-        self.call("stage")
-        companion = self.target / "codex.next/bin/codex-code-mode-host"
-        companion.chmod(0o777)
-        with self.assertRaises(SystemExit):
-            self.call("publish")
-        self.assertEqual((self.target / "codex/bin/codex-code-mode-host").read_bytes(), b"host")
-        self.call("reset")
-        self.assertFalse((self.target / "codex").exists())
-
-    def test_rejects_traversal_links_duplicates_and_writable_archive_entries(self):
-        for kind in ("traversal", "link", "duplicate", "mode"):
-            stream = io.BytesIO()
-            with tarfile.open(fileobj=stream, mode="w:gz") as archive:
-                entry = tarfile.TarInfo("package/vendor/aarch64-unknown-linux-musl/bin/codex")
-                entry.mode = 0o777 if kind == "mode" else 0o755
-                if kind == "traversal":
-                    entry.name = "package/../../escaped"
-                if kind == "link":
-                    entry.type, entry.linkname = tarfile.SYMTYPE, "/elsewhere"
-                archive.addfile(entry)
-                if kind == "duplicate":
-                    archive.addfile(entry)
-            with self.subTest(kind=kind), self.assertRaises((SystemExit, ValueError)):
-                self.call("stage", stream.getvalue())
-            self.call("reset")
-
-    def test_expanded_archive_is_bounded(self):
-        with (
-            mock.patch.dict(self.update.__globals__, {"LIMIT": 100}),
-            self.assertRaises(SystemExit),
-        ):
-            self.call("stage")
+        self.probe = script("codex-probe.py")["probe"]
+        self.clients = Path(self.home, "clients")
 
     def test_probe_resolves_npm_companion_and_runs_it(self):
         native = (
-            self.target
+            self.clients
             / "lib/node_modules/@openai/codex-linux-arm64/vendor/aarch64-unknown-linux-musl/bin/codex"
         )
         native.parent.mkdir(parents=True)
@@ -935,14 +824,21 @@ class CodexUpdate(Case):
         companion.chmod(0o755)
         with mock.patch("subprocess.run") as run:
             run.return_value.stdout = b"codex-cli 0.163.0\n"
-            self.code["probe"](self.target / "bin/codex", "0.163.0")
-        self.assertEqual(run.call_args_list[-1].args[0], [str(companion), "--help"])
+            self.probe(self.clients / "bin/codex", "0.163.0")
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            [[str(self.clients / "bin/codex"), "--version"], [str(companion), "--help"]],
+        )
+        with mock.patch("subprocess.run") as run, self.assertRaises(SystemExit):
+            run.return_value.stdout = b"codex-cli 0.164.0\n"
+            self.probe(self.clients / "bin/codex", "0.163.0")
         companion.unlink()
         with mock.patch("subprocess.run") as run, self.assertRaises(SystemExit):
-            self.code["probe"](self.target / "bin/codex", "0.163.0")
+            self.probe(self.clients / "bin/codex", "0.163.0")
+        run.assert_not_called()
 
     def test_probe_propagates_companion_startup_failure(self):
-        native = self.target / "codex.next/bin/codex"
+        native = self.clients / "bin/codex"
         native.parent.mkdir(parents=True)
         for path in (native, native.with_name("codex-code-mode-host")):
             path.write_bytes(b"binary")
@@ -951,7 +847,7 @@ class CodexUpdate(Case):
             run.return_value.stdout = b"codex-cli 0.163.0\n"
             run.side_effect = [run.return_value, OSError("host cannot start")]
             with self.assertRaises(OSError):
-                self.code["probe"](native, "0.163.0")
+                self.probe(native, "0.163.0")
 
 
 class InstallHook(Case):
@@ -1238,10 +1134,10 @@ class DefaultDockerfile(Case):
             "rm -rf /etc/sudoers.d",
             "USER agent",
             "NPM_CONFIG_PREFIX=/home/agent/.npm-global",
-            "npm install -g @anthropic-ai/claude-code\n",
         ):
             self.assertIn(needle, text)
         self.assertNotIn("SHASUMS256", text)
+        self.assertNotIn("@anthropic-ai/claude-code", text)
         self.assertNotIn("@openai/codex", text)
 
 
@@ -1255,15 +1151,25 @@ def tarball(files):
     return buffer.getvalue()
 
 
+VERSION = "1.19.3"
+
+
+def metadata(package, data, **fields):
+    """package@VERSION's registry metadata, its integrity data's sha512; fields replace its keys."""
+    integrity = "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode()
+    return json.dumps(
+        {"name": package, "version": VERSION, "dist": {"integrity": integrity}, **fields}
+    ).encode()
+
+
 class OpencodeInstall(Case):
     def setUp(self):
         self.ns = script("opencode-install.py")
-        version = self.ns["VERSION"]
         self.tarballs = {
             "opencode-ai": tarball(
                 {
                     "package/package.json": json.dumps(
-                        {"name": "opencode-ai", "version": version}
+                        {"name": "opencode-ai", "version": VERSION}
                     ).encode(),
                     "package/LICENSE": b"MIT",
                     "package/bin/opencode.exe": b"stub",
@@ -1272,13 +1178,14 @@ class OpencodeInstall(Case):
         }
         self.native = {}
         for name in ("opencode-linux-arm64", "opencode-linux-x64"):
-            self.native[name] = self.binary(name, version)
+            self.native[name] = self.binary(name, VERSION)
             self.tarballs[name] = tarball(
                 {
-                    "package/package.json": json.dumps({"name": name, "version": version}).encode(),
+                    "package/package.json": json.dumps({"name": name, "version": VERSION}).encode(),
                     "package/bin/opencode": self.native[name],
                 }
             )
+        self.metadata = {}
         self.urls, self.runs = [], []
         self.prefix = Path(self.home, "clients")
         self.prefix.mkdir()
@@ -1295,24 +1202,27 @@ class OpencodeInstall(Case):
         return SimpleNamespace(returncode=0, stdout=f"{version}\n")
 
     def opener(self, url, timeout):
+        """The registry: a tarball, or a package version's metadata (self.metadata, else its hash)."""
         self.urls.append((url, timeout))
-        name = url.rsplit("/", 1)[1].removesuffix(f"-{self.ns['VERSION']}.tgz")
-        return io.BytesIO(self.tarballs[name])
+        path = url.removeprefix("https://registry.npmjs.org/")
+        if "/-/" in path:
+            return io.BytesIO(self.tarballs[path.split("/-/")[0]])
+        name = path.rsplit("/", 1)[0]
+        return io.BytesIO(self.metadata.get(name) or metadata(name, self.tarballs[name]))
 
-    def install(self, arch, opener=None):
-        sums = {n: hashlib.sha512(data).hexdigest() for n, data in self.tarballs.items()}
+    def install(self, arch, opener=None, version=VERSION):
         fetch = self.ns["fetch"]
-        with (
-            mock.patch.dict(self.ns["SHA512"], sums),
-            mock.patch("subprocess.run", self.version_run),
-        ):
+        with mock.patch("subprocess.run", self.version_run):
             self.ns["install"](
-                arch, self.prefix, fetch=lambda name: fetch(name, opener=opener or self.opener)
+                arch,
+                self.prefix,
+                version,
+                fetch=lambda name, version: fetch(name, version, opener=opener or self.opener),
             )
 
-    def assert_refused(self, arch="arm64", opener=None):
+    def assert_refused(self, arch="arm64", opener=None, version=VERSION):
         with self.assertRaises(SystemExit) as raised:
-            self.install(arch, opener)
+            self.install(arch, opener, version)
         self.assertTrue(str(raised.exception.code).startswith("opencode-install: "))
         self.assertEqual(list(self.prefix.iterdir()), [])
         return str(raised.exception.code)
@@ -1337,24 +1247,49 @@ class OpencodeInstall(Case):
                     os.readlink(link), "../lib/node_modules/opencode-ai/bin/opencode.exe"
                 )
                 self.assertEqual(link.resolve(), executable.resolve())
-                version = self.ns["VERSION"]
+                registry = "https://registry.npmjs.org"
                 self.assertEqual(
                     self.urls,
                     [
-                        (f"https://registry.npmjs.org/{n}/-/{n}-{version}.tgz", 300)
+                        (url, 300)
                         for n in ("opencode-ai", name)
+                        for url in (
+                            f"{registry}/{n}/{VERSION}",
+                            f"{registry}/{n}/-/{n}-{VERSION}.tgz",
+                        )
                     ],
                 )
 
-    def test_recorded_hashes_cover_both_platforms_and_the_package(self):
-        self.assertEqual(self.ns["VERSION"], "1.19.3")
-        self.assertEqual(set(self.ns["SHA512"]), {"opencode-ai", *self.ns["PLATFORMS"].values()})
+    def test_the_version_comes_from_the_command_line(self):
+        install = mock.Mock()
+        with mock.patch.dict(self.ns["main"].__globals__, {"install": install}):
+            self.ns["main"](["arm64", str(self.prefix), "1.20.4"])
+        install.assert_called_once_with("arm64", self.prefix, "1.20.4")
+        self.assertNotIn("VERSION", self.ns)
+        self.assertNotIn("SHA512", self.ns)
         self.assertEqual(
             self.ns["PLATFORMS"],
             {"arm64": "opencode-linux-arm64", "amd64": "opencode-linux-x64"},
         )
-        for value in self.ns["SHA512"].values():
-            self.assertRegex(value, "^[0-9a-f]{128}$")
+
+    def test_a_bad_version_fetches_nothing(self):
+        for version in ("1.19", "v1.19.3", "1.19.3-beta.1", "1.19.3\n", "../1.19.3", "١.١٩.٣", ""):
+            with self.subTest(version=version):
+                self.assertIn("invalid version", self.assert_refused(version=version))
+        self.assertEqual(self.urls, [])
+
+    def test_the_hash_comes_from_the_registry_metadata_before_the_tarball(self):
+        self.metadata["opencode-ai"] = metadata("opencode-ai", b"another tarball")
+        self.assertIn(
+            "opencode-ai@1.19.3 does not match its registry sha512", self.assert_refused()
+        )
+        self.assertEqual(
+            [url for url, _ in self.urls],
+            [
+                "https://registry.npmjs.org/opencode-ai/1.19.3",
+                "https://registry.npmjs.org/opencode-ai/-/opencode-ai-1.19.3.tgz",
+            ],
+        )
 
     def test_a_tarball_that_does_not_match_its_hash_installs_nothing(self):
         for name in ("opencode-ai", "opencode-linux-arm64"):
@@ -1366,7 +1301,62 @@ class OpencodeInstall(Case):
                     return io.BytesIO(data + b"x" if data == good else data)
 
                 message = self.assert_refused(opener=tampered)
-                self.assertIn(f"{name}@1.19.3 does not match its recorded sha512", message)
+                self.assertIn(f"{name}@1.19.3 does not match its registry sha512", message)
+
+    def test_oversize_or_unparsable_metadata_installs_nothing(self):
+        self.metadata["opencode-ai"] = b" " * (1 << 20) + b"{}"
+        self.assertIn("opencode-ai@1.19.3 metadata exceeds 1048576 bytes", self.assert_refused())
+        self.metadata["opencode-ai"] = b"{"
+        self.assertIn("opencode-ai@1.19.3: registry metadata", self.assert_refused())
+
+    def test_metadata_for_another_package_or_version_installs_nothing(self):
+        data = self.tarballs["opencode-ai"]
+        for fields in ({"name": "opencode"}, {"version": "1.19.4"}, {"name": None}):
+            with self.subTest(fields=fields):
+                self.metadata["opencode-ai"] = metadata("opencode-ai", data, **fields)
+                self.assertIn("opencode-ai@1.19.3: registry metadata", self.assert_refused())
+
+    def test_an_integrity_other_than_one_sha512_installs_nothing(self):
+        data = self.tarballs["opencode-ai"]
+        sha512 = base64.b64encode(hashlib.sha512(data).digest()).decode()
+        sha256 = base64.b64encode(hashlib.sha256(data).digest()).decode()
+        for integrity in (
+            f"sha256-{sha256}",
+            f"sha512-{sha512} sha512-{sha512}",
+            f"sha512-{sha512} sha256-{sha256}",
+            f"sha512-{sha256}",
+            "sha512-not*base64",
+            "",
+            None,
+        ):
+            with self.subTest(integrity=integrity):
+                self.metadata["opencode-ai"] = metadata(
+                    "opencode-ai", data, dist={"integrity": integrity}
+                )
+                self.assertIn("opencode-ai@1.19.3: registry integrity", self.assert_refused())
+        self.metadata["opencode-ai"] = metadata("opencode-ai", data, dist=[])
+        self.assertIn("opencode-ai@1.19.3: registry integrity", self.assert_refused())
+
+    def test_a_redirect_is_refused(self):
+        def redirect(_handler, request):
+            headers = http.client.HTTPMessage()
+            headers["Location"] = "https://elsewhere.invalid/opencode-ai"
+            response = urllib.response.addinfourl(io.BytesIO(b""), headers, request.full_url, 302)
+            response.msg = "Found"
+            return response
+
+        with (
+            mock.patch.object(
+                urllib.request.HTTPSHandler, "https_open", autospec=True, side_effect=redirect
+            ) as opened,
+            self.assertRaises(SystemExit) as raised,
+        ):
+            self.ns["fetch"]("opencode-ai", VERSION)
+        self.assertIn("redirect", str(raised.exception.code))
+        self.assertEqual(opened.call_count, 1)
+        self.assertEqual(
+            opened.call_args.args[1].full_url, "https://registry.npmjs.org/opencode-ai/1.19.3"
+        )
 
     def test_wrong_package_name_or_version_installs_nothing(self):
         for name, manifest in (
@@ -1391,9 +1381,13 @@ class OpencodeInstall(Case):
         def broken(*_, **__):
             raise OSError("no route")
 
-        self.assertIn("downloading opencode-ai@1.19.3 failed", self.assert_refused(opener=broken))
+        self.assertIn(
+            "downloading opencode-ai@1.19.3 metadata failed", self.assert_refused(opener=broken)
+        )
 
-        def truncated(*_, **__):
+        def truncated(url, timeout):
+            if "/-/" not in url:
+                return self.opener(url, timeout)
             response = mock.MagicMock()
             response.__enter__.return_value = response
             response.read.side_effect = http.client.IncompleteRead(b"partial")
@@ -1411,7 +1405,7 @@ class OpencodeInstall(Case):
         )
         self.assertIn("no package/bin/opencode", self.assert_refused())
 
-    def test_a_binary_that_does_not_report_the_pinned_version_installs_nothing(self):
+    def test_a_binary_that_does_not_report_the_requested_version_installs_nothing(self):
         name = "opencode-linux-arm64"
         self.tarballs[name] = tarball(
             {
@@ -1431,14 +1425,22 @@ class OpencodeInstall(Case):
         self.assertNotEqual(scratch, self.home)
         self.assertFalse(os.path.exists(scratch))
 
-    def test_main_requires_arch_and_absolute_prefix(self):
-        for argv in ([], ["arm64"], ["arm64", "relative"], ["arm64", "/p", "extra"]):
+    def test_main_requires_arch_absolute_prefix_and_version(self):
+        for argv in (
+            [],
+            ["arm64"],
+            ["arm64", "/p"],
+            ["arm64", "relative", VERSION],
+            ["arm64", "/p", VERSION, "extra"],
+        ):
             with self.subTest(argv=argv), self.assertRaises(SystemExit):
                 self.ns["main"](argv)
 
-    def test_the_pinned_opencode_still_needs_the_window_floor(self):
+    def test_the_minimum_opencode_still_needs_the_window_floor(self):
+        versions = Path(REPO, "src/broker/internal/launcher/versions.go").read_text()
+        [minimum] = re.findall(r'^const opencodeMinVersion = "([0-9.]+)"$', versions, re.M)
         self.assertEqual(
-            (self.ns["VERSION"], HOME.min_width),
+            (minimum, HOME.min_width),
             ("1.19.3", 40),
             "see HOME in clients/opencode/common.py: keep min_width while the broker's "
             "opencodeMinVersion (src/broker/internal/launcher/versions.go) bundles @opentui/core "

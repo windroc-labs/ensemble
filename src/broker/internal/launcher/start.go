@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"ensemble/broker/internal/audit"
-	"ensemble/broker/internal/codex"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/protocol"
 )
@@ -91,11 +90,9 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	if err != nil {
 		return StartResult{}, err
 	}
-	var policy codex.Installation
 	switch m.Client {
 	case "codex":
-		policy, err = h.versionPolicy(ctx)
-		if err != nil {
+		if err := h.versionPolicy(); err != nil {
 			return StartResult{}, err
 		}
 		if err := h.Codex.Ready(ctx); err != nil {
@@ -193,7 +190,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 			return StartResult{}, busy(holder)
 		}
 	}
-	result, held, err = h.create(ctx, c, m, info, route, policy, facts, lap)
+	result, held, err = h.create(ctx, c, m, info, route, facts, lap)
 	if errors.Is(err, errTaken) {
 		return StartResult{}, taken(c)
 	}
@@ -231,7 +228,6 @@ func mounts(m Manifest, labels map[string]string) ([]string, []audit.Mount) {
 	add("--mount", spec, mount)
 	owner := ",mode=0700,uid=" + labels["ensemble.agent-uid"] + ",gid=" + labels["ensemble.agent-gid"]
 	if m.Client == "codex" {
-		tmpfs(runtimeDir, "rw,exec,nosuid,nodev,size=536870912,mode=0755,uid=0,gid=0")
 		// 1 GiB: Codex's log DB alone outgrows its 64 MiB budget (counts live rows only, never WAL or free pages)
 		// and no setting disables or caps it.
 		tmpfs(m.CodexDir, "rw,noexec,nosuid,nodev,size=1073741824"+owner)
@@ -269,7 +265,7 @@ func (h Host) withdraw(c string, m Manifest, held holding, e *protocol.Error) {
 
 // create runs every step after the absence check; any error makes Start roll back. held: the credentials in the
 // container so far.
-func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, route egress, policy codex.Installation, facts *audit.StartFacts,
+func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, route egress, facts *audit.StartFacts,
 	lap func(phase string)) (_ StartResult, held holding, _ error) {
 	labels := info.Config.Labels
 	args := append([]string{"run", "--detach", "--name", c, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "agent"},
@@ -347,20 +343,14 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 		return StartResult{}, held, failure(err, protocol.StartFailed, "Cannot run the image's clients.")
 	}
 	lap("clients")
-	if m.Client == "opencode" {
-		if err := checkOpencode(clients.Opencode); err != nil {
-			return StartResult{}, held, err
-		}
+	switch m.Client {
+	case "codex":
+		err = checkCodex(clients.Codex)
+	case "opencode":
+		err = checkOpencode(clients.Opencode)
 	}
-	var update *ClientUpdate
-	if m.Client == "codex" {
-		var prepared ClientUpdate
-		clients, prepared, err = h.updateCodex(ctx, c, info.Architecture, clients, policy)
-		if err != nil {
-			return StartResult{}, held, err
-		}
-		update = &prepared
-		lap("client_update")
+	if err != nil {
+		return StartResult{}, held, err
 	}
 	exec := h.agentExec(ctx, c)
 	var codexExpiry *string
@@ -401,7 +391,7 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 		}
 		lap("github")
 	}
-	return StartResult{Container: c, Endpoint: h.Endpoint, ImageDigest: info.ID, Clients: clients, GitHub: expiries, CredentialExpiresAt: codexExpiry, ClientUpdate: update}, held, nil
+	return StartResult{Container: c, Endpoint: h.Endpoint, ImageDigest: info.ID, Clients: clients, GitHub: expiries, CredentialExpiresAt: codexExpiry}, held, nil
 }
 
 // injected classifies a Credentials or Tokens error: its protocol error, an unreachable daemon, else code.

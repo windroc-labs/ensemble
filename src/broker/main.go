@@ -26,7 +26,7 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | lock-query --lock NAME | refresh --container NAME --manifest FILE | close --container NAME | status [--cleanup] | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force]"
+const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | lock-query --lock NAME | refresh --container NAME --manifest FILE | close --container NAME | status [--cleanup] | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients"
 
 var containerPattern = regexp.MustCompile(`^ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}$`)
 var secondsPattern = regexp.MustCompile(`^[0-9]{1,9}$`)
@@ -49,6 +49,7 @@ type app struct {
 	loginOpencode func(provider, authFile string, out io.Writer) error
 	loginEnv      func(name string, out io.Writer) error // login env NAME: the value on stdin
 	installCodex  func(context.Context, string, bool) (any, error)
+	checkClients  func(ctx context.Context, progress io.Writer) (any, error)
 }
 
 // keyFile is login github's --key-file content and --app-id.
@@ -160,7 +161,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 				}
 				return emit(stdout, result)
 			}
-		case "version", "build", "start", "refresh", "close", "status", "workspace-rm", "probe-provider", "lock-query":
+		case "version", "build", "start", "refresh", "close", "status", "workspace-rm", "probe-provider", "lock-query", "check-clients":
 			command = args[0]
 		case "login":
 			var login func() error
@@ -240,6 +241,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 		s, arg = func(ctx context.Context, volume string, _ io.Writer) (any, error) {
 			return a.workspaceRm(ctx, volume, force)
 		}, args[2]
+	case command == "check-clients" && len(args) == 1:
+		s = func(ctx context.Context, _ string, progress io.Writer) (any, error) {
+			return a.checkClients(ctx, progress)
+		}
 	default:
 		return fail(stderr, command, protocol.New(protocol.Usage, usage))
 	}
@@ -350,6 +355,9 @@ func system() app {
 		},
 		build: func(ctx context.Context, pkg string, spec launcher.BuildSpec, maxAge time.Duration, progress io.Writer) (any, error) {
 			return withHost("build", "", progress, func(h launcher.Host) (any, error) { return h.Build(ctx, pkg, spec, maxAge) })
+		},
+		checkClients: func(ctx context.Context, progress io.Writer) (any, error) {
+			return withHost("check-clients", "", progress, func(h launcher.Host) (any, error) { return h.CheckClients(ctx) })
 		},
 		start: func(ctx context.Context, manifest string, progress io.Writer) (any, error) {
 			return withHost("start", "", progress, func(h launcher.Host) (any, error) { return h.Start(ctx, manifest) })

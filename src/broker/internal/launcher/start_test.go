@@ -679,3 +679,35 @@ func TestStartPhaseTimes(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexStartRunsNoClientUpdate(t *testing.T) {
+	h, d := startHost(&world{labels: goodLabels()}, &fakeCreds{})
+	v := defaultVersions()
+	h.Versions, h.Codex = v, &fakeCodexCreds{}
+	var progress strings.Builder
+	h.Progress = &progress
+	got, err := h.Start(context.Background(), codexManifest(t))
+	if err != nil || got.Clients.Codex != "codex-cli 0.163.0" || !slices.Equal(v.calls, []string{"verify"}) {
+		t.Fatalf("%+v %v %v", got, err, v.calls)
+	}
+	for _, call := range d.calls {
+		joined := strings.Join(call, " ")
+		if strings.Contains(joined, "codex-update") || strings.Contains(joined, "codex-probe") || strings.Contains(joined, "/opt/ensemble/runtime") {
+			t.Fatalf("client update step: %v", call)
+		}
+	}
+	if strings.Contains(progress.String(), "client_update") || strings.Contains(progress.String(), "update-codex") {
+		t.Fatal(progress.String())
+	}
+	data, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := fields["client_update"]; present {
+		t.Fatal(string(data))
+	}
+}

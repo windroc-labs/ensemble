@@ -13,7 +13,6 @@ class Started:
     github: Sequence[Mapping[str, str]]  # each GitHub token's {"account", "expires_at"}
     github_user_id: int | None  # the App's bot user ID; None without an App
     credential_expires_at: str | None
-    client_update: Mapping[str, str | Sequence[str]] | None = None
 
 
 @dataclass(frozen=True)

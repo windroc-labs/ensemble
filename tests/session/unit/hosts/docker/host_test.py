@@ -16,7 +16,7 @@ import sys
 import threading
 import time
 import tomllib
-from dataclasses import replace
+from dataclasses import fields, replace
 from types import SimpleNamespace
 from unittest import mock
 
@@ -44,7 +44,6 @@ from ensemble.session.hosts.base import Host
 from ensemble.session.hosts.docker import host as docker_host
 from ensemble.session.hosts.docker.broker import (
     BROKER,
-    REFRESH,
     RELAY,
     Broker,
     BrokerError,
@@ -156,7 +155,7 @@ class FakeBroker:
 
     def __init__(self, order, started):
         self.order, self.started, self.error, self.closed = order, started, None, []
-        self.failing, self.max_ages, self.refreshed = {}, [], threading.Event()
+        self.failing, self.refreshed = {}, threading.Event()
 
     def version(self):
         self.order.append("version")
@@ -169,10 +168,9 @@ class FakeBroker:
             raise self.failing["probe-provider"]
         return True
 
-    def build(self, package, *, plugins=(), max_age=None):
+    def build(self, package, *, plugins=()):
         self.order.append(("build", package))
         self.plugins = plugins
-        self.max_ages.append(max_age)
         if "build" in self.failing:
             raise self.failing["build"]
         return IMAGE, DIGEST
@@ -333,7 +331,7 @@ class ConfigTest(Base):
             (5, "", json.dumps(locked)),
         )
         self.host.broker = Broker(runner)
-        with self.assertRaisesRegex(SessionError, "protocol '18', want '25'") as caught:
+        with self.assertRaisesRegex(SessionError, "protocol '18', want '26'") as caught:
             self.host._provider_usage(request)
         self.assertIn(
             "install or upgrade it: see docs/docker-host.md#install", str(caught.exception)
@@ -758,7 +756,6 @@ class StartTest(Base):
                 ["exec", "-i", CONTAINER, "tmux", "display-message"],
             ],
         )
-        self.assertEqual(self.broker.max_ages, [REFRESH])
         self.assertEqual(os.listdir(self.home_dir), [])
         self.assertEqual(stat.S_IMODE(os.stat(self.home_dir).st_mode), 0o700)
         with open(manifest) as f:
@@ -1240,30 +1237,33 @@ class StartTest(Base):
                 self.assertFalse(result.startswith(self.home_dir + os.sep))
 
     def test_generation_versions_survive_later_client_setup_failure(self):
-        for audit in (data("start-output-codex.json")["client_update"], None):
-            self.broker.started = replace(self.broker.started, client_update=audit)
-            with (
-                self.subTest(audit=audit),
-                mock.patch.object(
-                    self.host, "_stage_files", side_effect=SessionError("setup failed")
-                ),
-                self.assertRaisesRegex(SessionError, "setup failed"),
-            ):
-                self.start()
-            with open(os.path.join(self.state, f"{GEN}.result.json")) as source:
-                result = json.load(source)
-            self.assertEqual(result["image_digest"], self.broker.started.image_digest)
-            if audit is None:
-                self.assertNotIn("client_update", result)
-            else:
-                self.assertEqual(result["client_update"], audit)
+        with (
+            mock.patch.object(self.host, "_stage_files", side_effect=SessionError("setup failed")),
+            self.assertRaisesRegex(SessionError, "setup failed"),
+        ):
+            self.start()
+        with open(os.path.join(self.state, f"{GEN}.result.json")) as source:
+            result = json.load(source)
+        self.assertEqual(result["image_digest"], self.broker.started.image_digest)
 
-    def test_successful_start_records_the_update_when_present(self):
-        audit = data("start-output-codex.json")["client_update"]
-        self.broker.started = replace(self.broker.started, client_update=audit)
+    def test_saved_result_has_no_client_update(self):
+        self.assertNotIn("client_update", {f.name for f in fields(Started)})
         self.start()
         with open(os.path.join(self.state, f"{GEN}.result.json")) as source:
-            self.assertEqual(json.load(source)["client_update"], audit)
+            result = json.load(source)
+        self.assertEqual(
+            set(result),
+            {
+                "container",
+                "image",
+                "image_digest",
+                "client_versions",
+                "started_at",
+                "ended_at",
+                "phases",
+                "launched_at",
+            },
+        )
 
     def test_each_start_records_and_reports_its_phase_times(self):
         result = os.path.join(self.state, f"{GEN}.result.json")
@@ -1851,7 +1851,6 @@ class PreflightTest(Base):
     def test_preflight_runs_version_then_build_and_writes_nothing(self):
         self.validate()
         self.assertEqual(self.order, ["version", ("build", REPO)])
-        self.assertEqual(self.broker.max_ages, [REFRESH])
         self.assertFalse(os.path.exists(self.state))
 
     def test_resume_preflight_builds_with_the_whitelisted_plugins(self):
@@ -1868,7 +1867,6 @@ class PreflightTest(Base):
                 "beta@owner/market#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             ),
         )
-        self.assertEqual(self.broker.max_ages, [REFRESH])
         self.assertFalse(os.path.exists(self.state))
 
     def test_an_argument_over_the_linux_limit_is_refused_before_any_docker_call(self):
@@ -2456,11 +2454,11 @@ class RecoverTest(Base):
         self.listed("w")
         self.record(events=os.path.join(self.home, "events"))
         self.lock = os.path.join(self.state, "supervisor.lock")
-        self.result(DIGEST)
+        self.result(IMAGE)
 
-    def result(self, digest):
+    def result(self, image, digest=DIGEST):
         with open(os.path.join(self.state, f"{GEN}.result.json"), "w") as f:
-            json.dump({"container": CONTAINER, "image_digest": digest}, f)
+            json.dump({"container": CONTAINER, "image": image, "image_digest": digest}, f)
 
     def serves(self):
         return [call for call in self.docker.execs() if call[:2] == [RELAY, "serve"]]
@@ -2506,7 +2504,6 @@ class RecoverTest(Base):
                 "beta@owner/market#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             ),
         )
-        self.assertEqual(self.broker.max_ages, [None])
         self.assertEqual(len(self.spawned), 1)
 
     def test_attach_with_the_lock_held_starts_nothing(self):
@@ -2553,25 +2550,31 @@ class RecoverTest(Base):
         (row,) = self.host.rows()
         self.assertEqual(row.state, StatusState.DEAD)
 
+    def test_recover_keeps_worker_after_client_only_rebuild(self):
+        self.result(IMAGE, "sha256:" + "d" * 64)
+        process = self.host.attach("w")
+        self.assertTrue(process.current)
+        self.assertEqual(len(self.spawned), 1)
+        self.assertFalse(os.path.exists(os.path.join(self.state, f"{GEN}.stale")))
+
     def test_an_older_image_is_not_recovered_and_closes_without_the_supervisor(self):
-        for digest in ("sha256:" + "d" * 64, None):
-            with self.subTest(digest=digest):
+        for image in ("ensemble-worker:" + "d" * 64, None):
+            with self.subTest(image=image):
                 self.host._warned.clear()
                 stale = os.path.join(self.state, f"{GEN}.stale")
                 with contextlib.suppress(FileNotFoundError):
                     os.unlink(stale)
-                if digest is None:
+                if image is None:
                     os.unlink(os.path.join(self.state, f"{GEN}.result.json"))
                 else:
-                    self.result(digest)
+                    self.result(image)
                 with self.assertLogs("session", "WARNING") as logs:
                     process = self.host.attach("w")
                     builds = self.order.count(("build", REPO))
                     self.host.attach("w")
                 self.assertEqual(self.order.count(("build", REPO)), builds)
-                self.assertEqual(self.broker.max_ages[-1], None)
                 with open(stale) as f:
-                    self.assertEqual(f.read(), DIGEST)
+                    self.assertEqual(f.read(), IMAGE)
                 self.assertEqual(
                     logs.output,
                     ["WARNING:session:docker session w runs an older image; restart it to upgrade"],

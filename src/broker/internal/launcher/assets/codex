@@ -1,5 +1,0 @@
-#!/bin/sh
-if [ -x /opt/ensemble/runtime/codex/bin/codex ]; then
-    exec /opt/ensemble/runtime/codex/bin/codex "$@"
-fi
-exec /opt/ensemble/clients/bin/codex "$@"
