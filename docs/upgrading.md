@@ -8,10 +8,9 @@ of success or failure; custom clients must display it while preserving the opera
 
 ## Egress gateway
 
-Ship the installer and worker gateway enforcement (WDRC-139) in the same release. After updating the plugin,
-rerun `scripts/install.sh --docker`: it installs the pinned private `windroc/egress-proxy` with your `gh` access,
-creates `~/.egress/config.local.yaml` only if absent, starts the gateway and waits for healthy. Existing configs
-are preserved. Add Ollama and local/LAN provider exceptions before starting their workers
+After updating the plugin, rerun `scripts/install.sh --docker`: it installs the pinned private
+`windroc/egress-proxy` with your `gh` access, creates `~/.egress/config.local.yaml` only if absent, starts the
+gateway and waits for healthy. Existing configs are preserved. Add Ollama and local/LAN provider exceptions before starting their workers
 ([Gateway operations](docker-host.md#egress-gateway)).
 
 An already running worker stays on `bridge` during the upgrade; it is not forcibly migrated or stopped.
