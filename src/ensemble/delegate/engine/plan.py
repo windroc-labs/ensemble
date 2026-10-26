@@ -123,9 +123,12 @@ def plan(
     )
     docker = driver.docker and spec.mode in (Mode.TUI, Mode.HEADLESS)
     if environment is not None and not docker:
-        raise ConfigError(
-            f"mode {spec.mode}: the role's environment needs a container: tui or headless"
-        )
+        lost = next((k for k in ("lock", "secrets") if getattr(environment.spec, k)), None)
+        if lost := "prefetch" if environment.prefetch else lost:
+            raise ConfigError(
+                f"mode {spec.mode}: environment {lost} needs a container: tui or headless"
+            )
+        environment = None
     environment_spec, repo = _environment(environment, spec.input) if docker else (None, None)
     if docker:
         spec = replace(spec, input=_on_docker(run, spec, repo, composition))

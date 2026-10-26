@@ -767,6 +767,9 @@ class Docker(Base):
         self.assertIn("team_dirs", self.refused("poet", "verse", team=team, out=None))
 
 
+SECRET = {"item": "ensemble-env/dummy", "file": "dummy.txt"}
+
+
 class PrefetchTest(Docker):
     """A resolved environment's prefetch target: the Reference block's one Repo: and optional Ref:,
     syntax-checked before any git call (WDRC-109 FR-52).
@@ -828,6 +831,15 @@ class PrefetchTest(Docker):
         got, _ = self.planned(input=text)
         self.assertIsNone(got.session.environment)
 
-    def test_an_in_process_run_refuses_an_environment(self):
-        message = self.refused(mode="in_process", environment=self.env(prefetch=False))
-        self.assertIn("in_process", message)
+    def test_an_in_process_run_refuses_what_it_would_lose(self):
+        for environment, key in (
+            (self.env(prefetch=False), "lock"),
+            (self.env(), "prefetch"),
+            (Resolved(replace(self.SPEC, lock=None, secrets=(SECRET,)), prefetch=False), "secrets"),
+        ):
+            with self.subTest(key=key):
+                message = self.refused(mode="in_process", environment=environment)
+                self.assertIn(f"in_process: environment {key}", message)
+        gateway = Resolved(EnvironmentSpec(image="@worker", gateway="x"), prefetch=False)
+        got, _ = self.planned(mode="in_process", environment=gateway)
+        self.assertIsNone(got.session.environment)

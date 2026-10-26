@@ -603,7 +603,8 @@ the agent Host. A result equal to the Host's packaged default (local changes asi
 engineer starts as before; a local `[delegate.environment.docker] gateway = "x"` puts every Docker run on `x`. A
 Host without a default table (`tmux`, or a Docker-kind `[hosts.d2]` without `[environment.d2]`) runs a role that
 selects or overrides an environment as a configuration error naming `[environment.<host>]`, before anything is
-written. `ensemble-delegate run --dry-run` prints the result as `environment` (secrets as references; `null`: none).
+written. A run in mode `in_process` starts no container: it runs without the environment, and one with a `lock`,
+`secrets` or `prefetch` is refused as a configuration error. `ensemble-delegate run --dry-run` prints the result as `environment` (secrets as references; `null`: none).
 The run stores it in `delegate.json`'s `plan.session`; resume and `ensemble-crew reopen` reuse it whatever the config
 says now, and a run stored before environments resumes without one.
 

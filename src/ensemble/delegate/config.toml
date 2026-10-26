@@ -165,7 +165,8 @@ effort = "low"
 #   [environments.<name>] a named environment: only the keys that differ from the default; <name> as lock below
 #   [roles.<role>.environment]  local: name (a named environment) and keys overriding it, or the default without name
 # A result equal to this file's default (config.local.toml aside) passes no environment: the run starts as before
-# environments. Keys (a table refuses any other):
+# environments. An in_process run has no container: it drops the environment, refusing one with lock, secrets or
+# prefetch. Keys (a table refuses any other):
 #   image     a local base image's tag or ID, or "@worker": ensemble's worker base (~/.ensemble/docker/worker)
 #   gateway   the egress proxy's caller network the container joins (its label name, docs/docker-host.md › Egress proxy)
 #   plugins   in-image plugin names or pinned sources, added to [hosts.docker] plugins; [] → none
