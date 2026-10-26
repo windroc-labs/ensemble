@@ -5,6 +5,7 @@ test on a configured class (self.session) with caller-owned dependencies.
 
 import contextlib
 import dataclasses
+import functools
 import io
 import itertools
 import json
@@ -2874,6 +2875,18 @@ class EnvironmentHostTest(HostedTuiBase):
             with self.subTest(call):
                 self.refused(ConfigError, "environment: host tmux is not a Docker-kind Host", call)
         self.assertEqual(self.host.calls.mock_calls, [])
+
+    def test_handlers_are_refused_before_anything_starts(self):
+        spec = self.env_spec(environment=None, handlers=(engine_types.HookCallback("pkg.h"),))
+        for host in ("tmux", "d2"):
+            for call in (self.session.start, self.session.preflight):
+                with self.subTest(host=host, call=call.__name__):
+                    self.refused(
+                        ConfigError,
+                        f"handlers: fake tui sessions on host {host} have no session harness",
+                        functools.partial(call, spec, host=host),
+                    )
+        self.assertEqual((self.host.calls.mock_calls, self.docker.calls.mock_calls), ([], []))
 
     def test_a_docker_kind_host_of_another_name_accepts_it(self):
         self.session.preflight(self.env_spec(), host="d2")

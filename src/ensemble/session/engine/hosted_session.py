@@ -104,6 +104,14 @@ def _environment_check(spec: Spec, on: Host, mode: Mode) -> None:
         raise ConfigError("environment: in_process mode runs on no Host")
 
 
+def _handlers_check(spec: Spec, client: str, on: Host, mode: Mode) -> None:
+    """Handlers need a session harness to call them (FR-5); no start has one yet."""
+    if spec.handlers:
+        raise ConfigError(
+            f"handlers: {client} {mode.value} sessions on host {on.name} have no session harness"
+        )
+
+
 def _built(cls: type[Host], name: str, settings: Mapping) -> Host:
     return cls(name, settings)
 
@@ -321,6 +329,7 @@ class HostedSession(Session):
         spec = replace(spec, sid=spec.sid or str(uuid.uuid4()))
         on = cls.host(host)
         _environment_check(spec, on, mode)
+        _handlers_check(spec, client_name, on, mode)
         cls.viewer()
         displays.validate_display(display, on)
         MODES[mode].preflight(
@@ -347,6 +356,7 @@ class HostedSession(Session):
         spec = replace(spec, sid=spec.sid or str(uuid.uuid4()))
         on = cls.host(host)
         _environment_check(spec, on, mode)
+        _handlers_check(spec, client_name, on, mode)
         viewer = cls.viewer()
         displays.validate_display(display, on)
         spec = _picked(setup, spec, client_name, client, on)
