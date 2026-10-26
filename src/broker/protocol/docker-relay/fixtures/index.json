@@ -1,5 +1,5 @@
 {
-  "broker_protocol_version": "22",
+  "broker_protocol_version": "24",
   "cases": [
     {
       "file": "stub-request.json",
@@ -454,6 +454,51 @@
     },
     {
       "file": "relay-reply-extra-field.json",
+      "definition": "relay_reply",
+      "valid": false,
+      "expected": {
+        "stage": "response",
+        "reply": null
+      }
+    },
+    {
+      "file": "relay-reply-retry.json",
+      "definition": "relay_reply",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "reply": null
+      }
+    },
+    {
+      "file": "relay-reply-retry-success.json",
+      "definition": "relay_reply",
+      "valid": false,
+      "expected": {
+        "stage": "response",
+        "reply": null
+      }
+    },
+    {
+      "file": "relay-reply-retry-false.json",
+      "definition": "relay_reply",
+      "valid": false,
+      "expected": {
+        "stage": "response",
+        "reply": null
+      }
+    },
+    {
+      "file": "relay-reply-retry-integer.json",
+      "definition": "relay_reply",
+      "valid": false,
+      "expected": {
+        "stage": "response",
+        "reply": null
+      }
+    },
+    {
+      "file": "relay-reply-retry-unidentified.json",
       "definition": "relay_reply",
       "valid": false,
       "expected": {

@@ -1,0 +1,64 @@
+# The test board's settings, a template for the mini's ~/.ensemble/config.local.toml: copy it there
+# and fill every <…> from the test Linear workspace and GitHub account (docs/credentials.md › Linear
+# presets). The filled values live only on the mini; never commit them.
+[orchestrator]
+tracker = "linear"
+
+[orchestrator.linear]
+team = "<team id>"
+task_label_group = "<Tasks label group id>"
+agent_label_group = "<Agent label group id>"
+harness_key = "<harness key service>"
+manager_key = "<manager key service>"
+human_members = ["<the test manager account's address>"]
+
+[orchestrator.linear.states]
+backlog     = "<Backlog state id>"
+todo        = "<Todo state id>"
+in_progress = "<In Progress state id>"
+in_review   = "<In Review state id>"
+handoff     = "<Handoff state id>"
+done        = "<Done state id>"
+canceled    = "<Canceled state id>"
+
+[orchestrator.linear.task_labels]
+build          = "<Build label id>"
+light-build    = "<Light Build label id>"
+light-research = "<Light Research label id>"
+deep-research  = "<Deep Research label id>"
+
+[orchestrator.linear.agent_labels]
+claude   = "<Claude label id>"
+codex    = "<Codex label id>"
+opencode = "<OpenCode label id>"
+
+[orchestrator.linear.roles.researcher]
+account = "<researcher account's address>"
+key = "<researcher key service>"
+
+[orchestrator.linear.roles.pm]
+account = "<pm account's address>"
+key = "<pm key service>"
+
+[orchestrator.linear.roles.engineer]
+account = "<engineer account's address>"
+key = "<engineer key service>"
+
+[orchestrator.linear.project_repos]
+"<project id>" = "<test owner>/<test repo>"
+
+[orchestrator.client_max_runs]
+opencode = 1
+claude = 1
+
+[delegate.roles.researcher.output]
+type = "github"
+repo = "<test owner>/<test repo>"
+branch = "main"
+dir = "Research/"
+
+[delegate.roles.pm.output]
+type = "github"
+repo = "<test owner>/<test repo>"
+branch = "main"
+dir = "PRD/"

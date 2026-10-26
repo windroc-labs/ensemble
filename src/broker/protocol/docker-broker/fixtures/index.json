@@ -1,5 +1,5 @@
 {
-  "protocol_version": "22",
+  "protocol_version": "24",
   "cases": [
     {
       "file": "manifest-valid.json",
@@ -333,6 +333,56 @@
       }
     },
     {
+      "file": "build-input-image-plugins.json",
+      "definition": "build_input",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "build-input-image-plugin-path.json",
+      "definition": "build_input",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 2,
+        "error_code": "usage"
+      }
+    },
+    {
+      "file": "build-input-base-image.json",
+      "definition": "build_input",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "build-input-base-image-missing.json",
+      "definition": "build_input",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 2,
+        "error_code": "usage"
+      }
+    },
+    {
+      "file": "build-input-base-image-bad.json",
+      "definition": "build_input",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 2,
+        "error_code": "usage"
+      }
+    },
+    {
       "file": "build-output.json",
       "definition": "build_output",
       "valid": true,
@@ -608,6 +658,56 @@
     },
     {
       "file": "error-build_failed.json",
+      "definition": "error",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 8,
+        "error_code": "build_failed"
+      }
+    },
+    {
+      "file": "error-build-image-plugin.json",
+      "definition": "error",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 8,
+        "error_code": "build_failed"
+      }
+    },
+    {
+      "file": "error-build-image-plugin-missing.json",
+      "definition": "error",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 8,
+        "error_code": "build_failed"
+      }
+    },
+    {
+      "file": "error-build-base-image-absent.json",
+      "definition": "error",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 8,
+        "error_code": "build_failed"
+      }
+    },
+    {
+      "file": "error-build-base-image-label.json",
+      "definition": "error",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 8,
+        "error_code": "build_failed"
+      }
+    },
+    {
+      "file": "error-build-base-image-requirements.json",
       "definition": "error",
       "valid": true,
       "expected": {
@@ -1812,6 +1912,66 @@
     },
     {
       "file": "manifest-opencode-providers-bad-name.json",
+      "definition": "manifest",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "manifest-secrets.json",
+      "definition": "manifest",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "manifest-secrets-broker-item.json",
+      "definition": "manifest",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "manifest-secrets-path.json",
+      "definition": "manifest",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "manifest-secrets-dot.json",
+      "definition": "manifest",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "manifest-secrets-empty-file.json",
+      "definition": "manifest",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "manifest-secrets-extra-field.json",
       "definition": "manifest",
       "valid": false,
       "expected": {

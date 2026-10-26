@@ -14,6 +14,7 @@ import (
 	"go/parser"
 	gotoken "go/token"
 	"io"
+	"maps"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -927,15 +928,29 @@ func TestInjectKeychainFailure(t *testing.T) {
 	}
 }
 
-// TestKeychainServices: KeychainServices lists exactly the package's ...Service string constants, so a
-// new service cannot miss docs/credentials.md.
+// TestKeychainServices: KeychainServices lists exactly the package's ...Service string constants and, each ending in
+// "/", its ...ServicePrefix ones (prefix items), so a new service cannot miss docs/credentials.md.
 func TestKeychainServices(t *testing.T) {
+	services, prefixes := serviceConstants(t)
+	if len(services) < 5 || len(prefixes) < 1 {
+		t.Fatalf("found %d service and %d prefix constants, want at least 5 and 1", len(services), len(prefixes))
+	}
+	if !prefixes[envServicePrefix] {
+		t.Errorf("no prefix constant for %s", envServicePrefix)
+	}
+	for _, err := range checkServices(KeychainServices, services, prefixes) {
+		t.Error(err)
+	}
+}
+
+// serviceConstants are the package's string constants named ...Service and ...ServicePrefix.
+func serviceConstants(t *testing.T) (services, prefixes map[string]bool) {
+	t.Helper()
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{}
-	constants := 0
+	services, prefixes = map[string]bool{}, map[string]bool{}
 	fset := gotoken.NewFileSet()
 	for _, name := range files {
 		if strings.HasSuffix(name, "_test.go") {
@@ -953,7 +968,13 @@ func TestKeychainServices(t *testing.T) {
 			for _, spec := range gen.Specs {
 				value := spec.(*ast.ValueSpec)
 				for i, id := range value.Names {
-					if !strings.HasSuffix(id.Name, "Service") || i >= len(value.Values) {
+					into := services
+					if strings.HasSuffix(id.Name, "ServicePrefix") {
+						into = prefixes
+					} else if !strings.HasSuffix(id.Name, "Service") {
+						continue
+					}
+					if i >= len(value.Values) {
 						continue
 					}
 					lit, ok := value.Values[i].(*ast.BasicLit)
@@ -964,28 +985,74 @@ func TestKeychainServices(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					want[service] = true
-					constants++
+					into[service] = true
 				}
 			}
 		}
 	}
-	if constants < 5 {
-		t.Fatalf("found %d service constants, want at least 5", constants)
-	}
+	return services, prefixes
+}
+
+// checkServices is why list is not exactly services and prefixes: a prefix ends in "/", a service does not and
+// starts with no listed prefix, each is listed once.
+func checkServices(list []string, services, prefixes map[string]bool) []error {
+	var errs []error
 	listed := map[string]bool{}
-	for _, service := range KeychainServices {
+	for _, service := range list {
 		if listed[service] {
-			t.Errorf("KeychainServices lists %s twice", service)
+			errs = append(errs, fmt.Errorf("KeychainServices lists %s twice", service))
 		}
 		listed[service] = true
-		if !want[service] {
-			t.Errorf("KeychainServices lists %s, neither a service constant nor a GitHub App", service)
+		switch {
+		case prefixes[service] && !strings.HasSuffix(service, "/"):
+			errs = append(errs, fmt.Errorf("prefix item %s does not end in /", service))
+		case services[service] && strings.HasSuffix(service, "/"):
+			errs = append(errs, fmt.Errorf("service %s ends in /: declare it as a ...ServicePrefix constant", service))
+		case !services[service] && !prefixes[service]:
+			errs = append(errs, fmt.Errorf("KeychainServices lists %s, neither a service nor a prefix constant", service))
 		}
 	}
-	for service := range want {
+	for _, service := range slices.Sorted(maps.Keys(services)) {
 		if !listed[service] {
-			t.Errorf("KeychainServices misses %s", service)
+			errs = append(errs, fmt.Errorf("KeychainServices misses %s", service))
+		}
+		for prefix := range prefixes {
+			if listed[prefix] && strings.HasPrefix(service, prefix) {
+				errs = append(errs, fmt.Errorf("service %s starts with prefix item %s", service, prefix))
+			}
+		}
+	}
+	for _, prefix := range slices.Sorted(maps.Keys(prefixes)) {
+		if !listed[prefix] {
+			errs = append(errs, fmt.Errorf("KeychainServices misses prefix item %s", prefix))
+		}
+	}
+	return errs
+}
+
+// TestCheckServices: each way a list can disagree with the constants is reported.
+func TestCheckServices(t *testing.T) {
+	services := map[string]bool{"ensemble-claude": true, "ensemble-bot": true}
+	prefixes := map[string]bool{"ensemble-env/": true}
+	if errs := checkServices([]string{"ensemble-claude", "ensemble-bot", "ensemble-env/"}, services, prefixes); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	for name, tc := range map[string]struct {
+		list               []string
+		services, prefixes map[string]bool
+		want               string
+	}{
+		"prefix missing":       {[]string{"ensemble-claude", "ensemble-bot"}, services, prefixes, "misses prefix item ensemble-env/"},
+		"prefix not constant":  {[]string{"ensemble-claude", "ensemble-bot", "ensemble-env/", "other/"}, services, prefixes, "lists other/, neither"},
+		"prefix without slash": {[]string{"ensemble-claude", "ensemble-bot", "ensemble-env"}, services, map[string]bool{"ensemble-env": true}, "does not end in /"},
+		"service with slash":   {[]string{"ensemble-claude", "ensemble-bot", "x/", "ensemble-env/"}, map[string]bool{"ensemble-claude": true, "ensemble-bot": true, "x/": true}, prefixes, "service x/ ends in /"},
+		"service under prefix": {[]string{"ensemble-claude", "ensemble-env/x", "ensemble-env/"}, map[string]bool{"ensemble-claude": true, "ensemble-env/x": true}, prefixes, "starts with prefix item ensemble-env/"},
+		"service missing":      {[]string{"ensemble-claude", "ensemble-env/"}, services, prefixes, "misses ensemble-bot"},
+		"twice":                {[]string{"ensemble-claude", "ensemble-bot", "ensemble-env/", "ensemble-env/"}, services, prefixes, "lists ensemble-env/ twice"},
+	} {
+		errs := checkServices(tc.list, tc.services, tc.prefixes)
+		if !strings.Contains(fmt.Sprint(errs), tc.want) {
+			t.Errorf("%s: %v, want %q", name, errs, tc.want)
 		}
 	}
 }

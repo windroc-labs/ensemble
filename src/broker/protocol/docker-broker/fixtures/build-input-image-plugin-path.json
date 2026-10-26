@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "build",
+    "--ensemble",
+    "/opt/ensemble",
+    "--image-plugin",
+    "../x"
+  ]
+}

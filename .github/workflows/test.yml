@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, edited]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -382,9 +383,35 @@ jobs:
             exit 1
           fi
 
+  mini-op:
+    # Every event, whatever the scope: an edited PR title or body is rescanned.
+    name: mini-op guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Scan .mini-op/ and the PR fields
+        run: python3 .github/mini_op_guard.py
+      - name: Require unchanged checkout
+        if: ${{ always() }}
+        run: |
+          status=$(git -c core.fsmonitor=false -c core.hooksPath=/dev/null status --porcelain)
+          if [[ -n "$status" ]]; then
+            printf '%s\n' "$status"
+            exit 1
+          fi
+
   ci:
     name: CI
-    needs: [changes, lint, repository, unit, coverage, integration, broker]
+    needs: [changes, lint, repository, unit, coverage, integration, broker, mini-op]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5

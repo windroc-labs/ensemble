@@ -52,7 +52,8 @@ next start, restart or resume.
 
 After every install or reinstall, run all three logins: `login claude`, `login github ensemble-bot` and
 `login codex` ([Codex](#codex)), plus `login claude <name>` for each other registered
-[Claude account](#claude-accounts) and `login opencode <name>` for each configured OpenCode provider. A reinstalled broker cannot read the old items without asking; `start` never asks and instead names the login to rerun. Each login asks its terminal questions first, without
+[Claude account](#claude-accounts), `login opencode <name>` for each configured OpenCode provider and
+`login env <name>` for each [environment secret](#environment-secrets). A reinstalled broker cannot read the old items without asking; `start` never asks and instead names the login to rerun. Each login asks its terminal questions first, without
 echo:
 
 | Login | Terminal | macOS dialog, at most | Click |
@@ -61,7 +62,8 @@ echo:
 | `login github ensemble-bot [--key-file <pem> --app-id <ID>]` | the login keychain password, when a step is not yet in place | with `--key-file`, none; else one change-access dialog (Deny / Allow), after the password | Allow |
 | `login codex` | the login keychain password, when a step is not yet in place, before the browser opens | one change-access dialog (Deny / Allow), after the password | Allow |
 | `login opencode <name>` | the provider's API key; the login keychain password only when the item's access needs a change | at most one change-access dialog (Deny / Allow), after the password | Allow |
-| `start` | none | none: a token or key it cannot read without one names unlocking the login keychain or the login to run (`keychain_failed` for an OpenCode key; `login_required` for other clients) | |
+| `login env <name>` | the value, hidden, unless stdin is a pipe or file; the login keychain password only when the item's access needs a change, from the terminal | at most one change-access dialog (Deny / Allow), after the password | Allow |
+| `start` | none | none: a token or key it cannot read without one names unlocking the login keychain or the login to run (`keychain_failed` for an OpenCode key or an environment secret needing approval; `login_required` for other clients and a missing environment secret) | |
 
 What each login hands a container: [Credentials › Who logs in](credentials.md#who-logs-in).
 
@@ -128,7 +130,11 @@ both and writes the App's slug to `github.app`.
 "$B" build --ensemble "$PKG"              # Docker's progress on stderr, then {"image":"ensemble-worker:<key>","digest":"sha256:…","rebuilt":true}
 "$B" build --ensemble "$PKG"              # the same, "rebuilt":false
 "$B" build --ensemble "$PKG" --max-age 0  # rebuild now
+"$B" build --ensemble "$PKG" --base-image dummy-env:test --image-plugin dummy-plugin  # see Base images
 ```
+
+The full form is `build --ensemble DIR [--base-image IMAGE] [--plugin SOURCE]... [--image-plugin NAME]... [--max-age
+SECONDS]`, in that order.
 
 A changed Dockerfile or ensemble version gives a new key. No build log shows a secret. Rebuilds skip Docker's cache,
 so they install npm's latest Claude Code. `--max-age N` rebuilds an image N or more seconds old under the same key (a
@@ -195,12 +201,48 @@ configured commit cannot be fetched, the build fails instead of falling back to 
 
 Claude loads its installation through `/opt/ensemble/plugins/<name>`, listed in `CLAUDE_CODE_PLUGIN_DIRS`, with
 `/<name>:` commands. OpenCode's container config points `skills.paths` at `/opt/ensemble/plugins`: it discovers the
-same original `skills/*/SKILL.md` files and keeps their relative references. Codex loads its own native installation. Image plugin files are root-owned and read-only for `agent`.
+same original `skills/*/SKILL.md` files and keeps their relative references. Codex loads its own native installation. Source plugin files are root-owned and read-only for `agent`.
 
 Invalid sources and duplicate plugin names fail before Docker; marketplace, installation or metadata failures
 fail the image build. Selecting a plugin trusts its code, hooks and servers beside the container's credentials.
 `scripts/install.sh --docker` installs ensemble on the host and leaves updraft installation to the image;
 `--no-docker` also installs updraft for the selected host Claude/Codex clients.
+A base image can also carry plugins of its own: [Base images](#base-images).
+
+### Base images
+
+`--base-image IMAGE` takes a local image tag or ID as stage 1 in place of `~/.ensemble/docker/worker`; the result is
+still `ensemble-worker:<key>`. The broker never pulls or rebuilds it: an image absent locally fails the build naming
+it. The key covers the base image's local ID, so rebuilding the base image gives a new key and the next build
+rebuilds the variant; the same ID under two tags shares one variant. The 7-day refresh (`--max-age`) rebuilds only
+the ensemble layer; updating the base image's Claude Code and plugins is yours. The broker tags the base image as
+`ensemble-user:<key>`, so removing older images can delete a base image that has no tag of its own once no variant
+or container uses it: tag your base images.
+
+Before building, the broker checks the base image, offline and unprivileged, and fails with `build_failed` naming
+each missing item:
+
+| Requirement | Why |
+|---|---|
+| `apt-get`, `dpkg` (Debian) | the ensemble layer installs tini, python3, python3-venv, curl, ripgrep and gh |
+| `node`, `npm` | the ensemble layer installs Codex and OpenCode |
+| `tmux`, `git`, `claude` (Claude Code) | sessions run them |
+| a non-root user `agent` | sessions run as it; the broker reads its UID and GID from the image (1000 works) |
+
+Commands must be on `/home/agent/.npm-global/bin:/usr/local/bin:/usr/bin:/bin`, the container's `PATH` less
+`/opt/ensemble/bin`, as `agent` finds them. python3 is not required. A label starting with `windroc.` or `ensemble.`
+also fails the build, naming it: those are the broker's.
+
+`--image-plugin NAME` adds a plugin the base image (or `~/.ensemble/docker/worker`) already holds in
+`/opt/windroc/plugins/NAME/`, on top of the `--plugin` sources: its `.claude-plugin/plugin.json` must have `"name":
+"NAME"` and `agent` must be able to read every file in the directory. Claude Code loads it as `/NAME:` through
+`CLAUDE_CODE_PLUGIN_DIRS`, after the source plugins; Codex and OpenCode do not load it. A plugin directory that is
+missing, unreadable by `agent`, or whose `plugin.json` names another plugin fails the build naming the plugin; a
+name used twice, by either option, fails before Docker. Plugin names are part of the key.
+
+The base image is trusted like `~/.ensemble/docker/worker`: the variant inherits its environment, `ONBUILD`
+triggers and binaries, and sessions run in it with their credentials. The checks verify its shape, not its
+contents.
 
 ## Start
 
@@ -216,6 +258,36 @@ EOF
 
 It prints the container name (`C` below) and client versions.
 
+## Environment secrets
+
+Named values a container gets by reference, such as a password, an API key or an ssh private key. Import each once
+per broker install:
+
+```sh
+"$B" login env dummy                      # type or paste the value; nothing echoes
+"$B" login env mini-ssh < ~/.ssh/id_mini  # a pipe or file: stored verbatim, newlines included
+```
+
+It saves the value, 1 to 16384 bytes, in broker-only item `ensemble-env/<name>` / `<name>`, replacing an earlier one.
+Names match `[a-z0-9][a-z0-9._-]{0,63}`. With a pipe or file on stdin, the keychain password, when needed, is read
+from the terminal. The value never goes on a command line. Pipe a long value: the terminal's line mode limits a
+typed line (1024 bytes on macOS).
+
+A start manifest lists the secrets it wants, at most 16:
+
+```json
+"secrets": [{"item": "ensemble-env/dummy", "file": "dummy.txt"}]
+```
+
+`item` must be an `ensemble-env/<name>` reference; any other keychain service, the broker's own and Linear's
+included, is `manifest_rejected`. `file` is one name of at most 255 bytes: no `/`, no control character, not `.`
+or `..`, and not repeated in the list. The broker checks both itself whatever sent the manifest. It reads each
+item at `start` only, after the manifest checks and before any container exists, so a missing or unreadable item
+refuses the start, naming it and the login to run. It then writes each value to
+`/run/ensemble/secrets/env/<file>` in the container's secrets tmpfs, 0400, owner `agent`, through `docker exec`
+stdin: never in the container's env, arguments or image. The copy goes with the container. Who can read the item
+and the copy, and how to revoke: [Credentials › Environment secrets](credentials.md#environment-secrets).
+
 ## What a container gets
 
 - User `agent`, all capabilities dropped, `no-new-privileges`; no Docker socket.
@@ -223,7 +295,8 @@ It prints the container name (`C` below) and client versions.
   lower-case pair set to its proxy, and `NO_PROXY` only `localhost,127.0.0.1,::1`: all other traffic, `host.docker.internal`
   and LAN addresses included, goes through the gateway's `workers` policy.
 - A workspace volume at cwd; Claude and OpenCode have their own client-state bind, Codex only its session history.
-- Credentials on tmpfs, readable by the container's processes ([Credentials](credentials.md)).
+- Credentials on tmpfs, readable by the container's processes ([Credentials](credentials.md)); each listed
+  [environment secret](#environment-secrets) at `/run/ensemble/secrets/env/<file>`.
 - Tools from your `~/.ensemble/docker/worker/Dockerfile`, plus ensemble, clients, plugins and credential wrappers.
 - Each checkout runs its own branch's `.githooks/` through `core.hooksPath = .githooks`; a checkout without that directory runs none.
 - With GitHub configured, commits use the App's bot identity.
@@ -239,7 +312,7 @@ It prints the container name (`C` below) and client versions.
 
 ## Audit log
 
-Every `start`, `refresh` and `close` appends to `~/Library/Logs/ensemble/broker.jsonl`, recording credentials issued, renewed, withdrawn or revoked, never a token or key. Past 10 MiB it rotates to `broker.jsonl.1`. An unwritable log may lose records. OpenCode provider keys have no audit line. No container mounts it.
+Every `start`, `refresh` and `close` appends to `~/Library/Logs/ensemble/broker.jsonl`, recording credentials issued, renewed, withdrawn or revoked, never a token or key. Past 10 MiB it rotates to `broker.jsonl.1`. An unwritable log may lose records. OpenCode provider keys have no audit line. Each environment secret a start writes is an `env-secret` credential naming its `item`, never its value: `issued` at start, `withdrawn` when close or a failed start removes the container. No container mounts it.
 
 Audit persistence failure adds `audit_warning: "audit_write_failed"` to the broker's JSON
 response, alongside the original success fields or error envelope. The operation's exit code,
@@ -444,6 +517,15 @@ later, it leaves its worker running.
 
 ### Recovery
 
+- **Host hook failed** (timeout, could not start, callback failure or non-zero exit): the supervisor
+  invokes `ensemble-session hook --strict --event <gen>.<seq> DIR LABEL` so callback failures return
+  non-zero; ordinary client hook calls retain their default exit 0. The `hooks.jsonl` record carries
+  the event; a retry whose event is that file's last record skips the client callback and the journal
+  and reruns only the Host callback with the journaled payload. The supervisor logs the failure in
+  `rejected.jsonl` without advancing the successful sequence. Its `ok: false, retry: true` reply keeps the
+  event at the relay queue's head and retries on the same connection every 10 s until success or session
+  end; later events wait behind it. Success records the sequence, so acknowledged replays do not rerun
+  the hook. Malformed requests, wrong generations and wrong directories remain terminal rejections.
 - **Supervisor or daemon gone** (killed, not a host reboot): the worker's next `attach`, `read`, `send`, `status`,
   `restart` or `close` starts both and replays the queue; an event arrives once, or twice if its hook ran just before
   the kill, never lost. `next-event` restarts nothing: it reads only the events file. Until the daemon is restarted,
