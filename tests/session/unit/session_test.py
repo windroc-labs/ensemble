@@ -6,9 +6,13 @@ from unittest import mock
 from ensemble import session
 from ensemble.session import (
     Access,
+    Activity,
+    Blocked,
     Effort,
     EnvironmentSpec,
+    EventCall,
     Exited,
+    HookCallback,
     Host,
     IdleTimeout,
     Launch,
@@ -23,6 +27,7 @@ from ensemble.session import (
     Stderr,
     TurnEnd,
     TurnFailed,
+    TurnStarted,
     Usage,
     Viewer,
     Window,
@@ -31,7 +36,18 @@ from ensemble.session.engine import types
 from ensemble.session.engine.hosted_session import HostedSession
 from tests.session.case import HOSTS, Case
 
-EVENTS = {Exited, IdleTimeout, LimitHit, Reply, Stderr, TurnEnd, TurnFailed}
+EVENTS = {
+    Activity,
+    Blocked,
+    Exited,
+    IdleTimeout,
+    LimitHit,
+    Reply,
+    Stderr,
+    TurnEnd,
+    TurnFailed,
+    TurnStarted,
+}
 
 ALLOWED_CONCRETE = {
     SessionStatusLog,
@@ -47,6 +63,8 @@ ALLOWED_CONCRETE = {
     Resumable,
     RunLog,
     Viewer,
+    HookCallback,
+    EventCall,
     *EVENTS,
 }
 

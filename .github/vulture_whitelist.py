@@ -11,7 +11,7 @@ from ensemble.session.clients.claude import ClaudeClient
 from ensemble.session.clients.codex import CodexClient
 from ensemble.session.clients.opencode import OpenCodeClient
 from ensemble.session.engine.base import Session
-from ensemble.session.engine.types import Effort, NamedKey, SessionRow, Tier
+from ensemble.session.engine.types import Effort, EventCall, NamedKey, SessionRow, Tier
 from ensemble.session.viewer.types import Split
 from ensemble.utils import LayerCommand, OutcomeStatus
 
@@ -68,5 +68,7 @@ _ = Connect.__call__
 # Only tests read it, but the session interface is frozen (tests/guard_checks/exports.py
 # session_interface_snapshot).
 _ = SessionRow.last_lines
+# A handler's EventCall field; WDRC-204's session harness sets it for each dispatched event.
+_ = EventCall.event_id
 # urllib calls the redirect hook src/broker/internal/launcher/assets/opencode-install.py's NoRedirect overrides.
 _ = urllib.request.HTTPRedirectHandler.redirect_request
