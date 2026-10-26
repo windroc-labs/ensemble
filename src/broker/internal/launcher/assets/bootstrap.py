@@ -20,6 +20,9 @@ def bootstrap_skill(directory):
         return
     if not (MINI_OP_SKILL / "SKILL.md").is_file():
         sys.exit("bootstrap: mini-op skill has no SKILL.md")
+    if directory.is_symlink():
+        sys.exit("bootstrap: skill parent must be a directory, not a link")
+    directory.mkdir(mode=0o700, exist_ok=True)
     skills = directory / "skills"
     if skills.is_symlink():
         sys.exit("bootstrap: skills must be a directory, not a link")
@@ -81,7 +84,7 @@ def bootstrap_codex(directory, cwd, secrets=None, plugins=Path("/opt/ensemble/co
     (directory / "plugins").mkdir(mode=0o700)
     (directory / "plugins/cache").symlink_to(plugins / "plugins/cache", target_is_directory=True)
     (directory / "auth.json").symlink_to(secrets / "codex/auth.json")
-    bootstrap_skill(directory)
+    bootstrap_skill(Path.home() / ".agents")
 
 
 def inject_codex(stream, secrets=None, directory=None):

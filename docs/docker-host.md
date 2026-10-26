@@ -589,7 +589,8 @@ The packaged default is `[environment.docker]`: `image = "@worker"`, `gateway = 
 `mini-op:env`, gateway and lock `mini-op`, and the secrets `ensemble-env/mini-op-password` (file `mini-password`)
 and `ensemble-env/mini-op-ssh-key` (file `mini-ssh-key`); no prefetch. The built-in `verifier` selects it with
 `prefetch = true`. It uses the selected client, like every other role: Claude and Codex bootstrap links
-`/opt/windroc/mini-op/skills/mini-op` into the run's effective config directory's `skills/mini-op`;
+`/opt/windroc/mini-op/skills/mini-op` into Claude's effective config directory's `skills/mini-op` or
+Codex's `~/.agents/skills/mini-op` (independent of `CODEX_HOME`);
 OpenCode loads `/opt/windroc/mini-op/skills` through its container-only `skills.paths`. The environment requests no
 mini-op plugin; use a mini-op image containing its plain skill (WDRC-195). On a Host without a default table
 (the packaged `tmux`) a `verifier` run is the configuration error

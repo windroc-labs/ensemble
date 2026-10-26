@@ -65,7 +65,7 @@ class MiniOpSkill(Case):
             result = real_readlink(path, *args, **kwargs)
             return (
                 str(self.image)
-                if Path(path).is_relative_to(self.target) and result == str(self.source)
+                if Path(path).is_relative_to(self.home) and result == str(self.source)
                 else result
             )
 
@@ -74,23 +74,63 @@ class MiniOpSkill(Case):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def test_each_bootstrap_links_the_plain_skill_in_the_selected_client_home(self):
+    def test_each_bootstrap_links_the_plain_skill_in_the_client_discovery_directory(self):
         for client in ("claude", "codex"):
             with self.subTest(client=client):
                 directory = self.target / client
-                (directory / "skills/other").mkdir(parents=True)
+                directory.mkdir()
+                discovery = directory if client == "claude" else Path(self.home, ".agents")
+                (discovery / "skills/other").mkdir(parents=True)
                 if client == "claude":
                     self.code["bootstrap_claude"](self.templates, directory, "/work")
                 else:
                     self.code["bootstrap_codex"](
                         directory, "/work", Path(self.home, "fake-secrets"), self.plugins
                     )
-                skill = directory / "skills/mini-op"
+                skill = discovery / "skills/mini-op"
                 self.assertEqual(skill.readlink(), self.image)
                 self.assertEqual(
                     (skill / "SKILL.md").read_text(), (self.source / "SKILL.md").read_text()
                 )
-                self.assertTrue((directory / "skills/other").is_dir())
+                self.assertTrue((discovery / "skills/other").is_dir())
+                if client == "codex":
+                    self.assertFalse((directory / "skills").exists())
+
+    def test_codex_creates_the_user_discovery_directory(self):
+        self.code["bootstrap_codex"](
+            self.target, "/work", Path(self.home, "fake-secrets"), self.plugins
+        )
+        skill = Path(self.home, ".agents/skills/mini-op")
+        self.assertEqual(skill.readlink(), self.image)
+        self.assertEqual((skill / "SKILL.md").read_text(), (self.source / "SKILL.md").read_text())
+
+    def test_codex_without_mini_op_leaves_user_skills_absent(self):
+        shutil.rmtree(self.source)
+        self.code["bootstrap_codex"](
+            self.target, "/work", Path(self.home, "fake-secrets"), self.plugins
+        )
+        self.assertFalse(Path(self.home, ".agents").exists())
+
+    def test_codex_preserves_and_refuses_a_conflicting_user_skill(self):
+        skills = Path(self.home, ".agents/skills")
+        skills.mkdir(parents=True)
+        target = skills / "mini-op"
+        target.write_text("existing")
+        with self.assertRaisesRegex(SystemExit, "mini-op skill already exists"):
+            self.code["bootstrap_codex"](
+                self.target, "/work", Path(self.home, "fake-secrets"), self.plugins
+            )
+        self.assertEqual(target.read_text(), "existing")
+
+    def test_codex_refuses_a_linked_user_skill_parent(self):
+        elsewhere = Path(self.home, "elsewhere")
+        elsewhere.mkdir()
+        Path(self.home, ".agents").symlink_to(elsewhere)
+        with self.assertRaisesRegex(SystemExit, "skill parent must be a directory, not a link"):
+            self.code["bootstrap_codex"](
+                self.target, "/work", Path(self.home, "fake-secrets"), self.plugins
+            )
+        self.assertEqual(list(elsewhere.iterdir()), [])
 
     def test_an_ordinary_image_without_mini_op_adds_no_skill(self):
         shutil.rmtree(self.source)
