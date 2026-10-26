@@ -16,6 +16,10 @@ OSStatus SecKeychainItemSetAccessWithPassword(SecKeychainItemRef itemRef, SecAcc
 // Private (SecTrustedApplicationPriv.h) but exported; NULL requirement when none is recorded.
 OSStatus SecTrustedApplicationCopyRequirement(SecTrustedApplicationRef appRef, SecRequirementRef *requirement);
 
+// Whether a keychain call may show UI: process-wide, so call sets it around each call under a lock and turns it off
+// after. With it off, securityd refuses whatever would ask (errSecInteractionNotAllowed), file keychains included,
+// which ignore kSecUseAuthenticationUI.
+static OSStatus set_ui(int allowed) { return SecKeychainSetUserInteractionAllowed(allowed ? true : false); }
 static OSStatus signed_runtime(void) {
     SecCodeRef code = NULL;
     CFDictionaryRef info = NULL;
@@ -51,8 +55,30 @@ static CFMutableDictionaryRef item_query(const char *keychain_path, const char *
     CFRelease(list);
     return q;
 }
-// Attributes only, so it never prompts; *account is the first item's, malloc'd, empty when it has none.
-static OSStatus item_accounts(const char *path, const char *service, long *count, char **account) {
+// The values of attribute key of each item in result (an array of attribute dictionaries), newline-joined in a
+// malloc'd UTF-8 string; one without it, or not a string, adds an empty value. prefix (NULL: any) keeps only values
+// starting with it.
+static OSStatus join_attributes(CFArrayRef result, CFStringRef key, CFStringRef prefix, char **joined) {
+    CFMutableStringRef all = CFStringCreateMutable(NULL, 0);
+    int first = 1;
+    for (CFIndex i = 0; i < CFArrayGetCount(result); i++) {
+        CFStringRef v = CFDictionaryGetValue(CFArrayGetValueAtIndex(result, i), key);
+        if (v && CFGetTypeID(v) != CFStringGetTypeID()) v = NULL;
+        if (prefix && (!v || !CFStringHasPrefix(v, prefix))) continue;
+        if (!first) CFStringAppend(all, CFSTR("\n"));
+        if (v) CFStringAppend(all, v);
+        first = 0;
+    }
+    CFIndex size = CFStringGetMaximumSizeForEncoding(CFStringGetLength(all), kCFStringEncodingUTF8) + 1;
+    OSStatus s = errSecSuccess;
+    *joined = calloc(1, size);
+    if (!*joined) s = errSecAllocate;
+    else if (!CFStringGetCString(all, *joined, size, kCFStringEncodingUTF8)) s = errSecDecode;
+    CFRelease(all);
+    return s;
+}
+// Attributes only, so it never prompts: *count items, *accounts their accounts newline-joined, malloc'd.
+static OSStatus item_accounts(const char *path, const char *service, long *count, char **accounts) {
     SecKeychainRef kc = NULL;
     OSStatus s;
     CFMutableDictionaryRef q = item_query(path, service, NULL, &kc, &s);
@@ -63,14 +89,32 @@ static OSStatus item_accounts(const char *path, const char *service, long *count
     s = SecItemCopyMatching(q, &result);
     if (s == errSecSuccess) {
         *count = CFArrayGetCount((CFArrayRef)result);
-        CFStringRef a = *count ? CFDictionaryGetValue(CFArrayGetValueAtIndex((CFArrayRef)result, 0), kSecAttrAccount) : NULL;
-        if (a && CFGetTypeID(a) != CFStringGetTypeID()) a = NULL;
-        CFIndex size = a ? CFStringGetMaximumSizeForEncoding(CFStringGetLength(a), kCFStringEncodingUTF8) + 1 : 1;
-        *account = calloc(1, size);
-        if (!*account) s = errSecAllocate;
-        else if (a && !CFStringGetCString(a, *account, size, kCFStringEncodingUTF8)) s = errSecDecode;
+        s = join_attributes((CFArrayRef)result, kSecAttrAccount, NULL, accounts);
     }
     if (result) CFRelease(result);
+    CFRelease(q);
+    CFRelease(kc);
+    return s;
+}
+// Attributes only, so it never prompts: the services of every generic-password item in the keychain starting with
+// prefix, newline-joined in *services, malloc'd; repeats are the caller's to drop.
+static OSStatus item_services(const char *path, const char *prefix, char **services) {
+    SecKeychainRef kc = NULL;
+    OSStatus s = SecKeychainOpen(path, &kc);
+    if (s != errSecSuccess) return s;
+    CFMutableDictionaryRef q = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionarySetValue(q, kSecClass, kSecClassGenericPassword);
+    CFArrayRef list = CFArrayCreate(NULL, (const void **)&kc, 1, &kCFTypeArrayCallBacks);
+    CFDictionarySetValue(q, kSecMatchSearchList, list);
+    CFRelease(list);
+    CFDictionarySetValue(q, kSecReturnAttributes, kCFBooleanTrue);
+    CFDictionarySetValue(q, kSecMatchLimit, kSecMatchLimitAll);
+    CFStringRef p = CFStringCreateWithCString(NULL, prefix, kCFStringEncodingUTF8);
+    CFTypeRef result = NULL;
+    s = SecItemCopyMatching(q, &result);
+    if (s == errSecSuccess) s = join_attributes((CFArrayRef)result, kSecAttrService, p, services);
+    if (result) CFRelease(result);
+    CFRelease(p);
     CFRelease(q);
     CFRelease(kc);
     return s;
@@ -111,15 +155,17 @@ static OSStatus self_access(const char *label, SecAccessRef *access) {
     CFRelease(self);
     return s;
 }
-// A broker-only item. Replacement deletes the old item so a pre-planted permissive ACL cannot survive;
-// initial-only creation leaves an existing item untouched and fails on a duplicate.
-static OSStatus secret_put(const char *path, const char *service, const char *account, const char *label, const void *bytes, long length, int replace) {
+// A broker-only item. Replacement deletes the old item so a pre-planted permissive ACL cannot survive, failing
+// rather than asking when no_ui; initial-only creation leaves an existing item untouched and fails on a duplicate.
+static OSStatus secret_put(const char *path, const char *service, const char *account, const char *label, const void *bytes, long length, int replace, int no_ui) {
     SecKeychainRef kc = NULL;
     OSStatus s;
     CFMutableDictionaryRef q = item_query(path, service, account, &kc, &s);
     if (!q) return s;
     if (replace) {
+        if (no_ui) CFDictionarySetValue(q, kSecUseAuthenticationUI, kSecUseAuthenticationUIFail);
         s = SecItemDelete(q);
+        CFDictionaryRemoveValue(q, kSecUseAuthenticationUI);
         if (s != errSecSuccess && s != errSecItemNotFound) goto done;
     }
     SecAccessRef access = NULL;
@@ -454,6 +500,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
 	"syscall"
 	"unsafe"
 )
@@ -523,8 +572,33 @@ func status(s C.OSStatus) error {
 	return fmt.Errorf("keychain status %d", int(s))
 }
 
-// fileKeychain is the keychain file at this path, with no install check.
-type fileKeychain string
+// fileKeychain is the keychain file at path, with no install check. Only with ui may its dialog reads, dialog trust
+// changes and writes show a keychain dialog; every other call, and every call without ui, fails rather than ask.
+type fileKeychain struct {
+	path string
+	ui   bool
+}
+
+// uiMu serializes call: SecKeychainSetUserInteractionAllowed is process-wide.
+var uiMu sync.Mutex
+
+// call runs f, a Security call, with keychain UI allowed only when ui, and turns UI off again after it.
+func call(ui bool, f func() C.OSStatus) error {
+	uiMu.Lock()
+	defer uiMu.Unlock()
+	if s := C.set_ui(cBool(ui)); s != 0 {
+		return status(s)
+	}
+	defer C.set_ui(0)
+	return status(f())
+}
+
+func cBool(b bool) C.int {
+	if b {
+		return 1
+	}
+	return 0
+}
 
 // cStrings converts s to C strings for one call; free releases them.
 func cStrings(s ...string) (ps []*C.char, free func()) {
@@ -538,16 +612,16 @@ func cStrings(s ...string) (ps []*C.char, free func()) {
 	}
 }
 
-func (k fileKeychain) get(service, account string, noUI bool) ([]byte, error) {
-	p, free := cStrings(string(k), service, account)
+// get reads the item; only dialog, on a keychain with ui, may show a dialog.
+func (k fileKeychain) get(service, account string, dialog bool) ([]byte, error) {
+	if dialog && !k.ui {
+		return nil, ErrNeedsDialog
+	}
+	p, free := cStrings(k.path, service, account)
 	defer free()
 	var data unsafe.Pointer
 	var n C.long
-	var ui C.int
-	if noUI {
-		ui = 1
-	}
-	if err := status(C.item_get(p[0], p[1], p[2], ui, &data, &n)); err != nil {
+	if err := call(dialog, func() C.OSStatus { return C.item_get(p[0], p[1], p[2], cBool(!dialog), &data, &n) }); err != nil {
 		return nil, err
 	}
 	defer C.free(data)
@@ -556,77 +630,137 @@ func (k fileKeychain) get(service, account string, noUI bool) ([]byte, error) {
 	return b, nil
 }
 
-func (k fileKeychain) Get(account string) ([]byte, error) { return k.get(tokenService, account, true) }
+func (k fileKeychain) Get(account string) ([]byte, error) { return k.get(tokenService, account, false) }
 
 func (k fileKeychain) GetWithDialog(account string) ([]byte, error) {
-	return k.get(tokenService, account, false)
+	return k.get(tokenService, account, true)
 }
 
 func (k fileKeychain) Put(account string, token []byte) error {
 	if len(token) == 0 {
 		return errors.New("empty setup-token")
 	}
-	return k.put(tokenService, account, "ensemble Claude setup-token "+account, token)
+	return k.put(tokenService, account, "ensemble Claude setup-token "+account, token, true)
 }
 
-func (k fileKeychain) put(service, account, label string, data []byte) error {
-	p, free := cStrings(string(k), service, account, label)
+// put saves data as a broker-only item, replacing an earlier one when replace.
+func (k fileKeychain) put(service, account, label string, data []byte, replace bool) error {
+	p, free := cStrings(k.path, service, account, label)
 	defer free()
-	return status(C.secret_put(p[0], p[1], p[2], p[3], unsafe.Pointer(&data[0]), C.long(len(data)), 1))
+	return call(k.ui, func() C.OSStatus {
+		return C.secret_put(p[0], p[1], p[2], p[3], unsafe.Pointer(&data[0]), C.long(len(data)), cBool(replace), cBool(!k.ui))
+	})
 }
 
 func (k fileKeychain) Secret(service, account string) ([]byte, error) {
-	return k.get(service, account, true)
+	return k.get(service, account, false)
 }
 
 func (k fileKeychain) PutSecret(service, account string, data []byte) error {
 	if len(data) == 0 {
 		return errors.New("empty secret")
 	}
-	return k.put(service, account, "ensemble "+service, data)
+	return k.put(service, account, "ensemble "+service, data, true)
 }
 
 func (k fileKeychain) CreateSecret(service, account string, data []byte) error {
 	if len(data) == 0 {
 		return errors.New("empty secret")
 	}
-	p, free := cStrings(string(k), service, account, "ensemble "+service)
-	defer free()
-	return status(C.secret_put(p[0], p[1], p[2], p[3], unsafe.Pointer(&data[0]), C.long(len(data)), 0))
+	return k.put(service, account, "ensemble "+service, data, false)
 }
 
 func (k fileKeychain) WriteSecret(service, account string, data []byte) error {
 	if len(data) == 0 {
 		return errors.New("empty secret")
 	}
-	p, free := cStrings(string(k), service, account)
+	p, free := cStrings(k.path, service, account)
 	defer free()
-	return status(C.codex_write(p[0], p[1], p[2], unsafe.Pointer(&data[0]), C.long(len(data))))
+	return call(k.ui, func() C.OSStatus { return C.codex_write(p[0], p[1], p[2], unsafe.Pointer(&data[0]), C.long(len(data))) })
 }
 
 func (k fileKeychain) DeleteSecret(service, account string) error {
-	p, free := cStrings(string(k), service, account)
+	p, free := cStrings(k.path, service, account)
 	defer free()
-	if err := status(C.secret_delete(p[0], p[1], p[2])); !errors.Is(err, ErrNotFound) {
+	if err := call(k.ui, func() C.OSStatus { return C.secret_delete(p[0], p[1], p[2]) }); !errors.Is(err, ErrNotFound) {
 		return err
 	}
 	return nil
 }
 
-func (k fileKeychain) AppAccount(app string) (string, error) {
-	p, free := cStrings(string(k), app)
+func (k fileKeychain) CreateCodex() error {
+	p, free := cStrings(k.path, codexService, codexAccount, "ensemble Codex login")
+	defer free()
+	return call(k.ui, func() C.OSStatus { return C.codex_create(p[0], p[1], p[2], p[3]) })
+}
+
+func (k fileKeychain) WriteCodex(data []byte) error {
+	if len(data) == 0 || len(data) > maxCodexAuth {
+		return errors.New("invalid Codex credential size")
+	}
+	p, free := cStrings(k.path, codexService, codexAccount)
+	defer free()
+	return call(k.ui, func() C.OSStatus {
+		return C.codex_write(p[0], p[1], p[2], unsafe.Pointer(&data[0]), C.long(len(data)))
+	})
+}
+
+// Accounts are the accounts of service's items, attributes only; none when it has no item.
+func (k fileKeychain) Accounts(service string) ([]string, error) {
+	p, free := cStrings(k.path, service)
 	defer free()
 	var n C.long
-	var account *C.char
-	err := status(C.item_accounts(p[0], p[1], &n, &account))
-	defer C.free(unsafe.Pointer(account))
+	var joined *C.char
+	err := call(false, func() C.OSStatus { return C.item_accounts(p[0], p[1], &n, &joined) })
+	defer C.free(unsafe.Pointer(joined))
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	}
+	accounts := strings.Split(C.GoString(joined), "\n")
+	if len(accounts) != int(n) {
+		return nil, fmt.Errorf("keychain service %q: an account holds a line break", service)
+	}
+	return accounts, nil
+}
+
+// Services are the distinct services, sorted, of the keychain's generic-password items starting with prefix,
+// attributes only.
+func (k fileKeychain) Services(prefix string) ([]string, error) {
+	p, free := cStrings(k.path, prefix)
+	defer free()
+	var joined *C.char
+	err := call(false, func() C.OSStatus { return C.item_services(p[0], p[1], &joined) })
+	defer C.free(unsafe.Pointer(joined))
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	}
+	var services []string
+	for _, s := range strings.Split(C.GoString(joined), "\n") {
+		if strings.HasPrefix(s, prefix) {
+			services = append(services, s)
+		}
+	}
+	slices.Sort(services)
+	return slices.Compact(services), nil
+}
+
+func (k fileKeychain) AppAccount(app string) (string, error) {
+	accounts, err := k.Accounts(app)
 	switch {
 	case err != nil:
 		return "", err
-	case n > 1:
+	case len(accounts) == 0:
+		return "", ErrNotFound
+	case len(accounts) > 1:
 		return "", ErrAmbiguous
 	}
-	return C.GoString(account), nil
+	return accounts[0], nil
 }
 
 func (k fileKeychain) AppKey(app, account string) ([]byte, error) { return k.get(app, account, false) }
@@ -636,47 +770,59 @@ func (k fileKeychain) TrustApps(app, account string, password []byte) error {
 }
 
 func (k fileKeychain) TrustAppsByDialog(app, account string) error {
-	p, free := cStrings(string(k), app, account)
+	if !k.ui {
+		return ErrNeedsDialog
+	}
+	p, free := cStrings(k.path, app, account)
 	defer free()
-	return status(C.item_trust_self(p[0], p[1], p[2], 0, nil, 0))
+	return call(true, func() C.OSStatus { return C.item_trust_self(p[0], p[1], p[2], 0, nil, 0) })
 }
 
 func (k fileKeychain) TrustPartition(app, account string, password []byte) error {
 	return k.trust(app, account, true, password)
 }
 
-// trust runs item_trust_self with the keychain password: the partition list when partitionList, else the read
-// and export entries.
+// trust runs item_trust_self with the keychain password, without UI: the partition list when partitionList, else the
+// read and export entries.
 func (k fileKeychain) trust(app, account string, partitionList bool, password []byte) error {
 	if len(password) == 0 {
 		return errors.New("empty keychain password")
 	}
-	p, free := cStrings(string(k), app, account)
+	p, free := cStrings(k.path, app, account)
 	defer free()
-	var list C.int
-	if partitionList {
-		list = 1
-	}
-	return status(C.item_trust_self(p[0], p[1], p[2], list, unsafe.Pointer(&password[0]), C.long(len(password))))
+	return call(false, func() C.OSStatus {
+		return C.item_trust_self(p[0], p[1], p[2], cBool(partitionList), unsafe.Pointer(&password[0]), C.long(len(password)))
+	})
 }
 
 func (k fileKeychain) AppAccess(app, account string) (AppAccess, error) {
-	p, free := cStrings(string(k), app, account)
+	p, free := cStrings(k.path, app, account)
 	defer free()
 	var text unsafe.Pointer
 	var n C.long
-	if err := status(C.item_access(p[0], p[1], p[2], &text, &n)); err != nil {
+	if err := call(false, func() C.OSStatus { return C.item_access(p[0], p[1], p[2], &text, &n) }); err != nil {
 		return AppAccess{}, err
 	}
 	defer C.free(text)
 	return parseAccess(C.GoBytes(text, C.int(n)))
 }
 
-// SystemKeychain is the item in the account's login keychain, reachable only from the hardened install.
-type SystemKeychain struct{ Home string }
+// SystemKeychain is the item in the account's login keychain, reachable only from the hardened install. Its calls
+// never show a keychain dialog unless it is Interactive.
+type SystemKeychain struct {
+	Home string
+	ui   bool
+}
+
+// Interactive is k for an explicit login or retrust: its dialog reads, dialog trust changes and writes may show a
+// keychain dialog.
+func (k SystemKeychain) Interactive() SystemKeychain {
+	k.ui = true
+	return k
+}
 
 func (k SystemKeychain) login() fileKeychain {
-	return fileKeychain(filepath.Join(k.Home, "Library/Keychains/login.keychain-db"))
+	return fileKeychain{path: filepath.Join(k.Home, "Library/Keychains/login.keychain-db"), ui: k.ui}
 }
 
 func (k SystemKeychain) Get(account string) ([]byte, error) {
@@ -775,19 +921,26 @@ func (k SystemKeychain) CreateCodex() error {
 	if err := CheckInstalled(); err != nil {
 		return err
 	}
-	p, free := cStrings(string(k.login()), codexService, codexAccount, "ensemble Codex login")
-	defer free()
-	return status(C.codex_create(p[0], p[1], p[2], p[3]))
+	return k.login().CreateCodex()
 }
 
 func (k SystemKeychain) WriteCodex(data []byte) error {
 	if err := CheckInstalled(); err != nil {
 		return err
 	}
-	if len(data) == 0 || len(data) > maxCodexAuth {
-		return errors.New("invalid Codex credential size")
+	return k.login().WriteCodex(data)
+}
+
+func (k SystemKeychain) Accounts(service string) ([]string, error) {
+	if err := CheckInstalled(); err != nil {
+		return nil, err
 	}
-	p, free := cStrings(string(k.login()), codexService, codexAccount)
-	defer free()
-	return status(C.codex_write(p[0], p[1], p[2], unsafe.Pointer(&data[0]), C.long(len(data))))
+	return k.login().Accounts(service)
+}
+
+func (k SystemKeychain) Services(prefix string) ([]string, error) {
+	if err := CheckInstalled(); err != nil {
+		return nil, err
+	}
+	return k.login().Services(prefix)
 }
