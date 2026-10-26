@@ -22,9 +22,9 @@ def on_docker(settings: Mapping, host: str | None) -> bool:
 
 
 def reference_lines(text: str) -> tuple[list[str], int]:
-    """(text's lines, kept ends; the Reference block's length)."""
+    """(text's lines, kept ends; the length of its Reference block, led by Reference: or Repo:)."""
     lines = text.lstrip().splitlines(keepends=True)
-    if not lines or not lines[0].startswith("Reference:"):
+    if not lines or not lines[0].startswith(("Reference:", "Repo:")):
         return lines, 0
     return lines, len(list(itertools.takewhile(str.strip, lines)))
 

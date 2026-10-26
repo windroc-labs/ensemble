@@ -12,7 +12,7 @@ from ensemble.delegate.composer.types import (
     RunParams,
     Team,
 )
-from ensemble.delegate.engine.config import read_config
+from ensemble.delegate.engine.config import fixed_clients, read_config
 from ensemble.utils import freeze, thaw
 
 
@@ -30,6 +30,7 @@ class Composer:
             except (OSError, ValueError) as error:
                 raise ConfigError(f"config: {error}") from None
         self.config = config if isinstance(config, DelegateConfig) else DelegateConfig(config)
+        self._fixed = fixed_clients(thaw(self.config.values))
         if team is not None:
             self.team = team
         else:
@@ -75,6 +76,9 @@ class Composer:
             return teams.index(role, self.team, cfg=cfg)
         teams.role_tables("config snapshot", "", cfg)
         return {name: teams.index(name, self.team, cfg=cfg) for name in teams.roles(self.team, cfg)}
+
+    def fixed_client(self, role: str) -> str | None:
+        return self._fixed.get(role)
 
     def trusted_dirs(self) -> frozenset[str]:
         return run.trusted_dirs(cfg=thaw(self.config.values))

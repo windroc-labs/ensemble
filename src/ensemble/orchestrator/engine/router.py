@@ -150,6 +150,10 @@ STALE = timedelta(hours=2)
 LIVE = timedelta(minutes=30)
 CAP = 4
 NOT_QUEUED = "not a {state} issue assigned to a role account"
+NOT_LISTED = (
+    "a {state} issue assigned to a role account, yet not in the {state} list "
+    "(it can lag a change: retry)"
+)
 SKEW = timedelta(minutes=5)
 CAP_COMMENT = "Tried 4 times without finishing; needs a look."
 INTERRUPTED = "The previous agent run was interrupted. Moving this issue back to the {state} queue."
@@ -613,10 +617,10 @@ class Board:
     def unqueued(self, ident):
         """Why ident is not queued, with the tracker's refusal."""
         current = self.tracker.recheck(ident)
-        reason = NOT_QUEUED.format(state=self.tracker.state_name(IssueState.READY))
-        reasons = [] if current.ready and current.role else [reason]
+        state = self.tracker.state_name(IssueState.READY)
+        reasons = [] if current.ready and current.role else [NOT_QUEUED.format(state=state)]
         reasons += [current.refused] if current.refused else []
-        return "; ".join(reasons) or reason
+        return "; ".join(reasons) or NOT_LISTED.format(state=state)
 
     def claim(self, issue, full, clients=()):
         ident = issue["identifier"]

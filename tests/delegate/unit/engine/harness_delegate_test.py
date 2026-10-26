@@ -246,6 +246,110 @@ class DockerPreflightTest(HarnessCase):
         self.assertFalse(os.path.exists(self.work))
 
 
+class FixedClientTest(HarnessCase):
+    """verifier on another client, from the router's gate overlay or a Spec's client, is a
+    ConfigError before anything is written (WDRC-110 FR-49, FR-81).
+    """
+
+    def test_the_gate_s_overlay_choosing_codex_is_refused(self):
+        overlays = ({}, {"roles": {"verifier": {"client": "codex"}}})  # gate.py _probe's shape
+        with self.assertRaises(ConfigError) as caught:
+            HarnessDelegate.usage("verifier", overlays=overlays, session_cls=HarnessSession)
+        self.assertIn("client 'codex': role verifier runs only on claude", str(caught.exception))
+
+    def test_a_spec_choosing_codex_is_refused_before_any_write(self):
+        self.settings(default="docker", harness_host="harness")  # mini-op needs a Docker default
+        HarnessSession.hosts["agent"] = RecordingHost("docker")
+        spec = Spec(
+            "Repo: windroc-labs/ensemble", self.work, task="verify", sid=SID, client="codex"
+        )
+        with self.assertRaises(ConfigError) as caught:
+            self.make(role="verifier", spec=spec)
+        self.assertEqual(
+            str(caught.exception),
+            "role verifier runs only on claude, not codex: chosen for this run",
+        )
+        self.assertFalse(os.path.exists(self.work))
+
+
+class VerifierDockerTest(HarnessCase):
+    """verifier on the packaged Docker Host, its broker faked: a missing mini-op:env or keychain
+    item fails before any container starts (WDRC-110 FR-50); no keychain, Docker or network.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.settings(default="docker", harness_host="harness")
+        self.calls, self.programs, self.refusals = [], [], {}
+        path = os.pathsep.join((PLUGIN_BIN, os.environ.get("PATH", os.defpath)))
+        for patcher in (
+            mock.patch("subprocess.Popen", side_effect=self.broker),
+            mock.patch("pwd.getpwuid", return_value=SimpleNamespace(pw_dir=self.home)),
+            mock.patch.dict(os.environ, {"PATH": path}),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def broker(self, argv, **kw):
+        program = os.path.basename(argv[0])
+        self.programs.append(program)
+        if program == "tmux":  # the packaged tmux Host's listing: no server, no session
+            process = mock.MagicMock(returncode=1)
+            process.__enter__.return_value = process
+            process.poll.return_value = 1
+            gone = "no server running on /tmp/tmux-0/default\n"
+            process.communicate.return_value = (
+                ("", gone) if kw.get("text") else (b"", gone.encode())
+            )
+            return process
+        command = argv[1]
+        self.calls.append(command)
+        if command in self.refusals:
+            code, name, message = self.refusals[command]
+            error = {"command": command, "code": name, "message": message, "cleanup": "not_needed"}
+            return support.FakeProc(
+                argv, err=json.dumps({"exit_code": code, "error": error}).encode(), code=code
+            )
+        free = "-empty" if command == "lock-query" else ""  # mini-op's lock is free
+        return support.FakeProc(argv, out=support.text(f"{command}-output{free}.json").encode())
+
+    def failure(self):
+        spec = Spec(
+            "Repo: windroc-labs/ensemble\nRef: main",
+            self.work,
+            task="verify",
+            mode="headless",
+            sid=SID,
+        )
+        try:
+            delegate = self.make(role="verifier", spec=spec, session_cls=Session)
+            result = delegate.run()
+        except (ConfigError, SessionError) as error:
+            return str(error)
+        self.assertNotEqual(result.returncode, 0)
+        return result.error
+
+    def test_a_missing_image_fails_before_any_container(self):
+        self.refusals["build"] = (
+            8,
+            "build_failed",
+            "Base image mini-op:env is not a local image; build or load it first (ensemble-broker never pulls it).",
+        )
+        self.assertIn("mini-op:env", self.failure())
+        self.assertIn("build", self.calls)
+        self.assertNotIn("start", self.calls)
+
+    def test_a_missing_keychain_item_fails_before_any_container(self):
+        self.refusals["start"] = (
+            5,
+            "login_required",
+            "No keychain item ensemble-env/mini-op-ssh-key: run ensemble-broker login env mini-op-ssh-key.",
+        )
+        self.assertIn("ensemble-env/mini-op-ssh-key", self.failure())
+        self.assertEqual(self.calls.count("start"), 1)
+        self.assertNotIn("docker", self.programs)
+
+
 class CloseTest(HarnessCase):
     def test_a_failed_harness_close_names_the_harness_session(self):
         spec = Spec("input", self.work, mode="tui", client="fake", sid=SID)

@@ -435,7 +435,8 @@ prefetches again. None of these errors is `busy`.
 
 ## Audit log
 
-Every `start`, `refresh` and `close` appends to `~/Library/Logs/ensemble/broker.jsonl`, recording credentials issued, renewed, withdrawn or revoked, never a token or key. Past 10 MiB it rotates to `broker.jsonl.1`. An unwritable log may lose records. OpenCode provider keys appear only on notice lines. Each delivered [static secret notice](#static-secret-expiry) is one `credential-notice` line (command `login`, `status` or `notices`) whose credential has result `notified`, its `item` the reference and its `notice` the threshold or `rotated`. Each environment secret a start writes is an `env-secret` credential naming its `item`, never its value: `issued` at start, `withdrawn` when close or a failed start removes the container. No container mounts it.
+Every `start` and `close`, and each `maintain` that renews a token (a `refresh` line), appends to
+`~/Library/Logs/ensemble/broker.jsonl`, recording credentials issued, renewed, withdrawn or revoked, never a token or key. Past 10 MiB it rotates to `broker.jsonl.1`. An unwritable log may lose records. OpenCode provider keys appear only on notice lines. Each delivered [static secret notice](#static-secret-expiry) is one `credential-notice` line (command `login`, `status` or `maintain`) whose credential has result `notified`, its `item` the reference and its `notice` the threshold or `rotated`. Each environment secret a start writes is an `env-secret` credential naming its `item`, never its value: `issued` at start, `withdrawn` when close or a failed start removes the container. No container mounts it.
 
 Audit persistence failure adds `audit_warning: "audit_write_failed"` to the broker's JSON
 response, alongside the original success fields or error envelope. The operation's exit code,
@@ -465,11 +466,10 @@ expiry with where it came from: `explicit` (`--expires`), `derived` (`--issued` 
 | the item is replaced | running sessions holding the old version get a notice to restart; new starts get the new one |
 | a `start` whose Claude token, OpenCode key or environment secret has expired | `login_required` (exit 5) naming the reference, before the lock and any container; never `busy`. An unknown expiry starts. An environment session whose lock is held still reports `SessionBusy` from the session's preflight first (that ordering is WDRC-168's) |
 
-Running sessions are never stopped. Their tick (the TUI supervisor or the headless harness) asks
-`ensemble-broker notices` at once, then when it says (at most an hour apart), and writes each notice to the session's
-events as `credential_notice <text>` (headless: the log). A notice the events file did not take is asked again; a
-failing check writes `credential_notice_failed <code>` once per streak. `status` lists every recorded static secret
-under `static`; `status --cleanup` also records and audits the notices due to you.
+Running sessions are never stopped. Their credential tick ([Credential renewal](#credential-renewal)) writes each
+notice to the session's events as `credential_notice <text>` (headless: the log); a notice the events file did not
+take comes again. `status` lists every recorded static secret under `static`; `status --cleanup` also records and
+audits the notices due to you.
 
 ## Run workers
 
@@ -503,20 +503,26 @@ Text a client copies in a container's pane (Claude Code's mouse selection, for o
 the container's tmux sets `set-clipboard on` and `allow-passthrough on`. Your terminal must support OSC 52 (Ghostty
 does), and a host tmux showing the pane needs `set -g set-clipboard on` in `~/.tmux.conf`.
 
-A session's credentials are renewed by the TUI session's host run supervisor or the headless run's harness;
-failures go to the session's events or the harness's log and retry every minute:
+### Credential renewal
 
-| Session | Renewal due | Failure event |
-|---|---|---|
-| Codex | 10 minutes before the earliest Codex or GitHub expiry | `client_refresh_failed <reason>` for either credential's failure |
-| Other clients with GitHub tokens | 10 minutes before the earliest GitHub expiry | `github_refresh_failed <reason>` |
-| Static secrets (Claude, OpenCode, env) | 30, 7 and 1 days before a known expiry, at expiry, and on replacement ([Static secret expiry](#static-secret-expiry)) | `credential_notice <text>`; `credential_notice_failed <code>` once per failing streak |
+One credential tick runs for every session: in the TUI session's host run supervisor, or in the headless run's
+harness. It calls `ensemble-broker maintain` at once, then whenever the broker says. The broker decides what is due:
+it renews each GitHub or Codex credential 10 minutes before its earliest expiry, works out the [static secret
+notices](#static-secret-expiry), and returns when to call again and the session's deadline. Its events go to the
+session's events, or the harness's log:
 
-Codex and GitHub renew independently within one broker refresh: a Codex failure still attempts GitHub renewal.
-For Codex, the absence of `github_refresh_failed` does not imply GitHub renewal succeeded; inspect
-`client_refresh_failed` and the [broker audit](#audit-log). A valid broker error preserves its message and optional
-cause. If the published Codex deadline expires, the supervisor reports `client_auth_expired` and closes the container;
-GitHub-only renewal keeps retrying across expiry. See [Codex recovery](#recovery).
+| Event | When |
+|---|---|
+| `credential_refresh_failed <credential>: <reason>` | one credential (`codex`, `github` or `notices`) failed; it is retried a minute later, the others are unaffected |
+| `credential_maintenance_failed <reason>` | the broker gave no answer (`transport`) or refused the call; once per failing streak, retried every minute |
+| `credential_notice <text>` | a static secret notice is due |
+| `client_auth_expired <reason>` | the Codex login the container holds expired with no newer one confirmed; the session closes |
+
+Each credential renews independently: a Codex failure still renews GitHub, and the reverse. The tick keeps the last
+deadline the broker confirmed in `<generation>.deadline.json`, so while the broker fails it still closes a Codex
+session at that deadline. If the cached deadline has already passed, the tick first tries one broker call;
+closing can wait until that call times out. GitHub-only and static-secret sessions have no deadline and keep retrying.
+See [Codex recovery](#recovery).
 
 ### Permissions
 
@@ -590,7 +596,11 @@ each replacing the keys it sets (a list whole):
 | `[roles.<role>.environment]` | `[delegate.roles.<role>.environment]` | `name` (a named environment) and keys overriding it; without `name`, overrides of the default |
 
 The packaged default is `[environment.docker]`: `image = "@worker"`, `gateway = "workers"`, `plugins = []`,
-`secrets = []`, `prefetch = false`, no `lock`. Keys:
+`secrets = []`, `prefetch = false`, no `lock`. It also ships one named environment, `[environments.mini-op]`: image
+`mini-op:env`, gateway, lock and plugin `mini-op`, and the secrets `ensemble-env/mini-op-password` (file `mini-password`)
+and `ensemble-env/mini-op-ssh-key` (file `mini-ssh-key`); no prefetch. The built-in `verifier` selects it with
+`prefetch = true`, so on a Host without a default table (the packaged `tmux`) a `verifier` run is the configuration error
+below. Keys:
 
 - `image`: a local [base image](#base-images) or `"@worker"`, ensemble's worker base.
 - `gateway`: the caller network the container joins, by the egress proxy's label name
@@ -601,7 +611,8 @@ The packaged default is `[environment.docker]`: `image = "@worker"`, `gateway = 
 - `lock`: a [lock](#broker-locks) name. A locked run's session closes as soon as the run ends (outcome, failure,
   give-up, usage limit), before its result goes out: no TUI is left for a pane to follow; the workspace and history
   stay, so `ensemble-crew reopen` continues.
-- `prefetch`: `true` prefetches the input's Reference block: exactly one `Repo:` line (a clone path names its origin)
+- `prefetch`: `true` prefetches the input's Reference block (its leading lines, opening with `Reference:` or, in an
+  input without an id, `Repo:`): exactly one `Repo:` line (a clone path names its origin)
   and at most one `Ref:` line (the [Prefetch](#prefetch) ref rule; none: the default branch). Both are checked before
   any git or GitHub call; `Base:` is not read.
 
@@ -800,7 +811,7 @@ to 3 s old, but the opening is sent only after a fresh capture shows no dialog; 
 - **Egress proxy not ready** (`egress_unavailable`): run `~/.egress/current/start.sh`, as the error says (before
   a first successful install, rerun `scripts/install.sh --docker`), wait for
   `docker ps --filter name=egress-proxy` to show `(healthy)`, then start, restart or resume again ([Egress proxy](#egress-proxy)).
-- **Codex authentication expired** (`client_auth_expired`): run `/usr/local/libexec/ensemble/ensemble-broker login codex` on the host, then `ensemble-session resume NAME`; native history is kept. Renewal failures (`client_refresh_failed`) retry each minute until expiry, when the generation closes; a retry after a failed delivery or deadline publication delivers the login already renewed, without renewing it again. No run logs in or uses another identity.
+- **Codex authentication expired** (`client_auth_expired`): run `/usr/local/libexec/ensemble/ensemble-broker login codex` on the host, then `ensemble-session resume NAME`; native history is kept. Renewal failures (`credential_refresh_failed codex: …`) retry each minute until expiry, when the generation closes; a retry after a failed delivery or deadline record delivers the login already renewed, without renewing it again. No run logs in or uses another identity.
 
 ## Broker locks
 
@@ -936,7 +947,7 @@ These proxy checks have not yet been run on the mini; the earlier bridge results
 | Command | Checks |
 |---|---|
 | `python3 tests/session/live_docker.py worker --client claude\|codex\|opencode CWD [NAME]`, from a manager session | a second build reuses the image; with no `--host`, the worker runs in a container; its security flags (`--cap-drop ALL`, only the egress proxy's `workers` network, no extra hosts) and mounts match the plan, and the [unreachable](credentials.md#what-a-container-cannot-reach) resources stay so; a supervisor killed mid-turn delivers its event once; restart, close then resume, and `docker rm -f` then resume each answer a prompt; every close revokes the generation's GitHub tokens and withdraws its client credential; no revocation stays pending but the removed container's, whose tokens it reports; for OpenCode also: the first turn leaves `~/.ensemble/docker-state/<NAME>/opencode/opencode/opencode.db`, Ollama listens on `127.0.0.1` only (`lsof`), the container holds only GitHub secrets and each configured provider's key (`find /run/ensemble/secrets`), and each resume continues the same OpenCode session |
-| `python3 tests/session/live_docker.py role --repo OWNER/NAME [--timeout S] [NAME]` | a headless engineer run on the test repo gets one forced token refresh, opens a draft PR as `windroc-bot[bot]` after it, and its close reclaims its credentials |
+| `python3 tests/session/live_docker.py role --repo OWNER/NAME [--timeout S] [NAME]` | a headless engineer run on the test repo gets one forced token renewal (`maintain --renew`), opens a draft PR as `windroc-bot[bot]` after it, and its close reclaims its credentials |
 | `python3 tests/session/live_docker.py pr URL` | the PR, such as an unattended board run's, was opened as a draft by `windroc-bot[bot]` |
 
 Each prints a `PASS` line per check and per-generation timings. It stops with exit 1 at

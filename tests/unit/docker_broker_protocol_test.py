@@ -81,7 +81,7 @@ class DockerBrokerProtocol(Case):
         Draft202012Validator.check_schema(schema)
         index = json.loads((PROTOCOL / "fixtures/index.json").read_text())
         self.assertTrue(index["cases"])
-        self.assertEqual(index["protocol_version"], "28")
+        self.assertEqual(index["protocol_version"], "29")
         names = [case["file"] for case in index["cases"]]
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual(
@@ -111,10 +111,8 @@ class DockerBrokerProtocol(Case):
             "lock_query_output",
             "check_clients_input",
             "check_clients_output",
-            "refresh_input",
-            "refresh_output",
-            "notices_input",
-            "notices_output",
+            "maintain_input",
+            "maintain_output",
             "close_input",
             "close_output",
             "probe_provider_input",

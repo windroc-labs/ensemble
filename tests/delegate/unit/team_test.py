@@ -8,6 +8,7 @@ from ensemble import session
 from ensemble.delegate.composer import Composer
 from ensemble.delegate.composer.base import TEAM, outline
 from ensemble.delegate.composer.teams import START
+from ensemble.delegate.engine.config import read_config
 from ensemble.utils import unfenced
 from tests.delegate.case import Case
 from tests.delegate.unit.composer.prompts import (
@@ -222,6 +223,7 @@ class Shipped(Case):
             "researcher": "research",
             "pm": "product-design",
             "engineer": "build",
+            "verifier": "verify",
             "dummy-tester": "echo",
         }
         self.assertEqual(set(roles()), set(defaults))
@@ -253,14 +255,48 @@ class Shipped(Case):
             self.assertIn(f"`/updraft:{t}`", task_text(t))
             self.assertNotRegex(task_text(t), r"(?<!/)updraft:")
 
+    def test_the_verify_task_runs_mini_op_and_fixes_its_outcome_statuses(self):
+        self.assertIn(" with `/mini-op:run`", catalog()["verifier"]["verify"])
+        text = task_text("verify")
+        self.assertIn("`/mini-op:run`", text)
+        self.assertNotRegex(text, r"(?<!/)mini-op:run")
+        steps = text.split("## Steps", 1)[1].split("## Resume", 1)[0]
+        for literal in (
+            "No clear check → `needs_input`",
+            "The check ran to its end, passing or not → `status: done`",
+            "`summary` opens with the verdict, `Pass:` or `Fail:`",
+            "The check could not run (the mini unreachable, the runbook broke midway, "
+            "`/mini-op:run` missing) → `status: failed`",
+            "The request is still unclear → `needs_input`",
+            "the runbook's source and path",
+            "its full text",
+            "/run/ensemble/secrets/",
+        ):
+            self.assertIn(literal, steps)
+
     def test_every_plugin_the_team_calls_is_in_the_default_docker_whitelist(self):
+        """Or, for a role whose packaged environment adds it, in that environment's plugins."""
         prefix = re.compile(r"(?<![\w/.])/([a-z0-9][a-z0-9-]*):[a-z]")
-        called = {m for text in team_texts().values() for m in prefix.findall(text)}
         ((package, name),) = session.CONFIG_RESOURCES
         with files(package).joinpath(name).open("rb") as f:
-            whitelist = tomllib.load(f)["hosts"]["docker"]["plugins"]
-        self.assertTrue(called)
-        self.assertLessEqual(called, {source.split("@", 1)[0] for source in whitelist})
+            whitelist = {s.split("@", 1)[0] for s in tomllib.load(f)["hosts"]["docker"]["plugins"]}
+        packaged = read_config(local=os.devnull)
+        named = packaged["environments"]
+        checked = set()
+        for role in roles():
+            selected = packaged["roles"].get(role, {}).get("environment", {}).get("name")
+            extra = set(named[selected]["plugins"]) if selected else set()
+            texts = [composed(role)[0], *(task_text(t) for t in catalog()[role])]
+            checked.add(f"roles/{role}.md")
+            checked.update(f"tasks/{task}.md" for task in catalog()[role])
+            called = {m for text in texts for m in prefix.findall(text)}
+            with self.subTest(role=role):
+                self.assertLessEqual(called, whitelist | extra)
+        for path, text in team_texts().items():
+            if path not in checked:
+                with self.subTest(path=path):
+                    self.assertLessEqual(set(prefix.findall(text)), whitelist)
+        self.assertIn("mini-op", {m for m in prefix.findall(task_text("verify"))})
 
     def test_product_design_reviews_the_prd_with_updraft_review_to_its_default_cap(self):
         text = task_text("product-design")
@@ -697,6 +733,7 @@ class Real(RealConfig):
                 "researcher": ["worktree"],
                 "pm": ["worktree"],
                 "engineer": ["worktree", "status"],
+                "verifier": ["worktree"],
                 "dummy-tester": ["worktree"],
             },
         )

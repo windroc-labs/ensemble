@@ -165,6 +165,11 @@ class PrefetchTargetTest(Case):
     def test_an_unreadable_repo(self):
         self.assertIn("Repo:", self.refused("Reference: T-1", "Repo: not a repo!"))
 
+    def test_a_block_opening_with_repo_needs_no_reference_line(self):
+        self.assertEqual(self.target("Repo: o/r", "Ref: main"), ("o/r", "main"))
+        self.assertEqual(self.target("Repo: o/r"), ("o/r", None))
+
     def test_no_repo_line_in_the_reference_block(self):
         self.refused("Reference: T-1", "Ref: v1")
-        self.refused("Repo: o/r")
+        self.refused("Ref: v1", "Repo: o/r")
+        self.refused("Brief", "Repo: o/r")

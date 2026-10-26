@@ -1,9 +1,0 @@
-{
-  "exit_code": 16,
-  "error": {
-    "command": "refresh",
-    "code": "refresh_failed",
-    "message": "No GitHub tokens recorded for ensemble-worker_1-0123456789abcdef0123456789abcdef.",
-    "cleanup": "not_needed"
-  }
-}

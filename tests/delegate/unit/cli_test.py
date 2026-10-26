@@ -373,14 +373,16 @@ class Harnessed(HarnessCase):
         os.chdir(self.home)
         self.events = os.path.join(self.home, "events")
 
-    def cli(self, *extra, input="Hello.", stdin=None):
+    def cli(
+        self, *extra, input="Hello.", stdin=None, role="dummy-tester", task="echo", client="fake"
+    ):
         class Bound(HarnessDelegate):
             def __init__(self, role, spec, **placement):
                 super().__init__(role, spec, session_cls=Shown, **placement)
 
-        argv = ["run", "--role", "dummy-tester", "--task", "echo", "--input", input]
+        argv = ["run", "--role", role, "--task", task, "--input", input]
         argv += ["--out", os.path.join(self.work, "out.md"), "--workdir", self.work]
-        argv += ["--mode", "headless"]
+        argv += ["--mode", "headless"] + (["--client", client] if client else [])
         out, err = io.StringIO(), io.StringIO()
         with (
             redirect_stdout(out),
@@ -388,7 +390,7 @@ class Harnessed(HarnessCase):
             mock.patch("sys.stdin", stdin or io.StringIO()),
         ):
             try:
-                code = cli.main([*argv, "--client", "fake", *extra], delegate_cls=Bound)
+                code = cli.main([*argv, *extra], delegate_cls=Bound)
             except SystemExit as exit:
                 code = exit.code
         return code, out.getvalue(), err.getvalue()
@@ -451,6 +453,83 @@ class Environments(Harnessed):
         code, _, err = self.cli("--environment", "dummy", "--dry-run", input=self.TARGETED)
         self.assertEqual(code, 2)
         self.assertIn("--environment", err)
+
+
+class Verifier(Harnessed):
+    """The built-in verifier on the packaged mini-op environment (WDRC-110 FR-47, FR-50, FR-80)."""
+
+    TARGETED = "Repo: windroc-labs/ensemble\nRef: main"
+
+    def configure(self, default):
+        self.settings(default=default, harness_host="harness")
+        Shown.hosts["agent"] = RecordingHost(default)
+
+    def verify(self, *extra, client=None):
+        return self.cli(*extra, input=self.TARGETED, role="verifier", task="verify", client=client)
+
+    def test_dry_run_prints_the_mini_op_environment(self):
+        self.configure("docker")
+        code, out, err = self.verify("--dry-run")
+        self.assertEqual(code, 0, err)
+        shown = json.loads(out)
+        self.assertEqual(
+            shown["environment"],
+            {
+                "image": "mini-op:env",
+                "gateway": "mini-op",
+                "secrets": [
+                    {"item": "ensemble-env/mini-op-password", "file": "mini-password"},
+                    {"item": "ensemble-env/mini-op-ssh-key", "file": "mini-ssh-key"},
+                ],
+                "plugins": ["mini-op"],
+                "lock": "mini-op",
+                "prefetch": {"repo": "windroc-labs/ensemble", "ref": "main"},
+            },
+        )
+        self.assertIn("/mini-op:run", shown["prompt"])
+        self.assertFalse(os.path.exists(self.work))
+
+    def test_client_codex_is_refused_naming_the_flag(self):
+        self.configure("docker")
+        for extra in (("--dry-run",), ()):
+            with self.subTest(extra=extra):
+                code, out, err = self.verify(*extra, client="codex")
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("--client codex: role verifier runs only on claude", err)
+                self.assertFalse(os.path.exists(self.work))
+
+    def test_a_local_role_client_is_refused_naming_its_table(self):
+        self.configure("docker")
+        with open(self.local, "a", encoding="utf-8") as file:
+            file.write('[delegate.roles.verifier]\nclient = "codex"\n')
+        code, out, err = self.verify("--dry-run")
+        self.assertEqual((code, out), (2, ""))
+        for part in ("[delegate.roles.verifier]", "'codex'", "role verifier runs only on claude"):
+            self.assertIn(part, err)
+
+    def test_missing_repo_is_refused_before_the_task_runs(self):
+        self.configure("docker")
+        for extra in (("--dry-run",), ()):
+            with self.subTest(extra=extra):
+                code, out, err = self.cli(
+                    *extra, input="Check login", role="verifier", task="verify", client=None
+                )
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("prefetch: want one Repo: line", err)
+                self.assertIn("no Repo: line", err)
+                self.assertFalse(os.path.exists(self.work))
+
+    def test_tmux_default_host_refuses_and_still_lists(self):
+        self.configure("tmux")
+        code, out, err = self.verify()
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("role verifier selects an environment", err)
+        self.assertIn("[environment.tmux]", err)
+        self.assertFalse(os.path.exists(self.work))
+        listed = io.StringIO()
+        with redirect_stdout(listed), redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.main(["run", "--list"]), 0)
+        self.assertIn("\nverifier  orchestrator  built-in\n  verify: ", listed.getvalue())
 
 
 class DetachDisplay(Harnessed):

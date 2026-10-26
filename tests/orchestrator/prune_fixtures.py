@@ -101,7 +101,7 @@ def gql_for(
     elsewhere=(),
 ):
     """children: sub-issue state types by parent, any depth, as Linear lists them (archived ones
-    left out); stamps: canceledAt and completedAt, hours before NOW, by issue (none: null);
+    left out), archived with their parent; stamps: canceledAt and completedAt, hours before NOW, by issue (none: null);
     reread: the state an issue's archive read finds, by issue (none: its own); changed: the idents
     the change feed lists (gql.changed, settable later; None: every issue), each updated just now,
     or "since": those updated after the feed's updatedAt.gt, at their time; an issue's updatedAt:
@@ -167,6 +167,10 @@ def gql_for(
             ]
         }
 
+    def below(ident):
+        """ident and its descendants: Linear archives them with it."""
+        return {ident}.union(*(below(c) for c in children.get(ident, {})))
+
     def gql(query, **v):
         gql.calls.append(query)
         if query == ops.Q_TEAM:
@@ -212,7 +216,7 @@ def gql_for(
             if ident in fail:
                 raise LinearError("linear api error: boom")
             if ident not in refuse:
-                gql.gone.add(ident)
+                gql.gone.update(below(ident))
             return {"issueArchive": {"success": ident not in refuse}}
         if query == linear_tracker.Q_SNAPSHOTS:
             numbers = v["f"]["number"]["in"]

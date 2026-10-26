@@ -61,8 +61,8 @@ GitHub on the Docker Host needs no per-run login: `<B> login github ensemble-bot
 | Revoke | `close` releases the container's grant: it attempts revocation before removing the container, even if revocation fails; backlog entries retry at the next start, close or `status --cleanup` until revoked or expired; `<B> status` lists pending backlog entries without changing them |
 
 The `ensemble-tokens` record holds each token's state: prepared (issued, not yet confirmed in the container),
-delivered, or retiring (replaced, awaiting revocation). Start and refresh report a token only once it is delivered;
-a refresh or close interrupted at any step leaves the record consistent, and the next refresh or close finishes it.
+delivered, or retiring (replaced, awaiting revocation). Start and maintain report a token only once it is delivered;
+a renewal or close interrupted at any step leaves the record consistent, and the next maintain or close finishes it.
 
 If the backlog cannot be read or written and direct revocation fails, the broker retains the original
 `ensemble-tokens` record and reports pending cleanup. Retry `<B> close --container <container>` with the original container
@@ -180,9 +180,9 @@ this recovery when another process created it. The installer leaves deletion to 
 
 Each Docker container's grant, `ensemble-codex-grants` / `<container>`, records the login's fingerprint, expiry,
 revision and delivery state, never a token. Renewals of the one login are serialized across broker processes:
-concurrent refreshes renew it once. A refresh whose delivery or deadline publication failed delivers the same login
+concurrent renewals renew it once. A renewal whose delivery or deadline record failed delivers the same login
 on retry without renewing it again. `close` deletes the grant after removing the container, leaving other containers
-and the login as they are; a container an older broker started gets its grant at its next refresh.
+and the login as they are; a container an older broker started gets its grant at its next renewal.
 
 The broker's temporary Codex login directory is removed on success, child failure and normal cancellation; SIGKILL or host failure can leave it behind. Other processes running as you can read it meanwhile. Personal `~/.codex` is neither read nor changed.
 
@@ -224,10 +224,10 @@ shows.
 | `ensemble-claude` | account name (`default` or `<name>`) | `[session.clients.claude.accounts.<name>]` | that Claude account's setup-token | `<B> login claude [<name>]` | the broker |
 | `ensemble-bot` | App ID | `[session.hosts.docker.github] app` | App private key | the user; access set by `<B> login github ensemble-bot` | the broker, once logged in |
 | `ensemble-github-users` | `ensemble-bot` | — | the App's slug and its bot user's ID, for git identity (not a secret) | `<B> login github ensemble-bot` | the broker |
-| `ensemble-tokens` | container name | — | that container's installation tokens and expiries, including retained recovery material | `<B> start`, `refresh`; `close` removes only safely retired entries | the broker |
-| `ensemble-revocations` | `pending` | — | tokens awaiting revocation | `<B> close`, `refresh` failures | the broker |
-| `ensemble-codex` | `auth` | — | the full Codex login | `<B> login codex`; renewals at `start`, `refresh` | the broker |
-| `ensemble-codex-grants` | container name | — | that container's Codex grant: the login's fingerprint, expiry, revision and delivery state; no token | `<B> start`, `refresh`; `close` deletes it | the broker |
+| `ensemble-tokens` | container name | — | that container's installation tokens and expiries, including retained recovery material | `<B> start`, `maintain`; `close` removes only safely retired entries | the broker |
+| `ensemble-revocations` | `pending` | — | tokens awaiting revocation | `<B> close`, `maintain` failures | the broker |
+| `ensemble-codex` | `auth` | — | the full Codex login | `<B> login codex`; renewals at `start`, `maintain` | the broker |
+| `ensemble-codex-grants` | container name | — | that container's Codex grant: the login's fingerprint, expiry, revision and delivery state; no token | `<B> start`, `maintain`; `close` deletes it | the broker |
 | `ensemble-opencode` | provider name | `[session.clients.opencode.providers.<name>]` | that OpenCode provider's API key | `<B> login opencode <name>` | the broker |
 | `ensemble-env/<name>` | `<name>` | — | that environment secret | `<B> login env <name>` | the broker |
 | the `linear.harness_key` value | any | `linear.harness_key` | harness Linear API key | the user ([Linear presets](#linear-presets)) | any process running as the user |

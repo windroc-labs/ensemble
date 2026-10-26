@@ -10,7 +10,7 @@ from tests.delegate.case import REPO, Case
 from tests.delegate.skills.act_as import argv, command
 from tests.utils.sandbox import clean_env, python_path
 
-ROLES = ["researcher", "pm", "engineer", "dummy-tester"]
+ROLES = ["researcher", "pm", "engineer", "verifier", "dummy-tester"]
 BIN = os.path.join(REPO, "bin")  # the plugin's bin/, on a Claude Code session's PATH
 
 

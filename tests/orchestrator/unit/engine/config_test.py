@@ -1769,6 +1769,11 @@ class ConfigurationRoot(ConfigFile, Case):
                 PIPELINE + '[core.roles.researcher]\ngate = "echo `id`"\n',
                 "core: run overlay: unknown key 'gate' in [overlay.roles.researcher]",
             ),
+            (
+                CORE_TOML,
+                PIPELINE + '[core.roles.verifier]\nclient = "codex"\n',
+                "core: run overlay: [overlay.roles.verifier] client 'codex': role verifier runs only on claude",
+            ),
         ]
         for core, text, message in cases:
             with self.subTest(message):

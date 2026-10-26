@@ -940,6 +940,22 @@ class RouterEntry(OuterBase):
                 self.assertEqual(len(self.todo["comments"]), 1)
                 self.assertNotIn(router.INTERRUPTED.format(state="Todo"), text)
 
+    def test_the_delegates_fixed_client_refusal_takes_the_label_client_path(self):
+        """A Codex label on a verifier issue: the real delegate's refusal (WDRC-110 FR-81)."""
+        with self.assertRaises(DelegateConfigError) as refused:
+            HarnessDelegate.resolve(
+                "verifier", overlays=({"roles": {"verifier": {"client": "b"}}},)
+            )
+        self.write_config(AGENT_TOP + OUTER + AGENT_LABELS)
+        self.fake.ids[UUID] = ID
+        self.todo["labels"] = [label("selected", AGENT_B, AGENT_GROUP)]
+        self.api.construct_error = refused.exception
+        self.assertEqual(self.entry("--issue", ID), 1)
+        self.assertEqual(self.todo["state"], "In Review")
+        [text] = self.todo["comments"]
+        self.assertIn('Client "b" chosen on the issue', text)
+        self.assertIn("role verifier runs only on claude", text)
+
     def test_label_client_other_launch_errors_keep_recovery_behavior(self):
         self.write_config(AGENT_TOP + OUTER + AGENT_LABELS)
         self.todo["labels"] = [label("selected", AGENT_B, AGENT_GROUP)]
@@ -1113,6 +1129,15 @@ class RouterEntry(OuterBase):
         )
         self.assertEqual(self.todo["state"], "In Progress")
         self.assertFalse(os.path.lexists(self.rd))
+
+    def test_a_fixed_client_overlay_is_a_dry_run_config_error(self):
+        self.write_config(OUTER + '[core.roles.verifier]\nclient = "codex"\n')
+        self.assertEqual(self.entry("--dry-run", tty=True), 2)
+        self.assertIn(
+            "core: run overlay: [overlay.roles.verifier] client 'codex': "
+            "role verifier runs only on claude",
+            self.err,
+        )
 
     def test_a_config_error_exits_2_logged_once_a_day_and_printed_on_a_terminal_or_for_issue(
         self,
@@ -4124,6 +4149,33 @@ class ExplicitIssueRuns(TickBase):
                     [f"pick-none {ident} reason=not a Todo issue assigned to a role account"],
                 )
                 self.assertEqual((self.start.launches, fake.mutations, self.state), ([], [], ""))
+
+    def test_an_archived_todo_issue_is_named_archived(self):
+        fake = FakeLinear([issue("TASK-8", "Todo", "researcher", archived=True)])
+        for dry in (False, True):
+            with self.subTest(dry=dry):
+                code = self.tick(fake, "--issue", "TASK-8", *["--dry-run"] * dry)
+                self.assertEqual(code, 0 if dry else 2)
+                self.assertEqual(
+                    self.said(),
+                    [f"pick-none TASK-8 reason={linear_tracker.ARCHIVED.format(key='TASK-8')}"],
+                )
+                self.assertEqual((self.start.launches, fake.mutations, self.state), ([], [], ""))
+
+    def test_a_todo_issue_the_list_leaves_out_is_named_unlisted(self):
+        class Lagging(FakeLinear):
+            def _queue(self, query, v):
+                return {"issues": {"nodes": []}}
+
+        fake = Lagging([issue("TASK-8", "Todo", "researcher")])
+        self.assertEqual(self.tick(fake, "--issue", "TASK-8"), 2)
+        self.assertEqual(
+            self.said(),
+            [
+                "pick-none TASK-8 reason=a Todo issue assigned to a role account, yet not in "
+                "the Todo list (it can lag a change: retry)"
+            ],
+        )
 
     def test_no_project_is_the_reason_given(self):
         fake = FakeLinear(
