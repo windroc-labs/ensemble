@@ -830,7 +830,7 @@ func TestHoldAppendsToRecord(t *testing.T) {
 	}
 }
 
-// TestEnderEndsOnce: an Ender issuer's run ends exactly once, with the run's error, and End's error joins the result.
+// TestEnderEndsOnce: an Ender issuer's run ends exactly once, whatever its outcome, and End's error joins the result.
 func TestEnderEndsOnce(t *testing.T) {
 	failing := newContainer()
 	failing.fail = func(int) bool { return true }
@@ -854,13 +854,13 @@ func TestEnderEndsOnce(t *testing.T) {
 		}},
 		"refresh": {run: func(l Lifecycle, p *endingProvider) error {
 			acquire(t, l, ctrA, newContainer())
-			p.ends = nil
+			p.ends = 0
 			_, err := l.Refresh(bg, to(ctrA, newContainer()), nil)
 			return err
 		}},
 		"refresh delivery failure": {failed: true, run: func(l Lifecycle, p *endingProvider) error {
 			acquire(t, l, ctrA, newContainer())
-			p.ends = nil
+			p.ends = 0
 			_, err := l.Refresh(bg, to(ctrA, failing), nil)
 			return err
 		}},
@@ -868,17 +868,18 @@ func TestEnderEndsOnce(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			p := &endingProvider{fakeProvider: newProvider(t, "acme")}
 			err := c.run(lifecycle(newStore(), p, nil), p)
-			if len(p.ends) != 1 || (p.ends[0] != nil) != c.failed || (err != nil) != c.failed {
-				t.Fatalf("ends %v, run error %v", p.ends, err)
-			}
-			if c.failed && !errors.Is(err, p.ends[0]) && !errors.Is(p.ends[0], err) {
-				t.Fatalf("End got %v, run returned %v", p.ends[0], err)
+			if p.ends != 1 || (err != nil) != c.failed {
+				t.Fatalf("ends %d, run error %v", p.ends, err)
 			}
 		})
 	}
 	p := &endingProvider{fakeProvider: newProvider(t, "acme"), endErr: errors.New("end failed")}
 	if _, err := lifecycle(newStore(), p, nil).Acquire(bg, to(ctrA, newContainer()), "app", nil); !errors.Is(err, p.endErr) {
 		t.Fatalf("End's error not returned: %v", err)
+	}
+	p.issueErr = func(int) error { return issueFails }
+	if _, err := lifecycle(newStore(), p, nil).Acquire(bg, to(ctrA, newContainer()), "app", nil); !errors.Is(err, issueFails) || !errors.Is(err, p.endErr) {
+		t.Fatalf("run and End errors not joined: %v", err)
 	}
 }
 

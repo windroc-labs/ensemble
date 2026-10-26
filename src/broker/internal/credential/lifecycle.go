@@ -507,10 +507,10 @@ func (l Lifecycle) write(d Delivery, issuer Issuer, m Material) error {
 	return Deliver(d.Exec, f, token)
 }
 
-// end ends issuer's run, when it is an Ender, with *err, joining End's error to it.
+// end ends issuer's run, when it is an Ender, joining End's error to *err.
 func end(issuer Issuer, err *error) {
 	if e, ok := issuer.(Ender); ok {
-		if endErr := e.End(*err); endErr != nil {
+		if endErr := e.End(); endErr != nil {
 			*err = errors.Join(*err, endErr)
 		}
 	}

@@ -48,7 +48,7 @@ func (c Codex) Ready(ctx context.Context) error {
 		return err
 	}
 	_, err = s.Issue(ctx, nil, credential.Material{Account: codexSlot})
-	if endErr := s.End(err); endErr != nil {
+	if endErr := s.End(); endErr != nil {
 		err = errors.Join(err, endErr)
 	}
 	return err
@@ -280,7 +280,7 @@ func (s *codexSession) Write(exec func([]string, []byte) error, m credential.Mat
 
 // End records a renewal or repair complete, or failed when Issue failed: a later delivery or publication failure
 // stays in its consumer's grant, never failing a sibling's run queued on the lock. It then unlocks.
-func (s *codexSession) End(error) error {
+func (s *codexSession) End() error {
 	defer s.unlock()
 	erase(s.carrier)
 	s.carrier = nil

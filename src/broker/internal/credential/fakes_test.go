@@ -212,10 +212,10 @@ type sharedProvider struct{ *fakeProvider }
 
 func (sharedProvider) SharedAccount() bool { return true }
 
-// endingProvider's issuer is an Ender: it records each End's argument and returns endErr.
+// endingProvider's issuer is an Ender: it counts End calls and returns endErr.
 type endingProvider struct {
 	*fakeProvider
-	ends   []error
+	ends   int
 	endErr error
 }
 
@@ -234,8 +234,8 @@ func (i endingIssuer) Issue(ctx context.Context, scope map[string]string, target
 	return i.p.Issue(ctx, scope, target)
 }
 
-func (i endingIssuer) End(err error) error {
-	i.p.ends = append(i.p.ends, err)
+func (i endingIssuer) End() error {
+	i.p.ends++
 	return i.p.endErr
 }
 

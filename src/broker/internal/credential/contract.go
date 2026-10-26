@@ -172,8 +172,8 @@ type Writer interface {
 }
 
 // Ender is an Issuer whose run holds something until it ends (Codex: the account lock): Acquire and Refresh call End
-// once, after their last record write, with the run's error, and return End's error joined to theirs.
-type Ender interface{ End(err error) error }
+// once, after their last record write, whatever the run's outcome, and return End's error joined to theirs.
+type Ender interface{ End() error }
 
 // Shared is a provider whose material other consumers share (an account's): releasing or replacing one consumer's
 // copy never revokes it; the account's own revision stays the provider's.
