@@ -145,13 +145,11 @@ class Resources(Case):
         )
 
     def test_reads_resources_and_interleaves_each_local_section(self):
-        self.local(
-            '[delegate.roles.pm]\ntier = 1\n[orchestrator.roles.pm]\ntier = 3\nnote = "pm@x"\n'
-        )
+        self.local('[delegate.roles.pm]\ntier = 1\n[orchestrator.roles.pm]\ntier = 3\nnote = "n"\n')
         found = read_resources(iter(self.resources))
         self.assertEqual(
             found["roles"]["pm"],
-            {"tier": 3, "output": {"type": "local"}, "note": "pm@x", "max_runs": 3},
+            {"tier": 3, "output": {"type": "local"}, "note": "n", "max_runs": 3},
         )
         self.assertEqual(read_resources(self.resources[:2])["roles"]["pm"]["tier"], 1)
         self.assertEqual(found["hosts"]["default"], "tmux")
@@ -253,7 +251,7 @@ class Resources(Case):
                 "move it under [orchestrator]",
             ),
             (
-                '[roles.engineer]\nnote = "engineer@x"\n',
+                '[roles.engineer]\nnote = "n"\n',
                 "roles.engineer.note",
                 "move it under [orchestrator]",
             ),
@@ -326,7 +324,7 @@ class Resources(Case):
     def test_flat_key_errors_with_supplied_layers(self):
         for text, layers, message in (
             (
-                'typo_key = "linear-harness"\n',
+                'typo_key = "x"\n',
                 1,
                 "~/.ensemble/config.local.toml: unknown key 'typo_key': flat local configuration; no supplied layer has it; move it under its owning layer's section",
             ),
@@ -380,7 +378,7 @@ class Resources(Case):
 
     def test_local_goes_over_every_table_merging_and_lists_replaced_whole(self):
         self.local(
-            '[session.hosts.tmux]\nstatus_line = true\n[delegate]\nclient = "b"\nteam_dirs = ["~/t"]\n[delegate.roles.pm]\ntier = 1\n[orchestrator]\nteam = "T"\n[orchestrator.roles.pm]\nnote = "pm@x"\n'
+            '[session.hosts.tmux]\nstatus_line = true\n[delegate]\nclient = "b"\nteam_dirs = ["~/t"]\n[delegate.roles.pm]\ntier = 1\n[orchestrator]\nteam = "T"\n[orchestrator.roles.pm]\nnote = "n"\n'
         )
         found = read_resources(self.resources)
         self.assertEqual(
@@ -389,7 +387,7 @@ class Resources(Case):
         )
         self.assertEqual(
             found["roles"]["pm"],
-            {"tier": 1, "output": {"type": "local"}, "note": "pm@x", "max_runs": 3},
+            {"tier": 1, "output": {"type": "local"}, "note": "n", "max_runs": 3},
         )
 
     def test_a_new_table_under_a_known_one_is_taken_as_its_owners(self):

@@ -27,7 +27,7 @@ SID = "0b6f2c1e-6d0a-4c1b-9a51-3f1f6b0e2a7d"
 
 PROJECT = "121166b1-191a-4461-bec4-42f1c2dc0ddd"
 
-HARNESS, KEY = "linear-app-harness-token", "linear-app-engineer-token"
+HARNESS, TOKEN = "linear-app-harness-token", "linear-app-engineer-token"
 
 SESSION = comment_id("harness", SID, "session")
 

@@ -36,9 +36,9 @@ BASE = "https://github.com/windroc/team-docs/blob/main/"
 
 ANN = ("ann@example.com", "Ann")
 
-MANAGER = ("manager@example.com", "Manager")
+MANAGER = (None, "Manager")
 
-AGENT = ("agent@example.com", "Researcher")
+AGENT = (None, "Researcher")
 
 RAW = ["gh", "api", "-H", "Accept: application/vnd.github.raw+json"]
 

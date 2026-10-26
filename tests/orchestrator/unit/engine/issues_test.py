@@ -64,9 +64,7 @@ def read(**over):
     return LinearTracker(FakeGql(payload(**over)), selves=SELVES).issue("ENG-7")
 
 
-def note(
-    body, at="2026-09-02T00:00:00.000Z", email="agent@example.com", name="Agent", origin="self"
-):
+def note(body, at="2026-09-02T00:00:00.000Z", email=None, name="Agent", origin="self"):
     return Note(body, at, email, name, origin)
 
 
@@ -189,7 +187,7 @@ class ReadIssue(Case):
                     comment(
                         session,
                         "2026-09-02T00:00:00.000Z",
-                        email="agent@example.com",
+                        email=None,
                         name="Agent",
                         me=True,
                     ),

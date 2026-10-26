@@ -291,7 +291,7 @@ class FakeLinear:
             self.users[uid] = {"id": uid, "email": email, "name": name, "service": service}
             return uid
 
-    def keys(self):
+    def tokens(self):
         with self.lock:
             return {
                 u["service"]: _record(u["service"]) for u in self.users.values() if u["service"]
@@ -476,9 +476,9 @@ class FakeLinear:
 
     def __call__(self, query, *, timeout=30, identity=None, **variables):
         service = identity.service if identity is not None else self.harness
-        keys = self.keys()
-        if service not in keys:
-            raise LinearError(f"fake transport: no key for {service}")
+        tokens = self.tokens()
+        if service not in tokens:
+            raise LinearError(f"fake transport: no token for {service}")
         status, body, delay = self.answer(query, variables, f"Bearer {_token(service)}")
         if delay:
             time.sleep(min(delay, timeout))
@@ -1141,5 +1141,5 @@ def seam(case, fake, url):
     fd, path = tempfile.mkstemp(prefix="fake-linear-", suffix=".json")
     case.addCleanup(os.remove, path)
     with os.fdopen(fd, "w") as f:
-        json.dump({"url": url, "keys": fake.keys()}, f)
+        json.dump({"url": url, "tokens": fake.tokens()}, f)
     return path

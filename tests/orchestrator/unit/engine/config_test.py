@@ -205,7 +205,7 @@ A = "engineer-TASK-12-0b6f2c1e"
 
 
 class ConfigurationLoading(ConfigFile, Case):
-    def test_role_apps_require_all_four_fields_and_reject_member_keys(self):
+    def test_role_apps_require_all_four_fields_and_reject_other_keys(self):
         app = {
             "client_id": "client-dummy",
             "secret_service": "dummy-secret",
@@ -572,8 +572,8 @@ class ConfigurationLoading(ConfigFile, Case):
                 "linear.manager.token_service must be a Keychain service name: False",
             ),
             (
-                table(secret_service="linear-manager", token_service="linear-manager"),
-                "linear.manager.secret_service 'linear-manager' is also linear.manager.token_service",
+                table(secret_service="linear-app-manager-x", token_service="linear-app-manager-x"),
+                "linear.manager.secret_service 'linear-app-manager-x' is also linear.manager.token_service",
             ),
             (
                 table(user_id=HARNESS_APP["user_id"]),
@@ -1121,7 +1121,7 @@ class CommittedConfiguration(Case):
         )
 
     def test_every_linear_key_under_orchestrator_linear_loads(self):
-        accounts = "".join(
+        apps = "".join(
             role(r).split(f"[roles.{r}]")[0].replace("[linear.", "[orchestrator.linear.")
             for r in ("researcher", "pm", "engineer")
         )
@@ -1140,7 +1140,7 @@ class CommittedConfiguration(Case):
             + "".join(f'{k} = "{v}"\n' for k, v in STATES.items())
             + f'[orchestrator.linear.task_labels]\nbuild = "{LABEL1}"\n'
             + f'[orchestrator.linear.agent_labels]\nclaude = "{LABEL2}"\n'
-            + accounts
+            + apps
             + f'[orchestrator.linear.project_repos]\n"{P1}" = "acme/x"\n',
         )
         cfg = self.load()
@@ -1663,10 +1663,8 @@ class RunnableRoles(ConfigFile, Case):
         self.assertEqual(list(self.runs(text)), ["researcher", "pm", "engineer"])
 
     def test_a_stage_without_role_table_runs_one(self):
-        accounts = "".join(
-            role(r).split(f"[roles.{r}]")[0] for r in ("researcher", "pm", "engineer")
-        )
-        roles = self.runs(HEADER + accounts + "[roles.pm]\nmax_runs = 2\n")
+        apps = "".join(role(r).split(f"[roles.{r}]")[0] for r in ("researcher", "pm", "engineer"))
+        roles = self.runs(HEADER + apps + "[roles.pm]\nmax_runs = 2\n")
         self.assertEqual(
             {r: x.max_runs for r, x in roles.items()}, {"researcher": 1, "pm": 2, "engineer": 1}
         )

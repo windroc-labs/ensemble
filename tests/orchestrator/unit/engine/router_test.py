@@ -96,9 +96,9 @@ from tests.orchestrator.unit.outage import FAILURES, FIELDS, failing
 from tests.orchestrator.unit.run_fixtures import (
     HARNESS,
     ID,
-    KEY,
     PROJECT,
     SID,
+    TOKEN,
     USER_NOTE,
     UUID,
     Gql,
@@ -358,7 +358,7 @@ class IssueClaims(Base):
                 self.assertEqual([self.claim(fake).split()[0] for _ in listed], order)
                 self.assertEqual({i["state"] for i in fake.issues.values()}, {"In Progress"})
 
-    def test_queue_only_role_accounts_across_projects(self):
+    def test_queue_only_role_apps_across_projects(self):
         fake = FakeLinear(
             [
                 issue("TASK-1", "Todo"),
@@ -1766,7 +1766,7 @@ class RouterOutages(TickBase):
                     self.assertEqual(self.tick(fake, *argv), 0)
                     self.assertEqual(self.launched_runs(), [("TASK-1", "new")])
 
-    def test_a_rejected_key_at_board_setup_is_one_config_error_a_day(self):
+    def test_a_rejected_token_at_board_setup_is_one_config_error_a_day(self):
         def unauthorized():
             return urllib.error.HTTPError(client.URL, 401, "Unauthorized", {}, io.BytesIO())
 
@@ -3361,7 +3361,7 @@ class RunLaunching(OuterBase):
         )
         self.assertEqual(self.outer(mode="resume", role="pm"), 0)
         self.assertEqual(self.detached(), self.expected(resume=True))
-        self.assertEqual(self.keychain_calls, [KEY])
+        self.assertEqual(self.keychain_calls, [TOKEN])
         self.assertEqual(runs.parse_log(self.runs)[-1].role, "engineer")
 
     """FR-45, FR-47's resume check: the outer reads the issue, checks its repo, renders its input,
@@ -3464,7 +3464,7 @@ class RunLaunching(OuterBase):
             ],
         )
         self.assertEqual(
-            (os.environ["PATH"], self.keychain_calls, self.api.info), (config.path(), [KEY], [])
+            (os.environ["PATH"], self.keychain_calls, self.api.info), (config.path(), [TOKEN], [])
         )
         self.assertEqual((self.err, self.said()), ("", []))
 
@@ -3677,10 +3677,10 @@ class RunLaunching(OuterBase):
                     self.gql.calls,
                     [
                         ("issue", HARNESS, {"i": ID}),
-                        ("subscribe", KEY, {"i": UUID, "e": "me@x.com"}),
+                        ("subscribe", TOKEN, {"i": UUID, "e": "me@x.com"}),
                         (
                             "post",
-                            KEY,
+                            TOKEN,
                             {
                                 "i": UUID,
                                 "b": (
@@ -3689,8 +3689,8 @@ class RunLaunching(OuterBase):
                                 ),
                             },
                         ),
-                        ("reread", KEY, {"i": UUID}),
-                        ("state", KEY, {"i": UUID, "s": IDS_BY_KEY["in_review"]}),
+                        ("reread", TOKEN, {"i": UUID}),
+                        ("state", TOKEN, {"i": UUID, "s": IDS_BY_KEY["in_review"]}),
                     ],
                 )
                 self.assertEqual(self.said(), [f"bounce TASK-7 reason={reason}"])
@@ -4241,7 +4241,7 @@ class ExplicitIssueRuns(TickBase):
                     )
                     self.assertEqual(len(fake.reads()), 1)
 
-    def test_another_state_or_not_a_role_account_starts_nothing(self):
+    def test_another_state_or_not_a_role_app_starts_nothing(self):
         fake = FakeLinear(
             [
                 issue("TASK-1", "In Review", "researcher"),
@@ -5015,7 +5015,7 @@ class StaleByMoveIntoRunning(TickBase):
 class ClaimRechecks(Base):
     """FR-56: the claim re-reads delegate and project; the claim is the recheck's."""
 
-    def test_reassigned_to_no_role_account_is_not_claimed(self):
+    def test_reassigned_to_no_role_app_is_not_claimed(self):
         for assignee in ({"id": USER, "email": "me@x.com"}, who("someone"), None):
             with self.subTest(assignee=assignee):
                 fake = Changed(
@@ -5203,10 +5203,10 @@ class RoleAppTokens(TickBase):
         )
 
 
-class RoleKeys(Base):
+class RoleApps(Base):
     """A tracker without role identities checks no keychain."""
 
-    def test_a_tracker_without_role_keys_checks_no_keychain(self):
+    def test_a_tracker_without_role_apps_checks_no_keychain(self):
         self.wiring = replace(cli.TRACKERS[TrackerKind.LINEAR], identity=lambda *_: None)
         self.assertEqual(self.claim(two()), "TASK-1 https://linear.app/x/TASK-1 Deep Research")
         self.assertEqual(self.keychain_calls, [])

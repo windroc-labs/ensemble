@@ -54,7 +54,7 @@ class Wirings(run_fixtures.Base):
         self.assertIn("delegate (Agent field)", output.getvalue())
         self.assertNotIn("assigned to a role", output.getvalue())
 
-    def test_linear_writes_as_the_role_key_and_the_harness_app(self):
+    def test_linear_writes_as_the_role_app_and_the_harness_app(self):
         cfg = config.load()
         gql = mock.Mock(return_value={})
         linear = cli.TRACKERS[TrackerKind.LINEAR]
@@ -136,7 +136,7 @@ class Wirings(run_fixtures.Base):
         cli.TRACKERS[TrackerKind.LOCAL].credentials(cfg, "prune", dry=True)
         self.assertIn("token-error: harness: HTTP 401", self.renewal(3, token_http_error(401)))
 
-    def test_a_local_board_writes_as_one_tracker_with_no_keys(self):
+    def test_a_local_board_writes_as_one_tracker_with_no_apps(self):
         board = os.path.realpath(os.path.join(self.work, "board"))
         cfg = replace(config.load(), tracker=TrackerKind.LOCAL, linear=None, board=board)
         local = cli.TRACKERS[TrackerKind.LOCAL]

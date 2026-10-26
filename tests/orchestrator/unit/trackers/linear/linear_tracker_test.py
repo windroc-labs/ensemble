@@ -778,7 +778,7 @@ class Comments(Case):
                 LinearTracker(Texts({ops.Q_COMMENT: reply})).find_comment("id-TASK-7", REF)
 
 
-class Account(Case):
+class CallerIdentity(Case):
     def calls(self, **kw):
         seen = []
 

@@ -138,7 +138,7 @@ class GraphQLProjection(ServerCase):
         self.assertIn("fake: linear.Q_ISSUE_STATE has no field color", str(cm.exception))
         self.assertEqual(self.log(), [("linear.Q_ISSUE_STATE", HARNESS_USER, "error")])
 
-    def test_comment_authors_by_id_and_is_me_follows_the_key(self):
+    def test_comment_authors_by_id_and_is_me_follows_the_token(self):
         mine = {
             HARNESS: self.fake.comment("TASK-7", self.harness, f"Run {SID} · running"),
             ENGINEER: self.fake.comment("TASK-7", self.engineer, f"Run {SID} · not a session"),
@@ -312,7 +312,7 @@ class GraphQLProjection(ServerCase):
             ["by the harness", "by the engineer"],
         )
 
-    def test_an_unknown_query_and_a_bad_key_are_errors_and_logged(self):
+    def test_an_unknown_query_and_a_bad_token_are_errors_and_logged(self):
         with self.assertRaises(LinearError) as cm:
             self.gql(UNKNOWN)
         self.assertIn("fake: unknown query", str(cm.exception))
@@ -371,13 +371,16 @@ class GraphQLProjection(ServerCase):
         )
 
     def test_a_bad_body_is_a_logged_400(self):
-        send, key = (
+        send, authorization = (
             urllib.request.build_opener(urllib.request.ProxyHandler({})).open,
             f"Bearer {fake_linear._token(HARNESS)}",
         )
         for body in (b"not json", b"[]", b'{"variables": {}}', b'{"query": "q", "variables": []}'):
             with self.subTest(body), self.assertRaises(urllib.error.HTTPError) as cm:
-                send(urllib.request.Request(self.url, body, {"Authorization": key}), timeout=5)
+                send(
+                    urllib.request.Request(self.url, body, {"Authorization": authorization}),
+                    timeout=5,
+                )
             cm.exception.close()
             self.assertEqual(cm.exception.code, 400)
         self.assertEqual(
@@ -691,7 +694,7 @@ class FixtureOperations(Case):
                 fake.user(*args, **kw)
         self.assertEqual(len(fake.users), 2)
         self.assertEqual(
-            fake.keys(),
+            fake.tokens(),
             {"linear-app-engineer-token": fake_linear._record("linear-app-engineer-token")},
         )
 

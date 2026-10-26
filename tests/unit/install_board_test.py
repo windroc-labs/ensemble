@@ -70,7 +70,7 @@ class BoardContract(Case):
 
     def test_slots_refuse_unknown_app_keys_naming_table_and_key(self):
         for text, table in (
-            ('[orchestrator.linear.roles.pm]\nkey = "x"\n', "linear.roles.pm"),
+            ('[orchestrator.linear.roles.pm]\ntoken = "x"\n', "linear.roles.pm"),
             ('[orchestrator.linear.harness]\ntypo = "x"\ntoken = "y"\n', "linear.harness"),
         ):
             with self.subTest(table=table):
@@ -78,7 +78,7 @@ class BoardContract(Case):
                 self.assertEqual(
                     stop,
                     f"install.sh: config.local.toml: unknown keys in [{table}]: "
-                    + ("key" if "roles" in table else "token, typo")
+                    + ("token" if "roles" in table else "token, typo")
                     + "; see docs/upgrading.md#linear-apps",
                 )
 

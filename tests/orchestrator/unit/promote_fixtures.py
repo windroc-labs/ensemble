@@ -42,7 +42,7 @@ HUMAN = {"email": "me@x.com", "name": "Me"}
 AGENT = {"id": role_id("researcher"), "email": None, "name": "Researcher"}
 
 # not in human_members, not a role or the harness: other, as the user's
-MANAGER = {"email": "manager@x.com", "name": "Manager"}
+MANAGER = {"email": None, "name": "Manager"}
 
 OTHER = {"email": "other@x.com", "name": "Other"}
 
