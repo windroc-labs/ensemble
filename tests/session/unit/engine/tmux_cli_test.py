@@ -97,6 +97,8 @@ class ProcessIdentityTest(Case):
             ("s", (0, " \n"), None),
             ("%7", (0, "4242   \n"), None),
             ("%7", (0, "4242  %7 4343\n"), None),
+            ("%7", (0, "4242 $3 %7 \n"), None),
+            ("%7", (0, "4242  %7 \n"), None),
             ("s", (1, "", "can't find session: =s\n"), None),
             ("%7", (1, "", "can't find pane: %7\n"), None),
             ("s", (1, "", "no server running on /tmp/tmux-501/default\n"), None),
@@ -115,6 +117,9 @@ class ProcessIdentityTest(Case):
             ((0, "4242 $3 %7\n"), "^bad tmux process "),
             ((0, "4242  %7 bad\n"), "^bad tmux process "),
             ((0, "bad  %7 4343\n"), "^bad tmux process "),
+            ((0, "boom\n"), "^bad tmux process "),
+            ((0, "4242 $3  4343\n"), "^bad tmux process "),
+            ((0, "4242 $3 %7 4343 9\n"), "^bad tmux process "),
         ):
             with self.subTest(printed=printed):
                 fake = FakeTmux(results={"display-message": printed})
@@ -141,6 +146,7 @@ class ProcessStatusTest(Case):
             ("4242 $3 %7 4343\t1  kill", ("4242 $3 %7 4343", -9)),
             ("4242 $3 %7 4343\tx", ("4242 $3 %7 4343", PaneStatus.UNKNOWN)),
             ("4242  %7 4343\t1 0 ", (None, None)),
+            ("4242 $3 %7 \t1 0 ", (None, None)),
             ("\t  ", (None, None)),
             (None, (None, None)),
         ):
@@ -169,6 +175,7 @@ class ProcessStatusTest(Case):
         for fake, message in (
             (FakeTmux(pane="", fail=("display-message",)), "tmux: boom"),
             (FakeTmux(pane="4242 x\t0  "), "bad tmux process '4242 x'"),
+            (FakeTmux(pane="4242 $3 %7\t0  "), "bad tmux process '4242 $3 %7'"),
         ):
             with self.subTest(message=message), self.assertRaises(tmux_cli.TuiError) as caught:
                 tmux_cli.TmuxCli(fake).process_status("%7")
