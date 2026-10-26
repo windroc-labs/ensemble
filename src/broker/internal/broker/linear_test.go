@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"ensemble/broker/internal/audit"
 	"ensemble/broker/internal/credential"
 )
 
@@ -665,6 +666,73 @@ func TestLinearOAuthFailuresKeepDurableCurrentMaterial(t *testing.T) {
 			after, _ := k.Secret(linearService, "app/"+a.TokenService)
 			if !bytes.Equal(before, after) || !bytes.Equal(published, h.value) || h.writes != writes {
 				t.Fatal("failed OAuth replaced durable or published access material")
+			}
+		})
+	}
+}
+
+func TestLinearMaintenanceAudit(t *testing.T) {
+	for _, renew := range []bool{false, true} {
+		name := "current"
+		if renew {
+			name = "renewing"
+		}
+		t.Run(name, func(t *testing.T) {
+			l, k, _, calls := linearRig(t)
+			a := linearApp("harness")
+			enrollLinear(t, l, k, a)
+			if _, err := l.Maintain(context.Background(), a); err != nil {
+				t.Fatal(err)
+			}
+			if renew {
+				l.now = func() time.Time { return linearNow.Add(26 * 24 * time.Hour) }
+			}
+			sink := &lines{}
+			rec := &audit.Recorder{Command: "linear-maintain", Container: "host/" + a.TokenService, Log: sink, Now: l.now}
+			l.Audit = rec
+			result, err := l.Maintain(context.Background(), a)
+			if err != nil || result.Renewed != renew {
+				t.Fatalf("maintenance: %+v %v", result, err)
+			}
+			if err := rec.Flush(nil); err != nil {
+				t.Fatal(err)
+			}
+			if !renew {
+				if len(*calls) != 1 || len(sink.got) != 0 {
+					t.Fatal("current token made a provider request or wrote an audit line")
+				}
+				return
+			}
+			if len(*calls) != 2 || len(sink.got) != 1 {
+				t.Fatalf("renewal: %d provider requests, %d audit lines", len(*calls), len(sink.got))
+			}
+			var event struct {
+				Command string `json:"command"`
+				logLine
+			}
+			if err := json.Unmarshal(sink.got[0], &event); err != nil {
+				t.Fatal(err)
+			}
+			if event.Command != "linear-maintain" || event.Event != "refresh" || event.Container != "host/"+a.TokenService {
+				t.Fatalf("wrong audit routing: %+v", event)
+			}
+			renewed := 0
+			for _, c := range event.Credentials {
+				if c.Kind != audit.LinearAccessToken || c.Account != a.Name {
+					t.Fatalf("wrong audit credential: %+v", c)
+				}
+				if c.Result == audit.Renewed {
+					renewed++
+					if c.ExpiresAt != result.ExpiresAt {
+						t.Fatalf("audit expiry %q differs from renewed expiry %q", c.ExpiresAt, result.ExpiresAt)
+					}
+				}
+			}
+			if renewed != 1 {
+				t.Fatalf("want one renewed credential, got %d", renewed)
+			}
+			if bytes.Contains(sink.got[0], []byte("ROOT-SENTINEL")) || bytes.Contains(sink.got[0], []byte("TOKEN-")) {
+				t.Fatal("audit contains root or access material")
 			}
 		})
 	}
