@@ -55,7 +55,7 @@ has none, and CI's Ruff step still catches it.
 | one repository integration shard | `python3 .github/run_tests.py 'Repository integration 1' tests/integration --shard 1/8` |
 | integration shard (labels in `.github/workflows/test.yml`) | `python3 .github/integration_jobs.py <N>` |
 
-Run tests only through these supervised, sandboxed entries; they retain diagnostics and cleanup.
+Use these supervised, sandboxed test entries to retain diagnostics and cleanup.
 
 Single-test and file selection need the same repository-root `PYTHONPATH` above and the
 selected test's dependencies (tmux for live tmux tests; `node` for the OpenCode TUI tests, which run its plugin and skip without it). Copy the complete ID from the
