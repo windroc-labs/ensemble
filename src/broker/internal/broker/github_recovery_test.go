@@ -117,7 +117,7 @@ func TestRevokeRecoveryAfterBacklogFailure(t *testing.T) {
 			store.failBacklog(kind)
 			remote.fail = func(string) bool { return true }
 			g := recoveryLifecycle(t, store, remote)
-			wantCode(t, g.Revoke(context.Background(), ctr), protocol.KeychainFailed)
+			wantCode(t, g.Release(context.Background(), ctr), protocol.KeychainFailed)
 			if len(remote.calls) == 0 {
 				t.Fatal("regression did not attempt the failed remote revoke")
 			}
@@ -125,7 +125,7 @@ func TestRevokeRecoveryAfterBacklogFailure(t *testing.T) {
 			// Only persisted bytes cross reconstruction, never the original entries.
 			store.readFail, store.writeFail, remote.fail = "", "", nil
 			rebuilt := recoveryLifecycle(t, store, remote)
-			if err := rebuilt.Revoke(context.Background(), ctr); err != nil {
+			if err := rebuilt.Release(context.Background(), ctr); err != nil {
 				t.Fatal(err)
 			}
 			if !slices.Contains(remote.revoked, "ghs_recovery") {
@@ -161,7 +161,7 @@ func TestDiscardRecoveryMatrix(t *testing.T) {
 						t.Fatalf("unexpected refresh outcome: %v", err)
 					}
 				default:
-					wantCode(t, g.Revoke(context.Background(), ctr), protocol.KeychainFailed)
+					wantCode(t, g.Release(context.Background(), ctr), protocol.KeychainFailed)
 				}
 				var rec tokenRecord
 				if err := json.Unmarshal(store.items[tokensService+"/"+ctr], &rec); err != nil {
@@ -175,7 +175,7 @@ func TestDiscardRecoveryMatrix(t *testing.T) {
 					t.Fatal("record did not retain exactly the unconfirmed tokens")
 				}
 				store.readFail, store.writeFail, remote.fail = "", "", nil
-				if err := recoveryLifecycle(t, store, remote).Revoke(context.Background(), ctr); err != nil {
+				if err := recoveryLifecycle(t, store, remote).Release(context.Background(), ctr); err != nil {
 					t.Fatal(err)
 				}
 				for _, e := range rec.Tokens {
@@ -196,7 +196,7 @@ func TestRevokeRecoveryAfterDeleteFailure(t *testing.T) {
 				store.readFail = revocationsService
 			}
 			store.deleteFail = tokensService
-			wantCode(t, recoveryLifecycle(t, store, remote).Revoke(context.Background(), ctr), protocol.KeychainFailed)
+			wantCode(t, recoveryLifecycle(t, store, remote).Release(context.Background(), ctr), protocol.KeychainFailed)
 			if !slices.Contains(remote.revoked, "ghs_recovery") {
 				t.Fatal("record delete failure prevented remote revocation")
 			}
@@ -204,7 +204,7 @@ func TestRevokeRecoveryAfterDeleteFailure(t *testing.T) {
 				t.Fatal("failed deletion lost the persisted recovery record")
 			}
 			store.readFail, store.deleteFail = "", ""
-			if err := recoveryLifecycle(t, store, remote).Revoke(context.Background(), ctr); err != nil {
+			if err := recoveryLifecycle(t, store, remote).Release(context.Background(), ctr); err != nil {
 				t.Fatal(err)
 			}
 			if _, found := store.items[tokensService+"/"+ctr]; found {
@@ -222,13 +222,13 @@ func TestDiscardExpiryConfirmation(t *testing.T) {
 			store, remote := recoverySeed(t, e)
 			store.readFail = revocationsService
 			remote.fail = func(string) bool { return true }
-			wantCode(t, recoveryLifecycle(t, store, remote).Revoke(context.Background(), ctr), protocol.KeychainFailed)
+			wantCode(t, recoveryLifecycle(t, store, remote).Release(context.Background(), ctr), protocol.KeychainFailed)
 			if _, found := store.items[tokensService+"/"+ctr]; !found {
 				t.Fatal("live or unknown-expiry token lost its recovery record")
 			}
 			remote.now = clock.Add(time.Hour)
 			remote.calls = nil
-			err := recoveryLifecycle(t, store, remote).Revoke(context.Background(), ctr)
+			err := recoveryLifecycle(t, store, remote).Release(context.Background(), ctr)
 			if deadline == "invalid" {
 				wantCode(t, err, protocol.KeychainFailed)
 				if _, found := store.items[tokensService+"/"+ctr]; !found {
@@ -283,7 +283,7 @@ func TestIssueRollbackWithUnreadableRecord(t *testing.T) {
 				t.Fatal("unrecorded issued token was not revoked after record read failure")
 			}
 			store.readFail, remote.fail = "", nil
-			if err := recoveryLifecycle(t, store, remote).Revoke(context.Background(), ctr); err != nil {
+			if err := recoveryLifecycle(t, store, remote).Release(context.Background(), ctr); err != nil {
 				t.Fatal(err)
 			}
 			for _, token := range []string{"ghs_existing", "ghs_replacement_1"} {

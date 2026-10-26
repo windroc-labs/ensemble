@@ -24,7 +24,7 @@ type fakeTokens struct {
 	ready, user, issue, refresh, revoke, retry error
 	prefetch                                   error
 	pending                                    []protocol.Pending
-	onRevoke                                   func()
+	onRelease                                  func()
 	revokeContexts                             []error
 	permissions                                []map[string]string // each Issue's and Refresh's set
 }
@@ -56,11 +56,11 @@ func (f *fakeTokens) Refresh(_ context.Context, app string, permissions map[stri
 	}
 	return expiry, exec([]string{"write"}, []byte("ghs_token"))
 }
-func (f *fakeTokens) Revoke(ctx context.Context, c string) error {
+func (f *fakeTokens) Release(ctx context.Context, c string) error {
 	f.calls = append(f.calls, "revoke "+c)
 	f.revokeContexts = append(f.revokeContexts, ctx.Err())
-	if f.onRevoke != nil {
-		f.onRevoke()
+	if f.onRelease != nil {
+		f.onRelease()
 	}
 	return f.revoke
 }
@@ -195,7 +195,7 @@ func TestCloseRevokesFirst(t *testing.T) {
 		order = append(order, args[0])
 		return []byte(container + "\n"), nil
 	}}
-	tokens := &fakeTokens{onRevoke: func() { order = append(order, "revoke") }}
+	tokens := &fakeTokens{onRelease: func() { order = append(order, "revoke") }}
 	got, err := Host{Docker: d, GitHub: tokens}.Close(context.Background(), container)
 	if err != nil || !got.Removed || !slices.Equal(order, []string{"revoke", "rm"}) {
 		t.Fatalf("%+v %v %v", got, err, order)

@@ -654,8 +654,8 @@ func (g GitHub) Refresh(ctx context.Context, app string, permissions map[string]
 	return expiries(fresh), nil
 }
 
-// Revoke retires every token of container's record. An unreadable record is kept for recovery.
-func (g GitHub) Revoke(ctx context.Context, container string) error {
+// Release retires every token of container's record, its grant; an unreadable record is kept for recovery.
+func (g GitHub) Release(ctx context.Context, container string) error {
 	var found bool
 	err := g.locked(func() (err error) {
 		_, found, err = g.readRecord(container)

@@ -562,7 +562,7 @@ func TestRevokeLockFails(t *testing.T) {
 	r := newRig(t, "acme", "other")
 	issued(t, r)
 	r.lockFails(0)
-	if err := r.g.Revoke(context.Background(), ctr); err == nil || !strings.Contains(err.Error(), "token lock") {
+	if err := r.g.Release(context.Background(), ctr); err == nil || !strings.Contains(err.Error(), "token lock") {
 		t.Fatalf("unclear error: %v", err)
 	}
 	if !slices.Equal(r.api.revoked, []string{"ghs_1_1", "ghs_2_2"}) {
@@ -586,7 +586,7 @@ func TestRevokeLockFailsKeepsATokenRecordedMeanwhile(t *testing.T) {
 		}
 		return 0
 	}
-	_ = r.g.Revoke(context.Background(), ctr)
+	_ = r.g.Release(context.Background(), ctr)
 	rec, ok := r.record(t)
 	if !ok || len(rec.Tokens) != 1 || rec.Tokens[0].Token != "ghs_late" {
 		t.Fatalf("record %v %v", ok, rec.Tokens)
@@ -613,7 +613,7 @@ func TestRevokeReadsTheRecordUnderTheLock(t *testing.T) {
 		}
 		return lock()
 	}
-	if err := r.g.Revoke(context.Background(), ctr); err != nil {
+	if err := r.g.Release(context.Background(), ctr); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := r.record(t); ok || !slices.Contains(r.api.revoked, "ghs_late") {
@@ -735,7 +735,7 @@ func TestRefreshOldRevokeFails(t *testing.T) {
 func TestRevoke(t *testing.T) {
 	r := newRig(t, "acme", "other")
 	issued(t, r)
-	if err := r.g.Revoke(context.Background(), ctr); err != nil {
+	if err := r.g.Release(context.Background(), ctr); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.exec.argv) != 0 {
@@ -747,7 +747,7 @@ func TestRevoke(t *testing.T) {
 	if _, ok := r.record(t); ok || len(r.backlog(t)) != 0 {
 		t.Fatal("left state")
 	}
-	if err := r.g.Revoke(context.Background(), ctr); err != nil {
+	if err := r.g.Release(context.Background(), ctr); err != nil {
 		t.Fatalf("absent record: %v", err)
 	}
 }
@@ -765,7 +765,7 @@ func TestRevokeTakesATokenRecordedMeanwhile(t *testing.T) {
 		}
 		return lock()
 	}
-	if err := r.g.Revoke(context.Background(), ctr); err != nil {
+	if err := r.g.Release(context.Background(), ctr); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Contains(r.api.revoked, "ghs_late") || len(r.backlog(t)) != 0 {
@@ -778,7 +778,7 @@ func TestRevokeOffline(t *testing.T) {
 	issued(t, r)
 	r.api.revokeErr = func(string) int { return 0 }
 	r.srv.Close()
-	if err := r.g.Revoke(context.Background(), ctr); err != nil {
+	if err := r.g.Release(context.Background(), ctr); err != nil {
 		t.Fatal(err)
 	}
 	if b := r.backlog(t); len(b) != 2 || b[0].Container != ctr {
@@ -830,7 +830,7 @@ func TestUnreadableBacklog(t *testing.T) {
 	r.keys.unreadable[revocationsService] = true
 	_, err := r.g.Retry(context.Background())
 	wantCode(t, err, protocol.KeychainFailed)
-	if err := r.g.Revoke(context.Background(), ctr); err != nil {
+	if err := r.g.Release(context.Background(), ctr); err != nil {
 		t.Fatalf("readable record revoked directly: %v", err)
 	}
 	if !slices.Equal(r.api.revoked, []string{"ghs_1_1"}) {
@@ -838,14 +838,14 @@ func TestUnreadableBacklog(t *testing.T) {
 	}
 	issued(t, r)
 	r.api.revokeErr = func(string) int { return 500 }
-	wantCode(t, r.g.Revoke(context.Background(), ctr), protocol.KeychainFailed)
+	wantCode(t, r.g.Release(context.Background(), ctr), protocol.KeychainFailed)
 }
 
 func TestUnreadableRecord(t *testing.T) {
 	r := newRig(t, "acme")
 	issued(t, r)
 	r.keys.unreadable[tokensService] = true
-	err := r.g.Revoke(context.Background(), ctr)
+	err := r.g.Release(context.Background(), ctr)
 	wantCode(t, err, protocol.KeychainFailed)
 	if !strings.Contains(err.Error(), "expire within an hour") {
 		t.Fatalf("message %v", err)
@@ -855,7 +855,7 @@ func TestUnreadableRecord(t *testing.T) {
 	}
 	r.keys.unreadable[tokensService] = false
 	rebuilt := GitHub{Keychain: r.keys, API: r.g.API, Lock: r.g.Lock}
-	if err := rebuilt.Revoke(context.Background(), ctr); err != nil || !slices.Contains(r.api.revoked, "ghs_1_1") {
+	if err := rebuilt.Release(context.Background(), ctr); err != nil || !slices.Contains(r.api.revoked, "ghs_1_1") {
 		t.Fatalf("restored record could not be recovered: %v", err)
 	}
 	r.keys.unreadable[tokensService] = true

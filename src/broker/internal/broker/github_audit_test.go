@@ -145,7 +145,7 @@ func TestRevokeAudit(t *testing.T) {
 	r := newRig(t, "acme", "other")
 	issued(t, r)
 	rec, sink := r.audited("close", ctr)
-	if err := r.g.Revoke(context.Background(), ctr); err != nil {
+	if err := r.g.Release(context.Background(), ctr); err != nil {
 		t.Fatal(err)
 	}
 	if got := resultsOf(flush(t, rec, sink)[0]); !slices.Equal(got, []string{audit.Revoked, audit.Revoked}) {
@@ -158,7 +158,7 @@ func TestRevokeAuditOffline(t *testing.T) {
 	issued(t, r)
 	rec, sink := r.audited("close", ctr)
 	r.srv.Close()
-	if err := r.g.Revoke(context.Background(), ctr); err != nil {
+	if err := r.g.Release(context.Background(), ctr); err != nil {
 		t.Fatal(err)
 	}
 	got := flush(t, rec, sink)[0]
@@ -178,7 +178,7 @@ func TestRevokeAuditLockFails(t *testing.T) {
 	r.api.revokeErr = func(string) int { return 500 }
 	r.lockFails(0)
 	rec, sink := r.audited("close", ctr)
-	_ = r.g.Revoke(context.Background(), ctr)
+	_ = r.g.Release(context.Background(), ctr)
 	got := flush(t, rec, sink)[0]
 	if !slices.Equal(resultsOf(got), []string{audit.Pending}) || got.Credentials[0].Reason != "GitHub answered HTTP 500 to DELETE /installation/token" {
 		t.Fatalf("a direct revoke that fails, then is queued: %+v", got)
@@ -206,7 +206,7 @@ func TestDiscardRecordsQueuedTokens(t *testing.T) {
 	issued(t, r)
 	r.g.Keychain = &flakySecrets{secrets: r.keys, service: revocationsService, ok: 1}
 	rec, sink := r.audited("close", ctr)
-	if err := r.g.Revoke(context.Background(), ctr); err != nil {
+	if err := r.g.Release(context.Background(), ctr); err != nil {
 		t.Fatal(err)
 	}
 	got := flush(t, rec, sink)[0]

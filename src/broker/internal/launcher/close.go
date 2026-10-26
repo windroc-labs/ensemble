@@ -58,7 +58,7 @@ func (h Host) held(ctx context.Context, c string) (kind string, secrets []string
 func (h Host) Close(ctx context.Context, container string) (CloseResult, error) {
 	h.Audit.Begin(container, nil)
 	kind, secrets := h.held(ctx, container)
-	revoked := h.GitHub.Revoke(ctx, container)
+	revoked := h.GitHub.Release(ctx, container)
 	removed, err := h.remove(ctx, container)
 	if removed {
 		if kind != "" {
