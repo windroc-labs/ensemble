@@ -2,6 +2,8 @@
 its caller names the ticket that calls it; that ticket deletes the entry.
 """
 
+import urllib.request
+
 from ensemble.delegate.composer.teams import TeamKind
 from ensemble.delegate.event.types import UpdraftStatus
 from ensemble.orchestrator.engine.flow.tracker import Connect
@@ -66,3 +68,5 @@ _ = Connect.__call__
 # Only tests read it, but the session interface is frozen (tests/guard_checks/exports.py
 # session_interface_snapshot).
 _ = SessionRow.last_lines
+# urllib calls the redirect hook src/broker/internal/launcher/assets/opencode-install.py's NoRedirect overrides.
+_ = urllib.request.HTTPRedirectHandler.redirect_request

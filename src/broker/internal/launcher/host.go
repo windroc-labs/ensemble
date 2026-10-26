@@ -102,6 +102,8 @@ func NewHost(home, endpoint string, d docker.Runner, creds Credentials, tokens T
 	}
 }
 
+const checkLogMax = 1 << 20
+
 // spawnCheck starts this executable's check-clients in a session of its own, outliving the build, its output in
 // ~/.ensemble/docker/clients-check.log.
 func spawnCheck(home string) error {
@@ -113,7 +115,12 @@ func spawnCheck(home string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	log, err := os.OpenFile(filepath.Join(dir, "clients-check.log"), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	// Appended, so a spawn never truncates a running check's log; emptied once past checkLogMax.
+	mode, path := os.O_CREATE|os.O_APPEND|os.O_WRONLY, filepath.Join(dir, "clients-check.log")
+	if info, err := os.Stat(path); err == nil && info.Size() > checkLogMax {
+		mode |= os.O_TRUNC
+	}
+	log, err := os.OpenFile(path, mode, 0o600)
 	if err != nil {
 		return err
 	}

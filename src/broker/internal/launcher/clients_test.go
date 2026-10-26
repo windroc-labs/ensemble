@@ -369,7 +369,7 @@ func TestCheckClientsDropsStaleRecords(t *testing.T) {
 		}},
 		"unleased": {kept: true, setup: func(t *testing.T, e *buildEnv) string {
 			key := strings.TrimPrefix(e.builtImage(t, e.pkg, BuildSpec{}).Image, "ensemble-worker:")
-			stale := time.Now().Add(-imageLease - time.Minute)
+			stale := time.Now().Add(-variantLease - time.Minute)
 			if err := os.Chtimes(e.leasePath(key), stale, stale); err != nil {
 				t.Fatal(err)
 			}

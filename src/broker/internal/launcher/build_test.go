@@ -517,13 +517,18 @@ func TestBuildRemovesOlderImages(t *testing.T) {
 	t.Run("keeps the images of keys a build leased within the lease", func(t *testing.T) {
 		e := newBuildEnv(t)
 		e.images = listing
-		stale := time.Now().Add(-imageLease - time.Minute)
+		stale := time.Now().Add(-variantLease - time.Minute)
 		for _, key := range []string{old, kept} {
 			putFile(t, e.leasePath(key), "")
 			putFile(t, e.leasePath(key)+".json", "{}")
 			putFile(t, e.leasePath(key)+".replaced", "[]")
 		}
 		if err := os.Chtimes(e.leasePath(old), stale, stale); err != nil {
+			t.Fatal(err)
+		}
+		// kept's record holds it past imageLease, within variantLease.
+		recent := time.Now().Add(-imageLease - time.Minute)
+		if err := os.Chtimes(e.leasePath(kept), recent, recent); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); err != nil {
@@ -700,7 +705,7 @@ func TestConcurrentPackagesKeepEachOthersImages(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		stale := time.Now().Add(-imageLease - time.Minute)
+		stale := time.Now().Add(-variantLease - time.Minute)
 		if err := os.Chtimes(e.leasePath(strings.TrimPrefix(built.Image, "ensemble-worker:")), stale, stale); err != nil {
 			t.Fatal(err)
 		}
@@ -722,7 +727,7 @@ func TestConcurrentPackagesKeepEachOthersImages(t *testing.T) {
 			t.Fatal(err)
 		}
 		lease := e.leasePath(strings.TrimPrefix(built.Image, "ensemble-worker:"))
-		stale := time.Now().Add(-imageLease - time.Minute)
+		stale := time.Now().Add(-variantLease - time.Minute)
 		if err := os.Chtimes(lease, stale, stale); err != nil {
 			t.Fatal(err)
 		}
@@ -1461,6 +1466,54 @@ func TestPruneKeepsReplacedImageForGrace(t *testing.T) {
 	clock = clock.Add(time.Minute)
 	h.prune(context.Background(), "")
 	if got := removed(); !slices.Equal(got, []string{young, old}) {
+		t.Fatalf("%q", got)
+	}
+	t.Run("an entry whose rebuild still runs outlives the grace", func(t *testing.T) {
+		putFile(t, filepath.Join(e.home, ".ensemble/docker/images", strings.Repeat("1", 64)+".replaced"),
+			`[{"id":"`+young+`","at":"2026-10-26T11:00:00Z","pending":true}]`)
+		h.prune(context.Background(), "")
+		if got := removed(); !slices.Equal(got, []string{old}) {
+			t.Fatalf("%q", got)
+		}
+		clock = clock.Add(pendingGrace)
+		h.prune(context.Background(), "")
+		if got := removed(); !slices.Equal(got, []string{young, old}) {
+			t.Fatalf("%q", got)
+		}
+	})
+}
+
+func TestPruneKeepsRecordedVariantsForTheVariantLease(t *testing.T) {
+	recorded, unrecorded := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	e := newBuildEnv(t)
+	e.images = "ensemble-worker:" + recorded + " sha256:" + strings.Repeat("5", 64) + "\n" +
+		"ensemble-worker:" + unrecorded + " sha256:" + strings.Repeat("6", 64) + "\n"
+	clock := time.Now()
+	h := e.host()
+	h.Now = func() time.Time { return clock }
+	for _, key := range []string{recorded, unrecorded} {
+		putFile(t, e.leasePath(key), "")
+	}
+	putFile(t, e.leasePath(recorded)+".json", "{}")
+	removed := func() []string {
+		var refs []string
+		for _, c := range e.fake.calls {
+			if strings.Join(c[:2], " ") == "image rm" {
+				refs = append(refs, c[2])
+			}
+		}
+		e.fake.calls = nil
+		return refs
+	}
+	clock = clock.Add(2 * time.Hour)
+	h.prune(context.Background(), "")
+	if got := removed(); !slices.Equal(got, []string{"ensemble-worker:" + unrecorded}) {
+		t.Fatalf("%q", got)
+	}
+	e.images = "ensemble-worker:" + recorded + " sha256:" + strings.Repeat("5", 64) + "\n"
+	clock = clock.Add(variantLease)
+	h.prune(context.Background(), "")
+	if got := removed(); !slices.Equal(got, []string{"ensemble-worker:" + recorded}) {
 		t.Fatalf("%q", got)
 	}
 }

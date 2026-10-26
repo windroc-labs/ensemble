@@ -60,6 +60,10 @@ var builtPattern = regexp.MustCompile(`^ensemble-(?:user|worker):[0-9a-f]{64}$`)
 // through a rebuild in progress and the start that follows a build.
 const imageLease = time.Hour
 
+// variantLease is how long prune keeps, and check-clients refreshes, a recorded variant after a build last leased
+// it, so a variant idle for a while still starts without a rebuild.
+const variantLease = 7 * 24 * time.Hour
+
 type imageInfo struct {
 	ID      string `json:"Id"`
 	Created time.Time
@@ -375,10 +379,19 @@ func (h Host) lease(key string) error {
 	return os.Chtimes(path, now, now)
 }
 
-// leased reports whether a build leased key less than imageLease ago.
-func (h Host) leased(key string) bool {
+// leased reports whether a build leased key less than d ago.
+func (h Host) leased(key string, d time.Duration) bool {
 	info, err := os.Stat(h.leasePath(key))
-	return err == nil && time.Since(info.ModTime()) < imageLease
+	return err == nil && h.now().Sub(info.ModTime()) < d
+}
+
+// kept reports whether prune keeps key's images: leased within imageLease, or a recorded variant within variantLease.
+func (h Host) kept(key string) bool {
+	if h.leased(key, imageLease) {
+		return true
+	}
+	_, err := os.Stat(h.recordPath(key))
+	return err == nil && h.leased(key, variantLease)
 }
 
 // rebuild builds both stages of key's images from the context in tmp, stage 1 being baseID's image when set, the
@@ -403,7 +416,7 @@ func (h Host) rebuild(ctx context.Context, tmp, key, version, plugins string, sp
 	if err := h.lease(key); err != nil {
 		return BuildResult{}, leaseFailed()
 	}
-	replaced, err := h.markReplaced(ctx, key, replacedImage{})
+	replaced, err := h.markReplaced(ctx, key, replacedImage{Pending: true})
 	if err != nil {
 		return BuildResult{}, err
 	}
@@ -415,7 +428,7 @@ func (h Host) rebuild(ctx context.Context, tmp, key, version, plugins string, sp
 	}
 	// The grace counts from the retag, however long the build took.
 	if replaced.ID != "" {
-		if _, err := h.markReplaced(ctx, key, replaced); err != nil {
+		if _, err := h.markReplaced(ctx, key, replacedImage{ID: replaced.ID, At: replaced.At}); err != nil {
 			h.note("cannot refresh the replaced image record of " + image + ": " + message(err))
 		}
 	}
@@ -437,38 +450,46 @@ func (h Host) rebuild(ctx context.Context, tmp, key, version, plugins string, sp
 }
 
 // retagGrace is how long prune keeps an image ID a rebuild took key's tag from: a start that inspected the tag just
-// before keeps using that ID for every step.
-const retagGrace = 10 * time.Minute
+// before keeps using that ID for every step. pendingGrace bounds an entry whose rebuild has not retagged yet.
+const (
+	retagGrace   = 10 * time.Minute
+	pendingGrace = 2 * time.Hour
+)
 
-// replacedImage is an entry of images/<key>.replaced: an image ID a rebuild took key's tag from, and when.
+// replacedImage is an entry of images/<key>.replaced: an image ID a rebuild took key's tag from, and when; Pending
+// while that rebuild still runs.
 type replacedImage struct {
-	ID string    `json:"id"`
-	At time.Time `json:"at"`
+	ID      string    `json:"id"`
+	At      time.Time `json:"at"`
+	Pending bool      `json:"pending,omitempty"`
 }
 
 func (h Host) replacedPath(key string) string {
 	return h.leasePath(key) + ".replaced"
 }
 
-// readReplaced is key's replaced entries younger than retagGrace; an unreadable list is empty.
+// readReplaced is key's replaced entries younger than retagGrace, or pendingGrace while pending; an unreadable list is
+// empty.
 func (h Host) readReplaced(key string) []replacedImage {
 	var entries []replacedImage
 	if data, err := os.ReadFile(h.replacedPath(key)); err != nil || json.Unmarshal(data, &entries) != nil {
 		return nil
 	}
 	now := h.now()
-	return slices.DeleteFunc(entries, func(e replacedImage) bool { return now.Sub(e.At) >= retagGrace })
+	return slices.DeleteFunc(entries, func(e replacedImage) bool {
+		return now.Sub(e.At) >= retagGrace && (!e.Pending || now.Sub(e.At) >= pendingGrace)
+	})
 }
 
-// markReplaced records, under the image lock, the ID key's worker tag names (prior's when set, replacing that entry)
-// as replaced now; it returns the entry, a zero one when the tag names no image.
+// markReplaced records, under the image lock, the ID key's worker tag names (prior's ID when set, replacing that entry)
+// as replaced now, pending as prior is; it returns the entry, a zero one when the tag names no image.
 func (h Host) markReplaced(ctx context.Context, key string, prior replacedImage) (replacedImage, error) {
 	unlock, err := h.Lock()
 	if err != nil {
 		return replacedImage{}, protocol.New(protocol.BuildFailed, "Taking the image lock ~/.ensemble/docker/images.lock failed.")
 	}
 	defer unlock()
-	entry := replacedImage{ID: prior.ID, At: h.now()}
+	entry := replacedImage{ID: prior.ID, At: h.now(), Pending: prior.Pending}
 	if entry.ID == "" {
 		info, found, err := h.inspectImage(ctx, "ensemble-worker:"+key)
 		if err != nil {
@@ -654,7 +675,7 @@ func (h Host) checkImagePlugins(ctx context.Context, image string, names []strin
 	return nil
 }
 
-// prune removes the user and worker images of keys other than key ("": none) that no build leased within imageLease,
+// prune removes the user and worker images of keys other than key ("": none) that it does not keep (kept),
 // with a worker image its key's record and replaced list, and the untagged ones a same-key rebuild left, except one
 // replaced within retagGrace, that no container, running or stopped, uses, noting each to Progress; whatever fails is
 // kept and never fails the build. It holds the image lock, so a build's lease and inspect come wholly before or after
@@ -679,7 +700,7 @@ func (h Host) prune(ctx context.Context, key string) {
 	for _, line := range strings.Split(string(out), "\n") {
 		ref, id, _ := strings.Cut(line, " ")
 		_, refKey, _ := strings.Cut(ref, ":")
-		if !builtPattern.MatchString(ref) || refKey == key || used[id] || h.leased(refKey) {
+		if !builtPattern.MatchString(ref) || refKey == key || used[id] || h.kept(refKey) {
 			continue
 		}
 		// No --force: Docker also refuses an image a container uses.

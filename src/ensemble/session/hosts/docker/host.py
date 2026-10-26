@@ -937,7 +937,7 @@ class DockerHost(Host):
             raise ConfigError(f"Docker cwd {cwd}: no such directory")
 
     def _image(self, name: str) -> tuple[str, str, tuple[str, str]]:
-        """(the hook path, the plugin root, the built image and digest), never waiting on an age refresh."""
+        """(the hook path, the plugin root, the built image and digest)."""
         hook = command_path(COMMAND)
         if hook is None:
             raise ConfigError(f"docker session {name}: {COMMAND} is not on PATH (its hooks run it)")

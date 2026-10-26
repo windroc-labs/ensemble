@@ -185,15 +185,16 @@ rebuilds an image N or more seconds old under the same key (starts pass none); i
 keeps the image, printing `ensemble-broker: kept <image>: refreshing it failed: <reason>`, except `--max-age 0`, which
 fails.
 
-After a rebuild, `build` removes unused older images, keeping those used by containers or recent builds.
+After a rebuild, and after every `check-clients`, the broker removes unused older images, keeping those used by
+containers, by a build in the last hour, or by a recorded variant a build used in the last 7 days.
 
 ### Client releases
 
 Starts never update a client and never wait for a rebuild. Every successful `build` records its inputs in
 `~/.ensemble/docker/images/<key>.json` and, when the last check is an hour old or more (or none ran), starts a
 detached `ensemble-broker check-clients` (log: `~/.ensemble/docker/clients-check.log`). It looks up the three clients'
-npm `latest` releases and rebuilds, under the same key, every variant built in the last hour whose labels differ (a
-newer release, or a `latest` moved back); the first start after it finishes runs the new image. Running workers keep
+npm `latest` releases and rebuilds, under the same key, every variant a build used in the last 7 days whose labels
+differ (a newer release, or a `latest` moved back); the first start after it finishes runs the new image. Running workers keep
 theirs. A host that runs no build runs no check: run `"$B" check-clients` by hand to check now (it prints
 `{"latest":{"claude":…,"codex":…,"opencode":…},"rebuilt":[…]}`, or `{"rebuilt":[]}` while another check runs, and
 fails `build_failed`, exit 8, on any failure).
