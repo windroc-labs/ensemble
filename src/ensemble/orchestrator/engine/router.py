@@ -5,10 +5,10 @@ Usage: ensemble-orchestrator router [--dry-run] [--issue ID]
        ensemble-orchestrator router --brake ROLE
 
 Arguments and options:
-  (no mode)     One scheduled tick: role max_runs, client_max_runs and usage
+  (no mode)     One scheduled tick: role max_runs and usage
                 gates; starts at most one run assigned to a role account.
   --issue ID    Only this issue identifier, e.g. TASK-1; bypass max_runs,
-                client_max_runs and usage gates (its run still counts toward
+                usage gates (its run still counts toward
                 them).
   --dry-run     Print the plan without claiming issues or launching work;
                 a tick still performs usage checks. Not an offline preview:
@@ -82,7 +82,6 @@ import subprocess
 import sys
 import textwrap
 import uuid
-from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -206,16 +205,6 @@ def live_sessions(cfg, entries, *, say):
 
 def full_roles(roles, live):
     return {r for r in roles if len(live[r]) >= roles[r].max_runs}
-
-
-def live_clients(entries, live):
-    """Each client's live runs: live's runs counted by the client their latest entry records."""
-    found = latest(entries)
-    return Counter(found[i].client for ids in live.values() for i in ids)
-
-
-def full_clients(limits, counts):
-    return frozenset(c for c, n in limits.items() if counts[c] >= n)
 
 
 def rank(issue):
@@ -547,7 +536,7 @@ class Board:
                     break
         return selected
 
-    def take(self, only=None, full=(), clients=()):
+    def take(self, only=None, full=()):
         queue = self.queue(full)
         if only:
             queue = [i for i in queue if i["identifier"] == only]
@@ -561,7 +550,7 @@ class Board:
                 )
                 return None
             self.say("pick", ident, queue=len(queue))
-            return self.claim(issue, full, clients)
+            return self.claim(issue, full)
 
         if (taken := self.first(map(pick, queue))) is not None:
             return taken
@@ -579,7 +568,7 @@ class Board:
         reasons += [current.refused] if current.refused else []
         return "; ".join(reasons) or NOT_LISTED.format(state=state)
 
-    def claim(self, issue, full, clients=()):
+    def claim(self, issue, full):
         ident = issue["identifier"]
         # re-check right before claiming so a concurrent change isn't overwritten
         current = self.tracker.recheck(issue["id"])
@@ -623,9 +612,6 @@ class Board:
                 reason = "bad task and Agent labels"
             self.say("claim-skip", ident, to="in_review", reason=reason)
             self.bounce(issue, "\n\n".join(comments))
-            return None
-        if client in clients:
-            self.say("claim-skip", ident, reason=f"{client} is full")
             return None
         if self.gated(issue, role, client, source):
             return None
@@ -952,7 +938,7 @@ def other_sid(spec, launch_sid):
     return True
 
 
-def choose(board, gate, live_ids, full, counts, *, clients, new_sid):
+def choose(board, gate, live_ids, full, counts, *, new_sid):
     unclaimed = False
 
     def resumes():
@@ -960,10 +946,6 @@ def choose(board, gate, live_ids, full, counts, *, clients, new_sid):
             if not board.available(issue, full):
                 continue
             spec, role = board.resumption(issue, sid, new_sid), board.role(issue)
-            if spec.client in clients:
-                reason = f"{spec.client} is full"
-                board.say("recover-skip", issue["identifier"], once=True, sid=sid, reason=reason)
-                continue
             if spec.mode == "new":
                 blocked = board.gated(
                     issue, role, spec.client, spec.client_source, IssueState.RUNNING
@@ -984,7 +966,7 @@ def choose(board, gate, live_ids, full, counts, *, clients, new_sid):
         if not (queue := board.queue(full)):
             return
         board.plan(("new", len(queue)), counts)
-        if not (taken := board.take(full=full, clients=clients)):
+        if not (taken := board.take(full=full)):
             unclaimed = True
             return
         issue, task, role, client, source = taken
@@ -1018,7 +1000,6 @@ def tick(opts, cfg, gql, *, start, keychain, wiring, clock=datetime.now, launch_
             say("skip", reason="agent runs unknown")
             return 0
         full = full_roles(cfg.roles, live)
-        clients = full_clients(cfg.client_max_runs, live_clients(entries, live))
         counts = {
             r: f"{len(ids)}/{cfg.roles[r].max_runs}" for r, ids in sorted(live.items()) if ids
         } or None
@@ -1046,7 +1027,7 @@ def tick(opts, cfg, gql, *, start, keychain, wiring, clock=datetime.now, launch_
             )
             live_ids = {i for ids in live.values() for i in ids}
             new_sid = launch_sid or str(uuid.uuid4())
-            spec = choose(board, gate, live_ids, full, counts, clients=clients, new_sid=new_sid)
+            spec = choose(board, gate, live_ids, full, counts, new_sid=new_sid)
             if not dry and spec is not None and other_sid(spec, launch_sid):
                 return 2
             if spec is None or dry:

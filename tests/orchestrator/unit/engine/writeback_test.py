@@ -2916,6 +2916,15 @@ BUSY_ERROR = "busy: lock dummy-lock is held by ensemble-x-1 (owner x)"
 
 
 class BusyFinished(Events):
+    def test_client_capacity_failure_comments_and_counts_one_attempt(self):
+        error = "client fake reached max_runs limit 1; held by: worker-one"
+        for _ in range(2):
+            self.assertTrue(self.deliver(self.finished(1, error=error)))
+        bodies = [v["body"] for v in self.linear.comments.values()]
+        self.assertEqual(sum(error in body for body in bodies), 1)
+        self.assertEqual(router.attempt_count(runs.parse_log(self.cfg.runs_log), RUN_ISSUE), 1)
+        self.assertEqual(self.linear.state, self.cfg.linear.states["in_review"])
+
     def test_busy_start_is_a_normal_failure_comment_and_attempt_once(self):
         for _ in range(2):
             self.assertTrue(self.deliver(self.finished(75, error=BUSY_ERROR)))
