@@ -100,7 +100,7 @@ Each Host implementation supplies its process capabilities.
 | `src/ensemble/session/hosts/docker/`, `src/broker/`, `src/broker/protocol/` | Docker adaptation, hook relay, worker image, containers and credential injection | Host, Docker Desktop, broker; broker uses macOS Keychain | Replace as a unit | Preserve Host for callers; retaining the broker also requires its protocol JSON schemas, versions, exit codes and shared fixtures |
 | `src/ensemble/manager/`, `skills/manage/`, `hooks/` | Crew, Roster, event cursors and commander sessions | utils; commands to other layers | Keep scheduling logic; adapt local display and client hooks | Record ctl and resume commands, CLI output; import relationships shown above |
 | `src/ensemble/utils/` | Configuration overlays, shared types, paths and process control | Python standard library | Keep, with the required OS process capabilities | Public exports and shared data formats |
-| External `windroc/egress-proxy` | Egress service, outside this repository | Docker labels and health; ensemble is not integrated | Replace the independent service as a unit | Versions, label meanings and health semantics in [docs/label-contract.md](https://github.com/windroc/egress-proxy/blob/f5aed5f/docs/label-contract.md) |
+| External `windroc/egress-proxy` | Egress service, outside this repository | Docker; installer fetches a pinned commit and starts the gateway; broker runtime enforcement ships with WDRC-139 | Replace the independent service as a unit | Versions, label meanings and health semantics in [docs/label-contract.md](https://github.com/windroc/egress-proxy/blob/225409bd04954ff1ea81d66e5339c812a519b4f7/docs/label-contract.md) |
 | `src/broker/internal/broker/keychain_darwin.go` | Read credentials from macOS Keychain for broker injection into containers | macOS Security; storage interface in `keychain.go` | Replace the credential source as a unit | Credentials, CodexCredentials, ProviderKeys and Tokens in `launcher/host.go`; credential readers and lifecycle in [Credentials](credentials.md) |
 
 The **Host boundary** is defined by [`hosts/base.py`](../src/ensemble/session/hosts/base.py).
@@ -109,7 +109,7 @@ selects an implementation and `[hosts] default` selects the host. Preserving its
 return types and error semantics keeps upper session, delegate and orchestrator code unchanged.
 Client adaptation remains in `clients/`.
 
-The **egress boundary** is defined by the external [docs/label-contract.md (f5aed5f)](https://github.com/windroc/egress-proxy/blob/f5aed5f/docs/label-contract.md).
+The **egress boundary** is defined by the external [docs/label-contract.md (f5aed5f)](https://github.com/windroc/egress-proxy/blob/225409bd04954ff1ea81d66e5339c812a519b4f7/docs/label-contract.md).
 Callers depend only on gateway `windroc.egress.*` labels and Docker health, selecting an internal
 network and proxy address from the network key's `.name` and `.proxy`. A replacement gateway preserves
 the consumed contract version, label meanings and health semantics; the contract lists the complete

@@ -712,7 +712,7 @@ class Worker:
             raise SystemExit("FAIL LAN control: need this mini's private LAN IPv4 address")
         for bind, target in (("127.0.0.1", "host.docker.internal"), (lan, lan)):
             with listener(bind) as port:
-                control = call(
+                call(
                     [
                         "curl",
                         "--noproxy",
@@ -725,7 +725,6 @@ class Worker:
                         f"http://{bind}:{port}/",
                     ]
                 )
-                del control
                 print(f"PASS host control: {bind}:{port} reachable", flush=True)
                 url = f"http://{target}:{port}/"
                 self.probe(container, proxy, url, "denied")

@@ -491,8 +491,12 @@ def docker(args):
     if args[:2] == ["inspect", "--format"] and args[-1] == "egress-gateway":
         if not (FAKES / "egress_started").exists():
             return 1
+        recorded = FAKES / "egress_inspect"
+        if recorded.exists():
+            out(recorded.read_text())
+            return 0
         health = "unhealthy" if (FAKES / "egress_unhealthy").exists() else "healthy"
-        out(f"true {health} 1 egress-workers http://egress-proxy-workers:4750\n")
+        out(f"true {health} 1 egress-workers http://egress-proxy-workers:4750 workers\n")
         return 0
     return 0 if args == ["info"] and (FAKES / "docker_running").exists() else 1
 

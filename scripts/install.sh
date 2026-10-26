@@ -1759,8 +1759,13 @@ broker_logins() {
 
 egress_ready() {
   local status
-  status=$(docker inspect --format '{{.State.Running}} {{if .State.Health}}{{.State.Health.Status}}{{end}} {{index .Config.Labels "windroc.egress.contract"}} {{index .Config.Labels "windroc.egress.network.workers.name"}} {{index .Config.Labels "windroc.egress.network.workers.proxy"}}' egress-gateway </dev/null 2>/dev/null) || return 1
-  [ "$status" = 'true healthy 1 egress-workers http://egress-proxy-workers:4750' ]
+  status=$(docker inspect --format '{{.State.Running}} {{if .State.Health}}{{.State.Health.Status}}{{end}} {{index .Config.Labels "windroc.egress.contract"}} {{index .Config.Labels "windroc.egress.network.workers.name"}} {{index .Config.Labels "windroc.egress.network.workers.proxy"}} {{index .Config.Labels "windroc.egress.networks"}}' egress-gateway </dev/null 2>/dev/null) || return 1
+  case $status in
+    'true healthy 1 egress-workers http://egress-proxy-workers:4750 '*) ;;
+    *) return 1 ;;
+  esac
+  case ",${status##* }," in *,workers,*) return 0 ;; esac
+  return 1
 }
 
 # Download to a sibling directory so a failed fetch never leaves a usable partial version.
@@ -1782,6 +1787,8 @@ egress_install() {
   local dir=$HOME/.egress version=$HOME/.egress/versions/$egress_commit tries=0
   step "egress gateway"
   mkdir -p "$dir/versions"
+  [ ! -L "$dir/config.local.yaml" ] \
+    || die "$dir/config.local.yaml symlink is unsupported by the gateway's directory mount; existing path was kept"
   if [ ! -e "$dir/config.local.yaml" ] && [ ! -L "$dir/config.local.yaml" ]; then
     (umask 077; set -o noclobber; printf 'version: 1\nnetworks:\n  workers:\n    mode: denylist\n' >"$dir/config.local.yaml") \
       || die "cannot create $dir/config.local.yaml; existing config was kept"

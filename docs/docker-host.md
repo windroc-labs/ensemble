@@ -48,8 +48,10 @@ access, pinned to commit `225409bd04954ff1ea81d66e5339c812a519b4f7` (label contr
 a branch or tag. No Docker selection means no gateway installation.
 
 The installer creates `~/.egress/config.local.yaml` only when absent, with just `workers` in denylist mode;
-an existing config is kept byte for byte. A healthy same-version rerun keeps the checkout, config and container.
-The gateway is shared with other caller networks: uninstalling ensemble keeps `~/.egress` and the gateway.
+an existing config is kept byte for byte. A config symlink is preserved and rejected: the gateway mounts
+its containing directory, so host symlink targets may not resolve inside the container. Use a regular file. A healthy same-version rerun keeps the checkout, config and container.
+The gateway is shared with other caller networks: ensemble cleanup keeps `~/.egress`. If cleanup also removes
+Docker Desktop, the gateway stops and its Docker state may be removed; reinstall Docker before using it again.
 The pinned [gateway README](https://github.com/windroc/egress-proxy/blob/225409bd04954ff1ea81d66e5339c812a519b4f7/README.md)
 and `config.example.yaml` in the installed version define the config.
 

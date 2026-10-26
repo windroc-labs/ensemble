@@ -6,6 +6,7 @@ import os
 import re
 import types
 import unittest
+from contextlib import nullcontext
 from unittest import mock
 
 from tests.session import live_docker as gate
@@ -136,11 +137,21 @@ class GatewayTest(Case):
         self.gateway["NetworkSettings"]["Networks"] = {}
         self.assertTrue(self.check())
 
-    def test_missing_proxy_variable_and_host_bypass_are_rejected(self):
+    def test_missing_proxy_variable_is_rejected(self):
         self.worker["Config"]["Env"].pop(0)
-        self.assertTrue(self.check())
-        self.worker["Config"]["Env"] = ["NO_PROXY=host.docker.internal"]
-        self.assertTrue(self.check())
+        self.assertEqual(self.check(), ["HTTP_PROXY differs from gateway label"])
+
+    def test_host_bypass_is_rejected_independently_for_each_case(self):
+        valid = self.worker["Config"]["Env"][:]
+        for key in ("NO_PROXY", "no_proxy"):
+            with self.subTest(key=key):
+                self.worker["Config"]["Env"] = [
+                    f"{key}=localhost,127.0.0.1,::1,host.docker.internal"
+                    if item.startswith(key + "=")
+                    else item
+                    for item in valid
+                ]
+                self.assertEqual(self.check(), [f"{key} must bypass only container loopback"])
 
     def test_probe_requires_proxy_decision_and_real_curl(self):
         for kind, status, code in (
@@ -157,6 +168,135 @@ class GatewayTest(Case):
             ("direct", "000 200", 0),
         ):
             self.assertTrue(gate.probe_problems(kind, status, code))
+
+
+class NetworkProbeTest(Case):
+    def setUp(self):
+        self.worker = gate.Worker(
+            gate.Args("worker", "live", client="claude", cwd=CWD), "mgr", "docker"
+        )
+        self.proxy = "http://egress-proxy-workers:4750"
+        self.route = ("  interface: en0\n", "")
+        self.lan = ("192.168.1.20\n", "")
+
+    def test_host_controls_and_every_worker_probe(self):
+        with (
+            mock.patch.object(
+                gate, "call", side_effect=[self.route, self.lan, ("", ""), ("", "")]
+            ) as call,
+            mock.patch.object(
+                gate, "listener", side_effect=[nullcontext(32101), nullcontext(32102)]
+            ) as listen,
+            mock.patch.object(self.worker, "probe") as probe,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            self.worker.network("container", self.proxy)
+        self.assertEqual(listen.call_args_list, [mock.call("127.0.0.1"), mock.call("192.168.1.20")])
+        self.assertEqual(
+            probe.call_args_list,
+            [
+                mock.call("container", self.proxy, "https://example.com", "public"),
+                mock.call("container", "", "https://1.1.1.1", "direct"),
+                mock.call("container", self.proxy, "http://host.docker.internal:32101/", "denied"),
+                mock.call("container", "", "http://host.docker.internal:32101/", "direct"),
+                mock.call("container", self.proxy, "http://192.168.1.20:32102/", "denied"),
+                mock.call("container", "", "http://192.168.1.20:32102/", "direct"),
+            ],
+        )
+        self.assertEqual(
+            call.call_args_list[:2],
+            [
+                mock.call(["route", "-n", "get", "default"]),
+                mock.call(["ipconfig", "getifaddr", "en0"]),
+            ],
+        )
+        for index, host, port in ((2, "127.0.0.1", 32101), (3, "192.168.1.20", 32102)):
+            self.assertEqual(
+                call.call_args_list[index].args[0],
+                [
+                    "curl",
+                    "--noproxy",
+                    "*",
+                    "-fsS",
+                    "-o",
+                    "/dev/null",
+                    "--max-time",
+                    "5",
+                    f"http://{host}:{port}/",
+                ],
+            )
+
+    def test_unreachable_host_control_cannot_pass_denial(self):
+        with (
+            mock.patch.object(
+                gate, "call", side_effect=[self.route, self.lan, SystemExit("host control failed")]
+            ),
+            mock.patch.object(gate, "listener", return_value=nullcontext(32101)),
+            mock.patch.object(self.worker, "probe") as probe,
+            self.assertRaisesRegex(SystemExit, "host control failed"),
+        ):
+            self.worker.network("container", self.proxy)
+        self.assertEqual(probe.call_count, 2)
+
+    def test_curl_uses_supplied_proxy_and_propagates_a_failed_denial(self):
+        response = types.SimpleNamespace(stdout="407 000", returncode=56)
+        with (
+            mock.patch.object(gate.subprocess, "run", return_value=response) as run,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            self.worker.probe(
+                "container", self.proxy, "http://host.docker.internal:32101/", "denied"
+            )
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[:4], ["docker", "exec", "container", "curl"])
+        self.assertEqual(
+            argv[-6:],
+            [
+                "--noproxy",
+                "",
+                "--proxytunnel",
+                "--proxy",
+                self.proxy,
+                "http://host.docker.internal:32101/",
+            ],
+        )
+        self.assertEqual(argv[argv.index("-o") + 1], "/dev/null")
+        response.stdout, response.returncode = "000 000", 7
+        with (
+            mock.patch.object(gate.subprocess, "run", return_value=response),
+            self.assertRaisesRegex(SystemExit, "FAIL network denied"),
+        ):
+            self.worker.probe(
+                "container", self.proxy, "http://host.docker.internal:32101/", "denied"
+            )
+
+    def test_direct_probe_explicitly_bypasses_all_proxies(self):
+        response = types.SimpleNamespace(stdout="000 000", returncode=28)
+        with (
+            mock.patch.object(gate.subprocess, "run", return_value=response) as run,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            self.worker.probe("container", "", "https://1.1.1.1", "direct")
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[-3:], ["--noproxy", "*", "https://1.1.1.1"])
+        self.assertNotIn("--proxy", argv)
+
+    def test_listener_releases_server_and_thread_on_failure(self):
+        with (
+            mock.patch.object(gate, "HTTPServer") as server_type,
+            mock.patch.object(gate.threading, "Thread") as thread_type,
+        ):
+            server = server_type.return_value.__enter__.return_value
+            server.server_port = 32101
+            with (
+                self.assertRaisesRegex(RuntimeError, "consumer failed"),
+                gate.listener("127.0.0.1") as port,
+            ):
+                self.assertEqual(port, 32101)
+                raise RuntimeError("consumer failed")
+            server.shutdown.assert_called_once_with()
+            thread_type.return_value.start.assert_called_once_with()
+            thread_type.return_value.join.assert_called_once_with()
 
 
 class ReclaimedTest(Case):

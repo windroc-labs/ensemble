@@ -50,6 +50,7 @@ REAL = (
     "mkfifo",
     "stty",
     "tar",
+    "gzip",
     "ln",
 )
 FAKED = ("uname", "id", "sudo", "curl", "security", "open", "launchctl", "shasum")
@@ -991,18 +992,17 @@ class InstallTest(Case):
         self.assertNotIn("docker egress-start", self.calls())
         self.assertFalse(any("tarball/" in c for c in self.calls()))
 
-    def test_gateway_existing_config_and_symlink_preserved(self):
+    def test_gateway_existing_config_preserved(self):
         egress = Path(self.home, ".egress")
         egress.mkdir()
-        target = Path(self.home, "my-egress.yaml")
+        target = egress / "config.local.yaml"
         target.write_text("# user policy\nversion: 1\nnetworks:\n  workers:\n    mode: denylist\n")
         target.chmod(0o600)
-        config = egress / "config.local.yaml"
-        config.symlink_to(target)
-        before = (target.read_bytes(), target.stat())
+        before = (target.read_bytes(), target.stat().st_mode, target.stat().st_mtime_ns)
         self.assert_ok(self.fresh("--clients", "claude", "--docker"))
-        self.assertTrue(config.is_symlink())
-        self.assertEqual((target.read_bytes(), target.stat()), before)
+        self.assertEqual(
+            (target.read_bytes(), target.stat().st_mode, target.stat().st_mtime_ns), before
+        )
 
     def test_gateway_bad_config_paths_are_not_replaced(self):
         egress = Path(self.home, ".egress")
@@ -1012,8 +1012,75 @@ class InstallTest(Case):
         result = self.fresh("--clients", "claude", "--docker", logins=[])
         self.assertEqual(result.code, 1)
         self.assertTrue(config.is_symlink())
-        self.assertIn("config.local.yaml is not a readable file", result.stderr)
+        self.assertIn("symlink is unsupported", result.stderr)
         self.assertNotIn("docker egress-start", self.calls())
+
+    def test_gateway_external_config_symlink_is_kept_and_rejected(self):
+        egress = Path(self.home, ".egress")
+        egress.mkdir()
+        target = Path(self.home, "my-egress.yaml")
+        target.write_text("# user config\n")
+        config = egress / "config.local.yaml"
+        config.symlink_to(target)
+        before = (target.read_bytes(), target.stat().st_mode, target.stat().st_mtime_ns)
+        result = self.fresh("--clients", "claude", "--docker", logins=[])
+        self.assertEqual(result.code, 1)
+        self.assertIn("symlink is unsupported", result.stderr)
+        self.assertTrue(config.is_symlink())
+        self.assertEqual(
+            (target.read_bytes(), target.stat().st_mode, target.stat().st_mtime_ns), before
+        )
+        self.assertNotIn("docker egress-start", self.calls())
+
+    def test_gateway_upgrade_keeps_old_version_and_publishes_current_only_when_healthy(self):
+        old_sha = "0" * 40
+        egress = Path(self.home, ".egress")
+        old = egress / "versions" / old_sha
+        old.mkdir(parents=True)
+        (old / "COMMIT").write_text(old_sha + "\n")
+        (old / "start.sh").write_text("# old checkout\n")
+        before = {
+            p: (p.read_bytes(), p.stat().st_mode, p.stat().st_mtime_ns) for p in old.iterdir()
+        }
+        (egress / "current").symlink_to(old)
+        state = Path(self.ensemble, "install/state")
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text(f"egress_commit={old_sha}\n")
+        (self.fakes / "fail").write_text("docker egress-start")
+        result = self.fresh("--clients", "claude", "--docker", logins=[])
+        self.assertEqual(result.code, 1)
+        self.assertEqual((egress / "current").resolve(), old)
+        self.assertEqual(self.state()["egress_commit"], old_sha)
+        self.assert_ok(
+            self.again("--clients", "claude", "--docker", answers=DOCKER_LOGINS + ((WRITE_Q, "y"),))
+        )
+        self.assertEqual(
+            (egress / "current").resolve(),
+            egress / "versions" / "225409bd04954ff1ea81d66e5339c812a519b4f7",
+        )
+        self.assertEqual(
+            {p: (p.read_bytes(), p.stat().st_mode, p.stat().st_mtime_ns) for p in old.iterdir()},
+            before,
+        )
+
+    def test_gateway_stopped_and_invalid_metadata_cannot_finish_installation(self):
+        self.assert_ok(self.fresh("--clients", "claude", "--docker"))
+        (self.bin / "sleep").unlink()
+        executable(self.bin / "sleep", "#!/bin/sh\n")
+        good = "true healthy 1 egress-workers http://egress-proxy-workers:4750 workers"
+        for status in (
+            good.replace("true", "false"),
+            good.replace("healthy 1", "healthy 2"),
+            good.replace("egress-workers", "bridge"),
+            good.replace("http://egress-proxy-workers:4750", "<no value>"),
+            good.removesuffix("workers") + "mini-op",
+        ):
+            with self.subTest(status=status):
+                (self.fakes / "egress_inspect").write_text(status + "\n")
+                result = self.again("--clients", "claude", "--docker")
+                self.assertEqual(result.code, 1)
+                self.assertIn("not healthy after 120 seconds", result.stderr)
+                self.assertNotIn("ensemble-broker login claude", self.calls())
 
     def test_gateway_download_failure_is_retryable(self):
         (self.fakes / "fail").write_text("gh api repos/windroc/egress-proxy/tarball/")
@@ -3722,11 +3789,12 @@ exec /bin/rm "$@"
         first = self.full()
         self.assert_ok(first)
         calls, ledger, files = self.run_calls(), self.ledger(), self.snapshot()
+        shared = {p: b for p, b in files.items() if ".egress" in p.relative_to(self.home).parts}
         result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
         self.assert_ok(result)
         self.assertNotIn("docker-uninstall", self.calls())
         self.assertIn("brew uninstall --cask docker-desktop", self.calls())
-        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.snapshot(), before | shared)
         self.assertEqual(list((self.fakes / "keychain").iterdir()), [])
         self.assertEqual(list((self.fakes / "login").iterdir()), [])
         self.assertFalse(self.broker_path().parent.exists())
@@ -3734,7 +3802,8 @@ exec /bin/rm "$@"
         self.assert_secret_free(PASSWORD, KEY, TOKEN, result=result)
         second = self.full()
         self.assert_ok(second)
-        self.assertEqual(self.run_calls(), calls)
+        fetch = "gh api repos/windroc/egress-proxy/tarball/"
+        self.assertEqual(self.run_calls(), [c for c in calls if not c.startswith(fetch)])
         self.assertEqual(self.ledger(), ledger)
         self.assertEqual(second.tty, first.tty)
         self.assertEqual(self.snapshot(), files)
@@ -3867,12 +3936,15 @@ exec /bin/rm "$@"
         )
         before = self.snapshot()
         self.assert_ok(self.fresh("--docker", logins=[(PEM_Q, "")]))
+        shared = {
+            p: b for p, b in self.snapshot().items() if ".egress" in p.relative_to(self.home).parts
+        }
         self.assertFalse(
             [r for r in self.ledger() if r.startswith(("homebrew", "clt", "formula\tgh"))]
         )
         result = self.cleanup("--yes")
         self.assert_ok(result)
-        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.snapshot(), before | shared)
         self.assertTrue((self.fakes / "brew/gh").exists())
         self.assertTrue((self.fakes / "keychain/ensemble-claude").exists())
         self.assertNotIn("brew uninstall gh", self.calls())
