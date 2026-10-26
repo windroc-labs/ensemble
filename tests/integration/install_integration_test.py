@@ -2506,8 +2506,14 @@ class InstallTest(Case):
         self.assert_ok(self.opencode_rerun())
         self.assertIn("ctmux --install", self.calls())
         for path in Path(self.ensemble, "bin").iterdir():
-            self.assertTrue(path.read_text().startswith("#!/bin/bash\ntarget=$(python3 -I - "))
-            self.assertIn("/node_modules/ensemble ", path.read_text())
+            self.assertTrue(
+                path.read_text().startswith('#!/bin/bash\ntarget=$(python3 -I - "${0##*/}" <<')
+            )
+        self.assertTrue(
+            json.loads(Path(self.ensemble, "plugin-root").read_text())["root"].endswith(
+                "/node_modules/ensemble"
+            )
+        )
         self.assert_ok(self.opencode_rerun())
         self.assertNotIn("ctmux --install", self.calls())
 
