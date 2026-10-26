@@ -76,15 +76,15 @@ def old_key(key):
 ROLES = {
     "researcher": (
         role_id("researcher"),
-        "linear-api-key-researcher",
+        "linear-app-researcher-token",
         ("deep-research", "research", "light-research"),
         1,
         "pm",
     ),
-    "pm": (role_id("pm"), "linear-api-key-pm", ("product-design",), 1, "engineer"),
+    "pm": (role_id("pm"), "linear-app-pm-token", ("product-design",), 1, "engineer"),
     "engineer": (
         role_id("engineer"),
-        "linear-api-key-engineer",
+        "linear-app-engineer-token",
         ("build", "light-build"),
         1,
         None,
@@ -93,7 +93,7 @@ ROLES = {
 
 
 def fields(cfg):
-    """Each role's account, key, tasks, max_runs and its stage's next (None: the last)."""
+    """Each role's app user id, token service, tasks, max_runs and its stage's next (None: the last)."""
     return {
         r: (
             cfg.linear.roles[r].user_id,
@@ -320,7 +320,7 @@ class ConfigurationLoading(ConfigFile, Case):
             ],
             (
                 BASE.replace(
-                    HARNESS_LINE, 'linear.harness_key = "linear-api-key"\n' + HARNESS_LINE
+                    HARNESS_LINE, 'linear.harness_key = "linear-app-harness-token"\n' + HARNESS_LINE
                 ),
                 "unknown keys in [linear]: harness_key",
             ),
@@ -346,8 +346,8 @@ class ConfigurationLoading(ConfigFile, Case):
                 )
             ],
             (
-                BASE.replace('"linear-api-key-secret"', '"linear-api-key"'),
-                "linear.harness.secret_service 'linear-api-key' is also linear.harness.token_service",
+                BASE.replace('"linear-app-harness-secret"', '"linear-app-harness-token"'),
+                "linear.harness.secret_service 'linear-app-harness-token' is also linear.harness.token_service",
             ),
             (
                 BASE.replace(TEAM, "Acme's Agents"),
@@ -455,16 +455,16 @@ class ConfigurationLoading(ConfigFile, Case):
                 "[roles.dummy-tester] names no stage of the workflow",
             ),
             (
-                PIPELINE.replace("linear-api-key-pm", "linear-api-key-researcher"),
-                "linear.roles.pm.secret_service 'linear-api-key-researcher-secret' is also linear.roles.researcher.secret_service",
+                PIPELINE.replace("linear-app-pm-", "linear-app-researcher-"),
+                "linear.roles.pm.secret_service 'linear-app-researcher-secret' is also linear.roles.researcher.secret_service",
             ),
             (
-                PIPELINE.replace("linear-api-key-engineer", "linear-api-key"),
-                "linear.roles.engineer.secret_service 'linear-api-key-secret' is also linear.harness.secret_service",
+                PIPELINE.replace("linear-app-engineer-", "linear-app-harness-"),
+                "linear.roles.engineer.secret_service 'linear-app-harness-secret' is also linear.harness.secret_service",
             ),
             (
-                PIPELINE.replace("linear-api-key-pm", "linear-api-key-secret"),
-                "linear.roles.pm.token_service 'linear-api-key-secret' is also linear.harness.secret_service",
+                PIPELINE.replace("linear-app-pm-token", "linear-app-harness-secret"),
+                "linear.roles.pm.token_service 'linear-app-harness-secret' is also linear.harness.secret_service",
             ),
             *[
                 (
@@ -606,16 +606,16 @@ class ConfigurationLoading(ConfigFile, Case):
                 "linear.manager.client_id 'client-pm' is also linear.roles.pm.client_id",
             ),
             (
-                table(token_service="linear-api-key"),
-                "linear.manager.token_service 'linear-api-key' is also linear.harness.token_service",
+                table(token_service="linear-app-harness-token"),
+                "linear.manager.token_service 'linear-app-harness-token' is also linear.harness.token_service",
             ),
             (
-                table(secret_service="linear-api-key-pm"),
-                "linear.manager.secret_service 'linear-api-key-pm' is also linear.roles.pm.token_service",
+                table(secret_service="linear-app-pm-token"),
+                "linear.manager.secret_service 'linear-app-pm-token' is also linear.roles.pm.token_service",
             ),
             (
-                table(token_service="linear-api-key-engineer-secret"),
-                "linear.manager.token_service 'linear-api-key-engineer-secret' is also "
+                table(token_service="linear-app-engineer-secret"),
+                "linear.manager.token_service 'linear-app-engineer-secret' is also "
                 "linear.roles.engineer.secret_service",
             ),
             (table(account="x"), "[linear.manager] has unknown keys: account"),
@@ -638,7 +638,7 @@ class ConfigurationLoading(ConfigFile, Case):
         pm = cfg.linear.roles["pm"]
         self.assertEqual(
             (pm.user_id, pm.token_service, cfg.roles["pm"].max_runs),
-            (role_id("pm"), "linear-api-key-pm", 1),
+            (role_id("pm"), "linear-app-pm-token", 1),
         )
         self.assertEqual(
             (
@@ -702,7 +702,7 @@ class ConfigurationLoading(ConfigFile, Case):
         self.assertIsNotNone(cm.exception.logs_dir)
 
     def test_a_stage_role_the_delegate_does_not_know(self):
-        # reported before the stage's missing Linear account
+        # reported before the stage's missing Linear app
         flow = os.path.join(self.dir, "flow.toml")
         write(flow, '[[stage]]\nrole = "ghostwriter"\ninput = "research"\n')
         self.fails(
@@ -2091,12 +2091,12 @@ class LocalOverlay(ConfigFile, Case):
             {
                 "researcher": (
                     role_id("researcher"),
-                    "linear-api-key-researcher",
+                    "linear-app-researcher-token",
                     ROLES["researcher"][2],
                     2,
                     "pm",
                 ),
-                "pm": (role_id("pm"), "linear-api-key-pm", ROLES["pm"][2], 1, None),
+                "pm": (role_id("pm"), "linear-app-pm-token", ROLES["pm"][2], 1, None),
             },
         )
         self.assertEqual(cfg.linear.project_repos, {P1: "acme/x", P2: "acme/y"})

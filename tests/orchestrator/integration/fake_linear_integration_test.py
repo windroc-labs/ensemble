@@ -58,7 +58,7 @@ from tests.orchestrator.unit.issue_fixtures import (
     names_cfg,
 )
 
-HARNESS, ENGINEER = "linear-api-key", "linear-api-key-engineer"
+HARNESS, ENGINEER = "linear-app-harness-token", "linear-app-engineer-token"
 
 HARNESS_EMAIL, ENGINEER_EMAIL = "harness@agents.test", "engineer@agents.test"
 
@@ -629,7 +629,7 @@ class FixtureOperations(Case):
 
     def test_fail_refuses_a_misuse(self):
         fake = fake_linear.FakeLinear()
-        fake.user("engineer@agents.test", "Engineer", "linear-api-key-engineer")
+        fake.user("engineer@agents.test", "Engineer", "linear-app-engineer-token")
         fake.user("me@x.com", "Me")
         for args, kw in (
             (("linear.M_NOPE", "error"), {}),

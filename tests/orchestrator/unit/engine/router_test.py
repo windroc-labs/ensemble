@@ -3359,7 +3359,7 @@ class RunLaunching(OuterBase):
             role="engineer",
             client="a",
             delegate_kind="harness",
-            key="deleted-member-key",
+            key="pre-app-key",
         )
         self.assertEqual(self.outer(mode="resume", role="pm"), 0)
         self.assertEqual(self.detached(), self.expected(resume=True))
@@ -4795,7 +4795,7 @@ class RunPlanning(Base):
         )
 
     def test_automation_moves_do_not_reset_attempts(self):
-        """Self's moves: the harness's, a role account's, Linear automation's (to Done, then back
+        """Self's moves: the harness's, a role app's, Linear automation's (to Done, then back
         to Todo) and an integration's credited to the user."""
         self.capped_rows(
             (
@@ -5759,7 +5759,7 @@ class RecoverWriteBack(TickBase):
         super().setUp()
         self.moved("TASK-1", 61)
         start = json.loads(self.row("start", "TASK-1", "a", "researcher", minutes=60))
-        key = "deleted-member-key"
+        key = "pre-app-key"
         self.lines.append(
             json.dumps(start | {"uuid": self.ISSUE, "project": IDS[DR], "target": None, "key": key})
         )
@@ -5788,7 +5788,7 @@ class RecoverWriteBack(TickBase):
         self.assertEqual(self.linear.issues["TASK-1"]["state"], "In Review")
         self.assertIsNone(self.linear.issues["TASK-1"].get("comments"))
         self.assertEqual(self.steps(), ["comment", "move:in_review", "outcome"])
-        self.assertNotIn("deleted-member-key", self.linear.services)
+        self.assertNotIn("pre-app-key", self.linear.services)
         self.assertIn(self.cfg().linear.roles["researcher"].token_service, self.linear.services)
         recovered = [show(e) for e in logged(self.logs) if e["kind"] == "recover"]
         self.assertEqual(self.unmap("\n".join(recovered)), "recover TASK-1 to=writeback sid=a")

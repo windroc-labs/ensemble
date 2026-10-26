@@ -1302,7 +1302,7 @@ class MovedAt(Case):
     def test_moved_at_by_other_skips_self_and_automation(self):
         for name, actor, want in (
             ("harness", "harness", "self"),
-            ("role account", "pm", "self"),
+            ("role app", "pm", "self"),
             ("automation", None, "self"),
             ("integration credited to a user", ("bot", "human"), "self"),
             ("manager app", "manager", "other"),

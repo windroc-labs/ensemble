@@ -129,7 +129,7 @@ class Run(TmuxFlow):
 
     def framed(self, *calls, end=DONE, created=True, since=0, reactivate=False):
         """A run's Linear calls: the session comment's first write (created: not found, then created
-        by its id), `calls` as the role's account, the session comment's end and repair.
+        by its id), `calls` as the role's app, the session comment's end and repair.
         """
         running, ended = self.session(RUNNING, end, since=since)
         update = ("sessions.M_UPDATE", HARNESS_EMAIL, {"c": SESSION, "b": running})

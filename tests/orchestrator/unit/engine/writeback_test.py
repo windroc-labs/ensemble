@@ -1643,7 +1643,7 @@ class ResumedComments(Base):
 
 RUN_ISSUE = "TASK-1"
 
-ROLE_SERVICE = "linear-api-key-engineer"
+ROLE_SERVICE = "linear-app-engineer-token"
 
 STARTED, RESTARTED = "2026-10-14T09:00:00+08:00", "2026-10-14T10:00:00+08:00"
 BEFORE = datetime.fromisoformat(STARTED) - timedelta(hours=1)  # a row, then its run's Begun
@@ -1769,7 +1769,7 @@ class Events(RunCase):
             uuid=UUID,
             project="p1",
             target="acme/ensemble",
-            **{"key": "deleted-engineer-member-key", **fields},
+            **{"key": "pre-app-engineer-key", **fields},
         )
 
     def accounts(self):
@@ -2074,7 +2074,7 @@ class RefusedEvents(Events):
 
     def test_resume_preserves_old_author_comment_after_lost_ledger_write(self):
         old = ops.client_id(RUN_SID, "start")
-        held = {"body": "old member's progress", "service": "deleted-member-key"}
+        held = {"body": "pre-app progress", "service": "pre-app-key"}
         self.linear.comments[old] = held.copy()
         self.assertTrue(self.deliver(delegate_event("progress", 2, name="start", text="new app")))
         self.assertEqual(self.linear.comments[old], held)
@@ -2085,7 +2085,7 @@ class RefusedEvents(Events):
 
     def test_recover_preserves_old_author_completion_after_lost_ledger_write(self):
         old = ops.client_id(RUN_SID, "comment")
-        held = {"body": "old member's completion", "service": "deleted-member-key"}
+        held = {"body": "pre-app completion", "service": "pre-app-key"}
         self.linear.comments[old] = held.copy()
         outcome = Outcome(status="failed", title="x", summary="run failed")
         self.assertTrue(

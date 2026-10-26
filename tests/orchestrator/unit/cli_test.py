@@ -45,7 +45,7 @@ class Commands(Case):
 
 
 class Wirings(run_fixtures.Base):
-    """Each tracker kind's engine wiring: its run reader, role keys and write-back accounts."""
+    """Each tracker kind's engine wiring: its run reader, role apps and write-back writers."""
 
     def test_router_help_identifies_linear_delegate_ownership(self):
         output = io.StringIO()

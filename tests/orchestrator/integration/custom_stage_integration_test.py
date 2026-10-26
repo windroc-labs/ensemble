@@ -1,6 +1,6 @@
 """A custom role as a board stage: a team dir's writer charter and note task in
 `[delegate] team_dirs`, an `[orchestrator] workflow` file whose writer stage, set by role and input
-alone, hands off to pm in place of the packaged researcher, and writer's Linear account. Its issue
+alone, hands off to pm in place of the packaged researcher, and writer's Linear app. Its issue
 goes from Todo through router.py's claim and a done run's write-back to In Review, then after a
 Handoff promote.py makes pm's PRD issue.
 """
@@ -20,7 +20,7 @@ from tests.orchestrator.unit.board_ids import PACKAGED_FLOW, role, role_id
 from tests.utils.case import local_section
 from tests.utils.sandbox import owned_directory
 
-ROLE, ACCOUNT, KEY, DIR = "writer", "writer@agents.test", "linear-api-key-writer", "Notes/"
+ROLE, ACCOUNT, KEY, DIR = "writer", "writer@agents.test", "linear-app-writer-token", "Notes/"
 
 TEAM = {
     f"roles/{ROLE}.md": (

@@ -554,7 +554,7 @@ def start(sid, **fields):
 
 class ClaimOf(Case):
     def test_claim_ignores_old_credentials_and_needs_none(self):
-        for fields in ({}, {"key": "deleted-member-key"}, {"key": None}, {"key": 7}):
+        for fields in ({}, {"key": "pre-app-key"}, {"key": None}, {"key": 7}):
             row = json.loads(start(SID_A))
             row.pop("key")
             row.update(fields)

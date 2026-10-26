@@ -639,8 +639,8 @@ class LabelGql:
 
 class EditGql(LabelGql):
     """LabelGql whose issue TASK-2 also holds `fields` (title, description, priority, assignee,
-    delegate, project; team to move it), answering `ensemble-orchestrator issue edit`'s read, the
-    role accounts' users and its --project lookups from `projects` (project() nodes), strictly
+    delegate, project; team to move it), answering `ensemble-orchestrator issue edit`'s read and
+    its --project lookups from `projects` (project() nodes), strictly
     as Routes; the mutation applies its label changes.
     """
 

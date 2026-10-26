@@ -29,7 +29,7 @@ PROJECT = "121166b1-191a-4461-bec4-42f1c2dc0ddd"
 
 ENGINEER, RESEARCHER = "engineer@agents.test", "researcher@agents.test"
 
-HARNESS, KEY = "linear-api-key", "linear-api-key-engineer"
+HARNESS, KEY = "linear-app-harness-token", "linear-app-engineer-token"
 
 SESSION = comment_id("harness", SID, "session")
 

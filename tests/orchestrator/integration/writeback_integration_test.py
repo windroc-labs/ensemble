@@ -102,7 +102,7 @@ class BegunAndProgress(Writeback):
         )
 
     def test_an_old_start_row_key_writes_as_the_current_role_app(self):
-        self.claim(key="deleted-member-key")
+        self.claim(key="pre-app-key")
         self.ok("progress", name="start", text=PICK)
         self.assertEqual(
             self.stored(), [(ACCOUNTS["researcher"], comment_id("researcher", SID, "start"))]

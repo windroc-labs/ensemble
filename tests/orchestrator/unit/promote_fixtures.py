@@ -1,4 +1,4 @@
-"""Promotion fixtures with explicit role accounts and logs."""
+"""Promotion fixtures with explicit role apps and logs."""
 
 import io
 import json
@@ -41,7 +41,7 @@ ROLE = ACCOUNTS
 
 HUMAN = {"email": "me@x.com", "name": "Me"}
 
-# a role account's: self, as the harness's
+# a role app's: self, as the harness's
 AGENT = {
     "id": role_id("researcher"),
     "email": "Researcher@agents.test",

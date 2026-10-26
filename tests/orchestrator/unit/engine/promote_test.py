@@ -779,7 +779,7 @@ class HarnessToken(Base):
             line["reason"],
             "Linear harness app token expired and renewal failed: HTTP 401; fix: check "
             "linear.harness.client_id and the client secret in Keychain service "
-            "linear-api-key-secret (rotated: store the new secret), then rerun",
+            "linear-app-harness-secret (rotated: store the new secret), then rerun",
         )
         self.assertEqual((self.endpoint.graphql, self.fake.mutations), ([], []))
 

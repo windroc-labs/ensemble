@@ -35,23 +35,23 @@ TASK_GROUP = "00000000-0000-4000-8000-000000000002"
 HARNESS_USER = "00000000-0000-4000-8000-000000000201"
 # The manager app's user: [linear.manager] user_id where a fixture sets it.
 MANAGER_USER = "00000000-0000-4000-8000-000000000202"
-# The harness app: its token entry is "linear-api-key", what a fake transport keys the harness by.
+# The harness app: its token entry is "linear-app-harness-token", what a fake transport keys the harness by.
 HARNESS_APP = {
     "client_id": "client-harness",
-    "secret_service": "linear-api-key-secret",
-    "token_service": "linear-api-key",
+    "secret_service": "linear-app-harness-secret",
+    "token_service": "linear-app-harness-token",
     "user_id": HARNESS_USER,
 }
 HARNESS_IDENTITY = LinearApp("harness", AppKind.HARNESS, "linear.harness", **HARNESS_APP)
 HARNESS_LINE = "linear.harness = {{ {} }}\n".format(
     ", ".join(f'{k} = "{v}"' for k, v in HARNESS_APP.items())
 )
-# The manager app: its token entry is "linear-api-key-manager"; HEADER leaves it out (the issue command's
+# The manager app: its token entry is "linear-app-manager-token"; HEADER leaves it out (the issue command's
 # fixtures prepend MANAGER_LINE).
 MANAGER_APP = {
     "client_id": "client-manager",
-    "secret_service": "linear-api-key-manager-secret",
-    "token_service": "linear-api-key-manager",
+    "secret_service": "linear-app-manager-secret",
+    "token_service": "linear-app-manager-token",
     "user_id": MANAGER_USER,
 }
 MANAGER_IDENTITY = LinearApp("manager", AppKind.MANAGER, "linear.manager", **MANAGER_APP)
@@ -105,8 +105,8 @@ def role_app(name):
         AppKind.ROLE,
         f"linear.roles.{name}",
         f"client-{name}",
-        f"linear-api-key-{name}-secret",
-        f"linear-api-key-{name}",
+        f"linear-app-{name}-secret",
+        f"linear-app-{name}-token",
         role_id(name),
     )
 

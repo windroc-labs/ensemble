@@ -1226,7 +1226,7 @@ class ManagerToken(IssueCase):
                     err,
                     f"ensemble-orchestrator issue: Linear manager app {state} and renewal "
                     "failed: HTTP 401; fix: check linear.manager.client_id and the client secret "
-                    "in Keychain service linear-api-key-manager-secret (rotated: store the new "
+                    "in Keychain service linear-app-manager-secret (rotated: store the new "
                     "secret), then rerun\n",
                 )
 

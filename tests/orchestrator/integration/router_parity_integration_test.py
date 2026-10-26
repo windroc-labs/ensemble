@@ -266,7 +266,7 @@ class Refusals(Parity):
 
     def test_a_new_run_whose_target_check_fails_is_bounced_and_starts_no_agent_run(self):
         """v1 CLAUDE.md › Architecture: router.outer, a build role: `target.check` Invalid on a
-        new agent run → `writeback.bounce`, no agent run; the bounce acts as the role's account
+        new agent run → `writeback.bounce`, no agent run; the bounce acts as the role's app
         and its move to In Review subscribes each human_members email.
         """
         self.seed(ID, "ENG: Session registry")
