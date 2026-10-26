@@ -28,9 +28,10 @@ var errMissing = errors.New("missing")
 // memStore is a persistent fake Keychain: a new Lifecycle over it sees what an earlier one wrote. fail injects a
 // failure by operation (read, write, delete) and service; its error carries a sentinel no output may show.
 type memStore struct {
-	items map[string][]byte
-	fail  func(op, service string) bool
-	log   *[]string
+	items     map[string][]byte
+	fail      func(op, service string) bool
+	failAfter func(op, service string) bool // the write lands, then reports failure, as a partly failed Keychain call
+	log       *[]string
 }
 
 func newStore() *memStore { return &memStore{items: map[string][]byte{}} }
@@ -61,6 +62,9 @@ func (s *memStore) PutSecret(service, account string, data []byte) error {
 		*s.log = append(*s.log, "write "+service)
 	}
 	s.items[service+"/"+account] = slices.Clone(data)
+	if s.failAfter != nil && s.failAfter("write", service) {
+		return errors.New("keychain broke after writing: STORE_SENTINEL")
+	}
 	return nil
 }
 
@@ -110,19 +114,21 @@ func (s *memStore) seed(t *testing.T, id string, rec Record) {
 // fakeProvider issues tok_<n> per Issue call, one target per account, and revokes by p.revoke (nil: revoked). It
 // fails the test if a lifecycle lock is held across one of its requests.
 type fakeProvider struct {
-	t        *testing.T
-	kind     Kind
-	now      time.Time
-	targets  []Material
-	n        int
-	issueErr func(n int) error
-	onIssue  func(n int)
-	revoke   func(token string) Revocation
-	revoked  []string
-	calls    []string
-	held     *bool
-	scopes   []map[string]string // each Issue's
-	log      *[]string
+	t             *testing.T
+	kind          Kind
+	now           time.Time
+	targets       []Material
+	n             int
+	issueErr      func(n int) error
+	onIssue       func(n int)
+	revoke        func(token string) Revocation
+	revoked       []string
+	calls         []string
+	held          *bool
+	scopes        []map[string]string // each Issue's
+	targetsIssued []Material          // each Issue's target
+	fixed         string              // non-empty: every Issue returns this token, as a shared account does
+	log           *[]string
 }
 
 func newProvider(t *testing.T, accounts ...string) *fakeProvider {
@@ -154,6 +160,7 @@ func (p *fakeProvider) Targets(context.Context) ([]Material, error) { return p.t
 func (p *fakeProvider) Issue(_ context.Context, scope map[string]string, target Material) (Material, error) {
 	p.unlocked("issue")
 	p.scopes = append(p.scopes, scope)
+	p.targetsIssued = append(p.targetsIssued, target)
 	p.n++
 	if p.onIssue != nil {
 		p.onIssue(p.n)
@@ -164,6 +171,9 @@ func (p *fakeProvider) Issue(_ context.Context, scope map[string]string, target 
 		}
 	}
 	token := fmt.Sprintf("tok_%d", p.n)
+	if p.fixed != "" {
+		token = p.fixed
+	}
 	p.calls = append(p.calls, "issue "+token)
 	if p.log != nil {
 		*p.log = append(*p.log, "issue "+token)
@@ -201,6 +211,46 @@ func (p *fakeProvider) revokes() int {
 type sharedProvider struct{ *fakeProvider }
 
 func (sharedProvider) SharedAccount() bool { return true }
+
+// endingProvider's issuer is an Ender: it counts End calls and returns endErr.
+type endingProvider struct {
+	*fakeProvider
+	ends   int
+	endErr error
+}
+
+type endingIssuer struct{ p *endingProvider }
+
+func (p *endingProvider) Begin(ctx context.Context, subject string) (Issuer, error) {
+	if _, err := p.fakeProvider.Begin(ctx, subject); err != nil {
+		return nil, err
+	}
+	return endingIssuer{p}, nil
+}
+
+func (i endingIssuer) Targets(ctx context.Context) ([]Material, error) { return i.p.Targets(ctx) }
+func (i endingIssuer) Secret() string                                  { return i.p.Secret() }
+func (i endingIssuer) Issue(ctx context.Context, scope map[string]string, target Material) (Material, error) {
+	return i.p.Issue(ctx, scope, target)
+}
+
+func (i endingIssuer) End() error {
+	i.p.ends++
+	return i.p.endErr
+}
+
+// writingProvider's issuer is a Writer: it writes "carrier-<token>" through exec itself.
+type writingProvider struct{ *fakeProvider }
+
+type writingIssuer struct{ *fakeProvider }
+
+func (p writingProvider) Begin(context.Context, string) (Issuer, error) {
+	return writingIssuer(p), nil
+}
+
+func (i writingIssuer) Write(exec func([]string, []byte) error, m Material) error {
+	return exec([]string{"write", m.Account}, []byte("carrier-"+m.Token))
+}
 
 func failRevoke(string) Revocation {
 	return Revocation{Outcome: Retryable, Err: errors.New("GitHub 503")}
@@ -267,7 +317,9 @@ func (c *container) exec(argv []string, stdin []byte) error {
 	return nil
 }
 
-func to(id string, c *container) Delivery { return Delivery{Consumer{Container: id}, c.exec} }
+func to(id string, c *container) Delivery {
+	return Delivery{Consumer: Consumer{Container: id}, Exec: c.exec}
+}
 
 func tokens(rec Record) map[string]State {
 	out := map[string]State{}

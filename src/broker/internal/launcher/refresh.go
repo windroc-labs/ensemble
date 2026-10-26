@@ -63,7 +63,7 @@ func (h Host) Refresh(ctx context.Context, container, path string) (RefreshResul
 		inject := func(argv []string, data []byte) error {
 			return exec(append(argv, m.CodexDir), data)
 		}
-		expiry, err := h.Codex.Refresh(ctx, inject, func(expiry string) error {
+		expiry, err := h.Codex.Refresh(ctx, container, inject, func(expiry string) error {
 			if err := h.publishExpiry(m, expiry); err != nil {
 				return protocol.New(protocol.RefreshFailed, "Publishing the Codex credential deadline failed; retry refresh.")
 			}

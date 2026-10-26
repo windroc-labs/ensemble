@@ -64,7 +64,7 @@ func TestCodexRefreshConcurrentDelayedWaiter(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	result := make(chan error, 2)
 	go func() {
-		_, err := c.Inject(context.Background(), func([]string, []byte) error {
+		_, err := c.Inject(context.Background(), codexContainer, func([]string, []byte) error {
 			close(entered)
 			<-release
 			clock = clock.Add(61 * time.Second)
@@ -75,7 +75,7 @@ func TestCodexRefreshConcurrentDelayedWaiter(t *testing.T) {
 	<-n.enter
 	<-entered
 	go func() {
-		_, err := c.Inject(context.Background(), func([]string, []byte) error { return nil })
+		_, err := c.Inject(context.Background(), codexContainer, func([]string, []byte) error { return nil })
 		result <- err
 	}()
 	<-n.enter
@@ -92,7 +92,7 @@ func TestCodexRefreshConcurrentDelayedWaiter(t *testing.T) {
 	n.refresh = func(home string) error {
 		return os.WriteFile(filepath.Join(home, "auth.json"), codexAuth(clock.Add(time.Hour).Unix()), 0o600)
 	}
-	if _, err := c.Inject(context.Background(), func([]string, []byte) error { return nil }); err != nil {
+	if _, err := c.Inject(context.Background(), codexContainer, func([]string, []byte) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if n.refreshes != 2 {
@@ -126,7 +126,7 @@ func TestCodexRenewalValidationAndCleanup(t *testing.T) {
 			if failure == "write" {
 				k.writeErr = errors.New("fake-refresh-secret")
 			}
-			_, err := c.Inject(ctx, func([]string, []byte) error { t.Fatal("injected failed renewal"); return nil })
+			_, err := c.Inject(ctx, codexContainer, func([]string, []byte) error { t.Fatal("injected failed renewal"); return nil })
 			if err == nil || strings.Contains(err.Error(), "fake-refresh-secret") {
 				t.Fatalf("unsafe failure: %v", err)
 			}
@@ -145,7 +145,7 @@ func TestCodexRenewalValidationAndCleanup(t *testing.T) {
 func TestCodexManagedCarrierAndPublicationLock(t *testing.T) {
 	c, n, _ := renewalFixture(t)
 	var auth codexAuthDocument
-	_, err := c.Inject(context.Background(), func(_ []string, data []byte) error {
+	_, err := c.Inject(context.Background(), codexContainer, func(_ []string, data []byte) error {
 		if !n.locked {
 			t.Fatal("publication outside account lock")
 		}
@@ -164,11 +164,11 @@ func TestCodexPublicationFailureRepairsWithoutRotation(t *testing.T) {
 	n.refresh = func(home string) error {
 		return os.WriteFile(filepath.Join(home, "auth.json"), codexAuth(codexNow.Add(120*time.Second).Unix()), 0o600)
 	}
-	if _, err := c.Refresh(context.Background(), func([]string, []byte) error { return nil }, func(string) error { return errors.New("deadline write failed") }); err == nil {
+	if _, err := c.Refresh(context.Background(), codexContainer, func([]string, []byte) error { return nil }, func(string) error { return errors.New("deadline write failed") }); err == nil {
 		t.Fatal("accepted failed publication")
 	}
 	var expiry string
-	if _, err := c.Refresh(context.Background(), func([]string, []byte) error { return nil }, func(value string) error {
+	if _, err := c.Refresh(context.Background(), codexContainer, func([]string, []byte) error { return nil }, func(value string) error {
 		if !n.locked {
 			t.Fatal("unlocked deadline")
 		}
@@ -193,7 +193,7 @@ func TestCodexLoginWinsAgainstQueuedRefresh(t *testing.T) {
 	<-n.enter
 	<-loginStarted
 	go func() {
-		_, err := c.Inject(context.Background(), func([]string, []byte) error { return nil })
+		_, err := c.Inject(context.Background(), codexContainer, func([]string, []byte) error { return nil })
 		result <- err
 	}()
 	<-n.enter

@@ -190,6 +190,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 						}
 					}
 					h.rollback(ctx, c, cleanup)
+					h.releaseCodex(ctx, c, held, cleanup)
 					h.withdraw(c, m, held, cleanup)
 					result, retErr = StartResult{}, cleanup
 				} else {
@@ -224,6 +225,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 			e = protocol.New(protocol.StartFailed, "Start failed.")
 		}
 		h.rollback(ctx, c, e)
+		h.releaseCodex(ctx, c, held, e)
 		if e.Code == protocol.Busy && e.Cleanup == protocol.Failed {
 			e.Code, e.Holder = protocol.StartFailed, nil
 			e.Message = "Cannot remove yielding container " + c + "."
@@ -268,10 +270,25 @@ func mounts(m Manifest, labels map[string]string) ([]string, []audit.Mount) {
 	return flags, list
 }
 
-// holding is the credentials a container being started holds: its client's and the environment secrets written.
+// holding is the credentials a container being started holds: its client's, the environment secrets written, and
+// whether a Codex grant may be recorded.
 type holding struct {
 	client  bool
+	codex   bool
 	secrets []string
+}
+
+// releaseCodex withdraws c's Codex grant, when its start recorded one, on a context of its own; a failure is added to
+// e's message.
+func (h Host) releaseCodex(ctx context.Context, c string, held holding, e *protocol.Error) {
+	if !held.codex {
+		return
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if err := h.Codex.Release(rctx, c); err != nil {
+		e.Message += " " + injected(err, protocol.KeychainFailed, "Withdrawing the Codex grant failed.").Message
+	}
 }
 
 // withdraw records each credential held as withdrawn when e's rollback removed c.
@@ -390,7 +407,8 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	var codexExpiry *string
 	switch m.Client {
 	case "codex":
-		expiry, err := h.Codex.Inject(ctx, exec)
+		held.codex = true // a failed Inject may leave its grant prepared
+		expiry, err := h.Codex.Inject(ctx, c, exec)
 		if err != nil {
 			return StartResult{}, held, injected(err, protocol.StartFailed, "Injecting Codex credentials failed.")
 		}

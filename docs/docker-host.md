@@ -716,7 +716,7 @@ to 3 s old, but the opening is sent only after a fresh capture shows no dialog; 
 - **Egress proxy not ready** (`egress_unavailable`): run `~/.egress/current/start.sh`, as the error says (before
   a first successful install, rerun `scripts/install.sh --docker`), wait for
   `docker ps --filter name=egress-proxy` to show `(healthy)`, then start, restart or resume again ([Egress proxy](#egress-proxy)).
-- **Codex authentication expired** (`client_auth_expired`): run `/usr/local/libexec/ensemble/ensemble-broker login codex` on the host, then `ensemble-session resume NAME`; native history is kept. Renewal failures (`client_refresh_failed`) retry each minute until expiry, when the generation closes. No run logs in or uses another identity.
+- **Codex authentication expired** (`client_auth_expired`): run `/usr/local/libexec/ensemble/ensemble-broker login codex` on the host, then `ensemble-session resume NAME`; native history is kept. Renewal failures (`client_refresh_failed`) retry each minute until expiry, when the generation closes; a retry after a failed delivery or deadline publication delivers the login already renewed, without renewing it again. No run logs in or uses another identity.
 
 ## Broker locks
 

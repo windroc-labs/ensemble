@@ -65,9 +65,11 @@ func (c Consumer) check() error {
 }
 
 // Delivery is a consumer and the exec bound to it: a container's runs argv as agent there; a host consumer has none.
+// Publish (nil: none) runs after each material is delivered, before it counts as delivered (Codex: its deadline).
 type Delivery struct {
 	Consumer Consumer
 	Exec     func(argv []string, stdin []byte) error
+	Publish  func(m Material) error
 }
 
 func (d Delivery) check() error {
@@ -151,17 +153,28 @@ type Provider interface {
 	Kind() Kind
 	AuditKind() string                                         // the audit log's kind for its tokens
 	Begin(ctx context.Context, subject string) (Issuer, error) // authenticates once for a run of issues; its errors hold no secret
-	File(m Material) (File, error)                             // where m goes in a container, validating m
+	File(m Material) (File, error)                             // where m goes in a container, validating m; unused for a Writer's
 	Revoke(ctx context.Context, m Material) Revocation
 	Now() time.Time
 }
 
-// Issuer issues materials under one authentication.
+// Issuer issues materials under one authentication. Issue's target is the slot; in a refresh it is the slot's newest
+// recorded material, so a provider can tell a delivery still pending from a renewal due.
 type Issuer interface {
 	Targets(ctx context.Context) ([]Material, error) // the slots a new grant covers, Token empty
 	Issue(ctx context.Context, scope map[string]string, target Material) (Material, error)
 	Secret() string // the request credential, for redaction
 }
+
+// Writer is an Issuer that writes what it issued into a container itself, in place of the provider's File and
+// Deliver; a material's Token may then be only its fingerprint (Codex: the access-only login it read).
+type Writer interface {
+	Write(exec func(argv []string, stdin []byte) error, m Material) error
+}
+
+// Ender is an Issuer whose run holds something until it ends (Codex: the account lock): Acquire and Refresh call End
+// once, after their last record write, whatever the run's outcome, and return End's error joined to theirs.
+type Ender interface{ End() error }
 
 // Shared is a provider whose material other consumers share (an account's): releasing or replacing one consumer's
 // copy never revokes it; the account's own revision stays the provider's.
