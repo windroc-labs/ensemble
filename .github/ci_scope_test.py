@@ -465,6 +465,36 @@ class Repository(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertNotEqual(scope.main(["--event", "pull_request"], root=self.root), 0)
 
+    def test_manual_replay_uses_a_sha_diff_and_defaults_to_full(self):
+        output = io.StringIO()
+        with (
+            mock.patch.object(scope, "changed_paths", return_value=["README.md"]) as diff,
+            contextlib.redirect_stdout(output),
+        ):
+            self.assertEqual(
+                scope.main(
+                    ["--event", "workflow_dispatch", "--base", "a" * 40, "--head", "b" * 40],
+                    root=self.root,
+                ),
+                0,
+            )
+        diff.assert_called_once_with(self.root, "a" * 40, "b" * 40)
+        self.assertTrue(json.loads(output.getvalue())["docs"])
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(
+                scope.main(["--event", "workflow_dispatch", "--head", "b" * 40], root=self.root), 0
+            )
+        self.assertTrue(json.loads(output.getvalue())["full"])
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(
+                scope.main(
+                    ["--event", "workflow_dispatch", "--base", "main", "--head", "b" * 40],
+                    root=self.root,
+                ),
+                1,
+            )
+
 
 class Aggregate(unittest.TestCase):
     def needs(self, *, full=True, event="pull_request", docs=False, version=False):
@@ -560,7 +590,7 @@ class Aggregate(unittest.TestCase):
             with self.subTest(needs=needs):
                 self.assertTrue(scope.gate(needs, "pull_request"))
         self.assertTrue(scope.gate(self.needs(full=False, event="push"), "push"))
-        self.assertTrue(scope.gate(self.needs(), "workflow_dispatch"))
+        self.assertTrue(scope.gate(self.needs(), "schedule"))
 
     def test_invalid_or_inconsistent_broker_output_fails(self):
         for value in (None, True, False, "", "TRUE", "unknown"):
@@ -645,6 +675,23 @@ def job(name):
 
 
 class Workflow(unittest.TestCase):
+    def test_manual_docs_replay_requires_an_explicit_base_and_keeps_the_same_scope_rules(self):
+        self.assertIn("  workflow_dispatch:", WORKFLOW.read_text())
+        self.assertIn("github.event.inputs.docs-base", job("changes"))
+        root = Path(scope.__file__).resolve().parents[1]
+        self.assertTrue(scope.classify(root, ["README.md"], "workflow_dispatch")["docs"])
+        for paths in (
+            [],
+            ["docs/credentials.md"],
+            ["README.md", ".github/run_tests.py"],
+            ["skills/manage/SKILL.md"],
+        ):
+            with self.subTest(paths=paths):
+                self.assertTrue(scope.classify(root, paths, "workflow_dispatch")["full"])
+        needs = Aggregate().needs(full=False, docs=True)
+        self.assertEqual(scope.gate(needs, "workflow_dispatch"), [])
+        self.assertTrue(scope.gate(Aggregate().needs(full=False), "workflow_dispatch"))
+
     def test_queue_group_and_broker_gate_wiring(self):
         self.assertIn("  merge_group:\n    types: [checks_requested]", WORKFLOW.read_text())
         ci = job("ci")
