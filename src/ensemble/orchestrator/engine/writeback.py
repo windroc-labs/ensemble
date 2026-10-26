@@ -69,8 +69,8 @@ class Context:
     repos: Mapping[str, str]
     target: tuple[str, str] | None
     harness: Tracker  # the session comment's app
-    # look each comment step up by its ref before posting it, as on resume: its event may
-    # come again after the post landed and its ledger write was lost
+    # look each comment step up by its ref before posting it, as on resume: its post may
+    # have landed with its ledger write lost
     redelivered: bool = False
     host: str = "github.com"
     document: str | None = None

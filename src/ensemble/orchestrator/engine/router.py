@@ -617,7 +617,7 @@ class Board:
 
     def claim(self, issue, full):
         ident = issue["identifier"]
-        # re-check right before claiming so a concurrent change isn't overwritten
+        # re-check before claiming so a concurrent change isn't overwritten
         current = self.tracker.recheck(issue["id"])
         role = current.role
         if not current.ready:
