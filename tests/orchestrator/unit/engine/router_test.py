@@ -4115,7 +4115,8 @@ class ExplicitIssueRuns(TickBase):
                 code = self.tick(fake, "--issue", "TASK-8", *["--dry-run"] * dry)
                 self.assertEqual(code, 0 if dry else 2)
                 self.assertEqual(
-                    self.said(), [f"pick-none TASK-8 reason={linear_tracker.ARCHIVED}"]
+                    self.said(),
+                    [f"pick-none TASK-8 reason={linear_tracker.ARCHIVED.format(key='TASK-8')}"],
                 )
                 self.assertEqual((self.start.launches, fake.mutations, self.state), ([], [], ""))
 

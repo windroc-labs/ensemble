@@ -1291,18 +1291,15 @@ class Rechecks(Case):
             tracker(Gql(Q_RECHECK=LinearError("linear api error: HTTP 400"))).recheck("TASK-9")
 
     def test_an_archived_issue_is_refused_as_archived(self):
-        for project, refused in (
-            (PROJECT, linear_tracker.ARCHIVED),
-            (None, f"{linear_tracker.ARCHIVED}; no project"),
-        ):
+        archived = linear_tracker.ARCHIVED.format(key="id-TASK-1")
+        for project, refused in ((PROJECT, archived), (None, f"{archived}; no project")):
             with self.subTest(project=project):
                 gql = Gql(
                     Q_RECHECK=rechecked(STATES["todo"], assignee=PM, project=project, archived=True)
                 )
                 found = tracker(gql).recheck("id-TASK-1")
                 self.assertEqual((found.ready, found.role, found.refused), (True, "pm", refused))
-        self.assertIn("archived", linear_tracker.ARCHIVED)
-        self.assertIn("issue move", linear_tracker.ARCHIVED)
+        self.assertIn("issue move id-TASK-1 ready", archived)
 
     def test_a_todo_id_shared_with_another_key_stays_ready(self):
         team = replace(TEAM_OBJ, states={**TEAM_OBJ.states, "in_progress": STATES["todo"]})

@@ -133,7 +133,7 @@ Q_RECHECK = (
 )
 ARCHIVED = (
     "archived: Linear lists no archived issue; "
-    "ensemble-orchestrator issue move <ID> ready unarchives it"
+    "ensemble-orchestrator issue move {key} ready unarchives it"
 )
 # ops.HISTORY's nodes with their actors: nested objects there would multiply Q_FINISHED's complexity
 Q_HISTORY = (
@@ -405,7 +405,7 @@ class LinearTracker(Tracker):
             return NO_ISSUE
         ready = found["state"]["id"] == _need("states", self.state_ids)[State.TODO]
         nodes = found["labels"]["nodes"]
-        refused = [ARCHIVED] if found["archivedAt"] else []
+        refused = [ARCHIVED.format(key=key)] if found["archivedAt"] else []
         refused += [] if found["project"] else ["no project"]
         return Recheck(
             ready,

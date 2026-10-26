@@ -317,7 +317,7 @@ class Pruner:
         except TRACKER_ERRORS as e:
             self.error(error=f"archive: {one_line(e)}")
             return
-        self.finished = {issue.ident: issue.since for issue in found}
+        finished = self.finished = {issue.ident: issue.since for issue in found}
         self.see(issue.updated for issue in found)
         due = []
         for issue in found:
@@ -334,7 +334,7 @@ class Pruner:
         for n, issue in enumerate(due):
             alone = self.budget.left == left
             try:
-                self.archive_one(issue)
+                self.archive_one(issue, finished)
             except Spent:
                 if alone:  # its plan alone outgrows a tick: skipped like a refusal
                     versions = {issue.ident: issue.updated}
@@ -344,7 +344,7 @@ class Pruner:
                     self.say("prune-deferred", archive=rest)
                 return
 
-    def archive_one(self, issue):
+    def archive_one(self, issue, finished):
         ident, refused = issue.ident, self.state.refused
         if ident in refused and self.trusted(refused[ident].read):
             self.say("prune-skip", ident, once=True, reason=refused[ident].reason)
@@ -352,7 +352,7 @@ class Pruner:
         held = None
         try:
             plan = self.tracker.archive_plan(issue.key)
-            held = self.held(plan) if plan.outcome == "changed" else None
+            held = self.held(plan, finished) if plan.outcome == "changed" else None
             archived = plan.outcome == "changed" and held is None
             if archived and self.dry:
                 self.budget.spend()  # the write a real tick sends
@@ -382,12 +382,13 @@ class Pruner:
         elif archived:
             self.say("prune-archived", ident)
 
-    def held(self, plan):
-        """plan's first descendant this tick would not archive itself, with why; None: none."""
+    def held(self, plan, finished):
+        """plan's first descendant this tick would not archive itself (finished: the candidates'
+        finish times), with why; None: none."""
         for sub in plan.descendants:
-            if sub.ident not in self.finished:
+            if sub.ident not in finished:
                 return sub, "not an archive candidate"
-            since = self.finished[sub.ident]
+            since = finished[sub.ident]
             if since is None:
                 return sub, "finish time unknown"
             if self.now - since < QUARANTINE:
