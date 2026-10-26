@@ -173,6 +173,12 @@ this recovery when another process created it. The installer leaves deletion to 
 | Lifetime | refreshed by Codex during use | access token renewed by the broker 10 minutes before it expires; refresh token: not documented |
 | Revoke | `codex logout` clears it locally | Unknown upstream: no documented route. Rerun `<B> login codex` to replace the login, or delete the `ensemble-codex` item |
 
+Each Docker container's grant, `ensemble-codex-grants` / `<container>`, records the login's fingerprint, expiry,
+revision and delivery state, never a token. Renewals of the one login are serialized across broker processes:
+concurrent refreshes renew it once. A refresh whose delivery or deadline publication failed delivers the same login
+on retry without renewing it again. `close` deletes the grant after removing the container, leaving other containers
+and the login as they are; a container an older broker started gets its grant at its next refresh.
+
 The broker's temporary Codex login directory is removed on success, child failure and normal cancellation; SIGKILL or host failure can leave it behind. Other processes running as you can read it meanwhile. Personal `~/.codex` is neither read nor changed.
 
 ### OpenCode provider API keys
@@ -238,18 +244,20 @@ the value, and `perl … alarm 10` stands for `timeout 10`, which macOS lacks. P
 column, and after `!` in the manager's Claude Code prompt for the manager column:
 
 ```sh
-for s in ensemble-claude ensemble-bot ensemble-github-users ensemble-tokens ensemble-revocations ensemble-codex ensemble-opencode; do security find-generic-password -s "$s" >/dev/null 2>&1; e=$?; r=$(bash -c 'perl -e "alarm 10; exec @ARGV" security find-generic-password -s "$0" -w 2>/dev/null | wc -c | tr -d " "; echo "exit=${PIPESTATUS[0]}"' "$s" | tr '\n' ' '); echo "$s exists=$e bytes/$r"; done
+for s in ensemble-claude ensemble-bot ensemble-github-users ensemble-tokens ensemble-revocations ensemble-codex ensemble-codex-grants ensemble-opencode; do security find-generic-password -s "$s" >/dev/null 2>&1; e=$?; r=$(bash -c 'perl -e "alarm 10; exec @ARGV" security find-generic-password -s "$0" -w 2>/dev/null | wc -c | tr -d " "; echo "exit=${PIPESTATUS[0]}"' "$s" | tr '\n' ' '); echo "$s exists=$e bytes/$r"; done
 ```
 
 For each environment secret, add `ensemble-env/<name>` to the loop's list. An item must exist to be measured (`exists=0`); `exists=44` means absent: record `absent, not measured` and make it
 first. `ensemble-claude`, `ensemble-github-users`, `ensemble-codex` and `ensemble-opencode` exist after their `login`; `ensemble-bot` once
-the user stores the key; `ensemble-tokens` while a Docker session runs; `ensemble-revocations` after a `close` with the
+the user stores the key; `ensemble-tokens` while a Docker session runs; `ensemble-codex-grants` while a Docker Codex
+session runs; `ensemble-revocations` after a `close` with the
 network off, until the next start, close or `status --cleanup` online.
 
 Pass: `exists=0`, `exit=` non-zero (142 when the alarm stops it, 128 when the dialog is denied) and a byte count of `0`. Click Deny on any dialog, never Always
 Allow; if Always Allow was clicked, `/usr/bin/security` now reads the item: rerun the `login` that writes it
 (`login github ensemble-bot` for `ensemble-bot` and `ensemble-github-users`), or for `ensemble-tokens` and
-`ensemble-revocations` delete the item in Keychain Access (its tokens expire within an hour), and note it here. Record only
+`ensemble-revocations` delete the item in Keychain Access (its tokens expire within an hour), for
+`ensemble-codex-grants` close the session (its item holds no token), and note it here. Record only
 `exists=<n>, exit=<n>, bytes=<n>`.
 A read that returns bytes fails this check unless the user accepts it: mark the row `silently readable, accepted <date>`.
 
@@ -261,6 +269,7 @@ A read that returns bytes fails this check unless the user accepts it: mark the 
 | `ensemble-tokens` | exists=0, exit=128, bytes=0 | exists=0, exit=128, bytes=0 |
 | `ensemble-revocations` | absent, not measured | absent, not measured |
 | `ensemble-codex` | exists=0, exit=128, bytes=0 | exists=0, exit=128, bytes=0 |
+| `ensemble-codex-grants` | pending | pending |
 | `ensemble-opencode` | pending | pending |
 | `ensemble-env/<name>` | pending | pending |
 
