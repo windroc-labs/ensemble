@@ -321,11 +321,38 @@ recorded() { [ -f "$ledger" ] && grep -qxF -- "$(
   printf '%s' "$*"
 )" "$ledger"; }
 
-# Records directory $1 when it does not exist yet.
-record_dir() { [ -e "$1" ] || [ -L "$1" ] || ledger_add dir "$1"; }
+# Exit 0 when absolute path $1 is confirmed missing, 1 when it is there, 2 when it cannot tell (macOS may deny it, or
+# $1 is relative): `test -e` is false on any lstat failure, so missing means its parent directory is missing too, or
+# lists without it. Shell only: python3 may be the Command Line Tools' failing shim until homebrew installs them.
+path_state() {
+  local parent=${1%/*} listing rc=0
+  if [ -e "$1" ] || [ -L "$1" ]; then return 1; fi
+  case $1 in /*[!/]) ;; *) return 2 ;; esac
+  [ -n "$parent" ] || parent=/
+  if [ ! -e "$parent" ] && [ ! -L "$parent" ]; then
+    path_state "$parent" || rc=$?
+    return "$rc"
+  fi
+  [ -d "$parent" ] || return 2
+  listing=$(ls -A -- "$parent" 2>/dev/null) || return 2
+  grep -qxF -- "${1##*/}" <<<"$listing" || rc=$?
+  [ "$rc" = 1 ] || return 2
+}
 
-# Records file $1 when it does not exist yet.
-record_file() { [ -e "$1" ] || ledger_add file "$1"; }
+# Exit 0 when path $1 is confirmed missing; a path macOS may deny counts as there (it may be the user's: never
+# recorded, so never removed by the cleanup) and prints one line.
+absent() {
+  local rc=0
+  path_state "$1" || rc=$?
+  if [ "$rc" = 2 ]; then say "    not recorded for cleanup: $1: cannot tell whether it is there"; fi
+  [ "$rc" = 0 ]
+}
+
+# Records directory $1 when it is confirmed missing.
+record_dir() { if absent "$1"; then ledger_add dir "$1"; fi; }
+
+# Records file $1 when it is confirmed missing.
+record_file() { if absent "$1"; then ledger_add file "$1"; fi; }
 
 # Per-user files under ~/Library that Docker Desktop and iTerm2 write once running, from their casks' zap stanzas:
 # directories, then files (preferences plists, cookies).
@@ -473,7 +500,7 @@ profile_line() {
   if [ -f "$file" ] && grep -qxF -- "$1" "$file"; then
     skip "in $file"
   elif consent "$file" "$1"; then
-    if [ ! -e "$file" ]; then ledger_add profile-file "$file"; fi
+    if absent "$file"; then ledger_add profile-file "$file"; fi
     ledger_add profile "$file" "$1"
     if [ -s "$file" ] && [ -n "$(tail -c 1 "$file")" ]; then printf '\n' >>"$file"; fi
     printf '%s\n' "$1" >>"$file"
@@ -891,7 +918,7 @@ apps() {
   record_dir "$HOME/.config/gh"
   if has claude; then
     record_dir "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-    if [ -z "${CLAUDE_CONFIG_DIR:-}" ] && [ ! -e "$HOME/.claude.json" ]; then ledger_add file "$HOME/.claude.json"; fi
+    if [ -z "${CLAUDE_CONFIG_DIR:-}" ]; then record_file "$HOME/.claude.json"; fi
   fi
   if has codex; then record_dir "${CODEX_HOME:-$HOME/.codex}"; fi
   if [ "$docker" = yes ]; then
@@ -904,7 +931,7 @@ apps() {
     # Docker Desktop adds its CLI completion block to the shell's rc files, creating them if needed: the cleanup
     # removes the block where it was not before, and a file that was not there once empty.
     for rc in .zshrc .bashrc .bash_profile .zprofile; do
-      if [ ! -e "$HOME/$rc" ]; then
+      if absent "$HOME/$rc"; then
         ledger_add profile-file "$HOME/$rc"
       elif ! grep -qF "# End of Docker Desktop section." "$HOME/$rc"; then
         ledger_add docker-block "$HOME/$rc"
@@ -1355,7 +1382,7 @@ opencode_plugin() {
     fi
   done
   for name in opencode.jsonc package.json package-lock.json .gitignore; do
-    [ -e "$conf/$name" ] || ledger_add file "$conf/$name"
+    record_file "$conf/$name"
   done
   record_dir "$conf/node_modules"
   record_dir "${XDG_CACHE_HOME:-$HOME/.cache}/opencode/packages"
@@ -1647,7 +1674,7 @@ ctmux_install() {
   if [ -n "$missing" ]; then
     if [ -d "$HOME/.ensemble/bin" ]; then
       for name in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
-        [ -e "$HOME/.ensemble/bin/$name" ] || ledger_add file "$HOME/.ensemble/bin/$name"
+        record_file "$HOME/.ensemble/bin/$name"
       done
     else
       record_dir "$HOME/.ensemble/bin"
@@ -1697,27 +1724,39 @@ sys.exit(v(sys.argv[1]) < v(sys.argv[2]))' "$os" "$2" || die "Docker Desktop $3 
 }
 
 # Presets Docker Desktop's settings before its first start, keeping any it has: Rosetta off (the worker image is
-# arm64; install.sh never installs Rosetta) and its onboarding marked done.
+# arm64; install.sh never installs Rosetta) and its onboarding marked done. Best effort: macOS 27 may deny the shell
+# Docker's Group Container; any failure prints one line, keeps the file as it was, and the install goes on.
 docker_settings() {
   python3 -I -c '
-import json, os, sys
+import contextlib, json, os, sys
 path = sys.argv[1]
-try:
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
-except FileNotFoundError:
-    data = {}
 preset = {"UseVirtualizationFrameworkRosetta": False, "DisplayedOnboarding": True}
-new = {**preset, **data}
-if new != data:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path + ".tmp", "w", encoding="utf-8") as f:
-        json.dump(new, f, indent=2)
-    os.replace(path + ".tmp", path)' "$HOME/Library/Group Containers/group.com.docker/settings-store.json"
+try:
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        data = {}
+    if not isinstance(data, dict):
+        raise ValueError(f"not a JSON object: {path}")
+    new = {**preset, **data}
+    if new != data:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        try:
+            with open(path + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(new, f, indent=2)
+            os.replace(path + ".tmp", path)
+        except Exception:
+            with contextlib.suppress(OSError):
+                os.remove(path + ".tmp")
+            raise
+except Exception as e:
+    print(f"    Docker Desktop presets not written (Rosetta off, onboarding done): {e}; Docker Desktop may show its"
+          " Welcome window", file=sys.stderr)' "$HOME/Library/Group Containers/group.com.docker/settings-store.json"
 }
 
 # Starts Docker Desktop and waits for its engine; the first time install.sh installed it, without its windows:
-# license accepted and privileged setup done by its own install command, settings preset.
+# license accepted and privileged setup done by its own install command, settings preset where macOS allows.
 docker_running() {
   local app=$root/Applications/Docker.app tries=0
   step "Docker Desktop running"
@@ -2362,7 +2401,7 @@ $wanted"; then
       return 0
     fi
     while IFS= read -r directory; do
-      [ -e "$directory" ] || ledger_add board-dir "$directory"
+      if absent "$directory"; then ledger_add board-dir "$directory"; fi
     done <<<"$wanted"
   fi
   mkdir -p "$board_dir/unassigned"
