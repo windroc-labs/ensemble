@@ -7,6 +7,7 @@ from ensemble import session
 from ensemble.session import (
     Access,
     Effort,
+    EnvironmentSpec,
     Exited,
     Host,
     IdleTimeout,
@@ -37,6 +38,7 @@ ALLOWED_CONCRETE = {
     Usage,
     Window,
     Spec,
+    EnvironmentSpec,
     Access,
     SessionStatus,
     Mode,

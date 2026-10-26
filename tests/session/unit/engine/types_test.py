@@ -471,3 +471,180 @@ class HookCallbackTest(Case):
 
 
 ROOTS = "hook callback roots: want distinct printable absolute paths"
+
+
+SOURCE = "dummy@owner/repo#" + "a" * 40
+ENVIRONMENT = {
+    "image": "dummy-env:test",
+    "gateway": "workers",
+    "secrets": [{"item": "ensemble-env/dummy", "file": "dummy.txt"}],
+    "plugins": ["dummy-plugin", SOURCE],
+    "lock": "dummy-lock",
+    "prefetch": {"repo": "o/r", "ref": "main"},
+}
+
+
+def environment(**changes):
+    return session.EnvironmentSpec.from_fields({**ENVIRONMENT, **changes})
+
+
+class EnvironmentSpecTest(Case):
+    def test_both_entry_modules_export_it_and_session_busy(self):
+        from ensemble.session import extension
+
+        for module in (session, extension):
+            self.assertIs(module.EnvironmentSpec, engine_types.EnvironmentSpec)
+            self.assertIs(module.SessionBusy, engine_types.SessionBusy)
+
+    def test_unknown_or_role_field_is_refused(self):
+        for key in ("role", "ports", "name"):
+            with self.subTest(key), self.assertRaisesRegex(ConfigError, key):
+                environment(**{key: "x"})
+
+    def test_missing_image_or_gateway_is_refused(self):
+        for key in ("image", "gateway"):
+            fields = {k: v for k, v in ENVIRONMENT.items() if k != key}
+            with self.subTest(key), self.assertRaisesRegex(ConfigError, key):
+                session.EnvironmentSpec.from_fields(fields)
+
+    def test_a_non_mapping_is_refused(self):
+        with self.assertRaises(ConfigError):
+            session.EnvironmentSpec.from_fields(["image"])
+
+    def test_bad_secret_files_and_items_are_refused(self):
+        item = "ensemble-env/dummy"
+        for secrets in (
+            [{"item": item, "file": "../x"}],
+            [{"item": item, "file": ""}],
+            [{"item": item, "file": "a\nb"}],
+            [{"item": item, "file": "a\x85b"}],
+            [{"item": item, "file": "."}],
+            [{"item": item, "file": ".."}],
+            [{"item": item, "file": "x" * 256}],
+            [
+                {"item": item, "file": "dummy.txt"},
+                {"item": "ensemble-env/other", "file": "dummy.txt"},
+            ],
+            [{"item": "ensemble-bot", "file": "dummy.txt"}],
+            [{"item": "ensemble-env/A", "file": "dummy.txt"}],
+            [{"item": item}],
+            [{"item": item, "file": "dummy.txt", "value": "s3cret"}],
+            [{"item": item, "file": f"f{i}"} for i in range(17)],
+            ["dummy.txt"],
+        ):
+            with self.subTest(secrets), self.assertRaisesRegex(ConfigError, "secrets"):
+                environment(secrets=secrets)
+
+    def test_each_field_has_an_accepted_value(self):
+        found = environment()
+        self.assertEqual(found.image, "dummy-env:test")
+        self.assertEqual(found.gateway, "workers")
+        self.assertEqual(
+            [dict(s) for s in found.secrets], [{"item": "ensemble-env/dummy", "file": "dummy.txt"}]
+        )
+        self.assertEqual(found.plugins, ("dummy-plugin", SOURCE))
+        self.assertEqual(found.lock, "dummy-lock")
+        self.assertEqual(dict(found.prefetch), {"repo": "o/r", "ref": "main"})
+        for changes in (
+            {"image": session.EnvironmentSpec.WORKER},
+            {"image": "sha256:" + "b" * 64},
+            {"image": "registry/team/mini-op"},
+            {"gateway": "mini-op_1"},
+            {"secrets": []},
+            {"plugins": []},
+            {"lock": None},
+            {"prefetch": None},
+            {"prefetch": {"repo": "o/r"}},
+            {"prefetch": {"repo": "o/r", "ref": "release/1.2"}},
+        ):
+            with self.subTest(changes):
+                environment(**changes)
+        self.assertIsNone(session.EnvironmentSpec(image="x", gateway="workers").lock)
+
+    def test_bad_values_are_refused(self):
+        for key, value in (
+            ("image", "Dummy:Test"),
+            ("image", "localhost:5000/x"),
+            ("image", "x@sha256:" + "a" * 64),
+            ("image", ""),
+            ("image", 3),
+            ("gateway", "Workers"),
+            ("gateway", ""),
+            ("gateway", "a" * 64),
+            ("plugins", ["dummy plugin"]),
+            ("plugins", ["dummy-plugin", "dummy-plugin"]),
+            ("plugins", "dummy-plugin"),
+            ("lock", "A B"),
+            ("lock", ""),
+            ("lock", "a" * 64),
+            ("prefetch", {"repo": "o"}),
+            ("prefetch", {"repo": "o/.."}),
+            ("prefetch", {"repo": "o/r", "ref": "--upload-pack=x"}),
+            ("prefetch", {"repo": "o/r", "ref": "refs/pull/1/head"}),
+            ("prefetch", {"repo": "o/r", "ref": "a" * 40}),
+            ("prefetch", {"repo": "o/r", "ref": "a b"}),
+            ("prefetch", {"ref": "main"}),
+            ("prefetch", {"repo": "o/r", "branch": "main"}),
+            ("prefetch", "o/r"),
+        ):
+            with self.subTest(key=key, value=value), self.assertRaisesRegex(ConfigError, key):
+                environment(**{key: value})
+
+    def test_the_constructor_wants_tuples_and_freezes_mappings(self):
+        with self.assertRaisesRegex(ConfigError, "plugins"):
+            session.EnvironmentSpec(image="x", gateway="workers", plugins=["a"])
+        secret = {"item": "ensemble-env/dummy", "file": "dummy.txt"}
+        prefetch = {"repo": "o/r"}
+        found = session.EnvironmentSpec(
+            image="x", gateway="workers", secrets=(secret,), prefetch=prefetch
+        )
+        secret["file"], prefetch["repo"] = "other", "o/other"
+        self.assertEqual(found.secrets[0]["file"], "dummy.txt")
+        self.assertEqual(found.prefetch["repo"], "o/r")
+        self.assertIsInstance(found.secrets[0], MappingProxyType)
+        self.assertIsInstance(found.prefetch, MappingProxyType)
+
+    def test_persisted_round_trips(self):
+        for found in (environment(), environment(lock=None, prefetch=None, secrets=[])):
+            with self.subTest(found):
+                data = found.persisted()
+                self.assertEqual(set(data), set(ENVIRONMENT))
+                self.assertEqual(session.EnvironmentSpec.from_fields(data), found)
+        self.assertEqual(environment().persisted(), ENVIRONMENT)
+
+
+class SpecEnvironmentTest(Case):
+    def test_spec_keeps_or_refuses_an_environment(self):
+        access = Access(cwd="/tmp")
+        self.assertIsNone(Spec(workdir="/tmp", access=access).environment)
+        found = environment()
+        self.assertIs(Spec(workdir="/tmp", access=access, environment=found).environment, found)
+        with self.assertRaisesRegex(ConfigError, "environment"):
+            Spec(workdir="/tmp", access=access, environment=ENVIRONMENT)
+
+
+class SessionBusyTest(Case):
+    def test_it_is_a_session_error_naming_lock_and_holder(self):
+        busy = session.SessionBusy("dummy-lock", "ensemble-dummy-1-ab (owner dummy-1)")
+        self.assertIsInstance(busy, SessionError)
+        self.assertEqual(
+            (busy.lock, busy.holder), ("dummy-lock", "ensemble-dummy-1-ab (owner dummy-1)")
+        )
+        self.assertEqual(
+            str(busy), "busy: lock dummy-lock is held by ensemble-dummy-1-ab (owner dummy-1)"
+        )
+
+    def test_its_pattern_finds_its_message_after_a_prefix(self):
+        busy = session.SessionBusy("dummy-lock", "c (owner o)")
+        for text in (str(busy), f"tui: {busy}", f"headless: {busy}"):
+            with self.subTest(text):
+                found = session.SessionBusy.PATTERN.search(text)
+                self.assertEqual(found.groups(), ("dummy-lock", "c (owner o)"))
+        for text in (
+            "",
+            "tui: did not start",
+            "tui: xbusy: lock x is held by c",
+            "busy: lock x is held by ",
+        ):
+            with self.subTest(text):
+                self.assertIsNone(session.SessionBusy.PATTERN.search(text))

@@ -26,12 +26,14 @@ from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import Finished, Layout, Result
 from ensemble.session import (
     Access,
+    EnvironmentSpec,
     Exited,
     Launch,
     Mode,
     NotShowable,
     Reply,
     Session,
+    SessionBusy,
     SessionError,
     Unanswered,
 )
@@ -848,6 +850,51 @@ class CheckTuiTest(HarnessCase):
                 self.check(display="d", events=self.events)
             self.assertEqual(str(caught.exception), str(error))
         self.assertEqual(RecordingHost.launches, [])
+
+
+class AttendedBusyTest(HarnessCase):
+    """An attended TUI whose harness ended before its agent went live, by its recorded result."""
+
+    BUSY = "busy: lock dummy-lock is held by ensemble-other-x (owner other)"
+
+    def started(self, error, lock="dummy-lock"):
+        spec = Spec("input", self.work, mode="tui", client="fake", sid=SID)
+        delegate = self.make(spec=spec, host="agent", harness_host="harness")
+        state = delegate._state
+        environment = (
+            None if lock is None else EnvironmentSpec(image="x", gateway="workers", lock=lock)
+        )
+        session = replace(state.plan.session, environment=environment)
+        state = replace(
+            state, plan=replace(state.plan, session=session), result=Result(1, None, error)
+        )
+        with (
+            mock.patch.object(delegate, "_answered_agent", return_value=None),
+            mock.patch.object(delegate, "_harness", return_value=None),
+            mock.patch.object(delegate, "_read", return_value=state),
+        ):
+            delegate._started(state)
+
+    def test_attended_tui_busy_raises_session_busy(self):
+        for error in (f"tui: {self.BUSY}", self.BUSY):
+            with self.subTest(error), self.assertRaises(SessionBusy) as caught:
+                self.started(error)
+            self.assertEqual(
+                (caught.exception.lock, caught.exception.holder),
+                ("dummy-lock", "ensemble-other-x (owner other)"),
+            )
+
+    def test_a_foreign_or_unprintable_busy_message_keeps_did_not_start(self):
+        for error, lock in (
+            (f"tui: {self.BUSY}", "other-lock"),
+            (f"tui: {self.BUSY}", None),
+            ("tui: busy: lock dummy-lock is held by \x1b[2J (owner o)", "dummy-lock"),
+            ("tui: broker: start failed", "dummy-lock"),
+        ):
+            with self.subTest(error=error, lock=lock), self.assertRaises(SessionError) as caught:
+                self.started(error, lock)
+            self.assertNotIsInstance(caught.exception, SessionBusy)
+            self.assertRegex(str(caught.exception), "did not start$")
 
 
 class LaunchTest(HarnessCase):

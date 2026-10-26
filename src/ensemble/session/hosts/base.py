@@ -223,6 +223,7 @@ class Host(ABC):
     """
 
     attachable: ClassVar[bool] = False
+    _environments: ClassVar[bool] = False  # runs Spec.environment
 
     def _provider_usage(self, request: ProviderProbe) -> bool | None:
         """Probe with this Host's credentials, when supported."""
@@ -350,8 +351,15 @@ class Host(ABC):
     def tui_settings(self) -> TuiSettings:
         return TuiSettings()
 
-    def _preflight(self, name: str, launch: Launch) -> None:
+    def _preflight(
+        self, name: str, launch: Launch, metadata: Mapping[str, str] | None = None
+    ) -> None:
         """validate, before its caller makes the cwd."""
+        self.validate(name, launch)
+
+    def _validate(
+        self, name: str, launch: Launch, metadata: Mapping[str, str] | None = None
+    ) -> None:
         self.validate(name, launch)
 
     def validate(self, name: str, launch: Launch) -> None:

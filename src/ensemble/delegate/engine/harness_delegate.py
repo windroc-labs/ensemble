@@ -49,6 +49,7 @@ from ensemble.session import (
     Resumable,
     RunLog,
     Session,
+    SessionBusy,
     SessionError,
     SessionStatus,
     SessionStatusLog,
@@ -1010,7 +1011,8 @@ class HarnessDelegate(Delegate):
     def _started(self, state: _State) -> None:
         """Tui: waits, outside the mutex, until the harness has this run's agent session live;
         SessionError, its harness and agent session closed, when the harness ends first, a Host
-        fails or TUI_START_TIMEOUT passes. A same-named session of another sid is not this run's.
+        fails or TUI_START_TIMEOUT passes (SessionBusy: its result names its lock held). A
+        same-named session of another sid is not this run's.
         """
         if state.plan.spec.mode != Mode.TUI:
             return
@@ -1030,7 +1032,25 @@ class HarnessDelegate(Delegate):
             if session is not None:
                 with contextlib.suppress(SessionError):
                     session.close()
+        if busy := self._busy(state):
+            raise busy
         raise SessionError(f"tui session {state.agent_name} did not start")
+
+    def _busy(self, state: _State) -> SessionBusy | None:
+        environment = state.plan.session.environment
+        try:
+            result = self._read().result
+        except (ConfigError, SessionError, OSError):
+            return None
+        found = None if result is None else SessionBusy.PATTERN.search(result.error)
+        if (
+            found is None
+            or environment is None
+            or found[1] != environment.lock
+            or not found[2].isprintable()
+        ):
+            return None
+        return SessionBusy(found[1], found[2])
 
     def resume(self, *, mode: str | None = None, input: str | None = None) -> Record:
         """Continues in `mode` (headless or tui), else the recorded one; the new mode is recorded."""

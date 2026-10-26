@@ -2539,3 +2539,101 @@ class SessionIdentityTest(HostedTuiBase):
         self.host.processes["w1"].calls.activity.return_value = StatusState.DONE
         self.host.calls.screen.return_value = "screen fallback"
         self.assertEqual(session.content(), "screen fallback")
+
+
+ENVIRONMENT = engine_types.EnvironmentSpec(image="dummy-env:test", gateway="workers", lock="l")
+
+
+class EnvironmentHost(MemoryHost):
+    """A Docker-kind Host: keeps the metadata of each _preflight and _validate; busy, when set,
+    is what its preflight or terminal raises.
+    """
+
+    _environments = True
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.checked: list[tuple[str, dict]] = []
+        self.busy: tuple[str, engine_types.SessionBusy] | None = None
+
+    def _raise(self, where: str) -> None:
+        if self.busy is not None and self.busy[0] == where:
+            raise self.busy[1]
+
+    def _preflight(self, name, launch, metadata=None):
+        self.checked.append(("preflight", dict(metadata or {})))
+        self._raise("preflight")
+
+    def _validate(self, name, launch, metadata=None):
+        self.checked.append(("validate", dict(metadata or {})))
+
+    def terminal(self, name, launch, **kwargs):
+        self._raise("terminal")
+        return super().terminal(name, launch, **kwargs)
+
+
+class EnvironmentHostTest(HostedTuiBase):
+    def setUp(self):
+        super().setUp()
+        self.docker = EnvironmentHost("d2")
+        self.hosts = {"tmux": self.host, "d2": self.docker}
+        tables = {
+            name: {"implementation": "tests.session.fakes.terminal:MemoryHost"}
+            for name in self.hosts
+        }
+        self.session.configure(
+            clients=self.session._config().registry.settings.clients,
+            hosts=parsed(tables, "tmux"),
+            class_loader=self.session_dependencies["class_loader"],
+            host_factory=lambda _kind, name, _settings: self.hosts[name],
+            viewer_factory=MemoryViewer,
+        )
+        self.busy = engine_types.SessionBusy("l", "c (owner o)")
+
+    def env_spec(self, **fields):
+        given = {"client": "fake", "mode": Mode.TUI, "name": "w1", "sid": SID}
+        return self.spec(**{**given, "environment": ENVIRONMENT, **fields})
+
+    def test_tmux_host_refuses_an_environment_before_anything_starts(self):
+        for call in (
+            lambda: self.session.start(self.env_spec()),
+            lambda: self.session.preflight(self.env_spec()),
+        ):
+            with self.subTest(call):
+                self.refused(ConfigError, "environment: host tmux is not a Docker-kind Host", call)
+        self.assertEqual(self.host.calls.mock_calls, [])
+
+    def test_a_docker_kind_host_of_another_name_accepts_it(self):
+        self.session.preflight(self.env_spec(), host="d2")
+        session = self.session.start(self.env_spec(), host="d2")
+        self.addCleanup(session.stop)
+        carried = json.dumps(ENVIRONMENT.persisted())
+        self.assertEqual(
+            [(where, found.get("environment")) for where, found in self.docker.checked],
+            [("preflight", carried), ("validate", carried)],
+        )
+        metadata = self.docker.calls.terminal.call_args.kwargs["metadata"]
+        self.assertEqual(metadata["environment"], carried)
+
+    def test_without_an_environment_the_metadata_has_none(self):
+        session = self.session.start(self.env_spec(environment=None), host="d2")
+        self.addCleanup(session.stop)
+        self.assertNotIn("environment", self.docker.calls.terminal.call_args.kwargs["metadata"])
+
+    def test_in_process_refuses_it(self):
+        spec = self.env_spec(mode=Mode.IN_PROCESS, name=None)
+        self.refused(
+            ConfigError,
+            "environment: in_process mode runs on no Host",
+            lambda: self.session.start(spec, host="d2"),
+        )
+
+    def test_preflight_and_start_keep_session_busy(self):
+        for where, call in (
+            ("preflight", lambda: self.session.preflight(self.env_spec(), host="d2")),
+            ("terminal", lambda: self.session.start(self.env_spec(), host="d2")),
+        ):
+            self.docker.busy = (where, self.busy)
+            with self.subTest(where), self.assertRaises(engine_types.SessionBusy) as raised:
+                call()
+            self.assertIs(raised.exception, self.busy)
