@@ -91,6 +91,11 @@ func ReadLinearIdentity(r io.Reader) (LinearIdentity, error) {
 		if !ok || seen[name] {
 			return a, errLinear
 		}
+		switch name {
+		case "name", "kind", "client_id", "user_id", "secret_service", "token_service":
+		default:
+			return a, errLinear
+		}
 		seen[name] = true
 		var v json.RawMessage
 		if d.Decode(&v) != nil {

@@ -250,6 +250,31 @@ func TestLinearIdentityInput(t *testing.T) {
 	}
 }
 
+func TestLinearIdentityRejectsNoncanonicalKeys(t *testing.T) {
+	a := linearApp("verifier")
+	b, _ := json.Marshal(a)
+	for _, key := range []string{"name", "kind", "client_id", "user_id", "secret_service", "token_service"} {
+		t.Run(key, func(t *testing.T) {
+			canonical := `"` + key + `":`
+			variant := `"` + strings.ToUpper(key) + `":`
+			for _, replacement := range []string{
+				variant,
+				canonical + `"ignored",` + variant,
+				variant + `"ignored",` + canonical,
+			} {
+				text := strings.Replace(string(b), canonical, replacement, 1)
+				if _, err := ReadLinearIdentity(strings.NewReader(text)); err == nil {
+					t.Errorf("accepted noncanonical key %q", replacement)
+				}
+			}
+		})
+	}
+	text := strings.Replace(string(b), `"name":`, `"name":"ignored","Name":`, 1)
+	if _, err := ReadLinearIdentity(strings.NewReader(text)); err == nil {
+		t.Error("accepted case-variant duplicate name/Name")
+	}
+}
+
 func TestLinearHostRenewalAndBoundedGrant(t *testing.T) {
 	for kind, expectedScope := range map[string]string{"harness": "read,write", "manager": "read,write,app:assignable", "role": "read,write,app:assignable,app:mentionable"} {
 		t.Run(kind, func(t *testing.T) {
