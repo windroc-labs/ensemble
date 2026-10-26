@@ -1,5 +1,5 @@
 {
-  "protocol_version": "21",
+  "protocol_version": "22",
   "cases": [
     {
       "file": "manifest-valid.json",
@@ -2133,6 +2133,96 @@
       "expected": {
         "stage": "schema",
         "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "status-input-cleanup.json",
+      "definition": "status_input",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "start-output-audit-warning.json",
+      "definition": "start_output",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "refresh-output-audit-warning.json",
+      "definition": "refresh_output",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "close-output-audit-warning.json",
+      "definition": "close_output",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "status-output-audit-warning.json",
+      "definition": "status_output",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "error-start-audit-warning.json",
+      "definition": "error",
+      "valid": true,
+      "expected": {
+        "stage": "response",
+        "exit_code": 9,
+        "error_code": "start_failed"
+      }
+    },
+    {
+      "file": "start-output-bad-audit-warning.json",
+      "definition": "start_output",
+      "valid": false,
+      "expected": {
+        "stage": "response",
+        "exit_code": null,
+        "error_code": null
+      }
+    },
+    {
+      "file": "error-bad-audit-warning.json",
+      "definition": "error",
+      "valid": false,
+      "expected": {
+        "stage": "response",
+        "exit_code": null,
+        "error_code": null
+      }
+    },
+    {
+      "file": "version-output-audit-warning.json",
+      "definition": "version_output",
+      "valid": false,
+      "expected": {
+        "stage": "response",
+        "exit_code": null,
         "error_code": null
       }
     }

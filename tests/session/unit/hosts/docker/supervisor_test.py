@@ -65,6 +65,23 @@ class Base(Case):
 
 
 class RefreshCapabilityTest(Base):
+    def test_audit_warning_is_visible_in_the_session_event_file(self):
+        response = {
+            "container": f"ensemble-worker_1-{GEN}",
+            "github": [],
+            "credential_expires_at": None,
+            "audit_warning": "audit_write_failed",
+        }
+        fake = FakeBroker((0, json.dumps(response), ""))
+        self.supervisor.broker.runner = fake
+        result = self.supervisor.broker.refresh(f"ensemble-worker_1-{GEN}", "/manifest")
+        self.assertEqual(result.github, [])
+        with open(self.events) as stream:
+            event = stream.read()
+        self.assertIn("worker_1 credential_audit_warning audit_write_failed:", event)
+        self.assertIn("Do not repeat a successful start", event)
+        self.assertEqual(len(fake.calls), 1)
+
     def test_only_a_true_capability_enables_refresh(self):
         path = os.path.join(self.state, "host.json")
         self.assertFalse(supervisor.refreshes_client(self.state))

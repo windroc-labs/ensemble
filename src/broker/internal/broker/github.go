@@ -587,6 +587,19 @@ func (g GitHub) Revoke(ctx context.Context, container string) error {
 	return g.discard(ctx, container, nil, true)
 }
 
+// Pending projects a single Keychain snapshot without locking, mutation, remote requests or audit.
+func (g GitHub) Pending() ([]protocol.Pending, error) {
+	list, err := g.readBacklog()
+	if err != nil {
+		return nil, tokensError(err)
+	}
+	out := make([]protocol.Pending, 0, len(list))
+	for _, p := range list {
+		out = append(out, protocol.Pending{Container: p.Container, Account: p.Account, ExpiresAt: p.ExpiresAt})
+	}
+	return out, nil
+}
+
 // Retry revokes the backlog: expired entries are dropped unrevoked, and the first request that gets no answer
 // stops the run, keeping the rest for next time. Audit gets every entry's outcome; it keeps what it needs.
 func (g GitHub) Retry(ctx context.Context) ([]protocol.Pending, error) {
