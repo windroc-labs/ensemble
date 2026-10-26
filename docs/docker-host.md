@@ -526,12 +526,12 @@ before starting anything.
 
 | Step | With an environment |
 |---|---|
-| preflight | the cwd, the broker handshake and, with a lock, `lock-query`: a holder raises `SessionBusy` naming its container and owner; no build, base image, egress proxy or secret check |
+| preflight | the cwd, the broker handshake and, with a lock, `lock-query`: a holder other than the session's own container raises `SessionBusy` naming its container and owner; no build, base image, egress proxy or secret check |
 | start | `build` on its image and plugins; the manifest gets `gateway`, `secrets`, `lock` with `lock_owner` (the session name) and `prefetch`; with `prefetch` no GitHub App or bot identity |
 | busy reply | `SessionBusy` (lock, holder), from start, restart, resume and a worker's restart |
 
 `host.json` keeps a start's environment and a worker's `worker.json` keeps the one it was given. A resume giving none
-(`ensemble-session resume`, `ensemble-crew reopen`) runs the stored one; one giving another (prefetch aside) is refused;
+(`ensemble-session resume`, `ensemble-crew reopen`) of the same sid runs the stored one; one giving another (prefetch aside) is refused;
 state from before environments runs without one. Each new container takes the lock again and resolves its secrets
 again; only a workspace the start creates is prefetched.
 
