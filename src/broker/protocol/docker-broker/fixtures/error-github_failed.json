@@ -1,7 +1,7 @@
 {
   "exit_code": 15,
   "error": {
-    "command": "refresh",
+    "command": "start",
     "code": "github_failed",
     "message": "GitHub request failed: GitHub answered HTTP 500.",
     "cleanup": "not_needed"

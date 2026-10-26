@@ -1,5 +1,14 @@
 # Upgrading
 
+Broker protocol 29 replaces `refresh` and `notices` with `maintain`: the broker now decides when each session's
+credentials renew ([Docker host › Credential renewal](docker-host.md#credential-renewal)). Upgrade the broker with the
+plugin, then restart (close and resume) every Docker session that was running: until then its old supervisor's
+renewals fail, each asking for that restart, its GitHub tokens lapse within the hour and a Codex session closes at its
+old deadline. The events `client_refresh_failed`, `github_refresh_failed` and `credential_notice_failed` become
+`credential_refresh_failed` and `credential_maintenance_failed`. To go back to protocol 28, install its plugin and
+broker, then close and resume every Docker session started under 29: a protocol 28 supervisor cannot read their
+records. Pending GitHub revocations are kept either way.
+
 Broker protocol 28 adds `notices` and `status`'s `static`, and records each Claude token's, OpenCode key's and
 environment secret's expiry ([Docker host › Static secret expiry](docker-host.md#static-secret-expiry)). Upgrade the
 broker with the plugin. Existing items keep working with an unknown expiry; to record one, rerun the login with

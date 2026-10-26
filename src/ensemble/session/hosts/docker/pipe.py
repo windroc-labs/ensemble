@@ -43,13 +43,13 @@ class DockerPiped(LocalPiped):
         *,
         close: Callable[[], None],
         lock: int,
-        refresh: Callable[[threading.Event], None],
+        maintain: Callable[[threading.Event], None],
     ) -> None:
         super().__init__(proc)
         self.stdout, self.stderr = _Capped(name, self.stdout), _Capped(name, self.stderr)
         self._close, self._lock = close, lock
         self._once, self._closed, self._stopped = threading.Lock(), False, threading.Event()
-        threading.Thread(target=refresh, args=(self._stopped,), daemon=True).start()
+        threading.Thread(target=maintain, args=(self._stopped,), daemon=True).start()
 
     def close(self) -> None:
         with self._once:
