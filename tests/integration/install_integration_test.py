@@ -1088,7 +1088,6 @@ class InstallTest(Case):
             good.replace("healthy 1", "healthy 2"),
             good.replace("egress-workers", "bridge"),
             good.replace("http://egress-proxy-workers:4750", "<no value>"),
-            good.removesuffix("workers") + "mini-op",
         ):
             with self.subTest(status=status):
                 (self.fakes / "egress_inspect").write_text(status + "\n")
@@ -1096,6 +1095,32 @@ class InstallTest(Case):
                 self.assertEqual(result.code, 1)
                 self.assertIn("not healthy after 120 seconds", result.stderr)
                 self.assertNotIn("ensemble-broker login claude", self.calls())
+
+    def test_gateway_config_without_workers_fails_at_once(self):
+        egress = Path(self.home, ".egress")
+        egress.mkdir()
+        config = egress / "config.local.yaml"
+        config.write_text("version: 1\nnetworks:\n  mini-op:\n    mode: allowlist\n")
+        config.chmod(0o600)
+        before = (config.read_bytes(), config.stat().st_mode, config.stat().st_mtime_ns)
+        (self.fakes / "egress_inspect").write_text("true healthy 1   mini-op\n")
+        slept = self.fakes / "slept"
+        (self.bin / "sleep").unlink()
+        real = shutil.which("sleep")
+        executable(
+            self.bin / "sleep", f'#!/bin/sh\n[ "$1" != 2 ] || touch \'{slept}\'\nexec {real} "$@"\n'
+        )
+        result = self.fresh("--clients", "claude", "--docker", gateway_failure=True)
+        self.assertEqual(result.code, 1)
+        self.assertIn(f"{config} has no networks.workers section", result.stderr)
+        self.assertIn("your config was kept unchanged", result.stderr)
+        self.assertNotIn("not healthy after 120 seconds", result.stderr)
+        self.assertFalse(slept.exists())
+        self.assertEqual(
+            (config.read_bytes(), config.stat().st_mode, config.stat().st_mtime_ns), before
+        )
+        self.assertNotIn("ensemble-broker login claude", self.calls())
+        self.assertFalse((egress / "current").exists())
 
     def test_gateway_download_failure_is_retryable(self):
         (self.fakes / "fail").write_text("gh api repos/windroc/egress-proxy/tarball/")

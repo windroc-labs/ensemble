@@ -1762,14 +1762,17 @@ broker_logins() {
   fi
 }
 
+# 0: ready for workers; 2: healthy contract-1 gateway whose config has no workers section; 1: not ready yet.
 egress_ready() {
   local status
   status=$(docker inspect --format '{{.State.Running}} {{if .State.Health}}{{.State.Health.Status}}{{end}} {{index .Config.Labels "windroc.egress.contract"}} {{index .Config.Labels "windroc.egress.network.workers.name"}} {{index .Config.Labels "windroc.egress.network.workers.proxy"}} {{index .Config.Labels "windroc.egress.networks"}}' egress-gateway </dev/null 2>/dev/null) || return 1
-  case $status in
-    'true healthy 1 egress-workers http://egress-proxy-workers:4750 '*) ;;
-    *) return 1 ;;
+  case ",${status##* }," in
+    *,workers,*) ;;
+    *) case $status in 'true healthy 1 '*) return 2 ;; *) return 1 ;; esac ;;
   esac
-  case ",${status##* }," in *,workers,*) return 0 ;; esac
+  case $status in
+    'true healthy 1 egress-workers http://egress-proxy-workers:4750 '*) return 0 ;;
+  esac
   return 1
 }
 
@@ -1789,12 +1792,12 @@ egress_download() (
 )
 
 egress_install() {
-  local dir=$HOME/.egress version=$HOME/.egress/versions/$egress_commit tries=0
+  local dir=$HOME/.egress version=$HOME/.egress/versions/$egress_commit tries=0 ready
   step "egress gateway"
   mkdir -p "$dir/versions"
   [ ! -L "$dir/config.local.yaml" ] \
     || die "$dir/config.local.yaml symlink is unsupported by the gateway's directory mount; existing path was kept"
-  if [ ! -e "$dir/config.local.yaml" ] && [ ! -L "$dir/config.local.yaml" ]; then
+  if [ ! -e "$dir/config.local.yaml" ]; then
     (umask 077; set -o noclobber; printf 'version: 1\nnetworks:\n  workers:\n    mode: denylist\n' >"$dir/config.local.yaml") \
       || die "cannot create $dir/config.local.yaml; existing config was kept"
   fi
@@ -1809,7 +1812,12 @@ egress_install() {
   fi
   EGRESS_CONFIG_DIR="$dir" bash "$version/start.sh" </dev/null >&2 \
     || die "egress-gateway start failed: run $version/start.sh; inspect docker logs egress-gateway"
-  while ! egress_ready; do
+  while :; do
+    ready=0
+    egress_ready || ready=$?
+    [ "$ready" -ne 0 ] || break
+    [ "$ready" -ne 2 ] \
+      || die "$dir/config.local.yaml has no networks.workers section, so the healthy gateway serves no workers network; add one (see $version/config.example.yaml), then rerun scripts/install.sh --docker; your config was kept unchanged"
     [ "$tries" -lt 60 ] \
       || die "egress-gateway not healthy after 120 seconds: docker logs egress-gateway; rerun $version/start.sh"
     tries=$((tries + 1))
