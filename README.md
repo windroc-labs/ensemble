@@ -75,8 +75,12 @@ Commands: [Quick start](#quick-start).
 On an Apple silicon Mac, from nothing installed up to a working ensemble, in one command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh | bash
 ```
+
+`<tag>` is the release the `windroc` marketplace pins: the `ref` of `ensemble` in its
+[`.claude-plugin/marketplace.json`](https://github.com/windroc-labs/agent-plugins-marketplace/blob/main/.claude-plugin/marketplace.json).
+That release's installer installs that release's plugins and broker; another installer may not fit them.
 
 `scripts/install.sh`, in order:
 
@@ -94,7 +98,7 @@ Without `--clients` and `--docker`/`--no-docker` it starts with a checklist of w
 
 | Flag | Does |
 |---|---|
-| `--ref <ref>` | installs the plugins and the broker from this branch or tag of `windroc-labs/ensemble` (default the ref the `windroc` marketplace serves ensemble at, `main` until it pins a release). Claude Code and Codex install `ensemble@windroc` from that marketplace, which serves one ref, so with them only that ref; another ref needs `--clients opencode`: a release tag downloads its broker, a branch builds it locally |
+| `--ref <ref>` | installs the plugins and the broker from this branch or tag of `windroc-labs/ensemble` (default `<tag>`, the release the `windroc` marketplace pins). Claude Code and Codex install `ensemble@windroc` from that marketplace, which serves one ref, so with them only that ref; another ref needs `--clients opencode`: a release tag downloads its broker, a branch builds it locally |
 | `--clients <list>` | comma-separated `claude`, `codex`, `opencode`; any one alone works |
 | `--docker`, `--no-docker` | workers in Docker (Docker Desktop, the broker) or on the local tmux Host |
 | `--board <local\|linear>`, `--no-board` | sets up a local or Linear board, or skips board setup (first-run default) |
@@ -111,7 +115,7 @@ the plugin's version). It stops naming both protocols when they differ.
 With a stdin flag, stdin cannot also carry the script:
 
 ```bash
-security find-generic-password -s <item> -w | bash -c "$(curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/main/scripts/install.sh)" scripts/install.sh --password-stdin
+security find-generic-password -s <item> -w | bash -c "$(curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh)" scripts/install.sh --password-stdin
 ```
 
 What it sets up, for reference or by hand:

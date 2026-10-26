@@ -2,7 +2,8 @@
 # Installs ensemble on an Apple silicon Mac from nothing: dependencies, then your configuration
 # (clients, Docker, OpenCode provider, the board) into ~/.ensemble/config.local.toml, then only what it needs.
 # Asks sudo once, every login on the spot, and before writing your files. Rerun to finish or check.
-#   curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install.sh | bash -s -- [flags]
+#   curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh | bash -s -- [flags]
+# <tag>: the release the windroc marketplace pins for ensemble (README.md#install).
 # ENSEMBLE_INSTALL_ROOT prefixes its system paths; only tests set it.
 set -euo pipefail
 
@@ -80,11 +81,12 @@ usage() {
   cat <<EOF
 usage: $synopsis
 
-  curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install.sh | bash -s -- [flags]
+  curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh | bash -s -- [flags]
+  <tag>: the release the windroc marketplace pins for ensemble (README.md#install)
 
   --ref <ref>                 git branch or tag of windroc-labs/ensemble to install the plugin and broker from (default
-                              the ref the windroc marketplace serves ensemble at); with claude or codex only that ref, as
-                              they install from the marketplace; a release tag downloads its broker, a branch builds it
+                              <tag>); with claude or codex only <tag>, as they install from the marketplace; another
+                              release tag downloads its broker, a branch builds it
   --clients <list>            comma-separated: claude (Claude Code), codex (Codex), opencode (OpenCode)
   --docker                    run workers in Docker: Docker Desktop, the broker and its logins
   --no-docker                 run workers on the local tmux Host; no Docker
@@ -99,7 +101,7 @@ usage: $synopsis
   --password-stdin            read the sudo password from stdin (first line, before the key)
 
 With --password-stdin or --opencode-key-stdin, stdin cannot carry the script:
-  security find-generic-password -s <item> -w | bash -c "\$(curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install.sh)" scripts/install.sh --password-stdin
+  security find-generic-password -s <item> -w | bash -c "\$(curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh)" scripts/install.sh --password-stdin
 
 Without --clients and --docker/--no-docker it shows a checklist of what to install (a rerun ticks the last
 choices). It installs the dependencies, asks what the flags leave open, writes ~/.ensemble/config.local.toml,
