@@ -326,6 +326,29 @@ class LaunchTest(Base):
                 ):
                     self.launch(self.spec(access=access))
 
+    def test_descendant_grants_follow_a_parent_symlink(self):
+        parent = self.made("parent")
+        child = os.path.join(parent, "child")
+        os.mkdir(child)
+        alias = os.path.join(self.home, "parent-link")
+        os.symlink(parent, alias)
+        for dirs, reads, parent_action, child_action in (
+            ((alias,), (child,), "allow", "deny"),
+            ((child,), (alias,), "deny", "allow"),
+        ):
+            with self.subTest(dirs=dirs, reads=reads):
+                rules = self.rules_for(Access(project=True, cwd=self.cwd, dirs=dirs, reads=reads))
+                self.assert_edits(
+                    rules,
+                    "/",
+                    {
+                        os.path.join(parent, "output.md"): parent_action,
+                        os.path.join(alias, "output.md"): parent_action,
+                        os.path.join(child, "light-build.md"): child_action,
+                        os.path.join(alias, "child", "light-build.md"): child_action,
+                    },
+                )
+
     def rules_for(self, access: Access) -> dict:
         return self.inline(self.launch(self.spec(access=access)))["permission"]["edit"]
 

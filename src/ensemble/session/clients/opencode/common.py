@@ -172,11 +172,18 @@ def _spellings(name: str) -> list[str]:
     ]
 
 
-def _grant_paths(paths: Iterable[str]) -> list[str]:
-    """OpenCode tools check lexical paths; retain those alongside their resolved targets."""
-    return list(
-        dict.fromkeys(p for path in paths for p in (os.path.abspath(path), os.path.realpath(path)))
-    )
+def _grant_paths(paths: Iterable[str], aliases: dict[str, str]) -> list[str]:
+    """Keep lexical and resolved grants, including descendants through known parent aliases."""
+    found = []
+    for path in paths:
+        real = os.path.realpath(path)
+        found.extend((os.path.abspath(path), real))
+        found.extend(
+            os.path.normpath(os.path.join(alias, os.path.relpath(real, target)))
+            for alias, target in aliases.items()
+            if os.path.commonpath((real, target)) == target
+        )
+    return list(dict.fromkeys(found))
 
 
 def _git(argv: list[str], timeout: int):
@@ -386,8 +393,12 @@ class OpenCodeCommon:
         permission: dict = {
             "bash": {"*": "ask", **commands} if commands else "ask",
         }
-        dirs = _grant_paths(access.dirs)
-        reads = _grant_paths(access.reads)
+        aliases = {
+            os.path.abspath(p): os.path.realpath(p)
+            for p in (access.cwd, *access.dirs, *access.reads)
+        }
+        dirs = _grant_paths(access.dirs, aliases)
+        reads = _grant_paths(access.reads, aliases)
         if outside := [*reads, *dirs]:
             permission["external_directory"] = {
                 pattern: "allow" for d in outside for pattern in (d, f"{d}/*")
