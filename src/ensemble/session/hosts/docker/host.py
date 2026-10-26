@@ -127,6 +127,7 @@ with os.fdopen(fd, 'wb') as f: f.write(sys.stdin.buffer.read())"""
 LOCK_WAIT = 30
 KILL_WAIT = 5
 POLL = 0.2
+WAIT_MAX = 1.0
 LABEL = "ensemble.session"
 PS_FORMAT = "\t".join(
     (
@@ -338,12 +339,15 @@ class _Laps:
             print(f"{head}: {phase} {seconds:.2f} s", file=sys.stderr)
 
 
-def _wait(ready, timeout: float, poll: float = POLL) -> bool:
+def _wait(ready, timeout: float, poll: float = POLL, cap: float | None = None) -> bool:
+    """cap: the poll doubles up to it."""
     deadline = time.monotonic() + timeout
     while not ready():
         if time.monotonic() >= deadline:
             return False
         time.sleep(poll)
+        if cap is not None:
+            poll = min(poll * 2, cap)
     return True
 
 
@@ -420,7 +424,7 @@ class DockerTerminal(InteractiveProcess):
         self.pane.press(keys, self.alive)
 
     def wait_exit(self, timeout: float) -> bool:
-        return _wait(lambda: not (self.alive() or self._group_live()), timeout, TMUX_POLL)
+        return _wait(lambda: not (self.alive() or self._group_live()), timeout, TMUX_POLL, WAIT_MAX)
 
     def kill(self) -> None:
         self._kill_group()

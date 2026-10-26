@@ -41,6 +41,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.engine.worker import Worker, WorkerState
 from ensemble.session.hosts.base import Host
+from ensemble.session.hosts.docker import host as docker_host
 from ensemble.session.hosts.docker.broker import (
     BROKER,
     REFRESH,
@@ -2022,6 +2023,44 @@ class TerminalTest(Base):
                     ("kill", "-0"): reply,
                 }
                 self.assertTrue(process.wait_exit(0))
+
+    def test_wait_exit_backs_off_to_its_cap_within_the_timeout(self):
+        process = self.terminal()
+        now, sleeps = [100.0], []
+
+        def sleep(seconds):
+            sleeps.append(round(seconds, 6))
+            now[0] += seconds
+
+        live = {("tmux", "display-message"): pane(), ("kill", "-0"): (0, "", "")}
+        self.docker.replies = live
+        with (
+            mock.patch("time.monotonic", lambda: now[0]),
+            mock.patch("time.sleep", sleep),
+        ):
+            self.assertFalse(process.wait_exit(4))
+            self.assertEqual(sleeps, [0.1, 0.2, 0.4, 0.8, 1.0, 1.0, 1.0])
+            sleeps.clear()
+            self.docker.replies = {
+                ("tmux", "display-message"): pane("1 0 "),
+                ("kill", "-0"): (1, "", "kill: (-4343) - No such process\n"),
+            }
+            self.assertTrue(process.wait_exit(4))
+            self.assertEqual(sleeps, [])
+
+    def test_waits_other_than_wait_exit_keep_a_fixed_poll(self):
+        now, sleeps, checks = [0.0], [], iter([False, False, False, True])
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            now[0] += seconds
+
+        with (
+            mock.patch("time.monotonic", lambda: now[0]),
+            mock.patch("time.sleep", sleep),
+        ):
+            self.assertTrue(docker_host._wait(lambda: next(checks), 5))
+        self.assertEqual(sleeps, [docker_host.POLL] * 3)
 
     def test_a_pane_probe_that_cannot_answer_is_unanswered_before_any_kill(self):
         process = self.terminal()
