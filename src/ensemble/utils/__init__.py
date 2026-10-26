@@ -105,7 +105,14 @@ from ensemble.utils.shell import (
     resume_command,
     sh,
 )
-from ensemble.utils.text import one_line, parse_time, printable, sid_error, timestamp
+from ensemble.utils.text import (
+    last_lines,
+    one_line,
+    parse_time,
+    printable,
+    sid_error,
+    timestamp,
+)
 
 __all__ = [
     "ACCOUNT_ENV",
@@ -167,6 +174,7 @@ __all__ = [
     "inode_lock",
     "json_records",
     "kill_group",
+    "last_lines",
     "load_class",
     "load_config",
     "module_roots",
