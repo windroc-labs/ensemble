@@ -77,6 +77,7 @@ func validSecretFile(file string) bool {
 		return r == '/' || r < 0x20 || r >= 0x7f && r <= 0x9f
 	})
 }
+
 func ValidLock(name string) bool { return lockPattern.MatchString(name) }
 
 // ValidProvider is whether name can be a listed OpenCode provider; ollama needs no key.
