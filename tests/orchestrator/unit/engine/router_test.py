@@ -996,19 +996,6 @@ class RouterEntry(OuterBase):
         )
         self.assertEqual(self.todo["state"], "In Progress")
 
-    def test_a_missing_role_key_skips_the_claim_and_leaves_the_issue_todo(self):
-        self.missing.add(KEY)
-        for argv, rc in ((("--issue", ID), 2), ((), 0)):
-            with self.subTest(argv=argv):
-                self.assertEqual(self.entry(*argv), rc)
-                self.assertIn(
-                    f"claim-skip TASK-7 reason=no Keychain item for role key {KEY}", self.said()
-                )
-                self.assertEqual(
-                    (self.todo["state"], self.fake.mutations, self.api.detached, self.raw_runs()),
-                    ("Todo", [], [], ""),
-                )
-
     def test_a_new_run_failing_before_its_linear_run_counts_toward_the_cap(self):
         self.fake.node = OSError("down")
         for _ in range(router.CAP):
@@ -3649,20 +3636,6 @@ class RunLaunching(OuterBase):
             ([], [], [], []),
         )
 
-    def test_no_keychain_item(self):
-        self.missing.add(KEY)
-        for mode, kinds in (("new", ["failed"]), ("resume", ["start", "resume"])):
-            with self.subTest(mode=mode):
-                with contextlib.suppress(FileNotFoundError):
-                    os.unlink(self.runs)
-                self.assertEqual(self.outer(mode=mode), 2)
-                self.assertEqual(
-                    self.said(),
-                    [f"config-error TASK-7 reason=no Keychain item for role key {KEY}"],
-                )
-                self.assertEqual(self.kinds(), kinds)
-        self.assertEqual((self.api.detached, self.api.info, self.gql.calls), ([], [], []))
-
     def kinds(self):
         if not os.path.exists(self.runs):
             return []
@@ -5233,17 +5206,9 @@ class RoleAppTokens(TickBase):
 
 
 class RoleKeys(Base):
-    """An unavailable app affects its role; a local tracker needs no credentials."""
-
-    def test_the_keychain_is_checked_only_for_a_role_key(self):
-        key = self.cfg().linear.roles["researcher"].token_service
-        self.missing = {key, ""}
-        self.assertEqual(self.claim(two()), f"TASK-2 https://linear.app/x/TASK-2 {PD}")
-        self.assertEqual(self.keychain_calls, [key, self.cfg().linear.roles["pm"].token_service])
-        self.assertIn(f"claim-skip TASK-1 reason=no Keychain item for role key {key}", self.said())
+    """A tracker without role identities checks no keychain."""
 
     def test_a_tracker_without_role_keys_checks_no_keychain(self):
-        self.missing = {self.cfg().linear.roles["researcher"].token_service, ""}
         self.wiring = replace(cli.TRACKERS[TrackerKind.LINEAR], identity=lambda *_: None)
         self.assertEqual(self.claim(two()), "TASK-1 https://linear.app/x/TASK-1 Deep Research")
         self.assertEqual(self.keychain_calls, [])

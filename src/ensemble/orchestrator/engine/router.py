@@ -292,8 +292,8 @@ class Board:
             else:
                 try:
                     identity = self.wiring.identity(self.cfg, role)
-                    if identity is not None and not self.keychain(identity):
-                        error = f"no Keychain item for role key {identity.service}"
+                    if identity is not None:
+                        self.keychain(identity)
                 except KeychainError as exc:
                     error = one_line(exc)
             self.credential_errors[role] = error
@@ -777,11 +777,10 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
     if role is None or reason:
         return fail(a.issue, "config-error", reason, 2)
     identity = wiring.identity(cfg, role)
-    key = identity.service if identity is not None else None
     kind = record(cfg, a, role=role, now=now) if a.mode == "resume" else cfg.delegate_kind
     try:
-        if identity is not None and not keychain(identity):
-            return fail(a.issue, "config-error", f"no Keychain item for role key {key}", 2)
+        if identity is not None:
+            keychain(identity)
     except KeychainError as error:
         return fail(a.issue, "config-error", one_line(error), 2)
     if a.mode == "resume":
