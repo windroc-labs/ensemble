@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 from ensemble.session.viewer.types import (
@@ -23,7 +24,17 @@ def _checksum(body: str) -> str:
 
 
 def parse_layout(text: str) -> Cell | None:
-    """The cell tree of `<checksum>,<body>` or a body; None when malformed."""
+    """The cell tree of tmux 3.8's JSON, `<checksum>,<body>` or a body; None when malformed or
+    floating.
+    """
+    if text.lstrip().startswith("{"):
+        try:
+            doc = json.loads(text)
+            if not isinstance(doc, dict) or type(doc.get("V")) is not int or doc["V"] != 2:
+                return None
+            return _json_cell(doc.get("L"))
+        except (ValueError, RecursionError):
+            return None
     csum, sep, body = text.partition(",")
     if sep and re.fullmatch(r"[0-9a-f]{4}", csum):
         if _checksum(body) != csum:
@@ -53,6 +64,27 @@ def _parse_cell(text: str, at: int) -> tuple[Cell, int]:
         if not text.startswith(",", at):
             raise ValueError(at)
         at += 1
+
+
+def _json_cell(node: object) -> Cell:
+    """t h (side by side), v (stacked) or p (pane I); ValueError when malformed or floating (z)."""
+    if not isinstance(node, dict) or "z" in node:
+        raise ValueError(node)
+    size = [v for v in (node.get(k) for k in "whxy") if type(v) is int and v >= 0]
+    if len(size) != 4:
+        raise ValueError(node)
+    w, h, x, y = size
+    t = node.get("t")
+    kind = {"h": LEFT_RIGHT, "v": TOP_BOTTOM, "p": LEAF}.get(t) if isinstance(t, str) else None
+    children = node.get("c")
+    if kind == LEAF:
+        pane = node.get("I")
+        if "c" in node or not isinstance(pane, str) or not re.fullmatch(r"%[0-9]+", pane):
+            raise ValueError(node)
+        return Cell(w, h, x, y, pane)
+    if kind is None or not isinstance(children, list) or len(children) < 2:
+        raise ValueError(node)
+    return Cell(w, h, x, y, kind=kind, children=tuple(_json_cell(c) for c in children))
 
 
 def render_layout(cell: Cell) -> str:
