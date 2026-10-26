@@ -19,7 +19,7 @@ from ensemble.orchestrator.engine import (
     types,
 )
 from ensemble.orchestrator.engine.flow.types import ArchiveRefused, IssueState, Linked, Priority
-from ensemble.orchestrator.engine.types import LinearError, LinearKey
+from ensemble.orchestrator.engine.types import AppKind, LinearApp, LinearError
 from ensemble.orchestrator.trackers.linear import (
     client,
     issue_archive,
@@ -316,14 +316,23 @@ class GraphQLProjection(ServerCase):
             self.gql(UNKNOWN)
         self.assertIn("fake: unknown query", str(cm.exception))
         stranger = fake_linear.FakeLinear()
-        stranger.user("stranger@x.com", "Stranger", "stranger")
+        uid = stranger.user("stranger@x.com", "Stranger", "stranger", app=True)
+        app = LinearApp(
+            "stranger",
+            AppKind.ROLE,
+            "linear.roles.stranger",
+            "c",
+            "stranger-secret",
+            "stranger",
+            uid,
+        )
         with (
             mock.patch.dict(
                 os.environ, {"FAKE_LINEAR_TRANSPORT": fake_linear.seam(self, stranger, self.url)}
             ),
             self.assertRaises(LinearError) as cm,
         ):
-            client.linear_gql(ops.Q_USER, identity=LinearKey("stranger"), e="me@x.com")
+            client.linear_gql(ops.Q_USER, identity=app, e="me@x.com")
         self.assertEqual(str(cm.exception), "linear api error: users: HTTP 401")
         self.assertEqual(
             self.fake.requests,

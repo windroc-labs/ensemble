@@ -99,20 +99,16 @@ max_runs = 3
 # The Linear tracker's entities and keys, by id; required only with tracker = "linear".
 #   team              local, required: the Linear team id
 #   human_members     local: the human users' emails; each is subscribed to every issue moved to In Review; [] → none
-#   manager_key       local: Keychain service of the manager's Linear API key, for ensemble-orchestrator issue: an account
-#                     neither the harness nor a role, so its comments and moves count as the user's; "" → issue refuses
 #   task_label_group  local, required: Linear id of the `Tasks` label group; its labels pick an issue's task through
 #                     [linear.task_labels]
 [linear]
 team = ""
 human_members = []
-manager_key = ""
 task_label_group = ""
 agent_label_group = ""
 # local: [orchestrator.linear]
 # local: team = "00000000-0000-0000-0000-000000000000"
 # local: human_members = ["you@example.com"]
-# local: manager_key = "linear-manager"
 # local: task_label_group = "00000000-0000-0000-0000-000000000000"
 # local: agent_label_group = "00000000-0000-4000-8000-000000000101"
 
@@ -135,13 +131,26 @@ user_id = ""
 # local: token_service = "linear-app-harness-token"
 # local: user_id = "00000000-0000-0000-0000-000000000000"
 
-# The manager's Linear OAuth app; optional.
-#   user_id  local: the app's Linear user id; its comments and moves count as the user's, also a move Linear credits
-#            to a botActor; "" → none
+# The manager's Linear OAuth app (ensemble-orchestrator issue): its calls send a client_credentials token, which the
+# issue commands renew when under 5 days are left; scopes are fixed (read,write,app:assignable). Its comments and moves
+# count as the user's (other), whether or not user_id is set. Any key "" → issue refuses; router, promote and prune
+# run without it.
+#   client_id       local, required for issue: the app's Client ID
+#   secret_service  local, required for issue: Keychain service of the app's client secret
+#   token_service   local, required for issue: Keychain service of its token and expiry, written by the issue
+#                   commands; delete that item after rotating the client secret
+#   user_id         local, required for issue: the app's Linear user id; it matters only for a manager move that
+#                   Linear credits to a botActor, which then counts as other too
 [linear.manager]
+client_id = ""
+secret_service = ""
+token_service = ""
 user_id = ""
 
 # local: [orchestrator.linear.manager]
+# local: client_id = "fedcba9876543210fedcba9876543210"
+# local: secret_service = "linear-app-manager-secret"
+# local: token_service = "linear-app-manager-token"
 # local: user_id = "00000000-0000-4000-8000-000000000001"
 
 # The team's workflow states the code uses.

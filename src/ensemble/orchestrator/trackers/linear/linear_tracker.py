@@ -251,7 +251,7 @@ class Selves:
     @classmethod
     def of(cls, linear: LinearSettings) -> "Selves":
         roles = frozenset(r.user_id for r in linear.roles.values())
-        return cls(linear.harness.user_id, roles, linear.manager_user_id or None)
+        return cls(linear.harness.user_id, roles, linear.manager.user_id or None)
 
     def origin(self, user) -> Origin:
         uid = user.get("id")

@@ -11,7 +11,7 @@ import tempfile
 from tests.orchestrator.case import REPO, Case
 from tests.orchestrator.config_fixtures import CORE_LOCAL, PIPELINE
 from tests.orchestrator.integration.fake_python import write_shim
-from tests.orchestrator.unit.board_ids import TEAM
+from tests.orchestrator.unit.board_ids import MANAGER_LINE, TEAM
 from tests.utils.case import local_section
 
 BIN = os.path.join(REPO, "bin", "ensemble-orchestrator")
@@ -139,7 +139,7 @@ class ConfigLayout(Command):
         return done
 
     def test_router_dry_run_and_issue_read_stop_at_their_keychain_items(self):
-        self.write_local('linear.manager_key = "linear-manager"\n' + PIPELINE)
+        self.write_local(MANAGER_LINE + PIPELINE)
         router = self.run_fake("router", "--dry-run")
         issue = self.run_fake("issue", "read", "TASK-1")
         for done in (router, issue):
@@ -151,7 +151,7 @@ class ConfigLayout(Command):
         self.assertEqual(router.returncode, 2)
         self.assertIn("Linear harness app has no token and renewal failed", router.stderr)
         self.assertEqual((issue.returncode, issue.stdout), (2, ""))
-        self.assertIn("linear.manager_key Keychain service 'linear-manager'", issue.stderr)
+        self.assertIn("Linear manager app has no token and renewal failed", issue.stderr)
 
     def test_a_linear_key_left_flat_is_refused(self):
         self.write_local(f'team = "{TEAM}"\n' + PIPELINE)

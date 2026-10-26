@@ -57,13 +57,6 @@ OWNERSHIP = MappingProxyType(
 )
 
 
-@dataclass(frozen=True)
-class LinearKey:
-    """The manager's personal API key, by its Keychain service."""
-
-    service: str
-
-
 class AppKind(StrEnum):
     """Which of ensemble's Linear OAuth apps: its token request's scopes."""
 
@@ -100,7 +93,7 @@ class LinearApp:
 
     @property
     def service(self) -> str:
-        """The Keychain service of what its calls send, as LinearKey.service."""
+        """The Keychain service of what its calls send: its token record's."""
         return self.token_service
 
 
@@ -112,18 +105,14 @@ class LinearSettings:
     states: Mapping[str, str]
     human_members: tuple[str, ...]
     harness: LinearApp
-    manager_user_id: str  # "": unset
-    manager_key: str
+    # each unset key "": read user_id from it; only config.manager_app gives it as a call identity
+    manager: LinearApp
     task_label_group: str
     task_labels: Mapping[str, str]
     agent_label_group: str
     agent_labels: Mapping[str, str]
     project_repos: Mapping[str, str]
     roles: Mapping[str, LinearApp]
-
-    @property
-    def manager(self) -> LinearKey:
-        return LinearKey(self.manager_key)
 
 
 @dataclass(frozen=True)

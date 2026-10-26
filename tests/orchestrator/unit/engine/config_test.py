@@ -35,6 +35,9 @@ from tests.orchestrator.unit.board_ids import (
     HARNESS_APP,
     HARNESS_LINE,
     HEADER,
+    MANAGER_APP,
+    MANAGER_IDENTITY,
+    MANAGER_LINE,
     MANAGER_USER,
     PACKAGED_FLOW,
     STATES,
@@ -162,9 +165,9 @@ class CatalogDelegate(FakeDelegate):
 HARNESS = LinearApp("harness", AppKind.HARNESS, "linear.harness", **HARNESS_APP)
 
 LINEAR_DEFAULTS = {
-    **dict.fromkeys(("team", "manager_key", "task_label_group", "agent_label_group"), ""),
+    **dict.fromkeys(("team", "task_label_group", "agent_label_group"), ""),
     "harness": dict.fromkeys(("client_id", "secret_service", "token_service", "user_id"), ""),
-    "manager": {"user_id": ""},
+    "manager": dict.fromkeys(("client_id", "secret_service", "token_service", "user_id"), ""),
     "states": dict.fromkeys(State, ""),
     "human_members": [],
     **dict.fromkeys(("task_labels", "agent_labels", "project_repos"), {}),
@@ -460,28 +463,8 @@ class ConfigurationLoading(ConfigFile, Case):
                 "linear.roles.engineer.secret_service 'linear-api-key-secret' is also linear.harness.secret_service",
             ),
             (
-                'linear.manager_key = "linear-api-key"\n' + PIPELINE,
-                "linear.manager_key 'linear-api-key' is linear.harness.token_service",
-            ),
-            (
                 PIPELINE.replace("linear-api-key-pm", "linear-api-key-secret"),
                 "linear.roles.pm.token_service 'linear-api-key-secret' is also linear.harness.secret_service",
-            ),
-            (
-                'linear.manager_key = "linear-api-key-pm"\n' + PIPELINE,
-                "linear.manager_key 'linear-api-key-pm' is linear.roles.pm.token_service",
-            ),
-            (
-                "linear.manager_key = 1\n" + PIPELINE,
-                "linear.manager_key must be a Keychain service name: 1",
-            ),
-            (
-                "linear.manager_key = false\n" + PIPELINE,
-                "linear.manager_key must be a Keychain service name: False",
-            ),
-            (
-                "linear.manager_key = 0\n" + PIPELINE,
-                "linear.manager_key must be a Keychain service name: 0",
             ),
             *[
                 (
@@ -544,36 +527,98 @@ class ConfigurationLoading(ConfigFile, Case):
                 self.assertTrue(msg.startswith(f"orchestrator/config.toml: {table}.{key} "), msg)
                 self.assertIn(repr(value), msg)
 
-    def test_manager_key_loaded_empty_by_default(self):
-        self.assertEqual(self.load(PIPELINE).linear.manager_key, "")
-        cfg = self.load('linear.manager_key = "linear-manager"\n' + PIPELINE)
-        self.assertEqual(cfg.linear.manager_key, "linear-manager")
+    def test_manager_key_is_an_unknown_key(self):
+        for value in ('"linear-manager"', '""', "1"):
+            with self.subTest(value=value):
+                self.fails(
+                    "orchestrator/config.toml: unknown keys in [linear]: manager_key",
+                    f"linear.manager_key = {value}\n" + PIPELINE,
+                )
 
-    def test_manager_user_id_is_optional_and_another_app_user(self):
-        self.assertEqual(self.load(PIPELINE).linear.manager_user_id, "")
-        cfg = self.load(PIPELINE + f'[linear.manager]\nuser_id = "{MANAGER_USER}"\n')
-        self.assertEqual(cfg.linear.manager_user_id, MANAGER_USER)
+    def test_a_complete_manager_app_loads_as_the_manager_identity(self):
+        linear = self.load(MANAGER_LINE + PIPELINE).linear
+        self.assertEqual(linear.manager, MANAGER_IDENTITY)
+        self.assertEqual(config.manager_app(linear), MANAGER_IDENTITY)
+        self.assertEqual(MANAGER_IDENTITY.scopes, "read,write,app:assignable")
+
+    def test_an_incomplete_manager_app_loads_but_issue_refuses_it(self):
+        none = dict.fromkeys(MANAGER_APP, "")
+        for given in ({}, {"user_id": MANAGER_USER}, {**MANAGER_APP, "secret_service": ""}):
+            with self.subTest(given=given):
+                table = "[linear.manager]\n" + "".join(f'{k} = "{v}"\n' for k, v in given.items())
+                linear = self.load(PIPELINE + table).linear
+                self.assertEqual(linear.manager.user_id, given.get("user_id", ""))
+                unset = [f"linear.manager.{k}" for k in MANAGER_APP if not {**none, **given}[k]]
+                with self.assertRaises(config.ConfigError) as cm:
+                    config.manager_app(linear)
+                self.assertEqual(
+                    str(cm.exception),
+                    "orchestrator/config.toml: ensemble-orchestrator issue needs the manager's "
+                    f"Linear OAuth app: required, unset: {', '.join(unset)}: set them in "
+                    f"{config.LOCAL} (orchestrator/config.toml's `# local:` lines)",
+                )
+                self.assertIsNone(cm.exception.logs_dir)
+
+    def test_manager_app_values_are_checked_when_set(self):
+        def table(**fields):
+            return (
+                PIPELINE
+                + "[linear.manager]\n"
+                + "".join(f"{k} = {json.dumps(v)}\n" for k, v in fields.items())
+            )
+
         for text, message in (
             (
-                PIPELINE + '[linear.manager]\nuser_id = "manager"\n',
+                table(user_id="manager"),
                 "linear.manager.user_id must be a Linear user id (UUID): 'manager'",
             ),
+            (table(user_id=1), "linear.manager.user_id must be a Linear user id (UUID): 1"),
             (
-                PIPELINE + "[linear.manager]\nuser_id = 1\n",
-                "linear.manager.user_id must be a Linear user id (UUID): 1",
+                table(client_id="client manager"),
+                "linear.manager.client_id must be a Linear OAuth app Client ID: 'client manager'",
             ),
             (
-                PIPELINE + f'[linear.manager]\nuser_id = "{HARNESS_APP["user_id"]}"\n',
+                table(secret_service="a b"),
+                "linear.manager.secret_service must be a Keychain service name: 'a b'",
+            ),
+            (
+                table(token_service=False),
+                "linear.manager.token_service must be a Keychain service name: False",
+            ),
+            (
+                table(secret_service="linear-manager", token_service="linear-manager"),
+                "linear.manager.secret_service 'linear-manager' is also linear.manager.token_service",
+            ),
+            (
+                table(user_id=HARNESS_APP["user_id"]),
                 f"linear.manager.user_id '{HARNESS_APP['user_id']}' is also linear.harness.user_id",
             ),
             (
-                PIPELINE + f'[linear.manager]\nuser_id = "{role_id("pm")}"\n',
+                table(user_id=role_id("pm")),
                 f"linear.manager.user_id '{role_id('pm')}' is also linear.roles.pm.user_id",
             ),
             (
-                PIPELINE + '[linear.manager]\nclient_id = "client-manager"\n',
-                "[linear.manager] has unknown keys: client_id",
+                table(client_id="client-harness"),
+                "linear.manager.client_id 'client-harness' is also linear.harness.client_id",
             ),
+            (
+                table(client_id="client-pm"),
+                "linear.manager.client_id 'client-pm' is also linear.roles.pm.client_id",
+            ),
+            (
+                table(token_service="linear-api-key"),
+                "linear.manager.token_service 'linear-api-key' is also linear.harness.token_service",
+            ),
+            (
+                table(secret_service="linear-api-key-pm"),
+                "linear.manager.secret_service 'linear-api-key-pm' is also linear.roles.pm.token_service",
+            ),
+            (
+                table(token_service="linear-api-key-engineer-secret"),
+                "linear.manager.token_service 'linear-api-key-engineer-secret' is also "
+                "linear.roles.engineer.secret_service",
+            ),
+            (table(account="x"), "[linear.manager] has unknown keys: account"),
             ("linear.manager = 1\n" + PIPELINE, "[linear.manager] must be a table"),
         ):
             with self.subTest(message):

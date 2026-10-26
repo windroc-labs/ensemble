@@ -34,6 +34,8 @@ from tests.orchestrator.unit import promote_fixtures as tp
 from tests.orchestrator.unit.board_ids import (
     ACCOUNTS,
     HEADER,
+    MANAGER_IDENTITY,
+    MANAGER_LINE,
     STATES,
     TASK_GROUP,
     TEAM,
@@ -43,8 +45,6 @@ from tests.orchestrator.unit.board_ids import (
 from tests.orchestrator.unit.run_fixtures import CORE_LOCAL
 
 OTHER_TEAM = "00000000-0000-4000-8000-0000000000f2"
-
-MANAGER_KEY = "linear-api-key-manager"
 
 
 def uid(n):
@@ -56,7 +56,7 @@ CLIENT_GROUP = uid(0xC0)
 CLIENT_LABELS = {"codex": uid(0xC1), "claude": uid(0xC2)}
 # each role's account's Linear user id
 ROLE_USERS = {a: role_id(r) for r, a in ACCOUNTS.items()}
-CONFIG = f'linear.manager_key = "{MANAGER_KEY}"\n' + tp.CONFIG.replace(
+CONFIG = MANAGER_LINE + tp.CONFIG.replace(
     HEADER,
     HEADER
     + "linear.task_labels = { "
@@ -73,6 +73,7 @@ def names_cfg(**fields):
         "team": TEAM,
         "states": dict(STATES),
         "roles": {r: role_app(r) for r in ACCOUNTS},
+        "manager": MANAGER_IDENTITY,
         "task_label_group": TASK_GROUP,
         "task_labels": dict(TASK_LABELS),
         "agent_label_group": CLIENT_GROUP,

@@ -6,11 +6,9 @@ fields.
 import json
 import os
 
-from ensemble.orchestrator.engine.types import LinearKey
-from tests.orchestrator.unit.board_ids import ACCOUNTS, STATES, TEAM
+from tests.orchestrator.unit.board_ids import ACCOUNTS, MANAGER_IDENTITY, STATES, TEAM
 from tests.orchestrator.unit.issue_fixtures import (
     CLIENT_LABELS,
-    MANAGER_KEY,
     OTHER_TEAM,
     ROLE_USERS,
     TASK_LABELS,
@@ -54,7 +52,7 @@ class Filters(IssueCase):
         query, variables = gql.calls[0]
         self.assertIn("orderBy: updatedAt", query)
         want = {"first": 20, "after": None, "f": {"team": {"id": {"eq": TEAM}}}, "a": False}
-        self.assertEqual(variables, {**want, "identity": LinearKey(MANAGER_KEY)})
+        self.assertEqual(variables, {**want, "identity": MANAGER_IDENTITY})
 
     def test_every_filter_holds_at_once(self):
         gql = Routes(

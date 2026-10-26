@@ -1,5 +1,5 @@
-"""Linear GraphQL transport and Keychain access: a personal key sent as is, an OAuth app's token as
-Bearer, renewed before the call when due (missing, undated, expired or under RENEW_BEFORE left)."""
+"""Linear GraphQL transport and Keychain access: an OAuth app's token sent as Bearer, renewed before
+the call when due (missing, undated, expired or under RENEW_BEFORE left)."""
 
 import http.client
 import json
@@ -62,17 +62,13 @@ def operation(query):
     return m[1] if m else "?"
 
 
-def linear_gql(query, *, identity, timeout=30, **variables):
+def linear_gql(query, *, identity: LinearApp, timeout=30, **variables):
     # a clean secret only: urllib's header error would echo it
-    if isinstance(identity, LinearApp):
-        secret = _token(identity, timeout)
-        auth = f"Bearer {secret}"
-    else:
-        secret = auth = _key(identity, timeout)
+    secret = _token(identity, timeout)
     req = urllib.request.Request(
         URL,
         data=json.dumps({"query": query, "variables": variables}).encode(),
-        headers={"Content-Type": "application/json", "Authorization": auth},
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {secret}"},
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -151,20 +147,6 @@ def _rate_limited(errors):
         if isinstance(extensions, dict) and extensions.get("code") == "RATELIMITED":
             return True
     return False
-
-
-def _key(identity, timeout):
-    service = identity.service
-    found = subprocess.run(
-        [SECURITY, "find-generic-password", "-s", service, "-w"],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=timeout,
-    ).stdout.strip()
-    if not _clean(found):
-        raise KeychainError(f"Linear key of {service}: empty, not printable or holds whitespace")
-    return found
 
 
 def _scrub(value, secret):
@@ -369,20 +351,10 @@ def _status(held, now):
     return {"days_left": round((held.expires - now) / timedelta(days=1), 1)}
 
 
-def has_key(identity):
+def has_key(identity: LinearApp):
     """Preflight an app through the same renewal policy as a call; discard its token."""
-    if isinstance(identity, LinearApp):
-        _token(identity, 30)
-        return True
-    # The manager's legacy key only needs an existence check.
-    return (
-        subprocess.run(
-            [SECURITY, "find-generic-password", "-s", identity.service],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        ).returncode
-        == 0
-    )
+    _token(identity, 30)
+    return True
 
 
 def _clean(s):

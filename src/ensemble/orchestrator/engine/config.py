@@ -54,7 +54,6 @@ LINEAR_KEYS = {
     "human_members",
     "harness",
     "manager",
-    "manager_key",
     "task_label_group",
     "task_labels",
     "agent_label_group",
@@ -75,8 +74,6 @@ class AppKey(StrEnum):
 
 
 LINEAR_ROLE_KEYS = set(AppKey)
-# [linear.manager]: its app user id until the manager calls Linear as its app
-MANAGER_KEYS = frozenset({AppKey.USER_ID})
 
 
 REQUIRED = (
@@ -103,6 +100,17 @@ def linear_settings(cfg: Config, command: str) -> LinearSettings:
     if cfg.linear is None:
         raise ConfigError(f'{command} needs [orchestrator] tracker = "linear"')
     return cfg.linear
+
+
+def manager_app(linear: LinearSettings) -> LinearApp:
+    """The manager's app, the issue commands' identity; ConfigError naming each unset key."""
+    if unset := [f"linear.manager.{k}" for k in AppKey if not getattr(linear.manager, k)]:
+        raise ConfigError(
+            "orchestrator/config.toml: ensemble-orchestrator issue needs the manager's Linear "
+            f"OAuth app: required, unset: {', '.join(unset)}: set them in {LOCAL} "
+            "(orchestrator/config.toml's `# local:` lines)"
+        )
+    return linear.manager
 
 
 def load(*, path: str | None = None) -> Config:
@@ -296,8 +304,12 @@ def _linear_settings(linear):
             "linear.harness",
             **{k.value: linear["harness"][k] for k in AppKey},
         ),
-        manager_user_id=linear["manager"].get("user_id", ""),
-        manager_key=linear.get("manager_key", ""),
+        manager=LinearApp(
+            "manager",
+            AppKind.MANAGER,
+            "linear.manager",
+            **{k.value: linear["manager"].get(k, "") for k in AppKey},
+        ),
         task_label_group=linear["task_label_group"],
         agent_label_group=linear["agent_label_group"],
         roles=MappingProxyType(
@@ -393,7 +405,7 @@ def _load_config(cfg, local, board):
 
 def _linear(cfg, local):
     _app_table(cfg["linear"], "harness")
-    _app_table(cfg["linear"], "manager", MANAGER_KEYS)
+    _app_table(cfg["linear"], "manager")
     if missing := utils.unset(cfg, REQUIRED):
         raise ConfigError(
             f"orchestrator/config.toml: required, unset: {', '.join(missing)}: set them in {local} (orchestrator/config.toml's `# local:` lines)"
@@ -401,40 +413,36 @@ def _linear(cfg, local):
     linear = cfg["linear"]
     _check_ids(linear)
     _app(linear, "harness")
-    _linear_roles(linear)
-    _manager(linear)
-    _manager_key(linear)
+    _manager(linear, _linear_roles(linear))
     _project_repos(linear)
     _task_labels(linear)
     _agent_labels(linear)
 
 
-def _app_table(linear, name, keys=frozenset(AppKey)):
+def _app_table(linear, name):
     """[linear.<name>]: a table of keys only (unset ones REQUIRED reports)."""
     table = linear.setdefault(name, {})
     if not isinstance(table, dict):
         raise ConfigError(f"orchestrator/config.toml: [linear.{name}] must be a table")
-    if extra := sorted(set(table) - keys):
+    if extra := sorted(set(table) - set(AppKey)):
         raise ConfigError(
             f"orchestrator/config.toml: [linear.{name}] has unknown keys: {', '.join(extra)}"
         )
 
 
-def _app(linear, name):
-    """[linear.<name>]: an OAuth app's Client ID, its secret's and token's Keychain services (two)
-    and its Linear user id."""
+def _app(linear, name, keys=tuple(AppKey)):
+    """[linear.<name>]: keys of an OAuth app's Client ID, its secret's and token's Keychain
+    services (two) and its Linear user id."""
     table = linear[name]
-    for key, what, valid in (
-        (AppKey.CLIENT_ID, "a Linear OAuth app Client ID", _client_id),
-        (AppKey.SECRET_SERVICE, "a Keychain service name", _keychain_name),
-        (AppKey.TOKEN_SERVICE, "a Keychain service name", _keychain_name),
-        (AppKey.USER_ID, "a Linear user id (UUID)", _uuid),
-    ):
+    for key in keys:
+        what, valid = _APP_VALUES[key]
         if not valid(table[key]):
             raise ConfigError(
                 f"orchestrator/config.toml: linear.{name}.{key} must be {what}: {table[key]!r}"
             )
-    if table["secret_service"] == table["token_service"]:
+    if {AppKey.SECRET_SERVICE, AppKey.TOKEN_SERVICE} <= set(keys) and (
+        table["secret_service"] == table["token_service"]
+    ):
         raise ConfigError(
             f"orchestrator/config.toml: linear.{name}.secret_service {table['secret_service']!r} "
             f"is also linear.{name}.token_service"
@@ -449,6 +457,14 @@ def _keychain_name(v):
     return isinstance(v, str) and bool(KEYCHAIN_NAME.fullmatch(v))
 
 
+_APP_VALUES = {
+    AppKey.CLIENT_ID: ("a Linear OAuth app Client ID", _client_id),
+    AppKey.SECRET_SERVICE: ("a Keychain service name", _keychain_name),
+    AppKey.TOKEN_SERVICE: ("a Keychain service name", _keychain_name),
+    AppKey.USER_ID: ("a Linear user id (UUID)", _uuid),
+}
+
+
 def _harness_services(linear):
     """{Keychain service: the harness setting naming it}."""
     return {
@@ -456,38 +472,22 @@ def _harness_services(linear):
     }
 
 
-def _manager(linear):
-    """[linear.manager] user_id: "" or the manager app's user id, which no other app has."""
-    uid = linear["manager"].get("user_id", "")
-    if uid == "":
-        return
-    if not _uuid(uid):
-        raise ConfigError(
-            f"orchestrator/config.toml: linear.manager.user_id must be a Linear user id (UUID): {uid!r}"
-        )
-    taken = {linear["harness"]["user_id"]: "linear.harness.user_id"} | {
-        p["user_id"]: f"linear.roles.{n}.user_id" for n, p in linear["roles"].items()
-    }
-    if uid in taken:
-        raise ConfigError(
-            f"orchestrator/config.toml: linear.manager.user_id {uid!r} is also {taken[uid]}"
-        )
+def _manager(linear, owners):
+    """[linear.manager]: its set keys, each valid and no other app's (owners: _linear_roles');
+    unset ones refuse only the issue commands (manager_app)."""
+    table = linear["manager"]
+    given = tuple(k for k in AppKey if table.get(k, "") != "")
+    _app(linear, "manager", given)
+    for key in given:
+        taken = owners["service" if key in _SERVICES else key]
+        if table[key] in taken:
+            raise ConfigError(
+                f"orchestrator/config.toml: linear.manager.{key} {table[key]!r} is also "
+                f"{taken[table[key]]}"
+            )
 
 
-def _manager_key(linear):
-    """Another account's than the harness's and the roles': the manager's writes are other."""
-    mk = linear.get("manager_key", "")
-    if not isinstance(mk, str):
-        raise ConfigError(
-            f"orchestrator/config.toml: linear.manager_key must be a Keychain service name: {mk!r}"
-        )
-    taken = _harness_services(linear) | {
-        p[k]: f"linear.roles.{n}.{k}"
-        for n, p in linear["roles"].items()
-        for k in ("secret_service", "token_service")
-    }
-    if mk in taken:
-        raise ConfigError(f"orchestrator/config.toml: linear.manager_key {mk!r} is {taken[mk]}")
+_SERVICES = (AppKey.SECRET_SERVICE, AppKey.TOKEN_SERVICE)
 
 
 def _stage_roles(cfg, linear):
@@ -519,9 +519,12 @@ def _stage_roles(cfg, linear):
 
 
 def _linear_roles(linear):
-    """Role apps: validated without reading their credentials; ids and services are unique."""
+    """Role apps: validated without reading their credentials; Client IDs and services are
+    unique. Returns the harness's and roles' {value: its setting} of client_id, service (both
+    services) and user_id."""
     clients = {linear["harness"]["client_id"]: "linear.harness.client_id"}
     services = _harness_services(linear)
+    users = {linear["harness"]["user_id"]: "linear.harness.user_id"}
     for name, p in linear["roles"].items():
         table = f"roles.{name}"
         _app({table: p}, table)
@@ -536,6 +539,8 @@ def _linear_roles(linear):
                     f"orchestrator/config.toml: {field} {p[k]!r} is also {owners[p[k]]}"
                 )
             owners[p[k]] = field
+        users.setdefault(p["user_id"], f"linear.{table}.user_id")
+    return {"client_id": clients, "service": services, "user_id": users}
 
 
 def _role_fields(roles):
