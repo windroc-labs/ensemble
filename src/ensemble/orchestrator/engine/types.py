@@ -48,9 +48,12 @@ class TrackerKind(StrEnum):
     LOCAL = "local"
 
 
-# why an issue has no role: Linear reads its delegate, a local board its assignee directory
+# an issue's role owner: Linear reads its delegate, a local board its assignee directory
 UNOWNED = MappingProxyType(
     {TrackerKind.LINEAR: "no configured role delegate", TrackerKind.LOCAL: "not assigned to a role"}
+)
+OWNERSHIP = MappingProxyType(
+    {TrackerKind.LINEAR: "delegated to a role app", TrackerKind.LOCAL: "assigned to a role account"}
 )
 
 
@@ -478,9 +481,11 @@ class Spec:
             return f"bad issue or session id: {self.issue} {self.sid}"
         return None
 
-    def role_error(self, role: str | None, tasks: tuple[str, ...]) -> str | None:
+    def role_error(
+        self, role: str | None, tasks: tuple[str, ...], tracker: TrackerKind
+    ) -> str | None:
         if role is None:
-            return "not assigned to a role"
+            return UNOWNED[tracker]
         if self.task is not None and self.task not in tasks:
             return f"task {self.task!r} is not one of {role}'s tasks ({', '.join(tasks)})"
         return None

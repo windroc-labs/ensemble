@@ -120,6 +120,8 @@ from ensemble.orchestrator.engine.runs import (
     trim,
 )
 from ensemble.orchestrator.engine.types import (
+    OWNERSHIP,
+    UNOWNED,
     UUID_RE,
     ClientSource,
     ConfigError,
@@ -615,14 +617,9 @@ class Board:
         """Why ident is not queued, with the tracker's refusal."""
         current = self.tracker.recheck(ident)
         if self.cfg.tracker is TrackerKind.LINEAR and current.ready and current.role is None:
-            self.say("claim-skip", ident, once=True, reason="no configured role delegate")
-        ownership = (
-            "delegated to a role app"
-            if self.cfg.tracker is TrackerKind.LINEAR
-            else "assigned to a role account"
-        )
+            self.say("claim-skip", ident, once=True, reason=UNOWNED[TrackerKind.LINEAR])
         reason = NOT_QUEUED.format(
-            state=self.tracker.state_name(IssueState.READY), ownership=ownership
+            state=self.tracker.state_name(IssueState.READY), ownership=OWNERSHIP[self.cfg.tracker]
         )
         reasons = [] if current.ready and current.role else [reason]
         reasons += [current.refused] if current.refused else []
@@ -636,7 +633,7 @@ class Board:
         if not current.ready:
             skip = f"no longer {self.tracker.state_name(IssueState.READY)}"
         elif role is None:
-            skip = "not assigned to a role"
+            skip = UNOWNED[self.cfg.tracker]
         elif role in full:
             skip = f"{role} is full"
         elif current.refused:
@@ -776,7 +773,7 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
     if role is not None and role not in cfg.roles:
         return fail(a.issue, "config-error", f"role {role!r} is not configured", 2)
     tasks = cfg.roles[role].tasks if role is not None else ()
-    reason = a.role_error(role, tasks)
+    reason = a.role_error(role, tasks, cfg.tracker)
     if role is None or reason:
         return fail(a.issue, "config-error", reason, 2)
     identity = wiring.identity(cfg, role)

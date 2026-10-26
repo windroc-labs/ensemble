@@ -3632,7 +3632,7 @@ class RunLaunching(OuterBase):
 
     def test_role_and_task_errors_are_config_errors_of_the_issue(self):
         for kw, reason in (
-            ({"role": None}, "not assigned to a role"),
+            ({"role": None}, "no configured role delegate"),
             (
                 {"role": "researcher", "task": "build"},
                 "task 'build' is not one of researcher's tasks (deep-research, research, light-research)",
@@ -5056,7 +5056,7 @@ class ClaimRechecks(Base):
                     self.said(),
                     [
                         "pick TASK-1 queue=2",
-                        "claim-skip TASK-1 reason=not assigned to a role",
+                        "claim-skip TASK-1 reason=no configured role delegate",
                         "pick TASK-2 queue=2",
                         "claim TASK-2 role=researcher client=a client_source=default",
                     ],
