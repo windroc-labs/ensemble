@@ -8,7 +8,7 @@ and how to revoke it. The local Host (`tmux`) and the Docker Host (`[session.hos
 tokens, the Codex access token, OpenCode provider API keys, environment secrets) can be read by the broker, by every process in that container, and by any process
 running as the user: `<B> start --manifest <file>` does not check its caller, and the Docker
 socket is the user's, so such a process can start a container or
-`docker exec` into one and read `/run/ensemble/secrets/`. Only the App private key and the Codex refresh token stay
+`docker exec` into one and read `/run/ensemble/secrets/`. The App private key, Codex refresh token and enrolled Linear client secrets stay
 with the broker; a provider API key or an environment secret is the same long-lived value in every container that lists it. The user accepted this on 2026-10-18; the broker is unchanged ([Risks](#risks)).
 
 ## Who logs in
@@ -61,8 +61,8 @@ GitHub on the Docker Host needs no per-run login: `<B> login github ensemble-bot
 | Revoke | `close` releases the container's grant: it attempts revocation before removing the container, even if revocation fails; backlog entries retry at the next start, close or `status --cleanup` until revoked or expired; `<B> status` lists pending backlog entries without changing them |
 
 The `ensemble-tokens` record holds each token's state: prepared (issued, not yet confirmed in the container),
-delivered, or retiring (replaced, awaiting revocation). Start and refresh report a token only once it is delivered;
-a refresh or close interrupted at any step leaves the record consistent, and the next refresh or close finishes it.
+delivered, or retiring (replaced, awaiting revocation). Start and maintain report a token only once it is delivered;
+a renewal or close interrupted at any step leaves the record consistent, and the next maintain or close finishes it.
 
 If the backlog cannot be read or written and direct revocation fails, the broker retains the original
 `ensemble-tokens` record and reports pending cleanup. Retry `<B> close --container <container>` with the original container
@@ -84,6 +84,7 @@ confirmed revocation, confirmed expiry or a successful durable transfer to the b
 ### Linear harness app
 
 The harness is a Linear OAuth app, `[linear.harness]`: its client secret and its token are two Keychain items.
+The following transport-owned defaults apply until [broker renewal](#linear-broker-renewal) is enabled.
 
 | Field | Value |
 |---|---|
@@ -97,7 +98,8 @@ The harness is a Linear OAuth app, `[linear.harness]`: its client secret and its
 ### Linear manager app
 
 The manager is a Linear OAuth app, `[linear.manager]`, with the harness app's four keys. Any of them unset, the `issue`
-commands exit 2 naming it; router, promote and prune run without it.
+commands exit 2 naming it; router, promote and prune run without it. Its transport-owned defaults below can also
+switch to [broker renewal](#linear-broker-renewal).
 
 | Field | Value |
 |---|---|
@@ -111,7 +113,8 @@ commands exit 2 naming it; router, promote and prune run without it.
 ### Linear role apps
 
 Each `[orchestrator.linear.roles.<role>]` holds `client_id`, `secret_service`, `token_service` and
-`user_id`. All four are required; any other key is refused. `user_id` is the installed app's
+`user_id`, plus optional `renewal` (`transport`, the default, or `broker`). All four identity fields are required;
+other keys are refused. `user_id` is the installed app's
 Linear user id; runtime role discovery reads it from configuration and needs no role token.
 
 | Field | Value |
@@ -119,15 +122,82 @@ Linear user id; runtime role discovery reads it from configuration and needs no 
 | Purpose | role write-back: comments, state moves, subscriptions, attachments and retitles; resume and Recover resolve the run's recorded role against current configuration, ignoring old start-row credentials |
 | Permission | fixed `read,write,app:assignable,app:mentionable` |
 | Stored at | client secret in `secret_service`; token and expiry in `token_service`, both login Keychain entries |
-| Readers | any process running as the user |
+| Readers | any process running as the user until broker renewal restricts the root item |
 | Lifetime | renewed through the shared transport when missing, undated, expired or under 5 days remain; dry-run never renews |
 | Failure | an expired token whose renewal fails skips only that role's claims and resumes; write-back reports refusal for Recover |
 | Revoke | revoke the app's tokens in Linear, then remove its token and secret entries from Keychain |
 
-Changing an app's client secret revokes its tokens: store the new secret and delete the token entry so
-the next call requests one. New runs record the role, never a credential service; existing run rows stay unchanged.
+With transport ownership, changing an app's client secret revokes its tokens: store the new secret and delete the
+token entry so the next call requests one. Enrolled apps instead follow the secret-rotation procedure under
+[broker renewal](#linear-broker-renewal). New runs record the role, never a credential service; existing run rows stay unchanged.
 Deterministic comments use the current app user id as their namespace. If a comment posted before the switch to apps
 landed before its write-back ledger was saved, Recover leaves it intact and posts the missing step as the app.
+
+### Linear broker renewal
+
+**Broker renewal** is an opt-in per app: `linear.harness.renewal`, `linear.manager.renewal` or
+`linear.roles.<role>.renewal` is `broker`. Omitted or `transport` retains the existing transport writer.
+The same role path supports a configured verifier; an absent verifier needs no enrollment.
+
+| Material | Readers and owner |
+|---|---|
+| Client secret, existing `secret_service` / existing account | only the installed broker after enrollment; Python never reads it on this path |
+| Authoritative access token and enrollment, `ensemble-linear` / `app/<token_service>` | broker only; version 1 binds the complete identity and preserves access material before publication |
+| Identity reservations, `ensemble-linear` / `registry` | broker only; prevents client ID, user ID and root/token service collisions |
+| Host grant, `ensemble-linear-grants` / `host/<token_service>` | broker only; prepared/delivered revision bookkeeping |
+| Published token, existing `token_service` / existing account | installed broker and `/usr/bin/security`; any process running as the user can invoke that reader; contains only access token and expiry |
+
+Enrollment and recovery order: [Upgrading › Linear broker renewal](upgrading.md#linear-broker-renewal).
+`login linear` and `linear-maintain` take one public identity object on stdin:
+
+```json
+{
+  "name": "harness",
+  "kind": "harness",
+  "client_id": "<configured client_id>",
+  "user_id": "<configured user_id>",
+  "secret_service": "<configured secret_service>",
+  "token_service": "<configured token_service>"
+}
+```
+
+Copy the six values into a local `linear-identity.json` (no secret). `kind` is `harness`, `manager`, or `role`
+for every role, including verifier. Identity/service names are 1–128 ASCII letters, digits or `._@+-`, excluding
+`.` and `..`; client ID is 1–256 printable ASCII characters without whitespace, user ID a lowercase UUID. Root/token
+services must differ and cannot be broker internal services. Enrollment rejects cross-identity aliases before
+changing access. A different binding requires explicit recovery rather than silent replacement.
+
+```sh
+/usr/local/libexec/ensemble/ensemble-broker login linear < linear-identity.json
+/usr/local/libexec/ensemble/ensemble-broker linear-maintain < linear-identity.json
+```
+
+The first command may ask for the login Keychain password on the controlling terminal to restrict root access.
+It persists a pending binding before changing the ACL; rerun the same enrollment after a failure. Maintenance
+rejects an incomplete binding and never opens an interactive root read. Host token publication narrows the read
+ACL to the broker and `/usr/bin/security`; it verifies both bytes and access after writing.
+
+The host transport invokes one-shot maintenance once per process per identity after it succeeds; every call reads
+the current published entry. No worker, supervisor or Docker process is needed. The broker renews once fewer than
+five days remain (past half the issued lifetime for tokens under ten days),
+with WDRC-67's fixed scopes. Per-identity cross-process locks cover renewal and publication; unrelated identities
+use different locks. A failed publication retries the saved token without another renewal while it is still current.
+
+On a maintenance failure, transport uses a still-valid or undated old token and reports once per process; missing
+or expired material raises the existing configuration error. It never falls back to the transport writer.
+Dry runs only read/report the published token: no broker call, root read, token request or write. The installer
+honors the same selection before credential setup and never becomes a second renewal writer.
+
+Host protocol 1 (`src/broker/protocol/linear-host/protocol.schema.json`) returns only version, renewal outcome and
+expiry, optionally `audit_warning: "audit_write_failed"`; enrollment returns version and `enrolled`. Docker protocol
+29 is unchanged. Renewal audit uses `linear-access-token` and the host identity, without secret values. Publication
+or storage failure is distinct from audit failure; an audit warning preserves the successful credential result.
+
+To rotate an enrolled app's secret, stop its host callers, rotate at Linear, replace only its root item in Keychain
+Access, and delete its published token plus its `ensemble-linear` account `app/<token_service>` and
+`ensemble-linear-grants` account `host/<token_service>`. Preserve `registry` and all other identities' items.
+Store the replacement root at the configured service/account, rerun `login linear` and `linear-maintain`, then
+restart callers. Removing only the published token would republish the broker's cached access token.
 
 ### Claude Code login
 
@@ -192,9 +262,9 @@ this recovery when another process created it. The installer leaves deletion to 
 
 Each Docker container's grant, `ensemble-codex-grants` / `<container>`, records the login's fingerprint, expiry,
 revision and delivery state, never a token. Renewals of the one login are serialized across broker processes:
-concurrent refreshes renew it once. A refresh whose delivery or deadline publication failed delivers the same login
+concurrent renewals renew it once. A renewal whose delivery or deadline record failed delivers the same login
 on retry without renewing it again. `close` deletes the grant after removing the container, leaving other containers
-and the login as they are; a container an older broker started gets its grant at its next refresh.
+and the login as they are; a container an older broker started gets its grant at its next renewal.
 
 The broker's temporary Codex login directory is removed on success, child failure and normal cancellation; SIGKILL or host failure can leave it behind. Other processes running as you can read it meanwhile. Personal `~/.codex` is neither read nor changed.
 
@@ -236,18 +306,20 @@ shows.
 | `ensemble-claude` | account name (`default` or `<name>`) | `[session.clients.claude.accounts.<name>]` | that Claude account's setup-token | `<B> login claude [<name>]` | the broker |
 | `ensemble-bot` | App ID | `[session.hosts.docker.github] app` | App private key | the user; access set by `<B> login github ensemble-bot` | the broker, once logged in |
 | `ensemble-github-users` | `ensemble-bot` | — | the App's slug and its bot user's ID, for git identity (not a secret) | `<B> login github ensemble-bot` | the broker |
-| `ensemble-tokens` | container name | — | that container's installation tokens and expiries, including retained recovery material | `<B> start`, `refresh`; `close` removes only safely retired entries | the broker |
-| `ensemble-revocations` | `pending` | — | tokens awaiting revocation | `<B> close`, `refresh` failures | the broker |
-| `ensemble-codex` | `auth` | — | the full Codex login | `<B> login codex`; renewals at `start`, `refresh` | the broker |
-| `ensemble-codex-grants` | container name | — | that container's Codex grant: the login's fingerprint, expiry, revision and delivery state; no token | `<B> start`, `refresh`; `close` deletes it | the broker |
+| `ensemble-tokens` | container name | — | that container's installation tokens and expiries, including retained recovery material | `<B> start`, `maintain`; `close` removes only safely retired entries | the broker |
+| `ensemble-revocations` | `pending` | — | tokens awaiting revocation | `<B> close`, `maintain` failures | the broker |
+| `ensemble-codex` | `auth` | — | the full Codex login | `<B> login codex`; renewals at `start`, `maintain` | the broker |
+| `ensemble-codex-grants` | container name | — | that container's Codex grant: the login's fingerprint, expiry, revision and delivery state; no token | `<B> start`, `maintain`; `close` deletes it | the broker |
+| `ensemble-linear` | `registry`, `app/<token_service>` | — | enrolled host identities and authoritative access tokens; no client secret copy | `<B> login linear`, `linear-maintain` | the broker |
+| `ensemble-linear-grants` | `host/<token_service>` | — | host app's prepared/delivered access-token grant | `<B> linear-maintain` | the broker |
 | `ensemble-opencode` | provider name | `[session.clients.opencode.providers.<name>]` | that OpenCode provider's API key | `<B> login opencode <name>` | the broker |
 | `ensemble-env/<name>` | `<name>` | — | that environment secret | `<B> login env <name>` | the broker |
-| the `linear.harness.secret_service` value | any | `linear.harness.secret_service` | harness app client secret | installer or the user ([Linear presets](#linear-presets)) | any process running as the user |
-| the `linear.harness.token_service` value | the existing item's, else the service | `linear.harness.token_service` | harness app token and expiry | installer, router, promote, prune, write-back | any process running as the user |
-| the `linear.manager.secret_service` value | any | `linear.manager.secret_service` | manager app client secret | installer or the user ([Linear presets](#linear-presets)) | any process running as the user |
-| the `linear.manager.token_service` value | the existing item's, else the service | `linear.manager.token_service` | manager app token and expiry; its comments and moves count as other whether or not `linear.manager.user_id` is set (the id only matters for a manager move that carries a `botActor`) | installer, the `issue` commands | any process running as the user |
-| each `linear.roles.<role>.secret_service` value | any | `linear.roles.<role>.secret_service` | role app client secret | installer or the user | any process running as the user |
-| each `linear.roles.<role>.token_service` value | the existing item's, else the service | `linear.roles.<role>.token_service` | role app token and expiry | installer, router, write-back, Recover | any process running as the user |
+| the `linear.harness.secret_service` value | any | `linear.harness.secret_service` | harness app client secret | installer or the user ([Linear presets](#linear-presets)); broker owns enrolled access | broker when enrolled; otherwise any process running as the user |
+| the `linear.harness.token_service` value | the existing item's, else the service | `linear.harness.token_service` | harness app token and expiry | selected writer: transport/installer or broker | any process running as the user through the restricted host reader |
+| the `linear.manager.secret_service` value | any | `linear.manager.secret_service` | manager app client secret | installer or the user ([Linear presets](#linear-presets)); broker owns enrolled access | broker when enrolled; otherwise any process running as the user |
+| the `linear.manager.token_service` value | the existing item's, else the service | `linear.manager.token_service` | manager app token and expiry; its comments and moves count as other whether or not `linear.manager.user_id` is set (the id only matters for a manager move that carries a `botActor`) | selected writer: transport/installer or broker | any process running as the user through the restricted host reader |
+| each `linear.roles.<role>.secret_service` value | any | `linear.roles.<role>.secret_service` | role app client secret | installer or the user; broker owns enrolled access | broker when enrolled; otherwise any process running as the user |
+| each `linear.roles.<role>.token_service` value | the existing item's, else the service | `linear.roles.<role>.token_service` | role app token and expiry, including configured verifier | selected writer: transport/installer or broker | any process running as the user through the restricted host reader |
 | Claude Code's own | — | — | local Claude login | Claude Code `/login` | Claude Code; service name not documented |
 | `gh`'s own | — | — | host `gh` token | `gh auth login` | `gh`; see `gh auth status` |
 | Codex's own, keyring mode only | — | — | local Codex login | `codex login` | Codex; service name not documented |
@@ -332,10 +404,13 @@ container's own tmux socket is not Docker's, so the socket search names `docker`
 
 ## Linear presets
 
-With `--board linear`, `scripts/install.sh` asks for each harness, manager and role app's Client ID and hidden client secret,
-stores its secret and first token with expiry in Keychain, and fills the app user ids ([Setup](board.md#setup)).
+With `--board linear`, `scripts/install.sh` asks for each transport-owned harness, manager and role app's Client ID
+and hidden client secret, stores its secret and first token with expiry in Keychain, and fills the app user ids
+([Setup](board.md#setup)). A configured app using broker renewal instead keeps its configured identity, invokes
+host maintenance and reads the published token; the installer never reads its root or requests/writes its token.
 Default services are `linear-app-<slot>-secret` and `linear-app-<slot>-token`; configured services are preserved.
-Reruns reuse valid tokens with over five days left. Cleanup removes only the credential items this installer created.
+Transport-owned reruns reuse valid tokens with over five days left; the broker decides enrolled apps' renewal timing.
+Cleanup removes only the credential items this installer created.
 A key the orchestrator does not know, in `[orchestrator.linear]` or an app table, stops the installer
 ([Upgrading](upgrading.md#linear-apps)). The table
 lists what it needs in Linear. By hand: create these in the Linear team, then put each id in `~/.ensemble/config.local.toml`: a `linear.<key>` under
@@ -415,7 +490,7 @@ A failed WDRC-67 before-cutover check stops the cutover; report it to the user.
 ## Risks
 
 - **Three-way readers** of handed-out credentials: accepted by the user on 2026-10-18; the broker is unchanged.
-- The Linear app items (client secrets and tokens) trust `/usr/bin/security`: any process running as the user reads them without a dialog.
+- Transport-owned Linear client secrets and published access tokens trust `/usr/bin/security`: any process running as the user reads them without a dialog. Enrolled client secrets trust only the broker; published access tokens trust both the broker and `/usr/bin/security` ([Keychain items](#keychain-items)).
 - Each broker release changes its ad-hoc code identity: rerun `login claude`, each `login claude <name>`,
   `login github ensemble-bot`, `login codex`, each `login opencode <name>` and each `login env <name>`
   ([Log in](docker-host.md#log-in)).

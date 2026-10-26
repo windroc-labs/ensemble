@@ -61,7 +61,7 @@ from ensemble.session.hosts.docker.host import (
     DockerTerminal,
 )
 from ensemble.session.hosts.docker.relay import SOCKET
-from ensemble.session.hosts.docker.types import Noticed, Started
+from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.session.hosts.types import CommandView
 from ensemble.session.viewer import display as displays
 from ensemble.utils import Record, parse_time
@@ -190,15 +190,12 @@ class FakeBroker:
             raise self.error
         return self.started
 
-    def refresh(self, container, manifest):
-        self.order.append(("refresh", container, manifest))
+    def maintain(self, container, manifest, delivered=(), *, root):
+        self.order.append(("maintain", container, manifest))
         self.refreshed.set()
-        if "refresh" in self.failing:
-            raise self.failing["refresh"]
-        return SimpleNamespace(github=[], credential_expires_at=self.started.credential_expires_at)
-
-    def notices(self, _container, _manifest, delivered=(), *, root):
-        return Noticed([], None)
+        if "maintain" in self.failing:
+            raise self.failing["maintain"]
+        return Maintained([], [], None, self.started.deadline)
 
     def close(self, container):
         self.order.append(("close", container))
@@ -240,9 +237,8 @@ class Base(Case):
             self.ep,
             "sha256:" + "b" * 64,
             {},
-            [],
             github_user_id=None,
-            credential_expires_at=None,
+            deadline=None,
         )
         self.broker = FakeBroker(self.order, started)
         self.host = DockerHost(
@@ -343,7 +339,7 @@ class ConfigTest(Base):
             (5, "", json.dumps(locked)),
         )
         self.host.broker = Broker(runner)
-        with self.assertRaisesRegex(SessionError, "protocol '18', want '28'") as caught:
+        with self.assertRaisesRegex(SessionError, "protocol '18', want '29'") as caught:
             self.host._provider_usage(request)
         self.assertIn(
             "install or upgrade it: see docs/docker-host.md#install", str(caught.exception)
@@ -602,7 +598,7 @@ class StartBase(Base):
         self.order.append("supervisor")
         self.spawned_lock_held = not _free(os.path.join(self.state, "supervisor.lock"))
         self.spawned_record = self.host_record()
-        self.spawned_github = not os.path.exists(os.path.join(self.state, f"{GEN}.github.json"))
+        self.spawned_deadline = os.path.exists(os.path.join(self.state, f"{GEN}.deadline.json"))
         return self.supervisor
 
     def start(self, **metadata):
@@ -659,13 +655,13 @@ class StartTest(StartBase):
                 self.assertNotIn("private", str(raised.exception))
 
     def test_runtime_projection_and_initial_expiry_are_staged_before_client(self):
-        expiry = "2026-10-18T12:00:00Z"
-        self.broker.started = replace(self.broker.started, credential_expires_at=expiry)
+        expiry = {"at": "2026-10-18T12:00:00Z", "action": "close", "reason": "r"}
+        self.broker.started = replace(self.broker.started, deadline=expiry)
         files = json.dumps({"/run/ensemble/agent-store/" + "a" * 64 + ".json": "{}"})
         self.start(runtime_files=files, home_persistent='["sessions"]')
         self.assertTrue(os.path.isdir(os.path.join(self.home_dir, "sessions")))
         self.assertIn(files, self.docker.inputs)
-        with open(os.path.join(self.state, f"{GEN}.credential.json")) as f:
+        with open(os.path.join(self.state, f"{GEN}.deadline.json")) as f:
             self.assertEqual(json.load(f), expiry)
         with open(os.path.join(self.state, f"{GEN}.plan.json")) as f:
             self.assertEqual(
@@ -797,7 +793,6 @@ class StartTest(StartBase):
                 "generation": GEN,
                 "sid": "s1",
                 "client": "agent",
-                "credential_refresh": False,
                 "display": "lead/below",
                 "record": RECORD.to_line(),
                 "events": os.path.join(self.home, "events"),
@@ -1151,15 +1146,14 @@ class StartTest(StartBase):
         with self.assertRaisesRegex(SessionError, "login codex"):
             self.start(**metadata)
         self.broker.error = None
-        self.broker.started = replace(
-            self.broker.started, credential_expires_at="2100-01-01T00:00:00Z"
-        )
+        until = {"at": "2100-01-01T00:00:00Z", "action": "close", "reason": "r"}
+        self.broker.started = replace(self.broker.started, deadline=until)
         self.start(**metadata)
         with open(transcript) as stream:
             self.assertEqual(stream.read(), native)
         self.assertEqual(self.host_record()["sid"], "s1")
-        with open(os.path.join(self.state, f"{GEN}.credential.json")) as stream:
-            self.assertEqual(json.load(stream), "2100-01-01T00:00:00Z")
+        with open(os.path.join(self.state, f"{GEN}.deadline.json")) as stream:
+            self.assertEqual(json.load(stream), until)
 
     def test_resume_keeps_the_home_and_starts_a_new_container(self):
         transcript = self.history()
@@ -1289,11 +1283,8 @@ class StartTest(StartBase):
                 self.assertEqual(os.listdir(self.home_dir), ["keep"])
 
     def test_a_github_app_reaches_the_manifest_the_env_and_the_expiry_file(self):
-        expiries = [{"account": "acme", "expires_at": "2026-10-17T13:00:00Z"}]
         self.host.github, self.host.github_permissions = "ensemble-bot", PERMISSIONS
-        self.broker.started = replace(
-            self.broker.started, github=expiries, github_user_id=343764394
-        )
+        self.broker.started = replace(self.broker.started, github_user_id=343764394)
         self.start()
         with open(os.path.join(self.state, f"{GEN}.json")) as f:
             self.assertEqual(
@@ -1302,17 +1293,19 @@ class StartTest(StartBase):
         env = self.docker.staged[0]["env"]
         self.assertEqual(env["ENSEMBLE_PR_AUTHOR"], "ensemble-bot[bot]")
         self.assertEqual({key: env.get(key) for key in GIT_IDENTITY}, GIT_IDENTITY)
-        with open(os.path.join(self.state, f"{GEN}.github.json")) as f:
-            self.assertEqual(json.load(f), expiries)
-        self.assertFalse(self.spawned_github)
+        with open(os.path.join(self.state, f"{GEN}.deadline.json")) as f:
+            self.assertIsNone(json.load(f))
+        self.assertTrue(self.spawned_deadline)
 
     def test_no_github_app_writes_null_and_no_author(self):
         self.start()
         env = self.docker.staged[0]["env"]
         self.assertNotIn("ENSEMBLE_PR_AUTHOR", env)
         self.assertFalse(set(GIT_IDENTITY) & set(env))
-        with open(os.path.join(self.state, f"{GEN}.github.json")) as f:
-            self.assertEqual(json.load(f), [])
+        with open(os.path.join(self.state, f"{GEN}.deadline.json")) as f:
+            self.assertIsNone(json.load(f))
+        for old in ("credential", "github"):
+            self.assertFalse(os.path.lexists(os.path.join(self.state, f"{GEN}.{old}.json")))
 
     def test_each_start_writes_its_generation_result(self):
         self.broker.started = Started(
@@ -1320,9 +1313,8 @@ class StartTest(StartBase):
             self.ep,
             "sha256:" + "b" * 64,
             {"claude": "2.1.0"},
-            [],
             github_user_id=None,
-            credential_expires_at=None,
+            deadline=None,
         )
         result = os.path.join(self.state, f"{GEN}.result.json")
         for resume in ("0", "1"):
@@ -1944,7 +1936,11 @@ class PipeTest(Base):
         piped = self.pipe()
         manifest = os.path.join(self.state, f"{GEN}.json")
         self.assertEqual(
-            [step if isinstance(step, str | tuple) else step[:5] for step in self.order],
+            [
+                step if isinstance(step, str | tuple) else step[:5]
+                for step in self.order
+                if step[0] != "maintain"  # the tick's own thread, at any time
+            ],
             [
                 ["ps", "-a", "--filter", "label=ensemble.session", "--format"],
                 ["ps", "-a", "--filter", "label=ensemble.session", "--format"],
@@ -1984,7 +1980,6 @@ class PipeTest(Base):
             "sid": "s1",
             "client": "agent",
             "mode": "pipe",
-            "credential_refresh": False,
             "environment": None,
         }
         self.assertEqual((self.popen_record, self.host_record()), (record, record))
@@ -2019,11 +2014,8 @@ class PipeTest(Base):
         self.assertEqual(self.broker.closed, [CONTAINER])
 
     def test_a_github_app_reaches_the_piped_client_and_its_tokens_are_refreshed(self):
-        expiries = [{"account": "acme", "expires_at": "2000-01-01T00:00:00Z"}]
         self.host.github, self.host.github_permissions = "ensemble-bot", PERMISSIONS
-        self.broker.started = replace(
-            self.broker.started, github=expiries, github_user_id=343764394
-        )
+        self.broker.started = replace(self.broker.started, github_user_id=343764394)
         piped = self.pipe()
         argv, kw = self.popened
         self.assertIn("ENSEMBLE_PR_AUTHOR", argv)
@@ -2038,7 +2030,7 @@ class PipeTest(Base):
             )
         self.assertTrue(self.broker.refreshed.wait(5))
         piped.close()
-        self.assertIn(("refresh", CONTAINER, os.path.join(self.state, f"{GEN}.json")), self.order)
+        self.assertIn(("maintain", CONTAINER, os.path.join(self.state, f"{GEN}.json")), self.order)
 
     def test_codex_pipe_uses_its_manifest_history_and_reports_expiry(self):
         home = os.path.join(self.state, "codex")
@@ -2047,8 +2039,13 @@ class PipeTest(Base):
             argv=("/opt/ensemble/bin/codex", "exec", "--json", "hello"),
             env={"CODEX_HOME": home},
         )
+        reason = (
+            "Client authentication expired; run /usr/local/libexec/ensemble/ensemble-broker login"
+            " codex on the host, then resume."
+        )
         self.broker.started = replace(
-            self.broker.started, credential_expires_at="2000-01-01T00:00:00Z"
+            self.broker.started,
+            deadline={"at": "2000-01-01T00:00:00Z", "action": "close", "reason": reason},
         )
         expired = threading.Event()
         original = self.broker.close
@@ -2084,27 +2081,61 @@ class PipeTest(Base):
         )
         self.assertEqual(
             logs.output,
-            [
-                "WARNING:session:docker session w: client_auth_expired Client authentication"
-                " expired; run /usr/local/libexec/ensemble/ensemble-broker login codex on the host, then resume"
-            ],
+            [f"WARNING:session:docker session w: client_auth_expired {reason}"],
         )
         self.assertEqual(self.broker.closed, [CONTAINER])
         piped.close()
 
-    def test_a_failed_piped_token_refresh_is_logged(self):
-        self.broker.started = replace(
-            self.broker.started, github=[{"account": "o", "expires_at": "2000-01-01T00:00:00Z"}]
+    def test_piped_tick_logs_partial_result(self):
+        response = data("maintain-output.json") | {"container": CONTAINER}
+        log, runner = self.logged_to_file(), BrokerRunner((0, json.dumps(response), ""))
+        called, wire = threading.Event(), Broker(runner).maintain
+
+        def maintain(*args, **kwargs):
+            try:
+                return wire(*args, **kwargs)
+            finally:
+                called.set()
+
+        self.broker.maintain = maintain
+        piped = self.pipe()
+        self.assertTrue(called.wait(5))
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and "credential_refresh_failed" not in _read(log):
+            time.sleep(0.01)
+        piped.close()
+        self.assertEqual(
+            _read(log).splitlines(),
+            [
+                "docker session w: credential_refresh_failed codex: Renewal unavailable. (status 503)"
+            ],
         )
-        self.broker.failing["refresh"] = SessionError("broker: offline")
-        with self.assertLogs("session", "WARNING") as logs:
+        self.assertEqual(runner.calls[0][1], "maintain")
+
+    def test_piped_tick_log_holds_only_the_brokers_message(self):
+        log, called = self.logged_to_file(), threading.Event()
+        message = f"Writing a GitHub token into {CONTAINER} failed."
+        failed = {"code": "refresh_failed", "message": message}
+        renewed = {"credential": "codex", "expires_at": "2100-01-01T00:00:00Z", "error": None}
+
+        def maintain(*_args, **_kwargs):
+            called.set()
+            results = [{"credential": "github", "expires_at": None, "error": failed}, renewed]
+            return Maintained(results, [], None, None)
+
+        self.broker.maintain = maintain
+        with mock.patch.dict(os.environ, {"SENTINEL_ENV": "SENTINEL-p1p3d"}):
             piped = self.pipe()
-            self.assertTrue(self.broker.refreshed.wait(5))
+            self.assertTrue(called.wait(5))
             deadline = time.monotonic() + 5
-            while not logs.output and time.monotonic() < deadline:
+            while time.monotonic() < deadline and "credential_refresh_failed" not in _read(log):
                 time.sleep(0.01)
             piped.close()
-        self.assertIn("docker session w: github_refresh_failed broker: offline", logs.output[0])
+        text = _read(log)
+        self.assertEqual(
+            text.splitlines(), [f"docker session w: credential_refresh_failed github: {message}"]
+        )
+        self.assertNotIn("SENTINEL", text)
 
     def logged_to_file(self):
         path = os.path.join(self.home, "session.log")
@@ -2118,17 +2149,16 @@ class PipeTest(Base):
     def test_a_piped_session_logs_and_acks_its_credential_notice(self):
         log, acked, calls = self.logged_to_file(), threading.Event(), []
 
-        def notices(_container, _manifest, delivered=(), *, root):
+        def maintain(_container, _manifest, delivered=(), *, root):
             self.assertEqual(root, REPO)
             calls.append(tuple(delivered))
             if delivered:
                 acked.set()
-                return Noticed([], None)
-            return Noticed(
-                [{"key": "ensemble-env/db@1:7d", "text": "ensemble-env/db expires soon"}], None
-            )
+                return Maintained([], [], None, None)
+            notice = {"key": "ensemble-env/db@1:7d", "text": "ensemble-env/db expires soon"}
+            return Maintained([], [notice], None, None)
 
-        self.broker.notices = notices
+        self.broker.maintain = maintain
         piped = self.pipe()
         self.assertTrue(acked.wait(5))
         piped.close()
@@ -2138,23 +2168,23 @@ class PipeTest(Base):
             )
         self.assertEqual(calls, [(), ("ensemble-env/db@1:7d",)])
 
-    def test_a_piped_notice_failure_logs_a_fixed_marker(self):
+    def test_a_piped_maintain_failure_logs_a_fixed_marker(self):
         log, failed = self.logged_to_file(), threading.Event()
 
-        def notices(*_args, **_kwargs):
+        def maintain(*_args, **_kwargs):
             failed.set()
-            raise SessionError("broker: bad response to notices: SENTINEL-headless")
+            raise SessionError("broker: bad response to maintain: SENTINEL-headless")
 
-        self.broker.notices = notices
+        self.broker.maintain = maintain
         piped = self.pipe()
         self.assertTrue(failed.wait(5))
         deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and "credential_notice_failed" not in _read(log):
+        while time.monotonic() < deadline and "credential_maintenance_failed" not in _read(log):
             time.sleep(0.01)
         piped.close()
         with open(log) as stream:
             text = stream.read()
-        self.assertIn("docker session w: credential_notice_failed transport", text)
+        self.assertIn("docker session w: credential_maintenance_failed transport", text)
         self.assertNotIn("SENTINEL", text)
 
     def test_stop_kills_the_exec_then_closes_and_a_close_failure_only_warns(self):

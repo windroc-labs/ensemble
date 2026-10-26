@@ -33,6 +33,9 @@ type Recorder struct {
 	order   []string
 	notices []Line
 	flushed bool
+
+	renewing bool          // a maintain that tried a token provider
+	failed   protocol.Code // its first provider failure
 }
 
 // Begin names the command's container and, for start, the facts only its line holds.
@@ -76,6 +79,18 @@ func (r *Recorder) Add(container string, c Credential, key string) {
 	r.others[container] = merge(r.others[container], c, key)
 }
 
+// Renewing marks a maintain that tried a token provider, so it writes a refresh line; failed ("": none) is that line's
+// error when the first try failed.
+func (r *Recorder) Renewing(failed protocol.Code) {
+	if r == nil {
+		return
+	}
+	r.renewing = true
+	if r.failed == "" {
+		r.failed = failed
+	}
+}
+
 // Notice records one delivered static secret notice for container ("": the host's), on a line of its own.
 func (r *Recorder) Notice(container string, c Credential) {
 	if r == nil {
@@ -92,7 +107,8 @@ func credentials(list []entry) []Credential {
 	return out
 }
 
-// Flush writes the retry lines, the notice lines, then the command line for start, refresh and close, err being the command's error.
+// Flush writes the retry lines, the notice lines, then the command line for start, refresh and close, and a refresh
+// line for a maintain that tried a token provider, err being the command's error.
 // Its error describes only audit persistence; the caller keeps the command's result independently.
 func (r *Recorder) Flush(err error) error {
 	if r == nil || r.flushed {
@@ -112,9 +128,14 @@ func (r *Recorder) Flush(err error) error {
 		l.Time = at
 		lines = append(lines, l)
 	}
-	switch r.Command {
+	event := r.Command
+	if (r.Command == maintainCommand || r.Command == "linear-maintain") && r.renewing {
+		event = refreshEvent
+	}
+	switch event {
 	case startEvent, refreshEvent, closeEvent:
-		line := Line{Time: at, Command: r.Command, Event: r.Command, Container: r.Container, Start: r.Start, Credentials: credentials(r.own)}
+		line := Line{Time: at, Command: r.Command, Event: event, Container: r.Container, Start: r.Start, Credentials: credentials(r.own),
+			Error: string(r.failed)}
 		if err != nil {
 			line.Error = string(protocol.InternalError)
 			var e *protocol.Error

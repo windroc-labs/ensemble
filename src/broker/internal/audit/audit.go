@@ -10,11 +10,12 @@ import (
 
 // Kinds and results, the log's only vocabulary for them.
 const (
-	ClaudeSetupToken = "claude-setup-token"
-	CodexAccessToken = "codex-access-token"
-	GitHubToken      = "github-installation-token"
-	EnvSecret        = "env-secret"
-	OpencodeAPIKey   = "opencode-api-key" // notice lines only
+	ClaudeSetupToken  = "claude-setup-token"
+	CodexAccessToken  = "codex-access-token"
+	GitHubToken       = "github-installation-token"
+	LinearAccessToken = "linear-access-token"
+	EnvSecret         = "env-secret"
+	OpencodeAPIKey    = "opencode-api-key" // notice lines only
 
 	Issued           = "issued"
 	Renewed          = "renewed"
@@ -30,6 +31,8 @@ const (
 	closeEvent   = "close"
 	retryEvent   = "revocation-retry"
 	noticeEvent  = "credential-notice"
+
+	maintainCommand = "maintain" // writes a refresh line only when it tried a token provider
 )
 
 var containerName = regexp.MustCompile(`^ensemble-([A-Za-z0-9_-]+)-([0-9a-f]{32})$`)
@@ -128,7 +131,7 @@ type Line struct {
 	Container   string
 	Start       *StartFacts // read only when Event is start
 	Credentials []Credential
-	Error       string // the command's protocol code; "" on success
+	Error       string // the command's protocol code, or a maintain's first provider failure; "" on success
 }
 
 func orNull(s string) *string {

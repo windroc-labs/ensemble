@@ -1,5 +1,14 @@
 # Upgrading
 
+Broker protocol 29 replaces `refresh` and `notices` with `maintain`: the broker now decides when each session's
+credentials renew ([Docker host › Credential renewal](docker-host.md#credential-renewal)). Upgrade the broker with the
+plugin, then restart (close and resume) every Docker session that was running: until then its old supervisor's
+renewals fail, each asking for that restart, its GitHub tokens lapse within the hour and a Codex session closes at its
+old deadline. The events `client_refresh_failed`, `github_refresh_failed` and `credential_notice_failed` become
+`credential_refresh_failed` and `credential_maintenance_failed`. To go back to protocol 28, install its plugin and
+broker, then close and resume every Docker session started under 29: a protocol 28 supervisor cannot read their
+records. Pending GitHub revocations are kept either way.
+
 Broker protocol 28 adds `notices` and `status`'s `static`, and records each Claude token's, OpenCode key's and
 environment secret's expiry ([Docker host › Static secret expiry](docker-host.md#static-secret-expiry)). Upgrade the
 broker with the plugin. Existing items keep working with an unknown expiry; to record one, rerun the login with
@@ -81,6 +90,47 @@ On a Linear board, switch once, in this order:
    `security delete-generic-password -s <service>` for each item written down in step 3, deactivate the old member
    accounts and remove their emails from `linear.human_members`. If the manager's old key was your own account's,
    revoke only that key: keep your account and email.
+
+## Linear broker renewal
+
+This optional cutover keeps existing identity/service names and fixed scopes. Upgrade the plugin and install its
+broker first (`sh <plugin dir>/src/broker/install.sh`), even on hosts that do not run Docker workers.
+Switch one configured identity at a time:
+
+```mermaid
+flowchart LR
+    S[Stop host callers] --> E[Enroll identity]
+    E --> C[Select broker writer]
+    C --> M[Run host maintenance]
+    M --> R[Restart callers]
+```
+Stop launchd router/promote jobs, manual host commands and active role write-back before enrollment so no old process
+holds a root secret in memory. Docker workers themselves receive no Linear material.
+
+Use that identity's public JSON and commands from [Credentials › Linear broker renewal](credentials.md#linear-broker-renewal).
+After `login linear` succeeds, set `renewal = "broker"` in its `[orchestrator.linear.harness]`,
+`[orchestrator.linear.manager]` or `[orchestrator.linear.roles.<role>]` table in `~/.ensemble/config.local.toml`.
+Run `linear-maintain` while callers remain stopped; success contains version 1, `renewed` and `expires_at`, never a
+token. Then restart callers. Repeat for the next identity, including verifier when configured. An unconfigured
+verifier is not an error. If enrollment/maintenance fails, complete recovery while that identity's callers stay
+stopped; do not change its writer back as an automatic fallback.
+
+An interrupted enrollment keeps its reservation and pending record. Rerun the exact same enrollment to complete
+root trust; a changed client ID, user ID or service is rejected. After broker reinstallation, rerun enrollment to
+repair the registry, selected app record, host grant and root trust. This repair accepts only metadata restricted
+to a prior broker code identity at the installed path; permissive or foreign-reader records stay refused. It asks
+for the login Keychain password once per enrollment, preserves reservations and cached tokens, and releases the
+registry transaction before interactive repair. Failed publication retains authoritative material; rerun maintenance. For a deliberate
+identity replacement, stop callers and remove only that identity's reservation from `ensemble-linear` / `registry`
+and its `app/<token_service>` and host grant records through a controlled Keychain recovery; preserve every other
+identity and all GitHub recovery material. There is no automatic rebinding command.
+
+Downgrade is explicit: stop the host callers, keep the broker's records, and remove `renewal` from each switched
+local app table before loading an older plugin (which rejects the new key). In Keychain Access restore only that
+identity's root item to its previous `/usr/bin/security` reader and partition settings, or recreate the root item
+with the same service/account using the old installer's hidden prompt. Do not resume the old writer until its root
+access is restored. Broker-only access never silently changes because a process selected the old writer. Re-enroll
+before selecting broker again. This does not delete or migrate pending GitHub revocations.
 
 ## With scripts/install.sh
 

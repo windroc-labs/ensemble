@@ -73,7 +73,7 @@ class AppKey(StrEnum):
     USER_ID = "user_id"
 
 
-LINEAR_ROLE_KEYS = set(AppKey)
+LINEAR_ROLE_KEYS = set(AppKey) | {"renewal"}
 
 
 REQUIRED = (
@@ -303,12 +303,14 @@ def _linear_settings(linear):
             AppKind.HARNESS,
             "linear.harness",
             **{k.value: linear["harness"][k] for k in AppKey},
+            renewal=linear["harness"].get("renewal", "transport"),
         ),
         manager=LinearApp(
             "manager",
             AppKind.MANAGER,
             "linear.manager",
             **{k.value: linear["manager"].get(k, "") for k in AppKey},
+            renewal=linear["manager"].get("renewal", "transport"),
         ),
         task_label_group=linear["task_label_group"],
         agent_label_group=linear["agent_label_group"],
@@ -424,7 +426,7 @@ def _app_table(linear, name):
     table = linear.setdefault(name, {})
     if not isinstance(table, dict):
         raise ConfigError(f"orchestrator/config.toml: [linear.{name}] must be a table")
-    if extra := sorted(set(table) - set(AppKey)):
+    if extra := sorted(set(table) - set(AppKey) - {"renewal"}):
         raise ConfigError(
             f"orchestrator/config.toml: [linear.{name}] has unknown keys: {', '.join(extra)}"
         )
@@ -434,6 +436,10 @@ def _app(linear, name, keys=tuple(AppKey)):
     """[linear.<name>]: keys of an OAuth app's Client ID, its secret's and token's Keychain
     services (two) and its Linear user id."""
     table = linear[name]
+    if table.get("renewal", "transport") not in ("transport", "broker"):
+        raise ConfigError(
+            f"orchestrator/config.toml: linear.{name}.renewal must be transport or broker"
+        )
     for key in keys:
         what, valid = _APP_VALUES[key]
         if not valid(table[key]):

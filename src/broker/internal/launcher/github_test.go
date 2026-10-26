@@ -105,8 +105,8 @@ func TestStartGitHub(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(got.GitHub, expiry) || !slices.Equal(tokens.calls, []string{"ready ensemble-bot", "user ensemble-bot", "retry", "issue ensemble-bot " + container}) {
-		t.Fatalf("%v %q", got.GitHub, tokens.calls)
+	if got.Deadline != nil || !slices.Equal(tokens.calls, []string{"ready ensemble-bot", "user ensemble-bot", "retry", "issue ensemble-bot " + container}) {
+		t.Fatalf("%+v %q", got, tokens.calls)
 	}
 	if len(tokens.permissions) != 1 || !maps.Equal(tokens.permissions[0], fixtureSet) {
 		t.Fatalf("issued with %v, want the manifest's set", tokens.permissions)
@@ -131,8 +131,8 @@ func TestStartGitHubNull(t *testing.T) {
 	tokens := &fakeTokens{}
 	h, _ := githubHost(&world{labels: goodLabels()}, tokens)
 	got, err := h.Start(context.Background(), validManifest(t))
-	if err != nil || got.GitHub == nil || len(got.GitHub) != 0 || got.GitHubUserID != nil || !slices.Equal(tokens.calls, []string{"retry"}) {
-		t.Fatalf("%v %v %v %q", got.GitHub, got.GitHubUserID, err, tokens.calls)
+	if err != nil || got.Deadline != nil || got.GitHubUserID != nil || !slices.Equal(tokens.calls, []string{"retry"}) {
+		t.Fatalf("%+v %v %q", got, err, tokens.calls)
 	}
 	if out, _ := json.Marshal(got); !strings.Contains(string(out), `"github_user_id":null`) {
 		t.Fatalf("%s", out)
@@ -211,13 +211,14 @@ func TestCloseKeychainFails(t *testing.T) {
 	}
 }
 
-func TestRefresh(t *testing.T) {
+func TestMaintainGitHub(t *testing.T) {
 	tokens := &fakeTokens{}
 	d := &fakeDocker{}
 	h := mountHost()
 	h.Docker, h.GitHub = d, tokens
-	got, err := h.Refresh(context.Background(), container, githubManifest(t))
-	if err != nil || got.Container != container || !slices.Equal(got.GitHub, expiry) {
+	got, err := h.Maintain(context.Background(), container, githubManifest(t), nil, false)
+	if err != nil || got.Container != container || len(got.Results) != 1 || got.Results[0].Credential != "github" ||
+		*got.Results[0].ExpiresAt != expiry[0].ExpiresAt || got.Deadline != nil {
 		t.Fatalf("%+v %v", got, err)
 	}
 	if !slices.Equal(d.calls[0], []string{"exec", "--interactive", "--user", "agent", container, "write"}) {
@@ -232,23 +233,38 @@ func TestRefresh(t *testing.T) {
 	other := "ensemble-worker_1-ffffffffffffffffffffffffffffffff"
 	for name, tc := range map[string]struct {
 		container, manifest string
-		tokens              *fakeTokens
 		code                protocol.Code
 	}{
-		"other container": {other, githubManifest(t), &fakeTokens{}, protocol.ManifestRejected},
-		"github null":     {container, validManifest(t), &fakeTokens{}, protocol.ManifestRejected},
-		"missing":         {container, "/nonexistent/m.json", &fakeTokens{}, protocol.ManifestRejected},
-		"no key":          {container, githubManifest(t), &fakeTokens{ready: protocol.New(protocol.LoginRequired, "x")}, protocol.LoginRequired},
-		"no record":       {container, githubManifest(t), &fakeTokens{refresh: protocol.New(protocol.RefreshFailed, "x")}, protocol.RefreshFailed},
-		"write":           {container, githubManifest(t), &fakeTokens{refresh: errors.New("opaque")}, protocol.RefreshFailed},
-		"unreachable":     {container, githubManifest(t), &fakeTokens{refresh: docker.ErrUnreachable}, protocol.DockerUnreachable},
+		"other container": {other, githubManifest(t), protocol.ManifestRejected},
+		"missing":         {container, "/nonexistent/m.json", protocol.ManifestRejected},
 	} {
 		host := mountHost()
-		host.Docker, host.GitHub = &fakeDocker{}, tc.tokens
-		_, err := host.Refresh(context.Background(), tc.container, tc.manifest)
+		host.Docker, host.GitHub = &fakeDocker{}, &fakeTokens{}
+		_, err := host.Maintain(context.Background(), tc.container, tc.manifest, nil, false)
 		if protoErr(t, err).Code != tc.code {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+	for name, tc := range map[string]struct {
+		tokens *fakeTokens
+		code   protocol.Code
+	}{
+		"no key":      {&fakeTokens{ready: protocol.New(protocol.LoginRequired, "x")}, protocol.LoginRequired},
+		"no record":   {&fakeTokens{refresh: protocol.New(protocol.RefreshFailed, "x")}, protocol.RefreshFailed},
+		"write":       {&fakeTokens{refresh: errors.New("opaque")}, protocol.RefreshFailed},
+		"unreachable": {&fakeTokens{refresh: docker.ErrUnreachable}, protocol.DockerUnreachable},
+	} {
+		host := mountHost()
+		host.Docker, host.GitHub = &fakeDocker{}, tc.tokens
+		got, err := host.Maintain(context.Background(), container, githubManifest(t), nil, false)
+		if err != nil || len(got.Results) != 1 || got.Results[0].Error == nil || got.Results[0].Error.Code != tc.code {
+			t.Errorf("%s: %+v %v", name, got, err)
+		}
+	}
+	host := mountHost()
+	host.Docker, host.GitHub = &fakeDocker{}, &fakeTokens{}
+	if got, err := host.Maintain(context.Background(), container, validManifest(t), nil, false); err != nil || len(got.Results) != 0 {
+		t.Errorf("github null: %+v %v", got, err)
 	}
 }
 
@@ -276,26 +292,5 @@ func TestCleanup(t *testing.T) {
 	}
 	if _, err := (Host{GitHub: &fakeTokens{retry: protocol.New(protocol.KeychainFailed, "x")}}).Cleanup(context.Background()); protoErr(t, err).Code != protocol.KeychainFailed {
 		t.Fatal(err)
-	}
-}
-
-func TestRefreshRejectsStaticOnlyManifest(t *testing.T) {
-	for name, edit := range map[string]func(map[string]any){
-		"claude":             func(map[string]any) {},
-		"claude and secrets": withSecrets(dummySecrets),
-	} {
-		tokens := &fakeTokens{}
-		h, d := githubHost(&world{labels: goodLabels()}, tokens)
-		codexCreds := &fakeCodexCreds{}
-		h.Codex = codexCreds
-		path := editedManifest(t, edit)
-		_, err := h.Refresh(context.Background(), "ensemble-worker_1-0123456789abcdef0123456789abcdef", path)
-		e := protoErr(t, err)
-		if e.Code != protocol.ManifestRejected || !strings.Contains(e.Message, "renewable credentials") {
-			t.Fatalf("%s: %+v", name, e)
-		}
-		if len(d.calls)+len(tokens.calls)+codexCreds.ready+codexCreds.injected != 0 {
-			t.Fatalf("%s: docker %q tokens %q", name, d.calls, tokens.calls)
-		}
 	}
 }

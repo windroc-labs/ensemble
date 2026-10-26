@@ -116,10 +116,12 @@ agent_label_group = ""
 # client_credentials token, which every command renews when under 5 days are left; scopes are fixed (read,write).
 #   client_id       local, required: the app's Client ID
 #   secret_service  local, required: Keychain service of the app's client secret
-#   token_service   local, required: Keychain service of its token and expiry, written by the commands; delete
-#                   that item after rotating the client secret
+#   token_service   local, required: Keychain service of its token and expiry, written by the selected writer;
+#                   after rotation: for transport ownership delete this item; for broker follow docs/credentials.md#linear-broker-renewal
 #   user_id         local, required: the app's Linear user id
+# renewal: transport keeps the current writer; broker requires enrollment (docs/credentials.md).
 [linear.harness]
+renewal = "transport"
 client_id = ""
 secret_service = ""
 token_service = ""
@@ -137,11 +139,12 @@ user_id = ""
 # run without it.
 #   client_id       local, required for issue: the app's Client ID
 #   secret_service  local, required for issue: Keychain service of the app's client secret
-#   token_service   local, required for issue: Keychain service of its token and expiry, written by the issue
-#                   commands; delete that item after rotating the client secret
+#   token_service   local, required for issue: Keychain service of its token and expiry, written by the selected writer;
+#                   after rotation: for transport ownership delete this item; for broker follow docs/credentials.md#linear-broker-renewal
 #   user_id         local, required for issue: the app's Linear user id; it matters only for a manager move that
 #                   Linear credits to a botActor, which then counts as other too
 [linear.manager]
+renewal = "transport"
 client_id = ""
 secret_service = ""
 token_service = ""
@@ -193,18 +196,21 @@ canceled = ""
 # Each stage role's OAuth app: four required fields, one table per workflow stage.
 # Store secrets and token records in Keychain; user_id is the app user id from installation.
 [linear.roles.researcher]
+renewal = "transport"
 client_id = ""
 secret_service = ""
 token_service = ""
 user_id = ""
 
 [linear.roles.pm]
+renewal = "transport"
 client_id = ""
 secret_service = ""
 token_service = ""
 user_id = ""
 
 [linear.roles.engineer]
+renewal = "transport"
 client_id = ""
 secret_service = ""
 token_service = ""

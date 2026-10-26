@@ -49,7 +49,7 @@ func TestSuccessfulAuditDoesNotMaskRecoveryFailure(t *testing.T) {
 
 func TestAuditWarningKeepsOperationOutcome(t *testing.T) {
 	const container = "ensemble-worker_1-0123456789abcdef0123456789abcdef"
-	for _, command := range []string{"start", "refresh", "close", "status"} {
+	for _, command := range []string{"start", "maintain", "close", "status"} {
 		for _, failed := range []bool{false, true} {
 			t.Run(command+"/"+map[bool]string{false: "success", true: "failure"}[failed], func(t *testing.T) {
 				sink := &failedAudit{}
@@ -65,14 +65,17 @@ func TestAuditWarningKeepsOperationOutcome(t *testing.T) {
 				calls := 0
 				f := func() (any, error) {
 					calls++
+					if command == "maintain" {
+						rec.Renewing("")
+					}
 					if command == "status" {
 						rec.Add("ensemble-other-0123456789abcdef0123456789abcdef", audit.Credential{Kind: audit.GitHubToken, Result: audit.Revoked}, "")
 					}
 					return map[string]any{"container": container, "removed": true, "github_user_id": int64(9007199254740993)}, operationErr
 				}
 				step := func(context.Context, string, io.Writer) (any, error) { return withAudit(rec, f) }
-				a := app{start: step, close: step, refresh: func(ctx context.Context, c, m string) (any, error) { return step(ctx, c, nil) }, status: func(ctx context.Context, _ bool) (any, error) { return step(ctx, "", nil) }}
-				args := map[string][]string{"start": {"start", "--manifest", "/manifest"}, "refresh": {"refresh", "--container", container, "--manifest", "/manifest"}, "close": {"close", "--container", container}, "status": {"status", "--cleanup"}}[command]
+				a := app{start: step, close: step, maintain: func(ctx context.Context, c, _ string, _ []string, _ bool) (any, error) { return step(ctx, c, nil) }, status: func(ctx context.Context, _ bool) (any, error) { return step(ctx, "", nil) }}
+				args := map[string][]string{"start": {"start", "--manifest", "/manifest"}, "maintain": {"maintain", "--container", container, "--manifest", "/manifest"}, "close": {"close", "--container", container}, "status": {"status", "--cleanup"}}[command]
 				code, out, errOut := invoke(a, args...)
 				wire := out
 				if failed {
