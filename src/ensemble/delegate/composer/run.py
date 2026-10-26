@@ -27,7 +27,7 @@ from ensemble.delegate.composer.teams import (
 )
 from ensemble.delegate.composer.types import ApprovedCommand, ConfigError, Intent, RunConfig, Team
 from ensemble.delegate.config import CONFIG
-from ensemble.delegate.engine.config import FIXED_CLIENT
+from ensemble.delegate.engine.config import FIXED_CLIENT, fixed_clients
 from ensemble.utils import LOCAL
 
 RUN_KEYS = frozenset(
@@ -117,12 +117,6 @@ def resolve(
             f"task {task!r} is not one of {role}'s tasks ({', '.join(tasks)})"
         )
     return replace(run, role_title=title_of(*found))
-
-
-def fixed_clients(cfg: Mapping) -> dict[str, str]:
-    """Each fixed role's client: its packaged table's, read_config having refused any other."""
-    roles = cfg.get("roles", {})
-    return {r: t["client"] for r, t in roles.items() if t.get(FIXED_CLIENT) is True}
 
 
 def accounts(

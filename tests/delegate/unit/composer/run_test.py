@@ -829,7 +829,10 @@ class FixedClient(Fake):
     def test_only_the_packaged_config_sets_fixed_client(self):
         for local in (
             "[roles.writer]\nfixed_client = false\n",
+            "[roles.writer]\nfixed_client = 1\n",
+            "[roles.writer]\nfixed_client = 1.0\n",
             "[roles.editor]\nfixed_client = true\n",
+            "[roles.editor]\nfixed_client = 0\n",
         ):
             with self.subTest(local=local):
                 self.local(local)

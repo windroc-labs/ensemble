@@ -163,6 +163,10 @@ fixed_client = true
 [roles.verifier.output]
 type = "orchestrator"
 
+[roles.verifier.environment]   # Environments below
+name = "mini-op"
+prefetch = true
+
 # ── Dummy Tester ────────────────────────────────────────
 [roles.dummy-tester]
 tier = 3
@@ -196,7 +200,7 @@ prefetch = false
 
 [environments]
 
-# mini-op: the test Mac mini through mini-op's image and plugin, by WDRC-108 FR-55's published names; its secrets are
+# mini-op: the test Mac mini through mini-op's image and plugin, by the names mini-op publishes; its secrets are
 # `ensemble-broker login env` items (docs/docker-host.md › Environment secrets)
 [environments.mini-op]
 image = "mini-op:env"
@@ -211,10 +215,6 @@ file = "mini-password"
 [[environments.mini-op.secrets]]
 item = "ensemble-env/mini-op-ssh-key"
 file = "mini-ssh-key"
-
-[roles.verifier.environment]
-name = "mini-op"
-prefetch = true
 
 # [delegates]
 #   harness_host  the [hosts.<name>] (src/ensemble/session/config.toml) the harness runs on; "" → the agent's Host.

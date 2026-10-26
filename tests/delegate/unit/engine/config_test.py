@@ -257,6 +257,9 @@ class EnvironmentCheckTest(Case):
         assert spec is not None
         self.assertFalse(spec.prefetch)
         self.assertEqual(spec.spec.image, "mini-op:env")
+        self.assertEqual(
+            found["roles"]["verifier"]["environment"], {"name": "mini-op", "prefetch": True}
+        )
 
     def test_a_local_named_environment_and_role_table_load(self):
         found = self.loaded(

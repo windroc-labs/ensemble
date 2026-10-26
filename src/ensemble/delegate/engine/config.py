@@ -89,19 +89,24 @@ def check_environments(cfg: Mapping) -> None:
                 raise ValueError(f"{where} name {name!r}: no [environments.{name}]")
 
 
+def fixed_clients(cfg: Mapping) -> dict[str, str]:
+    """Each fixed role's client."""
+    roles = _role_tables(cfg).items()
+    return {r: t["client"] for r, t in roles if t.get(FIXED_CLIENT) is True and "client" in t}
+
+
 def check_fixed_clients(packaged: Mapping, merged: Mapping, local: str) -> None:
     """ValueError unless each role's fixed_client, and a fixed role's client, is the packaged one."""
-    raw, fixed = _role_tables(packaged), {}
+    raw = _role_tables(packaged)
     for role, table in raw.items():
         value = table.get(FIXED_CLIENT, False)
         if not isinstance(value, bool):
             raise ValueError(f"[roles.{role}] {FIXED_CLIENT} must be true or false")
         if value and not isinstance(table.get("client"), str):
             raise ValueError(f"[roles.{role}] {FIXED_CLIENT} needs client")
-        if value:
-            fixed[role] = table["client"]
+    fixed = fixed_clients(packaged)
     for role, table in _role_tables(merged).items():
-        if table.get(FIXED_CLIENT, False) != raw.get(role, {}).get(FIXED_CLIENT, False):
+        if table.get(FIXED_CLIENT, False) is not raw.get(role, {}).get(FIXED_CLIENT, False):
             raise ValueError(
                 f"[delegate.roles.{role}] {FIXED_CLIENT} in {local}: only the packaged config.toml sets it"
             )
