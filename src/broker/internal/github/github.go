@@ -40,6 +40,11 @@ var Login = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}$`)
 // fullName is a repository's owner/name.
 var fullName = regexp.MustCompile(`^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$`)
 
+// ValidRepo is whether s is a repository's owner/name that is safe in an API path: GitHub forbids the names . and ..
+func ValidRepo(s string) bool {
+	return fullName.MatchString(s) && !strings.HasSuffix(s, "/.") && !strings.HasSuffix(s, "/..")
+}
+
 // levels are the repository permissions a token may request, each with the levels GitHub accepts for it.
 var levels = map[string][]string{
 	"actions": {"read", "write"}, "administration": {"read", "write"}, "checks": {"read", "write"},
