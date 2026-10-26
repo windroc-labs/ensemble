@@ -15,6 +15,7 @@ import (
 	"strings"
 	"unicode"
 
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/github"
 	"ensemble/broker/internal/launcher"
@@ -92,6 +93,29 @@ type SecretKeychain interface {
 type brokerOnlyStore interface {
 	SecretKeychain
 	ItemTrust
+}
+
+// trustedItem is start's controlled check of a broker-only item, without reading it: whether its access trusts only
+// the broker. err is the access read's, for the caller to map.
+func trustedItem(k interface {
+	AppAccess(service, account string) (AppAccess, error)
+}, service, account string) (trusted bool, err error) {
+	access, err := k.AppAccess(service, account)
+	if err != nil {
+		return false, err
+	}
+	return onlyBroker(access) == nil, nil
+}
+
+// readSecret is start's controlled read of a broker-only item, never with a dialog; it erases what a failed read
+// returned. The caller erases the value.
+func readSecret(k SecretKeychain, service, account string) ([]byte, error) {
+	value, err := k.Secret(service, account)
+	if err != nil {
+		erase(value)
+		return nil, err
+	}
+	return value, nil
 }
 
 // storeBrokerOnly saves value in item service/account (replacing an earlier one), makes the item trust only the
@@ -509,11 +533,11 @@ func keychainError(account string, err error) *protocol.Error {
 // Ready reads only account's item's access, so it never prompts: an item trusting another broker build would ask at
 // Inject.
 func (c Credentials) Ready(account string) error {
-	access, err := c.Keychain.AppAccess(tokenService, account)
+	trusted, err := trustedItem(c.Keychain, tokenService, account)
 	if err != nil {
 		return keychainError(account, err)
 	}
-	if onlyBroker(access) != nil {
+	if !trusted {
 		return protocol.New(protocol.LoginRequired, "The Claude account "+account+" setup-token trusts another broker build: run "+ClaudeLogin(account)+".")
 	}
 	return nil
@@ -528,7 +552,7 @@ func (c Credentials) Inject(account string, exec func(argv []string, stdin []byt
 	if err != nil {
 		return keychainError(account, err)
 	}
-	err = exec([]string{"/bin/sh", "-c", "umask 0377 && set -C && cat > " + docker.SecretsDir + "/claude"}, token)
+	err = credential.Deliver(exec, credential.File{Dir: docker.SecretsDir, Name: "claude"}, token)
 	if errors.Is(err, docker.ErrUnreachable) {
 		return fmt.Errorf("token injection: %w", docker.ErrUnreachable)
 	}

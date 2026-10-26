@@ -868,7 +868,8 @@ func TestInject(t *testing.T) {
 	if err := (Credentials{Keychain: k}).Inject("default", e.run); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"/bin/sh", "-c", "umask 0377 && set -C && cat > " + docker.SecretsDir + "/claude"}
+	script := "mkdir -p -m 0700 " + docker.SecretsDir + " && umask 0377 && set -C && cat > " + docker.SecretsDir + `/"$1"`
+	want := []string{"/bin/sh", "-c", script, "sh", "claude"}
 	if !reflect.DeepEqual(e.argv, [][]string{want}) || string(e.stdin[0]) != token {
 		t.Fatalf("%q %q", e.argv, e.stdin)
 	}
@@ -1053,6 +1054,32 @@ func TestCheckServices(t *testing.T) {
 		errs := checkServices(tc.list, tc.services, tc.prefixes)
 		if !strings.Contains(fmt.Sprint(errs), tc.want) {
 			t.Errorf("%s: %v, want %q", name, errs, tc.want)
+		}
+	}
+}
+
+type accessOf func(service, account string) (AppAccess, error)
+
+func (f accessOf) AppAccess(service, account string) (AppAccess, error) { return f(service, account) }
+
+func TestTrustedItem(t *testing.T) {
+	for name, tc := range map[string]struct {
+		access  AppAccess
+		err     error
+		trusted bool
+	}{
+		"broker only":  {brokerOnly(), nil, true},
+		"other app":    {*added(), nil, false},
+		"absent":       {AppAccess{}, ErrNotFound, false},
+		"read refused": {AppAccess{}, ErrNeedsDialog, false},
+	} {
+		var asked []string
+		trusted, err := trustedItem(accessOf(func(service, account string) (AppAccess, error) {
+			asked = append(asked, service+"/"+account)
+			return tc.access, tc.err
+		}), "ensemble-env/x", "x")
+		if trusted != tc.trusted || !errors.Is(err, tc.err) || !slices.Equal(asked, []string{"ensemble-env/x/x"}) {
+			t.Errorf("%s: %v %v %q", name, trusted, err, asked)
 		}
 	}
 }

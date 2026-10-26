@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/launcher"
 	"ensemble/broker/internal/protocol"
@@ -17,9 +18,6 @@ const (
 	envServicePrefix = "ensemble-env/"
 	envDir           = docker.SecretsDir + "/env"
 )
-
-// envScript writes stdin to $1 in envDir, 0400; set -C refuses one already there.
-const envScript = "mkdir -p -m 0700 " + envDir + " && umask 0377 && set -C && cat > " + envDir + `/"$1"`
 
 // EnvKeychain holds the environment secrets as broker-only items.
 type EnvKeychain interface{ brokerOnlyStore }
@@ -76,9 +74,8 @@ func (e EnvKeys) read(ref string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	value, err := e.Keychain.Secret(ref, name)
+	value, err := readSecret(e.Keychain, ref, name)
 	if err != nil {
-		erase(value)
 		return nil, envError(ref, name, err)
 	}
 	return value, nil
@@ -92,11 +89,11 @@ func (e EnvKeys) Ready(refs []string) error {
 		if err != nil {
 			return err
 		}
-		access, err := e.Keychain.AppAccess(ref, name)
+		trusted, err := trustedItem(e.Keychain, ref, name)
 		if err != nil {
 			return envError(ref, name, err)
 		}
-		if onlyBroker(access) != nil {
+		if !trusted {
 			return protocol.New(protocol.LoginRequired, "The keychain item "+ref+" trusts another broker build: run ensemble-broker login env "+name+".")
 		}
 		value, err := e.read(ref)
@@ -115,7 +112,7 @@ func (e EnvKeys) Inject(s launcher.Secret, exec func(argv []string, stdin []byte
 	if err != nil {
 		return err
 	}
-	err = exec([]string{"/bin/sh", "-c", envScript, "sh", s.File}, value)
+	err = credential.Deliver(exec, credential.File{Dir: envDir, Name: s.File}, value)
 	erase(value)
 	if errors.Is(err, docker.ErrUnreachable) {
 		return fmt.Errorf("environment secret injection: %w", docker.ErrUnreachable)

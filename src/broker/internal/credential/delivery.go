@@ -13,9 +13,10 @@ var ErrDelivery = errors.New("writing into the container failed")
 
 // Deliver writes value to f through exec's stdin, never its argv: 0400 in a 0700 directory. A create-only file
 // refuses one already there (set -C); Replace writes a dot file, which no reader matches, then renames it over.
-// Errors wrap docker.ErrUnreachable or are ErrDelivery.
+// Name must be one path component; a Replace one must not start with a dot, the temporary names'. Errors wrap
+// docker.ErrUnreachable or are ErrDelivery.
 func Deliver(exec func(argv []string, stdin []byte) error, f File, value []byte) error {
-	if f.Name == "" || strings.Contains(f.Name, "/") || strings.HasPrefix(f.Name, ".") {
+	if f.Name == "" || f.Name == "." || f.Name == ".." || strings.Contains(f.Name, "/") || f.Replace && strings.HasPrefix(f.Name, ".") {
 		return ErrDelivery
 	}
 	script := "mkdir -p -m 0700 " + f.Dir + " && umask 0377 && set -C && cat > " + f.Dir + `/"$1"`

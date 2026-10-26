@@ -44,11 +44,16 @@ func TestDeliverScripts(t *testing.T) {
 }
 
 func TestDeliverRejectsNames(t *testing.T) {
-	for _, name := range []string{"", "a/b", "../claude", ".hidden", "."} {
+	for _, f := range []File{{docker.SecretsDir, "", false}, {docker.SecretsDir, "a/b", false}, {docker.SecretsDir, "../claude", false},
+		{docker.SecretsDir, ".", false}, {docker.SecretsDir, "..", false}, {docker.SecretsDir, ".acme", true}} {
 		r := &recorded{}
-		if err := Deliver(r.exec, File{docker.SecretsDir, name, false}, []byte("x")); !errors.Is(err, ErrDelivery) || len(r.argv) != 0 {
-			t.Errorf("%q: %v, exec %q", name, err, r.argv)
+		if err := Deliver(r.exec, f, []byte("x")); !errors.Is(err, ErrDelivery) || len(r.argv) != 0 {
+			t.Errorf("%+v: %v, exec %q", f, err, r.argv)
 		}
+	}
+	r := &recorded{}
+	if err := Deliver(r.exec, File{docker.SecretsDir + "/env", ".npmrc", false}, []byte("x")); err != nil || len(r.argv) != 1 {
+		t.Fatalf("an env secret's dot file: %v", err)
 	}
 }
 
