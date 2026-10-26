@@ -1,13 +1,18 @@
-"""ensemble-orchestrator issue move and comment: one write each, never retried, and a receipt."""
+"""ensemble-orchestrator issue move and comment: one write each (a move of an archived issue to an
+active state unarchives it first), never retried, and a receipt."""
 
-from ensemble.orchestrator.engine.types import Receipt, Unavailable, WriteUnknown
+from ensemble.orchestrator.engine.flow.types import IssueState
+from ensemble.orchestrator.engine.types import IssueError, Receipt, Unavailable, WriteUnknown
 from ensemble.orchestrator.trackers.linear import issue_names, issue_read, ops
+from ensemble.orchestrator.trackers.linear.linear_tracker import M_UNARCHIVE
 
 Q_MOVE = (
-    "query($i: String!) { viewer { id name } issue(id: $i) { id identifier url state { id } "
-    "team { id key } } }"
+    "query($i: String!) { viewer { id name } issue(id: $i) { id identifier url archivedAt "
+    "state { id } team { id key } } }"
 )
-Q_COMMENT = "query($i: String!) { viewer { id name } issue(id: $i) { id identifier url } }"
+Q_COMMENT = (
+    "query($i: String!) { viewer { id name } issue(id: $i) { id identifier url archivedAt } }"
+)
 M_COMMENT = (
     "mutation($i: String!, $b: String!) { commentCreate(input: { issueId: $i, body: $b }) "
     "{ success comment { id } } }"
@@ -20,16 +25,25 @@ def move(gql, linear, ident, state):
     node = data["issue"]
     issue_names.in_team(linear, node, "move")
     target = issue_names.state_id(linear, state)
+    restore = node["archivedAt"] is not None and state not in (IssueState.DONE, IssueState.CANCELED)
+    if restore:  # Linear's lists, the router's Todo list included, leave an archived issue out
+        write(gql, "move", ident, M_UNARCHIVE, "issueUnarchive", i=node["id"])
     if node["state"]["id"] == target:
-        return receipt(node, "move", "unchanged", data["viewer"])
+        return receipt(node, "move", "changed" if restore else "unchanged", data["viewer"])
     write(gql, "move", ident, ops.M_STATE, "issueUpdate", i=node["id"], s=target)
     return receipt(node, "move", "changed", data["viewer"])
 
 
 def comment(gql, ident, body):
-    """Post body as a new top-level comment on ident."""
+    """Post body as a new top-level comment on ident; an archived issue takes none."""
     data = issue_read.lookup(gql, Q_COMMENT, ident)
     node = data["issue"]
+    if node["archivedAt"] is not None:
+        raise IssueError(
+            f"{ident}: archived, and Linear takes no comment on an archived issue: "
+            f"ensemble-orchestrator issue move {ident} STATE, to any state but done or canceled, "
+            "unarchives it"
+        )
     out = write(gql, "comment", ident, M_COMMENT, "commentCreate", i=node["id"], b=body)
     comment_id = (out.get("comment") or {}).get("id")
     return receipt(node, "comment", "changed", data["viewer"], comment_id=comment_id)

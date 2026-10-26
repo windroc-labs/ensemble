@@ -306,12 +306,13 @@ def issue_row(ident, team_id=TEAM, **fields):
 VIEWER = {"id": "u-me", "name": "Me"}
 
 
-def write_issue(ident="TASK-2", *, state=STATES["todo"], team_id=TEAM):
+def write_issue(ident="TASK-2", *, state=STATES["todo"], team_id=TEAM, archived=False):
     """An issue as `ensemble-orchestrator issue move` and `comment` read it."""
     return {
         "id": f"id-{ident}",
         "identifier": ident,
         "url": f"https://linear.app/t/issue/{ident}",
+        "archivedAt": "2026-10-26T04:11:00.000Z" if archived else None,
         "state": {"id": state},
         "team": {"id": team_id, "key": ident.split("-")[0]},
     }
@@ -325,6 +326,7 @@ class WriteGql:
 
     DEFAULTS = {
         "issueUpdate": {"success": True},
+        "issueUnarchive": {"success": True},
         "commentCreate": {"success": True, "comment": {"id": "c-new"}},
     }
 
