@@ -5793,7 +5793,7 @@ class StageKeyChecks(OuterBase):
                 "Ref: --upload-pack=touch /tmp/x",
                 "Ref: unsafe ref '--upload-pack=touch /tmp/x': want letters, digits, ., _, / or -",
             ),
-            ("Ref: main\nRef: dev", "several Ref: lines"),
+            ("Ref: main\nRef: dev", "several Ref: lines: 'main', 'dev'"),
         ):
             with self.subTest(description=description):
                 self.run_ = FakeRun(ENG_RUN)

@@ -686,6 +686,15 @@ class StageKeys(Case):
                 )
                 self.assertEqual(self.argvs(), [])
 
+    def test_mapped_only_with_an_unusable_mapping_refuses_a_repo_line(self):
+        for desc in ("Repo: acme/other", "Repo: acme/ensemble", "no repo here"):
+            with self.subTest(desc=desc):
+                got = self.check(desc, repos={PROJ: "nope"}, mapped_only=True)
+                self.assertEqual(
+                    got, target.Invalid("project mapping 'nope': not <owner>/<name>", mapped=True)
+                )
+                self.assertEqual(self.argvs(), [])
+
     def test_mapped_only_accepts_the_mapping(self):
         for desc, asked in (
             ("no repo here", "acme/ensemble"),
@@ -760,10 +769,15 @@ class StageKeys(Case):
                 self.assertFalse(os.path.exists("/tmp/x"))
 
     def test_two_ref_lines_are_invalid(self):
-        for desc in ("Ref: main\nRef: main", "Ref: main\n* ref: dev", "Ref: -x\nRef: main"):
+        for desc, named in (
+            ("Ref: main\nRef: main", "'main', 'main'"),
+            ("Ref: main\n* ref: dev", "'main', 'dev'"),
+            ("Ref: -x\nRef: `main`", "'-x', 'main'"),
+        ):
             with self.subTest(desc=desc):
                 self.assertEqual(
-                    self.ref_check(desc), target.Invalid("several Ref: lines", line="Ref")
+                    self.ref_check(desc),
+                    target.Invalid(f"several Ref: lines: {named}", line="Ref"),
                 )
                 self.assertEqual(self.argvs(), [])
 

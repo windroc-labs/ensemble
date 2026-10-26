@@ -66,12 +66,13 @@ def _ref(description) -> str | Invalid | None:
         for line in re.split(r"\r?\n", handoff.head(description))
         if (m := re.match(r"^\s*(?:[-*>]\s+)?(?:\*\*|`)?ref:(?:\*\*)?(.*)$", line, re.I))
     ]
-    if len(found) > 1:
-        return Invalid("several Ref: lines", line="Ref")
-    if not found:
+    values = [v.strip(" \t").strip("`*").strip(" \t") for v in found]
+    if len(values) > 1:
+        return Invalid(f"several Ref: lines: {', '.join(map(repr, values))[:200]}", line="Ref")
+    if not values:
         return None
     try:
-        return check_ref(found[0].strip(" \t").strip("`*").strip(" \t"))
+        return check_ref(values[0])
     except RepoInvalid as e:
         return Invalid(f"Ref: {e}", line="Ref")
 
@@ -209,15 +210,18 @@ def _branches(ident, o, n, *, run, delegate, workdir, roles, host):
 
 
 def _mapped_only(repo, issue, repos) -> Invalid | None:
-    """Why a Repo: line's repo, or an issue without a project mapping, is refused, else None."""
+    """Why a Repo: line's repo, or an issue without a usable project mapping, is refused, else
+    None."""
     if issue.home not in repos:
         return Invalid(
             f"this stage takes only its project's mapped repo, and project {issue.home!r} has none",
             mapped=True,
         )
     mapping = repo_slug(repos[issue.home])
-    if isinstance(repo, Invalid) or not mapping:
+    if isinstance(repo, Invalid):
         return None
+    if not mapping:
+        return Invalid(f"{MAPPED}{str(repos[issue.home])[:80]!r}: not <owner>/<name>", mapped=True)
     if (repo[0].lower(), repo[1].lower()) != (mapping[0].lower(), mapping[1].lower()):
         return Invalid(
             f"{repo[0]}/{repo[1]}: this stage takes only its project's mapped repo "
@@ -248,8 +252,8 @@ def check(
         repo = repo_slug(repos[issue.home]) or Invalid(
             f"{MAPPED}{str(repos[issue.home])[:80]!r}: not <owner>/<name>", mapped=True
         )
-    if mapped_only and not mapped:
-        repo = _mapped_only(repo, issue, repos) or repo
+    if mapped_only and not mapped and (refused := _mapped_only(repo, issue, repos)):
+        return refused
     if isinstance(repo, Invalid):
         return repo
     wanted = _ref(issue.description) if ref else None
