@@ -448,7 +448,7 @@ UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 @dataclass(frozen=True, kw_only=True)
 class Spec:
     """A run the router claimed or resumes: its issue's identity, its role (the tracker's for its
-    assignee), its session and client."""
+    owner: Linear's delegate, a local board's assignee), its session and client."""
 
     uuid: str
     issue: str

@@ -5037,7 +5037,7 @@ class StaleByMoveIntoRunning(TickBase):
 
 
 class ClaimRechecks(Base):
-    """FR-56: the claim re-reads assignee and project; the claim is the recheck's."""
+    """FR-56: the claim re-reads delegate and project; the claim is the recheck's."""
 
     def test_reassigned_to_no_role_account_is_not_claimed(self):
         for assignee in ({"id": USER, "email": "me@x.com"}, who("someone"), None):
