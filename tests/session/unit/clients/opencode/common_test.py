@@ -488,7 +488,10 @@ class SelectionTest(Case):
 
     def test_container_loads_image_skills_and_host_has_no_image_path(self):
         container = self.common.inline(self.spec, DOCKER_CONTEXT)
-        self.assertEqual(container["skills"], {"paths": ["/opt/ensemble/plugins"]})
+        self.assertEqual(
+            container["skills"],
+            {"paths": ["/opt/ensemble/plugins", "/opt/windroc/mini-op/skills"]},
+        )
         self.assertNotIn("skills", self.common.inline(self.spec, LOCAL_CONTEXT))
 
 

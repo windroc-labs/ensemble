@@ -12,8 +12,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TREE = ".mini-op"
-# Public values that may appear anywhere; add an entry only through review.
+# Public values that may appear anywhere; add an entry or pattern only through review.
 ALLOWED = frozenset({"noreply@anthropic.com"})
+# GitHub's ID-based noreply form, <id>+<login>@users.noreply.github.com, as in squash-merge trailers.
+GITHUB_NOREPLY = re.compile(r"[0-9]+\+[A-Za-z0-9](?:-?[A-Za-z0-9])*@users\.noreply\.github\.com")
 PRIVATE = tuple(
     ipaddress.ip_network(net)
     for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10")
@@ -84,7 +86,10 @@ def classes(line):
     found = []
     if any(_private(quad) for quad in QUAD.findall(line)):
         found.append("private IPv4")
-    if any(match not in ALLOWED for match in EMAIL.findall(line)):
+    if any(
+        match not in ALLOWED and not GITHUB_NOREPLY.fullmatch(match)
+        for match in EMAIL.findall(line)
+    ):
         found.append("email address")
     if UUID.search(line):
         found.append("UUID")

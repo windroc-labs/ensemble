@@ -246,30 +246,27 @@ class DockerPreflightTest(HarnessCase):
         self.assertFalse(os.path.exists(self.work))
 
 
-class FixedClientTest(HarnessCase):
-    """verifier on another client, from the router's gate overlay or a Spec's client, is a
-    ConfigError before anything is written (WDRC-110 FR-49, FR-81).
-    """
+class VerifierClientTest(HarnessCase):
+    """verifier uses the router's client overlay and an explicit Spec client (WDRC-196)."""
 
-    def test_the_gate_s_overlay_choosing_codex_is_refused(self):
-        overlays = ({}, {"roles": {"verifier": {"client": "codex"}}})  # gate.py _probe's shape
-        with self.assertRaises(ConfigError) as caught:
-            HarnessDelegate.usage("verifier", overlays=overlays, session_cls=HarnessSession)
-        self.assertIn("client 'codex': role verifier runs only on claude", str(caught.exception))
+    def test_the_gate_s_overlay_selects_each_client(self):
+        for client in ("codex", "opencode", "claude"):
+            with self.subTest(client=client), mock.patch.object(HarnessSession, "usage") as usage:
+                overlays = ({}, {"roles": {"verifier": {"client": client}}})
+                HarnessDelegate.usage("verifier", overlays=overlays, session_cls=HarnessSession)
+                usage.assert_called_once_with(client)
 
-    def test_a_spec_choosing_codex_is_refused_before_any_write(self):
+    def test_a_spec_selects_each_client_over_the_overlay(self):
         self.settings(default="docker", harness_host="harness")  # mini-op needs a Docker default
         HarnessSession.hosts["agent"] = RecordingHost("docker")
-        spec = Spec(
-            "Repo: windroc-labs/ensemble", self.work, task="verify", sid=SID, client="codex"
-        )
-        with self.assertRaises(ConfigError) as caught:
-            self.make(role="verifier", spec=spec)
-        self.assertEqual(
-            str(caught.exception),
-            "role verifier runs only on claude, not codex: chosen for this run",
-        )
-        self.assertFalse(os.path.exists(self.work))
+        for client in ("codex", "opencode", "claude"):
+            with self.subTest(client=client):
+                spec = Spec(
+                    "Repo: windroc-labs/ensemble", self.work, task="verify", sid=SID, client=client
+                )
+                self.make(role="verifier", spec=spec, overlays=({"client": "fake"},))
+                self.assertEqual(self.metadata()["plan"]["session"]["client"], client)
+                shutil.rmtree(self.work)
 
 
 class VerifierDockerTest(HarnessCase):

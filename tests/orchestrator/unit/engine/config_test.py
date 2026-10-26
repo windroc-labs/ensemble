@@ -1925,16 +1925,18 @@ class ConfigurationRoot(ConfigFile, Case):
                 PIPELINE + '[core.roles.researcher]\ngate = "echo `id`"\n',
                 "core: run overlay: unknown key 'gate' in [overlay.roles.researcher]",
             ),
-            (
-                CORE_TOML,
-                PIPELINE + '[core.roles.verifier]\nclient = "codex"\n',
-                "core: run overlay: [overlay.roles.verifier] client 'codex': role verifier runs only on claude",
-            ),
         ]
         for core, text, message in cases:
             with self.subTest(message):
                 self.core(core)
                 self.fails(message, text)
+
+    def test_verifier_accepts_each_client_in_the_core_overlay(self):
+        for client in ("codex", "opencode", "claude"):
+            with self.subTest(client=client):
+                cfg = self.load(PIPELINE + f'[core.roles.verifier]\nclient = "{client}"\n')
+                run = cfg.delegate_cls.resolve("verifier", overlays=(cfg.core,))
+                self.assertEqual(run.client, client)
 
     def test_docs(self):
         self.assertEqual(self.load(PIPELINE).docs, config.Docs("acme/notes", "trunk", DIRS))

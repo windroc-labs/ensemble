@@ -25,7 +25,8 @@ typos --config pyproject.toml
 
 `.github/mini_op_guard.py` rejects private and CGNAT IPv4 addresses, email addresses, UUIDs, `.local`
 host names and literal keychain item names in every file under `.mini-op/` (mini-op's project runbooks);
-on a pull request that changes `.mini-op/` it also scans the PR's title, body and commit messages. CI's
+it permits `noreply@anthropic.com` and GitHub's ID-based `<id>+<login>@users.noreply.github.com` addresses.
+On a pull request that changes `.mini-op/` it also scans the PR's title, body and commit messages. CI's
 `mini-op guard` job runs it on every event, whatever the test scope, and the `edited` trigger reruns it
 when a title or body changes. Its findings name the place and the pattern, never the matched text.
 An item name counts only when it holds a digit or one of `-._@:+`, so prose after a command name passes;

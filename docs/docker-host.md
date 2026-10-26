@@ -586,9 +586,14 @@ each replacing the keys it sets (a list whole):
 
 The packaged default is `[environment.docker]`: `image = "@worker"`, `gateway = "workers"`, `plugins = []`,
 `secrets = []`, `prefetch = false`, no `lock`. It also ships one named environment, `[environments.mini-op]`: image
-`mini-op:env`, gateway, lock and plugin `mini-op`, and the secrets `ensemble-env/mini-op-password` (file `mini-password`)
+`mini-op:env`, gateway and lock `mini-op`, and the secrets `ensemble-env/mini-op-password` (file `mini-password`)
 and `ensemble-env/mini-op-ssh-key` (file `mini-ssh-key`); no prefetch. The built-in `verifier` selects it with
-`prefetch = true`, so on a Host without a default table (the packaged `tmux`) a `verifier` run is the configuration error
+`prefetch = true`. It uses the selected client, like every other role: Claude and Codex bootstrap links
+`/opt/windroc/mini-op/skills/mini-op` into Claude's effective config directory's `skills/mini-op` or
+Codex's `~/.agents/skills/mini-op` (independent of `CODEX_HOME`);
+OpenCode loads `/opt/windroc/mini-op/skills` through its container-only `skills.paths`. The environment requests no
+mini-op plugin; use a mini-op image containing its plain skill (WDRC-195). On a Host without a default table
+(the packaged `tmux`) a `verifier` run is the configuration error
 below. Keys:
 
 - `image`: a local [base image](#base-images) or `"@worker"`, ensemble's worker base.
