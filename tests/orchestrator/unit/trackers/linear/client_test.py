@@ -44,6 +44,11 @@ from tests.orchestrator.unit.outage import FAILURES, failing
 
 
 class BrokerToken(Case):
+    def setUp(self):
+        patch = mock.patch.object(client, "_maintained", set(), create=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def test_metadata_validation_and_audit_warning(self):
         app = dataclasses.replace(HARNESS, renewal="broker")
         reply = {"version": 1, "renewed": False, "expires_at": "2026-11-26T12:00:00Z"}
@@ -114,7 +119,13 @@ class BrokerToken(Case):
         ):
             with self.subTest(identity=name):
                 client.use()
-                app = dataclasses.replace(HARNESS, name=name, kind=kind, renewal="broker")
+                app = dataclasses.replace(
+                    HARNESS,
+                    name=name,
+                    kind=kind,
+                    token_service=f"linear-{name}-token",
+                    renewal="broker",
+                )
                 keychain = Keychain({app.token_service: record(days=6)})
                 calls, endpoint = self.call(app, keychain)
                 self.assertEqual(len(calls), 1)
@@ -133,6 +144,81 @@ class BrokerToken(Case):
                         for argv, _ in keychain.calls
                     )
                 )
+
+    def test_two_requests_maintain_once_and_read_current_publication(self):
+        app = dataclasses.replace(HARNESS, renewal="broker")
+        keychain = Keychain({app.token_service: record(days=1)})
+        first, endpoint = self.call(app, keychain)
+        self.assertEqual(endpoint.graphql[0].get_header("Authorization"), f"Bearer {NEW}")
+        keychain.items[app.token_service] = (app.token_service, record("externally-published"))
+        second, endpoint = self.call(dataclasses.replace(app), keychain)
+        self.assertEqual(len(first) + len(second), 1)
+        self.assertEqual(
+            endpoint.graphql[0].get_header("Authorization"), "Bearer externally-published"
+        )
+
+    def test_success_is_remembered_for_each_identity(self):
+        for name, kind in (
+            ("harness", types.AppKind.HARNESS),
+            ("manager", types.AppKind.MANAGER),
+            ("verifier", types.AppKind.ROLE),
+        ):
+            app = dataclasses.replace(
+                HARNESS,
+                name=name,
+                kind=kind,
+                token_service=f"linear-{name}-token",
+                renewal="broker",
+            )
+            keychain = Keychain({app.token_service: record(days=1)})
+            first, _ = self.call(app, keychain)
+            second, _ = self.call(app, keychain)
+            self.assertEqual((len(first), len(second)), (1, 0))
+
+    def test_policy_changes_do_not_forget_successful_maintenance(self):
+        app = dataclasses.replace(HARNESS, renewal="broker")
+        keychain = Keychain({app.token_service: record()})
+        first, _ = self.call(app, keychain)
+        client.use(renew=False)
+        dry, _ = self.call(app, keychain)
+        client.use()
+        second, _ = self.call(app, keychain)
+        self.assertEqual((len(first), len(dry), len(second)), (1, 0, 0))
+
+    def test_dry_run_does_not_suppress_later_maintenance(self):
+        app = dataclasses.replace(HARNESS, renewal="broker")
+        keychain = Keychain({app.token_service: record(days=1)})
+        client.use(renew=False)
+        dry, _ = self.call(app, keychain)
+        client.use()
+        real, endpoint = self.call(app, keychain)
+        self.assertEqual((len(dry), len(real)), (0, 1))
+        self.assertEqual(endpoint.graphql[0].get_header("Authorization"), f"Bearer {NEW}")
+
+    def test_failed_maintenance_is_not_remembered_as_success(self):
+        app = dataclasses.replace(HARNESS, renewal="broker")
+        keychain = Keychain({app.token_service: record()})
+        reports = []
+        client.use(report=lambda *args: reports.append(args))
+        failed, _ = self.call(app, keychain, reply={"version": True}, publish=False)
+        client.use()
+        successful, endpoint = self.call(app, keychain)
+        repeated, _ = self.call(app, keychain)
+        self.assertEqual((len(failed), len(successful), len(repeated)), (1, 1, 0))
+        self.assertEqual(len(reports), 1)
+        self.assertEqual(endpoint.graphql[0].get_header("Authorization"), f"Bearer {NEW}")
+
+    def test_unusable_publication_after_success_fails_without_maintenance(self):
+        app = dataclasses.replace(HARNESS, renewal="broker")
+        keychain = Keychain({app.token_service: record()})
+        first, _ = self.call(app, keychain)
+        self.assertEqual(len(first), 1)
+        for entries in ({}, {app.token_service: record(days=-1)}):
+            with self.subTest(missing=not entries):
+                with self.assertRaises(types.KeychainError) as raised:
+                    self.call(app, Keychain(entries))
+                self.assertIn("no usable published token", str(raised.exception))
+                self.assertNotIn("dry run", str(raised.exception))
 
     def test_broker_outage_preserves_valid_or_undated_old_token_and_reports_once(self):
         app = dataclasses.replace(HARNESS, renewal="broker")

@@ -177,8 +177,9 @@ It persists a pending binding before changing the ACL; rerun the same enrollment
 rejects an incomplete binding and never opens an interactive root read. Host token publication narrows the read
 ACL to the broker and `/usr/bin/security`; it verifies both bytes and access after writing.
 
-Each real host call invokes one-shot maintenance, then rereads the published entry. No worker, supervisor or Docker
-process is needed. The broker renews once fewer than five days remain (past half the issued lifetime for tokens under ten days),
+The host transport invokes one-shot maintenance once per process per identity after it succeeds; every call reads
+the current published entry. No worker, supervisor or Docker process is needed. The broker renews once fewer than
+five days remain (past half the issued lifetime for tokens under ten days),
 with WDRC-67's fixed scopes. Per-identity cross-process locks cover renewal and publication; unrelated identities
 use different locks. A failed publication retries the saved token without another renewal while it is still current.
 

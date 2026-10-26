@@ -1,5 +1,5 @@
-"""Linear GraphQL transport and Keychain access: an OAuth app's token sent as Bearer, renewed before
-the call when due (missing, undated, expired or under RENEW_BEFORE left)."""
+"""Linear GraphQL transport and Keychain access: an OAuth app's token sent as Bearer.
+Transport-owned apps renew when due; broker-owned apps maintain once per process after success."""
 
 import http.client
 import json
@@ -48,6 +48,7 @@ class Policy:
 _policy = Policy()
 _failed: dict[str, str] = {}  # token service: why its renewal failed in this process
 _shown: set[str] = set()  # token services show was called for
+_maintained: set[LinearApp] = set()  # successful broker maintenance in this process
 
 
 def use(*, renew=True, report=None, show=None):
@@ -209,10 +210,11 @@ def _token(app, timeout):
 
 
 def _broker_token(app, held, now, timeout):
-    reason = _failed.get(app.token_service) or "dry run: no renewal"
-    if _policy.renew and app.token_service not in _failed:
+    reason = _failed.get(app.token_service) or (None if _policy.renew else "dry run: no renewal")
+    if _policy.renew and app not in _maintained and app.token_service not in _failed:
         try:
             _broker_maintain(app, timeout)
+            _maintained.add(app)
             reason = None
         except _RenewalFailed:
             reason = _failed[app.token_service] = (
