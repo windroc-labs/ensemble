@@ -1079,7 +1079,15 @@ class InstallTest(Case):
             ],
         )
         self.assert_ok(self.again())
-        self.assertEqual(self.plugin_calls(), [])
+        self.assertEqual(
+            self.plugin_calls(),
+            [
+                "claude plugin marketplace update windroc",
+                "claude plugin update ensemble@windroc",
+                "codex plugin marketplace upgrade windroc",
+                "codex plugin add ensemble@windroc",
+            ],
+        )
         result = self.again("--ref", "next")
         self.assertEqual(result.code, 1)
         self.assertEqual(self.plugin_calls(), [])
@@ -1092,8 +1100,12 @@ class InstallTest(Case):
         self.assertEqual(
             self.plugin_calls(),
             [
+                "claude plugin marketplace update windroc",
+                "claude plugin update ensemble@windroc",
                 "claude plugin enable ensemble@windroc",
                 "claude plugin enable updraft@windroc",
+                "codex plugin marketplace upgrade windroc",
+                "codex plugin add ensemble@windroc",
             ],
         )
 
@@ -1526,6 +1538,113 @@ class InstallTest(Case):
         installed = json.loads((self.fakes / "claude/plugins.json").read_text())
         return next(p["installPath"] for p in installed if p["id"] == "ensemble@windroc")
 
+    def stale_plugin_upgrade(self, clients):
+        self.assert_ok(self.fresh(clients=clients, docker="y"))
+        old = []
+        for client in clients.split(","):
+            path = (
+                Path(self.claude_ensemble())
+                if client == "claude"
+                else Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.7")
+            )
+            (path / CLIENT).unlink()
+            old.append(path)
+        (self.pkg_src / ".claude-plugin/plugin.json").write_text('{"version": "9.8.8"}\n')
+        self.serve({"ref": "v9.8.8"})
+        result = self.again()
+        self.assert_ok(result)
+        self.assertIn("ref v9.8.8", result.stderr)
+        self.assertIn("broker-install ", self.broker_calls())
+        calls = self.plugin_calls()
+        if "claude" in clients:
+            self.assertIn("claude plugin marketplace update windroc", calls)
+            self.assertIn("claude plugin update ensemble@windroc", calls)
+            self.assertNotEqual(Path(self.claude_ensemble()), old[0])
+        if "codex" in clients:
+            self.assertIn("codex plugin marketplace upgrade windroc", calls)
+            self.assertIn("codex plugin add ensemble@windroc", calls)
+            self.assertTrue(
+                Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.8", CLIENT).is_file()
+            )
+
+    def test_stale_claude_cache_updates_before_source_reads(self):
+        self.stale_plugin_upgrade("claude")
+
+    def test_stale_codex_cache_updates_before_source_reads(self):
+        self.stale_plugin_upgrade("codex")
+
+    def test_both_stale_clients_update_to_the_pinned_release(self):
+        self.stale_plugin_upgrade("claude,codex")
+
+    def test_plugin_refresh_failures_name_the_client(self):
+        self.assert_ok(self.fresh())
+        for command, client in (
+            ("claude plugin marketplace update windroc", "Claude Code"),
+            ("claude plugin update ensemble@windroc", "Claude Code"),
+            ("codex plugin marketplace upgrade windroc", "Codex"),
+            ("codex plugin add ensemble@windroc", "Codex"),
+        ):
+            with self.subTest(command=command):
+                (self.fakes / "fail").write_text(command)
+                result = self.again()
+                self.assertEqual(result.code, 1, result.stderr)
+                self.assertIn(f"install.sh: {client}:", result.stderr)
+                self.assertNotIn("==> plugin directory", result.stderr)
+
+    def test_successful_noop_update_rejects_stale_plugins_without_docker(self):
+        self.assert_ok(self.fresh())
+        for client, label in (("claude", "Claude Code"), ("codex", "Codex")):
+            with self.subTest(client=client):
+                path = (
+                    Path(self.claude_ensemble())
+                    if client == "claude"
+                    else Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.7")
+                )
+                manifest = path / ".claude-plugin/plugin.json"
+                original = manifest.read_text()
+                manifest.write_text('{"version": "0.1.0"}\n')
+                marker = self.fakes / client / "update_noop"
+                marker.touch()
+                result = self.again()
+                self.assertEqual(result.code, 1, result.stderr)
+                self.assertIn(f"install.sh: {label}:", result.stderr)
+                self.assertIn("0.1.0", result.stderr)
+                self.assertIn("9.8.7", result.stderr)
+                self.assertNotIn("==> plugin directory", result.stderr)
+                marker.unlink()
+                manifest.write_text(original)
+
+    def test_updated_plugin_with_unreadable_metadata_names_the_client(self):
+        self.assert_ok(self.fresh(docker="y"))
+        for client, label in (("claude", "Claude Code"), ("codex", "Codex")):
+            path = (
+                Path(self.claude_ensemble())
+                if client == "claude"
+                else Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.7")
+            )
+            marker = self.fakes / client / "update_noop"
+            marker.touch()
+            for filename, text in (
+                (".claude-plugin/plugin.json", None),
+                (".claude-plugin/plugin.json", "{}\n"),
+                (CLIENT, None),
+                (CLIENT, 'PROTOCOL = "invalid"\n'),
+            ):
+                with self.subTest(client=client, filename=filename, text=text):
+                    target = path / filename
+                    original = target.read_text()
+                    if text is None:
+                        target.unlink()
+                    else:
+                        target.write_text(text)
+                    result = self.again()
+                    self.assertEqual(result.code, 1, result.stderr)
+                    self.assertIn(f"install.sh: {label}:", result.stderr)
+                    self.assertIn(str(path), result.stderr)
+                    self.assertNotIn("==> plugin directory", result.stderr)
+                    target.write_text(original)
+            marker.unlink()
+
     def test_rerun_keeps_a_current_hand_built_broker(self):
         self.assert_ok(self.fresh(clients="claude", docker="y"))
         path = self.claude_ensemble()
@@ -1536,7 +1655,7 @@ class InstallTest(Case):
         self.assertIn(
             f"    broker protocol {OTHER}: {path} and the installed broker agree\n", result.stderr
         )
-        self.assertNotIn(f"{RAW}v9.8.7/{GO}", "\n".join(self.calls()))
+        self.assertIn(f"{RAW}v9.8.7/{GO}", "\n".join(self.calls()))
         self.assertIn("==> broker\n    skip: installed from this plugin\n", result.stderr)
 
     def test_failing_broker_install_names_the_broker_step(self):
@@ -1611,8 +1730,8 @@ class InstallTest(Case):
         result = self.again()
         self.assertEqual(result.code, 1, result.stderr)
         self.assertIn(
-            f"install.sh: ensemble main wants broker protocol {OTHER}, but its broker, the installed"
-            f" broker, speaks protocol {PROTOCOL}: update the plugin (Claude Code:",
+            f"install.sh: ensemble main wants broker protocol {OTHER}, but its broker, release"
+            f" v9.8.7, speaks protocol {PROTOCOL}: the windroc marketplace serves ensemble at main",
             result.stderr,
         )
 
@@ -1621,7 +1740,8 @@ class InstallTest(Case):
         Path(self.claude_ensemble(), CLIENT).write_text(f'PROTOCOL = "{OTHER}"\n')
         (self.fakes / "src/broker/protocol").write_text(OTHER)
         codex = Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.7")
-        result = self.refused("--clients", "claude,codex", "--docker", rerun=True)
+        result = self.again("--clients", "claude,codex", "--docker")
+        self.assertEqual(result.code, 1, result.stderr)
         self.assertIn(
             f"install.sh: {codex} wants broker protocol {PROTOCOL}, but its broker, the installed"
             f" broker, speaks protocol {OTHER}: update the plugin",
@@ -1645,7 +1765,8 @@ class InstallTest(Case):
         # 9.8.10 is newer than 9.8.7 by version, older by text.
         shutil.copytree(cache / "9.8.7", cache / "9.8.10")
         (cache / "9.8.10" / CLIENT).write_text(f'PROTOCOL = "{OTHER}"\n')
-        result = self.refused("--clients", "codex", "--docker", rerun=True)
+        result = self.again("--clients", "codex", "--docker")
+        self.assertEqual(result.code, 1, result.stderr)
         self.assertIn(
             f"install.sh: {cache / '9.8.10'} wants broker protocol {OTHER}, but its broker, release"
             f" v9.8.7, speaks protocol {PROTOCOL}: update the plugin",
@@ -1656,7 +1777,8 @@ class InstallTest(Case):
         self.assert_ok(self.fresh(clients="claude", docker="y"))
         path = self.claude_ensemble()
         Path(path, CLIENT).write_text(f'PROTOCOL = "{OTHER}"\n')
-        result = self.refused("--clients", "claude", "--docker", rerun=True)
+        result = self.again("--clients", "claude", "--docker")
+        self.assertEqual(result.code, 1, result.stderr)
         self.assertIn(
             f"install.sh: {path} wants broker protocol {OTHER}, but its broker, release v9.8.7,"
             f" speaks protocol {PROTOCOL}: update the plugin (Claude Code: claude plugin"

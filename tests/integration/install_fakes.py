@@ -437,14 +437,29 @@ def claude(args):
         return 0 if any(m["name"] == args[3] for m in markets) else 1
     elif args == ["plugin", "list", "--json"]:
         out(json.dumps(plugins))
-    elif args[:2] == ["plugin", "install"]:
+    elif args[:2] in (["plugin", "install"], ["plugin", "update"]):
+        found = [p for p in plugins if p["id"] == args[2]]
+        if args[1] == "update":
+            if not found:
+                return 1
+            if (FAKES / "claude/update_noop").exists():
+                return 0
+            manifest = Path(found[0]["installPath"], ".claude-plugin/plugin.json")
+            if (
+                manifest.exists()
+                and manifest.read_text()
+                == (FAKES / "pkg-src/.claude-plugin/plugin.json").read_text()
+            ):
+                return 0
         name, market = args[2].split("@")
         source = next(m for m in markets if m["name"] == market)
         path = FAKES / "claude/cache" / str(len(list((FAKES / "claude").glob("cache/*"))))
         if name == "ensemble":
             shutil.copytree(FAKES / "pkg-src", path)
             mark(path / "REF", source.get("ref", ""))
-        save(plugins_file, [*plugins, {"id": args[2], "enabled": True, "installPath": str(path)}])
+        kept = [p for p in plugins if p["id"] != args[2]]
+        enabled = found[0]["enabled"] if found else True
+        save(plugins_file, [*kept, {"id": args[2], "enabled": enabled, "installPath": str(path)}])
     elif args[:2] == ["plugin", "enable"]:
         save(plugins_file, [{**p, "enabled": p["enabled"] or p["id"] == args[2]} for p in plugins])
     elif args[:2] == ["plugin", "uninstall"]:
@@ -490,11 +505,15 @@ def codex(args):
         out(json.dumps({"installed": plugins, "available": []}))
         return 0
     elif args[:2] == ["plugin", "add"]:
+        if (FAKES / "codex/update_noop").exists():
+            return 0
+        plugins = [p for p in plugins if p["pluginId"] != args[2]]
         plugins.append({"pluginId": args[2], "installed": True, "enabled": True})
         if args[2] == "ensemble@windroc":
-            cache = codex_home() / "plugins/cache/windroc/ensemble/9.8.7"
-            shutil.rmtree(cache, ignore_errors=True)
-            shutil.copytree(FAKES / "pkg-src", cache)
+            version = load(FAKES / "pkg-src/.claude-plugin/plugin.json", {})["version"]
+            cache = codex_home() / "plugins/cache/windroc/ensemble" / version
+            if not cache.exists():
+                shutil.copytree(FAKES / "pkg-src", cache)
             mark(cache / "REF", markets["windroc"].get("ref", ""))
     elif args[:2] == ["plugin", "remove"]:
         if not any(p["pluginId"] == args[2] for p in plugins):

@@ -90,6 +90,9 @@ That release's installer installs that release's plugins and broker; another ins
 
 It asks the `sudo` password once per run and keeps it only in memory, for every `sudo` the run makes (Homebrew's included), runs each login on the spot (`gh`, Claude Code and Codex open your browser; the broker's `claude setup-token` and its paste run on the terminal's alternate screen, cleared once the broker has the token, so it stays out of the scrollback), and shows and asks before it writes your shell profile, the config or launchd jobs. A rerun keeps your last answers, skips what is done and finishes an interrupted install. Before upgrading, see [Upgrading](docs/upgrading.md).
 
+Each run refreshes the selected Claude Code/Codex marketplaces and updates ensemble to the served ref before
+reading installed plugin files. If a client cannot reach that version, installation stops with its name and reason.
+
 For OpenCode, it reuses an executable on `PATH` that runs the minimum version or a newer stable 1.x release,
 and records its path in `[session.clients.opencode] executable`. Otherwise it installs the private copy
 in `~/.ensemble/opencode`. Plugin setup and login use the selected executable; cleanup preserves an existing installation.
