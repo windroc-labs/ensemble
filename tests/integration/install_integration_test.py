@@ -1185,9 +1185,12 @@ class InstallTest(Case):
             "open -a Docker",
             "setup-token",
             "brew install go",
-            RAW,
         ):
             self.assertNotIn(absent, calls)
+        self.assertEqual(
+            [call for call in self.calls() if call.startswith(f"curl -fsSL {RAW}")],
+            [f"curl -fsSL {RAW}main/.claude-plugin/plugin.json"] * 2,
+        )
         self.assertFalse(Path(self.home, ".egress").exists())
 
     def test_egress_pinned_and_healthy_rerun_runs_start_and_keeps_checkout(self):
@@ -1707,7 +1710,7 @@ class InstallTest(Case):
         self.assertEqual(result.code, 1, result.stderr)
         self.assertIn(
             f"install.sh: {self.opencode_package()} wants broker protocol {OTHER}, but its broker,"
-            f" the installed broker, speaks protocol {PROTOCOL}: update the plugin (Claude Code:",
+            f" release v9.8.7, speaks protocol {PROTOCOL}: update the plugin (Claude Code:",
             result.stderr,
         )
 
@@ -4511,7 +4514,7 @@ exec /bin/rm "$@"
         self.assertNotIn(f"dir\t{h}/.ensemble", ledger)
         self.assertNotIn("keychain\tensemble-github-users\tensemble-bot", ledger)
 
-    def test_rerun_skips_everything(self):
+    def test_rerun_refreshes_plugins_and_reuses_completed_setup(self):
         self.assert_ok(self.full())
         before = self.ledger()
         files = {
@@ -4533,10 +4536,20 @@ exec /bin/rm "$@"
         changing += ("security add", "launchctl", "npm install", "setup-token", "-codex ")
         changing += ("auth login", "login codex", "login claude", "login opencode", "codex login")
         changed = [c for c in self.calls() if any(w in c for w in changing)]
-        self.assertEqual([c for c in changed if not c.endswith(" status")], [])
+        self.assertEqual(
+            [c for c in changed if not c.endswith(" status")],
+            ["codex plugin add ensemble@windroc"],
+        )
         self.assertEqual(self.ledger(), before)
-        # the egress step always runs the pinned start.sh, which changes nothing here
-        exempt = {"sudo", "configuration", "plugin directory", "egress proxy"}
+        # Plugin refresh and the pinned egress start.sh run again; their current files stay unchanged.
+        exempt = {
+            "sudo",
+            "configuration",
+            "plugin directory",
+            "egress proxy",
+            "Claude Code plugins",
+            "Codex plugins",
+        }
         steps = re.findall(r"==> (.+)\n(?!    skip:)", result.stderr)
         self.assertEqual([s for s in steps if s not in exempt], [])
         for path, data in files.items():
