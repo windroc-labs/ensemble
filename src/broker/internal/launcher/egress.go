@@ -25,7 +25,7 @@ const (
 	workersKey      = "workers"
 	gatewayName     = "egress-proxy"
 	noProxy         = "localhost,127.0.0.1,::1"
-	egressHint      = " Start the egress gateway (./start.sh in its egress-proxy checkout, docs/docker-host.md#egress-gateway), then retry."
+	egressHint      = " Start the egress proxy (~/.egress/current/start.sh, docs/docker-host.md#egress-proxy), then retry."
 )
 
 // networkPattern is a Docker network name; never a flag.

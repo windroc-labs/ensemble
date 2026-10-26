@@ -584,8 +584,8 @@ to 3 s old, but the opening is sent only after a fresh capture shows no dialog; 
 - **Older image** after an upgrade or rebuild: the command warns `restart it to upgrade`; restart the worker.
 - **Container gone** (Docker Desktop restart, `docker rm`): the worker shows `dead`; `ensemble-session resume NAME`
   continues the conversation in a new container. Events queued in the old one are lost.
-- **Egress gateway not ready** (`egress_unavailable`): run `~/.egress/current/start.sh` (the installed egress-proxy
-  checkout the broker's `./start.sh` hint means; before a first successful install, rerun `scripts/install.sh --docker`), wait for
+- **Egress gateway not ready** (`egress_unavailable`): run `~/.egress/current/start.sh`, as the error says (before
+  a first successful install, rerun `scripts/install.sh --docker`), wait for
   `docker ps --filter name=egress-proxy` to show `(healthy)`, then start, restart or resume again ([Egress gateway](#egress-gateway)).
 - **Codex authentication expired** (`client_auth_expired`): run `/usr/local/libexec/ensemble/ensemble-broker login codex` on the host, then `ensemble-session resume NAME`; native history is kept. Renewal failures (`client_refresh_failed`) retry each minute until expiry, when the generation closes. No run logs in or uses another identity.
 

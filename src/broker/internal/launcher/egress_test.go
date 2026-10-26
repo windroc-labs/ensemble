@@ -95,9 +95,10 @@ func TestEgressRefusals(t *testing.T) {
 				if e.Code != protocol.EgressUnavailable || protocol.Exit(e.Code) != 17 || e.Cleanup != protocol.NotNeeded {
 					t.Fatalf("%+v", e)
 				}
-				if !strings.Contains(e.Message, tc.want) || !strings.Contains(e.Message, "./start.sh") ||
+				if !strings.Contains(e.Message, tc.want) || !strings.HasSuffix(e.Message, egressHint) ||
+					!strings.Contains(e.Message, "Start the egress proxy (~/.egress/current/start.sh") ||
 					(!strings.Contains(e.Message, "egress-proxy") && !strings.Contains(e.Message, "my-gateway")) {
-					t.Fatalf("message %q lacks %q, the gateway or ./start.sh", e.Message, tc.want)
+					t.Fatalf("message %q lacks %q, the proxy or ~/.egress/current/start.sh", e.Message, tc.want)
 				}
 				if got := d.verbs(); !slices.Equal(got, gatewayCalls[:tc.calls]) {
 					t.Fatalf("docker calls %q, want %q", got, gatewayCalls[:tc.calls])
