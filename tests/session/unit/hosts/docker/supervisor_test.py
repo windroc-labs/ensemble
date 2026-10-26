@@ -1,11 +1,12 @@
 """hosts/docker/supervisor.py: each relay request checked against the shared protocol fixtures, its
 generation, dir and seq, run by the resident hook worker, its reply and rejected line, the dead
-watch, the GitHub token refresher and main's lifecycle on an inherited lock, with fake processes.
+watch, the credential tick and main's lifecycle on an inherited lock, with fake processes.
 """
 
 import base64
 import contextlib
 import fcntl
+import inspect
 import io
 import json
 import logging
@@ -19,9 +20,7 @@ from unittest import mock
 from ensemble.session.engine.status_log import SessionStatusLog
 from ensemble.session.engine.types import SessionError
 from ensemble.session.hosts.docker import relay, supervisor
-from ensemble.session.hosts.docker.broker import Broker
 from ensemble.session.hosts.docker.supervisor import Supervisor
-from ensemble.session.hosts.docker.types import Noticed
 from ensemble.session.modes import tui_hook
 from tests.session.case import REPO, SRC, Case
 from tests.session.tui_hook_support import state as hook_state
@@ -34,6 +33,7 @@ GEN = "0123456789abcdef0123456789abcdef"
 FIXTURES = os.path.join(REPO, "src", "broker", "protocol", "docker-relay", "fixtures")
 TUI = "/Users/example/.ensemble/tui/worker_1"
 THREAD = threading.Thread  # MainTest patches threading.Thread
+BROKER_FIXTURES = os.path.join("src", "broker", "protocol", "docker-broker", "fixtures")
 
 
 class WorkerProc:
@@ -146,45 +146,25 @@ class Base(Case):
             return []
 
 
-class RefreshCapabilityTest(Base):
+class AuditWarningTest(Base):
     def test_audit_warning_is_visible_in_the_session_event_file(self):
         response = {
             "container": f"ensemble-worker_1-{GEN}",
-            "github": [],
-            "credential_expires_at": None,
+            "next_check": None,
+            "deadline": None,
+            "results": [],
+            "notices": [],
             "audit_warning": "audit_write_failed",
         }
         fake = FakeBroker((0, json.dumps(response), ""))
         self.supervisor.broker.runner = fake
-        result = self.supervisor.broker.refresh(f"ensemble-worker_1-{GEN}", "/manifest")
-        self.assertEqual(result.github, [])
+        result = self.supervisor.broker.maintain(f"ensemble-worker_1-{GEN}", "/manifest", root=REPO)
+        self.assertEqual(result.results, [])
         with open(self.events) as stream:
             event = stream.read()
         self.assertIn("worker_1 credential_audit_warning audit_write_failed:", event)
         self.assertIn("Do not repeat a successful start", event)
         self.assertEqual(len(fake.calls), 1)
-
-    def test_only_a_true_capability_enables_refresh(self):
-        path = os.path.join(self.state, "host.json")
-        self.assertFalse(supervisor.refreshes_client(self.state))
-        for record, expected in (
-            ({"credential_refresh": True}, True),
-            ({"credential_refresh": False}, False),
-            ({"client": "agent"}, False),
-            ({"client": "agent", "credential_refresh": None}, False),
-            ({"client": "agent", "credential_refresh": 1}, False),
-            ({"client": "agent", "credential_refresh": "true"}, False),
-            ([], False),
-            (None, False),
-            (True, False),
-        ):
-            with self.subTest(record=record):
-                with open(path, "w") as stream:
-                    json.dump(record, stream)
-                self.assertEqual(supervisor.refreshes_client(self.state), expected)
-        with open(path, "w") as stream:
-            stream.write("{")
-        self.assertFalse(supervisor.refreshes_client(self.state))
 
 
 class HandleTest(Base):
@@ -583,140 +563,6 @@ class WatchTest(Base):
         self.assertEqual(self.events_text(), "")
 
 
-class Waits:
-    """A stop event set after `n` waits; records each timeout."""
-
-    def __init__(self, n):
-        self.n, self.timeouts = n, []
-
-    def wait(self, timeout):
-        self.timeouts.append(timeout)
-        return len(self.timeouts) > self.n
-
-
-NO_NOTICES = Noticed([], None)
-
-
-class TokenBroker:
-    def __init__(self, *results):
-        self.results, self.calls = list(results), []
-
-    def notices(self, _container, _manifest, delivered=(), *, root):
-        return NO_NOTICES
-
-    def refresh(self, container, manifest):
-        self.calls.append((container, manifest))
-        found = self.results.pop(0)
-        if isinstance(found, Exception):
-            raise found
-        return SimpleNamespace(github=found, credential_expires_at=None)
-
-
-NOW = 1_792_238_400.0  # 2026-10-17T12:00:00Z
-
-
-def no_notices():
-    response = {"container": f"ensemble-worker_1-{GEN}", "notices": [], "next_check": None}
-    return SimpleNamespace(returncode=0, stdout=json.dumps(response), stderr="")
-
-
-def expiry(seconds, account="acme"):
-    at = datetime.fromtimestamp(NOW + seconds, UTC)
-    return {"account": account, "expires_at": at.strftime("%Y-%m-%dT%H:%M:%SZ")}
-
-
-class RefreshTest(Base):
-    def setUp(self):
-        super().setUp()
-        self.path = os.path.join(self.state, f"{GEN}.github.json")
-        self.supervisor.clock = lambda: NOW
-
-    def refresh(self, saved, *results, waits=1):
-        if saved is not None:
-            with open(self.path, "w") as f:
-                json.dump(saved, f)
-        self.supervisor.broker = fake = TokenBroker(*results)
-        stop = Waits(waits)
-        self.supervisor.refresh(stop)
-        return fake, stop.timeouts
-
-    def saved(self):
-        with open(self.path) as f:
-            return json.load(f)
-
-    def test_no_expiry_file_or_an_empty_list_never_refreshes(self):
-        for saved in (None, [], "corrupt"):
-            with self.subTest(saved=saved):
-                fake, timeouts = self.refresh(saved)
-                self.assertEqual((fake.calls, timeouts), ([], []))
-
-    def test_it_refreshes_ten_minutes_before_the_earliest_expiry_and_saves_the_new_list(self):
-        new = [expiry(3600)]
-        fake, timeouts = self.refresh([expiry(3000, "b"), expiry(2400, "a")], new)
-        container = f"ensemble-worker_1-{GEN}"
-        self.assertEqual(fake.calls, [(container, os.path.join(self.state, f"{GEN}.json"))])
-        self.assertEqual(timeouts, [1800.0, 3000.0])
-        self.assertEqual(self.saved(), new)
-
-    def test_a_past_due_expiry_refreshes_at_once(self):
-        _, timeouts = self.refresh([expiry(60)], [expiry(3600)])
-        self.assertEqual(timeouts[0], 0.0)
-
-    def test_a_failure_writes_the_event_and_retries_every_minute(self):
-        new = [expiry(3600)]
-        error = SessionError("broker: GitHub request failed: GitHub answered HTTP 500.")
-        fake, timeouts = self.refresh([expiry(600)], error, error, new, waits=3)
-        self.assertEqual(len(fake.calls), 3)
-        self.assertEqual(timeouts, [0.0, 60.0, 60.0, 3000.0])
-        with open(self.events) as f:
-            lines = f.read().splitlines()
-        self.assertEqual(len(lines), 2)
-        for line in lines:
-            self.assertRegex(
-                line,
-                r"^\d\d:\d\d:\d\d worker_1 github_refresh_failed broker: GitHub request failed:",
-            )
-        self.assertEqual(self.saved(), new)
-
-    def test_without_an_events_file_a_failure_still_retries(self):
-        self.supervisor.events = ""
-        fake, timeouts = self.refresh([expiry(600)], SessionError("x"), [], waits=2)
-        self.assertEqual((len(fake.calls), timeouts), (2, [0.0, 60.0]))
-        self.assertEqual(self.saved(), [])
-
-    def test_a_stop_before_the_due_time_never_refreshes(self):
-        fake, timeouts = self.refresh([expiry(3600)], waits=0)
-        self.assertEqual((fake.calls, timeouts), ([], [3000.0]))
-
-    def test_github_retries_across_expiry_and_recovers(self):
-        now, waits = NOW, []
-        self.supervisor.clock = lambda: now
-
-        def wait(delay):
-            nonlocal now
-            waits.append(delay)
-            if len(waits) > 12:
-                return True
-            now += delay
-            return False
-
-        with open(self.path, "w") as stream:
-            json.dump([expiry(3600)], stream)
-        renewed = [expiry(7260)]
-        self.supervisor.broker = fake = TokenBroker(*([SessionError("offline")] * 11), renewed)
-        self.supervisor.refresh(SimpleNamespace(wait=wait))
-        self.assertEqual(now, NOW + 3660)
-        self.assertEqual(waits, [3000] + [60] * 11 + [3000])
-        self.assertEqual(len(fake.calls), 12)
-        self.assertEqual(self.saved(), renewed)
-        with open(self.events) as stream:
-            lines = stream.read().splitlines()
-        self.assertEqual(len(lines), 11)
-        self.assertTrue(
-            all(line.endswith("worker_1 github_refresh_failed offline") for line in lines)
-        )
-
-
 class MainTest(Base):
     def main(self, relay, fd, *args):
         argv = ["w", self.state, TUI, "", HOOK, GEN, str(fd), '["relay"]', '["wait"]', '["check"]']
@@ -757,8 +603,8 @@ class MainTest(Base):
         threads = {
             c.kwargs["target"].__name__: c.kwargs["args"] for c in self.threads.call_args_list
         }
-        self.assertEqual(threads.keys(), {"watch", "refresh"})
-        self.assertTrue(threads["refresh"][0].is_set())
+        self.assertEqual(threads.keys(), {"watch", "maintain"})
+        self.assertTrue(threads["maintain"][0].is_set())
 
     def test_an_unheld_lock_fd_or_bad_args_exit_nonzero(self):
         self.assertEqual(supervisor.main(["too", "few"]), 2)
@@ -773,395 +619,253 @@ class MainTest(Base):
         popen.assert_not_called()
 
 
-class CodexRenewalTest(Base):
-    def setUp(self):
-        super().setUp()
-        self.now = NOW
-        self.supervisor.clock = lambda: self.now
-        self.credential = os.path.join(self.state, f"{GEN}.credential.json")
-        self.github = os.path.join(self.state, f"{GEN}.github.json")
-        with open(os.path.join(self.state, "host.json"), "w") as stream:
-            json.dump({"client": "codex", "generation": GEN, "credential_refresh": True}, stream)
-        with open(self.github, "w") as stream:
-            json.dump([], stream)
-        self.supervisor.broker = mock.Mock()
-        self.supervisor.broker.notices.return_value = NO_NOTICES
-        self.waits = []
-
-    def deadline(self, seconds):
-        with open(self.credential, "w") as stream:
-            json.dump(expiry(seconds)["expires_at"], stream)
-
-    def stop(self, count):
-        def wait(delay):
-            self.waits.append(delay)
-            if len(self.waits) > count:
-                return True
-            self.now += delay
-            return False
-
-        return SimpleNamespace(wait=wait)
-
-    def renewed(self, client=3600, github=3600):
-        self.deadline(client)
-        return SimpleNamespace(
-            github=[expiry(github)], credential_expires_at=expiry(client)["expires_at"]
-        )
-
-    def test_earliest_client_or_github_deadline_schedules_refresh(self):
-        for client, github, delay in ((1800, 3600, 1200), (3600, 1800, 1200)):
-            with self.subTest(client=client):
-                self.now, self.waits = NOW, []
-                self.deadline(client)
-                with open(self.github, "w") as stream:
-                    json.dump([expiry(github)], stream)
-                self.supervisor.broker.refresh.side_effect = lambda *_args: self.renewed(7200, 7200)
-                self.supervisor.refresh(self.stop(1))
-                self.assertEqual(self.waits, [delay, 5400])
-                self.supervisor.broker.close.assert_not_called()
-
-    def test_wire_refresh_keeps_both_credentials_valid_beyond_two_hours(self):
-        self.deadline(3600)
-        with open(self.github, "w") as stream:
-            json.dump([expiry(3000)], stream)
-        deadlines, calls = [NOW + 3600, NOW + 3000], []
-
-        def run(argv, **_kwargs):
-            if argv[1] == "notices":
-                return no_notices()
-            self.assertEqual(argv[1], "refresh")
-            self.assertLess(self.now, min(deadlines))
-            calls.append(self.now)
-            offset = self.now - NOW
-            self.deadline(offset + 3600)
-            deadlines[:] = [self.now + 3600, self.now + 4200]
-            response = {
-                "container": f"ensemble-worker_1-{GEN}",
-                "github": [expiry(offset + 4200)],
-                "credential_expires_at": expiry(offset + 3600)["expires_at"],
-            }
-            return SimpleNamespace(returncode=0, stdout=json.dumps(response), stderr="")
-
-        self.supervisor.broker = Broker(run)
-        self.supervisor.refresh(self.stop(3))
-        self.assertEqual(calls, [NOW + 2400, NOW + 5400, NOW + 8400])
-        self.assertEqual(self.waits, [2400, 3000, 3000, 3000])
-        self.assertGreater(self.now, NOW + 7200)
-        self.assertGreater(min(deadlines), self.now)
-        with open(self.github) as stream:
-            self.assertEqual(json.load(stream), [expiry(12600)])
-        with open(self.events) as stream:
-            self.assertEqual(stream.read(), "")
-
-    def test_wire_failure_retries_and_recovers_beyond_initial_expiry(self):
-        for code, exit_code in (("refresh_failed", 16), ("github_failed", 15)):
-            with self.subTest(code=code):
-                self.now, self.waits = NOW, []
-                self.deadline(3600)
-                with open(self.github, "w") as stream:
-                    json.dump([expiry(3600)], stream)
-                with open(self.events, "w"):
-                    pass
-                calls = []
-
-                def run(argv, *, calls=calls, code=code, exit_code=exit_code, **_kwargs):
-                    if argv[1] == "notices":
-                        return no_notices()
-                    self.assertEqual(argv[1], "refresh")
-                    calls.append(self.now)
-                    if len(calls) == 1:
-                        error = {
-                            "command": "refresh",
-                            "code": code,
-                            "message": "Renewal unavailable",
-                            "cause": "Retry the broker",
-                            "cleanup": "not_needed",
-                        }
-                        return SimpleNamespace(
-                            returncode=exit_code,
-                            stdout="",
-                            stderr=json.dumps({"exit_code": exit_code, "error": error}),
-                        )
-                    offset = self.now - NOW
-                    self.deadline(offset + 3600)
-                    return SimpleNamespace(
-                        returncode=0,
-                        stdout=json.dumps(
-                            {
-                                "container": f"ensemble-worker_1-{GEN}",
-                                "github": [expiry(offset + 3600)],
-                                "credential_expires_at": expiry(offset + 3600)["expires_at"],
-                            }
-                        ),
-                        stderr="",
-                    )
-
-                self.supervisor.broker = Broker(run)
-                self.supervisor.refresh(self.stop(3))
-                self.assertEqual(calls, [NOW + 3000, NOW + 3060, NOW + 6060])
-                self.assertEqual(self.waits, [3000, 60, 3000, 3000])
-                with open(self.github) as stream:
-                    self.assertEqual(json.load(stream), [expiry(9660)])
-                with open(self.events) as stream:
-                    lines = stream.read().splitlines()
-                self.assertEqual(len(lines), 1)
-                self.assertTrue(
-                    lines[0].endswith(
-                        "worker_1 client_refresh_failed broker: Renewal unavailable (Retry the broker)"
-                    )
-                )
-
-    def test_expired_recovery_reconciles_before_closing(self):
-        self.deadline(-1)
-        self.supervisor.broker.refresh.side_effect = lambda *_args: self.renewed()
-        self.supervisor.refresh(self.stop(1))
-        self.assertEqual(self.waits, [0, 3000])
-        self.supervisor.broker.close.assert_not_called()
-
-    def test_failure_retries_until_expiry_then_full_event_and_log_and_close(self):
-        self.deadline(100)
-        self.supervisor.broker.refresh.side_effect = SessionError("offline")
-        self.supervisor.broker.close.side_effect = [SessionError("offline"), False]
-        with self.assertLogs("session", level="WARNING") as logged:
-            self.supervisor.refresh(self.stop(4))
-        reason = "Client authentication expired; run /usr/local/libexec/ensemble/ensemble-broker login codex on the host, then resume"
-        self.assertEqual(self.waits, [0, 60, 40, 60])
-        self.assertEqual(self.supervisor.broker.refresh.call_count, 3)
-        self.assertEqual(self.supervisor.broker.close.call_count, 2)
-        with open(self.events) as stream:
-            lines = stream.read().splitlines()
-        self.assertEqual(lines[-1].split(" ", 1)[1], f"worker_1 client_auth_expired {reason}")
-        self.assertIn(
-            f"WARNING:session:docker session worker_1: client_auth_expired {reason}", logged.output
-        )
-
-    def test_failure_event_carries_the_brokers_message_and_cause(self):
-        self.deadline(100)
-        error = {
-            "command": "refresh",
-            "code": "refresh_failed",
-            "message": "Writing Codex credentials into the container failed",
-            "cleanup": "not_needed",
-            "cause": "bootstrap: cannot write managed Codex credentials: No space left on device",
-        }
-        reply = (16, "", json.dumps({"exit_code": 16, "error": error}))
-        self.supervisor.broker = Broker(FakeBroker(noticed([], None), reply, reply))
-        self.supervisor.refresh(self.stop(1))
-        with open(self.events) as stream:
-            lines = stream.read().splitlines()
-        self.assertEqual(
-            lines[0].split(" ", 1)[1],
-            "worker_1 client_refresh_failed broker: Writing Codex credentials into the container"
-            " failed (bootstrap: cannot write managed Codex credentials: No space left on device)",
-        )
-
-    def test_partial_publication_survives_lost_reply_and_github_failure(self):
-        self.deadline(30)
-
-        def partial(*_args):
-            self.deadline(120)
-            raise SessionError("GitHub unavailable")
-
-        self.supervisor.broker.refresh.side_effect = partial
-        self.supervisor.refresh(self.stop(1))
-        self.assertEqual(self.waits, [0, 60])
-        self.supervisor.broker.close.assert_not_called()
-
-    def test_missing_client_retains_full_fallback_event_and_log(self):
-        with open(os.path.join(self.state, "host.json"), "w") as stream:
-            json.dump({"credential_refresh": True}, stream)
-        self.deadline(-1)
-        self.supervisor.broker.refresh.side_effect = SessionError("offline")
-        with self.assertLogs("session", level="WARNING") as logged:
-            self.supervisor.refresh(self.stop(1))
-        reason = "Client authentication expired; run /usr/local/libexec/ensemble/ensemble-broker login for this client on the host, then resume"
-        with open(self.events) as stream:
-            lines = stream.read().splitlines()
-        self.assertEqual(lines[-1].split(" ", 1)[1], f"worker_1 client_auth_expired {reason}")
-        self.assertIn(
-            f"WARNING:session:docker session worker_1: client_auth_expired {reason}", logged.output
-        )
-        self.supervisor.broker.close.assert_called_once_with(f"ensemble-worker_1-{GEN}")
-
-    def test_lost_reply_with_long_publication_retries_after_one_minute(self):
-        self.deadline(30)
-
-        def partial(*_args):
-            self.deadline(3600)
-            raise SessionError("response lost")
-
-        self.supervisor.broker.refresh.side_effect = partial
-        self.supervisor.refresh(self.stop(1))
-        self.assertEqual(self.waits, [0, 60])
-        self.supervisor.broker.close.assert_not_called()
-
-    def test_successful_short_lifetime_has_no_busy_loop(self):
-        self.deadline(30)
-        self.supervisor.broker.refresh.side_effect = lambda *_args: self.renewed(120)
-        self.supervisor.refresh(self.stop(1))
-        self.assertEqual(self.waits, [0, 60])
-
-    def test_missing_or_bad_deadline_reconciles_and_fails_closed(self):
-        for value in (None, "bad", []):
-            with self.subTest(value=value):
-                self.waits = []
-                with open(self.credential, "w") as stream:
-                    json.dump(value, stream)
-                self.supervisor.broker.refresh.side_effect = SessionError("unavailable")
-                self.supervisor.broker.close.reset_mock()
-                self.supervisor.refresh(self.stop(1))
-                self.supervisor.broker.close.assert_called_once_with(f"ensemble-worker_1-{GEN}")
-
-    def test_stop_cancels_due_refresh(self):
-        self.deadline(30)
-        self.supervisor.refresh(self.stop(0))
-        self.supervisor.broker.refresh.assert_not_called()
-        self.supervisor.broker.close.assert_not_called()
-        self.assertEqual(self.waits, [0])
+NOW = 1_792_238_400.0  # 2026-10-17T12:00:00Z
+CONTAINER = f"ensemble-worker_1-{GEN}"
+REASON = (
+    "Client authentication expired; run /usr/local/libexec/ensemble/ensemble-broker login codex"
+    " on the host, then resume."
+)
+NOTICE = {
+    "key": "ensemble-env/db@1:7d",
+    "text": "ensemble-env/db expires 2026-10-23 (explicit), in 6 days: rerun its login",
+}
 
 
 def at(seconds):
     return datetime.fromtimestamp(NOW + seconds, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-NOTICE = {
-    "key": "ensemble-claude/default@1:30d",
-    "text": "ensemble-claude/default expires 2026-11-06 (explicit), in 20 days: run claude"
-    " setup-token, then ensemble-broker login claude --fresh-token; running sessions keep their"
-    " copy until they restart",
-}
+def deadline(seconds):
+    return {"at": at(seconds), "action": "close", "reason": REASON}
 
 
-def noticed(notices, next_check):
+def maintained(next_check=None, until=None, results=(), notices=(), err=""):
     response = {
-        "container": f"ensemble-worker_1-{GEN}",
-        "notices": notices,
+        "container": CONTAINER,
         "next_check": next_check,
+        "deadline": until,
+        "results": list(results),
+        "notices": list(notices),
     }
-    return 0, json.dumps(response), ""
+    return 0, json.dumps(response), err
 
 
-def notices_failure(message, code="internal_error", exit_code=70):
-    error = {"command": "notices", "code": code, "message": message, "cleanup": "not_needed"}
-    return exit_code, "", json.dumps({"exit_code": exit_code, "error": error})
+def failed(credential, message, **extra):
+    error = {"code": "refresh_failed", "message": message, **extra}
+    return {"credential": credential, "expires_at": None, "error": error}
 
 
-class NoticeTest(Base):
-    """A session without GitHub or Codex tokens: its tick only checks static secret notices."""
+CLOSED = (0, json.dumps({"container": CONTAINER, "removed": True}), "")
+OFFLINE = OSError(2, "No such file or directory")
+
+
+class MaintainTest(Base):
+    """The shared tick, through the real Broker client over a fake broker process."""
 
     def setUp(self):
         super().setUp()
         self.now, self.waits = NOW, []
         self.supervisor.clock = lambda: self.now
         self.supervisor.hook = os.path.join(REPO, "bin", "ensemble-session")
+        self.cache = supervisor.deadline_file(self.state, GEN)
 
-    def run_ticks(self, *results, ticks):
-        fake = FakeBroker(*results)
-        self.supervisor.broker = Broker(fake)
+    def run_ticks(self, *responses, ticks=20):
+        fake = FakeBroker(*responses)
+        self.supervisor.broker.runner = fake
 
         def wait(delay):
             self.waits.append(delay)
-            if len(self.waits) > ticks:
+            if len(self.waits) > ticks or not fake.results:
                 return True
             self.now += delay
             return False
 
-        self.supervisor.refresh(SimpleNamespace(wait=wait))
+        self.supervisor.maintain(SimpleNamespace(wait=wait))
         return [call[1:] for call in fake.calls]
 
-    def event_lines(self):
+    def lines(self):
         with open(self.supervisor.events) as stream:
-            return stream.read().splitlines()
+            return [line.split(" ", 1)[1] for line in stream.read().splitlines()]
 
-    def test_first_tick_writes_credential_notice_once(self):
+    def cached(self):
+        with open(self.cache) as stream:
+            return json.load(stream)
+
+    def test_unknown_provider_is_scheduled_and_reported_by_metadata(self):
         calls = self.run_ticks(
-            noticed([NOTICE], at(3600)),
-            noticed([], at(3600)),
-            noticed([], at(7200)),
-            ticks=1,
+            maintained(at(3000), deadline(3100), [failed("fake-x", "Fake renewal failed.")]),
+            OFFLINE,
+            OFFLINE,
+            CLOSED,
         )
-        lines = self.event_lines()
-        self.assertEqual(len(lines), 1)
-        self.assertRegex(
-            lines[0], r"^\d\d:\d\d:\d\d worker_1 credential_notice ensemble-claude/default "
-        )
-        self.assertTrue(lines[0].endswith(NOTICE["text"]))
-        self.assertIn("claude setup-token", lines[0])
-        base = [
-            "notices",
-            "--container",
-            f"ensemble-worker_1-{GEN}",
-            "--manifest",
-            f"{self.state}/{GEN}.json",
-        ]
-        self.assertEqual(calls, [base, [*base, "--delivered", NOTICE["key"]], base])
-        self.assertEqual(self.waits, [3600, 3600])
-
-    def test_event_write_failure_acks_nothing(self):
-        os.remove(self.supervisor.events)
-        os.mkdir(self.supervisor.events)  # every write fails
-        calls = self.run_ticks(noticed([NOTICE], at(60)), noticed([NOTICE], at(60)), ticks=1)
-        self.assertEqual(len(calls), 2)
-        self.assertTrue(all("--delivered" not in call for call in calls))
-
-    def test_without_events_the_notice_is_logged_and_acked(self):
-        self.supervisor.events = ""
-        with self.assertLogs("session", "WARNING") as logs:
-            calls = self.run_ticks(noticed([NOTICE], None), noticed([], None), ticks=0)
+        self.assertEqual([c[0] for c in calls], ["maintain"] * 3 + ["close"])
+        self.assertEqual(self.waits, [0.0, 3000.0, 60.0, 40.0])
         self.assertEqual(
-            logs.output,
-            [f"WARNING:session:docker session worker_1: credential_notice {NOTICE['text']}"],
-        )
-        self.assertEqual(calls[1][-2:], ["--delivered", NOTICE["key"]])
-        self.assertEqual(self.waits, [])
-
-    def test_a_failing_check_writes_one_marker_per_streak_and_retries(self):
-        sentinel = "SENTINEL-n0t1ce-failure"
-        output = io.StringIO()
-        handler = logging.StreamHandler(output)
-        logger = logging.getLogger("session")
-        logger.addHandler(handler)
-        self.addCleanup(logger.removeHandler, handler)
-        calls = self.run_ticks(
-            notices_failure(sentinel),
-            notices_failure(sentinel),
-            noticed([], at(3600)),
-            notices_failure(sentinel, "manifest_rejected", 3),
-            ticks=3,
-        )
-        self.assertEqual(len(calls), 4)
-        self.assertEqual(self.waits[:3], [60, 60, 3480])
-        lines = self.event_lines()
-        self.assertEqual(
-            [line.split(" ", 1)[1] for line in lines],
+            self.lines(),
             [
-                "worker_1 credential_notice_failed internal_error",
-                "worker_1 credential_notice_failed manifest_rejected",
+                "worker_1 credential_refresh_failed fake-x: Fake renewal failed.",
+                "worker_1 credential_maintenance_failed transport",
+                f"worker_1 client_auth_expired {REASON}",
             ],
         )
-        for text in ("\n".join(lines), output.getvalue()):
-            self.assertNotIn(sentinel, text)
+        self.assertEqual(self.cached(), deadline(3100))
 
-    def test_a_transport_failure_is_a_fixed_marker(self):
-        self.run_ticks((0, "not json SENTINEL", ""), noticed([], None), ticks=1)
-        lines = self.event_lines()
-        self.assertEqual(
-            [line.split(" ", 1)[1] for line in lines],
-            ["worker_1 credential_notice_failed transport"],
-        )
+    def test_tick_source_names_no_provider(self):
+        source = "".join(
+            inspect.getsource(f)
+            for f in (
+                supervisor.maintain,
+                supervisor._close,
+                supervisor._tell,
+                supervisor._cached,
+                supervisor._timestamp,
+                supervisor.deadline_file,
+                Supervisor.maintain,
+                Supervisor._report,
+            )
+        ).lower()
+        for name in ("codex", "github", "claude", "opencode"):
+            with self.subTest(name=name):
+                self.assertNotIn(name, source)
 
-    def test_a_failed_ack_repeats_the_notice(self):
-        self.run_ticks(
-            noticed([NOTICE], at(60)),
-            notices_failure("ack failed"),
-            noticed([NOTICE], at(3600)),
-            noticed([], at(3600)),
-            ticks=1,
-        )
-        lines = self.event_lines()
+    def test_outage_retries_then_enforces_cached_deadline(self):
+        with open(self.cache, "w") as stream:
+            json.dump(deadline(150), stream)
+        failure = (16, "", "{")
+        calls = self.run_ticks(OFFLINE, OFFLINE, failure, SessionError("busy"), CLOSED)
+        self.assertEqual([c[0] for c in calls], ["maintain"] * 3 + ["close", "close"])
+        self.assertEqual(self.waits, [0.0, 60.0, 60.0, 30.0, 60.0])
+        lines = self.lines()
         self.assertEqual(len(lines), 2)
-        self.assertTrue(all(" credential_notice " in line for line in lines))
+        self.assertEqual(lines[0], "worker_1 credential_maintenance_failed transport")
+        self.assertEqual(lines[1], f"worker_1 client_auth_expired {REASON}")
 
-    def test_no_static_secret_stops_checking(self):
-        calls = self.run_ticks(noticed([], None), ticks=5)
-        self.assertEqual((len(calls), self.waits), (1, []))
+    def test_a_passed_cached_deadline_still_ticks_first(self):
+        with open(self.cache, "w") as stream:
+            json.dump(deadline(-100), stream)
+        calls = self.run_ticks(maintained(at(3600), deadline(7200)), OFFLINE, ticks=1)
+        self.assertEqual([c[0] for c in calls], ["maintain"])
+        self.assertEqual(self.waits, [0.0, 3600.0])
+        self.assertEqual((self.cached(), self.lines()), (deadline(7200), []))
+
+    def test_a_passed_cached_deadline_closes_after_one_failed_tick(self):
+        with open(self.cache, "w") as stream:
+            json.dump(deadline(-100), stream)
+        calls = self.run_ticks(OFFLINE, CLOSED)
+        self.assertEqual([c[0] for c in calls], ["maintain", "close"])
+        self.assertEqual(
+            self.lines(),
+            [
+                "worker_1 credential_maintenance_failed transport",
+                f"worker_1 client_auth_expired {REASON}",
+            ],
+        )
+
+    def test_a_reply_without_a_deadline_keeps_the_confirmed_one(self):
+        with open(self.cache, "w") as stream:
+            json.dump(deadline(100), stream)
+        calls = self.run_ticks(maintained(at(60)), OFFLINE, CLOSED)
+        self.assertEqual([c[0] for c in calls], ["maintain", "maintain", "close"])
+        self.assertEqual(self.waits, [0.0, 60.0, 40.0])
+        self.assertEqual(self.cached(), deadline(100))
+
+    def test_no_deadline_never_closes(self):
+        calls = self.run_ticks(*[OFFLINE] * 6)
+        self.assertEqual([c[0] for c in calls], ["maintain"] * 6)
+        self.assertEqual(self.waits, [0.0] + [60.0] * 6)
+        self.assertEqual(len(self.lines()), 1)
+
+    def test_later_confirmed_deadline_replaces_cache(self):
+        with open(self.cache, "w") as stream:
+            json.dump(deadline(100), stream)
+        calls = self.run_ticks(maintained(at(4000), deadline(5000)), OFFLINE, ticks=1)
+        self.assertEqual([c[0] for c in calls], ["maintain"])
+        self.assertEqual(self.waits, [0.0, 4000.0])
+        self.assertEqual(self.cached(), deadline(5000))
+        self.assertEqual(self.lines(), [])
+
+    def test_a_bad_cache_is_no_deadline(self):
+        for cached in ("{", '{"at": "x", "action": "close", "reason": "r"}', '{"at": 1}', "[]"):
+            with self.subTest(cached=cached):
+                with open(self.cache, "w") as stream:
+                    stream.write(cached)
+                self.waits = []
+                calls = self.run_ticks(OFFLINE, OFFLINE, ticks=1)
+                self.assertEqual([c[0] for c in calls], ["maintain"])
+
+    def test_partial_result_through_broker_reaches_event_file(self):
+        with open(os.path.join(REPO, BROKER_FIXTURES, "maintain-output.json")) as stream:
+            response = json.load(stream)
+        calls = self.run_ticks((0, json.dumps(response), ""), OFFLINE, ticks=1)
+        self.assertEqual(
+            calls[0], ["maintain", "--container", CONTAINER, "--manifest", self.manifest()]
+        )
+        self.assertEqual(
+            self.lines(),
+            ["worker_1 credential_refresh_failed codex: Renewal unavailable. (status 503)"],
+        )
+        self.assertEqual(self.cached(), response["deadline"])
+        self.assertEqual(self.waits, [0.0, 60.0])
+
+    def manifest(self):
+        return os.path.join(self.state, f"{GEN}.json")
+
+    def test_notice_reported_then_acked_at_once(self):
+        calls = self.run_ticks(
+            maintained(at(3600), notices=[NOTICE]), maintained(at(3600)), OFFLINE, ticks=2
+        )
+        self.assertEqual(calls[1][5:], ["--delivered", NOTICE["key"]])
+        self.assertEqual(self.waits, [0.0, 0.0, 3600.0])
+        self.assertEqual(self.lines(), [f"worker_1 credential_notice {NOTICE['text']}"])
+
+    def test_unwritten_notice_is_not_acked(self):
+        self.supervisor.events = self.state  # a directory: every write fails
+        calls = self.run_ticks(
+            maintained(at(60), notices=[NOTICE]), maintained(at(3600)), OFFLINE, ticks=2
+        )
+        self.assertEqual(len(calls[1]), 5)
+        self.assertEqual(self.waits[:2], [0.0, 60.0])
+
+    def test_whole_failure_reported_once_per_streak(self):
+        self.run_ticks(OFFLINE, OFFLINE, maintained(at(60)), OFFLINE, OFFLINE, ticks=5)
+        lines = [line for line in self.lines() if "credential_maintenance_failed" in line]
+        self.assertEqual(len(lines), 2)
+
+    def test_a_broker_error_keeps_its_message(self):
+        error = {
+            "exit_code": 3,
+            "error": {
+                "command": "maintain",
+                "code": "manifest_rejected",
+                "message": "Manifest rejected: maintain needs the container's manifest.",
+                "cleanup": "not_needed",
+            },
+        }
+        self.run_ticks((3, "", json.dumps(error)), OFFLINE, ticks=1)
+        self.assertEqual(
+            self.lines(),
+            [
+                "worker_1 credential_maintenance_failed broker: Manifest rejected: maintain"
+                " needs the container's manifest."
+            ],
+        )
+
+    def test_event_file_holds_only_the_brokers_message(self):
+        sentinel = "SENTINEL-s3ss10n"
+        message = f"Writing a GitHub token into {CONTAINER} failed."
+        self.run_ticks(
+            maintained(at(60), results=[failed("github", message)], err=sentinel), ticks=1
+        )
+        with open(self.supervisor.events) as stream:
+            written = stream.read()
+        self.assertNotIn(sentinel, written)
+        self.assertEqual(self.lines(), [f"worker_1 credential_refresh_failed github: {message}"])
+
+    def test_without_events_the_report_goes_to_the_log(self):
+        self.supervisor.events = ""
+        with self.assertLogs("session", logging.WARNING) as logged:
+            self.run_ticks(maintained(at(60), notices=[NOTICE]), OFFLINE, ticks=1)
+        self.assertIn(
+            f"WARNING:session:docker session worker_1: credential_notice {NOTICE['text']}",
+            logged.output,
+        )

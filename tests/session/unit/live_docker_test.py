@@ -7,6 +7,7 @@ import re
 import types
 import unittest
 from contextlib import nullcontext
+from types import SimpleNamespace
 from unittest import mock
 
 from tests.session import live_docker as gate
@@ -891,16 +892,22 @@ class Proc:
 
 
 class Broker:
-    """A fake Broker: raises `fails` SessionErrors, then refreshes."""
+    """A fake Broker: `fails` maintains fail, alternately raising and reporting a provider error;
+    then they renew.
+    """
 
     def __init__(self, fails):
         self.fails, self.calls = fails, []
 
-    def refresh(self, container, manifest):
-        self.calls.append((container, manifest))
+    def maintain(self, container, manifest, delivered=(), *, renew=False, root):
+        self.calls.append((container, manifest, renew, root))
         if self.fails:
             self.fails -= 1
-            raise gate.SessionError("not yet")
+            if self.fails % 2:
+                raise gate.SessionError("not yet")
+            error = {"code": "refresh_failed", "message": "not yet"}
+            return SimpleNamespace(results=[{"credential": "github", "error": error}])
+        return SimpleNamespace(results=[{"credential": "github", "error": None}])
 
 
 class RoleRunTest(Case):
@@ -972,8 +979,8 @@ class RoleRunTest(Case):
             mock.patch("time.sleep") as sleep,
             mock.patch("sys.stdout", new_callable=io.StringIO) as out,
         ):
-            gate.RoleRun("role", "/bin/docker", broker=broker).refresh("c", "m.json")
-        self.assertEqual(broker.calls, [("c", "m.json")] * 3)
+            gate.RoleRun("role", "/bin/docker", broker=broker).renew("c", "m.json")
+        self.assertEqual(broker.calls, [("c", "m.json", True, gate.REPO)] * 3)
         self.assertEqual([c.args for c in sleep.call_args_list], [(gate.REFRESH_RETRY,)] * 2)
         self.assertIn("PASS token refresh of c", out.getvalue())
 
@@ -984,7 +991,7 @@ class RoleRunTest(Case):
             mock.patch("time.monotonic", lambda: next(clock)),
             self.assertRaises(SystemExit) as raised,
         ):
-            gate.RoleRun("role", "/bin/docker", broker=Broker(fails=99)).refresh("c", "m.json")
+            gate.RoleRun("role", "/bin/docker", broker=Broker(fails=99)).renew("c", "m.json")
         self.assertEqual(str(raised.exception), "FAIL token refresh of c: not yet")
 
 

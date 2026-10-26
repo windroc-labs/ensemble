@@ -40,7 +40,7 @@ func login(t *testing.T, s credential.StaticStore, ref string, reg credential.Re
 	}
 }
 
-func noticeKeys(r NoticesResult) []string {
+func noticeKeys(r MaintainResult) []string {
 	var out []string
 	for _, n := range r.Notices {
 		out = append(out, n.Key)
@@ -53,7 +53,7 @@ func TestNoticesThirtyDays(t *testing.T) {
 	h, path, _, _ := noticeHost(t, &now, func(s credential.StaticStore) {
 		login(t, s, "ensemble-claude/default", credential.Registration{Expires: noticeNow.Add(20 * 24 * time.Hour)}, noticeNow)
 	})
-	got, err := h.Notices(context.Background(), container, path, nil)
+	got, err := h.Maintain(context.Background(), container, path, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestNoticesThirtyDays(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 	encoded, _ := json.Marshal(got)
-	if !strings.HasPrefix(string(encoded), `{"container":"`+container+`","notices":[{"key":"ensemble-claude/default@1:30d","text":`) {
+	if !strings.HasPrefix(string(encoded), `{"container":"`+container+`","next_check":"2026-10-26T13:00:00Z","deadline":null,"results":[],"notices":[{"key":"ensemble-claude/default@1:30d","text":`) {
 		t.Fatalf("%s", encoded)
 	}
 }
@@ -75,7 +75,7 @@ func TestNoticesDeliveredDedup(t *testing.T) {
 	h, path, _, record := noticeHost(t, &now, func(s credential.StaticStore) {
 		login(t, s, "ensemble-env/dummy", credential.Registration{Expires: time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)}, noticeNow)
 	})
-	_, logPath := audited(t, &h, "notices", container)
+	_, logPath := audited(t, &h, "maintain", container)
 	for _, c := range []struct {
 		at        time.Time
 		due, next string
@@ -86,15 +86,15 @@ func TestNoticesDeliveredDedup(t *testing.T) {
 		{time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC), "ensemble-env/dummy@1:expired", "2026-12-01T01:00:00Z"},
 	} {
 		now = c.at
-		got, err := h.Notices(context.Background(), container, path, nil)
+		got, err := h.Maintain(context.Background(), container, path, nil, false)
 		if err != nil || !slices.Equal(noticeKeys(got), []string{c.due}) || *got.NextCheck != c.next {
 			t.Fatalf("%v: %+v %v", c.at, got, err)
 		}
-		got, err = h.Notices(context.Background(), container, path, []string{c.due})
+		got, err = h.Maintain(context.Background(), container, path, []string{c.due}, false)
 		if err != nil || len(got.Notices) != 0 {
 			t.Fatalf("ack %v: %+v %v", c.at, got, err)
 		}
-		if again, err := h.Notices(context.Background(), container, path, nil); err != nil || len(again.Notices) != 0 {
+		if again, err := h.Maintain(context.Background(), container, path, nil, false); err != nil || len(again.Notices) != 0 {
 			t.Fatalf("after ack %v: %+v %v", c.at, again, err)
 		}
 	}
@@ -126,7 +126,7 @@ func TestNoticesMostUrgentOnly(t *testing.T) {
 	h, path, _, _ := noticeHost(t, &now, func(s credential.StaticStore) {
 		login(t, s, "ensemble-env/ssh", credential.Registration{Expires: noticeNow.Add(5 * 24 * time.Hour)}, noticeNow)
 	})
-	got, err := h.Notices(context.Background(), container, path, nil)
+	got, err := h.Maintain(context.Background(), container, path, nil, false)
 	if err != nil || !slices.Equal(noticeKeys(got), []string{"ensemble-env/ssh@1:7d"}) {
 		t.Fatalf("%+v %v", got, err)
 	}
@@ -137,7 +137,7 @@ func TestNoticesIgnoresUndueKey(t *testing.T) {
 	h, path, _, record := noticeHost(t, &now, func(s credential.StaticStore) {
 		login(t, s, "ensemble-env/dummy", credential.Registration{Expires: noticeNow.Add(20 * 24 * time.Hour)}, noticeNow)
 	})
-	got, err := h.Notices(context.Background(), container, path, []string{"ensemble-env/dummy@1:7d", "ensemble-env/ssh@1:30d", "ensemble-env/dummy@9:30d"})
+	got, err := h.Maintain(context.Background(), container, path, []string{"ensemble-env/dummy@1:7d", "ensemble-env/ssh@1:30d", "ensemble-env/dummy@9:30d"}, false)
 	if err != nil || !slices.Equal(noticeKeys(got), []string{"ensemble-env/dummy@1:30d"}) {
 		t.Fatalf("%+v %v", got, err)
 	}
@@ -152,19 +152,19 @@ func TestNoticesRotated(t *testing.T) {
 	h, path, store, _ := noticeHost(t, &now, func(s credential.StaticStore) {
 		login(t, s, "ensemble-env/dummy", credential.Registration{}, noticeNow)
 	})
-	if got, err := h.Notices(context.Background(), container, path, nil); err != nil || len(got.Notices) != 0 {
+	if got, err := h.Maintain(context.Background(), container, path, nil, false); err != nil || len(got.Notices) != 0 {
 		t.Fatalf("before: %+v %v", got, err)
 	}
 	login(t, store, "ensemble-env/dummy", credential.Registration{}, noticeNow)
-	got, err := h.Notices(context.Background(), container, path, nil)
+	got, err := h.Maintain(context.Background(), container, path, nil, false)
 	want := "ensemble-env/dummy was replaced (version 2); this session holds version 1 until it restarts"
 	if err != nil || len(got.Notices) != 1 || got.Notices[0].Key != "ensemble-env/dummy@2:rotated" || got.Notices[0].Text != want {
 		t.Fatalf("%+v %v", got, err)
 	}
-	if _, err := h.Notices(context.Background(), container, path, []string{"ensemble-env/dummy@2:rotated"}); err != nil {
+	if _, err := h.Maintain(context.Background(), container, path, []string{"ensemble-env/dummy@2:rotated"}, false); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := h.Notices(context.Background(), container, path, nil); err != nil || len(got.Notices) != 0 {
+	if got, err := h.Maintain(context.Background(), container, path, nil, false); err != nil || len(got.Notices) != 0 {
 		t.Fatalf("after ack: %+v %v", got, err)
 	}
 	// The next start injects version 2: no rotated notice.
@@ -172,7 +172,7 @@ func TestNoticesRotated(t *testing.T) {
 		login(t, s, "ensemble-env/dummy", credential.Registration{}, noticeNow)
 		login(t, s, "ensemble-env/dummy", credential.Registration{}, noticeNow)
 	})
-	if got, err := next.Notices(context.Background(), container, nextPath, nil); err != nil || len(got.Notices) != 0 {
+	if got, err := next.Maintain(context.Background(), container, nextPath, nil, false); err != nil || len(got.Notices) != 0 {
 		t.Fatalf("next start: %+v %v", got, err)
 	}
 }
@@ -183,11 +183,11 @@ func TestNoticesWithoutRecord(t *testing.T) {
 	if err := os.Remove(record); err != nil {
 		t.Fatal(err)
 	}
-	got, err := h.Notices(context.Background(), container, path, nil)
+	got, err := h.Maintain(context.Background(), container, path, nil, false)
 	if err != nil || got.Notices == nil || len(got.Notices) != 0 || got.NextCheck != nil {
 		t.Fatalf("%+v %v", got, err)
 	}
-	if encoded, _ := json.Marshal(got); string(encoded) != `{"container":"`+container+`","notices":[],"next_check":null}` {
+	if encoded, _ := json.Marshal(got); string(encoded) != `{"container":"`+container+`","next_check":null,"deadline":null,"results":[],"notices":[]}` {
 		t.Fatalf("%s", encoded)
 	}
 }
@@ -195,17 +195,20 @@ func TestNoticesWithoutRecord(t *testing.T) {
 func TestNoticesRejects(t *testing.T) {
 	now := noticeNow
 	h, path, _, record := noticeHost(t, &now, nil)
-	if _, err := h.Notices(context.Background(), "ensemble-other-0123456789abcdef0123456789abcdef", path, nil); code(t, err) != protocol.ManifestRejected {
+	if _, err := h.Maintain(context.Background(), "ensemble-other-0123456789abcdef0123456789abcdef", path, nil, false); code(t, err) != protocol.ManifestRejected {
 		t.Fatalf("%v", err)
 	}
-	if _, err := h.Notices(context.Background(), container, filepath.Join(t.TempDir(), "absent.json"), nil); code(t, err) != protocol.ManifestRejected {
+	if _, err := h.Maintain(context.Background(), container, filepath.Join(t.TempDir(), "absent.json"), nil, false); code(t, err) != protocol.ManifestRejected {
 		t.Fatalf("%v", err)
 	}
 	if err := os.WriteFile(record, []byte("SENTINEL-not-json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := h.Notices(context.Background(), container, path, nil)
-	if e := protoErr(t, err); e.Code != protocol.InternalError || strings.Contains(e.Message, "SENTINEL") || !strings.Contains(e.Message, filepath.Base(record)) {
+	got, err := h.Maintain(context.Background(), container, path, nil, false)
+	if err != nil || len(got.Results) != 1 || got.Results[0].Credential != "notices" {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if e := got.Results[0].Error; e == nil || e.Code != protocol.InternalError || strings.Contains(e.Message, "SENTINEL") || !strings.Contains(e.Message, filepath.Base(record)) {
 		t.Fatalf("%+v", e)
 	}
 }
@@ -217,8 +220,8 @@ func TestNoticesSentinelAbsent(t *testing.T) {
 		login(t, s, "ensemble-env/dummy", credential.Registration{Expires: noticeNow.Add(3 * 24 * time.Hour)}, noticeNow)
 	})
 	h.Env = &fakeEnv{} // its value, envValue-<item>, went into the container at start
-	_, logPath := audited(t, &h, "notices", container)
-	got, err := h.Notices(context.Background(), container, path, []string{"ensemble-env/dummy@1:7d"})
+	_, logPath := audited(t, &h, "maintain", container)
+	got, err := h.Maintain(context.Background(), container, path, []string{"ensemble-env/dummy@1:7d"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,14 +247,14 @@ func TestNoticesAuditOnlyRecordedDeliveries(t *testing.T) {
 	h, path, _, record := noticeHost(t, &now, func(s credential.StaticStore) {
 		login(t, s, "ensemble-env/dummy", credential.Registration{Expires: noticeNow.Add(20 * 24 * time.Hour)}, noticeNow)
 	})
-	_, logPath := audited(t, &h, "notices", container)
+	_, logPath := audited(t, &h, "maintain", container)
 	if err := os.Chmod(filepath.Dir(record), 0o500); err != nil {
 		t.Fatal(err)
 	}
 	defer os.Chmod(filepath.Dir(record), 0o700)
-	_, err := h.Notices(context.Background(), container, path, []string{"ensemble-env/dummy@1:30d"})
-	if code(t, err) != protocol.InternalError {
-		t.Fatalf("%v", err)
+	got, err := h.Maintain(context.Background(), container, path, []string{"ensemble-env/dummy@1:30d"}, false)
+	if err != nil || len(got.Results) != 1 || got.Results[0].Error == nil || got.Results[0].Error.Code != protocol.InternalError {
+		t.Fatalf("%+v %v", got, err)
 	}
 	if err := h.Audit.Flush(err); err != nil {
 		t.Fatal(err)
