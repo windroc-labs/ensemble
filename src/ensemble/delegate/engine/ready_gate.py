@@ -70,7 +70,7 @@ def gate(outcome: Outcome, updraft: Updraft | None, *, run: Runner = sh) -> Gate
     if not done:
         status, error = _undo(url, view, run)
         return Gated(outcome, status, _line(error))
-    reason = _judge(updraft, view)
+    reason = _judge(updraft, view, url, run)
     if reason is not None:
         _, error = _undo(url, view, run)
         return _failed(outcome, f"{reason}; {error}" if error else reason)
@@ -170,7 +170,7 @@ def _draft(url: str, run: Runner) -> str:
     return ""
 
 
-def _judge(updraft: Updraft | None, view: _View) -> str | None:
+def _judge(updraft: Updraft | None, view: _View, url: str, run: Runner) -> str | None:
     """The first of G1–G3 that fails, as a reason; None if all pass."""
     if updraft is None:
         return "G1: no updraft result"
@@ -180,7 +180,7 @@ def _judge(updraft: Updraft | None, view: _View) -> str | None:
         return f"G2: PR is {view.state}"
     if updraft.head != view.head:
         return f"G2: updraft head {updraft.head[:12]} is not PR head {view.head[:12]}"
-    checks = [_check(item) for item in view.checks]
+    checks = [_check(item, url, view.head, run) for item in view.checks]
     for name, kind, said in checks:
         if kind == _Check.FAIL:
             return f"G3: check {name} {said}"
@@ -189,7 +189,7 @@ def _judge(updraft: Updraft | None, view: _View) -> str | None:
     return None
 
 
-def _check(item: object) -> tuple[str, _Check, str]:
+def _check(item: object, url: str, head: str, run: Runner) -> tuple[str, _Check, str]:
     """(name, kind, GitHub's word) of a statusCheckRollup entry; unknown fails."""
     if not isinstance(item, dict):
         return "?", _Check.FAIL, "unreadable"
@@ -199,9 +199,48 @@ def _check(item: object) -> tuple[str, _Check, str]:
         status, conclusion = str(item.get("status")), str(item.get("conclusion"))
         if status != "COMPLETED":
             return name, _Check.FAIL, status
+        if conclusion == "CANCELLED" and _unstarted(item, url, head, run):
+            return name, _Check.SKIPPED, conclusion
         found = {"SUCCESS": _Check.PASS, "NEUTRAL": _Check.PASS, "SKIPPED": _Check.SKIPPED}
         return name, found.get(conclusion, _Check.FAIL), conclusion
     if kind == "StatusContext":
         state = str(item.get("state"))
         return name, _Check.PASS if state == "SUCCESS" else _Check.FAIL, state
     return name, _Check.FAIL, f"of unknown type {kind}"
+
+
+def _unstarted(item: dict, url: str, head: str, run: Runner) -> bool:
+    """Confirm terminal cancellation without a runner or steps; missing evidence fails closed."""
+    link = item.get("detailsUrl")
+    if not isinstance(link, str):
+        return False
+    try:
+        pr, job = urlsplit(url), urlsplit(link)
+        repo = "/".join(pr.path.split("/")[1:3])
+        path = re.fullmatch(rf"/{re.escape(repo)}/actions/runs/([1-9]\d*)/job/([1-9]\d*)", job.path)
+        if job.scheme != "https" or job.netloc.lower() != pr.netloc.lower() or path is None:
+            return False
+        data = json.loads(
+            _gh(
+                run,
+                "gh api job",
+                ["api", "--hostname", pr.netloc, f"repos/{repo}/actions/jobs/{path[2]}"],
+            )
+        )
+    except (_GhError, ValueError):
+        return False
+    # GitHub can populate started_at while queued; use execution evidence instead.
+    return (
+        isinstance(data, dict)
+        and type(data.get("id")) is int
+        and data["id"] == int(path[2])
+        and type(data.get("run_id")) is int
+        and data["run_id"] == int(path[1])
+        and data.get("head_sha") == head
+        and data.get("status") == "completed"
+        and data.get("conclusion") == "cancelled"
+        and all(key in data for key in ("runner_id", "runner_name", "steps"))
+        and (data["runner_id"] is None or type(data["runner_id"]) is int and data["runner_id"] == 0)
+        and data["runner_name"] in (None, "")
+        and data["steps"] == []
+    )

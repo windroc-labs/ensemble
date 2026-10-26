@@ -20,6 +20,8 @@ CONVERGED = Updraft(UpdraftStatus.CONVERGED, HEAD)
 VIEW = ["gh", "pr", "view", URL, "--json", "state,isDraft,headRefOid,statusCheckRollup"]
 READY = ["gh", "pr", "ready", URL]
 UNDO = ["gh", "pr", "ready", URL, "--undo"]
+JOB_URL = "https://github.com/o/n/actions/runs/100/job/200"
+JOB_API = ["gh", "api", "--hostname", "github.com", "repos/o/n/actions/jobs/200"]
 
 
 def run_(name, conclusion="SUCCESS", status="COMPLETED"):
@@ -44,14 +46,22 @@ class Gh:
     records calls and timeouts; an exception answer is raised; a list answers views in turn.
     """
 
-    def __init__(self, view_answer=None, ready=OK, undo=OK):
-        self.answers = {"view": view_answer, "ready": ready, "undo": undo}
+    def __init__(self, view_answer=None, ready=OK, undo=OK, api=OK):
+        self.answers = {"view": view_answer, "ready": ready, "undo": undo, "api": api}
         self.calls, self.timeouts = [], []
 
     def __call__(self, argv, timeout):
         self.calls.append(argv)
         self.timeouts.append(timeout)
-        key = "view" if argv[2] == "view" else "undo" if "--undo" in argv else "ready"
+        key = (
+            "api"
+            if argv[1] == "api"
+            else "view"
+            if argv[2] == "view"
+            else "undo"
+            if "--undo" in argv
+            else "ready"
+        )
         answer = self.answers[key]
         if isinstance(answer, list):
             answer = answer.pop(0)
@@ -186,6 +196,131 @@ class Done(Base):
         long = self.go(Gh(view([run_("n" * 1000, "FAILURE")])), out=outcome(summary="x" * 300))
         self.assertEqual(long.outcome.summary, f"ready gate: {long.reason}")
         self.assertLessEqual(len(long.outcome.summary), 300)
+
+
+class Cancelled(Base):
+    def check(self, **changes):
+        return {**run_("arbitrary CI leg", "CANCELLED"), "detailsUrl": JOB_URL, **changes}
+
+    def job(self, **changes):
+        return {
+            "id": 200,
+            "run_id": 100,
+            "head_sha": HEAD,
+            "status": "completed",
+            "conclusion": "cancelled",
+            "runner_id": 0,
+            "runner_name": "",
+            "steps": [],
+            "started_at": "2026-10-26T00:00:00Z",
+            **changes,
+        }
+
+    def go_job(self, job, *, checks=None, api=None, draft=True):
+        checks = [run_("passing"), self.check()] if checks is None else checks
+        return self.go(Gh(view(checks, draft=draft), api=api or ok(json.dumps(job))))
+
+    def test_cancelled_before_start_readies_with_other_checks_passing(self):
+        for changes in ({}, {"runner_id": None, "runner_name": None, "started_at": None}):
+            with self.subTest(changes=changes):
+                gated = self.go_job(self.job(**changes))
+                self.assertEqual((gated.status, gated.outcome), (GateStatus.PASSED, outcome()))
+                self.assertEqual(self.gh.calls, [VIEW, JOB_API, READY])
+                self.assertEqual(set(self.gh.timeouts), {SHORT})
+
+    def test_started_cancellation_and_incomplete_evidence_still_fail(self):
+        cases = [
+            {"runner_id": 9},
+            {"runner_name": "runner"},
+            {"steps": [{"name": "Set up"}]},
+            {"runner_id": False},
+            {"runner_id": "0"},
+            {"steps": None},
+            {"id": 201},
+            {"id": "200"},
+            {"run_id": 101},
+            {"head_sha": OLDER},
+            {"status": "in_progress"},
+            {"conclusion": "failure"},
+        ]
+        jobs = [self.job(**changes) for changes in cases]
+        jobs.extend(
+            {k: v for k, v in self.job().items() if k != missing}
+            for missing in ("runner_id", "runner_name", "steps", "id", "run_id", "head_sha")
+        )
+        jobs.extend((None, [], "junk"))
+        for job in jobs:
+            with self.subTest(job=job):
+                self.assert_failed(
+                    self.go_job(job, draft=False), "G3: check arbitrary CI leg CANCELLED"
+                )
+                self.assertEqual(self.gh.calls, [VIEW, JOB_API, UNDO])
+
+    def test_api_errors_fail_closed(self):
+        for api in (failed("HTTP 403"), ok("not json"), *PROCESS_ERRORS):
+            with self.subTest(api=api):
+                self.assert_failed(
+                    self.go_job(None, api=api), "G3: check arbitrary CI leg CANCELLED"
+                )
+
+    def test_untrusted_or_missing_job_links_are_not_followed(self):
+        for link in (
+            None,
+            "",
+            200,
+            "https://evil.example/o/n/actions/runs/100/job/200",
+            "https://github.com/other/n/actions/runs/100/job/200",
+            "http://github.com/o/n/actions/runs/100/job/200",
+            "https://github.com/o/n/actions/runs/100/job/200/extra",
+            "https://[",
+        ):
+            with self.subTest(link=link):
+                self.assert_failed(
+                    self.go_job(None, checks=[self.check(detailsUrl=link)]), "CANCELLED"
+                )
+                self.assertEqual(self.gh.calls, [VIEW])
+
+    def test_no_executed_checks_does_not_pass(self):
+        for checks in ([self.check()], [self.check(), run_("skipped", "SKIPPED")]):
+            with self.subTest(checks=checks):
+                self.assert_failed(self.go_job(self.job(), checks=checks), "G3: CI did not run")
+
+    def test_failure_and_pending_never_use_the_cancelled_exception(self):
+        for changes, said in (
+            ({"conclusion": "FAILURE"}, "FAILURE"),
+            ({"status": "QUEUED", "conclusion": None}, "QUEUED"),
+        ):
+            with self.subTest(changes=changes):
+                self.assert_failed(
+                    self.go_job(self.job(), checks=[run_("pass"), self.check(**changes)]), said
+                )
+                self.assertEqual(self.gh.calls, [VIEW])
+
+    def test_g1_g2_fail_without_reading_job_evidence(self):
+        for updraft in (None, Updraft(UpdraftStatus.CONVERGED, OLDER)):
+            with self.subTest(updraft=updraft):
+                self.assert_failed(
+                    self.go(Gh(view([self.check()])), updraft), "G1:" if updraft is None else "G2:"
+                )
+                self.assertEqual(self.gh.calls, [VIEW])
+
+    def test_enterprise_host_and_another_repo_use_their_own_api(self):
+        url = "https://ghe.example.com/company/project/pull/3"
+        check = self.check(
+            detailsUrl="https://ghe.example.com/company/project/actions/runs/100/job/200"
+        )
+        gh = Gh(view([run_("pass"), check]), api=ok(json.dumps(self.job())))
+        self.assertEqual(self.go(gh, out=outcome(url=url)).status, GateStatus.PASSED)
+        self.assertEqual(
+            gh.calls[1],
+            [
+                "gh",
+                "api",
+                "--hostname",
+                "ghe.example.com",
+                "repos/company/project/actions/jobs/200",
+            ],
+        )
 
 
 class Errors(Base):
