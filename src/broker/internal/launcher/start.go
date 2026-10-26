@@ -370,6 +370,13 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 			return StartResult{}, held, busy(holder)
 		}
 	}
+	contentCheck, err := checks.ReadFile("checks/image-content-check")
+	if err != nil {
+		return StartResult{}, held, protocol.New(protocol.StartFailed, "Embedded image checks unreadable.")
+	}
+	if _, err := h.Docker.Run(ctx, []string{"exec", "--interactive", "--user", "agent", c, "/bin/sh", "-s"}, contentCheck); err != nil {
+		return StartResult{}, held, failure(err, protocol.StartFailed, "Image content under /opt/ensemble is unreadable by agent; rebuild with ensemble-broker build.")
+	}
 	// OpenCode has no state to seed.
 	if m.Client != "opencode" {
 		if _, err := h.Docker.Run(ctx, asAgent(c, Python, "-I", Bootstrap, m.Client, m.StateDir(), m.CWD), nil); err != nil {
