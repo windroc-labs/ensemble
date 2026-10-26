@@ -12,14 +12,13 @@ import (
 // real one would: the partition step sets the broker's partition ID, the apps steps the broker's identity, and the
 // apps step with the password is refused (as securityd refuses it for an earlier build's app entry) when refuseApps.
 type retrustKeychain struct {
-	items       map[string]*AppAccess
-	order       []string
-	refuseApps  bool
-	failAccess  map[string]error // AppAccess error per item
-	failChange  map[string]error // TrustPartition error per item
-	listErr     map[string]error // Accounts or Services error per service or prefix
-	steps       []string
-	afterListed func(k *retrustKeychain) // runs at the first password read
+	items      map[string]*AppAccess
+	order      []string
+	refuseApps bool
+	failAccess map[string]error // AppAccess error per item
+	failChange map[string]error // TrustPartition error per item
+	listErr    map[string]error // Accounts or Services error per service or prefix
+	steps      []string
 }
 
 func newRetrustKeychain(items map[string]*AppAccess) *retrustKeychain {
