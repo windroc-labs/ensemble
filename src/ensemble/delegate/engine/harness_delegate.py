@@ -1025,7 +1025,7 @@ class HarnessDelegate(Delegate):
         return record
 
     def _started(self, state: _State) -> None:
-        """Tui: waits, outside the mutex, until the harness has this run's agent session live;
+        """Tui: waits, outside the mutex, until this run's agent session has its client running;
         SessionError naming why, its harness and agent session closed, when the harness ends first,
         a Host fails or its start limit passes; the last two first saved as start_failure, the
         harness's end. A same-named session of another sid is not this run's.
@@ -1039,7 +1039,7 @@ class HarnessDelegate(Delegate):
         try:
             while True:
                 agent, unanswered = self._probed_agent(state)
-                if agent is not None and agent.alive():
+                if agent is not None and agent.alive() and agent.status().alive:
                     return
                 harness = self._harness(state)
                 ended = harness is None or not harness.alive()

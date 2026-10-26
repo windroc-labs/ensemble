@@ -41,7 +41,7 @@ from ensemble.session import (
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import Spec as SessionSpec
 from ensemble.session.engine.types import Liveness
-from ensemble.utils import ACCOUNT_ENV, Stopped
+from ensemble.utils import ACCOUNT_ENV, StatusState, Stopped
 from tests.delegate.fakes.harness_session import (
     FakeViewer,
     HarnessSession,
@@ -1912,6 +1912,18 @@ class StartedTest(HarnessCase):
             f"tui session {AGENT} did not start in 30 s; "
             "agent session not checked: docker ps: timed out",
         )
+
+    def test_an_agent_whose_client_exited_is_not_started(self):
+        self.start_agent()
+        status = HarnessSession.status
+
+        def dead(session):
+            return replace(status(session), alive=False, state=StatusState.DEAD)
+
+        with mock.patch.object(HarnessSession, "status", dead):
+            message = self.failed(self.tui())
+        self.assertEqual(message, f"tui session {AGENT} did not start in 30 s")
+        self.assertFalse(self.harness().alive())
 
 
 class StartFailureEndTest(HarnessCase):
