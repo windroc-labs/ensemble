@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -93,6 +94,102 @@ func TestSnapshotKey(t *testing.T) {
 	}
 	if c, _ := treeDigest(dst); b == c {
 		t.Fatal("mode did not change key")
+	}
+}
+
+func TestPrepareUmask(t *testing.T) {
+	e := newBuildEnv(t)
+	h := e.host()
+	e.bases = map[string]string{"local:base": digest}
+	private := filepath.Join(e.pkg, "src/ensemble/session/private")
+	putFile(t, filepath.Join(private, "read.py"), "readable source")
+	putFile(t, filepath.Join(private, "run"), "executable source")
+	for path, mode := range map[string]os.FileMode{private: 0o700, filepath.Join(private, "read.py"): 0o600, filepath.Join(private, "run"): 0o700} {
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("read.py", filepath.Join(private, "link")); err != nil {
+		t.Fatal(err)
+	}
+	previous := syscall.Umask(0o022)
+	defer syscall.Umask(previous)
+	for _, spec := range []BuildSpec{{}, {BaseImage: "local:base", ImagePlugins: []string{"dummy"}}} {
+		var key string
+		for _, mask := range []int{0o022, 0o077} {
+			syscall.Umask(mask)
+			tmp, err := docker.TempDir(e.home, "ensemble-build-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, err := h.prepare(context.Background(), e.pkg, spec, tmp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if key != "" && key != p.key {
+				t.Errorf("umask %03o changed image key: %s != %s", mask, p.key, key)
+			}
+			key = p.key
+			err = filepath.WalkDir(filepath.Join(tmp, "package"), func(path string, entry os.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				info, err := entry.Info()
+				if err != nil || info.Mode()&os.ModeSymlink != 0 {
+					return err
+				}
+				want := os.FileMode(0o644)
+				if info.IsDir() || entry.Name() == "run" {
+					want = 0o755
+				}
+				if info.Mode().Perm() != want {
+					t.Errorf("umask %03o: %s mode %o, want %o", mask, path, info.Mode().Perm(), want)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if actual := syscall.Umask(mask); actual != mask {
+				t.Errorf("prepare changed caller umask to %03o", actual)
+			}
+			for _, rel := range []string{"base-image", "image-plugins"} {
+				if spec.BaseImage != "" {
+					if info, err := os.Stat(filepath.Join(tmp, rel)); err != nil || info.Mode().Perm() != 0o644 {
+						t.Errorf("%s must have stable 0644 mode: %v %v", rel, info, err)
+					}
+				}
+			}
+			if info, err := os.Stat(tmp); err != nil || info.Mode().Perm() != 0o700 {
+				t.Fatalf("staging root must stay private: %v %v", info, err)
+			}
+		}
+	}
+	if info, err := os.Stat(private); err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("source permissions changed: %v %v", info, err)
+	}
+}
+
+func TestSnapshotPreservesModesUnderUmask(t *testing.T) {
+	src, dst := t.TempDir(), filepath.Join(t.TempDir(), "snapshot")
+	putFile(t, filepath.Join(src, "Dockerfile"), "FROM base")
+	putFile(t, filepath.Join(src, "private/config"), "private definition input")
+	for path, mode := range map[string]os.FileMode{src: 0o755, filepath.Join(src, "private"): 0o750, filepath.Join(src, "private/config"): 0o640} {
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	previous := syscall.Umask(0o077)
+	defer syscall.Umask(previous)
+	if err := snapshotTree(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{".", "Dockerfile", "private", "private/config"} {
+		before, _ := os.Stat(filepath.Join(src, rel))
+		after, err := os.Stat(filepath.Join(dst, rel))
+		if err != nil || before.Mode().Perm() != after.Mode().Perm() {
+			t.Errorf("%s mode not preserved: %v %v", rel, after, err)
+		}
 	}
 }
 

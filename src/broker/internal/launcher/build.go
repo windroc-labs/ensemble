@@ -95,7 +95,10 @@ func snapshotTree(src, dst string, skip ...string) error {
 		}
 		switch {
 		case info.IsDir():
-			return os.MkdirAll(target, info.Mode().Perm())
+			if err := os.MkdirAll(target, info.Mode().Perm()); err != nil {
+				return err
+			}
+			return os.Chmod(target, info.Mode().Perm())
 		case info.Mode()&os.ModeSymlink != 0:
 			link, err := os.Readlink(path)
 			if err != nil {
@@ -119,12 +122,39 @@ func snapshotTree(src, dst string, skip ...string) error {
 				return err
 			}
 			_, copyErr := io.Copy(out, in)
+			modeErr := out.Chmod(info.Mode().Perm())
 			closeErr := out.Close()
-			return errors.Join(copyErr, closeErr)
+			return errors.Join(copyErr, modeErr, closeErr)
 		default:
 			return fmt.Errorf("unsupported build context file: %s", path)
 		}
 	})
+}
+
+// readablePackage sets image content modes explicitly, independent of source modes and the caller's umask.
+// Symlinks stay intact; the private staging root and the user's worker definition are outside this tree.
+func readablePackage(root string) error {
+	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			return err
+		}
+		mode := os.FileMode(0o644)
+		if info.IsDir() || info.Mode().Perm()&0o111 != 0 {
+			mode = 0o755
+		}
+		return os.Chmod(path, mode)
+	})
+}
+
+func writeBuildInput(path string, data []byte) error {
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o644)
 }
 
 func treeDigest(root string) (string, error) {
@@ -241,9 +271,12 @@ func (h Host) stage(pkg string, spec BuildSpec, tmp string) (string, string, err
 		return "", "", err
 	}
 	if len(spec.ImagePlugins) > 0 {
-		if err := os.WriteFile(filepath.Join(tmp, "image-plugins"), []byte(strings.Join(spec.ImagePlugins, "\n")+"\n"), 0o644); err != nil {
+		if err := writeBuildInput(filepath.Join(tmp, "image-plugins"), []byte(strings.Join(spec.ImagePlugins, "\n")+"\n")); err != nil {
 			return "", "", protocol.New(protocol.BuildFailed, "Cannot stage in-image plugins.")
 		}
+	}
+	if err := readablePackage(packageDir); err != nil {
+		return "", "", protocol.New(protocol.BuildFailed, "Cannot set readable image content permissions.")
 	}
 	return meta.Version, dirs, nil
 }
@@ -268,7 +301,7 @@ func (h Host) prepare(ctx context.Context, pkg string, spec BuildSpec, tmp strin
 		if base, err = h.baseImage(ctx, spec.BaseImage); err != nil {
 			return prepared{}, err
 		}
-		if err := os.WriteFile(filepath.Join(tmp, "base-image"), []byte(base.ID+"\n"), 0o644); err != nil {
+		if err := writeBuildInput(filepath.Join(tmp, "base-image"), []byte(base.ID+"\n")); err != nil {
 			return prepared{}, protocol.New(protocol.BuildFailed, "Cannot stage the base image.")
 		}
 	}
