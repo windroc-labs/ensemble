@@ -120,9 +120,10 @@ host = ""
 # A caller may supply a costly-step brake at runtime; it has no configuration key here.
 #   <run key>     tier, effort, client, language, cwd, idle_timeout, show or [output], for that role
 #   accounts      [roles.<role>.accounts]: [accounts] above, for that role, entry by entry
-#   fixed_client  this file only: true makes the table's client the role's only client. Another chosen for it (--client,
+#   fixed_client  true makes the table's client the role's only client. Another chosen for it (--client,
 #                 [delegate.roles.<role>] in config.local.toml, an overlay's [roles.<role>]) refuses the run, naming
-#                 where it came from; a global client does not apply to it; config.local.toml cannot set the key
+#                 where it came from; a global client does not apply to it. config.local.toml may repeat the packaged
+#                 boolean (false when absent), but cannot change it
 
 # ── Researcher ──────────────────────────────────────────
 [roles.researcher]

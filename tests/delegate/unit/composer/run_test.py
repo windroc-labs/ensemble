@@ -826,7 +826,12 @@ class FixedClient(Fake):
             "run overlay: [overlay.roles.writer] client 'x': role writer runs only on w",
         )
 
-    def test_only_the_packaged_config_sets_fixed_client(self):
+    def test_local_config_may_repeat_the_packaged_fixed_client_value(self):
+        self.local("[roles.writer]\nfixed_client = true\n[roles.editor]\nfixed_client = false\n")
+        self.assertEqual(self.resolved().client, "w")
+        self.assertEqual(self.resolved("editor").client, "a")
+
+    def test_local_config_cannot_change_the_packaged_fixed_client_value(self):
         for local in (
             "[roles.writer]\nfixed_client = false\n",
             "[roles.writer]\nfixed_client = 1\n",
@@ -838,7 +843,7 @@ class FixedClient(Fake):
                 self.local(local)
                 message = self.refused()
                 self.assertIn("fixed_client", message)
-                self.assertIn("only the packaged config.toml sets it", message)
+                self.assertIn("cannot change the packaged value", message)
         self.local("")
         overlay = {"roles": {"writer": {"fixed_client": False}}}
         self.assertIn("unknown key 'fixed_client'", self.refused(overlays=(overlay,)))

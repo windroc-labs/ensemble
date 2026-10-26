@@ -108,7 +108,7 @@ def check_fixed_clients(packaged: Mapping, merged: Mapping, local: str) -> None:
     for role, table in _role_tables(merged).items():
         if table.get(FIXED_CLIENT, False) is not raw.get(role, {}).get(FIXED_CLIENT, False):
             raise ValueError(
-                f"[delegate.roles.{role}] {FIXED_CLIENT} in {local}: only the packaged config.toml sets it"
+                f"[delegate.roles.{role}] {FIXED_CLIENT} in {local}: cannot change the packaged value"
             )
         if role in fixed and table.get("client") != fixed[role]:
             raise ValueError(
