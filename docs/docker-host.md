@@ -39,6 +39,15 @@ the image. The image pins `gh`, Codex and OpenCode; rebuild an image whose clien
 A worker runs only that Codex, `/opt/ensemble/bin/codex`, first on `PATH`: a Codex your Dockerfile installs is never run,
 so drop it to shrink the image (a Dockerfile seeded before this change has `@openai/codex` in its `npm install -g` line).
 
+### Egress gateway
+
+Every `start` needs the [egress gateway](https://github.com/windroc/egress-proxy#readme) (`windroc/egress-proxy`): one container, `egress-gateway`, running and
+healthy, on an internal `workers` network it names in its labels. Start it with `./start.sh` in its checkout; check it
+with `docker ps --filter name=egress-gateway` (status `(healthy)`). Otherwise, before any credential or container,
+`start` fails `egress_unavailable` (exit 17), naming the gateway and `./start.sh`; it never falls back to `bridge`.
+`scripts/install.sh` does not start the gateway yet. A worker started before this change stays on `bridge` until its
+next start, restart or resume.
+
 ## Log in
 
 After every install or reinstall, run all three logins: `login claude`, `login github ensemble-bot` and
@@ -281,7 +290,10 @@ and the copy, and how to revoke: [Credentials › Environment secrets](credentia
 
 ## What a container gets
 
-- User `agent`, all capabilities dropped, `no-new-privileges`, bridge network; no Docker socket.
+- User `agent`, all capabilities dropped, `no-new-privileges`; no Docker socket.
+- Only the gateway's `workers` network ([Egress gateway](#egress-gateway)), with `HTTP_PROXY`, `HTTPS_PROXY` and their
+  lower-case pair set to its proxy, and `NO_PROXY` only `localhost,127.0.0.1,::1`: all other traffic, `host.docker.internal`
+  and LAN addresses included, goes through the gateway's `workers` policy.
 - A workspace volume at cwd; Claude and OpenCode have their own client-state bind, Codex only its session history.
 - Credentials on tmpfs, readable by the container's processes ([Credentials](credentials.md)); each listed
   [environment secret](#environment-secrets) at `/run/ensemble/secrets/env/<file>`.
@@ -464,14 +476,13 @@ An unregistered account, an account selected for Codex or OpenCode, or a registe
 OpenCode sessions run the host's Ollama models, or a configured provider's ([OpenCode sessions](sessions.md#opencode-sessions)).
 Ollama needs no login; each configured provider's API key comes from the broker ([Log in](#log-in)), which writes it
 to the container's `/run/ensemble/secrets/opencode/<name>.key` at start ([Credentials](credentials.md#who-logs-in)).
-A provider is reached at its `base_url` from the container's bridge network, which Docker Desktop routes through the
-Mac: a LAN address such as `http://10.0.0.5:8080/v1` works as on the Mac, `localhost` is the container itself. The
-first worker to reach a LAN address makes macOS ask **Allow Docker to find devices on local networks?**: allow it (later:
-System Settings › Privacy & Security › Local Network › Docker), or the provider is unreachable. An
+A provider is reached at its `base_url` through the [egress gateway](#egress-gateway), whose `workers` policy refuses
+the Mac and the LAN unless its local config lists the provider's host:port as an exception ([egress-proxy](https://github.com/windroc/egress-proxy#readme));
+`localhost` is the container itself. An
 `http://` `base_url` sends the key in plaintext: anyone on the LAN can capture it ([Risks](#risks)). Once, on the Mac:
 
 1. Keep Ollama on `127.0.0.1` (its default; leave `OLLAMA_HOST` unset): the container reaches it through
-   `host.docker.internal` ([Risks](#risks)).
+   `host.docker.internal`, which needs `host.docker.internal:11434` in the gateway's `workers` exceptions ([Risks](#risks)).
 2. Set its context length to at least 65536, or tool calls fail: for the Ollama app,
    `launchctl setenv OLLAMA_CONTEXT_LENGTH 65536`, then quit and reopen it; for `ollama serve`, start it with
    `OLLAMA_CONTEXT_LENGTH=65536`. A larger one: set `[session.clients.opencode] ollama_context` to it, or
@@ -523,6 +534,8 @@ later, it leaves its worker running.
 - **Older image** after an upgrade or rebuild: the command warns `restart it to upgrade`; restart the worker.
 - **Container gone** (Docker Desktop restart, `docker rm`): the worker shows `dead`; `ensemble-session resume NAME`
   continues the conversation in a new container. Events queued in the old one are lost.
+- **Egress gateway not ready** (`egress_unavailable`): run `./start.sh` in the egress-proxy checkout, wait for
+  `docker ps --filter name=egress-gateway` to show `(healthy)`, then start, restart or resume again ([Egress gateway](#egress-gateway)).
 - **Codex authentication expired** (`client_auth_expired`): run `/usr/local/libexec/ensemble/ensemble-broker login codex` on the host, then `ensemble-session resume NAME`; native history is kept. Renewal failures (`client_refresh_failed`) retry each minute until expiry, when the generation closes. No run logs in or uses another identity.
 
 ## Broker locks
@@ -649,7 +662,7 @@ tier model pulled and `OLLAMA_CONTEXT_LENGTH` ≥ 65536, `[session.hosts] defaul
 
 | Command | Checks |
 |---|---|
-| `python3 tests/session/live_docker.py worker --client claude\|codex\|opencode CWD [NAME]`, from a manager session | a second build reuses the image; with no `--host`, the worker runs in a container; its security flags (`--cap-drop ALL`, network `bridge`, no extra hosts) and mounts match the plan, and the [unreachable](credentials.md#what-a-container-cannot-reach) resources stay so; a supervisor killed mid-turn delivers its event once; restart, close then resume, and `docker rm -f` then resume each answer a prompt; every close revokes the generation's GitHub tokens and withdraws its client credential; no revocation stays pending but the removed container's, whose tokens it reports; for OpenCode also: the first turn leaves `~/.ensemble/docker-state/<NAME>/opencode/opencode/opencode.db`, Ollama listens on `127.0.0.1` only (`lsof`), the container holds only GitHub secrets and each configured provider's key (`find /run/ensemble/secrets`), and each resume continues the same OpenCode session |
+| `python3 tests/session/live_docker.py worker --client claude\|codex\|opencode CWD [NAME]`, from a manager session | a second build reuses the image; with no `--host`, the worker runs in a container; its security flags (`--cap-drop ALL`, only the egress gateway's `workers` network, no extra hosts) and mounts match the plan, and the [unreachable](credentials.md#what-a-container-cannot-reach) resources stay so; a supervisor killed mid-turn delivers its event once; restart, close then resume, and `docker rm -f` then resume each answer a prompt; every close revokes the generation's GitHub tokens and withdraws its client credential; no revocation stays pending but the removed container's, whose tokens it reports; for OpenCode also: the first turn leaves `~/.ensemble/docker-state/<NAME>/opencode/opencode/opencode.db`, Ollama listens on `127.0.0.1` only (`lsof`), the container holds only GitHub secrets and each configured provider's key (`find /run/ensemble/secrets`), and each resume continues the same OpenCode session |
 | `python3 tests/session/live_docker.py role --repo OWNER/NAME [--timeout S] [NAME]` | a headless engineer run on the test repo gets one forced token refresh, opens a draft PR as `windroc-bot[bot]` after it, and its close reclaims its credentials |
 | `python3 tests/session/live_docker.py pr URL` | the PR, such as an unattended board run's, was opened as a draft by `windroc-bot[bot]` |
 
@@ -684,11 +697,11 @@ the first failed check. The keychain, Linear preset and board-run checks stay ma
   pauses the board for that client until its reset time, as a forged transcript record can for a TUI run.
 - A harness killed with `kill -9` leaves its headless client running, with its token, until the next Docker start or
   close.
-- Every container, Claude, Codex and OpenCode workers included, reaches through `host.docker.internal` the Mac's services that
-  listen only on `127.0.0.1`: on 2026-10-18 a worker-like container (bridge, `--cap-drop ALL`, no mounts or
-  credentials) got Ollama's `/api/version` while Ollama listened only on `127.0.0.1:11434`. The host side of such a
-  connection belongs to `com.docker.backend`, running as you, so pf cannot tell container traffic apart
-  ([Docker networking](https://docs.docker.com/desktop/features/networking/)); the Mac has no Docker gateway address
-  to listen on instead: docker0 lives inside the VM
-  ([Docker networking how-tos](https://docs.docker.com/desktop/features/networking/networking-how-tos/)). The user
-  accepted this risk on 2026-10-18: no forwarder, firewall or Docker Business.
+- A worker reaches the Mac's services, `127.0.0.1`-only ones included, and the LAN only through the egress gateway's
+  `workers` exceptions, and each exception holds for every worker. Before the gateway, on 2026-10-18, a worker-like
+  container (bridge, `--cap-drop ALL`, no mounts or credentials) got Ollama's `/api/version` while Ollama listened only
+  on `127.0.0.1:11434`: the host side of such a connection belongs to `com.docker.backend`, running as you, so pf cannot
+  tell container traffic apart ([Docker networking](https://docs.docker.com/desktop/features/networking/)), and the Mac
+  has no Docker gateway address to listen on instead
+  ([Docker networking how-tos](https://docs.docker.com/desktop/features/networking/networking-how-tos/)). A worker
+  started before the gateway keeps that reach until its next start, restart or resume.

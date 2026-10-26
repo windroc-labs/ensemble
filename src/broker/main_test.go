@@ -64,7 +64,7 @@ func invoke(a app, args ...string) (int, string, string) {
 
 func TestVersion(t *testing.T) {
 	code, out, errOut := invoke(app{}, "version")
-	if code != 0 || out != `{"protocol_version":"24"}`+"\n" || errOut != "" {
+	if code != 0 || out != `{"protocol_version":"25"}`+"\n" || errOut != "" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
 	for _, c := range fixtures.Cases(t, "version_output") {
@@ -587,7 +587,17 @@ func (s *scripted) Run(_ context.Context, args []string, stdin []byte) ([]byte, 
 	if s.fail != "" && strings.Contains(joined, s.fail) {
 		return nil, &docker.CommandError{Exit: 1, Stderr: "failed: " + string(stdin)}
 	}
+	gateway := strings.Repeat("e", 64)
 	switch {
+	case strings.HasPrefix(joined, "ps --all") && strings.Contains(joined, "--filter label=windroc.egress.contract "):
+		return []byte(gateway + "\n"), nil
+	case joined == "container inspect "+gateway:
+		return []byte(`[{"Id":"` + gateway + `","Name":"/egress-gateway","State":{"Running":true,"Health":{"Status":"healthy"}},` +
+			`"Config":{"Labels":{"windroc.egress.contract":"1","windroc.egress.networks":"workers",` +
+			`"windroc.egress.network.workers.name":"egress-workers","windroc.egress.network.workers.proxy":"http://egress-proxy-workers:4750"}},` +
+			`"NetworkSettings":{"Networks":{"egress-workers":{"NetworkID":"` + strings.Repeat("f", 64) + `"}}}}]`), nil
+	case strings.HasPrefix(joined, "network inspect"):
+		return []byte(`[{"Name":"egress-workers","Id":"` + strings.Repeat("f", 64) + `","Internal":true}]`), nil
 	case strings.HasPrefix(joined, "image inspect"):
 		return []byte(`[{"Id":"sha256:` + strings.Repeat("b", 64) + `","Config":{"Labels":{"ensemble.key":"` + strings.Repeat("a", 64) +
 			`","ensemble.version":"1.2.3","ensemble.agent-uid":"1001","ensemble.agent-gid":"1002"}}}]`), nil

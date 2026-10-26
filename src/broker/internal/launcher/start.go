@@ -87,6 +87,10 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	if err := h.checkMounts(m); err != nil {
 		return StartResult{}, err
 	}
+	gateway, err := h.checkEgress(ctx)
+	if err != nil {
+		return StartResult{}, err
+	}
 	var policy codex.Installation
 	switch m.Client {
 	case "codex":
@@ -189,7 +193,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 			return StartResult{}, busy(holder)
 		}
 	}
-	result, held, err = h.create(ctx, c, m, info, policy, facts, lap)
+	result, held, err = h.create(ctx, c, m, info, gateway, policy, facts, lap)
 	if errors.Is(err, errTaken) {
 		return StartResult{}, taken(c)
 	}
@@ -265,11 +269,12 @@ func (h Host) withdraw(c string, m Manifest, held holding, e *protocol.Error) {
 
 // create runs every step after the absence check; any error makes Start roll back. held: the credentials in the
 // container so far.
-func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, policy codex.Installation, facts *audit.StartFacts,
+func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, gateway egress, policy codex.Installation, facts *audit.StartFacts,
 	lap func(phase string)) (_ StartResult, held holding, _ error) {
 	labels := info.Config.Labels
-	args := []string{"run", "--detach", "--name", c, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "agent",
-		"--network", "bridge", "--workdir", m.CWD}
+	args := append([]string{"run", "--detach", "--name", c, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "agent"},
+		gateway.args()...)
+	args = append(args, "--workdir", m.CWD)
 	switch m.Client {
 	case "codex":
 		args = append(args, "--env", "CODEX_HOME="+m.CodexDir)

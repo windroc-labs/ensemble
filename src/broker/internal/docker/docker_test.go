@@ -162,3 +162,16 @@ func TestRunEndsBuildProgressOnALine(t *testing.T) {
 		}
 	}
 }
+
+func TestAbsentNetwork(t *testing.T) {
+	for stderr, want := range map[string]bool{
+		"Error: No such network: egress-workers":                       true,
+		"Error response from daemon: network egress-workers not found": true,
+		"Error response from daemon: permission denied":                false,
+		"Error response from daemon: network egress-workers is in use": false,
+	} {
+		if got := Absent(&CommandError{Exit: 1, Stderr: stderr}); got != want {
+			t.Errorf("Absent(%q) = %v", stderr, got)
+		}
+	}
+}

@@ -99,7 +99,7 @@ func TestManifestLock(t *testing.T) {
 			t.Errorf("accepted lock %v", lock)
 		}
 	}
-	for _, label := range []string{"windroc.lock", "windroc.other", "ensemble.lock"} {
+	for _, label := range []string{"windroc.lock", "windroc.other", "windroc.egress.contract", "ensemble.lock"} {
 		path := editedManifest(t, func(f map[string]any) { f["labels"] = map[string]string{label: "x"} })
 		data, _ := os.ReadFile(path)
 		if _, err := ParseManifest(data); code(t, err) != protocol.ManifestRejected {
