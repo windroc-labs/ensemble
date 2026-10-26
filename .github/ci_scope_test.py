@@ -645,6 +645,14 @@ def job(name):
 
 
 class Workflow(unittest.TestCase):
+    def test_style_and_types_share_a_runner_while_docs_keep_style_only(self):
+        lint = job("lint")
+        self.assertIn('\'["style", "design"]\'', lint)
+        self.assertNotIn("matrix.group == 'types'", lint)
+        self.assertIn("run: python3 -m pip install pyright==1.1.414", lint)
+        self.assertIn("run: pyright", lint)
+        self.assertIn("matrix.group == 'style' && needs.changes.outputs.docs == 'false'", lint)
+
     def test_queue_group_and_broker_gate_wiring(self):
         self.assertIn("  merge_group:\n    types: [checks_requested]", WORKFLOW.read_text())
         ci = job("ci")

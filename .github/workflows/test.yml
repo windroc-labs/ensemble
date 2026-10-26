@@ -60,7 +60,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: ${{ fromJSON(needs.changes.outputs.docs == 'true' && '["style"]' || '["style", "types", "design"]') }}
+        group: ${{ fromJSON(needs.changes.outputs.docs == 'true' && '["style"]' || '["style", "design"]') }}
     steps:
       - name: Check out
         uses: actions/checkout@v7.0.1
@@ -74,9 +74,11 @@ jobs:
         run: |
           case '${{ matrix.group }}' in
             style) python3 -m pip install ruff==0.16.9 vulture==2.16 ;;
-            types) python3 -m pip install pyright==1.1.414 ;;
             design) python3 -m pip install import-linter=="$IMPORT_LINTER_VERSION" pylint==4.1.3 ;;
           esac
+      - name: Install pinned Pyright
+        if: ${{ matrix.group == 'style' && needs.changes.outputs.docs == 'false' }}
+        run: python3 -m pip install pyright==1.1.414
       - name: Protect shipped source
         if: ${{ !cancelled() }}
         run: chmod -R a-w src
@@ -95,7 +97,7 @@ jobs:
         if: ${{ !cancelled() && matrix.group == 'style' && needs.changes.outputs.docs == 'true' }}
         run: python3 .github/run_tests.py 'Docs references' tests/manager/unit/skills tests/orchestrator/unit/skills
       - name: Pyright
-        if: ${{ !cancelled() && matrix.group == 'types' }}
+        if: ${{ !cancelled() && matrix.group == 'style' && needs.changes.outputs.docs == 'false' }}
         run: pyright
       - name: Import contracts
         if: ${{ !cancelled() && matrix.group == 'design' }}

@@ -156,7 +156,7 @@ occurs exactly once. Coverage applies to pull requests and merge groups; `CI` re
 | Change/event | Unit and integration tests | Repository tests |
 |---|---|---|
 | PR touching only `src/ensemble/manager/`, `src/ensemble/orchestrator/`, their `tests/<layer>/`, `skills/manage/`, `skills/board/`, `hooks/` and `launchd/` | both upper layers | intentionally skipped |
-| PR touching only root `*.md` files and/or `docs/` | upper skill unit tests in `Lint style` (they check the docs skills cite); unit matrix, coverage, integration, broker, type and design jobs skipped | intentionally skipped |
+| PR touching only root `*.md` files and/or `docs/` | upper skill unit tests in `Lint style` (they check the docs skills cite); unit matrix, coverage, integration, broker and design jobs skipped; no type check | intentionally skipped |
 | PR changing only the release `version` (`X.Y.Z`) of `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json` and/or `package.json` | skipped, with coverage; every lint runs (`Lint design` checks the versions agree) | intentionally skipped |
 | PR touching a lower layer, `tests/`, `.github/`, shared config, an unknown path, or an empty diff | all layers, plus shared unit tests | run |
 | push to `main` or `merge_group` | all layers, plus shared unit tests | run |
@@ -170,6 +170,7 @@ passes the selected group to discovery. Merge groups always select full scope an
 unit coverage, comparing changed source lines against `merge_group.base_sha`.
 Static lint remains required; `Lint style` checks
 unit import boundaries on every change and upper skill units for docs-only changes.
+Code changes also run Pyright in that runner; `Lint design` keeps the architecture checks.
 `docs/credentials.md`, read by repository checks, still selects full scope.
 `CI` accepts a skipped repository job only for
 a non-full decision, skipped unit, coverage and integration jobs only for the decision that
