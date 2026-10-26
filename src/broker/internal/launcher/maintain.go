@@ -117,7 +117,7 @@ func (h Host) Maintain(ctx context.Context, container, path string, delivered []
 		return MaintainResult{}, err
 	}
 	now := h.now()
-	record := TokenRecord{Expires: map[credential.Kind][]string{}, Retry: map[credential.Kind]string{}}
+	record := newTokenRecord()
 	if h.Schedule != nil {
 		record = h.Schedule.Read(m)
 	}
@@ -160,12 +160,10 @@ func (h Host) Maintain(ctx context.Context, container, path string, delivered []
 		consider(dueAt(record, p.kind, now))
 	}
 	result.Deadline = deadlineOf(record, held)
-	notices, static, err := h.dueNotices(container, m, delivered, now)
-	switch {
-	case err != nil:
+	if notices, static, err := h.dueNotices(container, m, delivered, now); err != nil {
 		result.Results = append(result.Results, ProviderResult{Credential: noticesComponent, Error: resultError(injected(err, protocol.InternalError, "Checking static secret notices failed."))})
 		consider(now.Add(RetryAfter))
-	default:
+	} else {
 		result.Notices = notices
 		if static != nil {
 			consider(*static)

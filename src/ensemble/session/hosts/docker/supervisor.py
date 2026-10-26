@@ -25,7 +25,7 @@ from typing import Any
 
 from ensemble.session.engine.status_log import SessionStatusLog
 from ensemble.session.engine.types import SessionError
-from ensemble.session.hosts.docker.broker import Broker, BrokerError, hook_root
+from ensemble.session.hosts.docker.broker import Broker, BrokerError, deadline_ok, hook_root
 from ensemble.session.hosts.docker.relay import LINE_MAX, relay_request
 from ensemble.utils import read_regular, save
 
@@ -276,14 +276,15 @@ def maintain(
 ) -> None:
     """Until stopped: the broker's maintain at once, then when it says, each failure and notice
     told to `report` (a notice it refuses is not acknowledged). While the broker fails, reported
-    once per streak, it retries each RETRY s and the last confirmed deadline holds.
+    once per streak, it retries each RETRY s and the last confirmed deadline holds; only a reply
+    with another deadline replaces it.
     """
     container, manifest = f"ensemble-{name}-{generation}", os.path.join(state, f"{generation}.json")
     deadline, due = _cached(deadline_file(state, generation)), clock()
     delivered: list[str] = []
-    failing = False
+    failing = ticked = False
     while True:
-        if deadline is not None:
+        if deadline is not None and ticked:
             at = datetime.fromisoformat(deadline["at"]).timestamp()
             if due is None or due > at:
                 if not stopped.wait(max(0.0, at - clock())):
@@ -291,6 +292,7 @@ def maintain(
                 return
         if due is None or stopped.wait(max(0.0, due - clock())):
             return
+        ticked = True
         try:
             found = broker.maintain(container, manifest, delivered, root=root)
         except SessionError as error:
@@ -311,9 +313,10 @@ def maintain(
             except (OSError, ValueError):
                 continue
             delivered.append(notice["key"])
-        deadline = found.deadline
-        with contextlib.suppress(OSError):
-            save(deadline_file(state, generation), json.dumps(deadline), durable=True)
+        if found.deadline is not None:
+            deadline = found.deadline
+            with contextlib.suppress(OSError):
+                save(deadline_file(state, generation), json.dumps(deadline), durable=True)
         due = clock() if delivered else _timestamp(found.next_check)
 
 
@@ -341,13 +344,9 @@ def _timestamp(value: str | None) -> float | None:
 def _cached(path: str) -> Any:
     try:
         found = json.loads(read_regular(path) or b"null")
-        if found is not None:
-            datetime.fromisoformat(found["at"])
-            if found.keys() != {"at", "action", "reason"} or found["action"] != "close":
-                return None
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+    except (OSError, ValueError, RecursionError):
         return None
-    return found
+    return found if deadline_ok(found) else None
 
 
 def main(argv=None) -> int:

@@ -36,6 +36,12 @@ type StateSchedule struct {
 
 func tokensFile(m Manifest) string { return m.Generation + ".tokens.json" }
 
+func tokensLock(m Manifest) string { return m.Generation + ".tokens.lock" }
+
+func newTokenRecord() TokenRecord {
+	return TokenRecord{Expires: map[credential.Kind][]string{}, Retry: map[credential.Kind]string{}}
+}
+
 func tokensFailed(m Manifest) *protocol.Error {
 	return protocol.New(protocol.InternalError, "Recording "+tokensFile(m)+" failed.")
 }
@@ -46,7 +52,7 @@ func (s StateSchedule) parent(m Manifest) (string, error) {
 }
 
 func (s StateSchedule) Read(m Manifest) TokenRecord {
-	record := TokenRecord{Expires: map[credential.Kind][]string{}, Retry: map[credential.Kind]string{}}
+	record := newTokenRecord()
 	parent, err := s.parent(m)
 	if err != nil {
 		return record
@@ -74,7 +80,7 @@ func (s StateSchedule) Record(m Manifest, kind credential.Kind, expires []string
 	if err != nil {
 		return tokensFailed(m)
 	}
-	lock, err := os.OpenFile(filepath.Join(parent, m.Generation+".tokens.lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o600)
+	lock, err := os.OpenFile(filepath.Join(parent, tokensLock(m)), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o600)
 	if err != nil {
 		return tokensFailed(m)
 	}

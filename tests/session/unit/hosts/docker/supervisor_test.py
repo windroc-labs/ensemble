@@ -740,6 +740,35 @@ class MaintainTest(Base):
         self.assertEqual(lines[0], "worker_1 credential_maintenance_failed transport")
         self.assertEqual(lines[1], f"worker_1 client_auth_expired {REASON}")
 
+    def test_a_passed_cached_deadline_still_ticks_first(self):
+        with open(self.cache, "w") as stream:
+            json.dump(deadline(-100), stream)
+        calls = self.run_ticks(maintained(at(3600), deadline(7200)), OFFLINE, ticks=1)
+        self.assertEqual([c[0] for c in calls], ["maintain"])
+        self.assertEqual(self.waits, [0.0, 3600.0])
+        self.assertEqual((self.cached(), self.lines()), (deadline(7200), []))
+
+    def test_a_passed_cached_deadline_closes_after_one_failed_tick(self):
+        with open(self.cache, "w") as stream:
+            json.dump(deadline(-100), stream)
+        calls = self.run_ticks(OFFLINE, CLOSED)
+        self.assertEqual([c[0] for c in calls], ["maintain", "close"])
+        self.assertEqual(
+            self.lines(),
+            [
+                "worker_1 credential_maintenance_failed transport",
+                f"worker_1 client_auth_expired {REASON}",
+            ],
+        )
+
+    def test_a_reply_without_a_deadline_keeps_the_confirmed_one(self):
+        with open(self.cache, "w") as stream:
+            json.dump(deadline(100), stream)
+        calls = self.run_ticks(maintained(at(60)), OFFLINE, CLOSED)
+        self.assertEqual([c[0] for c in calls], ["maintain", "maintain", "close"])
+        self.assertEqual(self.waits, [0.0, 60.0, 40.0])
+        self.assertEqual(self.cached(), deadline(100))
+
     def test_no_deadline_never_closes(self):
         calls = self.run_ticks(*[OFFLINE] * 6)
         self.assertEqual([c[0] for c in calls], ["maintain"] * 6)

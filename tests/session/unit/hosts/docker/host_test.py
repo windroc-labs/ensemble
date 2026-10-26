@@ -2086,6 +2086,32 @@ class PipeTest(Base):
         self.assertEqual(self.broker.closed, [CONTAINER])
         piped.close()
 
+    def test_piped_tick_logs_partial_result(self):
+        response = data("maintain-output.json") | {"container": CONTAINER}
+        log, runner = self.logged_to_file(), BrokerRunner((0, json.dumps(response), ""))
+        called, wire = threading.Event(), Broker(runner).maintain
+
+        def maintain(*args, **kwargs):
+            try:
+                return wire(*args, **kwargs)
+            finally:
+                called.set()
+
+        self.broker.maintain = maintain
+        piped = self.pipe()
+        self.assertTrue(called.wait(5))
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and "credential_refresh_failed" not in _read(log):
+            time.sleep(0.01)
+        piped.close()
+        self.assertEqual(
+            _read(log).splitlines(),
+            [
+                "docker session w: credential_refresh_failed codex: Renewal unavailable. (status 503)"
+            ],
+        )
+        self.assertEqual(runner.calls[0][1], "maintain")
+
     def test_piped_tick_log_holds_only_the_brokers_message(self):
         log, called = self.logged_to_file(), threading.Event()
         message = f"Writing a GitHub token into {CONTAINER} failed."

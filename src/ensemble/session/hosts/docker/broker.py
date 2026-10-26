@@ -148,7 +148,8 @@ def _credential_expiry(value) -> bool:
     return True
 
 
-def _deadline(value) -> bool:
+def deadline_ok(value) -> bool:
+    """A deadline as the protocol has it, or None."""
     return value is None or (
         isinstance(value, dict)
         and value.keys() == {"at", "action", "reason"}
@@ -386,7 +387,7 @@ class Broker:
             and started.clients.keys() == clients
             and all(map(_text, started.clients.values()))
             and _user_id(started.github_user_id)
-            and _deadline(started.deadline)
+            and deadline_ok(started.deadline)
         ):
             raise SessionError("broker: bad response to start: fields")
         return started
@@ -417,7 +418,7 @@ class Broker:
                 d.keys() == {"container", "next_check", "deadline", "results", "notices"}
                 and d["container"] == container
                 and _credential_expiry(d["next_check"])
-                and _deadline(d["deadline"])
+                and deadline_ok(d["deadline"])
                 and isinstance(d["results"], list)
                 and all(map(_result, d["results"]))
                 and _notices(d["notices"])
