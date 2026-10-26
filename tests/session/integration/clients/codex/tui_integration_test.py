@@ -974,6 +974,24 @@ class TuiRecoveryIntegrationTest(Live):
         after = stream.until(TurnEnd)
         self.assertEqual((set(after[:-1]), after[-1]), ({TurnStarted()}, TurnEnd("after")))
 
+    def test_overloaded_first_and_later_pane_input_each_fail_once_without_stop(self):
+        failed = {"kind": "fail", "info": "server_overloaded", "message": "try again later"}
+        self.scene([[failed], [failed], ["recovered"]])
+        handle = self.start()
+        stream = Stream(self, handle)
+        first = stream.until(TurnFailed)
+        self.assertEqual(first.count(TurnStarted()), 1)
+        self.assertEqual(first[-1], TurnFailed("server_overloaded", "try again later"))
+        self.server.tmux("send-keys", "-t", "=w1:", "-l", "continue")
+        self.server.tmux("send-keys", "-t", "=w1:", "Enter")
+        second = stream.until(TurnFailed)
+        self.assertEqual(
+            second, [TurnStarted(), TurnFailed("server_overloaded", "try again later")]
+        )
+        self.assertNotIn("Stop", [hook["hook"] for hook in self.hooks()])
+        handle.send("continue again")
+        self.assertEqual(stream.until(TurnEnd), [TurnStarted(), TurnEnd("recovered")])
+
     def test_root_child_cwd_and_rebinding_filters_publish_only_valid_hooks(self):
         invalid = [
             {"agent_id": CHANGED, "last_assistant_message": "child"},

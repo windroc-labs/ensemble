@@ -652,6 +652,17 @@ class TuiTest(Base):
                 self.assertEqual(run.observe(), [])
                 self.assertEqual(run.hook_events("Stop", self.payload(turn_id=turn)), [])
 
+    def test_native_failure_can_arrive_before_its_accepted_input_hook(self):
+        run, path = self.bound()
+        for turn in ("first", "pane-followup"):
+            failed = _failed("try again", "server_overloaded")
+            failed["payload"]["turn_id"] = turn
+            _append(path, failed)
+            self.assertEqual(
+                run.observe(), [TurnStarted(), TurnFailed("server_overloaded", "try again")]
+            )
+            self.assertEqual(run.hook_events("UserPromptSubmit", self.payload(turn_id=turn)), [])
+
     def test_native_and_hook_acceptance_share_identity_and_old_stop_cannot_end_next_turn(self):
         run, path = self.bound()
         self.assertEqual(

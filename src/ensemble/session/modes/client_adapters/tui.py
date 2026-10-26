@@ -90,6 +90,7 @@ class Tui(ABC):
 
     def _settle_turn(self, identifier: object, *, native: bool = False) -> bool:
         if not self._turn_id:  # legacy hooks also report background-work completion
+            self._turn_open = False
             return True
         if not self._turn_open:
             return False

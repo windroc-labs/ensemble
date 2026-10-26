@@ -283,6 +283,21 @@ class CodexTui(Tui):
 
     def _record(self, record: dict) -> list[SessionEvent]:
         payload = record.get("payload")
+        accepted: list[SessionEvent] = []
+        if (
+            record.get("type") == "event_msg"
+            and isinstance(payload, dict)
+            and payload.get("type") == "task_complete"
+            and (payload.get("error") is None or isinstance(payload.get("error"), dict))
+        ):
+            identifier = payload.get("turn_id")
+            if (
+                isinstance(identifier, str)
+                and identifier
+                and not self._turn_open
+                and self._accept_turn(identifier)
+            ):
+                accepted.append(TurnStarted())
         if (
             record.get("type") == "event_msg"
             and isinstance(payload, dict)
@@ -300,7 +315,7 @@ class CodexTui(Tui):
                 return []
             if not self._settle_turn(payload.get("turn_id") or self._native_turn, native=True):
                 return []
-            return [TurnFailed(kind, message)]
+            return [*accepted, TurnFailed(kind, message)]
         if (
             record.get("type") == "event_msg"
             and isinstance(payload, dict)
@@ -309,7 +324,7 @@ class CodexTui(Tui):
             and self._settle_turn(payload.get("turn_id") or self._native_turn, native=True)
         ):
             text = payload.get("last_agent_message")
-            return [TurnEnd(text if isinstance(text, str) else self.last)]
+            return [*accepted, TurnEnd(text if isinstance(text, str) else self.last)]
         found = records.message(record)
         if found is None:
             return []
