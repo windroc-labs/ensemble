@@ -19,6 +19,7 @@ from ensemble.delegate.config import (
 )
 from ensemble.delegate.engine import config as delegate
 from ensemble.delegate.engine.config import read_config
+from ensemble.delegate.engine.environment import resolve_fields
 from ensemble.session import Host
 from ensemble.session.engine.config import read_config as read_session_config
 from tests.delegate import case
@@ -229,7 +230,36 @@ class EnvironmentCheckTest(Case):
                 "prefetch": False,
             },
         )
-        self.assertEqual(found["environments"], {})
+        self.assertEqual(list(found["environments"]), ["mini-op"])
+
+    def test_the_packaged_mini_op_environment_holds_only_its_published_names(self):
+        found = read_config(local=os.devnull)
+        self.assertEqual(
+            found["environments"]["mini-op"],
+            {
+                "image": "mini-op:env",
+                "gateway": "mini-op",
+                "plugins": ["mini-op"],
+                "lock": "mini-op",
+                "secrets": [
+                    {"item": "ensemble-env/mini-op-password", "file": "mini-password"},
+                    {"item": "ensemble-env/mini-op-ssh-key", "file": "mini-ssh-key"},
+                ],
+            },
+        )
+        spec = resolve_fields(
+            found,
+            host="docker",
+            name="mini-op",
+            overrides={},
+            packaged=delegate.packaged_environments(),
+        )
+        assert spec is not None
+        self.assertFalse(spec.prefetch)
+        self.assertEqual(spec.spec.image, "mini-op:env")
+        self.assertEqual(
+            found["roles"]["verifier"]["environment"], {"name": "mini-op", "prefetch": True}
+        )
 
     def test_a_local_named_environment_and_role_table_load(self):
         found = self.loaded(

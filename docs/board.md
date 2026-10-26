@@ -183,7 +183,7 @@ Copy `[orchestrator.linear]`'s `agent_label_group` and `[orchestrator.linear.age
 | Agent-group labels at claim recheck | New run |
 |---|---|
 | None | Resolved role default client |
-| One mapped label | Its client, for any role; renaming the label preserves the mapping |
+| One mapped label | Its client; a choice that differs from a role's fixed client (`verifier`: claude only) takes the configuration-error path below; renaming the label preserves the mapping |
 | Several, or an unmapped child | One comment listing label errors, including task-label errors; In Review, no attempt consumed |
 
 The `claim` log records `client` and `client_source=label|default`. A label-selected client's quota configuration or configuration error produces a comment with the client and error's first line, then In Review instead of an interruption retry; fix it → move back to Todo.
