@@ -24,6 +24,7 @@ from datetime import datetime
 
 from ensemble.session.engine.types import MARKS, HookCall, HookError, StatusState
 from ensemble.session.hosts.base import TUI_STATE
+from ensemble.utils import read_regular
 
 PAYLOAD_MAX = 64 << 20  # bytes of stdin parsed
 
@@ -112,7 +113,7 @@ def _dispatch(folder, label, payload, state, specs, *, event):
         )
 
     journaled = None if event is None else _journaled(os.path.join(folder, HOOKS), event, label)
-    if journaled is not None:  # a retry after the Host callback failed: rerun only that
+    if journaled is not None:  # a retry reruns only the Host
         payload = journaled
     elif client_hook := state.get("client_hook"):
         client = _load_callback(client_hook["module"], "client hook", specs)
@@ -139,17 +140,10 @@ def _dispatch(folder, label, payload, state, specs, *, event):
 
 def _journaled(path: str, event: str, label: str) -> dict | None:
     """The payload of the last hooks.jsonl record when it journaled `event` under `label`."""
+    data = read_regular(path) or b""
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
-        try:
-            if not stat.S_ISREG(os.fstat(fd).st_mode):
-                return None
-            with os.fdopen(fd, "rb", closefd=False) as f:
-                last = f.read().rstrip(b"\n").rpartition(b"\n")[2]
-        finally:
-            os.close(fd)
-        record = json.loads(last)
-    except (OSError, ValueError, RecursionError):
+        record = json.loads(data.rstrip(b"\n").rpartition(b"\n")[2])
+    except (ValueError, RecursionError):
         return None
     if (
         isinstance(record, dict)
@@ -347,9 +341,9 @@ def append(path: str, record: dict) -> None:
 
 
 def run(argv: Sequence[str], stdin, *, roots: Sequence[str], event: str | None = None) -> bool:
-    """One hook call, as `ensemble-session hook DIR LABEL` runs it with its own source roots, its
-    payload stdin's bytes (stdin may be None): returns success, never raises or writes stdout;
-    a failure keeps its traceback in DIR/hook.log and one stderr line.
+    """One hook call, as `ensemble-session hook [--event ID] DIR LABEL` runs it with its own source
+    roots, its payload stdin's bytes (stdin may be None): returns success, never raises or writes
+    stdout; a failure keeps its traceback in DIR/hook.log and one stderr line.
     """
     try:
         main(argv, stdin.buffer, roots=roots, event=event)
