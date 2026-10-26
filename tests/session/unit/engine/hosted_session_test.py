@@ -136,6 +136,20 @@ class ClientCapacityTest(HostedTuiBase):
         first.stop()
         self.start().close()
 
+    def test_rejected_validation_leaves_no_capacity_state(self):
+        for existing in (True, False):
+            if not existing:
+                os.rmdir(self.ensemble)
+            before = sorted(str(p.relative_to(self.home)) for p in Path(self.home).rglob("*"))
+            with (
+                self.subTest(existing=existing),
+                self.assertRaisesRegex(ConfigError, "events: tui mode only"),
+            ):
+                self.start(events=os.path.join(self.home, "events"))
+            self.assertEqual(
+                sorted(str(p.relative_to(self.home)) for p in Path(self.home).rglob("*")), before
+            )
+
     def test_in_process_completion_without_events_and_stop_release_capacity(self):
         reached, release = threading.Event(), threading.Event()
         self.addCleanup(release.set)

@@ -157,6 +157,7 @@ class AdmissionTest(Case):
         self.assertFalse(stale.exists())
         outside = Path(self.home) / "untouched"
         outside.write_text("unchanged")
+        stale.parent.mkdir(parents=True, exist_ok=True)
         os.symlink(outside, stale)
         with self.assertRaises(SessionError), self.enter():
             pass
@@ -175,6 +176,7 @@ class AdmissionTest(Case):
         with ticket:
             pass
         path = Path(ticket.directory) / "bad.run"
+        path.parent.mkdir(parents=True, exist_ok=True)
         for content in ("not-json", "[]", "{}", '{"kind":"tui","sid":"s","name":"n"}'):
             with self.subTest(content=content):
                 path.write_text(content)

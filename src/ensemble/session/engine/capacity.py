@@ -14,7 +14,7 @@ from contextlib import AbstractContextManager
 
 from ensemble.session.engine.types import Liveness, Mode, SessionError, SessionRow, StatusState
 from ensemble.session.hosts.base import Host
-from ensemble.utils import STATE, file_lock, sync_directory
+from ensemble.utils import STATE, inode_lock, sync_directory
 
 ROOT = f"{STATE}/client-runs"
 POLL = 0.1
@@ -124,37 +124,52 @@ class Admission(AbstractContextManager):
 
     @contextlib.contextmanager
     def _admit(self) -> Iterator[Admission]:
+        gate = os.path.join(
+            os.path.dirname(os.path.dirname(self.directory)), f"client-runs-{self.client}.lock"
+        )
+        parent = os.path.dirname(gate)
+        existed = os.path.isdir(parent)
         try:
-            os.makedirs(self.directory, mode=0o700, exist_ok=True)
-            with file_lock(os.path.join(self.directory, "admission")):
-                if self.limit:
-                    known, holders = _inventory(self.hosts, self.client)
-                    active = _holders(self.directory, known, holders)
-                    if len(active) >= self.limit:
-                        raise SessionError(
-                            f"client {self.client} reached max_runs limit {self.limit}; "
-                            f"held by: {', '.join(active)}"
-                        )
-                self._fd = os.open(
-                    self.path, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
-                )
-                fcntl.flock(self._fd, fcntl.LOCK_EX)
-                with os.fdopen(os.dup(self._fd), "w", encoding="utf-8") as stream:
-                    json.dump(self.record, stream)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                sync_directory(self.directory)
+            os.makedirs(parent, mode=0o700, exist_ok=True)
+            with inode_lock(gate):
                 try:
+                    os.makedirs(self.directory, mode=0o700, exist_ok=True)
+                    if self.limit:
+                        known, holders = _inventory(self.hosts, self.client)
+                        active = _holders(self.directory, known, holders)
+                        if len(active) >= self.limit:
+                            raise SessionError(
+                                f"client {self.client} reached max_runs limit {self.limit}; "
+                                f"held by: {', '.join(active)}"
+                            )
+                    self._fd = os.open(
+                        self.path, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+                    )
+                    fcntl.flock(self._fd, fcntl.LOCK_EX)
+                    with os.fdopen(os.dup(self._fd), "w", encoding="utf-8") as stream:
+                        json.dump(self.record, stream)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    sync_directory(self.directory)
                     self._yielded = True
                     yield self
                 finally:
                     if not self._committed:
                         self.close()
+                    for path in (self.directory, os.path.dirname(self.directory)):
+                        with contextlib.suppress(OSError):
+                            os.rmdir(path)
+                    # inode_lock rechecks the inode after waiting, so deleting its file is safe.
+                    os.unlink(gate)
         except (OSError, ValueError) as error:
             if self._yielded:
                 raise
             self.close()
             raise SessionError(f"client {self.client}: capacity: {error}") from error
+        finally:
+            if not existed and not self._committed:
+                with contextlib.suppress(OSError):
+                    os.rmdir(parent)
 
     def started(self, state: Callable[[], Liveness]) -> None:
         if self.record["kind"] == Mode.TUI:

@@ -14,9 +14,9 @@ def compete(ready, release, output, name):
     try:
         with Admission("fake", 1, name=name, sid=name, mode=Mode.HEADLESS, hosts={}) as ticket:
             ticket.started(lambda: Liveness.LIVE)
-            output.put("admitted")
-            release.wait(10)
-            ticket.close()
+        output.put("admitted")
+        release.wait(10)
+        ticket.close()
     except SessionError:
         output.put("refused")
 
