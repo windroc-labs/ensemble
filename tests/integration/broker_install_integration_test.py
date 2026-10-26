@@ -29,6 +29,11 @@ VERIFY = (
     "--repo windroc-labs/ensemble --signer-workflow windroc-labs/ensemble/.github/workflows/release.yml"
     " --source-ref refs/tags/v9.8.7 --deny-self-hosted-runners"
 )
+# The released binary's stand-in: answers version with $ASSET_PROTOCOL and marks that it ran.
+RELEASED_BINARY = b"""#!/bin/sh
+: > "$RAN"
+[ "$*" = version ] && printf '{"protocol_version":"%s"}\\n' "$ASSET_PROTOCOL"
+"""
 SIGN = (
     "codesign --force --sign - --options runtime --identifier com.github.windroc.ensemble-broker "
 )
@@ -67,11 +72,16 @@ class Install(Case):
         (self.plugin / ".claude-plugin").mkdir()
         self.manifest = self.plugin / ".claude-plugin/plugin.json"
         self.manifest.write_text(json.dumps({"name": "ensemble", "version": "9.8.7"}, indent=2))
+        self.client = self.plugin / "src/ensemble/session/hosts/docker/broker.py"
+        self.client.parent.mkdir(parents=True)
+        self.client.write_text('BROKER = "/x"\nPROTOCOL = "7"\nTIMEOUT = 1\n')
         self.asset = Path(self.home, "asset.tar.gz")
         with tarfile.open(self.asset, "w:gz") as archive:
             member = tarfile.TarInfo("ensemble-broker")
-            member.size = len(b"released binary")
-            archive.addfile(member, io.BytesIO(b"released binary"))
+            member.size = len(RELEASED_BINARY)
+            member.mode = 0o755
+            archive.addfile(member, io.BytesIO(RELEASED_BINARY))
+        self.ran = Path(self.home, "asset-ran")
         self.installed = Path(self.home, "installed")
         self.seeded = Path(self.home, "seeded-before-sudo")
         self.env = {
@@ -83,6 +93,8 @@ class Install(Case):
             "INSTALLED": str(self.installed),
             "SEEDED": str(self.seeded),
             "PLATFORM": "Darwin arm64",
+            "RAN": str(self.ran),
+            "ASSET_PROTOCOL": "7",
         }
 
     def fake(self, *names):
@@ -169,7 +181,7 @@ class Install(Case):
         )
         self.assertEqual(calls[1], f"gh attestation verify {work}/{ASSET} {VERIFY}")
         self.assert_installed(calls[2:], f"{work}/ensemble-broker")
-        self.assertEqual(self.installed.read_bytes(), b"released binary")
+        self.assertEqual(self.installed.read_bytes(), RELEASED_BINARY)
         seeded = Path(self.ensemble, "docker/worker/Dockerfile")
         self.assertEqual(seeded.read_text(), (BROKER / "worker/Dockerfile").read_text())
         self.assertTrue(self.seeded.exists())
@@ -195,13 +207,48 @@ class Install(Case):
         work = calls[0].split()[3].rsplit("/", 1)[0]
         self.assertNotEqual(work, self.home)
         self.assert_installed(calls[1:], f"{work}/ensemble-broker")
-        self.assertEqual(self.installed.read_bytes(), b"released binary")
+        self.assertEqual(self.installed.read_bytes(), RELEASED_BINARY)
 
     def test_unattested_asset_aborts_before_install(self):
         self.fake("gh", "sudo")
         result = self.run_script("install.sh", ENSEMBLE_BROKER_ASSET=str(self.asset))
         self.assert_nothing_installed(result)
         self.assertIn("failed provenance verification for v9.8.7; nothing installed", result.stderr)
+        self.assertFalse(self.ran.exists())
+
+    def test_asset_with_another_protocol_aborts_before_install(self):
+        self.fake("gh", "sudo")
+        result = self.run_script(
+            "install.sh",
+            RELEASED=str(self.asset),
+            ATTESTED_REF="refs/tags/v9.8.7",
+            ASSET_PROTOCOL="6",
+        )
+        self.assert_nothing_installed(result)
+        self.assertTrue(self.ran.exists())
+        self.assertIn(
+            "v9.8.7's ensemble-broker speaks protocol 6, this plugin wants 7: install the plugin"
+            " at v9.8.7 (docs/upgrading.md), or build the broker from this plugin with"
+            f" sh {self.plugin.resolve()}/src/broker/install.sh --build, which needs Go and"
+            " resets every broker login; nothing installed",
+            result.stderr,
+        )
+
+    def test_unreadable_protocols_abort_before_install(self):
+        self.fake("gh", "sudo")
+        for asset, client, named in (
+            ("x7", 'PROTOCOL = "7"\n', "speaks protocol unknown, this plugin wants 7"),
+            ("7", "PROTOCOL = 7\n", "speaks protocol 7, this plugin wants unknown"),
+        ):
+            self.client.write_text(client)
+            result = self.run_script(
+                "install.sh",
+                RELEASED=str(self.asset),
+                ATTESTED_REF="refs/tags/v9.8.7",
+                ASSET_PROTOCOL=asset,
+            )
+            self.assert_nothing_installed(result)
+            self.assertIn(named, result.stderr)
 
     def test_asset_attested_for_another_tag_aborts(self):
         self.fake("gh", "sudo")
