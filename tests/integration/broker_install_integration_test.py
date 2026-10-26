@@ -35,13 +35,15 @@ RELEASED_BINARY = b"""#!/bin/sh
 [ "$*" = version ] && printf '{"protocol_version":"%s"}\\n' "$ASSET_PROTOCOL"
 """
 SIGN = (
-    "codesign --force --sign - --options runtime --identifier com.github.windroc.ensemble-broker "
+    "codesign --force --sign - --options runtime --identifier com.github.windroc.ensemble-broker"
+    ' --requirements =designated => identifier "com.github.windroc.ensemble-broker" '
 )
 FAKE = """#!/bin/sh
 printf '%s\\n' "$(basename "$0") $*" >> "$LOG"
 case "$(basename "$0") $*" in
   "go build"*) while [ "$#" -gt 0 ]; do [ "$1" = -o ] && : > "$2"; shift; done ;;
   "codesign -dv "*) echo "CodeDirectory v=20500 size=1 $FLAGS hashes=1" >&2 ;;
+  "codesign -d -r- "*) printf 'designated => identifier "%s"\\n' "${IDENTIFIER:-com.github.windroc.ensemble-broker}" >&2 ;;
   "codesign -d --entitlements"*) echo "$ENTITLEMENTS" ;;
   "sudo install -d"*) [ ! -e "$HOME/.ensemble/docker/worker/Dockerfile" ] || : > "$SEEDED" ;;
   "sudo install -o"*) cp "$8" "$INSTALLED" ;;
@@ -131,6 +133,7 @@ class Install(Case):
                 f"go build -trimpath -o {out} .",
                 f"{SIGN}{out}",
                 f"codesign --verify --strict {out}",
+                f"codesign -d -r- {out}",
                 f"codesign -dv {out}",
                 f"codesign -d --entitlements - {out}",
             ],
@@ -141,6 +144,12 @@ class Install(Case):
         result = self.run_script("build.sh", str(Path(self.home, "b")), FLAGS="flags=0x2(adhoc)")
         self.assertEqual(result.returncode, 1)
         self.assertIn("lacks the hardened runtime", result.stderr)
+
+    def test_build_script_rejects_a_binary_without_its_designated_requirement(self):
+        self.fake("go", "codesign")
+        result = self.run_script("build.sh", str(Path(self.home, "b")), IDENTIFIER="other")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("lacks its designated requirement", result.stderr)
 
     def test_build_script_rejects_get_task_allow(self):
         self.fake("go", "codesign")
