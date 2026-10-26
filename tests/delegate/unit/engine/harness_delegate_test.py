@@ -2234,3 +2234,28 @@ class EnvironmentTest(HarnessCase):
         view = HarnessDelegate.attach(self.work, session_cls=HarnessSession)
         self.stop(self.answered(view))
         self.assertIsNone(self.metadata()["plan"]["session"]["environment"])
+
+    def test_dummy_tester_acceptance_config_end_to_end(self):
+        self.append(ACCEPTANCE)
+        echoed = {"status": "done", "title": "Echo", "summary": "echoed", "deliverable": TARGETED}
+        HarnessSession.script = (Reply(block(echoed)), Exited(0))
+        view = self.make(spec=self.spec(mode="headless"), host="docker", harness_host="harness")
+        self.assertEqual(
+            HarnessSession.preflights[-1]["spec"].environment,
+            EnvironmentSpec(
+                image="dummy-env:test",
+                gateway="workers",
+                plugins=("dummy-plugin",),
+                secrets=({"item": "ensemble-env/dummy", "file": "dummy.txt"},),
+                lock="dummy-lock",
+                prefetch={"repo": "acme/app", "ref": "release/1"},
+            ),
+        )
+        order = []
+        with mock.patch.object(
+            HarnessSession, "close", autospec=True, side_effect=lambda _s: order.append("close")
+        ):
+            result = view.run(lambda e: isinstance(e, Finished) and order.append("finished"))
+        assert result.outcome is not None
+        self.assertEqual(result.outcome.deliverable.strip(), TARGETED)
+        self.assertEqual(order, ["close", "finished"])
