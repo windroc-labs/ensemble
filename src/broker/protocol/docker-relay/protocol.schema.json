@@ -191,6 +191,30 @@
             "ok"
           ],
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "gen": {
+              "$ref": "#/$defs/generation"
+            },
+            "seq": {
+              "$ref": "#/$defs/seq"
+            },
+            "ok": {
+              "const": false
+            },
+            "retry": {
+              "const": true
+            }
+          },
+          "required": [
+            "gen",
+            "seq",
+            "ok",
+            "retry"
+          ],
+          "additionalProperties": false
         }
       ]
     }

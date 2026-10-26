@@ -7,6 +7,7 @@ import json
 import os
 import re
 import stat
+import sys
 import tempfile
 import types
 import unittest
@@ -256,6 +257,76 @@ class DeclaredRootCallback(Case):
         with open(os.path.join(self.dir, "hooks.jsonl"), encoding="utf-8") as f:
             payloads = [json.loads(line)["payload"] for line in f]
         self.assertEqual((stderr.getvalue(), payloads), ("", [{"loaded": module}]))
+
+
+class RelayEvent(Case):
+    """A relay event's retry after its Host callback failed reruns only that callback."""
+
+    CLIENT = (
+        "calls = []\n"
+        "def on_hook(call):\n"
+        "    calls.append(call)\n"
+        "    return {**call.payload, 'seen': 1}\n"
+    )
+    HOST = (
+        "calls, fail = [], [RuntimeError('host down')]\n"
+        "def on_hook(word, call):\n"
+        "    calls.append((word, call.payload))\n"
+        "    if fail:\n"
+        "        raise fail.pop()\n"
+    )
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = os.path.realpath(tmp.name)
+        self.dir = os.path.join(self.root, "s1")
+        os.mkdir(self.dir, 0o700)
+        saved = {**state(self.root, None), "words": {"stop": "done"}}
+        self.names = {}
+        for kind, text in (("client", self.CLIENT), ("host", self.HOST)):
+            name = self.names[kind] = f"{kind}_{uuid.uuid4().hex}"
+            with open(os.path.join(self.root, f"{name}.py"), "w", encoding="utf-8") as f:
+                f.write(text)
+            saved[f"{kind}_hook"] = {"module": name, "state": {}, "roots": [self.root]}
+        write_state(self.dir, saved)
+
+    def calls(self, kind):
+        return sys.modules[self.names[kind]].calls
+
+    def run_hook(self, event, body=b'{"n": 1}'):
+        stdin = types.SimpleNamespace(buffer=io.BytesIO(body))
+        with redirect_stderr(io.StringIO()):
+            return tui_hook.run([self.dir, "stop"], stdin, roots=ROOTS, event=event)
+
+    def records(self):
+        with open(os.path.join(self.dir, tui_hook.HOOKS), encoding="utf-8") as f:
+            return [json.loads(line) for line in f]
+
+    def test_a_retried_event_journals_once_and_reruns_only_the_host(self):
+        self.assertFalse(self.run_hook("g1.1"))
+        self.assertTrue(self.run_hook("g1.1"))
+        records = self.records()
+        self.assertEqual(
+            [(r["label"], r["payload"], r["event"]) for r in records],
+            [("stop", {"n": 1, "seen": 1}, "g1.1")],
+        )
+        self.assertEqual(len(self.calls("client")), 1)
+        self.assertEqual(self.calls("host"), [("done", {"n": 1, "seen": 1})] * 2)
+
+    def test_another_event_or_none_journals_and_runs_both_callbacks(self):
+        self.assertFalse(self.run_hook(None))
+        for event in ("g1.1", "g1.2", None):
+            self.assertTrue(self.run_hook(event))
+        self.assertEqual([r.get("event") for r in self.records()], [None, "g1.1", "g1.2", None])
+        self.assertEqual((len(self.calls("client")), len(self.calls("host"))), (4, 4))
+
+    def test_a_bad_event_is_a_usage_error_before_any_callback(self):
+        for event in ("", "a b", "x" * 65):
+            with self.subTest(event=event), self.assertRaisesRegex(tui_hook.HookError, "usage"):
+                tui_hook.main([self.dir, "stop"], io.BytesIO(b"{}"), roots=ROOTS, event=event)
+        self.assertNotIn(self.names["client"], sys.modules)
+        self.assertFalse(os.path.exists(os.path.join(self.dir, tui_hook.HOOKS)))
 
 
 class Source(Case):

@@ -433,6 +433,15 @@ later, it leaves its worker running.
 
 ### Recovery
 
+- **Host hook failed** (timeout, could not start, callback failure or non-zero exit): the supervisor
+  invokes `ensemble-session hook --strict --event <gen>.<seq> DIR LABEL` so callback failures return
+  non-zero; ordinary client hook calls retain their default exit 0. The `hooks.jsonl` record carries
+  the event; a retry whose event is that file's last record skips the client callback and the journal
+  and reruns only the Host callback with the journaled payload. The supervisor logs the failure in
+  `rejected.jsonl` without advancing the successful sequence. Its `ok: false, retry: true` reply keeps the
+  event at the relay queue's head and retries on the same connection every 10 s until success or session
+  end; later events wait behind it. Success records the sequence, so acknowledged replays do not rerun
+  the hook. Malformed requests, wrong generations and wrong directories remain terminal rejections.
 - **Supervisor or daemon gone** (killed, not a host reboot): the worker's next `attach`, `read`, `send`, `status`,
   `restart` or `close` starts both and replays the queue; an event arrives once, or twice if its hook ran just before
   the kill, never lost. `next-event` restarts nothing: it reads only the events file. Until the daemon is restarted,
