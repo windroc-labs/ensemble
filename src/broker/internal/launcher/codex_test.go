@@ -183,7 +183,7 @@ func TestCodexStartRecordsAndRollbackReleasesGrant(t *testing.T) {
 	}
 	for name, fail := range map[string]func(*fakeCodexCreds, *fakeEnv){
 		"after inject": func(_ *fakeCodexCreds, env *fakeEnv) {
-			env.failOn["ensemble-env/dummy"] = errors.New("env write failed")
+			env.failOn["ensemble-broker-env/dummy"] = errors.New("env write failed")
 		},
 		"in inject": func(creds *fakeCodexCreds, _ *fakeEnv) { creds.injectErr = errors.New("writer failed") },
 	} {
@@ -202,7 +202,7 @@ func TestCodexStartRecordsAndRollbackReleasesGrant(t *testing.T) {
 		t.Fatalf("preflight failure: injected %d released %q: %v", creds.injected, creds.released, err)
 	}
 	h, creds, env := newHost()
-	env.failOn["ensemble-env/dummy"] = errors.New("env write failed")
+	env.failOn["ensemble-broker-env/dummy"] = errors.New("env write failed")
 	creds.releaseErr = errors.New("keychain STORE_SENTINEL")
 	_, err = h.Start(context.Background(), codexManifest(t, withSecrets(dummySecrets)))
 	if e := protoErr(t, err); !strings.Contains(e.Message, "Withdrawing the Codex grant failed.") || strings.Contains(e.Message, "STORE_SENTINEL") {

@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	codexService        = "ensemble-codex"
+	codexService        = "ensemble-broker-codex"
 	codexAccount        = "auth"
 	maxCodexAuth        = 64 * 1024
 	codexLoginCommand   = InstalledPath + " login codex"

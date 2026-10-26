@@ -6,9 +6,9 @@
     "--manifest",
     "/Users/example/.ensemble/docker-state/worker_1/0123456789abcdef0123456789abcdef.json",
     "--delivered",
-    "ensemble-env/db@2:7d",
+    "ensemble-broker-env/db@2:7d",
     "--renew",
     "--delivered",
-    "ensemble-claude/work@1:rotated"
+    "ensemble-broker-claude/work@1:rotated"
   ]
 }

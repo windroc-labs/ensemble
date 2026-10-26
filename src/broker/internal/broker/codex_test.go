@@ -318,7 +318,7 @@ func TestCodexLoginIsolation(t *testing.T) {
 	if n.locked {
 		t.Fatal("lock leaked")
 	}
-	if !slices.Equal(k.steps, []string{"partition ensemble-codex auth", "apps ensemble-codex auth"}) {
+	if !slices.Equal(k.steps, []string{"partition ensemble-broker-codex auth", "apps ensemble-broker-codex auth"}) {
 		t.Fatalf("ACL order %v", k.steps)
 	}
 	if !bytes.Equal(k.data, n.data) {
@@ -368,7 +368,7 @@ func TestCodexLoginAsksBeforeBrowser(t *testing.T) {
 			if wantAsk && asked != 1 || !wantAsk && asked != 0 {
 				t.Fatalf("password questions %v", k.events)
 			}
-			if wantAsk && !slices.Equal(stepsAtRun, []string{"partition ensemble-codex auth", "apps ensemble-codex auth"}) {
+			if wantAsk && !slices.Equal(stepsAtRun, []string{"partition ensemble-broker-codex auth", "apps ensemble-broker-codex auth"}) {
 				t.Fatalf("trust at browser start %v", stepsAtRun)
 			}
 			if !wantAsk && len(k.steps) != 0 {

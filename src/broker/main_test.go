@@ -66,7 +66,7 @@ func invoke(a app, args ...string) (int, string, string) {
 
 func TestVersion(t *testing.T) {
 	code, out, errOut := invoke(app{}, "version")
-	if code != 0 || out != `{"protocol_version":"29"}`+"\n" || errOut != "" {
+	if code != 0 || out != `{"protocol_version":"30"}`+"\n" || errOut != "" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
 	for _, c := range fixtures.Cases(t, "version_output") {
@@ -283,11 +283,11 @@ func TestUsageErrors(t *testing.T) {
 		{"unknown", []string{"login", "github", "ensemble-other"}},
 		{"unknown", []string{"login", "github", "ensemble-engineer"}},
 		{"unknown", []string{"login", "github", "ensemble-docs"}},
-		{"unknown", []string{"login", "github", "ensemble-bot", "x"}},
-		{"unknown", []string{"login", "github", "ensemble-bot", "--key-file", "/k.pem"}},
-		{"unknown", []string{"login", "github", "ensemble-bot", "--key-file", "/k.pem", "--app-id"}},
-		{"unknown", []string{"login", "github", "ensemble-bot", "--app-id", "1", "--key-file", "/k.pem"}},
-		{"unknown", []string{"login", "github", "ensemble-bot", "--key-file", "/k.pem", "--app", "1"}},
+		{"unknown", []string{"login", "github", "ensemble-broker-bot", "x"}},
+		{"unknown", []string{"login", "github", "ensemble-broker-bot", "--key-file", "/k.pem"}},
+		{"unknown", []string{"login", "github", "ensemble-broker-bot", "--key-file", "/k.pem", "--app-id"}},
+		{"unknown", []string{"login", "github", "ensemble-broker-bot", "--app-id", "1", "--key-file", "/k.pem"}},
+		{"unknown", []string{"login", "github", "ensemble-broker-bot", "--key-file", "/k.pem", "--app", "1"}},
 		{"unknown", []string{"login", "github", "ensemble-other", "--key-file", "/k.pem", "--app-id", "1"}},
 		{"unknown", []string{"login", "claude", "Work"}},
 		{"unknown", []string{"login", "claude", "setup-token"}},
@@ -315,7 +315,7 @@ func TestUsageErrors(t *testing.T) {
 }
 
 func TestLoginGitHubDispatch(t *testing.T) {
-	for _, name := range []string{"ensemble-bot"} {
+	for _, name := range []string{"ensemble-broker-bot"} {
 		var got string
 		a := app{loginGitHub: func(ctx context.Context, app string, key *keyFile, out io.Writer) error {
 			if ctx == nil {
@@ -333,7 +333,7 @@ func TestLoginGitHubDispatch(t *testing.T) {
 		}
 	}
 	a := app{loginGitHub: func(context.Context, string, *keyFile, io.Writer) error { return errors.New("no item") }}
-	if code, out, errOut := invoke(a, "login", "github", "ensemble-bot"); code != 1 || out != "" || errOut != "ensemble-broker: no item\n" {
+	if code, out, errOut := invoke(a, "login", "github", "ensemble-broker-bot"); code != 1 || out != "" || errOut != "ensemble-broker: no item\n" {
 		t.Fatalf("exit %d %q %q", code, out, errOut)
 	}
 }
@@ -820,7 +820,7 @@ func TestAuditHoldsNoSecret(t *testing.T) {
 	_ = json.Unmarshal(manifest, &m)
 	c := "ensemble-" + m.Name + "-" + m.Generation
 	log := filepath.Join(t.TempDir(), "Library/Logs/ensemble/broker.jsonl")
-	keys := memSecrets{"ensemble-github-users/ensemble-bot": []byte(`{"slug":"ensemble-bot","id":343764394}`)}
+	keys := memSecrets{"ensemble-broker-github-users/ensemble-broker-bot": []byte(`{"slug":"ensemble-bot","id":343764394}`)}
 	lock := broker.FileLock(filepath.Join(t.TempDir(), "tokens.lock"))
 	for _, command := range []string{"start", "maintain", "close"} {
 		rec := &audit.Recorder{Command: command, Now: time.Now, Log: audit.Log{Path: log}}
@@ -894,7 +894,7 @@ func TestLoginGitHubKeyFileDispatch(t *testing.T) {
 		_, err := io.WriteString(out, "ok\n")
 		return err
 	}}
-	if code, out, errOut := invoke(a, "login", "github", "ensemble-bot", "--key-file", path, "--app-id", "1234567"); code != 0 || out != "ok\n" || errOut != "" {
+	if code, out, errOut := invoke(a, "login", "github", "ensemble-broker-bot", "--key-file", path, "--app-id", "1234567"); code != 0 || out != "ok\n" || errOut != "" {
 		t.Fatalf("exit %d %q %q", code, out, errOut)
 	}
 	if seen.id != "1234567" || held != pemText || !bytes.Equal(seen.pem, make([]byte, len(pemText))) {
@@ -910,7 +910,7 @@ func TestLoginGitHubKeyFileDispatch(t *testing.T) {
 	} {
 		called := false
 		a := app{loginGitHub: func(context.Context, string, *keyFile, io.Writer) error { called = true; return nil }}
-		if code, out, errOut := invoke(a, "login", "github", "ensemble-bot", "--key-file", file, "--app-id", "1234567"); code != 1 || out != "" || errOut != want || called {
+		if code, out, errOut := invoke(a, "login", "github", "ensemble-broker-bot", "--key-file", file, "--app-id", "1234567"); code != 1 || out != "" || errOut != want || called {
 			t.Fatalf("%s: exit %d %q %q called %v", file, code, out, errOut, called)
 		}
 	}
@@ -1090,21 +1090,21 @@ func savedLogin(out io.Writer, line string) func() error {
 func TestStaticLoginRecordsExpiry(t *testing.T) {
 	s, home := staticFixture(t)
 	var out, errOut bytes.Buffer
-	if err := s.register("ensemble-claude/default", credential.Registration{}, &out, &errOut, savedLogin(&out, "saved")); err != nil {
+	if err := s.register("ensemble-broker-claude/default", credential.Registration{}, &out, &errOut, savedLogin(&out, "saved")); err != nil {
 		t.Fatal(err)
 	}
 	if out.String() != "saved\nExpiry unknown\n" || errOut.String() != "" {
 		t.Fatalf("%q %q", out.String(), errOut.String())
 	}
 	out.Reset()
-	if err := s.register("ensemble-claude/default", credential.Registration{Fresh: true}, &out, &errOut, savedLogin(&out, "saved")); err != nil {
+	if err := s.register("ensemble-broker-claude/default", credential.Registration{Fresh: true}, &out, &errOut, savedLogin(&out, "saved")); err != nil {
 		t.Fatal(err)
 	}
 	if out.String() != "saved\nExpires 2027-10-26 (assumed)\n" {
 		t.Fatalf("%q", out.String())
 	}
 	records, err := staticStore(home).Load()
-	if err != nil || !reflect.DeepEqual(records["ensemble-claude/default"], credential.Static{Version: 2, ExpiresAt: "2027-10-26T12:00:00Z", Provenance: credential.Assumed}) {
+	if err != nil || !reflect.DeepEqual(records["ensemble-broker-claude/default"], credential.Static{Version: 2, ExpiresAt: "2027-10-26T12:00:00Z", Provenance: credential.Assumed}) {
 		t.Fatalf("%+v %v", records, err)
 	}
 	if _, err := os.Stat(audit.Path(home)); !os.IsNotExist(err) {
@@ -1116,7 +1116,7 @@ func TestStaticLoginRejectsBeforeLogin(t *testing.T) {
 	s, home := staticFixture(t)
 	called := false
 	var out, errOut bytes.Buffer
-	err := s.register("ensemble-claude/default", credential.Registration{Fresh: true, Expires: day(t, "2027-01-02")}, &out, &errOut, func() error {
+	err := s.register("ensemble-broker-claude/default", credential.Registration{Fresh: true, Expires: day(t, "2027-01-02")}, &out, &errOut, func() error {
 		called = true
 		return nil
 	})
@@ -1131,15 +1131,15 @@ func TestStaticLoginRejectsBeforeLogin(t *testing.T) {
 func TestStaticLoginPrintsDueNotice(t *testing.T) {
 	s, home := staticFixture(t)
 	var out, errOut bytes.Buffer
-	if err := s.register("ensemble-env/db", credential.Registration{Expires: day(t, "2026-10-31")}, &out, &errOut, savedLogin(&out, "saved")); err != nil {
+	if err := s.register("ensemble-broker-env/db", credential.Registration{Expires: day(t, "2026-10-31")}, &out, &errOut, savedLogin(&out, "saved")); err != nil {
 		t.Fatal(err)
 	}
-	want := "saved\nExpires 2026-10-31 (explicit)\nensemble-env/db expires 2026-10-31 (explicit), in 5 days: rotate it at its source, then ensemble-broker login env db [--expires <date>]; running sessions keep their copy until they restart\n"
+	want := "saved\nExpires 2026-10-31 (explicit)\nensemble-broker-env/db expires 2026-10-31 (explicit), in 5 days: rotate it at its source, then ensemble-broker login env db [--expires <date>]; running sessions keep their copy until they restart\n"
 	if out.String() != want || errOut.String() != "" {
 		t.Fatalf("%q %q", out.String(), errOut.String())
 	}
 	records, _ := staticStore(home).Load()
-	if got := records["ensemble-env/db"].Notified; !reflect.DeepEqual(got, []string{"7d"}) {
+	if got := records["ensemble-broker-env/db"].Notified; !reflect.DeepEqual(got, []string{"7d"}) {
 		t.Fatalf("notified %q", got)
 	}
 	data, err := os.ReadFile(audit.Path(home))
@@ -1148,7 +1148,7 @@ func TestStaticLoginPrintsDueNotice(t *testing.T) {
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	if len(lines) != 1 || !strings.Contains(lines[0], `"command":"login","event":"credential-notice"`) ||
-		!strings.Contains(lines[0], `"kind":"env-secret","result":"notified","expires_at":"2026-10-31T00:00:00Z","item":"ensemble-env/db","notice":"7d"`) {
+		!strings.Contains(lines[0], `"kind":"env-secret","result":"notified","expires_at":"2026-10-31T00:00:00Z","item":"ensemble-broker-env/db","notice":"7d"`) {
 		t.Fatalf("%q", lines)
 	}
 }
@@ -1159,7 +1159,7 @@ func TestStaticLoginAuditWarning(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	if err := s.register("ensemble-env/db", credential.Registration{Expires: day(t, "2026-10-31")}, &out, &errOut, savedLogin(&out, "saved")); err != nil {
+	if err := s.register("ensemble-broker-env/db", credential.Registration{Expires: day(t, "2026-10-31")}, &out, &errOut, savedLogin(&out, "saved")); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasPrefix(errOut.String(), "ensemble-broker: audit_write_failed: ") || !strings.Contains(out.String(), "in 5 days") {
@@ -1177,13 +1177,13 @@ func TestStaticSentinelAbsent(t *testing.T) {
 		_, err := io.WriteString(&out, "saved\n")
 		return err
 	}
-	if err := s.register("ensemble-env/db", credential.Registration{Expires: day(t, "2026-10-31")}, &out, &errOut, login); err != nil {
+	if err := s.register("ensemble-broker-env/db", credential.Registration{Expires: day(t, "2026-10-31")}, &out, &errOut, login); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(s.store.Path, []byte(sentinel), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := s.register("ensemble-env/db", credential.Registration{}, &out, &errOut, login)
+	err := s.register("ensemble-broker-env/db", credential.Registration{}, &out, &errOut, login)
 	if err == nil || err.Error() != s.store.Path+": invalid content" {
 		t.Fatalf("%v", err)
 	}
@@ -1204,7 +1204,7 @@ func TestRefreshAndNoticesAskForRestart(t *testing.T) {
 	var calls []call
 	for _, args := range [][]string{
 		{"refresh", "--container", c, "--manifest", "/tmp/m.json"},
-		{"notices", "--container", c, "--manifest", "/tmp/m.json", "--delivered", "ensemble-env/db@2:7d"},
+		{"notices", "--container", c, "--manifest", "/tmp/m.json", "--delivered", "ensemble-broker-env/db@2:7d"},
 		{"refresh"},
 	} {
 		code, out, errOut := invoke(recording(&calls), args...)
@@ -1237,8 +1237,8 @@ func TestMaintainArgs(t *testing.T) {
 	}{
 		{nil, got{[]string{c, "/tmp/m.json"}, false}},
 		{[]string{"--renew"}, got{[]string{c, "/tmp/m.json"}, true}},
-		{[]string{"--delivered", "ensemble-env/db@2:7d", "--renew", "--delivered", "ensemble-claude/work@1:rotated"},
-			got{[]string{c, "/tmp/m.json", "ensemble-env/db@2:7d", "ensemble-claude/work@1:rotated"}, true}},
+		{[]string{"--delivered", "ensemble-broker-env/db@2:7d", "--renew", "--delivered", "ensemble-broker-claude/work@1:rotated"},
+			got{[]string{c, "/tmp/m.json", "ensemble-broker-env/db@2:7d", "ensemble-broker-claude/work@1:rotated"}, true}},
 	} {
 		calls = nil
 		code, out, errOut := invoke(a, append(slices.Clone(base), tc.extra...)...)
@@ -1249,12 +1249,12 @@ func TestMaintainArgs(t *testing.T) {
 	}
 	many := slices.Clone(base)
 	for range maxDelivered + 1 {
-		many = append(many, "--delivered", "ensemble-env/db@2:7d")
+		many = append(many, "--delivered", "ensemble-broker-env/db@2:7d")
 	}
 	calls = nil
 	for _, args := range [][]string{
 		append(slices.Clone(base), "--renew", "--renew"), append(slices.Clone(base), "--delivered"),
-		append(slices.Clone(base), "--delivered", "ensemble-bot/x@1:7d"), append(slices.Clone(base), "extra"),
+		append(slices.Clone(base), "--delivered", "ensemble-broker-bot/x@1:7d"), append(slices.Clone(base), "extra"),
 		{"maintain", "--container", "bad", "--manifest", "/tmp/m.json"}, {"maintain", "--container", c, "--manifest", "relative"},
 		{"maintain", "--manifest", "/tmp/m.json", "--container", c}, many,
 	} {
@@ -1305,7 +1305,7 @@ func TestStaticLoginPipedToken(t *testing.T) {
 		go func() { _, _ = io.WriteString(w, "sk-ant-oat01-piped\n"); w.Close() }()
 		read, _ := stdinReaders(r, "Claude account default setup-token (hidden): ", true)
 		var out, errOut bytes.Buffer
-		err = s.register("ensemble-claude/default", c.reg, &out, &errOut, func() error {
+		err = s.register("ensemble-broker-claude/default", c.reg, &out, &errOut, func() error {
 			token, err := read()
 			if err == nil && string(token) != "sk-ant-oat01-piped" {
 				err = fmt.Errorf("token %q", token)
@@ -1314,7 +1314,7 @@ func TestStaticLoginPipedToken(t *testing.T) {
 		})
 		r.Close()
 		records, _ := staticStore(home).Load()
-		if err != nil || records["ensemble-claude/default"].Provenance != c.want || errOut.Len() != 0 || strings.Contains(out.String(), "piped") {
+		if err != nil || records["ensemble-broker-claude/default"].Provenance != c.want || errOut.Len() != 0 || strings.Contains(out.String(), "piped") {
 			t.Fatalf("%v: %v %+v %q %q", c.want, err, records, out.String(), errOut.String())
 		}
 	}

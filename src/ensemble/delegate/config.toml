@@ -180,7 +180,7 @@ effort = "low"
 #   image     a local base image's tag or ID, or "@worker": ensemble's worker base (~/.ensemble/docker/worker)
 #   gateway   the egress proxy's caller network the container joins (its label name, docs/docker-host.md › Egress proxy)
 #   plugins   in-image plugin names or pinned sources, added to [hosts.docker] plugins; [] → none
-#   secrets   [[…secrets]] tables of item (an ensemble-env/<name> keychain item) and file (its name under
+#   secrets   [[…secrets]] tables of item (an ensemble-broker-env/<name> keychain item) and file (its name under
 #             /run/ensemble/secrets/env/); references only, never a value; [] → none
 #   lock      a lock name ([a-z0-9][a-z0-9_.-]{0,62}): one running container per name; a locked run's session closes
 #             when the run ends; unset → none
@@ -203,11 +203,11 @@ plugins = []
 lock = "mini-op"
 
 [[environments.mini-op.secrets]]
-item = "ensemble-env/mini-op-password"
+item = "ensemble-broker-env/mini-op-password"
 file = "mini-password"
 
 [[environments.mini-op.secrets]]
-item = "ensemble-env/mini-op-ssh-key"
+item = "ensemble-broker-env/mini-op-ssh-key"
 file = "mini-ssh-key"
 
 # [delegates]

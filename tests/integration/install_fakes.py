@@ -678,7 +678,7 @@ def broker(args):
     codex_file = BROKER.parent / "codex/state.json"
     state = load(codex_file, None)
     if args[:2] in (["login", "opencode"], ["login", "codex"]):
-        service = "ensemble-" + args[1]
+        service = "ensemble-broker-" + args[1]
         if (FAKES / "keychain" / ("foreign-" + service)).exists():
             account = "auth" if args[1] == "codex" else args[2]
             out(
@@ -693,7 +693,7 @@ def broker(args):
         default["repair"] = (
             "sudo /usr/local/libexec/ensemble/ensemble-broker install-codex <version>"
         )
-        claude = (FAKES / "keychain/ensemble-claude").exists()
+        claude = (FAKES / "keychain/ensemble-broker-claude").exists()
         claude = claude and not (FAKES / "src/broker/claude_unusable").exists()
         response = {"revocations": [], "codex": state or default, "claude": {"default": claude}}
         warning = FAKES / "src/broker/audit_warning.json"
@@ -720,28 +720,28 @@ def broker(args):
     if args == ["login", "claude"]:
         out("Paste the setup-token (hidden): ")
         mark(FAKES / "src/broker/claude_token", sys.stdin.readline().rstrip("\n"))
-        store_key("ensemble-claude", "token")
+        store_key("ensemble-broker-claude", "token")
         (FAKES / "src/broker/claude_unusable").unlink(missing_ok=True)
         return 0
-    if args[:3] == ["login", "github", "ensemble-bot"] and args[3:4] == ["--key-file"]:
+    if args[:3] == ["login", "github", "ensemble-broker-bot"] and args[3:4] == ["--key-file"]:
         if (
-            (FAKES / "keychain/ensemble-bot").exists()
+            (FAKES / "keychain/ensemble-broker-bot").exists()
             or args[5:6] != ["--app-id"]
             or len(args) != 7
         ):
             return 1
-        store_key("ensemble-bot", Path(args[4]).read_text())
-        mark(FAKES / "keychain/ensemble-bot.account", args[6])
+        store_key("ensemble-broker-bot", Path(args[4]).read_text())
+        mark(FAKES / "keychain/ensemble-broker-bot.account", args[6])
         args = args[:3]
-    if args == ["login", "github", "ensemble-bot"]:
-        if not (FAKES / "keychain/ensemble-bot").exists():
+    if args == ["login", "github", "ensemble-broker-bot"]:
+        if not (FAKES / "keychain/ensemble-broker-bot").exists():
             return 1
-        store_key("ensemble-github-users", "42")
+        store_key("ensemble-broker-github-users", "42")
         out("GitHub App ensemble-test-bot bot user ensemble-test-bot[bot] has ID 42\n")
         return 0
     if args == ["login", "codex"]:
         save(codex_file, {**(state or {}), "state": "ready", "repair": ""})
-        store_key("ensemble-codex", "auth")
+        store_key("ensemble-broker-codex", "auth")
         return 0
     if args[:2] == ["login", "opencode"]:
         if len(args) == 5 and args[3] == "--auth-file":
@@ -755,7 +755,7 @@ def broker(args):
         if not key:
             out("ensemble-broker: API key must be 1 to 16384 bytes\n", sys.stderr)
             return 1
-        store_key("ensemble-opencode", key)
+        store_key("ensemble-broker-opencode", key)
         return 0
     return 2
 

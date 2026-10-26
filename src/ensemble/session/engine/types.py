@@ -265,7 +265,7 @@ BASE_IMAGE = re.compile(
 )
 GATEWAY = re.compile(r"[a-z0-9][a-z0-9_-]{0,62}")
 LOCK_NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,62}")
-SECRET_ITEM = re.compile(r"ensemble-env/[a-z0-9][a-z0-9._-]{0,63}")
+SECRET_ITEM = re.compile(r"ensemble-broker-env/[a-z0-9][a-z0-9._-]{0,63}")
 SECRET_FILE = re.compile(r"[^/\x00-\x1f\x7f-\x9f]{1,255}")
 SECRETS_MAX = 16
 REPO = re.compile(r"[A-Za-z0-9-]+/(?!\.\.?\Z)[A-Za-z0-9._-]+")

@@ -15,7 +15,7 @@ import (
 // An environment secret: service envServicePrefix+<name>, account <name> (launcher.ValidEnvName); in a container, the
 // file envDir/<file> a start manifest names.
 const (
-	envServicePrefix = "ensemble-env/"
+	envServicePrefix = "ensemble-broker-env/"
 	envDir           = docker.SecretsDir + "/env"
 )
 
@@ -50,7 +50,7 @@ func LoginEnv(name string, read, password func() ([]byte, error), k EnvKeychain,
 	return err
 }
 
-// EnvKeys is start's side of the environment secrets: each reference is ensemble-env/<name>.
+// EnvKeys is start's side of the environment secrets: each reference is ensemble-broker-env/<name>.
 type EnvKeys struct{ Keychain EnvKeychain }
 
 // envError maps a keychain failure for ref's item to the protocol, naming ref, without its detail.
@@ -65,7 +65,7 @@ func envError(ref, name string, err error) *protocol.Error {
 	return protocol.New(protocol.KeychainFailed, "Keychain access to "+ref+" failed.")
 }
 
-// envName is ref's name, ref being ensemble-env/<name>; the launcher already refused any other reference.
+// envName is ref's name, ref being ensemble-broker-env/<name>; the launcher already refused any other reference.
 func envName(ref string) (string, error) {
 	if !launcher.ValidEnvItem(ref) {
 		return "", protocol.Newf(protocol.ManifestRejected, "Manifest rejected: invalid secret item %q", ref)

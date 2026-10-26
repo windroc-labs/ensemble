@@ -51,9 +51,9 @@ func TestCredentialJSON(t *testing.T) {
 		t.Fatal(claude)
 	}
 
-	env := encode(t, Credential{Kind: EnvSecret, Item: "ensemble-env/dummy", Result: Withdrawn})
+	env := encode(t, Credential{Kind: EnvSecret, Item: "ensemble-broker-env/dummy", Result: Withdrawn})
 	sameKeys(t, env, "kind", "result", "expires_at", "item")
-	if env["kind"] != "env-secret" || env["item"] != "ensemble-env/dummy" || env["expires_at"] != nil {
+	if env["kind"] != "env-secret" || env["item"] != "ensemble-broker-env/dummy" || env["expires_at"] != nil {
 		t.Fatal(env)
 	}
 

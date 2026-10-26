@@ -14,7 +14,7 @@ import (
 // An OpenCode provider's API key: service opencodeService, account the provider's name; in a container, the file
 // opencodeKeyDir/<provider>.key.
 const (
-	opencodeService = "ensemble-opencode"
+	opencodeService = "ensemble-broker-opencode"
 	opencodeKeyDir  = docker.SecretsDir + "/opencode"
 )
 

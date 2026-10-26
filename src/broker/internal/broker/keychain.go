@@ -29,7 +29,7 @@ const (
 )
 
 // A Claude account's setup-token: service tokenService, account the account's name (launcher.ValidClaudeAccount).
-const tokenService = "ensemble-claude"
+const tokenService = "ensemble-broker-claude"
 
 // TokenReader is start's side of the setup-token items: an item's access (ItemTrust's AppAccess of tokenService and
 // the account) and Get, a read of the account's item that fails with ErrNeedsDialog rather than show a keychain dialog.
@@ -65,24 +65,24 @@ func ownershipError(service, account string, err error) error {
 
 // AppKeyService is the item of the one GitHub App's private key (account its App ID) and login github's argument;
 // the App's own slug, whatever it is, comes from GitHub at login.
-const AppKeyService = "ensemble-bot"
+const AppKeyService = "ensemble-broker-bot"
 
 // KeychainServices are every keychain service the broker reads or writes, one literal each: docs/credentials.md names
 // them all (tests/guard_checks/credentials.py reads this list). Declare each service as a package-level `...Service`
 // string constant, and each prefix item, an entry ending in "/" that stands for every service starting with it, as a
 // `...ServicePrefix` one: TestKeychainServices pins this list to exactly those.
 var KeychainServices = []string{
-	"ensemble-claude",
-	"ensemble-bot",
-	"ensemble-github-users",
-	"ensemble-tokens",
-	"ensemble-revocations",
-	"ensemble-codex",
-	"ensemble-codex-grants",
-	"ensemble-opencode",
-	"ensemble-env/", // prefix item: every ensemble-env/<name>
-	"ensemble-linear",
-	"ensemble-linear-grants",
+	"ensemble-broker-claude",
+	"ensemble-broker-bot",
+	"ensemble-broker-github-users",
+	"ensemble-broker-tokens",
+	"ensemble-broker-revocations",
+	"ensemble-broker-codex",
+	"ensemble-broker-codex-grants",
+	"ensemble-broker-opencode",
+	"ensemble-broker-env/", // prefix item: every ensemble-broker-env/<name>
+	"ensemble-broker-linear",
+	"ensemble-broker-linear-grants",
 }
 
 // SecretKeychain holds broker-only items: created trusting only the broker, read without a dialog.

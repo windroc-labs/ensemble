@@ -208,7 +208,7 @@ class ResponseTest(Case):
         found = Broker(fake).maintain(
             CONTAINER,
             MANIFEST,
-            delivered=("ensemble-env/db@2:7d", "ensemble-claude/w@1:rotated"),
+            delivered=("ensemble-broker-env/db@2:7d", "ensemble-broker-claude/w@1:rotated"),
             root=REPO,
         )
         self.assertEqual((found.notices, found.next_check), (good["notices"], good["next_check"]))
@@ -218,9 +218,9 @@ class ResponseTest(Case):
                 *("maintain", "--container", CONTAINER, "--manifest", MANIFEST),
                 *(
                     "--delivered",
-                    "ensemble-env/db@2:7d",
+                    "ensemble-broker-env/db@2:7d",
                     "--delivered",
-                    "ensemble-claude/w@1:rotated",
+                    "ensemble-broker-claude/w@1:rotated",
                 ),
             ],
         )
@@ -234,10 +234,10 @@ class ResponseTest(Case):
             {"notices": [notice | {"token": "secret"}]},
             {"notices": [{"key": notice["key"]}]},
             {"notices": [notice | {"key": "other/x@1:30d"}]},
-            {"notices": [notice | {"key": "ensemble-bot/x@1:30d"}]},
+            {"notices": [notice | {"key": "ensemble-broker-bot/x@1:30d"}]},
             {"notices": [notice | {"key": "ensemble-other/x@1:30d"}]},
             {"notices": [notice | {"key": 1}]},
-            {"notices": [notice | {"key": "ensemble-env/db@1:2d"}]},
+            {"notices": [notice | {"key": "ensemble-broker-env/db@1:2d"}]},
             {"notices": [notice | {"text": "two\nlines"}]},
             {"notices": [notice | {"text": ""}]},
         ):
@@ -246,9 +246,9 @@ class ResponseTest(Case):
                     CONTAINER, MANIFEST, root=REPO
                 )
         for key in (
-            "ensemble-claude/default@1:30d",
-            "ensemble-opencode/strata@2:rotated",
-            "ensemble-env/db@3:expired",
+            "ensemble-broker-claude/default@1:30d",
+            "ensemble-broker-opencode/strata@2:rotated",
+            "ensemble-broker-env/db@3:expired",
         ):
             response = good | {"notices": [notice | {"key": key}]}
             found = Broker(FakeBroker((0, json.dumps(response), ""))).maintain(
@@ -266,7 +266,7 @@ class ResponseTest(Case):
         good = data("maintain-output.json")
         fake = FakeBroker((0, json.dumps(good), ""))
         found = Broker(fake).maintain(
-            CONTAINER, MANIFEST, ["ensemble-env/db@2:7d"], renew=True, root=REPO
+            CONTAINER, MANIFEST, ["ensemble-broker-env/db@2:7d"], renew=True, root=REPO
         )
         self.assertEqual(
             fake.calls,
@@ -274,7 +274,7 @@ class ResponseTest(Case):
                 [
                     BROKER,
                     *("maintain", "--container", CONTAINER, "--manifest", MANIFEST, "--renew"),
-                    *("--delivered", "ensemble-env/db@2:7d"),
+                    *("--delivered", "ensemble-broker-env/db@2:7d"),
                 ]
             ],
         )
@@ -308,7 +308,7 @@ class ResponseTest(Case):
             {"results": [failed | {"error": {"code": "other", "message": "No."}}]},
             {"results": [failed | {"error": failed["error"] | {"message": "a\nforged"}}]},
             {"results": [failed | {"error": failed["error"] | {"cause": "\x07"}}]},
-            {"notices": [{"key": "ensemble-bot/x@1:30d", "text": "x"}]},
+            {"notices": [{"key": "ensemble-broker-bot/x@1:30d", "text": "x"}]},
             {"github": []},
         ):
             with (
@@ -674,7 +674,7 @@ class ManifestTest(Case):
             "hook_path": "/plugin/bin/ensemble-session",
             "github": "",
         }
-        secret = {"item": "ensemble-env/dummy", "file": "dummy.txt"}
+        secret = {"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}
         broker.write_manifest(
             path,
             **base,

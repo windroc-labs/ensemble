@@ -242,7 +242,7 @@ func TestLinearIdentityInput(t *testing.T) {
 			t.Fatalf("accepted invalid input")
 		}
 	}
-	for _, s := range []string{"ensemble-codex", "ensemble-env/x", ".", "..", "bad\ncommand"} {
+	for _, s := range []string{"ensemble-broker-codex", "ensemble-broker-env/x", ".", "..", "bad\ncommand"} {
 		a.TokenService = s
 		if a.check() == nil {
 			t.Errorf("accepted service %q", s)

@@ -18,7 +18,7 @@ import (
 
 // Each Codex container's grant record: its one slot's fingerprint, expiry, revision and delivery state, never a token.
 const (
-	codexGrantsService = "ensemble-codex-grants"
+	codexGrantsService = "ensemble-broker-codex-grants"
 	codexSlot          = "codex"
 )
 

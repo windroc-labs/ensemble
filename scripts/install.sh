@@ -1684,10 +1684,10 @@ opencode_key() {
   if [ "$docker" = yes ]; then
     sha=$(shasum -a 256 "$broker" | cut -d' ' -f1)
     if [ "$(state_get login_opencode)" = "$sha $provider" ] \
-      && security find-generic-password -s ensemble-opencode -a "$provider" </dev/null >/dev/null 2>&1; then
+      && security find-generic-password -s ensemble-broker-opencode -a "$provider" </dev/null >/dev/null 2>&1; then
       skip "$provider logged in to this broker"
     else
-      record_item ensemble-opencode "$provider"
+      record_item ensemble-broker-opencode "$provider"
       if key_login "$broker" login opencode "$provider" --auth-file "$(opencode_auth_file)"; then
         state_set login_opencode "$sha $provider"
       else
@@ -1851,7 +1851,7 @@ broker_install() {
   state_set broker_source "$source"
 }
 
-# Asks for the ensemble-bot App key's .pem and App ID into app_pem and app_id, for the broker to store; 1 when the
+# Asks for the ensemble-broker-bot App key's .pem and App ID into app_pem and app_id, for the broker to store; 1 when the
 # user skips it.
 store_app_key() {
   [ "$(state_get github_app_key)" != skipped ] || return 1
@@ -1867,7 +1867,7 @@ store_app_key() {
     if [[ $answer =~ ^[1-9][0-9]{0,19}$ ]]; then break; fi
   done
   app_id=$answer
-  ledger_add keychain ensemble-bot "$app_id"
+  ledger_add keychain ensemble-broker-bot "$app_id"
 }
 
 # Claude's default credential or pinned Codex: install, update, login, ready or busy.
@@ -1934,7 +1934,7 @@ broker_logins() {
     if [ "$(state_get login_claude)" != "$sha" ]; then state_set login_claude "$sha"; fi
   else
     say "Create a token with claude setup-token, then paste it at the broker's prompt; both run on a screen cleared afterwards"
-    record_item ensemble-claude default
+    record_item ensemble-broker-claude default
     token_screen_enter
     if ! { claude setup-token <&3 >&3 2>&3 && "$broker" login claude <&3 >&3 2>&3; }; then
       ask "Press Enter to leave this screen:"
@@ -1947,14 +1947,14 @@ broker_logins() {
   step "broker login: GitHub"
   if [ "$(state_get login_github)" = "$sha" ] && [ -n "$(state_get github_app)" ]; then
     skip "done for this broker"
-  elif ! security find-generic-password -s ensemble-bot </dev/null >/dev/null 2>&1 && ! store_app_key; then
+  elif ! security find-generic-password -s ensemble-broker-bot </dev/null >/dev/null 2>&1 && ! store_app_key; then
     skip "no GitHub App key: create the App by docs/docker-host.md#create-the-github-app, then rerun"
   else
-    record_item ensemble-github-users ensemble-bot
+    record_item ensemble-broker-github-users ensemble-broker-bot
     if [ -n "$app_id" ]; then
-      said=$("$broker" login github ensemble-bot --key-file "$app_pem" --app-id "$app_id" <&3 2>&3 | to_terminal)
+      said=$("$broker" login github ensemble-broker-bot --key-file "$app_pem" --app-id "$app_id" <&3 2>&3 | to_terminal)
     else
-      said=$("$broker" login github ensemble-bot <&3 2>&3 | to_terminal)
+      said=$("$broker" login github ensemble-broker-bot <&3 2>&3 | to_terminal)
     fi
     slug=$(sed -n 's/^GitHub App \([A-Za-z0-9-]*\) bot user .*/\1/p' <<<"$said")
     [ -n "$slug" ] || die "broker login github named no GitHub App"
@@ -1979,10 +1979,10 @@ broker_logins() {
     if [ "$(broker_need codex "$min")" = ready ]; then
       skip "logged in"
     else
-      record_item ensemble-codex auth
+      record_item ensemble-broker-codex auth
       if ! "$broker" login codex <&3 >&3 2>&3; then
-        if security find-generic-password -s ensemble-codex -a auth </dev/null >/dev/null 2>&1; then
-          say "ensemble-codex/auth is unavailable to this broker. If another process created it, delete this item from the login keychain in Keychain Access, then rerun install.sh."
+        if security find-generic-password -s ensemble-broker-codex -a auth </dev/null >/dev/null 2>&1; then
+          say "ensemble-broker-codex/auth is unavailable to this broker. If another process created it, delete this item from the login keychain in Keychain Access, then rerun install.sh."
         fi
         return 1
       fi

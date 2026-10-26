@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	linearService       = "ensemble-linear"
-	linearGrantsService = "ensemble-linear-grants"
+	linearService       = "ensemble-broker-linear"
+	linearGrantsService = "ensemble-broker-linear-grants"
 	linearTokenURL      = "https://api.linear.app/oauth/token"
 )
 

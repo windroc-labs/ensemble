@@ -22,9 +22,9 @@ import (
 
 // The broker-only items: a token record per container, one revocation backlog, and each App's bot user ID.
 const (
-	usersService       = "ensemble-github-users"
-	tokensService      = "ensemble-tokens"
-	revocationsService = "ensemble-revocations"
+	usersService       = "ensemble-broker-github-users"
+	tokensService      = "ensemble-broker-tokens"
+	revocationsService = "ensemble-broker-revocations"
 	revocationsAccount = "pending"
 	tokenDir           = docker.SecretsDir + "/github"
 )
@@ -122,7 +122,7 @@ func tokensError(container string, err error) error {
 	return err
 }
 
-// lifecycle is g's token lifecycle over the ensemble-tokens records and the ensemble-revocations backlog.
+// lifecycle is g's token lifecycle over the ensemble-broker-tokens records and the ensemble-broker-revocations backlog.
 func (g GitHub) lifecycle() credential.Lifecycle {
 	return credential.Lifecycle{
 		Provider: githubProvider{g},

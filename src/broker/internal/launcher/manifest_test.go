@@ -236,16 +236,16 @@ func secret(item, file string) map[string]any { return map[string]any{"item": it
 
 func TestValidEnvName(t *testing.T) {
 	for _, name := range []string{"dummy", "a", "0", "a.b-c_d", strings.Repeat("a", 64)} {
-		if !ValidEnvName(name) || !ValidEnvItem("ensemble-env/"+name) {
+		if !ValidEnvName(name) || !ValidEnvItem("ensemble-broker-env/"+name) {
 			t.Errorf("%q rejected", name)
 		}
 	}
 	for _, name := range []string{"", "Dummy", ".a", "-a", "_a", "a/b", "a b", "a\n", strings.Repeat("a", 65), "é"} {
-		if ValidEnvName(name) || ValidEnvItem("ensemble-env/"+name) {
+		if ValidEnvName(name) || ValidEnvItem("ensemble-broker-env/"+name) {
 			t.Errorf("%q accepted", name)
 		}
 	}
-	for _, item := range []string{"dummy", "ensemble-env", "ensemble-env/", "ensemble-bot", "ensemble-claude/default", "other/dummy", "ensemble-env//dummy"} {
+	for _, item := range []string{"dummy", "ensemble-broker-env", "ensemble-broker-env/", "ensemble-broker-bot", "ensemble-broker-claude/default", "other/dummy", "ensemble-broker-env//dummy", "ensemble-env/dummy"} {
 		if ValidEnvItem(item) {
 			t.Errorf("item %q accepted", item)
 		}
@@ -266,14 +266,14 @@ func TestParseManifestSecrets(t *testing.T) {
 	if m, err := parse(withSecrets([]any{})); err != nil || len(m.Secrets) != 0 {
 		t.Fatalf("empty: %+v %v", m.Secrets, err)
 	}
-	two := []any{secret("ensemble-env/dummy", "dummy.txt"), secret("ensemble-env/dummy", "copy of dummy")}
-	if m, err := parse(withSecrets(two)); err != nil || !slices.Equal(m.Secrets, []Secret{{"ensemble-env/dummy", "dummy.txt"}, {"ensemble-env/dummy", "copy of dummy"}}) {
+	two := []any{secret("ensemble-broker-env/dummy", "dummy.txt"), secret("ensemble-broker-env/dummy", "copy of dummy")}
+	if m, err := parse(withSecrets(two)); err != nil || !slices.Equal(m.Secrets, []Secret{{"ensemble-broker-env/dummy", "dummy.txt"}, {"ensemble-broker-env/dummy", "copy of dummy"}}) {
 		t.Fatalf("two: %+v %v", m.Secrets, err)
 	}
 	many := func(n int) []any {
 		var list []any
 		for i := range n {
-			list = append(list, secret("ensemble-env/s"+strconv.Itoa(i), "f"+strconv.Itoa(i)))
+			list = append(list, secret("ensemble-broker-env/s"+strconv.Itoa(i), "f"+strconv.Itoa(i)))
 		}
 		return list
 	}
@@ -282,7 +282,7 @@ func TestParseManifestSecrets(t *testing.T) {
 	}
 	for _, client := range []string{"codex", "opencode"} {
 		edit := func(f map[string]any) {
-			f["client"], f[client+"_dir"], f["secrets"] = client, "/x", []any{secret("ensemble-env/dummy", "dummy.txt")}
+			f["client"], f[client+"_dir"], f["secrets"] = client, "/x", []any{secret("ensemble-broker-env/dummy", "dummy.txt")}
 			delete(f, "claude_dir")
 		}
 		if m, err := parse(edit); err != nil || len(m.Secrets) != 1 {
@@ -292,30 +292,31 @@ func TestParseManifestSecrets(t *testing.T) {
 	for name, secrets := range map[string]any{
 		"too many":         many(maxSecrets + 1),
 		"null":             nil,
-		"object":           map[string]any{"item": "ensemble-env/dummy", "file": "dummy.txt"},
-		"entry string":     []any{"ensemble-env/dummy"},
-		"extra field":      []any{map[string]any{"item": "ensemble-env/dummy", "file": "dummy.txt", "mode": "0644"}},
-		"no file":          []any{map[string]any{"item": "ensemble-env/dummy"}},
+		"object":           map[string]any{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"},
+		"entry string":     []any{"ensemble-broker-env/dummy"},
+		"extra field":      []any{map[string]any{"item": "ensemble-broker-env/dummy", "file": "dummy.txt", "mode": "0644"}},
+		"no file":          []any{map[string]any{"item": "ensemble-broker-env/dummy"}},
 		"no item":          []any{map[string]any{"file": "dummy.txt"}},
 		"item number":      []any{map[string]any{"item": 1, "file": "dummy.txt"}},
-		"broker item":      []any{secret("ensemble-bot", "key")},
-		"claude item":      []any{secret("ensemble-claude", "token")},
+		"broker item":      []any{secret("ensemble-broker-bot", "key")},
+		"claude item":      []any{secret("ensemble-broker-claude", "token")},
+		"old env prefix":   []any{secret("ensemble-env/dummy", "dummy.txt")}, // protocol 30 renamed it
 		"linear item":      []any{secret("linear.harness_key", "key")},
-		"bare prefix":      []any{secret("ensemble-env/", "x")},
-		"uppercase item":   []any{secret("ensemble-env/Dummy", "x")},
-		"nested item":      []any{secret("ensemble-env/a/b", "x")},
-		"traversal":        []any{secret("ensemble-env/dummy", "../github/token")},
-		"slash":            []any{secret("ensemble-env/dummy", "a/b")},
-		"empty file":       []any{secret("ensemble-env/dummy", "")},
-		"dot":              []any{secret("ensemble-env/dummy", ".")},
-		"dot dot":          []any{secret("ensemble-env/dummy", "..")},
-		"newline":          []any{secret("ensemble-env/dummy", "a\nb")},
-		"delete":           []any{secret("ensemble-env/dummy", "a\x7fb")},
-		"c1 control":       []any{secret("ensemble-env/dummy", "x\u009b31m")},
-		"long file":        []any{secret("ensemble-env/dummy", strings.Repeat("f", 256))},
-		"repeated file":    []any{secret("ensemble-env/a", "same"), secret("ensemble-env/b", "same")},
-		"file number":      []any{map[string]any{"item": "ensemble-env/dummy", "file": 1}},
-		"duplicate object": []any{secret("ensemble-env/dummy", "dummy.txt"), secret("ensemble-env/dummy", "dummy.txt")},
+		"bare prefix":      []any{secret("ensemble-broker-env/", "x")},
+		"uppercase item":   []any{secret("ensemble-broker-env/Dummy", "x")},
+		"nested item":      []any{secret("ensemble-broker-env/a/b", "x")},
+		"traversal":        []any{secret("ensemble-broker-env/dummy", "../github/token")},
+		"slash":            []any{secret("ensemble-broker-env/dummy", "a/b")},
+		"empty file":       []any{secret("ensemble-broker-env/dummy", "")},
+		"dot":              []any{secret("ensemble-broker-env/dummy", ".")},
+		"dot dot":          []any{secret("ensemble-broker-env/dummy", "..")},
+		"newline":          []any{secret("ensemble-broker-env/dummy", "a\nb")},
+		"delete":           []any{secret("ensemble-broker-env/dummy", "a\x7fb")},
+		"c1 control":       []any{secret("ensemble-broker-env/dummy", "x\u009b31m")},
+		"long file":        []any{secret("ensemble-broker-env/dummy", strings.Repeat("f", 256))},
+		"repeated file":    []any{secret("ensemble-broker-env/a", "same"), secret("ensemble-broker-env/b", "same")},
+		"file number":      []any{map[string]any{"item": "ensemble-broker-env/dummy", "file": 1}},
+		"duplicate object": []any{secret("ensemble-broker-env/dummy", "dummy.txt"), secret("ensemble-broker-env/dummy", "dummy.txt")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if m, err := parse(withSecrets(secrets)); code(t, err) != protocol.ManifestRejected {
@@ -323,10 +324,10 @@ func TestParseManifestSecrets(t *testing.T) {
 			}
 		})
 	}
-	if _, err := parse(withSecrets([]any{secret("ensemble-env/dummy", strings.Repeat("f", 255))})); err != nil {
+	if _, err := parse(withSecrets([]any{secret("ensemble-broker-env/dummy", strings.Repeat("f", 255))})); err != nil {
 		t.Fatalf("255-byte file: %v", err)
 	}
-	doc := `"secrets":[{"item":"ensemble-env/dummy","file":"a","file":"b"}]`
+	doc := `"secrets":[{"item":"ensemble-broker-env/dummy","file":"a","file":"b"}]`
 	valid, err := os.ReadFile(filepath.Join(fixtures.Dir(), "manifest-valid.json"))
 	if err != nil {
 		t.Fatal(err)

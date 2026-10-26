@@ -100,7 +100,7 @@ func TestLoginOpencode(t *testing.T) {
 	if err != nil || out != "OpenCode provider strata API key saved; keychain trusts only the broker\n" {
 		t.Fatalf("%v %q", err, out)
 	}
-	if string(k.items["ensemble-opencode/strata"]) != apiKey || !slices.Equal(k.puts, []string{"ensemble-opencode/strata"}) {
+	if string(k.items["ensemble-broker-opencode/strata"]) != apiKey || !slices.Equal(k.puts, []string{"ensemble-broker-opencode/strata"}) {
 		t.Fatalf("%q %q", k.items, k.puts)
 	}
 	if ask.calls != 0 || len(k.steps) != 0 {
@@ -141,8 +141,8 @@ func TestLoginOpencodeTrustsOnlyBroker(t *testing.T) {
 		steps        []string
 		fails        string
 	}{
-		"partition list": {access: halfDone(), steps: []string{"partition ensemble-opencode strata"}},
-		"refused": {access: halfDone(), partitionErr: errors.New("keychain status -25293"), steps: []string{"partition ensemble-opencode strata"},
+		"partition list": {access: halfDone(), steps: []string{"partition ensemble-broker-opencode strata"}},
+		"refused": {access: halfDone(), partitionErr: errors.New("keychain status -25293"), steps: []string{"partition ensemble-broker-opencode strata"},
 			fails: "rerun ensemble-broker login opencode strata to finish"},
 	} {
 		k := &fakeSecrets{fakeApps: fakeApps{access: tc.access, partitionErr: tc.partitionErr}}
@@ -152,7 +152,7 @@ func TestLoginOpencodeTrustsOnlyBroker(t *testing.T) {
 			t.Fatalf("%s: asked %d, steps %q", name, ask.calls, k.steps)
 		}
 		if tc.fails == "" && err != nil || tc.fails != "" && (err == nil || !strings.HasSuffix(err.Error(), tc.fails) ||
-			!strings.Contains(err.Error(), "keychain item ensemble-opencode")) {
+			!strings.Contains(err.Error(), "keychain item ensemble-broker-opencode")) {
 			t.Fatalf("%s: %v", name, err)
 		}
 	}
@@ -164,11 +164,11 @@ func TestLoginOpencodeReadsBack(t *testing.T) {
 		fails string
 	}{
 		"other bytes": {&fakeSecrets{readBack: []byte("sk-other")},
-			"keychain item ensemble-opencode strata: reading it failed: it holds other bytes; rerun ensemble-broker login opencode strata"},
+			"keychain item ensemble-broker-opencode strata: reading it failed: it holds other bytes; rerun ensemble-broker login opencode strata"},
 		"needs dialog": {&fakeSecrets{readErr: ErrNeedsDialog},
-			"keychain item ensemble-opencode strata: reading it failed: keychain status -25308; rerun ensemble-broker login opencode strata"},
+			"keychain item ensemble-broker-opencode strata: reading it failed: keychain status -25308; rerun ensemble-broker login opencode strata"},
 		"put fails": {&fakeSecrets{putErr: errors.New("keychain status -25299")},
-			"keychain item ensemble-opencode strata: saving it failed: keychain status -25299; rerun ensemble-broker login opencode strata"},
+			"keychain item ensemble-broker-opencode strata: saving it failed: keychain status -25299; rerun ensemble-broker login opencode strata"},
 	} {
 		if _, err := loginOpencode(t, tc.k, &askOnce{}, apiKey); err == nil || err.Error() != tc.fails {
 			t.Fatalf("%s: %v", name, err)
@@ -180,7 +180,7 @@ func TestLoginOpencodeReadsBack(t *testing.T) {
 func providerKeys(providers ...string) *fakeSecrets {
 	k := &fakeSecrets{items: map[string][]byte{}}
 	for _, p := range providers {
-		k.items["ensemble-opencode/"+p] = []byte(apiKey + "-" + p)
+		k.items["ensemble-broker-opencode/"+p] = []byte(apiKey + "-" + p)
 	}
 	return k
 }

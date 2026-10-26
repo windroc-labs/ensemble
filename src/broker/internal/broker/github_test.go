@@ -99,7 +99,7 @@ type keys struct {
 }
 
 func (k keys) AppAccount(app string) (string, error) {
-	if app != "ensemble-bot" || k.err != nil {
+	if app != "ensemble-broker-bot" || k.err != nil {
 		return "", errors.Join(ErrNotFound, k.err)
 	}
 	return k.account, nil
@@ -329,7 +329,7 @@ func TestReadyGitHub(t *testing.T) {
 	r.g.Apps = keys{err: ErrNotFound}
 	err = r.g.Ready(slug)
 	wantCode(t, err, protocol.LoginRequired)
-	if !strings.Contains(err.Error(), "ensemble-broker login github ensemble-bot") {
+	if !strings.Contains(err.Error(), "ensemble-broker login github ensemble-broker-bot") {
 		t.Fatalf("message %v", err)
 	}
 	r.g.Apps = keys{account: "not-an-id", key: testAppKey(t)}
@@ -358,9 +358,9 @@ func TestSaveUserSavesTheAppSlugAndBotUserID(t *testing.T) {
 }
 
 func TestSaveUserRejects(t *testing.T) {
-	app := "looking up the GitHub App of the ensemble-bot key failed: "
+	app := "looking up the GitHub App of the ensemble-broker-bot key failed: "
 	lookup := "looking up GitHub user ensemble-test-bot[bot] failed: "
-	rerun := "; rerun ensemble-broker login github ensemble-bot"
+	rerun := "; rerun ensemble-broker login github ensemble-broker-bot"
 	for name, c := range map[string]struct {
 		slug, user, want string
 		putErr           error
@@ -399,7 +399,7 @@ func TestBotUserID(t *testing.T) {
 		t.Fatalf("%d %v", id, err)
 	}
 	wantCode(t, func() error { _, err := r.g.BotUserID("ensemble-bot"); return err }(), protocol.ManifestRejected)
-	rerun := ": run ensemble-broker login github ensemble-bot."
+	rerun := ": run ensemble-broker login github ensemble-broker-bot."
 	for _, bad := range []string{"343764394", `{"slug":"ensemble-test-bot","id":0}`, `{"slug":"a b","id":1}`, "", "{"} {
 		r.keys.items[item] = []byte(bad)
 		_, err := r.g.BotUserID(slug)
