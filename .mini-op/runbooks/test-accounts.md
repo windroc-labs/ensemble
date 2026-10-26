@@ -4,7 +4,7 @@ when: creating or repairing ensemble's test accounts on the mini (Outlook, GitHu
 
 # Ensemble's test accounts
 
-How the manager builds ensemble's live-test accounts on the Mac mini: its own email, a GitHub account and App, its own Linear workspace with role accounts, and their keys in the mini's keychain. Machine access, the browser and reconnecting mini-op to a reset mini: mini-op's `setup-test-env` runbook. Rules, driving the mini: mini-op's rules (`/mini-op:run` loads them). Gotchas for this environment: `gotchas.md` beside this runbook.
+How the manager builds ensemble's live-test accounts on the Mac mini: its own email, a GitHub account and App, its own Linear workspace with role accounts, and their keys in the mini's keychain. Machine access, the browser and reconnecting mini-op to a reset mini: mini-op's `setup-test-env` runbook. Rules, driving the mini: mini-op's rules (the `mini-op` skill loads them). Gotchas for this environment: `gotchas.md` beside this runbook.
 
 Names, addresses and ids (accounts, keychain items, the workspace and its team, the GitHub user, App and repo) come from the request or the mini's `~/.ensemble/config.local.toml` (template: `install-ensemble/test-board.toml`); never write them into this repo. Before putting a name into an ssh command line, check it matches `^[A-Za-z0-9][A-Za-z0-9._@+:-]*$` (an email: `^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$`); if not, stop and ask the user. This runbook's scripts run from `~/mini-op-projects/ensemble/test-accounts/`; the Linear logins use mini-op's `~/apm/bin/linearlogin` and `~/apm/bin/maillink`.
 

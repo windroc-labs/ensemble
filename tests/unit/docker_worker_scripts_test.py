@@ -27,6 +27,144 @@ def script(name):
     return runpy.run_path(str(ASSETS / name), run_name="docker_worker_script")
 
 
+class MiniOpSkill(Case):
+    def setUp(self):
+        self.code = script("bootstrap.py")
+        self.source = Path(self.home, "image/skills/mini-op")
+        self.source.mkdir(parents=True)
+        (self.source / "SKILL.md").write_text("---\nname: mini-op\n---\nRun the check.\n")
+        self.target = Path(self.home, "selected-client")
+        self.target.mkdir()
+        self.templates = Path(self.home, "templates")
+        self.templates.mkdir()
+        (self.templates / ".claude.json").write_text("{}")
+        self.plugins = Path(self.home, "plugins")
+        self.plugins.mkdir()
+        (self.plugins / "config.toml").write_text("")
+        self.image = Path("/opt/windroc/mini-op/skills/mini-op")
+        real_stat = os.stat
+
+        def image_stat(path, *args, **kwargs):
+            if isinstance(path, (str, os.PathLike)):
+                requested = Path(path)
+                if requested == self.image or self.image in requested.parents:
+                    path = self.source / requested.relative_to(self.image)
+            return real_stat(path, *args, **kwargs)
+
+        patcher = mock.patch("os.stat", side_effect=image_stat)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        real_symlink, real_readlink = os.symlink, os.readlink
+
+        def image_symlink(source, destination, *args, **kwargs):
+            return real_symlink(
+                self.source if Path(source) == self.image else source, destination, *args, **kwargs
+            )
+
+        def image_readlink(path, *args, **kwargs):
+            result = real_readlink(path, *args, **kwargs)
+            return (
+                str(self.image)
+                if Path(path).is_relative_to(self.home) and result == str(self.source)
+                else result
+            )
+
+        for operation, fake in (("symlink", image_symlink), ("readlink", image_readlink)):
+            patcher = mock.patch(f"os.{operation}", side_effect=fake)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_each_bootstrap_links_the_plain_skill_in_the_client_discovery_directory(self):
+        for client in ("claude", "codex"):
+            with self.subTest(client=client):
+                directory = self.target / client
+                directory.mkdir()
+                discovery = directory if client == "claude" else Path(self.home, ".agents")
+                (discovery / "skills/other").mkdir(parents=True)
+                if client == "claude":
+                    self.code["bootstrap_claude"](self.templates, directory, "/work")
+                else:
+                    self.code["bootstrap_codex"](
+                        directory, "/work", Path(self.home, "fake-secrets"), self.plugins
+                    )
+                skill = discovery / "skills/mini-op"
+                self.assertEqual(skill.readlink(), self.image)
+                self.assertEqual(
+                    (skill / "SKILL.md").read_text(), (self.source / "SKILL.md").read_text()
+                )
+                self.assertTrue((discovery / "skills/other").is_dir())
+                if client == "codex":
+                    self.assertFalse((directory / "skills").exists())
+
+    def test_codex_creates_the_user_discovery_directory(self):
+        self.code["bootstrap_codex"](
+            self.target, "/work", Path(self.home, "fake-secrets"), self.plugins
+        )
+        skill = Path(self.home, ".agents/skills/mini-op")
+        self.assertEqual(skill.readlink(), self.image)
+        self.assertEqual((skill / "SKILL.md").read_text(), (self.source / "SKILL.md").read_text())
+
+    def test_codex_without_mini_op_leaves_user_skills_absent(self):
+        shutil.rmtree(self.source)
+        self.code["bootstrap_codex"](
+            self.target, "/work", Path(self.home, "fake-secrets"), self.plugins
+        )
+        self.assertFalse(Path(self.home, ".agents").exists())
+
+    def test_codex_preserves_and_refuses_a_conflicting_user_skill(self):
+        skills = Path(self.home, ".agents/skills")
+        skills.mkdir(parents=True)
+        target = skills / "mini-op"
+        target.write_text("existing")
+        with self.assertRaisesRegex(SystemExit, "mini-op skill already exists"):
+            self.code["bootstrap_codex"](
+                self.target, "/work", Path(self.home, "fake-secrets"), self.plugins
+            )
+        self.assertEqual(target.read_text(), "existing")
+
+    def test_codex_refuses_a_linked_user_skill_parent(self):
+        elsewhere = Path(self.home, "elsewhere")
+        elsewhere.mkdir()
+        Path(self.home, ".agents").symlink_to(elsewhere)
+        with self.assertRaisesRegex(SystemExit, "skill parent must be a directory, not a link"):
+            self.code["bootstrap_codex"](
+                self.target, "/work", Path(self.home, "fake-secrets"), self.plugins
+            )
+        self.assertEqual(list(elsewhere.iterdir()), [])
+
+    def test_an_ordinary_image_without_mini_op_adds_no_skill(self):
+        shutil.rmtree(self.source)
+        self.code["bootstrap_skill"](self.target)
+        self.assertFalse((self.target / "skills").exists())
+
+    def test_reinstall_keeps_the_same_link(self):
+        self.code["bootstrap_skill"](self.target)
+        self.code["bootstrap_skill"](self.target)
+        self.assertEqual((self.target / "skills/mini-op").readlink(), self.image)
+
+    def test_a_malformed_image_skill_fails(self):
+        (self.source / "SKILL.md").unlink()
+        with self.assertRaisesRegex(SystemExit, "mini-op skill has no SKILL.md"):
+            self.code["bootstrap_skill"](self.target)
+
+    def test_a_conflicting_skill_is_preserved_and_refused(self):
+        skills = self.target / "skills"
+        skills.mkdir()
+        target = skills / "mini-op"
+        target.write_text("existing")
+        with self.assertRaisesRegex(SystemExit, "mini-op skill already exists"):
+            self.code["bootstrap_skill"](self.target)
+        self.assertEqual(target.read_text(), "existing")
+
+    def test_a_linked_skills_directory_is_refused(self):
+        elsewhere = Path(self.home, "elsewhere")
+        elsewhere.mkdir()
+        (self.target / "skills").symlink_to(elsewhere)
+        with self.assertRaisesRegex(SystemExit, "skills must be a directory, not a link"):
+            self.code["bootstrap_skill"](self.target)
+        self.assertEqual(list(elsewhere.iterdir()), [])
+
+
 class Bootstrap(Case):
     def setUp(self):
         self.bootstrap = script("bootstrap.py")
