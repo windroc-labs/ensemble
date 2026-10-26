@@ -16,11 +16,10 @@ from ensemble.orchestrator.engine.types import (
 from ensemble.orchestrator.issue.output import receipt_payload
 from ensemble.orchestrator.trackers.linear import client, issue_create
 from tests.orchestrator.case import Case
-from tests.orchestrator.unit.board_ids import ACCOUNTS, MANAGER_USER, STATES, TEAM
+from tests.orchestrator.unit.board_ids import MANAGER_USER, STATES, TEAM, role_id
 from tests.orchestrator.unit.issue_fixtures import (
     CLIENT_LABELS,
     NEW,
-    ROLE_USERS,
     TASK_LABELS,
     VIEWER,
     by_name,
@@ -78,7 +77,7 @@ class Create(Case):
                 "projectMilestoneId": uid(8),
                 "parentId": "id-TASK-1",
                 "assigneeId": None,
-                "delegateId": ROLE_USERS[ACCOUNTS["engineer"]],
+                "delegateId": role_id("engineer"),
                 "priority": 2,
             },
         )
@@ -115,7 +114,7 @@ class Create(Case):
 
     def test_each_role_sets_the_delegate_and_every_create_clears_the_assignee(self):
         for role, delegate in (
-            ("pm", ROLE_USERS[ACCOUNTS["pm"]]),
+            ("pm", role_id("pm")),
             ("me", MANAGER_USER),
             ("unassigned", None),
             (None, None),

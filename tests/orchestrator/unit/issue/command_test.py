@@ -36,19 +36,18 @@ from ensemble.orchestrator.trackers.local.issues import LocalIssues
 from tests.orchestrator.case import Case
 from tests.orchestrator.process_fixtures import CalledProcessError, TimeoutExpired
 from tests.orchestrator.unit.board_ids import (
-    ACCOUNTS,
     HARNESS_LINE,
     MANAGER_APP,
     MANAGER_IDENTITY,
     MANAGER_LINE,
     STATES,
     TASK_GROUP,
+    role_id,
 )
 from tests.orchestrator.unit.issue_fixtures import (
     CLIENT_LABELS,
     CONFIG,
     OTHER_TEAM,
-    ROLE_USERS,
     TASK_LABELS,
     ArchiveGql,
     EditGql,
@@ -574,7 +573,7 @@ class Edit(IssueCase):
     def test_a_role_alone_sets_the_delegate_and_clears_the_assignee(self):
         other = {"id": "u-other"}
         for role, want in (
-            ("engineer", {"delegateId": ROLE_USERS[ACCOUNTS["engineer"]], "assigneeId": None}),
+            ("engineer", {"delegateId": role_id("engineer"), "assigneeId": None}),
             ("me", {"delegateId": MANAGER_IDENTITY.user_id, "assigneeId": None}),
             ("unassigned", {"delegateId": None, "assigneeId": None}),
         ):
@@ -753,7 +752,7 @@ class Create(IssueCase):
             (
                 STATES["in_progress"],
                 [TASK_LABELS["build"], CLIENT_LABELS["codex"]],
-                ROLE_USERS[ACCOUNTS["engineer"]],
+                role_id("engineer"),
                 None,
                 4,
             ),

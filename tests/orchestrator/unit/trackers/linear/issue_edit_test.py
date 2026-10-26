@@ -8,12 +8,11 @@ from ensemble.orchestrator.engine.types import IssueError, Unavailable, WriteUnk
 from ensemble.orchestrator.issue.output import receipt_payload
 from ensemble.orchestrator.trackers.linear import issue_edit, issue_label, issue_read, issue_refs
 from tests.orchestrator.case import Case
-from tests.orchestrator.unit.board_ids import ACCOUNTS, MANAGER_USER, TASK_GROUP, TEAM
+from tests.orchestrator.unit.board_ids import MANAGER_USER, TASK_GROUP, TEAM, role_id
 from tests.orchestrator.unit.issue_fixtures import (
     CLIENT_GROUP,
     CLIENT_LABELS,
     OTHER_TEAM,
-    ROLE_USERS,
     TASK_LABELS,
     VIEWER,
     EditGql,
@@ -128,7 +127,7 @@ class Edit(Case):
         self.assertEqual(receipt_payload(receipt)["actor"], VIEWER)
 
     def test_a_role_sets_the_delegate_and_clears_the_assignee(self):
-        engineer = ROLE_USERS[ACCOUNTS["engineer"]]
+        engineer = role_id("engineer")
         other = {"id": "u-other"}
         for role, fields, want in (
             ("engineer", {"delegate": other}, {"delegateId": engineer}),
@@ -149,7 +148,7 @@ class Edit(Case):
 
     def test_a_role_already_so_writes_nothing(self):
         for role, delegate in (
-            ("engineer", {"id": ROLE_USERS[ACCOUNTS["engineer"]]}),
+            ("engineer", {"id": role_id("engineer")}),
             ("me", {"id": MANAGER_USER}),
             ("unassigned", None),
         ):

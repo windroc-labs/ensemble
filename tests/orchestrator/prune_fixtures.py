@@ -452,7 +452,7 @@ class PruneScenario(Case):
         fake.moved("DR-1", 30, "Handoff", frm=tp.STATES["In Review"])
 
         def gql(query, **v):
-            if query in (ops.Q_TEAM, ops.Q_USER):
+            if query == ops.Q_TEAM:
                 self.setup_queries.append(query)
             return (prune_gql if query in PRUNE_QUERIES else fake)(query, **v)
 

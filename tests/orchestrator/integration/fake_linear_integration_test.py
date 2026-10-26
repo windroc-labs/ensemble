@@ -333,13 +333,13 @@ class GraphQLProjection(ServerCase):
             ),
             self.assertRaises(LinearError) as cm,
         ):
-            client.linear_gql(ops.Q_USER, identity=app, e="me@x.com")
-        self.assertEqual(str(cm.exception), "linear api error: users: HTTP 401")
+            client.linear_gql(ops.Q_TEAM, identity=app, t=TEAM)
+        self.assertEqual(str(cm.exception), "linear api error: teams: HTTP 401")
         self.assertEqual(
             self.fake.requests,
             [
                 fake_linear.Request(UNKNOWN, HARNESS_EMAIL, {}, "unknown"),
-                fake_linear.Request("linear.Q_USER", None, {"e": "me@x.com"}, "unauthorized"),
+                fake_linear.Request("linear.Q_TEAM", None, {"t": TEAM}, "unauthorized"),
             ],
         )
 
@@ -542,7 +542,6 @@ class GraphQLProjection(ServerCase):
         )
         self.assertEqual(ops.team(self.gql, cfg).states, STATES)
         ops.task_group(self.gql, cfg)
-        self.assertEqual(ops.user_id(self.gql, "me@x.com"), self.human)
         flt = {
             "team": {"id": {"eq": TEAM}},
             "project": {"null": False},

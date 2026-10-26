@@ -5558,10 +5558,7 @@ class ScheduledRuns(TickScenario):
         self.tick(fake, live=["ensemble-engineer-TASK-2"])
         self.assertEqual(self.said(), [])
         self.assertEqual((self.api.order, self.api.usage_calls), (SESSIONS, []))
-        self.assertEqual(
-            [v["e"] for q, v in fake.queries if "users(filter" in q],
-            [],
-        )
+        self.assertEqual([q for q, _ in fake.queries if "users" in q], [])
         self.assertEqual(fake.mutations, [])
 
     def test_one_run_per_tick_resume_first(self):

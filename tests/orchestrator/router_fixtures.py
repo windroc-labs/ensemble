@@ -285,15 +285,6 @@ class FakeLinear:
             return {"teams": {"nodes": [team_node()]}}
         if query == ops.Q_TASK_GROUP:
             return {"issueLabel": self.group}
-        if "users(filter" in query:
-            users = {
-                "me@x.com": USER,
-                "b@x.com": "user-b",
-                **{a.lower(): role_id(r) for r, a in ROLE.items()},
-            }
-            return {
-                "users": {"nodes": [{"id": u} for e, u in users.items() if v["e"].lower() == e]}
-            }
         return None
 
     def _issue_read(self, query, v):

@@ -6,11 +6,10 @@ fields.
 import json
 import os
 
-from tests.orchestrator.unit.board_ids import ACCOUNTS, MANAGER_IDENTITY, MANAGER_USER, STATES, TEAM
+from tests.orchestrator.unit.board_ids import MANAGER_IDENTITY, MANAGER_USER, STATES, TEAM, role_id
 from tests.orchestrator.unit.issue_fixtures import (
     CLIENT_LABELS,
     OTHER_TEAM,
-    ROLE_USERS,
     TASK_LABELS,
     IssueCase,
     Routes,
@@ -18,7 +17,6 @@ from tests.orchestrator.unit.issue_fixtures import (
     issue_row,
     label,
     project,
-    role_users,
     uid,
 )
 
@@ -57,7 +55,6 @@ class Filters(IssueCase):
         gql = Routes(
             issueLabels=edges([label(4, "bug")]),
             team={"projects": edges([project(5, "Ensemble")])},
-            users=role_users,
             issue={"id": uid(7), "identifier": "TASK-7"},
             issues=edges([]),
         )
@@ -73,7 +70,7 @@ class Filters(IssueCase):
                 {"team": {"id": {"eq": TEAM}}},
                 {"or": [{"title": text}, {"description": text}]},
                 {"state": {"id": {"eq": STATES["todo"]}}},
-                {"delegate": {"id": {"eq": ROLE_USERS[ACCOUNTS["engineer"]]}}},
+                {"delegate": {"id": {"eq": role_id("engineer")}}},
                 {"labels": {"some": {"id": {"eq": TASK_LABELS["build"]}}}},
                 {"labels": {"some": {"id": {"eq": CLIENT_LABELS["codex"]}}}},
                 {"priority": {"eq": 1}},
@@ -107,7 +104,7 @@ class Filters(IssueCase):
 
     def test_role_filters_the_delegate_me_the_manager_app_unassigned_none(self):
         for spec, want in (
-            ("pm", {"delegate": {"id": {"eq": ROLE_USERS[ACCOUNTS["pm"]]}}}),
+            ("pm", {"delegate": {"id": {"eq": role_id("pm")}}}),
             ("me", {"delegate": {"id": {"eq": MANAGER_USER}}}),
             ("unassigned", {"delegate": {"null": True}}),
         ):

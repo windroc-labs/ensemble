@@ -774,17 +774,6 @@ class FakeLinear:
             edges.append({"cursor": rec["id"], "node": node})
         return {"issues": {"edges": edges, "pageInfo": page["pageInfo"]}}
 
-    def _users(self, caller, v):
-        return {
-            "users": {
-                "nodes": [
-                    self._person(i, caller)
-                    for i, u in self.users.items()
-                    if u["email"].lower() == v["e"].lower()
-                ]
-            }
-        }
-
     def _history(self, caller, v):
         found = _newest(self._get(v["i"])["history"])
         start = int(v.get("after") or 0)
@@ -1030,7 +1019,6 @@ OPS = {
     "linear.M_STATE": FakeLinear._set_state,
     "linear.M_SUBSCRIBE": FakeLinear._subscribe,
     "linear.Q_ISSUE_STATE": FakeLinear._issue,
-    "linear.Q_USER": FakeLinear._users,
     "linear.Q_TEAM": FakeLinear._teams,
     "linear.Q_TASK_GROUP": FakeLinear._label_group,
     "router.Q_RELATIONS": FakeLinear._issue,

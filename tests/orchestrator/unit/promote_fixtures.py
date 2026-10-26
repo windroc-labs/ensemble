@@ -139,13 +139,6 @@ class FakeLinear:
     def _identity(self, query, v):
         if query == ops.Q_TEAM:
             return {"teams": {"nodes": [team_node(self.state_ids)]}}
-        if query == ops.Q_USER:
-            users = {a.lower(): role_id(r) for r, a in ROLE.items()}
-            return {
-                "users": {
-                    "nodes": [{"id": users[v["e"].lower()]}] if v["e"].lower() in users else []
-                }
-            }
         if query == linear_tracker.Q_HANDOFF:
             self.handoff_vars = v
             return {

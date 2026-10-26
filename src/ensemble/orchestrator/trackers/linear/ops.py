@@ -140,16 +140,8 @@ def last_move(nodes, states, keep=None):
     )
 
 
-Q_USER = "query($e: String!) { users(filter: { email: { eqIgnoreCase: $e } }) { nodes { id } } }"
-
-
-def user_id(gql, email):
-    nodes = gql(Q_USER, e=email)["users"]["nodes"]
-    return nodes[0]["id"] if nodes else None
-
-
 def role_ids(roles):
-    """{configured app user id: role}; no app credentials or email lookup needed."""
+    """{configured app user id: role}."""
     return {app.user_id: name for name, app in roles.items()}
 
 
