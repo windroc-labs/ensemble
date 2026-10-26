@@ -1083,8 +1083,8 @@ go_protocol_of() { sed -n 's/^const Version = "\([0-9][0-9]*\)"$/\1/p' | sed -n 
 version_of() { sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9]*\(\.[0-9][0-9]*\)*\)".*/\1/p' | sed -n 1p; }
 spoken_protocol_of() { sed -n 's/.*"protocol_version": *"\([0-9][0-9]*\)".*/\1/p' | sed -n 1p; }
 
-# The ensemble plugin Claude Code ($1 claude) or Codex (codex) has installed, else empty. install.sh keeps it, so its
-# copy is the one the client runs; Codex's newest version, as skills/manage/scripts/launcher looks.
+# The ensemble plugin Claude Code ($1 claude) or Codex (codex) has installed, else empty;
+# Codex's newest version, as skills/manage/scripts/launcher looks.
 installed_plugin() {
   if [ "$1" = claude ]; then
     command -v claude >/dev/null || return 0
@@ -1101,7 +1101,8 @@ print(found[0] if found else "")' "${CODEX_HOME:-$HOME/.codex}/plugins/cache/win
   fi
 }
 
-# With Docker, before any client step: the broker comes from the release of the plugin plugin_dir will pick
+# With Docker: preflight uses the served ref before client setup; otherwise use refreshed installed sources.
+# The broker comes from the release of the plugin plugin_dir will pick
 # (Claude Code's, else Codex's, else OpenCode's), downloaded, or for a branch built from its sources, and must speak
 # every chosen client's plugin protocol. Only advisory: gh attestation verify authenticates the broker.
 broker_plan() {
@@ -1111,7 +1112,7 @@ broker_plan() {
   for client in claude codex opencode; do
     has "$client" || continue
     if [ "$client" != opencode ]; then
-      source=$(installed_plugin "$client")
+      if [ "${1:-}" = preflight ]; then source=; else source=$(installed_plugin "$client"); fi
     else
       # OpenCode's copy counts only while it is at the commit $ref names: opencode_plugin downloads it again otherwise.
       source=$(opencode_package "$(opencode_spec)" 2>/dev/null) || source=
@@ -1162,6 +1163,28 @@ broker_plan() {
   say "    broker protocol $got: $agreed and $broker_label agree"
 }
 
+# Check the source the client and launcher will use after refreshing it, before any consumer reads its files.
+ensemble_plugin_check() {
+  local client=$1 label=$2 source expected got want
+  expected=$(ensemble_file "$ref" .claude-plugin/plugin.json | version_of) \
+    || die "$label: cannot read ensemble's expected version at $ref"
+  [ -n "$expected" ] || die "$label: no ensemble version at $ref"
+  case $ref in
+    v[0-9]*) [ "$ref" = "v$expected" ] || die "$label: ensemble at $ref reports version $expected" ;;
+  esac
+  source=$(installed_plugin "$client") || die "$label: cannot locate ensemble after updating to $ref"
+  [ -n "$source" ] && [ -d "$source" ] || die "$label: no installed ensemble directory after updating to $ref"
+  got=$(version_of <"$source/.claude-plugin/plugin.json" 2>/dev/null) \
+    || die "$label: cannot read ensemble version at $source after updating to $ref"
+  [ "$got" = "$expected" ] \
+    || die "$label: ensemble update to $ref expected version $expected, got ${got:-unknown} at $source"
+  if [ "$docker" = yes ]; then
+    want=$(protocol_of <"$source/src/ensemble/session/hosts/docker/broker.py" 2>/dev/null) \
+      || die "$label: cannot read ensemble broker protocol at $source after updating to $ref"
+    [ -n "$want" ] || die "$label: no ensemble broker protocol at $source after updating to $ref"
+  fi
+}
+
 # Claude Code and Codex install ensemble, and updraft for host workers, from the windroc marketplace.
 claude_plugins() {
   local rc id ids=(ensemble@windroc)
@@ -1174,25 +1197,29 @@ claude_plugins() {
   claude_market windroc windroc-labs/agent-plugins-marketplace || rc=$?
   if [ "$rc" = 1 ]; then
     ledger_add claude-marketplace windroc
-    claude plugin marketplace add windroc-labs/agent-plugins-marketplace </dev/null >&2
+    claude plugin marketplace add windroc-labs/agent-plugins-marketplace </dev/null >&2 \
+      || die "Claude Code: cannot add marketplace windroc"
   else
-    rc=0
-    claude_plugin ensemble@windroc || rc=$?
-    if [ "$rc" = 1 ]; then claude plugin marketplace update windroc </dev/null >&2; else skip "marketplace windroc"; fi
+    [ "$rc" = 0 ] || die "Claude Code: marketplace windroc has another source"
+    claude plugin marketplace update windroc </dev/null >&2 || die "Claude Code: cannot refresh marketplace windroc"
   fi
   if [ "$docker" != yes ]; then ids+=(updraft@windroc); fi
   for id in "${ids[@]}"; do
     rc=0
     claude_plugin "$id" || rc=$?
+    if [ "$id" = ensemble@windroc ] && [ "$rc" != 1 ]; then
+      claude plugin update "$id" </dev/null >&2 || die "Claude Code: cannot update $id to $ref"
+    fi
     case $rc in
       0) skip "$id installed" ;;
-      2) claude plugin enable "$id" </dev/null >&2 ;;
+      2) claude plugin enable "$id" </dev/null >&2 || die "Claude Code: cannot enable $id" ;;
       *)
         ledger_add claude-plugin "$id"
-        claude plugin install "$id" </dev/null >&2
+        claude plugin install "$id" </dev/null >&2 || die "Claude Code: cannot install $id at $ref"
         ;;
     esac
   done
+  ensemble_plugin_check claude "Claude Code"
 }
 
 codex_plugins() {
@@ -1206,25 +1233,32 @@ codex_plugins() {
   codex_market windroc https://github.com/windroc-labs/agent-plugins-marketplace.git || rc=$?
   if [ "$rc" = 1 ]; then
     ledger_add codex-marketplace windroc
-    codex plugin marketplace add windroc-labs/agent-plugins-marketplace </dev/null >&2
+    codex plugin marketplace add windroc-labs/agent-plugins-marketplace </dev/null >&2 \
+      || die "Codex: cannot add marketplace windroc"
   else
-    rc=0
-    codex_plugin ensemble@windroc || rc=$?
-    if [ "$rc" = 1 ]; then codex plugin marketplace upgrade windroc </dev/null >&2; else skip "marketplace windroc"; fi
+    [ "$rc" = 0 ] || die "Codex: marketplace windroc has another source"
+    codex plugin marketplace upgrade windroc </dev/null >&2 || die "Codex: cannot refresh marketplace windroc"
   fi
   if [ "$docker" != yes ]; then ids+=(updraft@windroc); fi
   for id in "${ids[@]}"; do
     rc=0
     codex_plugin "$id" || rc=$?
     case $rc in
-      0) skip "$id installed" ;;
-      2) codex plugin add "$id" </dev/null >&2 ;;
+      0)
+        if [ "$id" = ensemble@windroc ]; then
+          codex plugin add "$id" </dev/null >&2 || die "Codex: cannot update $id to $ref"
+        else
+          skip "$id installed"
+        fi
+        ;;
+      2) codex plugin add "$id" </dev/null >&2 || die "Codex: cannot enable/update $id to $ref" ;;
       *)
         ledger_add codex-plugin "$id"
-        codex plugin add "$id" </dev/null >&2
+        codex plugin add "$id" </dev/null >&2 || die "Codex: cannot install $id at $ref"
         ;;
     esac
   done
+  ensemble_plugin_check codex "Codex"
 }
 
 # The installed plugin: the whole repo (at $ref for OpenCode), source of the broker, ctmux and jobs. Claude Code's
@@ -2625,13 +2659,14 @@ main() {
   dependencies
   if [ -z "$answered" ]; then answers; fi
   ref_check
-  broker_plan
+  broker_plan preflight
   opencode_select
   config_file
   apps
   client_logins
   claude_plugins
   codex_plugins
+  if has claude || has codex; then broker_plan; fi
   if has claude || has codex; then plugin_dir; fi
   opencode_install
   opencode_plugin
