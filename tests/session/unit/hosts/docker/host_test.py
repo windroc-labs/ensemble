@@ -1603,6 +1603,26 @@ class EnvironmentTest(StartBase):
         self.assertIn(HOLDER["container"], str(raised.exception))
         self.assertIn("owner other", str(raised.exception))
 
+    def test_preflight_passes_its_own_container_holding_the_lock(self):
+        self.broker.holder = {"container": CONTAINER, "owner": "w"}
+        self.resumable(ENVIRONMENT.persisted())
+        self.host._preflight("w", self.launch, {**self.METADATA, "resume": "1"})
+        self.assertEqual(self.order, ["version", ("lock-query", "dummy-lock")])
+        for holder in (
+            {"container": CONTAINER, "owner": "other"},
+            {"container": "ensemble-other-" + GEN, "owner": "w"},
+        ):
+            self.broker.holder = holder
+            with self.subTest(holder), self.assertRaises(SessionBusy):
+                self.host._preflight("w", self.launch, {**self.METADATA, "resume": "1"})
+
+    def test_another_sids_record_is_not_the_stored_environment(self):
+        self.resumable(ENVIRONMENT.persisted())
+        self.record(sid="another", environment=ENVIRONMENT.persisted())
+        self.start(resume="1")
+        self.assertEqual(self.broker.built, {})
+        self.assertIsNone(self.host_record()["environment"])
+
     def test_no_lock_sends_no_lock_query_and_no_lock_fields(self):
         unlocked = carried(replace(ENVIRONMENT, lock=None))
         self.host._preflight("w", self.launch, {**self.METADATA, "environment": unlocked})

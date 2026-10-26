@@ -260,7 +260,7 @@ def _report_plan(name: str, plan: Mapping) -> None:
         print(f"docker plan {name} {plan['generation']}: {part}", file=sys.stderr)
 
 
-def _environment(name: str, value) -> EnvironmentSpec | None:
+def _parsed_environment(name: str, value) -> EnvironmentSpec | None:
     """An environment from metadata's JSON or host.json's object; None for none."""
     if value is None:
         return None
@@ -270,7 +270,7 @@ def _environment(name: str, value) -> EnvironmentSpec | None:
         raise SessionError(f"docker session {name}: bad environment: {error}") from None
 
 
-def _holder(found: Mapping[str, str]) -> str:
+def _holder_text(found: Mapping[str, str]) -> str:
     return f"{found['container']} (owner {found['owner']})"
 
 
@@ -856,7 +856,7 @@ class DockerHost(Host):
             hook = None
             if not os.path.lexists(stale):
                 hook, _, (image, _) = self._image(
-                    row.name, _environment(row.name, record.get("environment"))
+                    row.name, _parsed_environment(row.name, record.get("environment"))
                 )
                 if _image_tag(row) != image:
                     save(stale, image)
@@ -938,8 +938,12 @@ class DockerHost(Host):
         laps = _Laps()
         self._check_cwd(name, launch, missing_ok=True)
         self.broker.version()
-        if environment.lock and (holder := self.broker.lock_query(environment.lock)):
-            raise SessionBusy(environment.lock, _holder(holder))
+        holder = environment.lock and self.broker.lock_query(environment.lock)
+        # its own container, still up until a resume or restart closes it, is no other holder
+        if holder and not (
+            holder["owner"] == name and holder["container"].startswith(f"ensemble-{name}-")
+        ):
+            raise SessionBusy(environment.lock, _holder_text(holder))
         laps("preflight")
         laps.report(f"docker timing {name}")
 
@@ -957,11 +961,13 @@ class DockerHost(Host):
         """The given environment; a resume's is its stored one (FR-62): taken when none is given,
         refused when the given one differs but in prefetch.
         """
-        given = _environment(name, (metadata or {}).get("environment"))
+        given = _parsed_environment(name, (metadata or {}).get("environment"))
         record = _record(name)
-        if (metadata or {}).get("resume") != "1" or not record:
+        if (metadata or {}).get("resume") != "1" or record.get("sid") != (metadata or {}).get(
+            "sid"
+        ):
             return given
-        stored = _environment(name, record.get("environment"))
+        stored = _parsed_environment(name, record.get("environment"))
         if given is None:
             return stored
         if stored is None or replace(given, prefetch=None) != replace(stored, prefetch=None):
@@ -1257,7 +1263,7 @@ class DockerHost(Host):
             _save_result(name, created, laps.phases)
         except BrokerError as error:
             if error.code == "busy" and error.holder and environment and environment.lock:
-                raise SessionBusy(environment.lock, _holder(error.holder)) from error
+                raise SessionBusy(environment.lock, _holder_text(error.holder)) from error
             if error.cleanup == "failed" and error.container:
                 with contextlib.suppress(SessionError):
                     self.broker.close(error.container)

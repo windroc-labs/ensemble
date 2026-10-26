@@ -159,7 +159,7 @@ def _credential_expiry(value) -> bool:
     return True
 
 
-def _holder(value) -> bool:
+def _holder_ok(value) -> bool:
     return (
         isinstance(value, dict)
         and value.keys() == {"container", "owner"}
@@ -194,7 +194,7 @@ def _error(command: str, returncode: int, data: dict) -> BrokerError:
         and (cleanup != "failed" or container is not None)
         and (container is None or _matches(CONTAINER, container))
         and all(_text(error[key]) for key in ("message", "cause", "cleanup_error") if key in error)
-        and ("holder" not in error or _holder(error["holder"]) and cleanup != "failed")
+        and ("holder" not in error or _holder_ok(error["holder"]) and cleanup != "failed")
     ):
         raise _Bad("error fields")
     return BrokerError(
@@ -379,7 +379,7 @@ class Broker:
         """The running holder of `lock`, {"container", "owner"}, or None; takes nothing."""
         found = self._parsed(
             "lock-query",
-            lambda d: d.keys() == {"holder"} and (d["holder"] is None or _holder(d["holder"])),
+            lambda d: d.keys() == {"holder"} and (d["holder"] is None or _holder_ok(d["holder"])),
             "--lock",
             lock,
         )

@@ -131,7 +131,10 @@ class WorkerState:
             or not names - {"environment"} <= set(data) <= names
             or data["version"] != VERSION
         ):
-            raise ConfigError(f"want version {VERSION} with exactly {', '.join(sorted(names))}")
+            raise ConfigError(
+                f"want version {VERSION} with exactly {', '.join(sorted(names))}"
+                " (environment optional)"
+            )
         if not isinstance(data["flags"], list) or not isinstance(data["env"], dict):
             raise ConfigError("flags: want a list; env: want an object")
         fields = {k: v for k, v in data.items() if k != "version"}
