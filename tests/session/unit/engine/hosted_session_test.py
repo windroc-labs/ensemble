@@ -51,6 +51,7 @@ from ensemble.session.engine.types import (
     Stderr,
     TurnEnd,
     TurnFailed,
+    Unanswered,
     Usage,
     Window,
 )
@@ -2637,3 +2638,39 @@ class EnvironmentHostTest(HostedTuiBase):
             with self.subTest(where), self.assertRaises(engine_types.SessionBusy) as raised:
                 call()
             self.assertIs(raised.exception, self.busy)
+
+
+class ShowRetryTest(HostedTuiBase):
+    """A show its Host left unanswered is tried again, SHOW_TRIES calls in all, SHOW_RETRY_WAIT
+    apart; any other failure is raised at once.
+    """
+
+    def shown(self, *results, name="w1"):
+        session = self.tui(name=name)
+        self.host.calls.show.side_effect = results
+        with mock.patch("time.sleep") as slept:
+            try:
+                return session.show()
+            finally:
+                self.slept = [c.args for c in slept.call_args_list]
+
+    def test_an_unanswered_show_is_retried_then_succeeds(self):
+        self.assertEqual(self.shown(Unanswered("docker ps: timed out"), "attach w1"), "attach w1")
+        self.assertEqual(self.host.calls.show.call_count, 2)
+        self.assertEqual(self.slept, [(1,)])
+
+    def test_three_unanswered_shows_raise_the_last(self):
+        errors = [Unanswered(f"docker ps: timed out {n}") for n in range(3)]
+        with self.assertRaisesRegex(Unanswered, "^docker ps: timed out 2$"):
+            self.shown(*errors)
+        self.assertEqual(self.host.calls.show.call_count, 3)
+        self.assertEqual(self.slept, [(1,), (1,)])
+
+    def test_another_session_error_is_not_retried(self):
+        for n, error in enumerate((SessionError("no docker session"), NotShowable("no"))):
+            with self.subTest(error=error):
+                self.host.calls.show.reset_mock()
+                with self.assertRaises(type(error)):
+                    self.shown(error, None, name=f"w{n}")
+                self.assertEqual(self.host.calls.show.call_count, 1)
+                self.assertEqual(self.slept, [])
