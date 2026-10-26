@@ -17,13 +17,14 @@ with the broker; a provider API key or an environment secret is the same long-li
 |---|---|---|---|---|---|
 | `tmux` | Claude Code | the user, beforehand: `claude`, then `/login` ([Claude auth]) | macOS Keychain; `~/.claude/.credentials.json` (0600) if the Keychain refuses the write ([Claude auth]) | no container | — |
 | `tmux` | Codex | the user, beforehand: `codex login` ([Codex auth]) | `~/.codex/auth.json`, or the OS credential store per `cli_auth_credentials_store` ([Codex auth]) | no container | — |
-| Docker | Claude Code | the user, once per broker install and [account](docker-host.md#claude-accounts): `claude setup-token` in its subscription, pasted into `<B> login claude [<name>]` ([Log in](docker-host.md#log-in)) | `ensemble-broker-claude` / account name | the selected account's token alone, `/run/ensemble/secrets/claude`, 0400 on tmpfs, given to the client only as `CLAUDE_CODE_OAUTH_TOKEN` | deleted with the container (close, restart, resume start a new one); never revoked |
-| Docker | Codex | an admin installs the pinned Codex (`sudo <B> install-codex <version>`); the user, once per broker install: `<B> login codex` in a browser ([Codex](docker-host.md#codex)) | `ensemble-broker-codex` / `auth` | `/run/ensemble/secrets/codex/auth.json`, 0400 on tmpfs, with no refresh token; the broker publishes each renewal | deleted with the container; never revoked |
+| Docker | Claude Code | the user, once per [account](docker-host.md#claude-accounts): `claude setup-token` in its subscription, pasted into `<B> login claude [<name>]` ([Log in](docker-host.md#log-in)) | `ensemble-broker-claude` / account name | the selected account's token alone, `/run/ensemble/secrets/claude`, 0400 on tmpfs, given to the client only as `CLAUDE_CODE_OAUTH_TOKEN` | deleted with the container (close, restart, resume start a new one); never revoked |
+| Docker | Codex | an admin installs the pinned Codex (`sudo <B> install-codex <version>`); the user, once: `<B> login codex` in a browser ([Codex](docker-host.md#codex)) | `ensemble-broker-codex` / `auth` | `/run/ensemble/secrets/codex/auth.json`, 0400 on tmpfs, with no refresh token; the broker publishes each renewal | deleted with the container; never revoked |
 | `tmux` | OpenCode | no one for the host's Ollama on `127.0.0.1` ([Docker host › OpenCode](docker-host.md#opencode)); a configured provider's API key: the user, beforehand: `opencode auth login` ([OpenCode sessions](sessions.md#opencode-sessions)) | OpenCode's `auth.json`; ensemble reads the selected API entry for availability probes and explicit broker import | no container | — |
-| Docker | OpenCode | no one for the host's Ollama (through `host.docker.internal`); each configured provider's API key: `scripts/install.sh --docker` imports the local entry, or the user runs `<B> login opencode <name>` per broker install and provider ([Log in](docker-host.md#log-in)) | `ensemble-broker-opencode` / `<name>` | the GitHub tokens and each configured provider's key, `/run/ensemble/secrets/opencode/<name>.key`, 0400 on tmpfs, read by OpenCode through `{file:…}` in its inline config, never env or argv | deleted with the container; never revoked |
+| Docker | OpenCode | no one for the host's Ollama (through `host.docker.internal`); each configured provider's API key: `scripts/install.sh --docker` imports the local entry, or the user runs `<B> login opencode <name>` per provider ([Log in](docker-host.md#log-in)) | `ensemble-broker-opencode` / `<name>` | the GitHub tokens and each configured provider's key, `/run/ensemble/secrets/opencode/<name>.key`, 0400 on tmpfs, read by OpenCode through `{file:…}` in its inline config, never env or argv | deleted with the container; never revoked |
 
-GitHub on the Docker Host needs no per-run login: `<B> login github ensemble-broker-bot` once per broker install
-([Log in](docker-host.md#log-in)). The local Host uses the host `gh` login below.
+GitHub on the Docker Host needs no per-run login: `<B> login github ensemble-broker-bot` once
+([Log in](docker-host.md#log-in)); a new broker keeps every broker item through `<B> retrust`
+([Re-trust after an upgrade](docker-host.md#re-trust-after-an-upgrade)). The local Host uses the host `gh` login below.
 
 ## Credentials
 
@@ -308,7 +309,9 @@ credentials and other providers. This deletes the stored copies; it does not rev
 ## Keychain items
 
 All in the login keychain. "Readers" is by design; [Measured readers](#measured-readers) records what a live read
-shows.
+shows. Every service starting with `ensemble-broker-` is a broker item; `<B> retrust` makes each trust a new broker
+build ([Docker host › Re-trust after an upgrade](docker-host.md#re-trust-after-an-upgrade)). The `linear.*` services
+are not broker items.
 
 | Service | Account | Config key | Holds | Written by | Readers |
 |---|---|---|---|---|---|
@@ -500,9 +503,9 @@ A failed WDRC-67 before-cutover check stops the cutover; report it to the user.
 
 - **Three-way readers** of handed-out credentials: accepted by the user on 2026-10-18; the broker is unchanged.
 - Transport-owned Linear client secrets and published access tokens trust `/usr/bin/security`: any process running as the user reads them without a dialog. Enrolled client secrets trust only the broker; published access tokens trust both the broker and `/usr/bin/security` ([Keychain items](#keychain-items)).
-- Each broker release changes its ad-hoc code identity: rerun `login claude`, each `login claude <name>`,
-  `login github ensemble-broker-bot`, `login codex`, each `login opencode <name>` and each `login env <name>`
-  ([Log in](docker-host.md#log-in)).
+- Each broker build has its own partition ID: `scripts/install.sh --docker` runs `retrust` on each new broker, the
+  login keychain password once ([Re-trust after an upgrade](docker-host.md#re-trust-after-an-upgrade)); until then a
+  start fails without a dialog, naming `retrust`.
 - Config picks a Docker Claude session's account ([Claude accounts](docker-host.md#claude-accounts)); it is no
   access control: any process running as the user can start a container with any logged-in account (`<B> start`
   does not check its caller).

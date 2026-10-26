@@ -108,10 +108,13 @@ proxy and the key, never `busy`.
 
 ## Log in
 
-After every install or reinstall, run all three logins: `login claude`, `login github ensemble-broker-bot` and
+After the first install, run all three logins: `login claude`, `login github ensemble-broker-bot` and
 `login codex` ([Codex](#codex)), plus `login claude <name>` for each other registered
 [Claude account](#claude-accounts), `login opencode <name>` for each configured OpenCode provider and
-`login env <name>` for each [environment secret](#environment-secrets). A reinstalled broker cannot read the old items without asking; `start` never asks and instead names the login to rerun. Each login asks its terminal questions first, without
+`login env <name>` for each [environment secret](#environment-secrets). A new broker keeps them through
+[`retrust`](#re-trust-after-an-upgrade), which `scripts/install.sh --docker` runs; no command but a login or `retrust`
+shows a keychain dialog: each instead names `retrust` for an item an earlier broker build wrote, or the login to rerun
+for one another application owns. Each login asks its terminal questions first, without
 echo:
 
 | Login | Terminal | macOS dialog, at most | Click |
@@ -121,7 +124,8 @@ echo:
 | `login codex` | the login keychain password, when a step is not yet in place, before the browser opens | one change-access dialog (Deny / Allow), after the password | Allow |
 | `login opencode <name> [--expires <date>]` | the provider's API key; the login keychain password only when the item's access needs a change | at most one change-access dialog (Deny / Allow), after the password | Allow |
 | `login env <name> [--expires <date>]` | the value, hidden, unless stdin is a pipe or file; the login keychain password only when the item's access needs a change, from the terminal | at most one change-access dialog (Deny / Allow), after the password | Allow |
-| `start` | none | none: a token or key it cannot read without one names unlocking the login keychain or the login to run (`keychain_failed` for an OpenCode key or an environment secret needing approval; `login_required` for other clients and a missing environment secret) | |
+| `retrust` | the login keychain password, once, only when an item needs a change | one change-access dialog per item a broker of v0.4.1 or earlier wrote, once, announced on the terminal; none after | Allow |
+| `start` | none | none: a token or key it cannot read without one names unlocking the login keychain, `retrust` or the login to run (`keychain_failed` for an OpenCode key or an environment secret needing approval; `login_required` for other clients and a missing environment secret) | |
 
 What each login hands a container: [Credentials › Who logs in](credentials.md#who-logs-in).
 
@@ -150,7 +154,7 @@ broker create it from the downloaded `.pem` (`scripts/install.sh` does), so the 
 
 ```sh
 "$B" login github ensemble-broker-bot --key-file <key>.pem --app-id <App ID>   # then delete <key>.pem
-"$B" login github ensemble-broker-bot                                          # after a broker reinstall
+"$B" login github ensemble-broker-bot                                          # sets the access of a key stored otherwise
 ```
 
 With `--key-file` it refuses an existing `ensemble-broker-bot` item. Without it, the item must exist. If login exits non-zero, rerun it. It prints the App's slug and bot user ID; set `[session.hosts.docker.github] app = "<slug>"` in `~/.ensemble/config.local.toml` (`scripts/install.sh` writes it). The App must be private (installable only on your account): every session gets a token for every repo of every installation.
@@ -190,6 +194,24 @@ without this option stores only the broker item. Reruns and cleanup ownership: [
 
 Then store the key and run `login github` as [above](#log-in); `scripts/install.sh` asks for the `.pem` and the App ID, does
 both and writes the App's slug to `github.app`.
+
+### Re-trust after an upgrade
+
+macOS ties a keychain item to the code signatures it trusts. The broker signs with a stable designated requirement,
+so a new build differs from the last only in its partition ID, which the login keychain password changes without a
+dialog. `scripts/install.sh --docker` runs `retrust` before any other broker call whenever it installed a new broker
+(state key `retrust`, the broker's sha256); after installing a broker by hand, run it yourself:
+
+```sh
+"$B" retrust
+```
+
+It lists each broker item an earlier build wrote (`will re-trust …`), asks the login keychain password once, then makes
+each trust this build: every item whose service starts with `ensemble-broker-` ([Credentials › Keychain
+items](credentials.md#keychain-items)). An item a broker of v0.4.1 or earlier wrote needs one macOS dialog, announced
+first: click Allow; it never needs one again. `retrust` never asks for a value or creates an item (a missing one comes
+from its login), and leaves an item another application owns unchanged, naming the login that replaces it. The
+orchestrator-configured Linear client secrets are not broker items: `login linear` re-trusts them.
 
 ## Build
 
@@ -358,7 +380,7 @@ It prints the container name (`C` below) and client versions.
 ## Environment secrets
 
 Named values a container gets by reference, such as a password, an API key or an ssh private key. Import each once
-per broker install:
+([Re-trust after an upgrade](#re-trust-after-an-upgrade) keeps it through broker upgrades):
 
 ```sh
 "$B" login env dummy                      # type or paste the value; nothing echoes
@@ -1038,8 +1060,8 @@ the first failed check. The keychain, Linear preset and board-run checks stay ma
 
 - Container credentials are readable by every process in the container and by any process running as you
   ([Credentials](credentials.md)); each restart and resume writes them into a new container.
-- A broker reinstall needs all three logins, each `login claude <name>` and each `login opencode <name>` again
-  ([Log in](#log-in)); until then starts fail (`login_required`, or `keychain_failed` for the GitHub items).
+- A new broker needs `retrust` ([Re-trust after an upgrade](#re-trust-after-an-upgrade)); until then starts fail
+  without a dialog, naming it (`login_required`, or `keychain_failed` for the GitHub items).
 - An OpenCode provider at an `http://` `base_url` gets its API key and every prompt in plaintext: anyone on the LAN
   path can capture them. Prefer `https://`, or a key that only that server accepts.
 - A GitHub token the broker could not revoke stays valid until it expires (an hour); `"$B" status` lists it.
