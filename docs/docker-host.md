@@ -535,6 +535,12 @@ and `ensemble-crew role` exit 75 with `busy: lock <lock> is held by <container> 
 configuration error exits 2, a run failure 1). A busy preflight writes no run record; a busy found only at start ends
 the run without an outcome, its error starting `busy: `, and a detached run's harness exits 75.
 
+On the board a busy run spends no attempt and gets no comment; `runs.jsonl` records a `busy` row instead. A new run
+busy at preflight writes no start row and its issue goes back to Todo; a resume's issue stays In Progress, its resume
+row cancelled. A busy found at start is written back the same way (an attended `router --tui` start only logs
+`lock-busy`). The tick then tries the next resume or Todo issue in the same round, and Recover and the queue skip a busy
+issue for 25 minutes (`busy-skip`). `router --issue` exits 75 when busy and ignores the 25 minutes.
+
 `host.json` keeps a start's environment and a worker's `worker.json` keeps the one it was given. A resume giving none
 (`ensemble-session resume`, `ensemble-crew reopen`) of the same sid runs the stored one; one giving another (prefetch aside) is refused;
 state from before environments runs without one. Each new container takes the lock again and resolves its secrets

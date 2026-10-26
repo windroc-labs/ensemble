@@ -7,7 +7,7 @@ import threading
 from datetime import UTC, datetime, timedelta, timezone
 from unittest import mock
 
-from ensemble.orchestrator.engine import runs
+from ensemble.orchestrator.engine import router, runs
 from ensemble.orchestrator.engine.types import Claim, ConfigError
 from tests.orchestrator import case
 
@@ -626,3 +626,162 @@ class ClaimOf(Case):
                 self.write([json.dumps(row)])
                 with self.assertRaisesRegex(ValueError, f"start row {field}"):
                     runs.claim(self.log, "TASK-1", SID_A)
+
+
+def busy(issue, sid, cancels=None, attempt=None, **ago):
+    """A busy row; cancels: the cancelled row's (kind, its ago dict)."""
+    shown = cancels and {"kind": cancels[0], "ts": stamp(NOW - timedelta(**cancels[1]))}
+    return json.dumps(
+        {
+            "ts": stamp(NOW - timedelta(**ago)),
+            "kind": "busy",
+            "issue": issue,
+            "sid": sid,
+            "cancels": shown,
+            "attempt": attempt,
+        }
+    )
+
+
+class BusyRows(Case):
+    def attempts(self, since=None):
+        tried = [*runs.parse_log(self.log), *runs.failures(self.log)]
+        return router.attempt_count(tried, "TASK-1", since, busy=runs.busy_rows(self.log))
+
+    def test_a_cancelled_start_is_no_attempt_also_after_trim(self):
+        self.write(
+            [
+                row("start", "TASK-1", "a", hours=2),
+                busy("TASK-1", "a", ("start", {"hours": 2}), 1, hours=2),
+                row("start", "TASK-1", "b", hours=1),
+            ]
+        )
+        self.assertEqual(self.attempts(), 1)
+        runs.trim(self.log, NOW)
+        self.assertEqual(self.attempts(), 1)
+        self.assertEqual(len(runs.busy_rows(self.log)), 1)
+
+    def test_since_subtracts_only_busy_rows_of_counted_rows(self):
+        self.write(
+            [
+                row("start", "TASK-1", "a", hours=3),
+                busy("TASK-1", "a", ("start", {"hours": 3}), hours=3),
+                row("start", "TASK-1", "b", hours=1),
+            ]
+        )
+        self.assertEqual(self.attempts(NOW - timedelta(hours=2)), 1)
+        self.write(
+            [
+                row("start", "TASK-1", "a", hours=4),
+                row("resume", "TASK-1", "a", hours=3),
+                busy("TASK-1", "a", ("resume", {"hours": 3}), hours=3),
+                row("resume", "TASK-1", "a", hours=1),
+                busy("TASK-1", "a", ("resume", {"hours": 1}), 1, hours=1),
+            ]
+        )
+        self.assertEqual(self.attempts(), 1)
+        self.assertEqual(self.attempts(NOW - timedelta(hours=2)), 0)
+
+    def test_a_non_cancelling_busy_row_and_other_issues_rows_subtract_nothing(self):
+        self.write(
+            [
+                row("start", "TASK-1", "a", hours=2),
+                busy("TASK-1", "b", hours=1),
+                busy("TASK-2", "a", ("start", {"hours": 2}), hours=1),
+                busy("TASK-1", "c", ("start", {"hours": 2}), hours=1),
+            ]
+        )
+        self.assertEqual(self.attempts(), 1)
+
+    def test_trim_keeps_a_cancelling_row_with_its_row_and_others_seven_days(self):
+        old = row("start", "TASK-1", "a", days=8)
+        cancels_old = busy("TASK-1", "a", ("start", {"days": 8}), 1, days=8)
+        kept = row("start", "TASK-1", "b", days=1)
+        cancels_kept = busy("TASK-1", "b", ("start", {"days": 1}), 1, days=1)
+        orphan = busy("TASK-1", "z", ("start", {"days": 1}), days=1)
+        recent = busy("TASK-2", "c", days=7)
+        stale = busy("TASK-2", "d", days=7, seconds=1)
+        self.write([old, cancels_old, kept, cancels_kept, orphan, recent, stale])
+        runs.trim(self.log, NOW)
+        self.assertEqual(self.read(), "".join(line + "\n" for line in (kept, cancels_kept, recent)))
+
+    def test_busy_rows_parse_and_skip_malformed_lines(self):
+        good = busy("TASK-1", "a", ("resume", {"hours": 1}), 2, minutes=5)
+        bad = [
+            json.dumps({**json.loads(good), "cancels": {"kind": "failed", "ts": stamp(NOW)}}),
+            json.dumps({**json.loads(good), "cancels": {"kind": "start", "ts": "x"}}),
+            json.dumps({**json.loads(good), "attempt": True}),
+            json.dumps({**json.loads(good), "attempt": -1}),
+            json.dumps({**json.loads(good), "sid": 3}),
+            "plain text",
+        ]
+        self.write([*bad, good])
+        self.assertEqual(
+            runs.busy_rows(self.log),
+            [
+                runs.Busy(
+                    NOW - timedelta(minutes=5),
+                    "TASK-1",
+                    "a",
+                    ("resume", NOW - timedelta(hours=1)),
+                    2,
+                )
+            ],
+        )
+        self.assertEqual(runs.busy_rows(os.path.join(self.tmp, "nope")), [])
+
+    def test_note_busy_writes_a_router_row_and_note_returns_its_ts(self):
+        ts = runs.note(self.log, "resume", issue="TASK-1", sid="a", now=lambda: NOW)
+        self.assertEqual(ts, NOW.astimezone().isoformat(timespec="seconds"))
+        runs.note_busy(self.log, issue="TASK-1", sid="a", cancels=("resume", ts), now=lambda: NOW)
+        runs.note_busy(self.log, issue="TASK-2", sid="b", cancels=None, now=lambda: NOW)
+        rows = [json.loads(line) for line in self.read().splitlines()][1:]
+        self.assertEqual(
+            [{k: v for k, v in r.items() if k != "ts"} for r in rows],
+            [
+                {
+                    "kind": "busy",
+                    "issue": "TASK-1",
+                    "sid": "a",
+                    "cancels": {"kind": "resume", "ts": ts},
+                    "attempt": None,
+                },
+                {"kind": "busy", "issue": "TASK-2", "sid": "b", "cancels": None, "attempt": None},
+            ],
+        )
+
+    def test_note_busy_finished_cancels_the_latest_row_once_per_attempt(self):
+        self.write(
+            [
+                row("start", "TASK-1", "a", hours=3),
+                row("start", "TASK-1", "other", hours=1),
+                row("resume", "TASK-1", "a", hours=2),
+            ]
+        )
+        for _ in range(2):
+            self.assertEqual(
+                runs.note_busy_finished(self.log, issue="TASK-1", sid="a", attempt=2), "resume"
+            )
+        [found] = runs.busy_rows(self.log)
+        self.assertEqual(
+            (found.issue, found.sid, found.cancels, found.attempt),
+            ("TASK-1", "a", ("resume", NOW - timedelta(hours=2)), 2),
+        )
+        with open(self.log, "a") as f:
+            f.write(row("resume", "TASK-1", "a", minutes=5) + "\n")
+        self.assertEqual(
+            runs.note_busy_finished(self.log, issue="TASK-1", sid="a", attempt=2), "resume"
+        )
+        self.assertEqual(len(runs.busy_rows(self.log)), 1)
+
+    def test_note_busy_finished_writes_nothing_for_a_cancelled_or_missing_row(self):
+        self.write(
+            [
+                row("resume", "TASK-1", "a", hours=1),
+                busy("TASK-1", "a", ("resume", {"hours": 1}), minutes=50),
+            ]
+        )
+        before = self.read()
+        self.assertIsNone(runs.note_busy_finished(self.log, issue="TASK-1", sid="a", attempt=1))
+        self.assertIsNone(runs.note_busy_finished(self.log, issue="TASK-1", sid="b", attempt=1))
+        self.assertEqual(self.read(), before)
