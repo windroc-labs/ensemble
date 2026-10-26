@@ -262,10 +262,12 @@ class Shipped(Case):
         self.assertNotRegex(text, r"(?<!/)mini-op:run")
         steps = text.split("## Steps", 1)[1].split("## Resume", 1)[0]
         for literal in (
-            "`status: done`",
-            "`summary` opens with the verdict",
-            "`status: failed`",
-            "`needs_input`",
+            "No clear check → `needs_input`",
+            "The check ran to its end, passing or not → `status: done`",
+            "`summary` opens with the verdict, `Pass:` or `Fail:`",
+            "The check could not run (the mini unreachable, the runbook broke midway, "
+            "`/mini-op:run` missing) → `status: failed`",
+            "The request is still unclear → `needs_input`",
             "the runbook's source and path",
             "its full text",
             "/run/ensemble/secrets/",

@@ -6,9 +6,11 @@ Run one check on the Mac mini with `/mini-op:run`, then report its verdict.
 
 [Verifier › Input processing](#input-processing).
 
+The run requires a `Repo:` line; a missing or invalid repo or ref is a launch configuration error, before this task runs.
+
 ## Steps
 
-1. **Read** the input: the target repo, its ref, and what to test or the steps to run. No target repo, or no clear check → `needs_input`, `questions` naming what is missing; stop.
+1. **Read** the input: the target repo, its ref, and what to test or the steps to run. No clear check → `needs_input`, `questions` naming what is missing; stop.
 2. **Report progress:**
    [ensemble-progress:start] the check and its target, `<owner>/<name>@<ref or default branch>`
 3. **Check**: run `/mini-op:run` in `<Workdir>` with what to test or the input's steps, verbatim. It runs the target repo's runbook (under `.mini-op/runbooks/`) that matches, or writes a one-off runbook from the steps.

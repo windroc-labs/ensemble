@@ -492,6 +492,18 @@ class Verifier(Harnessed):
         for part in ("[delegate.roles.verifier]", "'codex'", "role verifier runs only on claude"):
             self.assertIn(part, err)
 
+    def test_missing_repo_is_refused_before_the_task_runs(self):
+        self.configure("docker")
+        for extra in (("--dry-run",), ()):
+            with self.subTest(extra=extra):
+                code, out, err = self.cli(
+                    *extra, input="Check login", role="verifier", task="verify", client=None
+                )
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("prefetch: want one Repo: line", err)
+                self.assertIn("no Repo: line", err)
+                self.assertFalse(os.path.exists(self.work))
+
     def test_tmux_default_host_refuses_and_still_lists(self):
         self.configure("tmux")
         code, out, err = self.verify()
