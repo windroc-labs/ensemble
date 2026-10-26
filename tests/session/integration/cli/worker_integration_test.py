@@ -9,6 +9,7 @@ import os
 import shutil
 import tempfile
 
+from ensemble.session.harness.channel import Channel
 from tests.session import live_tmux
 from tests.session.case import REPO
 from tests.session.cli_support import MANAGER, WorkerCase, logged
@@ -202,3 +203,16 @@ class ColorTest(WorkerCase):
             ],
         )
         self.assertEqual(self.commands("w1"), [])
+
+
+class HarnessedWorkerTest(WorkerCase):
+    def test_a_claude_worker_runs_under_a_harness_and_closes_through_it(self):
+        record = self.record(self.start("w1"))
+        with open(os.path.join(self.ensemble, "tui", "w1", "session.json"), encoding="utf-8") as f:
+            channel = Channel(json.load(f)["owner"])
+        self.assertEqual(channel.status()["sid"], record.sid)
+        self.assertTrue(channel.alive())
+        self.ok(self.session("close", "w1"))
+        self.assertFalse(self.live("w1"))
+        self.assertEqual(logged(channel.events)[-1]["type"], "Exited")
+        live_tmux.wait(lambda: not channel.alive(), timeout=40, what="the harness to exit")
