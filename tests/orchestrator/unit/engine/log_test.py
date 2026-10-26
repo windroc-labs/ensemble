@@ -60,7 +60,10 @@ class Log(Logs):
             ]
         self.assertEqual(len(reads), 1)
         self.assertEqual([d["issue"] for d in self.lines()], [f"TASK-{n}" for n in range(21)])
-        self.log("router", "claim-skip", "TASK-21", reason="no configured role delegate")
+        with open(self.path, "a", encoding="utf-8") as stream:
+            stream.write(
+                self.json("router", "claim-skip", "TASK-21", reason="no configured role delegate")
+            )
         with log.captured():
             self.log(
                 "router", "claim-skip", "TASK-21", once=True, reason="no configured role delegate"
