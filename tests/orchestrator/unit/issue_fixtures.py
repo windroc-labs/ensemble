@@ -22,7 +22,6 @@ from ensemble.orchestrator.trackers.linear import (
     client,
     issue_edit,
     issue_label,
-    issue_names,
     issue_read,
     issue_refs,
     issue_relation,
@@ -651,9 +650,9 @@ class LabelGql:
 
 class EditGql(LabelGql):
     """LabelGql whose issue TASK-2 also holds `fields` (title, description, priority, assignee,
-    project; team to move it), answering `ensemble-orchestrator issue edit`'s read, its --role
-    lookups (the role accounts' users, the viewer) and its --project ones from `projects`
-    (project() nodes), strictly as Routes; the mutation applies its label changes.
+    delegate, project; team to move it), answering `ensemble-orchestrator issue edit`'s read, the
+    role accounts' users and its --project lookups from `projects` (project() nodes), strictly
+    as Routes; the mutation applies its label changes.
     """
 
     def __init__(self, catalog, carried, *, fields=None, projects=(), **options):
@@ -664,6 +663,7 @@ class EditGql(LabelGql):
             "description": "Old body",
             "priority": 0,
             "assignee": None,
+            "delegate": None,
             "project": None,
             **(fields or {}),
         }
@@ -685,11 +685,9 @@ class EditGql(LabelGql):
         return {"team": {"projects": edges(found[: variables["first"]])}}
 
     def __call__(self, query, **variables):
-        if query in (ops.Q_USER, issue_names.Q_VIEWER):
+        if query == ops.Q_USER:
             self.calls.append((query, variables))
-            return (
-                {"users": role_users(variables)} if query == ops.Q_USER else {"viewer": self.viewer}
-            )
+            return {"users": role_users(variables)}
         if "project(" in query or "ProjectFilter" in query:
             self.calls.append((query, variables))
             return self._project(query, variables)

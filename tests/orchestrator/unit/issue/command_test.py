@@ -155,7 +155,7 @@ class Help(Case):
             "most\n  recently updated first",
             "1-50 (default 20)",
             "--role SPEC",
-            "unassigned (no assignee)",
+            "unassigned (no delegate; a local board: no assignee), on Linear by the\n  delegate",
             "ensemble-orchestrator issue list --role me",
             "ensemble-orchestrator issue list --state ready --task build --priority high",
             "ensemble-orchestrator issue lookup --help",
@@ -571,13 +571,18 @@ class Edit(IssueCase):
                 self.assertNotIn("中文".encode(), out)
                 self.assertEqual(gql.call_args.kwargs["identity"], MANAGER_IDENTITY)
 
-    def test_a_role_alone_changes_the_assignee(self):
-        for role, want in (("engineer", ROLE_USERS[ACCOUNTS["engineer"]]), ("unassigned", None)):
-            gql = EditGql((self.BUILD,), [], fields={"assignee": {"id": "u-other"}})
+    def test_a_role_alone_sets_the_delegate_and_clears_the_assignee(self):
+        other = {"id": "u-other"}
+        for role, want in (
+            ("engineer", {"delegateId": ROLE_USERS[ACCOUNTS["engineer"]], "assigneeId": None}),
+            ("me", {"delegateId": MANAGER_IDENTITY.user_id, "assigneeId": None}),
+            ("unassigned", {"delegateId": None, "assigneeId": None}),
+        ):
+            gql = EditGql((self.BUILD,), [], fields={"assignee": other, "delegate": other})
             with self.subTest(role=role):
                 code, out, err = self.run_main(["edit", "TASK-2", "--role", role], gql)
                 self.assertEqual((code, err, json.loads(out)["result"]), (0, "", "changed"))
-                self.assertEqual([w[1]["in"] for w in gql.writes], [{"assigneeId": want}])
+                self.assertEqual([w[1]["in"] for w in gql.writes], [want])
 
     def test_a_project_alone_changes_the_project(self):
         for value in (uid(4), "Ensemble"):
@@ -738,11 +743,18 @@ class Create(IssueCase):
         self.assertEqual((code, err), (0, ""))
         fields = gql.writes[0][1]["in"]
         self.assertEqual(
-            (fields["stateId"], fields["labelIds"], fields["assigneeId"], fields["priority"]),
+            (
+                fields["stateId"],
+                fields["labelIds"],
+                fields["delegateId"],
+                fields["assigneeId"],
+                fields["priority"],
+            ),
             (
                 STATES["in_progress"],
                 [TASK_LABELS["build"], CLIENT_LABELS["codex"]],
                 ROLE_USERS[ACCOUNTS["engineer"]],
+                None,
                 4,
             ),
         )

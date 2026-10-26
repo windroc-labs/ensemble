@@ -6,7 +6,7 @@ fields.
 import json
 import os
 
-from tests.orchestrator.unit.board_ids import ACCOUNTS, MANAGER_IDENTITY, STATES, TEAM
+from tests.orchestrator.unit.board_ids import ACCOUNTS, MANAGER_IDENTITY, MANAGER_USER, STATES, TEAM
 from tests.orchestrator.unit.issue_fixtures import (
     CLIENT_LABELS,
     OTHER_TEAM,
@@ -20,7 +20,6 @@ from tests.orchestrator.unit.issue_fixtures import (
     project,
     role_users,
     uid,
-    user,
 )
 
 FIELDS = ["id", "identifier", "title", "url", "state", "labels", "assignee", "project", "parent_id"]
@@ -74,7 +73,7 @@ class Filters(IssueCase):
                 {"team": {"id": {"eq": TEAM}}},
                 {"or": [{"title": text}, {"description": text}]},
                 {"state": {"id": {"eq": STATES["todo"]}}},
-                {"assignee": {"id": {"eq": ROLE_USERS[ACCOUNTS["engineer"]]}}},
+                {"delegate": {"id": {"eq": ROLE_USERS[ACCOUNTS["engineer"]]}}},
                 {"labels": {"some": {"id": {"eq": TASK_LABELS["build"]}}}},
                 {"labels": {"some": {"id": {"eq": CLIENT_LABELS["codex"]}}}},
                 {"priority": {"eq": 1}},
@@ -106,15 +105,17 @@ class Filters(IssueCase):
                 self.run_list(argv, gql)
                 self.assertEqual(gql.sent("issues")[0]["f"]["and"][1], want)
 
-    def test_role_me_is_the_viewer_and_unassigned_no_assignee(self):
+    def test_role_filters_the_delegate_me_the_manager_app_unassigned_none(self):
         for spec, want in (
-            ("me", {"assignee": {"id": {"eq": uid(6)}}}),
-            ("unassigned", {"assignee": {"null": True}}),
+            ("pm", {"delegate": {"id": {"eq": ROLE_USERS[ACCOUNTS["pm"]]}}}),
+            ("me", {"delegate": {"id": {"eq": MANAGER_USER}}}),
+            ("unassigned", {"delegate": {"null": True}}),
         ):
-            gql = Routes(viewer=user(6, "Harness"), issues=edges([]))
+            gql = Routes(issues=edges([]))
             with self.subTest(spec=spec):
                 self.run_list(["--role", spec], gql)
                 self.assertEqual(gql.sent("issues")[0]["f"]["and"][1], want)
+                self.assertEqual(len(gql.calls), 1)
 
     def test_archived_issues_only_when_asked(self):
         gql = Routes(issues=edges([issue_row("TASK-1")]))

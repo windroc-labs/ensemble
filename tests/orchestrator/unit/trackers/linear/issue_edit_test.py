@@ -8,7 +8,7 @@ from ensemble.orchestrator.engine.types import IssueError, Unavailable, WriteUnk
 from ensemble.orchestrator.issue.output import receipt_payload
 from ensemble.orchestrator.trackers.linear import issue_edit, issue_label, issue_read, issue_refs
 from tests.orchestrator.case import Case
-from tests.orchestrator.unit.board_ids import ACCOUNTS, TASK_GROUP, TEAM
+from tests.orchestrator.unit.board_ids import ACCOUNTS, MANAGER_USER, TASK_GROUP, TEAM
 from tests.orchestrator.unit.issue_fixtures import (
     CLIENT_GROUP,
     CLIENT_LABELS,
@@ -127,24 +127,44 @@ class Edit(Case):
         self.assertEqual((receipt.result, receipt.operation, gql.writes), ("unchanged", "edit", []))
         self.assertEqual(receipt_payload(receipt)["actor"], VIEWER)
 
-    def test_a_role_writes_only_its_assignee(self):
+    def test_a_role_sets_the_delegate_and_clears_the_assignee(self):
         engineer = ROLE_USERS[ACCOUNTS["engineer"]]
-        for role, want in (("engineer", engineer), ("me", VIEWER["id"]), ("unassigned", None)):
-            gql = EditGql(CATALOG, [KEEP["id"]], fields={"assignee": {"id": "u-other"}})
-            with self.subTest(role=role):
+        other = {"id": "u-other"}
+        for role, fields, want in (
+            ("engineer", {"delegate": other}, {"delegateId": engineer}),
+            ("me", {"delegate": other}, {"delegateId": MANAGER_USER}),
+            ("engineer", {"delegate": {"id": engineer}, "assignee": other}, {"assigneeId": None}),
+            ("me", {"assignee": other}, {"delegateId": MANAGER_USER, "assigneeId": None}),
+            ("unassigned", {"delegate": other}, {"delegateId": None}),
+            (
+                "unassigned",
+                {"delegate": other, "assignee": other},
+                {"delegateId": None, "assigneeId": None},
+            ),
+        ):
+            gql = EditGql(CATALOG, [KEEP["id"]], fields=fields)
+            with self.subTest(role=role, fields=fields):
                 self.assertEqual(edit(gql, role=role).result, "changed")
-                self.assertEqual(
-                    gql.writes,
-                    [(issue_edit.M_EDIT, {"i": "id-TASK-2", "in": {"assigneeId": want}})],
-                )
+                self.assertEqual(gql.writes, [(issue_edit.M_EDIT, {"i": "id-TASK-2", "in": want})])
 
-    def test_a_role_already_assigned_writes_nothing(self):
-        engineer = {"id": ROLE_USERS[ACCOUNTS["engineer"]]}
-        for role, assignee in (("engineer", engineer), ("me", VIEWER), ("unassigned", None)):
-            gql = EditGql(CATALOG, [], fields={"assignee": assignee})
+    def test_a_role_already_so_writes_nothing(self):
+        for role, delegate in (
+            ("engineer", {"id": ROLE_USERS[ACCOUNTS["engineer"]]}),
+            ("me", {"id": MANAGER_USER}),
+            ("unassigned", None),
+        ):
+            gql = EditGql(CATALOG, [], fields={"delegate": delegate, "assignee": None})
             with self.subTest(role=role):
                 self.assertEqual(edit(gql, role=role).result, "unchanged")
                 self.assertEqual(gql.writes, [])
+
+    def test_without_a_role_neither_delegate_nor_assignee_is_written(self):
+        other = {"id": "u-other"}
+        gql = EditGql(CATALOG, [], fields={"delegate": other, "assignee": other})
+        self.assertEqual(edit(gql, title="New").result, "changed")
+        self.assertEqual(
+            gql.writes, [(issue_edit.M_EDIT, {"i": "id-TASK-2", "in": {"title": "New"}})]
+        )
 
     def test_a_project_by_id_or_exact_name_writes_only_the_project(self):
         for value in (ENSEMBLE["id"], "Ensemble"):

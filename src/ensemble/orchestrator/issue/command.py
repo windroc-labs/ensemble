@@ -82,7 +82,9 @@ _HELP = (
     "Values: abstract names; on Linear each the configured team's id.\n"
     "  States: backlog, ready, running, review, approved, done, canceled.\n"
     "  --role SPEC: a role of [orchestrator.linear.roles], me (the\n"
-    "  [linear.manager] OAuth app) or unassigned; a local board: that directory.\n"
+    "  [linear.manager] OAuth app) or unassigned: on Linear that app is the\n"
+    "  delegate (the Agent field; unassigned: none), writes clearing the\n"
+    "  assignee; a local board: that directory.\n"
     "  --task NAME / --client NAME: on Linear a key of\n"
     "  [orchestrator.linear.task_labels] / agent_labels; a local board: a\n"
     "  configured role's task / any client name.\n"
@@ -132,7 +134,8 @@ _LIST_HELP = (
     "  --query TEXT matches title or description in any case; --state STATE:\n"
     "  backlog, ready, running, review, approved, done or canceled; --role SPEC:\n"
     "  a configured role, me (the [linear.manager] OAuth app) or\n"
-    "  unassigned (no assignee); --task NAME, --client NAME: a configured task or\n"
+    "  unassigned (no delegate; a local board: no assignee), on Linear by the\n"
+    "  delegate; --task NAME, --client NAME: a configured task or\n"
     "  client name; --priority NAME: none, urgent, high, medium or low; --parent\n"
     "  ID: the parent issue's identifier or id. Linear only (a local board exits\n"
     "  2): --label (not a group or retired) and --project, each an id or exact\n"
@@ -225,8 +228,9 @@ _CREATE_HELP = (
     "  unreadable exits 2.\n"
     "--state STATE: backlog, ready, running, review, approved, done or canceled;\n"
     "  default backlog.\n"
-    "--role SPEC: the assignee: a configured role's account, me (the\n"
-    "  [linear.manager] OAuth app) or unassigned (as without --role).\n"
+    "--role SPEC: the delegate: a configured role's app, me (the\n"
+    "  [linear.manager] OAuth app) or unassigned (as without --role: none); on\n"
+    "  Linear the assignee stays empty. A local board: the assignee directory.\n"
     "--task NAME / --client NAME: the configured task / client label.\n"
     "--priority NAME: none, urgent, high, medium or low.\n"
     "--parent ID: an issue, the new one its sub-issue: this splits an issue.\n"
@@ -280,8 +284,9 @@ _EDIT_HELP = (
     "--title TEXT: not blank. --body-file FILE: the new Markdown description,\n"
     "  UTF-8, sent verbatim, minus a leading byte order mark; - reads stdin;\n"
     "  blank or unreadable exits 2.\n"
-    "--role SPEC: the assignee: a configured role's account, me (the\n"
-    "  [linear.manager] OAuth app) or unassigned (no assignee); a local board:\n"
+    "--role SPEC: the delegate: a configured role's app, me (the\n"
+    "  [linear.manager] OAuth app) or unassigned (none), clearing the assignee;\n"
+    "  a local board: the assignee directory:\n"
     "  the file moves to <SPEC>/<state>/, an archived issue exits 2.\n"
     "--project VALUE: Linear only (a local board exits 2): a project of the\n"
     "  configured team, an id or exact name, resolved before the issue is read;\n"
@@ -421,7 +426,11 @@ def _parser():
     )
     found.add_argument("--query", metavar="TEXT", help="title or description holds TEXT, any case")
     found.add_argument("--state", choices=STATES, metavar="STATE", help=", ".join(STATES))
-    found.add_argument("--role", metavar="SPEC", help="a configured role, me or unassigned")
+    found.add_argument(
+        "--role",
+        metavar="SPEC",
+        help="delegate (a local board: assignee): a role, me or unassigned",
+    )
     found.add_argument("--task", metavar="NAME", help="a configured task name")
     found.add_argument("--client", metavar="NAME", help="a configured client name")
     found.add_argument("--priority", choices=PRIORITIES, metavar="NAME", help=", ".join(PRIORITIES))
@@ -471,7 +480,11 @@ def _parser():
         help=", ".join(STATES) + " (default: backlog)",
     )
     for option, metavar, what in (
-        ("--role", "SPEC", "assignee: a configured role, me or unassigned"),
+        (
+            "--role",
+            "SPEC",
+            "delegate (a local board: assignee): a configured role, me or unassigned",
+        ),
         ("--task", "NAME", "a configured task name"),
         ("--client", "NAME", "a configured client name"),
         ("--parent", "ID", "parent issue identifier (TASK-1) or id: a split"),
@@ -502,8 +515,8 @@ def _parser():
     )
     change = commands.add_parser(
         "edit",
-        help="change one issue's title, description, assignee, project, task, client or priority",
-        description="Change the title, description, assignee, project, task, client or priority "
+        help="change one issue's title, description, role, project, task, client or priority",
+        description="Change the title, description, role, project, task, client or priority "
         "of one issue.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_EDIT_HELP,
@@ -514,7 +527,10 @@ def _parser():
         "--body-file", action=_Once, metavar="FILE", help="the description, UTF-8; -: stdin"
     )
     change.add_argument(
-        "--role", action=_Once, metavar="SPEC", help="assignee: a configured role, me or unassigned"
+        "--role",
+        action=_Once,
+        metavar="SPEC",
+        help="delegate (a local board: assignee): a configured role, me or unassigned",
     )
     change.add_argument(
         "--project", action=_Once, metavar="VALUE", help="Linear only: project id or name"
