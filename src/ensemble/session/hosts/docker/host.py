@@ -106,6 +106,7 @@ from ensemble.utils import (
     docker_home,
     inode_lock,
     kill_group,
+    last_lines,
     module_roots,
     piped_popen,
     read_beneath,
@@ -122,7 +123,6 @@ RECORD = "host.json"
 PIPE_LOCK = "pipe.lock"  # held by a headless run's harness while its client runs
 PIPED = "pipe"
 READY_WAIT = 10
-TAIL_LINES = 5  # of an exited client's screen in its start error
 IMAGE_PYTHON = "/opt/ensemble/venv/bin/python"
 STATE_ROOT = "/run/ensemble"  # the client context's Container.state_root
 _ARG_STRLEN_MAX = 131072  # Linux exec's limit on one argument, its NUL included
@@ -388,11 +388,10 @@ class _Laps:
 def _tail(tmux: TmuxCli, name: str) -> str:
     """`: <last lines>` of a client's pane on one line, read before its rollback; empty unread."""
     try:
-        text = _text(tmux.read(name, 4 * TAIL_LINES))
+        tail = last_lines(_text(tmux.read(name)))
     except TuiError:
         return ""
-    lines = [line.strip() for line in text.splitlines() if line.strip()][-TAIL_LINES:]
-    return f": {' | '.join(lines)}" if lines else ""
+    return f": {tail}" if tail else ""
 
 
 def _wait(ready, timeout: float, poll: float = POLL, cap: float | None = None) -> bool:

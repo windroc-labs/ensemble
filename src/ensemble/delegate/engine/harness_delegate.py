@@ -72,6 +72,7 @@ from ensemble.utils import (
     Record,
     Status,
     StatusState,
+    last_lines,
     load_class,
     remove_tree,
     source_path,
@@ -127,9 +128,8 @@ class _State:
     start_failure: str | None = None
 
 
-TUI_START_TIMEOUT = 30  # seconds: a detached tui run's agent session to go live
-DOCKER_START_TIMEOUT = 120  # on Docker, its container start included
-TAIL_LINES = 5  # client screen lines in a start error
+TUI_START_TIMEOUT = 30  # seconds: a detached tui run's agent session to go live, but on Docker
+DOCKER_START_TIMEOUT = 120  # seconds, container start included
 TUI_POLL = 0.1  # seconds
 
 
@@ -862,7 +862,12 @@ class HarnessDelegate(Delegate):
                     on_event(event)
 
             try:
-                return execute(self._state.plan, driver=self.driver, on_event=emit)
+                return execute(
+                    self._state.plan,
+                    driver=self.driver,
+                    on_event=emit,
+                    ending=self._start_failure_end,
+                )
             except BaseException as error:
                 if not finished:
                     ended = self._start_failure_end(error)
@@ -1040,8 +1045,11 @@ class HarnessDelegate(Delegate):
         try:
             while True:
                 agent, unanswered = self._probed_agent(state)
-                if agent is not None and agent.alive() and agent.status().alive:
-                    return
+                try:
+                    if agent is not None and agent.alive() and agent.status().alive:
+                        return
+                except Unanswered as error:
+                    unanswered = error
                 harness = self._harness(state)
                 ended = harness is None or not harness.alive()
                 if ended:
@@ -1093,7 +1101,7 @@ class HarnessDelegate(Delegate):
     def _tail(self, state: _State, agent: Session | None) -> str:
         """`; last lines: …` of the agent's client: its screen, else its Host row's once exited."""
         try:
-            text = "" if agent is None else agent.screen(TAIL_LINES)
+            text = "" if agent is None else agent.screen()
         except SessionError:
             text = ""
         if not text:
@@ -1109,8 +1117,8 @@ class HarnessDelegate(Delegate):
                 ),
                 "",
             )
-        lines = [line.strip() for line in text.splitlines() if line.strip()][-TAIL_LINES:]
-        return f"; last lines: {' | '.join(lines)}" if lines else ""
+        tail = last_lines(text)
+        return f"; last lines: {tail}" if tail else ""
 
     def _start_failed(self, cause: str | None) -> None:
         with contextlib.suppress(ConfigError, OSError), self.store.mutex():

@@ -121,13 +121,7 @@ class Viewer:
         """None once shown, else an attach command; display None: the session's stored one;
         command: a shell command run instead, `{{session}}` the session name.
         """
-        for _ in range(SHOW_TRIES - 1):
-            with contextlib.suppress(Unanswered):
-                target, display = self._viewed(name, host, display)
-                break
-            time.sleep(SHOW_RETRY_WAIT)
-        else:
-            target, display = self._viewed(name, host, display)
+        target, display = self._viewed(name, host, display)
         try:
             if command is None:
                 opener, split, split_from, _ = parts(display)
@@ -159,7 +153,16 @@ class Viewer:
     def _viewed(
         self, name: str, host: Host, display: Display
     ) -> tuple[SessionView | CommandView, Display]:
-        """show's steps before placement, retried while Unanswered."""
+        """show's steps before placement, SHOW_TRIES times while Unanswered, as under load."""
+        for _ in range(SHOW_TRIES - 1):
+            with contextlib.suppress(Unanswered):
+                return self._prepared(name, host, display)
+            time.sleep(SHOW_RETRY_WAIT)
+        return self._prepared(name, host, display)
+
+    def _prepared(
+        self, name: str, host: Host, display: Display
+    ) -> tuple[SessionView | CommandView, Display]:
         target = self._target(name, host)
         if display is None:
             display = host.attach(name).display()

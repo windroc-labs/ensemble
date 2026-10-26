@@ -1965,6 +1965,21 @@ class StartedTest(HarnessCase):
         self.assertIsNone(self.metadata()["start_failure"])
         self.assertFalse(agent.alive())
 
+    def test_an_unanswered_liveness_probe_keeps_waiting(self):
+        self.start_agent()
+        alive = HarnessSession.alive
+
+        def probing(session):
+            if self.now < 10:
+                raise Unanswered("docker ps: timed out")
+            return alive(session)
+
+        with mock.patch.object(HarnessSession, "alive", probing):
+            record = self.detach(self.tui())
+        self.assertEqual(record.sessions, (HARNESS, AGENT))
+        self.assertEqual(self.now, 10)
+        self.assertIsNone(self.metadata()["start_failure"])
+
     def test_an_unreadable_tail_is_left_out(self):
         dead, refused, _rows = self.exited()
         with (
@@ -2020,6 +2035,11 @@ class StartFailureEndTest(HarnessCase):
         result, sent = self.stopped(self.FAILURE)
         self.assertEqual(result, asdict(Result(1, None, f"stopped: {self.FAILURE}")))
         self.assertEqual(sent["returncode"], 1)
+        with open(os.path.join(Layout(self.work).run, "run.jsonl"), encoding="utf-8") as file:
+            rows = {row["kind"]: row for row in map(json.loads, file)}
+        self.assertEqual(
+            (rows["result"]["error"], rows["end"]["rc"]), (f"stopped: {self.FAILURE}", 1)
+        )
         self.assertEqual(sent["error"], f"stopped: {self.FAILURE}")
 
     def test_an_outside_stop_stays_an_interruption(self):
