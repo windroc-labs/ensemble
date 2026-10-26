@@ -18,7 +18,7 @@ opencode_executable=$opencode_prefix/bin/opencode
 opencode_min=
 ref=main
 # Label contract v1; update only after checking the pinned repo's docs/label-contract.md.
-egress_commit=225409bd04954ff1ea81d66e5339c812a519b4f7
+egress_commit=9ed47580dc9eb4c1fe794d12e54a8f2d3f258831
 clients_flag=
 clients=
 docker_flag=
@@ -1765,7 +1765,7 @@ broker_logins() {
 # 0: ready for workers; 2: healthy contract-1 gateway whose config has no workers section; 1: not ready yet.
 egress_ready() {
   local status running health contract name proxy networks
-  status=$(docker inspect --format '{{.State.Running}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{index .Config.Labels "windroc.egress.contract"}}|{{index .Config.Labels "windroc.egress.network.workers.name"}}|{{index .Config.Labels "windroc.egress.network.workers.proxy"}}|{{index .Config.Labels "windroc.egress.networks"}}' egress-gateway </dev/null 2>/dev/null) || return 1
+  status=$(docker inspect --format '{{.State.Running}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{index .Config.Labels "windroc.egress.contract"}}|{{index .Config.Labels "windroc.egress.network.workers.name"}}|{{index .Config.Labels "windroc.egress.network.workers.proxy"}}|{{index .Config.Labels "windroc.egress.networks"}}' egress-proxy </dev/null 2>/dev/null) || return 1
   IFS='|' read -r running health contract name proxy networks <<<"$status"
   [ "$running|$health|$contract" = "true|healthy|1" ] || return 1
   case ",$networks," in *,workers,*) ;; *) return 2 ;; esac
@@ -1808,7 +1808,7 @@ egress_install() {
     return
   fi
   EGRESS_CONFIG_DIR="$dir" bash "$version/start.sh" </dev/null >&2 \
-    || die "egress-gateway start failed: run $version/start.sh; inspect docker logs egress-gateway"
+    || die "egress-proxy start failed: run $version/start.sh; inspect docker logs egress-proxy"
   while :; do
     ready=0
     egress_ready || ready=$?
@@ -1816,7 +1816,7 @@ egress_install() {
     [ "$ready" -ne 2 ] \
       || die "$dir/config.local.yaml has no networks.workers section, so the healthy gateway serves no workers network; add one (see $version/config.example.yaml), then rerun scripts/install.sh --docker; your config was kept unchanged"
     [ "$tries" -lt 60 ] \
-      || die "egress-gateway not healthy after 120 seconds: docker logs egress-gateway; rerun $version/start.sh"
+      || die "egress-proxy not healthy after 120 seconds: docker logs egress-proxy; rerun $version/start.sh"
     tries=$((tries + 1))
     sleep 2
   done

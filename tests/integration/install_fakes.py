@@ -493,7 +493,7 @@ def docker(args):
     if args == ["egress-start"]:
         mark(FAKES / "egress_started")
         return 0
-    if args[:2] == ["inspect", "--format"] and args[-1] == "egress-gateway":
+    if args[:2] == ["inspect", "--format"] and args[-1] == "egress-proxy":
         if not (FAKES / "egress_started").exists():
             return 1
         recorded = FAKES / "egress_inspect"

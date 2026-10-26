@@ -978,7 +978,7 @@ class InstallTest(Case):
     def test_gateway_pinned_and_healthy_rerun_changes_nothing(self):
         self.assert_ok(self.fresh("--clients", "claude", "--docker"))
         egress = Path(self.home, ".egress")
-        sha = "225409bd04954ff1ea81d66e5339c812a519b4f7"
+        sha = "9ed47580dc9eb4c1fe794d12e54a8f2d3f258831"
         checkout = egress / "versions" / sha
         self.assertEqual((egress / "current").resolve(), checkout)
         config = egress / "config.local.yaml"
@@ -1072,7 +1072,7 @@ class InstallTest(Case):
         )
         self.assertEqual(
             (egress / "current").resolve(),
-            egress / "versions" / "225409bd04954ff1ea81d66e5339c812a519b4f7",
+            egress / "versions" / "9ed47580dc9eb4c1fe794d12e54a8f2d3f258831",
         )
         self.assertEqual(
             {p: (p.read_bytes(), p.stat().st_mode, p.stat().st_mtime_ns) for p in old.iterdir()},
@@ -1154,7 +1154,7 @@ class InstallTest(Case):
         )
 
     def test_gateway_incomplete_checkout_is_kept_and_rejected(self):
-        version = Path(self.home, ".egress/versions/225409bd04954ff1ea81d66e5339c812a519b4f7")
+        version = Path(self.home, ".egress/versions/9ed47580dc9eb4c1fe794d12e54a8f2d3f258831")
         version.mkdir(parents=True)
         executable(version / "start.sh", "#!/bin/sh\n")
         (version / "COMMIT").write_text("0" * 40 + "\n")
@@ -1194,8 +1194,8 @@ class InstallTest(Case):
         (self.fakes / "fail").write_text("docker egress-start")
         result = self.fresh("--clients", "claude", "--docker", gateway_failure=True)
         self.assertEqual(result.code, 1)
-        self.assertIn("egress-gateway", result.stderr)
-        self.assertIn("docker logs egress-gateway", result.stderr)
+        self.assertIn("egress-proxy", result.stderr)
+        self.assertIn("docker logs egress-proxy", result.stderr)
         self.assertNotIn("ensemble-broker login claude", self.calls())
         (self.fakes / "egress_unhealthy").touch()
         (self.bin / "sleep").unlink()

@@ -48,7 +48,7 @@ func TestEgressRefusals(t *testing.T) {
 	}{
 		{"no gateway", world{gateways: &none}, 1, "No egress gateway container"},
 		{"two gateways", world{gateways: &two}, 1, "Found 2 egress gateway containers"},
-		{"malformed id", world{gateways: &short}, 1, "Cannot inspect egress gateway egress-gateway"},
+		{"malformed id", world{gateways: &short}, 1, "Cannot inspect egress gateway egress-proxy"},
 		{"unknown contract", world{gateway: labelsEdit(func(l map[string]any) { l["windroc.egress.contract"] = "2" })}, 2, "contract version 2; this broker knows 1"},
 		{"no contract label", world{gateway: labelsEdit(func(l map[string]any) { delete(l, "windroc.egress.contract") })}, 2, "contract version"},
 		{"stopped", world{gateway: func(g map[string]any) {
@@ -75,10 +75,10 @@ func TestEgressRefusals(t *testing.T) {
 		})}, 2, "no valid workers network labels"},
 		{"not attached", world{gateway: func(g map[string]any) {
 			delete(g["NetworkSettings"].(map[string]any)["Networks"].(map[string]any), workersNetwork)
-		}}, 2, "Egress gateway egress-gateway is not attached to network egress-workers"},
-		{"network absent", world{noNetwork: true}, 3, "Egress network egress-workers of gateway egress-gateway does not exist"},
+		}}, 2, "Egress gateway egress-proxy is not attached to network egress-workers"},
+		{"network absent", world{noNetwork: true}, 3, "Egress network egress-workers of gateway egress-proxy does not exist"},
 		{"network matched by id prefix", world{network: func(n map[string]any) { n["Name"] = "other" }}, 3, "does not exist"},
-		{"network not internal", world{network: func(n map[string]any) { n["Internal"] = false }}, 3, "Egress network egress-workers of gateway egress-gateway is not internal"},
+		{"network not internal", world{network: func(n map[string]any) { n["Internal"] = false }}, 3, "Egress network egress-workers of gateway egress-proxy is not internal"},
 		{"another network of that name", world{network: func(n map[string]any) { n["Id"] = strings.Repeat("a", 64) }}, 3, "is not attached to network egress-workers"},
 		{"renamed gateway", world{gateway: func(g map[string]any) {
 			g["Name"] = "/my-gateway"
@@ -96,7 +96,7 @@ func TestEgressRefusals(t *testing.T) {
 					t.Fatalf("%+v", e)
 				}
 				if !strings.Contains(e.Message, tc.want) || !strings.Contains(e.Message, "./start.sh") ||
-					(!strings.Contains(e.Message, "egress-gateway") && !strings.Contains(e.Message, "my-gateway")) {
+					(!strings.Contains(e.Message, "egress-proxy") && !strings.Contains(e.Message, "my-gateway")) {
 					t.Fatalf("message %q lacks %q, the gateway or ./start.sh", e.Message, tc.want)
 				}
 				if got := d.verbs(); !slices.Equal(got, gatewayCalls[:tc.calls]) {

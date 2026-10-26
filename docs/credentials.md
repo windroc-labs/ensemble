@@ -328,7 +328,7 @@ Keys, one per account:
 For the manager and the user, through mini-op on the test Mac mini with Docker Desktop. Never run real-machine
 acceptance on a developer's Mac. The 2026-10-18 results below predate the gateway.
 
-- [ ] Fresh `scripts/install.sh --docker` ends with `egress-gateway` healthy; rerunning keeps the gateway's ID
+- [ ] Fresh `scripts/install.sh --docker` ends with `egress-proxy` healthy; rerunning keeps the gateway's ID
   and start time, pinned checkout, and config bytes, mode and modification time. Repeat with an existing config.
 - [ ] `worker --client claude`, `worker --client codex`, `worker --client opencode` pass the gateway checks in
   [Live acceptance](docker-host.md#live-acceptance). Their local/LAN negative controls use temporary reachable

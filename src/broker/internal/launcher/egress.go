@@ -23,7 +23,7 @@ const (
 	contractVersion = "1"
 	networksLabel   = egressPrefix + "networks"
 	workersKey      = "workers"
-	gatewayName     = "egress-gateway"
+	gatewayName     = "egress-proxy"
 	noProxy         = "localhost,127.0.0.1,::1"
 	egressHint      = " Start the egress gateway (./start.sh in its egress-proxy checkout, docs/docker-host.md#egress-gateway), then retry."
 )

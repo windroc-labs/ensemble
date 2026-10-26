@@ -173,7 +173,7 @@ const (
 func gatewayObject() map[string]any {
 	return map[string]any{
 		"Id":   gatewayID,
-		"Name": "/egress-gateway",
+		"Name": "/egress-proxy",
 		"Config": map[string]any{"Labels": map[string]any{
 			"windroc.egress.contract":              "1",
 			"windroc.egress.networks":              "mini-op,workers",
@@ -181,7 +181,7 @@ func gatewayObject() map[string]any {
 			"windroc.egress.network.workers.proxy": workersProxy,
 			"windroc.egress.network.mini-op.name":  "egress-mini-op",
 			"windroc.egress.network.mini-op.proxy": "http://egress-proxy-mini-op:4750",
-			"com.docker.compose.service":           "gateway",
+			"com.docker.compose.service":           "proxy",
 		}},
 		"State": map[string]any{"Running": true, "Health": map[string]any{"Status": "healthy"}},
 		"NetworkSettings": map[string]any{"Networks": map[string]any{
