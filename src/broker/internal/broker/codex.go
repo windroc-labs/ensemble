@@ -315,6 +315,15 @@ func (c Codex) trusted() error {
 	return nil
 }
 
+// loginRepair is the command that makes the login usable when trusted fails: retrust for an earlier broker build's
+// item, else login codex.
+func (c Codex) loginRepair() string {
+	if _, earlier, err := checkItem(c.keychain, codexService, codexAccount); err == nil && earlier {
+		return RetrustCommand
+	}
+	return codexLoginCommand
+}
+
 // codexWriterMessages are bootstrap.py's fixed codex-auth exit messages. The writer runs in the untrusted container,
 // so writerCause passes on only these, or a write failure's errno text.
 var (
@@ -362,6 +371,7 @@ func (c Codex) Status(ctx context.Context) protocol.CodexStatus {
 	}
 	defer unlock()
 	if c.trusted() != nil {
+		s.Repair = c.loginRepair()
 		return s
 	}
 	data, err := c.keychain.Secret(codexService, codexAccount)

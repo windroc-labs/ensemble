@@ -94,11 +94,13 @@ func (e EnvKeys) Ready(refs []string) error {
 		if err != nil {
 			return err
 		}
-		trusted, err := trustedItem(e.Keychain, ref, name)
-		if err != nil {
+		trusted, earlier, err := checkItem(e.Keychain, ref, name)
+		switch {
+		case err != nil:
 			return envError(ref, name, err)
-		}
-		if !trusted {
+		case earlier:
+			return protocol.New(protocol.LoginRequired, "The keychain item "+ref+" trusts an earlier broker build: run "+RetrustCommand+".")
+		case !trusted:
 			return protocol.New(protocol.LoginRequired, "The keychain item "+ref+" trusts another broker build: run "+envLogin(name)+".")
 		}
 		value, err := e.read(ref)

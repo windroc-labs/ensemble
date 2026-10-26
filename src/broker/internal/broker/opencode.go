@@ -66,11 +66,13 @@ func opencodeError(provider string, err error) *protocol.Error {
 // Ready reads only each item's access, so it never prompts.
 func (o OpencodeKeys) Ready(providers []string) error {
 	for _, p := range providers {
-		trusted, err := trustedItem(o.Keychain, opencodeService, p)
-		if err != nil {
+		trusted, earlier, err := checkItem(o.Keychain, opencodeService, p)
+		switch {
+		case err != nil:
 			return opencodeError(p, err)
-		}
-		if !trusted {
+		case earlier:
+			return protocol.New(protocol.LoginRequired, "The OpenCode provider "+p+" API key trusts an earlier broker build: run "+RetrustCommand+".")
+		case !trusted:
 			return protocol.New(protocol.LoginRequired, "The OpenCode provider "+p+" API key trusts another broker build: run "+opencodeLogin(p)+".")
 		}
 	}

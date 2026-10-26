@@ -193,7 +193,9 @@ func TestOpencodeKeysReady(t *testing.T) {
 	}{
 		"all":     {k: providerKeys("strata", "lab")},
 		"missing": {k: providerKeys("strata"), code: protocol.LoginRequired, message: "No API key for OpenCode provider lab: run ensemble-broker login opencode lab."},
-		"other build": {k: func() *fakeSecrets { k := providerKeys("strata", "lab"); k.access = reinstalled(); return k }(), code: protocol.LoginRequired,
+		"earlier build": {k: func() *fakeSecrets { k := providerKeys("strata", "lab"); k.access = reinstalled(); return k }(), code: protocol.LoginRequired,
+			message: "The OpenCode provider strata API key trusts an earlier broker build: run " + RetrustCommand + "."},
+		"other application": {k: func() *fakeSecrets { k := providerKeys("strata", "lab"); k.access = added(); return k }(), code: protocol.LoginRequired,
 			message: "The OpenCode provider strata API key trusts another broker build: run ensemble-broker login opencode strata."},
 		"keychain": {k: func() *fakeSecrets {
 			k := providerKeys("strata", "lab")

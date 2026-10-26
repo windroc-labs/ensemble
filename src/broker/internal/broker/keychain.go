@@ -102,15 +102,30 @@ type brokerOnlyStore interface {
 
 // trustedItem is start's controlled check of a broker-only item, without reading it: whether its access trusts only
 // the broker. err is the access read's, for the caller to map.
-func trustedItem(k interface {
+func trustedItem(k accessReader, service, account string) (trusted bool, err error) {
+	trusted, _, err = checkItem(k, service, account)
+	return trusted, err
+}
+
+type accessReader interface {
 	AppAccess(service, account string) (AppAccess, error)
-}, service, account string) (trusted bool, err error) {
+}
+
+// checkItem is trustedItem, and for an item not trusted, whether an earlier broker build's (earlierBuild), which
+// RetrustCommand repairs.
+func checkItem(k accessReader, service, account string) (trusted, earlier bool, err error) {
 	access, err := k.AppAccess(service, account)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	return onlyBroker(access) == nil, nil
+	if onlyBroker(access) == nil {
+		return true, false, nil
+	}
+	return false, earlierBuild(access), nil
 }
+
+// retrustRemedy ends a keychain error a stale item may cause.
+const retrustRemedy = ": unlock the login keychain, or run " + RetrustCommand + "."
 
 // readSecret is start's controlled read of a broker-only item, never with a dialog; it erases what a failed read
 // returned. The caller erases the value.
@@ -576,11 +591,13 @@ func keychainError(account string, err error) *protocol.Error {
 // Ready reads only account's item's access, so it never prompts: an item trusting another broker build would ask at
 // Inject.
 func (c Credentials) Ready(account string) error {
-	trusted, err := trustedItem(c.Keychain, tokenService, account)
-	if err != nil {
+	trusted, earlier, err := checkItem(c.Keychain, tokenService, account)
+	switch {
+	case err != nil:
 		return keychainError(account, err)
-	}
-	if !trusted {
+	case earlier:
+		return protocol.New(protocol.LoginRequired, "The Claude account "+account+" setup-token trusts an earlier broker build: run "+RetrustCommand+".")
+	case !trusted:
 		return protocol.New(protocol.LoginRequired, "The Claude account "+account+" setup-token trusts another broker build: run "+ClaudeLogin(account)+".")
 	}
 	return nil

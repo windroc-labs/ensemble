@@ -108,7 +108,7 @@ func grantsError(container string, err error) error {
 	case errors.Is(err, credential.ErrLock):
 		return protocol.New(protocol.KeychainFailed, "Taking the Codex grant lock ~/.ensemble/docker/codex-grants.lock failed.")
 	case errors.Is(err, credential.ErrStore):
-		return protocol.New(protocol.KeychainFailed, "Keychain access to the Codex grants failed.")
+		return protocol.New(protocol.KeychainFailed, "Keychain access to the Codex grants failed"+retrustRemedy)
 	case errors.Is(err, credential.ErrReleased):
 		return protocol.New(protocol.RefreshFailed, container+" was closed during the refresh.")
 	case errors.Is(err, docker.ErrUnreachable):
@@ -197,7 +197,7 @@ func (s *codexSession) Issue(ctx context.Context, _ map[string]string, target cr
 	defer func() { s.issueFailed = s.issueFailed || err != nil }()
 	c := s.c
 	if c.trusted() != nil {
-		return credential.Material{}, protocol.New(protocol.LoginRequired, "Codex login unavailable; run "+codexLoginCommand)
+		return credential.Material{}, protocol.New(protocol.LoginRequired, "Codex login unavailable; run "+c.loginRepair())
 	}
 	data, err := c.keychain.Secret(codexService, codexAccount)
 	defer func() { erase(data) }()

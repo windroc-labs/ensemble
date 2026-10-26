@@ -414,7 +414,7 @@ func TestBotUserID(t *testing.T) {
 	r.keys.unreadable[usersService] = true
 	_, err = r.g.BotUserID(slug)
 	wantCode(t, err, protocol.KeychainFailed)
-	if err.(*protocol.Error).Message != "Keychain access to the GitHub bot user ID failed"+rerun {
+	if err.(*protocol.Error).Message != "Keychain access to the GitHub bot user ID failed: unlock the login keychain, or run "+RetrustCommand+"." {
 		t.Fatalf("%v", err)
 	}
 }
@@ -892,4 +892,26 @@ func TestFileLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	unlock()
+}
+
+// needsDialog is an App key item whose read would ask: one an earlier broker build wrote.
+type needsDialog struct{ keys }
+
+func (needsDialog) AppKey(string, string) ([]byte, error) { return nil, ErrNeedsDialog }
+
+func TestJWTNeedsDialogNamesRetrust(t *testing.T) {
+	g := GitHub{Apps: needsDialog{keys{account: "1234567"}}}
+	_, err := g.jwt(AppKeyService)
+	wantCode(t, err, protocol.KeychainFailed)
+	if want := "The GitHub App private key ensemble-broker-bot needs keychain approval: unlock the login keychain, or run " + RetrustCommand + "."; err.(*protocol.Error).Message != want {
+		t.Fatalf("%q", err.(*protocol.Error).Message)
+	}
+}
+
+func TestTokensStoreErrorNamesRetrust(t *testing.T) {
+	err := tokensError("ensemble-w-0123", fmt.Errorf("records: %w", credential.ErrStore))
+	wantCode(t, err, protocol.KeychainFailed)
+	if want := "Keychain access to the GitHub tokens failed: unlock the login keychain, or run " + RetrustCommand + "."; err.(*protocol.Error).Message != want {
+		t.Fatalf("%q", err.(*protocol.Error).Message)
+	}
 }

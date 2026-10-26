@@ -836,7 +836,8 @@ func TestReady(t *testing.T) {
 			{nil, nil, "", ""},
 			{ErrNotFound, nil, protocol.LoginRequired, "No Claude setup-token for account " + account + ": run " + login + "."},
 			{errors.New("user denied"), nil, protocol.KeychainFailed, "Keychain access to the Claude account " + account + " setup-token failed."},
-			{nil, reinstalled(), protocol.LoginRequired, "The Claude account " + account + " setup-token trusts another broker build: run " + login + "."},
+			{nil, reinstalled(), protocol.LoginRequired, "The Claude account " + account + " setup-token trusts an earlier broker build: run " + RetrustCommand + "."},
+			{nil, added(), protocol.LoginRequired, "The Claude account " + account + " setup-token trusts another broker build: run " + login + "."},
 			{nil, halfDone(), protocol.LoginRequired, "The Claude account " + account + " setup-token trusts another broker build: run " + login + "."},
 		} {
 			k := &fakeKeychain{account: account, fakeApps: fakeApps{access: tc.access, accessErr: tc.err}}

@@ -109,7 +109,7 @@ func tokensError(container string, err error) error {
 	case errors.Is(err, credential.ErrLock):
 		return protocol.New(protocol.KeychainFailed, "Taking the GitHub token lock ~/.ensemble/docker/tokens.lock failed.")
 	case errors.Is(err, credential.ErrStore):
-		return protocol.New(protocol.KeychainFailed, "Keychain access to the GitHub tokens failed.")
+		return protocol.New(protocol.KeychainFailed, "Keychain access to the GitHub tokens failed"+retrustRemedy)
 	case errors.Is(err, credential.ErrNoRecord):
 		return protocol.New(protocol.RefreshFailed, "No GitHub tokens recorded for "+container+".")
 	case errors.Is(err, credential.ErrReleased):
@@ -346,7 +346,7 @@ func (g GitHub) BotUserID(app string) (int64, error) {
 	case errors.Is(err, ErrNotFound):
 		return 0, missing
 	case err != nil:
-		return 0, protocol.New(protocol.KeychainFailed, "Keychain access to the GitHub bot user ID failed"+rerun)
+		return 0, protocol.New(protocol.KeychainFailed, "Keychain access to the GitHub bot user ID failed"+retrustRemedy)
 	}
 	var user botUser
 	if json.Unmarshal(data, &user) != nil || !github.Login.MatchString(user.Slug) || user.ID < 1 {
@@ -379,6 +379,8 @@ func (g GitHub) jwt(app string) (string, error) {
 	switch {
 	case errors.Is(err, ErrNotFound):
 		return "", loginError(app)
+	case errors.Is(err, ErrNeedsDialog):
+		return "", protocol.New(protocol.KeychainFailed, "The GitHub App private key "+app+" needs keychain approval"+retrustRemedy)
 	case err != nil:
 		return "", protocol.New(protocol.KeychainFailed, "Keychain access to the GitHub App private key failed.")
 	}

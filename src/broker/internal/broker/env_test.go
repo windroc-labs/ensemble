@@ -146,7 +146,9 @@ func TestEnvKeysReady(t *testing.T) {
 	}{
 		"all":     {k: envKeys("dummy", "ssh")},
 		"missing": {k: envKeys("dummy"), code: protocol.LoginRequired, message: "No keychain item ensemble-broker-env/ssh: " + login("ssh")},
-		"other build": {k: func() *fakeSecrets { k := envKeys("dummy", "ssh"); k.access = reinstalled(); return k }(), code: protocol.LoginRequired,
+		"earlier build": {k: func() *fakeSecrets { k := envKeys("dummy", "ssh"); k.access = reinstalled(); return k }(), code: protocol.LoginRequired,
+			message: "The keychain item ensemble-broker-env/dummy trusts an earlier broker build: run " + RetrustCommand + "."},
+		"other application": {k: func() *fakeSecrets { k := envKeys("dummy", "ssh"); k.access = added(); return k }(), code: protocol.LoginRequired,
 			message: "The keychain item ensemble-broker-env/dummy trusts another broker build: " + login("dummy")},
 		"needs dialog": {k: func() *fakeSecrets { k := envKeys("dummy", "ssh"); k.readErr = ErrNeedsDialog; return k }(), code: protocol.KeychainFailed,
 			message: "The keychain item ensemble-broker-env/dummy needs keychain approval: unlock the login keychain, or " + login("dummy")},

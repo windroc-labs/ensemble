@@ -665,3 +665,19 @@ func TestCodexRejectsCredentialSymlink(t *testing.T) {
 		t.Fatal("accepted credential symlink")
 	}
 }
+
+func TestCodexStatusEarlierBuildRepairsWithRetrust(t *testing.T) {
+	for access, want := range map[*AppAccess]string{reinstalled(): RetrustCommand, added(): codexLoginCommand} {
+		c, _, k := codexFixture(t)
+		if err := c.Login(context.Background(), io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		k.access = access
+		if s := c.Status(context.Background()); s.State != "login_unavailable" || s.Repair != want {
+			t.Fatalf("%+v, want repair %q", s, want)
+		}
+		if err := c.Ready(context.Background()); err == nil || !strings.HasSuffix(err.Error(), "Codex login unavailable; run "+want) {
+			t.Fatalf("Ready: %v, want run %q", err, want)
+		}
+	}
+}
