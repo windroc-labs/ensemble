@@ -403,6 +403,87 @@ class ResponseTest(Case):
                 Broker(FakeBroker(success("start-output.json"))).start(MANIFEST, clients=keys)
 
 
+class LockTest(Case):
+    def test_lock_query_returns_the_holder_or_none(self):
+        holder = data("lock-query-output.json")["holder"]
+        for name, want in (
+            ("lock-query-output.json", holder),
+            ("lock-query-output-empty.json", None),
+        ):
+            with self.subTest(name):
+                fake = FakeBroker(success(name))
+                self.assertEqual(Broker(fake).lock_query("dummy-lock"), want)
+                self.assertEqual(fake.calls, [argv("lock-query")])
+
+    def test_a_bad_lock_query_response_is_a_transport_failure(self):
+        for name in (
+            "lock-query-output-missing.json",
+            "lock-query-output-extra.json",
+            "lock-query-output-invalid-holder.json",
+        ):
+            with self.subTest(name), self.assertRaisesRegex(SessionError, "bad response") as raised:
+                Broker(FakeBroker(success(name))).lock_query("dummy-lock")
+            self.assertNotIsInstance(raised.exception, BrokerError)
+
+    def test_a_lock_query_error_is_a_broker_error(self):
+        error = {
+            "exit_code": 7,
+            "error": {
+                "command": "lock-query",
+                "code": "docker_unreachable",
+                "message": "Docker is unreachable.",
+                "cleanup": "not_needed",
+            },
+        }
+        with self.assertRaises(BrokerError) as raised:
+            Broker(FakeBroker((7, "", json.dumps(error)))).lock_query("dummy-lock")
+        self.assertEqual(raised.exception.code, "docker_unreachable")
+        self.assertIsNone(raised.exception.holder)
+
+    def test_busy_error_keeps_its_holder(self):
+        for name in ("error-busy.json", "error-busy-starting.json", "error-busy-removed.json"):
+            with self.subTest(name), self.assertRaises(BrokerError) as raised:
+                Broker(FakeBroker(failure(name))).start(MANIFEST, clients=KEYS)
+            error = data(name)["error"]
+            self.assertEqual((raised.exception.exit_code, raised.exception.code), (75, "busy"))
+            self.assertEqual(raised.exception.holder, error["holder"])
+            self.assertEqual(raised.exception.cleanup, error["cleanup"])
+
+    def test_holder_only_with_busy(self):
+        for name, call in (
+            ("error-busy-missing-holder.json", lambda b: b.start(MANIFEST, clients=KEYS)),
+            ("error-nonbusy-holder.json", lambda b: b.start(MANIFEST, clients=KEYS)),
+            ("error-busy-query.json", lambda b: b.lock_query("dummy-lock")),
+        ):
+            with self.subTest(name), self.assertRaisesRegex(SessionError, "bad response") as raised:
+                call(Broker(FakeBroker(failure(name))))
+            self.assertNotIsInstance(raised.exception, BrokerError)
+        bad = data("error-busy.json")
+        for holder in ({"container": "c"}, {"container": "c", "owner": "o\x1b"}, "c"):
+            with self.subTest(holder), self.assertRaisesRegex(SessionError, "bad response"):
+                error = {**bad, "error": {**bad["error"], "holder": holder}}
+                Broker(FakeBroker((75, "", json.dumps(error)))).start(MANIFEST, clients=KEYS)
+
+    def test_build_argv_order(self):
+        fake = FakeBroker(success("build-cached.json"))
+        Broker(fake).build(
+            "/opt/ensemble",
+            plugins=("beta@owner/market#" + "b" * 40,),
+            base_image="dummy-env:test",
+            image_plugins=("dummy-plugin", "other.plugin"),
+        )
+        self.assertEqual(fake.calls, [[BROKER, *data("build-input-base-image.json")["argv"][:-2]]])
+        fake = FakeBroker(success("build-cached.json"))
+        Broker(fake).build(
+            "/opt/ensemble",
+            plugins=("beta@owner/market#" + "b" * 40,),
+            image_plugins=("dummy-plugin", "other.plugin"),
+        )
+        self.assertEqual(
+            fake.calls, [[BROKER, *data("build-input-image-plugins.json")["argv"][:-2]]]
+        )
+
+
 class ManifestTest(Case):
     def test_writes_the_protocol_manifest_owner_only(self):
         path = os.path.join(self.home, "state", "g.json")
@@ -495,6 +576,48 @@ class ManifestTest(Case):
                 self.assertEqual(manifest["claude_account"], "work")
             else:
                 self.assertNotIn("claude_account", manifest)
+
+    def test_an_environment_reaches_the_manifest_only_when_set(self):
+        path = os.path.join(self.home, "state", "g.json")
+        base = {
+            "name": "w",
+            "generation": "0" * 32,
+            "image": "ensemble-worker:" + "a" * 64,
+            "cwd": "/work",
+            "workspace": "ensemble-ws-w",
+            "home": ("claude_dir", "/home/claude"),
+            "hook_path": "/plugin/bin/ensemble-session",
+            "github": "",
+        }
+        secret = {"item": "ensemble-env/dummy", "file": "dummy.txt"}
+        broker.write_manifest(
+            path,
+            **base,
+            gateway="mini-op",
+            secrets=(secret,),
+            lock="dummy-lock",
+            lock_owner="w",
+            prefetch={"repo": "o/r", "ref": "main"},
+        )
+        with open(path) as f:
+            manifest = json.load(f)
+        self.assertEqual(
+            {
+                key: manifest[key]
+                for key in ("gateway", "secrets", "lock", "lock_owner", "prefetch")
+            },
+            {
+                "gateway": "mini-op",
+                "secrets": [secret],
+                "lock": "dummy-lock",
+                "lock_owner": "w",
+                "prefetch": {"repo": "o/r", "ref": "main"},
+            },
+        )
+        broker.write_manifest(path, **base)
+        with open(path) as f:
+            manifest = json.load(f)
+        self.assertFalse({"gateway", "secrets", "lock", "lock_owner", "prefetch"} & set(manifest))
 
 
 class StreamTest(Case):
