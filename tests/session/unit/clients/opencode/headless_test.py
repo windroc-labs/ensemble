@@ -287,7 +287,7 @@ class LaunchTest(Base):
                     "ask",
                 )
 
-    def test_symlink_grants_preserve_read_only_and_writable_edit_boundaries(self):
+    def test_symlink_grants_preserve_read_only_and_canonical_write_boundaries(self):
         writable = self.made("writable")
         read = os.path.join(writable, "tasks")
         os.mkdir(read)
@@ -304,7 +304,7 @@ class LaunchTest(Base):
             {
                 os.path.join(link, "light-build.md"): "deny",
                 os.path.join(read, "light-build.md"): "deny",
-                os.path.join(alias, "output.md"): "allow",
+                os.path.join(alias, "output.md"): "deny",
                 os.path.join(extra, "output.md"): "allow",
                 os.path.join(writable, "output.md"): "allow",
                 os.path.join(alias, ".git", "config"): "deny",
@@ -326,7 +326,7 @@ class LaunchTest(Base):
                 ):
                     self.launch(self.spec(access=access))
 
-    def test_descendant_grants_follow_a_parent_symlink(self):
+    def test_descendant_grants_keep_writes_on_canonical_paths(self):
         parent = self.made("parent")
         child = os.path.join(parent, "child")
         os.mkdir(child)
@@ -343,11 +343,31 @@ class LaunchTest(Base):
                     "/",
                     {
                         os.path.join(parent, "output.md"): parent_action,
-                        os.path.join(alias, "output.md"): parent_action,
+                        os.path.join(alias, "output.md"): "deny",
                         os.path.join(child, "light-build.md"): child_action,
-                        os.path.join(alias, "child", "light-build.md"): child_action,
+                        os.path.join(alias, "child", "light-build.md"): "deny",
                     },
                 )
+
+    def test_a_nested_read_symlink_does_not_add_writable_alias_paths(self):
+        parent = self.made("parent")
+        readonly = self.made("readonly")
+        child = os.path.join(parent, "tasks")
+        os.symlink(readonly, child)
+        alias = os.path.join(self.home, "parent-link")
+        os.symlink(parent, alias)
+        rules = self.rules_for(Access(project=True, cwd=self.cwd, dirs=(alias,), reads=(child,)))
+        self.assert_edits(
+            rules,
+            "/",
+            {
+                os.path.join(alias, "tasks", "light-build.md"): "deny",
+                os.path.join(parent, "output.md"): "allow",
+                os.path.join(alias, "output.md"): "deny",
+                os.path.join(child, "light-build.md"): "deny",
+                os.path.join(readonly, "light-build.md"): "deny",
+            },
+        )
 
     def rules_for(self, access: Access) -> dict:
         return self.inline(self.launch(self.spec(access=access)))["permission"]["edit"]
