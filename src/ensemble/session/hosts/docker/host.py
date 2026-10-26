@@ -106,6 +106,7 @@ from ensemble.utils import (
     docker_home,
     inode_lock,
     kill_group,
+    last_lines,
     module_roots,
     piped_popen,
     read_beneath,
@@ -382,6 +383,15 @@ class _Laps:
     def report(self, head: str) -> None:
         for phase, seconds in self.phases.items():
             print(f"{head}: {phase} {seconds:.2f} s", file=sys.stderr)
+
+
+def _tail(tmux: TmuxCli, name: str) -> str:
+    """`: <last lines>` of a client's pane on one line, read before its rollback; empty unread."""
+    try:
+        tail = last_lines(_text(tmux.read(name)))
+    except TuiError:
+        return ""
+    return f": {tail}" if tail else ""
 
 
 def _wait(ready, timeout: float, poll: float = POLL, cap: float | None = None) -> bool:
@@ -1176,8 +1186,17 @@ class DockerHost(Host):
             )
             _save_record(name, {**_record(name), "process": process})
             laps("tmux")
-            if not _wait(lambda: tmux.status(name) == PaneStatus.RUNNING, READY_WAIT):
+            status = None
+
+            def settled() -> bool:
+                nonlocal status
+                status = tmux.status(name)
+                return status == PaneStatus.RUNNING or isinstance(status, int)
+
+            if not _wait(settled, READY_WAIT):
                 raise SessionError(f"{container}: the client did not start in {READY_WAIT} s")
+            if isinstance(status, int):
+                raise SessionError(f"{container}: the client exited {status}{_tail(tmux, name)}")
             laps("client")
             launched = datetime.now().astimezone().isoformat(timespec="milliseconds")
             _save_result(name, created, laps.phases, launched)

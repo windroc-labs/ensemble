@@ -5,13 +5,21 @@ import unittest
 from datetime import UTC, datetime, timedelta, timezone
 
 from ensemble.utils import one_line, parse_time, sid_error, timestamp
-from ensemble.utils.text import printable
+from ensemble.utils.text import last_lines, printable
 from tests.utils.case import Case
 
 
 class Printable(Case):
     def test_drops_control_characters_but_tabs(self):
         self.assertEqual(printable("a\x1b]52;c;ZXZpbA==\x07b\tc\r\n"), "a]52;c;ZXZpbA==b\tc")
+
+
+class LastLines(Case):
+    def test_the_last_non_blank_lines_stripped_on_one_line(self):
+        text = "a\n\n  b  \nc\nd\ne\nf\n\n"
+        self.assertEqual(last_lines(text), "b | c | d | e | f")
+        self.assertEqual(last_lines(text, 2), "e | f")
+        self.assertEqual(last_lines(" \n\n"), "")
 
 
 class SidError(Case):

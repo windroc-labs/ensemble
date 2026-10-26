@@ -202,8 +202,11 @@ def execute(
     *,
     driver: Driver,
     on_event: Callable[[Event], None] | None = None,
+    ending: Callable[[BaseException], Result] | None = None,
 ) -> Result:
-    """Run an accepted plan; every returned Result has one final Finished event."""
+    """Run an accepted plan; every returned Result has one final Finished event; `ending` ends
+    one that raised (else stopped).
+    """
     emit = on_event or (lambda _event: None)
     if not driver.session_based:
         instruction = driver.start(p.driver_spec)
@@ -225,7 +228,7 @@ def execute(
             raise e from failure  # the run log's, not the stop's
         finally:
             if not attempts.refused:
-                ended = stopped(e)
+                ended = (ending or stopped)(e)
                 attempts.close({"error": ended.error}, ended.returncode)
         raise
     closing = {"error": result.error}
