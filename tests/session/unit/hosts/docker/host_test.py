@@ -1076,21 +1076,12 @@ class StartTest(Base):
                 shutil.rmtree(home)
 
     def test_a_home_it_cannot_empty_fails_the_start_before_the_broker(self):
-        for target in ("remove_tree", "os.unlink"):
+        for target in ("shutil.rmtree", "os.unlink"):
             with self.subTest(target=target):
                 self.used(self.home_dir)
                 self.order.clear()
-                patch = (
-                    mock.patch("os.unlink", side_effect=PermissionError(13, "Permission denied"))
-                    if target == "os.unlink"
-                    else mock.patch.object(
-                        docker_host,
-                        "remove_tree",
-                        side_effect=PermissionError(13, "Permission denied"),
-                    )
-                )
                 with (
-                    patch,
+                    mock.patch(target, side_effect=PermissionError(13, "Permission denied")),
                     self.assertRaisesRegex(
                         SessionError,
                         f"^docker session w: cannot reset {re.escape(self.home_dir)}: Permission denied$",
