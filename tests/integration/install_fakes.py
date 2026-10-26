@@ -4,8 +4,9 @@ Every call is logged to $LOG (argv) and $ENVLOG (environment values). State live
 $FAKES: brew/<name> (installed), processes (one running command line each; unkillable: those KILL misses), login/<client>, keychain/<service>, claude/ and codex/ (plugins),
 src/broker/ (the broker's Codex install and tokens), fail (a call prefix that fails once), tty_name
 (what `ps -o tty=` reports), kqueue_refuses (a terminal the Bun-built clients die on, as on /dev/tty),
-commit (the commit GitHub reports for every ensemble ref), linear.json (the Linear workspace: keys
-{key: email}, teams [{id, key, name, states, members, projects}], labels).
+commit (the commit GitHub reports for every ensemble ref), linear.json (the Linear workspace: apps
+{client_id: {secret, access_token, user_id}}, teams [{id, key, name, states, members, projects}],
+labels).
 """
 
 import hashlib

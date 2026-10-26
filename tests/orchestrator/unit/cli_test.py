@@ -45,36 +45,36 @@ class Commands(Case):
 
 
 class Wirings(run_fixtures.Base):
-    """Each tracker kind's engine wiring: its run reader, role keys and write-back accounts."""
+    """Each tracker kind's engine wiring: its run reader, role apps and write-back writers."""
 
     def test_router_help_identifies_linear_delegate_ownership(self):
         output = io.StringIO()
         with redirect_stdout(output):
             self.assertEqual(router.main(["--help"], trackers=cli.TRACKERS), 0)
         self.assertIn("delegate (Agent field)", output.getvalue())
-        self.assertNotIn("assigned to a role account", output.getvalue())
+        self.assertNotIn("assigned to a role", output.getvalue())
 
-    def test_linear_writes_as_the_role_key_and_the_harness_app(self):
+    def test_linear_writes_as_the_role_app_and_the_harness_app(self):
         cfg = config.load()
         gql = mock.Mock(return_value={})
         linear = cli.TRACKERS[TrackerKind.LINEAR]
         identity = linear.identity(cfg, "engineer")
         self.assertEqual(identity, cfg.linear.roles["engineer"])
-        accounts = linear.accounts(gql, cfg, identity)
+        writers = linear.writers(gql, cfg, identity)
         self.assertEqual(
-            (accounts.states, accounts.humans, accounts.repos),
+            (writers.states, writers.humans, writers.repos),
             (cfg.linear.states, ("me@x.com",), {run_fixtures.PROJECT: "acme/ensemble"}),
         )
         self.assertEqual(
-            (accounts.tracker.state_ids, accounts.tracker.team_id),
+            (writers.tracker.state_ids, writers.tracker.team_id),
             (cfg.linear.states, cfg.linear.team),
         )
         gql.return_value = {"comment": None}
-        accounts.tracker.find_comment(ISSUE, (SID, "start"))
+        writers.tracker.find_comment(ISSUE, (SID, "start"))
         gql.assert_called_with(
             ops.Q_COMMENT, identity=identity, c=ops.client_id(identity.user_id, SID, "start")
         )
-        accounts.harness.find_comment(ISSUE, (SID, "session"))
+        writers.harness.find_comment(ISSUE, (SID, "session"))
         gql.assert_called_with(
             ops.Q_COMMENT,
             identity=HARNESS_IDENTITY,
@@ -136,20 +136,18 @@ class Wirings(run_fixtures.Base):
         cli.TRACKERS[TrackerKind.LOCAL].credentials(cfg, "prune", dry=True)
         self.assertIn("token-error: harness: HTTP 401", self.renewal(3, token_http_error(401)))
 
-    def test_a_local_board_writes_as_one_tracker_with_no_keys(self):
+    def test_a_local_board_writes_as_one_tracker_with_no_apps(self):
         board = os.path.realpath(os.path.join(self.work, "board"))
         cfg = replace(config.load(), tracker=TrackerKind.LOCAL, linear=None, board=board)
         local = cli.TRACKERS[TrackerKind.LOCAL]
         self.assertIsNone(local.identity(cfg, "engineer"))
-        accounts = local.accounts(None, cfg, None)
-        self.assertIs(accounts.tracker, accounts.harness)
-        self.assertIsInstance(accounts.tracker, LocalTracker)
-        self.assertEqual(accounts.tracker.board, board)
+        writers = local.writers(None, cfg, None)
+        self.assertIs(writers.tracker, writers.harness)
+        self.assertIsInstance(writers.tracker, LocalTracker)
+        self.assertEqual(writers.tracker.board, board)
+        self.assertEqual((writers.humans, writers.repos, set(writers.states)), ((), {}, set(State)))
         self.assertEqual(
-            (accounts.humans, accounts.repos, set(accounts.states)), ((), {}, set(State))
-        )
-        self.assertEqual(
-            (accounts.states["in_progress"], accounts.states["handoff"]), ("running", "approved")
+            (writers.states["in_progress"], writers.states["handoff"]), ("running", "approved")
         )
         for made in (local.connect(None, cfg, say=None), local.reader(None, cfg)):
             self.assertIsInstance(made, LocalTracker)

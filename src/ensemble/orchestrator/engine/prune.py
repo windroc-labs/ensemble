@@ -102,7 +102,7 @@ Prerequisites and effects:
   work_dir/local clones; on Linear ([orchestrator] tracker = "linear") also
   Linear access as the [linear.harness] OAuth app (Keychain items), renewing
   its token as promote does. A local board
-  ($ENSEMBLE_BOARD_DIR) needs no account; no job runs it on a timer: run it
+  ($ENSEMBLE_BOARD_DIR) needs no Linear app; no job runs it on a timer: run it
   (or promote) on demand. It archives by moving issue files flat into
   <board>/archive/; an unreadable board exits 2 (prune.py: <path>: <reason>).
   Configuration and executable lookup: ensemble-orchestrator --help

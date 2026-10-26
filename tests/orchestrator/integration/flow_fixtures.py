@@ -1,6 +1,6 @@
 """The orchestrator's integration flows: the test's HOME with both local files ([linear.task_labels]
-included), FakeLinear over HTTP through test-only transport with the harness, role and human
-accounts and the task label group, fake_claude as `claude`, a launch (router.outer), promote and
+included), FakeLinear over HTTP through test-only transport with the harness and role apps, the
+human and the task label group, fake_claude as `claude`, a launch (router.outer), promote and
 router as `python3 -P` subprocesses, and readers of Linear, the logs and a run's files. TmuxFlow adds a private tmux
 server for the runs' harness and agent sessions (a command run as from MANAGER's pane too),
 fake_gh as `gh` with REPO a bare repo, and `ensemble-orchestrator` as entry.py under the fake transport,
@@ -47,13 +47,11 @@ _LINEAR = _CFG["linear"]
 
 ROLES = tuple(_CFG["roles"])
 
-ACCOUNTS = {r: board_ids.ACCOUNTS[r] for r in ROLES}
-
-KEYS = {r: _LINEAR["roles"][r]["token_service"] for r in ROLES}
+TOKENS = {r: _LINEAR["roles"][r]["token_service"] for r in ROLES}
 
 [HUMAN] = _LINEAR["human_members"]
 
-HARNESS, HARNESS_EMAIL = _LINEAR["harness"]["token_service"], "harness@agents.test"
+HARNESS = _LINEAR["harness"]["token_service"]
 
 PROJECT = {"id": run_fixtures.PROJECT, "name": "Widgets"}
 
@@ -146,12 +144,10 @@ class Flow(Case):
                 + run_fixtures.CORE_LOCAL
             )
         self.fake = fake_linear.FakeLinear(harness=HARNESS)
-        self.ids = {HARNESS_EMAIL: self.fake.user(HARNESS_EMAIL, "Harness", HARNESS, app=True)}
+        self.fake.user("Harness", HARNESS, uid=board_ids.HARNESS_USER)
         for r in ROLES:
-            self.ids[ACCOUNTS[r]] = self.fake.user(
-                ACCOUNTS[r], r.title(), KEYS[r], app=True, uid=_LINEAR["roles"][r]["user_id"]
-            )
-        self.ids[HUMAN] = self.fake.user(HUMAN, "Me")
+            self.fake.user(r.title(), TOKENS[r], uid=_LINEAR["roles"][r]["user_id"])
+        self.ids = {HUMAN: self.fake.user("Me", email=HUMAN)}
         self.fake.label_group(board_ids.TASK_GROUP, "Tasks", {LIGHT_RESEARCH: "Light Research"})
         self.seam = fake_linear.seam(self, self.fake, fake_linear.serve(self, self.fake))
         self.bin = os.path.join(self.root, "bin")
@@ -235,14 +231,15 @@ class Flow(Case):
         with self.fake.lock:
             return list(self.fake.requests)
 
-    def sent(self, op, account=None):
-        return [r.variables for r in self.requests() if r.op == op and account in (None, r.account)]
+    def sent(self, op, caller=None):
+        return [r.variables for r in self.requests() if r.op == op and caller in (None, r.caller)]
 
     def problems(self):
-        return [(r.op, r.account, r.result) for r in self.requests() if r.result != "ok"]
+        return [(r.op, r.caller, r.result) for r in self.requests() if r.result != "ok"]
 
-    def email(self, uid):
-        return uid and self.fake.users[uid]["email"]
+    def who(self, uid):
+        """A user as the flows name it: a human by its email, an app by its user id."""
+        return uid and (self.fake.users[uid]["email"] or uid)
 
     def issue(self, ident):
         with self.fake.lock:
@@ -255,14 +252,14 @@ class Flow(Case):
         return self.issue(ident)["subscribers"]
 
     def comments(self, ident):
-        return [(self.email(c["user"]), c["body"]) for c in self.issue(ident)["comments"]]
+        return [(self.who(c["user"]), c["body"]) for c in self.issue(ident)["comments"]]
 
     def history(self, ident):
         return [
             (
                 fake_linear.NAMES[h["fromStateId"]],
                 fake_linear.NAMES[h["toStateId"]],
-                self.email(h["actorId"]),
+                self.who(h["actorId"]),
             )
             for h in self.issue(ident)["history"]
         ]

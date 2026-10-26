@@ -55,24 +55,17 @@ def _services(go):
 
 
 def _required_keys(config):
-    """The credential, label, state and OAuth app keys of config's [linear], each as linear.<key>."""
+    """The label, state and OAuth app keys of config's [linear], each as linear.<key>."""
     keys = []
     for key, value in config.get("linear", {}).items():
         if not isinstance(value, dict):
-            keys += [key] if key.endswith(("_key", "_label_group")) else []
+            keys += [key] if key.endswith("_label_group") else []
         elif {"client_id", "secret_service", "token_service"} <= set(value):  # an OAuth app
             keys += [f"{key}.{field}" for field in value]
         elif key == "states":
             keys += [f"states.{state}" for state in value]
         elif key.endswith("_labels"):
             keys.append(key)
-        elif key == "roles":
-            keys += [
-                f"roles.{role}.{field}"
-                for role, fields in value.items()
-                for field in ("key", "account")
-                if field in fields
-            ]
     return [f"linear.{key}" for key in keys]
 
 

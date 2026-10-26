@@ -1,5 +1,5 @@
 """Session comments: an agent run's one tracker comment (`Run <sid> · …`), posted by the harness
-account through the engine Tracker under the ref (sid, "session"), numbered `#<seq>`; repair rewrites
+app through the engine Tracker under the ref (sid, "session"), numbered `#<seq>`; repair rewrites
 it when a late write left an older one. Resume commands come from the owned run view.
 """
 

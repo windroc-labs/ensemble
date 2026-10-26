@@ -1,5 +1,5 @@
 """A promote run, prune included, against a counting fake Linear at a real host's scale: 297 work
-dirs (30 with agent files), 3 role accounts; requests counted by phase and query constant."""
+dirs (30 with agent files), 3 role apps; requests counted by phase and query constant."""
 
 import importlib
 import io

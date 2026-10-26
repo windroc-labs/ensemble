@@ -104,7 +104,7 @@ class Command(Case):
 
 
 class ConfigLayout(Command):
-    """A temp HOME whose config.local.toml sets every required Linear key under
+    """A temp HOME whose config.local.toml sets every required Linear setting under
     [orchestrator.linear]. Its python3, also every descendant's (ENSEMBLE_PATH), is fake_python.py:
     the Keychain is the fake's, holding no item, and a real `security` call is refused.
     """
@@ -114,7 +114,7 @@ class ConfigLayout(Command):
         self.fake = write_shim(os.path.join(self.tmp, "fake"))
         self.transport = os.path.join(self.tmp, "transport.json")
         with open(self.transport, "w", encoding="utf-8") as f:
-            json.dump({"url": "http://127.0.0.1:9", "keys": {}}, f)
+            json.dump({"url": "http://127.0.0.1:9", "tokens": {}}, f)
 
     def write_local(self, orchestrator):
         with open(os.path.join(self.ensemble, "config.local.toml"), "w", encoding="utf-8") as f:

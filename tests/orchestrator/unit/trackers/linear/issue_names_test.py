@@ -6,11 +6,10 @@ from ensemble.orchestrator.engine.flow.types import IssueState
 from ensemble.orchestrator.engine.types import IssueError
 from ensemble.orchestrator.trackers.linear import issue_names
 from tests.orchestrator.case import Case
-from tests.orchestrator.unit.board_ids import ACCOUNTS, MANAGER_USER, STATES
+from tests.orchestrator.unit.board_ids import MANAGER_USER, STATES, role_id
 from tests.orchestrator.unit.issue_fixtures import (
     CLIENT_LABELS,
     OTHER_TEAM,
-    ROLE_USERS,
     TASK_LABELS,
     names_cfg,
     write_issue,
@@ -37,7 +36,7 @@ class StateId(Case):
 class Delegate(Case):
     def test_a_role_is_its_app_me_the_manager_app_and_unassigned_none(self):
         linear = names_cfg()
-        self.assertEqual(issue_names.delegate(linear, "engineer"), ROLE_USERS[ACCOUNTS["engineer"]])
+        self.assertEqual(issue_names.delegate(linear, "engineer"), role_id("engineer"))
         self.assertEqual(issue_names.delegate(linear, "me"), MANAGER_USER)
         self.assertIsNone(issue_names.delegate(linear, "unassigned"))
 

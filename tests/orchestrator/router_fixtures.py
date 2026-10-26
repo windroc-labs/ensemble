@@ -31,9 +31,9 @@ from ensemble.session import SessionStatus
 from ensemble.utils import EVENTS_ENV, SHORT, SID_ENV
 from tests.orchestrator.unit import run_fixtures
 from tests.orchestrator.unit.board_ids import (
-    ACCOUNTS,
     HARNESS_USER,
     HEADER,
+    ROLES,
     STATE_NAMES,
     TEAM,
     role_id,
@@ -84,8 +84,6 @@ DR, PD = "Deep Research", "Product Design"
 IDS = {DR: "p-dr", PD: "p-pd"}
 
 
-ROLE = ACCOUNTS
-
 # history actor ids as users: the harness app, the user, the manager and the role apps;
 # None: Linear automation; BOT: an integration's move, credited to the user
 ACTORS = {
@@ -93,7 +91,7 @@ ACTORS = {
     USER: {"id": USER},
     MANAGER: {"id": MANAGER},
     BOT: {"id": USER},
-    **{role_id(r): {"id": role_id(r)} for r in ACCOUNTS},
+    **{role_id(r): {"id": role_id(r)} for r in ROLES},
 }
 
 
@@ -137,7 +135,8 @@ def ago(**kw):
 
 
 def who(role):
-    return None if role is None else {"id": role_id(role), "email": ROLE.get(role, f"{role}@x.com")}
+    """A role's app user, no email."""
+    return None if role is None else {"id": role_id(role), "email": None}
 
 
 def op(query):
@@ -285,15 +284,6 @@ class FakeLinear:
             return {"teams": {"nodes": [team_node()]}}
         if query == ops.Q_TASK_GROUP:
             return {"issueLabel": self.group}
-        if "users(filter" in query:
-            users = {
-                "me@x.com": USER,
-                "b@x.com": "user-b",
-                **{a.lower(): role_id(r) for r, a in ROLE.items()},
-            }
-            return {
-                "users": {"nodes": [{"id": u} for e, u in users.items() if v["e"].lower() == e]}
-            }
         return None
 
     def _issue_read(self, query, v):

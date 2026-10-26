@@ -96,9 +96,9 @@ from tests.orchestrator.unit.outage import FAILURES, FIELDS, failing
 from tests.orchestrator.unit.run_fixtures import (
     HARNESS,
     ID,
-    KEY,
     PROJECT,
     SID,
+    TOKEN,
     USER_NOTE,
     UUID,
     Gql,
@@ -358,7 +358,7 @@ class IssueClaims(Base):
                 self.assertEqual([self.claim(fake).split()[0] for _ in listed], order)
                 self.assertEqual({i["state"] for i in fake.issues.values()}, {"In Progress"})
 
-    def test_queue_only_role_accounts_across_projects(self):
+    def test_queue_only_role_apps_across_projects(self):
         fake = FakeLinear(
             [
                 issue("TASK-1", "Todo"),
@@ -1766,7 +1766,7 @@ class RouterOutages(TickBase):
                     self.assertEqual(self.tick(fake, *argv), 0)
                     self.assertEqual(self.launched_runs(), [("TASK-1", "new")])
 
-    def test_a_rejected_key_at_board_setup_is_one_config_error_a_day(self):
+    def test_a_rejected_token_at_board_setup_is_one_config_error_a_day(self):
         def unauthorized():
             return urllib.error.HTTPError(client.URL, 401, "Unauthorized", {}, io.BytesIO())
 
@@ -2531,9 +2531,7 @@ class LocalBoard(TickBase):
         with open(os.path.join(folder, "LOC-1 One.md"), "w", encoding="utf-8") as file:
             file.write("---\nid: LOC-1\ntitle: One\ncreated: 2026-09-01T00:00:00Z\n---\n")
         self.assertEqual(self.tick(self.fake(), "--dry-run", "--issue", "LOC-1"), 0)
-        self.assertIn(
-            "pick-none LOC-1 reason=not a ready/ issue assigned to a role account", self.said()
-        )
+        self.assertIn("pick-none LOC-1 reason=not a ready/ issue assigned to a role", self.said())
 
     def test_brake_on_local(self):
         self.api.usages = {"a": reading(70)}
@@ -3359,11 +3357,11 @@ class RunLaunching(OuterBase):
             role="engineer",
             client="a",
             delegate_kind="harness",
-            key="deleted-member-key",
+            key="pre-app-key",
         )
         self.assertEqual(self.outer(mode="resume", role="pm"), 0)
         self.assertEqual(self.detached(), self.expected(resume=True))
-        self.assertEqual(self.keychain_calls, [KEY])
+        self.assertEqual(self.keychain_calls, [TOKEN])
         self.assertEqual(runs.parse_log(self.runs)[-1].role, "engineer")
 
     """FR-45, FR-47's resume check: the outer reads the issue, checks its repo, renders its input,
@@ -3466,7 +3464,7 @@ class RunLaunching(OuterBase):
             ],
         )
         self.assertEqual(
-            (os.environ["PATH"], self.keychain_calls, self.api.info), (config.path(), [KEY], [])
+            (os.environ["PATH"], self.keychain_calls, self.api.info), (config.path(), [TOKEN], [])
         )
         self.assertEqual((self.err, self.said()), ("", []))
 
@@ -3679,10 +3677,10 @@ class RunLaunching(OuterBase):
                     self.gql.calls,
                     [
                         ("issue", HARNESS, {"i": ID}),
-                        ("subscribe", KEY, {"i": UUID, "e": "me@x.com"}),
+                        ("subscribe", TOKEN, {"i": UUID, "e": "me@x.com"}),
                         (
                             "post",
-                            KEY,
+                            TOKEN,
                             {
                                 "i": UUID,
                                 "b": (
@@ -3691,8 +3689,8 @@ class RunLaunching(OuterBase):
                                 ),
                             },
                         ),
-                        ("reread", KEY, {"i": UUID}),
-                        ("state", KEY, {"i": UUID, "s": IDS_BY_KEY["in_review"]}),
+                        ("reread", TOKEN, {"i": UUID}),
+                        ("state", TOKEN, {"i": UUID, "s": IDS_BY_KEY["in_review"]}),
                     ],
                 )
                 self.assertEqual(self.said(), [f"bounce TASK-7 reason={reason}"])
@@ -4243,7 +4241,7 @@ class ExplicitIssueRuns(TickBase):
                     )
                     self.assertEqual(len(fake.reads()), 1)
 
-    def test_another_state_or_not_a_role_account_starts_nothing(self):
+    def test_another_state_or_not_a_role_app_starts_nothing(self):
         fake = FakeLinear(
             [
                 issue("TASK-1", "In Review", "researcher"),
@@ -4795,7 +4793,7 @@ class RunPlanning(Base):
         )
 
     def test_automation_moves_do_not_reset_attempts(self):
-        """Self's moves: the harness's, a role account's, Linear automation's (to Done, then back
+        """Self's moves: the harness's, a role app's, Linear automation's (to Done, then back
         to Todo) and an integration's credited to the user."""
         self.capped_rows(
             (
@@ -5017,7 +5015,7 @@ class StaleByMoveIntoRunning(TickBase):
 class ClaimRechecks(Base):
     """FR-56: the claim re-reads delegate and project; the claim is the recheck's."""
 
-    def test_reassigned_to_no_role_account_is_not_claimed(self):
+    def test_reassigned_to_no_role_app_is_not_claimed(self):
         for assignee in ({"id": USER, "email": "me@x.com"}, who("someone"), None):
             with self.subTest(assignee=assignee):
                 fake = Changed(
@@ -5165,7 +5163,7 @@ class RoleAppTokens(TickBase):
             }
         )
         self.endpoint = Endpoint(token_http_error(401))
-        self.keychain = client.has_key
+        self.keychain = client.has_token
         self.enterContext(mock.patch("subprocess.run", self.items))
         self.enterContext(mock.patch("urllib.request.urlopen", self.endpoint))
 
@@ -5205,10 +5203,10 @@ class RoleAppTokens(TickBase):
         )
 
 
-class RoleKeys(Base):
+class RoleApps(Base):
     """A tracker without role identities checks no keychain."""
 
-    def test_a_tracker_without_role_keys_checks_no_keychain(self):
+    def test_a_tracker_without_role_apps_checks_no_keychain(self):
         self.wiring = replace(cli.TRACKERS[TrackerKind.LINEAR], identity=lambda *_: None)
         self.assertEqual(self.claim(two()), "TASK-1 https://linear.app/x/TASK-1 Deep Research")
         self.assertEqual(self.keychain_calls, [])
@@ -5558,10 +5556,7 @@ class ScheduledRuns(TickScenario):
         self.tick(fake, live=["ensemble-engineer-TASK-2"])
         self.assertEqual(self.said(), [])
         self.assertEqual((self.api.order, self.api.usage_calls), (SESSIONS, []))
-        self.assertEqual(
-            [v["e"] for q, v in fake.queries if "users(filter" in q],
-            [],
-        )
+        self.assertEqual([q for q, _ in fake.queries if "users" in q], [])
         self.assertEqual(fake.mutations, [])
 
     def test_one_run_per_tick_resume_first(self):
@@ -5762,7 +5757,7 @@ class RecoverWriteBack(TickBase):
         super().setUp()
         self.moved("TASK-1", 61)
         start = json.loads(self.row("start", "TASK-1", "a", "researcher", minutes=60))
-        key = "deleted-member-key"
+        key = "pre-app-key"
         self.lines.append(
             json.dumps(start | {"uuid": self.ISSUE, "project": IDS[DR], "target": None, "key": key})
         )
@@ -5791,7 +5786,7 @@ class RecoverWriteBack(TickBase):
         self.assertEqual(self.linear.issues["TASK-1"]["state"], "In Review")
         self.assertIsNone(self.linear.issues["TASK-1"].get("comments"))
         self.assertEqual(self.steps(), ["comment", "move:in_review", "outcome"])
-        self.assertNotIn("deleted-member-key", self.linear.services)
+        self.assertNotIn("pre-app-key", self.linear.services)
         self.assertIn(self.cfg().linear.roles["researcher"].token_service, self.linear.services)
         recovered = [show(e) for e in logged(self.logs) if e["kind"] == "recover"]
         self.assertEqual(self.unmap("\n".join(recovered)), "recover TASK-1 to=writeback sid=a")

@@ -14,9 +14,7 @@ from datetime import UTC, datetime, timedelta
 from tests.delegate.replies import block, mark, option
 from tests.delegate.workdir import checkout_path, session_cwd
 from tests.orchestrator.integration.flow_fixtures import (
-    ACCOUNTS,
     ENTRY,
-    HARNESS_EMAIL,
     HUMAN,
     LAUNCH,
     PROJECT,
@@ -24,7 +22,7 @@ from tests.orchestrator.integration.flow_fixtures import (
     TmuxFlow,
     steps,
 )
-from tests.orchestrator.unit.board_ids import STATES, comment_id
+from tests.orchestrator.unit.board_ids import HARNESS_USER, STATES, comment_id, role_id
 from tests.orchestrator.unit.run_fixtures import ID, SESSION, SID, UUID
 from tests.orchestrator.unit.writeback_fixtures import APPROVE_MAPPED, DOC, PR, PRD
 
@@ -61,12 +59,12 @@ def find(step):
     return ("linear.Q_COMMENT", {"c": cid(step)})
 
 
-def looked_up(op, account, v):
+def looked_up(op, caller, v):
     """A role's call as made: a comment post is first looked up by its client id, not found."""
-    made = (op, account, v, "ok")
+    made = (op, caller, v, "ok")
     if op != "linear.M_COMMENT_ID":
         return [made]
-    return [("linear.Q_COMMENT", account, {"c": v["c"]}, "error"), made]
+    return [("linear.Q_COMMENT", caller, {"c": v["c"]}, "error"), made]
 
 
 def attach(url, title):
@@ -86,7 +84,7 @@ class Run(TmuxFlow):
             identifier=ID,
             id=UUID,
             state="in_progress",
-            delegate=self.ids[ACCOUNTS[role]],
+            delegate=role_id(role),
             project=PROJECT,
         )
 
@@ -105,7 +103,7 @@ class Run(TmuxFlow):
     def wrote(self, since=0):
         """The write-back's requests since: all but the launch's issue read and related search."""
         return [
-            (r.op, r.account, r.variables, r.result)
+            (r.op, r.caller, r.variables, r.result)
             for r in self.requests()[since:]
             if r.op != "issues.Q_ISSUE" and not str(r.op).startswith("related.")
         ]
@@ -129,19 +127,19 @@ class Run(TmuxFlow):
 
     def framed(self, *calls, end=DONE, created=True, since=0, reactivate=False):
         """A run's Linear calls: the session comment's first write (created: not found, then created
-        by its id), `calls` as the role's account, the session comment's end and repair.
+        by its id), `calls` as the role's app, the session comment's end and repair.
         """
         running, ended = self.session(RUNNING, end, since=since)
-        update = ("sessions.M_UPDATE", HARNESS_EMAIL, {"c": SESSION, "b": running})
-        create = ("linear.M_COMMENT_ID", HARNESS_EMAIL, {"c": SESSION, "i": ID, "b": running})
+        update = ("sessions.M_UPDATE", HARNESS_USER, {"c": SESSION, "b": running})
+        create = ("linear.M_COMMENT_ID", HARNESS_USER, {"c": SESSION, "i": ID, "b": running})
         return [
             *([(*update, "error"), (*create, "ok")] if created else [(*update, "ok")]),
-            (REREAD[0], ACCOUNTS[self.role], REREAD[1], "ok"),
+            (REREAD[0], role_id(self.role), REREAD[1], "ok"),
             *(
                 [
                     (
                         "linear.M_STATE",
-                        ACCOUNTS[self.role],
+                        role_id(self.role),
                         {"i": UUID, "s": STATES["in_progress"]},
                         "ok",
                     )
@@ -149,13 +147,13 @@ class Run(TmuxFlow):
                 if reactivate
                 else []
             ),
-            *(made for op, v in calls for made in looked_up(op, ACCOUNTS[self.role], v)),
-            ("sessions.M_UPDATE", HARNESS_EMAIL, {"c": SESSION, "b": ended}, "ok"),
-            ("linear.Q_COMMENT", HARNESS_EMAIL, {"c": SESSION}, "ok"),
+            *(made for op, v in calls for made in looked_up(op, role_id(self.role), v)),
+            ("sessions.M_UPDATE", HARNESS_USER, {"c": SESSION, "b": ended}, "ok"),
+            ("linear.Q_COMMENT", HARNESS_USER, {"c": SESSION}, "ok"),
         ]
 
     def stored(self):
-        return [(self.email(c["user"]), c["id"]) for c in self.issue(ID)["comments"]]
+        return [(self.who(c["user"]), c["id"]) for c in self.issue(ID)["comments"]]
 
 
 class Done(Run):
@@ -171,13 +169,13 @@ class Done(Run):
         self.assertEqual([e["kind"] for e in self.records(ID)], kinds)
         self.assertEqual(self.records(ID)[-2]["outcome"]["status"], "done")
         self.assertEqual([option(c, "--session-id") for c in self.calls()], [SID])
-        account = ACCOUNTS[role]
+        app = role_id(role)
         self.assertEqual(
             self.stored(),
             [
-                (HARNESS_EMAIL, SESSION),
-                (account, cid("start", role)),
-                (account, cid("comment", role)),
+                (HARNESS_USER, SESSION),
+                (app, cid("start", role)),
+                (app, cid("comment", role)),
             ],
         )
         self.assertEqual(self.state(ID), "in_review")
@@ -383,7 +381,7 @@ class Undone(Run):
         again = {**note, "attempt": 2}
         self.assertEqual(self.runs(), [start, note, {"kind": "resume", **resumed}, again])
         self.assertEqual([s for _, s in self.stored()].count(cid("limit")), 1)
-        researcher = ACCOUNTS["researcher"]
+        researcher = role_id("researcher")
         self.assertEqual(
             self.history(ID),
             [
@@ -419,10 +417,10 @@ class Undone(Run):
         self.assertEqual(self.said()[said:], steps(*ledger[SID], found=("start", "comment")))
         self.assertEqual(self.ledger(ID), ledger)
         self.assertEqual([option(c, "--resume") for c in self.calls()], [None, SID])
-        account = ACCOUNTS["researcher"]
+        app = role_id("researcher")
         self.assertEqual(
             self.stored(),
-            [(HARNESS_EMAIL, SESSION), (account, cid("start")), (account, cid("comment"))],
+            [(HARNESS_USER, SESSION), (app, cid("start")), (app, cid("comment"))],
         )
 
 

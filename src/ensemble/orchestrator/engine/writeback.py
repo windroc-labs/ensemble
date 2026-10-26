@@ -1,5 +1,5 @@
 """Write-back: an agent run's progress, outcome and usage limit as tracker comments, links and
-moves through the engine Tracker (the Accounts cli.py's wiring builds), each step once per session
+moves through the engine Tracker (the Writers cli.py's wiring builds), each step once per session
 id (the ledger; comment steps by ref (sid, step), found again on resume); `deliver`, one
 DelegateEvent's write-back; `replay`, Recover's of an ended run's outcome; bounce, the router's
 repo-check report.
@@ -32,7 +32,6 @@ from ensemble.orchestrator.engine.linear_run import LinearRun
 from ensemble.orchestrator.engine.log import log
 from ensemble.orchestrator.engine.types import (
     MOVES,
-    Accounts,
     Claim,
     ConfigError,
     Invalid,
@@ -42,6 +41,7 @@ from ensemble.orchestrator.engine.types import (
     Stopped,
     TrackerFileError,
     Unavailable,
+    Writers,
 )
 from ensemble.utils import (
     ConfinedFileError,
@@ -63,12 +63,12 @@ class Context:
     resume: bool
     project: str | None
     workdir: str
-    tracker: Tracker  # the claim's or role's account
+    tracker: Tracker  # the claim's or role's app
     humans: tuple[str, ...]
     states: Mapping[str, str]
     repos: Mapping[str, str]
     target: tuple[str, str] | None
-    harness: Tracker  # the session comment's account
+    harness: Tracker  # the session comment's app
     # look each comment step up by its ref before posting it, as on resume: its event may
     # come again after the post landed and its ledger write was lost
     redelivered: bool = False
@@ -98,7 +98,7 @@ ERRORS = (
 )
 
 
-def context(cfg, role, accounts: Accounts, *, ident, issue_id, sid, resume, project, target):
+def context(cfg, role, writers: Writers, *, ident, issue_id, sid, resume, project, target):
     return Context(
         ident=ident,
         issue_id=issue_id,
@@ -107,22 +107,22 @@ def context(cfg, role, accounts: Accounts, *, ident, issue_id, sid, resume, proj
         resume=resume,
         project=project,
         workdir=cfg.issue_workdir(ident),
-        tracker=accounts.tracker,
-        states=accounts.states,
-        humans=accounts.humans,
-        repos=accounts.repos,
+        tracker=writers.tracker,
+        states=writers.states,
+        humans=writers.humans,
+        repos=writers.repos,
         target=target,
-        harness=accounts.harness,
+        harness=writers.harness,
         host=cfg.repo_host(role),
         document=cfg.docs.local_out(role, ident, sid),
     )
 
 
-def for_run(cfg, role, spec: Spec, accounts: Accounts):
+def for_run(cfg, role, spec: Spec, writers: Writers):
     return context(
         cfg,
         role,
-        accounts,
+        writers,
         ident=spec.issue,
         issue_id=spec.uuid,
         sid=spec.sid,
@@ -132,13 +132,13 @@ def for_run(cfg, role, spec: Spec, accounts: Accounts):
     )
 
 
-def for_claim(cfg, claim: Claim, accounts: Accounts, *, attempt: int) -> Context:
-    """Write through accounts resolved from the recorded role's current configuration."""
+def for_claim(cfg, claim: Claim, writers: Writers, *, attempt: int) -> Context:
+    """Write through writers resolved from the recorded role's current configuration."""
     return replace(
         context(
             cfg,
             claim.role,
-            accounts,
+            writers,
             ident=claim.issue,
             issue_id=claim.uuid,
             sid=claim.sid,
@@ -560,7 +560,7 @@ def replay(
     sid: str,
     outcome: Outcome,
     *,
-    accounts: Callable[[Claim], Accounts],
+    writers: Callable[[Claim], Writers],
     dry=False,
     now=timestamp,
 ) -> bool | None:
@@ -571,7 +571,7 @@ def replay(
     """
     rows = [e for e in runs.parse_log(cfg.runs_log) if (e.issue, e.sid) == (issue, sid)]
     claim = _claim(cfg, issue, sid)
-    ctx = for_claim(cfg, claim, accounts(claim), attempt=len(rows))
+    ctx = for_claim(cfg, claim, writers(claim), attempt=len(rows))
     attempt = _replayed_attempt(_ledger(ctx).get(sid, {}).get("attempts", {}), rows)
     ctx = replace(ctx, resume=attempt > 1)
     if "outcome" in _done(ctx):
@@ -593,10 +593,10 @@ def deliver(
     workdir: str,
     event: DelegateEvent,
     *,
-    accounts: Callable[[Claim], Accounts],
+    writers: Callable[[Claim], Writers],
     now=timestamp,
 ) -> bool:
-    """Writes the (issue, event.sid) run's event back as its start row's claim (accounts: the row's),
+    """Writes the (issue, event.sid) run's event back as its start row's claim (writers: the row's),
     each step once however often the event arrives; False when a write failed. Raises ConfigError
     or ValueError, before any write, on what it cannot write.
     """
@@ -608,7 +608,7 @@ def deliver(
     if attempt is None:  # DelegateEvent requires one
         raise ValueError("attempt: missing")
     claim = _claim(cfg, issue, event.sid)
-    ctx = for_claim(cfg, claim, accounts(claim), attempt=attempt)
+    ctx = for_claim(cfg, claim, writers(claim), attempt=attempt)
     with _exclusive(ctx) as held:
         return held and _deliver(ctx, cfg, claim, event, now=now)
 

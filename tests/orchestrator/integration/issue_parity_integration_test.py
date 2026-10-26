@@ -15,13 +15,12 @@ from ensemble.orchestrator.engine.types import MOVES, State
 from tests.orchestrator.integration.fake_linear import TITLES, seam
 from tests.orchestrator.integration.fake_python import write_shim
 from tests.orchestrator.integration.flow_fixtures import (
-    ACCOUNTS,
     BIN,
     LIGHT_RESEARCH,
     TIMEOUT,
     Flow,
 )
-from tests.orchestrator.unit.board_ids import MANAGER_IDENTITY, MANAGER_LINE
+from tests.orchestrator.unit.board_ids import MANAGER_IDENTITY, MANAGER_LINE, role_id
 from tests.orchestrator.unit.issue_fixtures import CLIENT_GROUP, CLIENT_LABELS
 
 TASK, CLIENT = "light-research", "claude"
@@ -108,13 +107,7 @@ class Parity(Flow):
         with open(self.config, encoding="utf-8") as f:
             self.linear_text = f.read()
         self.assertEqual(self.linear_text.count('tracker = "linear"\n'), 1)
-        self.fake.user(
-            "manager@agents.test",
-            "Manager",
-            MANAGER_IDENTITY.token_service,
-            app=True,
-            uid=MANAGER_IDENTITY.user_id,
-        )
+        self.fake.user("Manager", MANAGER_IDENTITY.token_service, uid=MANAGER_IDENTITY.user_id)
         with open(self.seam, encoding="utf-8") as f:  # its keys: the users when it was written
             self.seam = seam(self, self.fake, json.load(f)["url"])
         self.fake.label_group(CLIENT_GROUP, "Agent", {CLIENT_LABELS[CLIENT]: "Claude"})
@@ -155,7 +148,7 @@ class Parity(Flow):
 
     def seed_linear(self):
         """TASK-1 (engineer, ready, task and client) and TASK-2 (unassigned, backlog)."""
-        engineer = self.ids[ACCOUNTS["engineer"]]
+        engineer = role_id("engineer")
         self.fake.issue(
             "Seed 1",
             identifier="TASK-1",

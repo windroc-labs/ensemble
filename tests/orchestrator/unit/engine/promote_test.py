@@ -25,6 +25,7 @@ from tests.orchestrator.unit.board_ids import (
     FINISHED,
     HARNESS_IDENTITY,
     HARNESS_USER,
+    ROLES,
     TEAM,
     role_id,
 )
@@ -48,7 +49,6 @@ from tests.orchestrator.unit.promote_fixtures import (
     NOW,
     OTHER,
     PM_NEXT,
-    ROLE,
     STATES,
     Base,
     FakeLinear,
@@ -418,7 +418,7 @@ class PromotionCleanup(Base):
             (tracker.team_id, tracker.state_ids, tracker.finished_ids),
             (TEAM, dict(IDS_BY_KEY), FINISHED),
         )
-        self.assertEqual(tracker.roles, {role_id(role): role for role in ROLE})
+        self.assertEqual(tracker.roles, {role_id(role): role for role in ROLES})
 
     def test_prune_error_does_not_break_promote(self):
         class Boom:
@@ -779,7 +779,7 @@ class HarnessToken(Base):
             line["reason"],
             "Linear harness app token expired and renewal failed: HTTP 401; fix: check "
             "linear.harness.client_id and the client secret in Keychain service "
-            "linear-api-key-secret (rotated: store the new secret), then rerun",
+            "linear-app-harness-secret (rotated: store the new secret), then rerun",
         )
         self.assertEqual((self.endpoint.graphql, self.fake.mutations), ([], []))
 
@@ -943,7 +943,7 @@ class PromotionScope(Base):
         self.assertEqual(
             self.fake.handoff_vars, {"t": TEAM, "s": IDS_BY_KEY["handoff"], "a": mock.ANY}
         )
-        self.assertEqual(sorted(self.fake.handoff_vars["a"]), sorted(role_id(r) for r in ROLE))
+        self.assertEqual(sorted(self.fake.handoff_vars["a"]), sorted(role_id(r) for r in ROLES))
         self.assertIn("team: { id: { eq: $t } }", linear_tracker.Q_HANDOFF)
         self.assertIn("state: { id: { eq: $s } }", linear_tracker.Q_HANDOFF)
         self.assertIn("project: { null: false }", linear_tracker.Q_HANDOFF)

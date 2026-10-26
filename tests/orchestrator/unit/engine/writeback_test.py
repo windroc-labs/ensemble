@@ -29,7 +29,6 @@ from ensemble.orchestrator.engine.flow.types import (
 )
 from ensemble.orchestrator.engine.linear_run import LinearRun
 from ensemble.orchestrator.engine.types import (
-    Accounts,
     Claim,
     ConfigError,
     Invalid,
@@ -38,6 +37,7 @@ from ensemble.orchestrator.engine.types import (
     Stopped,
     TrackerFileError,
     TrackerKind,
+    Writers,
 )
 from ensemble.orchestrator.trackers.linear import (
     linear_tracker,
@@ -650,9 +650,7 @@ class IssueBounce(Base):
             writeback.bounce(self.ctx(gql=gql), issue("x"), Invalid("r"))
 
 
-ACCOUNTS = Accounts(
-    tracker(Gql()), LinearTracker(Gql()), STATES, HUMANS, {PROJECT: "acme/ensemble"}
-)
+WRITERS = Writers(tracker(Gql()), LinearTracker(Gql()), STATES, HUMANS, {PROJECT: "acme/ensemble"})
 
 
 class WritebackContext(run_fixtures.Base):
@@ -675,7 +673,7 @@ class WritebackContext(run_fixtures.Base):
                 ctx = writeback.context(
                     current,
                     "engineer",
-                    ACCOUNTS,
+                    WRITERS,
                     ident=ID,
                     issue_id=UUID,
                     sid=SID,
@@ -698,7 +696,7 @@ class WritebackContext(run_fixtures.Base):
                 ctx = writeback.context(
                     cfg,
                     "researcher",
-                    ACCOUNTS,
+                    WRITERS,
                     ident=ID,
                     issue_id=UUID,
                     sid=SID,
@@ -713,14 +711,14 @@ class WritebackContext(run_fixtures.Base):
                 self.assertEqual(url, expected)
                 self.assertIn(expected, body)
 
-    def test_the_one_context_of_a_role_from_its_accounts(self):
+    def test_the_one_context_of_a_role_from_its_writers(self):
         cfg = config.load()
         for resume, target in ((False, TARGET), (True, None)):
             with self.subTest(resume=resume):
                 ctx = writeback.context(
                     cfg,
                     "engineer",
-                    ACCOUNTS,
+                    WRITERS,
                     ident=ID,
                     issue_id=UUID,
                     sid=SID,
@@ -736,21 +734,21 @@ class WritebackContext(run_fixtures.Base):
                     resume=resume,
                     project=PROJECT,
                     workdir=os.path.join(self.work, "work", ID),
-                    tracker=ACCOUNTS.tracker,
+                    tracker=WRITERS.tracker,
                     humans=HUMANS,
                     states=STATES,
                     repos={PROJECT: "acme/ensemble"},
                     target=target,
-                    harness=ACCOUNTS.harness,
+                    harness=WRITERS.harness,
                 )
                 self.assertEqual(ctx, want)
 
-    def test_a_run_writes_with_the_accounts_it_is_given(self):
+    def test_a_run_writes_with_the_writers_it_is_given(self):
         cfg = config.load()
         spec = SimpleNamespace(issue=ID, uuid=UUID, sid=SID, mode="resume", project=PROJECT)
-        ctx = writeback.for_run(cfg, "engineer", spec, ACCOUNTS)
-        self.assertIs(ctx.tracker, ACCOUNTS.tracker)
-        self.assertIs(ctx.harness, ACCOUNTS.harness)
+        ctx = writeback.for_run(cfg, "engineer", spec, WRITERS)
+        self.assertIs(ctx.tracker, WRITERS.tracker)
+        self.assertIs(ctx.harness, WRITERS.harness)
         self.assertEqual(
             (ctx.ident, ctx.issue_id, ctx.sid, ctx.resume, ctx.project, ctx.target),
             (ID, UUID, SID, True, PROJECT, None),
@@ -1643,7 +1641,7 @@ class ResumedComments(Base):
 
 RUN_ISSUE = "TASK-1"
 
-ROLE_SERVICE = "linear-api-key-engineer"
+ROLE_SERVICE = "linear-app-engineer-token"
 
 STARTED, RESTARTED = "2026-10-14T09:00:00+08:00", "2026-10-14T10:00:00+08:00"
 BEFORE = datetime.fromisoformat(STARTED) - timedelta(hours=1)  # a row, then its run's Begun
@@ -1769,10 +1767,10 @@ class Events(RunCase):
             uuid=UUID,
             project="p1",
             target="acme/ensemble",
-            **{"key": "deleted-engineer-member-key", **fields},
+            **fields,
         )
 
-    def accounts(self):
+    def writers(self):
         return functools.partial(cli.TRACKERS[TrackerKind.LINEAR].claimed, self.linear, self.cfg)
 
     def deliver(self, e, *, workdir=None, issue=RUN_ISSUE):
@@ -1781,7 +1779,7 @@ class Events(RunCase):
             issue,
             workdir or self.workdir,
             e,
-            accounts=self.accounts(),
+            writers=self.writers(),
             now=lambda: next(self.now),
         )
 
@@ -1824,9 +1822,9 @@ class Events(RunCase):
 
 
 class ForClaim(RunCase):
-    def test_writes_as_the_accounts_it_is_given(self):
-        ctx = writeback.for_claim(self.cfg, CLAIM, ACCOUNTS, attempt=1)
-        self.assertEqual((ctx.tracker, ctx.harness), (ACCOUNTS.tracker, ACCOUNTS.harness))
+    def test_writes_as_the_writers_it_is_given(self):
+        ctx = writeback.for_claim(self.cfg, CLAIM, WRITERS, attempt=1)
+        self.assertEqual((ctx.tracker, ctx.harness), (WRITERS.tracker, WRITERS.harness))
         self.assertTrue(ctx.redelivered)
         self.assertEqual(
             (ctx.ident, ctx.issue_id, ctx.sid, ctx.role, ctx.project, ctx.target),
@@ -1837,7 +1835,7 @@ class ForClaim(RunCase):
     def test_a_later_attempt_is_a_resume(self):
         for attempt, resume in ((1, False), (2, True), (3, True)):
             with self.subTest(attempt=attempt):
-                ctx = writeback.for_claim(self.cfg, CLAIM, ACCOUNTS, attempt=attempt)
+                ctx = writeback.for_claim(self.cfg, CLAIM, WRITERS, attempt=attempt)
                 self.assertIs(ctx.resume, resume)
 
 
@@ -1993,7 +1991,7 @@ class BegunEvents(Events):
 
 
 class ProgressEvents(Events):
-    def test_start_and_marks_post_once_as_the_claims_account(self):
+    def test_start_and_marks_post_once_as_the_claims_app(self):
         self.assertTrue(
             self.deliver(delegate_event("progress", name="start", text="light-build: a tweak"))
         )
@@ -2074,7 +2072,7 @@ class RefusedEvents(Events):
 
     def test_resume_preserves_old_author_comment_after_lost_ledger_write(self):
         old = ops.client_id(RUN_SID, "start")
-        held = {"body": "old member's progress", "service": "deleted-member-key"}
+        held = {"body": "pre-app progress", "service": "pre-app-key"}
         self.linear.comments[old] = held.copy()
         self.assertTrue(self.deliver(delegate_event("progress", 2, name="start", text="new app")))
         self.assertEqual(self.linear.comments[old], held)
@@ -2085,18 +2083,18 @@ class RefusedEvents(Events):
 
     def test_recover_preserves_old_author_completion_after_lost_ledger_write(self):
         old = ops.client_id(RUN_SID, "comment")
-        held = {"body": "old member's completion", "service": "deleted-member-key"}
+        held = {"body": "pre-app completion", "service": "pre-app-key"}
         self.linear.comments[old] = held.copy()
         outcome = Outcome(status="failed", title="x", summary="run failed")
         self.assertTrue(
-            writeback.replay(self.cfg, RUN_ISSUE, RUN_SID, outcome, accounts=self.accounts())
+            writeback.replay(self.cfg, RUN_ISSUE, RUN_SID, outcome, writers=self.writers())
         )
         self.assertEqual(self.linear.comments[old], held)
         posts = self.linear.writes("comment")
         self.assertEqual(posts[0][0], ROLE_SERVICE)
         self.assertNotEqual(posts[0][1]["c"], old)
         self.assertIsNone(
-            writeback.replay(self.cfg, RUN_ISSUE, RUN_SID, outcome, accounts=self.accounts())
+            writeback.replay(self.cfg, RUN_ISSUE, RUN_SID, outcome, writers=self.writers())
         )
         self.assertEqual(self.linear.writes("comment"), posts)
 
@@ -2124,6 +2122,12 @@ class RefusedEvents(Events):
         self.assertEqual(self.linear.calls, [])
 
     def test_current_app_replaces_the_old_start_row_credential(self):
+        with open(self.cfg.runs_log) as f:
+            rows = [json.loads(line) for line in f]
+        with open(self.cfg.runs_log, "w") as f:
+            for row in rows:
+                old = {"key": "pre-app-engineer-key"} if row["kind"] == "start" else {}
+                f.write(json.dumps(row | old) + "\n")
         app = replace(self.cfg.linear.roles["engineer"], token_service="new-engineer-token")
         self.cfg = replace(self.cfg, linear=replace(self.cfg.linear, roles={"engineer": app}))
         self.assertTrue(self.deliver(delegate_event("progress", name="start", text="x")))
@@ -2702,7 +2706,7 @@ class RecoverReplay(Events):
             RUN_ISSUE,
             RUN_SID,
             self.outcome(),
-            accounts=self.accounts(),
+            writers=self.writers(),
             now=lambda: next(self.now),
         )
 

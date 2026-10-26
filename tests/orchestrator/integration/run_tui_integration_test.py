@@ -11,14 +11,13 @@ import unittest
 from ensemble.orchestrator.engine import runs
 from tests.delegate.replies import block, mark
 from tests.orchestrator.integration.flow_fixtures import (
-    ACCOUNTS,
     ENTRY,
-    KEYS,
     MANAGER,
     PROJECT,
     TmuxFlow,
     steps,
 )
+from tests.orchestrator.unit.board_ids import role_id
 from tests.orchestrator.unit.run_fixtures import ID, SID, UUID
 from tests.orchestrator.unit.writeback_fixtures import PRD
 from tests.session import live_tmux
@@ -43,7 +42,7 @@ class Tui(TmuxFlow):
             identifier=ID,
             id=UUID,
             state="in_progress",
-            delegate=self.ids[ACCOUNTS["pm"]],
+            delegate=role_id("pm"),
             project=PROJECT,
         )
         self.scene([f"{mark('start', 'a PRD.')}\n{block(DONE)}"])
@@ -61,7 +60,6 @@ class Tui(TmuxFlow):
             uuid=UUID,
             project=PROJECT["id"],
             target=None,
-            key=KEYS["pm"],
         )
         res = self.script(ENTRY, "tui", ID, SID, "pm", "claude", display, "Do it.\n")
         self.assertEqual((res.returncode, res.stdout), (0, ""), res.stderr)

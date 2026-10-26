@@ -8,7 +8,8 @@ from pathlib import Path
 
 from ensemble.utils import SID_ENV, Record
 from tests.orchestrator.case import PY
-from tests.orchestrator.integration.flow_fixtures import ACCOUNTS, ENTRY, PROJECT, TmuxFlow
+from tests.orchestrator.integration.flow_fixtures import ENTRY, PROJECT, TmuxFlow
+from tests.orchestrator.unit.board_ids import role_id
 from tests.session import live_tmux
 from tests.session.integration.clients.claude import fake_claude
 from tests.utils.contracts.ctl import CtlContract
@@ -54,7 +55,7 @@ class LinearCtlContract(CtlContract, TmuxFlow):
         self.fake.issue(
             "ENG: Contract",
             identifier=issue,
-            delegate=self.ids[ACCOUNTS["engineer"]],
+            delegate=role_id("engineer"),
             project=PROJECT,
             description="Exercise the ctl contract.",
         )

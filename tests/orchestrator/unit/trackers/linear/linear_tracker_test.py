@@ -195,7 +195,7 @@ def item(ident, kind="completed"):
 
 def names():
     found = {getattr(linear_tracker, n): n for n in (*BASE, *ROUTER, *NEW)}
-    found |= {getattr(ops, n): n for n in ("Q_TEAM", "Q_TASK_GROUP", "Q_USER")} | OPS
+    found |= {getattr(ops, n): n for n in ("Q_TEAM", "Q_TASK_GROUP")} | OPS
     lists = linear_tracker.q_issues(), linear_tracker.q_issues(linear_tracker.RELATIONS)
     return found | dict(zip(lists, ("LIST", "LIST_RELATIONS"), strict=True))
 
@@ -778,7 +778,7 @@ class Comments(Case):
                 LinearTracker(Texts({ops.Q_COMMENT: reply})).find_comment("id-TASK-7", REF)
 
 
-class Account(Case):
+class CallerIdentity(Case):
     def calls(self, **kw):
         seen = []
 
@@ -972,10 +972,6 @@ class WritebackWrites(Case):
         self.assertEqual(gql.calls, [(linear_tracker.M_UNARCHIVE, {"i": "id-TASK-3"})])
 
 
-def users(*ids):
-    return [{"users": {"nodes": [{"id": i}] if i else []}} for i in ids]
-
-
 def board_linear():
     return SimpleNamespace(
         team=TEAM,
@@ -1001,7 +997,7 @@ def connected(**replies):
 
 class Connect(Case):
     def test_reads_in_order(self):
-        found, gql = connected(Q_USER=users(role_id("pm")))
+        found, gql = connected()
         self.assertEqual(gql.names(), ["Q_TEAM", "Q_TASK_GROUP"])
         self.assertEqual(
             [{k: x for k, x in v.items() if k != "identity"} for _, v in gql.calls],
@@ -1016,7 +1012,7 @@ class Connect(Case):
 
     def test_connect_reads_no_human_ids(self):
         """human_members only subscribe: one not in Linear stops nothing."""
-        found, gql = connected(Q_USER=users(role_id("pm")))
+        found, gql = connected()
         self.assertNotIn("human@x.test", [v.get("e") for _, v in gql.calls])
         self.assertEqual((found.humans, found.selves), (("human@x.test",), SELVES))
 
@@ -1028,7 +1024,7 @@ class Connect(Case):
                 connected(**replies)
 
     def test_connect_binds_harness_identity(self):
-        found, gql = connected(Q_USER=users(role_id("pm")), Q_UPSTREAM={"issue": None})
+        found, gql = connected(Q_UPSTREAM={"issue": None})
         found.description("TASK-1")
         self.assertEqual(gql.names()[-1], "Q_UPSTREAM")
         self.assertEqual([v.get("identity") for _, v in gql.calls], [HARNESS_IDENTITY] * 3)
@@ -1306,7 +1302,7 @@ class MovedAt(Case):
     def test_moved_at_by_other_skips_self_and_automation(self):
         for name, actor, want in (
             ("harness", "harness", "self"),
-            ("role account", "pm", "self"),
+            ("role app", "pm", "self"),
             ("automation", None, "self"),
             ("integration credited to a user", ("bot", "human"), "self"),
             ("manager app", "manager", "other"),
@@ -1348,7 +1344,7 @@ def rechecked(state, *, delegate=None, assignee=None, project=None, labels=()):
 
 
 PM, PROJECT = (
-    {"id": role_id("pm"), "email": "pm@agents.test"},
+    {"id": role_id("pm"), "email": None},
     {"id": "p-1", "name": "Deep Research"},
 )
 AGENTS = "00000000-0000-4000-8000-000000000081"
@@ -1831,7 +1827,7 @@ def run_issue(**over):
                 {
                     "body": "as the role",
                     "createdAt": "2026-09-02T12:00:00.000Z",
-                    "user": {"id": role_id("pm"), "email": "PM@agents.test", "name": "PM"},
+                    "user": {"id": role_id("pm"), "email": None, "name": "PM"},
                 },
                 {
                     "body": f"Run {SID} · started",
@@ -1916,7 +1912,7 @@ class RunIssue(Case):
                 "p-1",
                 (
                     Note("first", "2026-09-01T12:00:00.000Z", "ann@x.com", "Ann", "other"),
-                    Note("as the role", "2026-09-02T12:00:00.000Z", "PM@agents.test", "PM", "self"),
+                    Note("as the role", "2026-09-02T12:00:00.000Z", None, "PM", "self"),
                 ),
                 (Link("https://github.com/o/r/pull/1"),),
                 (Linked("TASK-2", "Two", "Done"), Linked("TASK-4", "Four", "Todo")),

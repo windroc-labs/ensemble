@@ -36,19 +36,18 @@ from ensemble.orchestrator.trackers.local.issues import LocalIssues
 from tests.orchestrator.case import Case
 from tests.orchestrator.process_fixtures import CalledProcessError, TimeoutExpired
 from tests.orchestrator.unit.board_ids import (
-    ACCOUNTS,
     HARNESS_LINE,
     MANAGER_APP,
     MANAGER_IDENTITY,
     MANAGER_LINE,
     STATES,
     TASK_GROUP,
+    role_id,
 )
 from tests.orchestrator.unit.issue_fixtures import (
     CLIENT_LABELS,
     CONFIG,
     OTHER_TEAM,
-    ROLE_USERS,
     TASK_LABELS,
     ArchiveGql,
     EditGql,
@@ -88,7 +87,7 @@ from tests.orchestrator.unit.keychain_fixtures import (
 
 
 # The manager app's Keychain with a token days from expiry and its client secret.
-def manager_keychain(days=10.0):
+def manager_tokens(days=10.0):
     return Keychain(
         {
             MANAGER_IDENTITY.token_service: record(days=days),
@@ -574,7 +573,7 @@ class Edit(IssueCase):
     def test_a_role_alone_sets_the_delegate_and_clears_the_assignee(self):
         other = {"id": "u-other"}
         for role, want in (
-            ("engineer", {"delegateId": ROLE_USERS[ACCOUNTS["engineer"]], "assigneeId": None}),
+            ("engineer", {"delegateId": role_id("engineer"), "assigneeId": None}),
             ("me", {"delegateId": MANAGER_IDENTITY.user_id, "assigneeId": None}),
             ("unassigned", {"delegateId": None, "assigneeId": None}),
         ):
@@ -753,7 +752,7 @@ class Create(IssueCase):
             (
                 STATES["in_progress"],
                 [TASK_LABELS["build"], CLIENT_LABELS["codex"]],
-                ROLE_USERS[ACCOUNTS["engineer"]],
+                role_id("engineer"),
                 None,
                 4,
             ),
@@ -1081,13 +1080,13 @@ class Failures(IssueCase):
                     err,
                 )
 
-    def test_a_manager_key_exits_two(self):
+    def test_an_unknown_linear_key_exits_two(self):
         with open(self.config, "w") as f:
-            f.write('linear.manager_key = "linear-manager"\n' + CONFIG)
+            f.write('linear.typo = "x"\n' + CONFIG)
         gql = Gql(issue_node())
         code, out, err = self.run_main(["read", "TASK-2"], gql)
         self.assertEqual((code, out, gql.calls), (2, b"", []))
-        self.assertIn("unknown keys in [linear]: manager_key", err)
+        self.assertIn("unknown keys in [linear]: typo", err)
 
     def test_diagnostics_stay_within_eight_kib(self):
         gql = Gql(None, fail=LinearError("linear api error: " + "错" * 9000))
@@ -1132,7 +1131,7 @@ class Failures(IssueCase):
     def test_an_auth_failure_shows_no_credential(self):
         refused = urllib.error.HTTPError(client.URL, 401, "Unauthorized", {}, io.BytesIO(b"{}"))
         with (
-            mock.patch("subprocess.run", manager_keychain()),
+            mock.patch("subprocess.run", manager_tokens()),
             mock.patch("urllib.request.urlopen", side_effect=refused),
         ):
             code, out, err = self.run_main(["read", "TASK-2"], client.linear_gql)
@@ -1145,7 +1144,7 @@ class ManagerToken(IssueCase):
     """The issue commands call as the manager app over the real transport, renewing its token."""
 
     def run_issue(self, days, argv, answer=None, data=None):
-        self.keychain = manager_keychain(days)
+        self.keychain = manager_tokens(days)
         routes = data or Routes(issues=page_edges([issue_row("TASK-1")]))
         self.endpoint = Endpoint(answer, data=lambda q, v: routes(q, **v))
         with (
@@ -1227,7 +1226,7 @@ class ManagerToken(IssueCase):
                     err,
                     f"ensemble-orchestrator issue: Linear manager app {state} and renewal "
                     "failed: HTTP 401; fix: check linear.manager.client_id and the client secret "
-                    "in Keychain service linear-api-key-manager-secret (rotated: store the new "
+                    "in Keychain service linear-app-manager-secret (rotated: store the new "
                     "secret), then rerun\n",
                 )
 
@@ -1666,7 +1665,7 @@ class Full(IssueCase):
         refused = urllib.error.HTTPError(client.URL, 401, "Unauthorized", {}, io.BytesIO(b"{}"))
         path = os.path.join(self.root, "TASK-2.json")
         with (
-            mock.patch("subprocess.run", manager_keychain()),
+            mock.patch("subprocess.run", manager_tokens()),
             mock.patch("urllib.request.urlopen", side_effect=refused),
         ):
             code, out, err = self.run_main(

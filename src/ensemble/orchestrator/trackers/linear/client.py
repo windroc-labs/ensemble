@@ -351,7 +351,7 @@ def _status(held, now):
     return {"days_left": round((held.expires - now) / timedelta(days=1), 1)}
 
 
-def has_key(identity: LinearApp):
+def has_token(identity: LinearApp):
     """Preflight an app through the same renewal policy as a call; discard its token."""
     _token(identity, 30)
     return True

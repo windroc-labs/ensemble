@@ -355,16 +355,16 @@ class Outage(Case):
         self.assertEqual(gql.failed, [(ops.Q_TEAM, {"i": "I"}), (ops.M_STATE, {"i": "I"})])
 
 
-class HasKey(Case):
+class HasToken(Case):
     def test_a_usable_token_is_true_and_none_a_keychain_error(self):
         with mock.patch("subprocess.run", Keychain({HARNESS.token_service: record()})):
-            self.assertTrue(client.has_key(HARNESS))
+            self.assertTrue(client.has_token(HARNESS))
         with (
             mock.patch("subprocess.run", Keychain()),
             mock.patch.object(urllib.request, "urlopen", side_effect=AssertionError("sent")),
             self.assertRaises(types.KeychainError),
         ):
-            client.has_key(HARNESS)
+            client.has_token(HARNESS)
 
 
 class Messages(Case):

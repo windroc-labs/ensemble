@@ -1,6 +1,6 @@
 """A custom role as a board stage: a team dir's writer charter and note task in
 `[delegate] team_dirs`, an `[orchestrator] workflow` file whose writer stage, set by role and input
-alone, hands off to pm in place of the packaged researcher, and writer's Linear account. Its issue
+alone, hands off to pm in place of the packaged researcher, and writer's Linear app. Its issue
 goes from Todo through router.py's claim and a done run's write-back to In Review, then after a
 Handoff promote.py makes pm's PRD issue.
 """
@@ -12,7 +12,7 @@ from unittest import mock
 
 from ensemble.orchestrator.engine import config
 from tests.orchestrator.case import REPO
-from tests.orchestrator.integration import fake_linear, flow_fixtures, segments
+from tests.orchestrator.integration import fake_linear, segments
 from tests.orchestrator.integration.flow_fixtures import BRANCH, DOCS
 from tests.orchestrator.integration.segments import INSTRUCTIONS, RESEARCH, Segment
 from tests.orchestrator.unit import run_fixtures
@@ -20,7 +20,9 @@ from tests.orchestrator.unit.board_ids import PACKAGED_FLOW, role, role_id
 from tests.utils.case import local_section
 from tests.utils.sandbox import owned_directory
 
-ROLE, ACCOUNT, KEY, DIR = "writer", "writer@agents.test", "linear-api-key-writer", "Notes/"
+ROLE, TOKEN, DIR = "writer", "linear-app-writer-token", "Notes/"
+
+WRITER = role_id(ROLE)
 
 TEAM = {
     f"roles/{ROLE}.md": (
@@ -73,13 +75,12 @@ class CustomStage(Segment):
                 + run_fixtures.CORE_LOCAL
                 + f"\n[delegate.roles.{ROLE}.output]\n{output}"
             )
-        self.ids[ACCOUNT] = self.fake.user(ACCOUNT, "Writer", KEY, app=True, uid=role_id(ROLE))
+        self.fake.user("Writer", TOKEN, uid=WRITER)
         with open(self.seam, encoding="utf-8") as f:  # its keys: the users when it was written
             url = json.load(f)["url"]
         self.seam = fake_linear.seam(self, self.fake, url)
         for table, entry in (
-            (flow_fixtures.ACCOUNTS, {ROLE: ACCOUNT}),
-            (segments.ROLE_OF, {ACCOUNT: ROLE}),
+            (segments.ROLE_OF, {WRITER: ROLE}),
             (segments.DIRS, {ROLE: DIR}),
         ):
             patch = mock.patch.dict(table, entry)
@@ -95,7 +96,7 @@ class CustomStage(Segment):
         self.agent_run()
         self.assertEqual(self.state(ident), "in_review")
         # the stage's default leads
-        said = [b for a, b in self.comments(ident) if a == ACCOUNT]
+        said = [b for a, b in self.comments(ident) if a == WRITER]
         self.assertEqual(
             [b.split(" ", 2)[:2] for b in said], [[ROLE, "started:"], [ROLE, "done:"]], said
         )
