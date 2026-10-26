@@ -37,8 +37,9 @@ func TestErrorFixtures(t *testing.T) {
 		}
 		t.Run(c.File, func(t *testing.T) {
 			var in struct {
-				ExitCode int `json:"exit_code"`
-				Error    struct {
+				ExitCode     int    `json:"exit_code"`
+				AuditWarning string `json:"audit_warning"`
+				Error        struct {
 					Command string `json:"command"`
 					Error
 				} `json:"error"`
@@ -49,6 +50,7 @@ func TestErrorFixtures(t *testing.T) {
 			if Exit(in.Error.Code) != in.ExitCode {
 				t.Fatalf("Exit(%s) = %d, fixture %d", in.Error.Code, Exit(in.Error.Code), in.ExitCode)
 			}
+			in.Error.AuditWarning = in.AuditWarning
 			out := Envelope(in.Error.Command, &in.Error.Error)
 			if !strings.HasSuffix(string(out), "}\n") || strings.Count(string(out), "\n") != 1 {
 				t.Fatalf("not one line: %q", out)

@@ -84,10 +84,10 @@ func credentials(list []entry) []Credential {
 }
 
 // Flush writes the retry lines, then the command line for start, refresh and close, err being the command's error.
-// A failed write is dropped: the broker's output and exit code never depend on the log.
-func (r *Recorder) Flush(err error) {
+// Its error describes only audit persistence; the caller keeps the command's result independently.
+func (r *Recorder) Flush(err error) error {
 	if r == nil || r.flushed {
-		return
+		return nil
 	}
 	r.flushed = true
 	now := time.Now
@@ -112,15 +112,15 @@ func (r *Recorder) Flush(err error) {
 		lines = append(lines, line)
 	}
 	if len(lines) == 0 || r.Log == nil {
-		return
+		return nil
 	}
 	data := make([][]byte, 0, len(lines))
 	for _, l := range lines {
 		b, err := json.Marshal(l)
 		if err != nil {
-			return
+			return err
 		}
 		data = append(data, b)
 	}
-	_ = r.Log.Append(data...)
+	return r.Log.Append(data...)
 }

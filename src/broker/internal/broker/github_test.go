@@ -817,9 +817,15 @@ func TestUnreadableRecord(t *testing.T) {
 	if !strings.Contains(err.Error(), "expire within an hour") {
 		t.Fatalf("message %v", err)
 	}
-	if _, ok := r.keys.items[tokensService+"/"+ctr]; ok {
-		t.Fatal("record not deleted")
+	if _, ok := r.keys.items[tokensService+"/"+ctr]; !ok {
+		t.Fatal("unreadable recovery record was deleted")
 	}
+	r.keys.unreadable[tokensService] = false
+	rebuilt := GitHub{Keychain: r.keys, API: r.g.API, Lock: r.g.Lock}
+	if err := rebuilt.Revoke(context.Background(), ctr); err != nil || !slices.Contains(r.api.revoked, "ghs_1_1") {
+		t.Fatalf("restored record could not be recovered: %v", err)
+	}
+	r.keys.unreadable[tokensService] = true
 	r.keys.items[tokensService+"/"+ctr] = []byte("{}")
 	_, err = r.g.Refresh(context.Background(), "ensemble-bot", perms, ctr, r.exec.run)
 	wantCode(t, err, protocol.KeychainFailed)
