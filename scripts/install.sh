@@ -1696,9 +1696,40 @@ sys.exit(v(sys.argv[1]) < v(sys.argv[2]))' "$os" "$2" || die "Docker Desktop $3 
   say "    Docker Desktop $3 for $archs, macOS $2+: matches $cpu, macOS $os"
 }
 
+# Presets Docker Desktop's settings before its first start, keeping any it has: Rosetta off (the worker image is
+# arm64; install.sh never installs Rosetta) and its onboarding marked done. Best effort: macOS 27 may deny the shell
+# Docker's Group Container; any failure prints one line, keeps the file as it was, and the install goes on.
+docker_settings() {
+  python3 -I -c '
+import contextlib, json, os, sys
+path = sys.argv[1]
+preset = {"UseVirtualizationFrameworkRosetta": False, "DisplayedOnboarding": True}
+try:
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        data = {}
+    if not isinstance(data, dict):
+        raise ValueError(f"not a JSON object: {path}")
+    new = {**preset, **data}
+    if new != data:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        try:
+            with open(path + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(new, f, indent=2)
+            os.replace(path + ".tmp", path)
+        except Exception:
+            with contextlib.suppress(OSError):
+                os.remove(path + ".tmp")
+            raise
+except Exception as e:
+    print(f"    Docker Desktop presets not written (Rosetta off, onboarding done): {e}; Docker Desktop may show its"
+          " Welcome window", file=sys.stderr)' "$HOME/Library/Group Containers/group.com.docker/settings-store.json"
+}
+
 # Starts Docker Desktop and waits for its engine; the first time install.sh installed it, without its windows:
-# license accepted and privileged setup done by its own install command. Its settings stay Docker Desktop's own: macOS
-# 27 denies the shell its Group Container, and 4.96.3 starts there with no Rosetta or license dialog.
+# license accepted and privileged setup done by its own install command, settings preset where macOS allows.
 docker_running() {
   local app=$root/Applications/Docker.app tries=0
   step "Docker Desktop running"
@@ -1706,9 +1737,12 @@ docker_running() {
     skip running
     return
   fi
-  if recorded cask docker-desktop && [ "$(state_get docker_license)" != accepted ]; then
-    sudo -A "$app/Contents/MacOS/install" --accept-license --user="$(id -un)" </dev/null >&2
-    state_set docker_license accepted
+  if recorded cask docker-desktop; then
+    if [ "$(state_get docker_license)" != accepted ]; then
+      sudo -A "$app/Contents/MacOS/install" --accept-license --user="$(id -un)" </dev/null >&2
+      state_set docker_license accepted
+    fi
+    docker_settings
   fi
   open -a Docker </dev/null
   say "    waiting for Docker Desktop's engine (up to 5 minutes)"

@@ -94,6 +94,8 @@ LEAVE_Q = r"Press Enter to leave this screen:"
 SCREEN_ON, SCREEN_OFF = "\x1b[?1049h\x1b[H\x1b[2J", "\x1b[H\x1b[2J\x1b[?1049l"
 PEM_Q = r"private key \(\.pem; [^)]*\), empty to skip:"
 DOCKER_LOGINS = ((TOKEN_Q, TOKEN), (PEM_Q, ""))
+DOCKER_PRESETS = {"UseVirtualizationFrameworkRosetta": False, "DisplayedOnboarding": True}
+PRESETS_NOT_WRITTEN = "    Docker Desktop presets not written (Rosetta off, onboarding done): "
 REMOVE_Q = r"Remove all of this\? \[y/N\]"
 SHARED = (
     "say",
@@ -1653,7 +1655,8 @@ class InstallTest(Case):
         self.assertLess(
             calls.index(f"{install} --accept-license --user=tester"), calls.index("open -a Docker")
         )
-        self.assertFalse(self.docker_group().exists())
+        self.assertEqual(json.loads(self.docker_settings().read_text()), DOCKER_PRESETS)
+        self.assertNotIn(PRESETS_NOT_WRITTEN, result.stderr)
         self.assertIn(
             "Docker Desktop 4.96.0 for arm64, macOS 14.0+: matches arm64, macOS 26.7.1",
             result.stderr,
@@ -1674,19 +1677,58 @@ class InstallTest(Case):
         )
         self.assertNotIn("[session.hosts.docker] docker", self.again().tty)
 
+    def test_docker_settings_kept(self):
+        self.docker_group().mkdir(parents=True)
+        self.docker_settings().write_text(
+            '{"UseVirtualizationFrameworkRosetta": true, "Theme": "dark"}'
+        )
+        self.assert_ok(self.fresh(clients="claude", docker="y"))
+        self.assertEqual(
+            json.loads(self.docker_settings().read_text()),
+            {
+                "UseVirtualizationFrameworkRosetta": True,
+                "Theme": "dark",
+                "DisplayedOnboarding": True,
+            },
+        )
+
     def test_docker_group_container_denied(self):
         group = self.docker_group()
         group.mkdir(parents=True)
-        (group / "settings-store.json").write_text('{"Theme": "dark"}')
+        self.docker_settings().write_text('{"Theme": "dark"}')
         group.chmod(0)
         self.addCleanup(lambda: group.exists() and group.chmod(0o700))
-        self.assert_ok(self.fresh(clients="claude", docker="y"))
+        result = self.fresh(clients="claude", docker="y")
+        self.assert_ok(result)
+        self.assertEqual(result.stderr.count(PRESETS_NOT_WRITTEN), 1, result.stderr)
         group.chmod(0o700)
         self.assertEqual([p.name for p in group.iterdir()], ["settings-store.json"])
-        self.assertEqual((group / "settings-store.json").read_text(), '{"Theme": "dark"}')
+        self.assertEqual(self.docker_settings().read_text(), '{"Theme": "dark"}')
+
+    def test_docker_group_container_create_denied(self):
+        parent = self.docker_group().parent
+        parent.mkdir(parents=True)
+        parent.chmod(0o500)
+        self.addCleanup(lambda: parent.exists() and parent.chmod(0o700))
+        result = self.fresh(clients="claude", docker="y")
+        self.assert_ok(result)
+        self.assertEqual(result.stderr.count(PRESETS_NOT_WRITTEN), 1, result.stderr)
+        self.assertFalse(self.docker_group().exists())
+
+    def test_docker_settings_invalid_kept(self):
+        self.docker_group().mkdir(parents=True)
+        self.docker_settings().write_text("[]")
+        result = self.fresh(clients="claude", docker="y")
+        self.assert_ok(result)
+        self.assertEqual(result.stderr.count(PRESETS_NOT_WRITTEN), 1, result.stderr)
+        self.assertEqual(self.docker_settings().read_text(), "[]")
+        self.assertEqual([p.name for p in self.docker_group().iterdir()], ["settings-store.json"])
 
     def docker_group(self):
         return Path(self.home, "Library/Group Containers/group.com.docker")
+
+    def docker_settings(self):
+        return self.docker_group() / "settings-store.json"
 
     def assert_docker_build_refused(self, marker, text, said):
         (self.fakes / marker).write_text(text)

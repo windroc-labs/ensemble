@@ -20,13 +20,15 @@ Needs Docker Desktop (running) and `gh` (logged in).
 
 **First start**: when `scripts/install.sh` installed Docker Desktop, it accepts the license and runs the privileged setup
 through Docker Desktop's own `install --accept-license`, then runs `open -a Docker` and waits up to 5 minutes for the
-engine. It keeps Docker Desktop's default settings and never opens its Group Container
-(`~/Library/Group Containers/group.com.docker`), which macOS 27 denies a shell. On macOS 27, Docker Desktop 4.96.3
-starts its engine with no Rosetta or license dialog; it may open its Containers window, which you can close.
+engine. Before that start it presets Rosetta off and the onboarding done in Docker Desktop's
+`~/Library/Group Containers/group.com.docker/settings-store.json`, keeping any setting already there, so no Rosetta
+prompt or "Welcome to Docker" sign-in window shows. macOS 27 may deny a shell that Group Container: then install.sh prints
+`Docker Desktop presets not written (Rosetta off, onboarding done): …` and goes on without them, and Docker Desktop shows
+its Welcome window on first start (Skip). Either way it may open its Containers window, which you can close.
 
-**Rosetta**: `scripts/install.sh` never installs it: the worker image is arm64. For an amd64-only base image in
-your Dockerfile, run `softwareupdate --install-rosetta`, then make sure Docker Desktop › Settings › General › **Use Rosetta
-for x86_64/amd64 emulation on Apple Silicon** is on. Rosetta cannot be uninstalled, so `scripts/install-cleanup.sh` cannot
+**Rosetta**: `scripts/install.sh` presets it off where it can ([First start](#install)) and never installs it: the worker image is arm64. For an amd64-only base image in
+your Dockerfile, run `softwareupdate --install-rosetta`, then turn on Docker Desktop › Settings › General › **Use Rosetta
+for x86_64/amd64 emulation on Apple Silicon**. Rosetta cannot be uninstalled, so `scripts/install-cleanup.sh` cannot
 undo it.
 
 ```sh
