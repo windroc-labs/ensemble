@@ -70,12 +70,12 @@ connections on **every** caller network. Running workers keep their proxy settin
 An edited config without a gateway restart makes health `unhealthy`. Every `start` needs `egress-gateway` running
 and healthy on its internal `workers` network: otherwise, before any credential or container, it fails
 `egress_unavailable` (exit 17), naming the gateway and `start.sh`, and never falls back to `bridge`. Fix the
-config/startup error, wait for healthy, then start, restart or resume again. A worker started before the gateway
-stays on `bridge` until its next start, restart or resume ([Upgrading](upgrading.md#egress-gateway)).
+config/startup error, wait for healthy, then start, restart or resume again.
 
 New workers join only the internal network advertised by the `workers` label (`egress-workers` in contract 1).
-Both cases of `HTTP_PROXY` and `HTTPS_PROXY` point to `http://egress-proxy-workers:4750`; only container loopback
-(`localhost`, `127.0.0.1`, `::1`) bypasses the proxy. The gateway allows public destinations and denies private
+Both cases of `HTTP_PROXY` and `HTTPS_PROXY` point to the label's proxy (`http://egress-proxy-workers:4750`), and
+`NO_PROXY`/`no_proxy` list only container loopback (`localhost,127.0.0.1,::1`): all other traffic, `host.docker.internal`
+and LAN addresses included, goes through the gateway's `workers` policy. The gateway allows public destinations and denies private
 ranges, the Mac and LAN, including `host.docker.internal`, unless a specific `host:port` exception applies.
 Without the gateway there is no worker egress. Tools that ignore proxy variables cannot reach external services
 (including direct SSH, raw TCP/UDP and external DNS). Same-network containers can reach each other directly.
@@ -327,9 +327,7 @@ and the copy, and how to revoke: [Credentials › Environment secrets](credentia
 ## What a container gets
 
 - User `agent`, all capabilities dropped, `no-new-privileges`; no Docker socket.
-- Only the gateway's `workers` network ([Egress gateway](#egress-gateway)), with `HTTP_PROXY`, `HTTPS_PROXY` and their
-  lower-case pair set to its proxy, and `NO_PROXY` only `localhost,127.0.0.1,::1`: all other traffic, `host.docker.internal`
-  and LAN addresses included, goes through the gateway's `workers` policy.
+- Only the gateway's `workers` network, with its proxy variables ([Egress gateway](#egress-gateway)).
 - A workspace volume at cwd; Claude and OpenCode have their own client-state bind, Codex only its session history.
 - Credentials on tmpfs, readable by the container's processes ([Credentials](credentials.md)); each listed
   [environment secret](#environment-secrets) at `/run/ensemble/secrets/env/<file>`.
@@ -574,7 +572,8 @@ later, it leaves its worker running.
 - **Older image** after an upgrade or rebuild: the command warns `restart it to upgrade`; restart the worker.
 - **Container gone** (Docker Desktop restart, `docker rm`): the worker shows `dead`; `ensemble-session resume NAME`
   continues the conversation in a new container. Events queued in the old one are lost.
-- **Egress gateway not ready** (`egress_unavailable`): run `./start.sh` in the egress-proxy checkout, wait for
+- **Egress gateway not ready** (`egress_unavailable`): run `~/.egress/current/start.sh` (the installed egress-proxy
+  checkout the broker's `./start.sh` hint means; before a first successful install, rerun `scripts/install.sh --docker`), wait for
   `docker ps --filter name=egress-gateway` to show `(healthy)`, then start, restart or resume again ([Egress gateway](#egress-gateway)).
 - **Codex authentication expired** (`client_auth_expired`): run `/usr/local/libexec/ensemble/ensemble-broker login codex` on the host, then `ensemble-session resume NAME`; native history is kept. Renewal failures (`client_refresh_failed`) retry each minute until expiry, when the generation closes. No run logs in or uses another identity.
 

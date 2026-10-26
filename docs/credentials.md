@@ -258,18 +258,16 @@ A read that returns bytes fails this check unless the user accepts it: mark the 
 
 Every container runs as `agent`, with all capabilities dropped and `no-new-privileges`.
 
-New workers attach only to the internal network advertised for `workers` (`egress-workers` in contract 1).
-They cannot directly reach the public network, external DNS, the Mac or LAN. The gateway denies private ranges
-and `host.docker.internal` unless a `host:port` exception applies; its config, checkout and Docker socket are
-not mounted into workers. Only container loopback bypasses the proxy. See [gateway operations](docker-host.md#egress-gateway)
+That network is the internal one the gateway advertises for `workers` (`egress-workers` in contract 1), with no
+direct route out, external DNS included. The gateway's config, checkout and Docker socket are not mounted into
+workers. Only container loopback bypasses the proxy. See [gateway operations](docker-host.md#egress-gateway)
 for the installer, policy and network-change restart commands, health checks, and public IPv4/global IPv6 limits.
 
 Ollama's `host.docker.internal:11434` and every local/LAN provider `base_url` host and port must be listed in
 `networks.workers.exceptions` in `~/.egress/config.local.yaml`. The installer preserves an existing config and
 does not add provider exceptions. Every worker gets the exception, including Claude and Codex, so a permitted
 provider still receives the requests and credentials its own permissions allow. Host-side provider probes can
-pass before the worker's exception exists. Same-network peers remain directly reachable; image builds keep
-their existing network access. Existing running `bridge` workers retain old access until their next
+pass before the worker's exception exists. Image builds keep their existing network access. Existing running `bridge` workers retain old access until their next
 start, restart or resume ([Upgrading](upgrading.md#egress-gateway)).
 
 ## What a container cannot reach

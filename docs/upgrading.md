@@ -2,8 +2,8 @@
 
 Broker protocol 25 makes `start` require the egress gateway ([Docker host › Egress
 gateway](docker-host.md#egress-gateway)): without it running and healthy, a start fails
-`egress_unavailable` (exit 17) before any credential. Upgrade the broker with the plugin.
-A worker already running stays on `bridge` until its next start, restart or resume.
+`egress_unavailable` (exit 17) before any credential. Upgrade the broker with the plugin, then rerun
+`scripts/install.sh --docker` to start the gateway ([Egress gateway](#egress-gateway)).
 
 Broker protocol 24 adds the start manifest's optional `secrets` ([environment secrets](docker-host.md#environment-secrets)).
 Upgrade the broker with the plugin: sessions refuse a broker of another protocol.
