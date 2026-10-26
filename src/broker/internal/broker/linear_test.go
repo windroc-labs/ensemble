@@ -159,28 +159,38 @@ func (k *linearKeysFake) TrustAppsByDialog(s, a string) error {
 
 type linearHostFake struct {
 	mu     sync.Mutex
-	value  []byte
+	values map[[2]string][]byte
 	fail   bool
 	writes int
 }
 
-func (h *linearHostFake) Read(string, string) ([]byte, error) {
+func (h *linearHostFake) Read(service, account string) ([]byte, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.value == nil {
+	value, ok := h.values[[2]string{service, account}]
+	if !ok {
 		return nil, ErrNotFound
 	}
-	return bytes.Clone(h.value), nil
+	return bytes.Clone(value), nil
 }
-func (h *linearHostFake) Publish(_ context.Context, _, _ string, v []byte) error {
+func (h *linearHostFake) Publish(_ context.Context, service, account string, v []byte) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.writes++
 	if h.fail {
 		return errors.New("TOKEN-SENTINEL")
 	}
-	h.value = bytes.Clone(v)
+	h.values[[2]string{service, account}] = bytes.Clone(v)
 	return nil
+}
+
+func (h *linearHostFake) value(t *testing.T, a LinearIdentity) []byte {
+	t.Helper()
+	value, err := h.Read(a.TokenService, a.TokenService) // fake AppAccount returns the service
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
 }
 
 type linearRoundTrip func(*http.Request) (*http.Response, error)
@@ -190,7 +200,7 @@ func (f linearRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { re
 func linearRig(t *testing.T) (Linear, *linearKeysFake, *linearHostFake, *[]url.Values) {
 	t.Helper()
 	k := &linearKeysFake{items: map[string][]byte{}}
-	h := &linearHostFake{}
+	h := &linearHostFake{values: map[[2]string][]byte{}}
 	var calls []url.Values
 	var callsMu sync.Mutex
 	l := NewLinear(t.TempDir(), nil)
@@ -267,7 +277,7 @@ func TestLinearHostRenewalAndBoundedGrant(t *testing.T) {
 				}
 			}
 			var token map[string]any
-			json.Unmarshal(h.value, &token)
+			json.Unmarshal(h.value(t, a), &token)
 			if len(token) != 2 || token["access_token"] != "TOKEN-3" {
 				t.Fatalf("publication keys %v", token)
 			}
@@ -296,7 +306,7 @@ func TestLinearReconstructionRepairsPublicationWithoutRenewal(t *testing.T) {
 		t.Fatalf("repair %+v %v, requests %d", got, err, len(*calls))
 	}
 	var published linearAccess
-	if json.Unmarshal(h.value, &published) != nil || published.AccessToken != "TOKEN-1" || published.ExpiresAt != "2026-11-25T12:00:00Z" {
+	if json.Unmarshal(h.value(t, a), &published) != nil || published.AccessToken != "TOKEN-1" || published.ExpiresAt != "2026-11-25T12:00:00Z" {
 		t.Fatalf("unrepaired publication %+v", published)
 	}
 }
@@ -305,7 +315,7 @@ func TestLinearLegacyExpiryIsCanonical(t *testing.T) {
 	l, k, h, calls := linearRig(t)
 	a := linearApp("harness")
 	enrollLinear(t, l, k, a)
-	h.value = []byte(`{"access_token":"OLD","expires_at":"2026-11-25T12:00:00+00:00"}`)
+	h.values[[2]string{a.TokenService, a.TokenService}] = []byte(`{"access_token":"OLD","expires_at":"2026-11-25T12:00:00+00:00"}`)
 	got, err := l.Maintain(context.Background(), a)
 	if err != nil || got.ExpiresAt != "2026-11-25T12:00:00Z" || got.Renewed || len(*calls) != 0 {
 		t.Fatalf("legacy reply %+v %v", got, err)
@@ -424,7 +434,7 @@ func TestLinearBlockedIdentityDoesNotBlockAnotherRenewal(t *testing.T) {
 			close(entered)
 			<-release
 		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"access_token":"NEW","expires_in":2592000}`))}, nil
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{"access_token":"NEW-%s","expires_in":2592000}`, form.Get("client_id"))))}, nil
 	})}
 	resultA, resultB := make(chan error, 1), make(chan error, 1)
 	go func() { _, err := l.Maintain(context.Background(), a); resultA <- err }()
@@ -451,6 +461,67 @@ func TestLinearBlockedIdentityDoesNotBlockAnotherRenewal(t *testing.T) {
 	}
 	if h.writes != 2 {
 		t.Fatalf("publications %d", h.writes)
+	}
+	for _, identity := range []LinearIdentity{a, b} {
+		var published linearAccess
+		if err := json.Unmarshal(h.value(t, identity), &published); err != nil || published.AccessToken != "NEW-"+identity.ClientID {
+			t.Fatalf("wrong identity publication: %+v %v", published, err)
+		}
+	}
+}
+
+func TestLinearIdentityPublicationsSurviveRenewalAndReconstruction(t *testing.T) {
+	l, k, h, calls := linearRig(t)
+	a, b := linearApp("harness"), linearApp("verifier")
+	a.Kind = "harness"
+	b.UserID = "00000000-0000-4000-8000-000000000002"
+	for _, identity := range []LinearIdentity{a, b} {
+		enrollLinear(t, l, k, identity)
+		if _, err := l.Maintain(context.Background(), identity); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(identity LinearIdentity, token, expiry string) []byte {
+		t.Helper()
+		value := h.value(t, identity)
+		var published linearAccess
+		if err := json.Unmarshal(value, &published); err != nil || published.AccessToken != token || published.ExpiresAt != expiry {
+			t.Fatalf("wrong publication for %s: %+v %v", identity.Name, published, err)
+		}
+		return value
+	}
+	check(a, "TOKEN-1", "2026-11-25T12:00:00Z")
+	oldB := check(b, "TOKEN-2", "2026-11-25T12:00:00Z")
+	l.now = func() time.Time { return linearNow.Add(26 * 24 * time.Hour) }
+	if got, err := l.Maintain(context.Background(), a); err != nil || !got.Renewed {
+		t.Fatalf("renewal: %+v %v", got, err)
+	}
+	newA := check(a, "TOKEN-3", "2026-12-21T12:00:00Z")
+	if !bytes.Equal(h.value(t, b), oldB) {
+		t.Fatal("harness renewal changed verifier publication")
+	}
+	h.fail = true
+	if _, err := l.Maintain(context.Background(), b); err == nil {
+		t.Fatal("failed verifier publication accepted")
+	}
+	h.fail = false
+	if !bytes.Equal(h.value(t, a), newA) || !bytes.Equal(h.value(t, b), oldB) || len(*calls) != 4 {
+		t.Fatal("failed publication changed either host entry or did not renew verifier")
+	}
+	rebuilt := NewLinear(t.TempDir(), nil)
+	rebuilt.keys, rebuilt.host, rebuilt.http, rebuilt.now = k, h, l.http, l.now
+	if got, err := rebuilt.Maintain(context.Background(), b); err != nil || got.Renewed || len(*calls) != 4 {
+		t.Fatalf("verifier repair: %+v %v, requests %d", got, err, len(*calls))
+	}
+	newB := check(b, "TOKEN-4", "2026-12-21T12:00:00Z")
+	if !bytes.Equal(h.value(t, a), newA) {
+		t.Fatal("verifier repair changed harness publication")
+	}
+	if got, err := rebuilt.Maintain(context.Background(), a); err != nil || got.Renewed || len(*calls) != 4 {
+		t.Fatalf("harness reconstruction: %+v %v, requests %d", got, err, len(*calls))
+	}
+	if !bytes.Equal(h.value(t, a), newA) || !bytes.Equal(h.value(t, b), newB) || len(h.values) != 2 {
+		t.Fatal("reconstruction changed identity material or published to another service/account")
 	}
 }
 
@@ -646,7 +717,7 @@ func TestLinearOAuthFailuresKeepDurableCurrentMaterial(t *testing.T) {
 				t.Fatal(err)
 			}
 			before, _ := k.Secret(linearService, "app/"+a.TokenService)
-			published := bytes.Clone(h.value)
+			published := h.value(t, a)
 			writes := h.writes
 			l.now = func() time.Time { return linearNow.Add(26 * 24 * time.Hour) }
 			l.http = &http.Client{Transport: linearRoundTrip(func(*http.Request) (*http.Response, error) {
@@ -664,7 +735,7 @@ func TestLinearOAuthFailuresKeepDurableCurrentMaterial(t *testing.T) {
 				t.Fatalf("invalid response accepted or leaked: %v", err)
 			}
 			after, _ := k.Secret(linearService, "app/"+a.TokenService)
-			if !bytes.Equal(before, after) || !bytes.Equal(published, h.value) || h.writes != writes {
+			if !bytes.Equal(before, after) || !bytes.Equal(published, h.value(t, a)) || h.writes != writes {
 				t.Fatal("failed OAuth replaced durable or published access material")
 			}
 		})
