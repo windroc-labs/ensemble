@@ -55,8 +55,8 @@ type Store interface {
 // Records, account Consumer.ID()) or the backlog (Backlog's service and account) holds every token issued until it
 // is confirmed revoked or expired: a material leaves its record only for confirmed revocation, confirmed expiry or a
 // confirmed backlog write. Lock guards each read-modify-write of either item, never a provider request. Audit (nil:
-// none) gets each token's outcome, never its value. Every operation refuses a provider whose kind is not renewable
-// (ErrStatic).
+// none) gets each token's outcome, never its value. Acquire, Refresh, Release and Retry refuse a provider whose kind
+// is not renewable (ErrStatic); Pending, which asks the provider nothing, only reads the backlog.
 type Lifecycle struct {
 	Provider Provider
 	Store    Store
