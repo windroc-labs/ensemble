@@ -68,6 +68,7 @@ __all__ = [
     "Tier",
     "TurnEnd",
     "TurnFailed",
+    "TurnStarted",
     "Usage",
     "Window",
     "StatusState",
@@ -125,6 +126,7 @@ class HookKind(StrEnum):
     TURN_FAILED = "turn_failed"
     BLOCKED = "blocked"
     ACTIVITY = "activity"
+    TURN_STARTED = "turn_started"
 
 
 class Tier(StrEnum):
@@ -586,6 +588,13 @@ class ClientBound:
 
 
 @dataclass(frozen=True)
+class TurnStarted:
+    """A turn its client accepted: the first prompt, a send or text typed into its terminal; never
+    a replayed record.
+    """
+
+
+@dataclass(frozen=True)
 class Activity:
     detail: str = ""
 
@@ -624,7 +633,7 @@ class Exited:
     returncode: int
 
 
-SessionEvent = Activity | Reply | TurnEnd | TurnFailed | Blocked | LimitHit | Exited
+SessionEvent = TurnStarted | Activity | Reply | TurnEnd | TurnFailed | Blocked | LimitHit | Exited
 
 
 @dataclass(frozen=True)

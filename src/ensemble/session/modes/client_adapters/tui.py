@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping
 from types import MappingProxyType
+from typing import ClassVar
 
 from ensemble.session.engine.types import (
     LOCAL_CONTEXT,
@@ -19,6 +20,7 @@ from ensemble.session.engine.types import (
     Spec,
     TurnEnd,
     TurnFailed,
+    TurnStarted,
 )
 
 
@@ -29,6 +31,7 @@ class Tui(ABC):
     dialogs: tuple[str, ...] = ()
     opening: tuple[str, str] | None = None  # (hook label, text)
     client = ""  # last ClientBound's id
+    _owned: ClassVar[bool] = False  # a session harness owns its session on a harnessed Host
 
     @abstractmethod
     def launch(self, spec: Spec, hook: tuple[str, ...]) -> Launch:
@@ -104,4 +107,6 @@ class Tui(ABC):
             found.append(Blocked(self.blocked_reason(payload)))
         elif kind == HookKind.ACTIVITY:
             found.append(Activity(self.activity(payload)))
+        elif kind == HookKind.TURN_STARTED:
+            found.append(TurnStarted())
         return found

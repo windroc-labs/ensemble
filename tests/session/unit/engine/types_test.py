@@ -250,7 +250,7 @@ class OptionSets(Case):
 
     def test_hook_kinds_tiers_and_hook_words_are_session_internal_str_enums(self):
         for enum, values in (
-            (HookKind, ["turn_end", "turn_failed", "blocked", "activity"]),
+            (HookKind, ["turn_end", "turn_failed", "blocked", "activity", "turn_started"]),
             (Tier, ["1", "2", "3", "4"]),
         ):
             with self.subTest(enum=enum.__name__):

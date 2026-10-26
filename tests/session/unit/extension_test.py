@@ -54,6 +54,7 @@ TYPES = {
             "Reply",
             "TurnEnd",
             "TurnFailed",
+            "TurnStarted",
             "TuiSettings",
             "Stderr",
             "SessionInfo",

@@ -42,6 +42,7 @@ from ensemble.session.engine.types import (
     Stderr,
     TurnEnd,
     TurnFailed,
+    TurnStarted,
 )
 from ensemble.session.hosts.base import (
     TUI_DIR,
@@ -72,6 +73,7 @@ WORDS = {
     HookKind.TURN_FAILED: StatusState.DONE,
     HookKind.BLOCKED: StatusState.BLOCKED,
     HookKind.ACTIVITY: StatusState.WORKING,
+    HookKind.TURN_STARTED: StatusState.WORKING,
 }
 SLICE = 0.1
 OPEN_AFTER = 1.0  # keys sent before a client's input box shows are lost
@@ -716,7 +718,7 @@ class TuiMode(BaseMode):
 
     def _track(self, events: list[SessionEvent | Stderr | ClientBound]) -> None:
         for event in events:
-            if isinstance(event, Blocked | Activity | TurnEnd | TurnFailed):
+            if isinstance(event, Blocked | Activity | TurnStarted | TurnEnd | TurnFailed):
                 self._held = isinstance(event, Blocked)
 
     def _end(self) -> None:

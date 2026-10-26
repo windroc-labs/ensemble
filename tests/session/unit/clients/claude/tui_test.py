@@ -23,6 +23,7 @@ from ensemble.session.engine.types import (
     Spec,
     TurnEnd,
     TurnFailed,
+    TurnStarted,
 )
 from ensemble.utils import docker_home
 from tests.session.unit.clients.claude.support import (
@@ -559,12 +560,15 @@ class TuiPayloadTest(Base):
                 [Blocked("Claude is waiting")],
             ),
             ("PostToolUse", {"session_id": SID, "tool_name": "Edit"}, [Activity("Edit")]),
-            ("UserPromptSubmit", {"session_id": SID, "prompt": "x"}, [Activity("")]),
+            ("UserPromptSubmit", {"session_id": SID, "prompt": "x"}, [TurnStarted()]),
             ("SessionStart", {"session_id": SID}, []),
         )
         for label, payload, events in rows:
             with self.subTest(label=label):
                 self.assertEqual(self.run.hook_events(label, payload), events)
+
+    def test_a_claude_tui_session_is_owned_by_a_session_harness(self):
+        self.assertTrue(type(self.run)._owned)
 
     def test_it_binds_the_sid_it_launched_or_restored_once(self):
         launched = ClaudeClient({}).tui()
@@ -895,7 +899,7 @@ class TranscriptTest(TranscriptCase):
                 ("Stop", {"session_id": SID, "last_assistant_message": "C"}),
             ]
         )
-        self.assertEqual(replayed, [Reply("A"), Activity(""), TurnEnd("C", 0)])
+        self.assertEqual(replayed, [Reply("A"), TurnStarted(), TurnEnd("C", 0)])
         self.append(said("m2", text("C")))
         self.assertEqual(run.observe(), [])
 
@@ -1139,7 +1143,7 @@ class ContinuationTest(TranscriptCase):
         for sid in (SID, NEXT):
             self.assertEqual(
                 restored.hook_events("UserPromptSubmit", {"session_id": sid}),
-                ([ClientBound(SID), Activity("")] if sid == SID else [Activity("")]),
+                ([ClientBound(SID), TurnStarted()] if sid == SID else [TurnStarted()]),
             )
 
     def test_foreign_hooks_have_no_replay_effect(self):
