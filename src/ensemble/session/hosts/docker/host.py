@@ -385,7 +385,8 @@ def _accept_started(
 class DockerTerminal(InteractiveProcess):
     """The container's pane, a TmuxPane on the container's TmuxCli. Its Record, display and sid: the
     Host record's, of the container's generation. state, returncode and screen() share one probe
-    and capture for an interval doubling from PROBE_MIN to PROBE_MAX while nothing changes.
+    and capture for an interval doubling from PROBE_MIN to PROBE_MAX while nothing changes; alive()
+    probes afresh, so the next screen() captures afresh.
     """
 
     def __init__(

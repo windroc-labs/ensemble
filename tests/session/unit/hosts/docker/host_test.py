@@ -2116,6 +2116,18 @@ class TerminalTest(Base):
         self.assertEqual((process.returncode(), process.state()), (3, Liveness.LIVE))
         self.assertEqual(tmux(), [])
 
+    def test_alive_renews_the_snapshot_so_the_next_screen_is_fresh(self):
+        process, now, tmux = self.probing()
+        for _ in range(20):
+            self.tick(process)
+            now[0] += 0.5
+        self.docker.replies[("tmux", "capture-pane")] = (0, "Trust this folder?\n", "")
+        self.assertEqual(process.screen(), "idle")
+        self.docker.order.clear()
+        self.assertTrue(process.alive())
+        self.assertEqual(process.screen(), "Trust this folder?")
+        self.assertEqual(tmux(), ["display-message", "capture-pane"])
+
     def test_an_exit_during_back_off_is_seen_within_the_cap(self):
         process, now, tmux = self.probing()
         for _ in range(20):

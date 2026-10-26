@@ -682,6 +682,9 @@ class TuiMode(BaseMode):
         try:
             if self._shown(self._terminal.screen()):
                 return
+            # may be cached until alive()
+            if not self._terminal.alive() or self._shown(self._terminal.screen()):
+                return
         except NotShowable:
             pass
         except SessionError:

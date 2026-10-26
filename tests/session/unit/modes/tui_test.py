@@ -1852,6 +1852,39 @@ class OpeningTest(Base):
         mode.poll(1.5)
         self.assertEqual(self.sends(mode), [])
 
+    def test_a_dialog_on_the_fresh_read_holds_the_opening(self):
+        mode = self.opened()
+        fresh = [False]
+
+        def alive():
+            fresh[0] = True
+            return True
+
+        def screen(_terminal, _lines):  # a cached capture until alive() renews it
+            shown, fresh[0] = ("Trust this folder?" if fresh[0] else ""), False
+            return shown
+
+        mode._terminal.calls.alive.side_effect = alive
+        self.host.calls.screen.side_effect = screen
+        self.append(record("ready"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [])
+        self.assertEqual(mode.opening_pending, "/color")
+        self.host.calls.screen.side_effect = None
+        self.host.calls.screen.return_value = ""
+        mode.poll(0.6)
+        self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
+
+    def test_a_process_not_alive_at_the_confirm_holds_the_opening(self):
+        mode = self.opened()
+        mode._terminal.calls.alive.return_value = False
+        self.append(record("ready"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [])
+        self.assertEqual(mode.opening_pending, "/color")
+
     def test_held_while_marked_blocked(self):
         mode = self.opened()
         self.append(record("ready"), record("ask", why="perm"))
