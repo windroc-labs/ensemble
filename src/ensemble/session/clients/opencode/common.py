@@ -172,6 +172,13 @@ def _spellings(name: str) -> list[str]:
     ]
 
 
+def _grant_paths(paths: Iterable[str]) -> list[str]:
+    """OpenCode tools check lexical paths; retain those alongside their resolved targets."""
+    return list(
+        dict.fromkeys(p for path in paths for p in (os.path.abspath(path), os.path.realpath(path)))
+    )
+
+
 def _git(argv: list[str], timeout: int):
     env = {k: v for k, v in os.environ.items() if k not in LOCAL_ENV_VARS}
     return sh(argv, timeout, env=env)
@@ -379,8 +386,8 @@ class OpenCodeCommon:
         permission: dict = {
             "bash": {"*": "ask", **commands} if commands else "ask",
         }
-        dirs = [os.path.realpath(d) for d in access.dirs]
-        reads = [os.path.realpath(d) for d in access.reads]
+        dirs = _grant_paths(access.dirs)
+        reads = _grant_paths(access.reads)
         if outside := [*reads, *dirs]:
             permission["external_directory"] = {
                 pattern: "allow" for d in outside for pattern in (d, f"{d}/*")
