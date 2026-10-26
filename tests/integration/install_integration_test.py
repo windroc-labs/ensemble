@@ -865,7 +865,7 @@ class InstallTest(Case):
                 (WRITE_Q, "y"),
                 *DOCKER_LOGINS,
                 *self.secrets(*SLOTS),
-                *BOARD,
+                *BOARD[:-1],
             ],
         )
         self.assert_ok(result)
@@ -886,7 +886,7 @@ class InstallTest(Case):
             "linear",
             "--no-launchd",
             clients="claude",
-            then=[*self.secrets(*SLOTS), *BOARD],
+            then=[*self.secrets(*SLOTS), *BOARD[:-1]],
         )
         self.assert_ok(result)
         self.assertRegex(result.tty, MENU_Q)
