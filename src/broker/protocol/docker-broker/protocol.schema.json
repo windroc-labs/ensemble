@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Docker broker protocol 24",
+  "title": "Docker broker protocol 25",
   "$comment": "Changes to the protocol format defined by this schema require bumping Version in src/broker/internal/protocol/protocol.go.",
   "$ref": "#/$defs/manifest",
   "$defs": {
@@ -438,7 +438,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "24"
+          "const": "25"
         }
       },
       "required": [
