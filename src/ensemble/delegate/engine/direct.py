@@ -45,18 +45,18 @@ def open_worker(
         "ensemble.session.cli",
         "start",
         name,
-        "--host",
-        host,
-        "--client",
-        client or cfg.get("client", ""),
-        "--cwd",
-        os.path.abspath(cwd or os.getcwd()),
     ]
+    for flag, value in (
+        ("--host", host),
+        ("--client", client or cfg.get("client", "")),
+        ("--cwd", os.path.abspath(cwd or os.getcwd())),
+    ):
+        argv += [flag, value]
     if resolved is not None:
         argv += ["--environment-spec", json.dumps(resolved.spec.persisted())]
     for flag, value in (("--account", account), ("--display", display)):
         if value is not None:
-            argv += [flag, value]
+            argv.append(f"{flag}={value}")
     child_env = {**os.environ, **source_path(config.module_roots())}
     for key, value in ((SID_ENV, sid), (EVENTS_ENV, events)):
         child_env.pop(key, None)

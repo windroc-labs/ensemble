@@ -154,12 +154,17 @@ class Direct(Case):
             events="/captured/events",
         )
         argv = self.argv()
-        for key, value in (("--client", "codex"), ("--account", "work"), ("--display", "none")):
-            self.assertEqual(argv[argv.index(key) + 1], value)
+        self.assertEqual(argv[argv.index("--client") + 1], "codex")
+        self.assertIn("--account=work", argv)
+        self.assertIn("--display=none", argv)
         env = self.started.call_args.kwargs["env"]
         self.assertEqual(
             (env["ENSEMBLE_SID"], env["ENSEMBLE_EVENTS"]), ("captured", "/captured/events")
         )
+
+    def test_leading_dash_display_remains_one_option_value(self):
+        self.open(display="-pane")
+        self.assertIn("--display=-pane", self.argv())
 
     def test_absent_identity_does_not_reuse_the_callers_environment(self):
         with mock.patch.dict(os.environ, {"ENSEMBLE_SID": "stale", "ENSEMBLE_EVENTS": "/stale"}):

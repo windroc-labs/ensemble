@@ -30,8 +30,7 @@ class Open(Case):
         return subprocess.run(
             (
                 *PY,
-                "-m",
-                "tests.delegate.fakes.open_launcher",
+                str(Path(REPO, "tests/delegate/fakes/open_launcher.py")),
                 "open",
                 "dummy-1",
                 "--environment",
@@ -67,7 +66,7 @@ class Open(Case):
         self.assertEqual((launch["sid"], launch["events"]), (SID, str(Path(self.home, "events"))))
         argv = launch["argv"]
         self.assertEqual(argv[argv.index("--cwd") + 1], str(self.cwd))
-        self.assertEqual(argv[argv.index("--account") + 1], "work")
+        self.assertIn("--account=work", argv)
         spec = json.loads(argv[argv.index("--environment-spec") + 1])
         self.assertEqual(spec["secrets"], [{"item": "ensemble-env/dummy", "file": "dummy.txt"}])
         self.assertIsNone(spec["prefetch"])

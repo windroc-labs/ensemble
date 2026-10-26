@@ -1225,11 +1225,11 @@ class Open(Base):
         self.assertEqual(argv[5:7], ["start", "dummy-1"])
         for key, value in (
             ("--client", "codex"),
-            ("--account", "work"),
             ("--cwd", self.tmp),
-            ("--display", "none"),
         ):
             self.assertEqual(argv[argv.index(key) + 1], value)
+        self.assertIn("--account=work", argv)
+        self.assertIn("--display=none", argv)
         env = self.opened.call_args.kwargs["env"]
         self.assertEqual((env["ENSEMBLE_SID"], env["ENSEMBLE_EVENTS"]), (SID, "/events"))
         self.assertFalse(os.path.exists(self.work))
