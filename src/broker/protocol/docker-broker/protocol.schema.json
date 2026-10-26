@@ -471,7 +471,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "27"
+          "const": "29"
         }
       },
       "required": [
@@ -614,9 +614,6 @@
           ],
           "additionalProperties": false
         },
-        "github": {
-          "$ref": "#/$defs/expiries"
-        },
         "github_user_id": {
           "oneOf": [
             {
@@ -628,13 +625,13 @@
             }
           ]
         },
-        "credential_expires_at": {
+        "deadline": {
           "oneOf": [
             {
               "type": "null"
             },
             {
-              "$ref": "#/$defs/time"
+              "$ref": "#/$defs/deadline"
             }
           ]
         },
@@ -647,9 +644,8 @@
         "endpoint",
         "image_digest",
         "clients",
-        "github",
         "github_user_id",
-        "credential_expires_at"
+        "deadline"
       ],
       "additionalProperties": false
     },
@@ -741,14 +737,40 @@
       ],
       "additionalProperties": false
     },
-    "refresh_input": {
+    "notice_key": {
+      "type": "string",
+      "pattern": "^ensemble-(claude|opencode|env)/[A-Za-z0-9._-]{1,64}@[0-9]{1,9}:(30d|7d|1d|expired|rotated)$"
+    },
+    "deadline": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/time"
+        },
+        "action": {
+          "enum": [
+            "close"
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "at",
+        "action",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "maintain_input": {
       "type": "object",
       "properties": {
         "argv": {
           "type": "array",
           "prefixItems": [
             {
-              "const": "refresh"
+              "const": "maintain"
             },
             {
               "const": "--container"
@@ -763,8 +785,27 @@
               "$ref": "#/$defs/path"
             }
           ],
-          "items": false,
-          "minItems": 5
+          "items": {
+            "anyOf": [
+              {
+                "const": "--renew"
+              },
+              {
+                "const": "--delivered"
+              },
+              {
+                "$ref": "#/$defs/notice_key"
+              }
+            ]
+          },
+          "not": {
+            "contains": {
+              "const": "--renew"
+            },
+            "minContains": 2
+          },
+          "minItems": 5,
+          "maxItems": 134
         }
       },
       "required": [
@@ -772,16 +813,14 @@
       ],
       "additionalProperties": false
     },
-    "refresh_output": {
+    "maintain_result": {
       "type": "object",
       "properties": {
-        "container": {
-          "$ref": "#/$defs/container"
+        "credential": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,31}$"
         },
-        "github": {
-          "$ref": "#/$defs/expiries"
-        },
-        "credential_expires_at": {
+        "expires_at": {
           "oneOf": [
             {
               "type": "null"
@@ -791,14 +830,120 @@
             }
           ]
         },
+        "error": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "enum": [
+                    "usage",
+                    "manifest_rejected",
+                    "mount_rejected",
+                    "login_required",
+                    "image_rejected",
+                    "docker_unreachable",
+                    "build_failed",
+                    "start_failed",
+                    "close_failed",
+                    "keychain_failed",
+                    "workspace_dirty",
+                    "workspace_rejected",
+                    "workspace_failed",
+                    "github_failed",
+                    "refresh_failed",
+                    "egress_unavailable",
+                    "internal_error",
+                    "busy"
+                  ]
+                },
+                "message": {
+                  "$ref": "#/$defs/text"
+                },
+                "cause": {
+                  "$ref": "#/$defs/text"
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "credential",
+        "expires_at",
+        "error"
+      ],
+      "additionalProperties": false
+    },
+    "maintain_output": {
+      "type": "object",
+      "properties": {
+        "container": {
+          "$ref": "#/$defs/container"
+        },
+        "next_check": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/time"
+            }
+          ]
+        },
+        "deadline": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/deadline"
+            }
+          ]
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/maintain_result"
+          }
+        },
+        "notices": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "$ref": "#/$defs/notice_key"
+              },
+              "text": {
+                "$ref": "#/$defs/text"
+              }
+            },
+            "required": [
+              "key",
+              "text"
+            ],
+            "additionalProperties": false
+          }
+        },
         "audit_warning": {
           "$ref": "#/$defs/audit_warning"
         }
       },
       "required": [
         "container",
-        "github",
-        "credential_expires_at"
+        "next_check",
+        "deadline",
+        "results",
+        "notices"
       ],
       "additionalProperties": false
     },
@@ -865,6 +1010,58 @@
           ],
           "additionalProperties": false
         },
+        "static": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "reference": {
+                "type": "string",
+                "pattern": "^ensemble-(claude|opencode|env)/[A-Za-z0-9._-]{1,64}$"
+              },
+              "version": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "expires_at": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/$defs/time"
+                  }
+                ]
+              },
+              "provenance": {
+                "enum": [
+                  "explicit",
+                  "derived",
+                  "assumed",
+                  "unknown"
+                ]
+              },
+              "notice": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/$defs/text"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "reference",
+              "version",
+              "expires_at",
+              "provenance",
+              "notice"
+            ],
+            "additionalProperties": false
+          }
+        },
         "audit_warning": {
           "$ref": "#/$defs/audit_warning"
         }
@@ -888,7 +1085,7 @@
                 "version",
                 "build",
                 "start",
-                "refresh",
+                "maintain",
                 "close",
                 "status",
                 "workspace-rm",
@@ -1047,7 +1244,7 @@
                     "version",
                     "build",
                     "start",
-                    "refresh",
+                    "maintain",
                     "close",
                     "status",
                     "workspace-rm",
@@ -1074,7 +1271,7 @@
                 "command": {
                   "enum": [
                     "start",
-                    "refresh"
+                    "maintain"
                   ]
                 }
               }
@@ -1094,7 +1291,7 @@
                 "command": {
                   "enum": [
                     "start",
-                    "refresh"
+                    "maintain"
                   ]
                 }
               }
@@ -1114,7 +1311,6 @@
                 "command": {
                   "enum": [
                     "start",
-                    "refresh",
                     "probe-provider"
                   ]
                 }
@@ -1155,7 +1351,6 @@
                   "enum": [
                     "build",
                     "start",
-                    "refresh",
                     "close",
                     "workspace-rm",
                     "lock-query"
@@ -1237,7 +1432,6 @@
                 "command": {
                   "enum": [
                     "start",
-                    "refresh",
                     "close",
                     "status",
                     "probe-provider"
@@ -1316,27 +1510,7 @@
                 },
                 "command": {
                   "enum": [
-                    "start",
-                    "refresh"
-                  ]
-                }
-              }
-            }
-          }
-        },
-        {
-          "properties": {
-            "exit_code": {
-              "const": 16
-            },
-            "error": {
-              "properties": {
-                "code": {
-                  "const": "refresh_failed"
-                },
-                "command": {
-                  "enum": [
-                    "refresh"
+                    "start"
                   ]
                 }
               }
@@ -1377,7 +1551,7 @@
                     "version",
                     "build",
                     "start",
-                    "refresh",
+                    "maintain",
                     "close",
                     "status",
                     "workspace-rm",
@@ -1423,7 +1597,7 @@
                   "command": {
                     "enum": [
                       "start",
-                      "refresh",
+                      "maintain",
                       "close",
                       "status"
                     ]
@@ -1442,25 +1616,6 @@
     "time": {
       "type": "string",
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
-    },
-    "expiries": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "account": {
-            "$ref": "#/$defs/github_login"
-          },
-          "expires_at": {
-            "$ref": "#/$defs/time"
-          }
-        },
-        "required": [
-          "account",
-          "expires_at"
-        ],
-        "additionalProperties": false
-      }
     },
     "plugin": {
       "type": "string",
@@ -1616,15 +1771,33 @@
       "pattern": "^[A-Za-z0-9._/-]{1,255}$",
       "not": {
         "anyOf": [
-          {"pattern": "^-"},
-          {"const": "HEAD"},
-          {"pattern": "^refs/"},
-          {"pattern": "^[0-9a-fA-F]{7,64}$"},
-          {"pattern": "\\.\\."},
-          {"pattern": "\\.$"},
-          {"pattern": "(^|/)(/|$)"},
-          {"pattern": "(^|/)\\."},
-          {"pattern": "\\.lock(/|$)"}
+          {
+            "pattern": "^-"
+          },
+          {
+            "const": "HEAD"
+          },
+          {
+            "pattern": "^refs/"
+          },
+          {
+            "pattern": "^[0-9a-fA-F]{7,64}$"
+          },
+          {
+            "pattern": "\\.\\."
+          },
+          {
+            "pattern": "\\.$"
+          },
+          {
+            "pattern": "(^|/)(/|$)"
+          },
+          {
+            "pattern": "(^|/)\\."
+          },
+          {
+            "pattern": "\\.lock(/|$)"
+          }
         ]
       }
     },

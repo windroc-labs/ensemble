@@ -29,7 +29,7 @@ class Delegate(ABC):
         callback: Sequence[str] | None = None,
         overlays: Sequence[Mapping] = (),
     ) -> Delegate:
-        """Build and save a run without starting its sessions; SessionBusy on a held lock."""
+        """Build and save a run without starting its sessions."""
 
     @classmethod
     @abstractmethod

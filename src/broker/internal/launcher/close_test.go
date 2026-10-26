@@ -2,6 +2,7 @@ package launcher
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 
@@ -38,5 +39,31 @@ func TestClose(t *testing.T) {
 				t.Fatalf("%+v %v", got, err)
 			}
 		})
+	}
+}
+
+// TestCloseReleasesCodexGrant: close withdraws the container's Codex grant after deleting it, reports a withdrawal
+// failure after the deletion, and keeps the grant of a container it could not delete.
+func TestCloseReleasesCodexGrant(t *testing.T) {
+	var log []string
+	removal := error(nil)
+	d := &fakeDocker{respond: func(args []string) ([]byte, error) {
+		log = append(log, args[0])
+		return []byte(container + "\n"), removal
+	}}
+	creds := &fakeCodexCreds{log: &log}
+	h := Host{Docker: d, GitHub: &fakeTokens{}, Codex: creds}
+	got, err := h.Close(context.Background(), container)
+	if err != nil || got != (CloseResult{Container: container, Removed: true}) || !slices.Equal(log, []string{"rm", "release " + container}) {
+		t.Fatalf("%+v %v %q", got, err, log)
+	}
+	log, creds.releaseErr = nil, errors.New("keychain STORE_SENTINEL")
+	_, err = h.Close(context.Background(), container)
+	if e := protoErr(t, err); e.Code != protocol.KeychainFailed || e.Message != "Withdrawing the Codex grant of "+container+" failed." || !slices.Equal(log, []string{"rm", "release " + container}) {
+		t.Fatalf("%+v %q", e, log)
+	}
+	log, removal = nil, &docker.CommandError{Exit: 1, Stderr: "removal of container in progress"}
+	if _, err := h.Close(context.Background(), container); protoErr(t, err).Code != protocol.CloseFailed || !slices.Equal(log, []string{"rm"}) {
+		t.Fatalf("%v %q", err, log)
 	}
 }

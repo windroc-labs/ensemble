@@ -44,8 +44,7 @@ Exit conditions:
   unknown run inventory; 2 when busy,
   already live or unclaimable; 0 if an ended outcome was written back. Otherwise
   launch result: 0 detached/bounced, 1 launch failure, 2 issue config error,
-  3 transient error, 75 when its run is busy (a lock held): a new run back in
-  Ready, a resume left In Progress. --dry-run: 0 for the plan; setup failures still apply.
+  3 transient error. --dry-run: 0 for the plan; setup failures still apply.
   A nonzero --issue (not --dry-run) also prints its orchestrator.jsonl lines about
   the issue that stderr did not show, e.g. router.py: pick-none TASK-1 reason=...
   ENSEMBLE_SID is read once and removed: new run identity, or must match a
@@ -106,15 +105,11 @@ from ensemble.orchestrator.engine.gate import BRAKE_5H, Gate, read_usage
 from ensemble.orchestrator.engine.linear_run import LinearRun
 from ensemble.orchestrator.engine.log import linear_error, log
 from ensemble.orchestrator.engine.runs import (
-    COOL,
-    busy_rows,
-    cancelled_rows,
     client_of,
     delegate_of,
     failures,
     latest,
     note,
-    note_busy,
     parse_log,
     started_task,
     trim,
@@ -137,7 +132,6 @@ from ensemble.orchestrator.trackers.linear.client import has_key, linear_gql
 from ensemble.utils import (
     CLIENT_ENV,
     EVENTS_ENV,
-    EXIT_BUSY,
     SID_ENV,
     exhausted,
     nested_start,
@@ -150,6 +144,10 @@ STALE = timedelta(hours=2)
 LIVE = timedelta(minutes=30)
 CAP = 4
 NOT_QUEUED = "not a {state} issue assigned to a role account"
+NOT_LISTED = (
+    "a {state} issue assigned to a role account, yet not in the {state} list "
+    "(it can lag a change: retry)"
+)
 SKEW = timedelta(minutes=5)
 CAP_COMMENT = "Tried 4 times without finishing; needs a look."
 INTERRUPTED = "The previous agent run was interrupted. Moving this issue back to the {state} queue."
@@ -159,7 +157,6 @@ USAGE = (
     "[--tui [--display D] [--events FILE]] | --brake ROLE"
 )
 FLAGS = {"--dry-run": "dry", "--tui": "tui"}
-# the Delegate's error for a run's environment on a Host without its default table (FR-57)
 ENVIRONMENT_ERROR = re.compile(r"\[environment\.[^\]\s]+\]")
 VALUED = {"--issue": "issue", "--display": "display", "--events": "events"}
 
@@ -187,10 +184,8 @@ def first_line_time(entries, sid):
     )
 
 
-def attempt_count(entries, issue, since=None, busy=()):
-    """entries' rows of issue after since, less those a busy row cancels."""
-    counted = [e for e in entries if e.issue == issue and (since is None or e.ts > since)]
-    return len(counted) - cancelled_rows(busy, counted)
+def attempt_count(entries, issue, since=None):
+    return sum(1 for e in entries if e.issue == issue and (since is None or e.ts > since))
 
 
 def live_sessions(cfg, entries, *, say):
@@ -250,18 +245,7 @@ def client_for(pick, default) -> tuple[str | None, ClientSource, str | None]:
 
 class Board:
     def __init__(
-        self,
-        gql,
-        entries,
-        cfg,
-        *,
-        now,
-        dry,
-        keychain,
-        wiring: Wiring,
-        gate=None,
-        say=None,
-        cool=True,
+        self, gql, entries, cfg, *, now, dry, keychain, wiring: Wiring, gate=None, say=None
     ):
         self.gql, self.entries, self.now, self.dry = gql, entries, now, dry
         self.cfg, self.keychain, self.wiring, self.gate = cfg, keychain, wiring, gate
@@ -269,22 +253,7 @@ class Board:
         self.ready, self.blocked, self.live, self.statuses = None, {}, set(), {}
         self.status_errors, self.replays = {}, {}
         self.failures = failures(cfg.runs_log)
-        self.busy, self.cool, self.busy_skipped = busy_rows(cfg.runs_log), cool, set()
         self.tracker = wiring.connect(gql, cfg, say=self.say)
-
-    def reread_busy(self):
-        self.busy = busy_rows(self.cfg.runs_log)
-
-    def cooling(self, issue):
-        """Whether issue's newest busy row is under COOL old (cool), said once."""
-        ident = issue["identifier"]
-        mine = [b.ts for b in self.busy if b.issue == ident]
-        if not self.cool or not mine or self.now - max(mine) >= COOL:
-            return False
-        if ident not in self.busy_skipped:
-            self.busy_skipped.add(ident)
-            self.say("busy-skip", ident, since=max(mine).isoformat())
-        return True
 
     def todo(self):
         if self.ready is None:
@@ -317,7 +286,7 @@ class Board:
 
     def attempts(self, issue):
         tried = [*self.entries, *self.failures]
-        n = attempt_count(tried, issue["identifier"], busy=self.busy)
+        n = attempt_count(tried, issue["identifier"])
         return (
             n
             if n < CAP
@@ -325,7 +294,6 @@ class Board:
                 tried,
                 issue["identifier"],
                 self.tracker.moved_at(issue["id"], IssueState.READY, by="other"),
-                self.busy,
             )
         )
 
@@ -378,7 +346,7 @@ class Board:
         mine = [
             (i, self.current_sid(i))
             for i in self.tracker.assigned(IssueState.RUNNING)
-            if i["identifier"] not in self.live and not self.cooling(i)
+            if i["identifier"] not in self.live
         ]
         mine.sort(
             key=lambda p: (
@@ -488,13 +456,9 @@ class Board:
             )
         return False
 
-    def queue(self, full=(), tried=()):
+    def queue(self, full=()):
         return sorted(
-            (
-                i
-                for i in self.todo()
-                if i["identifier"] not in tried and self.available(i, full) and not self.cooling(i)
-            ),
+            (i for i in self.todo() if self.available(i, full)),
             key=lambda i: (rank(i), self.later(i), i["createdAt"]),
         )
 
@@ -583,16 +547,13 @@ class Board:
                     break
         return selected
 
-    def take(self, only=None, full=(), clients=(), tried=None):
-        """tried: the idents already examined, skipped and added to."""
-        tried = set() if tried is None else tried
-        queue = self.queue(full, tried)
+    def take(self, only=None, full=(), clients=()):
+        queue = self.queue(full)
         if only:
             queue = [i for i in queue if i["identifier"] == only]
 
         def pick(issue):
             ident = issue["identifier"]
-            tried.add(ident)
             if self.attempts(issue) >= CAP:
                 self.say("claim-skip", ident, to="in_review", reason=f"reached {CAP} attempts")
                 self.comment_and_move(
@@ -613,10 +574,10 @@ class Board:
     def unqueued(self, ident):
         """Why ident is not queued, with the tracker's refusal."""
         current = self.tracker.recheck(ident)
-        reason = NOT_QUEUED.format(state=self.tracker.state_name(IssueState.READY))
-        reasons = [] if current.ready and current.role else [reason]
+        state = self.tracker.state_name(IssueState.READY)
+        reasons = [] if current.ready and current.role else [NOT_QUEUED.format(state=state)]
         reasons += [current.refused] if current.refused else []
-        return "; ".join(reasons) or reason
+        return "; ".join(reasons) or NOT_LISTED.format(state=state)
 
     def claim(self, issue, full, clients=()):
         ident = issue["identifier"]
@@ -691,10 +652,10 @@ def begin(cfg, spec: Spec) -> Spec:
     return spec
 
 
-def record(cfg, spec: Spec, *, role, key, now, target=None) -> tuple[str, str]:
+def record(cfg, spec: Spec, *, role, key, now, target=None) -> str:
     """The run's runs.jsonl row, an attempt toward CAP: a start row holds the claim's context (issue
     uuid, project, target, the role's key), which its write-back reads, and its task, which picks
-    a resume's tier; returns its Delegate kind and the row's ts.
+    a resume's tier; returns its Delegate kind.
     """
     if spec.mode == "new":
         kind, claim = (
@@ -709,7 +670,7 @@ def record(cfg, spec: Spec, *, role, key, now, target=None) -> tuple[str, str]:
         )
     else:
         kind, claim = delegate_of(parse_log(cfg.runs_log), spec.sid), {}
-    ts = note(
+    note(
         cfg.runs_log,
         "start" if spec.mode == "new" else "resume",
         issue=spec.issue,
@@ -720,7 +681,7 @@ def record(cfg, spec: Spec, *, role, key, now, target=None) -> tuple[str, str]:
         now=now,
         **claim,
     )
-    return kind, ts
+    return kind
 
 
 def fail(ident, kind, reason, rc):
@@ -742,8 +703,7 @@ def outer(
     """Prepares the issue's input, then detaches its LinearRun, attended (tui mode) when given.
     Its runs.jsonl row, an attempt toward CAP, comes once Recover can read the run back: a resume's
     first, a new run's once its LinearRun (its Delegate's state) is built, before its detach; a new
-    run failing before then leaves a `failed` row, an attempt that Recover cannot read back, unless
-    it is busy (EXIT_BUSY).
+    run failing before then leaves a `failed` row, an attempt that Recover cannot read back.
     """
     rc = None
     try:
@@ -752,11 +712,7 @@ def outer(
         )
         return rc
     finally:
-        if (
-            a.mode == "new"
-            and rc not in (0, EXIT_BUSY)
-            and a.sid not in {e.sid for e in parse_log(cfg.runs_log)}
-        ):
+        if a.mode == "new" and rc != 0 and a.sid not in {e.sid for e in parse_log(cfg.runs_log)}:
             note(cfg.runs_log, "failed", issue=a.issue, sid=a.sid, now=now)
 
 
@@ -771,11 +727,7 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
     if role is None or reason:
         return fail(a.issue, "config-error", reason, 2)
     key = wiring.key(cfg, role)
-    kind, resumed = (
-        record(cfg, a, role=role, key=key, now=now)
-        if a.mode == "resume"
-        else (cfg.delegate_kind, None)
-    )
+    kind = record(cfg, a, role=role, key=key, now=now) if a.mode == "resume" else cfg.delegate_kind
     if key is not None and not keychain(key):
         return fail(a.issue, "config-error", f"no Keychain item for role key {key}", 2)
     if a.mode == "resume":
@@ -881,42 +833,23 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
                     else {}
                 ),
             )
-        except delegate.SessionBusy as busy:
-            return _busy(a, ctx, resumed, busy, now=now, runs=cfg.runs_log)
         except delegate.ConfigError as error:
-            label = a.mode == "new" and a.client_source == "label"
-            if label and not ENVIRONMENT_ERROR.search(str(error)):
+            if (
+                a.mode == "new"
+                and a.client_source == "label"
+                and not ENVIRONMENT_ERROR.search(str(error))
+            ):
                 return _label_client_error(a, ctx, error)
             raise
         if a.mode == "new":
             record(cfg, a, role=role, key=key, target=slug, now=now)
-        try:
-            detached = linear_run.detach()
-        except delegate.SessionBusy as busy:  # attended: its write-back handles it
-            log("router", "lock-busy", a.issue, error=one_line(busy))
-            return 1
+        detached = linear_run.detach()
     except (ConfigError, delegate.ConfigError, delegate.SessionError) as e:
         log("router", "launch-error", a.issue, error=one_line(e))
         return 1
     if attended:
         announce(a.issue, linear_run, detached)
     return 0
-
-
-def _busy(a, ctx, resumed, busy, *, now, runs):
-    """A run whose lock is held at construction: no attempt, no comment; a new run back to Ready, a
-    resume's row (resumed: its ts) cancelled.
-    """
-    note_busy(runs, issue=a.issue, sid=a.sid, cancels=resumed and ("resume", resumed), now=now)
-    log("router", "busy", a.issue, sid=a.sid, error=one_line(busy))
-    if a.mode == "new":
-        try:
-            left = ctx.tracker.move(ctx.issue_id, IssueState.READY, frm=IssueState.RUNNING)
-        except writeback.ERRORS as e:
-            return fail(a.issue, "transient", f"busy move: {one_line(e)}", EXIT_BUSY)
-        if left is not None:
-            log("router", "move-skip", a.issue, step="busy", state=left)
-    return EXIT_BUSY
 
 
 def _label_client_message(client, error, ready):
@@ -1019,26 +952,15 @@ def other_sid(spec, launch_sid):
     return True
 
 
-class Candidates:
-    """A tick's runs to try in order: its resumes, then its claims, each issue once (new_sid: each
-    new run's sid); `unclaimed`: the claims ended on a queue with nothing claimable.
-    """
+def choose(board, gate, live_ids, full, counts, *, clients, new_sid):
+    unclaimed = False
 
-    def __init__(self, board, gate, live_ids, full, counts, *, clients, new_sid):
-        self.board, self.gate, self.full, self.counts = board, gate, full, counts
-        self.clients, self.new_sid, self.unclaimed = clients, new_sid, False
-        self.found = itertools.chain(self._resumes(live_ids), self._claimed())
-
-    def __iter__(self):
-        return self.found
-
-    def _resumes(self, live_ids):
-        board = self.board
+    def resumes():
         for issue, sid in board.recover(live_ids):
-            if not board.available(issue, self.full):
+            if not board.available(issue, full):
                 continue
-            spec, role = board.resumption(issue, sid, self.new_sid()), board.role(issue)
-            if spec.client in self.clients:
+            spec, role = board.resumption(issue, sid, new_sid), board.role(issue)
+            if spec.client in clients:
                 reason = f"{spec.client} is full"
                 board.say("recover-skip", issue["identifier"], once=True, sid=sid, reason=reason)
                 continue
@@ -1048,34 +970,38 @@ class Candidates:
                 )
             else:
                 key = (delegate_of(board.entries, sid), spec.client)
-                blocked = self.gate.blocked(
+                blocked = gate.blocked(
                     role,
                     issue["identifier"],
                     key=key,
                 )
             if not blocked:
-                board.plan(("resume", spec, sid), self.counts)
+                board.plan(("resume", spec, sid), counts)
                 yield spec
 
-    def _claimed(self):
-        board, tried = self.board, set()
-        while queue := board.queue(self.full, tried):
-            board.plan(("new", len(queue)), self.counts)
-            if not (taken := board.take(full=self.full, clients=self.clients, tried=tried)):
-                self.unclaimed = True
-                return
-            issue, task, role, client, source = taken
-            yield Spec.from_issue(
-                issue,
-                role=role,
-                mode="new",
-                sid=self.new_sid(),
-                task=task,
-                client=client,
-                client_source=source,
-            )
-            if board.dry:
-                return
+    def claimed():
+        nonlocal unclaimed
+        if not (queue := board.queue(full)):
+            return
+        board.plan(("new", len(queue)), counts)
+        if not (taken := board.take(full=full, clients=clients)):
+            unclaimed = True
+            return
+        issue, task, role, client, source = taken
+        yield Spec.from_issue(
+            issue,
+            role=role,
+            mode="new",
+            sid=new_sid,
+            task=task,
+            client=client,
+            client_source=source,
+        )
+
+    spec = board.first(itertools.chain(resumes(), claimed()))
+    if spec is None and unclaimed:
+        board.say("skip", reason="nothing claimed")
+    return spec
 
 
 def tick(opts, cfg, gql, *, start, keychain, wiring, clock=datetime.now, launch_sid=None):
@@ -1119,28 +1045,14 @@ def tick(opts, cfg, gql, *, start, keychain, wiring, clock=datetime.now, launch_
                 say=walk,
             )
             live_ids = {i for ids in live.values() for i in ids}
-            found = Candidates(
-                board,
-                gate,
-                live_ids,
-                full,
-                counts,
-                clients=clients,
-                new_sid=lambda: launch_sid or str(uuid.uuid4()),
-            )
-            if dry:
-                board.first(found)
-            else:
-                for spec in found:
-                    if other_sid(spec, launch_sid):
-                        return 2
-                    walk.write()  # the outer logs past the walk
-                    if start_run(start, begin(cfg, spec), walk) != EXIT_BUSY:
-                        return 0
-                    board.reread_busy()  # a busy run is not the round's: the next one's turn
-            if found.unclaimed:
-                board.say("skip", reason="nothing claimed")
-            return 0
+            new_sid = launch_sid or str(uuid.uuid4())
+            spec = choose(board, gate, live_ids, full, counts, clients=clients, new_sid=new_sid)
+            if not dry and spec is not None and other_sid(spec, launch_sid):
+                return 2
+            if spec is None or dry:
+                return 0
+            walk.write()  # the outer logs past the walk
+            return start_run(start, begin(cfg, spec), walk)
 
 
 def run_issue(opts, cfg, gql, start, *, keychain, wiring, clock=datetime.now, launch_sid=None):
@@ -1168,9 +1080,7 @@ def run_issue(opts, cfg, gql, start, *, keychain, wiring, clock=datetime.now, la
             print(f"router.py: {ident} has a live agent run{shown}", file=sys.stderr)
             return stop
         entries = parse_log(runs)
-        board = Board(
-            gql, entries, cfg, now=now, dry=dry, keychain=keychain, wiring=wiring, cool=False
-        )
+        board = Board(gql, entries, cfg, now=now, dry=dry, keychain=keychain, wiring=wiring)
         if issue := next(
             (i for i in board.tracker.assigned(IssueState.RUNNING) if i["identifier"] == ident),
             None,
@@ -1402,7 +1312,6 @@ def _route(opts, cfg, launch_sid, *, trackers, now, gql, run, keychain, start, d
 
 
 def start_run(start, args, say):
-    """EXIT_BUSY when the run was busy, else 0."""
     try:
         result = start(args)
     except (Exception, SystemExit) as error:  # noqa: BLE001  # A recorded launch may fail.
@@ -1414,6 +1323,4 @@ def start_run(start, args, say):
         )
     else:
         say("launch", args.issue, exit=result)
-        if result == EXIT_BUSY:
-            return EXIT_BUSY
     return 0

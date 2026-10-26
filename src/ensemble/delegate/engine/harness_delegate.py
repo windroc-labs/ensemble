@@ -17,9 +17,10 @@ from ensemble.delegate import config
 from ensemble.delegate.composer import Composer, DelegateConfig, RunConfig, Team, teams
 from ensemble.delegate.engine.base import Delegate
 from ensemble.delegate.engine.callback import EventCallback, sweep
-from ensemble.delegate.engine.config import module_roots, read_config
+from ensemble.delegate.engine.config import module_roots, packaged_environments, read_config
 from ensemble.delegate.engine.container import on_docker
 from ensemble.delegate.engine.drivers import AgentDriver, Driver, InstructionDriver
+from ensemble.delegate.engine.environment import resolve
 from ensemble.delegate.engine.plan import plan
 from ensemble.delegate.engine.runner import execute, say, stopped
 from ensemble.delegate.engine.state import RunState
@@ -34,12 +35,14 @@ from ensemble.delegate.engine.types import (
     Preview,
     Result,
     Spec,
+    Stopped,
 )
 from ensemble.delegate.event.reply import outcome_only
 from ensemble.delegate.event.types import Outcome
 from ensemble.session import (
     SIGNALS,
     Access,
+    EnvironmentSpec,
     Host,
     Launch,
     Mode,
@@ -71,6 +74,7 @@ from ensemble.utils import (
     Record,
     Status,
     StatusState,
+    last_lines,
     load_class,
     remove_tree,
     source_path,
@@ -123,9 +127,11 @@ class _State:
     completed: bool = False
     result: Result | None = None
     events: str | None = None
+    start_failure: str | None = None
 
 
-TUI_START_TIMEOUT = 30  # seconds: a detached tui run's agent session to go live
+TUI_START_TIMEOUT = 30  # seconds: a tui run's agent session to go live, off Docker
+DOCKER_START_TIMEOUT = 120  # seconds, container start included
 TUI_POLL = 0.1  # seconds
 
 
@@ -204,6 +210,9 @@ class HarnessDelegate(Delegate):
             self._configure()
             hosts = Host.parse_hosts(self._settings.get("hosts")).tables
             agent_host = session_cls.host(host)
+            environment = resolve(
+                self._settings, role=role, host=agent_host.name, packaged=packaged_environments()
+            )
             self._harness_override = harness_host if isinstance(harness_host, Host) else None
             harness = (
                 harness_host
@@ -243,6 +252,7 @@ class HarnessDelegate(Delegate):
             driver=self.driver,
             composition=self.composer,
             accounts=accounts,
+            environment=environment,
         )
         name = spec.name or f"{role}-{accepted.sid[:8]}"
         named = name if self._named(spec.mode) else None
@@ -301,8 +311,8 @@ class HarnessDelegate(Delegate):
     def _preflight(self) -> None:
         try:
             self.driver.preflight(self._state.plan.session)
-        except SessionBusy:
-            raise
+        except SessionBusy as error:
+            raise SessionError(str(error)) from None
         except (SessionConfigError, SessionError) as error:
             raise ConfigError(str(error)) from None
 
@@ -411,6 +421,8 @@ class HarnessDelegate(Delegate):
             session["access"] = Access(**access)
             session["flags"] = tuple(session["flags"])
             session["reply_tags"] = tuple(session["reply_tags"])
+            if session.get("environment") is not None:
+                session["environment"] = EnvironmentSpec.from_fields(session["environment"])
             accepted = Plan(
                 spec,
                 SessionSpec(**session),
@@ -860,10 +872,15 @@ class HarnessDelegate(Delegate):
                     on_event(event)
 
             try:
-                return execute(self._state.plan, driver=self.driver, on_event=emit)
+                return execute(
+                    self._state.plan,
+                    driver=self.driver,
+                    on_event=emit,
+                    ending=self._start_failure_end,
+                )
             except BaseException as error:
                 if not finished:
-                    ended = stopped(error)
+                    ended = self._start_failure_end(error)
                     if isinstance(error, (Exception, SystemExit)):
                         RunLog(run_dir).note(
                             "run_error",
@@ -880,6 +897,19 @@ class HarnessDelegate(Delegate):
                 raise
             finally:
                 self._clear_tmp()
+
+    def _start_failure_end(self, error: BaseException) -> Result:
+        """A signal's stop ends as the saved start_failure, if any."""
+        ended = stopped(error)
+        if not isinstance(error, Stopped):
+            return ended
+        try:
+            state = self._current()
+        except (ConfigError, OSError):
+            return ended
+        if state.start_failure is None:
+            return ended
+        return Result(1, None, f"stopped: {state.start_failure}")
 
     def _clear_tmp(self) -> None:
         """agent/tmp at the run's end, never followed, keeping a deliverable file `out` directly in
@@ -964,7 +994,7 @@ class HarnessDelegate(Delegate):
 
     def _launch(self, previous: _State, state: _State) -> Record:
         """`state` saved detached before its harness starts; `previous` again when it cannot."""
-        state = replace(state, detached=True)
+        state = replace(state, detached=True, start_failure=None)
         record = self._record(state)
         launch = self._harness_launch(state)
         self._save(state)
@@ -1011,32 +1041,101 @@ class HarnessDelegate(Delegate):
         return record
 
     def _started(self, state: _State) -> None:
-        """Tui: waits, outside the mutex, until the harness has this run's agent session live;
-        SessionError, its harness and agent session closed, when the harness ends first, a Host
-        fails or TUI_START_TIMEOUT passes (SessionBusy: its result names its lock held). A
-        same-named session of another sid is not this run's.
+        """Tui: waits, outside the mutex, until this run's agent session has its client running;
+        else SessionError naming why (a held lock names its holder), its harness and
+        agent session closed. A Host failure or the passed start limit is saved as the attempt's
+        start_failure before the close, and the harness then ends with it; a harness that ended
+        first is not. A same-named session of another sid is not this run's.
         """
         if state.plan.spec.mode != Mode.TUI:
             return
-        deadline = time.monotonic() + TUI_START_TIMEOUT
-        harness = agent = None
-        with contextlib.suppress(SessionError):
+        limit = DOCKER_START_TIMEOUT if self.driver.docker else TUI_START_TIMEOUT
+        deadline = time.monotonic() + limit
+        harness = agent = unanswered = None
+        ended = False
+        try:
             while True:
-                agent = self._answered_agent(state)
-                agent = agent if agent is not None and agent.sid == state.plan.sid else None
-                if agent is not None and agent.alive():
-                    return
+                agent, unanswered = self._probed_agent(state)
+                try:
+                    if agent is not None and agent.alive() and agent.status().alive:
+                        return
+                except Unanswered as error:
+                    unanswered = error
                 harness = self._harness(state)
-                if harness is None or not harness.alive() or time.monotonic() >= deadline:
+                ended = harness is None or not harness.alive()
+                if ended:
+                    why = f": its harness ended{self._ended()}"
+                    break
+                if time.monotonic() >= deadline:
+                    why = f" in {limit} s"
                     break
                 time.sleep(TUI_POLL)
-        for session in (harness, agent):
-            if session is not None:
-                with contextlib.suppress(SessionError):
-                    session.close()
+        except SessionError as error:
+            why = f": {error}"
+        if agent is None and unanswered is not None:
+            agent, unanswered = self._probed_agent(state)
+        message = f"tui session {state.agent_name} did not start{why}{self._tail(state, agent)}"
+        if unanswered is not None:
+            message += f"; agent session not checked: {unanswered}"
+        message = " ".join(message.split())
+        if not ended:
+            self._start_failed(message)
+        if harness is not None:
+            try:
+                harness.close()
+            except SessionError:
+                if not ended:
+                    self._start_failed(None)
+        if agent is not None:
+            with contextlib.suppress(SessionError):
+                agent.close()
         if busy := self._busy(state):
-            raise busy
-        raise SessionError(f"tui session {state.agent_name} did not start")
+            raise SessionError(str(busy))
+        raise SessionError(message)
+
+    def _probed_agent(self, state: _State) -> tuple[Session | None, Unanswered | None]:
+        try:
+            agent = self._agent(state)
+        except Unanswered as error:
+            return None, error
+        return (agent if agent is not None and agent.sid == state.plan.sid else None), None
+
+    def _ended(self) -> str:
+        try:
+            result = self._current().result
+        except ConfigError:
+            return ""
+        if result is None:
+            return ""
+        return f": exit {result.returncode}" + (f": {result.error}" if result.error else "")
+
+    def _tail(self, state: _State, agent: Session | None) -> str:
+        """`; last lines: …` of the agent's client: its screen, else its Host row's."""
+        try:
+            text = "" if agent is None else agent.screen()
+        except SessionError:
+            text = ""
+        if not text:
+            try:
+                rows = self.session_cls.host(state.host).rows()
+            except (SessionError, SessionConfigError):
+                rows = []
+            text = next(
+                (
+                    r.last_lines or ""
+                    for r in rows
+                    if (r.name, r.sid) == (state.agent_name, state.plan.sid)
+                ),
+                "",
+            )
+        tail = last_lines(text)
+        return f"; last lines: {tail}" if tail else ""
+
+    def _start_failed(self, cause: str | None) -> None:
+        with contextlib.suppress(ConfigError, OSError), self.store.mutex():
+            state = self._current()
+            if not state.completed:
+                self._save(replace(state, start_failure=cause))
 
     def _busy(self, state: _State) -> SessionBusy | None:
         environment = state.plan.session.environment
@@ -1107,6 +1206,8 @@ class HarnessDelegate(Delegate):
                 session=replace(
                     accepted.session,
                     name=named,
+                    # stored, never re-resolved (FR-62)
+                    environment=state.plan.session.environment,
                     access=replace(
                         accepted.session.access, cwd=original.cwd, project=original.project
                     ),

@@ -1,12 +1,12 @@
 {
-  "credential_expires_at": null,
   "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
   "endpoint": "unix:///Users/example/.docker/run/docker.sock",
   "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "clients": {
     "claude": "2.1.0",
-    "codex": "codex-cli 0.100.0",
+    "codex": "codex-cli 0.163.0",
     "opencode": "1.19.3"
   },
-  "github_user_id": null
+  "github_user_id": 343764394,
+  "deadline": 22
 }

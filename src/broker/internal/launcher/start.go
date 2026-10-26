@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"ensemble/broker/internal/audit"
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/protocol"
 )
@@ -133,6 +134,9 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 			return StartResult{}, err
 		}
 	}
+	if err := h.checkStatic(staticRefs(m)); err != nil {
+		return StartResult{}, err
+	}
 	if _, err := h.GitHub.Retry(ctx); err != nil {
 		times.WriteString("ensemble-broker: start revocations skipped\n")
 	}
@@ -187,6 +191,8 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 						}
 					}
 					h.rollback(ctx, c, cleanup)
+					h.dropTokens(m)
+					h.releaseCodex(ctx, c, held, cleanup)
 					h.withdraw(c, m, held, cleanup)
 					result, retErr = StartResult{}, cleanup
 				} else {
@@ -221,6 +227,8 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 			e = protocol.New(protocol.StartFailed, "Start failed.")
 		}
 		h.rollback(ctx, c, e)
+		h.dropTokens(m)
+		h.releaseCodex(ctx, c, held, e)
 		if e.Code == protocol.Busy && e.Cleanup == protocol.Failed {
 			e.Code, e.Holder = protocol.StartFailed, nil
 			e.Message = "Cannot remove yielding container " + c + "."
@@ -265,10 +273,25 @@ func mounts(m Manifest, labels map[string]string) ([]string, []audit.Mount) {
 	return flags, list
 }
 
-// holding is the credentials a container being started holds: its client's and the environment secrets written.
+// holding is the credentials a container being started holds: its client's, the environment secrets written, and
+// whether a Codex grant may be recorded.
 type holding struct {
 	client  bool
+	codex   bool
 	secrets []string
+}
+
+// releaseCodex withdraws c's Codex grant, when its start recorded one, on a context of its own; a failure is added to
+// e's message.
+func (h Host) releaseCodex(ctx context.Context, c string, held holding, e *protocol.Error) {
+	if !held.codex {
+		return
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if err := h.Codex.Release(rctx, c); err != nil {
+		e.Message += " " + injected(err, protocol.KeychainFailed, "Withdrawing the Codex grant failed.").Message
+	}
 }
 
 // withdraw records each credential held as withdrawn when e's rollback removed c.
@@ -374,10 +397,21 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 		return StartResult{}, held, err
 	}
 	exec := h.agentExec(ctx, c)
+	// Read again just before the Keychain reads, the closest to the versions injected.
+	var record *injectedRecord
+	if refs := staticRefs(m); h.Static != nil && len(refs) > 0 {
+		records, err := h.Static.Load()
+		if err != nil {
+			return StartResult{}, held, storeFailed(err, protocol.StartFailed)
+		}
+		r := injectedRecords(refs, records)
+		record = &r
+	}
 	var codexExpiry *string
 	switch m.Client {
 	case "codex":
-		expiry, err := h.Codex.Inject(ctx, exec)
+		held.codex = true // a failed Inject may leave its grant prepared
+		expiry, err := h.Codex.Inject(ctx, c, exec)
 		if err != nil {
 			return StartResult{}, held, injected(err, protocol.StartFailed, "Injecting Codex credentials failed.")
 		}
@@ -404,6 +438,11 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 		held.secrets = append(held.secrets, s.Item)
 		h.Audit.Add(c, audit.Credential{Kind: audit.EnvSecret, Item: s.Item, Result: audit.Issued}, "")
 	}
+	if record != nil {
+		if err := h.writeInjected(m, *record, protocol.StartFailed); err != nil {
+			return StartResult{}, held, err
+		}
+	}
 	lap("credentials")
 	expiries := []protocol.Expiry{}
 	if m.GitHubApp != "" {
@@ -412,7 +451,39 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 		}
 		lap("github")
 	}
-	return StartResult{Container: c, Endpoint: h.Endpoint, ImageDigest: info.ID, Clients: clients, GitHub: expiries, CredentialExpiresAt: codexExpiry}, held, nil
+	if err := h.startTokens(ctx, c, m, codexExpiry, expiries); err != nil {
+		return StartResult{}, held, err
+	}
+	delivered := TokenRecord{Expires: map[credential.Kind][]string{credential.GitHub: expiryTimes(expiries)}}
+	if codexExpiry != nil {
+		delivered.Expires[credential.Codex] = []string{*codexExpiry}
+	}
+	return StartResult{Container: c, Endpoint: h.Endpoint, ImageDigest: info.ID, Clients: clients, Deadline: deadlineOf(delivered, heldKinds(m))},
+		held, nil
+}
+
+// startTokens records the expiries a start delivered; on failure it retires the GitHub grant, which the container
+// rollback alone would leave live.
+func (h Host) startTokens(ctx context.Context, c string, m Manifest, codexExpiry *string, github []protocol.Expiry) error {
+	var err error
+	if codexExpiry != nil {
+		err = h.recordTokens(m, credential.Codex, []string{*codexExpiry}, nil)
+	}
+	if err == nil && m.GitHubApp != "" {
+		err = h.recordTokens(m, credential.GitHub, expiryTimes(github), nil)
+	}
+	if err == nil {
+		return nil
+	}
+	e := protocol.New(protocol.StartFailed, tokensFailed(m).Message)
+	if m.GitHubApp != "" {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		if revoked := h.GitHub.Release(rctx, c); revoked != nil {
+			e.Message += " " + injected(revoked, protocol.KeychainFailed, "Revoking the GitHub tokens failed; retry their pending revocation.").Message
+		}
+	}
+	return e
 }
 
 // injected classifies a Credentials or Tokens error: its protocol error, an unreachable daemon, else code.

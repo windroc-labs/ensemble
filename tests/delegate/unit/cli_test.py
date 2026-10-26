@@ -373,14 +373,16 @@ class Harnessed(HarnessCase):
         os.chdir(self.home)
         self.events = os.path.join(self.home, "events")
 
-    def cli(self, *extra, input="Hello.", stdin=None):
+    def cli(
+        self, *extra, input="Hello.", stdin=None, role="dummy-tester", task="echo", client="fake"
+    ):
         class Bound(HarnessDelegate):
             def __init__(self, role, spec, **placement):
                 super().__init__(role, spec, session_cls=Shown, **placement)
 
-        argv = ["run", "--role", "dummy-tester", "--task", "echo", "--input", input]
+        argv = ["run", "--role", role, "--task", task, "--input", input]
         argv += ["--out", os.path.join(self.work, "out.md"), "--workdir", self.work]
-        argv += ["--mode", "headless"]
+        argv += ["--mode", "headless"] + (["--client", client] if client else [])
         out, err = io.StringIO(), io.StringIO()
         with (
             redirect_stdout(out),
@@ -388,10 +390,146 @@ class Harnessed(HarnessCase):
             mock.patch("sys.stdin", stdin or io.StringIO()),
         ):
             try:
-                code = cli.main([*argv, "--client", "fake", *extra], delegate_cls=Bound)
+                code = cli.main([*argv, *extra], delegate_cls=Bound)
             except SystemExit as exit:
                 code = exit.code
         return code, out.getvalue(), err.getvalue()
+
+
+ACCEPTANCE = """
+[delegate.environments.dummy]
+image = "dummy-env:test"
+plugins = ["dummy-plugin"]
+lock = "dummy-lock"
+
+[[delegate.environments.dummy.secrets]]
+item = "ensemble-env/dummy"
+file = "dummy.txt"
+
+[delegate.roles.dummy-tester.environment]
+name = "dummy"
+prefetch = true
+"""
+
+
+class Environments(Harnessed):
+    """run's environment: resolved from the delegate config only (WDRC-109 FR-57, FR-60)."""
+
+    TARGETED = "Reference: T-1\nRepo: acme/app\nRef: release/1\n\nHello."
+
+    def configure(self, default):
+        self.settings(default=default, harness_host="harness")
+        # the fake resolves no --host to its "agent" entry: make that the default Host
+        Shown.hosts["agent"] = RecordingHost(default)
+        with open(self.local, "a", encoding="utf-8") as file:
+            file.write(ACCEPTANCE)
+
+    def test_dry_run_prints_environment(self):
+        self.configure("docker")
+        code, out, err = self.cli("--dry-run", input=self.TARGETED)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(
+            json.loads(out)["environment"],
+            {
+                "image": "dummy-env:test",
+                "gateway": "workers",
+                "secrets": [{"item": "ensemble-env/dummy", "file": "dummy.txt"}],
+                "plugins": ["dummy-plugin"],
+                "lock": "dummy-lock",
+                "prefetch": {"repo": "acme/app", "ref": "release/1"},
+            },
+        )
+        self.assertFalse(os.path.exists(self.work))
+
+    def test_run_refuses_environment_on_tmux(self):
+        self.configure("tmux")
+        code, out, err = self.cli(input=self.TARGETED)
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("[environment.tmux]", err)
+        self.assertFalse(os.path.exists(self.work))
+
+    def test_run_has_no_environment_option(self):
+        self.configure("docker")
+        code, _, err = self.cli("--environment", "dummy", "--dry-run", input=self.TARGETED)
+        self.assertEqual(code, 2)
+        self.assertIn("--environment", err)
+
+
+class Verifier(Harnessed):
+    """The built-in verifier on the packaged mini-op environment (WDRC-110 FR-47, FR-50, FR-80)."""
+
+    TARGETED = "Repo: windroc-labs/ensemble\nRef: main"
+
+    def configure(self, default):
+        self.settings(default=default, harness_host="harness")
+        Shown.hosts["agent"] = RecordingHost(default)
+
+    def verify(self, *extra, client=None):
+        return self.cli(*extra, input=self.TARGETED, role="verifier", task="verify", client=client)
+
+    def test_dry_run_prints_the_mini_op_environment(self):
+        self.configure("docker")
+        code, out, err = self.verify("--dry-run")
+        self.assertEqual(code, 0, err)
+        shown = json.loads(out)
+        self.assertEqual(
+            shown["environment"],
+            {
+                "image": "mini-op:env",
+                "gateway": "mini-op",
+                "secrets": [
+                    {"item": "ensemble-env/mini-op-password", "file": "mini-password"},
+                    {"item": "ensemble-env/mini-op-ssh-key", "file": "mini-ssh-key"},
+                ],
+                "plugins": ["mini-op"],
+                "lock": "mini-op",
+                "prefetch": {"repo": "windroc-labs/ensemble", "ref": "main"},
+            },
+        )
+        self.assertIn("/mini-op:run", shown["prompt"])
+        self.assertFalse(os.path.exists(self.work))
+
+    def test_client_codex_is_refused_naming_the_flag(self):
+        self.configure("docker")
+        for extra in (("--dry-run",), ()):
+            with self.subTest(extra=extra):
+                code, out, err = self.verify(*extra, client="codex")
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("--client codex: role verifier runs only on claude", err)
+                self.assertFalse(os.path.exists(self.work))
+
+    def test_a_local_role_client_is_refused_naming_its_table(self):
+        self.configure("docker")
+        with open(self.local, "a", encoding="utf-8") as file:
+            file.write('[delegate.roles.verifier]\nclient = "codex"\n')
+        code, out, err = self.verify("--dry-run")
+        self.assertEqual((code, out), (2, ""))
+        for part in ("[delegate.roles.verifier]", "'codex'", "role verifier runs only on claude"):
+            self.assertIn(part, err)
+
+    def test_missing_repo_is_refused_before_the_task_runs(self):
+        self.configure("docker")
+        for extra in (("--dry-run",), ()):
+            with self.subTest(extra=extra):
+                code, out, err = self.cli(
+                    *extra, input="Check login", role="verifier", task="verify", client=None
+                )
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("prefetch: want one Repo: line", err)
+                self.assertIn("no Repo: line", err)
+                self.assertFalse(os.path.exists(self.work))
+
+    def test_tmux_default_host_refuses_and_still_lists(self):
+        self.configure("tmux")
+        code, out, err = self.verify()
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("role verifier selects an environment", err)
+        self.assertIn("[environment.tmux]", err)
+        self.assertFalse(os.path.exists(self.work))
+        listed = io.StringIO()
+        with redirect_stdout(listed), redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.main(["run", "--list"]), 0)
+        self.assertIn("\nverifier  orchestrator  built-in\n  verify: ", listed.getvalue())
 
 
 class DetachDisplay(Harnessed):
@@ -505,6 +643,7 @@ class DryRun(Base):
                 "sessions": {"agent": None, "harness": None},
                 "hosts": {"agent": "tmux", "harness": "tmux"},
                 "callback": None,
+                "environment": None,
             },
         )
         self.assertEqual(
@@ -1049,14 +1188,112 @@ class Prompt(Case):
         self.assertFalse(os.path.exists(self.work))
 
 
+class Open(Base):
+    def setUp(self):
+        super().setUp()
+        self.config = Path(self.ensemble, "config.local.toml")
+        self.config.write_text(
+            '[session.hosts]\ndefault = "docker"\n'
+            '[delegate.environments.dummy]\nimage = "dummy-env:test"\nlock = "dummy-lock"\n'
+        )
+        self.opened = self.enterContext(
+            mock.patch("subprocess.run", return_value=types.SimpleNamespace(returncode=0))
+        )
+
+    def test_open_has_no_role_and_passes_optional_values_and_launcher_identity(self):
+        with mock.patch.dict(os.environ, {"ENSEMBLE_SID": SID, "ENSEMBLE_EVENTS": "/events"}):
+            self.assertEqual(
+                self.cli(
+                    "open",
+                    "dummy-1",
+                    "--environment",
+                    "dummy",
+                    "--client",
+                    "codex",
+                    "--account",
+                    "work",
+                    "--cwd",
+                    self.tmp,
+                    "--display",
+                    "none",
+                ),
+                (0, "", ""),
+            )
+            self.assertNotIn("ENSEMBLE_SID", os.environ)
+            self.assertNotIn("ENSEMBLE_EVENTS", os.environ)
+        argv = self.opened.call_args.args[0]
+        self.assertEqual(argv[5:7], ["start", "dummy-1"])
+        for key, value in (
+            ("--client", "codex"),
+            ("--cwd", self.tmp),
+        ):
+            self.assertEqual(argv[argv.index(key) + 1], value)
+        self.assertIn("--account=work", argv)
+        self.assertIn("--display=none", argv)
+        env = self.opened.call_args.kwargs["env"]
+        self.assertEqual((env["ENSEMBLE_SID"], env["ENSEMBLE_EVENTS"]), (SID, "/events"))
+        self.assertFalse(os.path.exists(self.work))
+
+    def test_open_preserves_the_session_status(self):
+        for code in (0, 1, 2, 75):
+            with self.subTest(code=code):
+                self.opened.return_value = types.SimpleNamespace(returncode=code)
+                self.assertEqual(
+                    self.cli("open", "dummy-1", "--environment", "dummy"), (code, "", "")
+                )
+
+    def test_config_errors_and_spawn_errors_are_reported_cleanly(self):
+        self.opened.side_effect = OSError("session unavailable")
+        self.assertEqual(
+            self.cli("open", "dummy-1", "--environment", "dummy"),
+            (1, "", "delegate: session unavailable\n"),
+        )
+        self.opened.reset_mock()
+        code, out, err = self.cli("open", "dummy-1", "--environment", "unknown")
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("unknown", err)
+        self.config.write_text("[")
+        self.assertEqual(self.cli("open", "dummy-1", "--environment", "dummy")[:2], (2, ""))
+        self.opened.assert_not_called()
+
+    def test_invalid_names_missing_unknown_empty_and_repeated_options_start_nothing(self):
+        for argv in (
+            ("open", "none", "--environment", "dummy"),
+            ("open", "a.b", "--environment", "dummy"),
+            ("open", "--environment", "dummy", "--", "-worker"),
+            ("open", "dummy-1"),
+            ("open", "dummy-1", "--environment", "dummy", "--role", "engineer"),
+            *(
+                ("open", "dummy-1", "--environment", "dummy", flag, "")
+                for flag in ("--client", "--account", "--cwd", "--display", "--environment")
+            ),
+            *(
+                ("open", "dummy-1", "--environment", "dummy", flag, "x", flag, "y")
+                for flag in ("--client", "--account", "--cwd", "--display", "--environment")
+            ),
+        ):
+            with self.subTest(argv=argv):
+                self.assertEqual(self.cli(*argv)[:2], (2, ""))
+        self.opened.assert_not_called()
+
+    def test_nested_open_is_refused_and_help_starts_nothing(self):
+        with mock.patch.dict(os.environ, {"ENSEMBLE_AGENT_SESSION": "1"}):
+            code, out, err = self.cli("open", "dummy-1", "--environment", "dummy")
+            self.assertEqual((code, out), (2, ""))
+            self.assertIn("refused inside an agent session", err)
+            self.assertEqual(self.cli("open", "--help")[0], 0)
+        self.opened.assert_not_called()
+
+
 class Commands(Base):
-    def test_help_lists_exactly_the_ten_subcommands(self):
+    def test_help_lists_all_subcommands(self):
         code, out, err = self.cli("--help")
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(
             re.search(r"\{([a-z,-]+)\}", out)[1].split(","),
             [
                 "run",
+                "open",
                 "status",
                 "content",
                 "outcome",
@@ -1380,6 +1617,7 @@ class AdhocWorkdir(Base):
 
 HELP_COMMANDS = [
     "run",
+    "open",
     "status",
     "content",
     "outcome",
@@ -1450,7 +1688,7 @@ class HelpContracts(Case):
 
     def test_every_query_explains_cardinality_and_record_input(self):
         for name in HELP_COMMANDS:
-            if name in {"run", "prompt"}:
+            if name in {"run", "open", "prompt"}:
                 continue
             with self.subTest(name=name):
                 text = self.help(name)

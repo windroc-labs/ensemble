@@ -27,6 +27,7 @@ from ensemble.orchestrator.engine import (
 from ensemble.orchestrator.engine.types import LinearError
 from ensemble.orchestrator.trackers.linear import (
     client,
+    issue_archive,
     issue_create,
     issue_edit,
     issue_label,
@@ -106,6 +107,7 @@ MODULES = {
     "issue_edit": issue_edit,
     "issue_label": issue_label,
     "issue_write": issue_write,
+    "issue_archive": issue_archive,
     "issue_relation": issue_relation,
 }
 
@@ -1045,8 +1047,8 @@ OPS = {
     "issue_edit.M_EDIT": FakeLinear._update,
     "issue_label.Q_MORE": _paged_op(issue_label.Q_MORE),
     "issue_write.Q_MOVE": _paged_op(issue_write.Q_MOVE, viewer=True),
-    # issue_archive.Q_ISSUE is the same text
     "issue_write.Q_COMMENT": _paged_op(issue_write.Q_COMMENT, viewer=True),
+    "issue_archive.Q_ISSUE": _paged_op(issue_archive.Q_ISSUE, viewer=True),
     "issue_write.M_COMMENT": FakeLinear._comment_with_id,
     **{
         f"issue_relation.Q_READ[{d}]": _paged_op(q, viewer=True)

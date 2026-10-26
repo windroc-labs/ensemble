@@ -26,6 +26,7 @@ from ensemble.delegate.engine.types import Begun, Finished, Layout, Limit, Resul
 from ensemble.delegate.event.reply import marks
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import (
+    EnvironmentSpec,
     Exited,
     IdleTimeout,
     LimitHit,
@@ -736,6 +737,63 @@ class TuiPolicy(Base):
             (given, args[0].session.sid, args[0].session.resume, args[0].session.events),
             ({"idle_timeout": 7200}, self.events[0].sid, False, None),
         )
+
+
+LOCKED = EnvironmentSpec(image="dummy-env:test", gateway="workers", lock="dummy-lock")
+
+
+class LockCloseTest(TuiPolicy):
+    """A locked run's session closes as soon as the run ends, before its Finished (FR-61)."""
+
+    def locked(self, *events, environment=LOCKED, close_fail=None, **kw):
+        self.at_finish = None
+
+        def on(event):
+            if isinstance(event, Finished):
+                self.at_finish = list(self.handle.calls)
+
+        FakeHandle.close_fail = close_fail
+        self.addCleanup(setattr, FakeHandle, "close_fail", None)
+        self.fresh()
+        return self.faked(*events, environment=environment, on_event=on, **kw)
+
+    def test_every_run_end_closes_before_finished(self):
+        for name, events, mode in (
+            ("outcome headless", (turn(START, block(DONE)), Exited(0)), "headless"),
+            ("outcome tui", (turn(START, block(DONE)),), "tui"),
+            ("no outcome", (turn(START), Exited(0)), "headless"),
+            ("failed turn", (turn(START), TurnFailed("overloaded")), "tui"),
+            ("give-up", (turn(START), *[STOP] * STOP_LIMIT), "tui"),
+            ("idle", (turn(START), IdleTimeout(7200)), "tui"),
+            ("usage limit", (turn(START), LimitHit(None), Exited(0)), "headless"),
+        ):
+            with self.subTest(name):
+                self.locked(*events, mode=mode)
+                self.assertEqual(self.handle.calls.count(("close",)), 1, self.handle.calls)
+                self.assertIn(("close",), self.at_finish)
+                self.assertIn(f"session {NAME} closed (lock dummy-lock)", self.err)
+                self.assertNotIn("left open", self.err)
+
+    def test_a_raised_error_closes_after_stopping(self):
+        with self.assertRaises(AssertionError):
+            self.locked(turn(START), mode="headless")
+        self.assertEqual(self.handle.calls[-2:], [("stop",), ("close",)])
+
+    def test_a_failed_close_is_printed_not_raised(self):
+        r = self.locked(
+            turn(START, block(DONE)), Exited(0), mode="headless", close_fail=SessionError("gone")
+        )
+        self.assertEqual(r.outcome.status, "done")
+        self.assertIn("gone", self.err)
+        self.assertNotIn("closed (lock", self.err)
+
+    def test_without_a_lock_the_session_stays_open(self):
+        unlocked = EnvironmentSpec(image="dummy-env:test", gateway="workers")
+        for environment in (None, unlocked):
+            with self.subTest(environment=environment):
+                self.locked(turn(START), *[STOP] * STOP_LIMIT, environment=environment)
+                self.assertNotIn(("close",), self.handle.calls)
+                self.assertIn(LEFT_OPEN, self.err)
 
 
 class InstructionRuns(InstructionCase):

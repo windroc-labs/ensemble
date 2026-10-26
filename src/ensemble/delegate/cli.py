@@ -20,6 +20,7 @@ from collections.abc import Sequence
 from dataclasses import asdict
 
 from ensemble.delegate.composer import Composer, RunParams
+from ensemble.delegate.engine import direct
 from ensemble.delegate.engine.harness_delegate import HarnessDelegate
 from ensemble.delegate.engine.plan import run_sid
 from ensemble.delegate.engine.runner import report, say
@@ -55,7 +56,7 @@ def main(
     parser = argparse.ArgumentParser(
         prog="ensemble-delegate",
         allow_abbrev=False,
-        description="Run a role, generate its instruction file, or control an existing run.",
+        description="Run a role, open an environment worker, or control an existing run.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Role: persona; task: optional work type, otherwise the role chooses it.
 Discover configured roles/tasks and their sources: ensemble-delegate run --list
@@ -109,7 +110,8 @@ Examples:
   Modes: headless runs without a terminal; tui is a text user interface (TUI);
   in_process uses the configured in-process client runtime.
   --dry-run prints a JSON preview, writes nothing and skips launch preflight;
-  it still requires valid configuration and conditional inputs.
+  it still requires valid configuration and conditional inputs. Its "environment" is the
+  resolved container environment (secrets by reference only), null for none.
 
 Examples:
   Discover roles/tasks before choosing one:
@@ -128,6 +130,7 @@ Recovery and next help:
 """,
     )
     _run_options(run)
+    _open_options(commands)
     for name, many, what in (
         ("status", True, "one Status line per run"),
         ("content", False, "the run's content"),
@@ -209,15 +212,102 @@ Recovery and next help:
     )
     _common_options(prompt, out="where the prompt is written")
     a = parser.parse_args(argv)
-    starts = a.command == "resume" or (a.command == "run" and not (a.list or a.dry_run))
+    starts = a.command in {"resume", "open"} or (a.command == "run" and not (a.list or a.dry_run))
     if starts and (refused := nested_start()):
         say(f"delegate: {refused}")
         return 2
+    if a.command == "open":
+        return _open(a, sid, events)
     if a.command == "run":
         return _run(a, run, argv[1:], delegate_cls, sid=sid, events=events)
     if a.command == "prompt":
         return _prompt(a, prompt, delegate_cls)
     return _query(a, delegate_cls, sid)
+
+
+def _worker_name(value: str) -> str:
+    if not SESSION_NAME.fullmatch(value) or value.startswith("-"):
+        raise argparse.ArgumentTypeError(
+            f"want {SESSION_NAME_RULE}, not starting with -, not {value!r:.80}"
+        )
+    return value
+
+
+def _open_value(value: str) -> str:
+    if not value or not value.isprintable():
+        raise argparse.ArgumentTypeError("want nonempty printable text")
+    return value
+
+
+def _open_options(commands) -> None:
+    ap = commands.add_parser(
+        "open",
+        help="open a named environment as an interactive worker",
+        description="Open a configured environment as a plain TUI worker, without a role or task.",
+        allow_abbrev=False,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Prerequisites and effects:
+  Requires a named [delegate.environments.NAME] and a Docker default Host.
+  Resolves the Host default then the named environment; prefetch is refused.
+  --client defaults to delegate's global client; --account is passed to session,
+  otherwise session selects by usage. --cwd defaults to this directory.
+  No charter, task, prompt or outcome. Prints a worker Record on stdout.
+  ENSEMBLE_SID and ENSEMBLE_EVENTS identify and track the worker through crew.
+  All scalar options accept one occurrence. Exit 2: configuration; 1: failure;
+  75: lock busy, naming its holder on stderr. Nested agent starts are refused.
+
+Examples:
+  With dummy configured:
+  ensemble-delegate open dummy-1 --environment dummy --display none
+
+Recovery and next help:
+  Track with crew:
+  ensemble-crew run dummy-1 -- ensemble-delegate open dummy-1 --environment dummy
+  Close/release its lock: ensemble-session close dummy-1
+  Resume its saved environment: ensemble-session resume dummy-1
+  Placement and Record controls: ensemble-session --help
+  Commands and exits: ensemble-delegate --help
+  Environment configuration and acceptance: docs/docker-host.md
+""",
+    )
+    ap.add_argument(
+        "name", type=_worker_name, help="new worker's session name; must not start with -"
+    )
+    ap.add_argument(
+        "--environment",
+        required=True,
+        action=Once,
+        type=_open_value,
+        metavar="ENV",
+        help="named environment already defined in delegate config",
+    )
+    for name, text in (
+        ("client", "configured session client; default: delegate global client"),
+        ("account", "session client account; omitted: automatic by usage"),
+        ("cwd", "worker directory; default: current directory"),
+        ("display", "session placement; none: hidden; omitted: caller context"),
+    ):
+        ap.add_argument(f"--{name}", action=Once, type=_open_value, help=text)
+
+
+def _open(args, sid: str | None, events: str | None) -> int:
+    try:
+        return direct.open_worker(
+            args.name,
+            args.environment,
+            client=args.client,
+            account=args.account,
+            cwd=args.cwd,
+            display=args.display,
+            sid=sid,
+            events=events,
+        )
+    except (ConfigError, SessionConfigError, ValueError) as error:
+        say(f"delegate: {error}")
+        return 2
+    except (SessionError, OSError) as error:
+        say(f"delegate: {error}")
+        return 1
 
 
 def _common_options(ap: argparse.ArgumentParser, *, out: str) -> None:
@@ -340,9 +430,9 @@ def _run(
     except ConfigError as e:
         say(f"delegate: {e}")
         return 2
-    except SessionBusy as e:
+    except SessionError as e:
         say(f"delegate: {e}")
-        return EXIT_BUSY
+        return EXIT_BUSY if SessionBusy.PATTERN.match(str(e)) else 1
     return report(result, spec.out or Layout(spec.workdir).out)[0]
 
 
@@ -350,12 +440,9 @@ def _detach(delegate_cls: type[HarnessDelegate], role: str, spec: Spec, placemen
     """Prints the run's Record line once its listed sessions are live."""
     try:
         record = delegate_cls.create(role, spec, **placement).detach()
-    except SessionBusy as e:
-        say(f"delegate: {e}")
-        return EXIT_BUSY
     except (SessionError, OSError) as e:
         say(f"delegate: {e}")
-        return 1
+        return EXIT_BUSY if SessionBusy.PATTERN.match(str(e)) else 1
     say(f"delegate: session {record.sid}")
     print(record.to_line(), flush=True)
     return 0
@@ -388,6 +475,8 @@ def _check(a: argparse.Namespace) -> None:
     if a.input is None:
         raise ConfigError("--input is required")
     _check_out(a)
+    if a.client and (fixed := Composer().fixed_client(a.role)) and a.client != fixed:
+        raise ConfigError(f"--client {a.client}: role {a.role} runs only on {fixed}")
     if a.events is not None and not a.detach:
         raise ConfigError("--events needs --detach")
     if a.on_event is not None and not a.detach:
@@ -421,6 +510,7 @@ def _begun(event) -> None:
 
 def _shown(preview: Preview, a: argparse.Namespace) -> dict:
     access, s = preview.plan.session.access, preview.plan.spec
+    environment = preview.plan.session.environment
     shown = {
         "client": s.client,
         "mode": s.mode,
@@ -437,6 +527,7 @@ def _shown(preview: Preview, a: argparse.Namespace) -> dict:
         "sessions": {"agent": preview.agent, "harness": preview.harness if a.detach else None},
         "hosts": {"agent": preview.host, "harness": preview.harness_host},
         "callback": preview.callback,
+        "environment": None if environment is None else environment.persisted(),
     }
     if a.detach:
         shown["events"] = os.path.abspath(a.events)

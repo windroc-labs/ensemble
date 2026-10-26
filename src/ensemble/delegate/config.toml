@@ -18,7 +18,8 @@
 #   tier            required: model tier 1–4 (1 = strongest); the Client maps it to a model
 #   effort          required: low | medium | high | xhigh | max; the Client maps it to its own effort value
 #   client          required: the Client that runs the agent run (a [clients.<name>] name); the orchestrator's
-#                   overlay may set it per role. The Composer passes it through unchecked
+#                   overlay may set it per role. The Composer passes it through unchecked, but for a fixed client
+#                   (Roles › fixed_client)
 #   language        the language reports and PRDs are written in (one line); "" → no rule: the model's default
 #   cwd             the dir the agent run starts in (absolute or ~ path); "" → <workdir>/agent. A resume reuses
 #                   its recorded one (<workdir>/run/run.jsonl)
@@ -119,6 +120,10 @@ host = ""
 # A caller may supply a costly-step brake at runtime; it has no configuration key here.
 #   <run key>     tier, effort, client, language, cwd, idle_timeout, show or [output], for that role
 #   accounts      [roles.<role>.accounts]: [accounts] above, for that role, entry by entry
+#   fixed_client  true makes the table's client the role's only client. Another chosen for it (--client,
+#                 [delegate.roles.<role>] in config.local.toml, an overlay's [roles.<role>]) refuses the run, naming
+#                 where it came from; a global client does not apply to it. config.local.toml may repeat the packaged
+#                 boolean (false when absent), but cannot change it
 
 # ── Researcher ──────────────────────────────────────────
 [roles.researcher]
@@ -151,10 +156,66 @@ commands = ["python3 -P {{team}}/tools/repo.py worktree --dir {{workdir}}/src *"
 [roles.engineer.output]
 type = "pull-request"
 
+# ── Verifier ────────────────────────────────────────────
+[roles.verifier]
+client = "claude"
+fixed_client = true
+
+[roles.verifier.output]
+type = "orchestrator"
+
+[roles.verifier.environment]   # Environments below
+name = "mini-op"
+prefetch = true
+
 # ── Dummy Tester ────────────────────────────────────────
 [roles.dummy-tester]
 tier = 3
 effort = "low"
+
+# Environments (docs/docker-host.md › Environment config): the container a role run's agent starts in, on a Docker-kind
+# Host. Only this file and config.local.toml set them: a caller's overlay (the orchestrator's among them) holding
+# environment, environments or roles.<role>.environment is refused, and nothing in a run's input selects one.
+# A run on Host <host> resolves, each step replacing the keys it sets (a list whole):
+#   [environment.<host>]  the Host's default; only a Docker-kind Host has one, and it must set image and gateway. A Host
+#                         without one runs a role selecting or overriding an environment as a configuration error
+#   [environments.<name>] a named environment: only the keys that differ from the default; <name> as lock below
+#   [roles.<role>.environment]  local: name (a named environment) and keys overriding it, or the default without name
+# A result equal to this file's default (config.local.toml aside) passes no environment: the run starts as before
+# environments. An in_process run has no container: it drops the environment, refusing one with lock, secrets or
+# prefetch. Keys (a table refuses any other):
+#   image     a local base image's tag or ID, or "@worker": ensemble's worker base (~/.ensemble/docker/worker)
+#   gateway   the egress proxy's caller network the container joins (its label name, docs/docker-host.md › Egress proxy)
+#   plugins   in-image plugin names or pinned sources, added to [hosts.docker] plugins; [] → none
+#   secrets   [[…secrets]] tables of item (an ensemble-env/<name> keychain item) and file (its name under
+#             /run/ensemble/secrets/env/); references only, never a value; [] → none
+#   lock      a lock name ([a-z0-9][a-z0-9_.-]{0,62}): one running container per name; a locked run's session closes
+#             when the run ends; unset → none
+#   prefetch  true: clone the input's one Reference `Repo:` at its optional `Ref:` line into the new workspace
+[environment.docker]
+image = "@worker"
+gateway = "workers"
+plugins = []
+secrets = []
+prefetch = false
+
+[environments]
+
+# mini-op: the test Mac mini through mini-op's image and plugin, by the names mini-op publishes; its secrets are
+# `ensemble-broker login env` items (docs/docker-host.md › Environment secrets)
+[environments.mini-op]
+image = "mini-op:env"
+gateway = "mini-op"
+plugins = ["mini-op"]
+lock = "mini-op"
+
+[[environments.mini-op.secrets]]
+item = "ensemble-env/mini-op-password"
+file = "mini-password"
+
+[[environments.mini-op.secrets]]
+item = "ensemble-env/mini-op-ssh-key"
+file = "mini-ssh-key"
 
 # [delegates]
 #   harness_host  the [hosts.<name>] (src/ensemble/session/config.toml) the harness runs on; "" → the agent's Host.

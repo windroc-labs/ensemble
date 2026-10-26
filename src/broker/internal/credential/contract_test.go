@@ -76,14 +76,14 @@ func TestConsumerCheck(t *testing.T) {
 		ok   bool
 		id   string
 	}{
-		{"container", Delivery{Consumer{Container: "ensemble-s-0123"}, exec}, true, "ensemble-s-0123"},
-		{"host", Delivery{Consumer{Host: "linear-app"}, nil}, true, "host/linear-app"},
-		{"neither", Delivery{Consumer{}, exec}, false, ""},
-		{"both", Delivery{Consumer{Container: "c", Host: "h"}, exec}, false, ""},
-		{"container without exec", Delivery{Consumer{Container: "c"}, nil}, false, ""},
-		{"host with exec", Delivery{Consumer{Host: "h"}, exec}, false, ""},
-		{"container naming a host key", Delivery{Consumer{Container: "host/linear-app"}, exec}, false, ""},
-		{"host with slash", Delivery{Consumer{Host: "a/b"}, nil}, false, ""},
+		{"container", Delivery{Consumer: Consumer{Container: "ensemble-s-0123"}, Exec: exec}, true, "ensemble-s-0123"},
+		{"host", Delivery{Consumer: Consumer{Host: "linear-app"}, Exec: nil}, true, "host/linear-app"},
+		{"neither", Delivery{Consumer: Consumer{}, Exec: exec}, false, ""},
+		{"both", Delivery{Consumer: Consumer{Container: "c", Host: "h"}, Exec: exec}, false, ""},
+		{"container without exec", Delivery{Consumer: Consumer{Container: "c"}, Exec: nil}, false, ""},
+		{"host with exec", Delivery{Consumer: Consumer{Host: "h"}, Exec: exec}, false, ""},
+		{"container naming a host key", Delivery{Consumer: Consumer{Container: "host/linear-app"}, Exec: exec}, false, ""},
+		{"host with slash", Delivery{Consumer: Consumer{Host: "a/b"}, Exec: nil}, false, ""},
 	} {
 		err := c.d.check()
 		if (err == nil) != c.ok || err != nil && !errors.Is(err, ErrConsumer) {

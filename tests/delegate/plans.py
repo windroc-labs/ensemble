@@ -76,6 +76,7 @@ class Base(Case):
         """
         kw = {"client": "fake", "mode": "headless", "out": self.out, "input": "Research X.", **kw}
         workdir, accounts = kw.pop("workdir", self.work), kw.pop("accounts", None)
+        environment = kw.pop("environment", None)
         composition = Composer(team=team)
         run = run or replace(composition.resolve(role), **(keys or {}))
         err = io.StringIO()
@@ -86,6 +87,7 @@ class Base(Case):
                 driver=self.driver,
                 composition=composition,
                 **({} if accounts is None else {"accounts": accounts}),
+                **({} if environment is None else {"environment": environment}),
             )
         return got, err.getvalue()
 

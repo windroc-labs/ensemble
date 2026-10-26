@@ -1,5 +1,5 @@
-"""The root-owned broker at the PROTOCOL version (src/broker/protocol/docker-broker/protocol.schema.json): version, build, start, refresh,
-close, workspace-rm and lock-query with strict response parsing. A missing, malformed or inconsistent response is a transport failure;
+"""The root-owned broker at the PROTOCOL version (src/broker/protocol/docker-broker/protocol.schema.json): version, build, start, maintain,
+close, workspace-rm and probe-provider with strict response parsing. A missing, malformed or inconsistent response is a transport failure;
 a valid error response is a BrokerError.
 """
 
@@ -16,13 +16,13 @@ from dataclasses import fields
 from datetime import datetime
 
 from ensemble.session.engine.types import ConfigError, SessionError
-from ensemble.session.hosts.docker.types import Refreshed, Started
+from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.utils import save
 
 # Installed by src/broker/install.sh and the worker image (src/broker/internal/launcher/assets/Dockerfile).
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
 RELAY = "/opt/ensemble/bin/relay"
-PROTOCOL = "27"
+PROTOCOL = "29"
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
 INSTALL = "install or upgrade it: see docs/docker-host.md#install"
 TIMEOUT = 1800
@@ -33,14 +33,14 @@ IMAGE = re.compile(r"ensemble-worker:[0-9a-f]{64}")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 CONTAINER = re.compile(r"ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}")
 ENDPOINT = re.compile(r"unix:///[^\x00-\x1f\x7f]+/\.docker/run/docker\.sock")
-LOGIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}")
 TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
+CREDENTIAL = re.compile(r"[a-z][a-z0-9-]{0,31}")
 COMMANDS = frozenset(
     {
         "version",
         "build",
         "start",
-        "refresh",
+        "maintain",
         "close",
         "status",
         "workspace-rm",
@@ -51,20 +51,20 @@ COMMANDS = frozenset(
 )
 CODES = {  # code → (exit code, the commands that report it)
     "usage": (2, COMMANDS),
-    "manifest_rejected": (3, {"start", "refresh"}),
-    "mount_rejected": (4, {"start", "refresh"}),
-    "login_required": (5, {"start", "refresh", "probe-provider"}),
+    "manifest_rejected": (3, {"start", "maintain"}),
+    "mount_rejected": (4, {"start", "maintain"}),
+    "login_required": (5, {"start", "probe-provider"}),
     "image_rejected": (6, {"start"}),
-    "docker_unreachable": (7, {"build", "start", "refresh", "close", "workspace-rm", "lock-query"}),
+    "docker_unreachable": (7, {"build", "start", "close", "workspace-rm", "lock-query"}),
     "build_failed": (8, {"build"}),
     "start_failed": (9, {"start", "lock-query"}),
     "close_failed": (10, {"close"}),
-    "keychain_failed": (11, {"start", "refresh", "close", "status", "probe-provider"}),
+    "keychain_failed": (11, {"start", "close", "status", "probe-provider"}),
     "workspace_dirty": (12, {"workspace-rm"}),
     "workspace_rejected": (13, {"workspace-rm"}),
     "workspace_failed": (14, {"workspace-rm"}),
-    "github_failed": (15, {"start", "refresh"}),
-    "refresh_failed": (16, {"refresh"}),
+    "github_failed": (15, {"start"}),
+    "refresh_failed": (16, set()),  # in maintain results only
     "egress_unavailable": (17, {"start"}),
     "internal_error": (70, COMMANDS),
     "busy": (75, {"start"}),
@@ -136,17 +136,6 @@ def _matches(pattern: re.Pattern, value) -> bool:
     return isinstance(value, str) and bool(pattern.fullmatch(value))
 
 
-def _expiries(value) -> bool:
-    return isinstance(value, list) and all(
-        isinstance(e, dict)
-        and e.keys() == {"account", "expires_at"}
-        and _matches(LOGIN, e["account"])
-        and e["expires_at"] is not None
-        and _credential_expiry(e["expires_at"])
-        for e in value
-    )
-
-
 def _credential_expiry(value) -> bool:
     if value is None:
         return True
@@ -157,6 +146,35 @@ def _credential_expiry(value) -> bool:
     except ValueError:
         return False
     return True
+
+
+def deadline_ok(value) -> bool:
+    """A deadline as the protocol has it, or None."""
+    return value is None or (
+        isinstance(value, dict)
+        and value.keys() == {"at", "action", "reason"}
+        and _matches(TIME, value["at"])
+        and _credential_expiry(value["at"])
+        and value["action"] == "close"
+        and _text(value["reason"])
+    )
+
+
+def _result(value) -> bool:
+    error = value.get("error") if isinstance(value, dict) else None
+    return (
+        isinstance(value, dict)
+        and value.keys() == {"credential", "expires_at", "error"}
+        and _matches(CREDENTIAL, value["credential"])
+        and _credential_expiry(value["expires_at"])
+        and (
+            error is None
+            or isinstance(error, dict)
+            and {"code", "message"} <= error.keys() <= {"code", "message", "cause"}
+            and error["code"] in CODES
+            and all(_text(error[key]) for key in error.keys() - {"code"})
+        )
+    )
 
 
 def _holder_ok(value) -> bool:
@@ -288,7 +306,7 @@ class Broker:
                 found = _object(err)
             if "audit_warning" in found:
                 if (
-                    command not in {"start", "refresh", "close", "status"}
+                    command not in {"start", "maintain", "close", "status"}
                     or found.pop("audit_warning") != "audit_write_failed"
                 ):
                     raise _Bad("audit warning")
@@ -368,40 +386,44 @@ class Broker:
             and isinstance(started.clients, dict)
             and started.clients.keys() == clients
             and all(map(_text, started.clients.values()))
-            and _expiries(started.github)
             and _user_id(started.github_user_id)
-            and _credential_expiry(started.credential_expires_at)
+            and deadline_ok(started.deadline)
         ):
             raise SessionError("broker: bad response to start: fields")
         return started
 
-    def lock_query(self, lock: str) -> dict[str, str] | None:
-        """The running holder of `lock`, {"container", "owner"}, or None; takes nothing."""
+    def maintain(
+        self,
+        container: str,
+        manifest: str,
+        delivered: Sequence[str] = (),
+        *,
+        renew: bool = False,
+        root: str,
+    ) -> Maintained:
+        """`delivered`: notice keys told; `renew`: renew every token now."""
         found = self._parsed(
-            "lock-query",
-            lambda d: d.keys() == {"holder"} and (d["holder"] is None or _holder_ok(d["holder"])),
-            "--lock",
-            lock,
-        )
-        return found["holder"]
-
-    def refresh(self, container: str, manifest: str) -> Refreshed:
-        """Public credential deadlines; `manifest`: the one the container was started with."""
-        found = self._parsed(
-            "refresh",
+            "maintain",
             lambda d: (
-                d.keys() == {"container", "github", "credential_expires_at"}
-                and _matches(CONTAINER, d["container"])
+                d.keys() == {"container", "next_check", "deadline", "results", "notices"}
                 and d["container"] == container
-                and _expiries(d["github"])
-                and _credential_expiry(d["credential_expires_at"])
+                and _credential_expiry(d["next_check"])
+                and deadline_ok(d["deadline"])
+                and isinstance(d["results"], list)
+                and all(map(_result, d["results"]))
+                and _notices(d["notices"])
             ),
             "--container",
             container,
             "--manifest",
             manifest,
+            *(("--renew",) if renew else ()),
+            *(arg for key in delivered for arg in ("--delivered", key)),
         )
-        return Refreshed(found["github"], found["credential_expires_at"])
+        _check_keys(found["notices"], root, "maintain")
+        return Maintained(
+            found["results"], found["notices"], found["next_check"], found["deadline"]
+        )
 
     def close(self, container: str) -> bool:
         """Whether it removed `container`; False: it was already gone."""
@@ -438,9 +460,31 @@ class Broker:
         return found
 
 
+def _notices(value) -> bool:
+    return isinstance(value, list) and all(
+        isinstance(n, dict) and n.keys() == {"key", "text"} and _text(n["text"]) for n in value
+    )
+
+
+def _check_keys(notices: list[dict], root: str, command: str) -> None:
+    if not notices:
+        return
+    try:
+        key = notice_key(root)
+    except ConfigError as error:
+        raise SessionError(f"broker: {error}") from None
+    if not all(_matches(key, n["key"]) for n in notices):
+        raise SessionError(f"broker: bad response to {command}: fields")
+
+
+def hook_root(hook_path: str) -> str:
+    """The parent of the bin/ holding `hook_path`."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(hook_path)))
+
+
 def plugin_root(hook_path: str) -> str:
-    """The running plugin's root: the parent of the bin/ holding its ensemble-session."""
-    root = os.path.dirname(os.path.dirname(os.path.abspath(hook_path)))
+    """The running plugin's root: hook_root, holding the protocol schema."""
+    root = hook_root(hook_path)
     if not os.path.isfile(os.path.join(root, SCHEMA)):
         raise ConfigError(f"ensemble plugin {root}: no {SCHEMA}")
     return root
@@ -451,8 +495,7 @@ def client_keys(root: str) -> frozenset[str]:
     inline object property in the protocol schema under `root`.
     """
     try:
-        with open(os.path.join(root, SCHEMA), encoding="utf-8") as f:
-            properties = json.load(f)["$defs"]["start_output"]["properties"]
+        properties = _schema(root)["$defs"]["start_output"]["properties"]
         (keys,) = (
             p["required"]
             for p in properties.values()
@@ -461,6 +504,22 @@ def client_keys(root: str) -> frozenset[str]:
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise ConfigError(f"{SCHEMA}: no start_output client map ({error})") from None
     return frozenset(keys)
+
+
+def _schema(root: str) -> dict:
+    try:
+        with open(os.path.join(root, SCHEMA), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError) as error:
+        raise ConfigError(f"{SCHEMA}: unreadable ({error})") from None
+
+
+def notice_key(root: str) -> re.Pattern:
+    """The schema's notice key pattern."""
+    try:
+        return re.compile(_schema(root)["$defs"]["notice_key"]["pattern"])
+    except (KeyError, TypeError, re.error):
+        raise ConfigError(f"{SCHEMA}: no notice_key pattern") from None
 
 
 def write_manifest(

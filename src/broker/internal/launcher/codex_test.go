@@ -13,28 +13,44 @@ import (
 )
 
 type fakeCodexCreds struct {
-	err             error
+	err, injectErr  error
+	releaseErr      error
 	ready, injected int
+	containers      []string // each Inject's and Refresh's
+	released        []string
+	log             *[]string
 }
 
 func (c *fakeCodexCreds) Ready(context.Context) error { c.ready++; return c.err }
-func (c *fakeCodexCreds) Inject(_ context.Context, exec func([]string, []byte) error) (string, error) {
+func (c *fakeCodexCreds) Inject(_ context.Context, container string, exec func([]string, []byte) error) (string, error) {
 	c.injected++
+	c.containers = append(c.containers, container)
+	if c.injectErr != nil {
+		return "", c.injectErr
+	}
 	return "2026-10-18T12:00:00Z", exec([]string{"inject-codex"}, []byte("fake-access-only"))
 }
 
-func (c *fakeCodexCreds) Refresh(ctx context.Context, exec func([]string, []byte) error, publish func(string) error) (string, error) {
+func (c *fakeCodexCreds) Refresh(ctx context.Context, container string, exec func([]string, []byte) error, publish func(string) error) (string, error) {
 	if c.err != nil {
 		return "", c.err
 	}
-	expiry, err := c.Inject(ctx, exec)
+	expiry, err := c.Inject(ctx, container, exec)
 	if err != nil {
 		return "", err
 	}
 	return expiry, publish(expiry)
 }
 
-func codexManifest(t *testing.T) string {
+func (c *fakeCodexCreds) Release(_ context.Context, container string) error {
+	c.released = append(c.released, container)
+	if c.log != nil {
+		*c.log = append(*c.log, "release "+container)
+	}
+	return c.releaseErr
+}
+
+func codexManifest(t *testing.T, edits ...func(map[string]any)) string {
 	t.Helper()
 	data, err := os.ReadFile(validManifest(t))
 	if err != nil {
@@ -47,6 +63,9 @@ func codexManifest(t *testing.T) string {
 	fields["client"] = "codex"
 	fields["codex_dir"] = strings.Replace(fields["claude_dir"].(string), "/claude", "/codex", 1)
 	delete(fields, "claude_dir")
+	for _, edit := range edits {
+		edit(fields)
+	}
 	data, err = json.Marshal(fields)
 	if err != nil {
 		t.Fatal(err)
@@ -60,7 +79,7 @@ func TestCodexStartIsolation(t *testing.T) {
 	h.Codex = creds
 	h.Versions = &fakeVersions{}
 	result, err := h.Start(context.Background(), codexManifest(t))
-	if err != nil || result.CredentialExpiresAt == nil || *result.CredentialExpiresAt != "2026-10-18T12:00:00Z" || creds.ready != 1 || creds.injected != 1 {
+	if err != nil || result.Deadline == nil || result.Deadline.At != "2026-10-18T12:00:00Z" || creds.ready != 1 || creds.injected != 1 {
 		t.Fatalf("%+v %v", result, err)
 	}
 	var run []string
@@ -107,7 +126,7 @@ func TestClaudeDoesNotReadCodex(t *testing.T) {
 	creds := &fakeCodexCreds{err: errors.New("Codex must not be read")}
 	h.Codex = creds
 	result, err := h.Start(context.Background(), validManifest(t))
-	if err != nil || result.CredentialExpiresAt != nil || creds.ready != 0 || creds.injected != 0 {
+	if err != nil || result.Deadline != nil || creds.ready != 0 || creds.injected != 0 {
 		t.Fatalf("%+v %v", result, err)
 	}
 }
@@ -145,5 +164,48 @@ func TestCodexMountBoundary(t *testing.T) {
 		if code(t, err) != protocol.MountRejected || hasCall(d, "run") {
 			t.Fatal("unsafe mount accepted")
 		}
+	}
+}
+
+// TestCodexStartRecordsAndRollbackReleasesGrant: start grants its container; a start that fails once Inject ran
+// withdraws that grant during its rollback, and one that failed before it has none to withdraw.
+func TestCodexStartRecordsAndRollbackReleasesGrant(t *testing.T) {
+	newHost := func() (Host, *fakeCodexCreds, *fakeEnv) {
+		h, _ := startHost(&world{labels: goodLabels(), versions: []string{"claude 2", "codex-cli 0.163.0"}}, &fakeCreds{})
+		creds, env := &fakeCodexCreds{}, &fakeEnv{failOn: map[string]error{}}
+		h.Codex, h.Versions, h.Env = creds, &fakeVersions{}, env
+		return h, creds, env
+	}
+	h, creds, _ := newHost()
+	result, err := h.Start(context.Background(), codexManifest(t))
+	if err != nil || !slices.Equal(creds.containers, []string{result.Container}) || len(creds.released) != 0 {
+		t.Fatalf("granted %q released %q: %v", creds.containers, creds.released, err)
+	}
+	for name, fail := range map[string]func(*fakeCodexCreds, *fakeEnv){
+		"after inject": func(_ *fakeCodexCreds, env *fakeEnv) {
+			env.failOn["ensemble-env/dummy"] = errors.New("env write failed")
+		},
+		"in inject": func(creds *fakeCodexCreds, _ *fakeEnv) { creds.injectErr = errors.New("writer failed") },
+	} {
+		h, creds, env := newHost()
+		fail(creds, env)
+		if _, err := h.Start(context.Background(), codexManifest(t, withSecrets(dummySecrets))); err == nil {
+			t.Fatalf("%s: start succeeded", name)
+		}
+		if len(creds.containers) != 1 || !slices.Equal(creds.released, creds.containers) {
+			t.Fatalf("%s: granted %q released %q", name, creds.containers, creds.released)
+		}
+	}
+	h, creds, _ = newHost()
+	creds.err = protocol.New(protocol.LoginRequired, "login codex")
+	if _, err := h.Start(context.Background(), codexManifest(t)); err == nil || creds.injected != 0 || len(creds.released) != 0 {
+		t.Fatalf("preflight failure: injected %d released %q: %v", creds.injected, creds.released, err)
+	}
+	h, creds, env := newHost()
+	env.failOn["ensemble-env/dummy"] = errors.New("env write failed")
+	creds.releaseErr = errors.New("keychain STORE_SENTINEL")
+	_, err = h.Start(context.Background(), codexManifest(t, withSecrets(dummySecrets)))
+	if e := protoErr(t, err); !strings.Contains(e.Message, "Withdrawing the Codex grant failed.") || strings.Contains(e.Message, "STORE_SENTINEL") {
+		t.Fatalf("%+v", e)
 	}
 }

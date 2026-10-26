@@ -14,13 +14,12 @@ import logging
 import os
 import re
 import shlex
-import shutil
 import signal
 import subprocess
 import sys
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import replace
 from datetime import datetime
 from typing import NamedTuple
@@ -77,6 +76,7 @@ from ensemble.session.hosts.docker.broker import (
     Broker,
     BrokerError,
     client_keys,
+    hook_root,
     plugin_root,
     write_manifest,
 )
@@ -107,10 +107,12 @@ from ensemble.utils import (
     docker_home,
     inode_lock,
     kill_group,
+    last_lines,
     module_roots,
     piped_popen,
     read_beneath,
     read_regular,
+    remove_tree,
     save,
     source_path,
     timestamp,
@@ -239,6 +241,35 @@ def _image_tag(row: Row) -> str | None:
     return found.get("image") if isinstance(found, dict) else None
 
 
+def _reset_home(name: str, home: str, kept: Iterable[str]) -> None:
+    """Empties a new start's client home in place, never following a link: Docker Desktop can
+    report a bind source recreated at a path it saw before as missing, so `home` and each `kept`
+    dir under it stay the same dir, mode 0700; a link or file there is removed.
+    """
+    keep = {os.path.join(home, directory) for directory in kept}
+
+    def empty(path: str) -> None:
+        os.chmod(path, 0o700)
+        with os.scandir(path) as entries:
+            for entry in entries:
+                if not entry.is_dir(follow_symlinks=False):
+                    os.unlink(entry.path)
+                elif entry.path in keep:
+                    empty(entry.path)
+                else:
+                    remove_tree(entry.path)
+
+    try:
+        if os.path.lexists(home) and (os.path.islink(home) or not os.path.isdir(home)):
+            os.unlink(home)
+        os.makedirs(home, mode=0o700, exist_ok=True)
+        empty(home)
+    except OSError as error:
+        raise SessionError(
+            f"docker session {name}: cannot reset {home}: {error.strerror or error}"
+        ) from None
+
+
 def _report_plan(name: str, plan: Mapping) -> None:
     """Freeze a generation's plan beside its manifest, then print it to stderr, a line a part."""
     try:
@@ -355,6 +386,15 @@ class _Laps:
             print(f"{head}: {phase} {seconds:.2f} s", file=sys.stderr)
 
 
+def _tail(tmux: TmuxCli, name: str) -> str:
+    """`: <last lines>` of a client's pane on one line, read before its rollback; empty unread."""
+    try:
+        tail = last_lines(_text(tmux.read(name)))
+    except TuiError:
+        return ""
+    return f": {tail}" if tail else ""
+
+
 def _wait(ready, timeout: float, poll: float = POLL, cap: float | None = None) -> bool:
     """cap: the poll doubles up to it."""
     deadline = time.monotonic() + timeout
@@ -371,7 +411,7 @@ def _accept_started(
     name: str, generation: str, started: Started, container: str, github: str
 ) -> None:
     """The broker started `container` here, with a bot user ID exactly when `github` names an App;
-    its GitHub token expiries saved for refresh.
+    its deadline saved for the credential tick.
     """
     if (started.endpoint, started.container) != (endpoint(), container):
         raise SessionError(
@@ -381,13 +421,8 @@ def _accept_started(
     if (started.github_user_id is None) == bool(github):
         raise SessionError("broker: bad response to start: github_user_id")
     save(
-        os.path.join(state_dir(name), f"{generation}.credential.json"),
-        json.dumps(started.credential_expires_at),
-        durable=True,
-    )
-    save(
-        os.path.join(state_dir(name), f"{generation}.github.json"),
-        json.dumps(list(started.github)),
+        run_supervisor.deadline_file(state_dir(name), generation),
+        json.dumps(started.deadline),
         durable=True,
     )
 
@@ -930,7 +965,7 @@ class DockerHost(Host):
     def _preflight(
         self, name: str, launch: Launch, metadata: Mapping[str, str] | None = None
     ) -> None:
-        """With an environment: the cwd, the broker handshake and its lock's holder only."""
+        """With an environment: cwd and handshake; start owns the lock and credential checks."""
         environment = self._environment(name, metadata)
         if environment is None:
             self.validate(name, launch, missing_ok=True)
@@ -938,17 +973,6 @@ class DockerHost(Host):
         laps = _Laps()
         self._check_cwd(name, launch, missing_ok=True)
         self.broker.version()
-        lock = environment.lock
-        holder = self.broker.lock_query(lock) if lock else None
-        # its own container, still up until a resume or restart closes it, is no other holder
-        if (
-            lock
-            and holder
-            and not (
-                holder["owner"] == name and holder["container"].startswith(f"ensemble-{name}-")
-            )
-        ):
-            raise SessionBusy(lock, _holder_text(holder))
         laps("preflight")
         laps.report(f"docker timing {name}")
 
@@ -1114,7 +1138,6 @@ class DockerHost(Host):
                     "generation": generation,
                     "sid": sid,
                     "client": metadata.get("client"),
-                    "credential_refresh": created.started.credential_expires_at is not None,
                     "display": display,
                     "record": None if record is None else record.to_line(),
                     "events": events,
@@ -1147,8 +1170,17 @@ class DockerHost(Host):
             )
             _save_record(name, {**_record(name), "process": process})
             laps("tmux")
-            if not _wait(lambda: tmux.status(name) == PaneStatus.RUNNING, READY_WAIT):
+            status = None
+
+            def settled() -> bool:
+                nonlocal status
+                status = tmux.status(name)
+                return status == PaneStatus.RUNNING or isinstance(status, int)
+
+            if not _wait(settled, READY_WAIT):
                 raise SessionError(f"{container}: the client did not start in {READY_WAIT} s")
+            if isinstance(status, int):
+                raise SessionError(f"{container}: the client exited {status}{_tail(tmux, name)}")
             laps("client")
             launched = datetime.now().astimezone().isoformat(timespec="milliseconds")
             _save_result(name, created, laps.phases, launched)
@@ -1206,8 +1238,7 @@ class DockerHost(Host):
         persistent = json.loads(metadata.get("home_persistent") or "null")
         if resume == "0":
             self._move_workspace(name, volume, cwd)
-            shutil.rmtree(home, ignore_errors=True)
-            os.makedirs(home, mode=0o700)
+            _reset_home(name, home, persistent or ())
             for file, text in json.loads(metadata.get("home_files") or "{}").items():
                 save(os.path.join(home, file), text)
             for directory in persistent or ():
@@ -1322,7 +1353,6 @@ class DockerHost(Host):
                     "generation": generation,
                     "sid": metadata.get("sid"),
                     "client": metadata.get("client"),
-                    "credential_refresh": created.started.credential_expires_at is not None,
                     "mode": PIPED,
                     "environment": None if environment is None else environment.persisted(),
                 },
@@ -1357,23 +1387,14 @@ class DockerHost(Host):
             proc,
             close=lambda: self._close_piped(name, container),
             lock=lock,
-            refresh=lambda stopped: run_supervisor.refresh_tokens(
+            maintain=lambda stopped: run_supervisor.maintain(
                 name,
                 state_dir(name),
                 generation,
                 self.broker,
                 stopped,
-                failed=lambda reason: LOG.warning(
-                    "docker session %s: %s %s",
-                    name,
-                    "client_refresh_failed"
-                    if created.started.credential_expires_at is not None
-                    else "github_refresh_failed",
-                    reason,
-                ),
-                expired=lambda reason: LOG.warning(
-                    "docker session %s: client_auth_expired %s", name, reason
-                ),
+                report=lambda word, text: LOG.warning("docker session %s: %s %s", name, word, text),
+                root=hook_root(created.hook),
             ),
         )
 

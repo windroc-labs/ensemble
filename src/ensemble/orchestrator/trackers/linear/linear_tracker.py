@@ -129,7 +129,11 @@ RELATIONS = "inverseRelations(first: 50) { nodes { type issue { identifier state
 Q_RELATIONS = "query($i: String!) { issue(id: $i) { " + RELATIONS + " } }"
 Q_RECHECK = (
     "query($i: String!) { issue(id: $i) { state { id } assignee { id email } project { id name } "
-    "labels { nodes { id name parent { id } } } } }"
+    "labels { nodes { id name parent { id } } } archivedAt } }"
+)
+ARCHIVED = (
+    "archived: Linear lists no archived issue; "
+    "ensemble-orchestrator issue move {key} ready unarchives it"
 )
 # ops.HISTORY's nodes with their actors: nested objects there would multiply Q_FINISHED's complexity
 Q_HISTORY = (
@@ -389,8 +393,8 @@ class LinearTracker(Tracker):
         return [(i, tuple(blockers(i))) for i in issues]
 
     def recheck(self, key):
-        """ready: in the configured Todo state id, whatever other key shares it; refused without
-        a project; no such issue: not ready."""
+        """ready: in the configured Todo state id, whatever other key shares it; refused when
+        archived (no list holds it) or without a project; no such issue: not ready."""
         try:
             found = self.gql(Q_RECHECK, i=key)["issue"]
         except LinearError as e:
@@ -401,10 +405,12 @@ class LinearTracker(Tracker):
             return NO_ISSUE
         ready = found["state"]["id"] == _need("states", self.state_ids)[State.TODO]
         nodes = found["labels"]["nodes"]
+        refused = [ARCHIVED.format(key=key)] if found["archivedAt"] else []
+        refused += [] if found["project"] else ["no project"]
         return Recheck(
             ready,
             role=_need("roles", self.roles).get((found["assignee"] or {}).get("id")),
-            refused=None if found["project"] else "no project",
+            refused="; ".join(refused) or None,
             assignee=found["assignee"],
             home=found["project"],
             task=pick(nodes, self.task_group, self.label_tasks, "task"),
@@ -589,6 +595,7 @@ class LinearTracker(Tracker):
             archived,
             found[1:],
             () if archived else tuple(s for s in found if not s.finished),
+            updated=found[0].updated,
         )
 
     def _descendants(self, root):

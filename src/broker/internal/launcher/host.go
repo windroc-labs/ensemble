@@ -32,9 +32,12 @@ type Credentials interface {
 // CodexCredentials is the broker package's side of a Codex start; the launcher never sees the login.
 type CodexCredentials interface {
 	Ready(context.Context) error
-	// Inject writes the login through exec, as Credentials.Inject does, and returns its expiry (RFC 3339).
-	Inject(context.Context, func([]string, []byte) error) (string, error)
-	Refresh(context.Context, func([]string, []byte) error, func(string) error) (string, error)
+	// Inject writes the login into container through exec, as Credentials.Inject does, records the container's grant
+	// and returns its expiry (RFC 3339).
+	Inject(ctx context.Context, container string, exec func([]string, []byte) error) (string, error)
+	// Refresh writes the current login into container and records its expiry before returning it.
+	Refresh(ctx context.Context, container string, exec func([]string, []byte) error, publish func(string) error) (string, error)
+	Release(ctx context.Context, container string) error // withdraws the container's grant; never the login
 }
 
 // ProviderKeys is the broker package's side of an OpenCode start: the listed providers' API keys, which the launcher
@@ -78,12 +81,14 @@ type Host struct {
 	Codex    CodexCredentials
 	Opencode ProviderKeys
 	Env      EnvSecrets
+	Static   StaticMeta // nil: no static secret records, as tests without them
+	Schedule Schedule   // nil: no token record, as tests without one; every token provider is then always due
 	GitHub   Tokens
 	Versions CodexVersions
 	Releases Releases                          // nil: a build that must rebuild fails
 	Progress io.Writer                         // nil: none; build's notes on older images, after Docker's progress; start's phase times
 	Lock     func() (unlock func(), err error) // the image lock: build's lease and inspect, and prune
-	Audit    *audit.Recorder                   // nil: none; start, refresh and close name their container and add the client credential
+	Audit    *audit.Recorder                   // nil: none; start, maintain and close name their container and add the client credential
 	Now      func() time.Time                  // nil: host clock; mutex expiry, replaced image and check state tests supply a clock
 	Spawn    func() error                      // nil: none; starts check-clients detached, for a build
 }
@@ -99,6 +104,7 @@ func NewHost(home, endpoint string, d docker.Runner, creds Credentials, tokens T
 		Audit:    rec,
 		IsDir:    isDir,
 		Safe:     realSafe,
+		Schedule: StateSchedule{Home: home, Safe: realSafe},
 		Docker:   d,
 		Versions: codex.New(),
 		Releases: releases.New(),
@@ -159,25 +165,19 @@ type Clients struct {
 }
 
 type StartResult struct {
-	Container           string            `json:"container"`
-	Endpoint            string            `json:"endpoint"`
-	ImageDigest         string            `json:"image_digest"`
-	Clients             Clients           `json:"clients"`
-	GitHub              []protocol.Expiry `json:"github"`
-	GitHubUserID        *int64            `json:"github_user_id"`
-	CredentialExpiresAt *string           `json:"credential_expires_at"`
-}
-
-type RefreshResult struct {
-	Container           string            `json:"container"`
-	GitHub              []protocol.Expiry `json:"github"`
-	CredentialExpiresAt *string           `json:"credential_expires_at"`
+	Container    string    `json:"container"`
+	Endpoint     string    `json:"endpoint"`
+	ImageDigest  string    `json:"image_digest"`
+	Clients      Clients   `json:"clients"`
+	GitHubUserID *int64    `json:"github_user_id"`
+	Deadline     *Deadline `json:"deadline"`
 }
 
 type StatusResult struct {
 	Revocations []protocol.Pending    `json:"revocations"`
 	Codex       *protocol.CodexStatus `json:"codex,omitempty"`
 	Claude      map[string]bool       `json:"claude,omitempty"`
+	Static      []StaticStatus        `json:"static,omitempty"`
 }
 
 type CloseResult struct {

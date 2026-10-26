@@ -66,7 +66,3 @@ func (c Codex) renew(ctx context.Context, previous []byte, old codexAuthDocument
 func (c Codex) refreshError(err error) error {
 	return protocol.New(protocol.RefreshFailed, err.Error())
 }
-
-func (c Codex) Refresh(ctx context.Context, exec func([]string, []byte) error, publish func(string) error) (string, error) {
-	return c.inject(ctx, exec, publish, protocol.RefreshFailed)
-}
