@@ -89,7 +89,7 @@ ensemble 启动的 session 如何加载你的设置，以及为什么有些命�
 
 | 命令 | 作用 |
 |---|---|
-| `ctmux <name>` | 打开 commander 的 tmux session：在 iTerm2 中是原生窗口，在其他终端中是普通的 tmux attach，在 tmux 内部则是切换。`ctmux --install` 把 ctmux 和四个命令 `ensemble-crew`、`ensemble-session`、`ensemble-delegate`、`ensemble-orchestrator` 放进 `~/.ensemble/bin/`：按该路径运行，或把它加到 `PATH`。命令使用本次安装选择的插件，不受其他客户端残留副本影响。手动升级后若路径改变，重新运行安装器，或在支持来源选择的目标插件中运行 `skills/manage/scripts/ctmux --install`。安装旧 ref 时使用安装器。 |
+| `ctmux <name>` | 打开 commander 的 tmux session：在 iTerm2 中是原生窗口，在其他终端中是普通的 tmux attach，在 tmux 内部则是切换。`ctmux --install` 把 ctmux 和四个命令 `ensemble-crew`、`ensemble-session`、`ensemble-delegate`、`ensemble-orchestrator` 放进 `~/.ensemble/bin/`：按该路径运行，或把它加到 `PATH`。命令使用本次安装选择的插件，不受其他客户端残留副本影响。更新删除所选目录后，下次命令自动选择、记录并运行同一客户端最新的已安装副本，在 stderr 显示路径，无需重跑安装器。同一客户端已无副本时保留原选择错误。安装旧 ref 时使用安装器。 |
 | `/ensemble:manage` | 按 commander 的准则启动并指挥 worker、role run 和 pipeline run。 |
 | `/ensemble:act-as <role>[:<task>] <input>` | 在当前对话中运行一个核心 role。 |
 | `/ensemble:board` | 用固定的 `ensemble-orchestrator issue` 命令读取、查找、创建、编辑、移动和归档看板上的 issue。 |

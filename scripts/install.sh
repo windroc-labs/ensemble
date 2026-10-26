@@ -1701,12 +1701,12 @@ opencode_key() {
 
 # Installer-owned adapters also support refs whose launchers predate source selection.
 command_source() {
-  if has opencode; then
-    printf 'opencode\n%s/opencode/packages\n' "${XDG_CACHE_HOME:-$HOME/.cache}"
-  elif has claude; then
+  if has claude; then
     printf 'claude\n%s/plugins/installed_plugins.json\n' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-  else
+  elif has codex; then
     printf 'codex\n%s/plugins/cache/windroc/ensemble\n' "${CODEX_HOME:-$HOME/.codex}"
+  else
+    printf 'opencode\n%s/opencode/packages\n' "${XDG_CACHE_HOME:-$HOME/.cache}"
   fi
 }
 

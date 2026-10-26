@@ -24,7 +24,7 @@ def plugin_version(root, manifest="package.json"):
         return []
 
 
-def client_roots(client, source):
+def client_roots(client, source, newest=True):
     if client == "claude":
         try:
             with open(source, encoding="utf-8") as f:
@@ -45,7 +45,8 @@ def client_roots(client, source):
         key = plugin_version
     else:
         return []
-    return sorted(sorted(p for p in roots if isinstance(p, str) and os.path.isabs(p) and "\n" not in p), key=key, reverse=True)
+    roots = [p for p in roots if isinstance(p, str) and os.path.isabs(p) and "\n" not in p]
+    return sorted(sorted(roots), key=key, reverse=True) if newest else roots
 
 
 def identify(root):
@@ -101,7 +102,7 @@ else:
                     sys.exit()
     sys.exit(f"{name}: selected plugin {root!r} has no executable {rel}; rerun install.sh or the plugin's ctmux --install")
 
-roots = client_roots("claude", record) + client_roots("codex", cache) + client_roots("opencode", packages)
+roots = client_roots("claude", record, newest=False) + client_roots("codex", cache) + client_roots("opencode", packages)
 for root in roots:
     if isinstance(root, str) and os.access(path := os.path.join(root, rel), os.X_OK):
         print(path)

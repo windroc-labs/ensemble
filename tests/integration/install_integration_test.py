@@ -2661,7 +2661,13 @@ class InstallTest(Case):
 
     def test_installer_codex_adapters_follow_an_update(self):
         commands = self.legacy_command_package()
-        self.assert_ok(self.fresh(clients="codex"))
+        self.assert_ok(self.opencode_only())
+        self.assert_ok(
+            self.again("--clients", "codex,opencode", "--no-docker", answers=[(WRITE_Q, "y")])
+        )
+        self.assertEqual(
+            json.loads(Path(self.ensemble, "plugin-root").read_text())["client"], "codex"
+        )
         selected = Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.7")
         newer = selected.with_name("10.0.0")
         shutil.copytree(selected, newer)
@@ -2671,7 +2677,13 @@ class InstallTest(Case):
 
     def test_installer_claude_adapters_follow_an_update(self):
         commands = self.legacy_command_package()
-        self.assert_ok(self.fresh(clients="claude"))
+        self.assert_ok(self.opencode_only())
+        self.assert_ok(
+            self.again("--clients", "claude,opencode", "--no-docker", answers=[(WRITE_Q, "y")])
+        )
+        self.assertEqual(
+            json.loads(Path(self.ensemble, "plugin-root").read_text())["client"], "claude"
+        )
         selected = Path(self.claude_ensemble())
         newer = selected.with_name("10.0.0")
         shutil.copytree(selected, newer)

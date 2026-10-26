@@ -202,11 +202,11 @@ For a manual release upgrade:
 ```mermaid
 flowchart LR
     T[Set new #v&lt;version&gt;] --> R[Restart OpenCode]
-    R --> S[Refresh command selection]
-    S --> D[Delete old spec directory]
+    R --> D[Delete old spec directory]
+    D --> C[Run an installed command]
 ```
 
-Refresh command selection by rerunning the installer or the new plugin's `skills/manage/scripts/ctmux --install`; older refs require the installer ([Upgrading](upgrading.md)).
+When the old selected directory is gone, the next installed command selects and records the newest installed ensemble copy from OpenCode and reports its path on stderr; no installer rerun is needed. To select a different ref while the old directory remains, rerun the installer or the new plugin's `skills/manage/scripts/ctmux --install`; older refs require the installer ([Upgrading](upgrading.md)).
 
 The plugin adds:
 

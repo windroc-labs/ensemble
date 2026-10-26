@@ -305,11 +305,13 @@ class FakeTmux(Case):
                 shutil.rmtree(selected)
                 if client == "claude":
                     record(self.home, newer)
-                for _ in range(2):
+                for attempt in range(2):
                     process, _, err, calls = self.ctmux("s1", script=self.dst)
                     self.assertEqual(process.returncode, 0, err)
                     self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", newer))
-                    self.assertEqual(err, f"ctmux: re-selected plugin {newer}\n" if _ == 0 else "")
+                    self.assertEqual(
+                        err, f"ctmux: re-selected plugin {newer}\n" if attempt == 0 else ""
+                    )
                 with open(os.path.join(self.ensemble, "plugin-root"), encoding="utf-8") as f:
                     self.assertEqual(json.load(f)["root"], newer)
                 shutil.rmtree(newer)
@@ -382,6 +384,15 @@ class FakeTmux(Case):
                 process, _, err, calls = self.ctmux("s1", script=self.dst)
                 self.assertEqual((process.returncode, err), (0, ""))
                 self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", root))
+
+    def test_legacy_claude_discovery_keeps_record_order_across_versions(self):
+        self.legacy_install()
+        first = plugin(os.path.join(self.home, "cache", "0.5.0"))
+        newer = plugin(os.path.join(self.home, "cache", "0.10.0"))
+        record(self.home, first, newer)
+        process, _, err, calls = self.ctmux("s1", script=self.dst)
+        self.assertEqual((process.returncode, err), (0, ""))
+        self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", first))
 
     def test_without_a_claude_record_the_newest_codex_install_runs(self):
         self.legacy_install()
