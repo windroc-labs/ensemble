@@ -22,7 +22,7 @@ ref=
 release_tag=
 broker_mode=
 # Label contract v1; update only after checking the pinned repo's docs/label-contract.md.
-egress_commit=225409bd04954ff1ea81d66e5339c812a519b4f7
+egress_commit=9ed47580dc9eb4c1fe794d12e54a8f2d3f258831
 clients_flag=
 clients=
 docker_flag=
@@ -1915,10 +1915,10 @@ broker_logins() {
   fi
 }
 
-# 0: ready for workers; 2: healthy contract-1 gateway whose config has no workers section; 1: not ready yet.
+# 0: ready for workers; 2: healthy contract-1 proxy whose config has no workers section; 1: not ready yet.
 egress_ready() {
   local status running health contract name proxy networks
-  status=$(docker inspect --format '{{.State.Running}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{index .Config.Labels "windroc.egress.contract"}}|{{index .Config.Labels "windroc.egress.network.workers.name"}}|{{index .Config.Labels "windroc.egress.network.workers.proxy"}}|{{index .Config.Labels "windroc.egress.networks"}}' egress-gateway </dev/null 2>/dev/null) || return 1
+  status=$(docker inspect --format '{{.State.Running}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{index .Config.Labels "windroc.egress.contract"}}|{{index .Config.Labels "windroc.egress.network.workers.name"}}|{{index .Config.Labels "windroc.egress.network.workers.proxy"}}|{{index .Config.Labels "windroc.egress.networks"}}' egress-proxy </dev/null 2>/dev/null) || return 1
   IFS='|' read -r running health contract name proxy networks <<<"$status"
   [ "$running|$health|$contract" = "true|healthy|1" ] || return 1
   case ",$networks," in *,workers,*) ;; *) return 2 ;; esac
@@ -1943,10 +1943,10 @@ egress_download() (
 
 egress_install() {
   local dir=$HOME/.egress version=$HOME/.egress/versions/$egress_commit tries=0 ready
-  step "egress gateway"
+  step "egress proxy"
   mkdir -p "$dir/versions"
   [ ! -L "$dir/config.local.yaml" ] \
-    || die "$dir/config.local.yaml symlink is unsupported by the gateway's directory mount; existing path was kept"
+    || die "$dir/config.local.yaml symlink is unsupported by the proxy's directory mount; existing path was kept"
   if [ ! -e "$dir/config.local.yaml" ]; then
     (umask 077; set -o noclobber; printf 'version: 1\nnetworks:\n  workers:\n    mode: denylist\n' >"$dir/config.local.yaml") \
       || die "cannot create $dir/config.local.yaml; existing config was kept"
@@ -1956,20 +1956,17 @@ egress_install() {
   if [ ! -e "$version" ]; then egress_download; fi
   [ -x "$version/start.sh" ] && [ "$(cat "$version/COMMIT")" = "$egress_commit" ] \
     || die "incomplete egress checkout $version; keep your config and repair that version directory"
-  if [ "$(state_get egress_commit)" = "$egress_commit" ] && egress_ready; then
-    skip "pinned egress gateway healthy"
-    return
-  fi
+  # Always run start.sh: it applies a new or changed config and leaves an unchanged proxy running.
   EGRESS_CONFIG_DIR="$dir" bash "$version/start.sh" </dev/null >&2 \
-    || die "egress-gateway start failed: run $version/start.sh; inspect docker logs egress-gateway"
+    || die "egress-proxy start failed: run $version/start.sh; inspect docker logs egress-proxy"
   while :; do
     ready=0
     egress_ready || ready=$?
     [ "$ready" -ne 0 ] || break
     [ "$ready" -ne 2 ] \
-      || die "$dir/config.local.yaml has no networks.workers section, so the healthy gateway serves no workers network; add one (see $version/config.example.yaml), then rerun scripts/install.sh --docker; your config was kept unchanged"
+      || die "$dir/config.local.yaml has no networks.workers section, so the healthy proxy serves no workers network; add one (see $version/config.example.yaml), then rerun scripts/install.sh --docker; your config was kept unchanged"
     [ "$tries" -lt 60 ] \
-      || die "egress-gateway not healthy after 120 seconds: docker logs egress-gateway; rerun $version/start.sh"
+      || die "egress-proxy not healthy after 120 seconds: docker logs egress-proxy; rerun $version/start.sh"
     tries=$((tries + 1))
     sleep 2
   done
@@ -1984,7 +1981,7 @@ egress_install() {
 docker_steps() {
   local name
   if [ "$docker" != yes ]; then
-    for name in "Docker Desktop running" "egress gateway" broker "broker login: Claude" "broker login: GitHub" \
+    for name in "Docker Desktop running" "egress proxy" broker "broker login: Claude" "broker login: GitHub" \
       "broker Codex install" "broker login: Codex"; do
       step "$name"
       skip "Docker not chosen"

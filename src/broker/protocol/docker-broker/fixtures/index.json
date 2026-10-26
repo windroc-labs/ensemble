@@ -1055,7 +1055,7 @@
         "docker": "reachable",
         "egress": "stopped"
       },
-      "note": "Schema-valid; broker must refuse from the fake egress gateway state before any credential or container."
+      "note": "Schema-valid; broker must refuse from the fake egress proxy state before any credential or container."
     },
     {
       "file": "runtime-egress-unhealthy.json",
@@ -1076,7 +1076,7 @@
         "docker": "reachable",
         "egress": "unhealthy"
       },
-      "note": "Schema-valid; broker must refuse from the fake egress gateway state before any credential or container."
+      "note": "Schema-valid; broker must refuse from the fake egress proxy state before any credential or container."
     },
     {
       "file": "runtime-egress-missing.json",
@@ -1097,7 +1097,7 @@
         "docker": "reachable",
         "egress": "missing"
       },
-      "note": "Schema-valid; broker must refuse from the fake egress gateway state before any credential or container."
+      "note": "Schema-valid; broker must refuse from the fake egress proxy state before any credential or container."
     },
     {
       "file": "runtime-egress-not-internal.json",
@@ -1118,7 +1118,7 @@
         "docker": "reachable",
         "egress": "not_internal"
       },
-      "note": "Schema-valid; broker must refuse from the fake egress gateway state before any credential or container."
+      "note": "Schema-valid; broker must refuse from the fake egress proxy state before any credential or container."
     },
     {
       "file": "runtime-docker-sharing-denied.json",

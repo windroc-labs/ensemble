@@ -1,9 +1,9 @@
 # Upgrading
 
-Broker protocol 25 makes `start` require the egress gateway ([Docker host › Egress
-gateway](docker-host.md#egress-gateway)): without it running and healthy, a start fails
+Broker protocol 25 makes `start` require the egress proxy ([Docker host › Egress
+proxy](docker-host.md#egress-proxy)): without it running and healthy, a start fails
 `egress_unavailable` (exit 17) before any credential. Upgrade the broker with the plugin, then rerun
-`scripts/install.sh --docker` to start the gateway ([Egress gateway](#egress-gateway)).
+`scripts/install.sh --docker` to start the proxy ([Egress proxy](#egress-proxy)).
 
 Broker protocol 24 adds the start manifest's optional `secrets` ([environment secrets](docker-host.md#environment-secrets)).
 Upgrade the broker with the plugin: sessions refuse a broker of another protocol.
@@ -16,15 +16,15 @@ of success or failure; custom clients must display it while preserving the opera
 Its `build` adds `--base-image IMAGE` and `--image-plugin NAME` ([Docker host › Base
 images](docker-host.md#base-images)); a build without them is unchanged.
 
-## Egress gateway
+## Egress proxy
 
 After updating the plugin, rerun `scripts/install.sh --docker`: it installs the pinned private
 `windroc/egress-proxy` with your `gh` access, creates `~/.egress/config.local.yaml` only if absent, starts the
-gateway and waits for healthy. Existing configs are preserved. Add Ollama and local/LAN provider exceptions before starting their workers
-([Gateway operations](docker-host.md#egress-gateway)).
+proxy and waits for healthy. Existing configs are preserved. Add Ollama and local/LAN provider exceptions before starting their workers
+([Egress proxy operations](docker-host.md#egress-proxy)).
 
 An already running worker stays on `bridge` during the upgrade; it is not forcibly migrated or stopped.
-Its next start, restart or resume creates a container on the gateway's internal `workers` network.
+Its next start, restart or resume creates a container on the proxy's internal `workers` network.
 List running broker workers still on `bridge`:
 
 ```sh

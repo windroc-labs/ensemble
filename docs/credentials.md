@@ -253,14 +253,14 @@ A read that returns bytes fails this check unless the user accepts it: mark the 
 - Its workspace volume `ensemble-ws-<name>` at its cwd.
 - Its own client state: Claude and OpenCode's read-write binds; Codex's volatile home and bound `sessions/` history.
 - Its credentials on tmpfs ([Credentials](#credentials)).
-- The network only through the egress gateway's `workers` policy: the public internet; the Mac (`host.docker.internal`) and LAN providers only through its exceptions ([Egress gateway](docker-host.md#egress-gateway)).
+- The network only through the egress proxy's `workers` policy: the public internet; the Mac (`host.docker.internal`) and LAN providers only through its exceptions ([Egress proxy](docker-host.md#egress-proxy)).
 - Every repo of every App installation.
 
 Every container runs as `agent`, with all capabilities dropped and `no-new-privileges`.
 
-The `workers` network is the internal one the gateway advertises in its `windroc.egress.network.workers.name` label
-(`egress-workers` in contract 1), with no direct route out, external DNS included. The gateway's config, checkout and Docker socket are not mounted into
-workers. Only container loopback bypasses the proxy. See [gateway operations](docker-host.md#egress-gateway)
+The `workers` network is the internal one the proxy advertises in its `windroc.egress.network.workers.name` label
+(`egress-workers` in contract 1), with no direct route out, external DNS included. The proxy's config, checkout and Docker socket are not mounted into
+workers. Only container loopback bypasses the proxy. See [egress proxy operations](docker-host.md#egress-proxy)
 for the installer, policy and network-change restart commands, health checks, and public IPv4/global IPv6 limits.
 
 Ollama's `host.docker.internal:11434` and every local/LAN provider `base_url` host and port must be listed in
@@ -268,7 +268,7 @@ Ollama's `host.docker.internal:11434` and every local/LAN provider `base_url` ho
 does not add provider exceptions. Every worker gets the exception, including Claude and Codex, so a permitted
 provider still receives the requests and credentials its own permissions allow. Host-side provider probes can
 pass before the worker's exception exists. Existing running `bridge` workers retain old access until their next
-start, restart or resume ([Upgrading](upgrading.md#egress-gateway)).
+start, restart or resume ([Upgrading](upgrading.md#egress-proxy)).
 
 ## What a container cannot reach
 
@@ -326,13 +326,15 @@ Keys, one per account:
 ## Live checks
 
 For the manager and the user, through mini-op on the test Mac mini with Docker Desktop. Never run real-machine
-acceptance on a developer's Mac. The 2026-10-18 results below predate the gateway.
+acceptance on a developer's Mac. The 2026-10-18 results below predate the egress proxy.
 
-- [ ] Fresh `scripts/install.sh --docker` ends with `egress-gateway` healthy; rerunning keeps the gateway's ID
+- [ ] Fresh `scripts/install.sh --docker` ends with `egress-proxy` healthy; rerunning keeps the proxy's ID
   and start time, pinned checkout, and config bytes, mode and modification time. Repeat with an existing config.
-- [ ] `worker --client claude`, `worker --client codex`, `worker --client opencode` pass the gateway checks in
+- [ ] After changing or recreating `~/.egress/config.local.yaml`, rerunning `scripts/install.sh --docker` makes the
+  proxy serve the new config; with no change, the proxy keeps its start time.
+- [ ] `worker --client claude`, `worker --client codex`, `worker --client opencode` pass the proxy checks in
   [Live acceptance](docker-host.md#live-acceptance). Their local/LAN negative controls use temporary reachable
-  listeners; the mini's NAS already rejects it and proves no gateway isolation.
+  listeners; the mini's NAS already rejects it and proves no proxy isolation.
 
 - [x] [Measured readers](#measured-readers): six services, manager and shell.
 - [x] [What a container cannot reach](#what-a-container-cannot-reach): four commands, a Claude and a Codex worker

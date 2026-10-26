@@ -90,7 +90,7 @@ func (w *lockWorld) respond(args []string) ([]byte, error, bool) {
 		return []byte(strings.Join(ids, "\n")), nil, true
 	case "container":
 		ref := args[len(args)-1]
-		if args[1] != "inspect" || ref == gatewayID { // the egress gateway is the base world's
+		if args[1] != "inspect" || ref == proxyID { // the egress proxy is the base world's
 			return nil, nil, false
 		}
 		for _, c := range w.objects {

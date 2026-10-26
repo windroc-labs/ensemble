@@ -86,9 +86,9 @@ class AuditLinesTest(Case):
         self.assertEqual([x["event"] for x in gate.audit_lines(text)], ["start", "close"])
 
 
-class GatewayTest(Case):
+class ProxyBaselineTest(Case):
     def setUp(self):
-        self.gateway = {
+        self.egress = {
             "Config": {
                 "Labels": {
                     "windroc.egress.contract": "1",
@@ -116,18 +116,18 @@ class GatewayTest(Case):
         }
 
     def check(self):
-        return gate.gateway_baseline(self.gateway, self.network, self.worker)
+        return gate.proxy_baseline(self.egress, self.network, self.worker)
 
     def test_valid_contract_and_environment(self):
         self.assertEqual(self.check(), [])
 
     def test_starting_and_stopped_are_rejected(self):
         for state in ({"Running": False}, {"Running": True, "Health": {"Status": "starting"}}):
-            self.gateway["State"] = state
+            self.egress["State"] = state
             self.assertTrue(self.check())
 
     def test_each_missing_label_is_rejected(self):
-        labels = self.gateway["Config"]["Labels"]
+        labels = self.egress["Config"]["Labels"]
         for key in list(labels):
             value = labels.pop(key)
             self.assertTrue(self.check(), key)
@@ -137,12 +137,12 @@ class GatewayTest(Case):
         self.network["Internal"] = False
         self.assertTrue(self.check())
         self.network["Internal"] = True
-        self.gateway["NetworkSettings"]["Networks"] = {}
+        self.egress["NetworkSettings"]["Networks"] = {}
         self.assertTrue(self.check())
 
     def test_missing_proxy_variable_is_rejected(self):
         self.worker["Config"]["Env"].pop(0)
-        self.assertEqual(self.check(), ["HTTP_PROXY differs from gateway label"])
+        self.assertEqual(self.check(), ["HTTP_PROXY differs from proxy label"])
 
     def test_host_bypass_is_rejected_independently_for_each_case(self):
         valid = self.worker["Config"]["Env"][:]
@@ -492,18 +492,18 @@ class BaselineTest(Case):
         self.assertIn("docker.sock", problems[0])
 
 
-class EgressGatewayTest(Case):
-    GATEWAY = "e" * 64
+class EgressProxyTest(Case):
+    PROXY = "e" * 64
 
     def network(self, listing, labels=None):
         found = [{"Config": {"Labels": labels or {}}}]
         replies = iter([(listing, ""), (json.dumps(found), "")])
         with mock.patch.object(gate, "call", side_effect=lambda _argv: next(replies)) as call:
-            return gate.egress_gateway("docker")[1], call
+            return gate.egress_proxy("docker")[1], call
 
-    def test_the_gateways_workers_network(self):
+    def test_the_proxy_workers_network(self):
         labels = {"windroc.egress.network.workers.name": NETWORK}
-        found, call = self.network(self.GATEWAY + "\n", labels)
+        found, call = self.network(self.PROXY + "\n", labels)
         self.assertEqual(found, NETWORK)
         self.assertEqual(
             call.call_args_list[0].args[0],
@@ -518,15 +518,15 @@ class EgressGatewayTest(Case):
             ],
         )
 
-    def test_no_single_gateway_or_label_fails_naming_the_gateway(self):
+    def test_no_single_proxy_or_label_fails_naming_the_proxy(self):
         for listing, labels in (
             ("", None),
-            (self.GATEWAY + "\n" + "c" * 64 + "\n", None),
-            (self.GATEWAY + "\n", {}),
+            (self.PROXY + "\n" + "c" * 64 + "\n", None),
+            (self.PROXY + "\n", {}),
         ):
             with (
                 self.subTest(listing=listing, labels=labels),
-                self.assertRaisesRegex(SystemExit, "egress gateway"),
+                self.assertRaisesRegex(SystemExit, "egress proxy"),
             ):
                 self.network(listing, labels)
 

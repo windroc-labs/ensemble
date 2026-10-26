@@ -14,7 +14,7 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-var gatewayCalls = []string{"ps --all", "container inspect", "network inspect"}
+var proxyCalls = []string{"ps --all", "container inspect", "network inspect"}
 
 func labelsEdit(edit func(labels map[string]any)) func(map[string]any) {
 	return func(g map[string]any) { edit(g["Config"].(map[string]any)["Labels"].(map[string]any)) }
@@ -38,52 +38,52 @@ func credentialHost(w *world) (Host, *fakeDocker, *fakeCreds, *fakeTokens, *fake
 }
 
 func TestEgressRefusals(t *testing.T) {
-	two := gatewayID + "\n" + strings.Repeat("c", 64) + "\n"
+	two := proxyID + "\n" + strings.Repeat("c", 64) + "\n"
 	none, short := "", "abc123\n"
 	for _, tc := range []struct {
 		name  string
 		world world
-		calls int    // gateway calls made before refusing
+		calls int    // proxy calls made before refusing
 		want  string // in the message
 	}{
-		{"no gateway", world{gateways: &none}, 1, "No egress gateway container"},
-		{"two gateways", world{gateways: &two}, 1, "Found 2 egress gateway containers"},
-		{"malformed id", world{gateways: &short}, 1, "Cannot inspect egress gateway egress-gateway"},
-		{"unknown contract", world{gateway: labelsEdit(func(l map[string]any) { l["windroc.egress.contract"] = "2" })}, 2, "contract version 2; this broker knows 1"},
-		{"no contract label", world{gateway: labelsEdit(func(l map[string]any) { delete(l, "windroc.egress.contract") })}, 2, "contract version"},
-		{"stopped", world{gateway: func(g map[string]any) {
+		{"no proxy", world{proxies: &none}, 1, "No egress proxy container"},
+		{"two proxies", world{proxies: &two}, 1, "Found 2 egress proxy containers"},
+		{"malformed id", world{proxies: &short}, 1, "Cannot inspect egress proxy egress-proxy"},
+		{"unknown contract", world{proxy: labelsEdit(func(l map[string]any) { l["windroc.egress.contract"] = "2" })}, 2, "contract version 2; this broker knows 1"},
+		{"no contract label", world{proxy: labelsEdit(func(l map[string]any) { delete(l, "windroc.egress.contract") })}, 2, "contract version"},
+		{"stopped", world{proxy: func(g map[string]any) {
 			g["State"] = map[string]any{"Running": false, "Health": map[string]any{"Status": "unhealthy"}}
 		}}, 2, "is not running"},
-		{"paused", world{gateway: func(g map[string]any) { g["State"].(map[string]any)["Paused"] = true }}, 2, "is not running"},
-		{"unhealthy", world{gateway: func(g map[string]any) { g["State"].(map[string]any)["Health"] = map[string]any{"Status": "unhealthy"} }}, 2, "is unhealthy, not healthy"},
-		{"starting", world{gateway: func(g map[string]any) { g["State"].(map[string]any)["Health"] = map[string]any{"Status": "starting"} }}, 2, "is starting, not healthy"},
-		{"no health check", world{gateway: func(g map[string]any) { delete(g["State"].(map[string]any), "Health") }}, 2, "without a health check, not healthy"},
-		{"no workers key", world{gateway: labelsEdit(func(l map[string]any) { l["windroc.egress.networks"] = "mini-op" })}, 2, "no valid workers network labels"},
-		{"workers key prefix only", world{gateway: labelsEdit(func(l map[string]any) { l["windroc.egress.networks"] = "mini-op,workers2" })}, 2, "no valid workers network labels"},
-		{"no name label", world{gateway: labelsEdit(func(l map[string]any) { delete(l, "windroc.egress.network.workers.name") })}, 2, "no valid workers network labels"},
-		{"no proxy label", world{gateway: labelsEdit(func(l map[string]any) { delete(l, "windroc.egress.network.workers.proxy") })}, 2, "no valid workers network labels"},
-		{"flag as network name", world{gateway: labelsEdit(func(l map[string]any) { l["windroc.egress.network.workers.name"] = "--privileged" })}, 2, "no valid workers network labels"},
-		{"https proxy", world{gateway: labelsEdit(func(l map[string]any) {
+		{"paused", world{proxy: func(g map[string]any) { g["State"].(map[string]any)["Paused"] = true }}, 2, "is not running"},
+		{"unhealthy", world{proxy: func(g map[string]any) { g["State"].(map[string]any)["Health"] = map[string]any{"Status": "unhealthy"} }}, 2, "is unhealthy, not healthy"},
+		{"starting", world{proxy: func(g map[string]any) { g["State"].(map[string]any)["Health"] = map[string]any{"Status": "starting"} }}, 2, "is starting, not healthy"},
+		{"no health check", world{proxy: func(g map[string]any) { delete(g["State"].(map[string]any), "Health") }}, 2, "without a health check, not healthy"},
+		{"no workers key", world{proxy: labelsEdit(func(l map[string]any) { l["windroc.egress.networks"] = "mini-op" })}, 2, "no valid workers network labels"},
+		{"workers key prefix only", world{proxy: labelsEdit(func(l map[string]any) { l["windroc.egress.networks"] = "mini-op,workers2" })}, 2, "no valid workers network labels"},
+		{"no name label", world{proxy: labelsEdit(func(l map[string]any) { delete(l, "windroc.egress.network.workers.name") })}, 2, "no valid workers network labels"},
+		{"no proxy label", world{proxy: labelsEdit(func(l map[string]any) { delete(l, "windroc.egress.network.workers.proxy") })}, 2, "no valid workers network labels"},
+		{"flag as network name", world{proxy: labelsEdit(func(l map[string]any) { l["windroc.egress.network.workers.name"] = "--privileged" })}, 2, "no valid workers network labels"},
+		{"https proxy", world{proxy: labelsEdit(func(l map[string]any) {
 			l["windroc.egress.network.workers.proxy"] = "https://egress-proxy-workers:4750"
 		})}, 2, "no valid workers network labels"},
-		{"proxy without port", world{gateway: labelsEdit(func(l map[string]any) { l["windroc.egress.network.workers.proxy"] = "http://egress-proxy-workers" })}, 2, "no valid workers network labels"},
-		{"proxy with user", world{gateway: labelsEdit(func(l map[string]any) {
+		{"proxy without port", world{proxy: labelsEdit(func(l map[string]any) { l["windroc.egress.network.workers.proxy"] = "http://egress-proxy-workers" })}, 2, "no valid workers network labels"},
+		{"proxy with user", world{proxy: labelsEdit(func(l map[string]any) {
 			l["windroc.egress.network.workers.proxy"] = "http://u:p@egress-proxy-workers:4750"
 		})}, 2, "no valid workers network labels"},
-		{"proxy with path", world{gateway: labelsEdit(func(l map[string]any) {
+		{"proxy with path", world{proxy: labelsEdit(func(l map[string]any) {
 			l["windroc.egress.network.workers.proxy"] = "http://egress-proxy-workers:4750/x"
 		})}, 2, "no valid workers network labels"},
-		{"not attached", world{gateway: func(g map[string]any) {
+		{"not attached", world{proxy: func(g map[string]any) {
 			delete(g["NetworkSettings"].(map[string]any)["Networks"].(map[string]any), workersNetwork)
-		}}, 2, "Egress gateway egress-gateway is not attached to network egress-workers"},
-		{"network absent", world{noNetwork: true}, 3, "Egress network egress-workers of gateway egress-gateway does not exist"},
+		}}, 2, "Egress proxy egress-proxy is not attached to network egress-workers"},
+		{"network absent", world{noNetwork: true}, 3, "Egress network egress-workers of proxy egress-proxy does not exist"},
 		{"network matched by id prefix", world{network: func(n map[string]any) { n["Name"] = "other" }}, 3, "does not exist"},
-		{"network not internal", world{network: func(n map[string]any) { n["Internal"] = false }}, 3, "Egress network egress-workers of gateway egress-gateway is not internal"},
+		{"network not internal", world{network: func(n map[string]any) { n["Internal"] = false }}, 3, "Egress network egress-workers of proxy egress-proxy is not internal"},
 		{"another network of that name", world{network: func(n map[string]any) { n["Id"] = strings.Repeat("a", 64) }}, 3, "is not attached to network egress-workers"},
-		{"renamed gateway", world{gateway: func(g map[string]any) {
-			g["Name"] = "/my-gateway"
+		{"renamed proxy", world{proxy: func(g map[string]any) {
+			g["Name"] = "/my-proxy"
 			g["State"].(map[string]any)["Health"] = map[string]any{"Status": "unhealthy"}
-		}}, 2, "Egress gateway my-gateway is unhealthy"},
+		}}, 2, "Egress proxy my-proxy is unhealthy"},
 	} {
 		for _, manifest := range []string{"manifest-github-app.json", "manifest-codex.json", "manifest-opencode-providers.json"} {
 			t.Run(tc.name+"/"+manifest, func(t *testing.T) {
@@ -95,12 +95,13 @@ func TestEgressRefusals(t *testing.T) {
 				if e.Code != protocol.EgressUnavailable || protocol.Exit(e.Code) != 17 || e.Cleanup != protocol.NotNeeded {
 					t.Fatalf("%+v", e)
 				}
-				if !strings.Contains(e.Message, tc.want) || !strings.Contains(e.Message, "./start.sh") ||
-					(!strings.Contains(e.Message, "egress-gateway") && !strings.Contains(e.Message, "my-gateway")) {
-					t.Fatalf("message %q lacks %q, the gateway or ./start.sh", e.Message, tc.want)
+				if !strings.Contains(e.Message, tc.want) || !strings.HasSuffix(e.Message, egressHint) ||
+					!strings.Contains(e.Message, "Start the egress proxy (~/.egress/current/start.sh") ||
+					(!strings.Contains(e.Message, "egress-proxy") && !strings.Contains(e.Message, "my-proxy")) {
+					t.Fatalf("message %q lacks %q, the proxy or ~/.egress/current/start.sh", e.Message, tc.want)
 				}
-				if got := d.verbs(); !slices.Equal(got, gatewayCalls[:tc.calls]) {
-					t.Fatalf("docker calls %q, want %q", got, gatewayCalls[:tc.calls])
+				if got := d.verbs(); !slices.Equal(got, proxyCalls[:tc.calls]) {
+					t.Fatalf("docker calls %q, want %q", got, proxyCalls[:tc.calls])
 				}
 				if len(creds.calls)+len(tokens.calls)+len(keys.calls)+codexCreds.ready+codexCreds.injected != 0 {
 					t.Fatalf("credential calls: %q %q %q codex=%d/%d", creds.calls, tokens.calls, keys.calls, codexCreds.ready, codexCreds.injected)
@@ -119,7 +120,7 @@ func TestEgressDockerFailures(t *testing.T) {
 		{"unreachable", world{unreachable: true}, protocol.DockerUnreachable},
 		{"listing unreachable", world{egressErr: docker.ErrUnreachable}, protocol.DockerUnreachable},
 		{"listing fails", world{egressErr: &docker.CommandError{Exit: 1, Stderr: "boom"}}, protocol.EgressUnavailable},
-		{"inspect not json", world{gateway: func(g map[string]any) { g["State"] = "running" }}, protocol.EgressUnavailable},
+		{"inspect not json", world{proxy: func(g map[string]any) { g["State"] = "running" }}, protocol.EgressUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := tc.w
@@ -155,7 +156,7 @@ func envArgs(argv []string) map[string]string {
 	return out
 }
 
-// A start, restart and resume (each a new generation) of every client joins only the gateway's workers network.
+// A start, restart and resume (each a new generation) of every client joins only the proxy's workers network.
 func TestStartJoinsOnlyWorkers(t *testing.T) {
 	for _, manifest := range []string{"manifest-valid.json", "manifest-codex.json", "manifest-opencode-providers.json", "manifest-github-app.json"} {
 		for _, generation := range []string{"", "fedcba9876543210fedcba9876543210"} {
@@ -173,12 +174,12 @@ func TestStartJoinsOnlyWorkers(t *testing.T) {
 				if got := networkArgs(run); !slices.Equal(got, []string{workersNetwork}) {
 					t.Fatalf("--network values %q in %q", got, run)
 				}
-				if !slices.Equal(d.verbs()[:3], gatewayCalls) || !slices.Equal(d.calls[2], []string{"network", "inspect", workersNetwork}) {
-					t.Fatalf("gateway check first: %q", d.verbs())
+				if !slices.Equal(d.verbs()[:3], proxyCalls) || !slices.Equal(d.calls[2], []string{"network", "inspect", workersNetwork}) {
+					t.Fatalf("proxy check first: %q", d.verbs())
 				}
 				if !slices.Equal(d.calls[0], []string{"ps", "--all", "--no-trunc", "--filter", "label=windroc.egress.contract", "--format", "{{.ID}}"}) ||
-					!slices.Equal(d.calls[1], []string{"container", "inspect", gatewayID}) {
-					t.Fatalf("gateway calls %q", d.calls[:2])
+					!slices.Equal(d.calls[1], []string{"container", "inspect", proxyID}) {
+					t.Fatalf("proxy calls %q", d.calls[:2])
 				}
 			})
 		}
@@ -225,7 +226,7 @@ func TestStartProxyEnv(t *testing.T) {
 	}
 }
 
-// Helpers stay on network none, and no client mount reaches the gateway's config, checkout or a Docker socket.
+// Helpers stay on network none, and no client mount reaches the proxy's config, checkout or a Docker socket.
 func TestHelpersStayOffline(t *testing.T) {
 	for _, manifest := range []string{"manifest-valid.json", "manifest-codex.json", "manifest-opencode.json"} {
 		t.Run(manifest, func(t *testing.T) {
@@ -277,8 +278,8 @@ func TestValidProxy(t *testing.T) {
 }
 
 func TestEgressListingIgnoresBlankLines(t *testing.T) {
-	out := "\n" + gatewayID + "\n\n"
-	w := &world{labels: goodLabels(), gateways: &out}
+	out := "\n" + proxyID + "\n\n"
+	w := &world{labels: goodLabels(), proxies: &out}
 	h, _ := startHost(w, &fakeCreds{})
 	if _, err := h.Start(context.Background(), validManifest(t)); err != nil {
 		t.Fatal(err)
