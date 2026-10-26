@@ -7,9 +7,8 @@ Usage: ensemble-orchestrator router [--dry-run] [--issue ID]
 Arguments and options:
   (no mode)     One scheduled tick: role max_runs and usage
                 gates; starts at most one run assigned to a role account.
-  --issue ID    Only this issue identifier, e.g. TASK-1; bypass max_runs,
-                usage gates (its run still counts toward
-                them).
+  --issue ID    Only this issue identifier, e.g. TASK-1; bypass role max_runs
+                and usage gates; session client limits still apply.
   --dry-run     Print the plan without claiming issues or launching work;
                 a tick still performs usage checks. Not an offline preview:
                 read configuration, run inventory, credentials and board data.

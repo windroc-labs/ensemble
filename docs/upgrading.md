@@ -1,5 +1,17 @@
 # Upgrading
 
+## Client run limits
+
+Move every entry in `[orchestrator.client_max_runs]` in `~/.ensemble/config.local.toml` to its client's session table, then delete the old table:
+
+```toml
+# Previously: [orchestrator.client_max_runs] with opencode = 1
+[session.clients.opencode]
+max_runs = 1
+```
+
+Zero or an omitted `max_runs` means unlimited. The old local table is now an unknown key and is ignored with a warning by the configuration overlay; it no longer limits launches. Stop and restart headless/in-process runs started by the previous version before relying on the new limit, because they have no session-layer leases. Existing TUI sessions on configured Hosts are counted immediately. The limit now covers ad-hoc role runs, crew workers and `router --issue` too; a refused board start is a normal failed attempt. See [Session run limits](sessions.md#run-limits) for counting and reconciliation.
+
 Broker protocol 29 replaces `refresh` and `notices` with `maintain`: the broker now decides when each session's
 credentials renew ([Docker host › Credential renewal](docker-host.md#credential-renewal)). Upgrade the broker with the
 plugin, then restart (close and resume) every Docker session that was running: until then its old supervisor's

@@ -43,6 +43,28 @@ Text sent to a Codex or Claude tui session mid-turn joins that turn. Codex takes
 
 A Codex or Claude turn that fails ends a role run's attempt at once. A usage limit stays a usage limit.
 
+## Run limits
+
+Set a client's simultaneous session limit in `~/.ensemble/config.local.toml`:
+
+```toml
+[session.clients.opencode]
+max_runs = 1
+
+[session.clients.claude]
+max_runs = 3
+```
+
+`max_runs` is a whole number >= 0. Zero (the packaged default) or an omitted key means unlimited. The setting belongs to the session layer's `[clients.<client>]` table in `src/ensemble/session/config.toml`, and is removed before configuration reaches the client adapter.
+
+Every `Session.start` shares admission for that client across processes using the same user state directory, regardless of caller, Host, mode, name or resume flag. Board runs, `router --issue`, ad-hoc role runs and crew workers all count. The check and start hold one client admission lock; a full client raises the existing `SessionError` before launching or recording a new session, naming the client, limit and holding names (session ids for unnamed runs). There is no capacity queue. Preflight, inspect and attaching to an existing session reserve nothing.
+
+TUI sessions count while their client is alive, including `done` between turns and `blocked`; an unknown state keeps its slot. Close a retained TUI when it should stop using capacity. Headless and in-process modes hold a lease until their mode ends or is stopped/closed, even when nobody reads events. A failed start releases its reservation. TUI ownership survives its launcher; transient leases belong to their caller process. An abnormal caller exit does not add a recovery protocol for orphaned children.
+
+Admission checks all configured Hosts; an unavailable inventory fails closed. Shared TUI reservations from a Host configuration the caller does not have remain counted until a caller with the matching configuration confirms the session ended. Close the original session or retry using its original Host configuration to reconcile it. Changing an unrelated Host setting changes that configuration's identity, so close its sessions before changing its settings.
+
+The orchestrator's [role limits](board.md#run-limits) and usage gate remain separate. Direct client commands outside `Session.start`, including `client-resume`'s native client handoff, do not create ensemble sessions.
+
 ## Recall a closed run
 
 `ensemble-crew close <ID>` ends a board run's sessions and drops its roster entry; its conversation stays. To continue it:
