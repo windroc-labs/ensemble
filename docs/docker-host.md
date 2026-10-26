@@ -107,11 +107,11 @@ echo:
 
 | Login | Terminal | macOS dialog, at most | Click |
 |---|---|---|---|
-| `login claude [<name>]` | the token; the login keychain password only when the item's access needs a change | one change-access dialog, after the password; one read dialog, announced on the terminal first | Allow; Always Allow |
+| `login claude [<name>] [--fresh-token \| --issued <date> \| --expires <date>]` | the token; the login keychain password only when the item's access needs a change | one change-access dialog, after the password; one read dialog, announced on the terminal first | Allow; Always Allow |
 | `login github ensemble-bot [--key-file <pem> --app-id <ID>]` | the login keychain password, when a step is not yet in place | with `--key-file`, none; else one change-access dialog (Deny / Allow), after the password | Allow |
 | `login codex` | the login keychain password, when a step is not yet in place, before the browser opens | one change-access dialog (Deny / Allow), after the password | Allow |
 | `login opencode <name>` | the provider's API key; the login keychain password only when the item's access needs a change | at most one change-access dialog (Deny / Allow), after the password | Allow |
-| `login env <name>` | the value, hidden, unless stdin is a pipe or file; the login keychain password only when the item's access needs a change, from the terminal | at most one change-access dialog (Deny / Allow), after the password | Allow |
+| `login env <name> [--expires <date>]` | the value, hidden, unless stdin is a pipe or file; the login keychain password only when the item's access needs a change, from the terminal | at most one change-access dialog (Deny / Allow), after the password | Allow |
 | `start` | none | none: a token or key it cannot read without one names unlocking the login keychain or the login to run (`keychain_failed` for an OpenCode key or an environment secret needing approval; `login_required` for other clients and a missing environment secret) | |
 
 What each login hands a container: [Credentials › Who logs in](credentials.md#who-logs-in).
@@ -125,6 +125,15 @@ claude setup-token          # copy the token it prints
 ```
 
 It saves the token in `ensemble-claude` / `<name>` (`default` without a name), replacing an earlier one, and makes it trust only the broker. If macOS asks, enter the login keychain password and click Always Allow as the terminal instructs.
+
+```sh
+"$B" login claude --fresh-token            # a token claude setup-token just printed: expires in one year
+"$B" login claude --issued 2026-03-01      # generated that day: expires one year later
+"$B" login claude work --expires 2027-03-01
+```
+
+Without one of them the expiry stays unknown ([Static secret expiry](#static-secret-expiry)); `--fresh-token` takes
+no date, and `--issued` with `--expires` must agree.
 
 **GitHub**: the private key of your one GitHub App ([create it](#create-the-github-app)), whatever its name, must be
 a generic-password item in the login keychain, service `ensemble-bot`, account its App ID, content the key. Let the
@@ -143,7 +152,7 @@ With `--key-file` it refuses an existing `ensemble-bot` item. Without it, the it
 "$B" login opencode strata   # paste strata's API key; nothing echoes
 ```
 
-It saves the key in broker-only item `ensemble-opencode` / `<name>`, replacing an earlier one. A Docker OpenCode start needs every configured provider's key; a missing one names this login command.
+It saves the key in broker-only item `ensemble-opencode` / `<name>`, replacing an earlier one. A Docker OpenCode start needs every configured provider's key; a missing one names this login command. `--expires YYYY-MM-DD` records when the key stops working, as `login env` does.
 
 `scripts/install.sh --docker` with OpenCode selected first ensures the local OpenCode API entry, then imports it
 into the broker, so a local commander and Docker workers both have credentials with one key entry. To import an
@@ -417,7 +426,7 @@ prefetches again. None of these errors is `busy`.
 
 ## Audit log
 
-Every `start`, `refresh` and `close` appends to `~/Library/Logs/ensemble/broker.jsonl`, recording credentials issued, renewed, withdrawn or revoked, never a token or key. Past 10 MiB it rotates to `broker.jsonl.1`. An unwritable log may lose records. OpenCode provider keys have no audit line. Each environment secret a start writes is an `env-secret` credential naming its `item`, never its value: `issued` at start, `withdrawn` when close or a failed start removes the container. No container mounts it.
+Every `start`, `refresh` and `close` appends to `~/Library/Logs/ensemble/broker.jsonl`, recording credentials issued, renewed, withdrawn or revoked, never a token or key. Past 10 MiB it rotates to `broker.jsonl.1`. An unwritable log may lose records. OpenCode provider keys appear only on notice lines. Each delivered [static secret notice](#static-secret-expiry) is one `credential-notice` line (command `login`, `status` or `notices`) whose credential has result `notified`, its `item` the reference and its `notice` the threshold or `rotated`. Each environment secret a start writes is an `env-secret` credential naming its `item`, never its value: `issued` at start, `withdrawn` when close or a failed start removes the container. No container mounts it.
 
 Audit persistence failure adds `audit_warning: "audit_write_failed"` to the broker's JSON
 response, alongside the original success fields or error envelope. The operation's exit code,
@@ -433,6 +442,25 @@ resolved entries, preserving the former status behavior. See [credential status]
 ```sh
 jq 'select(.session=="NAME")' ~/Library/Logs/ensemble/broker.jsonl
 ```
+
+## Static secret expiry
+
+Claude setup-tokens, OpenCode keys and environment secrets are static: the broker never renews or revokes them. Each
+login records, in `~/.ensemble/docker/static-secrets.json` (no secret), the item's version (counting logins) and its
+expiry with where it came from: `explicit` (`--expires`), `derived` (`--issued` plus a year), `assumed`
+(`--fresh-token`) or `unknown`. Items saved before this record are `unknown`.
+
+| When | What happens |
+|---|---|
+| 30, 7 and 1 days before a known expiry, and at it | a notice naming the reference, the date, its provenance and the login to rerun: printed by the login, shown by `status`, delivered once per session and version |
+| the item is replaced | running sessions holding the old version get a notice to restart; new starts get the new one |
+| a `start` whose Claude token, OpenCode key or environment secret has expired | `login_required` (exit 5) naming the reference, before the lock and any container; never `busy`. An unknown expiry starts |
+
+Running sessions are never stopped. Their tick (the TUI supervisor or the headless harness) asks
+`ensemble-broker notices` at once, then when it says (at most an hour apart), and writes each notice to the session's
+events as `credential_notice <text>` (headless: the log). A notice the events file did not take is asked again; a
+failing check writes `credential_notice_failed <code>` once per streak. `status` lists every recorded static secret
+under `static`; `status --cleanup` also records and audits the notices due to you.
 
 ## Run workers
 
@@ -473,6 +501,7 @@ failures go to the session's events or the harness's log and retry every minute:
 |---|---|---|
 | Codex | 10 minutes before the earliest Codex or GitHub expiry | `client_refresh_failed <reason>` for either credential's failure |
 | Other clients with GitHub tokens | 10 minutes before the earliest GitHub expiry | `github_refresh_failed <reason>` |
+| Static secrets (Claude, OpenCode, env) | 30, 7 and 1 days before a known expiry, at expiry, and on replacement ([Static secret expiry](#static-secret-expiry)) | `credential_notice <text>`; `credential_notice_failed <code>` once per failing streak |
 
 Codex and GitHub renew independently within one broker refresh: a Codex failure still attempts GitHub renewal.
 For Codex, the absence of `github_refresh_failed` does not imply GitHub renewal succeeded; inspect
