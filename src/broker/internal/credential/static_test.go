@@ -1,11 +1,15 @@
 package credential
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"ensemble/broker/internal/audit"
+	"ensemble/broker/internal/fixtures"
 )
 
 var staticNow = time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
@@ -277,5 +281,21 @@ func TestNoticeKeyPatternMatchesDue(t *testing.T) {
 		if NoticeKeyPattern.MatchString(bad) {
 			t.Errorf("%q matched", bad)
 		}
+	}
+}
+
+func TestNoticeKeyPatternIsTheSchemas(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(fixtures.Dir(), "..", "protocol.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Defs map[string]struct{ Pattern string } `json:"$defs"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := NoticeKeyPattern.String(), schema.Defs["notice_key"].Pattern; want == "" || got != want {
+		t.Fatalf("%q, schema %q", got, want)
 	}
 }

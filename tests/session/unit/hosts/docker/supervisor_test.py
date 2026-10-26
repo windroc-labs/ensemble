@@ -601,7 +601,7 @@ class TokenBroker:
     def __init__(self, *results):
         self.results, self.calls = list(results), []
 
-    def notices(self, _container, _manifest, delivered=()):
+    def notices(self, _container, _manifest, delivered=(), *, root):
         return NO_NOTICES
 
     def refresh(self, container, manifest):
@@ -1053,6 +1053,7 @@ class NoticeTest(Base):
         super().setUp()
         self.now, self.waits = NOW, []
         self.supervisor.clock = lambda: self.now
+        self.supervisor.hook = os.path.join(REPO, "bin", "ensemble-session")
 
     def run_ticks(self, *results, ticks):
         fake = FakeBroker(*results)

@@ -197,7 +197,7 @@ class FakeBroker:
             raise self.failing["refresh"]
         return SimpleNamespace(github=[], credential_expires_at=self.started.credential_expires_at)
 
-    def notices(self, _container, _manifest, delivered=()):
+    def notices(self, _container, _manifest, delivered=(), *, root):
         return Noticed([], None)
 
     def close(self, container):
@@ -2118,7 +2118,8 @@ class PipeTest(Base):
     def test_a_piped_session_logs_and_acks_its_credential_notice(self):
         log, acked, calls = self.logged_to_file(), threading.Event(), []
 
-        def notices(_container, _manifest, delivered=()):
+        def notices(_container, _manifest, delivered=(), *, root):
+            self.assertEqual(root, REPO)
             calls.append(tuple(delivered))
             if delivered:
                 acked.set()

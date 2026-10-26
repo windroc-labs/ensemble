@@ -156,12 +156,13 @@ const Rotated = "rotated"
 // NoticeKeyPattern matches every notice key Due can produce.
 var NoticeKeyPattern = regexp.MustCompile(`^ensemble-(claude|opencode|env)/[A-Za-z0-9._-]{1,64}@[0-9]{1,9}:(` + labels() + `)$`)
 
+// labels are the thresholds, least urgent first, then Rotated: the schema's order.
 func labels() string {
-	names := []string{Rotated}
-	for _, th := range thresholds {
-		names = append(names, th.name)
+	var names []string
+	for i := len(thresholds) - 1; i >= 0; i-- {
+		names = append(names, thresholds[i].name)
 	}
-	return strings.Join(names, "|")
+	return strings.Join(append(names, Rotated), "|")
 }
 
 // thresholdAt is when a threshold days before expires is reached.

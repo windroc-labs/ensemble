@@ -76,6 +76,7 @@ from ensemble.session.hosts.docker.broker import (
     Broker,
     BrokerError,
     client_keys,
+    hook_root,
     plugin_root,
     write_manifest,
 )
@@ -1422,6 +1423,7 @@ class DockerHost(Host):
                     "docker session %s: client_auth_expired %s", name, reason
                 ),
                 notice=lambda word, text: LOG.warning("docker session %s: %s %s", name, word, text),
+                root=hook_root(created.hook),
             ),
         )
 

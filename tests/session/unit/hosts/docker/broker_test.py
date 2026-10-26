@@ -39,7 +39,7 @@ CALLS = {
     "build_output": ("build", lambda b: b.build("/opt/ensemble")),
     "start_output": ("start", lambda b: b.start(MANIFEST, clients=KEYS)),
     "refresh_output": ("refresh", lambda b: b.refresh(CONTAINER, MANIFEST)),
-    "notices_output": ("notices", lambda b: b.notices(CONTAINER, MANIFEST)),
+    "notices_output": ("notices", lambda b: b.notices(CONTAINER, MANIFEST, root=REPO)),
     "close_output": ("close", lambda b: b.close(CONTAINER)),
     "workspace_rm_output": ("workspace-rm", lambda b: b.workspace_rm(VOLUME)),
 }
@@ -230,7 +230,10 @@ class ResponseTest(Case):
         good = data("notices-output.json")
         fake = FakeBroker((0, json.dumps(good), ""))
         found = Broker(fake).notices(
-            CONTAINER, MANIFEST, delivered=("ensemble-env/db@2:7d", "ensemble-claude/w@1:rotated")
+            CONTAINER,
+            MANIFEST,
+            delivered=("ensemble-env/db@2:7d", "ensemble-claude/w@1:rotated"),
+            root=REPO,
         )
         self.assertEqual((found.notices, found.next_check), (good["notices"], good["next_check"]))
         self.assertEqual(
@@ -255,29 +258,74 @@ class ResponseTest(Case):
             {"notices": [notice | {"token": "secret"}]},
             {"notices": [{"key": notice["key"]}]},
             {"notices": [notice | {"key": "other/x@1:30d"}]},
+            {"notices": [notice | {"key": "ensemble-bot/x@1:30d"}]},
+            {"notices": [notice | {"key": "ensemble-other/x@1:30d"}]},
+            {"notices": [notice | {"key": 1}]},
             {"notices": [notice | {"key": "ensemble-env/db@1:2d"}]},
             {"notices": [notice | {"text": "two\nlines"}]},
             {"notices": [notice | {"text": ""}]},
         ):
             with self.subTest(change=change), self.assertRaisesRegex(SessionError, "bad response"):
-                Broker(FakeBroker((0, json.dumps(good | change), ""))).notices(CONTAINER, MANIFEST)
+                Broker(FakeBroker((0, json.dumps(good | change), ""))).notices(
+                    CONTAINER, MANIFEST, root=REPO
+                )
+        for key in (
+            "ensemble-claude/default@1:30d",
+            "ensemble-opencode/strata@2:rotated",
+            "ensemble-env/db@3:expired",
+        ):
+            response = good | {"notices": [notice | {"key": key}]}
+            found = Broker(FakeBroker((0, json.dumps(response), ""))).notices(
+                CONTAINER, MANIFEST, root=REPO
+            )
+            self.assertEqual(found.notices[0]["key"], key)
+        # An empty list reads no schema.
         empty = Broker(FakeBroker(success("notices-output-empty.json"))).notices(
-            CONTAINER, MANIFEST
+            CONTAINER, MANIFEST, root="/nonexistent"
         )
         self.assertEqual((empty.notices, empty.next_check), ([], None))
+
+    def test_notice_keys_are_the_schemas(self):
+        with open(os.path.join(REPO, broker.SCHEMA), encoding="utf-8") as f:
+            schema = json.load(f)["$defs"]["notice_key"]["pattern"]
+        self.assertEqual(broker.notice_key(REPO).pattern, schema)
+        self.assertEqual(broker.hook_root(HOOK), REPO)
+
+    def test_an_unreadable_notice_key_is_a_session_error(self):
+        response = data("notices-output.json")
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, broker.SCHEMA)
+            os.makedirs(os.path.dirname(path))
+            for text in (
+                '{"$defs": {}}',
+                "not json",
+                '{"$defs": {"notice_key": {"pattern": "("}}}',
+            ):
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(text)
+                fake = FakeBroker((0, json.dumps(response), ""))
+                with self.subTest(text=text), self.assertRaises(SessionError) as raised:
+                    Broker(fake).notices(CONTAINER, MANIFEST, root=root)
+                self.assertNotIsInstance(raised.exception, BrokerError)
+                self.assertIn(broker.SCHEMA, str(raised.exception))
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("not json")
+            for read in (broker.notice_key, broker.client_keys):
+                with self.subTest(read=read), self.assertRaisesRegex(ConfigError, "unreadable"):
+                    read(root)
 
     def test_notices_errors_and_audit_warning(self):
         warned = []
         response = data("notices-output-audit-warning.json")
         found = Broker(FakeBroker((0, json.dumps(response), "")), warning=warned.append).notices(
-            CONTAINER, MANIFEST
+            CONTAINER, MANIFEST, root=REPO
         )
         self.assertEqual((found.notices, warned), ([], [broker.AUDIT_WARNING]))
         for code, exit_code in (("manifest_rejected", 3), ("internal_error", 70), ("usage", 2)):
             error = {"command": "notices", "code": code, "message": "No.", "cleanup": "not_needed"}
             fake = FakeBroker((exit_code, "", json.dumps({"exit_code": exit_code, "error": error})))
             with self.subTest(code=code), self.assertRaises(BrokerError) as raised:
-                Broker(fake).notices(CONTAINER, MANIFEST)
+                Broker(fake).notices(CONTAINER, MANIFEST, root=REPO)
             self.assertEqual(raised.exception.code, code)
 
     def test_refresh_failure_keeps_the_brokers_message_and_cause(self):

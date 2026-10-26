@@ -25,7 +25,7 @@ from datetime import datetime
 
 from ensemble.session.engine.status_log import SessionStatusLog
 from ensemble.session.engine.types import SessionError
-from ensemble.session.hosts.docker.broker import BROKER, Broker, BrokerError
+from ensemble.session.hosts.docker.broker import BROKER, Broker, BrokerError, hook_root
 from ensemble.session.hosts.docker.relay import LINE_MAX, relay_request
 from ensemble.utils import read_regular, save
 
@@ -137,6 +137,7 @@ class Supervisor:
     ) -> None:
         self.name, self.state, self.tui_dir, self.events = name, state, tui_dir, events
         self.generation, self.worker = generation, HookWorker([hook, "hook", "--serve", tui_dir])
+        self.hook = hook
         self.run, self.popen = run or subprocess.run, subprocess.Popen
         self.stopping, self.line_max = False, LINE_MAX
         self.seq_file = os.path.join(state, f"{generation}.seq")
@@ -234,6 +235,7 @@ class Supervisor:
             failed=self._refresh_failed,
             expired=self._auth_expired,
             notice=self._notice,
+            root=hook_root(self.hook),
             clock=self.clock,
         )
 
@@ -301,15 +303,17 @@ class _Notices:
     (None: never); a failure retries, the first of a streak a fixed credential_notice_failed.
     """
 
-    def __init__(self, container: str, manifest: str, broker: Broker, *, notice, clock) -> None:
-        self.container, self.manifest = container, manifest
+    def __init__(
+        self, container: str, manifest: str, broker: Broker, *, notice, root, clock
+    ) -> None:
+        self.container, self.manifest, self.root = container, manifest, root
         self.broker, self.notice, self.clock = broker, notice, clock
         self.due: float | None = clock()
         self.failing = False
 
     def check(self) -> None:
         try:
-            found = self.broker.notices(self.container, self.manifest)
+            found = self.broker.notices(self.container, self.manifest, root=self.root)
         except SessionError as error:
             self.due = self.clock() + REFRESH_RETRY
             if not self.failing:
@@ -328,7 +332,7 @@ class _Notices:
             told.append(found_notice["key"])
         if told:
             with contextlib.suppress(SessionError):
-                self.broker.notices(self.container, self.manifest, delivered=told)
+                self.broker.notices(self.container, self.manifest, delivered=told, root=self.root)
         self.due = None
         if found.next_check is not None:
             self.due = datetime.fromisoformat(found.next_check).timestamp()
@@ -353,6 +357,7 @@ def refresh_tokens(
     failed: Callable[[str], None],
     expired: Callable[[str], None],
     notice: Callable[[str, str], None],
+    root: str,
     clock: Callable[[], float] = time.time,
 ) -> None:
     """Until stopped: the broker's refresh at the earliest saved expiry less REFRESH_AHEAD, its
@@ -360,7 +365,7 @@ def refresh_tokens(
     No list and no notice due: returns.
     """
     container, manifest = f"ensemble-{name}-{generation}", os.path.join(state, f"{generation}.json")
-    notices = _Notices(container, manifest, broker, notice=notice, clock=clock)
+    notices = _Notices(container, manifest, broker, notice=notice, root=root, clock=clock)
     notices.check()
     if refreshes_client(state):
         _renew_client(

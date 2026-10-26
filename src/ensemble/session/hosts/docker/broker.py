@@ -35,9 +35,6 @@ CONTAINER = re.compile(r"ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}")
 ENDPOINT = re.compile(r"unix:///[^\x00-\x1f\x7f]+/\.docker/run/docker\.sock")
 LOGIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}")
 TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
-NOTICE_KEY = re.compile(
-    r"ensemble-[a-z]+/[A-Za-z0-9._-]{1,64}@[0-9]{1,9}:(30d|7d|1d|expired|rotated)"
-)
 COMMANDS = frozenset(
     {
         "version",
@@ -407,8 +404,10 @@ class Broker:
         )
         return Refreshed(found["github"], found["credential_expires_at"])
 
-    def notices(self, container: str, manifest: str, delivered: Sequence[str] = ()) -> Noticed:
-        """The static secret notices `container` is due; `delivered`: keys of ones it was told."""
+    def notices(
+        self, container: str, manifest: str, delivered: Sequence[str] = (), *, root: str
+    ) -> Noticed:
+        """`container`'s due notices; `delivered`: keys told; keys per `root`'s schema."""
         found = self._parsed(
             "notices",
             lambda d: (
@@ -416,10 +415,7 @@ class Broker:
                 and d["container"] == container
                 and isinstance(d["notices"], list)
                 and all(
-                    isinstance(n, dict)
-                    and n.keys() == {"key", "text"}
-                    and _matches(NOTICE_KEY, n["key"])
-                    and _text(n["text"])
+                    isinstance(n, dict) and n.keys() == {"key", "text"} and _text(n["text"])
                     for n in d["notices"]
                 )
                 and _credential_expiry(d["next_check"])
@@ -430,6 +426,13 @@ class Broker:
             manifest,
             *(arg for key in delivered for arg in ("--delivered", key)),
         )
+        if found["notices"]:
+            try:
+                key = notice_key(root)
+            except ConfigError as error:
+                raise SessionError(f"broker: {error}") from None
+            if not all(_matches(key, n["key"]) for n in found["notices"]):
+                raise SessionError("broker: bad response to notices: fields")
         return Noticed(found["notices"], found["next_check"])
 
     def close(self, container: str) -> bool:
@@ -467,9 +470,14 @@ class Broker:
         return found
 
 
+def hook_root(hook_path: str) -> str:
+    """The parent of the bin/ holding `hook_path`."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(hook_path)))
+
+
 def plugin_root(hook_path: str) -> str:
-    """The running plugin's root: the parent of the bin/ holding its ensemble-session."""
-    root = os.path.dirname(os.path.dirname(os.path.abspath(hook_path)))
+    """The running plugin's root: hook_root, holding the protocol schema."""
+    root = hook_root(hook_path)
     if not os.path.isfile(os.path.join(root, SCHEMA)):
         raise ConfigError(f"ensemble plugin {root}: no {SCHEMA}")
     return root
@@ -480,8 +488,7 @@ def client_keys(root: str) -> frozenset[str]:
     inline object property in the protocol schema under `root`.
     """
     try:
-        with open(os.path.join(root, SCHEMA), encoding="utf-8") as f:
-            properties = json.load(f)["$defs"]["start_output"]["properties"]
+        properties = _schema(root)["$defs"]["start_output"]["properties"]
         (keys,) = (
             p["required"]
             for p in properties.values()
@@ -490,6 +497,22 @@ def client_keys(root: str) -> frozenset[str]:
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise ConfigError(f"{SCHEMA}: no start_output client map ({error})") from None
     return frozenset(keys)
+
+
+def _schema(root: str) -> dict:
+    try:
+        with open(os.path.join(root, SCHEMA), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError) as error:
+        raise ConfigError(f"{SCHEMA}: unreadable ({error})") from None
+
+
+def notice_key(root: str) -> re.Pattern:
+    """The schema's notice key pattern."""
+    try:
+        return re.compile(_schema(root)["$defs"]["notice_key"]["pattern"])
+    except (KeyError, TypeError, re.error):
+        raise ConfigError(f"{SCHEMA}: no notice_key pattern") from None
 
 
 def write_manifest(
