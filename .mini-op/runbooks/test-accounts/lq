@@ -4,8 +4,9 @@ app: the access token in its token record, the keychain item <service>/<account>
 ~/.ensemble/config.local.toml [orchestrator.linear.manager] token_service, default
 linear-app-manager-token, its account the same name; install.sh writes it), goes to curl as a Bearer
 Authorization header through stdin. Prints the reply. Exits 0, 1 (the file is unreadable, the item
-holds no token record, or curl failed, an error status from Linear included: an expired token is a
-401, renewed by rerunning the install) or 2 (usage error).'
+holds no token record, curl failed, an error status from Linear included: an expired token is a
+401, renewed by rerunning the install, or the reply holds GraphQL errors, each message then on
+stderr) or 2 (usage error).'
 [[ $# -eq 1 && $1 == -h ]] && { print -r -- $usage; exit 0; }
 name='^[A-Za-z0-9][A-Za-z0-9._@+:-]*$'
 [[ $# -eq 3 && $1 =~ $name && $2 =~ $name && -n $3 && $3 != -* ]] ||
@@ -24,9 +25,20 @@ token=
 unset record match
 [[ -n $token ]] || { print -u2 -r -- "lq: $s/$a holds no app token record"; exit 1; }
 # The token reaches curl only through a builtin print pipe, never its argv.
-print -r -- "Authorization: Bearer $token" |
+body=$(print -r -- "Authorization: Bearer $token" |
   curl -s --fail-with-body https://api.linear.app/graphql -H @- -H "Content-Type: application/json" \
-    --data-binary @"$3"
-st=($pipestatus)
+    --data-binary @"$3")
+rc=$?
 unset token
-(( st[2] == 0 )) || { print -u2 -r -- "lq: curl exited $st[2]"; exit 1; }
+print -r -- $body
+(( rc == 0 )) || { print -u2 -r -- "lq: curl exited $rc"; exit 1; }
+# Linear answers a refused mutation with HTTP 200 and a top-level "errors" array.
+[[ $body =~ '"errors"[[:space:]]*:[[:space:]]*\[' ]] || exit 0
+rest=${body[MEND+1,-1]} found=
+message='"message"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)"'
+while [[ $rest =~ $message ]]; do
+  print -u2 -r -- "lq: Linear error: $match[1]"
+  rest=${rest[MEND+1,-1]} found=1
+done
+[[ -n $found ]] || print -u2 -r -- 'lq: Linear answered with errors'
+exit 1
