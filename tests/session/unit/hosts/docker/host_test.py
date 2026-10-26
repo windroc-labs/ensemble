@@ -29,12 +29,14 @@ from ensemble.session.engine.types import (
     ClientHome,
     ConfigError,
     Container,
+    EnvironmentSpec,
     IdleTimeout,
     KeyPress,
     Launch,
     Liveness,
     Paste,
     Permission,
+    SessionBusy,
     SessionError,
     StatusState,
     Unanswered,
@@ -155,6 +157,7 @@ class FakeBroker:
 
     def __init__(self, order, started):
         self.order, self.started, self.error, self.closed = order, started, None, []
+        self.holder = None
         self.failing, self.refreshed = {}, threading.Event()
 
     def version(self):
@@ -168,12 +171,16 @@ class FakeBroker:
             raise self.failing["probe-provider"]
         return True
 
-    def build(self, package, *, plugins=()):
+    def build(self, package, *, plugins=(), **environment):
         self.order.append(("build", package))
-        self.plugins = plugins
+        self.plugins, self.built = plugins, environment
         if "build" in self.failing:
             raise self.failing["build"]
         return IMAGE, DIGEST
+
+    def lock_query(self, lock):
+        self.order.append(("lock-query", lock))
+        return self.holder
 
     def start(self, manifest, *, clients):
         self.order.append(("start", manifest, clients))
@@ -556,7 +563,73 @@ class ClientEnvTest(Base):
         )
 
 
-class StartTest(Base):
+class StartBase(Base):
+    """A terminal start's metadata, launch and supervisor spawn."""
+
+    METADATA = {
+        "sid": "s1",
+        "client": "agent",
+        "generation": GEN,
+        "home_field": "agent_dir",
+        "home_dir": "agent",
+        "resume": "0",
+        "credential": "agent-token",
+    }
+
+    def setUp(self):
+        super().setUp()
+        self.home_dir = os.path.join(self.state, "agent")
+        self.docker.replies = {
+            ("tmux", "start-server"): (0, PROCESS + "\n", ""),
+            ("tmux", "display-message"): pane(),
+        }
+        self.supervisor = mock.Mock(pid=4321)
+        popen = mock.patch("subprocess.Popen", side_effect=self.popen)
+        self.popen_mock = popen.start()
+        self.addCleanup(popen.stop)
+        self.launch = Launch(
+            ("agent", "--flag"),
+            cwd=self.cwd,
+            env={"PATH": "/host/bin", "AGENT_HOME": self.home_dir, "K": "v"},
+        )
+
+    def popen(self, argv, **kw):
+        self.order.append("supervisor")
+        self.spawned_lock_held = not _free(os.path.join(self.state, "supervisor.lock"))
+        self.spawned_record = self.host_record()
+        self.spawned_github = not os.path.exists(os.path.join(self.state, f"{GEN}.github.json"))
+        return self.supervisor
+
+    def start(self, **metadata):
+        return self.host.terminal(
+            "w",
+            self.launch,
+            display="lead/below",
+            events=os.path.join(self.home, "events"),
+            record=RECORD,
+            metadata={k: v for k, v in {**self.METADATA, **metadata}.items() if v is not None},
+        )
+
+    def history(self):
+        """A native transcript in the home, which the launch names."""
+        transcript = os.path.join(self.home_dir, "projects", "p", "s1.jsonl")
+        os.makedirs(os.path.dirname(transcript))
+        with open(transcript, "w") as f:
+            f.write("{}\n")
+        self.launch = replace(self.launch, transcript=transcript)
+        return transcript
+
+    def refused_untouched(self, error, pattern):
+        """start(resume="1") fails with `pattern`, before any broker call, file or supervisor."""
+        self.order.clear()
+        with self.assertRaisesRegex(error, pattern):
+            self.start(resume="1")
+        self.assertNotIn("version", self.order)
+        self.assertFalse(os.path.exists(os.path.join(self.state, f"{GEN}.json")))
+        self.popen_mock.assert_not_called()
+
+
+class StartTest(StartBase):
     def test_runtime_staging_errors_are_reported_without_container_output(self):
         files = json.dumps({"/run/ensemble/agent-store/" + "a" * 64 + ".json": "{}"})
         for result in (
@@ -657,68 +730,6 @@ class StartTest(Base):
             self.start()
         self.assertEqual(self.broker.closed, [CONTAINER])
 
-    METADATA = {
-        "sid": "s1",
-        "client": "agent",
-        "generation": GEN,
-        "home_field": "agent_dir",
-        "home_dir": "agent",
-        "resume": "0",
-        "credential": "agent-token",
-    }
-
-    def setUp(self):
-        super().setUp()
-        self.home_dir = os.path.join(self.state, "agent")
-        self.docker.replies = {
-            ("tmux", "start-server"): (0, PROCESS + "\n", ""),
-            ("tmux", "display-message"): pane(),
-        }
-        self.supervisor = mock.Mock(pid=4321)
-        popen = mock.patch("subprocess.Popen", side_effect=self.popen)
-        self.popen_mock = popen.start()
-        self.addCleanup(popen.stop)
-        self.launch = Launch(
-            ("agent", "--flag"),
-            cwd=self.cwd,
-            env={"PATH": "/host/bin", "AGENT_HOME": self.home_dir, "K": "v"},
-        )
-
-    def popen(self, argv, **kw):
-        self.order.append("supervisor")
-        self.spawned_lock_held = not _free(os.path.join(self.state, "supervisor.lock"))
-        self.spawned_record = self.host_record()
-        self.spawned_github = not os.path.exists(os.path.join(self.state, f"{GEN}.github.json"))
-        return self.supervisor
-
-    def start(self, **metadata):
-        return self.host.terminal(
-            "w",
-            self.launch,
-            display="lead/below",
-            events=os.path.join(self.home, "events"),
-            record=RECORD,
-            metadata={k: v for k, v in {**self.METADATA, **metadata}.items() if v is not None},
-        )
-
-    def history(self):
-        """A native transcript in the home, which the launch names."""
-        transcript = os.path.join(self.home_dir, "projects", "p", "s1.jsonl")
-        os.makedirs(os.path.dirname(transcript))
-        with open(transcript, "w") as f:
-            f.write("{}\n")
-        self.launch = replace(self.launch, transcript=transcript)
-        return transcript
-
-    def refused_untouched(self, error, pattern):
-        """start(resume="1") fails with `pattern`, before any broker call, file or supervisor."""
-        self.order.clear()
-        with self.assertRaisesRegex(error, pattern):
-            self.start(resume="1")
-        self.assertNotIn("version", self.order)
-        self.assertFalse(os.path.exists(os.path.join(self.state, f"{GEN}.json")))
-        self.popen_mock.assert_not_called()
-
     def test_the_build_holds_the_whitelisted_plugins(self):
         self.host.plugins = (
             "updraft@windroc-labs/updraft#33f01c3b9e398e009f1fb1a4554ddcf19209dd4e::windroc-labs/agent-plugins-marketplace#dbea3408ab0c113bd74f414ab3a19d820e0f6e43",
@@ -785,6 +796,7 @@ class StartTest(Base):
                 "display": "lead/below",
                 "record": RECORD.to_line(),
                 "events": os.path.join(self.home, "events"),
+                "environment": None,
                 "process": PROCESS,
             },
         )
@@ -1547,6 +1559,177 @@ class StartTest(Base):
             self.host.detach("w", self.launch)
 
 
+HOST_SOURCE = "beta@owner/market#" + "b" * 40
+ENV_SOURCE = "gamma@owner/market#" + "e" * 40
+ENVIRONMENT = EnvironmentSpec(
+    image="dummy-env:test",
+    gateway="mini-op",
+    secrets=({"item": "ensemble-env/dummy", "file": "dummy.txt"},),
+    plugins=("dummy-plugin", HOST_SOURCE, ENV_SOURCE),
+    lock="dummy-lock",
+)
+PREFETCHED = replace(ENVIRONMENT, prefetch={"repo": "o/r", "ref": "main"})
+HOLDER = {"container": "ensemble-other-" + "d" * 32, "owner": "other"}
+
+
+def carried(environment):
+    return json.dumps(environment.persisted())
+
+
+class EnvironmentTest(StartBase):
+    def manifest(self):
+        with open(os.path.join(self.state, f"{GEN}.json")) as f:
+            return json.load(f)
+
+    def resumable(self, environment):
+        """w's host.json from a start in `environment` (absent: a pre-upgrade one), its history."""
+        self.record(**({} if environment == "absent" else {"environment": environment}))
+        self.history()
+
+    def test_preflight_sends_version_and_lock_query_only(self):
+        cwd = os.path.join(self.account, "src", "later")
+        launch = Launch(("agent",), cwd=cwd, env={})
+        self.host._preflight("w", launch, {**self.METADATA, "environment": carried(ENVIRONMENT)})
+        self.assertEqual(self.order, ["version", ("lock-query", "dummy-lock")])
+        self.assertFalse(os.path.exists(cwd))
+
+    def test_preflight_raises_session_busy_naming_the_holder(self):
+        self.broker.holder = HOLDER
+        with self.assertRaises(SessionBusy) as raised:
+            self.host._preflight(
+                "w", self.launch, {**self.METADATA, "environment": carried(ENVIRONMENT)}
+            )
+        self.assertEqual(raised.exception.lock, "dummy-lock")
+        self.assertIn(HOLDER["container"], str(raised.exception))
+        self.assertIn("owner other", str(raised.exception))
+
+    def test_no_lock_sends_no_lock_query_and_no_lock_fields(self):
+        unlocked = carried(replace(ENVIRONMENT, lock=None))
+        self.host._preflight("w", self.launch, {**self.METADATA, "environment": unlocked})
+        self.assertEqual(self.order, ["version"])
+        self.start(environment=unlocked)
+        self.assertNotIn(("lock-query", "dummy-lock"), self.order)
+        self.assertFalse({"lock", "lock_owner"} & set(self.manifest()))
+
+    def test_build_uses_the_base_image_and_plugins(self):
+        self.host.plugins = (HOST_SOURCE,)
+        self.start(environment=carried(ENVIRONMENT))
+        self.assertEqual(self.broker.plugins, (HOST_SOURCE, ENV_SOURCE))
+        self.assertEqual(
+            self.broker.built, {"base_image": "dummy-env:test", "image_plugins": ("dummy-plugin",)}
+        )
+        self.assertNotIn(("lock-query", "dummy-lock"), self.order)
+
+    def test_worker_image_sends_no_base_image(self):
+        worker_image = replace(ENVIRONMENT, image=EnvironmentSpec.WORKER, plugins=())
+        self.start(environment=carried(worker_image))
+        self.assertEqual(self.broker.built, {"base_image": None, "image_plugins": ()})
+
+    def test_manifest_carries_the_environment(self):
+        self.host.github, self.host.github_permissions = "ensemble-bot", PERMISSIONS
+        self.broker.started = replace(self.broker.started, github_user_id=343764394)
+        self.start(environment=carried(ENVIRONMENT))
+        manifest = self.manifest()
+        self.assertEqual(
+            {key: manifest.get(key) for key in ("gateway", "secrets", "lock", "lock_owner")},
+            {
+                "gateway": "mini-op",
+                "secrets": [{"item": "ensemble-env/dummy", "file": "dummy.txt"}],
+                "lock": "dummy-lock",
+                "lock_owner": "w",
+            },
+        )
+        self.assertNotIn("prefetch", manifest)
+        self.assertEqual(manifest["github"]["app"], "ensemble-bot")
+        self.assertEqual(self.docker.staged[0]["env"]["ENSEMBLE_PR_AUTHOR"], BOT)
+
+    def test_prefetch_drops_the_github_app(self):
+        self.host.github, self.host.github_permissions = "ensemble-bot", PERMISSIONS
+        self.start(environment=carried(PREFETCHED))
+        manifest = self.manifest()
+        self.assertEqual(manifest["prefetch"], {"repo": "o/r", "ref": "main"})
+        self.assertIsNone(manifest["github"])
+        env = self.docker.staged[0]["env"]
+        self.assertNotIn("ENSEMBLE_PR_AUTHOR", env)
+        self.assertFalse(set(GIT_IDENTITY) & set(env))
+
+    def test_busy_start_raises_session_busy(self):
+        self.broker.error = BrokerError(75, "busy", "Lock held.", "not_needed", None, holder=HOLDER)
+        os.unlink(os.path.join(self.home, ".ensemble", "tui", "w", "session.json"))
+        for call in (
+            lambda: self.start(environment=carried(ENVIRONMENT)),
+            lambda: self.host.pipe(
+                "w", self.launch, metadata={**self.METADATA, "environment": carried(ENVIRONMENT)}
+            ),
+        ):
+            with self.subTest(call), self.assertRaises(SessionBusy) as raised:
+                call()
+            self.assertEqual(
+                (raised.exception.lock, raised.exception.holder),
+                ("dummy-lock", f"{HOLDER['container']} (owner other)"),
+            )
+        self.popen_mock.assert_not_called()
+
+    def test_start_records_the_environment(self):
+        self.start(environment=carried(ENVIRONMENT))
+        self.assertEqual(self.host_record()["environment"], ENVIRONMENT.persisted())
+
+    def test_resume_with_another_environment_is_refused(self):
+        self.resumable(ENVIRONMENT.persisted())
+        other = carried(replace(ENVIRONMENT, gateway="workers"))
+        self.order.clear()
+        with self.assertRaisesRegex(ConfigError, "resume: environment differs"):
+            self.start(resume="1", environment=other)
+        self.assertEqual(self.order, [])
+        with self.assertRaisesRegex(ConfigError, "resume: environment differs"):
+            self.host._preflight(
+                "w", self.launch, {**self.METADATA, "resume": "1", "environment": other}
+            )
+
+    def test_resume_differing_only_in_prefetch_runs_the_stored_one_without_github(self):
+        self.host.github, self.host.github_permissions = "ensemble-bot", PERMISSIONS
+        self.resumable(PREFETCHED.persisted())
+        self.start(resume="1", environment=carried(ENVIRONMENT))
+        manifest = self.manifest()
+        self.assertEqual(manifest["prefetch"], {"repo": "o/r", "ref": "main"})
+        self.assertIsNone(manifest["github"])
+        self.assertNotIn("ENSEMBLE_PR_AUTHOR", self.docker.staged[0]["env"])
+        self.assertEqual(self.host_record()["environment"], PREFETCHED.persisted())
+
+    def test_pre_upgrade_record_counts_as_none(self):
+        self.resumable("absent")
+        with self.assertRaisesRegex(ConfigError, "resume: environment differs"):
+            self.start(resume="1", environment=carried(ENVIRONMENT))
+        self.start(resume="1")
+        self.assertEqual(self.broker.built, {})
+        self.assertNotIn("gateway", self.manifest())
+
+    def test_resume_without_an_environment_uses_the_stored_one(self):
+        self.resumable(ENVIRONMENT.persisted())
+        self.host._preflight("w", self.launch, {**self.METADATA, "resume": "1"})
+        self.assertEqual(self.order, ["version", ("lock-query", "dummy-lock")])
+        self.start(resume="1")
+        self.assertEqual(self.broker.built["base_image"], "dummy-env:test")
+        self.assertEqual(self.manifest()["lock"], "dummy-lock")
+        self.assertEqual(self.host_record()["environment"], ENVIRONMENT.persisted())
+
+    def test_resume_without_stored_or_given_environment_is_phase_one(self):
+        self.resumable(None)
+        self.start(resume="1")
+        self.assertEqual(self.broker.built, {})
+        self.assertFalse({"gateway", "secrets", "lock", "prefetch"} & set(self.manifest()))
+
+    def test_resume_resends_the_stored_prefetch(self):
+        self.resumable(PREFETCHED.persisted())
+        self.start(resume="1")
+        self.assertEqual(self.manifest()["prefetch"], {"repo": "o/r", "ref": "main"})
+
+    def test_a_bad_environment_is_a_session_error(self):
+        with self.assertRaisesRegex(SessionError, "bad environment"):
+            self.start(environment='{"image": "x", "gateway": "workers", "role": "pm"}')
+        self.assertEqual(self.broker.closed, [])
+
+
 class PipeTest(Base):
     METADATA = StartTest.METADATA
 
@@ -1647,6 +1830,7 @@ class PipeTest(Base):
             "client": "agent",
             "mode": "pipe",
             "credential_refresh": False,
+            "environment": None,
         }
         self.assertEqual((self.popen_record, self.host_record()), (record, record))
         self.assertTrue(self.lock_held)
@@ -2549,6 +2733,12 @@ class RecoverTest(Base):
         self.record()
         (row,) = self.host.rows()
         self.assertEqual(row.state, StatusState.DEAD)
+
+    def test_recover_builds_the_stored_environment(self):
+        self.record(events=os.path.join(self.home, "events"), environment=ENVIRONMENT.persisted())
+        self.host.attach("w")
+        self.assertEqual(self.broker.built["base_image"], "dummy-env:test")
+        self.assertEqual(len(self.spawned), 1)
 
     def test_recover_keeps_worker_after_client_only_rebuild(self):
         self.result(IMAGE, "sha256:" + "d" * 64)

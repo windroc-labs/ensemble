@@ -49,12 +49,14 @@ from ensemble.session.engine.types import (
     ClientHome,
     ConfigError,
     Container,
+    EnvironmentSpec,
     HookCallback,
     Key,
     Launch,
     Liveness,
     PaneStatus,
     Paste,
+    SessionBusy,
     SessionError,
     SessionRow,
     StatusState,
@@ -256,6 +258,20 @@ def _report_plan(name: str, plan: Mapping) -> None:
         f"credential {plan['credential']}",
     ):
         print(f"docker plan {name} {plan['generation']}: {part}", file=sys.stderr)
+
+
+def _environment(name: str, value) -> EnvironmentSpec | None:
+    """An environment from metadata's JSON or host.json's object; None for none."""
+    if value is None:
+        return None
+    try:
+        return EnvironmentSpec.from_fields(json.loads(value) if isinstance(value, str) else value)
+    except (ValueError, RecursionError, ConfigError) as error:
+        raise SessionError(f"docker session {name}: bad environment: {error}") from None
+
+
+def _holder(found: Mapping[str, str]) -> str:
+    return f"{found['container']} (owner {found['owner']})"
 
 
 def _text(found: str) -> str:
@@ -839,7 +855,9 @@ class DockerHost(Host):
                 return True
             hook = None
             if not os.path.lexists(stale):
-                hook, _, (image, _) = self._image(row.name)
+                hook, _, (image, _) = self._image(
+                    row.name, _environment(row.name, record.get("environment"))
+                )
                 if _image_tag(row) != image:
                     save(stale, image)
             if hook is None or os.path.lexists(stale):
@@ -912,7 +930,49 @@ class DockerHost(Host):
     def _preflight(
         self, name: str, launch: Launch, metadata: Mapping[str, str] | None = None
     ) -> None:
-        self.validate(name, launch, missing_ok=True)
+        """With an environment: the cwd, the broker handshake and its lock's holder only."""
+        environment = self._environment(name, metadata)
+        if environment is None:
+            self.validate(name, launch, missing_ok=True)
+            return
+        laps = _Laps()
+        self._check_cwd(name, launch, missing_ok=True)
+        self.broker.version()
+        if environment.lock and (holder := self.broker.lock_query(environment.lock)):
+            raise SessionBusy(environment.lock, _holder(holder))
+        laps("preflight")
+        laps.report(f"docker timing {name}")
+
+    def _validate(
+        self, name: str, launch: Launch, metadata: Mapping[str, str] | None = None
+    ) -> None:
+        """With an environment: the cwd and the broker handshake; the start builds and locks."""
+        if self._environment(name, metadata) is None:
+            self.validate(name, launch)
+            return
+        self._check_cwd(name, launch)
+        self.broker.version()
+
+    def _environment(self, name: str, metadata: Mapping[str, str] | None) -> EnvironmentSpec | None:
+        """The given environment; a resume's is its stored one (FR-62): taken when none is given,
+        refused when the given one differs but in prefetch.
+        """
+        given = _environment(name, (metadata or {}).get("environment"))
+        record = _record(name)
+        if (metadata or {}).get("resume") != "1" or not record:
+            return given
+        stored = _environment(name, record.get("environment"))
+        if given is None:
+            return stored
+        if stored is None or replace(given, prefetch=None) != replace(stored, prefetch=None):
+            raise ConfigError(
+                f"docker session {name}: resume: environment differs from the one it was started with"
+            )
+        return stored
+
+    def _app(self, environment: EnvironmentSpec | None) -> str:
+        """The GitHub App a start's container gets: none with a prefetch (FR-52)."""
+        return "" if environment is not None and environment.prefetch else self.github
 
     def validate(self, name: str, launch: Launch, *, missing_ok: bool = False) -> None:
         """The preflight, before any container: the cwd (`missing_ok`: or none yet), the broker
@@ -936,14 +996,27 @@ class DockerHost(Host):
         if not os.path.isdir(cwd) and not (missing_ok and not os.path.lexists(cwd)):
             raise ConfigError(f"Docker cwd {cwd}: no such directory")
 
-    def _image(self, name: str) -> tuple[str, str, tuple[str, str]]:
-        """(the hook path, the plugin root, the built image and digest)."""
+    def _image(
+        self, name: str, environment: EnvironmentSpec | None = None
+    ) -> tuple[str, str, tuple[str, str]]:
+        """(the hook path, the plugin root, the built image and digest); an environment's base
+        image and plugins over the Host's.
+        """
         hook = command_path(COMMAND)
         if hook is None:
             raise ConfigError(f"docker session {name}: {COMMAND} is not on PATH (its hooks run it)")
         self.broker.version()
         root = plugin_root(hook)
-        return hook, root, self.broker.build(root, plugins=self.plugins)
+        if environment is None:
+            return hook, root, self.broker.build(root, plugins=self.plugins)
+        sources = [p for p in environment.plugins if PLUGIN_SOURCE.fullmatch(p)]
+        built = self.broker.build(
+            root,
+            plugins=(*self.plugins, *(p for p in sources if p not in self.plugins)),
+            base_image=None if environment.image == EnvironmentSpec.WORKER else environment.image,
+            image_plugins=tuple(p for p in environment.plugins if p not in sources),
+        )
+        return hook, root, built
 
     def _move_workspace(self, name: str, volume: str, cwd: str) -> None:
         """Deletes a new start's workspace volume mounted at another cwd, unless the broker's check
@@ -1008,7 +1081,8 @@ class DockerHost(Host):
         min_width = metadata.get("home_min_width", "0")
         if not re.fullmatch(r"[0-9]+", min_width):
             raise SessionError(f"docker session {name}: bad min width {min_width!r:.20}")
-        created = self._container(name, launch, stops, laps, metadata)
+        environment = self._environment(name, metadata)
+        created = self._container(name, launch, stops, laps, metadata, environment=environment)
         container, generation, hook, _, cwd, _, _, _ = created
         supervisor = lock = None
         try:
@@ -1033,6 +1107,7 @@ class DockerHost(Host):
                     "display": display,
                     "record": None if record is None else record.to_line(),
                     "events": events,
+                    "environment": None if environment is None else environment.persisted(),
                 },
             )
             self._serve_relay(container, generation)
@@ -1052,7 +1127,7 @@ class DockerHost(Host):
                     *launch.argv,
                 ],
                 cwd=cwd,
-                env=self._exec_env(launch, created.started),
+                env=self._exec_env(launch, created.started, self._app(environment)),
                 python=IMAGE_PYTHON,
                 handover_dir=STATE_ROOT,
                 tags={"@kind": KIND, "@sid": sid or "", "@generation": generation},
@@ -1079,7 +1154,14 @@ class DockerHost(Host):
         )
 
     def _container(
-        self, name: str, launch: Launch, stops: _Stops, laps: _Laps, metadata: Mapping[str, str]
+        self,
+        name: str,
+        launch: Launch,
+        stops: _Stops,
+        laps: _Laps,
+        metadata: Mapping[str, str],
+        *,
+        environment: EnvironmentSpec | None,
     ) -> _Container:
         """The checks, image, workspace, home and plan, then the broker's start, rolled back on a
         transport failure: what terminal and pipe share.
@@ -1107,7 +1189,7 @@ class DockerHost(Host):
         if resume == "1" and read_beneath(home, launch.transcript, limit=0) is None:
             raise ConfigError(f"docker session {name}: no native history to resume in {home}")
         laps("checks")
-        hook, root, (image, digest) = self._image(name)
+        hook, root, (image, digest) = self._image(name, environment)
         volume = workspace_volume(name)
         cwd = os.path.realpath(launch.cwd)
         persistent = json.loads(metadata.get("home_persistent") or "null")
@@ -1130,10 +1212,21 @@ class DockerHost(Host):
             workspace=volume,
             home=(field, home),
             hook_path=hook,
-            github=self.github,
+            github=self._app(environment),
             permissions=self.github_permissions,
             providers=tuple(json.loads(metadata.get("home_providers") or "[]")),
             account=metadata.get("home_account", ""),
+            **(
+                {
+                    "gateway": environment.gateway,
+                    "secrets": environment.secrets,
+                    "lock": environment.lock,
+                    "lock_owner": name,
+                    "prefetch": environment.prefetch,
+                }
+                if environment is not None
+                else {}
+            ),
         )
         _report_plan(
             name,
@@ -1157,12 +1250,14 @@ class DockerHost(Host):
         began = timestamp()
         try:
             started = self.broker.start(manifest, clients=clients)
-            _accept_started(name, generation, started, container, self.github)
+            _accept_started(name, generation, started, container, self._app(environment))
             ended = timestamp()
             laps("start")
             created = _Container(container, generation, hook, image, cwd, started, began, ended)
             _save_result(name, created, laps.phases)
         except BrokerError as error:
+            if error.code == "busy" and error.holder and environment and environment.lock:
+                raise SessionBusy(environment.lock, _holder(error.holder)) from error
             if error.cleanup == "failed" and error.container:
                 with contextlib.suppress(SessionError):
                     self.broker.close(error.container)
@@ -1201,7 +1296,8 @@ class DockerHost(Host):
     ) -> DockerPiped:
         laps = _Laps()
         self._check_cwd(name, launch)
-        created = self._container(name, launch, stops, laps, metadata)
+        environment = self._environment(name, metadata)
+        created = self._container(name, launch, stops, laps, metadata, environment=environment)
         container, generation, _, _, cwd, _, _, _ = created
         lock = proc = None
         try:
@@ -1217,9 +1313,10 @@ class DockerHost(Host):
                     "client": metadata.get("client"),
                     "credential_refresh": created.started.credential_expires_at is not None,
                     "mode": PIPED,
+                    "environment": None if environment is None else environment.persisted(),
                 },
             )
-            env = self._exec_env(launch, created.started)
+            env = self._exec_env(launch, created.started, self._app(environment))
             argv, docker_env = docker_call(
                 self.docker,
                 *("exec", "-i", "--workdir", cwd),
@@ -1312,11 +1409,11 @@ class DockerHost(Host):
                 f"staging prompt file: {why[-1] if why else f'exit status {result.returncode}'}"
             )
 
-    def _exec_env(self, launch: Launch, started: Started) -> dict[str, str]:
+    def _exec_env(self, launch: Launch, started: Started, app: str) -> dict[str, str]:
         """launch's env, plus with a GitHub App its bot as PR author and git identity."""
         env = {k: v for k, v in launch.env.items() if k != "PATH"}
-        if self.github:
-            bot = f"{self.github}[bot]"
+        if app:
+            bot = f"{app}[bot]"
             email = f"{started.github_user_id}+{bot}@users.noreply.github.com"
             env |= {
                 "ENSEMBLE_PR_AUTHOR": bot,
