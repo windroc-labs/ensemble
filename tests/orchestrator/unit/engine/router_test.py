@@ -2531,9 +2531,7 @@ class LocalBoard(TickBase):
         with open(os.path.join(folder, "LOC-1 One.md"), "w", encoding="utf-8") as file:
             file.write("---\nid: LOC-1\ntitle: One\ncreated: 2026-09-01T00:00:00Z\n---\n")
         self.assertEqual(self.tick(self.fake(), "--dry-run", "--issue", "LOC-1"), 0)
-        self.assertIn(
-            "pick-none LOC-1 reason=not a ready/ issue assigned to a role account", self.said()
-        )
+        self.assertIn("pick-none LOC-1 reason=not a ready/ issue assigned to a role", self.said())
 
     def test_brake_on_local(self):
         self.api.usages = {"a": reading(70)}

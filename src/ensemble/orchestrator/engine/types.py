@@ -53,7 +53,7 @@ UNOWNED = MappingProxyType(
     {TrackerKind.LINEAR: "no configured role delegate", TrackerKind.LOCAL: "not assigned to a role"}
 )
 OWNERSHIP = MappingProxyType(
-    {TrackerKind.LINEAR: "delegated to a role app", TrackerKind.LOCAL: "assigned to a role account"}
+    {TrackerKind.LINEAR: "delegated to a role app", TrackerKind.LOCAL: "assigned to a role"}
 )
 
 
