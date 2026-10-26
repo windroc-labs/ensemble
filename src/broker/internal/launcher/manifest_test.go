@@ -434,6 +434,12 @@ func TestManifestPrefetch(t *testing.T) {
 			t.Errorf("%s accepted", name)
 		}
 	}
+	// A Linear keychain item is never an environment secret, prefetch or not.
+	_, err = ParseManifest(withFields(t, map[string]any{"prefetch": map[string]any{"repo": "o/r"},
+		"secrets": []any{map[string]any{"item": "linear.harness_key", "file": "linear"}}}))
+	if code(t, err) != protocol.ManifestRejected {
+		t.Fatalf("prefetch with a Linear item: %v", err)
+	}
 	github := map[string]any{"app": "ensemble-bot", "permissions": map[string]any{"contents": "write"}}
 	_, err = ParseManifest(withFields(t, map[string]any{"prefetch": map[string]any{"repo": "o/r"}, "github": github}))
 	if code(t, err) != protocol.ManifestRejected || !strings.Contains(err.Error(), "prefetch requires github null") {

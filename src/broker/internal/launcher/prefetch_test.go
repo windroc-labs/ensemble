@@ -80,7 +80,7 @@ func TestPrefetchHelperArgs(t *testing.T) {
 	}
 	for k, v := range map[string]string{"--pull": "never", "--user": "1001:1002", "--cap-drop": "ALL", "--security-opt": "no-new-privileges",
 		"--tmpfs": "/run/prefetch:rw,noexec,nosuid,nodev,size=65536,mode=0700,uid=1001,gid=1002",
-		"--mount": "type=volume,source=" + volume + ",target=" + home + "/src/project,volume-nocopy", "--entrypoint": "clone"} {
+		"--mount": "type=volume,source=" + volume + ",target=" + home + "/src/project,volume-nocopy", "--entrypoint": "/bin/sh"} {
 		if flag(run, k) != v {
 			t.Errorf("helper %s=%q in %q", k, flag(run, k), run)
 		}
@@ -88,7 +88,7 @@ func TestPrefetchHelperArgs(t *testing.T) {
 	if !slices.Contains(run, "--rm") || !slices.Contains(run, "--interactive") || !strings.HasPrefix(flag(run, "--name"), "ensemble-prefetch-") {
 		t.Fatalf("helper %q", run)
 	}
-	if i := slices.Index(run, digest); i < 0 || !slices.Equal(run[i+1:], []string{"acme/app", "main", home + "/src/project"}) {
+	if i := slices.Index(run, digest); i < 0 || !slices.Equal(run[i+1:], []string{"-c", "clone-script", "sh", "acme/app", "main", home + "/src/project"}) {
 		t.Fatalf("helper image and argv %q", run)
 	}
 	// The run container stays on the manifest's network.
@@ -320,6 +320,34 @@ func TestPrefetchNoGitHubTokens(t *testing.T) {
 		if c[0] == "exec" && strings.Contains(strings.Join(c, " "), "/run/ensemble/secrets/github") {
 			t.Fatalf("github write %q", c)
 		}
+	}
+}
+
+// An environment container without prefetch keeps the host App's GitHub tokens, whatever its network and secrets.
+func TestEnvironmentWithoutPrefetchKeepsGitHub(t *testing.T) {
+	w := &world{labels: goodLabels()}
+	h, d, tokens := prefetchHost(t, w)
+	h.Env = &fakeEnv{}
+	path := prefetchManifest(t, h, func(f map[string]any) {
+		delete(f, "prefetch")
+		f["gateway"] = "mini-op"
+		f["secrets"] = []any{map[string]any{"item": "ensemble-env/dummy", "file": "dummy.txt"}}
+		f["github"] = map[string]any{"app": "ensemble-bot", "permissions": fixtureSet}
+	})
+	if _, err := h.Start(context.Background(), path); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(tokens.calls, "issue ensemble-bot "+container) || slices.ContainsFunc(tokens.calls, func(c string) bool { return strings.HasPrefix(c, "prefetch") }) {
+		t.Fatalf("token calls %q", tokens.calls)
+	}
+	if run, _ := helperRun(d); run != nil {
+		t.Fatalf("helper ran: %q", run)
+	}
+	i := slices.IndexFunc(d.calls, func(c []string) bool {
+		return slices.Equal(c, []string{"exec", "--interactive", "--user", "agent", container, "write"})
+	})
+	if i < 0 || string(d.stdin[i]) != "ghs_token" {
+		t.Fatalf("no GitHub token write in %q", d.verbs())
 	}
 }
 

@@ -149,16 +149,19 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		}
 		return StartResult{}, taken(c)
 	}
+	lostName := false
 	created, err := h.ensureVolume(ctx, m, info)
 	if err != nil {
 		return StartResult{}, err
 	}
 	lap("checks")
 	if created && m.Prefetch != nil {
-		// Registered before the lock's, so it runs after every rollback of the container.
+		// Registered before the lock's, so it runs after every rollback of the container. A start that lost the
+		// container name to another leaves the workspace to that one.
 		defer func() {
-			if retErr != nil {
-				h.dropWorkspace(ctx, m.Workspace, retErr)
+			var e *protocol.Error
+			if errors.As(retErr, &e) && !lostName {
+				h.removeVolume(ctx, m.Workspace, e)
 			}
 		}()
 		if err := h.prefetch(ctx, c, m, info, px); err != nil {
@@ -209,6 +212,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	}
 	result, held, err = h.create(ctx, c, m, info, route, facts, lap)
 	if errors.Is(err, errTaken) {
+		lostName = true
 		return StartResult{}, taken(c)
 	}
 	if err != nil {

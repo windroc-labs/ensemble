@@ -69,7 +69,7 @@ func (f *fakeTokens) Prefetch(_ context.Context, repo, ref, dir, c string, run f
 	if f.prefetch != nil {
 		return f.prefetch
 	}
-	if err := run([]string{"clone", repo, ref, dir}, []byte("ghs_prefetch")); err != nil {
+	if err := run([]string{"/bin/sh", "-c", "clone-script", "sh", repo, ref, dir}, []byte("ghs_prefetch")); err != nil {
 		return protocol.New(protocol.StartFailed, "Prefetching "+repo+" at "+ref+" failed.")
 	}
 	return nil

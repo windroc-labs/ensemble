@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"syscall"
 	"time"
 
@@ -577,9 +576,9 @@ func (g GitHub) Prefetch(ctx context.Context, repo, ref, dir, container string, 
 		if errors.Is(err, docker.ErrUnreachable) {
 			return protocol.New(protocol.DockerUnreachable, "Cannot reach Docker Desktop; start it and retry.")
 		}
-		e := protocol.Newf(protocol.StartFailed, "Prefetching %s at %s failed.", repo, ref)
-		e.Cause = github.Redact(strings.ReplaceAll(docker.Diagnostic(err), token, "[redacted]"), token)
-		return e
+		failed := protocol.Newf(protocol.StartFailed, "Prefetching %s at %s failed.", repo, ref)
+		failed.Cause = github.Redact(docker.Diagnostic(err), token)
+		return failed
 	}
 	return nil
 }

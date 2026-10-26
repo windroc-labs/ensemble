@@ -2,8 +2,6 @@ package launcher
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -70,9 +68,7 @@ func (h Host) prefetch(ctx context.Context, c string, m Manifest, run imageInfo,
 		return err
 	}
 	owner := run.Config.Labels["ensemble.agent-uid"] + ":" + run.Config.Labels["ensemble.agent-gid"]
-	id := make([]byte, 16)
-	_, _ = rand.Read(id)
-	name := "ensemble-prefetch-" + hex.EncodeToString(id)
+	name := "ensemble-prefetch-" + randomHex()
 	start := func(argv []string, stdin []byte) error {
 		cctx, cancel := context.WithTimeout(ctx, prefetchTimeout)
 		defer cancel()
@@ -88,17 +84,4 @@ func (h Host) prefetch(ctx context.Context, c string, m Manifest, run imageInfo,
 		return err
 	}
 	return h.GitHub.Prefetch(ctx, m.Prefetch.Repo, m.Prefetch.Ref, m.CWD, c, start)
-}
-
-// dropWorkspace removes the workspace volume a failed prefetching start created, after its container's rollback;
-// a failed removal adds the command to e.
-func (h Host) dropWorkspace(ctx context.Context, v string, err error) {
-	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	defer cancel()
-	if _, rmErr := h.Docker.Run(rctx, []string{"volume", "rm", v}, nil); rmErr != nil {
-		var e *protocol.Error
-		if errors.As(err, &e) {
-			e.Message += " Remove it with docker volume rm " + v + " before retrying."
-		}
-	}
 }

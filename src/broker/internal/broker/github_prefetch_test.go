@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -215,4 +219,65 @@ func startLine(t *testing.T, a audited) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+// cloneScript run for real against a local repo standing in for github.com: the clone holds the ref and no
+// credential anywhere, its remote URL included.
+func TestCloneScriptLeavesNoCredential(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	tmp := t.TempDir()
+	env := append(os.Environ(), "HOME="+filepath.Join(tmp, "home"), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %q: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	src, bare, ws := filepath.Join(tmp, "src"), filepath.Join(tmp, "bare.git"), filepath.Join(tmp, "ws")
+	for _, dir := range []string{src, ws, filepath.Join(tmp, "home")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git(src, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git(src, "add", "a.txt")
+	git(src, "commit", "-q", "-m", "one")
+	git(src, "branch", "release/1.2")
+	git(tmp, "clone", "-q", "--bare", src, bare)
+	const secret = "ghs_prefetchsecret123"
+	cmd := exec.Command("/bin/sh", "-c", cloneScript, "sh", "acme/app", "release/1.2", ws)
+	cmd.Env = append(env, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=url.file://"+bare+".insteadOf", "GIT_CONFIG_VALUE_0=https://github.com/acme/app.git")
+	cmd.Stdin = strings.NewReader(secret)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clone: %v %s", err, out)
+	}
+	if got := git(ws, "rev-parse", "--abbrev-ref", "HEAD"); got != "release/1.2" {
+		t.Fatalf("HEAD %q", got)
+	}
+	if got := git(ws, "config", "--get", "remote.origin.url"); got != "https://github.com/acme/app.git" {
+		t.Fatalf("remote %q", got)
+	}
+	err := filepath.WalkDir(ws, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err == nil && strings.Contains(string(data), secret) {
+			t.Errorf("token in %s", path)
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 }

@@ -90,9 +90,6 @@ func validSecretFile(file string) bool {
 
 func ValidLock(name string) bool { return lockPattern.MatchString(name) }
 
-// defaultGateway is the caller network key a manifest without gateway uses.
-const defaultGateway = "workers"
-
 func ValidGateway(key string) bool { return gatewayPattern.MatchString(key) }
 
 // ValidRef is whether ref names a branch or tag, by ensemble.utils.git.check_ref's rule (WDRC-109 FR-52): never an
@@ -245,7 +242,7 @@ func ParseManifest(data []byte) (Manifest, error) {
 		return reject("lock requires a valid lock name and nonempty lock_owner")
 	}
 	if _, ok := fields["gateway"]; !ok {
-		m.Gateway = defaultGateway
+		m.Gateway = workersKey
 	} else if !ValidGateway(m.Gateway) {
 		return reject("invalid gateway")
 	}

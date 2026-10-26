@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"ensemble/broker/internal/audit"
 	"ensemble/broker/internal/docker"
@@ -157,6 +158,23 @@ func (h Host) volumeLabels(ctx context.Context, volume string) (map[string]strin
 	return labels, nil
 }
 
+// randomHex is 16 random bytes in hex: a throwaway name or nonce.
+func randomHex() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// removeVolume removes volume v, which this start created, on a context of its own; a failed removal adds the command
+// to e.
+func (h Host) removeVolume(ctx context.Context, v string, e *protocol.Error) {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if _, err := h.Docker.Run(rctx, []string{"volume", "rm", v}, nil); err != nil {
+		e.Message += " Remove it with docker volume rm " + v + " before retrying."
+	}
+}
+
 // ensureVolume gives m its workspace volume: created with its labels and an agent-owned root, or an
 // existing one whose labels match and that no container mounts. created: this start made it, which a prefetching
 // start knows by its own nonceLabel value.
@@ -168,9 +186,7 @@ func (h Host) ensureVolume(ctx context.Context, m Manifest, info imageInfo) (cre
 		create := []string{"volume", "create", "--label", kindLabel + "=" + kind, "--label", workspaceLabel + "=" + m.CWD}
 		nonce := ""
 		if m.Prefetch != nil {
-			id := make([]byte, 16)
-			_, _ = rand.Read(id)
-			nonce = hex.EncodeToString(id)
+			nonce = randomHex()
 			create = append(create, "--label", nonceLabel+"="+nonce)
 		}
 		if _, err := h.Docker.Run(ctx, append(create, v), nil); err != nil {
@@ -185,9 +201,7 @@ func (h Host) ensureVolume(ctx context.Context, m Manifest, info imageInfo) (cre
 	// Until its root is the agent's, a volume this start created is removed on failure: a later start would skip the chown.
 	undo := func(e *protocol.Error) (bool, error) {
 		if created {
-			if _, rmErr := h.Docker.Run(context.WithoutCancel(ctx), []string{"volume", "rm", v}, nil); rmErr != nil {
-				e.Message += " Remove it with docker volume rm " + v + " before retrying."
-			}
+			h.removeVolume(ctx, v, e)
 		}
 		return false, e
 	}
