@@ -597,6 +597,7 @@ class ClaimOf(Case):
         self.write([start(SID_A, uuid="LOC-1")])
         found = runs.claim(self.log, "TASK-1", SID_A)
         self.assertEqual(found.uuid, "LOC-1")
+        self.assertFalse(hasattr(found, "key"))
 
     def test_no_start_row_for_the_issue_and_sid_raises(self):
         self.write(

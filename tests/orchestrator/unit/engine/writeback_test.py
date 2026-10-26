@@ -2122,6 +2122,12 @@ class RefusedEvents(Events):
         self.assertEqual(self.linear.calls, [])
 
     def test_current_app_replaces_the_old_start_row_credential(self):
+        with open(self.cfg.runs_log) as f:
+            rows = [json.loads(line) for line in f]
+        with open(self.cfg.runs_log, "w") as f:
+            for row in rows:
+                old = {"key": "pre-app-engineer-key"} if row["kind"] == "start" else {}
+                f.write(json.dumps(row | old) + "\n")
         app = replace(self.cfg.linear.roles["engineer"], token_service="new-engineer-token")
         self.cfg = replace(self.cfg, linear=replace(self.cfg.linear, roles={"engineer": app}))
         self.assertTrue(self.deliver(delegate_event("progress", name="start", text="x")))
