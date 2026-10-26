@@ -1115,7 +1115,7 @@ broker_plan() {
       elif has claude || has codex; then
         remedy="the windroc marketplace serves ensemble at $ref, ahead of release $release_tag: wait until it serves a release, or use --clients opencode --ref $release_tag"
       else
-        remedy="use --ref $release_tag or a branch"
+        remedy="use --ref $release_tag or a branch other than main"
       fi
       die "$label wants broker protocol $want, but its broker, $broker_label, speaks protocol $got: $remedy"
     fi

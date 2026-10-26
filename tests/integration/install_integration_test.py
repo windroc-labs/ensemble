@@ -386,10 +386,10 @@ class InstallTest(Case):
         self.at_ref(ref, CLIENT, f'PROTOCOL = "{protocol}"\n')
         self.at_ref(ref, GO, f'package protocol\n\nconst Version = "{protocol}"\n')
 
-    def refused(self, *args, rerun=False):
+    def refused(self, *args, rerun=False, then=()):
         """A run of `args` that stops before any client step: the sudo password, then on a first
-        run the brew profile line."""
-        answers = [(SUDO_Q, PASSWORD), *(() if rerun else ((WRITE_Q, "y"),))]
+        run the brew profile line, then `then` (the configuration's)."""
+        answers = [(SUDO_Q, PASSWORD), *(() if rerun else ((WRITE_Q, "y"),)), *then]
         result = self.run_install(*args, answers=answers)
         self.assertEqual(result.code, 1, result.stderr)
         self.assertEqual(self.plugin_calls(), [])
@@ -1433,6 +1433,16 @@ class InstallTest(Case):
             result.stderr,
         )
         self.assertEqual(self.broker_calls(), [])
+
+    def test_opencode_main_remedy_names_a_branch_other_than_main(self):
+        self.protocol_at("v9.8.7", OTHER)
+        flags = ("--clients", "opencode", "--docker", "--ref", "main")
+        result = self.refused(*flags, then=PROVIDER_ANSWERS)
+        self.assertIn(
+            f"install.sh: ensemble main wants broker protocol {PROTOCOL}, but its broker, release"
+            f" v9.8.7, speaks protocol {OTHER}: use --ref v9.8.7 or a branch other than main\n",
+            result.stderr,
+        )
 
     def test_installed_plugin_with_another_protocol_stops_up_front(self):
         self.assert_ok(self.fresh(clients="claude", docker="y"))
