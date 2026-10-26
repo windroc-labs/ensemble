@@ -1762,7 +1762,7 @@ broker_logins() {
   fi
 }
 
-# 0: ready for workers; 2: healthy contract-1 gateway whose config has no workers section; 1: not ready yet.
+# 0: ready for workers; 2: healthy contract-1 proxy whose config has no workers section; 1: not ready yet.
 egress_ready() {
   local status running health contract name proxy networks
   status=$(docker inspect --format '{{.State.Running}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{index .Config.Labels "windroc.egress.contract"}}|{{index .Config.Labels "windroc.egress.network.workers.name"}}|{{index .Config.Labels "windroc.egress.network.workers.proxy"}}|{{index .Config.Labels "windroc.egress.networks"}}' egress-proxy </dev/null 2>/dev/null) || return 1
@@ -1790,10 +1790,10 @@ egress_download() (
 
 egress_install() {
   local dir=$HOME/.egress version=$HOME/.egress/versions/$egress_commit tries=0 ready
-  step "egress gateway"
+  step "egress proxy"
   mkdir -p "$dir/versions"
   [ ! -L "$dir/config.local.yaml" ] \
-    || die "$dir/config.local.yaml symlink is unsupported by the gateway's directory mount; existing path was kept"
+    || die "$dir/config.local.yaml symlink is unsupported by the proxy's directory mount; existing path was kept"
   if [ ! -e "$dir/config.local.yaml" ]; then
     (umask 077; set -o noclobber; printf 'version: 1\nnetworks:\n  workers:\n    mode: denylist\n' >"$dir/config.local.yaml") \
       || die "cannot create $dir/config.local.yaml; existing config was kept"
@@ -1811,7 +1811,7 @@ egress_install() {
     egress_ready || ready=$?
     [ "$ready" -ne 0 ] || break
     [ "$ready" -ne 2 ] \
-      || die "$dir/config.local.yaml has no networks.workers section, so the healthy gateway serves no workers network; add one (see $version/config.example.yaml), then rerun scripts/install.sh --docker; your config was kept unchanged"
+      || die "$dir/config.local.yaml has no networks.workers section, so the healthy proxy serves no workers network; add one (see $version/config.example.yaml), then rerun scripts/install.sh --docker; your config was kept unchanged"
     [ "$tries" -lt 60 ] \
       || die "egress-proxy not healthy after 120 seconds: docker logs egress-proxy; rerun $version/start.sh"
     tries=$((tries + 1))
@@ -1828,7 +1828,7 @@ egress_install() {
 docker_steps() {
   local name
   if [ "$docker" != yes ]; then
-    for name in "Docker Desktop running" "egress gateway" broker "broker login: Claude" "broker login: GitHub" \
+    for name in "Docker Desktop running" "egress proxy" broker "broker login: Claude" "broker login: GitHub" \
       "broker Codex install" "broker login: Codex"; do
       step "$name"
       skip "Docker not chosen"

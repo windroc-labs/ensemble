@@ -64,11 +64,11 @@ type world struct {
 	rmErr           error
 	rmSilent        bool // rm --force exits 0 without echoing: the container was absent
 	unreachable     bool
-	gateways        *string              // the gateway listing's output; nil: the one healthy gateway
-	gateway         func(map[string]any) // edits the gateway's inspect object
+	proxies         *string              // the proxy listing's output; nil: the one healthy proxy
+	proxy           func(map[string]any) // edits the proxy's inspect object
 	network         func(map[string]any) // edits the workers network's inspect object
 	noNetwork       bool
-	egressErr       error // the gateway listing's error
+	egressErr       error // the proxy listing's error
 }
 
 func (w *world) docker() *fakeDocker {
@@ -79,10 +79,10 @@ func (w *world) docker() *fakeDocker {
 		}
 		switch strings.Join(args[:2], " ") {
 		case "ps --all":
-			if w.gateways != nil {
-				return []byte(*w.gateways), w.egressErr
+			if w.proxies != nil {
+				return []byte(*w.proxies), w.egressErr
 			}
-			return []byte(gatewayID + "\n"), w.egressErr
+			return []byte(proxyID + "\n"), w.egressErr
 		case "network inspect":
 			if w.noNetwork {
 				return nil, &docker.CommandError{Exit: 1, Stderr: "Error: No such network: " + args[2]}
@@ -114,8 +114,8 @@ func (w *world) docker() *fakeDocker {
 		case "volume rm":
 			return []byte(volume + "\n"), nil
 		case "container inspect":
-			if args[2] == gatewayID {
-				return inspectObject(gatewayObject(), w.gateway), nil
+			if args[2] == proxyID {
+				return inspectObject(proxyObject(), w.proxy), nil
 			}
 			if w.exists {
 				return []byte("[{}]"), nil
@@ -163,16 +163,16 @@ func (w *world) docker() *fakeDocker {
 }
 
 const (
-	gatewayID      = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	proxyID        = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 	workersID      = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 	workersNetwork = "egress-workers"
 	workersProxy   = "http://egress-proxy-workers:4750"
 )
 
-// gatewayObject is a healthy contract-v1 gateway's docker inspect object, attached to egress-workers.
-func gatewayObject() map[string]any {
+// proxyObject is a healthy contract-v1 proxy's docker inspect object, attached to egress-workers.
+func proxyObject() map[string]any {
 	return map[string]any{
-		"Id":   gatewayID,
+		"Id":   proxyID,
 		"Name": "/egress-proxy",
 		"Config": map[string]any{"Labels": map[string]any{
 			"windroc.egress.contract":              "1",
@@ -291,12 +291,12 @@ func TestRuntimeFixtures(t *testing.T) {
 			}
 			switch ctx.Egress {
 			case "stopped":
-				w.gateway = func(g map[string]any) { g["State"].(map[string]any)["Running"] = false }
+				w.proxy = func(g map[string]any) { g["State"].(map[string]any)["Running"] = false }
 			case "unhealthy":
-				w.gateway = func(g map[string]any) { g["State"].(map[string]any)["Health"] = map[string]any{"Status": "unhealthy"} }
+				w.proxy = func(g map[string]any) { g["State"].(map[string]any)["Health"] = map[string]any{"Status": "unhealthy"} }
 			case "missing":
 				none := ""
-				w.gateways = &none
+				w.proxies = &none
 			case "not_internal":
 				w.network = func(n map[string]any) { n["Internal"] = false }
 			}

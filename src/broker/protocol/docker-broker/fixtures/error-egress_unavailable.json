@@ -3,7 +3,7 @@
   "error": {
     "command": "start",
     "code": "egress_unavailable",
-    "message": "Egress gateway egress-proxy is unhealthy, not healthy. Start the egress proxy (~/.egress/current/start.sh, docs/docker-host.md#egress-proxy), then retry.",
+    "message": "Egress proxy egress-proxy is unhealthy, not healthy. Start the egress proxy (~/.egress/current/start.sh, docs/docker-host.md#egress-proxy), then retry.",
     "cleanup": "not_needed"
   }
 }
