@@ -562,6 +562,7 @@ class InstallTest(Case):
             if c.startswith(wanted)
             and c not in own
             and "status" not in c
+            and c != "ensemble-broker version"
             and "/Docker.app/" not in c
         ]
 
@@ -1402,10 +1403,40 @@ class InstallTest(Case):
         self.assertIn("==> broker\n    skip: installed from this plugin\n", result.stderr)
         self.assertNotIn("broker-install ", self.broker_calls())
 
+    def claude_ensemble(self):
+        """The directory of the ensemble plugin the fake Claude Code installed."""
+        installed = json.loads((self.fakes / "claude/plugins.json").read_text())
+        return next(p["installPath"] for p in installed if p["id"] == "ensemble@windroc")
+
+    def test_rerun_keeps_a_current_hand_built_broker(self):
+        self.assert_ok(self.fresh(clients="claude", docker="y"))
+        path = self.claude_ensemble()
+        Path(path, CLIENT).write_text(f'PROTOCOL = "{OTHER}"\n')
+        (self.fakes / "src/broker/protocol").write_text(OTHER)
+        result = self.again("--clients", "claude", "--docker")
+        self.assert_ok(result)
+        self.assertIn(
+            f"    broker protocol {OTHER}: {path} and the installed broker agree\n", result.stderr
+        )
+        self.assertNotIn(f"{RAW}v9.8.7/{GO}", "\n".join(self.calls()))
+        self.assertIn("==> broker\n    skip: installed from this plugin\n", result.stderr)
+
+    def test_other_client_plugin_against_the_installed_broker_stops(self):
+        self.assert_ok(self.fresh(docker="y"))
+        Path(self.claude_ensemble(), CLIENT).write_text(f'PROTOCOL = "{OTHER}"\n')
+        (self.fakes / "src/broker/protocol").write_text(OTHER)
+        codex = Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.7")
+        result = self.refused("--clients", "claude,codex", "--docker", rerun=True)
+        self.assertIn(
+            f"install.sh: {codex} wants broker protocol {PROTOCOL}, but its broker, the installed"
+            f" broker, speaks protocol {OTHER}: update the plugin",
+            result.stderr,
+        )
+        self.assertEqual(self.broker_calls(), [])
+
     def test_installed_plugin_with_another_protocol_stops_up_front(self):
         self.assert_ok(self.fresh(clients="claude", docker="y"))
-        installed = json.loads((self.fakes / "claude/plugins.json").read_text())
-        path = next(p["installPath"] for p in installed if p["id"] == "ensemble@windroc")
+        path = self.claude_ensemble()
         Path(path, CLIENT).write_text(f'PROTOCOL = "{OTHER}"\n')
         result = self.refused("--clients", "claude", "--docker", rerun=True)
         self.assertIn(

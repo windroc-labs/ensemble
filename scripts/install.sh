@@ -1076,7 +1076,7 @@ print(found[0] if found else "")' "${CODEX_HOME:-$HOME/.codex}/plugins/cache/win
 # every chosen client's plugin protocol. Only advisory: gh attestation verify authenticates the broker.
 broker_plan() {
   local -a sources=()
-  local client source label where version want got remedy seen= agreed=
+  local client source label where version want got remedy current broker_label seen= agreed=
   [ "$docker" = yes ] || return 0
   for client in claude codex opencode; do
     has "$client" || continue
@@ -1095,8 +1095,14 @@ broker_plan() {
     broker_mode=build
     return
   fi
-  got=$(ensemble_file "$release_tag" src/broker/internal/protocol/protocol.go | go_protocol_of)
-  [ -n "$got" ] || die "no broker protocol in src/broker/internal/protocol/protocol.go at ref $release_tag"
+  if [ -n "${sources[0]}" ] && current=$(broker_current "${sources[0]}"); then
+    got=${current%%:*}
+    broker_label="the installed broker"
+  else
+    got=$(ensemble_file "$release_tag" src/broker/internal/protocol/protocol.go | go_protocol_of)
+    [ -n "$got" ] || die "no broker protocol in src/broker/internal/protocol/protocol.go at ref $release_tag"
+    broker_label="release $release_tag"
+  fi
   for source in "${sources[@]}"; do
     label=${source:-ensemble $ref}
     case $seen in *"<$label>"*) continue ;; esac
@@ -1111,11 +1117,11 @@ broker_plan() {
       else
         remedy="use --ref $release_tag or a branch"
       fi
-      die "$label wants broker protocol $want, but its broker, release $release_tag, speaks protocol $got: $remedy"
+      die "$label wants broker protocol $want, but its broker, $broker_label, speaks protocol $got: $remedy"
     fi
     agreed+="${agreed:+, }$label"
   done
-  say "    broker protocol $got: $agreed and release $release_tag agree"
+  say "    broker protocol $got: $agreed and $broker_label agree"
 }
 
 # Claude Code and Codex install ensemble, and updraft for host workers, from the windroc marketplace.
@@ -1650,7 +1656,7 @@ ctmux_install() {
 # sha256 of the plugin's broker sources: a change means the broker must be reinstalled.
 broker_source() {
   (
-    cd "$pkg"
+    cd "$1"
     find src/broker -type f | LC_ALL=C sort | while IFS= read -r file; do shasum -a 256 "$file"; done
     shasum -a 256 .claude-plugin/plugin.json
   ) | shasum -a 256 | cut -d' ' -f1
@@ -1727,19 +1733,30 @@ docker_running() {
 }
 
 # Installs the broker unless the one installed came from this plugin's sources and speaks its protocol.
-broker_install() {
-  local source want= got=
-  source=$(broker_source)
-  if [ -x "$broker" ] && [ "$(state_get broker_source)" = "$source" ]; then
-    want=$(protocol_of <"$pkg/src/ensemble/session/hosts/docker/broker.py" 2>/dev/null) || want=
+# "<spoken>:<wanted>": the protocol the installed broker reports when it was installed from plugin $1's broker
+# sources (else empty), and $1's plugin protocol. Exit 0 when both are set and equal: the broker is current and
+# broker_install keeps it, so broker_plan may trust it.
+broker_current() {
+  local got= want=
+  want=$(protocol_of <"$1/src/ensemble/session/hosts/docker/broker.py" 2>/dev/null) || want=
+  if [ -x "$broker" ] && [ "$(state_get broker_source)" = "$(broker_source "$1")" ]; then
     got=$("$broker" version </dev/null 2>/dev/null | spoken_protocol_of) || got=
   fi
+  printf '%s:%s\n' "$got" "$want"
+  [ -n "$want" ] && [ "$got" = "$want" ]
+}
+
+broker_install() {
+  local source current got want
   step broker
-  if [ -n "$want" ] && [ "$got" = "$want" ]; then
+  if current=$(broker_current "$pkg"); then
     skip "installed from this plugin"
     return
   fi
+  got=${current%%:*}
+  want=${current#*:}
   if [ -n "$got" ]; then say "    installed broker speaks protocol $got, the plugin wants ${want:-unknown}: reinstalling"; fi
+  source=$(broker_source "$pkg")
   [ -e "$root/usr/local/libexec/ensemble" ] || ledger_add broker
   record_dir "$HOME/.ensemble/docker"
   if [ "$broker_mode" = release ]; then
