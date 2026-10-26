@@ -218,9 +218,9 @@ func TestDiscardRecordsQueuedTokens(t *testing.T) {
 func TestRetryAudit(t *testing.T) {
 	r := newRig(t)
 	list := []pending{
-		{ctr2, "a", "ghs_expired", "2026-10-17T11:59:59Z"},
-		{ctr2, "b", "ghs_live", "2026-10-17T12:30:00Z"},
-		{ctr2, "c", "ghs_refused", "2026-10-17T12:30:00Z"},
+		{Container: ctr2, Account: "a", Token: "ghs_expired", ExpiresAt: "2026-10-17T11:59:59Z"},
+		{Container: ctr2, Account: "b", Token: "ghs_live", ExpiresAt: "2026-10-17T12:30:00Z"},
+		{Container: ctr2, Account: "c", Token: "ghs_refused", ExpiresAt: "2026-10-17T12:30:00Z"},
 	}
 	data, _ := json.Marshal(list)
 	r.keys.items[revocationsService+"/"+revocationsAccount] = data
@@ -280,7 +280,7 @@ func TestUnrecordedTokenAudit(t *testing.T) {
 
 func TestRetryAuditNotesAfterRemoval(t *testing.T) {
 	r := newRig(t)
-	data, _ := json.Marshal([]pending{{ctr2, "b", "ghs_live", "2026-10-17T12:30:00Z"}})
+	data, _ := json.Marshal([]pending{{Container: ctr2, Account: "b", Token: "ghs_live", ExpiresAt: "2026-10-17T12:30:00Z"}})
 	r.keys.items[revocationsService+"/"+revocationsAccount] = data
 	r.lockFails(1)
 	rec, sink := r.audited("status", "")

@@ -90,7 +90,7 @@ func recoveryLifecycle(t *testing.T, store *recoveryStore, remote *recoveryAPI) 
 func recoverySeed(t *testing.T, entries ...tokenEntry) (*recoveryStore, *recoveryAPI) {
 	t.Helper()
 	s := &recoveryStore{secrets: &secrets{items: map[string][]byte{}}}
-	b, err := json.Marshal(tokenRecord{App: "ensemble-bot", Tokens: entries})
+	b, err := json.Marshal(tokenRecord{Subject: "ensemble-bot", Tokens: entries})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func recoverySeed(t *testing.T, entries ...tokenEntry) (*recoveryStore, *recover
 }
 
 func recoveryEntry(token string) tokenEntry {
-	return tokenEntry{Account: "acme", Installation: 1, Token: token, ExpiresAt: clock.Add(time.Hour).Format(time.RFC3339)}
+	return tokenEntry{Account: "acme", Target: 1, Token: token, ExpiresAt: clock.Add(time.Hour).Format(time.RFC3339)}
 }
 
 func (s *recoveryStore) failBacklog(kind string) {
@@ -171,7 +171,7 @@ func TestDiscardRecoveryMatrix(t *testing.T) {
 				if action == "replacement" || action == "rollback" {
 					want = 2
 				}
-				if len(rec.Tokens) != want || tokenIn(rec.Tokens)("ghs_confirmed") {
+				if len(rec.Tokens) != want || slices.ContainsFunc(rec.Tokens, func(e tokenEntry) bool { return e.Token == "ghs_confirmed" }) {
 					t.Fatal("record did not retain exactly the unconfirmed tokens")
 				}
 				store.readFail, store.writeFail, remote.fail = "", "", nil

@@ -25,7 +25,7 @@ func (s statusSecrets) DeleteSecret(string, string) error {
 }
 
 func TestPendingReadOnly(t *testing.T) {
-	list := []pending{{ctr, "acme", "ghs_STATUS_SENTINEL", "2000-01-01T00:00:00Z"}}
+	list := []pending{{Container: ctr, Account: "acme", Token: "ghs_STATUS_SENTINEL", ExpiresAt: "2000-01-01T00:00:00Z"}}
 	data, _ := json.Marshal(list)
 	keys := &secrets{items: map[string][]byte{revocationsService + "/" + revocationsAccount: data}}
 	g := GitHub{Keychain: statusSecrets{keys, t}, Lock: func() (func(), error) {

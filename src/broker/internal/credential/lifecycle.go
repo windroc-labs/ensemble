@@ -513,6 +513,9 @@ func (l Lifecycle) Acquire(ctx context.Context, d Delivery, subject string, scop
 		issued[len(issued)-1] = m
 		l.describe(ctx, id, audit.Issued, m, secret)
 	}
+	if len(issued) == 0 {
+		return expiries(nil), nil // a subject with no targets has nothing to grant
+	}
 	for _, m := range issued {
 		if err := l.deliver(d, m); err != nil {
 			return fail(err)
@@ -636,6 +639,37 @@ func (l Lifecycle) retire(ctx context.Context, id string, old []Material) {
 			rec.Tokens = slices.DeleteFunc(rec.Tokens, func(t Material) bool { return t.Token == o.Token })
 		})
 	}
+}
+
+// Hold records m, a token the provider issued outside Acquire for the broker's own one-off use (GitHub: a prefetch
+// token), prepared in c's record before it is used, so a Release of c retires it should the broker die. A failed
+// record write retires m at once and returns the error.
+func (l Lifecycle) Hold(ctx context.Context, c Consumer, m Material) error {
+	if err := l.ready(); err != nil {
+		return err
+	}
+	if err := c.check(); err != nil {
+		return err
+	}
+	id := c.ID()
+	m.State = Prepared
+	if _, err := l.editRecord(id, true, func(rec *Record, _ bool) {
+		m.Revision = desired(rec) + 1
+		rec.Tokens = append(rec.Tokens, m)
+	}); err != nil {
+		l.noteUnrecorded(id, audit.Issued, m)
+		return rolledBack(err, l.discard(context.WithoutCancel(ctx), id, []Material{m}, false))
+	}
+	l.describe(ctx, id, audit.Issued, m, "")
+	return nil
+}
+
+// Retire revokes m, which Hold recorded for c: confirmed, it leaves the record; else it goes the backlog way.
+func (l Lifecycle) Retire(ctx context.Context, c Consumer, m Material) {
+	if l.ready() != nil || c.check() != nil {
+		return
+	}
+	l.retire(ctx, c.ID(), []Material{m})
 }
 
 // Release retires every material of c's record, its grant: for a shared provider by withdrawal only. An

@@ -22,12 +22,24 @@ import (
 	"testing"
 	"time"
 
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/github"
 	"ensemble/broker/internal/protocol"
 )
 
 const ctr = "ensemble-worker_1-0123456789abcdef0123456789abcdef"
+
+// writeScript is the token file's atomic replacement, as every broker before the shared delivery wrote it.
+const writeScript = "mkdir -p -m 0700 " + tokenDir + " && umask 0377 && rm -f " + tokenDir + `/."$1".new && cat > ` + tokenDir +
+	`/."$1".new && mv -f ` + tokenDir + `/."$1".new ` + tokenDir + `/"$1"`
+
+// The GitHub record and backlog shapes, as the lifecycle stores them.
+type (
+	tokenEntry  = credential.Material
+	tokenRecord = credential.Record
+	pending     = credential.Pending
+)
 
 var (
 	clock    = time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
@@ -441,7 +453,7 @@ func TestIssueWritesFiles(t *testing.T) {
 		t.Fatalf("token requests %q", r.api.bodies)
 	}
 	rec, ok := r.record(t)
-	if !ok || rec.App != "ensemble-bot" || len(rec.Tokens) != 2 || rec.Tokens[0] != (tokenEntry{"acme", 1, "ghs_1_1", "2026-10-17T13:00:00Z"}) {
+	if !ok || rec.Subject != "ensemble-bot" || len(rec.Tokens) != 2 || rec.Tokens[0] != (tokenEntry{Account: "acme", Target: 1, Token: "ghs_1_1", ExpiresAt: "2026-10-17T13:00:00Z", Revision: 1, State: credential.Delivered}) {
 		t.Fatalf("record %v", rec)
 	}
 }
@@ -503,7 +515,7 @@ func TestIssueRollbackOffline(t *testing.T) {
 	r.api.revokeErr = func(string) int { return 503 }
 	_, err := r.g.Issue(context.Background(), "ensemble-bot", perms, ctr, r.exec.run)
 	wantCode(t, err, protocol.GitHubFailed)
-	if b := r.backlog(t); len(b) != 1 || b[0] != (pending{ctr, "acme", "ghs_1_1", "2026-10-17T13:00:00Z"}) {
+	if b := r.backlog(t); len(b) != 1 || b[0] != (pending{Container: ctr, Account: "acme", Token: "ghs_1_1", ExpiresAt: "2026-10-17T13:00:00Z"}) {
 		t.Fatalf("backlog %v", b)
 	}
 }
@@ -580,7 +592,7 @@ func TestRevokeLockFailsKeepsATokenRecordedMeanwhile(t *testing.T) {
 	r.api.revokeErr = func(string) int { // a refresh records its new token while close revokes without the lock
 		rec, _ := r.record(t)
 		if !slices.ContainsFunc(rec.Tokens, func(e tokenEntry) bool { return e.Token == "ghs_late" }) {
-			rec.Tokens = append(rec.Tokens, tokenEntry{"acme", 1, "ghs_late", "2026-10-17T13:00:00Z"})
+			rec.Tokens = append(rec.Tokens, tokenEntry{Account: "acme", Target: 1, Token: "ghs_late", ExpiresAt: "2026-10-17T13:00:00Z"})
 			data, _ := json.Marshal(rec)
 			r.keys.items[tokensService+"/"+ctr] = data
 		}
@@ -608,7 +620,7 @@ func TestRevokeReadsTheRecordUnderTheLock(t *testing.T) {
 	lock, n := r.g.Lock, 0
 	r.g.Lock = func() (func(), error) {
 		if n++; n == 1 { // a refresh's record write lands just before close takes the lock
-			data, _ := json.Marshal(tokenRecord{"ensemble-bot", []tokenEntry{{"acme", 1, "ghs_late", "2026-10-17T13:00:00Z"}}})
+			data, _ := json.Marshal(tokenRecord{Subject: "ensemble-bot", Tokens: []tokenEntry{{Account: "acme", Target: 1, Token: "ghs_late", ExpiresAt: "2026-10-17T13:00:00Z"}}})
 			r.keys.items[tokensService+"/"+ctr] = data
 		}
 		return lock()
@@ -759,7 +771,7 @@ func TestRevokeTakesATokenRecordedMeanwhile(t *testing.T) {
 	r.g.Lock = func() (func(), error) {
 		if n++; n == 2 { // a refresh records its new token between close's lock sections
 			rec, _ := r.record(t)
-			rec.Tokens = append(rec.Tokens, tokenEntry{"acme", 1, "ghs_late", rec.Tokens[0].ExpiresAt})
+			rec.Tokens = append(rec.Tokens, tokenEntry{Account: "acme", Target: 1, Token: "ghs_late", ExpiresAt: rec.Tokens[0].ExpiresAt})
 			data, _ := json.Marshal(rec)
 			r.keys.items[tokensService+"/"+ctr] = data
 		}
@@ -792,10 +804,10 @@ func TestRevokeOffline(t *testing.T) {
 func TestRetryRevocations(t *testing.T) {
 	r := newRig(t)
 	list := []pending{
-		{"c1", "a", "ghs_expired", "2026-10-17T11:59:59Z"},
-		{"c1", "b", "ghs_live", "2026-10-17T12:30:00Z"},
-		{"c2", "c", "ghs_down", "2026-10-17T12:30:00Z"},
-		{"c2", "d", "ghs_after", "2026-10-17T12:30:00Z"},
+		{Container: "c1", Account: "a", Token: "ghs_expired", ExpiresAt: "2026-10-17T11:59:59Z"},
+		{Container: "c1", Account: "b", Token: "ghs_live", ExpiresAt: "2026-10-17T12:30:00Z"},
+		{Container: "c2", Account: "c", Token: "ghs_down", ExpiresAt: "2026-10-17T12:30:00Z"},
+		{Container: "c2", Account: "d", Token: "ghs_after", ExpiresAt: "2026-10-17T12:30:00Z"},
 	}
 	data, _ := json.Marshal(list)
 	r.keys.items[revocationsService+"/"+revocationsAccount] = data

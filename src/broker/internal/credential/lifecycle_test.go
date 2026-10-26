@@ -645,3 +645,49 @@ func (p *secretProvider) Targets(context.Context) ([]Material, error) {
 }
 
 func (p *secretProvider) Begin(context.Context, string) (Issuer, error) { return p, nil }
+
+func TestAcquireWithoutTargets(t *testing.T) {
+	store := newStore()
+	got, err := lifecycle(store, newProvider(t), nil).Acquire(bg, to(ctrA, newContainer()), "app", nil)
+	if err != nil || got == nil || len(got) != 0 || len(store.items) != 0 {
+		t.Fatalf("%v %v %v", got, err, store.items)
+	}
+}
+
+// TestHoldAndRetire is a token the broker itself uses once (GitHub's prefetch): held in its consumer's record while in
+// use, revoked after, and never lost when a write or the revocation fails.
+func TestHoldAndRetire(t *testing.T) {
+	m := Material{Account: "acme", Target: 1, Token: "ghs_prefetch", ExpiresAt: clock.Add(time.Hour).Format(time.RFC3339)}
+	store, p := newStore(), newProvider(t)
+	l := lifecycle(store, p, nil)
+	if err := l.Hold(bg, Consumer{Container: ctrA}, m); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := store.record(t, ctrA)
+	wantTokens(t, "held", tokens(rec), map[string]State{"ghs_prefetch": Prepared})
+	l.Retire(bg, Consumer{Container: ctrA}, m)
+	if _, ok := store.record(t, ctrA); ok || !slices.Equal(p.revoked, []string{"ghs_prefetch"}) {
+		t.Fatalf("retire left the record or skipped the revocation: %q", p.revoked)
+	}
+
+	store, p = newStore(), newProvider(t)
+	l = lifecycle(store, p, nil)
+	store.fail = func(op, service string) bool { return service == records && op == "write" }
+	if err := l.Hold(bg, Consumer{Container: ctrA}, m); !errors.Is(err, ErrStore) {
+		t.Fatalf("hold with the record down: %v", err)
+	}
+	if !slices.Contains(p.revoked, "ghs_prefetch") && !slices.Contains(pendingTokens(store.backlog(t)), "ghs_prefetch") {
+		t.Fatal("an unrecorded held token was lost")
+	}
+
+	store, p = newStore(), newProvider(t)
+	l = lifecycle(store, p, nil)
+	if err := l.Hold(bg, Consumer{Container: ctrA}, m); err != nil {
+		t.Fatal(err)
+	}
+	p.revoke = failRevoke
+	l.Retire(bg, Consumer{Container: ctrA}, m)
+	if !slices.Equal(pendingTokens(store.backlog(t)), []string{"ghs_prefetch"}) {
+		t.Fatalf("an unrevoked held token not queued: %v", store.backlog(t))
+	}
+}
