@@ -4200,6 +4200,8 @@ exec /bin/rm "$@"
 
     def test_relative_tool_path_not_recorded(self):
         """A relative path from the environment cannot be confirmed missing: one line, no record."""
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(self.home)
         self.env["UV_CACHE_DIR"] = "uv-cache"
         result = self.fresh("--no-docker")
         self.assert_ok(result)
