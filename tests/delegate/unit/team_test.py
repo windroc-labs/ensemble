@@ -256,17 +256,17 @@ class Shipped(Case):
             self.assertNotRegex(task_text(t), r"(?<!/)updraft:")
 
     def test_the_verify_task_runs_mini_op_and_fixes_its_outcome_statuses(self):
-        self.assertIn(" with `/mini-op:run`", catalog()["verifier"]["verify"])
+        self.assertIn(" with the `mini-op` skill", catalog()["verifier"]["verify"])
         text = task_text("verify")
-        self.assertIn("`/mini-op:run`", text)
-        self.assertNotRegex(text, r"(?<!/)mini-op:run")
+        self.assertIn("the `mini-op` skill", text)
+        self.assertNotIn("/mini-op:run", text)
         steps = text.split("## Steps", 1)[1].split("## Resume", 1)[0]
         for literal in (
             "No clear check → `needs_input`",
             "The check ran to its end, passing or not → `status: done`",
             "`summary` opens with the verdict, `Pass:` or `Fail:`",
             "The check could not run (the mini unreachable, the runbook broke midway, "
-            "`/mini-op:run` missing) → `status: failed`",
+            "the `mini-op` skill missing) → `status: failed`",
             "The request is still unclear → `needs_input`",
             "the runbook's source and path",
             "its full text",
@@ -296,7 +296,7 @@ class Shipped(Case):
             if path not in checked:
                 with self.subTest(path=path):
                     self.assertLessEqual(set(prefix.findall(text)), whitelist)
-        self.assertIn("mini-op", {m for m in prefix.findall(task_text("verify"))})
+        self.assertEqual(prefix.findall(task_text("verify")), [])
 
     def test_product_design_reviews_the_prd_with_updraft_review_to_its_default_cap(self):
         text = task_text("product-design")

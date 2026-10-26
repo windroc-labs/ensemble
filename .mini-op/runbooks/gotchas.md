@@ -4,7 +4,7 @@ when: a step on Outlook, GitHub, Linear, Strata or OpenCode, sbx, or an ensemble
 
 # Gotchas: ensemble's test environment on the mini
 
-The mini's own gotchas (its keychain, OpenCLI, the Terminal, screenshots, key chords, a locked screen) come with mini-op's rules (`/mini-op:run` loads them). Item names: the request or the mini's `~/.ensemble/config.local.toml`.
+The mini's own gotchas (its keychain, OpenCLI, the Terminal, screenshots, key chords, a locked screen) come with mini-op's rules (the `mini-op` skill loads them). Item names: the request or the mini's `~/.ensemble/config.local.toml`.
 
 ## Outlook
 

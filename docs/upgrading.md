@@ -1,5 +1,11 @@
 # Upgrading
 
+The built-in `verifier` now accepts every configured client, including Codex, OpenCode and Claude; board runs
+use their Agent label. Rebuild `mini-op:env` from mini-op's plain-skill version (WDRC-195) before starting one:
+it must contain `/opt/windroc/mini-op/skills/mini-op/SKILL.md`. Remove any local `fixed_client` role key and
+any `mini-op` entry in an environment's `plugins`; the packaged environment no longer requests that plugin.
+Update the broker with the plugin so its worker image includes the new client skill bootstrap.
+
 Broker protocol 29 replaces `refresh` and `notices` with `maintain`: the broker now decides when each session's
 credentials renew ([Docker host › Credential renewal](docker-host.md#credential-renewal)). Upgrade the broker with the
 plugin, then restart (close and resume) every Docker session that was running: until then its old supervisor's
