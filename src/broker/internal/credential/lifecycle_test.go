@@ -691,3 +691,49 @@ func TestHoldAndRetire(t *testing.T) {
 		t.Fatalf("an unrevoked held token not queued: %v", store.backlog(t))
 	}
 }
+
+func TestRollbackReportsUnrevokedWhenRemovalFails(t *testing.T) {
+	store, p := newStore(), newProvider(t, "acme", "other", "third")
+	writes := 0
+	store.fail = func(op, service string) bool {
+		if service == backlogS {
+			return true
+		}
+		if service == records && op == "write" {
+			writes++
+			return writes >= 3
+		}
+		return false
+	}
+	p.revoke = func(token string) Revocation {
+		if token != "tok_1" { // tok_2 keeps the record, so removing tok_1 is a failing write
+			return Revocation{Outcome: Retryable, Err: errors.New("GitHub 503")}
+		}
+		return Revocation{Outcome: Revoked}
+	}
+	_, err := lifecycle(store, p, nil).Acquire(bg, to(ctrA, newContainer()), "app", nil)
+	var unrevoked *UnrevokedError
+	if !errors.As(err, &unrevoked) || !errors.Is(err, ErrStore) {
+		t.Fatalf("a live, unqueued tok_3 reported as %v", err)
+	}
+}
+
+func TestRefreshMarkWithoutReplacement(t *testing.T) {
+	store, p := newStore(), newProvider(t, "acme")
+	l := lifecycle(store, p, nil)
+	acquire(t, l, ctrA, newContainer())
+	before := slices.Clone(store.items[records+"/"+ctrA])
+	c := newContainer()
+	c.fail = func(int) bool {
+		store.items[records+"/"+ctrA] = slices.Clone(before) // another command took the replacement out meanwhile
+		return false
+	}
+	if _, err := l.Refresh(bg, to(ctrA, c), nil); !errors.Is(err, ErrReleased) {
+		t.Fatalf("%v", err)
+	}
+	rec, _ := store.record(t, ctrA)
+	wantTokens(t, "record", tokens(rec), map[string]State{"tok_1": Delivered})
+	if slices.Contains(p.revoked, "tok_1") {
+		t.Fatal("the live token was retired")
+	}
+}

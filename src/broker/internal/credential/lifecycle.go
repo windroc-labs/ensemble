@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 
 	"ensemble/broker/internal/audit"
 	"ensemble/broker/internal/protocol"
@@ -304,12 +305,7 @@ func (l Lifecycle) discard(ctx context.Context, id string, entries []Material, w
 		ran = true
 		var recordErr error
 		if whole {
-			rec, found, err := l.readRecord(id)
-			recordErr = err
-			if err == nil && found {
-				in := tokenIn(entries)
-				entries = append(slices.Clone(entries), slices.DeleteFunc(rec.Tokens, func(m Material) bool { return in(m.Token) })...)
-			}
+			entries, recordErr = l.withRecord(id, entries)
 		}
 		backlogErr = l.editBacklog(func(list []Pending) []Pending {
 			for _, m := range entries {
@@ -318,7 +314,7 @@ func (l Lifecycle) discard(ctx context.Context, id string, entries []Material, w
 			return list
 		})
 		if backlogErr != nil {
-			return nil // direct revocation below must finish before the original record can change
+			return nil // direct revocation must finish before the original record can change
 		}
 		for _, m := range entries {
 			l.note(id, audit.Pending, "queued for revocation", m, nil)
@@ -339,65 +335,80 @@ func (l Lifecycle) discard(ctx context.Context, id string, entries []Material, w
 		rec.Tokens = slices.DeleteFunc(rec.Tokens, func(m Material) bool { return tokenIn(entries)(m.Token) })
 		return l.writeRecord(id, rec)
 	})
-	if !ran && whole {
-		if rec, found, err := l.readRecord(id); err == nil && found {
-			in := tokenIn(entries)
-			entries = append(slices.Clone(entries), slices.DeleteFunc(rec.Tokens, func(m Material) bool { return in(m.Token) })...)
-		}
-	}
-	if backlogErr != nil || !ran {
-		type miss struct {
-			entry  Material
-			reason string
-		}
-		var left []Pending
-		var missed []miss
-		var confirmed []Material
-		now := l.Provider.Now()
-		for _, m := range entries {
-			if m.Expired(now) {
-				confirmed = append(confirmed, m)
-				l.note(id, audit.ExpiredUnrevoked, "", m, nil)
-				continue
-			}
-			if r, reason := l.revoke(ctx, m); !r.confirmed() {
-				left = append(left, pending(id, m))
-				missed = append(missed, miss{m, reason})
-			} else {
-				confirmed = append(confirmed, m)
-				l.note(id, audit.Revoked, "", m, nil)
-			}
-		}
-		queued := !ran && (len(left) == 0 || l.editBacklog(func(list []Pending) []Pending { return append(list, left...) }) == nil)
-		for _, m := range missed {
-			if !queued {
-				m.reason += "; not queued"
-			}
-			l.note(id, audit.Pending, m.reason, m.entry, nil)
-		}
-		if !ran {
-			if !queued {
-				return &UnrevokedError{Consumer: id} // the record keeps them tracked
-			}
-			l.untrack(id, entries)
-		} else {
-			if len(confirmed) > 0 {
-				_, removeErr := l.editRecord(id, false, func(rec *Record, _ bool) {
-					in := tokenIn(confirmed)
-					rec.Tokens = slices.DeleteFunc(rec.Tokens, func(m Material) bool { return in(m.Token) })
-				})
-				if removeErr != nil {
-					return removeErr
-				}
-			}
-			if len(left) > 0 {
-				return &UnrevokedError{Consumer: id}
-			}
-		}
-	} else {
+	if ran && backlogErr == nil {
 		_, _ = l.Retry(ctx)
+		return err
+	}
+	if !ran && whole {
+		entries, _ = l.withRecord(id, entries)
+	}
+	if revokeErr := l.revokeDirect(ctx, id, entries, ran); revokeErr != nil {
+		return revokeErr
 	}
 	return err
+}
+
+// withRecord is entries plus every other material of id's record; err is the record read's.
+func (l Lifecycle) withRecord(id string, entries []Material) ([]Material, error) {
+	rec, found, err := l.readRecord(id)
+	if err == nil && found {
+		in := tokenIn(entries)
+		entries = append(slices.Clone(entries), slices.DeleteFunc(rec.Tokens, func(m Material) bool { return in(m.Token) })...)
+	}
+	return entries, err
+}
+
+// revokeDirect is discard's fallback when the backlog transfer failed (locked) or the lock did: it revokes each
+// entry itself and takes the confirmed ones out of the record; without the lock it queues the rest. A token left
+// neither confirmed nor queued is an *UnrevokedError, whatever else failed.
+func (l Lifecycle) revokeDirect(ctx context.Context, id string, entries []Material, locked bool) error {
+	type miss struct {
+		entry  Material
+		reason string
+	}
+	var left []Pending
+	var missed []miss
+	var confirmed []Material
+	now := l.Provider.Now()
+	for _, m := range entries {
+		if m.Expired(now) {
+			confirmed = append(confirmed, m)
+			l.note(id, audit.ExpiredUnrevoked, "", m, nil)
+			continue
+		}
+		if r, reason := l.revoke(ctx, m); !r.confirmed() {
+			left = append(left, pending(id, m))
+			missed = append(missed, miss{m, reason})
+		} else {
+			confirmed = append(confirmed, m)
+			l.note(id, audit.Revoked, "", m, nil)
+		}
+	}
+	queued := !locked && (len(left) == 0 || l.editBacklog(func(list []Pending) []Pending { return append(list, left...) }) == nil)
+	for _, m := range missed {
+		if !queued {
+			m.reason += "; not queued"
+		}
+		l.note(id, audit.Pending, m.reason, m.entry, nil)
+	}
+	if !locked {
+		if !queued {
+			return &UnrevokedError{Consumer: id} // the record keeps them tracked
+		}
+		l.untrack(id, entries)
+		return nil
+	}
+	var removeErr error
+	if len(confirmed) > 0 {
+		_, removeErr = l.editRecord(id, false, func(rec *Record, _ bool) {
+			in := tokenIn(confirmed)
+			rec.Tokens = slices.DeleteFunc(rec.Tokens, func(m Material) bool { return in(m.Token) })
+		})
+	}
+	if len(left) > 0 {
+		return &UnrevokedError{Consumer: id, Cause: removeErr}
+	}
+	return removeErr
 }
 
 // untrack takes entries, revoked or queued, out of id's record without the lock: best effort, as the lock is what
@@ -457,15 +468,7 @@ func expiries(entries []Material) []protocol.Expiry {
 	for _, m := range entries {
 		out = append(out, protocol.Expiry{Account: m.Account, ExpiresAt: m.ExpiresAt})
 	}
-	slices.SortFunc(out, func(a, b protocol.Expiry) int {
-		switch {
-		case a.Account < b.Account:
-			return -1
-		case a.Account > b.Account:
-			return 1
-		}
-		return 0
-	})
+	slices.SortFunc(out, func(a, b protocol.Expiry) int { return strings.Compare(a.Account, b.Account) })
 	return out
 }
 
@@ -599,7 +602,11 @@ func (l Lifecycle) Refresh(ctx context.Context, d Delivery, scope map[string]str
 			return nil, rolledBack(redactErr(err, secret), l.discard(ctx, id, []Material{m}, false))
 		}
 		var old []Material
+		kept := false
 		found, err = l.editRecord(id, false, func(rec *Record, _ bool) {
+			if kept = slices.ContainsFunc(rec.Tokens, func(t Material) bool { return t.Token == m.Token }); !kept {
+				return // another command retired the replacement meanwhile; the slot's other materials stay as they are
+			}
 			for i := range rec.Tokens {
 				switch t := &rec.Tokens[i]; {
 				case t.Token == m.Token:
@@ -613,7 +620,7 @@ func (l Lifecycle) Refresh(ctx context.Context, d Delivery, scope map[string]str
 		switch {
 		case err != nil:
 			return nil, err // the record still has the slot's usable material; a retry finishes this one
-		case !found:
+		case !found, !kept:
 			return nil, ErrReleased
 		}
 		l.retire(ctx, id, old)
@@ -690,8 +697,10 @@ func (l Lifecycle) Release(ctx context.Context, c Consumer) error {
 	switch {
 	case errors.Is(err, ErrLock):
 		return l.discard(ctx, id, nil, true)
+	case err != nil && l.shared():
+		return err // a withdrawal revokes nothing, so nothing is left unrevoked
 	case err != nil:
-		return &UnrevokedError{Consumer: id}
+		return &UnrevokedError{Consumer: id, Cause: err}
 	case !found:
 		if !l.shared() {
 			_, _ = l.Retry(ctx)
@@ -701,12 +710,11 @@ func (l Lifecycle) Release(ctx context.Context, c Consumer) error {
 	return l.discard(ctx, id, nil, true)
 }
 
-func listed(list []Pending, keep func(Pending) bool) []protocol.Pending {
+// listed is list as status reports it, without its tokens.
+func listed(list []Pending) []protocol.Pending {
 	out := []protocol.Pending{}
 	for _, p := range list {
-		if keep(p) {
-			out = append(out, protocol.Pending{Container: p.Container, Account: p.Account, ExpiresAt: p.ExpiresAt})
-		}
+		out = append(out, protocol.Pending{Container: p.Container, Account: p.Account, ExpiresAt: p.ExpiresAt})
 	}
 	return out
 }
@@ -717,7 +725,7 @@ func (l Lifecycle) Pending() ([]protocol.Pending, error) {
 	if err != nil {
 		return nil, err
 	}
-	return listed(list, func(Pending) bool { return true }), nil
+	return listed(list), nil
 }
 
 // Retry revokes the backlog: expired entries are dropped unrevoked, and the first request that gets no answer stops
@@ -770,5 +778,5 @@ func (l Lifecycle) Retry(ctx context.Context) ([]protocol.Pending, error) {
 	for _, o := range resolved {
 		l.note(o.entry.Container, o.result, "", o.entry.material(), nil)
 	}
-	return listed(list, func(p Pending) bool { return !slices.Contains(done, p.Token) }), nil
+	return listed(slices.DeleteFunc(list, func(p Pending) bool { return slices.Contains(done, p.Token) })), nil
 }

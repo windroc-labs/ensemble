@@ -192,10 +192,6 @@ func (p *fakeProvider) Revoke(_ context.Context, m Material) Revocation {
 	return r
 }
 
-func (p *fakeProvider) issues() int {
-	return len(slices.DeleteFunc(slices.Clone(p.calls), func(c string) bool { return !strings.HasPrefix(c, "issue ") }))
-}
-
 func (p *fakeProvider) revokes() int {
 	return len(slices.DeleteFunc(slices.Clone(p.calls), func(c string) bool { return !strings.HasPrefix(c, "revoke ") }))
 }

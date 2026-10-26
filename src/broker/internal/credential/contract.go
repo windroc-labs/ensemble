@@ -94,7 +94,7 @@ type Material struct {
 	Account   string `json:"account"`
 	Target    int64  `json:"installation"`
 	Token     string `json:"token"`
-	ExpiresAt string `json:"expires_at"` // RFC 3339; unparseable is never confirmed expired
+	ExpiresAt string `json:"expires_at"` // RFC 3339; one that does not parse is never confirmed expired
 	Revision  int    `json:"revision,omitempty"`
 	State     State  `json:"state,omitempty"` // "": a record an older broker wrote, delivered
 }
