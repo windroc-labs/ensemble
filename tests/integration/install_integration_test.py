@@ -2686,7 +2686,9 @@ class InstallTest(Case):
         newer = selected.with_name("10.0.0")
         shutil.copytree(selected, newer)
         shutil.rmtree(selected)
-        Path(self.home, ".claude/plugins/installed_plugins.json").write_text(
+        registry = Path(self.home, ".claude/plugins/installed_plugins.json")
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        registry.write_text(
             json.dumps({"plugins": {"ensemble@windroc": [{"installPath": str(newer)}]}})
         )
         self.assert_command_sources(commands, newer, reselected=commands[0])
