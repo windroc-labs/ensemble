@@ -1475,6 +1475,30 @@ class InstallTest(Case):
             result.stderr,
         )
 
+    def test_stale_opencode_copy_next_to_an_installed_plugin_names_the_update(self):
+        self.assert_ok(
+            self.fresh(
+                clients="claude,opencode",
+                docker="y",
+                opencode=PROVIDER_ANSWERS,
+                logins=[
+                    (TOKEN_Q, TOKEN),
+                    (PEM_Q, ""),
+                    (OPENCODE_LOGIN_Q, "lan"),
+                    (r"API key:", KEY),
+                ],
+            )
+        )
+        (self.fakes / "commit").write_text(NEW)
+        self.protocol_at("main", OTHER)
+        result = self.again()
+        self.assertEqual(result.code, 1, result.stderr)
+        self.assertIn(
+            f"install.sh: ensemble main wants broker protocol {OTHER}, but its broker, the installed"
+            f" broker, speaks protocol {PROTOCOL}: update the plugin (Claude Code:",
+            result.stderr,
+        )
+
     def test_other_client_plugin_against_the_installed_broker_stops(self):
         self.assert_ok(self.fresh(docker="y"))
         Path(self.claude_ensemble(), CLIENT).write_text(f'PROTOCOL = "{OTHER}"\n')

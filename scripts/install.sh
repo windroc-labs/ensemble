@@ -1077,7 +1077,7 @@ print(found[0] if found else "")' "${CODEX_HOME:-$HOME/.codex}/plugins/cache/win
 # every chosen client's plugin protocol. Only advisory: gh attestation verify authenticates the broker.
 broker_plan() {
   local -a sources=()
-  local client source label where version want got remedy installed broker_label opencode= seen= agreed=
+  local client source label where version want got remedy installed broker_label commit opencode= seen= agreed=
   [ "$docker" = yes ] || return 0
   for client in claude codex opencode; do
     has "$client" || continue
@@ -1086,9 +1086,8 @@ broker_plan() {
     else
       # OpenCode's copy counts only while it is at the commit $ref names: opencode_plugin downloads it again otherwise.
       source=$(opencode_package "$(opencode_spec)" 2>/dev/null) || source=
-      if [ -z "$(state_get opencode_plugin_commit)" ] || [ "$(state_get opencode_plugin_commit)" != "$(ref_commit)" ]; then
-        source=
-      fi
+      commit=$(state_get opencode_plugin_commit)
+      if [ -z "$commit" ] || [ "$commit" != "$(ref_commit 2>/dev/null)" ]; then source=; fi
     fi
     [ -z "$source" ] || [ -d "$source" ] || source=
     if [ "$client" = opencode ]; then opencode=$source; fi
@@ -1122,7 +1121,7 @@ broker_plan() {
       # With Claude Code or Codex, ref_check takes only the served ref: OpenCode alone may change --ref.
       if ! has claude && ! has codex; then
         remedy="use --ref $release_tag or a branch other than main"
-      elif [ -n "$source" ]; then
+      elif [ -n "$source" ] || [ -n "${sources[0]}" ]; then
         remedy="update the plugin (Claude Code: claude plugin marketplace update windroc, then claude plugin update ensemble@windroc; Codex: codex plugin marketplace upgrade windroc), then rerun"
       else
         remedy="the windroc marketplace serves ensemble at $ref, ahead of release $release_tag: wait until it serves a release, or use --clients opencode --ref $release_tag"
