@@ -243,18 +243,19 @@ validate() {
   done <"$ledger"
 }
 
-# Exit 0 when path $1 is confirmed missing: its lstat fails with ENOENT, not with a denied access.
+# Exit 0 when path $1 is confirmed missing (install.sh's path_state): `test -e` is false on any lstat failure, so its
+# parent directory must be missing too, or list without it.
 absent() {
+  local parent=${1%/*} listing
   if [ -e "$1" ] || [ -L "$1" ]; then return 1; fi
-  python3 -I -c '
-import os, sys
-try:
-    os.lstat(sys.argv[1])
-except FileNotFoundError:
-    sys.exit(0)
-except OSError:
-    sys.exit(1)
-sys.exit(1)' "$1"
+  [ -n "$parent" ] || parent=/
+  if [ ! -e "$parent" ] && [ ! -L "$parent" ]; then
+    absent "$parent"
+    return
+  fi
+  [ -d "$parent" ] || return 1
+  listing=$(ls -A -- "$parent" 2>/dev/null) || return 1
+  ! grep -qxF -- "${1##*/}" <<<"$listing"
 }
 
 # Stops before anything is removed while a recorded app or group container may be there and the terminal lacks Full

@@ -321,20 +321,27 @@ recorded() { [ -f "$ledger" ] && grep -qxF -- "$(
   printf '%s' "$*"
 )" "$ledger"; }
 
-# Exit 0 when path $1 is confirmed missing: its lstat fails with ENOENT. `test -e` is false on any lstat failure, so a
-# path macOS denies may be the user's: it counts as there, never recorded and so never removed by the cleanup.
+# Exit 0 when path $1 is confirmed missing, 1 when it is there, 2 when macOS may deny it: `test -e` is false on any
+# lstat failure, so missing means its parent directory is missing too, or lists without it. Shell only: python3 may
+# be the Command Line Tools' failing shim until homebrew installs them.
+path_state() {
+  local parent=${1%/*} listing rc=0
+  if [ -e "$1" ] || [ -L "$1" ]; then return 1; fi
+  [ -n "$parent" ] || parent=/
+  if [ ! -e "$parent" ] && [ ! -L "$parent" ]; then
+    path_state "$parent" || rc=$?
+    return "$rc"
+  fi
+  [ -d "$parent" ] || return 2
+  listing=$(ls -A -- "$parent" 2>/dev/null) || return 2
+  if grep -qxF -- "${1##*/}" <<<"$listing"; then return 2; fi
+}
+
+# Exit 0 when path $1 is confirmed missing; a path macOS may deny counts as there (it may be the user's: never
+# recorded, so never removed by the cleanup) and prints one line.
 absent() {
   local rc=0
-  if [ -e "$1" ] || [ -L "$1" ]; then return 1; fi
-  python3 -I -c '
-import os, sys
-try:
-    os.lstat(sys.argv[1])
-except FileNotFoundError:
-    sys.exit(0)
-except OSError:
-    sys.exit(2)
-sys.exit(1)' "$1" || rc=$?
+  path_state "$1" || rc=$?
   if [ "$rc" = 2 ]; then say "    not recorded for cleanup: $1: cannot tell whether it is there"; fi
   [ "$rc" = 0 ]
 }

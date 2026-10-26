@@ -52,6 +52,7 @@ REAL = (
     "tar",
     "gzip",
     "ln",
+    "ls",
 )
 FAKED = ("uname", "id", "sudo", "curl", "security", "open", "launchctl", "shasum")
 FAKED += ("xcode-select", "ps", "sw_vers", "lipo", "pgrep", "pkill", "defaults")
@@ -4179,6 +4180,23 @@ exec /bin/rm "$@"
                 f'profile\t{h}/.zprofile\texport PATH="$HOME/.ensemble/bin:$PATH"',
             ],
         )
+
+    def test_ledger_before_python_works(self):
+        """Before the Command Line Tools, macOS's python3 is a shim that fails: tool state is still recorded."""
+        (self.bin / "python3").unlink()
+        clt = Path(self.root, "Library/Developer/CommandLineTools")
+        executable(
+            self.bin / "python3",
+            f'#!/bin/sh\n[ -d "{clt}" ] || exit 1\nexec {sys.executable} "$@"\n',
+        )
+        self.assert_ok(self.fresh("--no-docker"))
+        h = self.home
+        for record in (
+            f"dir\t{h}/.homebrew",
+            f"file\t{h}/.homebrew/trust.json",
+            f"dir\t{h}/.cache/uv",
+        ):
+            self.assertIn(record, self.ledger())
 
     def test_ledger_with_docker_and_opencode(self):
         self.assert_ok(self.full())
