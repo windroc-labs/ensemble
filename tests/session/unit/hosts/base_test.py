@@ -359,6 +359,7 @@ class ManagedWorkerTest(Case):
         for name in ("screen", "state", "close", "returncode"):
             self.assertIs(getattr(InteractiveProcess, name), getattr(Process, name))
 
-    def test_the_guard_is_not_implemented_yet(self):
-        with self.assertRaisesRegex(NotImplementedError, "FR-13"):
+    def test_the_guard_requires_an_explicit_client_command(self):
+        with self.assertRaises(SystemExit) as caught:
             guard.main([])
+        self.assertEqual(caught.exception.code, 2)

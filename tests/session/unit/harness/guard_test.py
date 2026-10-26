@@ -5,7 +5,9 @@ import errno
 import json
 import os
 import signal
+import socket
 import subprocess
+from pathlib import Path
 from unittest import mock
 
 from ensemble.session.harness import guard
@@ -138,8 +140,8 @@ class GuardTest(Case):
         for kind, payload in ((b"q", b'{"lines":false}'), (b"z", b""), (b"c", b"[]")):
             with self.subTest(kind=kind), self.assertRaises(ValueError):
                 runtime.command(kind, payload)
-        with mock.patch.object(guard, "BUFFER_MAX", 4), self.assertRaises(ValueError):
-            runtime.command(b"i", b"overflow")
+        with self.assertRaises(ValueError):
+            runtime.command(b"i", b"x" * (guard.BUFFER_MAX + 1))
         runtime.command(b"c", b"{}")
         self.assertIsNotNone(runtime.closing)
 
@@ -167,8 +169,8 @@ class GuardTest(Case):
         runtime.peers[peer] = ("display", bytearray())
         runtime.peer_read(peer)
         self.assertEqual(runtime.input, b"type")
-        with mock.patch.object(guard, "BUFFER_MAX", 4):
-            runtime.peer_read(peer)
+        peer.recv.return_value = b"x" * (guard.BUFFER_MAX + 1)
+        runtime.peer_read(peer)
         self.assertNotIn(peer, runtime.peers)
 
     def test_terminal_output_screen_and_slow_viewer(self):
@@ -197,7 +199,9 @@ class GuardTest(Case):
         with (
             mock.patch.object(os, "pidfd_open", return_value=9),
             mock.patch.object(os, "close") as closed,
-            mock.patch.object(guard, "process_info", return_value=(1, "new", False)),
+            mock.patch.object(
+                Path, "read_text", return_value="8 (fake) S 1 8 8 " + "0 " * 15 + "new 0"
+            ),
             mock.patch.object(signal, "pidfd_send_signal") as sent,
         ):
             guard.signal_process(8, "old", signal.SIGKILL)
@@ -209,7 +213,7 @@ class GuardTest(Case):
         runtime.proc = mock.Mock(returncode=0)
         runtime.known = {10: "client"}
         with (
-            mock.patch.object(guard, "processes", return_value={}),
+            mock.patch.object(os, "listdir", return_value=[]),
             mock.patch.object(os, "waitpid", side_effect=ChildProcessError),
         ):
             self.assertTrue(runtime.tick())
@@ -217,18 +221,26 @@ class GuardTest(Case):
     def test_stopped_child_requires_escalation_and_no_false_confirmation(self):
         runtime = self.runtime()
         runtime.proc = mock.Mock(returncode=None)
-        runtime.known = {10: "client"}
+        runtime.known = {10: "123"}
         runtime.closing = 1
         with (
-            mock.patch.object(guard, "processes", return_value={10: (1, "client", False)}),
+            mock.patch.object(os, "listdir", return_value=["10"]),
+            mock.patch.object(
+                Path, "read_text", return_value="10 (fake) S 1 10 10 " + "0 " * 15 + "123 0"
+            ),
             mock.patch.object(guard.time, "monotonic", return_value=3),
-            mock.patch.object(guard, "signal_process") as sent,
+            mock.patch.object(os, "pidfd_open", return_value=9),
+            mock.patch.object(os, "close"),
+            mock.patch.object(signal, "pidfd_send_signal") as sent,
         ):
             self.assertFalse(runtime.tick())
             self.assertFalse(runtime.tick())
-        sent.assert_called_once_with(10, "client", signal.SIGKILL)
+        sent.assert_called_once_with(9, signal.SIGKILL)
         with (
-            mock.patch.object(guard, "processes", return_value={10: (1, "client", False)}),
+            mock.patch.object(os, "listdir", return_value=["10"]),
+            mock.patch.object(
+                Path, "read_text", return_value="10 (fake) S 1 10 10 " + "0 " * 15 + "123 0"
+            ),
             mock.patch.object(guard.time, "monotonic", return_value=20),
             self.assertRaises(OSError),
         ):
@@ -246,27 +258,39 @@ class GuardTest(Case):
     def test_start_client_exec_failure_never_emits_started(self):
         runtime = self.runtime()
         with (
-            mock.patch.object(guard, "subreaper"),
-            mock.patch.object(guard, "listener"),
+            mock.patch.object(guard.ctypes, "CDLL") as library,
+            mock.patch.object(socket, "socket"),
+            mock.patch.object(os, "chmod"),
             mock.patch.object(subprocess, "Popen", side_effect=FileNotFoundError),
             self.assertRaises(FileNotFoundError),
         ):
+            library.return_value.prctl.return_value = 0
             runtime.start()
         self.assertFalse(runtime.output)
 
     def test_run_places_exit_after_last_output(self):
         runtime = self.runtime()
-        runtime.proc = mock.Mock(returncode=0, stdin=None, stdout=None, stderr=None)
-        runtime.emit(guard.frame(b"o", b"last"))
+        proc = mock.Mock(returncode=0, pid=100)
+        proc.stdin.fileno.return_value = 10
+        proc.stdout.fileno.return_value = 11
+        proc.stderr.fileno.return_value = 12
         captured = []
         with (
-            mock.patch.object(guard.Guard, "start"),
-            mock.patch.object(guard.Guard, "tick", return_value=True),
+            mock.patch.object(guard.ctypes, "CDLL") as library,
+            mock.patch.object(socket, "socket"),
+            mock.patch.object(os, "chmod"),
+            mock.patch.object(os, "listdir", return_value=[]),
+            mock.patch.object(os, "set_blocking"),
+            mock.patch.object(subprocess, "Popen", return_value=proc),
+            mock.patch.object(os, "waitpid", side_effect=ChildProcessError),
+            mock.patch.object(guard.select, "select", return_value=([11, 12], [], [])),
+            mock.patch.object(os, "read", side_effect=[b"last", b"", b"", b""]),
             mock.patch.object(
                 os, "write", side_effect=lambda _fd, data: captured.append(data) or len(data)
             ),
         ):
+            library.return_value.prctl.return_value = 0
             self.assertEqual(runtime.run(), 0)
         self.assertEqual(
-            [kind for kind, _ in guard.Decoder().feed(b"".join(captured))], [b"o", b"x"]
+            [kind for kind, _ in guard.Decoder().feed(b"".join(captured))], [b"s", b"o", b"x"]
         )
