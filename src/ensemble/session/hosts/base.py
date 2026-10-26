@@ -61,9 +61,7 @@ def tui_lock(name: str) -> str:
 
 
 class Process(ABC):
-    """close: ends it and forgets it, absent is fine; kill: its process group; wait_exit: until that
-    group ends too.
-    """
+    """close: end/forget, absent is fine; kill: process group; wait_exit: await the whole group."""
 
     name: str
 
@@ -163,26 +161,17 @@ class Interactive(ABC):
 
 
 class InteractiveProcess(Process, Interactive):
-    """The managed worker contract (docs/sessions.md › Session harness interfaces).
-    Input, screen and liveness reuse Interactive and Process. Managed close() returns only after
-    confirmed worker exit, else raises SessionError (Unanswered if unknown); returncode() supplies
-    the confirmed code. Legacy terminals do not implement the channel yet.
-    """
+    """Managed contract: docs/sessions.md › Session harness interfaces. Channel not implemented."""
 
-    generation: str  # this worker start's identity, bound to every channel message
+    generation: str
 
     def read(self, timeout: float) -> list[WorkerMessage]:
-        """Channel order, up to timeout seconds; [] on timeout, nothing after WorkerExit.
-        Broken transport raises Unanswered until exit is confirmed; EOF alone is no proof.
-        """
         raise NotImplementedError
 
     def write(self, data: bytes) -> None:
-        """Raw headless stdin over the existing channel; terminal input uses send/press."""
         raise NotImplementedError
 
     def tick(self, now: float) -> float | None:
-        """Host periodic duty in the harness; next due time, or None when there is no duty."""
         return None
 
 
@@ -238,10 +227,8 @@ def check_sid(name: str, process: Process | None, sid: str | None) -> None:
 
 
 class Host(ABC):
-    """settings: [hosts.<name>] minus implementation and isolated. Launch.env is passed verbatim;
-    on exit, events gets `exited <rc>` / `dead`.
-    attach: a Process, unknown → SessionError. list: its sessions' names, sorted. A display is kept
-    as given; the Viewer reads it.
+    """settings excludes implementation/isolated; Launch.env passes verbatim. Exit events:
+    `exited <rc>` / `dead`; unknown attach: SessionError; list: sorted names. Viewer reads display.
     """
 
     attachable: ClassVar[bool] = False

@@ -41,7 +41,8 @@ class Session(ABC):
     name: str | None
 
     @abstractmethod
-    def events(self) -> Iterator[SessionEvent | Stderr | IdleTimeout]: ...
+    def events(self) -> Iterator[SessionEvent | Stderr | IdleTimeout]:
+        """FR-27 target: observes recorded events; iterator exit never ends supervision."""
 
     @abstractmethod
     def send(self, text: str) -> None: ...
@@ -60,7 +61,8 @@ class Session(ABC):
     def content(self) -> str: ...
 
     @abstractmethod
-    def stop(self) -> None: ...
+    def stop(self) -> None:
+        """FR-27 target: request owner shutdown; return only after confirmed worker exit."""
 
     @abstractmethod
     def info(self) -> SessionInfo: ...
@@ -70,7 +72,8 @@ class Session(ABC):
     def reply(self) -> str | None: ...
 
     @abstractmethod
-    def close(self) -> None: ...
+    def close(self) -> None:
+        """FR-27 target: idempotent owner shutdown, SessionError/Unanswered if unconfirmed."""
 
     @abstractmethod
     def session_status(self) -> SessionStatus: ...
@@ -134,6 +137,7 @@ class Session(ABC):
         host: str | None = None,
         idle_timeout: float | None = None,
     ) -> Session:
+        """FR-27 target: create the sole harness owner, restoring handlers on resume."""
         return cls._hosted("start")(spec, display=display, host=host, idle_timeout=idle_timeout)
 
     @classmethod
@@ -145,10 +149,12 @@ class Session(ABC):
         host: str | None = None,
         idle_timeout: float | None = None,
     ) -> Session:
+        """FR-27 target: a control view of the existing owner, never a second owner."""
         return cls._hosted("attach")(name, sid=sid, host=host, idle_timeout=idle_timeout)
 
     @classmethod
     def retire(cls, name: str, *, sid: str | None = None, host: str | None = None) -> None:
+        """FR-27 target: sid-bound owner close; unconfirmed exit raises, retaining its record."""
         cls._hosted("retire")(name, sid=sid, host=host)
 
     @classmethod
