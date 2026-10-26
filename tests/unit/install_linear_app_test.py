@@ -5,7 +5,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+from urllib.parse import quote
 
+from ensemble.orchestrator.engine.types import SCOPES, AppKind
 from scripts import install_linear_app as app
 from tests.case import Case
 
@@ -151,6 +153,28 @@ class LinearAppInstall(Case):
             with self.subTest(service=service), self.assertRaises(app.InstallError):
                 app.prepare(str(self.config), "pm", service, "secret-pm", str(self.output))
         self.assertEqual(self.requests, [])
+
+    def test_each_slot_requests_its_apps_fixed_scopes_from_its_table(self):
+        for slot, table, kind in (
+            ("harness", "harness", AppKind.HARNESS),
+            ("manager", "manager", AppKind.MANAGER),
+            ("pm", "roles.pm", AppKind.ROLE),
+        ):
+            with self.subTest(slot=slot):
+                self.requests.clear()
+                self.secrets = {f"secret-{slot}": "hidden-secret"}
+                self.output.write_text("{}")
+                self.config.write_text(
+                    f'[orchestrator.linear.{table}]\nclient_id = "client-{slot}"\n'
+                )
+                app.prepare(
+                    str(self.config), slot, f"token-{slot}", f"secret-{slot}", str(self.output)
+                )
+                [token] = [kw["input"] for args, kw in self.requests if args[-1] == app.TOKEN_URL]
+                self.assertIn(f"&scope={quote(SCOPES[kind], safe='')}", token)
+                self.assertIn(f"client_id=client-{slot}&", token)
+                planned = json.loads(self.output.read_text())[slot]
+                self.assertEqual(planned["client_id"], f"client-{slot}")
 
     def test_duplicate_app_is_rejected(self):
         self.output.write_text(json.dumps({"researcher": {"user_id": USER}}))

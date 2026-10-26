@@ -267,11 +267,11 @@ container's own tmux socket is not Docker's, so the socket search names `docker`
 
 ## Linear presets
 
-With `--board linear`, `scripts/install.sh` asks for each harness/role app's Client ID and hidden client secret,
+With `--board linear`, `scripts/install.sh` asks for each harness, manager and role app's Client ID and hidden client secret,
 stores its secret and first token with expiry in Keychain, and fills the app user ids ([Setup](board.md#setup)).
 Default services are `linear-app-<slot>-secret` and `linear-app-<slot>-token`; configured services are preserved.
 Reruns reuse valid tokens with over five days left. Cleanup removes only the credential items this installer created.
-The manager still supplies its separate API key. The table
+A `manager_key` left in `config.local.toml` stops the installer ([Linear manager app](#linear-manager-app)). The table
 lists what it needs in Linear. By hand: create these in the Linear team, then put each id in `~/.ensemble/config.local.toml`: a `linear.<key>` under
 `[orchestrator.linear]` (`linear.states.todo` is `todo` in `[orchestrator.linear.states]`, `linear.roles.pm.client_id` is
 `client_id` in `[orchestrator.linear.roles.pm]`), `local_clones` under `[orchestrator]` ([Setup](board.md#setup)).

@@ -152,8 +152,8 @@ def linear_token(args):
     workspace = load(FAKES / "linear.json", {})
     client = form.get("client_id", [""])[0]
     app = workspace.get("apps", {}).get(client)
-    scope = (
-        "read,write" if client == "client-harness" else "read,write,app:assignable,app:mentionable"
+    scope = {"client-harness": "read,write", "client-manager": "read,write,app:assignable"}.get(
+        client, "read,write,app:assignable,app:mentionable"
     )
     if (
         app is None
@@ -168,7 +168,7 @@ def linear_token(args):
 
 
 def linear(args):
-    """Linear's GraphQL API: the key from the -K - config on stdin, the query from --data-binary."""
+    """Linear's GraphQL API: the app token from the -K - config on stdin, the query from --data-binary."""
     if args[:1] != ["-q"]:
         out("curl: Linear call without -q first\n", sys.stderr)
         return 2
@@ -179,13 +179,13 @@ def linear(args):
         (a for a in workspace.get("apps", {}).values() if value == "Bearer " + a["access_token"]),
         None,
     )
-    if app is None and value not in workspace.get("keys", {}):
+    if app is None:
         out("curl: (22) The requested URL returned error: 400\n", sys.stderr)
         return 22
     sent = json.loads(args[args.index("--data-binary") + 1])
     query, variables = sent["query"], sent.get("variables") or {}
     if "viewer" in query:
-        data = {"viewer": {"id": app["user_id"]} if app else {"email": workspace["keys"][value]}}
+        data = {"viewer": {"id": app["user_id"]}}
     elif "teams(" in query:
         data = {
             "teams": {
