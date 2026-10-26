@@ -110,10 +110,6 @@ def plan(
         run = replace(run, task=spec.task)
     layout = Layout(spec.workdir)
     client = spec.client or run.client
-    if (fixed := composition.fixed_client(run.role)) and client != fixed:
-        raise ConfigError(
-            f"role {run.role} runs only on {fixed}, not {client}: chosen for this run"
-        )
     out = layout.out if driver.session_based else None
     if spec.out:
         out = os.path.abspath(spec.out)

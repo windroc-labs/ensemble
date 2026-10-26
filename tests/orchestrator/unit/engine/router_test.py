@@ -940,21 +940,17 @@ class RouterEntry(OuterBase):
                 self.assertEqual(len(self.todo["comments"]), 1)
                 self.assertNotIn(router.INTERRUPTED.format(state="Todo"), text)
 
-    def test_the_delegates_fixed_client_refusal_takes_the_label_client_path(self):
-        """A Codex label on a verifier issue: the real delegate's refusal (WDRC-110 FR-81)."""
-        with self.assertRaises(DelegateConfigError) as refused:
-            HarnessDelegate.resolve(
-                "verifier", overlays=({"roles": {"verifier": {"client": "b"}}},)
-            )
+    def test_the_delegate_accepts_the_label_client_for_verifier(self):
+        """The real delegate accepts the same label overlay for verifier (WDRC-196)."""
+        resolved = HarnessDelegate.resolve(
+            "verifier", overlays=({"roles": {"verifier": {"client": "b"}}},)
+        )
+        self.assertEqual(resolved.client, "b")
         self.write_config(AGENT_TOP + OUTER + AGENT_LABELS)
         self.fake.ids[UUID] = ID
         self.todo["labels"] = [label("selected", AGENT_B, AGENT_GROUP)]
-        self.api.construct_error = refused.exception
-        self.assertEqual(self.entry("--issue", ID), 1)
-        self.assertEqual(self.todo["state"], "In Review")
-        [text] = self.todo["comments"]
-        self.assertIn('Client "b" chosen on the issue', text)
-        self.assertIn("role verifier runs only on claude", text)
+        self.assertEqual(self.entry("--issue", ID), 0)
+        self.assertEqual(self.last_run()[4], "b")
 
     def test_label_client_other_launch_errors_keep_recovery_behavior(self):
         self.write_config(AGENT_TOP + OUTER + AGENT_LABELS)
@@ -1130,14 +1126,10 @@ class RouterEntry(OuterBase):
         self.assertEqual(self.todo["state"], "In Progress")
         self.assertFalse(os.path.lexists(self.rd))
 
-    def test_a_fixed_client_overlay_is_a_dry_run_config_error(self):
+    def test_a_verifier_client_overlay_is_accepted_by_dry_run(self):
         self.write_config(OUTER + '[core.roles.verifier]\nclient = "codex"\n')
-        self.assertEqual(self.entry("--dry-run", tty=True), 2)
-        self.assertIn(
-            "core: run overlay: [overlay.roles.verifier] client 'codex': "
-            "role verifier runs only on claude",
-            self.err,
-        )
+        self.assertEqual(self.entry("--dry-run", tty=True), 0)
+        self.assertEqual(self.err, "")
 
     def test_a_config_error_exits_2_logged_once_a_day_and_printed_on_a_terminal_or_for_issue(
         self,
