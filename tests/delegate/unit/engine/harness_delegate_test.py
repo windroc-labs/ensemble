@@ -439,6 +439,24 @@ class RunDirTest(HarnessCase):
         with open(self.record(), encoding="utf-8") as file:
             return json.load(file)
 
+    def test_session_handlers_round_trip_with_and_without_the_saved_key(self):
+        self.make()
+        original = self.stored()
+        self.assertEqual(original["plan"]["session"]["handlers"], [])
+        for present in (True, False):
+            with self.subTest(present=present):
+                data = json.loads(json.dumps(original))
+                if not present:
+                    del data["plan"]["session"]["handlers"]
+                with open(self.record(), "w", encoding="utf-8") as file:
+                    json.dump(data, file)
+                view = HarnessDelegate.attach(self.work)
+                self.assertEqual(view._state.plan.session.handlers, ())
+                view._save(view._state)
+                self.assertEqual(self.stored(), original)
+                again = HarnessDelegate.attach(self.work)
+                self.assertEqual(again._state.plan.session, view._state.plan.session)
+
     def test_the_default_session_class_is_null(self):
         self.make(session_cls=Session, driver=AgentDriver(HarnessSession))
         self.assertIsNone(self.stored()["session_cls"])
