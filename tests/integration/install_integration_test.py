@@ -1443,7 +1443,7 @@ class InstallTest(Case):
 
     def test_failing_broker_install_names_the_broker_step(self):
         (self.fakes / "broker_install_fails").write_text("")
-        result = self.fresh("--clients", "claude", "--docker", gateway_failure=True)
+        result = self.fresh("--clients", "claude", "--docker", egress_failure=True)
         self.assertEqual(result.code, 1)
         self.assertIn(
             "install.sh: broker failed; rerun the same command to continue\n", result.stderr
