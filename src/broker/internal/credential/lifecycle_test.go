@@ -774,3 +774,55 @@ func TestRefreshUsesRecordedScope(t *testing.T) {
 		t.Fatalf("scopes %v", p.scopes)
 	}
 }
+
+// TestHoldRefusedStillRevokes: Hold gets a token already issued, so refusing it (no valid consumer, a shared provider)
+// still revokes it, touching no store; a revocation that fails leaves an *UnrevokedError.
+func TestHoldRefusedStillRevokes(t *testing.T) {
+	m := Material{Account: "acme", Target: 1, Token: "ghs_prefetch", ExpiresAt: clock.Add(time.Hour).Format(time.RFC3339)}
+	for name, tc := range map[string]struct {
+		c      Consumer
+		shared bool
+	}{
+		"no consumer":     {Consumer{}, false},
+		"bad consumer":    {Consumer{Container: "a/b"}, false},
+		"shared provider": {Consumer{Container: ctrA}, true},
+	} {
+		for _, revokeOK := range []bool{true, false} {
+			store, fp := newStore(), newProvider(t)
+			store.fail = func(op, service string) bool { t.Errorf("%s: store %s %s", name, op, service); return false }
+			var p Provider = fp
+			if tc.shared {
+				p = sharedProvider{fp}
+			}
+			if !revokeOK {
+				fp.revoke = failRevoke
+			}
+			err := lifecycle(store, p, nil).Hold(bg, tc.c, m)
+			var unrevoked *UnrevokedError
+			if err == nil || errors.As(err, &unrevoked) == revokeOK || fp.revokes() != 1 {
+				t.Errorf("%s revoke=%v: %v, revokes %d", name, revokeOK, err, fp.revokes())
+			}
+			if revokeOK && !slices.Equal(fp.revoked, []string{"ghs_prefetch"}) {
+				t.Errorf("%s: revoked %q", name, fp.revoked)
+			}
+		}
+	}
+}
+
+// TestHoldAppendsToRecord: a held token joins whatever the record already has, after its highest revision.
+func TestHoldAppendsToRecord(t *testing.T) {
+	store, p := newStore(), newProvider(t)
+	store.seed(t, ctrA, Record{Subject: "app", Tokens: []Material{
+		{Account: "acme", Target: 1, Token: "ghs_live", Revision: 2, State: Delivered},
+		{Account: "acme", Target: 1, Token: "ghs_held", Revision: 3, State: Prepared},
+	}})
+	l := lifecycle(store, p, nil)
+	if err := l.Hold(bg, Consumer{Container: ctrA}, Material{Account: "acme", Target: 1, Token: "ghs_more"}); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := store.record(t, ctrA)
+	wantTokens(t, "record", tokens(rec), map[string]State{"ghs_live": Delivered, "ghs_held": Prepared, "ghs_more": Prepared})
+	if last := rec.Tokens[len(rec.Tokens)-1]; last.Token != "ghs_more" || last.Revision != 4 {
+		t.Fatalf("%+v", last)
+	}
+}

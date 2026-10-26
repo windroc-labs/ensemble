@@ -8,6 +8,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"time"
 
 	"ensemble/broker/internal/audit"
 	"ensemble/broker/internal/protocol"
@@ -646,11 +647,8 @@ func (l Lifecycle) retire(ctx context.Context, id string, old []Material) {
 // token), prepared in c's record before it is used, so a Release of c retires it should the broker die. A failed
 // record write retires m at once and returns the error.
 func (l Lifecycle) Hold(ctx context.Context, c Consumer, m Material) error {
-	if err := l.ready(); err != nil {
-		return err
-	}
-	if err := c.check(); err != nil {
-		return err
+	if err := l.holdable(c); err != nil {
+		return l.refused(ctx, c, m, err)
 	}
 	id := c.ID()
 	m.State = Prepared
@@ -667,10 +665,45 @@ func (l Lifecycle) Hold(ctx context.Context, c Consumer, m Material) error {
 
 // Retire revokes m, which Hold recorded for c: confirmed, it leaves the record; else it goes the backlog way.
 func (l Lifecycle) Retire(ctx context.Context, c Consumer, m Material) {
-	if l.ready() != nil || c.check() != nil {
+	if err := l.holdable(c); err != nil {
+		_ = l.refused(ctx, c, m, err)
 		return
 	}
 	l.retire(ctx, c.ID(), []Material{m})
+}
+
+// errShared refuses a one-off token from a shared provider: the broker's own material is revoked, never withdrawn.
+var errShared = errors.New("a shared provider's material is not held for one use")
+
+// holdable is nil when c may hold a one-off token of l's provider.
+func (l Lifecycle) holdable(c Consumer) error {
+	if err := l.ready(); err != nil {
+		return err
+	}
+	if err := c.check(); err != nil {
+		return err
+	}
+	if l.shared() {
+		return errShared
+	}
+	return nil
+}
+
+// refused retires m, already issued, that Hold or Retire cannot keep: the provider, if any, revokes it directly on a
+// context of its own, as there is no record or backlog to keep it in. A revocation it does not confirm is an
+// *UnrevokedError; else cause is returned.
+func (l Lifecycle) refused(ctx context.Context, c Consumer, m Material, cause error) error {
+	if l.Provider == nil {
+		return &UnrevokedError{Consumer: c.ID(), Cause: cause}
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if r, reason := l.revoke(rctx, m); !r.confirmed() {
+		l.note(c.ID(), audit.Pending, reason+"; not queued", m, nil)
+		return &UnrevokedError{Consumer: c.ID(), Cause: cause}
+	}
+	l.note(c.ID(), audit.Revoked, "", m, nil)
+	return cause
 }
 
 // Release retires every material of c's record, its grant: for a shared provider by withdrawal only. An
