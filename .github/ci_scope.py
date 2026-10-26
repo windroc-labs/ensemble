@@ -202,15 +202,15 @@ def gate(needs: dict, event: str) -> list[str]:
     if not isinstance(needs, dict):
         return ["CI_NEEDS must be an object containing all required jobs"]
     failures = []
-    if event not in ("pull_request", "push"):
+    if event not in ("pull_request", "push", "merge_group"):
         failures.append(f"Unsupported CI event: {event}")
     changes = needs.get("changes")
     output = changes.get("outputs") if isinstance(changes, dict) else None
     full = output.get("full") if isinstance(output, dict) else None
     if full not in ("true", "false") or not isinstance(full, str):
         failures.append("changes.outputs.full must be exactly true or false")
-    if event == "push" and full != "true":
-        failures.append("changes.outputs.full must be true on push")
+    if event in ("push", "merge_group") and full != "true":
+        failures.append(f"changes.outputs.full must be true on {event}")
     docs = output.get("docs") if isinstance(output, dict) else None
     if docs not in ("true", "false") or not isinstance(docs, str):
         failures.append("changes.outputs.docs must be exactly true or false")
@@ -233,9 +233,8 @@ def gate(needs: dict, event: str) -> list[str]:
         "lint": "success",
         "repository": "skipped" if full == "false" else "success",
         "unit": "skipped" if version == "true" else "success",
-        "coverage": "success" if event == "pull_request" and version != "true" else "skipped",
+        "coverage": "success" if event != "push" and version != "true" else "skipped",
         "integration": "skipped" if "true" in (docs, version) else "success",
-        "broker": "success",
         "mini-op": "success",
     }
     for job, wanted in expected.items():

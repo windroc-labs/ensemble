@@ -477,7 +477,6 @@ class Aggregate(unittest.TestCase):
                 "unit",
                 "coverage",
                 "integration",
-                "broker",
                 "mini-op",
             )
         }
@@ -500,6 +499,18 @@ class Aggregate(unittest.TestCase):
                 self.assertEqual(scope.gate(self.needs(full=full, event=event), event), [])
         self.assertEqual(scope.gate(self.needs(full=False, docs=True), "pull_request"), [])
         self.assertEqual(scope.gate(self.needs(full=False, version=True), "pull_request"), [])
+
+    def test_merge_group_requires_full_scope_and_diff_coverage(self):
+        needs = self.needs()
+        self.assertEqual(scope.gate(needs, "merge_group"), [])
+        needs["coverage"]["result"] = "skipped"
+        self.assertTrue(scope.gate(needs, "merge_group"))
+        self.assertTrue(scope.gate(self.needs(full=False), "merge_group"))
+
+    def test_broker_matrix_is_checked_by_the_separate_api_gate(self):
+        needs = self.needs()
+        needs.pop("broker", None)
+        self.assertEqual(scope.gate(needs, "pull_request"), [])
 
     def test_failure_cancel_and_unexpected_skip_always_fail(self):
         for job in self.needs():
@@ -584,15 +595,6 @@ class Aggregate(unittest.TestCase):
                 self.assertTrue(scope.gate(needs, "pull_request"))
         self.assertTrue(scope.gate(self.needs(full=False, version=True, event="push"), "push"))
 
-    def test_broker_check_must_report_success_even_when_go_steps_are_skipped(self):
-        for docs, version in ((False, False), (True, False), (False, True)):
-            needs = self.needs(full=False, docs=docs, version=version)
-            self.assertEqual(scope.gate(needs, "pull_request"), [])
-            needs["broker"]["result"] = "skipped"
-            self.assertIn(
-                "broker: expected success, got 'skipped'", scope.gate(needs, "pull_request")
-            )
-
     def test_mini_op_guard_must_succeed_in_every_scope(self):
         for kwargs in (
             {},
@@ -641,13 +643,28 @@ def job(name):
 
 
 class Workflow(unittest.TestCase):
+    def test_queue_group_and_broker_gate_wiring(self):
+        self.assertIn("  merge_group:\n    types: [checks_requested]", WORKFLOW.read_text())
+        ci = job("ci")
+        self.assertNotRegex(ci, r"needs:.*\bbroker\b")
+        self.assertIn("if: ${{ always() }}", ci)
+        self.assertIn("actions: write", ci)
+        self.assertIn("if: ${{ always() && steps.gate.outcome == 'success' }}", ci)
+        self.assertIn("run: python3 .github/ci_broker.py", ci)
+        self.assertIn("github.event_name != 'push'", job("unit"))
+        self.assertIn("github.event.merge_group.base_sha", job("coverage"))
+        worker = WORKFLOW.with_name("worker-image.yml").read_text()
+        self.assertIn("  merge_group:\n    types: [checks_requested]", worker)
+        self.assertIn("github.event.merge_group.head_sha", worker)
+        self.assertIn("github.event.merge_group.base_sha", worker)
+
     def test_version_scope_skips_unit_coverage_and_integration_only(self):
         self.assertIn("      version: ${{ steps.scope.outputs.version }}\n", job("changes"))
         for name, condition in (
             ("unit", "needs.changes.outputs.version == 'false'"),
             (
                 "coverage",
-                "github.event_name == 'pull_request' && needs.changes.outputs.version == 'false'",
+                "github.event_name != 'push' && needs.changes.outputs.version == 'false'",
             ),
             (
                 "integration",
