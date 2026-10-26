@@ -50,7 +50,7 @@ has none, and CI's Ruff step still catches it.
 | all unit tests | `python3 .github/run_tests.py Unit --unit` |
 | one unit shard | `python3 .github/run_tests.py Unit --unit --shard 1/8` |
 | one four-process unit job | `python3 .github/run_tests.py Unit --unit --parallel 4 --shard 1/2` |
-| one balanced four-process repository job | `python3 .github/run_tests.py Repository tests/integration --durations .github/test_durations.json --parallel 4 --shard 1/4` |
+| one balanced four-process repository job | `python3 .github/run_tests.py Repository tests/integration --durations .github/test_durations.json --parallel 4 --shard 1/6` |
 | one complete test ID | `python3 .github/run_tests.py Integration tests.manager.integration.crew_close_all_integration_test.CloseAllTest.test_close_all_closes_what_mgr_opened_and_only_that` |
 | one test file | `python3 .github/run_tests.py Integration tests/manager/integration/crew_close_all_integration_test.py` |
 | one repository integration shard | `python3 .github/run_tests.py 'Repository integration 1' tests/integration --shard 1/8` |
@@ -68,7 +68,7 @@ with complete, disjoint coverage. Invalid, empty or duplicate-ID shards fail.
 Subtest annotations use the method ID and keep parameters in the error text; selecting
 that method runs all its subtests.
 
-The `repository` matrix runs four jobs, each with four independently supervised workers.
+The `repository` matrix runs six jobs, each with four independently supervised workers.
 The unit matrix keeps two jobs with four workers each. Both use
 `--durations .github/test_durations.json` to assign the longest estimated tests to the least loaded
 worker, with deterministic tie-breaking. Discovery supplies every test exactly once;
@@ -76,6 +76,8 @@ missing IDs default to 0.01 seconds and stale hints never select tests. Without
 `--durations`, `--shard` retains its sorted-ID slicing behavior.
 The timing table's provenance and approximations are in `.github/test_durations.sources.json`.
 Repository artifacts retain each worker's log and per-test durations for later tuning.
+Each repository guard is a separate unit test using the same `tests.checks.checks` entry
+as the design lint. Guard discovery creates every test once; unknown selected names fail.
 `fail-fast: false`, source protection, cleanup, unchanged-checkout guards and the
 aggregate's dependency on the entire matrix remain in force.
 CLI help retains both flags and all three entry modes. The isolated-import check splits
@@ -136,7 +138,7 @@ python3 .github/coverage_gate.py /tmp/coverage-data origin/main
 flowchart LR
     S[Contract-based path scope] --> U
     S --> I
-    S --> R[Repository: 4 jobs x 4 workers when full]
+    S --> R[Repository: 6 jobs x 4 workers when full]
     S --> B
     L[Lint groups] --> CI[Required CI aggregate]
     U[Unit: 2 jobs x 4 processes] --> C[Combine every coverage shard]
