@@ -536,7 +536,7 @@ class TuiTest(Base):
             ),
             [ClientBound(NATIVE), TurnEnd("kept"), TurnEnd()],
         )
-        self.assertEqual(attached.hook_events("Interrupt", self.payload()), [])
+        self.assertEqual(attached.hook_events("Interrupt", self.payload()), [TurnEnd()])
 
     def test_restore_readies_a_fresh_tui_as_the_one_that_launched(self):
         run, _, data = self.launch()

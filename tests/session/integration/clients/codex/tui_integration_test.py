@@ -35,6 +35,7 @@ from ensemble.session.engine.types import (
     Spec,
     TurnEnd,
     TurnFailed,
+    TurnStarted,
 )
 from tests.session import live_tmux
 from tests.session.case import PLUGIN_BIN, PY, REPO, ROOTS, Case, configured
@@ -518,7 +519,7 @@ class TuiLaunchIntegrationTest(Live):
         handle = self.start(prompt="quoted ' prompt\nnext")
         stream = Stream(self, handle)
         found = stream.until(TurnEnd)
-        self.assertEqual(found, [Activity(), Activity(), Blocked("Bash"), TurnEnd(raw)])
+        self.assertEqual(found, [Activity(), TurnStarted(), Blocked("Bash"), TurnEnd(raw)])
         self.assertEqual(self.lines(2), ["w1 blocked", "w1 done"])
         self.assertEqual(handle.reply, raw)
         self.assertEqual(len(self.server.panes("=mgr:")), 1)
@@ -528,9 +529,9 @@ class TuiLaunchIntegrationTest(Live):
         hook_store = self.home / ".ensemble" / "tui" / "w1" / "hooks.jsonl"
         self.assertEqual(stat.S_IMODE(hook_store.stat().st_mode), 0o600)
         handle.send("more")
-        self.assertEqual(stream.until(TurnEnd), [Activity(), TurnEnd("second")])
+        self.assertEqual(stream.until(TurnEnd), [TurnStarted(), TurnEnd("second")])
         self.assertEqual(self.attach("last"), [[self.sid, True, "second"], ["third", 0], "third"])
-        self.assertEqual(stream.until(TurnEnd), [Activity(), TurnEnd("third")])
+        self.assertEqual(stream.until(TurnEnd), [TurnStarted(), TurnEnd("third")])
         self.assertEqual(self.lines(4), ["w1 blocked", "w1 done", "w1 done", "w1 done"])
         live_tmux.wait(lambda: len(self.hooks()) == 8, WAIT, what="all hook results logged")
         (call,) = self.calls()
@@ -599,7 +600,7 @@ class TuiLaunchIntegrationTest(Live):
             found,
             [
                 Activity(),
-                Activity(),
+                TurnStarted(),
                 Blocked("question: Scope"),
                 Activity("request_user_input"),
                 TurnEnd("ok"),
@@ -793,7 +794,7 @@ class TuiLaunchIntegrationTest(Live):
         stream = Stream(self, self.start())
         self.assertEqual(
             stream.until(TurnEnd),
-            [Activity(), Activity(), TurnEnd("quoted reply")],
+            [Activity(), TurnStarted(), TurnEnd("quoted reply")],
         )
         stream.quiet()
 
@@ -915,7 +916,7 @@ class TuiRecoveryIntegrationTest(Live):
         stream = Stream(self, resumed)
         self.assertEqual(
             stream.until(TurnEnd),
-            [Activity(), Activity(), TurnEnd("recovered")],
+            [Activity(), TurnStarted(), TurnEnd("recovered")],
         )
         self.assertEqual(self.calls()[-1]["argv"][:2], ["resume", native])
         self.assertEqual(
@@ -931,16 +932,16 @@ class TuiRecoveryIntegrationTest(Live):
         stream = Stream(self, handle)
         self.assertEqual(stream.until(TurnEnd)[-1], TurnEnd("kept"))
         handle.send("interrupt")
-        self.assertEqual(stream.until(TurnEnd), [Activity(), TurnEnd()])
+        self.assertEqual(stream.until(TurnEnd), [TurnStarted(), TurnEnd()])
         self.assertEqual(self.lines(2), ["w1 done", "w1 done"])
         self.assertEqual(
             self.attach("interrupt again"),
             [[self.sid, True, ""], ["", 0], ""],
         )
-        self.assertEqual(stream.until(TurnEnd), [Activity(), TurnEnd()])
+        self.assertEqual(stream.until(TurnEnd), [TurnStarted(), TurnEnd()])
         self.assertEqual(self.attach(), [self.sid, True, ""])
         handle.send("recover")
-        self.assertEqual(stream.until(TurnEnd), [Activity(), TurnEnd("after")])
+        self.assertEqual(stream.until(TurnEnd), [TurnStarted(), TurnEnd("after")])
         live_tmux.wait(lambda: len(self.hooks()) == 9, WAIT, what="all hook results logged")
         self.assertEqual([h["hook"] for h in self.hooks()].count("Stop"), 2)
         self.assertEqual([h["hook"] for h in self.hooks()].count("Interrupt"), 2)
@@ -953,7 +954,7 @@ class TuiRecoveryIntegrationTest(Live):
         self.assertEqual(stream.until(TurnEnd)[-1], TurnEnd())
         self.assertEqual(self.attach(), [self.sid, True, ""])
         handle.send("silent")
-        self.assertEqual(stream.until(TurnEnd), [Activity(), TurnEnd()])
+        self.assertEqual(stream.until(TurnEnd), [TurnStarted(), TurnEnd()])
         live_tmux.wait(
             lambda: any(row["hook"] == "Stop" for row in self.hooks()),
             WAIT,
@@ -971,7 +972,7 @@ class TuiRecoveryIntegrationTest(Live):
         handle.send("recover")
         # The failed turn's hook Activities may come after its TurnFailed, read first.
         after = stream.until(TurnEnd)
-        self.assertEqual((set(after[:-1]), after[-1]), ({Activity()}, TurnEnd("after")))
+        self.assertEqual((set(after[:-1]), after[-1]), ({TurnStarted()}, TurnEnd("after")))
 
     def test_root_child_cwd_and_rebinding_filters_publish_only_valid_hooks(self):
         invalid = [
@@ -1002,7 +1003,7 @@ class TuiRecoveryIntegrationTest(Live):
             found,
             [
                 Activity(),
-                Activity(),
+                TurnStarted(),
                 Activity("Bash"),
                 TurnEnd("root"),
             ],
@@ -1038,7 +1039,7 @@ class TuiRecoveryIntegrationTest(Live):
         self.assertTrue(resumed.info().transcript)
         self.assertIn(native, resumed.info().resume)
         found = Stream(self, resumed).until(TurnEnd)
-        self.assertEqual(found, [Activity(), Activity(), TurnEnd("resumed")])
+        self.assertEqual(found, [Activity(), TurnStarted(), TurnEnd("resumed")])
         first, second = self.calls()
         self.assertEqual(second["argv"], ["resume", native, *first["argv"]])
         self.assertEqual(
