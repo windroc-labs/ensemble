@@ -465,7 +465,7 @@ expiry with where it came from: `explicit` (`--expires`), `derived` (`--issued` 
 |---|---|
 | 30, 7 and 1 days before a known expiry, and at it | a notice naming the reference, the date, its provenance and the login to rerun: printed by the login, shown by `status`, delivered once per session and version |
 | the item is replaced | running sessions holding the old version get a notice to restart; new starts get the new one |
-| a `start` whose Claude token, OpenCode key or environment secret has expired | `login_required` (exit 5) naming the reference, before the lock and any container; never `busy`. An unknown expiry starts. An environment session whose lock is held still reports `SessionBusy` from the session's preflight first (that ordering is WDRC-168's) |
+| a `start` whose Claude token, OpenCode key or environment secret has expired | `login_required` (exit 5) naming the reference and login, before the lock and any container; never `busy`, even with a holder. An unknown expiry starts. Environment preflight does not check the lock or read secrets; start checks expiry before taking the lock |
 
 Running sessions are never stopped. Their credential tick ([Credential renewal](#credential-renewal)) writes each
 notice to the session's events as `credential_notice <text>` (headless: the log); a notice the events file did not
@@ -562,9 +562,17 @@ before starting anything.
 
 | Step | With an environment |
 |---|---|
-| preflight | the cwd, the broker handshake and, with a lock, `lock-query`: a holder other than the session's own container raises `SessionBusy` naming its container and owner; no build, base image, egress proxy or secret check |
+| preflight | cwd and broker handshake only; no lock query, build, base image, egress proxy or secret check |
 | start | `build` on its image and plugins; the manifest gets `gateway`, `secrets`, `lock` with `lock_owner` (the session name) and `prefetch`; with `prefetch` no GitHub App or bot identity |
-| busy reply | `SessionBusy` (lock, holder), from start, restart, resume and a worker's restart |
+| busy reply | session raises `SessionBusy` (lock, holder); delegate callers get `SessionError` naming the lock and holder; the broker and CLI keep exit 75 |
+
+A held lock is an ordinary failed role run. Its normal `start` or `resume` row spends one attempt, its Finished
+event has no outcome and names the holder in `busy: ...`, and write-back posts the normal failure comment and
+applies the workflow's failure state. After four attempts the board's normal cap sends it to In Review. There is
+no busy row, attempt cancellation, return to Ready for busy, cooldown or same-tick busy retry. Old busy rows do not
+offset attempts. Environment preflight defers locking to start, so a held lock cannot bypass recording an attempt.
+`ensemble-delegate run`, `ensemble-crew role` and direct `open` still exit 75 with the holder on stderr; a
+configuration error exits 2 and another run failure 1. Busy is not a public delegate exception type.
 
 `host.json` keeps a start's environment and a worker's `worker.json` keeps the one it was given. A resume giving none
 (`ensemble-session resume`, `ensemble-crew reopen`) of the same sid runs the stored one; one giving another (prefetch aside) is refused;
@@ -654,6 +662,78 @@ ensemble-delegate run --role dummy-tester --dry-run \
   --input $'Reference: T-1\nRepo: acme/app\nRef: main\n\nEcho me.'
 ```
 
+#### Direct use
+
+Open an environment already defined in the trusted config, without a role:
+
+```sh
+ensemble-delegate open dummy-1 --environment dummy --display none
+ensemble-crew run dummy-1 -- ensemble-delegate open dummy-1 --environment dummy
+```
+
+Choose one command: the first prints a plain worker Record; the second tracks that Record in `ensemble-crew
+status`. `open` uses the default Host, which must be Docker-kind and have `[environment.<host>]`, then overlays the
+named environment. Worker names match `[A-Za-z0-9_-]+`, except `none`, and cannot start with `-` (the Record resume
+key). It applies no role settings. `--client` defaults to delegate's global `client`; `--cwd` defaults
+to the current directory; `--display` has session's usual placement syntax. Under crew it uses `ENSEMBLE_SID` and
+`ENSEMBLE_EVENTS`. No charter, task, prompt, outcome or delegate harness is created.
+
+Direct use refuses `prefetch = true`, including an inherited Host default, with exit 2. An unknown environment is
+also exit 2, naming it. With no prefetch, the container receives the Host's GitHub token, as a normal worker does.
+Its workspace volume is `ensemble-ws-dummy-1`, and its lock owner is `dummy-1`.
+
+Claude environment containers use the default worker's setup-token path: the broker injects the selected account's
+token at start into tmpfs `/run/ensemble/secrets/claude`; `with-secrets` supplies it to Claude. `--account work`
+selects `work`; omitted, [Claude accounts](#claude-accounts) selects by usage, falling back to `default`. Role runs
+keep their `[delegate.roles.<role>.accounts]` selection. Other clients receive no Claude token. A missing or
+unreadable account names `ensemble-broker login claude [ACCOUNT]`; known expiry fails before the lock, even when
+another worker holds it. Values never enter the spec, images, workspace, client state, inspect configuration or
+process arguments; environment secret files are also in tmpfs, under `/run/ensemble/secrets/env/`.
+
+```mermaid
+flowchart LR
+    O[open] --> R[Running and holding lock]
+    R --> C[close or docker stop]
+    C --> F[Lock released]
+    F --> S[resume or restart]
+    S --> L{Lock free}
+    L -->|yes| R
+    L -->|no| B[Exit 75 with holder]
+```
+Resume uses the stored environment spec; each new container resolves secrets again. Use `resume` after close or
+stop; `restart` requires an existing session.
+
+Use `ensemble-session close dummy-1` to release the lock while keeping workspace and history. `docker stop` also
+releases it. Recover with `ensemble-session resume dummy-1`; changing the named environment meanwhile does not
+change the saved spec. Use session controls from its Record. The [manual docker start warning](#broker-locks)
+still applies.
+
+#### Environment acceptance
+
+Use disposable test credentials and the dummy config above, with the egress proxy healthy. The base image must
+meet [Base images](#base-images); `dummy-plugin` lives at `/opt/windroc/plugins/dummy-plugin/` with a matching,
+agent-readable `.claude-plugin/plugin.json`. Import the test environment secret through stdin with
+`/usr/local/libexec/ensemble/ensemble-broker login env dummy`; log in to Claude on the Host, not in the container.
+The `dummy-tester` run's `prefetch = true` is a role override; direct `dummy` still has no prefetch.
+
+| Check | Action and expected result |
+|---|---|
+| Resolve | Run the dry-run above with an App-installed test repo; spec contains references only, the Host's gateway and role prefetch |
+| Run | `ensemble-crew role dummy-tester --input '...'` with that Repo/Ref input: outcome echoes input, plugin is available, env file is 0400, and completion closes the locked container |
+| Open | `ensemble-crew run dummy-1 -- ensemble-delegate open dummy-1 --environment dummy`: Claude answers without container login; `ensemble-crew status` lists the worker |
+| Inspect | `docker ps --filter label=windroc.lock.owner=dummy-1 --format '{{.Names}}'`, then `docker inspect CONTAINER`: an `ensemble-worker:` variant of `dummy-env:test`, network `workers`, `windroc.lock=dummy-lock`, owner `dummy-1`, volume `ensemble-ws-dummy-1`, restart policy `no` |
+| Plugin and secret | In the TUI, `/dummy-plugin:` is available; `docker exec CONTAINER stat -c '%a %U' /run/ensemble/secrets/env/dummy.txt` prints `400 agent` |
+| Busy | `ensemble-delegate open dummy-2 --environment dummy` exits 75 and names `dummy-1`; a board run for the same lock gets a normal failed attempt and failure comment; four attempts reach In Review |
+| Release | `ensemble-session close dummy-1`, then start a same-lock dummy-tester run: it can take the lock; stopping the container with `docker stop CONTAINER` also releases it |
+| Resume | With `dummy-2` holding the lock, `ensemble-session resume dummy-1` exits 75 naming `dummy-2`; close the holder, then resume succeeds using the saved spec |
+| Config errors | Unknown `--environment` or a named/default environment resolving `prefetch = true`: exit 2 naming the environment or `prefetch` |
+| Account | Register a disposable `work` account and use `--account work`: the manifest has `claude_account=work`; with its test item removed, start names `ensemble-broker login claude work`, and does not exit 75 |
+| Expiry | An expired test env item or Claude account, while another worker holds the lock: start reports the reference and login before busy |
+| Secrecy | With known test sentinel values, inspect `docker history --no-trunc` and saved layers of both base and variant, workspace volume, client state directory, `docker inspect CONTAINER` and process arguments: neither Claude token nor any env value occurs there; only tmpfs injection contains them |
+
+Replace `CONTAINER` with the name from `docker ps`, and use an App-installed test repo for the run input. These are
+operator live checks; automated tests use fake credentials and Docker responses and never access the real keychain.
+
 ### Codex
 
 Install or upgrade the broker first ([Install](#install)). `<version>` is an exact stable npm version, at least `0.163.0` for both the pinned host installation and the image. A lower host version needs `update-codex`; a lower image needs a [rebuild](#build).
@@ -720,8 +800,7 @@ An unregistered account, an account selected for Codex or OpenCode, or a registe
   selection picks, so the gate skips Claude runs only when every account is over a threshold (`usage-skip`, reason
   `usage`) or none has a reading (`usage unknown`). A worker's or role's selected account is gated the same way, not
   by its own usage. With one account, or on tmux, the
-  gate probes the host's Claude login. The board's limit hold stays per
-  client: one account's usage limit holds every board run on Claude.
+  gate probes the host's Claude login.
 - The tmux Host checks a selection as above, then ignores it: the session runs on your own Claude login.
 
 ### OpenCode
@@ -973,7 +1052,8 @@ the first failed check. The keychain, Linear preset and board-run checks stay ma
 - Claude's client state is a read-write bind: a worker can leave settings, hooks, `CLAUDE.md`, symlinks or large files there for
   its later generations; host readers must not follow symlinks.
 - A headless run's output comes from its container, where client and tools share uid `agent`: a forged rate-limit line
-  pauses the board for that client until its reset time, as a forged transcript record can for a TUI run.
+  can end that run and trigger its usage-limit notification and move to review, as can a forged transcript record
+  for a TUI run.
 - A harness killed with `kill -9` leaves its headless client running, with its token, until the next Docker start or
   close.
 - A worker reaches the Mac's services, `127.0.0.1`-only ones included, and the LAN only through the egress proxy's

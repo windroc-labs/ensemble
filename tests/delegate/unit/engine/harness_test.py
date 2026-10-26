@@ -23,6 +23,7 @@ SID = "11111111-2222-3333-4444-555555555555"
 DONE = Result(0, Outcome("done", "Title", "Summary"))
 ASKING = Result(0, Outcome("needs_input", "Title", "Summary", questions=["Which?"]))
 NO_OUTCOME = Result(1, None, "no outcome after 3 turn ends")
+BUSY = Result(75, None, "busy: lock dummy-lock is held by ensemble-x-1 (owner x)")
 
 
 class Owner:
@@ -106,6 +107,11 @@ class Entry(Case):
                 self.assertEqual(got, code)
                 self.assertEqual(self.owner.announced, [result])
                 self.assertIn(f"delegate: session {SID}\n", err)
+
+    def test_a_busy_start_exits_75(self):
+        code, err = self.main(BUSY)
+        self.assertEqual((code, self.owner.announced), (75, [BUSY]))
+        self.assertIn(f"delegate: {BUSY.error}\n", err)
 
     def test_a_refused_run_exits_2_announcing_no_result(self):
         code, err = self.main(ConfigError("/work: delegate attempt was replaced"))

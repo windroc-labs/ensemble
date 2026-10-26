@@ -63,6 +63,23 @@ class Case(case.Case):
 
 
 class Parse(Case):
+    def test_legacy_busy_rows_neither_offset_attempts_nor_survive_trim(self):
+        start = json.loads(row("start", "TASK-1", "s", minutes=30))
+        busy = {
+            "kind": "busy",
+            "ts": stamp(NOW),
+            "issue": "TASK-1",
+            "sid": "s",
+            "cancels": {"kind": "start", "ts": start["ts"]},
+            "attempt": 1,
+        }
+        self.write([json.dumps(start), json.dumps(busy), row("resume", "TASK-1", "s")])
+        self.assertEqual(len(runs.parse_log(self.log)), 2)
+        runs.trim(self.log, now=NOW)
+        self.assertEqual(
+            [json.loads(line)["kind"] for line in self.read().splitlines()], ["start", "resume"]
+        )
+
     def test_parse_log_is_utc_entries_in_file_order(self):
         self.assertEqual(runs.parse_log(os.path.join(self.tmp, "nope")), [])
         self.write(
@@ -144,78 +161,6 @@ class Parse(Case):
                 self.assertIsNone(runs.parse_line(line))
 
 
-class Limits(Case):
-    def limits(self, *lines):
-        self.write(lines)
-        return runs.limits(self.log, NOW)
-
-    def test_a_live_row_names_its_client_and_reset_time(self):
-        at = NOW + timedelta(hours=1)
-        got = self.limits(row("start", "TASK-1", "s", minutes=5), limit(stamp(at, EAST)))
-        self.assertEqual(got, {("harness", "a"): at})
-        self.assertEqual(got["harness", "a"].utcoffset(), timedelta(hours=8))
-
-    def test_the_latest_reset_per_delegate_and_client_up_to_keep_ahead(self):
-        early, late = NOW + timedelta(hours=1), NOW + timedelta(hours=3)
-        for name, lines, want in (
-            (
-                "latest per client",
-                (limit(stamp(late)), limit(stamp(early)), limit(stamp(early), client="b")),
-                {("harness", "a"): late, ("harness", "b"): early},
-            ),
-            ("keep ahead", (limit(stamp(NOW + runs.KEEP)),), {("harness", "a"): NOW + runs.KEEP}),
-            (
-                "per delegate",
-                (
-                    limit(stamp(early)),
-                    limit(stamp(NOW + timedelta(hours=2)), delegate_kind="external"),
-                ),
-                {("harness", "a"): early, ("external", "a"): NOW + timedelta(hours=2)},
-            ),
-        ):
-            with self.subTest(name):
-                self.assertEqual(self.limits(*lines), want)
-
-    def test_only_live_limit_rows_count(self):
-        at = stamp(NOW + timedelta(hours=1))
-        good = json.loads(limit(at))
-        kindless = {k: v for k, v in good.items() if k != "delegate_kind"}
-        for lines in (
-            *(
-                (limit(not_live),)
-                for not_live in (
-                    stamp(NOW - timedelta(minutes=1)),
-                    stamp(NOW),
-                    None,
-                    "2026-09-27T05:00:00",
-                    "2026-09-27",
-                    1790000000,
-                    ["2026-09-27T05:00:00+00:00"],
-                    "soon",
-                    "",
-                    stamp(NOW + runs.KEEP + timedelta(seconds=1)),
-                    "9999-12-31T23:59:59-05:00",
-                )
-            ),
-            (
-                limit(at, client=""),
-                limit(at, client=None),
-                limit(at, client=3),
-                json.dumps({k: v for k, v in good.items() if k != "client"}),
-                json.dumps({**good, "kind": "end"}),
-                "[]",
-                "null",
-                "not json",
-            ),
-            (json.dumps(kindless),),
-        ):
-            with self.subTest(lines=lines):
-                self.assertEqual(self.limits(*lines), {})
-
-    def test_a_missing_log_has_none(self):
-        self.assertEqual(runs.limits(self.log, NOW), {})
-
-
 class Trim(Case):
     def test_drops_old_and_unparsable_lines(self):
         keep = [
@@ -244,19 +189,17 @@ class Trim(Case):
         runs.trim(self.log, NOW)
         self.assertEqual(self.read(), keep[1] + "\n")
 
-    def test_a_limit_row_appended_while_it_trims_is_kept(self):
+    def test_a_run_appended_while_it_trims_is_kept(self):
         self.write(["plain text", row("start", "TASK-2", "b", hours=1)])
-        at = stamp(NOW + timedelta(hours=2))
         writer = threading.Thread(
-            target=runs.note_limit,
-            args=(self.log,),
+            target=runs.note,
+            args=(self.log, "resume"),
             kwargs={
                 "issue": "TASK-2",
                 "sid": "b",
                 "client": "a",
-                "resets_at": at,
+                "role": "engineer",
                 "delegate_kind": "harness",
-                "attempt": 1,
             },
         )
         real = os.replace
@@ -270,10 +213,10 @@ class Trim(Case):
             runs.trim(self.log, NOW)
         writer.join(5)
         self.assertEqual(
-            [json.loads(line)["kind"] for line in self.read().splitlines()], ["start", "limit"]
+            [json.loads(line)["kind"] for line in self.read().splitlines()], ["start", "resume"]
         )
 
-    def test_keeps_live_limit_rows_and_drops_the_rest(self):
+    def test_drops_legacy_limit_rows_even_with_a_future_reset(self):
         live = limit(stamp(NOW + timedelta(hours=2)), ts=stamp(NOW - timedelta(days=9)))
         start = row("start", "TASK-1", "a", hours=1)
         self.write(
@@ -287,7 +230,7 @@ class Trim(Case):
             ]
         )
         runs.trim(self.log, NOW)
-        self.assertEqual(self.read(), live + "\n" + start + "\n")
+        self.assertEqual(self.read(), start + "\n")
 
     def test_keeps_failed_launch_rows_for_keep(self):
         def failed(**ago):
@@ -319,7 +262,6 @@ class Trim(Case):
     def test_unchanged_file_not_rewritten(self):
         lines = [
             row("start", "TASK-1", "a", days=1),
-            limit(stamp(NOW + timedelta(hours=1))),
             row("resume", "TASK-1", "a", minutes=5),
         ]
         self.write(lines)
@@ -334,8 +276,12 @@ class Trim(Case):
         self.assertEqual(self.read(), "".join(line + "\n" for line in lines))
 
     def test_retained_rows_keep_their_exact_bytes_and_file_order(self):
-        live = limit(stamp(NOW + timedelta(hours=2)), ts=stamp(NOW - timedelta(days=9)))
-        retained = ("  " + live + "  \n\n" + row("resume", "TASK-1", "s", minutes=5)).encode()
+        retained = (
+            "  "
+            + row("start", "TASK-1", "s", hours=2)
+            + "  \n\n"
+            + row("resume", "TASK-1", "s", minutes=5)
+        ).encode()
         crlf = ("  " + row("start", "TASK-1", "latest", days=8) + "  \r\n").encode()
         for name, old, kept, want in (
             (
@@ -456,76 +402,6 @@ class StartedTask(Case):
         self.write([json.dumps({**plain, "tier": 2, "effort": "high"})])
         self.assertEqual(runs.started_task(self.log, "TASK-1", SID_A), "light-build")
         self.assertEqual((runs.claim(self.log, "TASK-1", SID_A), runs.parse_log(self.log)), want)
-
-
-class NoteLimit(Case):
-    def test_writes_the_limit_row_durably_and_limits_reads_it(self):
-        at = stamp(NOW + timedelta(hours=1), EAST)
-        path = os.path.join(self.tmp, "logs", "runs.jsonl")
-        with mock.patch.object(os, "fsync", wraps=os.fsync) as spy:
-            runs.note_limit(
-                path,
-                issue="TASK-1",
-                sid="s",
-                client="a",
-                resets_at=at,
-                delegate_kind="harness",
-                attempt=1,
-            )
-            runs.note_limit(
-                path,
-                issue="TASK-2",
-                sid="t",
-                client="b",
-                resets_at=None,
-                delegate_kind="harness",
-                attempt=1,
-            )
-        self.assertEqual(spy.call_count, 4)
-        with open(path, encoding="utf-8") as f:
-            rows = [json.loads(line) for line in f]
-        self.assertEqual(
-            [list(r) for r in rows],
-            [["ts", "kind", "issue", "sid", "client", "resets_at", "delegate_kind", "attempt"]] * 2,
-        )
-        self.assertEqual(
-            [{k: v for k, v in r.items() if k != "ts"} for r in rows],
-            [
-                {
-                    "kind": "limit",
-                    "issue": "TASK-1",
-                    "sid": "s",
-                    "client": "a",
-                    "resets_at": at,
-                    "delegate_kind": "harness",
-                    "attempt": 1,
-                },
-                {
-                    "kind": "limit",
-                    "issue": "TASK-2",
-                    "sid": "t",
-                    "client": "b",
-                    "resets_at": None,
-                    "delegate_kind": "harness",
-                    "attempt": 1,
-                },
-            ],
-        )
-        self.assertEqual(runs.limits(path, NOW), {("harness", "a"): datetime.fromisoformat(at)})
-
-    def test_an_attempts_limit_is_one_row_and_a_later_attempts_another(self):
-        at = stamp(NOW + timedelta(hours=1), EAST)
-        for attempt in (1, 1, 2):
-            runs.note_limit(
-                self.log,
-                issue="TASK-1",
-                sid="s",
-                client="a",
-                resets_at=at,
-                delegate_kind="harness",
-                attempt=attempt,
-            )
-        self.assertEqual([json.loads(line)["attempt"] for line in self.read().splitlines()], [1, 2])
 
 
 SID_A, SID_B = "0b6f2c1e-6d0a-4c1b-9a51-3f1f6b0e2a7d", "9c1d2e3f-4a5b-4c6d-8e7f-a0b1c2d3e4f5"

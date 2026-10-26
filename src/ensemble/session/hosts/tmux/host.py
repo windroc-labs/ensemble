@@ -438,3 +438,12 @@ class TmuxHost(Host):
             )
             for row in found
         ]
+
+    def _capacity_namespace(self) -> str:
+        try:
+            socket = self.tmux.checked(["display-message", "-p", "#{socket_path}"]).stdout.strip()
+        except TuiError as error:
+            raise SessionError(f"host {self.name}: inventory namespace: {error}") from error
+        if not socket or not socket.isprintable() or not os.path.isabs(socket):
+            raise SessionError(f"host {self.name}: inventory namespace unavailable")
+        return f"tmux:{os.path.realpath(socket)}"

@@ -145,7 +145,7 @@ A label from the `Tasks` group picks the role's task, mapped by `[task_labels]`.
 ## Operating
 
 ```bash
-bin/ensemble-orchestrator router --issue <ID>         # run one issue now, skipping the run limits and usage gates
+bin/ensemble-orchestrator router --issue <ID>         # run one issue now, skipping role limits and usage gates
 bin/ensemble-orchestrator router --issue <ID> --tui   # the same, attended in a TUI (display, events file, exit codes: --help)
 bin/ensemble-orchestrator status <ID>                 # alive: its run; once that ends, state is its open TUI's (done, working, blocked), gone once none is open
 bin/ensemble-orchestrator attach-command <ID>         # the command that shows its agent run
@@ -162,15 +162,9 @@ Each session's `Run <sid>` comment holds its resume command. Move the issue out 
 
 ### Run limits
 
-A run starts only when both layers have room: its role has fewer live runs than `[roles.<role>] max_runs` (packaged: 3 for researcher, pm and engineer; another stage's role without a table: 1), and its client fewer than its `[client_max_runs]` entry. No client is limited by default: an unlisted client is unlimited. Set limits in `~/.ensemble/config.local.toml`, e.g. `opencode = 1`, as the host's local models run one job at a time:
+The orchestrator limits each role with `[roles.<role>] max_runs` (packaged: 3 for researcher, pm and engineer; another stage's role without a table: 1), counting its live runs in `runs.jsonl`, including runs between rounds. A tick checks the role and then the usage gate. `router --issue` skips those two gates; its run still counts toward the role limit.
 
-```toml
-[orchestrator.client_max_runs]
-opencode = 1
-claude = 3
-```
-
-Both layers count the live runs in `runs.jsonl`, a run between rounds included, a client's by the client its run records. A tick checks role, then client, then the usage gate. A full client's Todo issue logs `claim-skip` with reason `<client> is full` and the tick tries the next one; a full client's In Progress issue logs `recover-skip` and waits. `router --issue` skips both limits, but its run counts. Ad-hoc runs (`ensemble-delegate run`, `ensemble-session start`) and crew workers bypass the router and `runs.jsonl`: no limit applies to them and they count toward none, so an OpenCode crew worker adds to the local model's load.
+The session layer owns [client run limits](sessions.md#run-limits): `[session.clients.<client>] max_runs` in `~/.ensemble/config.local.toml`. These apply to every `Session.start`, including board starts, `router --issue`, ad-hoc role runs and crew workers. A full client refuses the start with `SessionError`, naming the client, limit and holders. The board records an ordinary failed run: one attempt and its normal failure comment; it does not skip the issue or wait for capacity.
 
 ### Linear MCP off
 
@@ -198,7 +192,9 @@ A missing or malformed OpenCode provider API key is a client configuration error
 
 Each new run selects again, retries included. A session resumes only in the client that created it, so an interrupted run re-reads its labels: when the selection differs from its session's client, the router starts a new session on the selected client instead, the issue staying In Progress. A usage-blocked restart waits for the next tick. Invalid Agent or task labels keep the resume.
 
-Scheduled quota checks use each candidate’s selected or recorded client, probing each Delegate kind/client pair once per tick, regardless of role or task tier; blocked usage logs `usage-skip` without switching clients. On the Docker Host with two or more [Claude accounts](docker-host.md#claude-accounts), the Claude probe reads every account (cached 5 minutes) and passes while any is under the thresholds, the run then starting on the one with the most usage left; every account over logs `usage-skip` with reason `usage`. A role's selected account (`[orchestrator.core.roles.<role>.accounts]`) changes neither: probe and limit hold stay per client. Inside an agent run, `--brake <role>` uses its `ENSEMBLE_CLIENT` environment, set at process launch from the effective client, including resumed snapshots; outside one it uses the role default.
+Scheduled quota checks use each candidate’s selected or recorded client, probing each Delegate kind/client pair once per tick, regardless of role or task tier; blocked usage logs `usage-skip` without switching clients. On the Docker Host with two or more [Claude accounts](docker-host.md#claude-accounts), the Claude probe reads every account (cached 5 minutes) and passes while any is under the thresholds, the run then starting on the one with the most usage left; every account over logs `usage-skip` with reason `usage`. A role's selected account (`[orchestrator.core.roles.<role>.accounts]`) changes neither: quota checks stay per client. Inside an agent run, `--brake <role>` uses its `ENSEMBLE_CLIENT` environment, set at process launch from the effective client, including resumed snapshots; outside one it uses the role default.
+
+Quota availability comes only from live usage, including scheduled recovery and manual resume. Write-back reports a usage-limit event and its reset time without saving a quota hold in `runs.jsonl`. Historical `limit` rows are ignored and removed by normal log trimming; no manual cleanup is needed. Exhausted or unknown usage keeps the existing `usage-skip` behavior, and host probe failures still stop the tick.
 
 For a client without a usage dashboard (for example, an API-key login), disable its usage checks in `~/.ensemble/config.local.toml`:
 
@@ -208,7 +204,7 @@ claude = "off"
 codex = "off"
 ```
 
-Each entry accepts `"on"` or `"off"`; an unlisted client defaults to `"on"`. The orchestrator owns this setting. For an off client, board starts and recovery ignore recorded quota holds and never read or evaluate usage; the researcher brake returns success without probing. Other clients keep their settings. On keeps today's start thresholds and the researcher's 80% five-hour brake (weekly exhaustion also brakes). Role and client concurrency limits still apply.
+Each entry accepts `"on"` or `"off"`; an unlisted client defaults to `"on"`. The orchestrator owns this setting. For an off client, board starts and recovery never read or evaluate usage; the researcher brake returns success without probing. Other clients keep their settings. On keeps today's start thresholds and the researcher's 80% five-hour brake (weekly exhaustion also brakes). Role and client concurrency limits still apply.
 
 The orchestrator supplies the researcher's brake command through the Delegate's runtime overlays, which persist across resumes. Delegate passes the command unchanged. There is no `gate` configuration key; standalone researcher runs have no brake. On Docker, the existing missing-command failure remains; Docker brake support is deferred.
 

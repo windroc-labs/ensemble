@@ -1861,7 +1861,7 @@ class ClientUsage(Base):
 
     def gate(self):
         self.write_runs()
-        return quota.Gate(self.runs, NOW, dry=False, cfg=self.cfg())
+        return quota.Gate(dry=False, cfg=self.cfg())
 
     def test_off_skips_probe_and_recorded_limits_only_for_that_client(self):
         self.write_config(CONFIG + '[usage_limit]\na = "off"\nb = "on"\n')
@@ -1881,8 +1881,6 @@ class ClientUsage(Base):
                 self.api.usages, self.api.usage_calls = {"a": usage}, []
                 said = []
                 gate = quota.Gate(
-                    self.runs,
-                    NOW,
                     lambda *a, said=said, **kw: said.append((a, kw)),
                     cfg=self.cfg(),
                     dry=True,
@@ -2085,7 +2083,8 @@ class ClaimUsageGates(Base):
             )
         self.assertEqual(self.api.usage_calls, ["a", "a"])
 
-    def test_dry_run_prints_the_usage_of_each_client(self):
+    def test_dry_run_prints_the_live_usage_even_with_a_legacy_limit(self):
+        self.api.usages["a"] = None
         at = (NOW + timedelta(hours=1)).astimezone(EAST).isoformat()
         self.limit("a", at)
         fake = two()
@@ -2098,185 +2097,24 @@ class ClaimUsageGates(Base):
             [
                 "pick TASK-1 queue=2",
                 "preview TASK-1 client=a client_source=default",
-                f"usage client=a until={at} allowed=false",
-                f"usage-skip TASK-1 client=a reason=limit until={at}",
+                "usage client=a usage=unknown allowed=false",
+                "usage-skip TASK-1 client=a reason=usage unknown",
                 "pick TASK-2 queue=2",
                 "preview TASK-2 client=b client_source=default",
                 "usage client=b usage=five_hour=10% weekly=10% allowed=true",
             ],
         )
         self.assertEqual(self.taken[1:], (None, "pm", "b", "default"))
-        self.assertEqual((fake.mutations, self.api.usage_calls), ([], ["b"]))
+        self.assertEqual((fake.mutations, self.api.usage_calls), ([], ["a", "b"]))
         self.assertEqual([v["i"] for q, v in fake.queries if q == RECHECK], ["TASK-1", "TASK-2"])
 
 
-A_LIMIT = "[client_max_runs]\na = 1\n"
-
-
-class ClientLimits(TickBase):
-    """FR-4 to FR-11: a run starts only while its client has fewer live runs than its
-    client_max_runs, checked after the role and before the usage gate; --issue skips it.
-    """
-
-    def setUp(self):
-        super().setUp()
-        self.write_config(CONFIG + A_LIMIT)
-
-    def test_live_clients_counts_live_runs_by_recorded_client(self):
-        self.api.live = ["ensemble-engineer-TASK-1", "ensemble-pm-TASK-2"]
-        self.add(kind="start", ident="TASK-1", sid="t1", minutes_ago=60, role="engineer")
-        self.add(
-            kind="resume",
-            ident="TASK-1",
-            sid="t1",
-            minutes_ago=30,
-            role="engineer",
-            client="opencode",
-        )
-        self.add(kind="start", ident="TASK-2", sid="t2", minutes_ago=60, role="pm", client="claude")
-        self.add(kind="start", ident="TASK-3", sid="t3", minutes_ago=60, client="opencode")
-        self.write_runs()
-        entries = runs.parse_log(self.runs)
-        live = router.live_sessions(self.cfg(), entries, say=SAY)
-        self.assertEqual(live, {"researcher": [], "pm": ["TASK-2"], "engineer": ["TASK-1"]})
-        self.assertEqual(router.live_clients(entries, live), {"opencode": 1, "claude": 1})
-        self.assertEqual(
-            router.full_clients(
-                {"opencode": 1, "claude": 2, "ghost": 1}, router.live_clients(entries, live)
-            ),
-            {"opencode"},
-        )
-
-    def test_full_client_skipped_for_the_next_issue(self):
-        self.write_config(AGENT_TOP + CONFIG + AGENT_LABELS + A_LIMIT)
-        fake = self.fake(
-            issue(
-                "TASK-1",
-                "Todo",
-                "pm",
-                priority=1,
-                project=PD,
-                labels=[label("A", AGENT_A, AGENT_GROUP)],
-            ),
-            issue("TASK-2", "Todo", "researcher", priority=2),
-            issue("TASK-3", "Todo", "pm", priority=3, project=PD),
-        )
-        self.assertEqual(self.tick(fake, live=["ensemble-engineer-TASK-7"]), 0)
-        self.assertEqual(
-            self.said(),
-            [
-                'plan mode=new queue=3 live={"engineer": "1/1"}',
-                "pick TASK-1 queue=3",
-                "claim-skip TASK-1 reason=a is full",
-                "pick TASK-2 queue=3",
-                "claim-skip TASK-2 reason=a is full",
-                "pick TASK-3 queue=3",
-                "claim TASK-3 role=pm client=b client_source=default",
-                "launch TASK-3 exit=0",
-            ],
-        )
-        self.assertEqual((self.launched_runs(), self.api.usage_calls), ([("TASK-3", "new")], ["b"]))
-        self.assertEqual(
-            [
-                (fake.issues[i]["state"], fake.issues[i].get("comments", []))
-                for i in ("TASK-1", "TASK-2")
-            ],
-            [("Todo", []), ("Todo", [])],
-        )
-
-    def test_full_default_client_skipped(self):
-        fake = self.fake(issue("TASK-1", "Todo", "researcher", priority=1))
-        self.assertEqual(self.tick(fake, live=["ensemble-engineer-TASK-7"]), 0)
-        self.assertIn("claim-skip TASK-1 reason=a is full", self.said())
-        self.assertEqual((self.start.launches, fake.mutations, self.api.usage_calls), ([], [], []))
-        self.assertEqual(fake.issues["TASK-1"]["state"], "Todo")
-        self.write_config(CONFIG)
-        self.assertEqual(self.tick(fake, live=["ensemble-engineer-TASK-7"]), 0)
-        self.assertEqual(self.launched_runs(), [("TASK-1", "new")])
-
-    def test_full_client_resume_waits(self):
-        fake = self.fake(
-            issue("TASK-1", "In Progress", "researcher", priority=1),
-            issue("TASK-2", "Todo", "pm", priority=2, project=PD),
-        )
-        self.resumable("TASK-1", "saved", 60)
-        self.assertEqual(self.tick(fake, live=["ensemble-engineer-TASK-7"]), 0)
-        said = self.said()
-        self.assertIn("recover-skip TASK-1 sid=saved reason=a is full", said)
-        self.assertNotIn("usage-skip", " ".join(said))
-        self.assertEqual((self.launched_runs(), self.api.usage_calls), ([("TASK-2", "new")], ["b"]))
-        self.assertEqual(fake.issues["TASK-1"]["state"], "In Progress")
-
-    def interrupted(self, client):
-        self.lines, self.hist = [], {}
-        self.moved("TASK-1", 61)
-        self.add(kind="start", ident="TASK-1", sid="old", minutes_ago=60, client=client)
-        self.touch("old", 40)
-        return self.fake(
-            issue("TASK-1", "In Progress", "researcher", labels=[label("A", AGENT_A, AGENT_GROUP)])
-        )
-
-    def test_full_client_restart_waits(self):
-        self.write_config(AGENT_TOP + CONFIG + AGENT_LABELS + A_LIMIT)
-        fake = self.interrupted("b")
-        self.assertEqual(self.tick(fake, live=["ensemble-engineer-TASK-7"]), 0)
-        self.assertEqual(self.said(), ["recover-skip TASK-1 sid=old reason=a is full"])
-        self.assertEqual((self.start.launches, fake.mutations, self.api.usage_calls), ([], [], []))
-        self.write_config(AGENT_TOP + CONFIG + AGENT_LABELS + "[client_max_runs]\nb = 1\n")
-        fake = self.interrupted("b")
-        self.assertEqual(self.tick(fake, live=["ensemble-pm-TASK-6"]), 0)
-        (spec,) = self.start.launches
-        self.assertEqual((spec.issue, spec.client, spec.mode), ("TASK-1", "a", "new"))
-
-    def test_client_limit_counted_under_router_lock(self):
-        self.write_config(
-            HEADER
-            + role_table("researcher", "max_runs = 2")
-            + role_table("pm")
-            + role_table("engineer")
-            + OVERLAY
-            + A_LIMIT
-        )
-        fake = self.fake(
-            issue("TASK-1", "Todo", "researcher", priority=1),
-            issue("TASK-2", "Todo", "researcher", priority=2),
-        )
-        with other_router(self.runs):
-            self.assertEqual(self.tick(fake), 0)
-            self.assertEqual(self.said(), ["skip reason=another router is running"])
-        self.assertEqual(self.tick(fake, live=[]), 0)
-        self.assertEqual(self.launched_runs(), [("TASK-1", "new")])
-        self.assertEqual(self.tick(fake, live=["ensemble-researcher-TASK-1"]), 0)
-        self.assertEqual(self.start.launches, [])
-        self.assertIn("claim-skip TASK-2 reason=a is full", self.said())
-        self.assertEqual(fake.issues["TASK-2"]["state"], "Todo")
-
-    def test_issue_ignores_client_limit_and_counts(self):
-        for state in ("Todo", "In Progress"):
-            with self.subTest(state=state):
-                self.lines, self.hist = [], {}
-                fake = self.fake(issue("TASK-1", state, "researcher"))
-                if state == "In Progress":
-                    self.resumable("TASK-1", "saved", 60)
-                self.add(kind="start", ident="TASK-7", sid="t7", minutes_ago=60, role="engineer")
-                live = ["ensemble-engineer-TASK-7"]
-                self.assertEqual(self.tick(fake, "--issue", "TASK-1", live=live), 0)
-                (spec,) = self.start.launches
-                self.assertEqual((spec.issue, spec.client), ("TASK-1", "a"))
-        self.api.live = ["ensemble-engineer-TASK-7", "ensemble-researcher-TASK-1"]
-        self.write_runs()
-        entries = runs.parse_log(self.runs)
-        self.assertEqual(
-            router.live_clients(entries, router.live_sessions(self.cfg(), entries, say=SAY)),
-            {"a": 2},
-        )
-
-    def test_dry_run_shows_full_client_skip(self):
+class ClientAdmission(TickBase):
+    def test_client_capacity_is_left_to_the_session_start(self):
         fake = self.fake(issue("TASK-1", "Todo", "researcher"))
-        self.assertEqual(self.tick(fake, "--dry-run", live=["ensemble-engineer-TASK-7"]), 0)
-        self.assertIn("claim-skip TASK-1 reason=a is full", self.said())
-        self.assertEqual((fake.mutations, self.start.launches), ([], []))
-        self.assertEqual(fake.issues["TASK-1"]["state"], "Todo")
+        self.assertEqual(self.tick(fake, live=["ensemble-engineer-TASK-7"]), 0)
+        self.assertEqual(self.launched_runs(), [("TASK-1", "new")])
+        self.assertFalse(hasattr(self.cfg(), "client_max_runs"))
 
 
 class RunBrake(Base):
@@ -2932,7 +2770,8 @@ class ScheduledUsageGates(TickBase):
                     ([], [], before, ["a"]),
                 )
 
-    def test_a_live_limit_row_lets_the_other_client_start(self):
+    def test_a_legacy_limit_does_not_replace_unknown_usage(self):
+        self.api.usages["a"] = None
         at = (NOW + timedelta(hours=1)).astimezone(EAST).isoformat()
         self.limit("a", at)
         self.tick(two())
@@ -2941,14 +2780,16 @@ class ScheduledUsageGates(TickBase):
             [
                 "plan mode=new queue=2",
                 "pick TASK-1 queue=2",
-                f"usage-skip TASK-1 client=a reason=limit until={at}",
+                "usage-skip TASK-1 client=a reason=usage unknown",
                 "pick TASK-2 queue=2",
                 "claim TASK-2 role=pm client=b client_source=default",
                 "launch TASK-2 exit=0",
             ],
         )
-        self.assertEqual((self.launched_runs(), self.api.usage_calls), ([("TASK-2", "new")], ["b"]))
-        self.assertEqual([json.loads(x)["kind"] for x in self.state.splitlines()], ["limit"])
+        self.assertEqual(
+            (self.launched_runs(), self.api.usage_calls), ([("TASK-2", "new")], ["a", "b"])
+        )
+        self.assertEqual(self.state, "")
 
     def test_a_dry_run_walks_the_same_and_changes_nothing(self):
         at = (NOW + timedelta(hours=1)).astimezone(EAST).isoformat()
@@ -2958,14 +2799,14 @@ class ScheduledUsageGates(TickBase):
                 True,
                 [
                     "preview TASK-1 client=a mode=resume sid=a",
-                    f"usage client=a until={at} allowed=false",
-                    f"usage-skip TASK-1 client=a reason=limit until={at}",
+                    "usage client=a usage=unknown allowed=false",
+                    "usage-skip TASK-1 client=a reason=usage unknown",
                     "plan mode=new queue=1",
                     "pick TASK-2 queue=1",
                     "preview TASK-2 client=b client_source=default",
                     b,
                 ],
-                ["b"],
+                ["a", "b"],
             ),
             (
                 False,
@@ -2984,6 +2825,7 @@ class ScheduledUsageGates(TickBase):
         for limited, said, calls in rows:
             with self.subTest(limited=limited):
                 self.lines, self.hist = [], {}
+                self.api.usages["a"] = None if limited else reading()
                 if limited:
                     self.limit("a", at)
                 fake = self.fake(
@@ -5269,12 +5111,40 @@ class RoleApps(Base):
         self.assertEqual(self.keychain_calls, [])
 
 
-class LiveLimits(Base):
-    """FR-60: a live limit row blocks its client with no probe; any other limit row changes
-    nothing.
-    """
+class LiveLimits(TickBase):
+    """Historical limit rows never participate in quota decisions."""
 
-    def test_a_live_limit_row_skips_its_client_without_a_probe(self):
+    def test_available_usage_picks_and_previews_despite_a_legacy_limit(self):
+        self.api.usages["a"] = reading(10, 49)
+        self.limit("a", "2026-11-01T12:39:00+00:00")
+        fake = self.fake(issue("TASK-1", "Todo", "researcher"))
+        before = self.before()
+        self.assertEqual(
+            self.tick(fake, "--dry-run", now=datetime(2026, 10, 26, 14, tzinfo=UTC)), 0
+        )
+        said = "\n".join(self.said())
+        self.assertIn("pick TASK-1", said)
+        self.assertIn("preview TASK-1 client=a", said)
+        self.assertIn("usage client=a usage=five_hour=10% weekly=49% allowed=true", said)
+        self.assertNotIn("usage-skip", said)
+        self.assertEqual(self.api.usage_calls, ["a"])
+        self.assertEqual((fake.mutations, self.start.launches, self.state), ([], [], before))
+
+    def test_recovery_uses_live_usage_despite_a_legacy_limit(self):
+        self.api.usages["a"] = reading(10, 49)
+        self.resumable("TASK-1", "saved", 60)
+        self.limit("a", (NOW + timedelta(hours=1)).isoformat())
+        fake = self.fake(issue("TASK-1", "In Progress", "researcher"))
+        self.assertEqual(self.tick(fake), 0)
+        self.assertEqual(self.launched_runs(), [("TASK-1", "resume")])
+        self.assertEqual(self.api.usage_calls, ["a"])
+        self.assertNotIn("usage-skip", "\n".join(self.said()))
+        self.assertTrue(
+            all(json.loads(line)["kind"] != "limit" for line in self.state.splitlines())
+        )
+
+    def test_a_legacy_limit_does_not_replace_exhausted_live_usage(self):
+        self.api.usages["a"] = reading(10, 100)
         at = (NOW + timedelta(hours=1)).astimezone(EAST).isoformat()
         self.limit("a", at)
         fake = two()
@@ -5286,12 +5156,12 @@ class LiveLimits(Base):
             self.said(),
             [
                 "pick TASK-1 queue=2",
-                f"usage-skip TASK-1 client=a reason=limit until={at}",
+                "usage-skip TASK-1 client=a reason=usage usage=five_hour=10% weekly=100%",
                 "pick TASK-2 queue=2",
                 "claim TASK-2 role=pm client=b client_source=default",
             ],
         )
-        self.assertEqual(self.api.usage_calls, ["b"])
+        self.assertEqual(self.api.usage_calls, ["a", "b"])
 
     def test_a_limit_row_not_live_changes_nothing(self):
         rows = (
@@ -6108,3 +5978,70 @@ class StageKeyChecks(OuterBase):
                 self.assertEqual(
                     self.REF_REMOTE in [c[0][:3] for c in self.run_.calls], bool(header)
                 )
+
+
+NO_DEFAULT = "role engineer selects an environment, but Host tmux has no [environment.tmux]"
+
+
+class EnvironmentLaunch(OuterBase):
+    def test_busy_attempts_reach_the_normal_four_attempt_cap(self):
+        self.todo["state"] = "In Progress"
+        self.resumable(ID, "s", 60, role="engineer")
+        self.api.detach_error = SessionError(
+            "busy: lock dummy-lock is held by worker (owner worker)"
+        )
+        for _ in range(router.CAP - 1):
+            self.assertEqual(self.entry(), 0)
+            self.lines = self.raw_runs().splitlines()
+        self.assertEqual(
+            [json.loads(line)["kind"] for line in self.lines],
+            ["start", *["resume"] * (router.CAP - 1)],
+        )
+        self.assertEqual(self.entry(), 0)
+        self.assertEqual(self.todo["state"], "In Review")
+        self.assertIn("reached 4 attempts", "\n".join(self.said()))
+
+    def setUp(self):
+        super().setUp()
+        self.todo = issue(ID, "Todo", "engineer")
+        self.todo["project"] = {"id": PROJECT, "name": "Ensemble"}
+        self.fake = ClaimLinear(self.todo, node(comments=[USER_NOTE]))
+        self.fake.ids[UUID] = ID
+
+    def entry(self, *argv):
+        outer = {"run": self.run_, "keychain": self.keychain}
+        return self.tick(self.fake, *argv, again=True, outer=outer)
+
+    def test_an_environment_config_error_is_only_a_launch_error(self):
+        for name, labels in (
+            ("default client", []),
+            ("label client", [label("selected", AGENT_B, AGENT_GROUP)]),
+        ):
+            with self.subTest(name):
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(self.runs)
+                self.write_config(AGENT_TOP + OUTER + AGENT_LABELS)
+                self.lines, self.todo["state"], self.todo["comments"] = [], "Todo", []
+                self.todo["labels"] = labels
+                self.api.construct_error = DelegateConfigError(NO_DEFAULT)
+                self.assertEqual(self.entry("--issue", ID), 1)
+                self.assertEqual((self.todo["state"], self.todo["comments"]), ("In Progress", []))
+                self.assertEqual(runs.parse_log(self.runs), [])
+                said = self.said()
+                self.assertTrue(
+                    [line for line in said if line.startswith(f"launch-error {ID} ")], said
+                )
+                self.assertIn("[environment.tmux]", "\n".join(said))
+
+    def test_a_label_client_config_error_still_comments(self):
+        self.write_config(AGENT_TOP + OUTER + AGENT_LABELS)
+        self.todo["labels"] = [label("selected", AGENT_B, AGENT_GROUP)]
+        self.api.construct_error = DelegateConfigError("b: not installed")
+        self.assertEqual(self.entry("--issue", ID), 1)
+        self.assertEqual(self.todo["state"], "In Review")
+        self.assertEqual(len(self.todo["comments"]), 1)
+
+    def test_an_environment_start_failure_writes_its_start_row(self):
+        self.assertEqual(self.entry("--issue", ID), 0)
+        self.assertEqual([e.kind for e in runs.parse_log(self.runs)], ["start"])
+        self.assertEqual(len(self.api.detached), 1)

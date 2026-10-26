@@ -185,16 +185,7 @@ class Limit(Writeback):
         [session] = [b for _, b in self.comments(ID) if b.startswith(f"Run {SID}")]
         self.assertRegex(session, rf"\ARun {SID} · limit · #2 · \S+ → \S+ · exit -9\Z")
         self.assertEqual(self.history(ID), [("in_progress", "in_review", researcher)])
-        row = {
-            "kind": "limit",
-            "issue": ID,
-            "sid": SID,
-            "client": "claude",
-            "resets_at": None,
-            "delegate_kind": "harness",
-            "attempt": 1,
-        }
-        self.assertEqual(self.limit_rows(), [row])
+        self.assertEqual(self.limit_rows(), [])
 
         self.ok("begun", attempt=2)
         self.assertEqual(self.state(ID), "in_progress")
@@ -211,7 +202,7 @@ class Limit(Writeback):
             self.stored(),
             [(HARNESS_USER, SESSION), (researcher, comment_id("researcher", SID, "limit"))],
         )
-        self.assertEqual(self.limit_rows(), [row, {**row, "attempt": 2}])
+        self.assertEqual(self.limit_rows(), [])
 
 
 if __name__ == "__main__":

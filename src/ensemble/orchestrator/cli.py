@@ -4,7 +4,6 @@ import argparse
 import contextlib
 import os
 import sys
-from datetime import UTC, datetime
 from functools import partial
 from types import MappingProxyType
 
@@ -257,8 +256,6 @@ def main(argv=None):
             entries = runs.parse_log(cfg.runs_log)
             entry = runs.latest(entries)[view.issue]
             gate = Gate(
-                cfg.runs_log,
-                datetime.now(UTC),
                 cfg=cfg,
                 dry=False,
                 say=partial(event_log.log, "router", quiet=True),

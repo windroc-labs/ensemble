@@ -346,15 +346,11 @@ jobs:
           fi
 
   broker:
-    name: Broker ${{ matrix.os }}
+    name: Broker ubuntu-24.04
     needs: [changes]
     if: ${{ needs.changes.outputs.broker == 'true' }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, macos-15]
     defaults:
       run:
         working-directory: src/broker
@@ -364,13 +360,11 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        if: ${{ needs.changes.outputs.broker == 'true' }}
         uses: actions/setup-go@v7.0.0
         with:
           go-version-file: src/broker/go.mod
           cache: false
       - name: Gofmt
-        if: ${{ needs.changes.outputs.broker == 'true' }}
         run: |
           unformatted=$(sh with-go-state.sh gofmt -l .)
           if [[ -n "$unformatted" ]]; then
@@ -378,31 +372,13 @@ jobs:
             exit 1
           fi
       - name: Go vet
-        if: ${{ needs.changes.outputs.broker == 'true' }}
         run: sh with-go-state.sh go vet ./...
       - name: Staticcheck
-        if: ${{ needs.changes.outputs.broker == 'true' }}
         run: sh with-go-state.sh go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
       - name: Go test
-        if: ${{ needs.changes.outputs.broker == 'true' }}
         run: sh with-go-state.sh go test ./...
       - name: Go build
-        if: ${{ needs.changes.outputs.broker == 'true' && runner.os == 'Linux' }}
         run: sh with-go-state.sh go build -trimpath -o "$RUNNER_TEMP/ensemble-broker" .
-      - name: Build darwin/arm64 binary with cgo
-        if: ${{ needs.changes.outputs.broker == 'true' && runner.os == 'macOS' }}
-        env:
-          GOOS: darwin
-          GOARCH: arm64
-        run: sh build.sh "$RUNNER_TEMP/ensemble-broker-darwin-arm64"
-      - name: Upload darwin/arm64 binary
-        if: ${{ needs.changes.outputs.broker == 'true' && runner.os == 'macOS' }}
-        uses: actions/upload-artifact@v7.0.2
-        with:
-          name: ensemble-broker-darwin-arm64
-          path: ${{ runner.temp }}/ensemble-broker-darwin-arm64
-          if-no-files-found: error
-          retention-days: 30
       - name: Require unchanged checkout
         if: ${{ always() }}
         run: |
@@ -440,13 +416,10 @@ jobs:
 
   ci:
     name: CI
-    needs: [changes, lint, repository, unit, coverage, integration, mini-op]
+    needs: [changes, lint, repository, unit, coverage, integration, broker, mini-op]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    permissions:
-      contents: read
-      actions: write
+    timeout-minutes: 5
     steps:
       - name: Check out
         uses: actions/checkout@v7.0.1
@@ -456,13 +429,7 @@ jobs:
         uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.11"
-      - name: Require every non-broker job
-        id: gate
+      - name: Require every applicable job
         env:
           CI_NEEDS: ${{ toJSON(needs) }}
         run: python3 .github/ci_scope.py --gate
-      - name: Require broker results or confirmed unstarted macOS cancellation
-        if: ${{ always() && steps.gate.outcome == 'success' && needs.changes.outputs.broker == 'true' }}
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: python3 .github/ci_broker.py

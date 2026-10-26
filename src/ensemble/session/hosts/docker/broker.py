@@ -1,5 +1,5 @@
 """The root-owned broker at the PROTOCOL version (src/broker/protocol/docker-broker/protocol.schema.json): version, build, start, maintain,
-close, workspace-rm and lock-query with strict response parsing. A missing, malformed or inconsistent response is a transport failure;
+close, workspace-rm and probe-provider with strict response parsing. A missing, malformed or inconsistent response is a transport failure;
 a valid error response is a BrokerError.
 """
 
@@ -45,7 +45,6 @@ COMMANDS = frozenset(
         "status",
         "workspace-rm",
         "probe-provider",
-        "lock-query",
         "unknown",
     }
 )
@@ -55,9 +54,9 @@ CODES = {  # code → (exit code, the commands that report it)
     "mount_rejected": (4, {"start", "maintain"}),
     "login_required": (5, {"start", "probe-provider"}),
     "image_rejected": (6, {"start"}),
-    "docker_unreachable": (7, {"build", "start", "close", "workspace-rm", "lock-query"}),
+    "docker_unreachable": (7, {"build", "start", "close", "workspace-rm"}),
     "build_failed": (8, {"build"}),
-    "start_failed": (9, {"start", "lock-query"}),
+    "start_failed": (9, {"start"}),
     "close_failed": (10, {"close"}),
     "keychain_failed": (11, {"start", "close", "status", "probe-provider"}),
     "workspace_dirty": (12, {"workspace-rm"}),
@@ -391,16 +390,6 @@ class Broker:
         ):
             raise SessionError("broker: bad response to start: fields")
         return started
-
-    def lock_query(self, lock: str) -> dict[str, str] | None:
-        """The running holder of `lock`, {"container", "owner"}, or None; takes nothing."""
-        found = self._parsed(
-            "lock-query",
-            lambda d: d.keys() == {"holder"} and (d["holder"] is None or _holder_ok(d["holder"])),
-            "--lock",
-            lock,
-        )
-        return found["holder"]
 
     def maintain(
         self,

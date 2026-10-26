@@ -521,7 +521,7 @@ class Base(run_fixtures.Base):
                     dry=dry,
                     keychain=self.keychain,
                     wiring=self.wiring,
-                    gate=quota.Gate(self.runs, NOW, dry=dry, cfg=cfg) if gate else None,
+                    gate=quota.Gate(dry=dry, cfg=cfg) if gate else None,
                 )
             )
         self.raw, self.err = err.getvalue(), self.unmap(err.getvalue())

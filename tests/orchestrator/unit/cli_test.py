@@ -673,12 +673,13 @@ class Queries(RunCase):
             )
         self.assertEqual(ReadyDelegate.usage_calls, ["researcher"])
 
-    def test_config_drift_never_probes_and_recorded_limits_still_block(self):
+    def test_config_drift_probes_the_recorded_client_despite_a_legacy_limit(self):
         self.start()
         FakeDelegate.end(self.cfg.issue_workdir("TASK-1"))
         self.configure(default="other")
-        runs.note_limit(
+        runs.note(
             self.cfg.runs_log,
+            "limit",
             issue="TASK-1",
             sid="1234abcd-0000-4000-8000-000000000000",
             client="fake",
@@ -687,13 +688,12 @@ class Queries(RunCase):
             attempt=1,
         )
         for tty in (False, True):
+            FakeDelegate.end(self.cfg.issue_workdir("TASK-1"))
             result, output, errors = _call(["resume", "TASK-1"], tty=tty)
-            self.assertEqual((result, output), (1, ""))
-            self.assertEqual(
-                errors, "ensemble-orchestrator: TASK-1: resume blocked by usage gate\n"
-            )
-        self.assertEqual(ReadyDelegate.usage_calls, [])
-        self.assertFalse(FakeDelegate.attach(self.cfg.issue_workdir("TASK-1")).alive())
+            self.assertEqual((result, errors), (0, ""))
+            self.assertEqual(Record.parse(output).name, "TASK-1")
+        self.assertEqual(ReadyDelegate.usage_calls, ["researcher", "researcher"])
+        self.assertTrue(FakeDelegate.attach(self.cfg.issue_workdir("TASK-1")).alive())
 
     def test_config_drift_without_a_limit_probes_before_resuming(self):
         self.start()
@@ -886,13 +886,11 @@ class WritebackUsage(RunCase):
         self.assertIn("unknown key 'newer_limits'", errors)
 
     def test_a_configuration_it_cannot_load_is_logged_where_its_logs_go(self):
-        self.append_local("\n[orchestrator.client_max_runs]\nopencode = 0\n")
+        self.append_local("\n[orchestrator.usage_limit]\na = 0\n")
         result, output, errors = _call(
             ["writeback", "--issue", "TASK-1", "--workdir", "/w"], stdin="{}\n"
         )
-        refused = (
-            "orchestrator/config.toml: [client_max_runs] opencode must be a whole number >= 1: 0"
-        )
+        refused = 'orchestrator/config.toml: [usage_limit] a must be "on" or "off": 0'
         self.assertEqual((result, output, errors), (2, "", f"ensemble-orchestrator: {refused}\n"))
         row = logged(self.cfg.logs_dir)[-1]
         self.assertEqual(

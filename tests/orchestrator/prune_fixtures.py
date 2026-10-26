@@ -333,7 +333,6 @@ class PruneScenario(Case):
         )
         self.cfg = config.Config(
             task_tiers={},
-            client_max_runs={},
             usage_limit={},
             roles=dict.fromkeys(ROLES.values()),  # prune reads only the names
             local_clones={},

@@ -86,6 +86,7 @@ class PermissionTest(Base):
     ):
         table = dict(read_config(local=os.devnull)["clients"]["claude"])
         table.pop("implementation")
+        table.pop("max_runs")
         words = {
             Permission.AUTO: "--permission-mode",
             Permission.YOLO: "--dangerously-skip-permissions",
@@ -164,6 +165,7 @@ class AccountsTest(Base):
     def test_the_packaged_config_registers_only_the_default_account(self):
         table = dict(read_config(local=os.devnull)["clients"]["claude"])
         table.pop("implementation")
+        table.pop("max_runs")
         self.assertEqual(table["accounts"], {})
         self.assertEqual(ClaudeClient(table)._accounts(), frozenset({"default"}))
 

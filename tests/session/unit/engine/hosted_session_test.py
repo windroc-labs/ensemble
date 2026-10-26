@@ -16,9 +16,10 @@ import stat
 import tempfile
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
-from ensemble.session import Host, NoRecordedSession, NotShowable
+from ensemble.session import Host, NoRecordedSession, NotShowable, Viewer
 from ensemble.session.clients import common as selection
 from ensemble.session.clients.base import Client
 from ensemble.session.clients.claude import ClaudeClient
@@ -54,6 +55,7 @@ from ensemble.session.engine.types import (
     Usage,
     Window,
 )
+from ensemble.session.hosts.base import Piped
 from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.session.modes import tui
 from ensemble.session.viewer import hidden as hidden_store
@@ -73,7 +75,9 @@ from tests.session.hosted_support import (
     HostedEnvBase,
     HostedTuiBase,
     ProbeClient,
+    TuiBase,
     fake_tmux,
+    listed,
 )
 from tests.session.threads import capture_errors
 from tests.utils.sandbox import owned_directory
@@ -82,8 +86,276 @@ UNCONFIGURED = "session not configured: call Session.configure first"
 FAKE_HOSTS = {"fake": {"implementation": "tests.session.fakes.host:FakeHost"}}
 
 
+class CapacityPiped(Piped):
+    def __init__(self):
+        self.stdout, self.stderr = io.StringIO(), io.StringIO()
+        self.code = None
+
+    def wait(self, timeout):
+        return self.code
+
+    def stop(self, *, ended):
+        self.code = 0
+
+
+class CapacityHost(ScreenHost):
+    close_failure = None
+    inventory_failure = None
+    launch_failure = None
+
+    def create(self, *args, **kwargs):
+        terminal = super().create(*args, **kwargs)
+        terminal.calls.close.side_effect = self.close_failure
+        if self.inventory_failure is not None:
+            self.calls.list.side_effect = self.inventory_failure
+        return terminal
+
+    def terminal(self, *args, **kwargs):
+        terminal = super().terminal(*args, **kwargs)
+        if self.launch_failure is not None:
+            raise self.launch_failure
+        return terminal
+
+    def pipe(self, name, launch, *, metadata=None):
+        self.calls.pipe(name, launch, metadata=metadata)
+        return CapacityPiped()
+
+
+class ClientCapacityTest(HostedTuiBase):
+    def setUp(self):
+        super().setUp()
+        self.host = CapacityHost("tmux")
+        self.configure(tui=True, max_runs=1)
+
+    def _other_configuration(self):
+        setup = self.session._config()
+        other = ScreenHost("elsewhere")
+        return HostedSession.configured(
+            clients=setup.registry.settings.clients,
+            hosts=parsed(
+                {"elsewhere": {"implementation": "tests.session.fakes.terminal:ScreenHost"}},
+                "elsewhere",
+            ),
+            class_loader=setup.class_loader,
+            host_factory=lambda _kind, _name, _settings: other,
+            viewer_factory=MemoryViewer,
+        )
+
+    def test_independent_configurations_share_capacity_and_attached_closes_release_it(self):
+        for action in ("original", "attached-close", "attached-stop", "retire"):
+            with self.subTest(action=action):
+                other = self._other_configuration()
+                first = self.start(mode="tui", name="one", sid="s1")
+                spec = self.spec(client="fake", mode="tui", name="two", sid="s2")
+                with self.assertRaisesRegex(SessionError, "one"):
+                    other.start(spec)
+                if action == "original":
+                    first.close()
+                elif action == "retire":
+                    self.session.retire("one", sid="s1")
+                else:
+                    attached = self.session.attach("one", sid="s1")
+                    attached.close() if action == "attached-close" else attached.stop()
+                other.start(spec).close()
+
+    def test_a_stale_attached_stop_keeps_the_replacement_reservation(self):
+        first = self.start(mode="tui", name="one", sid="same")
+        attached = self.session.attach("one", sid="same")
+        first.close()
+        replacement = self.start(mode="tui", name="one", sid="same")
+        attached.stop()
+        other = self._other_configuration()
+        with self.assertRaisesRegex(SessionError, "one"):
+            other.start(self.spec(client="fake", mode="tui", name="two"))
+        replacement.close()
+
+    def test_launch_and_publication_failures_release_the_reserved_slot(self):
+        for mode, boundary in (
+            ("headless", self.host.calls.pipe),
+            ("tui", self.host.calls.terminal),
+            ("tui", self.host.calls.close_view),
+        ):
+            with self.subTest(mode=mode, boundary=boundary):
+                boundary.side_effect = SessionError("fake launch failure")
+                with self.assertRaisesRegex(SessionError, "fake launch failure"):
+                    self.start(mode=mode, name="one", sid="s1")
+                boundary.side_effect = None
+                self.start(mode=mode, name="one", sid="s2").close()
+
+    def test_unconfirmed_failed_shutdown_keeps_the_durable_reservation(self):
+        for phase in ("publication", "handoff", "handoff-visible"):
+            with self.subTest(phase=phase):
+                other = self._other_configuration()
+                self.host.close_failure = SessionError("shutdown unconfirmed")
+                self.host.inventory_failure = (
+                    None if phase == "handoff-visible" else SessionError("host unavailable")
+                )
+                self.host.launch_failure = (
+                    None if phase == "publication" else SessionError("handoff failed")
+                )
+                self.host.calls.close_view.side_effect = SessionError("publication failed")
+                with self.assertRaises(SessionError):
+                    self.start(mode="tui", name="one", sid="s1")
+                spec = self.spec(client="fake", mode="tui", name="two", sid="s2")
+                with self.assertRaisesRegex(SessionError, "one"):
+                    admitted = other.start(spec)
+                    self.addCleanup(admitted.close)
+                self.host.calls.list.side_effect = None
+                self.host.calls.close_view.side_effect = None
+                self.host.processes["one"].calls.close.side_effect = None
+                self.session.retire("one", sid="s1")
+                other.start(spec).close()
+
+    def test_each_mode_and_resumed_start_uses_the_same_client_capacity(self):
+        for mode, name in (("tui", "one"), ("headless", None), ("headless", "one")):
+            with self.subTest(mode=mode, name=name):
+                first = self.start(mode=mode, name=name, sid="s1")
+                for next_mode, next_name in (("headless", None), ("tui", "two")):
+                    with self.assertRaisesRegex(SessionError, "client fake.*limit 1"):
+                        self.start(mode=next_mode, name=next_name, sid="s2", resume=True)
+                first.close()
+                again = self.start(mode=mode, name=name, sid="s3", resume=True)
+                again.close()
+
+    def test_refusal_happens_before_the_session_record_and_host_launch(self):
+        first = self.start(mode="tui", name="one", sid="s1")
+        before, calls = self.written(), len(self.host.calls.mock_calls)
+        with self.assertRaisesRegex(SessionError, "one"):
+            self.start(mode="headless", sid="s2")
+        self.assertEqual(self.written(), before)
+        self.assertEqual(self.host.calls.pipe.call_count, 0)
+        self.assertGreaterEqual(len(self.host.calls.mock_calls), calls)
+        first.close()
+
+    def test_preflight_does_not_reserve_and_other_clients_remain_available(self):
+        spec = self.spec(client="fake", mode="headless", prompt="hi")
+        self.session.preflight(spec)
+        first = self.start()
+        self.start(client="quiet").close()
+        first.stop()
+        self.start().close()
+
+    def test_rejected_validation_leaves_no_capacity_state(self):
+        for existing in (True, False):
+            if not existing:
+                os.rmdir(self.ensemble)
+            before = sorted(str(p.relative_to(self.home)) for p in Path(self.home).rglob("*"))
+            with (
+                self.subTest(existing=existing),
+                self.assertRaisesRegex(ConfigError, "events: tui mode only"),
+            ):
+                self.start(events=os.path.join(self.home, "events"))
+            self.assertEqual(
+                sorted(str(p.relative_to(self.home)) for p in Path(self.home).rglob("*")), before
+            )
+
+    def test_in_process_completion_without_events_and_stop_release_capacity(self):
+        reached, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        self.configure(client="checked", max_runs=1)
+        self.steps({"sleep": 1})
+
+        def sleep(_seconds):
+            reached.set()
+            release.wait(5)
+
+        with mock.patch("time.sleep", side_effect=sleep):
+            first = self.start(client="checked", mode="in_process", sid="a")
+            self.assertTrue(reached.wait(5))
+            with self.assertRaisesRegex(SessionError, "client checked"):
+                self.start(client="checked", mode="in_process", sid="b")
+            release.set()
+            self.assertTrue(first._capacity.finished.wait(5))
+            self.start(client="checked", mode="in_process", sid="c").close()
+
+
 def parsed(tables, default) -> Hosts:
     return Host.parse_hosts({**tables, "default": default})
+
+
+class AliasedClientCapacityTest(TuiBase):
+    def test_closing_through_an_alias_releases_the_original_reservation_for_disjoint_hosts(self):
+        for action in ("close", "stop", "retire"):
+            with self.subTest(action=action):
+                self.configure(tui=True, max_runs=1)
+                setup = self.session._config()
+                self.host.checked.return_value = SimpleNamespace(stdout="/fake/server.sock\n")
+                offline = ScreenHost("offline")
+
+                def build(kind, name, table, *, unavailable=offline):
+                    return unavailable if name == "offline" else kind(name, table, tmux=self.host)
+
+                self.session = HostedSession.configured(
+                    clients=setup.registry.settings.clients,
+                    hosts=parsed(
+                        {
+                            "tmux": HOSTS["tmux"],
+                            "alias": HOSTS["tmux"],
+                            "offline": {
+                                "implementation": "tests.session.fakes.terminal:ScreenHost"
+                            },
+                        },
+                        "tmux",
+                    ),
+                    class_loader=setup.class_loader,
+                    host_factory=build,
+                    viewer_factory=lambda settings: Viewer(settings, tmux=self.host),
+                )
+                other = ScreenHost("elsewhere")
+                disjoint = HostedSession.configured(
+                    clients=setup.registry.settings.clients,
+                    hosts=parsed(
+                        {
+                            "elsewhere": {
+                                "implementation": "tests.session.fakes.terminal:ScreenHost"
+                            }
+                        },
+                        "elsewhere",
+                    ),
+                    class_loader=setup.class_loader,
+                    host_factory=lambda _kind, _name, _table, target=other: target,
+                    viewer_factory=MemoryViewer,
+                )
+                self.start(mode="tui", name="one", sid=SID)
+                offline.calls.list.side_effect = SessionError("unrelated host offline")
+                if action == "retire":
+                    self.session.retire("one", sid=SID, host="alias")
+                else:
+                    attached = self.session.attach("one", sid=SID, host="alias")
+                    attached.close() if action == "close" else attached.stop()
+                next_session = disjoint.start(self.spec(client="fake", mode="tui", name="two"))
+                next_session.close()
+
+    def test_two_tmux_aliases_count_one_existing_tui_and_still_enforce_the_limit(self):
+        self.configure(client="checked", max_runs=2)
+        setup = self.session._config()
+        self.host.checked.return_value = SimpleNamespace(stdout="/fake/server.sock\n")
+        self.host.listing.return_value = [listed("existing", client="checked", sid="s1")]
+        self.session = HostedSession.configured(
+            clients=setup.registry.settings.clients,
+            hosts=parsed(
+                {"tmux": HOSTS["tmux"], "alias": {**HOSTS["tmux"], "status_line": False}},
+                "tmux",
+            ),
+            class_loader=setup.class_loader,
+            host_factory=lambda kind, name, table: kind(name, table, tmux=self.host),
+            viewer_factory=MemoryViewer,
+        )
+        reached, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        self.steps({"sleep": 1})
+
+        def sleep(_seconds):
+            reached.set()
+            release.wait(WAIT)
+
+        with mock.patch("time.sleep", side_effect=sleep):
+            second = self.start(client="checked", mode="in_process", sid="s2")
+            self.assertTrue(reached.wait(WAIT))
+            with self.assertRaisesRegex(SessionError, "client checked.*limit 2.*existing.*s2"):
+                self.start(client="checked", mode="in_process", sid="s3")
+            release.set()
+            self.assertTrue(second._capacity.finished.wait(WAIT))
 
 
 class ConfiguredTest(Case):

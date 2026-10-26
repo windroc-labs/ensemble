@@ -13,6 +13,7 @@ BIN = os.path.join(REPO, "bin", "ensemble-delegate")
 MINIMAL = "/usr/bin:/bin"
 COMMANDS = [
     "run",
+    "open",
     "status",
     "content",
     "outcome",

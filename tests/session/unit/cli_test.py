@@ -8,13 +8,13 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
-from ensemble.session import cli
+from ensemble.session import EnvironmentSpec, SessionBusy, cli
 from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.tmux_cli import attach_command
 from ensemble.session.engine.types import ConfigError, Hosts
 from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.session.viewer import display as displays
-from ensemble.utils import Record
+from ensemble.utils import ACCOUNT_ENV, Record
 from tests.session.case import Case
 from tests.session.fakes.terminal import ScreenHost
 from tests.session.hosted_support import SID, HostedTuiBase
@@ -46,6 +46,102 @@ class ReservedName(Case):
                 cli.main(argv)
             self.assertEqual(caught.exception.code, 2)
             self.assertIn("want [A-Za-z0-9_-]+ but not none, not 'none'", err.getvalue())
+
+
+class WorkerEnvironment(Case):
+    def setUp(self):
+        self.environment = EnvironmentSpec(
+            image="dummy-env:test",
+            gateway="workers",
+            lock="dummy-lock",
+            secrets=({"item": "ensemble-env/dummy", "file": "dummy.txt"},),
+        )
+        self.addCleanup(setattr, HostedSession, "_setup", None)
+        self.workers = mock.MagicMock()
+        self.worker = self.workers.new.return_value
+        self.record = Record(
+            v=1,
+            kind="worker",
+            name="dummy-1",
+            sessions=("dummy-1",),
+            sid=SID,
+            workdir=self.home,
+            ctl=("ensemble-session",),
+            resume=("ensemble-session", "resume", "dummy-1"),
+            display=None,
+            detail="claude",
+        )
+        self.worker.start.return_value = self.record
+        self.workers.load.return_value = self.worker
+        self.worker.resume.return_value = self.worker.restart.return_value = self.record
+        self.enterContext(mock.patch.dict(os.environ, {"ENSEMBLE_SID": SID}))
+
+    def invoke(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                code = cli.main(list(argv), worker_cls=self.workers)
+            except SystemExit as error:
+                code = error.code
+        return code, out.getvalue(), err.getvalue()
+
+    def start(self, *argv):
+        return self.invoke(
+            "start", "dummy-1", "--client", "claude", "--cwd", self.home, "--display", "none", *argv
+        )
+
+    def test_resolved_environment_and_account_reach_the_persisted_worker(self):
+        code, out, err = self.start(
+            "--environment-spec",
+            json.dumps(self.environment.persisted()),
+            "--account",
+            "work",
+        )
+        self.assertEqual((code, out, err), (0, self.record.to_line() + "\n", ""))
+        fields = self.workers.new.call_args.kwargs
+        self.assertEqual((fields["environment"], fields["sid"]), (self.environment, SID))
+        self.assertEqual(fields["env"], {ACCOUNT_ENV: "work"})
+        self.worker.check.assert_called_once_with(prompt="", resume=False)
+        self.worker.start.assert_called_once_with(prompt="", resume=False, hidden=True)
+
+    def test_bad_environment_json_is_rejected_before_a_worker_exists(self):
+        valid = self.environment.persisted()
+        for data in (
+            "{",
+            "null",
+            "[]",
+            "{}",
+            json.dumps(valid | {"role": "engineer"}),
+            json.dumps(valid | {"prefetch": {"repo": "o/r", "ref": "main"}}),
+        ):
+            with self.subTest(data=data):
+                code, out, err = self.start("--environment-spec", data)
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("environment", err)
+        self.workers.new.assert_not_called()
+
+    def test_start_without_environment_preserves_the_default_worker(self):
+        self.assertEqual(self.start()[0], 0)
+        self.assertIsNone(self.workers.new.call_args.kwargs.get("environment"))
+
+    def test_busy_start_restart_and_resume_exit_75_naming_the_holder(self):
+        busy = SessionBusy("dummy-lock", "ensemble-other-1 (owner other)")
+        for method, argv in (
+            (
+                "start",
+                ("start", "dummy-1", "--client", "claude", "--cwd", self.home, "--display", "none"),
+            ),
+            ("restart", ("restart", "dummy-1")),
+            ("resume", ("resume", "dummy-1")),
+        ):
+            with (
+                self.subTest(method=method),
+                mock.patch.object(self.worker, method, side_effect=busy),
+            ):
+                code, out, err = self.invoke(*argv)
+            self.assertEqual((code, out), (75, ""))
+            self.assertIn("dummy-lock", err)
+            self.assertIn("ensemble-other-1 (owner other)", err)
 
 
 class RecordControl(HostedTuiBase):

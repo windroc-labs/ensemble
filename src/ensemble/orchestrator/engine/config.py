@@ -38,7 +38,6 @@ TOP_KEYS = {
     "tracker",
     "workflow",
     "task_tiers",
-    "client_max_runs",
     "usage_limit",
     "roles",
     "local_clones",
@@ -268,8 +267,7 @@ def _load(cfg, work, kind, delegates, index, *, board):
     docs = _docs(roles, LOCAL, work)
     _clone_origins(cfg["local_clones"], roles, docs)
     frozen = {
-        k: MappingProxyType(dict(cfg[k]))
-        for k in ("task_tiers", "client_max_runs", "usage_limit", "local_clones")
+        k: MappingProxyType(dict(cfg[k])) for k in ("task_tiers", "usage_limit", "local_clones")
     }
     return Config(
         roles=MappingProxyType(roles),
@@ -281,7 +279,6 @@ def _load(cfg, work, kind, delegates, index, *, board):
         docs=docs,
         stages=MappingProxyType(_stage_order()),
         task_tiers=frozen["task_tiers"],
-        client_max_runs=frozen["client_max_runs"],
         usage_limit=frozen["usage_limit"],
         local_clones=frozen["local_clones"],
         delegate_kind=kind,
@@ -401,7 +398,6 @@ def _load_config(cfg, local, board):
     _local_clones(cfg)
     _work_dir(cfg, cfg["local_clones"], board=board)
     _task_tiers(cfg)
-    _client_max_runs(cfg)
     _usage_limit(cfg)
 
 
@@ -690,19 +686,6 @@ def _usage_limit(cfg):
                 f'orchestrator/config.toml: [usage_limit] {client} must be "on" or "off": {value!r}'
             )
         switches[client] = value == "on"
-
-
-def _client_max_runs(cfg):
-    limits = cfg.setdefault("client_max_runs", {})
-    if not isinstance(limits, dict):
-        raise ConfigError(
-            "orchestrator/config.toml: client_max_runs must be a table of <client> = <whole number >= 1>"
-        )
-    for k, n in limits.items():
-        if not isinstance(n, int) or isinstance(n, bool) or n < 1:
-            raise ConfigError(
-                f"orchestrator/config.toml: [client_max_runs] {k} must be a whole number >= 1: {n!r}"
-            )
 
 
 def _runnable(cfg, work, delegate_cls, index):

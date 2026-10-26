@@ -159,7 +159,6 @@ class FakeBroker:
 
     def __init__(self, order, started):
         self.order, self.started, self.error, self.closed = order, started, None, []
-        self.holder = None
         self.failing, self.refreshed = {}, threading.Event()
 
     def version(self):
@@ -179,10 +178,6 @@ class FakeBroker:
         if "build" in self.failing:
             raise self.failing["build"]
         return IMAGE, DIGEST
-
-    def lock_query(self, lock):
-        self.order.append(("lock-query", lock))
-        return self.holder
 
     def start(self, manifest, *, clients):
         self.order.append(("start", manifest, clients))
@@ -328,6 +323,13 @@ def _free(path):
 
 
 class ConfigTest(Base):
+    def test_capacity_namespace_uses_the_fixed_endpoint_across_aliases(self):
+        alias = DockerHost(
+            "alias", {"docker": "/other/docker"}, run=self.docker, broker=self.broker
+        )
+        self.assertEqual(self.host._capacity_namespace(), f"docker:{self.ep}")
+        self.assertEqual(alias._capacity_namespace(), self.host._capacity_namespace())
+
     def test_provider_usage_rejects_broker_18_before_probing_credentials(self):
         request = SimpleNamespace(provider="strata", base_url="https://strata.test/v1")
         locked = data("error-login_required.json")
@@ -1713,35 +1715,17 @@ class EnvironmentTest(StartBase):
         self.record(**({} if environment == "absent" else {"environment": environment}))
         self.history()
 
-    def test_preflight_sends_version_and_lock_query_only(self):
+    def test_preflight_sends_version_only_without_querying_the_lock(self):
         cwd = os.path.join(self.account, "src", "later")
         launch = Launch(("agent",), cwd=cwd, env={})
         self.host._preflight("w", launch, {**self.METADATA, "environment": carried(ENVIRONMENT)})
-        self.assertEqual(self.order, ["version", ("lock-query", "dummy-lock")])
+        self.assertEqual(self.order, ["version"])
         self.assertFalse(os.path.exists(cwd))
 
-    def test_preflight_raises_session_busy_naming_the_holder(self):
-        self.broker.holder = HOLDER
-        with self.assertRaises(SessionBusy) as raised:
-            self.host._preflight(
-                "w", self.launch, {**self.METADATA, "environment": carried(ENVIRONMENT)}
-            )
-        self.assertEqual(raised.exception.lock, "dummy-lock")
-        self.assertIn(HOLDER["container"], str(raised.exception))
-        self.assertIn("owner other", str(raised.exception))
-
-    def test_preflight_passes_its_own_container_holding_the_lock(self):
-        self.broker.holder = {"container": CONTAINER, "owner": "w"}
+    def test_preflight_of_a_resume_in_an_environment_sends_version_only(self):
         self.resumable(ENVIRONMENT.persisted())
         self.host._preflight("w", self.launch, {**self.METADATA, "resume": "1"})
-        self.assertEqual(self.order, ["version", ("lock-query", "dummy-lock")])
-        for holder in (
-            {"container": CONTAINER, "owner": "other"},
-            {"container": "ensemble-other-" + GEN, "owner": "w"},
-        ):
-            self.broker.holder = holder
-            with self.subTest(holder), self.assertRaises(SessionBusy):
-                self.host._preflight("w", self.launch, {**self.METADATA, "resume": "1"})
+        self.assertEqual(self.order, ["version"])
 
     def test_another_sids_record_is_not_the_stored_environment(self):
         self.resumable(ENVIRONMENT.persisted())
@@ -1750,12 +1734,11 @@ class EnvironmentTest(StartBase):
         self.assertEqual(self.broker.built, {})
         self.assertIsNone(self.host_record()["environment"])
 
-    def test_no_lock_sends_no_lock_query_and_no_lock_fields(self):
+    def test_no_lock_sends_no_lock_fields(self):
         unlocked = carried(replace(ENVIRONMENT, lock=None))
         self.host._preflight("w", self.launch, {**self.METADATA, "environment": unlocked})
         self.assertEqual(self.order, ["version"])
         self.start(environment=unlocked)
-        self.assertNotIn(("lock-query", "dummy-lock"), self.order)
         self.assertFalse({"lock", "lock_owner"} & set(self.manifest()))
 
     def test_build_uses_the_base_image_and_plugins(self):
@@ -1765,7 +1748,6 @@ class EnvironmentTest(StartBase):
         self.assertEqual(
             self.broker.built, {"base_image": "dummy-env:test", "image_plugins": ("dummy-plugin",)}
         )
-        self.assertNotIn(("lock-query", "dummy-lock"), self.order)
 
     def test_worker_image_sends_no_base_image(self):
         worker_image = replace(ENVIRONMENT, image=EnvironmentSpec.WORKER, plugins=())
@@ -1854,7 +1836,7 @@ class EnvironmentTest(StartBase):
     def test_resume_without_an_environment_uses_the_stored_one(self):
         self.resumable(ENVIRONMENT.persisted())
         self.host._preflight("w", self.launch, {**self.METADATA, "resume": "1"})
-        self.assertEqual(self.order, ["version", ("lock-query", "dummy-lock")])
+        self.assertEqual(self.order, ["version"])
         self.start(resume="1")
         self.assertEqual(self.broker.built["base_image"], "dummy-env:test")
         self.assertEqual(self.manifest()["lock"], "dummy-lock")
@@ -3379,6 +3361,20 @@ class ReclaimTest(Base):
 
 
 class ListTest(Base):
+    def test_admission_inventory_distinguishes_missing_docker_from_empty(self):
+        self.host.run = mock.Mock(side_effect=FileNotFoundError(2, "no docker"))
+        with self.assertRaisesRegex(SessionError, "inventory unavailable"):
+            self.host._capacity_rows()
+        os.unlink(self.ep.removeprefix("unix://"))
+        self.host.run = self.docker
+        with self.assertRaisesRegex(SessionError, "inventory unavailable"):
+            self.host._capacity_rows()
+
+    def test_admission_inventory_reads_successful_empty_and_populated_results(self):
+        self.assertEqual(self.host._capacity_rows(), [])
+        self.listed("w")
+        self.assertEqual([row.name for row in self.host._capacity_rows()], ["w"])
+
     def test_list_and_rows_from_labelled_containers(self):
         self.listed("w", "v")
         self.docker.ps += [
