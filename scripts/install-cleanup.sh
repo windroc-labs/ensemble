@@ -192,8 +192,9 @@ usage: install-cleanup.sh [--yes] [--password-stdin]
 
 Internal, for test machines only: removes what install.sh recorded in ~/.ensemble/install/added,
 so the machine is as before install.sh ran. Lists it and asks first; --yes skips the question
-(automation only). An app container to remove (~/Library/Containers/<app>) needs the terminal's Full Disk
-Access: without it the cleanup stops before removing anything. Run by hand:
+(automation only). An app or group container to remove (~/Library/Containers/<app>, ~/Library/Group
+Containers/<group>) needs the terminal's Full Disk Access: without it the cleanup stops before removing
+anything. Run by hand:
   curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install-cleanup.sh | bash
 With --password-stdin (sudo password on stdin), stdin cannot carry the script:
   security find-generic-password -s <item> -w | bash -c "\$(curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install-cleanup.sh)" install-cleanup.sh --yes --password-stdin
@@ -242,12 +243,31 @@ validate() {
   done <"$ledger"
 }
 
-# Stops before anything is removed while a recorded app container is there and the terminal lacks Full Disk Access:
-# macOS lets only that remove ~/Library/Containers/<app>, and only that reads TCC.db.
+# Exit 0 when path $1 is confirmed missing: its lstat fails with ENOENT, not with a denied access.
+absent() {
+  if [ -e "$1" ] || [ -L "$1" ]; then return 1; fi
+  python3 -I -c '
+import os, sys
+try:
+    os.lstat(sys.argv[1])
+except FileNotFoundError:
+    sys.exit(0)
+except OSError:
+    sys.exit(1)
+sys.exit(1)' "$1"
+}
+
+# Stops before anything is removed while a recorded app or group container may be there and the terminal lacks Full
+# Disk Access: macOS lets only that remove ~/Library/Containers/<app> and ~/Library/Group Containers/<group>, and only
+# that reads TCC.db.
 protected_dirs() {
   local path found=
   while IFS= read -r path; do
-    case $path in "$HOME/Library/Containers/"?*) if [ -e "$path" ]; then found="$found $path"; fi ;; esac
+    case $path in
+      "$HOME/Library/Containers/"?* | "$HOME/Library/Group Containers/"?*)
+        if ! absent "$path"; then found="$found $path"; fi
+        ;;
+    esac
   done <<<"$(of_kind dir | cut -f2)"
   if [ -z "$found" ] || head -c 1 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" >/dev/null 2>&1; then return 0; fi
   die "macOS lets only Full Disk Access remove$found: give the terminal Full Disk Access (System Settings › Privacy & Security), reopen it, then rerun; nothing removed (take the access back once cleanup has finished)"

@@ -326,6 +326,10 @@ class InstallTest(Case):
         (self.fakes / "tty_name").write_text("ttys001\n")
         (self.fakes / "commit").write_text(OLD)
         (self.root / "dev").mkdir(parents=True)
+        # A test machine's terminal has Full Disk Access (install-cleanup.sh reads TCC.db); its tests revoke it.
+        self.tcc = Path(self.home, "Library/Application Support/com.apple.TCC/TCC.db")
+        self.tcc.parent.mkdir(parents=True)
+        self.tcc.write_text("granted")
         self.pkg_src = self.fakes / "pkg-src"
         executable(self.pkg_src / "src/broker/install.sh", BROKER_INSTALL)
         self.versions = self.pkg_src / "src/broker/internal/codex/versions.go"
@@ -4449,7 +4453,9 @@ exec /bin/rm "$@"
     def test_cleanup_needs_full_disk_access_for_a_container(self):
         """macOS lets only Full Disk Access remove an app container: without it nothing is removed."""
         self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        self.tcc.unlink()
         container = Path(self.home, "Library/Containers/com.docker.docker")
+        group = Path(self.home, "Library/Group Containers/group.com.docker")
         (container / "locked").mkdir(parents=True)
         (container / "locked/data").write_text("")
         ledger = Path(self.ensemble, "install/added")
@@ -4458,7 +4464,7 @@ exec /bin/rm "$@"
         self.assertEqual(result.code, 1, result.stderr)
         self.assertEqual(
             result.stderr,
-            f"install-cleanup.sh: macOS lets only Full Disk Access remove {container}: give the"
+            f"install-cleanup.sh: macOS lets only Full Disk Access remove {container} {group}: give the"
             " terminal Full Disk Access (System Settings › Privacy & Security), reopen it, then"
             " rerun; nothing removed (take the access back once cleanup has finished)\n",
         )
@@ -4466,9 +4472,7 @@ exec /bin/rm "$@"
         self.assertEqual(ledger.read_bytes(), recorded)
         self.assertTrue((container / "locked/data").exists())
         self.assertEqual([c for c in self.calls() if not c.startswith(("uname", "ps "))], [])
-        tcc = Path(self.home, "Library/Application Support/com.apple.TCC/TCC.db")
-        tcc.parent.mkdir(parents=True)
-        tcc.write_text("granted")
+        self.tcc.write_text("granted")
         locked = container / "locked"
         locked.chmod(0o500)
         self.addCleanup(lambda: locked.exists() and locked.chmod(0o700))
@@ -4490,6 +4494,33 @@ exec /bin/rm "$@"
         self.assertFalse(container.exists())
         self.assertFalse(Path(self.ensemble, "install").exists())
         self.assertFalse(Path(self.home, ".zprofile").exists())
+
+    def test_cleanup_needs_full_disk_access_for_a_group_container(self):
+        """macOS 27 denies a terminal Docker's Group Container too: without the access nothing is removed."""
+        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        group = Path(self.home, "Library/Group Containers/group.com.docker")
+        self.assertTrue((group / "settings-store.json").exists())
+        self.tcc.unlink()
+        ledger = Path(self.ensemble, "install/added")
+        recorded = ledger.read_bytes()
+        result = self.cleanup()
+        self.assertEqual(result.code, 1, result.stderr)
+        self.assertIn(
+            f"install-cleanup.sh: macOS lets only Full Disk Access remove {group}:", result.stderr
+        )
+        self.assertNotRegex(result.tty, REMOVE_Q)
+        self.assertEqual(ledger.read_bytes(), recorded)
+        self.assertTrue((group / "settings-store.json").exists())
+        group.parent.chmod(0o600)
+        self.addCleanup(lambda: group.parent.exists() and group.parent.chmod(0o700))
+        result = self.cleanup()
+        self.assertEqual(result.code, 1, result.stderr)
+        self.assertIn(f"remove {group}:", result.stderr)
+        self.assertEqual(ledger.read_bytes(), recorded)
+        group.parent.chmod(0o700)
+        self.tcc.write_text("granted")
+        self.assert_ok(self.cleanup("--yes"))
+        self.assertFalse(group.exists())
 
     def preinstalled_homebrew(self):
         """Homebrew with gh and the Command Line Tools, there before install.sh; PATH lacks its bin."""
