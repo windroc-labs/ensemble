@@ -31,6 +31,7 @@ type Recorder struct {
 	own     []entry
 	others  map[string][]entry
 	order   []string
+	notices []Line
 	flushed bool
 }
 
@@ -75,6 +76,14 @@ func (r *Recorder) Add(container string, c Credential, key string) {
 	r.others[container] = merge(r.others[container], c, key)
 }
 
+// Notice records one delivered static secret notice for container ("": the host's), on a line of its own.
+func (r *Recorder) Notice(container string, c Credential) {
+	if r == nil {
+		return
+	}
+	r.notices = append(r.notices, Line{Command: r.Command, Event: noticeEvent, Container: container, Credentials: []Credential{c}})
+}
+
 func credentials(list []entry) []Credential {
 	out := make([]Credential, 0, len(list))
 	for _, e := range list {
@@ -83,7 +92,7 @@ func credentials(list []entry) []Credential {
 	return out
 }
 
-// Flush writes the retry lines, then the command line for start, refresh and close, err being the command's error.
+// Flush writes the retry lines, the notice lines, then the command line for start, refresh and close, err being the command's error.
 // Its error describes only audit persistence; the caller keeps the command's result independently.
 func (r *Recorder) Flush(err error) error {
 	if r == nil || r.flushed {
@@ -98,6 +107,10 @@ func (r *Recorder) Flush(err error) error {
 	var lines []Line
 	for _, c := range r.order {
 		lines = append(lines, Line{Time: at, Command: r.Command, Event: retryEvent, Container: c, Credentials: credentials(r.others[c])})
+	}
+	for _, l := range r.notices {
+		l.Time = at
+		lines = append(lines, l)
 	}
 	switch r.Command {
 	case startEvent, refreshEvent, closeEvent:

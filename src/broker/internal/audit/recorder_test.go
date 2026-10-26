@@ -3,6 +3,7 @@ package audit
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -173,4 +174,40 @@ func TestFlushNoWriteHasNoError(t *testing.T) {
 	if err := r.Flush(nil); err != nil || s.calls != 0 {
 		t.Fatal("empty flush attempted a write")
 	}
+}
+
+func TestNoticeLines(t *testing.T) {
+	for _, command := range []string{"login", "status", "notices", "refresh"} {
+		r, s := recorder(command, "")
+		if command == "notices" || command == "refresh" {
+			r.Begin(ctr, nil)
+		}
+		expires := "2026-11-20T00:00:00Z"
+		r.Notice(r.Container, Credential{Kind: EnvSecret, Item: "ensemble-env/db", Result: Notified, Notice: "30d", ExpiresAt: &expires})
+		r.Notice(r.Container, Credential{Kind: OpencodeAPIKey, Item: "ensemble-opencode/strata", Result: Notified, Notice: "rotated"})
+		if err := r.Flush(nil); err != nil {
+			t.Fatal(err)
+		}
+		lines := s.decoded(t)
+		if command == "refresh" {
+			lines = lines[:2] // then the command's own line
+		}
+		if len(lines) != 2 {
+			t.Fatalf("%s: %v", command, lines)
+		}
+		for i, want := range []string{
+			`{"kind":"env-secret","result":"notified","expires_at":"2026-11-20T00:00:00Z","item":"ensemble-env/db","notice":"30d"}`,
+			`{"kind":"opencode-api-key","result":"notified","expires_at":null,"item":"ensemble-opencode/strata","notice":"rotated"}`,
+		} {
+			line := lines[i]
+			if line["event"] != "credential-notice" || line["command"] != command || !strings.Contains(string(s.lines[i]), `"credentials":[`+want+`]`) {
+				t.Errorf("%s %d: %s", command, i, s.lines[i])
+			}
+			if (r.Container == "") != (line["container"] == nil) {
+				t.Errorf("%s: container %v", command, line["container"])
+			}
+		}
+	}
+	var r *Recorder
+	r.Notice("", Credential{Kind: EnvSecret, Result: Notified})
 }
