@@ -1725,7 +1725,7 @@ class EndingHost(RecordingHost):
 
 
 class StartedTest(HarnessCase):
-    """detach's wait for a tui run's agent session: TUI_START_TIMEOUT bounds it, its SessionError
+    """detach's wait for a tui run's agent session: the start limit bounds it, its SessionError
     names why, and a start it gives up on while the harness may live is saved before the close.
     """
 

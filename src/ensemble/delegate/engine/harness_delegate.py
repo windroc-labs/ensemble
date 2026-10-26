@@ -1033,8 +1033,8 @@ class HarnessDelegate(Delegate):
     def _started(self, state: _State) -> None:
         """Tui: waits, outside the mutex, until this run's agent session has its client running;
         SessionError naming why, its harness and agent session closed, when the harness ends first,
-        a Host fails or its start limit passes; the last two first saved as start_failure, the
-        harness's end. A same-named session of another sid is not this run's.
+        a Host fails or its start limit passes. The last two save start_failure first, which the
+        harness then ends with. A same-named session of another sid is not this run's.
         """
         if state.plan.spec.mode != Mode.TUI:
             return
