@@ -28,11 +28,15 @@ from typing import NamedTuple
 import ensemble.utils
 from ensemble.session.engine.tmux_cli import (
     DIED,
+    Probe,
     TmuxCli,
     TmuxPane,
     TuiError,
     absent,
     display_error,
+    exit_code,
+    liveness,
+    running,
 )
 from ensemble.session.engine.tmux_cli import POLL as TMUX_POLL
 from ensemble.session.engine.types import (
@@ -66,7 +70,6 @@ from ensemble.session.hosts.base import (
 from ensemble.session.hosts.docker import hook as docker_hook
 from ensemble.session.hosts.docker import supervisor as run_supervisor
 from ensemble.session.hosts.docker.broker import (
-    REFRESH,
     RELAY,
     Broker,
     BrokerError,
@@ -127,6 +130,9 @@ with os.fdopen(fd, 'wb') as f: f.write(sys.stdin.buffer.read())"""
 LOCK_WAIT = 30
 KILL_WAIT = 5
 POLL = 0.2
+WAIT_MAX = 1.0
+PROBE_MIN = 0.5  # HostedSession's POLL
+PROBE_MAX = 3.0
 LABEL = "ensemble.session"
 PS_FORMAT = "\t".join(
     (
@@ -222,8 +228,8 @@ def _state_file(name: str) -> str:
     return os.path.join(os.path.expanduser(TUI_DIR), name, TUI_STATE)
 
 
-def _image_digest(row: Row) -> str | None:
-    """The image digest row's generation recorded at start."""
+def _image_tag(row: Row) -> str | None:
+    """The image tag row's generation recorded at start: its key, which a client-only rebuild keeps."""
     try:
         with open(
             os.path.join(state_dir(row.name), f"{row.generation}.result.json"), encoding="utf-8"
@@ -231,7 +237,7 @@ def _image_digest(row: Row) -> str | None:
             found = json.load(f)
     except (OSError, ValueError):
         return None
-    return found.get("image_digest") if isinstance(found, dict) else None
+    return found.get("image") if isinstance(found, dict) else None
 
 
 def _report_plan(name: str, plan: Mapping) -> None:
@@ -310,8 +316,6 @@ def _save_result(
         "ended_at": created.ended,
         "phases": dict(phases),
     }
-    if created.started.client_update is not None:
-        result["client_update"] = dict(created.started.client_update)
     if launched is not None:
         result["launched_at"] = launched
     save(
@@ -338,12 +342,15 @@ class _Laps:
             print(f"{head}: {phase} {seconds:.2f} s", file=sys.stderr)
 
 
-def _wait(ready, timeout: float, poll: float = POLL) -> bool:
+def _wait(ready, timeout: float, poll: float = POLL, cap: float | None = None) -> bool:
+    """cap: the poll doubles up to it."""
     deadline = time.monotonic() + timeout
     while not ready():
         if time.monotonic() >= deadline:
             return False
         time.sleep(poll)
+        if cap is not None:
+            poll = min(poll * 2, cap)
     return True
 
 
@@ -374,7 +381,9 @@ def _accept_started(
 
 class DockerTerminal(InteractiveProcess):
     """The container's pane, a TmuxPane on the container's TmuxCli. Its Record, display and sid: the
-    Host record's, of the container's generation.
+    Host record's, of the container's generation. state, returncode and screen() share one probe
+    and capture for an interval doubling from PROBE_MIN to PROBE_MAX while nothing changes; alive()
+    probes afresh, so the next screen() captures afresh.
     """
 
     def __init__(
@@ -392,35 +401,59 @@ class DockerTerminal(InteractiveProcess):
         self._pane_pid = process.split(" ")[3]
         self.host, self.container, self.generation = host, container, generation
         self.current = current
+        self._found: Probe | None = None
+        self._at, self._interval = 0.0, PROBE_MIN
+        self._screen: str | SessionError | None = None
+        self._seen: str | None = None
 
     @property
     def identity(self) -> str:
         return self.pane.process
 
+    def _take(self, found: Probe) -> Probe:
+        if found != self._found:
+            self._interval = PROBE_MIN
+        self._found, self._at, self._screen = found, time.monotonic(), None
+        return found
+
+    def _current(self) -> Probe:
+        if self._found is not None and time.monotonic() - self._at < self._interval:
+            return self._found
+        previous = self._found
+        found = self._take(self.pane.probe())
+        if found == previous:
+            self._interval = min(self._interval * 2, PROBE_MAX)
+        return found
+
+    def _alive(self, found: Probe) -> bool:
+        try:
+            return running(found, self.name)
+        except SessionError as error:  # the pane's tmux did not tell
+            raise Unanswered(str(error)) from None
+
     def state(self) -> Liveness:
-        return self.pane.state()
+        return liveness(self._current())
 
     def returncode(self) -> int | None:
-        return self.pane.returncode()
+        return exit_code(self._current())
 
     def activity(self) -> StatusState | None:
         value = self.pane.option("@state")
         return StatusState(value) if value in MARKS else None
 
     def alive(self) -> bool:
-        try:
-            return self.pane.alive()
-        except SessionError as error:  # the pane's tmux did not tell
-            raise Unanswered(str(error)) from None
+        return self._alive(self._take(self.pane.probe()))
 
     def send(self, action: Paste | Key) -> None:
         self.pane.send(action, self.alive)
+        self._interval = PROBE_MIN
 
     def press(self, keys) -> None:
         self.pane.press(keys, self.alive)
+        self._interval = PROBE_MIN
 
     def wait_exit(self, timeout: float) -> bool:
-        return _wait(lambda: not (self.alive() or self._group_live()), timeout, TMUX_POLL)
+        return _wait(lambda: not (self.alive() or self._group_live()), timeout, TMUX_POLL, WAIT_MAX)
 
     def kill(self) -> None:
         self._kill_group()
@@ -457,8 +490,24 @@ class DockerTerminal(InteractiveProcess):
         return found.get("sid"), found.get("generation")
 
     def screen(self, lines: int | None = None) -> str:
-        if not self.alive():
+        if not (self._alive(self._current()) if lines is None else self.alive()):
             raise SessionError(f"session {self.name} is not running on host {self.host.name}")
+        if lines is not None:
+            return self._read(lines)
+        if self._screen is None:
+            try:
+                self._screen = self._read(None)
+            except SessionError as error:
+                self._screen = error
+            else:
+                if self._screen != self._seen:
+                    self._interval = PROBE_MIN
+                self._seen = self._screen
+        if isinstance(self._screen, SessionError):
+            raise SessionError(str(self._screen))
+        return self._screen
+
+    def _read(self, lines: int | None) -> str:
         try:
             return _text(self.pane.read(lines))
         except TuiError as error:
@@ -792,9 +841,9 @@ class DockerHost(Host):
                 return True
             hook = None
             if not os.path.lexists(stale):
-                hook, _, (_, digest) = self._image(row.name, max_age=None)
-                if _image_digest(row) != digest:
-                    save(stale, digest)
+                hook, _, (image, _) = self._image(row.name)
+                if _image_tag(row) != image:
+                    save(stale, image)
             if hook is None or os.path.lexists(stale):
                 if row.name not in self._warned:
                     self._warned.add(row.name)
@@ -887,16 +936,14 @@ class DockerHost(Host):
         if not os.path.isdir(cwd) and not (missing_ok and not os.path.lexists(cwd)):
             raise ConfigError(f"Docker cwd {cwd}: no such directory")
 
-    def _image(
-        self, name: str, *, max_age: int | None = REFRESH
-    ) -> tuple[str, str, tuple[str, str]]:
-        """(the hook path, the plugin root, the built image and digest); `max_age`: Broker.build's."""
+    def _image(self, name: str) -> tuple[str, str, tuple[str, str]]:
+        """(the hook path, the plugin root, the built image and digest)."""
         hook = command_path(COMMAND)
         if hook is None:
             raise ConfigError(f"docker session {name}: {COMMAND} is not on PATH (its hooks run it)")
         self.broker.version()
         root = plugin_root(hook)
-        return hook, root, self.broker.build(root, plugins=self.plugins, max_age=max_age)
+        return hook, root, self.broker.build(root, plugins=self.plugins)
 
     def _move_workspace(self, name: str, volume: str, cwd: str) -> None:
         """Deletes a new start's workspace volume mounted at another cwd, unless the broker's check

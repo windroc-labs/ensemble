@@ -1,0 +1,42 @@
+# The test board's settings, a template for the mini's ~/.ensemble/config.local.toml: copy it there
+# and fill every <…> (test-accounts.md 4.). Each app's Keychain services default to
+# linear-app-<slot>-secret and -token. install.sh asks each app's client secret and each Linear
+# project's repo, and fills each app's user_id and the team, state and label ids (docs/credentials.md
+# › Linear presets).
+# The filled values live only on the mini; never commit them.
+[orchestrator]
+tracker = "linear"
+
+[orchestrator.linear]
+human_members = ["<the test manager account's address>"]
+
+[orchestrator.linear.harness]
+client_id = "<harness app's Client ID>"
+
+[orchestrator.linear.manager]
+client_id = "<manager app's Client ID>"
+
+[orchestrator.linear.roles.researcher]
+client_id = "<researcher app's Client ID>"
+
+[orchestrator.linear.roles.pm]
+client_id = "<pm app's Client ID>"
+
+[orchestrator.linear.roles.engineer]
+client_id = "<engineer app's Client ID>"
+
+[orchestrator.client_max_runs]
+opencode = 1
+claude = 1
+
+[delegate.roles.researcher.output]
+type = "github"
+repo = "<test owner>/<test repo>"
+branch = "main"
+dir = "Research/"
+
+[delegate.roles.pm.output]
+type = "github"
+repo = "<test owner>/<test repo>"
+branch = "main"
+dir = "PRD/"

@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"ensemble/broker/internal/audit"
@@ -40,18 +41,20 @@ func recording(calls *[]call) app {
 		}
 	}
 	build, workspaceRm := result("build"), result("workspace-rm")
-	return app{build: func(ctx context.Context, arg string, _ []string, _ time.Duration, p io.Writer) (any, error) {
+	return app{build: func(ctx context.Context, arg string, _ launcher.BuildSpec, _ time.Duration, p io.Writer) (any, error) {
 		return build(ctx, arg, p)
 	},
 		start: result("start"), close: result("close"),
+		lockQuery: func(ctx context.Context, name string) (any, error) { return result("lock-query")(ctx, name, nil) },
 		refresh: func(ctx context.Context, container, manifest string) (any, error) {
 			return result("refresh")(ctx, container+" "+manifest, nil)
 		},
-		status: func(ctx context.Context) (any, error) { return result("status")(ctx, "", nil) },
+		status: func(ctx context.Context, _ bool) (any, error) { return result("status")(ctx, "", nil) },
 		probeOpencode: func(ctx context.Context, provider, base string) (any, error) {
 			return result("probe-provider")(ctx, provider+" "+base, nil)
 		},
-		workspaceRm: func(ctx context.Context, volume string, _ bool) (any, error) { return workspaceRm(ctx, volume, nil) }}
+		workspaceRm:  func(ctx context.Context, volume string, _ bool) (any, error) { return workspaceRm(ctx, volume, nil) },
+		checkClients: func(ctx context.Context, p io.Writer) (any, error) { return result("check-clients")(ctx, "", p) }}
 }
 
 func invoke(a app, args ...string) (int, string, string) {
@@ -62,13 +65,79 @@ func invoke(a app, args ...string) (int, string, string) {
 
 func TestVersion(t *testing.T) {
 	code, out, errOut := invoke(app{}, "version")
-	if code != 0 || out != `{"protocol_version":"20"}`+"\n" || errOut != "" {
+	if code != 0 || out != `{"protocol_version":"27"}`+"\n" || errOut != "" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
 	for _, c := range fixtures.Cases(t, "version_output") {
 		if c.Valid && !fixtures.SameJSON(t, []byte(out), c.Data) {
 			t.Fatalf("%s: %s", c.File, out)
 		}
+	}
+}
+
+func TestLockQueryCommand(t *testing.T) {
+	calls := 0
+	a := app{lockQuery: func(_ context.Context, name string) (any, error) {
+		calls++
+		if name != "dummy" {
+			t.Fatalf("query %q", name)
+		}
+		return launcher.LockResult{}, nil
+	}}
+	code, out, errOut := invoke(a, "lock-query", "--lock", "dummy")
+	if code != 0 || out != "{\"holder\":null}\n" || errOut != "" || calls != 1 {
+		t.Fatalf("%d %q %q calls=%d", code, out, errOut, calls)
+	}
+	for _, args := range [][]string{{"lock-query"}, {"lock-query", "--lock", "A B"}, {"lock-query", "--lock", ""}, {"lock-query", "--lock", "dummy", "extra"}} {
+		code, out, errOut = invoke(a, args...)
+		if code != 2 || out != "" || calls != 1 {
+			t.Fatalf("%q: %d %q %q", args, code, out, errOut)
+		}
+	}
+	a.start = func(context.Context, string, io.Writer) (any, error) {
+		e := protocol.New(protocol.Busy, "Lock held by container (worker_1).")
+		e.Holder = &protocol.Holder{Container: "container", Owner: "worker_1"}
+		return nil, e
+	}
+	code, out, errOut = invoke(a, "start", "--manifest", "/tmp/manifest.json")
+	if code != 75 || out != "" || !strings.Contains(errOut, `"holder":{"container":"container","owner":"worker_1"}`) {
+		t.Fatalf("%d %q %q", code, out, errOut)
+	}
+}
+
+func TestCheckClientsCommand(t *testing.T) {
+	calls := 0
+	a := app{checkClients: func(_ context.Context, progress io.Writer) (any, error) {
+		calls++
+		fmt.Fprintln(progress, "ensemble-broker: removed ensemble-worker:x")
+		return launcher.CheckResult{Latest: launcher.ClientVersions{Claude: "2.1.7", Codex: "0.170.0", Opencode: "1.20.1"},
+			Rebuilt: []string{"ensemble-worker:" + strings.Repeat("a", 64)}}, nil
+	}}
+	code, out, errOut := invoke(a, "check-clients")
+	if code != 0 || errOut != "ensemble-broker: removed ensemble-worker:x\n" || calls != 1 {
+		t.Fatalf("%d %q %q calls=%d", code, out, errOut, calls)
+	}
+	for _, c := range fixtures.Cases(t, "check_clients_output") {
+		if c.File == "check-clients-output.json" && !fixtures.SameJSON(t, []byte(out), c.Data) {
+			t.Fatalf("%s: %s", c.File, out)
+		}
+	}
+	code, out, errOut = invoke(a, "check-clients", "--now")
+	if code != 2 || calls != 1 {
+		t.Fatalf("extra args: %d %q %q", code, out, errOut)
+	}
+	assertError(t, errOut, out, "check-clients", protocol.Usage)
+	a.checkClients = func(context.Context, io.Writer) (any, error) {
+		return nil, protocol.New(protocol.BuildFailed, "Cannot look up the latest client releases.")
+	}
+	code, out, errOut = invoke(a, "check-clients")
+	assertError(t, errOut, out, "check-clients", protocol.BuildFailed)
+	if code != 8 {
+		t.Fatalf("exit %d", code)
+	}
+	_, _, errOut = invoke(app{}, "frobnicate")
+	if !strings.Contains(errOut, " | check-clients") {
+		t.Fatalf("usage %q", errOut)
 	}
 }
 
@@ -104,7 +173,7 @@ func TestProbeOpencodeCommand(t *testing.T) {
 }
 
 func TestInputFixtures(t *testing.T) {
-	for _, c := range fixtures.Cases(t, "version_input", "build_input", "start_input", "refresh_input", "close_input", "status_input", "workspace_rm_input", "probe_provider_input") {
+	for _, c := range fixtures.Cases(t, "version_input", "build_input", "start_input", "refresh_input", "close_input", "status_input", "workspace_rm_input", "probe_provider_input", "lock_query_input", "check_clients_input") {
 		t.Run(c.File, func(t *testing.T) {
 			var in struct{ Argv []string }
 			if err := json.Unmarshal(c.Data, &in); err != nil {
@@ -122,7 +191,7 @@ func TestInputFixtures(t *testing.T) {
 					want.arg = in.Argv[2] + " " + in.Argv[4]
 				case "refresh":
 					want.arg = in.Argv[2] + " " + in.Argv[4]
-				case "version", "status":
+				case "version", "status", "check-clients":
 				default:
 					want.arg = in.Argv[2]
 				}
@@ -179,6 +248,20 @@ func TestUsageErrors(t *testing.T) {
 		{"build", []string{"build", "--ensemble", "/x", "--plugin", "../x"}},
 		{"build", []string{"build", "--ensemble", "/x", "--plugin", "a@"}},
 		{"build", []string{"build", "--ensemble", "/x", "--max-age", "1", "--plugin", "a"}},
+		{"build", []string{"build", "--ensemble", "/x", "--image-plugin"}},
+		{"build", []string{"build", "--ensemble", "/x", "--image-plugin", "../x"}},
+		{"build", []string{"build", "--ensemble", "/x", "--image-plugin", ".x"}},
+		{"build", []string{"build", "--ensemble", "/x", "--image-plugin", "a@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+		{"build", []string{"build", "--ensemble", "/x", "--image-plugin", "a", "--plugin", "b@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+		{"build", []string{"build", "--ensemble", "/x", "--max-age", "1", "--image-plugin", "a"}},
+		{"build", []string{"build", "--ensemble", "/x", "--base-image"}},
+		{"build", []string{"build", "--ensemble", "/x", "--base-image", "-x"}},
+		{"build", []string{"build", "--ensemble", "/x", "--base-image", "Dummy:test"}},
+		{"build", []string{"build", "--ensemble", "/x", "--base-image", "localhost:5000/env:1"}},
+		{"build", []string{"build", "--ensemble", "/x", "--base-image", "env@sha256:" + strings.Repeat("c", 64)}},
+		{"build", []string{"build", "--ensemble", "/x", "--base-image", strings.Repeat("a", 256)}},
+		{"build", []string{"build", "--ensemble", "/x", "--base-image", "a", "--base-image", "b"}},
+		{"build", []string{"build", "--ensemble", "/x", "--plugin", "b@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "--base-image", "a"}},
 		{"start", []string{"start", "--manifest", "/bad\npath"}},
 		{"start", []string{"start", "--manifest", "/bad\xffpath"}},
 		{"close", []string{"close", "--container", "other"}},
@@ -215,6 +298,11 @@ func TestUsageErrors(t *testing.T) {
 		{"unknown", []string{"login", "opencode", "ollama"}},
 		{"unknown", []string{"login", "opencode", "a/b"}},
 		{"unknown", []string{"login", "opencode", "strata", "x"}},
+		{"unknown", []string{"login", "env"}},
+		{"unknown", []string{"login", "env", ""}},
+		{"unknown", []string{"login", "env", "Dummy"}},
+		{"unknown", []string{"login", "env", "a/b"}},
+		{"unknown", []string{"login", "env", "dummy", "value"}},
 	} {
 		code, out, errOut := invoke(a, tc.args...)
 		if code != 2 {
@@ -395,8 +483,16 @@ func TestCodexStatusFixtures(t *testing.T) {
 		if err := json.Unmarshal(c.Data, &result); err != nil {
 			t.Fatal(err)
 		}
+		var metadata struct {
+			AuditWarning string `json:"audit_warning"`
+		}
+		_ = json.Unmarshal(c.Data, &metadata)
+		var response any = result
+		if metadata.AuditWarning != "" {
+			response = auditWarningResult{result}
+		}
 		var out bytes.Buffer
-		if emit(&out, result) != 0 {
+		if emit(&out, response) != 0 {
 			t.Fatal("status encoding failed")
 		}
 		var original, encoded any
@@ -414,7 +510,7 @@ func TestBuildMaxAge(t *testing.T) {
 		999999999 * time.Second: {"--max-age", "999999999"},
 	} {
 		got := time.Duration(-2)
-		a := app{build: func(_ context.Context, _ string, _ []string, maxAge time.Duration, _ io.Writer) (any, error) {
+		a := app{build: func(_ context.Context, _ string, _ launcher.BuildSpec, maxAge time.Duration, _ io.Writer) (any, error) {
 			got = maxAge
 			return map[string]string{}, nil
 		}}
@@ -425,23 +521,30 @@ func TestBuildMaxAge(t *testing.T) {
 }
 
 func TestBuildPlugins(t *testing.T) {
+	widget := "widget@vendor/plugin#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa::vendor/catalogue#cccccccccccccccccccccccccccccccccccccccc"
+	b, a := "b@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "a@o/m.x#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	for _, c := range []struct {
-		args    []string
-		plugins []string
-		maxAge  time.Duration
+		args   []string
+		spec   launcher.BuildSpec
+		maxAge time.Duration
 	}{
-		{nil, nil, -1},
-		{[]string{"--plugin", "widget@vendor/plugin#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa::vendor/catalogue#cccccccccccccccccccccccccccccccccccccccc"}, []string{"widget@vendor/plugin#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa::vendor/catalogue#cccccccccccccccccccccccccccccccccccccccc"}, -1},
-		{[]string{"--plugin", "b@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "--plugin", "a@o/m.x#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "--max-age", "60"}, []string{"b@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "a@o/m.x#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, time.Minute},
+		{nil, launcher.BuildSpec{}, -1},
+		{[]string{"--plugin", widget}, launcher.BuildSpec{Plugins: []string{widget}}, -1},
+		{[]string{"--plugin", b, "--plugin", a, "--max-age", "60"}, launcher.BuildSpec{Plugins: []string{b, a}}, time.Minute},
+		{[]string{"--image-plugin", "dummy-plugin"}, launcher.BuildSpec{ImagePlugins: []string{"dummy-plugin"}}, -1},
+		{[]string{"--plugin", b, "--image-plugin", "z", "--image-plugin", "a.b_c-d", "--max-age", "0"}, launcher.BuildSpec{Plugins: []string{b}, ImagePlugins: []string{"z", "a.b_c-d"}}, 0},
+		{[]string{"--base-image", "dummy-env:test"}, launcher.BuildSpec{BaseImage: "dummy-env:test"}, -1},
+		{[]string{"--base-image", "sha256:" + strings.Repeat("c", 64), "--plugin", b, "--image-plugin", "z", "--max-age", "60"}, launcher.BuildSpec{BaseImage: "sha256:" + strings.Repeat("c", 64), Plugins: []string{b}, ImagePlugins: []string{"z"}}, time.Minute},
 	} {
-		var plugins []string
+		var spec launcher.BuildSpec
 		maxAge := time.Duration(-2)
-		a := app{build: func(_ context.Context, _ string, p []string, m time.Duration, _ io.Writer) (any, error) {
-			plugins, maxAge = p, m
+		app := app{build: func(_ context.Context, _ string, s launcher.BuildSpec, m time.Duration, _ io.Writer) (any, error) {
+			spec, maxAge = s, m
 			return map[string]string{}, nil
 		}}
-		if code, _, errOut := invoke(a, append([]string{"build", "--ensemble", "/pkg"}, c.args...)...); code != 0 || !slices.Equal(plugins, c.plugins) || maxAge != c.maxAge {
-			t.Fatalf("%q: exit %d plugins %q max age %v: %s", c.args, code, plugins, maxAge, errOut)
+		if code, _, errOut := invoke(app, append([]string{"build", "--ensemble", "/pkg"}, c.args...)...); code != 0 || !slices.Equal(spec.Plugins, c.spec.Plugins) ||
+			!slices.Equal(spec.ImagePlugins, c.spec.ImagePlugins) || spec.BaseImage != c.spec.BaseImage || maxAge != c.maxAge {
+			t.Fatalf("%q: exit %d spec %+v max age %v: %s", c.args, code, spec, maxAge, errOut)
 		}
 	}
 }
@@ -460,7 +563,7 @@ func TestWorkspaceRmForce(t *testing.T) {
 }
 
 func TestChannels(t *testing.T) {
-	failing := app{build: func(context.Context, string, []string, time.Duration, io.Writer) (any, error) {
+	failing := app{build: func(context.Context, string, launcher.BuildSpec, time.Duration, io.Writer) (any, error) {
 		return nil, protocol.New(protocol.BuildFailed, "stage failed")
 	}, close: func(context.Context, string, io.Writer) (any, error) {
 		return nil, errors.New("surprise")
@@ -521,7 +624,17 @@ func (s *scripted) Run(_ context.Context, args []string, stdin []byte) ([]byte, 
 	if s.fail != "" && strings.Contains(joined, s.fail) {
 		return nil, &docker.CommandError{Exit: 1, Stderr: "failed: " + string(stdin)}
 	}
+	proxyID := strings.Repeat("e", 64)
 	switch {
+	case strings.HasPrefix(joined, "ps --all") && strings.Contains(joined, "--filter label=windroc.egress.contract "):
+		return []byte(proxyID + "\n"), nil
+	case joined == "container inspect "+proxyID:
+		return []byte(`[{"Id":"` + proxyID + `","Name":"/egress-proxy","State":{"Running":true,"Health":{"Status":"healthy"}},` +
+			`"Config":{"Labels":{"windroc.egress.contract":"1","windroc.egress.networks":"workers",` +
+			`"windroc.egress.network.workers.name":"egress-workers","windroc.egress.network.workers.proxy":"http://egress-proxy-workers:4750"}},` +
+			`"NetworkSettings":{"Networks":{"egress-workers":{"NetworkID":"` + strings.Repeat("f", 64) + `"}}}}]`), nil
+	case strings.HasPrefix(joined, "network inspect"):
+		return []byte(`[{"Name":"egress-workers","Id":"` + strings.Repeat("f", 64) + `","Internal":true}]`), nil
 	case strings.HasPrefix(joined, "image inspect"):
 		return []byte(`[{"Id":"sha256:` + strings.Repeat("b", 64) + `","Config":{"Labels":{"ensemble.key":"` + strings.Repeat("a", 64) +
 			`","ensemble.version":"1.2.3","ensemble.agent-uid":"1001","ensemble.agent-gid":"1002"}}}]`), nil
@@ -582,7 +695,7 @@ func TestTokenNeverLeaves(t *testing.T) {
 func TestBuildProgressGoesToStderr(t *testing.T) {
 	result := map[string]any{"image": "ensemble-worker:k", "digest": "sha256:d", "rebuilt": true}
 	build := func(fail bool) app {
-		return app{build: func(_ context.Context, _ string, _ []string, _ time.Duration, progress io.Writer) (any, error) {
+		return app{build: func(_ context.Context, _ string, _ launcher.BuildSpec, _ time.Duration, progress io.Writer) (any, error) {
 			_, _ = io.WriteString(progress, "#1 [1/3] FROM base\n#2 DONE\n")
 			if fail {
 				return nil, protocol.New(protocol.BuildFailed, "stage failed")
@@ -604,19 +717,41 @@ func TestBuildProgressGoesToStderr(t *testing.T) {
 }
 
 func TestStatus(t *testing.T) {
-	a := app{status: func(context.Context) (any, error) {
+	a := app{status: func(context.Context, bool) (any, error) {
 		return launcher.StatusResult{Revocations: []protocol.Pending{{Container: "c", Account: "acme", ExpiresAt: "2026-10-17T13:00:00Z"}}}, nil
 	}}
 	code, out, errOut := invoke(a, "status")
 	if code != 0 || errOut != "" || out != `{"revocations":[{"container":"c","account":"acme","expires_at":"2026-10-17T13:00:00Z"}]}`+"\n" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
-	a = app{status: func(context.Context) (any, error) { return nil, protocol.New(protocol.KeychainFailed, "x") }}
+	a = app{status: func(context.Context, bool) (any, error) { return nil, protocol.New(protocol.KeychainFailed, "x") }}
 	code, out, errOut = invoke(a, "status")
 	if code != 11 {
 		t.Fatalf("%d %q", code, errOut)
 	}
 	assertError(t, errOut, out, "status", protocol.KeychainFailed)
+}
+
+func TestStatusCleanupOption(t *testing.T) {
+	var calls []call
+	a := recording(&calls)
+	var choices []bool
+	a.status = func(ctx context.Context, cleanup bool) (any, error) {
+		choices = append(choices, cleanup)
+		return recording(&calls).status(ctx, cleanup)
+	}
+	code, out, errOut := invoke(a, "status", "--cleanup")
+	if code != 0 || len(calls) != 1 || out == "" || errOut != "" {
+		t.Fatalf("explicit cleanup not dispatched: %d %q %q %v", code, out, errOut, calls)
+	}
+	for _, args := range [][]string{{"status", "--other"}, {"status", "--cleanup", "--cleanup"}} {
+		if code, _, _ := invoke(recording(&calls), args...); code != 2 || len(calls) != 1 {
+			t.Fatal("invalid status options dispatched")
+		}
+	}
+	if code, _, _ := invoke(a, "status"); code != 0 || !slices.Equal(choices, []bool{true, false}) {
+		t.Fatalf("wrong status choices: %v", choices)
+	}
 }
 
 // noSecrets is an empty broker-only keychain.
@@ -779,5 +914,69 @@ func TestLoginGitHubKeyFileDispatch(t *testing.T) {
 		if code, out, errOut := invoke(a, "login", "github", "ensemble-bot", "--key-file", file, "--app-id", "1234567"); code != 1 || out != "" || errOut != want || called {
 			t.Fatalf("%s: exit %d %q %q called %v", file, code, out, errOut, called)
 		}
+	}
+}
+
+func TestLoginEnvDispatch(t *testing.T) {
+	var got string
+	a := app{loginEnv: func(name string, out io.Writer) error {
+		got = name
+		_, err := io.WriteString(out, "ok\n")
+		return err
+	}}
+	if code, out, errOut := invoke(a, "login", "env", "dummy"); code != 0 || got != "dummy" || out != "ok\n" || errOut != "" {
+		t.Fatalf("exit %d name %q %q %q", code, got, out, errOut)
+	}
+	a = app{loginEnv: func(string, io.Writer) error { return errors.New("the value must be 1 to 16384 bytes") }}
+	if code, out, errOut := invoke(a, "login", "env", "dummy"); code != 1 || out != "" || errOut != "ensemble-broker: the value must be 1 to 16384 bytes\n" {
+		t.Fatalf("%d %q %q", code, out, errOut)
+	}
+}
+
+// keptReader reads from r and keeps every buffer it was handed, so a test can check the caller erased it.
+type keptReader struct {
+	r    io.Reader
+	bufs [][]byte
+}
+
+func (k *keptReader) Read(p []byte) (int, error) {
+	k.bufs = append(k.bufs, p)
+	return k.r.Read(p)
+}
+
+// erased is whether every buffer k was handed, to its capacity, is zero.
+func (k *keptReader) erased() bool {
+	for _, b := range k.bufs {
+		b = b[:cap(b)]
+		if !bytes.Equal(b, make([]byte, len(b))) {
+			return false
+		}
+	}
+	return len(k.bufs) > 0
+}
+
+func TestReadEnvValue(t *testing.T) {
+	for _, value := range []string{"", "one line", "-----BEGIN KEY-----\nabc\n-----END KEY-----\n", strings.Repeat("v", launcher.MaxSecretBytes)} {
+		r := &keptReader{r: strings.NewReader(value)}
+		got, err := readEnvValue(r)
+		if err != nil || string(got) != value || len(r.bufs) == 0 || cap(r.bufs[0]) != launcher.MaxSecretBytes+1 {
+			t.Fatalf("%.20q: %.20q %v, buffers %d", value, got, err, len(r.bufs))
+		}
+		end := func(b []byte) *byte { return &b[:cap(b)][cap(b)-1] }
+		for _, b := range r.bufs {
+			if end(b) != end(r.bufs[0]) {
+				t.Fatalf("%.20q: read into a second buffer", value)
+			}
+		}
+	}
+	for _, n := range []int{launcher.MaxSecretBytes + 1, launcher.MaxSecretBytes + 2} {
+		r := &keptReader{r: strings.NewReader(strings.Repeat("v", n))}
+		if _, err := readEnvValue(r); err == nil || err.Error() != "the value must be 1 to 16384 bytes" || !r.erased() {
+			t.Fatalf("%d bytes: %v, erased %v", n, err, r.erased())
+		}
+	}
+	r := &keptReader{r: io.MultiReader(strings.NewReader("partial"), iotest.ErrReader(errors.New("closed")))}
+	if _, err := readEnvValue(r); err == nil || err.Error() != "closed" || !r.erased() {
+		t.Fatalf("read error: %v, erased %v", err, r.erased())
 	}
 }

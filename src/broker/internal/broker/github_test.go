@@ -22,12 +22,24 @@ import (
 	"testing"
 	"time"
 
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/github"
 	"ensemble/broker/internal/protocol"
 )
 
 const ctr = "ensemble-worker_1-0123456789abcdef0123456789abcdef"
+
+// writeScript is the token file's atomic replacement, as every broker before the shared delivery wrote it.
+const writeScript = "mkdir -p -m 0700 " + tokenDir + " && umask 0377 && rm -f " + tokenDir + `/."$1".new && cat > ` + tokenDir +
+	`/."$1".new && mv -f ` + tokenDir + `/."$1".new ` + tokenDir + `/"$1"`
+
+// The GitHub record and backlog shapes, as the lifecycle stores them.
+type (
+	tokenEntry  = credential.Material
+	tokenRecord = credential.Record
+	pending     = credential.Pending
+)
 
 var (
 	clock    = time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
@@ -116,6 +128,16 @@ type api struct {
 	reposFail int // the repository listing's status; 0: each installation reaches <login>/one and <login>/two
 	onRepos   func(token string)
 	bodies    []string // each token request's body
+	repo      *fakeRepo
+	repoPaths []string // each /repos/ request's path and its token
+}
+
+// fakeRepo is the one repository a prefetch test reaches: acme/app, on the acme installation when installed.
+type fakeRepo struct {
+	installed      bool
+	defaultBranch  string
+	branches, tags []string
+	refStatus      int // a ref lookup's status; 0: 200 or 404 by branches and tags
 }
 
 // perms is the set every test token is requested with; permsBody, its request body.
@@ -167,6 +189,9 @@ func (a *api) handler(t *testing.T) http.HandlerFunc {
 			_, _ = fmt.Sscanf(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ghs_"), "%d_", &id)
 			login := a.installs[id-1]
 			_, _ = fmt.Fprintf(w, `{"total_count":2,"repository_selection":"all","repositories":[{"full_name":"%s/two"},{"full_name":"%s/one"}]}`, login, login)
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/repos/"):
+			a.repoPaths = append(a.repoPaths, r.URL.Path+" "+r.Header.Get("Authorization"))
+			a.answerRepo(w, strings.TrimPrefix(r.URL.Path, "/repos/acme/app"))
 		case r.Method == http.MethodGet && r.URL.Path == "/app":
 			a.appAuth = append(a.appAuth, r.Header.Get("Authorization"))
 			if a.slug == "" {
@@ -185,6 +210,26 @@ func (a *api) handler(t *testing.T) http.HandlerFunc {
 		default:
 			t.Errorf("unexpected %s %s", r.Method, r.URL)
 		}
+	}
+}
+
+func (a *api) answerRepo(w http.ResponseWriter, rest string) {
+	repo := a.repo
+	if repo == nil {
+		repo = &fakeRepo{}
+	}
+	switch {
+	case rest == "/installation" && repo.installed:
+		_, _ = fmt.Fprintf(w, `{"id":%d,"account":{"login":"acme"}}`, slices.Index(a.installs, "acme")+1)
+	case rest == "" && repo.installed:
+		_, _ = fmt.Fprintf(w, `{"full_name":"acme/app","default_branch":%q}`, repo.defaultBranch)
+	case strings.HasPrefix(rest, "/git/ref/") && repo.refStatus != 0:
+		w.WriteHeader(repo.refStatus)
+	case strings.HasPrefix(rest, "/git/ref/heads/") && slices.Contains(repo.branches, strings.TrimPrefix(rest, "/git/ref/heads/")),
+		strings.HasPrefix(rest, "/git/ref/tags/") && slices.Contains(repo.tags, strings.TrimPrefix(rest, "/git/ref/tags/")):
+		_, _ = fmt.Fprintf(w, `{"ref":%q}`, "refs/"+strings.TrimPrefix(rest, "/git/ref/"))
+	default:
+		w.WriteHeader(http.StatusNotFound)
 	}
 }
 
@@ -408,7 +453,7 @@ func TestIssueWritesFiles(t *testing.T) {
 		t.Fatalf("token requests %q", r.api.bodies)
 	}
 	rec, ok := r.record(t)
-	if !ok || rec.App != "ensemble-bot" || len(rec.Tokens) != 2 || rec.Tokens[0] != (tokenEntry{"acme", 1, "ghs_1_1", "2026-10-17T13:00:00Z"}) {
+	if !ok || rec.Subject != "ensemble-bot" || len(rec.Tokens) != 2 || rec.Tokens[0] != (tokenEntry{Account: "acme", Target: 1, Token: "ghs_1_1", ExpiresAt: "2026-10-17T13:00:00Z", Revision: 1, State: credential.Delivered}) {
 		t.Fatalf("record %v", rec)
 	}
 }
@@ -470,7 +515,7 @@ func TestIssueRollbackOffline(t *testing.T) {
 	r.api.revokeErr = func(string) int { return 503 }
 	_, err := r.g.Issue(context.Background(), "ensemble-bot", perms, ctr, r.exec.run)
 	wantCode(t, err, protocol.GitHubFailed)
-	if b := r.backlog(t); len(b) != 1 || b[0] != (pending{ctr, "acme", "ghs_1_1", "2026-10-17T13:00:00Z"}) {
+	if b := r.backlog(t); len(b) != 1 || b[0] != (pending{Container: ctr, Account: "acme", Token: "ghs_1_1", ExpiresAt: "2026-10-17T13:00:00Z"}) {
 		t.Fatalf("backlog %v", b)
 	}
 }
@@ -529,7 +574,7 @@ func TestRevokeLockFails(t *testing.T) {
 	r := newRig(t, "acme", "other")
 	issued(t, r)
 	r.lockFails(0)
-	if err := r.g.Revoke(context.Background(), ctr); err == nil || !strings.Contains(err.Error(), "token lock") {
+	if err := r.g.Release(context.Background(), ctr); err == nil || !strings.Contains(err.Error(), "token lock") {
 		t.Fatalf("unclear error: %v", err)
 	}
 	if !slices.Equal(r.api.revoked, []string{"ghs_1_1", "ghs_2_2"}) {
@@ -547,13 +592,13 @@ func TestRevokeLockFailsKeepsATokenRecordedMeanwhile(t *testing.T) {
 	r.api.revokeErr = func(string) int { // a refresh records its new token while close revokes without the lock
 		rec, _ := r.record(t)
 		if !slices.ContainsFunc(rec.Tokens, func(e tokenEntry) bool { return e.Token == "ghs_late" }) {
-			rec.Tokens = append(rec.Tokens, tokenEntry{"acme", 1, "ghs_late", "2026-10-17T13:00:00Z"})
+			rec.Tokens = append(rec.Tokens, tokenEntry{Account: "acme", Target: 1, Token: "ghs_late", ExpiresAt: "2026-10-17T13:00:00Z"})
 			data, _ := json.Marshal(rec)
 			r.keys.items[tokensService+"/"+ctr] = data
 		}
 		return 0
 	}
-	_ = r.g.Revoke(context.Background(), ctr)
+	_ = r.g.Release(context.Background(), ctr)
 	rec, ok := r.record(t)
 	if !ok || len(rec.Tokens) != 1 || rec.Tokens[0].Token != "ghs_late" {
 		t.Fatalf("record %v %v", ok, rec.Tokens)
@@ -575,12 +620,12 @@ func TestRevokeReadsTheRecordUnderTheLock(t *testing.T) {
 	lock, n := r.g.Lock, 0
 	r.g.Lock = func() (func(), error) {
 		if n++; n == 1 { // a refresh's record write lands just before close takes the lock
-			data, _ := json.Marshal(tokenRecord{"ensemble-bot", []tokenEntry{{"acme", 1, "ghs_late", "2026-10-17T13:00:00Z"}}})
+			data, _ := json.Marshal(tokenRecord{Subject: "ensemble-bot", Tokens: []tokenEntry{{Account: "acme", Target: 1, Token: "ghs_late", ExpiresAt: "2026-10-17T13:00:00Z"}}})
 			r.keys.items[tokensService+"/"+ctr] = data
 		}
 		return lock()
 	}
-	if err := r.g.Revoke(context.Background(), ctr); err != nil {
+	if err := r.g.Release(context.Background(), ctr); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := r.record(t); ok || !slices.Contains(r.api.revoked, "ghs_late") {
@@ -702,7 +747,7 @@ func TestRefreshOldRevokeFails(t *testing.T) {
 func TestRevoke(t *testing.T) {
 	r := newRig(t, "acme", "other")
 	issued(t, r)
-	if err := r.g.Revoke(context.Background(), ctr); err != nil {
+	if err := r.g.Release(context.Background(), ctr); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.exec.argv) != 0 {
@@ -714,7 +759,7 @@ func TestRevoke(t *testing.T) {
 	if _, ok := r.record(t); ok || len(r.backlog(t)) != 0 {
 		t.Fatal("left state")
 	}
-	if err := r.g.Revoke(context.Background(), ctr); err != nil {
+	if err := r.g.Release(context.Background(), ctr); err != nil {
 		t.Fatalf("absent record: %v", err)
 	}
 }
@@ -726,13 +771,13 @@ func TestRevokeTakesATokenRecordedMeanwhile(t *testing.T) {
 	r.g.Lock = func() (func(), error) {
 		if n++; n == 2 { // a refresh records its new token between close's lock sections
 			rec, _ := r.record(t)
-			rec.Tokens = append(rec.Tokens, tokenEntry{"acme", 1, "ghs_late", rec.Tokens[0].ExpiresAt})
+			rec.Tokens = append(rec.Tokens, tokenEntry{Account: "acme", Target: 1, Token: "ghs_late", ExpiresAt: rec.Tokens[0].ExpiresAt})
 			data, _ := json.Marshal(rec)
 			r.keys.items[tokensService+"/"+ctr] = data
 		}
 		return lock()
 	}
-	if err := r.g.Revoke(context.Background(), ctr); err != nil {
+	if err := r.g.Release(context.Background(), ctr); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Contains(r.api.revoked, "ghs_late") || len(r.backlog(t)) != 0 {
@@ -745,7 +790,7 @@ func TestRevokeOffline(t *testing.T) {
 	issued(t, r)
 	r.api.revokeErr = func(string) int { return 0 }
 	r.srv.Close()
-	if err := r.g.Revoke(context.Background(), ctr); err != nil {
+	if err := r.g.Release(context.Background(), ctr); err != nil {
 		t.Fatal(err)
 	}
 	if b := r.backlog(t); len(b) != 2 || b[0].Container != ctr {
@@ -759,10 +804,10 @@ func TestRevokeOffline(t *testing.T) {
 func TestRetryRevocations(t *testing.T) {
 	r := newRig(t)
 	list := []pending{
-		{"c1", "a", "ghs_expired", "2026-10-17T11:59:59Z"},
-		{"c1", "b", "ghs_live", "2026-10-17T12:30:00Z"},
-		{"c2", "c", "ghs_down", "2026-10-17T12:30:00Z"},
-		{"c2", "d", "ghs_after", "2026-10-17T12:30:00Z"},
+		{Container: "c1", Account: "a", Token: "ghs_expired", ExpiresAt: "2026-10-17T11:59:59Z"},
+		{Container: "c1", Account: "b", Token: "ghs_live", ExpiresAt: "2026-10-17T12:30:00Z"},
+		{Container: "c2", Account: "c", Token: "ghs_down", ExpiresAt: "2026-10-17T12:30:00Z"},
+		{Container: "c2", Account: "d", Token: "ghs_after", ExpiresAt: "2026-10-17T12:30:00Z"},
 	}
 	data, _ := json.Marshal(list)
 	r.keys.items[revocationsService+"/"+revocationsAccount] = data
@@ -797,7 +842,7 @@ func TestUnreadableBacklog(t *testing.T) {
 	r.keys.unreadable[revocationsService] = true
 	_, err := r.g.Retry(context.Background())
 	wantCode(t, err, protocol.KeychainFailed)
-	if err := r.g.Revoke(context.Background(), ctr); err != nil {
+	if err := r.g.Release(context.Background(), ctr); err != nil {
 		t.Fatalf("readable record revoked directly: %v", err)
 	}
 	if !slices.Equal(r.api.revoked, []string{"ghs_1_1"}) {
@@ -805,21 +850,27 @@ func TestUnreadableBacklog(t *testing.T) {
 	}
 	issued(t, r)
 	r.api.revokeErr = func(string) int { return 500 }
-	wantCode(t, r.g.Revoke(context.Background(), ctr), protocol.KeychainFailed)
+	wantCode(t, r.g.Release(context.Background(), ctr), protocol.KeychainFailed)
 }
 
 func TestUnreadableRecord(t *testing.T) {
 	r := newRig(t, "acme")
 	issued(t, r)
 	r.keys.unreadable[tokensService] = true
-	err := r.g.Revoke(context.Background(), ctr)
+	err := r.g.Release(context.Background(), ctr)
 	wantCode(t, err, protocol.KeychainFailed)
 	if !strings.Contains(err.Error(), "expire within an hour") {
 		t.Fatalf("message %v", err)
 	}
-	if _, ok := r.keys.items[tokensService+"/"+ctr]; ok {
-		t.Fatal("record not deleted")
+	if _, ok := r.keys.items[tokensService+"/"+ctr]; !ok {
+		t.Fatal("unreadable recovery record was deleted")
 	}
+	r.keys.unreadable[tokensService] = false
+	rebuilt := GitHub{Keychain: r.keys, API: r.g.API, Lock: r.g.Lock}
+	if err := rebuilt.Release(context.Background(), ctr); err != nil || !slices.Contains(r.api.revoked, "ghs_1_1") {
+		t.Fatalf("restored record could not be recovered: %v", err)
+	}
+	r.keys.unreadable[tokensService] = true
 	r.keys.items[tokensService+"/"+ctr] = []byte("{}")
 	_, err = r.g.Refresh(context.Background(), "ensemble-bot", perms, ctr, r.exec.run)
 	wantCode(t, err, protocol.KeychainFailed)

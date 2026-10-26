@@ -1,9 +1,11 @@
 """A Docker session's host run supervisor (argv: name, state dir, TUI dir, events or "", hook
 command, generation, the supervisor.lock fd its starter holds, then connector, dead-wait and
-dead-check argv as JSON). Each relay request that passes its checks and is newer than <gen>.seq runs
-`<hook> hook <TUI dir> <label>` once; every line gets one reply. SIGTERM closes the connector's
-stdin; lines already sent still run. A confirmed client exit writes the dead line. The session's
-GitHub tokens (<gen>.github.json) are refreshed REFRESH_AHEAD s before the earliest expiry.
+dead-check argv as JSON). Each relay request that passes its checks and is newer than <gen>.seq goes,
+as event <gen>.<seq>, to one resident `<hook> hook --serve <TUI dir>`; only success records seq,
+failures request retry, and a retry reruns only the Host callback. Every line gets one reply. SIGTERM
+closes the connector's stdin; lines already sent still run. A confirmed client exit writes the dead
+line. The session's GitHub tokens (<gen>.github.json) are refreshed REFRESH_AHEAD s before the
+earliest expiry.
 """
 
 import base64
@@ -40,6 +42,79 @@ AUTH_EXPIRED = (
 )
 
 
+class HookWorker:
+    """`argv`, one resident `hook --serve` process, started by the first call and by the first after
+    it ends; each call is bounded by `wait` s, and a timeout kills it.
+    """
+
+    def __init__(self, argv: list[str]) -> None:
+        self.argv, self.popen, self.wait = argv, subprocess.Popen, HOOK_WAIT
+        self.proc: subprocess.Popen | None = None
+
+    def call(self, label: str, body: dict, event: str) -> str | None:
+        """None on success, else the reject reason."""
+        deadline = time.monotonic() + self.wait
+        proc = self.proc
+        if proc is not None and proc.poll() is not None:
+            self._end(proc)
+            proc = None
+        if proc is None:
+            try:
+                proc = self.proc = self.popen(
+                    self.argv,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                )
+            except OSError:
+                return "hook error"
+        line = json.dumps({"label": label, "event": event, "payload": body}).encode() + b"\n"
+        try:
+            reply = _exchange(proc, line, deadline)
+        except OSError:  # it ended mid-write
+            reply = b""
+        if reply is None:
+            self._end(proc)
+            return "hook timeout"
+        if not reply.endswith(b"\n"):
+            return f"hook exit {self._end(proc, deadline - time.monotonic())}"
+        return None if reply == b'{"ok": true}\n' else "hook exit 1"
+
+    def _end(self, proc: subprocess.Popen, wait: float = 0.0) -> int:
+        """Its exit code, killed unless it exits within `wait` s."""
+        self.proc = None
+        try:
+            proc.wait(timeout=max(0.0, wait))
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        for stream in (proc.stdin, proc.stdout):
+            if stream is not None:
+                with contextlib.suppress(OSError):
+                    stream.close()
+        return proc.returncode
+
+
+def _exchange(proc: subprocess.Popen, line: bytes, deadline: float) -> bytes | None:
+    """The reply line, or what came before EOF; None past the deadline. Each write after select
+    is at most PIPE_BUF bytes, which never blocks.
+    """
+    assert proc.stdin is not None and proc.stdout is not None
+    sink, source = proc.stdin.fileno(), proc.stdout.fileno()
+    while line:
+        if not select.select([], [sink], [], max(0.0, deadline - time.monotonic()))[1]:
+            return None
+        line = line[os.write(sink, line[: select.PIPE_BUF]) :]
+    reply = b""
+    while not reply.endswith(b"\n"):
+        if not select.select([source], [], [], max(0.0, deadline - time.monotonic()))[0]:
+            return None
+        if not (chunk := os.read(source, 4096)):
+            break
+        reply += chunk
+    return reply
+
+
 def _body(payload: str) -> dict | None:
     try:
         found = json.loads(base64.b64decode(payload, validate=True))
@@ -61,11 +136,11 @@ class Supervisor:
         run=None,
     ) -> None:
         self.name, self.state, self.tui_dir, self.events = name, state, tui_dir, events
-        self.hook, self.generation = hook, generation
+        self.generation, self.worker = generation, HookWorker([hook, "hook", "--serve", tui_dir])
         self.run, self.popen = run or subprocess.run, subprocess.Popen
         self.stopping, self.line_max = False, LINE_MAX
         self.seq_file = os.path.join(state, f"{generation}.seq")
-        self.broker, self.clock = Broker(), time.time
+        self.broker, self.clock = Broker(warning=self._audit_warning), time.time
 
     def reject(self, gen: str | None, seq: int | None, reason: str) -> None:
         path = os.path.join(self.state, "rejected.jsonl")
@@ -89,7 +164,10 @@ class Supervisor:
             why = "directory"
         elif seq > self._seen():
             body.pop("transcript_path", None)
-            why = self._hook(request["argv"][2], body)
+            why = self.worker.call(request["argv"][2], body, f"{gen}.{seq}")
+            if why:
+                self.reject(gen, seq, why)
+                return {"gen": gen, "seq": seq, "ok": False, "retry": True}
             with contextlib.suppress(OSError):
                 save(self.seq_file, str(seq), durable=True)
         if why:
@@ -102,21 +180,6 @@ class Supervisor:
                 return int(f.read())
         except (OSError, ValueError):
             return 0
-
-    def _hook(self, label: str, body: dict) -> str | None:
-        try:
-            res = self.run(
-                [self.hook, "hook", self.tui_dir, label],
-                input=json.dumps(body).encode(),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=HOOK_WAIT,
-            )
-        except subprocess.TimeoutExpired:
-            return "hook timeout"
-        except OSError:
-            return "hook error"
-        return f"hook exit {res.returncode}" if res.returncode else None
 
     def serve(self, requests, replies) -> None:
         """A reply per line until EOF; a line over LINE_MAX is discarded."""
@@ -183,6 +246,12 @@ class Supervisor:
                     else "github_refresh_failed",
                     reason,
                 )
+
+    def _audit_warning(self, reason: str) -> None:
+        if self.events:
+            SessionStatusLog(self.events).write(self.name, "credential_audit_warning", reason)
+        else:
+            LOG.warning("docker session %s: %s", self.name, reason)
 
     def _auth_expired(self, reason: str) -> None:
         LOG.warning("docker session %s: client_auth_expired %s", self.name, reason)

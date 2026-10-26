@@ -9,17 +9,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"ensemble/broker/internal/npm"
 )
 
 const (
-	registry    = "https://registry.npmjs.org"
-	maxMetadata = 1 << 20
 	maxArchive  = 256 << 20
 	maxExpanded = 512 << 20
 )
@@ -36,47 +33,13 @@ type packageMetadata struct {
 	} `json:"dist"`
 }
 
-func registryURL(raw string) bool {
-	u, err := url.Parse(raw)
-	return err == nil && u.Scheme == "https" && u.Host == "registry.npmjs.org" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && u.Opaque == "" && strings.HasPrefix(u.Path, "/")
-}
-
-func (r Runtime) download(ctx context.Context, raw string, limit int64) ([]byte, error) {
-	if !registryURL(raw) {
-		return nil, errors.New("Codex download origin rejected")
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
-	if err != nil {
-		return nil, errors.New("invalid Codex registry request")
-	}
-	req.Header.Set("User-Agent", "ensemble-broker")
-	client := *r.http
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, errors.New("Codex registry unavailable")
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, errReleaseMissing
-	}
-	if resp.StatusCode != http.StatusOK || resp.ContentLength > limit {
-		return nil, errors.New("Codex registry response rejected")
-	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
-	if err != nil || int64(len(b)) > limit {
-		return nil, errors.New("Codex registry response exceeds limit")
-	}
-	return b, nil
-}
-
 func (r Runtime) metadata(ctx context.Context, name, version string) (packageMetadata, error) {
 	var m packageMetadata
-	b, err := r.download(ctx, registry+"/"+strings.ReplaceAll(name, "/", "%2F")+"/"+version, maxMetadata)
+	b, err := npm.Fetch(ctx, r.http, "Codex", npm.Package(name, version), npm.MaxMetadata)
 	if err != nil {
 		return m, err
 	}
-	if err := json.Unmarshal(b, &m); err != nil || m.Name != name || m.Version != version || !registryURL(m.Dist.Tarball) {
+	if err := json.Unmarshal(b, &m); err != nil || m.Name != name || m.Version != version || !npm.Allowed(m.Dist.Tarball) {
 		return packageMetadata{}, errors.New("Codex package metadata rejected")
 	}
 	return m, nil
@@ -98,7 +61,7 @@ func (r Runtime) packageArchive(ctx context.Context, m packageMetadata) ([]byte,
 	if err != nil || len(want) != sha512.Size {
 		return nil, errors.New("Codex integrity malformed")
 	}
-	b, err := r.download(ctx, m.Dist.Tarball, maxArchive)
+	b, err := npm.Fetch(ctx, r.http, "Codex", m.Dist.Tarball, maxArchive)
 	if err != nil {
 		return nil, err
 	}

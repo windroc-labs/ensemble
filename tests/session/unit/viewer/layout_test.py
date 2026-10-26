@@ -1,6 +1,8 @@
 """Pure layout codec, ownership tree and geometry vectors."""
 
+import copy
 import itertools
+import json
 
 from ensemble.session.viewer import layout as layouts
 from ensemble.session.viewer import types
@@ -10,6 +12,7 @@ from tests.session.tmux_fixtures import (
     TILED_SPLIT,
     body,
     grid,
+    json_layout,
     slot,
 )
 
@@ -529,3 +532,105 @@ class LayoutStringTest(Case):
         ):
             with self.subTest(bad=bad):
                 self.assertIsNone(layouts.parse_layout(bad))
+
+    def test_json_matches_the_old_format(self):
+        for case, sample in (
+            ("main-vertical", MAIN_VERTICAL),
+            ("tiled split", TILED_SPLIT),
+            ("13 workers", layouts.render_layout(grid(13, 3))),
+        ):
+            with self.subTest(case):
+                cell = layouts.parse_layout(sample)
+                self.assertIsNotNone(cell)
+                self.assertEqual(layouts.parse_layout(json_layout(cell)), cell)
+                self.assertEqual(layouts.parse_layout(" \n" + json_layout(cell)), cell)
+
+    def test_json_tmux_3_8_shape(self):
+        # as tmux 3.8 printed it on the mini (2026-10-25): no checksum, keys i, a, l beside I
+        printed = (
+            '{"V":2,"L":{"t":"h","w":212,"h":58,"x":0,"y":0,"c":['
+            '{"t":"p","w":106,"h":58,"x":0,"y":0,"i":0,"a":true,"I":"%0"},'
+            '{"t":"v","w":105,"h":58,"x":107,"y":0,"c":['
+            '{"t":"p","w":105,"h":3,"x":107,"y":0,"i":1,"l":1,"I":"%32"},'
+            '{"t":"p","w":105,"h":54,"x":107,"y":4,"i":2,"l":2,"I":"%33"}]}]}}'
+        )
+        Cell, lr, tb = types.Cell, layouts.LEFT_RIGHT, layouts.TOP_BOTTOM
+        want = Cell(
+            212,
+            58,
+            0,
+            0,
+            kind=lr,
+            children=(
+                Cell(106, 58, 0, 0, "%0"),
+                Cell(
+                    105,
+                    58,
+                    107,
+                    0,
+                    kind=tb,
+                    children=(Cell(105, 3, 107, 0, "%32"), Cell(105, 54, 107, 4, "%33")),
+                ),
+            ),
+        )
+        self.assertEqual(layouts.parse_layout(printed), want)
+        self.assertEqual(
+            layouts.render_layout(want),
+            "5d6b,212x58,0,0{106x58,0,0,0,105x58,107,0[105x3,107,0,32,105x54,107,4,33]}",
+        )
+
+    def test_json_malformed(self):
+        good = json.loads(json_layout(layouts.parse_layout(MAIN_VERTICAL)))
+        pane = good["L"]["c"][0]
+
+        def edit(where, change):
+            def run():
+                doc = copy.deepcopy(good)
+                change(where(doc))
+                return json.dumps(doc)
+
+            return run
+
+        root, first, right = (
+            lambda d: d,
+            lambda d: d["L"]["c"][0],
+            lambda d: d["L"]["c"][1],
+        )
+        for case, bad in (
+            ("not JSON", lambda: "{"),
+            ("trailing text", lambda: json.dumps(good) + "x"),
+            ("two values", lambda: json.dumps(good) + json.dumps(good)),
+            ("a list", lambda: json.dumps([good])),
+            ("a string", lambda: json.dumps("{}")),
+            ("no V", edit(root, lambda d: d.pop("V"))),
+            ("V 1", edit(root, lambda d: d.update(V=1))),
+            ("V 3", edit(root, lambda d: d.update(V=3))),
+            ("V true", edit(root, lambda d: d.update(V=True))),
+            ("V string", edit(root, lambda d: d.update(V="2"))),
+            ("no L", edit(root, lambda d: d.pop("L"))),
+            ("L a list", edit(root, lambda d: d.update(L=[pane]))),
+            ("unknown t", edit(first, lambda c: c.update(t="f"))),
+            ("no t", edit(first, lambda c: c.pop("t"))),
+            ("t a list", edit(first, lambda c: c.update(t=["p"]))),
+            *(
+                (f"{key} {how}", edit(first, lambda c, k=key, v=value: c.update({k: v})))
+                for key in "whxy"
+                for how, value in (("-1", -1), ("1.0", 1.0), ("true", True), ("string", "1"))
+            ),
+            *((f"no {key}", edit(right, lambda c, k=key: c.pop(k))) for key in "whxy"),
+            ("pane without I", edit(first, lambda c: c.pop("I"))),
+            ("I without %", edit(first, lambda c: c.update(I="0"))),
+            ("I not a pane id", edit(first, lambda c: c.update(I="%x"))),
+            ("I a number", edit(first, lambda c: c.update(I=0))),
+            ("pane with c", edit(first, lambda c: c.update(c=[]))),
+            ("container without c", edit(right, lambda c: c.pop("c"))),
+            ("c not a list", edit(right, lambda c: c.update(c=pane))),
+            ("one child", edit(right, lambda c: c.update(c=c["c"][:1]))),
+            ("no children", edit(right, lambda c: c.update(c=[]))),
+            ("child not an object", edit(right, lambda c: c["c"].append("%3"))),
+            ("floating pane", edit(first, lambda c: c.update(z=0))),
+            ("z on a container", edit(right, lambda c: c.update(z=1))),
+            ("deep nesting", lambda: '{"V":2,"L":' + '{"c":' * 100000 + "1" + "}" * 100001),
+        ):
+            with self.subTest(case):
+                self.assertIsNone(layouts.parse_layout(bad()))

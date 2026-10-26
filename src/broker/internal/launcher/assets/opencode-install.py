@@ -1,13 +1,17 @@
-"""Installs the pinned OpenCode from its npm tarballs, each checked against its recorded sha512 before
-anything is written: the opencode-ai package with its platform binary in place of the stub its
-postinstall would replace, as npm and that postinstall leave it.
+"""Installs OpenCode at the requested version from its npm tarballs, each checked against the sha512
+of the registry's metadata for that version before anything is written: the opencode-ai package with
+its platform binary in place of the stub its postinstall would replace, as npm and that postinstall
+leave it.
 """
 
+import base64
+import binascii
 import hashlib
 import http.client
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -16,35 +20,68 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-VERSION = "1.19.3"
 REGISTRY = "https://registry.npmjs.org"
-SHA512 = {  # package → its tarball's sha512, the npm dist.integrity in hex
-    "opencode-ai": "c0345c52530389b68bcde7081af546500f676a085756acc259c504ecddea6a0a"
-    "4688b494954e156e2c48f9ba6c12bc09a7e000b923b69614abfd7c4997b5dbad",
-    "opencode-linux-arm64": "6351c8b0934afb3c5bb5de784c2ac423f1b79bf45200b09a29bcc069ac49605f"
-    "991d01363c59479ae7aa5838a04284f5b5b88f8bff2d3cc8abc691a0717129ae",
-    "opencode-linux-x64": "c33fa45e2ed992f2d6d38844228716dd1a04ce700b2776069ef36565d5c56ab6"
-    "05d2fd63c83c80c293c6664c5be09643af0e28cb8f3f2c367cc021484034f187",
-}
 PLATFORMS = {"arm64": "opencode-linux-arm64", "amd64": "opencode-linux-x64"}
 LIMIT = 512 << 20
+METADATA_LIMIT = 1 << 20
+INTEGRITY = re.compile(r"sha512-([A-Za-z0-9+/]+={0,2})")
 
 
 def fail(message):
     raise SystemExit(f"opencode-install: {message}")
 
 
-def fetch(name, opener=urllib.request.urlopen):
-    url = f"{REGISTRY}/{name}/-/{name}-{VERSION}.tgz"
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, *_):
+        fail(f"{req.full_url} answered a redirect")
+
+
+def open_url(url, timeout):
+    return urllib.request.build_opener(NoRedirect).open(url, timeout=timeout)
+
+
+def download(url, limit, what, opener):
     try:
         with opener(url, timeout=300) as response:
-            data = response.read(LIMIT + 1)
+            data = response.read(limit + 1)
     except (OSError, http.client.HTTPException) as error:
-        fail(f"downloading {name}@{VERSION} failed: {error}")
-    if len(data) > LIMIT:
-        fail(f"{name}@{VERSION} exceeds {LIMIT} bytes")
-    if hashlib.sha512(data).hexdigest() != SHA512[name]:
-        fail(f"{name}@{VERSION} does not match its recorded sha512")
+        fail(f"downloading {what} failed: {error}")
+    if len(data) > limit:
+        fail(f"{what} exceeds {limit} bytes")
+    return data
+
+
+def integrity(name, version, opener):
+    """The sha512 the registry's metadata for name@version records: its one dist.integrity entry."""
+    data = download(
+        f"{REGISTRY}/{name}/{version}", METADATA_LIMIT, f"{name}@{version} metadata", opener
+    )
+    try:
+        metadata = json.loads(data)
+    except ValueError:
+        metadata = None
+    if not isinstance(metadata, dict) or (metadata.get("name"), metadata.get("version")) != (
+        name,
+        version,
+    ):
+        fail(f"{name}@{version}: registry metadata is not for {name}@{version}")
+    dist = metadata.get("dist")
+    entry = dist.get("integrity") if isinstance(dist, dict) else None
+    match = INTEGRITY.fullmatch(entry) if isinstance(entry, str) else None
+    try:
+        digest = base64.b64decode(match[1], validate=True) if match else b""
+    except binascii.Error:
+        digest = b""
+    if len(digest) != hashlib.sha512().digest_size:
+        fail(f"{name}@{version}: registry integrity is not one sha512 entry")
+    return digest
+
+
+def fetch(name, version, opener=open_url):
+    digest = integrity(name, version, opener)
+    data = download(f"{REGISTRY}/{name}/-/{name}-{version}.tgz", LIMIT, f"{name}@{version}", opener)
+    if hashlib.sha512(data).digest() != digest:
+        fail(f"{name}@{version} does not match its registry sha512")
     return data
 
 
@@ -60,7 +97,7 @@ def member(tarball, name, path):
         fail(f"{name}: no {path}")
 
 
-def package(tarball, name):
+def package(tarball, name, version):
     data = member(tarball, name, "package/package.json")
     try:
         manifest = json.loads(data)
@@ -68,13 +105,13 @@ def package(tarball, name):
         manifest = None
     if not isinstance(manifest, dict) or (manifest.get("name"), manifest.get("version")) != (
         name,
-        VERSION,
+        version,
     ):
-        fail(f"{name}: package.json is not {name}@{VERSION}")
+        fail(f"{name}: package.json is not {name}@{version}")
     return data
 
 
-def check(binary):
+def check(binary, version):
     """Runs binary --version from a scratch directory, also its HOME, that is removed afterwards."""
     scratch = Path(tempfile.mkdtemp(prefix="opencode-check-"))
     try:
@@ -95,22 +132,24 @@ def check(binary):
             reported = str(error)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
-    if reported != VERSION:
-        fail(f"opencode --version gave {reported[:200]!r}, want {VERSION}")
+    if reported != version:
+        fail(f"opencode --version gave {reported[:200]!r}, want {version}")
 
 
-def install(arch, prefix, fetch=fetch):
+def install(arch, prefix, version, fetch=fetch):
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version, re.ASCII):
+        fail(f"invalid version {version[:40]!r}")
     platform = PLATFORMS.get(arch)
     if platform is None:
         fail(f"no OpenCode package for architecture {arch!r}")
-    wrapper, native = fetch("opencode-ai"), fetch(platform)
+    wrapper, native = fetch("opencode-ai", version), fetch(platform, version)
     files = {
-        "package.json": package(wrapper, "opencode-ai"),
+        "package.json": package(wrapper, "opencode-ai", version),
         "LICENSE": member(wrapper, "opencode-ai", "package/LICENSE"),
     }
-    package(native, platform)
+    package(native, platform, version)
     binary = member(native, platform, "package/bin/opencode")
-    check(binary)
+    check(binary, version)
     root = prefix / "lib/node_modules/opencode-ai"
     (root / "bin").mkdir(parents=True)
     for file, data in files.items():
@@ -123,9 +162,9 @@ def install(arch, prefix, fetch=fetch):
 
 
 def main(argv):
-    if len(argv) != 2 or not os.path.isabs(argv[1]):
-        fail("usage: opencode-install.py ARCH /ABSOLUTE/PREFIX")
-    install(argv[0], Path(argv[1]))
+    if len(argv) != 3 or not os.path.isabs(argv[1]):
+        fail("usage: opencode-install.py ARCH /ABSOLUTE/PREFIX VERSION")
+    install(argv[0], Path(argv[1]), argv[2])
 
 
 if __name__ == "__main__":

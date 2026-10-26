@@ -4,6 +4,7 @@ a valid error response is a BrokerError.
 """
 
 import json
+import logging
 import os
 import re
 import select
@@ -21,13 +22,10 @@ from ensemble.utils import save
 # Installed by src/broker/install.sh and the worker image (src/broker/internal/launcher/assets/Dockerfile).
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
 RELAY = "/opt/ensemble/bin/relay"
-PROTOCOL = "20"
+PROTOCOL = "27"
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
 INSTALL = "install or upgrade it: see docs/docker-host.md#install"
 TIMEOUT = 1800
-REFRESH = (
-    7 * 24 * 3600
-)  # seconds: a start rebuilds an older image, which installs the latest clients
 GRACE = 5  # for a broker whose pipes closed by the deadline to be reaped
 
 TEXT = re.compile(r"[^\x00-\x1f\x7f]+")
@@ -37,7 +35,6 @@ CONTAINER = re.compile(r"ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}")
 ENDPOINT = re.compile(r"unix:///[^\x00-\x1f\x7f]+/\.docker/run/docker\.sock")
 LOGIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}")
 TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
-VERSION = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)")
 COMMANDS = frozenset(
     {
         "version",
@@ -67,10 +64,16 @@ CODES = {  # code → (exit code, the commands that report it)
     "workspace_failed": (14, {"workspace-rm"}),
     "github_failed": (15, {"start", "refresh"}),
     "refresh_failed": (16, {"refresh"}),
+    "egress_unavailable": (17, {"start"}),
     "internal_error": (70, COMMANDS),
 }
 ERROR_KEYS = frozenset({"command", "code", "message", "cleanup"})
 ERROR_OPTIONAL = frozenset({"cause", "cleanup_error", "container"})
+LOG = logging.getLogger("session")
+AUDIT_WARNING = (
+    "audit_write_failed: broker audit persistence failed; the credential/resource operation "
+    "result still applies. Do not repeat a successful start; check the broker audit log."
+)
 
 
 class BrokerError(SessionError):
@@ -155,48 +158,6 @@ def _user_id(value) -> bool:
     return value is None or (type(value) is int and value >= 1)
 
 
-def _client_update(value, clients) -> bool:
-    if not isinstance(value, dict) or value.keys() != {
-        "client",
-        "pinned_version",
-        "min_version",
-        "image_version",
-        "target_version",
-        "result",
-    }:
-        return False
-    minimum = value["min_version"]
-    client = value["client"]
-    image, target, result = value["image_version"], value["target_version"], value["result"]
-    if not (
-        _text(client)
-        and client in clients
-        and _matches(VERSION, value["pinned_version"])
-        and _matches(VERSION, image)
-        and _matches(VERSION, minimum)
-        and isinstance(target, str)
-        and (target == "" or _matches(VERSION, target))
-        and isinstance(result, str)
-    ):
-        return False
-    floor = tuple(map(int, minimum.split(".")))
-    if any(
-        tuple(map(int, version.split("."))) < floor
-        for version in (value["pinned_version"], image, target)
-        if version
-    ):
-        return False
-    actual = clients[client].rsplit(" ", 1)[-1]
-    if result in {"registry_unavailable", "no_supported_release"}:
-        return target == "" and actual == image
-    if result == "current":
-        return target == image and actual == image
-    if result in {"updated", "update_failed"}:
-        expected = target if result == "updated" else image
-        return bool(target) and target != image and actual == expected
-    return False
-
-
 def _error(command: str, returncode: int, data: dict) -> BrokerError:
     error, exit_code = data.get("error"), data.get("exit_code")
     if not (
@@ -278,8 +239,9 @@ def _show(progress: bytes | bytearray) -> None:
 
 
 class Broker:
-    def __init__(self, runner=_stream) -> None:
+    def __init__(self, runner=_stream, *, warning=None) -> None:
         self.runner = runner
+        self.warning = warning or LOG.warning
 
     def _run(self, command: str, *args: str) -> dict:
         try:
@@ -297,11 +259,25 @@ class Broker:
             raise SessionError(f"broker {BROKER}: {error.strerror}; {INSTALL}") from None
         try:
             if res.returncode == 0:
-                return _object(res.stdout)
-            err = res.stderr
-            if command == "build":  # its progress lines come before the error object
-                err = err[err.rfind("\n{") + 1 :]
-            raise _error(command, res.returncode, _object(err))
+                found = _object(res.stdout)
+            else:
+                err = res.stderr
+                if command == "build":  # its progress lines come before the error object
+                    err = err[err.rfind("\n{") + 1 :]
+                found = _object(err)
+            if "audit_warning" in found:
+                if (
+                    command not in {"start", "refresh", "close", "status"}
+                    or found.pop("audit_warning") != "audit_write_failed"
+                ):
+                    raise _Bad("audit warning")
+                try:
+                    self.warning(AUDIT_WARNING)
+                except (OSError, ValueError):
+                    LOG.warning(AUDIT_WARNING)
+            if res.returncode == 0:
+                return found
+            raise _error(command, res.returncode, found)
         except _Bad as why:
             raise SessionError(f"broker: bad response to {command}: {why}") from None
 
@@ -324,14 +300,9 @@ class Broker:
         )
         return found["available"]
 
-    def build(
-        self, package: str, *, plugins: Sequence[str] = (), max_age: int | None = None
-    ) -> tuple[str, str]:
-        """`package`'s image tag and digest, with `plugins` installed from repository sources;
-        `max_age`: rebuild an image built at least that many seconds ago.
-        """
+    def build(self, package: str, *, plugins: Sequence[str] = ()) -> tuple[str, str]:
+        """`package`'s image tag and digest, with `plugins` installed from repository sources."""
         named = [arg for name in plugins for arg in ("--plugin", name)]
-        age = () if max_age is None else ("--max-age", str(max_age))
         found = self._parsed(
             "build",
             lambda d: (
@@ -343,16 +314,15 @@ class Broker:
             "--ensemble",
             package,
             *named,
-            *age,
         )
         return found["image"], found["digest"]
 
     def start(self, manifest: str, *, clients: frozenset[str]) -> Started:
         """`clients`: the client names the protocol requires in the response."""
-        required = {f.name for f in fields(Started)} - {"client_update"}
+        required = {f.name for f in fields(Started)}
         found = self._parsed(
             "start",
-            lambda d: required <= set(d) <= required | {"client_update"},
+            lambda d: set(d) == required,
             "--manifest",
             manifest,
         )
@@ -367,11 +337,6 @@ class Broker:
             and _expiries(started.github)
             and _user_id(started.github_user_id)
             and _credential_expiry(started.credential_expires_at)
-            and (
-                _client_update(started.client_update, started.clients)
-                if started.credential_expires_at is not None
-                else "client_update" not in found
-            )
         ):
             raise SessionError("broker: bad response to start: fields")
         return started

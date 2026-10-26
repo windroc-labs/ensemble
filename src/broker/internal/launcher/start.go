@@ -8,11 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"ensemble/broker/internal/audit"
-	"ensemble/broker/internal/codex"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/protocol"
 )
@@ -53,7 +53,7 @@ func taken(c string) *protocol.Error {
 }
 
 // Start writes each phase's seconds to Progress only once it succeeds, so a failure's stderr stays one error object.
-func (h Host) Start(ctx context.Context, path string) (StartResult, error) {
+func (h Host) Start(ctx context.Context, path string) (result StartResult, retErr error) {
 	var times strings.Builder
 	var notes strings.Builder
 	progress := h.Progress
@@ -65,6 +65,12 @@ func (h Host) Start(ctx context.Context, path string) (StartResult, error) {
 		fmt.Fprintf(&times, "ensemble-broker: start %s %.2f s\n", phase, now.Sub(last).Seconds())
 		last = now
 	}
+	defer func() {
+		if retErr == nil && progress != nil {
+			fmt.Fprintf(&times, "ensemble-broker: start total %.2f s\n", time.Since(began).Seconds())
+			_, _ = io.WriteString(progress, times.String()+notes.String())
+		}
+	}()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return StartResult{}, protocol.New(protocol.ManifestRejected, "Cannot read manifest "+path+".")
@@ -80,11 +86,17 @@ func (h Host) Start(ctx context.Context, path string) (StartResult, error) {
 	if err := h.checkMounts(m); err != nil {
 		return StartResult{}, err
 	}
-	var policy codex.Installation
+	px, err := h.checkProxy(ctx, m.Gateway)
+	if err != nil {
+		return StartResult{}, err
+	}
+	route, err := h.caller(ctx, px, m.Gateway)
+	if err != nil {
+		return StartResult{}, err
+	}
 	switch m.Client {
 	case "codex":
-		policy, err = h.versionPolicy(ctx)
-		if err != nil {
+		if err := h.versionPolicy(); err != nil {
 			return StartResult{}, err
 		}
 		if err := h.Codex.Ready(ctx); err != nil {
@@ -112,6 +124,15 @@ func (h Host) Start(ctx context.Context, path string) (StartResult, error) {
 		}
 		userID = &id
 	}
+	if len(m.Secrets) > 0 {
+		items := make([]string, len(m.Secrets))
+		for i, s := range m.Secrets {
+			items[i] = s.Item
+		}
+		if err := h.Env.Ready(items); err != nil {
+			return StartResult{}, err
+		}
+	}
 	if _, err := h.GitHub.Retry(ctx); err != nil {
 		times.WriteString("ensemble-broker: start revocations skipped\n")
 	}
@@ -128,12 +149,70 @@ func (h Host) Start(ctx context.Context, path string) (StartResult, error) {
 		}
 		return StartResult{}, taken(c)
 	}
-	if err := h.ensureVolume(ctx, m, info); err != nil {
+	lostName := false
+	created, err := h.ensureVolume(ctx, m, info)
+	if err != nil {
 		return StartResult{}, err
 	}
 	lap("checks")
-	result, held, err := h.create(ctx, c, m, info, policy, facts, lap)
+	if created && m.Prefetch != nil {
+		// Registered before the lock's, so it runs after every rollback of the container. A start that lost the
+		// container name to another leaves the workspace to that one.
+		defer func() {
+			var e *protocol.Error
+			if errors.As(retErr, &e) && !lostName {
+				h.removeVolume(ctx, m.Workspace, e)
+			}
+		}()
+		if err := h.prefetch(ctx, c, m, info, px); err != nil {
+			return StartResult{}, err
+		}
+		lap("prefetch")
+	}
+	var held holding
+	if m.Lock != "" {
+		mutex, err := h.acquireMutex(ctx, m.Lock, info.ID)
+		if err != nil {
+			return StartResult{}, err
+		}
+		defer func() {
+			if cleanup := h.releaseMutex(ctx, mutex); cleanup != nil {
+				if retErr == nil {
+					if m.GitHubApp != "" {
+						rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+						revoked := h.GitHub.Release(rctx, c)
+						cancel()
+						if revoked != nil {
+							cleanup.Message += " " + injected(revoked, protocol.KeychainFailed, "Revoking the GitHub tokens failed; retry their pending revocation.").Message
+						}
+					}
+					h.rollback(ctx, c, cleanup)
+					h.withdraw(c, m, held, cleanup)
+					result, retErr = StartResult{}, cleanup
+				} else {
+					var e *protocol.Error
+					if errors.As(retErr, &e) {
+						e.Message += " " + cleanup.Message
+						if e.Code == protocol.Busy {
+							e.Code, e.Holder = protocol.StartFailed, nil
+						}
+					} else {
+						retErr = cleanup
+					}
+				}
+			}
+		}()
+		holder, err := h.lockHolder(ctx, m.Lock, "")
+		if err != nil {
+			return StartResult{}, err
+		}
+		if holder != nil {
+			return StartResult{}, busy(holder)
+		}
+	}
+	result, held, err = h.create(ctx, c, m, info, route, facts, lap)
 	if errors.Is(err, errTaken) {
+		lostName = true
 		return StartResult{}, taken(c)
 	}
 	if err != nil {
@@ -142,16 +221,14 @@ func (h Host) Start(ctx context.Context, path string) (StartResult, error) {
 			e = protocol.New(protocol.StartFailed, "Start failed.")
 		}
 		h.rollback(ctx, c, e)
-		if kind := clientKind(m.Client); held && kind != "" && e.Cleanup == protocol.Removed {
-			h.Audit.Add(c, audit.Credential{Kind: kind, Result: audit.Withdrawn}, "")
+		if e.Code == protocol.Busy && e.Cleanup == protocol.Failed {
+			e.Code, e.Holder = protocol.StartFailed, nil
+			e.Message = "Cannot remove yielding container " + c + "."
 		}
+		h.withdraw(c, m, held, e)
 		return StartResult{}, e
 	}
 	result.GitHubUserID = userID
-	fmt.Fprintf(&times, "ensemble-broker: start total %.2f s\n", time.Since(began).Seconds())
-	if progress != nil {
-		_, _ = io.WriteString(progress, times.String()+notes.String())
-	}
 	return result, nil
 }
 
@@ -172,7 +249,6 @@ func mounts(m Manifest, labels map[string]string) ([]string, []audit.Mount) {
 	add("--mount", spec, mount)
 	owner := ",mode=0700,uid=" + labels["ensemble.agent-uid"] + ",gid=" + labels["ensemble.agent-gid"]
 	if m.Client == "codex" {
-		tmpfs(runtimeDir, "rw,exec,nosuid,nodev,size=536870912,mode=0755,uid=0,gid=0")
 		// 1 GiB: Codex's log DB alone outgrows its 64 MiB budget (counts live rows only, never WAL or free pages)
 		// and no setting disables or caps it.
 		tmpfs(m.CodexDir, "rw,noexec,nosuid,nodev,size=1073741824"+owner)
@@ -181,17 +257,41 @@ func mounts(m Manifest, labels map[string]string) ([]string, []audit.Mount) {
 	} else {
 		bind(m.StateDir())
 	}
-	tmpfs(docker.SecretsDir, "rw,noexec,nosuid,nodev,size=65536"+owner)
+	size := 65536
+	if n := len(m.Secrets); n > 0 {
+		size += 4096 + MaxSecretBytes*n // the env directory and each secret at its largest
+	}
+	tmpfs(docker.SecretsDir, "rw,noexec,nosuid,nodev,size="+strconv.Itoa(size)+owner)
 	return flags, list
 }
 
-// create runs every step after the absence check; any error makes Start roll back. held: the client credential is in
-// the container.
-func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, policy codex.Installation, facts *audit.StartFacts,
-	lap func(phase string)) (_ StartResult, held bool, _ error) {
+// holding is the credentials a container being started holds: its client's and the environment secrets written.
+type holding struct {
+	client  bool
+	secrets []string
+}
+
+// withdraw records each credential held as withdrawn when e's rollback removed c.
+func (h Host) withdraw(c string, m Manifest, held holding, e *protocol.Error) {
+	if e.Cleanup != protocol.Removed {
+		return
+	}
+	if kind := clientKind(m.Client); held.client && kind != "" {
+		h.Audit.Add(c, audit.Credential{Kind: kind, Result: audit.Withdrawn}, "")
+	}
+	for _, item := range held.secrets {
+		h.Audit.Add(c, audit.Credential{Kind: audit.EnvSecret, Item: item, Result: audit.Withdrawn}, "")
+	}
+}
+
+// create runs every step after the absence check; any error makes Start roll back. held: the credentials in the
+// container so far.
+func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, route egress, facts *audit.StartFacts,
+	lap func(phase string)) (_ StartResult, held holding, _ error) {
 	labels := info.Config.Labels
-	args := []string{"run", "--detach", "--name", c, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "agent",
-		"--network", "bridge", "--workdir", m.CWD}
+	args := append([]string{"run", "--detach", "--name", c, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "agent"},
+		route.args()...)
+	args = append(args, "--workdir", m.CWD)
 	switch m.Client {
 	case "codex":
 		args = append(args, "--env", "CODEX_HOME="+m.CodexDir)
@@ -206,6 +306,16 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	}
 	args = append(args,
 		"--label", "ensemble.session="+m.Name, "--label", "ensemble.generation="+m.Generation, "--label", clientLabel+"="+m.Client)
+	if len(m.Secrets) > 0 {
+		items := make([]string, len(m.Secrets))
+		for i, s := range m.Secrets {
+			items[i] = s.Item
+		}
+		args = append(args, "--label", secretsLabel+"="+strings.Join(items, ","))
+	}
+	if m.Lock != "" {
+		args = append(args, "--restart", "no", "--label", lockLabel+"="+m.Lock, "--label", ownerLabel+"="+m.LockOwner)
+	}
 	keys := make([]string, 0, len(m.Labels))
 	for k := range m.Labels {
 		keys = append(keys, k)
@@ -219,46 +329,49 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	args = append(append(args, flags...), "--entrypoint", "/usr/bin/tini", info.ID, "--", "sleep", "infinity")
 	if _, err := h.Docker.Run(ctx, args, nil); err != nil {
 		if docker.Conflict(err) {
-			return StartResult{}, false, errTaken
+			return StartResult{}, held, errTaken
 		}
 		e := diagnosed(err, protocol.StartFailed, "Creating the container failed.")
 		if text := err.Error(); strings.Contains(text, "mounts denied") || strings.Contains(text, "not shared from the host") {
 			e.Message = sharing
 		}
-		return StartResult{}, false, e
+		return StartResult{}, held, e
 	}
 	lap("create")
+	if m.Lock != "" {
+		holder, err := h.lockHolder(ctx, m.Lock, c)
+		if err != nil {
+			return StartResult{}, held, err
+		}
+		if holder != nil {
+			return StartResult{}, held, busy(holder)
+		}
+	}
 	// OpenCode has no state to seed.
 	if m.Client != "opencode" {
 		if _, err := h.Docker.Run(ctx, asAgent(c, Python, "-I", Bootstrap, m.Client, m.StateDir(), m.CWD), nil); err != nil {
-			return StartResult{}, false, failure(err, protocol.StartFailed, "Writing client bootstrap state failed.")
+			return StartResult{}, held, failure(err, protocol.StartFailed, "Writing client bootstrap state failed.")
 		}
 	}
 	if m.HasHook {
 		if _, err := h.Docker.Run(ctx, []string{"exec", "--user", "root", c, Python, "-I", Bootstrap, "hook", m.HookPath}, nil); err != nil {
-			return StartResult{}, false, failure(err, protocol.StartFailed, "Installing the hook stub failed.")
+			return StartResult{}, held, failure(err, protocol.StartFailed, "Installing the hook stub failed.")
 		}
 	}
 	lap("bootstrap")
 	clients, err := h.probe(ctx, c)
 	if err != nil {
-		return StartResult{}, false, failure(err, protocol.StartFailed, "Cannot run the image's clients.")
+		return StartResult{}, held, failure(err, protocol.StartFailed, "Cannot run the image's clients.")
 	}
 	lap("clients")
-	if m.Client == "opencode" {
-		if err := checkOpencode(clients.Opencode); err != nil {
-			return StartResult{}, false, err
-		}
+	switch m.Client {
+	case "codex":
+		err = checkCodex(clients.Codex)
+	case "opencode":
+		err = checkOpencode(clients.Opencode)
 	}
-	var update *ClientUpdate
-	if m.Client == "codex" {
-		var prepared ClientUpdate
-		clients, prepared, err = h.updateCodex(ctx, c, info.Architecture, clients, policy)
-		if err != nil {
-			return StartResult{}, false, err
-		}
-		update = &prepared
-		lap("client_update")
+	if err != nil {
+		return StartResult{}, held, err
 	}
 	exec := h.agentExec(ctx, c)
 	var codexExpiry *string
@@ -266,23 +379,30 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	case "codex":
 		expiry, err := h.Codex.Inject(ctx, exec)
 		if err != nil {
-			return StartResult{}, false, injected(err, protocol.StartFailed, "Injecting Codex credentials failed.")
+			return StartResult{}, held, injected(err, protocol.StartFailed, "Injecting Codex credentials failed.")
 		}
 		codexExpiry = &expiry
 	case "claude":
 		if err := h.Creds.Inject(m.ClaudeAccount, exec); err != nil {
-			return StartResult{}, false, injected(err, protocol.StartFailed, "Injecting the Claude token failed.")
+			return StartResult{}, held, injected(err, protocol.StartFailed, "Injecting the Claude token failed.")
 		}
 	case "opencode":
 		if len(m.OpencodeProviders) > 0 {
 			if err := h.Opencode.Inject(m.OpencodeProviders, exec); err != nil {
-				return StartResult{}, false, injected(err, protocol.StartFailed, "Injecting the OpenCode provider API keys failed.")
+				return StartResult{}, held, injected(err, protocol.StartFailed, "Injecting the OpenCode provider API keys failed.")
 			}
 		}
 	}
 	if kind := clientKind(m.Client); kind != "" {
-		held = true
+		held.client = true
 		h.Audit.Add(c, audit.Credential{Kind: kind, Result: audit.Issued, ExpiresAt: codexExpiry}, "")
+	}
+	for _, s := range m.Secrets {
+		if err := h.Env.Inject(s, exec); err != nil {
+			return StartResult{}, held, injected(err, protocol.StartFailed, "Writing "+s.Item+" into the container failed.")
+		}
+		held.secrets = append(held.secrets, s.Item)
+		h.Audit.Add(c, audit.Credential{Kind: audit.EnvSecret, Item: s.Item, Result: audit.Issued}, "")
 	}
 	lap("credentials")
 	expiries := []protocol.Expiry{}
@@ -292,7 +412,7 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 		}
 		lap("github")
 	}
-	return StartResult{Container: c, Endpoint: h.Endpoint, ImageDigest: info.ID, Clients: clients, GitHub: expiries, CredentialExpiresAt: codexExpiry, ClientUpdate: update}, held, nil
+	return StartResult{Container: c, Endpoint: h.Endpoint, ImageDigest: info.ID, Clients: clients, GitHub: expiries, CredentialExpiresAt: codexExpiry}, held, nil
 }
 
 // injected classifies a Credentials or Tokens error: its protocol error, an unreachable daemon, else code.

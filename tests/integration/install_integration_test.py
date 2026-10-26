@@ -50,6 +50,10 @@ REAL = (
     "mktemp",
     "mkfifo",
     "stty",
+    "tar",
+    "gzip",
+    "ln",
+    "ls",
 )
 FAKED = ("uname", "id", "sudo", "curl", "security", "open", "launchctl", "shasum")
 FAKED += ("xcode-select", "ps", "sw_vers", "lipo", "pgrep", "pkill", "defaults")
@@ -59,6 +63,15 @@ PASSWORD = "pw-SENTINEL-sudo"
 TOKEN = "sk-ant-oat01-SENTINEL-token"
 KEY = "sk-SENTINEL-opencode-key"
 OLD, NEW = "1" * 40, "2" * 40
+CLIENT, GO = (
+    "src/ensemble/session/hosts/docker/broker.py",
+    "src/broker/internal/protocol/protocol.go",
+)
+# The repo's own broker protocol, never a literal: another protocol is one more.
+PROTOCOL = re.search(r'^PROTOCOL = "([0-9]+)"$', Path(REPO, CLIENT).read_text(), re.M)[1]
+OTHER = str(int(PROTOCOL) + 1)
+MARKET = "https://raw.githubusercontent.com/windroc-labs/agent-plugins-marketplace/main/"
+RAW = "https://raw.githubusercontent.com/windroc-labs/ensemble/"
 SPEC = "ensemble@git+https://github.com/windroc-labs/ensemble.git#main"
 API_CALL = (
     "curl -fsSL -H Accept: application/vnd.github.sha"
@@ -83,6 +96,9 @@ LEAVE_Q = r"Press Enter to leave this screen:"
 SCREEN_ON, SCREEN_OFF = "\x1b[?1049h\x1b[H\x1b[2J", "\x1b[H\x1b[2J\x1b[?1049l"
 PEM_Q = r"private key \(\.pem; [^)]*\), empty to skip:"
 DOCKER_LOGINS = ((TOKEN_Q, TOKEN), (PEM_Q, ""))
+DOCKER_PRESETS = {"UseVirtualizationFrameworkRosetta": False, "DisplayedOnboarding": True}
+PRESETS_NOT_WRITTEN = "    Docker Desktop presets not written (Rosetta off, onboarding done): "
+NOT_TOLD = "    not recorded for cleanup: "
 REMOVE_Q = r"Remove all of this\? \[y/N\]"
 SHARED = (
     "say",
@@ -104,6 +120,7 @@ RELOAD = (
 )
 DOCKER_STEPS = (
     "Docker Desktop running",
+    "egress proxy",
     "broker",
     "broker login: Claude",
     "broker login: GitHub",
@@ -114,6 +131,8 @@ BROKER_INSTALL = """#!/bin/sh
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 echo "broker-install $*" >> "$LOG"
+[ ! -e "$FAKES/broker_install_fails" ] || exit 1
+rm -f "$FAKES/src/broker/protocol"
 target="$ENSEMBLE_INSTALL_ROOT/usr/local/libexec/ensemble"
 sudo mkdir -p "$target"
 { cat "$FAKES/apps/ensemble-broker"; echo "# $(cksum < "$here/internal/codex/versions.go")"; } > "$target/ensemble-broker"
@@ -320,6 +339,10 @@ class InstallTest(Case):
         (self.fakes / "tty_name").write_text("ttys001\n")
         (self.fakes / "commit").write_text(OLD)
         (self.root / "dev").mkdir(parents=True)
+        # A test machine's terminal has Full Disk Access (install-cleanup.sh reads TCC.db); its tests revoke it.
+        self.tcc = Path(self.home, "Library/Application Support/com.apple.TCC/TCC.db")
+        self.tcc.parent.mkdir(parents=True)
+        self.tcc.write_text("granted")
         self.pkg_src = self.fakes / "pkg-src"
         (self.pkg_src / "scripts").mkdir(parents=True)
         shutil.copyfile(
@@ -338,6 +361,10 @@ class InstallTest(Case):
         (self.pkg_src / ".claude-plugin").mkdir()
         (self.pkg_src / ".claude-plugin/plugin.json").write_text('{"version": "9.8.7"}\n')
         shutil.copytree(Path(REPO, "launchd"), self.pkg_src / "launchd")
+        for source in (CLIENT, GO):
+            (self.pkg_src / source).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(Path(REPO, source), self.pkg_src / source)
+        self.serve()
         flow = "src/ensemble/orchestrator/engine/flow"
         (self.pkg_src / flow).mkdir(parents=True)
         charters = "src/ensemble/delegate/team/roles"
@@ -356,6 +383,43 @@ class InstallTest(Case):
             "TMPDIR": str(self.tmp),
             "ENSEMBLE_INSTALL_ROOT": str(self.root),
         }
+
+    def serve(self, claude=None, codex=None):
+        """The windroc marketplace's manifests: ensemble's source for Claude Code and Codex
+        (a dict merged into the url source, or a list of plugins; None: no ref, the default branch)."""
+        url = {"source": "url", "url": "https://github.com/windroc-labs/ensemble.git"}
+        for path, source in (
+            (".claude-plugin/marketplace.json", claude),
+            (".agents/plugins/marketplace.json", claude if codex is None else codex),
+        ):
+            plugins = source if isinstance(source, list) else None
+            plugins = plugins or [{"name": "ensemble", "source": {**url, **(source or {})}}]
+            manifest = self.fakes / "marketplace" / path
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            manifest.write_text(json.dumps({"name": "windroc", "plugins": plugins}))
+
+    def at_ref(self, ref, path, text):
+        """Ensemble's file `path` at `ref` on GitHub; None: unreadable."""
+        target = self.fakes / "refs" / ref / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if text is None:
+            target.with_name(target.name + ".missing").write_text("")
+        else:
+            target.write_text(text)
+
+    def protocol_at(self, ref, protocol):
+        """Ensemble at `ref` with both sides at `protocol`."""
+        self.at_ref(ref, CLIENT, f'PROTOCOL = "{protocol}"\n')
+        self.at_ref(ref, GO, f'package protocol\n\nconst Version = "{protocol}"\n')
+
+    def refused(self, *args, rerun=False, then=()):
+        """A run of `args` that stops before any client step: the sudo password, then on a first
+        run the brew profile line, then `then` (the configuration's)."""
+        answers = [(SUDO_Q, PASSWORD), *(() if rerun else ((WRITE_Q, "y"),)), *then]
+        result = self.run_install(*args, answers=answers)
+        self.assertEqual(result.code, 1, result.stderr)
+        self.assertEqual(self.plugin_calls(), [])
+        return result
 
     def run_install(self, *args, answers=(), stdin=None, tty=True, script=SCRIPT, ctty=None):
         """`ctty`: what /dev/tty opens, else the terminal, which is also /dev/ttys001."""
@@ -445,6 +509,7 @@ class InstallTest(Case):
         ctty=None,
         then=(),
         provider_write=True,
+        egress_failure=False,
     ):
         """A first run answering every question: brew profile line, clients, Docker, the
         OpenCode provider, the config, the Docker logins, the PATH line, then `then` (the board's).
@@ -471,9 +536,9 @@ class InstallTest(Case):
             (WRITE_Q, "y"),
             *plugin,
             *provider,
-            *(logins or ()),
-            (WRITE_Q, "y"),
-            *([(WRITE_Q, "y")] if "opencode" in (chosen or "") else []),
+            *((logins or ()) if not egress_failure else ()),
+            *([(WRITE_Q, "y")] if not egress_failure else []),
+            *([(WRITE_Q, "y")] if "opencode" in (chosen or "") and not egress_failure else []),
             *then,
         ]
         return self.run_install(*args, answers=answers, ctty=ctty)
@@ -537,6 +602,7 @@ class InstallTest(Case):
             if c.startswith(wanted)
             and c not in own
             and "status" not in c
+            and c != "ensemble-broker version"
             and "/Docker.app/" not in c
         ]
 
@@ -704,7 +770,8 @@ class InstallTest(Case):
         profile = Path(self.home, ".zprofile").read_text()
         self.assertIn(f'eval "$({self.root}/opt/homebrew/bin/brew shellenv)"\n', profile)
         self.assertTrue(result.stderr.endswith(RELOAD + "\n"), result.stderr)
-        self.assertIn("| (_| | (_| |  __/ | | | ||_____| |_) | | | | | |\n", result.stderr)
+        self.assertIn("| |___| | | \\__ \\  __/ | | | | | |_) | |  __/\n", result.stderr)
+        self.assertNotIn("| (_| | (_| |  __/ | | | ||_____| |_) | | | | | |", result.stderr)
         self.assertIn(
             "ensemble is installed (ref main, clients claude,codex, Docker no).\n"
             "Welcome onboard, and congrats: your crew is ready.",
@@ -875,18 +942,69 @@ class InstallTest(Case):
         self.assertIn("ensemble-broker login claude", calls)
         self.assertNotIn("[delegate]", self.config().read_text())
 
-    def test_ref_with_claude_or_codex_is_refused(self):
-        result = self.run_install(
-            *("--ref", "orchestrator-revamped", "--clients", "claude,codex", "--no-docker"),
-            answers=[(SUDO_Q, PASSWORD), (WRITE_Q, "y")],
-        )
-        self.assertEqual(result.code, 1)
+    def test_ref_with_claude_or_codex_must_be_the_served_ref(self):
+        self.serve({"ref": "v9.8.7"})
+        flags = ("--clients", "claude,codex", "--no-docker")
+        result = self.fresh("--ref", "v9.8.7", *flags)
+        self.assert_ok(result)
+        self.assertIn("ensemble is installed (ref v9.8.7, clients claude,codex", result.stderr)
+        result = self.refused("--ref", "orchestrator-revamped", *flags, rerun=True)
         self.assertIn(
             "install.sh: --ref orchestrator-revamped: Claude Code and Codex install ensemble@windroc"
-            " from the windroc marketplace (main); use --ref only with --clients opencode\n",
+            " from the windroc marketplace, which serves ensemble at v9.8.7; use --ref v9.8.7,"
+            " or --clients opencode for another ref\n",
             result.stderr,
         )
-        self.assertEqual(self.plugin_calls(), [])
+
+    def test_served_ref_is_the_default(self):
+        self.serve({"ref": "v9.8.7"})
+        result = self.fresh(clients="claude")
+        self.assert_ok(result)
+        self.assertIn(
+            "ensemble is installed (ref v9.8.7, clients claude, Docker no)", result.stderr
+        )
+        market = "https://raw.githubusercontent.com/windroc-labs/agent-plugins-marketplace/main/"
+        self.assertIn(f"curl -fsSL {market}.claude-plugin/marketplace.json", self.calls())
+        self.assertNotIn(f"curl -fsSL {market}.agents/plugins/marketplace.json", self.calls())
+
+    def test_served_refs_must_agree(self):
+        self.serve({"ref": "v9.8.7"}, {"ref": "v9.8.6"})
+        result = self.refused("--clients", "claude,codex", "--no-docker")
+        self.assertIn(
+            "install.sh: the windroc marketplace serves ensemble at v9.8.7 to Claude Code and"
+            " v9.8.6 to Codex: they must match\n",
+            result.stderr,
+        )
+
+    def test_invalid_served_ref_or_sha_pin_stops(self):
+        flags = ("--clients", "claude", "--no-docker")
+        cases = (
+            ({"ref": "../../x/y/main"}, "not a git ref: '../../x/y/main'"),
+            ({"ref": "v1#x"}, "not a git ref: 'v1#x'"),
+            ({"ref": "-x"}, "not a git ref: '-x'"),
+            ({"ref": "v1\nx"}, "not a git ref: 'v1\\nx'"),
+            ({"ref": 7}, "not a git ref: 7"),
+            ({"sha": OLD}, "pinned by sha, not a release tag"),
+            ([{"name": "updraft", "source": "./"}], "no ensemble entry"),
+        )
+        for rerun, (source, reason) in enumerate(cases):
+            with self.subTest(source=source):
+                self.serve(source)
+                result = self.refused(*flags, rerun=bool(rerun))
+                self.assertIn(
+                    "install.sh: cannot read ensemble's ref from the windroc marketplace"
+                    f" (.claude-plugin/marketplace.json): {reason}\n",
+                    result.stderr,
+                )
+
+    def test_unreadable_marketplace_stops(self):
+        (self.fakes / "marketplace/.agents/plugins/marketplace.json").unlink()
+        result = self.refused("--clients", "codex", "--no-docker")
+        self.assertIn(
+            "install.sh: cannot read ensemble's ref from the windroc marketplace"
+            " (.agents/plugins/marketplace.json)\n",
+            result.stderr,
+        )
 
     def test_installs_from_the_windroc_marketplace(self):
         self.assert_ok(self.fresh())
@@ -996,8 +1114,259 @@ class InstallTest(Case):
             "open -a Docker",
             "setup-token",
             "brew install go",
+            RAW,
         ):
             self.assertNotIn(absent, calls)
+        self.assertFalse(Path(self.home, ".egress").exists())
+
+    def test_egress_pinned_and_healthy_rerun_runs_start_and_keeps_checkout(self):
+        self.assert_ok(self.fresh("--clients", "claude", "--docker"))
+        egress = Path(self.home, ".egress")
+        sha = "9ed47580dc9eb4c1fe794d12e54a8f2d3f258831"
+        checkout = egress / "versions" / sha
+        self.assertEqual((egress / "current").resolve(), checkout)
+        config = egress / "config.local.yaml"
+        self.assertEqual(
+            config.read_text(), "version: 1\nnetworks:\n  workers:\n    mode: denylist\n"
+        )
+        before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in checkout.iterdir()}
+        before[config] = (config.read_bytes(), config.stat().st_mtime_ns)
+        self.assertIn(f"gh api repos/windroc/egress-proxy/tarball/{sha}", self.calls())
+        self.assertIn("docker egress-start", self.calls())
+        self.assert_ok(self.again("--clients", "claude", "--docker"))
+        self.assertEqual({p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before}, before)
+        # start.sh itself leaves an unchanged proxy running; the installer never restarts it
+        self.assertIn("docker egress-start", self.calls())
+        self.assertFalse(
+            any(c.split()[:2] in (["docker", "restart"], ["docker", "rm"]) for c in self.calls())
+        )
+        self.assertFalse(any("tarball/" in c for c in self.calls()))
+
+    def test_egress_rerun_applies_a_changed_or_recreated_config(self):
+        self.assert_ok(self.fresh("--clients", "claude", "--docker"))
+        config = Path(self.home, ".egress", "config.local.yaml")
+        served = self.fakes / "egress_served"
+        edited = "version: 1\nnetworks:\n  workers:\n    mode: denylist\n    deny_ranges: [203.0.113.7/32]\n"
+        config.write_text(edited)
+        self.assert_ok(self.again("--clients", "claude", "--docker"))
+        self.assertEqual(served.read_text(), edited)
+        self.assertEqual(config.read_text(), edited)
+        config.unlink()
+        self.assert_ok(self.again("--clients", "claude", "--docker"))
+        default = "version: 1\nnetworks:\n  workers:\n    mode: denylist\n"
+        self.assertEqual(config.read_text(), default)
+        self.assertEqual(served.read_text(), default)
+
+    def test_egress_existing_config_preserved(self):
+        egress = Path(self.home, ".egress")
+        egress.mkdir()
+        target = egress / "config.local.yaml"
+        target.write_text("# user policy\nversion: 1\nnetworks:\n  workers:\n    mode: denylist\n")
+        target.chmod(0o600)
+        before = (target.read_bytes(), target.stat().st_mode, target.stat().st_mtime_ns)
+        self.assert_ok(self.fresh("--clients", "claude", "--docker"))
+        self.assertEqual(
+            (target.read_bytes(), target.stat().st_mode, target.stat().st_mtime_ns), before
+        )
+
+    def test_egress_bad_config_paths_are_not_replaced(self):
+        egress = Path(self.home, ".egress")
+        egress.mkdir()
+        config = egress / "config.local.yaml"
+        config.symlink_to(egress / "absent")
+        result = self.fresh("--clients", "claude", "--docker", egress_failure=True)
+        self.assertEqual(result.code, 1)
+        self.assertTrue(config.is_symlink())
+        self.assertIn("symlink is unsupported", result.stderr)
+        self.assertNotIn("docker egress-start", self.calls())
+
+    def test_egress_external_config_symlink_is_kept_and_rejected(self):
+        egress = Path(self.home, ".egress")
+        egress.mkdir()
+        target = Path(self.home, "my-egress.yaml")
+        target.write_text("# user config\n")
+        config = egress / "config.local.yaml"
+        config.symlink_to(target)
+        before = (target.read_bytes(), target.stat().st_mode, target.stat().st_mtime_ns)
+        result = self.fresh("--clients", "claude", "--docker", egress_failure=True)
+        self.assertEqual(result.code, 1)
+        self.assertIn("symlink is unsupported", result.stderr)
+        self.assertTrue(config.is_symlink())
+        self.assertEqual(
+            (target.read_bytes(), target.stat().st_mode, target.stat().st_mtime_ns), before
+        )
+        self.assertNotIn("docker egress-start", self.calls())
+
+    def test_egress_upgrade_keeps_old_version_and_publishes_current_only_when_healthy(self):
+        old_sha = "0" * 40
+        egress = Path(self.home, ".egress")
+        old = egress / "versions" / old_sha
+        old.mkdir(parents=True)
+        (old / "COMMIT").write_text(old_sha + "\n")
+        (old / "start.sh").write_text("# old checkout\n")
+        before = {
+            p: (p.read_bytes(), p.stat().st_mode, p.stat().st_mtime_ns) for p in old.iterdir()
+        }
+        (egress / "current").symlink_to(old)
+        state = Path(self.ensemble, "install/state")
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text(f"egress_commit={old_sha}\n")
+        (self.fakes / "fail").write_text("docker egress-start")
+        result = self.fresh("--clients", "claude", "--docker", egress_failure=True)
+        self.assertEqual(result.code, 1)
+        self.assertEqual((egress / "current").resolve(), old)
+        self.assertEqual(self.state()["egress_commit"], old_sha)
+        (self.fakes / "egress_unhealthy").touch()
+        (self.bin / "sleep").unlink()
+        executable(self.bin / "sleep", "#!/bin/sh\n")
+        result = self.again("--clients", "claude", "--docker")
+        self.assertEqual(result.code, 1)
+        self.assertIn("not healthy after 120 seconds", result.stderr)
+        self.assertIn("docker egress-start", self.calls())
+        self.assertEqual((egress / "current").resolve(), old)
+        self.assertEqual(self.state()["egress_commit"], old_sha)
+        self.assertEqual(
+            {p: (p.read_bytes(), p.stat().st_mode, p.stat().st_mtime_ns) for p in old.iterdir()},
+            before,
+        )
+        (self.fakes / "egress_unhealthy").unlink()
+        self.assert_ok(
+            self.again("--clients", "claude", "--docker", answers=DOCKER_LOGINS + ((WRITE_Q, "y"),))
+        )
+        self.assertEqual(
+            (egress / "current").resolve(),
+            egress / "versions" / "9ed47580dc9eb4c1fe794d12e54a8f2d3f258831",
+        )
+        self.assertEqual(
+            {p: (p.read_bytes(), p.stat().st_mode, p.stat().st_mtime_ns) for p in old.iterdir()},
+            before,
+        )
+
+    def test_egress_stopped_and_invalid_metadata_cannot_finish_installation(self):
+        self.assert_ok(self.fresh("--clients", "claude", "--docker"))
+        (self.bin / "sleep").unlink()
+        executable(self.bin / "sleep", "#!/bin/sh\n")
+        good = "true|healthy|1|egress-workers|http://egress-proxy-workers:4750|workers"
+        for status in (
+            good.replace("true", "false"),
+            good.replace("healthy|1", "healthy|2"),
+            good.replace("|egress-workers|", "||"),
+            good.replace("http://egress-proxy-workers:4750", "<no value>"),
+            "true|starting|1|||mini-op",
+        ):
+            with self.subTest(status=status):
+                (self.fakes / "egress_inspect").write_text(status + "\n")
+                result = self.again("--clients", "claude", "--docker")
+                self.assertEqual(result.code, 1)
+                self.assertIn("not healthy after 120 seconds", result.stderr)
+                self.assertNotIn("ensemble-broker login claude", self.calls())
+
+    def test_egress_config_without_workers_fails_at_once(self):
+        egress = Path(self.home, ".egress")
+        egress.mkdir()
+        config = egress / "config.local.yaml"
+        config.write_text("version: 1\nnetworks:\n  mini-op:\n    mode: allowlist\n")
+        config.chmod(0o600)
+        before = (config.read_bytes(), config.stat().st_mode, config.stat().st_mtime_ns)
+        (self.fakes / "egress_inspect").write_text("true|healthy|1|||mini-op\n")
+        slept = self.fakes / "slept"
+        (self.bin / "sleep").unlink()
+        real = shutil.which("sleep")
+        executable(
+            self.bin / "sleep", f'#!/bin/sh\n[ "$1" != 2 ] || touch \'{slept}\'\nexec {real} "$@"\n'
+        )
+        result = self.fresh("--clients", "claude", "--docker", egress_failure=True)
+        self.assertEqual(result.code, 1)
+        self.assertIn(f"{config} has no networks.workers section", result.stderr)
+        self.assertIn("your config was kept unchanged", result.stderr)
+        self.assertNotIn("not healthy after 120 seconds", result.stderr)
+        self.assertFalse(slept.exists())
+        self.assertEqual(
+            (config.read_bytes(), config.stat().st_mode, config.stat().st_mtime_ns), before
+        )
+        self.assertNotIn("ensemble-broker login claude", self.calls())
+        self.assertFalse((egress / "current").exists())
+
+    def test_egress_download_failure_is_retryable(self):
+        (self.fakes / "fail").write_text("gh api repos/windroc/egress-proxy/tarball/")
+        result = self.fresh("--clients", "claude", "--docker", egress_failure=True)
+        self.assertEqual(result.code, 1)
+        self.assertIn("cannot fetch pinned windroc/egress-proxy", result.stderr)
+        versions = Path(self.home, ".egress/versions")
+        self.assertEqual(list(versions.iterdir()), [])
+        self.assert_ok(
+            self.again("--clients", "claude", "--docker", answers=DOCKER_LOGINS + ((WRITE_Q, "y"),))
+        )
+
+    def test_egress_unusable_download_leaves_no_version_and_is_retryable(self):
+        versions = Path(self.home, ".egress/versions")
+        (self.fakes / "egress_tarball").write_text("corrupt")
+        result = self.fresh("--clients", "claude", "--docker", egress_failure=True)
+        self.assertEqual(result.code, 1)
+        self.assertIn("cannot unpack pinned windroc/egress-proxy", result.stderr)
+        self.assertEqual(list(versions.iterdir()), [])
+        (self.fakes / "egress_tarball").write_text("noexec")
+        result = self.again("--clients", "claude", "--docker")
+        self.assertEqual(result.code, 1)
+        self.assertIn("pinned egress version has no executable start.sh", result.stderr)
+        self.assertEqual(list(versions.iterdir()), [])
+        self.assertNotIn("docker egress-start", self.calls())
+        (self.fakes / "egress_tarball").unlink()
+        self.assert_ok(
+            self.again("--clients", "claude", "--docker", answers=DOCKER_LOGINS + ((WRITE_Q, "y"),))
+        )
+
+    def test_egress_incomplete_checkout_is_kept_and_rejected(self):
+        version = Path(self.home, ".egress/versions/9ed47580dc9eb4c1fe794d12e54a8f2d3f258831")
+        version.mkdir(parents=True)
+        executable(version / "start.sh", "#!/bin/sh\n")
+        (version / "COMMIT").write_text("0" * 40 + "\n")
+        before = {p.name: p.read_bytes() for p in version.iterdir()}
+        result = self.fresh("--clients", "claude", "--docker", egress_failure=True)
+        self.assertEqual(result.code, 1)
+        self.assertIn(f"incomplete egress checkout {version}", result.stderr)
+        self.assertEqual({p.name: p.read_bytes() for p in version.iterdir()}, before)
+        self.assertNotIn("docker egress-start", self.calls())
+        self.assertFalse(any("tarball/" in c for c in self.calls()))
+
+    def test_egress_config_directory_is_kept_and_rejected(self):
+        config = Path(self.home, ".egress/config.local.yaml")
+        config.mkdir(parents=True)
+        (config / "keep").write_text("mine\n")
+        result = self.fresh("--clients", "claude", "--docker", egress_failure=True)
+        self.assertEqual(result.code, 1)
+        self.assertIn(
+            "config.local.yaml is not a readable file; existing path was kept", result.stderr
+        )
+        self.assertEqual((config / "keep").read_text(), "mine\n")
+        self.assertNotIn("docker egress-start", self.calls())
+
+    def test_egress_current_directory_is_kept_and_not_published(self):
+        current = Path(self.home, ".egress/current")
+        current.mkdir(parents=True)
+        (current / "keep").write_text("mine\n")
+        result = self.fresh("--clients", "claude", "--docker", egress_failure=True)
+        self.assertEqual(result.code, 1)
+        self.assertIn(f"{current} is not an installer symlink; kept it", result.stderr)
+        self.assertFalse(current.is_symlink())
+        self.assertEqual((current / "keep").read_text(), "mine\n")
+        self.assertNotIn("egress_commit", self.state())
+        self.assertNotIn("ensemble-broker login claude", self.calls())
+
+    def test_egress_start_and_health_failures_stop_before_broker_logins(self):
+        (self.fakes / "fail").write_text("docker egress-start")
+        result = self.fresh("--clients", "claude", "--docker", egress_failure=True)
+        self.assertEqual(result.code, 1)
+        self.assertIn("egress-proxy", result.stderr)
+        self.assertIn("docker logs egress-proxy", result.stderr)
+        self.assertNotIn("ensemble-broker login claude", self.calls())
+        (self.fakes / "egress_unhealthy").touch()
+        (self.bin / "sleep").unlink()
+        executable(self.bin / "sleep", "#!/bin/sh\n")
+        result = self.again("--clients", "claude", "--docker")
+        self.assertEqual(result.code, 1)
+        self.assertIn("not healthy after 120 seconds", result.stderr)
+        self.assertNotIn("ensemble-broker login claude", self.calls())
 
     def test_branch_broker_is_built(self):
         result = self.fresh(
@@ -1011,6 +1380,283 @@ class InstallTest(Case):
         self.assert_ok(result)
         self.assertIn("brew install go", self.calls())
         self.assertIn("broker-install --build", self.calls())
+        self.assertNotIn("agent-plugins-marketplace", "\n".join(self.calls()))
+        self.assertNotIn(f"{RAW}v9.8.7/{GO}", "\n".join(self.calls()))
+
+    def test_release_tag_broker_is_downloaded(self):
+        self.protocol_at("main", OTHER)
+        result = self.fresh(
+            "--ref",
+            "v9.8.7",
+            clients="opencode",
+            docker="y",
+            opencode=PROVIDER_ANSWERS,
+            logins=[(PEM_Q, ""), (OPENCODE_LOGIN_Q, "lan"), (r"API key:", KEY)],
+        )
+        self.assert_ok(result)
+        self.assertNotIn("brew install go", self.calls())
+        self.assertIn("broker-install ", self.calls())
+        self.assertIn("skip: go: the broker comes from release v9.8.7", result.stderr)
+        self.assertNotIn("agent-plugins-marketplace", "\n".join(self.calls()))
+
+    def test_release_ref_served_by_the_marketplace(self):
+        self.serve({"ref": "v9.8.7"})
+        self.protocol_at("main", OTHER)
+        result = self.fresh(docker="y")
+        self.assert_ok(result)
+        self.assertIn(
+            f"    broker protocol {PROTOCOL}: ensemble v9.8.7 and release v9.8.7 agree\n",
+            result.stderr,
+        )
+        self.assertEqual(self.broker_calls()[0], "broker-install ")
+        self.assertNotIn("brew install go", self.calls())
+        self.assertNotIn(f"{RAW}main/", "\n".join(self.calls()))
+        self.assertIn("ensemble is installed (ref v9.8.7, clients claude,codex", result.stderr)
+
+    def test_protocol_parsers_read_the_repo_sources(self):
+        self.assert_ok(self.fresh(clients="claude", docker="y"))
+        for path in (f"main/{CLIENT}", "main/.claude-plugin/plugin.json", f"v9.8.7/{GO}"):
+            self.assertIn(f"curl -fsSL {RAW}{path}", self.calls())
+        result = self.again("--clients", "claude", "--docker")
+        self.assert_ok(result)
+        self.assertIn(f"    broker protocol {PROTOCOL}: ", result.stderr)
+
+    def test_protocol_mismatch_stops_before_client_steps(self):
+        self.protocol_at("v9.8.7", OTHER)
+        for rerun, (clients, remedy) in enumerate(
+            (
+                (
+                    "claude,codex",
+                    "the windroc marketplace serves ensemble at main, ahead of release v9.8.7:"
+                    " wait until it serves a release, or use --clients opencode --ref v9.8.7",
+                ),
+                ("codex", "the windroc marketplace serves ensemble at main"),
+            )
+        ):
+            with self.subTest(clients=clients):
+                result = self.refused("--clients", clients, "--docker", rerun=bool(rerun))
+                self.assertIn(
+                    f"install.sh: ensemble main wants broker protocol {PROTOCOL}, but its broker,"
+                    f" release v9.8.7, speaks protocol {OTHER}: {remedy}",
+                    result.stderr,
+                )
+                calls = "\n".join(self.calls())
+                for absent in ("--cask claude", "--cask codex", "--cask docker", "login"):
+                    self.assertNotIn(absent, calls)
+                self.assertEqual(self.broker_calls(), [])
+                self.assertFalse(self.config().exists())
+
+    def test_rerun_reinstalls_a_broker_with_another_protocol(self):
+        self.assert_ok(self.fresh(clients="claude", docker="y"))
+        (self.fakes / "src/broker/protocol").write_text(OTHER)
+        result = self.again("--clients", "claude", "--docker")
+        self.assert_ok(result)
+        self.assertIn(
+            f"    installed broker speaks protocol {OTHER}, the plugin wants {PROTOCOL}:"
+            " reinstalling\n",
+            result.stderr,
+        )
+        self.assertIn("broker-install ", self.broker_calls())
+        result = self.again("--clients", "claude", "--docker")
+        self.assert_ok(result)
+        self.assertIn("==> broker\n    skip: installed from this plugin\n", result.stderr)
+        self.assertNotIn("broker-install ", self.broker_calls())
+
+    def claude_ensemble(self):
+        """The directory of the ensemble plugin the fake Claude Code installed."""
+        installed = json.loads((self.fakes / "claude/plugins.json").read_text())
+        return next(p["installPath"] for p in installed if p["id"] == "ensemble@windroc")
+
+    def test_rerun_keeps_a_current_hand_built_broker(self):
+        self.assert_ok(self.fresh(clients="claude", docker="y"))
+        path = self.claude_ensemble()
+        Path(path, CLIENT).write_text(f'PROTOCOL = "{OTHER}"\n')
+        (self.fakes / "src/broker/protocol").write_text(OTHER)
+        result = self.again("--clients", "claude", "--docker")
+        self.assert_ok(result)
+        self.assertIn(
+            f"    broker protocol {OTHER}: {path} and the installed broker agree\n", result.stderr
+        )
+        self.assertNotIn(f"{RAW}v9.8.7/{GO}", "\n".join(self.calls()))
+        self.assertIn("==> broker\n    skip: installed from this plugin\n", result.stderr)
+
+    def test_failing_broker_install_names_the_broker_step(self):
+        (self.fakes / "broker_install_fails").write_text("")
+        result = self.fresh("--clients", "claude", "--docker", egress_failure=True)
+        self.assertEqual(result.code, 1)
+        self.assertIn(
+            "install.sh: broker failed; rerun the same command to continue\n", result.stderr
+        )
+
+    def test_opencode_rerun_keeps_a_current_hand_built_broker(self):
+        self.assert_ok(
+            self.fresh(
+                clients="opencode",
+                docker="y",
+                opencode=PROVIDER_ANSWERS,
+                logins=[(PEM_Q, ""), (OPENCODE_LOGIN_Q, "lan"), (r"API key:", KEY)],
+            )
+        )
+        (self.opencode_package() / CLIENT).write_text(f'PROTOCOL = "{OTHER}"\n')
+        (self.fakes / "src/broker").mkdir(parents=True, exist_ok=True)
+        (self.fakes / "src/broker/protocol").write_text(OTHER)
+        result = self.again()
+        self.assert_ok(result)
+        self.assertIn(
+            f"    broker protocol {OTHER}: {self.opencode_package()} and the installed broker"
+            " agree\n",
+            result.stderr,
+        )
+        self.assertIn("==> broker\n    skip: installed from this plugin\n", result.stderr)
+
+    def test_mixed_run_remedy_updates_the_plugin(self):
+        """With Claude Code chosen only the served ref installs, so OpenCode's copy names the plugin update."""
+        self.assert_ok(
+            self.fresh(
+                clients="claude,opencode",
+                docker="y",
+                opencode=PROVIDER_ANSWERS,
+                logins=[
+                    (TOKEN_Q, TOKEN),
+                    (PEM_Q, ""),
+                    (OPENCODE_LOGIN_Q, "lan"),
+                    (r"API key:", KEY),
+                ],
+            )
+        )
+        (self.opencode_package() / CLIENT).write_text(f'PROTOCOL = "{OTHER}"\n')
+        result = self.again()
+        self.assertEqual(result.code, 1, result.stderr)
+        self.assertIn(
+            f"install.sh: {self.opencode_package()} wants broker protocol {OTHER}, but its broker,"
+            f" the installed broker, speaks protocol {PROTOCOL}: update the plugin (Claude Code:",
+            result.stderr,
+        )
+
+    def test_stale_opencode_copy_next_to_an_installed_plugin_names_the_update(self):
+        self.assert_ok(
+            self.fresh(
+                clients="claude,opencode",
+                docker="y",
+                opencode=PROVIDER_ANSWERS,
+                logins=[
+                    (TOKEN_Q, TOKEN),
+                    (PEM_Q, ""),
+                    (OPENCODE_LOGIN_Q, "lan"),
+                    (r"API key:", KEY),
+                ],
+            )
+        )
+        (self.fakes / "commit").write_text(NEW)
+        self.protocol_at("main", OTHER)
+        result = self.again()
+        self.assertEqual(result.code, 1, result.stderr)
+        self.assertIn(
+            f"install.sh: ensemble main wants broker protocol {OTHER}, but its broker, the installed"
+            f" broker, speaks protocol {PROTOCOL}: update the plugin (Claude Code:",
+            result.stderr,
+        )
+
+    def test_other_client_plugin_against_the_installed_broker_stops(self):
+        self.assert_ok(self.fresh(docker="y"))
+        Path(self.claude_ensemble(), CLIENT).write_text(f'PROTOCOL = "{OTHER}"\n')
+        (self.fakes / "src/broker/protocol").write_text(OTHER)
+        codex = Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.7")
+        result = self.refused("--clients", "claude,codex", "--docker", rerun=True)
+        self.assertIn(
+            f"install.sh: {codex} wants broker protocol {PROTOCOL}, but its broker, the installed"
+            f" broker, speaks protocol {OTHER}: update the plugin",
+            result.stderr,
+        )
+        self.assertEqual(self.broker_calls(), [])
+
+    def test_opencode_main_remedy_names_a_branch_other_than_main(self):
+        self.protocol_at("v9.8.7", OTHER)
+        flags = ("--clients", "opencode", "--docker", "--ref", "main")
+        result = self.refused(*flags, then=PROVIDER_ANSWERS)
+        self.assertIn(
+            f"install.sh: ensemble main wants broker protocol {PROTOCOL}, but its broker, release"
+            f" v9.8.7, speaks protocol {OTHER}: use --ref v9.8.7 or a branch other than main\n",
+            result.stderr,
+        )
+
+    def test_codex_plugin_from_its_newest_cache_dir(self):
+        self.assert_ok(self.fresh(clients="codex", docker="y"))
+        cache = Path(self.home, ".codex/plugins/cache/windroc/ensemble")
+        # 9.8.10 is newer than 9.8.7 by version, older by text.
+        shutil.copytree(cache / "9.8.7", cache / "9.8.10")
+        (cache / "9.8.10" / CLIENT).write_text(f'PROTOCOL = "{OTHER}"\n')
+        result = self.refused("--clients", "codex", "--docker", rerun=True)
+        self.assertIn(
+            f"install.sh: {cache / '9.8.10'} wants broker protocol {OTHER}, but its broker, release"
+            f" v9.8.7, speaks protocol {PROTOCOL}: update the plugin",
+            result.stderr,
+        )
+
+    def test_installed_plugin_with_another_protocol_stops_up_front(self):
+        self.assert_ok(self.fresh(clients="claude", docker="y"))
+        path = self.claude_ensemble()
+        Path(path, CLIENT).write_text(f'PROTOCOL = "{OTHER}"\n')
+        result = self.refused("--clients", "claude", "--docker", rerun=True)
+        self.assertIn(
+            f"install.sh: {path} wants broker protocol {OTHER}, but its broker, release v9.8.7,"
+            f" speaks protocol {PROTOCOL}: update the plugin (Claude Code: claude plugin"
+            " marketplace update windroc, then claude plugin update ensemble@windroc; Codex:"
+            " codex plugin marketplace upgrade windroc), then rerun\n",
+            result.stderr,
+        )
+        self.assertEqual(self.broker_calls(), [])
+
+    def test_invalid_version_or_protocol_stops(self):
+        cases = (
+            (
+                "main",
+                ".claude-plugin/plugin.json",
+                '{"version": "9.8.7/../../x"}\n',
+                "no release version in .claude-plugin/plugin.json at ref main",
+            ),
+            (
+                "main",
+                CLIENT,
+                f"PROTOCOL = {PROTOCOL}\n",
+                f"no broker protocol in {CLIENT} at ref main",
+            ),
+            (
+                "v9.8.7",
+                GO,
+                'const Version = "x"\n',
+                f"no broker protocol in {GO} at ref v9.8.7",
+            ),
+            (
+                "main",
+                ".claude-plugin/plugin.json",
+                None,
+                "cannot read .claude-plugin/plugin.json at ref main of windroc-labs/ensemble",
+            ),
+        )
+        for rerun, (ref, path, text, message) in enumerate(cases):
+            with self.subTest(path=path, text=text):
+                shutil.rmtree(self.fakes / "refs", ignore_errors=True)
+                self.at_ref(ref, path, text)
+                result = self.refused("--clients", "claude", "--docker", rerun=bool(rerun))
+                self.assertIn(f"install.sh: {message}\n", result.stderr)
+
+    def test_existing_marketplace_is_refreshed_before_a_fresh_plugin(self):
+        self.assert_ok(self.fresh())
+        for client, key in (("claude", "id"), ("codex", "pluginId")):
+            path = self.fakes / client / "plugins.json"
+            kept = [p for p in json.loads(path.read_text()) if p[key] != "ensemble@windroc"]
+            path.write_text(json.dumps(kept))
+        self.assert_ok(self.again())
+        self.assertEqual(
+            self.plugin_calls(),
+            [
+                "claude plugin marketplace update windroc",
+                "claude plugin install ensemble@windroc",
+                "codex plugin marketplace upgrade windroc",
+                "codex plugin add ensemble@windroc",
+            ],
+        )
 
     def test_docker_not_running_fails(self):
         (self.fakes / "docker_wont_start").touch()
@@ -1046,10 +1692,8 @@ class InstallTest(Case):
         self.assertLess(
             calls.index(f"{install} --accept-license --user=tester"), calls.index("open -a Docker")
         )
-        self.assertEqual(
-            json.loads(self.docker_settings().read_text()),
-            {"UseVirtualizationFrameworkRosetta": False, "DisplayedOnboarding": True},
-        )
+        self.assertEqual(json.loads(self.docker_settings().read_text()), DOCKER_PRESETS)
+        self.assertNotIn(PRESETS_NOT_WRITTEN, result.stderr)
         self.assertIn(
             "Docker Desktop 4.96.0 for arm64, macOS 14.0+: matches arm64, macOS 26.7.1",
             result.stderr,
@@ -1071,7 +1715,7 @@ class InstallTest(Case):
         self.assertNotIn("[session.hosts.docker] docker", self.again().tty)
 
     def test_docker_settings_kept(self):
-        self.docker_settings().parent.mkdir(parents=True)
+        self.docker_group().mkdir(parents=True)
         self.docker_settings().write_text(
             '{"UseVirtualizationFrameworkRosetta": true, "Theme": "dark"}'
         )
@@ -1085,8 +1729,71 @@ class InstallTest(Case):
             },
         )
 
+    def test_docker_group_container_denied(self):
+        group = self.docker_group()
+        group.mkdir(parents=True)
+        self.docker_settings().write_text('{"Theme": "dark"}')
+        group.chmod(0)
+        self.addCleanup(lambda: group.exists() and group.chmod(0o700))
+        result = self.fresh(clients="claude", docker="y")
+        self.assert_ok(result)
+        self.assertEqual(result.stderr.count(PRESETS_NOT_WRITTEN), 1, result.stderr)
+        group.chmod(0o700)
+        self.assertEqual([p.name for p in group.iterdir()], ["settings-store.json"])
+        self.assertEqual(self.docker_settings().read_text(), '{"Theme": "dark"}')
+
+    def test_docker_group_container_create_denied(self):
+        parent = self.docker_group().parent
+        parent.mkdir(parents=True)
+        parent.chmod(0o500)
+        self.addCleanup(lambda: parent.exists() and parent.chmod(0o700))
+        result = self.fresh(clients="claude", docker="y")
+        self.assert_ok(result)
+        self.assertEqual(result.stderr.count(PRESETS_NOT_WRITTEN), 1, result.stderr)
+        self.assertFalse(self.docker_group().exists())
+
+    def test_docker_settings_invalid_kept(self):
+        self.docker_group().mkdir(parents=True)
+        self.docker_settings().write_text("[]")
+        result = self.fresh(clients="claude", docker="y")
+        self.assert_ok(result)
+        self.assertEqual(result.stderr.count(PRESETS_NOT_WRITTEN), 1, result.stderr)
+        self.assertEqual(self.docker_settings().read_text(), "[]")
+        self.assertEqual([p.name for p in self.docker_group().iterdir()], ["settings-store.json"])
+
+    def test_docker_group_container_unreadable_parent(self):
+        """A container whose lstat macOS denies may be the user's: never recorded, so cleanup keeps it."""
+        group = self.docker_group()
+        group.mkdir(parents=True)
+        (group / "data").write_text("user's")
+        group.parent.chmod(0o600)
+        self.addCleanup(lambda: group.parent.exists() and group.parent.chmod(0o700))
+        result = self.fresh(clients="claude", docker="y")
+        self.assert_ok(result)
+        self.assertEqual(
+            result.stderr.count(f"{NOT_TOLD}{group}: cannot tell whether it is there"), 1
+        )
+        self.assertNotIn(f"dir\t{group}", self.ledger())
+        self.assert_ok(self.cleanup("--yes"))
+        group.parent.chmod(0o700)
+        self.assertEqual((group / "data").read_text(), "user's")
+
+    def test_dangling_symlink_not_recorded(self):
+        """A dangling symlink is there, not missing: cleanup leaves it (Docker Desktop writes through it)."""
+        plist = Path(self.home, "Library/Preferences/com.docker.docker.plist")
+        plist.parent.mkdir(parents=True)
+        Path(self.home, "dotfiles").mkdir()
+        plist.symlink_to(Path(self.home, "dotfiles/docker.plist"))
+        self.assert_ok(self.fresh(clients="claude", docker="y"))
+        self.assertNotIn(f"file\t{plist}", self.ledger())
+        self.assert_ok(self.cleanup("--yes"))
+        self.assertTrue(plist.is_symlink())
+
+    def docker_group(self):
+        return Path(self.home, "Library/Group Containers/group.com.docker")
+
     def docker_settings(self):
-        return Path(self.home, "Library/Group Containers/group.com.docker/settings-store.json")
+        return self.docker_group() / "settings-store.json"
 
     def assert_docker_build_refused(self, marker, text, said):
         (self.fakes / marker).write_text(text)
@@ -1201,6 +1908,24 @@ class InstallTest(Case):
             self.assertNotIn(f"sudo -A {broker} install-codex 0.163.0", calls)
             login = "ensemble-broker login codex" in calls
             self.assertEqual(login, status["state"] != "ready", status)
+
+    def test_broker_audit_warning_preserves_ready_credentials(self):
+        self.assert_ok(self.fresh(docker="y"))
+        warning = self.fakes / "src/broker/audit_warning.json"
+        for value, message in (
+            ("audit_write_failed", "audit_write_failed: broker audit persistence failed"),
+            ("AUDIT_SECRET_SENTINEL", "invalid audit warning metadata"),
+        ):
+            warning.write_text(json.dumps(value))
+            result = self.again()
+            self.assert_ok(result)
+            self.assertIn(message, result.stderr)
+            self.assertIn("the operation result still applies", result.stderr)
+            self.assertNotIn("AUDIT_SECRET_SENTINEL", result.stdout + result.stderr + result.tty)
+            calls = self.calls()
+            self.assertIn("ensemble-broker status --cleanup", calls)
+            self.assertNotIn("ensemble-broker login claude", calls)
+            self.assertNotIn("ensemble-broker login codex", calls)
 
     def test_opencode_config_and_flags(self):
         flags = ("--clients", "claude,opencode", "--no-docker")
@@ -3554,6 +4279,35 @@ exec /bin/rm "$@"
             ],
         )
 
+    def test_ledger_before_python_works(self):
+        """Before the Command Line Tools, macOS's python3 is a shim that fails: tool state is still recorded."""
+        (self.bin / "python3").unlink()
+        clt = Path(self.root, "Library/Developer/CommandLineTools")
+        executable(
+            self.bin / "python3",
+            f'#!/bin/sh\n[ -d "{clt}" ] || exit 1\nexec {sys.executable} "$@"\n',
+        )
+        self.assert_ok(self.fresh("--no-docker"))
+        h = self.home
+        for record in (
+            f"dir\t{h}/.homebrew",
+            f"file\t{h}/.homebrew/trust.json",
+            f"dir\t{h}/.cache/uv",
+        ):
+            self.assertIn(record, self.ledger())
+
+    def test_relative_tool_path_not_recorded(self):
+        """A relative path from the environment cannot be confirmed missing: one line, no record."""
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(self.home)
+        self.env["UV_CACHE_DIR"] = "uv-cache"
+        result = self.fresh("--no-docker")
+        self.assert_ok(result)
+        self.assertEqual(
+            result.stderr.count(f"{NOT_TOLD}uv-cache: cannot tell whether it is there"), 1
+        )
+        self.assertFalse([record for record in self.ledger() if "uv-cache" in record])
+
     def test_ledger_with_docker_and_opencode(self):
         self.assert_ok(self.full())
         h, ledger = self.home, self.ledger()
@@ -3599,7 +4353,8 @@ exec /bin/rm "$@"
         changed = [c for c in self.calls() if any(w in c for w in changing)]
         self.assertEqual([c for c in changed if not c.endswith(" status")], [])
         self.assertEqual(self.ledger(), before)
-        exempt = {"sudo", "configuration", "plugin directory"}
+        # the egress step always runs the pinned start.sh, which changes nothing here
+        exempt = {"sudo", "configuration", "plugin directory", "egress proxy"}
         steps = re.findall(r"==> (.+)\n(?!    skip:)", result.stderr)
         self.assertEqual([s for s in steps if s not in exempt], [])
         for path, data in files.items():
@@ -3747,11 +4502,12 @@ exec /bin/rm "$@"
         first = self.full()
         self.assert_ok(first)
         calls, ledger, files = self.run_calls(), self.ledger(), self.snapshot()
+        shared = {p: b for p, b in files.items() if ".egress" in p.relative_to(self.home).parts}
         result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
         self.assert_ok(result)
         self.assertNotIn("docker-uninstall", self.calls())
         self.assertIn("brew uninstall --cask docker-desktop", self.calls())
-        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.snapshot(), before | shared)
         self.assertEqual(list((self.fakes / "keychain").iterdir()), [])
         self.assertEqual(list((self.fakes / "login").iterdir()), [])
         self.assertFalse(self.broker_path().parent.exists())
@@ -3759,7 +4515,8 @@ exec /bin/rm "$@"
         self.assert_secret_free(PASSWORD, KEY, TOKEN, result=result)
         second = self.full()
         self.assert_ok(second)
-        self.assertEqual(self.run_calls(), calls)
+        fetch = "gh api repos/windroc/egress-proxy/tarball/"
+        self.assertEqual(self.run_calls(), [c for c in calls if not c.startswith(fetch)])
         self.assertEqual(self.ledger(), ledger)
         self.assertEqual(second.tty, first.tty)
         self.assertEqual(self.snapshot(), files)
@@ -3824,7 +4581,9 @@ exec /bin/rm "$@"
     def test_cleanup_needs_full_disk_access_for_a_container(self):
         """macOS lets only Full Disk Access remove an app container: without it nothing is removed."""
         self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        self.tcc.unlink()
         container = Path(self.home, "Library/Containers/com.docker.docker")
+        group = Path(self.home, "Library/Group Containers/group.com.docker")
         (container / "locked").mkdir(parents=True)
         (container / "locked/data").write_text("")
         ledger = Path(self.ensemble, "install/added")
@@ -3833,7 +4592,7 @@ exec /bin/rm "$@"
         self.assertEqual(result.code, 1, result.stderr)
         self.assertEqual(
             result.stderr,
-            f"install-cleanup.sh: macOS lets only Full Disk Access remove {container}: give the"
+            f"install-cleanup.sh: macOS lets only Full Disk Access remove {container} {group}: give the"
             " terminal Full Disk Access (System Settings › Privacy & Security), reopen it, then"
             " rerun; nothing removed (take the access back once cleanup has finished)\n",
         )
@@ -3841,9 +4600,7 @@ exec /bin/rm "$@"
         self.assertEqual(ledger.read_bytes(), recorded)
         self.assertTrue((container / "locked/data").exists())
         self.assertEqual([c for c in self.calls() if not c.startswith(("uname", "ps "))], [])
-        tcc = Path(self.home, "Library/Application Support/com.apple.TCC/TCC.db")
-        tcc.parent.mkdir(parents=True)
-        tcc.write_text("granted")
+        self.tcc.write_text("granted")
         locked = container / "locked"
         locked.chmod(0o500)
         self.addCleanup(lambda: locked.exists() and locked.chmod(0o700))
@@ -3865,6 +4622,33 @@ exec /bin/rm "$@"
         self.assertFalse(container.exists())
         self.assertFalse(Path(self.ensemble, "install").exists())
         self.assertFalse(Path(self.home, ".zprofile").exists())
+
+    def test_cleanup_needs_full_disk_access_for_a_group_container(self):
+        """macOS 27 denies a terminal Docker's Group Container too: without the access nothing is removed."""
+        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        group = Path(self.home, "Library/Group Containers/group.com.docker")
+        self.assertTrue((group / "settings-store.json").exists())
+        self.tcc.unlink()
+        ledger = Path(self.ensemble, "install/added")
+        recorded = ledger.read_bytes()
+        result = self.cleanup()
+        self.assertEqual(result.code, 1, result.stderr)
+        self.assertIn(
+            f"install-cleanup.sh: macOS lets only Full Disk Access remove {group}:", result.stderr
+        )
+        self.assertNotRegex(result.tty, REMOVE_Q)
+        self.assertEqual(ledger.read_bytes(), recorded)
+        self.assertTrue((group / "settings-store.json").exists())
+        group.parent.chmod(0o600)
+        self.addCleanup(lambda: group.parent.exists() and group.parent.chmod(0o700))
+        result = self.cleanup()
+        self.assertEqual(result.code, 1, result.stderr)
+        self.assertIn(f"remove {group}:", result.stderr)
+        self.assertEqual(ledger.read_bytes(), recorded)
+        group.parent.chmod(0o700)
+        self.tcc.write_text("granted")
+        self.assert_ok(self.cleanup("--yes"))
+        self.assertFalse(group.exists())
 
     def preinstalled_homebrew(self):
         """Homebrew with gh and the Command Line Tools, there before install.sh; PATH lacks its bin."""
@@ -3892,12 +4676,15 @@ exec /bin/rm "$@"
         )
         before = self.snapshot()
         self.assert_ok(self.fresh("--docker", logins=[(PEM_Q, "")]))
+        shared = {
+            p: b for p, b in self.snapshot().items() if ".egress" in p.relative_to(self.home).parts
+        }
         self.assertFalse(
             [r for r in self.ledger() if r.startswith(("homebrew", "clt", "formula\tgh"))]
         )
         result = self.cleanup("--yes")
         self.assert_ok(result)
-        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.snapshot(), before | shared)
         self.assertTrue((self.fakes / "brew/gh").exists())
         self.assertTrue((self.fakes / "keychain/ensemble-claude").exists())
         self.assertNotIn("brew uninstall gh", self.calls())

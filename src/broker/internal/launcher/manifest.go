@@ -22,7 +22,19 @@ type Manifest struct {
 	GitHubPermissions                                                                           map[string]string // the repository permissions each of its tokens is limited to; nil: github null
 	OpencodeProviders                                                                           []string          // the providers whose API keys an opencode container gets
 	ClaudeAccount                                                                               string            // the account whose setup-token a claude container gets; "" for other clients
+	Secrets                                                                                     []Secret          // the environment secrets the container gets; nil without the field
+	Lock, LockOwner                                                                             string            // optional lock name and readable owner
+	Gateway                                                                                     string            // the egress proxy's caller network key; workers without the field
+	Prefetch                                                                                    *Prefetch         // the repo cloned into a new workspace; nil without the field
 }
+
+// Prefetch is the repo a start clones into the workspace volume it creates: Repo owner/name, Ref a branch or tag
+// name, "" for the default branch.
+type Prefetch struct{ Repo, Ref string }
+
+// Secret is one environment secret a start writes: Item is its keychain reference (ValidEnvItem), File its name in
+// the container's secrets directory.
+type Secret struct{ Item, File string }
 
 // A workspace volume's labels: its kind (always kind) and its mount point.
 const (
@@ -30,6 +42,10 @@ const (
 	kind           = "ws"
 	workspaceLabel = "ensemble.workspace"
 	maxProviders   = 32
+	maxSecrets     = 16
+	maxSecretFile  = 255
+	// MaxSecretBytes caps one environment secret's value: login env's limit and the secrets tmpfs budget.
+	MaxSecretBytes = 16384
 )
 
 var (
@@ -38,12 +54,58 @@ var (
 	imagePattern      = regexp.MustCompile(`^ensemble-worker:[0-9a-f]{64}$`)
 	labelKeyPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 	appPattern        = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	lockPattern       = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,62}$`)
+	// A caller network key: one label path segment, windroc.egress.network.<key>.name.
+	gatewayPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+	refChars       = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
+	shaPattern     = regexp.MustCompile(`^[0-9a-fA-F]{7,64}$`)
 	// An OpenCode provider's name: its keychain account and its key file's name, <name>.key.
 	providerPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 	// A Claude account's name: its setup-token item's keychain account. Lowercase only, so the keychain's case
 	// handling cannot merge two names.
 	claudeAccountPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+	// An environment secret's name, as Claude accounts: lowercase so the keychain's case handling cannot merge two.
+	envNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 )
+
+// envItemPrefix starts every environment secret's keychain service; the broker package's envServicePrefix is the same.
+const envItemPrefix = "ensemble-env/"
+
+// ValidEnvName is whether name can be an environment secret, item ensemble-env/<name>.
+func ValidEnvName(name string) bool { return envNamePattern.MatchString(name) }
+
+// ValidEnvItem is whether item is an environment secret's reference, ensemble-env/<name>; no other keychain service is.
+func ValidEnvItem(item string) bool {
+	name, ok := strings.CutPrefix(item, envItemPrefix)
+	return ok && ValidEnvName(name)
+}
+
+// validSecretFile is whether file can name a secret in the container: one path component of at most maxSecretFile
+// bytes, with no C0 or C1 control character, not . or ..
+func validSecretFile(file string) bool {
+	return file != "" && len(file) <= maxSecretFile && file != "." && file != ".." && !strings.ContainsFunc(file, func(r rune) bool {
+		return r == '/' || r < 0x20 || r >= 0x7f && r <= 0x9f
+	})
+}
+
+func ValidLock(name string) bool { return lockPattern.MatchString(name) }
+
+func validGateway(key string) bool { return gatewayPattern.MatchString(key) }
+
+// ValidRef is whether ref names a branch or tag, by ensemble.utils.git.check_ref's rule (WDRC-109 FR-52): never an
+// option, a full ref, HEAD or something that looks like a commit SHA.
+func ValidRef(ref string) bool {
+	if len(ref) > 255 || !refChars.MatchString(ref) || strings.HasPrefix(ref, "-") || ref == "HEAD" ||
+		strings.HasPrefix(ref, "refs/") || shaPattern.MatchString(ref) || strings.Contains(ref, "..") || strings.HasSuffix(ref, ".") {
+		return false
+	}
+	for _, part := range strings.Split(ref, "/") {
+		if part == "" || strings.HasPrefix(part, ".") || strings.HasSuffix(part, ".lock") {
+			return false
+		}
+	}
+	return true
+}
 
 // ValidProvider is whether name can be a listed OpenCode provider; ollama needs no key.
 func ValidProvider(name string) bool { return providerPattern.MatchString(name) && name != "ollama" }
@@ -131,9 +193,9 @@ func ParseManifest(data []byte) (Manifest, error) {
 	var m Manifest
 	targets := map[string]*string{"name": &m.Name, "generation": &m.Generation, "image": &m.Image,
 		"cwd": &m.CWD, "workspace": &m.Workspace, "client": &m.Client, "claude_dir": &m.ClaudeDir, "codex_dir": &m.CodexDir,
-		"opencode_dir": &m.OpencodeDir, "hook_path": &m.HookPath}
+		"opencode_dir": &m.OpencodeDir, "hook_path": &m.HookPath, "lock": &m.Lock, "lock_owner": &m.LockOwner, "gateway": &m.Gateway}
 	for key, raw := range fields {
-		if key == "labels" || key == "github" || key == "opencode_providers" || key == "claude_account" {
+		if key == "labels" || key == "github" || key == "opencode_providers" || key == "claude_account" || key == "secrets" || key == "prefetch" {
 			continue
 		}
 		target, ok := targets[key]
@@ -174,6 +236,16 @@ func ParseManifest(data []byte) (Manifest, error) {
 		return reject("paths must be absolute")
 	}
 	m.CWD = filepath.Clean(m.CWD) // Docker mounts at the cleaned target
+	_, hasLock := fields["lock"]
+	_, hasOwner := fields["lock_owner"]
+	if hasLock != hasOwner || hasLock && (!ValidLock(m.Lock) || strings.TrimSpace(m.LockOwner) == "") {
+		return reject("lock requires a valid lock name and nonempty lock_owner")
+	}
+	if _, ok := fields["gateway"]; !ok {
+		m.Gateway = workersKey
+	} else if !validGateway(m.Gateway) {
+		return reject("invalid gateway")
+	}
 	if raw := fields["github"]; string(raw) != "null" {
 		var github map[string]json.RawMessage
 		if len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &github) != nil || len(github) != 2 {
@@ -219,6 +291,52 @@ func ParseManifest(data []byte) (Manifest, error) {
 		m.ClaudeAccount = DefaultClaudeAccount
 	}
 
+	if raw, ok := fields["secrets"]; ok {
+		const shape = "secrets must be an array of at most %d {\"item\", \"file\"} objects"
+		var entries []map[string]json.RawMessage
+		if len(raw) == 0 || raw[0] != '[' || json.Unmarshal(raw, &entries) != nil || len(entries) > maxSecrets {
+			return reject(shape, maxSecrets)
+		}
+		m.Secrets = []Secret{}
+		for _, entry := range entries {
+			item, okItem := str(entry["item"])
+			file, okFile := str(entry["file"])
+			switch {
+			case len(entry) != 2 || !okItem || !okFile:
+				return reject(shape, maxSecrets)
+			case !ValidEnvItem(item):
+				return reject("invalid secret item %q", item)
+			case !validSecretFile(file):
+				return reject("invalid secret file %q", file)
+			case slices.ContainsFunc(m.Secrets, func(s Secret) bool { return s.File == file }):
+				return reject("repeated secret file %q", file)
+			}
+			m.Secrets = append(m.Secrets, Secret{Item: item, File: file})
+		}
+	}
+
+	if raw, ok := fields["prefetch"]; ok {
+		const shape = "prefetch must be {\"repo\": <owner/name>, \"ref\"?: <branch or tag>}"
+		var p map[string]json.RawMessage
+		if len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &p) != nil {
+			return reject(shape)
+		}
+		repo, ok := str(p["repo"])
+		rawRef, hasRef := p["ref"]
+		ref, okRef := str(rawRef)
+		switch {
+		case !ok || len(p) != 1 && !(len(p) == 2 && hasRef) || hasRef && !okRef:
+			return reject(shape)
+		case !githubapi.ValidRepo(repo):
+			return reject("invalid prefetch repo %q", repo)
+		case hasRef && !ValidRef(ref):
+			return reject("invalid prefetch ref %q", ref)
+		case m.GitHubApp != "":
+			return reject("prefetch requires github null")
+		}
+		m.Prefetch = &Prefetch{Repo: repo, Ref: ref}
+	}
+
 	var labels map[string]json.RawMessage
 	if raw := fields["labels"]; len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &labels) != nil {
 		return reject("labels must be an object")
@@ -226,7 +344,7 @@ func ParseManifest(data []byte) (Manifest, error) {
 	m.Labels = map[string]string{}
 	for key, raw := range labels {
 		value, ok := str(raw)
-		if !ok || !labelKeyPattern.MatchString(key) || strings.HasPrefix(key, "ensemble.") {
+		if !ok || !labelKeyPattern.MatchString(key) || strings.HasPrefix(key, "ensemble.") || strings.HasPrefix(key, "windroc.") {
 			return reject("invalid label %q", key)
 		}
 		m.Labels[key] = value

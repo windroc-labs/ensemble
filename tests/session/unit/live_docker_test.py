@@ -6,6 +6,7 @@ import os
 import re
 import types
 import unittest
+from contextlib import nullcontext
 from unittest import mock
 
 from tests.session import live_docker as gate
@@ -45,6 +46,9 @@ def withdrawn(kind="claude-setup-token"):
     return {"kind": kind, "result": "withdrawn"}
 
 
+NETWORK = "egress-workers"
+
+
 def inspect(**changes):
     found = {
         "Config": {"User": "agent", "Env": [f"GH_TOKEN={FAKE}"]},
@@ -52,10 +56,11 @@ def inspect(**changes):
             "CapDrop": ["ALL"],
             "SecurityOpt": ["no-new-privileges"],
             "Privileged": False,
-            "NetworkMode": "bridge",
+            "NetworkMode": NETWORK,
             "PidMode": "",
             "IpcMode": "private",
         },
+        "NetworkSettings": {"Networks": {NETWORK: {}}},
         "Mounts": [
             {"Type": "volume", "Name": "ensemble-ws-live", "Destination": CWD},
             {"Type": "bind", "Source": CLAUDE_DIR, "Destination": CLAUDE_DIR},
@@ -79,6 +84,243 @@ class AuditLinesTest(Case):
     def test_skips_blank_and_malformed_lines(self):
         text = "\n".join([json.dumps(line("start")), "", "{oops", "[1]", json.dumps(line("close"))])
         self.assertEqual([x["event"] for x in gate.audit_lines(text)], ["start", "close"])
+
+
+class ProxyBaselineTest(Case):
+    def setUp(self):
+        self.egress = {
+            "Config": {
+                "Labels": {
+                    "windroc.egress.contract": "1",
+                    "windroc.egress.networks": "mini-op,workers",
+                    "windroc.egress.network.workers.name": "egress-workers",
+                    "windroc.egress.network.workers.proxy": "http://egress-proxy-workers:4750",
+                }
+            },
+            "State": {"Running": True, "Health": {"Status": "healthy"}},
+            "NetworkSettings": {"Networks": {"egress-workers": {}}},
+        }
+        self.network = {"Name": "egress-workers", "Internal": True}
+        proxy = "http://egress-proxy-workers:4750"
+        self.worker = {
+            "Config": {
+                "Env": [
+                    *(
+                        f"{k}={proxy}"
+                        for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")
+                    ),
+                    "NO_PROXY=localhost,127.0.0.1,::1",
+                    "no_proxy=localhost,127.0.0.1,::1",
+                ]
+            }
+        }
+
+    def check(self):
+        return gate.proxy_baseline(self.egress, self.network, self.worker)
+
+    def test_valid_contract_and_environment(self):
+        self.assertEqual(self.check(), [])
+
+    def test_starting_and_stopped_are_rejected(self):
+        for state in ({"Running": False}, {"Running": True, "Health": {"Status": "starting"}}):
+            self.egress["State"] = state
+            self.assertTrue(self.check())
+
+    def test_each_missing_label_is_rejected(self):
+        labels = self.egress["Config"]["Labels"]
+        for key in list(labels):
+            value = labels.pop(key)
+            self.assertTrue(self.check(), key)
+            labels[key] = value
+
+    def test_network_must_be_internal_and_attached(self):
+        self.network["Internal"] = False
+        self.assertTrue(self.check())
+        self.network["Internal"] = True
+        self.egress["NetworkSettings"]["Networks"] = {}
+        self.assertTrue(self.check())
+
+    def test_missing_proxy_variable_is_rejected(self):
+        self.worker["Config"]["Env"].pop(0)
+        self.assertEqual(self.check(), ["HTTP_PROXY differs from proxy label"])
+
+    def test_host_bypass_is_rejected_independently_for_each_case(self):
+        valid = self.worker["Config"]["Env"][:]
+        for key in ("NO_PROXY", "no_proxy"):
+            with self.subTest(key=key):
+                self.worker["Config"]["Env"] = [
+                    f"{key}=localhost,127.0.0.1,::1,host.docker.internal"
+                    if item.startswith(key + "=")
+                    else item
+                    for item in valid
+                ]
+                self.assertEqual(self.check(), [f"{key} must bypass only container loopback"])
+
+    def test_probe_requires_proxy_decision_and_real_curl(self):
+        for kind, status, code in (
+            ("public", "200 200", 0),
+            ("denied", "407 000", 56),
+            ("direct", "000 000", 7),
+        ):
+            self.assertEqual(gate.probe_problems(kind, status, code), [])
+        for kind, status, code in (
+            ("public", "000 000", 0),
+            ("denied", "000 000", 7),
+            ("denied", "200 200", 0),
+            ("direct", "000 000", 125),
+            ("direct", "000 200", 0),
+        ):
+            self.assertTrue(gate.probe_problems(kind, status, code))
+
+
+class NetworkProbeTest(Case):
+    def setUp(self):
+        self.worker = gate.Worker(
+            gate.Args("worker", "live", client="claude", cwd=CWD), "mgr", "docker"
+        )
+        self.proxy = "http://egress-proxy-workers:4750"
+        self.route = ("  interface: en0\n", "")
+        self.lan = ("192.168.1.20\n", "")
+
+    def test_host_controls_and_every_worker_probe(self):
+        with (
+            mock.patch.object(
+                gate, "call", side_effect=[self.route, self.lan, ("", ""), ("", "")]
+            ) as call,
+            mock.patch.object(
+                gate, "listener", side_effect=[nullcontext(32101), nullcontext(32102)]
+            ) as listen,
+            mock.patch.object(self.worker, "probe") as probe,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            self.worker.network("container", self.proxy)
+        self.assertEqual(listen.call_args_list, [mock.call("127.0.0.1"), mock.call("192.168.1.20")])
+        self.assertEqual(
+            probe.call_args_list,
+            [
+                mock.call("container", self.proxy, "https://example.com", "public"),
+                mock.call("container", "", "https://1.1.1.1", "direct"),
+                mock.call("container", self.proxy, "http://host.docker.internal:32101/", "denied"),
+                mock.call("container", "", "http://host.docker.internal:32101/", "direct"),
+                mock.call("container", self.proxy, "http://192.168.1.20:32102/", "denied"),
+                mock.call("container", "", "http://192.168.1.20:32102/", "direct"),
+            ],
+        )
+        self.assertEqual(
+            call.call_args_list[:2],
+            [
+                mock.call(["route", "-n", "get", "default"]),
+                mock.call(["ipconfig", "getifaddr", "en0"]),
+            ],
+        )
+        for index, host, port in ((2, "127.0.0.1", 32101), (3, "192.168.1.20", 32102)):
+            self.assertEqual(
+                call.call_args_list[index].args[0],
+                [
+                    "curl",
+                    "--noproxy",
+                    "*",
+                    "-fsS",
+                    "-o",
+                    "/dev/null",
+                    "--max-time",
+                    "5",
+                    f"http://{host}:{port}/",
+                ],
+            )
+
+    def test_lan_control_needs_one_default_interface_and_a_private_ipv4(self):
+        two = ("  interface: en0\n  interface: en1\n", "")
+        cases = [
+            ([("", "")], "no unique default interface"),
+            ([two], "no unique default interface"),
+            *(
+                ([self.route, (address, "")], "private LAN IPv4")
+                for address in ("8.8.8.8\n", "127.0.0.1\n", "fd00::1\n", "\n")
+            ),
+        ]
+        for replies, message in cases:
+            with (
+                self.subTest(replies=replies),
+                mock.patch.object(gate, "call", side_effect=replies),
+                mock.patch.object(gate, "listener") as listen,
+                mock.patch.object(self.worker, "probe"),
+                self.assertRaisesRegex(SystemExit, message),
+            ):
+                self.worker.network("container", self.proxy)
+            listen.assert_not_called()
+
+    def test_unreachable_host_control_cannot_pass_denial(self):
+        with (
+            mock.patch.object(
+                gate, "call", side_effect=[self.route, self.lan, SystemExit("host control failed")]
+            ),
+            mock.patch.object(gate, "listener", return_value=nullcontext(32101)),
+            mock.patch.object(self.worker, "probe") as probe,
+            self.assertRaisesRegex(SystemExit, "host control failed"),
+        ):
+            self.worker.network("container", self.proxy)
+        self.assertEqual(probe.call_count, 2)
+
+    def test_curl_uses_supplied_proxy_and_propagates_a_failed_denial(self):
+        response = types.SimpleNamespace(stdout="407 000", returncode=56)
+        with (
+            mock.patch.object(gate.subprocess, "run", return_value=response) as run,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            self.worker.probe(
+                "container", self.proxy, "http://host.docker.internal:32101/", "denied"
+            )
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[:4], ["docker", "exec", "container", "curl"])
+        self.assertEqual(
+            argv[-6:],
+            [
+                "--noproxy",
+                "",
+                "--proxytunnel",
+                "--proxy",
+                self.proxy,
+                "http://host.docker.internal:32101/",
+            ],
+        )
+        self.assertEqual(argv[argv.index("-o") + 1], "/dev/null")
+        response.stdout, response.returncode = "000 000", 7
+        with (
+            mock.patch.object(gate.subprocess, "run", return_value=response),
+            self.assertRaisesRegex(SystemExit, "FAIL network denied"),
+        ):
+            self.worker.probe(
+                "container", self.proxy, "http://host.docker.internal:32101/", "denied"
+            )
+
+    def test_direct_probe_explicitly_bypasses_all_proxies(self):
+        response = types.SimpleNamespace(stdout="000 000", returncode=28)
+        with (
+            mock.patch.object(gate.subprocess, "run", return_value=response) as run,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            self.worker.probe("container", "", "https://1.1.1.1", "direct")
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[-3:], ["--noproxy", "*", "https://1.1.1.1"])
+        self.assertNotIn("--proxy", argv)
+
+    def test_listener_releases_server_and_thread_on_failure(self):
+        with (
+            mock.patch.object(gate, "HTTPServer") as server_type,
+            mock.patch.object(gate.threading, "Thread") as thread_type,
+        ):
+            server = server_type.return_value.__enter__.return_value
+            server.server_port = 32101
+            with (
+                self.assertRaisesRegex(RuntimeError, "consumer failed"),
+                gate.listener("127.0.0.1") as port,
+            ):
+                self.assertEqual(port, 32101)
+                raise RuntimeError("consumer failed")
+            server.shutdown.assert_called_once_with()
+            thread_type.return_value.start.assert_called_once_with()
+            thread_type.return_value.join.assert_called_once_with()
 
 
 class ReclaimedTest(Case):
@@ -168,7 +410,7 @@ class RemovedTokensTest(Case):
 
 class BaselineTest(Case):
     def check(self, found, plan=(CLAUDE_DIR,)):
-        return gate.baseline(found, "live", CWD, list(plan))
+        return gate.baseline(found, "live", CWD, list(plan), NETWORK)
 
     def test_compliant_claude(self):
         self.assertEqual(self.check(inspect()), [])
@@ -177,7 +419,6 @@ class BaselineTest(Case):
         sessions = "/Users/u/.ensemble/docker-state/live/codex/sessions"
         mounts = [
             {"Type": "volume", "Name": "ensemble-ws-live", "Destination": CWD},
-            {"Type": "tmpfs", "Destination": "/opt/ensemble/runtime"},
             {"Type": "bind", "Source": sessions, "Destination": sessions},
         ]
         self.assertEqual(self.check(inspect(Mounts=mounts), (sessions,)), [])
@@ -187,7 +428,9 @@ class BaselineTest(Case):
         bind = {"Type": "bind", "Source": "/host_mnt" + CLAUDE_DIR, "Destination": CLAUDE_DIR}
         self.assertEqual(self.check(inspect(Mounts=[volume, bind])), [])
         inside = {"Type": "bind", "Source": "/host_mnt" + CWD + "/src", "Destination": "/w"}
-        problems = gate.baseline(inspect(Mounts=[volume, inside]), "live", CWD, [CWD + "/src"])
+        problems = gate.baseline(
+            inspect(Mounts=[volume, inside]), "live", CWD, [CWD + "/src"], NETWORK
+        )
         self.assertEqual(len(problems), 1, problems)
         self.assertIn("cwd", problems[0])
 
@@ -210,7 +453,9 @@ class BaselineTest(Case):
             "user": inspect(Config__User="root"),
             "privileged": inspect(HostConfig__Privileged=True),
             "network": inspect(HostConfig__NetworkMode="host"),
-            "network not bridge": inspect(HostConfig__NetworkMode="none"),
+            "network none": inspect(HostConfig__NetworkMode="none"),
+            "network bridge": inspect(HostConfig__NetworkMode="bridge"),
+            "second network": inspect(NetworkSettings={"Networks": {NETWORK: {}, "bridge": {}}}),
             "extra hosts": inspect(HostConfig__ExtraHosts=["host.docker.internal:host-gateway"]),
             "pid": inspect(HostConfig__PidMode="host"),
             "ipc": inspect(HostConfig__IpcMode="host"),
@@ -233,7 +478,7 @@ class BaselineTest(Case):
                 found = inspect(
                     Mounts=[volume, {"Type": "bind", "Source": source, "Destination": "/w"}]
                 )
-                problems = gate.baseline(found, "live", CWD, [source])
+                problems = gate.baseline(found, "live", CWD, [source], NETWORK)
                 self.assertEqual(len(problems), 1, problems)
                 self.assertIn("cwd", problems[0])
 
@@ -241,9 +486,48 @@ class BaselineTest(Case):
         volume = {"Type": "volume", "Name": "ensemble-ws-live", "Destination": CWD}
         sock = "/var/run/docker.sock"
         found = inspect(Mounts=[volume, {"Type": "bind", "Source": sock, "Destination": sock}])
-        problems = gate.baseline(found, "live", CWD, [sock])
+        problems = gate.baseline(found, "live", CWD, [sock], NETWORK)
         self.assertEqual(len(problems), 1, problems)
         self.assertIn("docker.sock", problems[0])
+
+
+class EgressProxyTest(Case):
+    PROXY = "e" * 64
+
+    def network(self, listing, labels=None):
+        found = [{"Config": {"Labels": labels or {}}}]
+        replies = iter([(listing, ""), (json.dumps(found), "")])
+        with mock.patch.object(gate, "call", side_effect=lambda _argv: next(replies)) as call:
+            return gate.egress_proxy("docker")[1], call
+
+    def test_the_proxy_workers_network(self):
+        labels = {"windroc.egress.network.workers.name": NETWORK}
+        found, call = self.network(self.PROXY + "\n", labels)
+        self.assertEqual(found, NETWORK)
+        self.assertEqual(
+            call.call_args_list[0].args[0],
+            [
+                "docker",
+                "ps",
+                "--all",
+                "--filter",
+                "label=windroc.egress.contract",
+                "--format",
+                "{{.ID}}",
+            ],
+        )
+
+    def test_no_single_proxy_or_label_fails_naming_the_proxy(self):
+        for listing, labels in (
+            ("", None),
+            (self.PROXY + "\n" + "c" * 64 + "\n", None),
+            (self.PROXY + "\n", {}),
+        ):
+            with (
+                self.subTest(listing=listing, labels=labels),
+                self.assertRaisesRegex(SystemExit, "egress proxy"),
+            ):
+                self.network(listing, labels)
 
 
 class DrainedTest(Case):
@@ -279,7 +563,6 @@ class TimingTest(Case):
     STDERR = (
         "docker timing live: preflight 2.40 s\n"
         "ensemble-broker: start preflight 0.01 s\n"
-        "ensemble-broker: start client_update 3.25 s\n"
         f"ensemble-broker: start credentials 0.10 s {FAKE}\n"
     )
 
@@ -299,15 +582,6 @@ class TimingTest(Case):
             " | client ready 2.5 s | preflight 2.4 s",
         )
 
-    def test_codex_client_update(self):
-        result = self.result(client_update={"client": "codex", "result": "current"})
-        hooks = self.hooks("2026-10-18T14:00:01.000+02:00")
-        self.assertTrue(
-            gate.timing(result, hooks, self.STDERR, "live").endswith(
-                "client ready 1.0 s | preflight 2.4 s | client_update current 3.2 s"
-            )
-        )
-
     def test_headless_has_no_launch(self):
         result = {"phases": {"checks": 0.1, "image": 0.2, "start": 3.0, "client": 0.4}}
         self.assertIn("client ready n/a", gate.timing(result, "", "", "live"))
@@ -317,10 +591,7 @@ class TimingTest(Case):
         self.assertIn("client ready n/a", gate.timing(self.result(), hooks, "", "live"))
 
     def test_stderr_missing(self):
-        result = self.result(client_update={"client": "codex", "result": "updated"})
-        text = gate.timing(result, "", "", "live")
-        self.assertIn("preflight n/a", text)
-        self.assertIn("client_update updated n/a", text)
+        self.assertIn("preflight n/a", gate.timing(self.result(), "", "", "live"))
 
 
 class RefreshedAtTest(Case):
@@ -362,23 +633,21 @@ class InstallStepsTest(Case):
         )
     )
 
-    def test_clean_claude_and_codex(self):
-        self.assertEqual(gate.install_steps({"phases": self.PHASES}, self.BROKER, "claude"), [])
-        codex = self.BROKER + "ensemble-broker: start client_update 2.00 s\n"
-        self.assertEqual(gate.install_steps({"phases": self.PHASES}, codex, "codex"), [])
+    def test_clean(self):
+        self.assertEqual(gate.install_steps({"phases": self.PHASES}, self.BROKER), [])
 
     def test_build_phase(self):
-        (problem,) = gate.install_steps({"phases": {**self.PHASES, "build": 9.0}}, "", "claude")
+        (problem,) = gate.install_steps({"phases": {**self.PHASES, "build": 9.0}}, "")
         self.assertIn("build", problem)
 
-    def test_client_update_on_claude(self):
+    def test_client_update_is_an_install_step(self):
         stderr = self.BROKER + "ensemble-broker: start client_update 2.00 s\n"
-        (problem,) = gate.install_steps({"phases": self.PHASES}, stderr, "claude")
+        (problem,) = gate.install_steps({"phases": self.PHASES}, stderr)
         self.assertIn("client_update", problem)
 
     def test_unknown_broker_phase(self):
         stderr = self.BROKER + "ensemble-broker: start install 2.00 s\n"
-        (problem,) = gate.install_steps({"phases": self.PHASES}, stderr, "codex")
+        (problem,) = gate.install_steps({"phases": self.PHASES}, stderr)
         self.assertIn("install", problem)
 
 
@@ -451,9 +720,9 @@ class NoSecretTest(Case):
         outputs = [
             *gate.reclaimed(lines, G1, "claude"),
             gate.removed_tokens(lines, G1),
-            *gate.baseline(inspect(HostConfig__CapDrop=[]), "live", CWD, [CLAUDE_DIR]),
+            *gate.baseline(inspect(HostConfig__CapDrop=[]), "live", CWD, [CLAUDE_DIR], NETWORK),
             gate.timing({"phases": {}}, "", TimingTest.STDERR, "live"),
-            *gate.install_steps({"phases": {}}, TimingTest.STDERR, "claude"),
+            *gate.install_steps({"phases": {}}, TimingTest.STDERR),
         ]
         for text in outputs:
             self.assertNotIn(FAKE, text)

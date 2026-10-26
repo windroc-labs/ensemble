@@ -111,7 +111,16 @@ def relay_reply(line: bytes) -> dict | None:
     if found is None or type(found.get("ok")) is not bool:
         return None
     if found == {"ok": False} or (
-        found.keys() == {"gen", "seq", "ok"} and _gen(found["gen"]) and _int(found["seq"], 1)
+        (
+            found.keys() == {"gen", "seq", "ok"}
+            or (
+                found.keys() == {"gen", "seq", "ok", "retry"}
+                and found["ok"] is False
+                and found["retry"] is True
+            )
+        )
+        and _gen(found["gen"])
+        and _int(found["seq"], 1)
     ):
         return found
     return None
@@ -182,8 +191,8 @@ def answer(line: bytes, queue: Queue, gen: str) -> dict:
 
 
 def pump(queue: Queue, reader, writer, idle: float | None = None) -> None:
-    """Stop-and-wait: sends the first message and drops it on its reply; returns at EOF, a reply
-    that is not one, or `idle` s with nothing to send.
+    """Stop-and-wait: retry:true retains the first message and retries after WAIT s; other matching
+    replies drop it. Returns at EOF, an invalid/mismatched reply, or `idle` s with nothing to send.
     """
     while (found := queue.first(idle)) is not None:
         seq, message = found
@@ -194,10 +203,11 @@ def pump(queue: Queue, reader, writer, idle: float | None = None) -> None:
         writer.write(message)
         writer.flush()
         reply = relay_reply(reader.readline(LINE_MAX + 1))
-        if reply is None or (
-            len(reply) == 3 and (reply["gen"], reply["seq"]) != (sent["gen"], seq)
-        ):
+        if reply is None or ("gen" in reply and (reply["gen"], reply["seq"]) != (sent["gen"], seq)):
             return
+        if reply.get("retry"):
+            time.sleep(WAIT)
+            continue
         queue.drop(seq)
 
 

@@ -1592,18 +1592,39 @@ class CloseStopTest(Base):
         mode._terminal.calls.close.assert_called_once_with()
         self.assertNoSessionDir()
 
-    def test_a_stop_whose_holder_lookup_fails_raises_and_a_later_stop_closes_the_session(self):
+    def test_a_stop_whose_holder_lookup_fails_closes_its_own_pane_while_it_has_its_sid(self):
+        lock = os.path.join(self.root, f"{NAME}.lock")
+        for pane in ("this session's", "another sid", "not owned"):
+            with self.subTest(pane=pane):
+                mode = self.started()
+                terminal = mode._terminal
+                if pane == "another sid":
+                    terminal.calls.session_identity.return_value = ("other", "g")
+                elif pane == "not owned":
+                    self.host.processes.clear()
+                self.host.calls.list.side_effect = SessionError("tmux sessions unknown: failed")
+                mode.stop()
+                self.host.calls.list.side_effect = None
+                ours = pane == "this session's"
+                self.assertEqual(terminal.calls.close.call_count, int(ours))
+                self.assertEqual(
+                    (os.path.isdir(self.dir), os.path.lexists(lock)), (not ours, not ours)
+                )
+                self.assertEqual((mode.poll(0), mode.returncode(0)), (([], True), -signal.SIGHUP))
+
+    def test_a_stop_whose_holder_lookup_and_sid_read_fail_raises_and_a_later_stop_closes_it(self):
         mode = self.started()
-        self.host.calls.list.side_effect = SessionError("tmux sessions unknown: tmux failed")
-        with self.assertRaisesRegex(SessionError, r"\Atmux sessions unknown: tmux failed\Z"):
+        terminal = mode._terminal
+        self.host.calls.list.side_effect = SessionError("tmux sessions unknown: failed")
+        terminal.calls.session_identity.side_effect = SessionError("tmux session w1: failed")
+        with self.assertRaisesRegex(SessionError, r"\Atmux session w1: failed\Z"):
             mode.stop()
-        mode._terminal.calls.close.assert_not_called()
+        terminal.calls.close.assert_not_called()
         self.assertTrue(os.path.isdir(self.dir))
-        self.host.calls.list.side_effect = None
+        self.host.calls.list.side_effect = terminal.calls.session_identity.side_effect = None
         mode.stop()
-        mode._terminal.calls.close.assert_called_once_with()
+        terminal.calls.close.assert_called_once_with()
         self.assertNoSessionDir()
-        self.assertEqual((mode.poll(0), mode.returncode(0)), (([], True), -signal.SIGHUP))
 
     def test_a_sid_bound_stop_whose_sid_read_fails_raises_and_a_later_stop_closes_it(self):
         terminal = self.started()._terminal
@@ -1851,6 +1872,39 @@ class OpeningTest(Base):
         mode.poll(0)
         mode.poll(1.5)
         self.assertEqual(self.sends(mode), [])
+
+    def test_a_dialog_on_the_fresh_read_holds_the_opening(self):
+        mode = self.opened()
+        fresh = [False]
+
+        def alive():
+            fresh[0] = True
+            return True
+
+        def screen(_terminal, _lines):  # a cached capture until alive() renews it
+            shown, fresh[0] = ("Trust this folder?" if fresh[0] else ""), False
+            return shown
+
+        mode._terminal.calls.alive.side_effect = alive
+        self.host.calls.screen.side_effect = screen
+        self.append(record("ready"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [])
+        self.assertEqual(mode.opening_pending, "/color")
+        self.host.calls.screen.side_effect = None
+        self.host.calls.screen.return_value = ""
+        mode.poll(0.6)
+        self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
+
+    def test_a_process_not_alive_at_the_confirm_holds_the_opening(self):
+        mode = self.opened()
+        mode._terminal.calls.alive.return_value = False
+        self.append(record("ready"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [])
+        self.assertEqual(mode.opening_pending, "/color")
 
     def test_held_while_marked_blocked(self):
         mode = self.opened()

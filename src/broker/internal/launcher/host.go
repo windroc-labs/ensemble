@@ -6,11 +6,18 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"syscall"
+	"time"
 
 	"ensemble/broker/internal/audit"
 	"ensemble/broker/internal/codex"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/protocol"
+	"ensemble/broker/internal/releases"
 )
 
 // Credentials is the broker package's side of start: each Claude account's setup-token, which the launcher never sees.
@@ -38,6 +45,14 @@ type ProviderKeys interface {
 	Inject(providers []string, exec func(argv []string, stdin []byte) error) error
 }
 
+// EnvSecrets is the broker package's side of a start's environment secrets, which the launcher never sees: each item
+// is a reference, ensemble-env/<name>. Errors are as Credentials'.
+type EnvSecrets interface {
+	Ready(items []string) error
+	// Inject writes one secret's value through exec, as Credentials.Inject does, to the file s.File.
+	Inject(s Secret, exec func(argv []string, stdin []byte) error) error
+}
+
 // Tokens is the broker package's GitHub side: a container's installation tokens, which the launcher never sees.
 // Errors are *protocol.Error, wrap docker.ErrUnreachable, or are opaque, carrying no Docker stderr.
 type Tokens interface {
@@ -45,7 +60,11 @@ type Tokens interface {
 	BotUserID(app string) (int64, error) // login_required or keychain_failed for the bot user ID login github saved
 	Issue(ctx context.Context, app string, permissions map[string]string, container string, exec func(argv []string, stdin []byte) error) ([]protocol.Expiry, error)
 	Refresh(ctx context.Context, app string, permissions map[string]string, container string, exec func(argv []string, stdin []byte) error) ([]protocol.Expiry, error)
-	Revoke(ctx context.Context, container string) error
+	Release(ctx context.Context, container string) error // retires the container's grant; never shared credentials
+	// Prefetch clones ref ("": the default branch) of repo into dir through run, which starts the helper container
+	// with argv and the token as stdin, and revokes the token once run returns.
+	Prefetch(ctx context.Context, repo, ref, dir, container string, run func(argv []string, stdin []byte) error) error
+	Pending() ([]protocol.Pending, error)                  // read-only backlog snapshot
 	Retry(ctx context.Context) ([]protocol.Pending, error) // the backlog still unrevoked
 }
 
@@ -58,11 +77,15 @@ type Host struct {
 	Creds    Credentials
 	Codex    CodexCredentials
 	Opencode ProviderKeys
+	Env      EnvSecrets
 	GitHub   Tokens
 	Versions CodexVersions
+	Releases Releases                          // nil: a build that must rebuild fails
 	Progress io.Writer                         // nil: none; build's notes on older images, after Docker's progress; start's phase times
 	Lock     func() (unlock func(), err error) // the image lock: build's lease and inspect, and prune
 	Audit    *audit.Recorder                   // nil: none; start, refresh and close name their container and add the client credential
+	Now      func() time.Time                  // nil: host clock; mutex expiry, replaced image and check state tests supply a clock
+	Spawn    func() error                      // nil: none; starts check-clients detached, for a build
 }
 
 // NewHost wires the real filesystem; tests build Host with fakes. rec is the command's audit recorder, the one tokens
@@ -78,7 +101,49 @@ func NewHost(home, endpoint string, d docker.Runner, creds Credentials, tokens T
 		Safe:     realSafe,
 		Docker:   d,
 		Versions: codex.New(),
+		Releases: releases.New(),
+		Spawn:    func() error { return spawnCheck(home) },
 	}
+}
+
+const checkLogMax = 1 << 20
+
+// spawnCheck starts this executable's check-clients in a session of its own, outliving the build, its output in
+// ~/.ensemble/docker/clients-check.log.
+func spawnCheck(home string) error {
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(home, ".ensemble/docker")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	log, err := openCheckLog(dir, os.Rename)
+	if err != nil {
+		return err
+	}
+	defer log.Close()
+	cmd := exec.Command(self, "check-clients")
+	cmd.Stdout, cmd.Stderr = log, log
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
+}
+
+// openCheckLog opens dir's clients-check.log for appending, first moving one past checkLogMax to clients-check.log.1:
+// a running check keeps writing to the moved file, so a spawn never loses its output. A log another spawn moved first
+// is fine.
+func openCheckLog(dir string, rename func(oldpath, newpath string) error) (*os.File, error) {
+	path := filepath.Join(dir, "clients-check.log")
+	if info, err := os.Stat(path); err == nil && info.Size() > checkLogMax {
+		if err := rename(path, path+".1"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
+	}
+	return os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 }
 
 type BuildResult struct {
@@ -101,7 +166,6 @@ type StartResult struct {
 	GitHub              []protocol.Expiry `json:"github"`
 	GitHubUserID        *int64            `json:"github_user_id"`
 	CredentialExpiresAt *string           `json:"credential_expires_at"`
-	ClientUpdate        *ClientUpdate     `json:"client_update,omitempty"`
 }
 
 type RefreshResult struct {
@@ -126,8 +190,12 @@ type WorkspaceResult struct {
 	Removed bool   `json:"removed"`
 }
 
-// clientLabel names the client a container was started for; manifest labels cannot use the ensemble. prefix.
-const clientLabel = "ensemble.client"
+// clientLabel names the client a container was started for, secretsLabel the environment secrets it got (their
+// references, comma-joined; never a value); manifest labels cannot use the ensemble. prefix.
+const (
+	clientLabel  = "ensemble.client"
+	secretsLabel = "ensemble.secrets"
+)
 
 // clientKind is the audit kind of the credential client's container holds; "" for none.
 func clientKind(client string) string {

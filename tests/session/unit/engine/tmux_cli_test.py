@@ -8,6 +8,7 @@ import errno
 import io
 import os
 import re
+import signal
 import stat
 import sys
 import tempfile
@@ -29,7 +30,7 @@ from ensemble.session.engine.tmux_cli import (
     events_file,
     validate_events,
 )
-from ensemble.session.engine.types import Key, KeyPress, PaneStatus, Paste, SessionError
+from ensemble.session.engine.types import Key, KeyPress, Liveness, PaneStatus, Paste, SessionError
 from tests.session.case import Case
 from tests.session.tmux_fixtures import (
     ABSENT,
@@ -96,6 +97,8 @@ class ProcessIdentityTest(Case):
             ("s", (0, " \n"), None),
             ("%7", (0, "4242   \n"), None),
             ("%7", (0, "4242  %7 4343\n"), None),
+            ("%7", (0, "4242 $3 %7 \n"), None),
+            ("%7", (0, "4242  %7 \n"), None),
             ("s", (1, "", "can't find session: =s\n"), None),
             ("%7", (1, "", "can't find pane: %7\n"), None),
             ("s", (1, "", "no server running on /tmp/tmux-501/default\n"), None),
@@ -114,6 +117,9 @@ class ProcessIdentityTest(Case):
             ((0, "4242 $3 %7\n"), "^bad tmux process "),
             ((0, "4242  %7 bad\n"), "^bad tmux process "),
             ((0, "bad  %7 4343\n"), "^bad tmux process "),
+            ((0, "boom\n"), "^bad tmux process "),
+            ((0, "4242 $3  4343\n"), "^bad tmux process "),
+            ((0, "4242 $3 %7 4343 9\n"), "^bad tmux process "),
         ):
             with self.subTest(printed=printed):
                 fake = FakeTmux(results={"display-message": printed})
@@ -140,6 +146,7 @@ class ProcessStatusTest(Case):
             ("4242 $3 %7 4343\t1  kill", ("4242 $3 %7 4343", -9)),
             ("4242 $3 %7 4343\tx", ("4242 $3 %7 4343", PaneStatus.UNKNOWN)),
             ("4242  %7 4343\t1 0 ", (None, None)),
+            ("4242 $3 %7 \t1 0 ", (None, None)),
             ("\t  ", (None, None)),
             (None, (None, None)),
         ):
@@ -168,6 +175,7 @@ class ProcessStatusTest(Case):
         for fake, message in (
             (FakeTmux(pane="", fail=("display-message",)), "tmux: boom"),
             (FakeTmux(pane="4242 x\t0  "), "bad tmux process '4242 x'"),
+            (FakeTmux(pane="4242 $3 %7\t0  "), "bad tmux process '4242 $3 %7'"),
         ):
             with self.subTest(message=message), self.assertRaises(tmux_cli.TuiError) as caught:
                 tmux_cli.TmuxCli(fake).process_status("%7")
@@ -2040,6 +2048,46 @@ class TmuxPaneTest(Case):
     def test_alive_raises_when_tmux_cannot_tell(self):
         self.tmux.process_status.return_value = (PROCESS, PaneStatus.UNKNOWN)
         with self.assertRaisesRegex(SessionError, "^tmux session w1: tmux failed$"):
+            self.pane.alive()
+
+    def test_one_probe_answers_state_returncode_and_alive_as_the_pane_does(self):
+        cases = (
+            ((PROCESS, PaneStatus.RUNNING), Liveness.LIVE, None, True),
+            ((PROCESS, 3), Liveness.LIVE, 3, False),
+            ((PROCESS, -9), Liveness.LIVE, -9, False),
+            ((PROCESS, PaneStatus.UNKNOWN), Liveness.UNKNOWN, None, "tmux failed"),
+            (("4242 $3 %7 9999", PaneStatus.RUNNING), Liveness.ABSENT, -signal.SIGHUP, False),
+            ((None, None), Liveness.ABSENT, -signal.SIGHUP, False),
+        )
+        for status, state, code, alive in cases:
+            with self.subTest(status=status):
+                self.tmux.process_status.reset_mock()
+                self.tmux.process_status.return_value = status
+                found = self.pane.probe()
+                self.tmux.process_status.assert_called_once_with("%7")
+                self.assertEqual(found, (status[0] == PROCESS, status[1]))
+                self.assertEqual((tmux_cli.liveness(found), self.pane.state()), (state, state))
+                self.assertEqual((tmux_cli.exit_code(found), self.pane.returncode()), (code, code))
+                if isinstance(alive, str):
+                    with self.assertRaisesRegex(SessionError, f"^tmux session w1: {alive}$"):
+                        tmux_cli.running(found, "w1")
+                    with self.assertRaisesRegex(SessionError, f"^tmux session w1: {alive}$"):
+                        self.pane.alive()
+                else:
+                    self.assertIs(tmux_cli.running(found, "w1"), alive)
+                    self.assertIs(self.pane.alive(), alive)
+
+    def test_a_probe_tmux_cannot_answer_is_no_answer_not_an_error(self):
+        self.tmux.process_status.side_effect = tmux_cli.TuiError("tmux: server exited")
+        found = self.pane.probe()
+        self.assertEqual(found, tmux_cli.NoAnswer("tmux session w1: tmux: server exited"))
+        self.assertEqual(tmux_cli.liveness(found), Liveness.UNKNOWN)
+        self.assertIsNone(tmux_cli.exit_code(found))
+        with self.assertRaisesRegex(SessionError, "^tmux session w1: tmux: server exited$"):
+            tmux_cli.running(found, "w1")
+        self.assertEqual(self.pane.state(), Liveness.UNKNOWN)
+        self.assertIsNone(self.pane.returncode())
+        with self.assertRaisesRegex(SessionError, "^tmux session w1: tmux: server exited$"):
             self.pane.alive()
 
     def test_a_key_after_a_paste_waits_the_pause_once(self):

@@ -1,0 +1,10 @@
+{
+  "latest": {
+    "claude": "2.1.7",
+    "codex": "0.170.0",
+    "opencode": "1.20.1"
+  },
+  "rebuilt": [
+    "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  ]
+}

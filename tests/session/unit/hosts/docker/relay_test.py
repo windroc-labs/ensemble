@@ -157,6 +157,21 @@ class PumpTest(Case):
     def reply(self, seq, *, ok=True):
         return json.dumps({"gen": GEN, "seq": seq, "ok": ok}).encode() + b"\n"
 
+    def test_retry_keeps_the_first_message_and_waits_before_resending(self):
+        retry = json.dumps({"gen": GEN, "seq": 1, "ok": False, "retry": True}).encode() + b"\n"
+        with mock.patch("time.sleep") as sleep:
+            self.assertEqual(self.pump(retry, retry), [1, 1, 1])
+        self.assertEqual(sleep.call_args_list, [mock.call(10), mock.call(10)])
+        self.assertEqual(self.queue.first(0)[0], 1)
+        self.assertEqual(self.pump(self.reply(1), self.reply(2), self.reply(3)), [1, 2, 3])
+
+    def test_retry_must_match_the_message_before_resending(self):
+        retry = json.dumps({"gen": GEN, "seq": 2, "ok": False, "retry": True}).encode() + b"\n"
+        with mock.patch("time.sleep") as sleep:
+            self.assertEqual(self.pump(retry), [1])
+        sleep.assert_not_called()
+        self.assertEqual(self.queue.first(0)[0], 1)
+
     def test_any_reply_drops_its_message_and_sends_the_next(self):
         sent = self.pump(self.reply(1), self.reply(2, ok=False), b'{"ok":false}\n')
         self.assertEqual(sent, [1, 2, 3])

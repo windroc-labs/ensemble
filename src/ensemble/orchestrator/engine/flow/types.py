@@ -192,7 +192,10 @@ class Stage:
     first_failure: Literal["ready", "review"]
     approve: bool
     files: bool
+    deliverable: bool
     hint: str
+    ref: bool
+    mapped_only: bool
 
 
 ISSUE_ID = r"[A-Z][A-Z0-9]*-\d+"

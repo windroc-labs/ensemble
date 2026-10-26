@@ -60,7 +60,7 @@ One agent keeps you waiting; many agents by hand route every prompt, check and a
 
 Each session runs on a Host you pick: the local one (tmux), where the client runs on your Mac as you, or the Docker Host, where it runs isolated in its own container. The broker, on the Mac, keeps the logins in the login keychain and hands each container only its own credentials (GitHub tokens that last an hour), taking them back when the container closes.
 
-![Flexible hosts: each session runs on a Host you pick, locally (tmux, not isolated) or in its own Docker container (isolated, so the client runs in yolo mode by default). The broker keeps the logins and gives each container only its own credentials: GitHub tokens valid an hour and revoked at close, a Codex access token without its refresh token, a Claude setup-token copy. The container cannot reach the host keychain, optional Linear app tokens, gh login or Docker socket, but reaches the host's 127.0.0.1 services (an accepted risk); its work leaves only through GitHub](docs/images/system.svg)
+![Flexible hosts: each session runs on a Host you pick, locally (tmux, not isolated) or in its own Docker container (isolated, so the client runs in yolo mode by default). The broker keeps the logins and gives each container only its own credentials: GitHub tokens valid an hour and revoked at close, a Codex access token without its refresh token, a Claude setup-token copy. The container cannot reach the host keychain, optional Linear app tokens, gh login or Docker socket, and reaches public destinations through the egress proxy; local/LAN services need explicit host:port exceptions; its work leaves only through GitHub](docs/images/system.svg)
 
 Details: [Docker host](docs/docker-host.md), [Credentials](docs/credentials.md).
 
@@ -75,8 +75,12 @@ Commands: [Quick start](#quick-start).
 On an Apple silicon Mac, from nothing installed up to a working ensemble, in one command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh | bash
 ```
+
+`<tag>` is the release the `windroc` marketplace pins: the `ref` of `ensemble` in its
+[`.claude-plugin/marketplace.json`](https://github.com/windroc-labs/agent-plugins-marketplace/blob/main/.claude-plugin/marketplace.json).
+That release's installer installs that release's plugins and broker; another installer may not fit them.
 
 `scripts/install.sh`, in order:
 
@@ -94,7 +98,7 @@ Without `--clients` and `--docker`/`--no-docker` it starts with a checklist of w
 
 | Flag | Does |
 |---|---|
-| `--ref <ref>` | installs the plugins and the broker from this branch or tag of `windroc-labs/ensemble` (default `main`; another ref builds the broker locally and needs `--clients opencode`: Claude Code and Codex install from the `windroc` marketplace) |
+| `--ref <ref>` | installs the plugins and the broker from this branch or tag of `windroc-labs/ensemble` (default `<tag>`, the release the `windroc` marketplace pins). Claude Code and Codex install `ensemble@windroc` from that marketplace, which serves one ref, so with them only that ref; another ref needs `--clients opencode`: a release tag downloads its broker, a branch builds it locally |
 | `--clients <list>` | comma-separated `claude`, `codex`, `opencode`; any one alone works |
 | `--docker`, `--no-docker` | workers in Docker (Docker Desktop, the broker) or on the local tmux Host |
 | `--board <local\|linear>`, `--no-board` | sets up a local or Linear board, or skips board setup (first-run default) |
@@ -103,10 +107,15 @@ Without `--clients` and `--docker`/`--no-docker` it starts with a checklist of w
 | `--opencode-key-stdin` | reads the provider's API key from stdin; Docker imports the same key from local OpenCode's `auth.json` into the broker |
 | `--password-stdin` | reads the `sudo` password from stdin, before the key |
 
+With Docker, before any client step, it checks that each chosen client's ensemble plugin (the copy installed, OpenCode's
+only while at the `--ref`'s commit, else the `--ref` on GitHub) speaks the protocol of the broker it will use: the
+installed broker when it came from that plugin and speaks its protocol, else the release it will install it from (`v` +
+the plugin's version). It stops naming both protocols when they differ.
+
 With a stdin flag, stdin cannot also carry the script:
 
 ```bash
-security find-generic-password -s <item> -w | bash -c "$(curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/main/scripts/install.sh)" scripts/install.sh --password-stdin
+security find-generic-password -s <item> -w | bash -c "$(curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh)" scripts/install.sh --password-stdin
 ```
 
 What it sets up, for reference or by hand:
@@ -123,7 +132,7 @@ Set up by hand, nothing checks these: a missing one fails the agent run.
 |---|---|
 | `claude` CLI, Python 3.11+ | every agent run |
 | the [`updraft`](https://github.com/windroc-labs/updraft) plugin for host workers: Claude Code `/plugin marketplace add windroc-labs/agent-plugins-marketplace`, then `/plugin install updraft@windroc`; Codex `codex plugin marketplace add windroc-labs/agent-plugins-marketplace`, then `codex plugin add updraft@windroc`. Docker workers install it in the image ([Plugins](docs/docker-host.md#plugins)). | the engineer's build tasks (`/updraft:build`, `/updraft:light-build`) and the PM's PRD review (`/updraft:review`). Not needed otherwise. |
-| tmux 3.3+ | tui runs on the `tmux` Host |
+| tmux 3.3–3.8 | tui runs on the `tmux` Host |
 | [Ollama](https://ollama.com) on `127.0.0.1` with its context length at least 65536 and the tier model pulled; on `tmux` also OpenCode 1.x (`npm install -g opencode-ai@1.19.3`) | OpenCode runs only ([Docker host › OpenCode](docs/docker-host.md#opencode), [OpenCode sessions](docs/sessions.md#opencode-sessions)) |
 | `git`, `gh` logged in | coding (checkouts, pull requests) and GitHub destinations. Not needed otherwise. |
 | iTerm2 running | the default iTerm2 split |

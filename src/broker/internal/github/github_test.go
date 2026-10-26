@@ -283,15 +283,23 @@ func TestStatusErrorRedactsCredentials(t *testing.T) {
 }
 
 func TestRevoke(t *testing.T) {
-	for status, ok := range map[int]bool{204: true, 401: true, 404: true, 500: false, 403: false} {
+	for status, want := range map[int]string{204: "revoked", 401: "invalid", 404: "invalid", 500: "failed", 403: "failed"} {
 		c := client(t, func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodDelete || r.URL.Path != "/installation/token" || r.Header.Get("Authorization") != "Bearer ghs_old" {
 				t.Errorf("request %s %s", r.Method, r.URL)
 			}
 			w.WriteHeader(status)
 		})
-		if err := c.Revoke(context.Background(), "ghs_old"); (err == nil) != ok {
-			t.Errorf("%d: %v", status, err)
+		err := c.Revoke(context.Background(), "ghs_old")
+		got := "failed"
+		switch {
+		case err == nil:
+			got = "revoked"
+		case errors.Is(err, ErrAlreadyInvalid):
+			got = "invalid"
+		}
+		if got != want {
+			t.Errorf("%d: %s, want %s (%v)", status, got, want, err)
 		}
 	}
 }
@@ -433,5 +441,111 @@ func TestRepositoriesRejects(t *testing.T) {
 	c := Client{Base: "http://127.0.0.1:1", HTTP: &http.Client{Timeout: time.Second}, Now: time.Now}
 	if _, _, err := c.Repositories(context.Background(), "ghs_inst"); !Transport(err) {
 		t.Fatal(err)
+	}
+}
+
+func TestValidRepo(t *testing.T) {
+	for repo, want := range map[string]bool{
+		"windroc-labs/ensemble": true, "o/r.x": true, "o/.github": true, "o/a..b": true,
+		"o/.": false, "o/..": false, "o": false, "o/r/x": false, "./r": false, "o/r x": false, "": false,
+	} {
+		if got := ValidRepo(repo); got != want {
+			t.Errorf("ValidRepo(%q) = %v", repo, got)
+		}
+	}
+}
+
+func TestRepoInstallation(t *testing.T) {
+	c := client(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/repos/acme/app/installation" || r.Header.Get("Authorization") != "Bearer J" {
+			t.Errorf("request %s %s", r.Method, r.URL)
+		}
+		_, _ = io.WriteString(w, `{"id":42,"account":{"login":"acme"}}`)
+	})
+	in, err := c.RepoInstallation(context.Background(), "J", "acme/app")
+	if err != nil || in != (Installation{42, "acme"}) {
+		t.Fatalf("%+v %v", in, err)
+	}
+	for name, answer := range map[string]string{"no id": `{"account":{"login":"acme"}}`, "bad login": `{"id":1,"account":{"login":"-x"}}`} {
+		c := client(t, func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, answer) })
+		if _, err := c.RepoInstallation(context.Background(), "J", "acme/app"); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	c = client(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNotFound) })
+	_, err = c.RepoInstallation(context.Background(), "J", "acme/app")
+	var se *StatusError
+	if !errors.As(err, &se) || se.Status != http.StatusNotFound {
+		t.Fatalf("404: %v", err)
+	}
+	if _, err := c.RepoInstallation(context.Background(), "J", "acme/.."); err == nil {
+		t.Fatal("unsafe repo accepted")
+	}
+}
+
+func TestIssueRepoBody(t *testing.T) {
+	c := client(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if r.Method != http.MethodPost || r.URL.Path != "/app/installations/42/access_tokens" ||
+			string(body) != `{"permissions":{"contents":"read"},"repositories":["app"]}` {
+			t.Errorf("request %s %s %q", r.Method, r.URL, body)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"token":"ghs_secret","expires_at":"2026-10-17T13:00:00Z"}`)
+	})
+	token, expires, err := c.IssueRepo(context.Background(), "J", 42, "acme/app", map[string]string{"contents": "read"})
+	if err != nil || token != "ghs_secret" || !expires.Equal(now.Add(time.Hour)) {
+		t.Fatalf("%q %v %v", token, expires, err)
+	}
+}
+
+func TestDefaultBranch(t *testing.T) {
+	c := client(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/acme/app" || r.Header.Get("Authorization") != "Bearer T" {
+			t.Errorf("request %s", r.URL)
+		}
+		_, _ = io.WriteString(w, `{"full_name":"acme/app","default_branch":"trunk"}`)
+	})
+	if got, err := c.DefaultBranch(context.Background(), "T", "acme/app"); err != nil || got != "trunk" {
+		t.Fatalf("%q %v", got, err)
+	}
+	c = client(t, func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, `{}`) })
+	if _, err := c.DefaultBranch(context.Background(), "T", "acme/app"); err == nil {
+		t.Fatal("no default_branch accepted")
+	}
+}
+
+func TestRefKind(t *testing.T) {
+	refs := map[string]bool{"/repos/acme/app/git/ref/heads/main": true, "/repos/acme/app/git/ref/tags/v1": true, "/repos/acme/app/git/ref/heads/both": true,
+		"/repos/acme/app/git/ref/tags/both": true}
+	var paths []string
+	c := client(t, func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.Header.Get("Authorization") != "Bearer T" {
+			t.Errorf("auth %q", r.Header.Get("Authorization"))
+		}
+		if !refs[r.URL.Path] {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"ref":%q,"object":{"sha":"abc"}}`, "refs/"+strings.TrimPrefix(r.URL.Path, "/repos/acme/app/git/ref/"))
+	})
+	for ref, want := range map[string]string{"main": "branch", "v1": "tag", "both": "branch", "gone": ""} {
+		paths = nil
+		got, err := c.RefKind(context.Background(), "T", "acme/app", ref)
+		if err != nil || got != want {
+			t.Errorf("%s: %q %v (paths %q)", ref, got, err, paths)
+		}
+	}
+	// GitHub answering another ref than asked (a prefix match) is no match.
+	c = client(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"ref":"refs/heads/main-old","object":{"sha":"abc"}}`)
+	})
+	if got, err := c.RefKind(context.Background(), "T", "acme/app", "main"); err != nil || got != "" {
+		t.Fatalf("prefix answer: %q %v", got, err)
+	}
+	c = client(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusInternalServerError) })
+	if _, err := c.RefKind(context.Background(), "T", "acme/app", "main"); err == nil {
+		t.Fatal("500 accepted")
 	}
 }

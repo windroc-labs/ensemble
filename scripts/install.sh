@@ -2,7 +2,8 @@
 # Installs ensemble on an Apple silicon Mac from nothing: dependencies, then your configuration
 # (clients, Docker, OpenCode provider, the board) into ~/.ensemble/config.local.toml, then only what it needs.
 # Asks sudo once, every login on the spot, and before writing your files. Rerun to finish or check.
-#   curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install.sh | bash -s -- [flags]
+#   curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh | bash -s -- [flags]
+# <tag>: the release the windroc marketplace pins for ensemble (README.md#install).
 # ENSEMBLE_INSTALL_ROOT prefixes its system paths; only tests set it.
 set -euo pipefail
 
@@ -16,7 +17,12 @@ config=$HOME/.ensemble/config.local.toml
 opencode_prefix=$HOME/.ensemble/opencode
 opencode_executable=$opencode_prefix/bin/opencode
 opencode_min=
-ref=main
+ref=
+# The broker's release (v<plugin version>) and whether install.sh downloads it or builds it: broker_plan.
+release_tag=
+broker_mode=
+# Label contract v1; update only after checking the pinned repo's docs/label-contract.md.
+egress_commit=9ed47580dc9eb4c1fe794d12e54a8f2d3f258831
 clients_flag=
 clients=
 docker_flag=
@@ -75,10 +81,12 @@ usage() {
   cat <<EOF
 usage: $synopsis
 
-  curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install.sh | bash -s -- [flags]
+  curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh | bash -s -- [flags]
+  <tag>: the release the windroc marketplace pins for ensemble (README.md#install)
 
-  --ref <ref>                 git branch or tag of windroc-labs/ensemble to install the plugin and broker from (default main);
-                              another ref only without claude and codex, which install from the windroc marketplace
+  --ref <ref>                 git branch or tag of windroc-labs/ensemble to install the plugin and broker from (default
+                              <tag>); with claude or codex only <tag>, as they install from the marketplace; another
+                              release tag downloads its broker, a branch builds it
   --clients <list>            comma-separated: claude (Claude Code), codex (Codex), opencode (OpenCode)
   --docker                    run workers in Docker: Docker Desktop, the broker and its logins
   --no-docker                 run workers on the local tmux Host; no Docker
@@ -93,7 +101,7 @@ usage: $synopsis
   --password-stdin            read the sudo password from stdin (first line, before the key)
 
 With --password-stdin or --opencode-key-stdin, stdin cannot carry the script:
-  security find-generic-password -s <item> -w | bash -c "\$(curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install.sh)" scripts/install.sh --password-stdin
+  security find-generic-password -s <item> -w | bash -c "\$(curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh)" scripts/install.sh --password-stdin
 
 Without --clients and --docker/--no-docker it shows a checklist of what to install (a rerun ticks the last
 choices). It installs the dependencies, asks what the flags leave open, writes ~/.ensemble/config.local.toml,
@@ -313,11 +321,38 @@ recorded() { [ -f "$ledger" ] && grep -qxF -- "$(
   printf '%s' "$*"
 )" "$ledger"; }
 
-# Records directory $1 when it does not exist yet.
-record_dir() { [ -e "$1" ] || [ -L "$1" ] || ledger_add dir "$1"; }
+# Exit 0 when absolute path $1 is confirmed missing, 1 when it is there, 2 when it cannot tell (macOS may deny it, or
+# $1 is relative): `test -e` is false on any lstat failure, so missing means its parent directory is missing too, or
+# lists without it. Shell only: python3 may be the Command Line Tools' failing shim until homebrew installs them.
+path_state() {
+  local parent=${1%/*} listing rc=0
+  if [ -e "$1" ] || [ -L "$1" ]; then return 1; fi
+  case $1 in /*[!/]) ;; *) return 2 ;; esac
+  [ -n "$parent" ] || parent=/
+  if [ ! -e "$parent" ] && [ ! -L "$parent" ]; then
+    path_state "$parent" || rc=$?
+    return "$rc"
+  fi
+  [ -d "$parent" ] || return 2
+  listing=$(ls -A -- "$parent" 2>/dev/null) || return 2
+  grep -qxF -- "${1##*/}" <<<"$listing" || rc=$?
+  [ "$rc" = 1 ] || return 2
+}
 
-# Records file $1 when it does not exist yet.
-record_file() { [ -e "$1" ] || ledger_add file "$1"; }
+# Exit 0 when path $1 is confirmed missing; a path macOS may deny counts as there (it may be the user's: never
+# recorded, so never removed by the cleanup) and prints one line.
+absent() {
+  local rc=0
+  path_state "$1" || rc=$?
+  if [ "$rc" = 2 ]; then say "    not recorded for cleanup: $1: cannot tell whether it is there"; fi
+  [ "$rc" = 0 ]
+}
+
+# Records directory $1 when it is confirmed missing.
+record_dir() { if absent "$1"; then ledger_add dir "$1"; fi; }
+
+# Records file $1 when it is confirmed missing.
+record_file() { if absent "$1"; then ledger_add file "$1"; fi; }
 
 # Per-user files under ~/Library that Docker Desktop and iTerm2 write once running, from their casks' zap stanzas:
 # directories, then files (preferences plists, cookies).
@@ -465,7 +500,7 @@ profile_line() {
   if [ -f "$file" ] && grep -qxF -- "$1" "$file"; then
     skip "in $file"
   elif consent "$file" "$1"; then
-    if [ ! -e "$file" ]; then ledger_add profile-file "$file"; fi
+    if absent "$file"; then ledger_add profile-file "$file"; fi
     ledger_add profile "$file" "$1"
     if [ -s "$file" ] && [ -n "$(tail -c 1 "$file")" ]; then printf '\n' >>"$file"; fi
     printf '%s\n' "$1" >>"$file"
@@ -883,7 +918,7 @@ apps() {
   record_dir "$HOME/.config/gh"
   if has claude; then
     record_dir "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-    if [ -z "${CLAUDE_CONFIG_DIR:-}" ] && [ ! -e "$HOME/.claude.json" ]; then ledger_add file "$HOME/.claude.json"; fi
+    if [ -z "${CLAUDE_CONFIG_DIR:-}" ]; then record_file "$HOME/.claude.json"; fi
   fi
   if has codex; then record_dir "${CODEX_HOME:-$HOME/.codex}"; fi
   if [ "$docker" = yes ]; then
@@ -896,7 +931,7 @@ apps() {
     # Docker Desktop adds its CLI completion block to the shell's rc files, creating them if needed: the cleanup
     # removes the block where it was not before, and a file that was not there once empty.
     for rc in .zshrc .bashrc .bash_profile .zprofile; do
-      if [ ! -e "$HOME/$rc" ]; then
+      if absent "$HOME/$rc"; then
         ledger_add profile-file "$HOME/$rc"
       elif ! grep -qF "# End of Docker Desktop section." "$HOME/$rc"; then
         ledger_add docker-block "$HOME/$rc"
@@ -908,7 +943,7 @@ apps() {
   if [ "$docker" = yes ]; then
     cask docker-desktop "" "$root/Applications/Docker.app"
     docker_build
-    if [ "$ref" = main ]; then skip "go: the broker comes from a release"; else formula go; fi
+    if [ "$broker_mode" = build ]; then formula go; else skip "go: the broker comes from release $release_tag"; fi
   else
     skip "Docker Desktop: Docker not chosen"
   fi
@@ -984,11 +1019,145 @@ found = [p for p in json.load(sys.stdin).get("installed", []) if p.get("pluginId
 sys.exit(1 if not found else 0 if found[0].get("enabled") else 2)' "$1"
 }
 
-# The windroc marketplace has no other ref of windroc-labs/ensemble: only an OpenCode-only install takes one.
+# The ref the windroc marketplace serves ensemble at, from its manifest $1 on main: the ensemble entry's source.ref,
+# else main (the default branch). A ref goes into URLs: --ref's characters and no .. segment.
+marketplace_ref() {
+  local text served
+  text=$(curl -fsSL "https://raw.githubusercontent.com/windroc-labs/agent-plugins-marketplace/main/$1" </dev/null) \
+    || die "cannot read ensemble's ref from the windroc marketplace ($1)"
+  served=$(python3 -I -c '
+import json, re, sys
+try:
+    plugins = json.loads(sys.stdin.read())["plugins"]
+    source = next(p["source"] for p in plugins if p.get("name") == "ensemble")
+    ref = None if "sha" in source else source.get("ref", "main")
+except Exception:
+    sys.exit("no ensemble entry")
+if ref is None:
+    sys.exit("pinned by sha, not a release tag")
+if not isinstance(ref, str) or not re.fullmatch(r"[A-Za-z0-9._/-]+", ref) or ref.startswith("-") \
+        or ".." in ref.split("/"):
+    sys.exit(f"not a git ref: {ref!r}")
+print(ref)' 2>&1 <<<"$text") || die "cannot read ensemble's ref from the windroc marketplace ($1): $served"
+  printf '%s' "$served"
+}
+
+# Claude Code and Codex install ensemble@windroc from the windroc marketplace, which serves one ref of ensemble: the
+# install takes that ref, unless OpenCode alone names another.
 ref_check() {
-  if [ "$ref" != main ] && { has claude || has codex; }; then
-    die "--ref $ref: Claude Code and Codex install ensemble@windroc from the windroc marketplace (main); use --ref only with --clients opencode"
+  local claude_ref= codex_ref= served_ref
+  if [ -n "$ref" ] && ! has claude && ! has codex; then return; fi
+  if has claude || ! has codex; then claude_ref=$(marketplace_ref .claude-plugin/marketplace.json); fi
+  if has codex; then codex_ref=$(marketplace_ref .agents/plugins/marketplace.json); fi
+  if [ -n "$claude_ref" ] && [ -n "$codex_ref" ] && [ "$claude_ref" != "$codex_ref" ]; then
+    die "the windroc marketplace serves ensemble at $claude_ref to Claude Code and $codex_ref to Codex: they must match"
   fi
+  served_ref=${claude_ref:-$codex_ref}
+  if [ -z "$ref" ]; then
+    ref=$served_ref
+  elif [ "$ref" != "$served_ref" ]; then
+    die "--ref $ref: Claude Code and Codex install ensemble@windroc from the windroc marketplace, which serves ensemble at $served_ref; use --ref $served_ref, or --clients opencode for another ref"
+  fi
+}
+
+# File $2 of windroc-labs/ensemble at ref $1.
+ensemble_file() {
+  curl -fsSL "https://raw.githubusercontent.com/windroc-labs/ensemble/$1/$2" </dev/null \
+    || die "cannot read $2 at ref $1 of windroc-labs/ensemble"
+}
+
+# File $2 of plugin source $1: an installed plugin's directory, else ensemble at $ref on GitHub.
+plugin_file() {
+  if [ -z "$1" ]; then
+    ensemble_file "$ref" "$2"
+  else
+    cat -- "$1/$2" 2>/dev/null || die "cannot read $1/$2"
+  fi
+}
+
+# Parsers of the files that hold the versions, for GitHub's copy and an installed one alike; empty when absent.
+protocol_of() { sed -n 's/^PROTOCOL = "\([0-9][0-9]*\)"$/\1/p' | sed -n 1p; }
+go_protocol_of() { sed -n 's/^const Version = "\([0-9][0-9]*\)"$/\1/p' | sed -n 1p; }
+version_of() { sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9]*\(\.[0-9][0-9]*\)*\)".*/\1/p' | sed -n 1p; }
+spoken_protocol_of() { sed -n 's/.*"protocol_version": *"\([0-9][0-9]*\)".*/\1/p' | sed -n 1p; }
+
+# The ensemble plugin Claude Code ($1 claude) or Codex (codex) has installed, else empty. install.sh keeps it, so its
+# copy is the one the client runs; Codex's newest version, as skills/manage/scripts/launcher looks.
+installed_plugin() {
+  if [ "$1" = claude ]; then
+    command -v claude >/dev/null || return 0
+    claude plugin list --json </dev/null | python3 -I -c '
+import json, sys
+print(next((p.get("installPath", "") for p in json.load(sys.stdin) if p.get("id") == "ensemble@windroc"), ""))'
+  else
+    python3 -I -c '
+import glob, os, sys
+def version(path):
+    return [int(part) if part.isdigit() else -1 for part in os.path.basename(path).split(".")]
+found = sorted(glob.glob(os.path.join(glob.escape(sys.argv[1]), "*")), key=version, reverse=True)
+print(found[0] if found else "")' "${CODEX_HOME:-$HOME/.codex}/plugins/cache/windroc/ensemble"
+  fi
+}
+
+# With Docker, before any client step: the broker comes from the release of the plugin plugin_dir will pick
+# (Claude Code's, else Codex's, else OpenCode's), downloaded, or for a branch built from its sources, and must speak
+# every chosen client's plugin protocol. Only advisory: gh attestation verify authenticates the broker.
+broker_plan() {
+  local -a sources=()
+  local client source label where version want got remedy installed broker_label commit opencode= seen= agreed=
+  [ "$docker" = yes ] || return 0
+  for client in claude codex opencode; do
+    has "$client" || continue
+    if [ "$client" != opencode ]; then
+      source=$(installed_plugin "$client")
+    else
+      # OpenCode's copy counts only while it is at the commit $ref names: opencode_plugin downloads it again otherwise.
+      source=$(opencode_package "$(opencode_spec)" 2>/dev/null) || source=
+      commit=$(state_get opencode_plugin_commit)
+      if [ -z "$commit" ] || [ "$commit" != "$(ref_commit 2>/dev/null)" ]; then source=; fi
+    fi
+    [ -z "$source" ] || [ -d "$source" ] || source=
+    if [ "$client" = opencode ]; then opencode=$source; fi
+    sources+=("$source")
+  done
+  where=${sources[0]:-ref $ref}
+  version=$(plugin_file "${sources[0]}" .claude-plugin/plugin.json | version_of)
+  [ -n "$version" ] || die "no release version in .claude-plugin/plugin.json at $where"
+  release_tag=v$version
+  if [ "$ref" = main ] || [ "$ref" = "$release_tag" ] || { [ -n "${sources[0]}" ] && [ "${sources[0]}" != "$opencode" ]; }; then
+    broker_mode=release
+  else
+    broker_mode=build
+    return
+  fi
+  if [ -n "${sources[0]}" ] && installed=$(broker_current "${sources[0]}"); then
+    got=${installed%%:*}
+    broker_label="the installed broker"
+  else
+    got=$(ensemble_file "$release_tag" src/broker/internal/protocol/protocol.go | go_protocol_of)
+    [ -n "$got" ] || die "no broker protocol in src/broker/internal/protocol/protocol.go at ref $release_tag"
+    broker_label="release $release_tag"
+  fi
+  for source in "${sources[@]}"; do
+    label=${source:-ensemble $ref}
+    case $seen in *"<$label>"*) continue ;; esac
+    seen+="<$label>"
+    want=$(plugin_file "$source" src/ensemble/session/hosts/docker/broker.py | protocol_of)
+    [ -n "$want" ] || die "no broker protocol in src/ensemble/session/hosts/docker/broker.py at ${source:-ref $ref}"
+    if [ "$want" != "$got" ]; then
+      # With Claude Code or Codex, ref_check takes only the served ref: OpenCode alone may change --ref.
+      if ! has claude && ! has codex; then
+        remedy="use --ref $release_tag or a branch other than main"
+      elif [ -n "$source" ] || [ -n "${sources[0]}" ]; then
+        remedy="update the plugin (Claude Code: claude plugin marketplace update windroc, then claude plugin update ensemble@windroc; Codex: codex plugin marketplace upgrade windroc), then rerun"
+      else
+        remedy="the windroc marketplace serves ensemble at $ref, ahead of release $release_tag: wait until it serves a release, or use --clients opencode --ref $release_tag"
+      fi
+      die "$label wants broker protocol $want, but its broker, $broker_label, speaks protocol $got: $remedy"
+    fi
+    agreed+="${agreed:+, }$label"
+  done
+  say "    broker protocol $got: $agreed and $broker_label agree"
 }
 
 # Claude Code and Codex install ensemble, and updraft for host workers, from the windroc marketplace.
@@ -1005,7 +1174,9 @@ claude_plugins() {
     ledger_add claude-marketplace windroc
     claude plugin marketplace add windroc-labs/agent-plugins-marketplace </dev/null >&2
   else
-    skip "marketplace windroc"
+    rc=0
+    claude_plugin ensemble@windroc || rc=$?
+    if [ "$rc" = 1 ]; then claude plugin marketplace update windroc </dev/null >&2; else skip "marketplace windroc"; fi
   fi
   if [ "$docker" != yes ]; then ids+=(updraft@windroc); fi
   for id in "${ids[@]}"; do
@@ -1035,7 +1206,9 @@ codex_plugins() {
     ledger_add codex-marketplace windroc
     codex plugin marketplace add windroc-labs/agent-plugins-marketplace </dev/null >&2
   else
-    skip "marketplace windroc"
+    rc=0
+    codex_plugin ensemble@windroc || rc=$?
+    if [ "$rc" = 1 ]; then codex plugin marketplace upgrade windroc </dev/null >&2; else skip "marketplace windroc"; fi
   fi
   if [ "$docker" != yes ]; then ids+=(updraft@windroc); fi
   for id in "${ids[@]}"; do
@@ -1059,16 +1232,9 @@ plugin_dir() {
   if ! has claude && ! has codex; then
     pkg=$(opencode_package "$(opencode_spec)")
   elif has claude; then
-    pkg=$(claude plugin list --json </dev/null | python3 -I -c '
-import json, sys
-print(next((p.get("installPath", "") for p in json.load(sys.stdin) if p.get("id") == "ensemble@windroc"), ""))')
+    pkg=$(installed_plugin claude)
   else
-    pkg=$(python3 -I -c '
-import glob, os, sys
-def version(path):
-    return [int(part) if part.isdigit() else -1 for part in os.path.basename(path).split(".")]
-found = sorted(glob.glob(os.path.join(glob.escape(sys.argv[1]), "*")), key=version, reverse=True)
-print(found[0] if found else "")' "${CODEX_HOME:-$HOME/.codex}/plugins/cache/windroc/ensemble")
+    pkg=$(installed_plugin codex)
   fi
   [ -n "$pkg" ] && [ -d "$pkg" ] || die "no installed ensemble plugin directory"
   say "    $pkg"
@@ -1216,7 +1382,7 @@ opencode_plugin() {
     fi
   done
   for name in opencode.jsonc package.json package-lock.json .gitignore; do
-    [ -e "$conf/$name" ] || ledger_add file "$conf/$name"
+    record_file "$conf/$name"
   done
   record_dir "$conf/node_modules"
   record_dir "${XDG_CACHE_HOME:-$HOME/.cache}/opencode/packages"
@@ -1508,7 +1674,7 @@ ctmux_install() {
   if [ -n "$missing" ]; then
     if [ -d "$HOME/.ensemble/bin" ]; then
       for name in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
-        [ -e "$HOME/.ensemble/bin/$name" ] || ledger_add file "$HOME/.ensemble/bin/$name"
+        record_file "$HOME/.ensemble/bin/$name"
       done
     else
       record_dir "$HOME/.ensemble/bin"
@@ -1526,7 +1692,7 @@ ctmux_install() {
 # sha256 of the plugin's broker sources: a change means the broker must be reinstalled.
 broker_source() {
   (
-    cd "$pkg"
+    cd "$1"
     find src/broker -type f | LC_ALL=C sort | while IFS= read -r file; do shasum -a 256 "$file"; done
     shasum -a 256 .claude-plugin/plugin.json
   ) | shasum -a 256 | cut -d' ' -f1
@@ -1558,27 +1724,39 @@ sys.exit(v(sys.argv[1]) < v(sys.argv[2]))' "$os" "$2" || die "Docker Desktop $3 
 }
 
 # Presets Docker Desktop's settings before its first start, keeping any it has: Rosetta off (the worker image is
-# arm64; install.sh never installs Rosetta) and its onboarding marked done.
+# arm64; install.sh never installs Rosetta) and its onboarding marked done. Best effort: macOS 27 may deny the shell
+# Docker's Group Container; any failure prints one line, keeps the file as it was, and the install goes on.
 docker_settings() {
   python3 -I -c '
-import json, os, sys
+import contextlib, json, os, sys
 path = sys.argv[1]
-try:
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
-except FileNotFoundError:
-    data = {}
 preset = {"UseVirtualizationFrameworkRosetta": False, "DisplayedOnboarding": True}
-new = {**preset, **data}
-if new != data:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path + ".tmp", "w", encoding="utf-8") as f:
-        json.dump(new, f, indent=2)
-    os.replace(path + ".tmp", path)' "$HOME/Library/Group Containers/group.com.docker/settings-store.json"
+try:
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        data = {}
+    if not isinstance(data, dict):
+        raise ValueError(f"not a JSON object: {path}")
+    new = {**preset, **data}
+    if new != data:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        try:
+            with open(path + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(new, f, indent=2)
+            os.replace(path + ".tmp", path)
+        except Exception:
+            with contextlib.suppress(OSError):
+                os.remove(path + ".tmp")
+            raise
+except Exception as e:
+    print(f"    Docker Desktop presets not written (Rosetta off, onboarding done): {e}; Docker Desktop may show its"
+          " Welcome window", file=sys.stderr)' "$HOME/Library/Group Containers/group.com.docker/settings-store.json"
 }
 
 # Starts Docker Desktop and waits for its engine; the first time install.sh installed it, without its windows:
-# license accepted and privileged setup done by its own install command, settings preset.
+# license accepted and privileged setup done by its own install command, settings preset where macOS allows.
 docker_running() {
   local app=$root/Applications/Docker.app tries=0
   step "Docker Desktop running"
@@ -1602,21 +1780,34 @@ docker_running() {
   done
 }
 
+# Prints "<spoken>:<wanted>", whatever its exit status: the protocol the installed broker reports when it was
+# installed from plugin $1's broker sources (else empty), and $1's plugin protocol. Exit 0 when both are set and
+# equal: the broker is current and broker_install keeps it, so broker_plan may trust it.
+broker_current() {
+  local got= want=
+  want=$(protocol_of <"$1/src/ensemble/session/hosts/docker/broker.py" 2>/dev/null) || want=
+  if [ -x "$broker" ] && [ "$(state_get broker_source)" = "$(broker_source "$1")" ]; then
+    got=$("$broker" version </dev/null 2>/dev/null | spoken_protocol_of) || got=
+  fi
+  printf '%s:%s\n' "$got" "$want"
+  [ -n "$want" ] && [ "$got" = "$want" ]
+}
+
+# Installs the broker unless the one installed came from this plugin's sources and speaks its protocol.
 broker_install() {
-  local source
-  source=$(broker_source)
-  if [ -x "$broker" ] && [ "$(state_get broker_source)" = "$source" ]; then
-    step "Docker Desktop running"
-    skip "broker current"
-    step broker
+  local source installed got want
+  step broker
+  if installed=$(broker_current "$pkg"); then
     skip "installed from this plugin"
     return
   fi
-  docker_running
-  step broker
+  got=${installed%%:*}
+  want=${installed#*:}
+  if [ -n "$got" ]; then say "    installed broker speaks protocol $got, the plugin wants ${want:-unknown}: reinstalling"; fi
+  source=$(broker_source "$pkg")
   [ -e "$root/usr/local/libexec/ensemble" ] || ledger_add broker
   record_dir "$HOME/.ensemble/docker"
-  if [ "$ref" = main ]; then
+  if [ "$broker_mode" = release ]; then
     sh "$pkg/src/broker/install.sh" </dev/null >&2
   else
     sh "$pkg/src/broker/install.sh" --build </dev/null >&2
@@ -1645,9 +1836,14 @@ store_app_key() {
 
 # Claude's default credential or pinned Codex: install, update, login, ready or busy.
 broker_need() {
-  "$broker" status </dev/null | python3 -I -c '
+  "$broker" status --cleanup </dev/null | python3 -I -c '
 import json, sys
 data = json.load(sys.stdin)
+if "audit_warning" in data:
+    if data["audit_warning"] == "audit_write_failed":
+        print("audit_write_failed: broker audit persistence failed; the operation result still applies. Do not repeat a successful start.", file=sys.stderr)
+    else:
+        print("ensemble-broker: invalid audit warning metadata; the operation result still applies.", file=sys.stderr)
 if sys.argv[1] == "claude":
     print("ready" if (data.get("claude") or {}).get("default") is True else "login")
     sys.exit(0)
@@ -1758,16 +1954,81 @@ broker_logins() {
   fi
 }
 
+# 0: ready for workers; 2: healthy contract-1 proxy whose config has no workers section; 1: not ready yet.
+egress_ready() {
+  local status running health contract name proxy networks
+  status=$(docker inspect --format '{{.State.Running}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{index .Config.Labels "windroc.egress.contract"}}|{{index .Config.Labels "windroc.egress.network.workers.name"}}|{{index .Config.Labels "windroc.egress.network.workers.proxy"}}|{{index .Config.Labels "windroc.egress.networks"}}' egress-proxy </dev/null 2>/dev/null) || return 1
+  IFS='|' read -r running health contract name proxy networks <<<"$status"
+  [ "$running|$health|$contract" = "true|healthy|1" ] || return 1
+  case ",$networks," in *,workers,*) ;; *) return 2 ;; esac
+  case $name in '' | '<no value>') return 1 ;; esac
+  case $proxy in '' | '<no value>') return 1 ;; esac
+}
+
+# Download to a sibling directory so a failed fetch never leaves a usable partial version.
+egress_download() (
+  local versions=$HOME/.egress/versions tmp
+  tmp=$(mktemp -d "$versions/.download.XXXXXX")
+  trap 'rm -rf "$tmp"' EXIT
+  gh api "repos/windroc/egress-proxy/tarball/$egress_commit" </dev/null >"$tmp/source.tar.gz" \
+    || die "cannot fetch pinned windroc/egress-proxy $egress_commit; check gh auth status and repository access, then rerun"
+  mkdir "$tmp/source"
+  tar -xzf "$tmp/source.tar.gz" --strip-components=1 -C "$tmp/source" \
+    || die "cannot unpack pinned windroc/egress-proxy $egress_commit"
+  [ -x "$tmp/source/start.sh" ] || die "pinned egress version has no executable start.sh"
+  printf '%s\n' "$egress_commit" >"$tmp/source/COMMIT"
+  mv "$tmp/source" "$versions/$egress_commit"
+)
+
+egress_install() {
+  local dir=$HOME/.egress version=$HOME/.egress/versions/$egress_commit tries=0 ready
+  step "egress proxy"
+  mkdir -p "$dir/versions"
+  [ ! -L "$dir/config.local.yaml" ] \
+    || die "$dir/config.local.yaml symlink is unsupported by the proxy's directory mount; existing path was kept"
+  if [ ! -e "$dir/config.local.yaml" ]; then
+    (umask 077; set -o noclobber; printf 'version: 1\nnetworks:\n  workers:\n    mode: denylist\n' >"$dir/config.local.yaml") \
+      || die "cannot create $dir/config.local.yaml; existing config was kept"
+  fi
+  [ -f "$dir/config.local.yaml" ] && [ -r "$dir/config.local.yaml" ] \
+    || die "$dir/config.local.yaml is not a readable file; existing path was kept"
+  if [ ! -e "$version" ]; then egress_download; fi
+  [ -x "$version/start.sh" ] && [ "$(cat "$version/COMMIT")" = "$egress_commit" ] \
+    || die "incomplete egress checkout $version; keep your config and repair that version directory"
+  # Always run start.sh: it applies a new or changed config and leaves an unchanged proxy running.
+  EGRESS_CONFIG_DIR="$dir" bash "$version/start.sh" </dev/null >&2 \
+    || die "egress-proxy start failed: run $version/start.sh; inspect docker logs egress-proxy"
+  while :; do
+    ready=0
+    egress_ready || ready=$?
+    [ "$ready" -ne 0 ] || break
+    [ "$ready" -ne 2 ] \
+      || die "$dir/config.local.yaml has no networks.workers section, so the healthy proxy serves no workers network; add one (see $version/config.example.yaml), then rerun scripts/install.sh --docker; your config was kept unchanged"
+    [ "$tries" -lt 60 ] \
+      || die "egress-proxy not healthy after 120 seconds: docker logs egress-proxy; rerun $version/start.sh"
+    tries=$((tries + 1))
+    sleep 2
+  done
+  if [ -e "$dir/current" ] || [ -L "$dir/current" ]; then
+    [ -L "$dir/current" ] || die "$dir/current is not an installer symlink; kept it"
+    rm "$dir/current"
+  fi
+  ln -s "$version" "$dir/current"
+  state_set egress_commit "$egress_commit"
+}
+
 docker_steps() {
   local name
   if [ "$docker" != yes ]; then
-    for name in "Docker Desktop running" broker "broker login: Claude" "broker login: GitHub" \
+    for name in "Docker Desktop running" "egress proxy" broker "broker login: Claude" "broker login: GitHub" \
       "broker Codex install" "broker login: Codex"; do
       step "$name"
       skip "Docker not chosen"
     done
     return
   fi
+  docker_running
+  egress_install
   broker_install
   docker_cli
   broker_logins
@@ -2164,7 +2425,7 @@ $wanted"; then
       return 0
     fi
     while IFS= read -r directory; do
-      [ -e "$directory" ] || ledger_add board-dir "$directory"
+      if absent "$directory"; then ledger_add board-dir "$directory"; fi
     done <<<"$wanted"
   fi
   mkdir -p "$board_dir/unassigned"
@@ -2310,12 +2571,11 @@ celebrate() {
     if [ -n "$pause" ]; then sleep "$pause"; fi
   done <<'EOF'
 
-                        _
-  __ _  __ _  ___ _ __ | |_      _ __  _ __ ___
- / _` |/ _` |/ _ \ '_ \| __|____| '_ \| '_ ` _ \
-| (_| | (_| |  __/ | | | ||_____| |_) | | | | | |
- \__,_|\__, |\___|_| |_|\__|    | .__/|_| |_| |_|
-       |___/                    |_|
+ _____                          _     _
+| ____|_ __  ___  ___ _ __ ___ | |__ | | ___
+|  _| | '_ \/ __|/ _ \ '_ ` _ \| '_ \| |/ _ \
+| |___| | | \__ \  __/ | | | | | |_) | |  __/
+|_____|_| |_|___/\___|_| |_| |_|_.__/|_|\___|
 
 EOF
   say "ensemble is installed (ref $ref, clients $clients, Docker $docker)."
@@ -2356,6 +2616,7 @@ main() {
   dependencies
   if [ -z "$answered" ]; then answers; fi
   ref_check
+  broker_plan
   opencode_select
   config_file
   apps

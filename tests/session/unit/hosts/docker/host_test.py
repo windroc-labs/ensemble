@@ -16,7 +16,7 @@ import sys
 import threading
 import time
 import tomllib
-from dataclasses import replace
+from dataclasses import fields, replace
 from types import SimpleNamespace
 from unittest import mock
 
@@ -41,9 +41,9 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.engine.worker import Worker, WorkerState
 from ensemble.session.hosts.base import Host
+from ensemble.session.hosts.docker import host as docker_host
 from ensemble.session.hosts.docker.broker import (
     BROKER,
-    REFRESH,
     RELAY,
     Broker,
     BrokerError,
@@ -155,7 +155,7 @@ class FakeBroker:
 
     def __init__(self, order, started):
         self.order, self.started, self.error, self.closed = order, started, None, []
-        self.failing, self.max_ages, self.refreshed = {}, [], threading.Event()
+        self.failing, self.refreshed = {}, threading.Event()
 
     def version(self):
         self.order.append("version")
@@ -168,10 +168,9 @@ class FakeBroker:
             raise self.failing["probe-provider"]
         return True
 
-    def build(self, package, *, plugins=(), max_age=None):
+    def build(self, package, *, plugins=()):
         self.order.append(("build", package))
         self.plugins = plugins
-        self.max_ages.append(max_age)
         if "build" in self.failing:
             raise self.failing["build"]
         return IMAGE, DIGEST
@@ -332,7 +331,7 @@ class ConfigTest(Base):
             (5, "", json.dumps(locked)),
         )
         self.host.broker = Broker(runner)
-        with self.assertRaisesRegex(SessionError, "protocol '18', want '20'") as caught:
+        with self.assertRaisesRegex(SessionError, "protocol '18', want '27'") as caught:
             self.host._provider_usage(request)
         self.assertIn(
             "install or upgrade it: see docs/docker-host.md#install", str(caught.exception)
@@ -757,7 +756,6 @@ class StartTest(Base):
                 ["exec", "-i", CONTAINER, "tmux", "display-message"],
             ],
         )
-        self.assertEqual(self.broker.max_ages, [REFRESH])
         self.assertEqual(os.listdir(self.home_dir), [])
         self.assertEqual(stat.S_IMODE(os.stat(self.home_dir).st_mode), 0o700)
         with open(manifest) as f:
@@ -1239,30 +1237,33 @@ class StartTest(Base):
                 self.assertFalse(result.startswith(self.home_dir + os.sep))
 
     def test_generation_versions_survive_later_client_setup_failure(self):
-        for audit in (data("start-output-codex.json")["client_update"], None):
-            self.broker.started = replace(self.broker.started, client_update=audit)
-            with (
-                self.subTest(audit=audit),
-                mock.patch.object(
-                    self.host, "_stage_files", side_effect=SessionError("setup failed")
-                ),
-                self.assertRaisesRegex(SessionError, "setup failed"),
-            ):
-                self.start()
-            with open(os.path.join(self.state, f"{GEN}.result.json")) as source:
-                result = json.load(source)
-            self.assertEqual(result["image_digest"], self.broker.started.image_digest)
-            if audit is None:
-                self.assertNotIn("client_update", result)
-            else:
-                self.assertEqual(result["client_update"], audit)
+        with (
+            mock.patch.object(self.host, "_stage_files", side_effect=SessionError("setup failed")),
+            self.assertRaisesRegex(SessionError, "setup failed"),
+        ):
+            self.start()
+        with open(os.path.join(self.state, f"{GEN}.result.json")) as source:
+            result = json.load(source)
+        self.assertEqual(result["image_digest"], self.broker.started.image_digest)
 
-    def test_successful_start_records_the_update_when_present(self):
-        audit = data("start-output-codex.json")["client_update"]
-        self.broker.started = replace(self.broker.started, client_update=audit)
+    def test_saved_result_has_no_client_update(self):
+        self.assertNotIn("client_update", {f.name for f in fields(Started)})
         self.start()
         with open(os.path.join(self.state, f"{GEN}.result.json")) as source:
-            self.assertEqual(json.load(source)["client_update"], audit)
+            result = json.load(source)
+        self.assertEqual(
+            set(result),
+            {
+                "container",
+                "image",
+                "image_digest",
+                "client_versions",
+                "started_at",
+                "ended_at",
+                "phases",
+                "launched_at",
+            },
+        )
 
     def test_each_start_records_and_reports_its_phase_times(self):
         result = os.path.join(self.state, f"{GEN}.result.json")
@@ -1850,7 +1851,6 @@ class PreflightTest(Base):
     def test_preflight_runs_version_then_build_and_writes_nothing(self):
         self.validate()
         self.assertEqual(self.order, ["version", ("build", REPO)])
-        self.assertEqual(self.broker.max_ages, [REFRESH])
         self.assertFalse(os.path.exists(self.state))
 
     def test_resume_preflight_builds_with_the_whitelisted_plugins(self):
@@ -1867,7 +1867,6 @@ class PreflightTest(Base):
                 "beta@owner/market#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             ),
         )
-        self.assertEqual(self.broker.max_ages, [REFRESH])
         self.assertFalse(os.path.exists(self.state))
 
     def test_an_argument_over_the_linux_limit_is_refused_before_any_docker_call(self):
@@ -2022,6 +2021,225 @@ class TerminalTest(Base):
                     ("kill", "-0"): reply,
                 }
                 self.assertTrue(process.wait_exit(0))
+
+    def probing(self, screens=None):
+        """A terminal on a live pane, at a fake time `now[0]`, and its tmux execs' commands so far."""
+        process = self.terminal()
+        self.docker.replies = {
+            ("tmux", "display-message"): pane(),
+            ("tmux", "capture-pane"): screens or (0, "idle\n", ""),
+        }
+        now = [100.0]
+        clock = mock.patch("time.monotonic", lambda: now[0])
+        clock.start()
+        self.addCleanup(clock.stop)
+        self.docker.order.clear()
+        return process, now, lambda: [c[1] for c in self.docker.execs() if c[0] == "tmux"]
+
+    @staticmethod
+    def tick(process):
+        """Tui.poll's calls on its terminal in one tick."""
+        process.state()
+        process.returncode()
+        process.screen()
+        process.state()
+
+    def test_an_idle_pane_costs_at_most_one_exec_per_second(self):
+        process, now, tmux = self.probing()
+        counts = []
+        for _ in range(120):  # 60 s of HostedSession's 0.5 s ticks
+            before = len(tmux())
+            self.tick(process)
+            counts.append(len(tmux()) - before)
+            now[0] += 0.5
+        self.assertLessEqual(sum(counts), 60, f"{sum(counts)} tmux execs in 60 s")
+        for start in range(12, 109):
+            self.assertLessEqual(sum(counts[start : start + 12]), 6, (start, counts))
+
+    def test_one_tick_shares_one_probe_and_one_capture(self):
+        process, now, tmux = self.probing()
+        for _ in range(3):
+            self.tick(process)
+            self.assertEqual((process.state(), process.returncode()), (Liveness.LIVE, None))
+            now[0] += 0.1
+        self.assertEqual(tmux(), ["display-message", "capture-pane"])
+
+    def test_the_probe_interval_backs_off_to_its_cap_and_resets_on_change(self):
+        process, now, tmux = self.probing()
+
+        def probes_at(ticks):
+            found = []
+            for _ in range(ticks):
+                before = tmux().count("display-message")
+                self.tick(process)
+                if tmux().count("display-message") > before:
+                    found.append(now[0] - start)
+                now[0] += 0.5
+            return found
+
+        start = now[0]
+        self.assertEqual(probes_at(26), [0, 0.5, 1.5, 3.5, 6.5, 9.5, 12.5])
+        probes_at(1)
+        self.docker.replies[("tmux", "capture-pane")] = (0, "busy\n", "")
+        start = now[0]
+        found = probes_at(8)  # seen at the next refresh, then probed every tick
+        self.assertLessEqual(found[0], docker_host.PROBE_MAX)
+        self.assertEqual(found[1] - found[0], 0.5)
+        for act in (lambda: process.send(Paste("hi")), lambda: process.press([KeyPress("a")])):
+            probes_at(20)  # backed off to the cap
+            act()
+            start = now[0]
+            self.assertEqual(probes_at(2), [0.5])
+
+    def test_a_probe_that_changes_resets_the_interval(self):
+        process, now, tmux = self.probing()
+        for _ in range(20):
+            self.tick(process)
+            now[0] += 0.5
+        self.docker.replies[("tmux", "display-message")] = TimeoutExpired("docker", 10)
+        while process.state() != Liveness.UNKNOWN:
+            now[0] += 0.5
+        self.docker.replies[("tmux", "display-message")] = pane()
+        now[0] += 0.5
+        self.assertEqual(process.state(), Liveness.LIVE)
+
+    def test_a_dead_pane_seen_by_alive_resets_the_interval_and_is_the_snapshot(self):
+        process, now, tmux = self.probing()
+        for _ in range(20):
+            self.tick(process)
+            now[0] += 0.5
+        self.docker.replies[("tmux", "display-message")] = pane("1 3 ")
+        self.assertFalse(process.alive())
+        self.docker.order.clear()
+        self.assertEqual((process.returncode(), process.state()), (3, Liveness.LIVE))
+        self.assertEqual(tmux(), [])
+        now[0] += docker_host.PROBE_MIN - 0.01
+        process.state()
+        self.assertEqual(tmux(), [])
+        now[0] += 0.01
+        process.state()
+        self.assertEqual(tmux(), ["display-message"])
+
+    def test_an_unchanged_alive_keeps_the_interval(self):
+        process, now, tmux = self.probing()
+        for _ in range(20):
+            self.tick(process)
+            now[0] += 0.5
+        self.assertTrue(process.alive())
+        self.docker.order.clear()
+        now[0] += docker_host.PROBE_MAX - 0.01
+        process.state()
+        self.assertEqual(tmux(), [])
+        now[0] += 0.01
+        process.state()
+        self.assertEqual(tmux(), ["display-message"])
+
+    def test_alive_renews_the_snapshot_so_the_next_screen_is_fresh(self):
+        process, now, tmux = self.probing()
+        for _ in range(20):
+            self.tick(process)
+            now[0] += 0.5
+        self.docker.replies[("tmux", "capture-pane")] = (0, "Trust this folder?\n", "")
+        self.assertEqual(process.screen(), "idle")
+        self.docker.order.clear()
+        self.assertTrue(process.alive())
+        self.assertEqual(process.screen(), "Trust this folder?")
+        self.assertEqual(tmux(), ["display-message", "capture-pane"])
+
+    def test_an_exit_during_back_off_is_seen_within_the_cap(self):
+        process, now, tmux = self.probing()
+        for _ in range(20):
+            self.tick(process)
+            now[0] += 0.5
+        died = now[0]
+        self.docker.replies[("tmux", "display-message")] = pane("1 3 ")
+        while process.returncode() is None:
+            now[0] += 0.5
+        self.assertLessEqual(now[0] - died, docker_host.PROBE_MAX)
+        self.docker.replies = {
+            (): (1, "", f"Error response from daemon: No such container: {CONTAINER}\n")
+        }
+        gone = now[0]
+        while process.state() != Liveness.ABSENT:
+            now[0] += 0.5
+        self.assertLessEqual(now[0] - gone, docker_host.PROBE_MAX)
+        self.assertEqual(process.returncode(), -signal.SIGHUP)
+
+    def test_a_changing_screen_keeps_the_interval_at_its_minimum(self):
+        shown = iter(range(1000))
+        process, now, tmux = self.probing(lambda _: done(0, f"working {next(shown)}\n"))
+        for _ in range(20):
+            self.tick(process)
+            now[0] += 0.5
+        self.assertEqual(tmux(), ["display-message", "capture-pane"] * 20)
+
+    def test_alive_and_screen_lines_always_probe_fresh(self):
+        process, now, tmux = self.probing()
+        self.tick(process)
+        self.docker.order.clear()
+        for _ in range(3):
+            self.assertTrue(process.alive())
+            self.assertEqual(process.screen(5), "idle")
+        self.assertEqual(tmux(), ["display-message", "display-message", "capture-pane"] * 3)
+
+    def test_a_cached_unknown_probe_and_capture_error_keep_todays_errors(self):
+        process, now, tmux = self.probing()
+        self.docker.replies[("tmux", "display-message")] = TimeoutExpired("docker", 10)
+        for _ in range(2):
+            self.assertEqual(process.state(), Liveness.UNKNOWN)
+            self.assertIsNone(process.returncode())
+            with self.assertRaisesRegex(
+                Unanswered, f"^tmux session w: .*docker exec in {CONTAINER}: "
+            ):
+                process.screen()
+        self.assertEqual(tmux(), ["display-message"])
+        now[0] += 0.5
+        self.docker.replies = {
+            ("tmux", "display-message"): pane(),
+            ("tmux", "capture-pane"): (1, "", "boom"),
+        }
+        for _ in range(2):
+            with self.assertRaisesRegex(SessionError, "^docker session w: tmux: boom$"):
+                process.screen()
+        self.assertEqual(tmux(), ["display-message", "display-message", "capture-pane"])
+
+    def test_wait_exit_backs_off_to_its_cap_within_the_timeout(self):
+        process = self.terminal()
+        now, sleeps = [100.0], []
+
+        def sleep(seconds):
+            sleeps.append(round(seconds, 6))
+            now[0] += seconds
+
+        live = {("tmux", "display-message"): pane(), ("kill", "-0"): (0, "", "")}
+        self.docker.replies = live
+        with (
+            mock.patch("time.monotonic", lambda: now[0]),
+            mock.patch("time.sleep", sleep),
+        ):
+            self.assertFalse(process.wait_exit(4))
+            self.assertEqual(sleeps, [0.1, 0.2, 0.4, 0.8, 1.0, 1.0, 1.0])
+            sleeps.clear()
+            self.docker.replies = {
+                ("tmux", "display-message"): pane("1 0 "),
+                ("kill", "-0"): (1, "", "kill: (-4343) - No such process\n"),
+            }
+            self.assertTrue(process.wait_exit(4))
+            self.assertEqual(sleeps, [])
+
+    def test_waits_other_than_wait_exit_keep_a_fixed_poll(self):
+        now, sleeps, checks = [0.0], [], iter([False, False, False, True])
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            now[0] += seconds
+
+        with (
+            mock.patch("time.monotonic", lambda: now[0]),
+            mock.patch("time.sleep", sleep),
+        ):
+            self.assertTrue(docker_host._wait(lambda: next(checks), 5))
+        self.assertEqual(sleeps, [docker_host.POLL] * 3)
 
     def test_a_pane_probe_that_cannot_answer_is_unanswered_before_any_kill(self):
         process = self.terminal()
@@ -2236,11 +2454,11 @@ class RecoverTest(Base):
         self.listed("w")
         self.record(events=os.path.join(self.home, "events"))
         self.lock = os.path.join(self.state, "supervisor.lock")
-        self.result(DIGEST)
+        self.result(IMAGE)
 
-    def result(self, digest):
+    def result(self, image, digest=DIGEST):
         with open(os.path.join(self.state, f"{GEN}.result.json"), "w") as f:
-            json.dump({"container": CONTAINER, "image_digest": digest}, f)
+            json.dump({"container": CONTAINER, "image": image, "image_digest": digest}, f)
 
     def serves(self):
         return [call for call in self.docker.execs() if call[:2] == [RELAY, "serve"]]
@@ -2286,7 +2504,6 @@ class RecoverTest(Base):
                 "beta@owner/market#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             ),
         )
-        self.assertEqual(self.broker.max_ages, [None])
         self.assertEqual(len(self.spawned), 1)
 
     def test_attach_with_the_lock_held_starts_nothing(self):
@@ -2333,25 +2550,31 @@ class RecoverTest(Base):
         (row,) = self.host.rows()
         self.assertEqual(row.state, StatusState.DEAD)
 
+    def test_recover_keeps_worker_after_client_only_rebuild(self):
+        self.result(IMAGE, "sha256:" + "d" * 64)
+        process = self.host.attach("w")
+        self.assertTrue(process.current)
+        self.assertEqual(len(self.spawned), 1)
+        self.assertFalse(os.path.exists(os.path.join(self.state, f"{GEN}.stale")))
+
     def test_an_older_image_is_not_recovered_and_closes_without_the_supervisor(self):
-        for digest in ("sha256:" + "d" * 64, None):
-            with self.subTest(digest=digest):
+        for image in ("ensemble-worker:" + "d" * 64, None):
+            with self.subTest(image=image):
                 self.host._warned.clear()
                 stale = os.path.join(self.state, f"{GEN}.stale")
                 with contextlib.suppress(FileNotFoundError):
                     os.unlink(stale)
-                if digest is None:
+                if image is None:
                     os.unlink(os.path.join(self.state, f"{GEN}.result.json"))
                 else:
-                    self.result(digest)
+                    self.result(image)
                 with self.assertLogs("session", "WARNING") as logs:
                     process = self.host.attach("w")
                     builds = self.order.count(("build", REPO))
                     self.host.attach("w")
                 self.assertEqual(self.order.count(("build", REPO)), builds)
-                self.assertEqual(self.broker.max_ages[-1], None)
                 with open(stale) as f:
-                    self.assertEqual(f.read(), DIGEST)
+                    self.assertEqual(f.read(), IMAGE)
                 self.assertEqual(
                     logs.output,
                     ["WARNING:session:docker session w runs an older image; restart it to upgrade"],

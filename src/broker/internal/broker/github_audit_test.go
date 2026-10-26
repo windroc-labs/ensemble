@@ -145,7 +145,7 @@ func TestRevokeAudit(t *testing.T) {
 	r := newRig(t, "acme", "other")
 	issued(t, r)
 	rec, sink := r.audited("close", ctr)
-	if err := r.g.Revoke(context.Background(), ctr); err != nil {
+	if err := r.g.Release(context.Background(), ctr); err != nil {
 		t.Fatal(err)
 	}
 	if got := resultsOf(flush(t, rec, sink)[0]); !slices.Equal(got, []string{audit.Revoked, audit.Revoked}) {
@@ -158,7 +158,7 @@ func TestRevokeAuditOffline(t *testing.T) {
 	issued(t, r)
 	rec, sink := r.audited("close", ctr)
 	r.srv.Close()
-	if err := r.g.Revoke(context.Background(), ctr); err != nil {
+	if err := r.g.Release(context.Background(), ctr); err != nil {
 		t.Fatal(err)
 	}
 	got := flush(t, rec, sink)[0]
@@ -178,7 +178,7 @@ func TestRevokeAuditLockFails(t *testing.T) {
 	r.api.revokeErr = func(string) int { return 500 }
 	r.lockFails(0)
 	rec, sink := r.audited("close", ctr)
-	_ = r.g.Revoke(context.Background(), ctr)
+	_ = r.g.Release(context.Background(), ctr)
 	got := flush(t, rec, sink)[0]
 	if !slices.Equal(resultsOf(got), []string{audit.Pending}) || got.Credentials[0].Reason != "GitHub answered HTTP 500 to DELETE /installation/token" {
 		t.Fatalf("a direct revoke that fails, then is queued: %+v", got)
@@ -206,7 +206,7 @@ func TestDiscardRecordsQueuedTokens(t *testing.T) {
 	issued(t, r)
 	r.g.Keychain = &flakySecrets{secrets: r.keys, service: revocationsService, ok: 1}
 	rec, sink := r.audited("close", ctr)
-	if err := r.g.Revoke(context.Background(), ctr); err != nil {
+	if err := r.g.Release(context.Background(), ctr); err != nil {
 		t.Fatal(err)
 	}
 	got := flush(t, rec, sink)[0]
@@ -218,9 +218,9 @@ func TestDiscardRecordsQueuedTokens(t *testing.T) {
 func TestRetryAudit(t *testing.T) {
 	r := newRig(t)
 	list := []pending{
-		{ctr2, "a", "ghs_expired", "2026-10-17T11:59:59Z"},
-		{ctr2, "b", "ghs_live", "2026-10-17T12:30:00Z"},
-		{ctr2, "c", "ghs_refused", "2026-10-17T12:30:00Z"},
+		{Container: ctr2, Account: "a", Token: "ghs_expired", ExpiresAt: "2026-10-17T11:59:59Z"},
+		{Container: ctr2, Account: "b", Token: "ghs_live", ExpiresAt: "2026-10-17T12:30:00Z"},
+		{Container: ctr2, Account: "c", Token: "ghs_refused", ExpiresAt: "2026-10-17T12:30:00Z"},
 	}
 	data, _ := json.Marshal(list)
 	r.keys.items[revocationsService+"/"+revocationsAccount] = data
@@ -280,7 +280,7 @@ func TestUnrecordedTokenAudit(t *testing.T) {
 
 func TestRetryAuditNotesAfterRemoval(t *testing.T) {
 	r := newRig(t)
-	data, _ := json.Marshal([]pending{{ctr2, "b", "ghs_live", "2026-10-17T12:30:00Z"}})
+	data, _ := json.Marshal([]pending{{Container: ctr2, Account: "b", Token: "ghs_live", ExpiresAt: "2026-10-17T12:30:00Z"}})
 	r.keys.items[revocationsService+"/"+revocationsAccount] = data
 	r.lockFails(1)
 	rec, sink := r.audited("status", "")

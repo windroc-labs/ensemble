@@ -1,10 +1,13 @@
 package launcher
 
 import (
+	"encoding/json"
 	"errors"
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -79,6 +82,41 @@ func TestManifestCleansCWD(t *testing.T) {
 	m, err := ParseManifest([]byte(strings.Replace(string(data), `src/project"`, `src//project/."`, 1)))
 	if err != nil || m.CWD != "/Users/example/src/project" {
 		t.Fatalf("%q %v", m.CWD, err)
+	}
+}
+
+func TestManifestLock(t *testing.T) {
+	for _, lock := range []string{"a", "0", "a.b-c_d", strings.Repeat("a", 63)} {
+		path := editedManifest(t, func(f map[string]any) { f["lock"], f["lock_owner"] = lock, "session 1" })
+		data, _ := os.ReadFile(path)
+		if _, err := ParseManifest(data); err != nil {
+			t.Errorf("%q: %v", lock, err)
+		}
+	}
+	for _, lock := range []any{"", "A B", "A", "-a", "a/b", "a\n", strings.Repeat("a", 64), nil, 1} {
+		path := editedManifest(t, func(f map[string]any) { f["lock"], f["lock_owner"] = lock, "session 1" })
+		data, _ := os.ReadFile(path)
+		if _, err := ParseManifest(data); code(t, err) != protocol.ManifestRejected {
+			t.Errorf("accepted lock %v", lock)
+		}
+	}
+	for _, label := range []string{"windroc.lock", "windroc.other", "windroc.egress.contract", "ensemble.lock"} {
+		path := editedManifest(t, func(f map[string]any) { f["labels"] = map[string]string{label: "x"} })
+		data, _ := os.ReadFile(path)
+		if _, err := ParseManifest(data); code(t, err) != protocol.ManifestRejected {
+			t.Errorf("accepted reserved label %q", label)
+		}
+	}
+	for name, edit := range map[string]func(map[string]any){
+		"missing owner": func(f map[string]any) { f["lock"] = "x" },
+		"orphan owner":  func(f map[string]any) { f["lock_owner"] = "session" },
+		"empty owner":   func(f map[string]any) { f["lock"], f["lock_owner"] = "x", "" },
+		"control owner": func(f map[string]any) { f["lock"], f["lock_owner"] = "x", "a\n" },
+	} {
+		data, _ := os.ReadFile(editedManifest(t, edit))
+		if _, err := ParseManifest(data); code(t, err) != protocol.ManifestRejected {
+			t.Errorf("accepted %s", name)
+		}
 	}
 }
 
@@ -187,5 +225,224 @@ func TestManifestClaudeAccount(t *testing.T) {
 		if want := map[bool]string{true: "claude_account requires client claude", false: "invalid claude_account"}[name == "codex" || name == "opencode"]; !strings.Contains(err.Error(), want) {
 			t.Fatalf("%s: %v", name, err)
 		}
+	}
+}
+
+func withSecrets(secrets any) func(map[string]any) {
+	return func(f map[string]any) { f["secrets"] = secrets }
+}
+
+func secret(item, file string) map[string]any { return map[string]any{"item": item, "file": file} }
+
+func TestValidEnvName(t *testing.T) {
+	for _, name := range []string{"dummy", "a", "0", "a.b-c_d", strings.Repeat("a", 64)} {
+		if !ValidEnvName(name) || !ValidEnvItem("ensemble-env/"+name) {
+			t.Errorf("%q rejected", name)
+		}
+	}
+	for _, name := range []string{"", "Dummy", ".a", "-a", "_a", "a/b", "a b", "a\n", strings.Repeat("a", 65), "é"} {
+		if ValidEnvName(name) || ValidEnvItem("ensemble-env/"+name) {
+			t.Errorf("%q accepted", name)
+		}
+	}
+	for _, item := range []string{"dummy", "ensemble-env", "ensemble-env/", "ensemble-bot", "ensemble-claude/default", "other/dummy", "ensemble-env//dummy"} {
+		if ValidEnvItem(item) {
+			t.Errorf("item %q accepted", item)
+		}
+	}
+}
+
+func TestParseManifestSecrets(t *testing.T) {
+	parse := func(edit func(map[string]any)) (Manifest, error) {
+		data, err := os.ReadFile(editedManifest(t, edit))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ParseManifest(data)
+	}
+	if m, err := parse(nil); err != nil || m.Secrets != nil {
+		t.Fatalf("absent: %+v %v", m.Secrets, err)
+	}
+	if m, err := parse(withSecrets([]any{})); err != nil || len(m.Secrets) != 0 {
+		t.Fatalf("empty: %+v %v", m.Secrets, err)
+	}
+	two := []any{secret("ensemble-env/dummy", "dummy.txt"), secret("ensemble-env/dummy", "copy of dummy")}
+	if m, err := parse(withSecrets(two)); err != nil || !slices.Equal(m.Secrets, []Secret{{"ensemble-env/dummy", "dummy.txt"}, {"ensemble-env/dummy", "copy of dummy"}}) {
+		t.Fatalf("two: %+v %v", m.Secrets, err)
+	}
+	many := func(n int) []any {
+		var list []any
+		for i := range n {
+			list = append(list, secret("ensemble-env/s"+strconv.Itoa(i), "f"+strconv.Itoa(i)))
+		}
+		return list
+	}
+	if m, err := parse(withSecrets(many(maxSecrets))); err != nil || len(m.Secrets) != maxSecrets {
+		t.Fatalf("%d: %v", maxSecrets, err)
+	}
+	for _, client := range []string{"codex", "opencode"} {
+		edit := func(f map[string]any) {
+			f["client"], f[client+"_dir"], f["secrets"] = client, "/x", []any{secret("ensemble-env/dummy", "dummy.txt")}
+			delete(f, "claude_dir")
+		}
+		if m, err := parse(edit); err != nil || len(m.Secrets) != 1 {
+			t.Fatalf("%s: %v", client, err)
+		}
+	}
+	for name, secrets := range map[string]any{
+		"too many":         many(maxSecrets + 1),
+		"null":             nil,
+		"object":           map[string]any{"item": "ensemble-env/dummy", "file": "dummy.txt"},
+		"entry string":     []any{"ensemble-env/dummy"},
+		"extra field":      []any{map[string]any{"item": "ensemble-env/dummy", "file": "dummy.txt", "mode": "0644"}},
+		"no file":          []any{map[string]any{"item": "ensemble-env/dummy"}},
+		"no item":          []any{map[string]any{"file": "dummy.txt"}},
+		"item number":      []any{map[string]any{"item": 1, "file": "dummy.txt"}},
+		"broker item":      []any{secret("ensemble-bot", "key")},
+		"claude item":      []any{secret("ensemble-claude", "token")},
+		"linear item":      []any{secret("linear.harness_key", "key")},
+		"bare prefix":      []any{secret("ensemble-env/", "x")},
+		"uppercase item":   []any{secret("ensemble-env/Dummy", "x")},
+		"nested item":      []any{secret("ensemble-env/a/b", "x")},
+		"traversal":        []any{secret("ensemble-env/dummy", "../github/token")},
+		"slash":            []any{secret("ensemble-env/dummy", "a/b")},
+		"empty file":       []any{secret("ensemble-env/dummy", "")},
+		"dot":              []any{secret("ensemble-env/dummy", ".")},
+		"dot dot":          []any{secret("ensemble-env/dummy", "..")},
+		"newline":          []any{secret("ensemble-env/dummy", "a\nb")},
+		"delete":           []any{secret("ensemble-env/dummy", "a\x7fb")},
+		"c1 control":       []any{secret("ensemble-env/dummy", "x\u009b31m")},
+		"long file":        []any{secret("ensemble-env/dummy", strings.Repeat("f", 256))},
+		"repeated file":    []any{secret("ensemble-env/a", "same"), secret("ensemble-env/b", "same")},
+		"file number":      []any{map[string]any{"item": "ensemble-env/dummy", "file": 1}},
+		"duplicate object": []any{secret("ensemble-env/dummy", "dummy.txt"), secret("ensemble-env/dummy", "dummy.txt")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if m, err := parse(withSecrets(secrets)); code(t, err) != protocol.ManifestRejected {
+				t.Fatalf("accepted: %+v", m.Secrets)
+			}
+		})
+	}
+	if _, err := parse(withSecrets([]any{secret("ensemble-env/dummy", strings.Repeat("f", 255))})); err != nil {
+		t.Fatalf("255-byte file: %v", err)
+	}
+	doc := `"secrets":[{"item":"ensemble-env/dummy","file":"a","file":"b"}]`
+	valid, err := os.ReadFile(filepath.Join(fixtures.Dir(), "manifest-valid.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseManifest([]byte(strings.Replace(string(valid), `"github": null`, `"github": null, `+doc, 1))); code(t, err) != protocol.ManifestRejected {
+		t.Fatal("duplicate key accepted")
+	}
+}
+
+// withFields is manifest-valid.json with fields set (nil deletes one).
+func withFields(t *testing.T, fields map[string]any) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(fixtures.Dir(), "manifest-valid.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range fields {
+		if v == nil {
+			delete(doc, k)
+			continue
+		}
+		doc[k] = v
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestManifestGateway(t *testing.T) {
+	m, err := ParseManifest(withFields(t, nil))
+	if err != nil || m.Gateway != "workers" {
+		t.Fatalf("absent gateway: %q %v", m.Gateway, err)
+	}
+	for _, ok := range []string{"workers", "mini-op", "a", "a_b-9", strings.Repeat("a", 63)} {
+		if m, err := ParseManifest(withFields(t, map[string]any{"gateway": ok})); err != nil || m.Gateway != ok {
+			t.Errorf("%q: %q %v", ok, m.Gateway, err)
+		}
+	}
+	for _, bad := range []any{"Nope", "", "a.b", "--x", "-a", "a b", "a\nb", strings.Repeat("a", 64), json.RawMessage("null"), 1, []string{"workers"}} {
+		if _, err := ParseManifest(withFields(t, map[string]any{"gateway": bad})); code(t, err) != protocol.ManifestRejected {
+			t.Errorf("gateway %v accepted", bad)
+		}
+	}
+}
+
+func TestValidRef(t *testing.T) {
+	for _, ok := range []string{"main", "release/1.2", "v1.0.0", "feature/x-y_z", "a", "deadbee-x", "abcdef", strings.Repeat("a", 255), "x.locked", "a.b"} {
+		if !ValidRef(ok) {
+			t.Errorf("%q rejected", ok)
+		}
+	}
+	for _, bad := range []string{"", "--upload-pack=x", "-x", "refs/pull/1/head", "refs/heads/main", "HEAD", "deadbeef", "DEADBEE",
+		strings.Repeat("a", 40) + "0", "0123456789abcdef0123456789abcdef01234567", "a b", "a\nb", "a\tb", "a..b", "a.", "x.lock", "a/x.lock/b",
+		"a//b", "/a", "a/", ".a", "a/.b", "a~1", "a^", "a:b", "a?", "a*", "a[", "a\\b", "a@{1}", "ü", strings.Repeat("a", 256)} {
+		if ValidRef(bad) {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+func TestManifestPrefetch(t *testing.T) {
+	m, err := ParseManifest(withFields(t, nil))
+	if err != nil || m.Prefetch != nil {
+		t.Fatalf("absent prefetch: %+v %v", m.Prefetch, err)
+	}
+	m, err = ParseManifest(withFields(t, map[string]any{"prefetch": map[string]any{"repo": "windroc-labs/ensemble", "ref": "release/1.2"}}))
+	if err != nil || m.Prefetch == nil || *m.Prefetch != (Prefetch{Repo: "windroc-labs/ensemble", Ref: "release/1.2"}) {
+		t.Fatalf("%+v %v", m.Prefetch, err)
+	}
+	m, err = ParseManifest(withFields(t, map[string]any{"prefetch": map[string]any{"repo": "o/r.x"}}))
+	if err != nil || m.Prefetch == nil || *m.Prefetch != (Prefetch{Repo: "o/r.x"}) {
+		t.Fatalf("no ref: %+v %v", m.Prefetch, err)
+	}
+	for name, prefetch := range map[string]any{
+		"null":        json.RawMessage("null"),
+		"string":      "o/r",
+		"empty":       map[string]any{},
+		"extra":       map[string]any{"repo": "o/r", "depth": 1},
+		"repo number": map[string]any{"repo": 1},
+		"no owner":    map[string]any{"repo": "r"},
+		"three parts": map[string]any{"repo": "o/r/x"},
+		"dot":         map[string]any{"repo": "o/."},
+		"dotdot":      map[string]any{"repo": "o/.."},
+		"owner dot":   map[string]any{"repo": "./r"},
+		"space":       map[string]any{"repo": "o/r x"},
+		"empty ref":   map[string]any{"repo": "o/r", "ref": ""},
+		"null ref":    map[string]any{"repo": "o/r", "ref": json.RawMessage("null")},
+		"flag ref":    map[string]any{"repo": "o/r", "ref": "--upload-pack=x"},
+		"pull ref":    map[string]any{"repo": "o/r", "ref": "refs/pull/1/head"},
+		"sha ref":     map[string]any{"repo": "o/r", "ref": "0123456789abcdef0123456789abcdef01234567"},
+		"short sha":   map[string]any{"repo": "o/r", "ref": "deadbeef"},
+		"space ref":   map[string]any{"repo": "o/r", "ref": "a b"},
+		"newline ref": map[string]any{"repo": "o/r", "ref": "a\nb"},
+		"dotdot ref":  map[string]any{"repo": "o/r", "ref": "a..b"},
+		"lock ref":    map[string]any{"repo": "o/r", "ref": "x.lock"},
+		"ref number":  map[string]any{"repo": "o/r", "ref": 1},
+	} {
+		if _, err := ParseManifest(withFields(t, map[string]any{"prefetch": prefetch})); code(t, err) != protocol.ManifestRejected {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	// A Linear keychain item is never an environment secret, prefetch or not.
+	_, err = ParseManifest(withFields(t, map[string]any{"prefetch": map[string]any{"repo": "o/r"},
+		"secrets": []any{map[string]any{"item": "linear.harness_key", "file": "linear"}}}))
+	if code(t, err) != protocol.ManifestRejected {
+		t.Fatalf("prefetch with a Linear item: %v", err)
+	}
+	github := map[string]any{"app": "ensemble-bot", "permissions": map[string]any{"contents": "write"}}
+	_, err = ParseManifest(withFields(t, map[string]any{"prefetch": map[string]any{"repo": "o/r"}, "github": github}))
+	if code(t, err) != protocol.ManifestRejected || !strings.Contains(err.Error(), "prefetch requires github null") {
+		t.Fatalf("prefetch with github: %v", err)
 	}
 }

@@ -17,6 +17,7 @@ type Context struct {
 	Login               string `json:"login"`
 	Image               string `json:"image"`
 	Docker              string `json:"docker"`
+	Egress              string `json:"egress"` // the egress proxy's state; "": healthy
 }
 
 type Case struct {

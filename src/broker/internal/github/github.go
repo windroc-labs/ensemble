@@ -40,6 +40,11 @@ var Login = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}$`)
 // fullName is a repository's owner/name.
 var fullName = regexp.MustCompile(`^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$`)
 
+// ValidRepo is whether s is a repository's owner/name that is safe in an API path: GitHub forbids the names . and ..
+func ValidRepo(s string) bool {
+	return fullName.MatchString(s) && !strings.HasSuffix(s, "/.") && !strings.HasSuffix(s, "/..")
+}
+
 // levels are the repository permissions a token may request, each with the levels GitHub accepts for it.
 var levels = map[string][]string{
 	"actions": {"read", "write"}, "administration": {"read", "write"}, "checks": {"read", "write"},
@@ -104,8 +109,9 @@ var (
 	jwtToken    = regexp.MustCompile(`[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*){2,}`)
 )
 
-// redact removes credentials before truncation so no partial token can escape at the boundary.
-func redact(text, bearer string) string {
+// Redact removes every GitHub token, JWT and private key from text, and bearer ("": none) wherever it appears; callers
+// redact before truncating so no partial token can escape at the boundary.
+func Redact(text, bearer string) string {
 	if strings.Contains(text, "PRIVATE KEY") {
 		return "[redacted]"
 	}
@@ -194,13 +200,13 @@ func (c Client) call(ctx context.Context, method, path, bearer string, body any,
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != want {
-		failure := &StatusError{Status: resp.StatusCode, method: method, path: redact(req.URL.EscapedPath(), bearer)}
+		failure := &StatusError{Status: resp.StatusCode, method: method, path: Redact(req.URL.EscapedPath(), bearer)}
 		var answer struct {
 			Message string `json:"message"`
 		}
 		data, readErr := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 		if readErr == nil && len(data) <= maxBody && json.Unmarshal(data, &answer) == nil {
-			message := []rune(redact(answer.Message, bearer))
+			message := []rune(Redact(answer.Message, bearer))
 			failure.message = string(message[:min(len(message), 200)])
 		}
 		return failure
@@ -242,12 +248,25 @@ func (c Client) Installations(ctx context.Context, jwt string) ([]Installation, 
 
 // Issue creates an installation token for every repository of installation id, limited to permissions.
 func (c Client) Issue(ctx context.Context, jwt string, id int64, permissions map[string]string) (string, time.Time, error) {
+	return c.issue(ctx, jwt, id, map[string]any{"permissions": permissions})
+}
+
+// IssueRepo creates an installation token of installation id for repo (owner/name) alone, limited to permissions.
+func (c Client) IssueRepo(ctx context.Context, jwt string, id int64, repo string, permissions map[string]string) (string, time.Time, error) {
+	if !ValidRepo(repo) {
+		return "", time.Time{}, fmt.Errorf("invalid repository %q", repo)
+	}
+	_, name, _ := strings.Cut(repo, "/")
+	return c.issue(ctx, jwt, id, map[string]any{"permissions": permissions, "repositories": []string{name}})
+}
+
+func (c Client) issue(ctx context.Context, jwt string, id int64, body map[string]any) (string, time.Time, error) {
 	var got struct {
 		Token     string `json:"token"`
 		ExpiresAt string `json:"expires_at"`
 	}
 	path := fmt.Sprintf("/app/installations/%d/access_tokens", id)
-	if err := c.call(ctx, http.MethodPost, path, jwt, map[string]any{"permissions": permissions}, http.StatusCreated, &got); err != nil {
+	if err := c.call(ctx, http.MethodPost, path, jwt, body, http.StatusCreated, &got); err != nil {
 		return "", time.Time{}, err
 	}
 	expires, err := time.Parse(time.RFC3339, got.ExpiresAt)
@@ -255,6 +274,66 @@ func (c Client) Issue(ctx context.Context, jwt string, id int64, permissions map
 		return "", time.Time{}, errors.New("GitHub answered a token without a token or expiry")
 	}
 	return got.Token, expires.UTC(), nil
+}
+
+// RepoInstallation is the App's installation on repo (owner/name); a StatusError 404 means it is not installed there.
+func (c Client) RepoInstallation(ctx context.Context, jwt, repo string) (Installation, error) {
+	if !ValidRepo(repo) {
+		return Installation{}, fmt.Errorf("invalid repository %q", repo)
+	}
+	var got struct {
+		ID      int64 `json:"id"`
+		Account struct {
+			Login string `json:"login"`
+		} `json:"account"`
+	}
+	if err := c.call(ctx, http.MethodGet, "/repos/"+repo+"/installation", jwt, nil, http.StatusOK, &got); err != nil {
+		return Installation{}, err
+	}
+	if got.ID <= 0 || !Login.MatchString(got.Account.Login) {
+		return Installation{}, errors.New("GitHub answered an installation without a valid id and account login")
+	}
+	return Installation{got.ID, got.Account.Login}, nil
+}
+
+// DefaultBranch is repo's default branch, as token sees it.
+func (c Client) DefaultBranch(ctx context.Context, token, repo string) (string, error) {
+	if !ValidRepo(repo) {
+		return "", fmt.Errorf("invalid repository %q", repo)
+	}
+	var got struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	if err := c.call(ctx, http.MethodGet, "/repos/"+repo, token, nil, http.StatusOK, &got); err != nil {
+		return "", err
+	}
+	if got.DefaultBranch == "" {
+		return "", errors.New("GitHub answered no default branch")
+	}
+	return got.DefaultBranch, nil
+}
+
+// RefKind is "branch" when repo has branch ref, else "tag" when it has tag ref, else "". ref must be a branch or tag
+// name the caller checked: it goes into the request path as is.
+func (c Client) RefKind(ctx context.Context, token, repo, ref string) (string, error) {
+	if !ValidRepo(repo) {
+		return "", fmt.Errorf("invalid repository %q", repo)
+	}
+	for _, kind := range []struct{ prefix, name string }{{"heads/", "branch"}, {"tags/", "tag"}} {
+		var got struct {
+			Ref string `json:"ref"`
+		}
+		err := c.call(ctx, http.MethodGet, "/repos/"+repo+"/git/ref/"+kind.prefix+ref, token, nil, http.StatusOK, &got)
+		var se *StatusError
+		switch {
+		case errors.As(err, &se) && se.Status == http.StatusNotFound:
+		case err != nil:
+			return "", err
+		case got.Ref == "refs/"+kind.prefix+ref:
+			return kind.name, nil
+		}
+	}
+	return "", nil
 }
 
 // Repositories is what installation token reaches: its installation's repository_selection and every repository's
@@ -292,12 +371,15 @@ func (c Client) Repositories(ctx context.Context, token string) (string, []strin
 	return "", nil, fmt.Errorf("GitHub listed more than %d repositories", maxPages*perPage)
 }
 
-// Revoke invalidates token; 401 and 404 mean it is already invalid.
+// ErrAlreadyInvalid is Revoke's answer for a token GitHub no longer accepts: as good as revoked.
+var ErrAlreadyInvalid = errors.New("GitHub token already invalid")
+
+// Revoke invalidates token; 401 and 404 mean it is already invalid (ErrAlreadyInvalid).
 func (c Client) Revoke(ctx context.Context, token string) error {
 	err := c.call(ctx, http.MethodDelete, "/installation/token", token, nil, http.StatusNoContent, nil)
 	var se *StatusError
 	if errors.As(err, &se) && (se.Status == http.StatusUnauthorized || se.Status == http.StatusNotFound) {
-		return nil
+		return ErrAlreadyInvalid
 	}
 	return err
 }

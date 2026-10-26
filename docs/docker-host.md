@@ -16,34 +16,102 @@ the installed ensemble plugin directory.
 
 Needs Docker Desktop (running) and `gh` (logged in).
 
-`scripts/install.sh` installs and starts Docker Desktop.
+`scripts/install.sh --docker` installs and starts Docker Desktop and the [egress proxy](#egress-proxy).
 
-**Rosetta** stays off and `scripts/install.sh` never installs it: the worker image is arm64. For an amd64-only base image in
-your Dockerfile, run `softwareupdate --install-rosetta`, then turn on Docker Desktop › Settings › General › **Use Rosetta
-for x86_64/amd64 emulation on Apple Silicon**. Rosetta cannot be uninstalled, so `scripts/install-cleanup.sh` cannot
-undo it.
+**First start**: when `scripts/install.sh` installed Docker Desktop, it accepts the license and runs the privileged
+setup through Docker Desktop's own `install --accept-license`, then runs `open -a Docker` and waits up to 5 minutes
+for the engine. Before that start it presets Rosetta off and the onboarding done in Docker Desktop's
+`~/Library/Group Containers/group.com.docker/settings-store.json`, keeping any setting already there, so no Rosetta
+prompt or "Welcome to Docker" sign-in window shows. macOS 27 may deny a shell access to that Group Container: then
+install.sh prints `Docker Desktop presets not written (Rosetta off, onboarding done): …` and goes on without them,
+and Docker Desktop shows its Welcome window on first start (Skip). Either way it may open its Containers window,
+which you can close.
+
+**Rosetta**: `scripts/install.sh` presets it off where it can ([First start](#install)) and never installs it: the
+worker image is arm64. For an amd64-only base image in your Dockerfile, run `softwareupdate --install-rosetta`, then
+turn on Docker Desktop › Settings › General › **Use Rosetta for x86_64/amd64 emulation on Apple Silicon**. Rosetta
+cannot be uninstalled, so `scripts/install-cleanup.sh` cannot undo it.
 
 ```sh
 sh "$PKG/src/broker/install.sh"
 ```
 
 It downloads the broker asset of the plugin's version, installs it root-owned (`sudo` asks once) only after
-`gh attestation verify` proves the ensemble release workflow built it from that version's tag, and seeds
+`gh attestation verify` proves the ensemble release workflow built it from that version's tag and the asset speaks the
+plugin's broker protocol (a plugin ahead of its release, such as `main` after a protocol change, is refused: update the
+plugin to that release, or use `--build`), and seeds
 `~/.ensemble/docker/worker/Dockerfile` (your image, edit freely) only if `~/.ensemble/docker/worker` does not exist.
 The asset appears a few minutes after a Release is published; until then it exits non-zero: retry. `--build`
 instead builds and ad-hoc signs it locally with the hardened runtime (needs Go, `brew install go`, and the Xcode
 command line tools).
 
-To upgrade, rerun it (your Dockerfile is never overwritten), then [log in](#log-in) again. Claude Code upgrades with
-the image. The image pins `gh`, Codex and OpenCode; rebuild an image whose client is below the broker's minimum version.
-A worker runs only that Codex, `/opt/ensemble/bin/codex`, first on `PATH`: a Codex your Dockerfile installs is never run,
-so drop it to shrink the image (a Dockerfile seeded before this change has `@openai/codex` in its `npm install -g` line).
+To upgrade, rerun it (your Dockerfile is never overwritten), then [log in](#log-in) again. The image pins `gh`, and
+Claude Code, Codex and OpenCode each at its npm `latest` release when the image was built; the broker rebuilds it when
+one moves ([Client releases](#client-releases)). A worker runs only those clients, `/opt/ensemble/bin/claude`, `codex`
+and `opencode`, first on `PATH`: a Claude Code or Codex your Dockerfile installs is never run, so drop it to shrink the
+image (a Dockerfile seeded before this change has `@anthropic-ai/claude-code` or `@openai/codex` in an `npm install -g`
+line).
+
+### Egress proxy
+
+Selecting Docker in `scripts/install.sh` also fetches private `windroc/egress-proxy` using your logged-in `gh`
+access, pinned to commit `9ed47580dc9eb4c1fe794d12e54a8f2d3f258831` (label contract 1). It installs under
+`~/.egress/versions/<commit>`, runs that version's `start.sh`, and waits up to 120 seconds for
+`egress-proxy` to become healthy. `~/.egress/current` points to the installed version. It does not follow
+a branch or tag. No Docker selection means no proxy installation.
+
+The installer creates `~/.egress/config.local.yaml` only when absent, with just `workers` in denylist mode;
+an existing config is kept byte for byte. A config symlink is preserved and rejected: the proxy mounts
+its containing directory, so host symlink targets may not resolve inside the container. Use a regular file. Every rerun runs the pinned `start.sh` again, which applies a new or changed config and
+leaves the proxy running when nothing changed; the checkout and config are kept.
+The proxy is shared with other caller networks: ensemble cleanup keeps `~/.egress`. If cleanup also removes
+Docker Desktop, the proxy stops and its Docker state may be removed; reinstall Docker before using it again.
+The pinned [egress-proxy README](https://github.com/windroc/egress-proxy/blob/9ed47580dc9eb4c1fe794d12e54a8f2d3f258831/README.md)
+and `config.example.yaml` in the installed version define the config.
+
+| Operation | Command |
+| --- | --- |
+| Start; apply any config change (a caller section added or removed, a policy edit) | `~/.egress/current/start.sh` (before the first successful install, rerun `scripts/install.sh --docker`) |
+| After the Mac changes networks | `docker restart egress-proxy` |
+| Health in the status column | `docker ps --filter name=egress-proxy` |
+| Detailed health | `docker inspect --format '{{json .State.Health}}' egress-proxy` |
+| Startup/config errors | `docker logs egress-proxy` |
+
+`start.sh` builds locally and renders caller networks from the local config before `docker compose up -d`;
+bare compose lacks those attachments. The proxy uses `restart: unless-stopped`, including after Docker Desktop
+restarts; after a Mac reboot, Docker Desktop must start at login. Any policy restart disconnects in-flight
+connections on **every** caller network. Running workers keep their proxy settings and need no restart.
+An edited config makes health `unhealthy` until `start.sh` applies it. Every `start` needs `egress-proxy` running
+and healthy on the internal caller network it joins (`workers` unless its manifest names another `gateway`):
+otherwise, before any credential or container, it fails `egress_unavailable` (exit 17), naming the proxy, the
+caller network and `~/.egress/current/start.sh`, and never falls back to `bridge`. Fix the
+config/startup error, wait for healthy, then start, restart or resume again.
+
+New workers join only the internal network advertised by their manifest's `gateway` label key, by default `workers`
+(`egress-workers` in contract 1).
+Both cases of `HTTP_PROXY` and `HTTPS_PROXY` point to the label's proxy (`http://egress-proxy-workers:4750`), and
+`NO_PROXY`/`no_proxy` list only container loopback (`localhost,127.0.0.1,::1`): all other traffic, `host.docker.internal`
+and LAN addresses included, goes through the proxy's `workers` policy. The proxy allows public destinations and denies private
+ranges, the Mac and LAN, including `host.docker.internal`, unless a specific `host:port` exception applies.
+Without the proxy there is no worker egress. Tools that ignore proxy variables cannot reach external services
+(including direct SSH, raw TCP/UDP and external DNS). Same-network containers can reach each other directly.
+
+The proxy cannot discover the Mac's public IPv4 address or global IPv6 LAN prefix: add those to `deny_ranges`
+in the local config. Restart after changing Wi-Fi or another host network. The policy's limits and defaults
+are in the pinned README. Image builds still use their existing network and can reach the Mac and LAN.
+
+A start manifest's optional `gateway` names the caller network to join: a key the proxy lists in its
+`windroc.egress.networks` label, whose network and proxy URL are its `windroc.egress.network.<key>.name` and
+`.proxy` labels. Keys match `[a-z0-9][a-z0-9_-]{0,62}`; without `gateway` a start joins `workers`. A key the proxy
+does not list, or lists without a valid internal network it is attached to, fails `egress_unavailable` naming the
+proxy and the key, never `busy`.
 
 ## Log in
 
 After every install or reinstall, run all three logins: `login claude`, `login github ensemble-bot` and
 `login codex` ([Codex](#codex)), plus `login claude <name>` for each other registered
-[Claude account](#claude-accounts) and `login opencode <name>` for each configured OpenCode provider. A reinstalled broker cannot read the old items without asking; `start` never asks and instead names the login to rerun. Each login asks its terminal questions first, without
+[Claude account](#claude-accounts), `login opencode <name>` for each configured OpenCode provider and
+`login env <name>` for each [environment secret](#environment-secrets). A reinstalled broker cannot read the old items without asking; `start` never asks and instead names the login to rerun. Each login asks its terminal questions first, without
 echo:
 
 | Login | Terminal | macOS dialog, at most | Click |
@@ -52,7 +120,8 @@ echo:
 | `login github ensemble-bot [--key-file <pem> --app-id <ID>]` | the login keychain password, when a step is not yet in place | with `--key-file`, none; else one change-access dialog (Deny / Allow), after the password | Allow |
 | `login codex` | the login keychain password, when a step is not yet in place, before the browser opens | one change-access dialog (Deny / Allow), after the password | Allow |
 | `login opencode <name>` | the provider's API key; the login keychain password only when the item's access needs a change | at most one change-access dialog (Deny / Allow), after the password | Allow |
-| `start` | none | none: a token or key it cannot read without one names unlocking the login keychain or the login to run (`keychain_failed` for an OpenCode key; `login_required` for other clients) | |
+| `login env <name>` | the value, hidden, unless stdin is a pipe or file; the login keychain password only when the item's access needs a change, from the terminal | at most one change-access dialog (Deny / Allow), after the password | Allow |
+| `start` | none | none: a token or key it cannot read without one names unlocking the login keychain or the login to run (`keychain_failed` for an OpenCode key or an environment secret needing approval; `login_required` for other clients and a missing environment secret) | |
 
 What each login hands a container: [Credentials › Who logs in](credentials.md#who-logs-in).
 
@@ -119,14 +188,40 @@ both and writes the App's slug to `github.app`.
 "$B" build --ensemble "$PKG"              # Docker's progress on stderr, then {"image":"ensemble-worker:<key>","digest":"sha256:…","rebuilt":true}
 "$B" build --ensemble "$PKG"              # the same, "rebuilt":false
 "$B" build --ensemble "$PKG" --max-age 0  # rebuild now
+"$B" build --ensemble "$PKG" --base-image dummy-env:test --image-plugin dummy-plugin  # see Base images
 ```
 
-A changed Dockerfile or ensemble version gives a new key. No build log shows a secret. Rebuilds skip Docker's cache,
-so they install npm's latest Claude Code. `--max-age N` rebuilds an image N or more seconds old under the same key (a
-start passes 604800, 7 days); if that rebuild fails (e.g. offline) it keeps the image, printing `ensemble-broker: kept
-<image>: refreshing it failed: <reason>`, except `--max-age 0`, which fails.
+The full form is `build --ensemble DIR [--base-image IMAGE] [--plugin SOURCE]... [--image-plugin NAME]... [--max-age
+SECONDS]`, in that order.
 
-After a rebuild, `build` removes unused older images, keeping those used by containers or recent builds.
+A changed Dockerfile or ensemble version gives a new key. No build log shows a secret. Rebuilds skip Docker's cache.
+A build that must rebuild first looks up each client's npm `latest` and installs exactly those versions, recorded in
+the image's `ensemble.claude-version`, `ensemble.codex-version` and `ensemble.opencode-version` labels; if the lookup
+fails it fails `build_failed`. A build that finds a current image returns it at once, with no lookup. `--max-age N`
+rebuilds an image N or more seconds old under the same key (starts pass none); if that rebuild fails (e.g. offline) it
+keeps the image, printing `ensemble-broker: kept <image>: refreshing it failed: <reason>`, except `--max-age 0`, which
+fails.
+
+After a rebuild, and after every `check-clients`, the broker removes unused older images, keeping those used by
+containers, by a build in the last hour, or by a recorded variant a build used in the last 7 days.
+
+### Client releases
+
+Starts never update a client and never wait for a rebuild. Every successful `build` records its inputs in
+`~/.ensemble/docker/images/<key>.json` and, when the last check is an hour old or more (or none ran), starts a
+detached `ensemble-broker check-clients` (log: `~/.ensemble/docker/clients-check.log`; past 1 MiB a spawn moves it to
+`clients-check.log.1`). It looks up the three clients' npm `latest` releases and rebuilds, under the same key, every
+variant a build used in the last 7 days whose labels
+differ (a newer release, or a `latest` moved back); the first start after it finishes runs the new image. Running workers keep
+theirs. A host that runs no build runs no check: run `"$B" check-clients` by hand to check now (it prints
+`{"latest":{"claude":…,"codex":…,"opencode":…},"rebuilt":[…]}`, or `{"rebuilt":[]}` while another check runs, and
+fails `build_failed`, exit 8, on any failure).
+
+While the registry is unreachable or a rebuild fails, starts use the current image; the next `build` prints
+`ensemble-broker: client check failed: <reason>; starts use the current image` once per distinct failure.
+Trust: the image adopts each client's `latest` within a check, trusting registry.npmjs.org over TLS and its
+integrity hashes; Codex installs without lifecycle scripts, Claude Code runs only its own postinstall. An OpenCode
+`latest` outside 1.x is refused (the session supports only 1.x).
 
 ### Plugins
 
@@ -186,12 +281,49 @@ configured commit cannot be fetched, the build fails instead of falling back to 
 
 Claude loads its installation through `/opt/ensemble/plugins/<name>`, listed in `CLAUDE_CODE_PLUGIN_DIRS`, with
 `/<name>:` commands. OpenCode's container config points `skills.paths` at `/opt/ensemble/plugins`: it discovers the
-same original `skills/*/SKILL.md` files and keeps their relative references. Codex loads its own native installation. Image plugin files are root-owned and read-only for `agent`.
+same original `skills/*/SKILL.md` files and keeps their relative references. Codex loads its own native installation. Source plugin files are root-owned and read-only for `agent`.
 
 Invalid sources and duplicate plugin names fail before Docker; marketplace, installation or metadata failures
 fail the image build. Selecting a plugin trusts its code, hooks and servers beside the container's credentials.
 `scripts/install.sh --docker` installs ensemble on the host and leaves updraft installation to the image;
 `--no-docker` also installs updraft for the selected host Claude/Codex clients.
+A base image can also carry plugins of its own: [Base images](#base-images).
+
+### Base images
+
+`--base-image IMAGE` takes a local image tag or ID as stage 1 in place of `~/.ensemble/docker/worker`; the result is
+still `ensemble-worker:<key>`. The broker never pulls or rebuilds it: an image absent locally fails the build naming
+it. The key covers the base image's local ID, so rebuilding the base image gives a new key and the next build
+rebuilds the variant; the same ID under two tags shares one variant. A [client release](#client-releases) rebuilds
+only the ensemble layer, which carries all three clients, so a base image's own Claude Code is never run; updating the
+base image's plugins is yours. The broker tags the base image as
+`ensemble-user:<key>`, so removing older images can delete a base image that has no tag of its own once no variant
+or container uses it: tag your base images.
+
+Before building, the broker checks the base image, offline and unprivileged, and fails with `build_failed` naming
+each missing item:
+
+| Requirement | Why |
+|---|---|
+| `apt-get`, `dpkg` (Debian) | the ensemble layer installs tini, python3, python3-venv, curl, ripgrep and gh |
+| `node`, `npm` | the ensemble layer installs Claude Code, Codex and OpenCode |
+| `tmux`, `git` | sessions run them |
+| a non-root user `agent` | sessions run as it; the broker reads its UID and GID from the image (1000 works) |
+
+Commands must be on `/home/agent/.npm-global/bin:/usr/local/bin:/usr/bin:/bin`, the container's `PATH` less
+`/opt/ensemble/bin`, as `agent` finds them. python3 is not required. A label starting with `windroc.` or `ensemble.`
+also fails the build, naming it: those are the broker's.
+
+`--image-plugin NAME` adds a plugin the base image (or `~/.ensemble/docker/worker`) already holds in
+`/opt/windroc/plugins/NAME/`, on top of the `--plugin` sources: its `.claude-plugin/plugin.json` must have `"name":
+"NAME"` and `agent` must be able to read every file in the directory. Claude Code loads it as `/NAME:` through
+`CLAUDE_CODE_PLUGIN_DIRS`, after the source plugins; Codex and OpenCode do not load it. A plugin directory that is
+missing, unreadable by `agent`, or whose `plugin.json` names another plugin fails the build naming the plugin; a
+name used twice, by either option, fails before Docker. Plugin names are part of the key.
+
+The base image is trusted like `~/.ensemble/docker/worker`: the variant inherits its environment, `ONBUILD`
+triggers and binaries, and sessions run in it with their credentials. The checks verify its shape, not its
+contents.
 
 ## Start
 
@@ -207,11 +339,78 @@ EOF
 
 It prints the container name (`C` below) and client versions.
 
+## Environment secrets
+
+Named values a container gets by reference, such as a password, an API key or an ssh private key. Import each once
+per broker install:
+
+```sh
+"$B" login env dummy                      # type or paste the value; nothing echoes
+"$B" login env mini-ssh < ~/.ssh/id_mini  # a pipe or file: stored verbatim, newlines included
+```
+
+It saves the value, 1 to 16384 bytes, in broker-only item `ensemble-env/<name>` / `<name>`, replacing an earlier one.
+Names match `[a-z0-9][a-z0-9._-]{0,63}`. With a pipe or file on stdin, the keychain password, when needed, is read
+from the terminal. The value never goes on a command line. Pipe a long value: the terminal's line mode limits a
+typed line (1024 bytes on macOS).
+
+A start manifest lists the secrets it wants, at most 16:
+
+```json
+"secrets": [{"item": "ensemble-env/dummy", "file": "dummy.txt"}]
+```
+
+`item` must be an `ensemble-env/<name>` reference; any other keychain service, the broker's own and Linear's
+included, is `manifest_rejected`. `file` is one name of at most 255 bytes: no `/`, no control character, not `.`
+or `..`, and not repeated in the list. The broker checks both itself whatever sent the manifest. It reads each
+item at `start` only, after the manifest checks and before any container exists, so a missing or unreadable item
+refuses the start, naming it and the login to run. It then writes each value to
+`/run/ensemble/secrets/env/<file>` in the container's secrets tmpfs, 0400, owner `agent`, through `docker exec`
+stdin: never in the container's env, arguments or image. The copy goes with the container. Who can read the item
+and the copy, and how to revoke: [Credentials › Environment secrets](credentials.md#environment-secrets).
+
+## Prefetch
+
+A start manifest's optional `prefetch` clones a GitHub repo into a new workspace before the container starts:
+
+```json
+"prefetch": {"repo": "acme/app", "ref": "release/1.2"}
+```
+
+`repo` is `owner/name`; `ref` is a branch or tag name, or absent for the default branch. A ref must match
+`[A-Za-z0-9._/-]`, at most 255 bytes, and is never `HEAD`, a full ref (`refs/...`, `refs/pull/...` included), something
+that starts with `-`, 7 to 64 hex digits (a commit SHA), or a name git refuses (`..`, a trailing `.`, an empty
+component, a component starting with `.` or ending in `.lock`): the same rule as the router's `Ref:` check. The
+broker checks both before any git or GitHub call (`manifest_rejected`). A manifest with `prefetch` must have
+`"github": null`: the container gets no GitHub token, and the clone's `.git/config` holds none either.
+
+Only a start that creates the workspace volume prefetches; a restart or resume into an existing workspace does not.
+After the volume's chown and before the [lock](#broker-locks), the broker:
+
+1. finds the App's installation on the repo: not installed is `github_failed`;
+2. issues a token of that installation for this one repo, `contents: read` only, and keeps it in the container's
+   `ensemble-tokens` record while in use;
+3. resolves the ref with that token, a branch first, then a tag (neither: `manifest_rejected`);
+4. runs a throwaway helper, `ensemble-prefetch-<hex>`: the newest default worker image (a build without a base image;
+   none: `start_failed` naming `ensemble-broker build`), `--pull never`, on the proxy's `workers` network whatever
+   `gateway` is, as the run image's `agent`, the workspace at cwd, a tmpfs `HOME`. The token reaches it on stdin only,
+   never env or arguments; git gets it through a command-line credential helper with repo hooks off and runs
+   `git clone --depth 1 --branch <ref>` into cwd. A helper failure is `start_failed`, its cause scrubbed of the token;
+5. revokes the token once the helper exits, success or not; an unconfirmed revocation goes to the backlog.
+
+`broker.jsonl` records the token's issue (with the one repository it reaches) and revocation, never its value. If the
+start then fails for any reason, `busy` included, the broker removes the workspace volume it created, so a retry
+prefetches again. None of these errors is `busy`.
+
 ## What a container gets
 
-- User `agent`, all capabilities dropped, `no-new-privileges`, bridge network; no Docker socket.
+- User `agent`, all capabilities dropped, `no-new-privileges`; no Docker socket.
+- Only the manifest's caller network (`gateway`, by default the proxy's `workers`), with its proxy variables
+  ([Egress proxy](#egress-proxy)).
+- With [`prefetch`](#prefetch), the repo at its ref in the workspace and no GitHub token.
 - A workspace volume at cwd; Claude and OpenCode have their own client-state bind, Codex only its session history.
-- Credentials on tmpfs, readable by the container's processes ([Credentials](credentials.md)).
+- Credentials on tmpfs, readable by the container's processes ([Credentials](credentials.md)); each listed
+  [environment secret](#environment-secrets) at `/run/ensemble/secrets/env/<file>`.
 - Tools from your `~/.ensemble/docker/worker/Dockerfile`, plus ensemble, clients, plugins and credential wrappers.
 - Each checkout runs its own branch's `.githooks/` through `core.hooksPath = .githooks`; a checkout without that directory runs none.
 - With GitHub configured, commits use the App's bot identity.
@@ -227,7 +426,18 @@ It prints the container name (`C` below) and client versions.
 
 ## Audit log
 
-Every `start`, `refresh` and `close` appends to `~/Library/Logs/ensemble/broker.jsonl`, recording credentials issued, renewed, withdrawn or revoked, never a token or key. Past 10 MiB it rotates to `broker.jsonl.1`. An unwritable log may lose records. OpenCode provider keys have no audit line. No container mounts it.
+Every `start`, `refresh` and `close` appends to `~/Library/Logs/ensemble/broker.jsonl`, recording credentials issued, renewed, withdrawn or revoked, never a token or key. Past 10 MiB it rotates to `broker.jsonl.1`. An unwritable log may lose records. OpenCode provider keys have no audit line. Each environment secret a start writes is an `env-secret` credential naming its `item`, never its value: `issued` at start, `withdrawn` when close or a failed start removes the container. No container mounts it.
+
+Audit persistence failure adds `audit_warning: "audit_write_failed"` to the broker's JSON
+response, alongside the original success fields or error envelope. The operation's exit code,
+result and cleanup details still apply: do not repeat a successful start because its audit
+write failed. The host logs a fixed warning; interactive maintenance also writes
+`credential_audit_warning` to the session event file. Audit records do not replace credential
+recovery storage.
+
+`ensemble-broker status` only reads credential status and the stored revocation backlog; it
+emits no audit. `ensemble-broker status --cleanup` explicitly retries that backlog and audits
+resolved entries, preserving the former status behavior. See [credential status](credentials.md).
 
 ```sh
 jq 'select(.session=="NAME")' ~/Library/Logs/ensemble/broker.jsonl
@@ -316,7 +526,7 @@ Install or upgrade the broker first ([Install](#install)). `<version>` is an exa
 | Browser login, as yourself | `/usr/local/libexec/ensemble/ensemble-broker login codex` |
 | Inspect | `/usr/local/libexec/ensemble/ensemble-broker status` |
 
-Each start, restart or resume selects the latest supported stable container Codex. The broker stages the integrity-checked platform package's complete vendor tree, including `codex-code-mode-host`, in the executable runtime tmpfs and publishes it with one directory rename. Before injecting credentials it verifies the version and starts the companion with `--help`; the image build checks its npm installation the same way. Lookup, incomplete packages, installation or probe failures restore and verify the image version. A below-minimum host or image is refused. The host installation is upgraded only by your explicit command.
+A container runs the image's Codex as it is: a start makes no registry lookup and updates nothing ([Client releases](#client-releases)). The image build verifies its version and starts `codex-code-mode-host` with `--help`. A below-minimum host or image is refused. The host installation is upgraded only by your explicit command.
 
 ### Claude accounts
 
@@ -380,14 +590,17 @@ An unregistered account, an account selected for Codex or OpenCode, or a registe
 OpenCode sessions run the host's Ollama models, or a configured provider's ([OpenCode sessions](sessions.md#opencode-sessions)).
 Ollama needs no login; each configured provider's API key comes from the broker ([Log in](#log-in)), which writes it
 to the container's `/run/ensemble/secrets/opencode/<name>.key` at start ([Credentials](credentials.md#who-logs-in)).
-A provider is reached at its `base_url` from the container's bridge network, which Docker Desktop routes through the
-Mac: a LAN address such as `http://10.0.0.5:8080/v1` works as on the Mac, `localhost` is the container itself. The
-first worker to reach a LAN address makes macOS ask **Allow Docker to find devices on local networks?**: allow it (later:
-System Settings › Privacy & Security › Local Network › Docker), or the provider is unreachable. An
-`http://` `base_url` sends the key in plaintext: anyone on the LAN can capture it ([Risks](#risks)). Once, on the Mac:
+A provider is reached through the [proxy](#egress-proxy). Add the `host:port` of each local or LAN provider's
+`base_url` to `networks.workers.exceptions` in `~/.egress/config.local.yaml`, then run `~/.egress/current/start.sh`.
+Use the URL's default port (80 or 443) when omitted. For example, `http://10.0.0.5:8080/v1` needs `10.0.0.5:8080`;
+Ollama needs `host.docker.internal:11434` (or your configured `ollama_port`). `localhost` is the container itself.
+The installer does not add these exceptions. They allow that host and port for **every worker**, including Claude
+and Codex; other ports and LAN destinations remain denied. Host-side `probe-provider` does not use the proxy,
+so it can pass while a worker still lacks its exception. Docker may also need macOS Local Network permission.
+An `http://` `base_url` sends the key in plaintext on the permitted path ([Risks](#risks)). Once, on the Mac:
 
-1. Keep Ollama on `127.0.0.1` (its default; leave `OLLAMA_HOST` unset): the container reaches it through
-   `host.docker.internal` ([Risks](#risks)).
+1. Keep Ollama on `127.0.0.1` (its default; leave `OLLAMA_HOST` unset): add its exception above so the proxy can
+   reach it through `host.docker.internal`.
 2. Set its context length to at least 65536, or tool calls fail: for the Ollama app,
    `launchctl setenv OLLAMA_CONTEXT_LENGTH 65536`, then quit and reopen it; for `ollama serve`, start it with
    `OLLAMA_CONTEXT_LENGTH=65536`. A larger one: set `[session.clients.opencode] ollama_context` to it, or
@@ -418,19 +631,107 @@ SIGTERM and, 60 s later, SIGKILL. From just before the broker's `start` until th
 SIGINT and SIGHUP back (an ignored one stays ignored); on one it removes its container, then the signal acts. Stopped
 later, it leaves its worker running.
 
+**Probes**: each tmux call is one `docker exec`. A running session's handle (the delegate harness's, polling every
+0.5 s) shares one pane probe and one screen capture between its liveness, exit code and screen reads; while the probe
+and screen stay unchanged, the interval doubles from 0.5 s to 3 s, and a change, `send` or key press resets it.
+An idle session costs at most 1 exec per second (about 0.7), a busy one 2 per 0.5 s tick (5 before). A client
+exit or a dialog or usage limit on screen is seen within 3.5 s plus the exec time (0.5 s before); turn ends and other
+hook events arrive through the hook journal, unaffected. That handle's status, liveness and unsized screen may be up
+to 3 s old, but the opening is sent only after a fresh capture shows no dialog; a new handle (another
+`ensemble-session` command) probes at once. Waiting for a killed client checks every 0.1 s, backing off to 1 s.
+
 **Claude settings**: a new start copies the host's model and effort settings, plus its web-search limit. No other host setting, credential, hook, plugin, status line or permission reaches it. `--model`/`--effort` and role config still win; a resume keeps the session's settings.
 
 ### Recovery
 
+- **Host hook failed** (timeout, could not start, callback failure or non-zero exit): the supervisor
+  sends each event, with its ID `<gen>.<seq>`, as one line to a resident `ensemble-session hook --serve DIR`,
+  one process per supervisor, started by its first hook and again by the first after it exits; a
+  callback failure replies `{"ok": false}` (`hook exit 1`), and a call past 60 s kills the process
+  (`hook timeout`). Ordinary client hook calls retain their default exit 0. The `hooks.jsonl` record carries
+  the event; a retry whose event is that file's last record skips the client callback and the journal
+  and reruns only the Host callback with the journaled payload. The supervisor logs the failure in
+  `rejected.jsonl` without advancing the successful sequence. Its `ok: false, retry: true` reply keeps the
+  event at the relay queue's head and retries on the same connection every 10 s until success or session
+  end; later events wait behind it. Success records the sequence, so acknowledged replays do not rerun
+  the hook. Malformed requests, wrong generations and wrong directories remain terminal rejections.
 - **Supervisor or daemon gone** (killed, not a host reboot): the worker's next `attach`, `read`, `send`, `status`,
   `restart` or `close` starts both and replays the queue; an event arrives once, or twice if its hook ran just before
   the kill, never lost. `next-event` restarts nothing: it reads only the events file. Until the daemon is restarted,
   the hook stub gives up on an event after 10 s and it is lost; `status` still shows the worker running, replies still come from
   the transcript.
-- **Older image** after an upgrade or rebuild: the command warns `restart it to upgrade`; restart the worker.
+- **Older image** after an upgrade (a new image key): the command warns `restart it to upgrade`; restart the worker. A
+  [client release](#client-releases) rebuild keeps the key and never warns.
 - **Container gone** (Docker Desktop restart, `docker rm`): the worker shows `dead`; `ensemble-session resume NAME`
   continues the conversation in a new container. Events queued in the old one are lost.
+- **Egress proxy not ready** (`egress_unavailable`): run `~/.egress/current/start.sh`, as the error says (before
+  a first successful install, rerun `scripts/install.sh --docker`), wait for
+  `docker ps --filter name=egress-proxy` to show `(healthy)`, then start, restart or resume again ([Egress proxy](#egress-proxy)).
 - **Codex authentication expired** (`client_auth_expired`): run `/usr/local/libexec/ensemble/ensemble-broker login codex` on the host, then `ensemble-session resume NAME`; native history is kept. Renewal failures (`client_refresh_failed`) retry each minute until expiry, when the generation closes. No run logs in or uses another identity.
+
+## Broker locks
+
+A broker `start` manifest may add `"lock": "dummy-lock", "lock_owner": "worker_1"`.
+Lock names match `[a-z0-9][a-z0-9_.-]{0,62}`; `lock_owner` is nonempty readable text
+(ensemble callers send the session name). Both fields must appear together. The broker
+validates them again and rejects caller labels prefixed with `windroc.` or `ensemble.`
+as `manifest_rejected`.
+
+A holder has `windroc.lock=<lock>` and state **running**, **paused** or **restarting**;
+`windroc.lock.owner` names its owner. Other states release the lock. Stopped containers
+remain in Docker and are never removed to acquire a lock. Every broker-created mutex
+and run container with a lock uses restart policy `no` (`--restart no`).
+
+```mermaid
+flowchart TD
+    P[Configuration checks] --> M[1. Create mutex]
+    M -->|name conflict| T{Older than 120 s?}
+    T -->|no| B[busy: starting]
+    T -->|yes| R[Remove inspected ID; retry once]
+    R -->|conflict again| B
+    R -->|created| H[2. Query holders]
+    M -->|created| H
+    H -->|occupied| O[busy: holder]
+    H -->|free| C[3. Create and start run]
+    C --> Q[4. Recheck other holders]
+    Q -->|another holder| D[Remove own run]
+    D -->|removed| O
+    D -->|failed| E[Error naming own run]
+    Q -->|none| S[Finish preparing run]
+    O --> X[5. Remove own mutex by ID]
+    E --> X
+    S --> X
+    X -->|success only| A[Hand over run]
+```
+Every exit after acquiring a mutex, including errors and cancellation, attempts step 5.
+
+The mutex is a never-started `windroc-lock-<lock>` container on the checked local image
+being started, created with `--pull never --network none --restart no` and labels
+`windroc.lock.mutex=<lock>` and `windroc.lock.since=<host epoch seconds>`. Docker's unique
+container name serializes ordinary starts. On conflict, only a timestamp strictly more
+than 120 seconds old permits removal, using the inspected ID, followed by one create
+retry. Missing or malformed timestamps stay busy. A killed starter can therefore leave
+same-lock starts busy until this expiry; successful cleanup leaves no mutex behind.
+ID-based cleanup protects a later starter's same-name mutex.
+
+The run receives `windroc.lock` and `windroc.lock.owner` at creation. The post-start
+recheck happens before bootstrap, credential injection and handover; it protects against
+overlapping starts after mutex expiry. Both starters may see each other and yield.
+Failure to remove a yielding run is `start_failed`, naming that container; stop it before
+retrying. A mutex cleanup failure also reports an error and rolls back a successful run.
+Claude token and image checks run before step 1, so their refusals retain their configuration
+error codes and are never busy.
+
+Busy is a distinct stderr protocol error (`code: "busy"`, exit 75), with a
+`holder` object containing `container` and `owner`; a mutex conflict reports
+`windroc-lock-<lock>` / `starting`. `ensemble-broker lock-query --lock dummy-lock` only
+reads Docker: it returns `{"holder": {"container": "…", "owner": "…"}}` or
+`{"holder": null}`, creates nothing and takes no lock. It queries run holders, so an
+in-progress start may still have an empty result; `start` always acquires and checks again.
+
+Release a holder with `docker stop <container>` (or close its session). A manual
+`docker start` of a stopped lock container bypasses this acquisition protocol and can
+create concurrent holders; start a fresh container through the broker instead.
 
 ## Workspace volumes
 
@@ -482,17 +783,26 @@ secrets in environments that need it.
 
 ## Live acceptance
 
-`tests/session/live_docker.py` checks the critical path on Docker Desktop, run by hand from
-the repo root with `PYTHONPATH` as in [Tests](tests.md). It needs the broker installed and
+Run `tests/session/live_docker.py` only through mini-op on the test Mac mini, from the repo root with
+`PYTHONPATH` as in [Tests](tests.md). Never run real-machine acceptance on a developer's Mac.
+It needs a healthy [proxy](#egress-proxy), the broker installed and
 logged in ([Install](#install), [Log in](#log-in)), for Codex also `install-codex` and
 `login codex` ([Codex](#codex)), for OpenCode the host's Ollama on `127.0.0.1` with the
 tier model pulled and `OLLAMA_CONTEXT_LENGTH` ≥ 65536, `[session.hosts] default =
 "docker"` and `[delegate.delegates] harness_host = "tmux"` ([Run workers](#run-workers),
 [Role runs](#role-runs)), and an authorized test repo with the App installed.
 
+Run `worker` once per client (Claude, Codex, OpenCode). It verifies the contract labels, proxy health,
+internal `workers` network, the worker's sole network attachment and both cases of proxy variables; public HTTPS
+must pass via the proxy and direct public IP access must fail. It starts temporary empty HTTP listeners on
+the mini's loopback and private LAN IPv4 address, proves each is reachable on the host, then requires a proxy
+407 denial and failed direct access from the worker. It prints no response body. A NAS already refusing the
+mini is not an isolation control. Allow a local-network/firewall prompt for these temporary listeners if needed.
+These proxy checks have not yet been run on the mini; the earlier bridge results do not validate them.
+
 | Command | Checks |
 |---|---|
-| `python3 tests/session/live_docker.py worker --client claude\|codex\|opencode CWD [NAME]`, from a manager session | a second build reuses the image; with no `--host`, the worker runs in a container; its security flags (`--cap-drop ALL`, network `bridge`, no extra hosts) and mounts match the plan, and the [unreachable](credentials.md#what-a-container-cannot-reach) resources stay so; a supervisor killed mid-turn delivers its event once; restart, close then resume, and `docker rm -f` then resume each answer a prompt; every close revokes the generation's GitHub tokens and withdraws its client credential; no revocation stays pending but the removed container's, whose tokens it reports; for OpenCode also: the first turn leaves `~/.ensemble/docker-state/<NAME>/opencode/opencode/opencode.db`, Ollama listens on `127.0.0.1` only (`lsof`), the container holds only GitHub secrets and each configured provider's key (`find /run/ensemble/secrets`), and each resume continues the same OpenCode session |
+| `python3 tests/session/live_docker.py worker --client claude\|codex\|opencode CWD [NAME]`, from a manager session | a second build reuses the image; with no `--host`, the worker runs in a container; its security flags (`--cap-drop ALL`, only the egress proxy's `workers` network, no extra hosts) and mounts match the plan, and the [unreachable](credentials.md#what-a-container-cannot-reach) resources stay so; a supervisor killed mid-turn delivers its event once; restart, close then resume, and `docker rm -f` then resume each answer a prompt; every close revokes the generation's GitHub tokens and withdraws its client credential; no revocation stays pending but the removed container's, whose tokens it reports; for OpenCode also: the first turn leaves `~/.ensemble/docker-state/<NAME>/opencode/opencode/opencode.db`, Ollama listens on `127.0.0.1` only (`lsof`), the container holds only GitHub secrets and each configured provider's key (`find /run/ensemble/secrets`), and each resume continues the same OpenCode session |
 | `python3 tests/session/live_docker.py role --repo OWNER/NAME [--timeout S] [NAME]` | a headless engineer run on the test repo gets one forced token refresh, opens a draft PR as `windroc-bot[bot]` after it, and its close reclaims its credentials |
 | `python3 tests/session/live_docker.py pr URL` | the PR, such as an unattended board run's, was opened as a draft by `windroc-bot[bot]` |
 
@@ -527,11 +837,15 @@ the first failed check. The keychain, Linear preset and board-run checks stay ma
   pauses the board for that client until its reset time, as a forged transcript record can for a TUI run.
 - A harness killed with `kill -9` leaves its headless client running, with its token, until the next Docker start or
   close.
-- Every container, Claude, Codex and OpenCode workers included, reaches through `host.docker.internal` the Mac's services that
-  listen only on `127.0.0.1`: on 2026-10-18 a worker-like container (bridge, `--cap-drop ALL`, no mounts or
-  credentials) got Ollama's `/api/version` while Ollama listened only on `127.0.0.1:11434`. The host side of such a
-  connection belongs to `com.docker.backend`, running as you, so pf cannot tell container traffic apart
-  ([Docker networking](https://docs.docker.com/desktop/features/networking/)); the Mac has no Docker gateway address
-  to listen on instead: docker0 lives inside the VM
-  ([Docker networking how-tos](https://docs.docker.com/desktop/features/networking/networking-how-tos/)). The user
-  accepted this risk on 2026-10-18: no forwarder, firewall or Docker Business.
+- A worker reaches the Mac's services, `127.0.0.1`-only ones included, and the LAN only through the egress proxy's
+  `workers` exceptions, and each exception holds for every worker, an injected agent included: keep the list narrow.
+  Before the egress proxy, on 2026-10-18, a worker-like
+  container (bridge, `--cap-drop ALL`, no mounts or credentials) got Ollama's `/api/version` while Ollama listened only
+  on `127.0.0.1:11434`: the host side of such a connection belongs to `com.docker.backend`, running as you, so pf cannot
+  tell container traffic apart ([Docker networking](https://docs.docker.com/desktop/features/networking/)), and the Mac
+  has no Docker gateway address to listen on instead
+  ([Docker networking how-tos](https://docs.docker.com/desktop/features/networking/networking-how-tos/)). A worker
+  started before the egress proxy keeps that reach until its next start, restart or resume
+  ([Upgrading](upgrading.md#egress-proxy)).
+- A proxy restart breaks connections on every caller network; a bad policy section can make the whole proxy
+  unhealthy and prevent new workers.

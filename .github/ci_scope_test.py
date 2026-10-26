@@ -122,6 +122,8 @@ class Repository(unittest.TestCase):
             (["skills/act-as/SKILL.md"], "pull_request", True),
             (["skills/manage/SKILL.md"], "pull_request", False),
             (["src/ensemble/delegate/team/roles/engineer.md"], "pull_request", True),
+            # Runbook-only PRs keep full scope, so tests/unit/mini_op_runbooks_test.py runs.
+            ([".mini-op/runbooks/test-accounts.md"], "pull_request", True),
             (["README.md", "docs/tests.md"], "push", True),
         ):
             with self.subTest(paths=paths, event=event):
@@ -336,6 +338,7 @@ class Aggregate(unittest.TestCase):
                 "coverage",
                 "integration",
                 "broker",
+                "mini-op",
             )
         }
         result["changes"]["outputs"] = {
@@ -426,6 +429,15 @@ class Aggregate(unittest.TestCase):
             self.assertIn(
                 "broker: expected success, got 'skipped'", scope.gate(needs, "pull_request")
             )
+
+    def test_mini_op_guard_must_succeed_in_every_scope(self):
+        for kwargs in ({}, {"full": False}, {"full": False, "docs": True}, {"event": "push"}):
+            needs = self.needs(**kwargs)
+            event = kwargs.get("event", "pull_request")
+            self.assertEqual(scope.gate(needs, event), [])
+            needs.pop("mini-op")
+            with self.subTest(**kwargs):
+                self.assertIn("mini-op: expected success, got None", scope.gate(needs, event))
 
     def test_cli_gate_uses_environment_and_reports_diagnostics(self):
         for needs, expected in ((self.needs(), 0), (self.needs(full=False), 0), ({}, 1), (None, 1)):

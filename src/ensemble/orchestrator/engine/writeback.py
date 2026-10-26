@@ -349,7 +349,7 @@ def _completion_body(ctx, o):
         url = Path(ctx.document).as_uri() if o.status == OutcomeStatus.DONE else ""
     if o.status == OutcomeStatus.DONE:
         lead, text, state = task.done, o.summary, "in_review"
-        if task.input == "build" and text:
+        if task.input == "build" and text and not task.deliverable:
             text = "Agent report before delivery:\n\n" + "\n".join(
                 f"> {line}" for line in text.splitlines()
             )
@@ -399,6 +399,23 @@ def _post_files(ctx, o, body):
     return body
 
 
+def _report(ctx, body):
+    """The done run's deliverable as the Delegate saved it (`run/out.md`, or the role's document),
+    else None with body noting why.
+    """
+    path = ctx.document or os.path.join(ctx.workdir, "run", "out.md")
+    try:
+        text = _read_file(path, os.path.dirname(path)).decode("utf-8", errors="replace")
+        if not text.strip():
+            raise ValueError("empty")
+    except (OSError, ValueError) as e:
+        return (
+            None,
+            body + f"\n\nCould not post the report `{os.path.basename(path)}`: {one_line(e)}",
+        )
+    return text, body
+
+
 def _attach(ctx, url, title, attached):
     if url not in attached:
         ctx.tracker.link(ctx.issue_id, url, title)
@@ -416,6 +433,9 @@ def _finish(ctx, o, steps=""):
 
     if task.files and o.status != OutcomeStatus.NEEDS_INPUT:
         body = _post_files(ctx, o, body)
+    report = None
+    if task.deliverable and o.status == OutcomeStatus.DONE:
+        report, body = _report(ctx, body)
 
     if (
         task.retitle
@@ -432,6 +452,8 @@ def _finish(ctx, o, steps=""):
     if state == "in_review":
         body += ctx.tracker.notify(issue, ctx.humans)
     if _post(ctx, f"{steps}comment", body):
+        return False
+    if report is not None and _post(ctx, f"{steps}deliverable", report):
         return False
 
     if (
@@ -664,7 +686,11 @@ def bounce(ctx, issue: Issue, invalid: Invalid) -> None:
         text = (
             f"Repo check failed: {reason}. To build it, move {h.source} to "
             f"{tracker.state_name(IssueState.APPROVED)} again with a comment "
-            "`Repo: <owner>/<name>` naming the target repo."
+            + (
+                "`Ref: <branch or tag>` naming the ref."
+                if invalid.line == "Ref"
+                else "`Repo: <owner>/<name>` naming the target repo."
+            )
         ) + (
             f" Or fix {LOCAL}'s [orchestrator.linear.project_repos] entry."
             if invalid.mapped
@@ -683,7 +709,7 @@ def bounce(ctx, issue: Issue, invalid: Invalid) -> None:
             ctx.issue_id,
             say(
                 "Question:",
-                f"repo check failed: {reason}. Fix the description's `Repo:` "
+                f"repo check failed: {reason}. Fix the description's `{invalid.line}:` "
                 f"line, then move this issue back to {tracker.state_name(IssueState.READY)}.",
             )
             + notes,

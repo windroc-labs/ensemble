@@ -1,6 +1,6 @@
 """hosts/docker/supervisor.py: each relay request checked against the shared protocol fixtures, its
-generation, dir and seq, run as the host hook, its reply and rejected line, the dead watch, the
-GitHub token refresher and main's lifecycle on an inherited lock, with fake processes.
+generation, dir and seq, run by the resident hook worker, its reply and rejected line, the dead
+watch, the GitHub token refresher and main's lifecycle on an inherited lock, with fake processes.
 """
 
 import base64
@@ -10,22 +10,98 @@ import io
 import json
 import os
 import signal
+import threading
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest import mock
 
+from ensemble.session.engine.status_log import SessionStatusLog
 from ensemble.session.engine.types import SessionError
-from ensemble.session.hosts.docker import supervisor
+from ensemble.session.hosts.docker import relay, supervisor
 from ensemble.session.hosts.docker.broker import Broker
 from ensemble.session.hosts.docker.supervisor import Supervisor
-from tests.session.case import REPO, Case
-from tests.session.unit.hosts.docker.support import FakeBroker
+from ensemble.session.modes import tui_hook
+from tests.session.case import REPO, SRC, Case
+from tests.session.tui_hook_support import state as hook_state
+from tests.session.tui_hook_support import write_state
+from tests.session.unit.hosts.docker.support import FakeBroker, FakePopen
 from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired
 
 HOOK = "/plugin/bin/ensemble-session"
 GEN = "0123456789abcdef0123456789abcdef"
 FIXTURES = os.path.join(REPO, "src", "broker", "protocol", "docker-relay", "fixtures")
 TUI = "/Users/example/.ensemble/tui/worker_1"
+THREAD = threading.Thread  # MainTest patches threading.Thread
+
+
+class WorkerProc:
+    """A `hook --serve` process: `serve(requests, replies)` in a thread over real pipes; exits 0
+    when serve returns, or as kill() or exit() say.
+    """
+
+    def __init__(self, serve):
+        (requests, self.stdin_fd), (self.stdout_fd, replies) = os.pipe(), os.pipe()
+        self.stdin, self.stdout = os.fdopen(self.stdin_fd, "wb"), os.fdopen(self.stdout_fd, "rb")
+        self.returncode, self.ended, self.lock = None, threading.Event(), threading.Lock()
+        self.replies = replies
+        self.thread = THREAD(target=self.run, args=(serve, requests), daemon=True)
+        self.thread.start()
+
+    def run(self, serve, requests):
+        with os.fdopen(requests, "rb") as stream, os.fdopen(os.dup(self.replies), "wb") as out:
+            if serve is not None:
+                serve(stream, out)
+                self.exit(0)
+            self.ended.wait()
+
+    def exit(self, code):
+        with self.lock:
+            if self.returncode is None:
+                self.returncode = code
+                os.close(self.replies)
+                self.ended.set()
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        if not self.ended.wait(timeout):
+            raise TimeoutExpired("hook", timeout)
+        return self.returncode
+
+    def kill(self):
+        self.exit(-9)
+
+
+class WorkerPopen:
+    """subprocess.Popen for the hook worker, counting launches: each pops the next of `script`, an
+    OSError it raises, "deaf" a process that never reads, else a serve(requests, replies). Without
+    one, a process whose answer(request) gives each reply: True or False replies ok, an int exits
+    with that code unreplied, "hang" never replies.
+    """
+
+    def __init__(self, answer=None, script=()):
+        self.answer, self.script, self.calls, self.procs = answer, list(script), [], []
+
+    def __call__(self, argv, **kw):
+        self.calls.append((argv, kw))
+        found = self.script.pop(0) if self.script else self.serve
+        if isinstance(found, OSError):
+            raise found
+        self.procs.append(WorkerProc(None if found == "deaf" else found))
+        return self.procs[-1]
+
+    def serve(self, requests, replies):
+        for line in requests:
+            proc, outcome = self.procs[-1], self.answer(json.loads(line))
+            if outcome == "hang":
+                proc.ended.wait()
+                return
+            if outcome is not True and outcome is not False:
+                proc.exit(outcome)
+                return
+            replies.write(json.dumps({"ok": outcome}).encode() + b"\n")
+            replies.flush()
 
 
 def request(body=b'{"session_id": "s", "transcript_path": "/x"}', *, label="Stop", **changes):
@@ -48,13 +124,17 @@ class Base(Case):
         open(self.events, "w").close()
         self.ran = []
         self.code = 0
-        self.supervisor = Supervisor(
-            "worker_1", self.state, TUI, self.events, HOOK, generation=GEN, run=self.hook_run
-        )
+        self.supervisor = Supervisor("worker_1", self.state, TUI, self.events, HOOK, generation=GEN)
+        self.workers = self.supervisor.worker.popen = WorkerPopen(self.answer)
+        self.addCleanup(self.end_worker)
 
-    def hook_run(self, argv, **kw):
-        self.ran.append((argv, kw))
-        return SimpleNamespace(returncode=self.code)
+    def answer(self, found):
+        self.ran.append(found)
+        return self.code or True
+
+    def end_worker(self):
+        if self.supervisor.worker.proc is not None:
+            self.supervisor.worker.proc.stdin.close()
 
     def rejected(self):
         try:
@@ -65,6 +145,23 @@ class Base(Case):
 
 
 class RefreshCapabilityTest(Base):
+    def test_audit_warning_is_visible_in_the_session_event_file(self):
+        response = {
+            "container": f"ensemble-worker_1-{GEN}",
+            "github": [],
+            "credential_expires_at": None,
+            "audit_warning": "audit_write_failed",
+        }
+        fake = FakeBroker((0, json.dumps(response), ""))
+        self.supervisor.broker.runner = fake
+        result = self.supervisor.broker.refresh(f"ensemble-worker_1-{GEN}", "/manifest")
+        self.assertEqual(result.github, [])
+        with open(self.events) as stream:
+            event = stream.read()
+        self.assertIn("worker_1 credential_audit_warning audit_write_failed:", event)
+        self.assertIn("Do not repeat a successful start", event)
+        self.assertEqual(len(fake.calls), 1)
+
     def test_only_a_true_capability_enables_refresh(self):
         path = os.path.join(self.state, "host.json")
         self.assertFalse(supervisor.refreshes_client(self.state))
@@ -105,11 +202,12 @@ class HandleTest(Base):
 
     def test_transcript_path_is_dropped_before_the_hook_runs(self):
         self.assertEqual(self.supervisor.handle(request()), {"gen": GEN, "seq": 1, "ok": True})
-        ((argv, kw),) = self.ran
-        self.assertEqual(argv, [HOOK, "hook", TUI, "Stop"])
-        self.assertEqual(json.loads(kw["input"]), {"session_id": "s"})
-        self.assertEqual(kw["timeout"], supervisor.HOOK_WAIT)
-        self.assertEqual(kw["stdout"], kw["stderr"])
+        self.assertEqual(
+            self.ran, [{"label": "Stop", "event": f"{GEN}.1", "payload": {"session_id": "s"}}]
+        )
+        ((argv, kw),) = self.workers.calls
+        self.assertEqual(argv, [HOOK, "hook", "--serve", TUI])
+        self.assertEqual((kw["stdin"], kw["stdout"], kw["stderr"]), (PIPE, PIPE, DEVNULL))
         self.assertEqual(self.rejected(), [])
 
     def test_malformed_lines_are_rejected_unrun_with_no_gen_seq_or_content(self):
@@ -163,14 +261,14 @@ class HandleTest(Base):
         self.assertEqual(len(self.ran), 2)
 
     def test_seq_is_recorded_after_the_hook_runs(self):
-        def run(argv, **kw):
-            self.assertFalse(os.path.exists(self.supervisor.seq_file))
-            return self.hook_run(argv, **kw)
-
-        self.supervisor.run = run
+        seen = []
+        self.workers.answer = lambda _: (
+            seen.append(os.path.exists(self.supervisor.seq_file)) or True
+        )
         self.supervisor.handle(request(seq=4))
         with open(self.supervisor.seq_file) as f:
             self.assertEqual(f.read(), "4")
+        self.assertEqual(seen, [False])
 
     def test_a_missing_or_corrupt_seq_file_counts_as_0(self):
         with open(self.supervisor.seq_file, "w") as f:
@@ -178,26 +276,31 @@ class HandleTest(Base):
         self.supervisor.handle(request(seq=1))
         self.assertEqual(len(self.ran), 1)
 
-    def test_hook_failure_is_not_ok_logged_and_not_replayed(self):
-        self.code = 3
-        for seq, error, reason in (
-            (1, None, "hook exit 3"),
-            (2, OSError(2, "gone"), "hook error"),
-            (3, TimeoutExpired(HOOK, 60), "hook timeout"),
+    def test_hook_failure_is_retried_logged_and_only_success_is_recorded(self):
+        outcomes = iter([3, False, "hang"])
+        self.workers.answer = lambda found: self.ran.append(found) or next(outcomes, True)
+        self.workers.script = [self.workers.serve, OSError(2, "gone"), self.workers.serve]
+        self.supervisor.worker.wait = 0.2
+        for seq, reason in (
+            (1, "hook exit 3"),
+            (2, "hook error"),
+            (3, "hook exit 1"),
+            (4, "hook timeout"),
         ):
             with self.subTest(reason=reason):
-                if error is not None:
-                    self.supervisor.run = mock.Mock(side_effect=error)
                 self.assertEqual(
-                    self.supervisor.handle(request(seq=seq)), {"gen": GEN, "seq": seq, "ok": False}
+                    self.supervisor.handle(request(seq=seq)),
+                    {"gen": GEN, "seq": seq, "ok": False, "retry": True},
                 )
                 self.assertEqual(self.rejected()[-1], {"gen": GEN, "seq": seq, "reason": reason})
-        self.supervisor.run = self.hook_run
-        self.code = 0
-        self.assertEqual(self.supervisor.handle(request(seq=3))["ok"], True)
-        self.assertEqual(len(self.ran), 1)
+                self.assertFalse(os.path.exists(self.supervisor.seq_file))
+        self.assertEqual(len(self.ran), 3)
         self.assertEqual(self.supervisor.handle(request(seq=4))["ok"], True)
-        self.assertEqual(len(self.ran), 2)
+        self.assertEqual(len(self.ran), 4)
+        self.assertEqual(self.supervisor.handle(request(seq=4))["ok"], True)
+        self.assertEqual(len(self.ran), 4)
+        self.assertEqual(self.supervisor.handle(request(seq=5))["ok"], True)
+        self.assertEqual(len(self.ran), 5)
 
     def test_the_rejected_log_stops_at_its_cap(self):
         path = os.path.join(self.state, "rejected.jsonl")
@@ -205,6 +308,188 @@ class HandleTest(Base):
             f.write("x" * supervisor.LOG_MAX)
         self.supervisor.handle(b"bad\n")
         self.assertEqual(os.path.getsize(path), supervisor.LOG_MAX)
+
+
+class HookReplayTest(Base):
+    def pump(self, outcomes):
+        queue = relay.Queue(os.path.join(self.home, "queue"))
+        message = relay.relay_request(request())
+        relay.answer(
+            json.dumps({k: message[k] for k in ("id", "argv", "payload")}).encode() + b"\n",
+            queue,
+            GEN,
+        )
+        attempts, replies = [], []
+        outcomes = list(outcomes)
+
+        def launch(argv, **kw):
+            if isinstance(outcomes[0], OSError):
+                attempts.append(outcomes[0])
+                raise outcomes.pop(0)
+            return WorkerPopen.__call__(self.workers, argv, **kw)
+
+        def answer(_request):
+            outcome = outcomes.pop(0)
+            attempts.append(outcome)
+            if outcome == 0:
+                SessionStatusLog(self.events).write("worker_1", "done")
+            return outcome or True
+
+        def write(line):
+            replies.append(json.dumps(self.supervisor.handle(line)).encode() + b"\n")
+
+        self.workers.answer, self.supervisor.worker.popen = answer, launch
+        reader = mock.Mock()
+        reader.readline.side_effect = lambda _: replies.pop(0) if replies else b""
+        writer = mock.Mock()
+        writer.write.side_effect = write
+        with mock.patch("time.sleep") as sleep:
+
+            def pause(_seconds):
+                self.assertEqual(queue.first(0)[0], 1)
+                if len(attempts) == 3:
+                    reader.readline.side_effect = lambda _: b""
+
+            sleep.side_effect = pause
+            self.supervisor.worker.wait = 0.2
+            relay.pump(queue, reader, writer, idle=0)
+        return queue, attempts
+
+    def test_hook_fails_once_then_delivers_one_manager_event_and_replays_harmlessly(self):
+        queue, attempts = self.pump([3, 0])
+        self.assertEqual(attempts, [3, 0])
+        self.assertIsNone(queue.first(0))
+        restarted = Supervisor("worker_1", self.state, TUI, self.events, HOOK, generation=GEN)
+        restarted.worker.popen = WorkerPopen(self.answer)
+        self.assertTrue(restarted.handle(request())["ok"])
+        self.assertEqual(restarted.worker.popen.calls, [])
+        with open(self.events) as stream:
+            self.assertEqual([line.split()[1:] for line in stream], [["worker_1", "done"]])
+
+    def test_persistent_hook_failures_remain_queued_and_log_each_reason(self):
+        queue, attempts = self.pump([3, OSError(2, "gone"), "hang", 3])
+        self.assertEqual(len(attempts), 4)
+        self.assertEqual(queue.first(0)[0], 1)
+        self.assertFalse(os.path.exists(self.supervisor.seq_file))
+        self.assertEqual(
+            [item["reason"] for item in self.rejected()],
+            ["hook exit 3", "hook error", "hook timeout", "hook exit 3"],
+        )
+        with open(self.events) as stream:
+            self.assertEqual(stream.read(), "")
+
+
+class HookCommandTest(Base):
+    def test_real_callback_failure_retries_then_delivers_once_through_the_cli(self):
+        folder = os.path.join(self.home, "tui")
+        os.mkdir(folder)
+        saved = hook_state(self.home, self.events)
+        saved["words"] = {"Stop": "done"}
+        saved["host_hook"] = {
+            "module": "ensemble.session.hosts.docker.hook",
+            "roots": [],
+            "state": {
+                "docker": "/usr/local/bin/docker",
+                "target": "worker_1",
+                "generation": GEN,
+                "container": f"ensemble-worker_1-{GEN}",
+                "endpoint": "unix:///Users/a/.docker/run/docker.sock",
+            },
+        }
+        write_state(folder, saved)
+        self.supervisor = Supervisor(
+            "worker_1", self.state, folder, self.events, HOOK, generation=GEN
+        )
+        roots = (SRC["session"], SRC["utils"])
+        workers = self.supervisor.worker.popen = WorkerPopen(
+            script=[
+                lambda requests, replies: tui_hook.serve([folder], requests, replies, roots=roots)
+            ]
+        )
+        popen = FakePopen(
+            (b"", b"temporary docker failure", 1),
+            (f"4242 $3 %7 4343\t{saved['sid']}\t{GEN}\n".encode(), b"", 0),
+            (b"", b"", 0),
+        )
+        line = request(argv=["hook", folder, "Stop"])
+        with (
+            mock.patch("pwd.getpwuid", return_value=SimpleNamespace(pw_dir="/Users/a")),
+            mock.patch("subprocess.Popen", popen),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            self.assertEqual(
+                self.supervisor.handle(line), {"gen": GEN, "seq": 1, "ok": False, "retry": True}
+            )
+            self.assertFalse(os.path.exists(self.supervisor.seq_file))
+            self.assertTrue(self.supervisor.handle(line)["ok"])
+            self.assertTrue(self.supervisor.handle(line)["ok"])
+        self.assertEqual([argv for argv, _ in workers.calls], [[HOOK, "hook", "--serve", folder]])
+        self.assertEqual(len(popen.calls), 3)
+        with open(os.path.join(folder, "hooks.jsonl")) as stream:
+            records = [json.loads(line) for line in stream]
+        self.assertEqual([(r["label"], r["event"]) for r in records], [("Stop", f"{GEN}.1")])
+        self.assertEqual(self.rejected()[-1]["reason"], "hook exit 1")
+        with open(os.path.join(folder, "hook.log")) as stream:
+            self.assertIn("temporary docker failure", stream.read())
+        with open(self.events) as stream:
+            self.assertEqual([line.split()[1:] for line in stream], [["worker_1", "done"]])
+
+
+class HookWorkerTest(Base):
+    """One resident `hook --serve` process for every call, bounded by its wait, replaced once it
+    ends.
+    """
+
+    def call(self, n=1, body=None):
+        return self.supervisor.worker.call("Stop", {"n": n} if body is None else body, f"{GEN}.{n}")
+
+    def test_n_calls_start_one_process(self):
+        for n in range(1, 6):
+            self.assertIsNone(self.call(n))
+        self.assertEqual(len(self.workers.calls), 1)
+        self.assertEqual(
+            [found["event"] for found in self.ran], [f"{GEN}.{n}" for n in range(1, 6)]
+        )
+
+    def test_a_hung_call_is_killed_at_hook_wait_and_the_next_call_starts_another(self):
+        self.code = "hang"
+        self.supervisor.worker.wait = 0.2
+        self.assertEqual(self.call(), "hook timeout")
+        self.assertEqual(self.workers.procs[0].returncode, -9)
+        self.code = 0
+        self.assertIsNone(self.call(2))
+        self.assertEqual(len(self.workers.calls), 2)
+
+    def test_a_worker_that_never_reads_a_large_request_is_still_bounded(self):
+        self.workers.script = ["deaf"]
+        self.supervisor.worker.wait = 0.2
+        self.assertEqual(self.call(body={"x": "y" * (1 << 20)}), "hook timeout")
+        self.assertEqual(self.workers.procs[0].returncode, -9)
+
+    def test_a_crash_is_its_exit_code_and_the_next_call_starts_another(self):
+        self.code = 7
+        self.assertEqual(self.call(), "hook exit 7")
+        self.code = 0
+        self.assertIsNone(self.call(2))
+        self.assertEqual(len(self.workers.calls), 2)
+
+    def test_a_failure_reply_is_exit_1_and_keeps_the_process(self):
+        self.workers.answer = lambda found: self.ran.append(found) or False
+        self.assertEqual(self.call(), "hook exit 1")
+        self.assertEqual(self.call(2), "hook exit 1")
+        self.assertEqual(len(self.workers.calls), 1)
+
+    def test_a_worker_that_cannot_start_is_a_hook_error(self):
+        self.workers.script = [OSError(2, "gone")]
+        self.assertEqual(self.call(), "hook error")
+        self.assertIsNone(self.call(2))
+        self.assertEqual(len(self.workers.calls), 2)
+
+    def test_a_worker_that_ended_between_calls_is_replaced_unreported(self):
+        self.assertIsNone(self.call())
+        self.workers.procs[0].kill()
+        self.assertIsNone(self.call(2))
+        self.assertEqual(len(self.workers.calls), 2)
 
 
 class ServeTest(Base):
@@ -422,8 +707,14 @@ class RefreshTest(Base):
 class MainTest(Base):
     def main(self, relay, fd, *args):
         argv = ["w", self.state, TUI, "", HOOK, GEN, str(fd), '["relay"]', '["wait"]', '["check"]']
+        workers = WorkerPopen(lambda _: True)
+        self.addCleanup(lambda: [proc.stdin.close() for proc in workers.procs])
+        launches = iter([relay])
         with (
-            mock.patch("subprocess.Popen", return_value=relay) as popen,
+            mock.patch(
+                "subprocess.Popen",
+                side_effect=lambda *a, **kw: next(launches, None) or workers(*a, **kw),
+            ) as popen,
             mock.patch("subprocess.run", return_value=SimpleNamespace(returncode=1)),
             mock.patch("signal.signal") as handler,
             mock.patch("threading.Thread") as self.threads,

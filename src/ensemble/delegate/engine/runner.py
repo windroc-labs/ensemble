@@ -4,6 +4,7 @@ run.jsonl (the session's workdir). A Mode's policy (POLICIES) starts the session
 answers each turn end and IdleTimeout: go on (None), END or GiveUp.
 """
 
+import contextlib
 import errno
 import os
 import sys
@@ -165,13 +166,21 @@ def say(text: str) -> None:
 
 
 def to_stderr(text: str) -> None:
-    """Dropped once stderr is dead: EIO, its terminal hung up; EPIPE, its reader gone."""
+    """Dropped once stderr is dead: EIO, its terminal hung up; EPIPE, its reader gone. Its fd
+    then is /dev/null, else the exit-time flush fails: exit 120.
+    """
     try:
         sys.stderr.write(text)
         sys.stderr.flush()
     except OSError as error:
         if error.errno not in (errno.EIO, errno.EPIPE):
             raise
+        with contextlib.suppress(OSError, ValueError):
+            null = os.open(os.devnull, os.O_WRONLY)
+            try:
+                os.dup2(null, sys.stderr.fileno())
+            finally:
+                os.close(null)
 
 
 def report(result: Result, out: str | None) -> tuple[int, str | None]:
@@ -211,6 +220,9 @@ def execute(
         try:
             if attempts.handle is not None:
                 attempts.stop(attempts.handle)
+        except BaseException as failure:
+            say(f"delegate: {p.spec.mode}: stop failed: {_named(failure)}")
+            raise e from failure  # the run log's, not the stop's
         finally:
             if not attempts.refused:
                 ended = stopped(e)
@@ -230,13 +242,17 @@ def stopped(error: BaseException) -> Result:
     """How a run that raised `error` ends: code `error.code` for a Stopped or an int-coded
     SystemExit, else 1; error `stopped: <Type>[: text]` on one line.
     """
-    text = " ".join(str(error).split())
     code = getattr(error, "code", None)
     return Result(
         code if isinstance(error, (Stopped, SystemExit)) and isinstance(code, int) else 1,
         None,
-        f"stopped: {type(error).__name__}" + (f": {text}" if text else ""),
+        f"stopped: {_named(error)}",
     )
+
+
+def _named(error: BaseException) -> str:
+    text = " ".join(str(error).split())
+    return type(error).__name__ + (f": {text}" if text else "")
 
 
 def _resets(at: float | None) -> str:

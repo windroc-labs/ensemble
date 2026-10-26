@@ -79,7 +79,7 @@ ensemble はレイヤーで構成され、各レイヤーは 1 つの役割だ�
 |---|---|
 | `claude` CLI、Python 3.11+ | すべてのエージェント run |
 | [`updraft`](https://github.com/windroc-labs/updraft) プラグイン（host worker の client に）：Claude Code は `/plugin marketplace add windroc-labs/agent-plugins-marketplace`、続けて `/plugin install updraft@windroc`。Codex は `codex plugin marketplace add windroc-labs/agent-plugins-marketplace`、続けて `codex plugin add updraft@windroc`. Docker worker はイメージ内で個別にインストールします（[プラグイン](../docker-host.md#plugins)）。 | engineer の build task（`/updraft:build`、`/updraft:light-build`）と PM の PRD レビュー（`/updraft:review`）。それ以外では不要。 |
-| tmux 3.3+ | `tmux` Host 上の tui run |
+| tmux 3.3–3.8 | `tmux` Host 上の tui run |
 | `127.0.0.1` だけで待ち受け、コンテキスト長 65536 以上、tier のモデルを pull 済みの [Ollama](https://ollama.com)。`tmux` ではさらに OpenCode 1.x（`npm install -g opencode-ai@1.19.3`） | OpenCode のみ（[Docker host › OpenCode](../docker-host.md#opencode), [OpenCode sessions](../sessions.md#opencode-sessions)） |
 | `git`、ログイン済みの `gh` | コーディング（checkout、pull request）と GitHub の出力先。それ以外では不要。 |
 | 起動中の iTerm2 | デフォルトの iTerm2 分割 |

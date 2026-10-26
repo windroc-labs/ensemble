@@ -1,5 +1,6 @@
 """The credentials inventory names every credential, label and state config key of [linear] and every broker
-keychain service, and holds no secret-like value. .github/ci_scope.py's CHECKED_DOCS names INVENTORY too.
+keychain service, and holds no secret-like value. A prefix item (a service ending in "/") needs its own Keychain items
+row, `<prefix><name>`. .github/ci_scope.py's CHECKED_DOCS names INVENTORY too.
 """
 
 import os
@@ -69,6 +70,11 @@ def _required_keys(config):
     return [f"linear.{key}" for key in keys]
 
 
+def _prefix_row(prefix):
+    """A Keychain items row whose Service cell is `<prefix><placeholder>`."""
+    return re.compile(rf"^\|\s*`{re.escape(prefix)}<[^>`]+>`\s*\|", re.M)
+
+
 def _violations(config, services, text):
     found = [
         f"{INVENTORY}: missing config key `{key}`"
@@ -78,7 +84,12 @@ def _violations(config, services, text):
     found += [
         f"{INVENTORY}: missing keychain service `{name}`"
         for name in services
-        if f"`{name}`" not in text
+        if not name.endswith("/") and f"`{name}`" not in text
+    ]
+    found += [
+        f"{INVENTORY}: missing keychain prefix item row `{name}<name>`"
+        for name in services
+        if name.endswith("/") and not _prefix_row(name).search(text)
     ]
     found += [
         f"{INVENTORY}:{n}: secret-like value ({label})"

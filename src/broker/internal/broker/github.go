@@ -2,21 +2,21 @@ package broker
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
-	"slices"
 	"syscall"
 	"time"
 
 	"ensemble/broker/internal/audit"
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/github"
+	"ensemble/broker/internal/launcher"
 	"ensemble/broker/internal/protocol"
 )
 
@@ -29,33 +29,23 @@ const (
 	tokenDir           = docker.SecretsDir + "/github"
 )
 
-// writeScript replaces $1's token file with stdin; the temporary name is a dot file, which no reader matches.
-const writeScript = "mkdir -p -m 0700 " + tokenDir + " && umask 0377 && rm -f " + tokenDir + `/."$1".new && cat > ` + tokenDir +
-	`/."$1".new && mv -f ` + tokenDir + `/."$1".new ` + tokenDir + `/"$1"`
+// cloneScript shallow-clones branch or tag $2 of github.com/$1 into $3 with the prefetch token on stdin, kept only in
+// $HOME (the helper's tmpfs). git reads it through a command-line credential helper, so the clone's config and remote
+// URL never hold it, and runs none of the repo's hooks.
+const cloneScript = `set -eu
+umask 077
+cat > "$HOME/token"
+exec git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c credential.helper= ` +
+	`-c 'credential.helper=!f() { test "$1" = get || exit 0; echo username=x-access-token; printf "password=%s\n" "$(cat "$HOME/token")"; }; f' ` +
+	`clone --quiet --depth 1 --branch "$2" -- "https://github.com/$1.git" "$3"`
+
+// prefetchPermissions is all a prefetch token may do: read its one repository's contents.
+var prefetchPermissions = map[string]string{"contents": "read"}
 
 // botUser is what login github keeps in the users item: the App's slug and its bot user's ID.
 type botUser struct {
 	Slug string `json:"slug"`
 	ID   int64  `json:"id"`
-}
-
-type tokenEntry struct {
-	Account      string `json:"account"`
-	Installation int64  `json:"installation"`
-	Token        string `json:"token"`
-	ExpiresAt    string `json:"expires_at"`
-}
-
-type tokenRecord struct {
-	App    string       `json:"app"`
-	Tokens []tokenEntry `json:"tokens"`
-}
-
-type pending struct {
-	Container string `json:"container"`
-	Account   string `json:"account"`
-	Token     string `json:"token"`
-	ExpiresAt string `json:"expires_at"`
 }
 
 // AppKeys reads a GitHub App's private-key item.
@@ -64,49 +54,16 @@ type AppKeys interface {
 	AppKey(app, account string) ([]byte, error)
 }
 
-// GitHub issues, refreshes and revokes a container's installation tokens. Every token it issues is in the
-// container's record or the backlog until revoked or expired; revocation uses only those values, never the
-// container's files. Lock guards each read-modify-write of either item, never a GitHub request. Audit (nil: none)
-// gets each token's outcome, never its value.
+// GitHub is the GitHub provider on the token lifecycle (credential.Lifecycle): each container's grant is one
+// installation token per installation, in the container's record or the backlog until revoked or expired;
+// revocation uses only those values, never the container's files. Lock guards each read-modify-write of either
+// item, never a GitHub request. Audit (nil: none) gets each token's outcome, never its value.
 type GitHub struct {
 	Keychain SecretKeychain
 	Apps     AppKeys
 	API      github.Client
 	Lock     func() (unlock func(), err error)
 	Audit    *audit.Recorder
-}
-
-// note gives the audit recorder e's outcome for container, keyed by a hash of its token.
-func (g GitHub) note(container, result, reason string, e tokenEntry, repos *audit.Repositories) {
-	if g.Audit == nil {
-		return
-	}
-	sum := sha256.Sum256([]byte(e.Token))
-	expires := e.ExpiresAt
-	g.Audit.Add(container, audit.Credential{Kind: audit.GitHubToken, Result: result, Reason: reason, ExpiresAt: &expires,
-		Account: e.Account, Installation: e.Installation, Repos: repos}, hex.EncodeToString(sum[:]))
-}
-
-// unlisted is a new token's repositories when it could not be recorded, so was never listed.
-var unlisted = audit.Repositories{Error: "not listed: the token could not be recorded"}
-
-// issued notes a recorded token with the repositories it reaches; a failed listing is noted, never returned. Only
-// after the record write: the listing's requests must not widen the window in which a token is untracked.
-func (g GitHub) issued(ctx context.Context, container, result string, e tokenEntry) {
-	if g.Audit == nil {
-		return
-	}
-	repos := &audit.Repositories{}
-	if selection, names, err := g.API.Repositories(ctx, e.Token); err != nil {
-		repos.Error = err.Error()
-	} else {
-		repos.Selection, repos.Names = &selection, names
-	}
-	g.note(container, result, "", e, repos)
-}
-
-func (p pending) entry() tokenEntry {
-	return tokenEntry{Account: p.Account, Token: p.Token, ExpiresAt: p.ExpiresAt}
 }
 
 // FileLock is an exclusive flock on path, created 0600 in a 0700 directory.
@@ -127,15 +84,6 @@ func FileLock(path string) func() (func(), error) {
 	}
 }
 
-var errLock = errors.New("token lock")
-
-func tokensError(err error) *protocol.Error {
-	if errors.Is(err, errLock) {
-		return protocol.New(protocol.KeychainFailed, "Taking the GitHub token lock ~/.ensemble/docker/tokens.lock failed.")
-	}
-	return protocol.New(protocol.KeychainFailed, "Keychain access to the GitHub tokens failed.")
-}
-
 func unrevoked(container string) *protocol.Error {
 	return protocol.New(protocol.KeychainFailed, "The GitHub tokens of "+container+" could not be revoked; they expire within an hour.")
 }
@@ -148,179 +96,211 @@ func loginError(app string) *protocol.Error {
 	return protocol.New(protocol.LoginRequired, "No usable GitHub App private key "+app+": run ensemble-broker login github "+AppKeyService+".")
 }
 
-func (g GitHub) locked(f func() error) error {
-	unlock, err := g.Lock()
-	if err != nil {
-		return fmt.Errorf("%w: %v", errLock, err)
-	}
-	defer unlock()
-	return f()
-}
-
-func (g GitHub) readRecord(container string) (tokenRecord, bool, error) {
-	var rec tokenRecord
-	data, err := g.Keychain.Secret(tokensService, container)
-	defer erase(data)
+// tokensError is the protocol's account of a lifecycle error about container's tokens.
+func tokensError(container string, err error) error {
+	var e *protocol.Error
 	switch {
-	case errors.Is(err, ErrNotFound):
-		return rec, false, nil
-	case err != nil:
-		return rec, false, err
+	case err == nil:
+		return nil
+	case errors.As(err, new(*credential.UnrevokedError)):
+		return unrevoked(container)
+	case errors.As(err, &e):
+		return e
+	case errors.Is(err, credential.ErrLock):
+		return protocol.New(protocol.KeychainFailed, "Taking the GitHub token lock ~/.ensemble/docker/tokens.lock failed.")
+	case errors.Is(err, credential.ErrStore):
+		return protocol.New(protocol.KeychainFailed, "Keychain access to the GitHub tokens failed.")
+	case errors.Is(err, credential.ErrNoRecord):
+		return protocol.New(protocol.RefreshFailed, "No GitHub tokens recorded for "+container+".")
+	case errors.Is(err, credential.ErrReleased):
+		return protocol.New(protocol.RefreshFailed, container+" was closed during the refresh.")
+	case errors.Is(err, docker.ErrUnreachable):
+		return fmt.Errorf("GitHub token injection: %w", docker.ErrUnreachable)
+	case errors.Is(err, credential.ErrDelivery):
+		return errors.New("writing a GitHub token into the container failed")
 	}
-	return rec, true, json.Unmarshal(data, &rec)
+	return err
 }
 
-func (g GitHub) writeRecord(container string, rec tokenRecord) error {
-	if len(rec.Tokens) == 0 {
-		return g.Keychain.DeleteSecret(tokensService, container)
+// lifecycle is g's token lifecycle over the ensemble-tokens records and the ensemble-revocations backlog.
+func (g GitHub) lifecycle() credential.Lifecycle {
+	return credential.Lifecycle{
+		Provider: githubProvider{g},
+		Store:    g.Keychain,
+		NotFound: ErrNotFound,
+		Records:  tokensService,
+		Backlog:  [2]string{revocationsService, revocationsAccount},
+		Lock:     g.Lock,
+		Audit:    g.Audit,
 	}
-	data, _ := json.Marshal(rec)
-	defer erase(data)
-	return g.Keychain.PutSecret(tokensService, container, data)
 }
 
-// editRecord changes container's record under the lock; f gets whether it exists, and a missing one is never created
-// unless f adds tokens and create is set.
-func (g GitHub) editRecord(container string, create bool, f func(rec *tokenRecord, found bool)) (bool, error) {
-	var found bool
-	err := g.locked(func() error {
-		rec, ok, err := g.readRecord(container)
-		if err != nil {
-			return err
-		}
-		found = ok
-		f(&rec, ok)
-		if !ok && !create {
-			return nil
-		}
-		return g.writeRecord(container, rec)
-	})
-	return found, err
+func to(container string, exec func([]string, []byte) error) credential.Delivery {
+	return credential.Delivery{Consumer: credential.Consumer{Container: container}, Exec: exec}
 }
 
-func (g GitHub) readBacklog() ([]pending, error) {
-	var list []pending
-	data, err := g.Keychain.Secret(revocationsService, revocationsAccount)
-	defer erase(data)
-	switch {
-	case errors.Is(err, ErrNotFound):
-		return nil, nil
-	case err != nil:
-		return nil, err
-	}
-	return list, json.Unmarshal(data, &list)
+// Issue gives container one token per installation of app, limited to permissions, recording each before the next
+// request and writing them in; on any failure it revokes every token it issued.
+func (g GitHub) Issue(ctx context.Context, app string, permissions map[string]string, container string, exec func([]string, []byte) error) ([]protocol.Expiry, error) {
+	expiries, err := g.lifecycle().Acquire(ctx, to(container, exec), app, permissions)
+	return expiries, tokensError(container, err)
 }
 
-// editBacklog changes the backlog; the caller holds the lock.
-func (g GitHub) editBacklog(f func([]pending) []pending) error {
-	list, err := g.readBacklog()
+// Refresh replaces each of container's tokens with one limited to its recorded permissions (permissions for a record
+// an older broker wrote): a new one is recorded and written in before the old is revoked.
+func (g GitHub) Refresh(ctx context.Context, _ string, permissions map[string]string, container string, exec func([]string, []byte) error) ([]protocol.Expiry, error) {
+	expiries, err := g.lifecycle().Refresh(ctx, to(container, exec), permissions)
+	return expiries, tokensError(container, err)
+}
+
+// Prefetch clones ref ("": the default branch) of repo into dir through run, which starts the helper container with
+// argv and stdin. The token it gives run reads only repo's contents; the lifecycle holds it in container's record while
+// in use, so closing container retires it should the broker die, and it is revoked once run returns.
+func (g GitHub) Prefetch(ctx context.Context, repo, ref, dir, container string, run func(argv []string, stdin []byte) error) error {
+	jwt, err := g.jwt(AppKeyService)
 	if err != nil {
 		return err
 	}
-	list = f(list)
-	if len(list) == 0 {
-		return g.Keychain.DeleteSecret(revocationsService, revocationsAccount)
-	}
-	data, _ := json.Marshal(list)
-	defer erase(data)
-	return g.Keychain.PutSecret(revocationsService, revocationsAccount, data)
-}
-
-func tokenIn(entries []tokenEntry) func(string) bool {
-	return func(t string) bool {
-		return slices.ContainsFunc(entries, func(e tokenEntry) bool { return e.Token == t })
-	}
-}
-
-// discard takes entries out of container's record (all of it, read in the same lock section, when whole) and
-// revokes them through the backlog. With the backlog unreadable, or the lock failing, it revokes them directly;
-// with the lock failing it queues the ones it could not revoke without the lock, so none is left untracked, then
-// takes them out of the record.
-func (g GitHub) discard(ctx context.Context, container string, entries []tokenEntry, whole bool) error {
-	var backlogErr error
-	ran := false
-	err := g.locked(func() error {
-		ran = true
-		if whole {
-			if rec, found, err := g.readRecord(container); err == nil && found {
-				in := tokenIn(entries)
-				entries = append(slices.Clone(entries), slices.DeleteFunc(rec.Tokens, func(e tokenEntry) bool { return in(e.Token) })...)
-			}
-		}
-		backlogErr = g.editBacklog(func(list []pending) []pending {
-			for _, e := range entries {
-				list = append(list, pending{container, e.Account, e.Token, e.ExpiresAt})
-			}
-			return list
-		})
-		if backlogErr == nil {
-			for _, e := range entries {
-				g.note(container, audit.Pending, "queued for revocation", e, nil)
-			}
-		}
-		if whole {
-			return g.Keychain.DeleteSecret(tokensService, container)
-		}
-		rec, found, err := g.readRecord(container)
-		if err != nil || !found {
-			return err
-		}
-		rec.Tokens = slices.DeleteFunc(rec.Tokens, func(e tokenEntry) bool { return tokenIn(entries)(e.Token) })
-		return g.writeRecord(container, rec)
-	})
-	if !ran && whole {
-		if rec, found, err := g.readRecord(container); err == nil && found {
-			in := tokenIn(entries)
-			entries = append(slices.Clone(entries), slices.DeleteFunc(rec.Tokens, func(e tokenEntry) bool { return in(e.Token) })...)
-		}
-	}
-	if backlogErr != nil || !ran {
-		type miss struct {
-			entry  tokenEntry
-			reason string
-		}
-		var left []pending
-		var missed []miss
-		for _, e := range entries {
-			if err := g.API.Revoke(ctx, e.Token); err != nil {
-				left = append(left, pending{container, e.Account, e.Token, e.ExpiresAt})
-				missed = append(missed, miss{e, err.Error()})
-			} else {
-				g.note(container, audit.Revoked, "", e, nil)
-			}
-		}
-		queued := !ran && (len(left) == 0 || g.editBacklog(func(list []pending) []pending { return append(list, left...) }) == nil)
-		for _, m := range missed {
-			if !queued {
-				m.reason += "; not queued"
-			}
-			g.note(container, audit.Pending, m.reason, m.entry, nil)
-		}
-		if !ran {
-			if !queued {
-				return unrevoked(container) // the record keeps them tracked
-			}
-			g.untrack(container, entries)
-		} else if len(left) > 0 {
-			return unrevoked(container)
-		}
-	} else {
-		_, _ = g.Retry(ctx)
+	in, err := g.API.RepoInstallation(ctx, jwt, repo)
+	var se *github.StatusError
+	if errors.As(err, &se) && se.Status == http.StatusNotFound {
+		return protocol.New(protocol.GitHubFailed, "GitHub App "+AppKeyService+" is not installed on "+repo+"; install it there or drop prefetch.")
 	}
 	if err != nil {
-		return tokensError(err)
+		return apiError(err)
+	}
+	token, expires, err := g.API.IssueRepo(ctx, jwt, in.ID, repo, prefetchPermissions)
+	if err != nil {
+		return apiError(err)
+	}
+	lc, c := g.lifecycle(), credential.Consumer{Container: container}
+	m := credential.Material{Account: in.Account, Target: in.ID, Token: token, ExpiresAt: expires.Format(time.RFC3339)}
+	if err := lc.Hold(ctx, c, m); err != nil {
+		return tokensError(container, err)
+	}
+	defer func() {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second) // a cancelled start still revokes it
+		defer cancel()
+		lc.Retire(rctx, c, m)
+	}()
+	if ref == "" {
+		if ref, err = g.API.DefaultBranch(ctx, token, repo); err != nil {
+			return apiError(err)
+		}
+		if !launcher.ValidRef(ref) {
+			return protocol.Newf(protocol.GitHubFailed, "GitHub named %q the default branch of %s, not a usable branch name.", ref[:min(len(ref), 80)], repo)
+		}
+	} else {
+		kind, err := g.API.RefKind(ctx, token, repo, ref)
+		if err != nil {
+			return apiError(err)
+		}
+		if kind == "" {
+			return protocol.Newf(protocol.ManifestRejected, "Manifest rejected: prefetch ref %s is no branch or tag of %s.", ref, repo)
+		}
+	}
+	stdin := []byte(token)
+	defer erase(stdin)
+	if err := run([]string{"/bin/sh", "-c", cloneScript, "sh", repo, ref, dir}, stdin); err != nil {
+		if errors.Is(err, docker.ErrUnreachable) {
+			return protocol.New(protocol.DockerUnreachable, "Cannot reach Docker Desktop; start it and retry.")
+		}
+		failed := protocol.Newf(protocol.StartFailed, "Prefetching %s at %s failed.", repo, ref)
+		failed.Cause = github.Redact(docker.Diagnostic(err), token)
+		return failed
 	}
 	return nil
 }
 
-// untrack takes entries, revoked or queued, out of container's record without the lock: best effort, as the lock
-// is what failed.
-func (g GitHub) untrack(container string, entries []tokenEntry) {
-	if rec, found, err := g.readRecord(container); err == nil && found {
-		in := tokenIn(entries)
-		rec.Tokens = slices.DeleteFunc(rec.Tokens, func(e tokenEntry) bool { return in(e.Token) })
-		_ = g.writeRecord(container, rec)
+// Release retires every token of container's record, its grant; an unreadable record is kept for recovery.
+func (g GitHub) Release(ctx context.Context, container string) error {
+	return tokensError(container, g.lifecycle().Release(ctx, credential.Consumer{Container: container}))
+}
+
+// Pending projects a single Keychain snapshot without locking, mutation, remote requests or audit.
+func (g GitHub) Pending() ([]protocol.Pending, error) {
+	pending, err := g.lifecycle().Pending()
+	return pending, tokensError("", err)
+}
+
+// Retry revokes the backlog: expired entries are dropped unrevoked, and the first request that gets no answer
+// stops the run, keeping the rest for next time.
+func (g GitHub) Retry(ctx context.Context) ([]protocol.Pending, error) {
+	pending, err := g.lifecycle().Retry(ctx)
+	return pending, tokensError("", err)
+}
+
+// githubProvider is GitHub's side of the lifecycle: installations, the App JWT and the token API.
+type githubProvider struct{ g GitHub }
+
+func (p githubProvider) Kind() credential.Kind { return credential.GitHub }
+func (p githubProvider) AuditKind() string     { return audit.GitHubToken }
+func (p githubProvider) Now() time.Time        { return p.g.API.Now() }
+
+// Begin signs the App JWT with the AppKeyService key; its errors are protocol errors without the key or JWT.
+func (p githubProvider) Begin(_ context.Context, _ string) (credential.Issuer, error) {
+	jwt, err := p.g.jwt(AppKeyService)
+	if err != nil {
+		return nil, err
 	}
+	return githubIssuer{p.g.API, jwt}, nil
+}
+
+// File is m's token file, refusing an account that is not a GitHub login before anything is written.
+func (p githubProvider) File(m credential.Material) (credential.File, error) {
+	if !github.Login.MatchString(m.Account) {
+		return credential.File{}, fmt.Errorf("account %q is not a GitHub login", m.Account)
+	}
+	return credential.File{Dir: tokenDir, Name: m.Account, Replace: true}, nil
+}
+
+func (p githubProvider) Revoke(ctx context.Context, m credential.Material) credential.Revocation {
+	err := p.g.API.Revoke(ctx, m.Token)
+	switch {
+	case err == nil:
+		return credential.Revocation{Outcome: credential.Revoked}
+	case errors.Is(err, github.ErrAlreadyInvalid):
+		return credential.Revocation{Outcome: credential.AlreadyInvalid}
+	}
+	return credential.Revocation{Outcome: credential.Retryable, Err: err, Unreachable: github.Transport(err)}
+}
+
+// Describe is the repositories m reaches; a failed listing is described, never returned.
+func (p githubProvider) Describe(ctx context.Context, m credential.Material) *audit.Repositories {
+	repos := &audit.Repositories{}
+	if selection, names, err := p.g.API.Repositories(ctx, m.Token); err != nil {
+		repos.Error = err.Error()
+	} else {
+		repos.Selection, repos.Names = &selection, names
+	}
+	return repos
+}
+
+type githubIssuer struct {
+	api github.Client
+	jwt string
+}
+
+func (i githubIssuer) Secret() string { return i.jwt }
+
+func (i githubIssuer) Targets(ctx context.Context) ([]credential.Material, error) {
+	installs, err := i.api.Installations(ctx, i.jwt)
+	if err != nil {
+		return nil, apiError(err)
+	}
+	targets := make([]credential.Material, 0, len(installs))
+	for _, in := range installs {
+		targets = append(targets, credential.Material{Account: in.Account, Target: in.ID})
+	}
+	return targets, nil
+}
+
+func (i githubIssuer) Issue(ctx context.Context, scope map[string]string, target credential.Material) (credential.Material, error) {
+	token, expires, err := i.api.Issue(ctx, i.jwt, target.Target, scope)
+	if err != nil {
+		return credential.Material{}, apiError(err)
+	}
+	return credential.Material{Token: token, ExpiresAt: expires.Format(time.RFC3339)}, nil
 }
 
 // SaveUser asks GitHub which App the AppKeyService key is (its slug), looks up its bot user (`<slug>[bot]`) and keeps
@@ -411,213 +391,4 @@ func (g GitHub) jwt(app string) (string, error) {
 		return "", protocol.New(protocol.GitHubFailed, "Signing the GitHub App token failed.")
 	}
 	return jwt, nil
-}
-
-// write puts e's token into the container through exec's stdin; errors wrap docker.ErrUnreachable or are opaque.
-func write(exec func([]string, []byte) error, e tokenEntry) error {
-	if !github.Login.MatchString(e.Account) {
-		return fmt.Errorf("account %q is not a GitHub login", e.Account)
-	}
-	token := []byte(e.Token)
-	defer erase(token)
-	err := exec([]string{"/bin/sh", "-c", writeScript, "sh", e.Account}, token)
-	if errors.Is(err, docker.ErrUnreachable) {
-		return fmt.Errorf("GitHub token injection: %w", docker.ErrUnreachable)
-	}
-	if err != nil {
-		return errors.New("writing a GitHub token into the container failed")
-	}
-	return nil
-}
-
-func expiries(entries []tokenEntry) []protocol.Expiry {
-	out := []protocol.Expiry{}
-	for _, e := range entries {
-		out = append(out, protocol.Expiry{Account: e.Account, ExpiresAt: e.ExpiresAt})
-	}
-	slices.SortFunc(out, func(a, b protocol.Expiry) int {
-		if a.Account < b.Account {
-			return -1
-		}
-		if a.Account > b.Account {
-			return 1
-		}
-		return 0
-	})
-	return out
-}
-
-// Issue gives container one token per installation of app, limited to permissions, recording each before writing it
-// in; on any failure it revokes every token it issued.
-func (g GitHub) Issue(ctx context.Context, app string, permissions map[string]string, container string, exec func([]string, []byte) error) ([]protocol.Expiry, error) {
-	jwt, err := g.jwt(AppKeyService)
-	if err != nil {
-		return nil, err
-	}
-	installs, err := g.API.Installations(ctx, jwt)
-	if err != nil {
-		return nil, apiError(err)
-	}
-	var issued []tokenEntry
-	fail := func(err error) ([]protocol.Expiry, error) {
-		if len(issued) > 0 {
-			_ = g.discard(ctx, container, issued, true)
-		}
-		return nil, err
-	}
-	for _, in := range installs {
-		token, expires, err := g.API.Issue(ctx, jwt, in.ID, permissions)
-		if err != nil {
-			return fail(apiError(err))
-		}
-		e := tokenEntry{in.Account, in.ID, token, expires.Format(time.RFC3339)}
-		issued = append(issued, e)
-		if _, err := g.editRecord(container, true, func(rec *tokenRecord, _ bool) {
-			rec.App, rec.Tokens = app, append(rec.Tokens, e)
-		}); err != nil {
-			g.note(container, audit.Issued, "", e, &unlisted)
-			return fail(tokensError(err))
-		}
-		g.issued(ctx, container, audit.Issued, e)
-	}
-	for _, e := range issued {
-		if err := write(exec, e); err != nil {
-			return fail(err)
-		}
-	}
-	return expiries(issued), nil
-}
-
-// Refresh replaces each of container's tokens with one limited to permissions: a new one is recorded and written in
-// before the old is revoked.
-func (g GitHub) Refresh(ctx context.Context, app string, permissions map[string]string, container string, exec func([]string, []byte) error) ([]protocol.Expiry, error) {
-	var rec tokenRecord
-	var found bool
-	if err := g.locked(func() (err error) {
-		rec, found, err = g.readRecord(container)
-		return err
-	}); err != nil {
-		return nil, tokensError(err)
-	}
-	if !found {
-		return nil, protocol.New(protocol.RefreshFailed, "No GitHub tokens recorded for "+container+".")
-	}
-	jwt, err := g.jwt(AppKeyService)
-	if err != nil {
-		return nil, err
-	}
-	var fresh []tokenEntry
-	for _, old := range rec.Tokens {
-		token, expires, err := g.API.Issue(ctx, jwt, old.Installation, permissions)
-		if err != nil {
-			return nil, apiError(err)
-		}
-		e := tokenEntry{old.Account, old.Installation, token, expires.Format(time.RFC3339)}
-		found, err := g.editRecord(container, false, func(rec *tokenRecord, found bool) {
-			if found {
-				rec.Tokens = append(rec.Tokens, e)
-			}
-		})
-		if err != nil || !found {
-			g.note(container, audit.Renewed, "", e, &unlisted)
-			_ = g.discard(ctx, container, []tokenEntry{e}, false)
-			if err != nil {
-				return nil, tokensError(err)
-			}
-			return nil, protocol.New(protocol.RefreshFailed, container+" was closed during the refresh.")
-		}
-		g.issued(ctx, container, audit.Renewed, e)
-		if err := write(exec, e); err != nil {
-			_ = g.discard(ctx, container, []tokenEntry{e}, false)
-			return nil, err
-		}
-		if g.API.Revoke(ctx, old.Token) != nil {
-			_ = g.discard(ctx, container, []tokenEntry{old}, false)
-		} else {
-			g.note(container, audit.Revoked, "", old, nil)
-			_, _ = g.editRecord(container, false, func(rec *tokenRecord, _ bool) {
-				rec.Tokens = slices.DeleteFunc(rec.Tokens, func(t tokenEntry) bool { return t.Token == old.Token })
-			})
-		}
-		fresh = append(fresh, e)
-	}
-	return expiries(fresh), nil
-}
-
-// Revoke revokes every token of container's record and deletes it. An unreadable record is deleted best-effort.
-func (g GitHub) Revoke(ctx context.Context, container string) error {
-	var found bool
-	err := g.locked(func() (err error) {
-		_, found, err = g.readRecord(container)
-		return err
-	})
-	if errors.Is(err, errLock) {
-		return g.discard(ctx, container, nil, true)
-	}
-	if err != nil {
-		_ = g.Keychain.DeleteSecret(tokensService, container)
-		return unrevoked(container)
-	}
-	if !found {
-		_, _ = g.Retry(ctx)
-		return nil
-	}
-	return g.discard(ctx, container, nil, true)
-}
-
-// Retry revokes the backlog: expired entries are dropped unrevoked, and the first request that gets no answer
-// stops the run, keeping the rest for next time. Audit gets every entry's outcome; it keeps what it needs.
-func (g GitHub) Retry(ctx context.Context) ([]protocol.Pending, error) {
-	var list []pending
-	if err := g.locked(func() (err error) {
-		list, err = g.readBacklog()
-		return err
-	}); err != nil {
-		return nil, tokensError(err)
-	}
-	now := g.API.Now()
-	type outcome struct {
-		entry  pending
-		result string
-	}
-	var done []string
-	var resolved []outcome // done's: noted once the backlog no longer holds them, so a failed removal notes nothing twice
-	for i, p := range list {
-		expires, err := time.Parse(time.RFC3339, p.ExpiresAt)
-		if err != nil || !now.Before(expires) {
-			done, resolved = append(done, p.Token), append(resolved, outcome{p, audit.ExpiredUnrevoked})
-			continue
-		}
-		err = g.API.Revoke(ctx, p.Token)
-		if err == nil {
-			done, resolved = append(done, p.Token), append(resolved, outcome{p, audit.Revoked})
-			continue
-		}
-		if github.Transport(err) {
-			for _, rest := range list[i:] {
-				g.note(rest.Container, audit.Pending, err.Error(), rest.entry(), nil)
-			}
-			break
-		}
-		g.note(p.Container, audit.Pending, err.Error(), p.entry(), nil)
-	}
-	if len(done) > 0 {
-		if err := g.locked(func() error {
-			return g.editBacklog(func(list []pending) []pending {
-				return slices.DeleteFunc(list, func(p pending) bool { return slices.Contains(done, p.Token) })
-			})
-		}); err != nil {
-			return nil, tokensError(err)
-		}
-	}
-	for _, o := range resolved {
-		g.note(o.entry.Container, o.result, "", o.entry.entry(), nil)
-	}
-	out := []protocol.Pending{}
-	for _, p := range list {
-		if !slices.Contains(done, p.Token) {
-			out = append(out, protocol.Pending{Container: p.Container, Account: p.Account, ExpiresAt: p.ExpiresAt})
-		}
-	}
-	return out, nil
 }

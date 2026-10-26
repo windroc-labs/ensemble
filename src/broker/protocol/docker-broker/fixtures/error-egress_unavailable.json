@@ -1,0 +1,9 @@
+{
+  "exit_code": 17,
+  "error": {
+    "command": "start",
+    "code": "egress_unavailable",
+    "message": "Egress proxy egress-proxy is unhealthy, not healthy. Caller network workers needs it. Start the egress proxy (~/.egress/current/start.sh, docs/docker-host.md#egress-proxy), then retry.",
+    "cleanup": "not_needed"
+  }
+}

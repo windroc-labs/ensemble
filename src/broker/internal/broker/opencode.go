@@ -1,11 +1,11 @@
 package broker
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
 
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/launcher"
 	"ensemble/broker/internal/protocol"
@@ -18,14 +18,8 @@ const (
 	opencodeKeyDir  = docker.SecretsDir + "/opencode"
 )
 
-// opencodeScript writes stdin to $1's key file, 0400; set -C refuses one already there.
-const opencodeScript = "mkdir -p -m 0700 " + opencodeKeyDir + " && umask 0377 && set -C && cat > " + opencodeKeyDir + `/"$1".key`
-
 // OpencodeKeychain holds the providers' API keys as broker-only items.
-type OpencodeKeychain interface {
-	SecretKeychain
-	ItemTrust
-}
+type OpencodeKeychain interface{ brokerOnlyStore }
 
 // LoginOpencode reads provider's API key with read, checks it, stores it in a broker-only item (replacing an earlier
 // one), makes the item trust only the broker (secureItem, asking password when needed) and proves start's no-dialog
@@ -42,23 +36,8 @@ func LoginOpencode(provider string, read, password func() ([]byte, error), k Ope
 	if err := checkSecret("API key", key); err != nil {
 		return err
 	}
-	item, rerun := opencodeService+" "+provider, "rerun ensemble-broker login opencode "+provider
-	if err := k.PutSecret(opencodeService, provider, key); err != nil {
-		if errors.Is(err, ErrInvalidOwnerEdit) {
-			return ownershipError(opencodeService, provider, err)
-		}
-		return fmt.Errorf("keychain item %s: saving it failed: %w; %s", item, err, rerun)
-	}
-	if err := secureItem(opencodeService, provider, rerun+" to finish", k, password); err != nil {
+	if err := storeBrokerOnly(opencodeService, provider, "rerun ensemble-broker login opencode "+provider, key, k, password); err != nil {
 		return err
-	}
-	saved, err := k.Secret(opencodeService, provider)
-	defer erase(saved)
-	if err == nil && !bytes.Equal(saved, key) {
-		err = errors.New("it holds other bytes")
-	}
-	if err != nil {
-		return fmt.Errorf("keychain item %s: reading it failed: %w; %s", item, err, rerun)
 	}
 	_, err = fmt.Fprintf(out, "OpenCode provider %s API key saved; keychain trusts only the broker\n", provider)
 	return err
@@ -82,11 +61,11 @@ func opencodeError(provider string, err error) *protocol.Error {
 // Ready reads only each item's access, so it never prompts.
 func (o OpencodeKeys) Ready(providers []string) error {
 	for _, p := range providers {
-		access, err := o.Keychain.AppAccess(opencodeService, p)
+		trusted, err := trustedItem(o.Keychain, opencodeService, p)
 		if err != nil {
 			return opencodeError(p, err)
 		}
-		if onlyBroker(access) != nil {
+		if !trusted {
 			return protocol.New(protocol.LoginRequired, "The OpenCode provider "+p+" API key trusts another broker build: run ensemble-broker login opencode "+p+".")
 		}
 	}
@@ -97,12 +76,11 @@ func (o OpencodeKeys) Ready(providers []string) error {
 // dialog. Errors are opencodeError's, wrap docker.ErrUnreachable or are opaque: no Docker stderr, no keychain detail.
 func (o OpencodeKeys) Inject(providers []string, exec func(argv []string, stdin []byte) error) error {
 	for _, p := range providers {
-		key, err := o.Keychain.Secret(opencodeService, p)
+		key, err := readSecret(o.Keychain, opencodeService, p)
 		if err != nil {
-			erase(key)
 			return opencodeError(p, err)
 		}
-		err = exec([]string{"/bin/sh", "-c", opencodeScript, "sh", p}, key)
+		err = credential.Deliver(exec, credential.File{Dir: opencodeKeyDir, Name: p + ".key"}, key)
 		erase(key)
 		if errors.Is(err, docker.ErrUnreachable) {
 			return fmt.Errorf("API key injection: %w", docker.ErrUnreachable)

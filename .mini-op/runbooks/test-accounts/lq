@@ -1,0 +1,32 @@
+#!/usr/bin/env zsh
+usage='lq <service> <account> <json-body-file>   send that GraphQL body to the Linear API as the manager
+app: the access token in its token record, the keychain item <service>/<account> (the mini'"'"'s
+~/.ensemble/config.local.toml [orchestrator.linear.manager] token_service, default
+linear-app-manager-token, its account the same name; install.sh writes it), goes to curl as a Bearer
+Authorization header through stdin. Prints the reply. Exits 0, 1 (the file is unreadable, the item
+holds no token record, or curl failed, an error status from Linear included: an expired token is a
+401, renewed by rerunning the install) or 2 (usage error).'
+[[ $# -eq 1 && $1 == -h ]] && { print -r -- $usage; exit 0; }
+name='^[A-Za-z0-9][A-Za-z0-9._@+:-]*$'
+[[ $# -eq 3 && $1 =~ $name && $2 =~ $name && -n $3 && $3 != -* ]] ||
+  { print -u2 -r -- 'lq: usage: lq <service> <account> <json-body-file>'; exit 2; }
+[[ -f $3 && -r $3 ]] || { print -u2 -r -- "lq: cannot read $3"; exit 1; }
+source ~/apm/lib/keychain.zsh || exit 1
+s=$1; a=$2
+keychain_has "$s" "$a" || { print -u2 -r -- "lq: no $s/$a token record in the keychain"; exit 1; }
+# zsh runs a pipeline's last command in this shell: record stays set and pipestatus has the read's rc.
+keychain_read "$s" "$a" 2>/dev/null | IFS= read -r -d '' record
+(( pipestatus[1] == 0 )) || { unset record; print -u2 -r -- "lq: cannot read $s/$a from the keychain"; exit 1; }
+# install.sh's record: {"access_token":"…","expires_at":"…"}; the token is one plain word.
+token_field='"access_token"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_.~+/=-]+)"'
+token=
+[[ $record =~ $token_field ]] && token=$match[1]
+unset record match
+[[ -n $token ]] || { print -u2 -r -- "lq: $s/$a holds no app token record"; exit 1; }
+# The token reaches curl only through a builtin print pipe, never its argv.
+print -r -- "Authorization: Bearer $token" |
+  curl -s --fail-with-body https://api.linear.app/graphql -H @- -H "Content-Type: application/json" \
+    --data-binary @"$3"
+st=($pipestatus)
+unset token
+(( st[2] == 0 )) || { print -u2 -r -- "lq: curl exited $st[2]"; exit 1; }
