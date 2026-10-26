@@ -2,8 +2,8 @@
 
 Broker protocol 25 makes `start` require the egress gateway ([Docker host › Egress
 gateway](docker-host.md#egress-gateway)): without it running and healthy, a start fails
-`egress_unavailable` (exit 17) before any credential. Upgrade the broker with the plugin.
-A worker already running stays on `bridge` until its next start, restart or resume.
+`egress_unavailable` (exit 17) before any credential. Upgrade the broker with the plugin, then rerun
+`scripts/install.sh --docker` to start the gateway ([Egress gateway](#egress-gateway)).
 
 Broker protocol 24 adds the start manifest's optional `secrets` ([environment secrets](docker-host.md#environment-secrets)).
 Upgrade the broker with the plugin: sessions refuse a broker of another protocol.
@@ -15,6 +15,24 @@ Protocol 23 also carries optional `audit_warning: "audit_write_failed"` metadata
 of success or failure; custom clients must display it while preserving the operation result.
 Its `build` adds `--base-image IMAGE` and `--image-plugin NAME` ([Docker host › Base
 images](docker-host.md#base-images)); a build without them is unchanged.
+
+## Egress gateway
+
+After updating the plugin, rerun `scripts/install.sh --docker`: it installs the pinned private
+`windroc/egress-proxy` with your `gh` access, creates `~/.egress/config.local.yaml` only if absent, starts the
+gateway and waits for healthy. Existing configs are preserved. Add Ollama and local/LAN provider exceptions before starting their workers
+([Gateway operations](docker-host.md#egress-gateway)).
+
+An already running worker stays on `bridge` during the upgrade; it is not forcibly migrated or stopped.
+Its next start, restart or resume creates a container on the gateway's internal `workers` network.
+List running broker workers still on `bridge`:
+
+```sh
+docker ps --filter network=bridge --filter label=ensemble.session
+```
+
+This filters out containers without the broker's session label. Restart or close/resume a listed worker when
+its current work can be interrupted. Until then, it retains its old local/LAN network access.
 
 ## Unified source layout
 

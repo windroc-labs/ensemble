@@ -6,6 +6,7 @@ import os
 import re
 import types
 import unittest
+from contextlib import nullcontext
 from unittest import mock
 
 from tests.session import live_docker as gate
@@ -83,6 +84,243 @@ class AuditLinesTest(Case):
     def test_skips_blank_and_malformed_lines(self):
         text = "\n".join([json.dumps(line("start")), "", "{oops", "[1]", json.dumps(line("close"))])
         self.assertEqual([x["event"] for x in gate.audit_lines(text)], ["start", "close"])
+
+
+class GatewayTest(Case):
+    def setUp(self):
+        self.gateway = {
+            "Config": {
+                "Labels": {
+                    "windroc.egress.contract": "1",
+                    "windroc.egress.networks": "mini-op,workers",
+                    "windroc.egress.network.workers.name": "egress-workers",
+                    "windroc.egress.network.workers.proxy": "http://egress-proxy-workers:4750",
+                }
+            },
+            "State": {"Running": True, "Health": {"Status": "healthy"}},
+            "NetworkSettings": {"Networks": {"egress-workers": {}}},
+        }
+        self.network = {"Name": "egress-workers", "Internal": True}
+        proxy = "http://egress-proxy-workers:4750"
+        self.worker = {
+            "Config": {
+                "Env": [
+                    *(
+                        f"{k}={proxy}"
+                        for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")
+                    ),
+                    "NO_PROXY=localhost,127.0.0.1,::1",
+                    "no_proxy=localhost,127.0.0.1,::1",
+                ]
+            }
+        }
+
+    def check(self):
+        return gate.gateway_baseline(self.gateway, self.network, self.worker)
+
+    def test_valid_contract_and_environment(self):
+        self.assertEqual(self.check(), [])
+
+    def test_starting_and_stopped_are_rejected(self):
+        for state in ({"Running": False}, {"Running": True, "Health": {"Status": "starting"}}):
+            self.gateway["State"] = state
+            self.assertTrue(self.check())
+
+    def test_each_missing_label_is_rejected(self):
+        labels = self.gateway["Config"]["Labels"]
+        for key in list(labels):
+            value = labels.pop(key)
+            self.assertTrue(self.check(), key)
+            labels[key] = value
+
+    def test_network_must_be_internal_and_attached(self):
+        self.network["Internal"] = False
+        self.assertTrue(self.check())
+        self.network["Internal"] = True
+        self.gateway["NetworkSettings"]["Networks"] = {}
+        self.assertTrue(self.check())
+
+    def test_missing_proxy_variable_is_rejected(self):
+        self.worker["Config"]["Env"].pop(0)
+        self.assertEqual(self.check(), ["HTTP_PROXY differs from gateway label"])
+
+    def test_host_bypass_is_rejected_independently_for_each_case(self):
+        valid = self.worker["Config"]["Env"][:]
+        for key in ("NO_PROXY", "no_proxy"):
+            with self.subTest(key=key):
+                self.worker["Config"]["Env"] = [
+                    f"{key}=localhost,127.0.0.1,::1,host.docker.internal"
+                    if item.startswith(key + "=")
+                    else item
+                    for item in valid
+                ]
+                self.assertEqual(self.check(), [f"{key} must bypass only container loopback"])
+
+    def test_probe_requires_proxy_decision_and_real_curl(self):
+        for kind, status, code in (
+            ("public", "200 200", 0),
+            ("denied", "407 000", 56),
+            ("direct", "000 000", 7),
+        ):
+            self.assertEqual(gate.probe_problems(kind, status, code), [])
+        for kind, status, code in (
+            ("public", "000 000", 0),
+            ("denied", "000 000", 7),
+            ("denied", "200 200", 0),
+            ("direct", "000 000", 125),
+            ("direct", "000 200", 0),
+        ):
+            self.assertTrue(gate.probe_problems(kind, status, code))
+
+
+class NetworkProbeTest(Case):
+    def setUp(self):
+        self.worker = gate.Worker(
+            gate.Args("worker", "live", client="claude", cwd=CWD), "mgr", "docker"
+        )
+        self.proxy = "http://egress-proxy-workers:4750"
+        self.route = ("  interface: en0\n", "")
+        self.lan = ("192.168.1.20\n", "")
+
+    def test_host_controls_and_every_worker_probe(self):
+        with (
+            mock.patch.object(
+                gate, "call", side_effect=[self.route, self.lan, ("", ""), ("", "")]
+            ) as call,
+            mock.patch.object(
+                gate, "listener", side_effect=[nullcontext(32101), nullcontext(32102)]
+            ) as listen,
+            mock.patch.object(self.worker, "probe") as probe,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            self.worker.network("container", self.proxy)
+        self.assertEqual(listen.call_args_list, [mock.call("127.0.0.1"), mock.call("192.168.1.20")])
+        self.assertEqual(
+            probe.call_args_list,
+            [
+                mock.call("container", self.proxy, "https://example.com", "public"),
+                mock.call("container", "", "https://1.1.1.1", "direct"),
+                mock.call("container", self.proxy, "http://host.docker.internal:32101/", "denied"),
+                mock.call("container", "", "http://host.docker.internal:32101/", "direct"),
+                mock.call("container", self.proxy, "http://192.168.1.20:32102/", "denied"),
+                mock.call("container", "", "http://192.168.1.20:32102/", "direct"),
+            ],
+        )
+        self.assertEqual(
+            call.call_args_list[:2],
+            [
+                mock.call(["route", "-n", "get", "default"]),
+                mock.call(["ipconfig", "getifaddr", "en0"]),
+            ],
+        )
+        for index, host, port in ((2, "127.0.0.1", 32101), (3, "192.168.1.20", 32102)):
+            self.assertEqual(
+                call.call_args_list[index].args[0],
+                [
+                    "curl",
+                    "--noproxy",
+                    "*",
+                    "-fsS",
+                    "-o",
+                    "/dev/null",
+                    "--max-time",
+                    "5",
+                    f"http://{host}:{port}/",
+                ],
+            )
+
+    def test_lan_control_needs_one_default_interface_and_a_private_ipv4(self):
+        two = ("  interface: en0\n  interface: en1\n", "")
+        cases = [
+            ([("", "")], "no unique default interface"),
+            ([two], "no unique default interface"),
+            *(
+                ([self.route, (address, "")], "private LAN IPv4")
+                for address in ("8.8.8.8\n", "127.0.0.1\n", "fd00::1\n", "\n")
+            ),
+        ]
+        for replies, message in cases:
+            with (
+                self.subTest(replies=replies),
+                mock.patch.object(gate, "call", side_effect=replies),
+                mock.patch.object(gate, "listener") as listen,
+                mock.patch.object(self.worker, "probe"),
+                self.assertRaisesRegex(SystemExit, message),
+            ):
+                self.worker.network("container", self.proxy)
+            listen.assert_not_called()
+
+    def test_unreachable_host_control_cannot_pass_denial(self):
+        with (
+            mock.patch.object(
+                gate, "call", side_effect=[self.route, self.lan, SystemExit("host control failed")]
+            ),
+            mock.patch.object(gate, "listener", return_value=nullcontext(32101)),
+            mock.patch.object(self.worker, "probe") as probe,
+            self.assertRaisesRegex(SystemExit, "host control failed"),
+        ):
+            self.worker.network("container", self.proxy)
+        self.assertEqual(probe.call_count, 2)
+
+    def test_curl_uses_supplied_proxy_and_propagates_a_failed_denial(self):
+        response = types.SimpleNamespace(stdout="407 000", returncode=56)
+        with (
+            mock.patch.object(gate.subprocess, "run", return_value=response) as run,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            self.worker.probe(
+                "container", self.proxy, "http://host.docker.internal:32101/", "denied"
+            )
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[:4], ["docker", "exec", "container", "curl"])
+        self.assertEqual(
+            argv[-6:],
+            [
+                "--noproxy",
+                "",
+                "--proxytunnel",
+                "--proxy",
+                self.proxy,
+                "http://host.docker.internal:32101/",
+            ],
+        )
+        self.assertEqual(argv[argv.index("-o") + 1], "/dev/null")
+        response.stdout, response.returncode = "000 000", 7
+        with (
+            mock.patch.object(gate.subprocess, "run", return_value=response),
+            self.assertRaisesRegex(SystemExit, "FAIL network denied"),
+        ):
+            self.worker.probe(
+                "container", self.proxy, "http://host.docker.internal:32101/", "denied"
+            )
+
+    def test_direct_probe_explicitly_bypasses_all_proxies(self):
+        response = types.SimpleNamespace(stdout="000 000", returncode=28)
+        with (
+            mock.patch.object(gate.subprocess, "run", return_value=response) as run,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            self.worker.probe("container", "", "https://1.1.1.1", "direct")
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[-3:], ["--noproxy", "*", "https://1.1.1.1"])
+        self.assertNotIn("--proxy", argv)
+
+    def test_listener_releases_server_and_thread_on_failure(self):
+        with (
+            mock.patch.object(gate, "HTTPServer") as server_type,
+            mock.patch.object(gate.threading, "Thread") as thread_type,
+        ):
+            server = server_type.return_value.__enter__.return_value
+            server.server_port = 32101
+            with (
+                self.assertRaisesRegex(RuntimeError, "consumer failed"),
+                gate.listener("127.0.0.1") as port,
+            ):
+                self.assertEqual(port, 32101)
+                raise RuntimeError("consumer failed")
+            server.shutdown.assert_called_once_with()
+            thread_type.return_value.start.assert_called_once_with()
+            thread_type.return_value.join.assert_called_once_with()
 
 
 class ReclaimedTest(Case):
@@ -254,14 +492,14 @@ class BaselineTest(Case):
         self.assertIn("docker.sock", problems[0])
 
 
-class WorkersNetworkTest(Case):
+class EgressGatewayTest(Case):
     GATEWAY = "e" * 64
 
     def network(self, listing, labels=None):
         found = [{"Config": {"Labels": labels or {}}}]
         replies = iter([(listing, ""), (json.dumps(found), "")])
         with mock.patch.object(gate, "call", side_effect=lambda _argv: next(replies)) as call:
-            return gate.workers_network("docker"), call
+            return gate.egress_gateway("docker")[1], call
 
     def test_the_gateways_workers_network(self):
         labels = {"windroc.egress.network.workers.name": NETWORK}
