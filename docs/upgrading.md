@@ -147,11 +147,11 @@ asks; skips what is installed and logged in; installs what the configuration lac
 change to your config or shell profile. Flags change the configuration (`--clients`, `--docker`/`--no-docker`, the
 `--opencode-*` flags); it removes nothing chosen before.
 
-It does not update what is installed, but for OpenCode's ensemble plugin: when `--ref` (default `<tag>`) names a newer
-commit than the one it last downloaded, it deletes OpenCode's copy and downloads it again. The `~/.ensemble/bin`
-commands follow [launcher precedence](../README.md#commands), so updating that copy alone may not change the code they run.
-Update the other plugins (Claude Code: `claude plugin marketplace update windroc`, then
-`claude plugin update ensemble@windroc`; Codex: `codex plugin marketplace upgrade windroc`), then rerun it: when
+Each run refreshes the selected Claude Code/Codex marketplaces and updates their ensemble plugins to the served ref
+before reading installed files. An update or version check failure stops with the client's name and reason.
+For OpenCode, when `--ref` (default `<tag>`) names a newer commit than the one it last downloaded, it deletes
+OpenCode's copy and downloads it again. The `~/.ensemble/bin` commands follow [launcher precedence](../README.md#commands),
+so updating OpenCode's copy alone may not change the code they run. After plugin refresh, when
 the plugin's broker sources changed, or the installed broker speaks another protocol, it reinstalls the broker, reusing locally usable Claude and ready Codex
 credentials and requesting any missing logins ([Log in](docker-host.md#log-in)).
 It does not edit config keys a release renames.
