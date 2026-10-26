@@ -366,6 +366,7 @@ class Related:
 class Invalid:
     reason: str
     mapped: bool = False
+    line: Literal["Repo", "Ref"] = "Repo"  # the description line the bounce says to fix
 
 
 @dataclass(frozen=True)
@@ -380,6 +381,7 @@ class Target:
     branch: str = ""
     clone: str = ""
     host: str = "github.com"
+    ref: str = ""  # a checked Ref: line's branch or tag
 
 
 UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")

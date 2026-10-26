@@ -26,7 +26,7 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | build --ensemble DIR [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--max-age SECONDS] | start --manifest FILE | lock-query --lock NAME | refresh --container NAME --manifest FILE | close --container NAME | status | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force]"
+const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | build --ensemble DIR [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--max-age SECONDS] | start --manifest FILE | lock-query --lock NAME | refresh --container NAME --manifest FILE | close --container NAME | status [--cleanup] | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force]"
 
 var containerPattern = regexp.MustCompile(`^ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}$`)
 var secondsPattern = regexp.MustCompile(`^[0-9]{1,9}$`)
@@ -40,7 +40,7 @@ type app struct {
 	build         func(ctx context.Context, pkg string, plugins []string, maxAge time.Duration, progress io.Writer) (any, error)
 	start, close  step
 	refresh       func(ctx context.Context, container, manifest string) (any, error)
-	status        func(ctx context.Context) (any, error)
+	status        func(ctx context.Context, cleanup bool) (any, error)
 	lockQuery     func(ctx context.Context, name string) (any, error)
 	probeOpencode func(ctx context.Context, provider, base string) (any, error)
 	workspaceRm   func(ctx context.Context, volume string, force bool) (any, error)
@@ -225,8 +225,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 		s, arg = func(ctx context.Context, container string, _ io.Writer) (any, error) {
 			return a.refresh(ctx, container, manifest)
 		}, args[2]
-	case command == "status" && len(args) == 1:
-		s = func(ctx context.Context, _ string, _ io.Writer) (any, error) { return a.status(ctx) }
+	case command == "status" && (len(args) == 1 || len(args) == 2 && args[1] == "--cleanup"):
+		s = func(ctx context.Context, _ string, _ io.Writer) (any, error) { return a.status(ctx, len(args) == 2) }
 	case command == "lock-query" && len(args) == 3 && args[1] == "--lock" && launcher.ValidLock(args[2]):
 		s, arg = func(ctx context.Context, lock string, _ io.Writer) (any, error) { return a.lockQuery(ctx, lock) }, args[2]
 	case command == "probe-provider" && len(args) == 5 && args[1] == "--provider" && launcher.ValidProvider(args[2]) && args[3] == "--base-url" && broker.ValidOpencodeURL(args[4]):
@@ -305,20 +305,21 @@ func withHost(command, container string, progress io.Writer, f func(launcher.Hos
 		return nil, err
 	}
 	rec := recorder(home, command, container)
-	defer func() { rec.Flush(err) }()
-	d, clean, err := docker.New(home)
-	if err != nil {
-		return nil, err
-	}
-	defer clean()
-	d.Progress = progress
-	h := launcher.NewHost(home, d.Endpoint(), d, broker.Credentials{Keychain: broker.SystemKeychain{Home: home}}, tokens(home, rec), rec)
-	h.Codex = broker.NewCodex(home, nil)
-	h.Opencode = broker.OpencodeKeys{Keychain: broker.SystemKeychain{Home: home}}
-	h.Env = broker.EnvKeys{Keychain: broker.SystemKeychain{Home: home}}
-	h.Progress = progress
-	h.Lock = broker.FileLock(filepath.Join(home, ".ensemble/docker/images.lock"))
-	return f(h)
+	return withAudit(rec, func() (any, error) {
+		d, clean, err := docker.New(home)
+		if err != nil {
+			return nil, err
+		}
+		defer clean()
+		d.Progress = progress
+		h := launcher.NewHost(home, d.Endpoint(), d, broker.Credentials{Keychain: broker.SystemKeychain{Home: home}}, tokens(home, rec), rec)
+		h.Codex = broker.NewCodex(home, nil)
+		h.Opencode = broker.OpencodeKeys{Keychain: broker.SystemKeychain{Home: home}}
+		h.Env = broker.EnvKeys{Keychain: broker.SystemKeychain{Home: home}}
+		h.Progress = progress
+		h.Lock = broker.FileLock(filepath.Join(home, ".ensemble/docker/images.lock"))
+		return f(h)
+	})
 }
 
 // tokens is the broker's GitHub App token store in the account's login keychain, reporting to rec (nil: none).
@@ -350,22 +351,31 @@ func system() app {
 		refresh: func(ctx context.Context, container, manifest string) (any, error) {
 			return withHost("refresh", container, nil, func(h launcher.Host) (any, error) { return h.Refresh(ctx, container, manifest) })
 		},
-		status: func(ctx context.Context) (_ any, err error) {
+		status: func(ctx context.Context, cleanup bool) (_ any, err error) {
 			home, err := accountHome()
 			if err != nil {
 				return nil, err
 			}
-			rec := recorder(home, "status", "")
-			defer func() { rec.Flush(err) }()
-			status, err := launcher.Host{GitHub: tokens(home, rec)}.Status(ctx)
-			if err != nil {
-				return nil, err
+			var rec *audit.Recorder
+			if cleanup {
+				rec = recorder(home, "status", "")
 			}
-			codexStatus := broker.NewCodex(home, nil).Status(ctx)
-			status.Codex = &codexStatus
-			credentials := broker.Credentials{Keychain: broker.SystemKeychain{Home: home}}
-			status.Claude = map[string]bool{"default": credentials.Usable("default")}
-			return status, nil
+			return withAudit(rec, func() (any, error) {
+				h := launcher.Host{GitHub: tokens(home, rec)}
+				query := h.Status
+				if cleanup {
+					query = h.Cleanup
+				}
+				status, err := query(ctx)
+				if err != nil {
+					return nil, err
+				}
+				codexStatus := broker.NewCodex(home, nil).Status(ctx)
+				status.Codex = &codexStatus
+				credentials := broker.Credentials{Keychain: broker.SystemKeychain{Home: home}}
+				status.Claude = map[string]bool{"default": credentials.Usable("default")}
+				return status, nil
+			})
 		},
 		close: func(ctx context.Context, container string, _ io.Writer) (any, error) {
 			return withHost("close", container, nil, func(h launcher.Host) (any, error) { return h.Close(ctx, container) })

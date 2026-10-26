@@ -1,5 +1,14 @@
 # Upgrading
 
+Broker protocol 23 adds the start manifest's optional `secrets` ([environment secrets](docker-host.md#environment-secrets)).
+Upgrade the broker with the plugin: sessions refuse a broker of another protocol.
+
+Broker protocol 22 makes `ensemble-broker status` read-only. Upgrade the broker with the
+plugin, and change automation that relied on status retrying GitHub revocations to
+`ensemble-broker status --cleanup`. The installer already uses this compatibility option.
+Protocol 22 also carries optional `audit_warning: "audit_write_failed"` metadata independently
+of success or failure; custom clients must display it while preserving the operation result.
+
 ## Unified source layout
 
 After updating the plugin to the `src/ensemble/` layout, refresh the launchers once:

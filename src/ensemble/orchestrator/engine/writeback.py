@@ -686,7 +686,11 @@ def bounce(ctx, issue: Issue, invalid: Invalid) -> None:
         text = (
             f"Repo check failed: {reason}. To build it, move {h.source} to "
             f"{tracker.state_name(IssueState.APPROVED)} again with a comment "
-            "`Repo: <owner>/<name>` naming the target repo."
+            + (
+                "`Ref: <branch or tag>` naming the ref."
+                if invalid.line == "Ref"
+                else "`Repo: <owner>/<name>` naming the target repo."
+            )
         ) + (
             f" Or fix {LOCAL}'s [orchestrator.linear.project_repos] entry."
             if invalid.mapped
@@ -705,7 +709,7 @@ def bounce(ctx, issue: Issue, invalid: Invalid) -> None:
             ctx.issue_id,
             say(
                 "Question:",
-                f"repo check failed: {reason}. Fix the description's `Repo:` "
+                f"repo check failed: {reason}. Fix the description's `{invalid.line}:` "
                 f"line, then move this issue back to {tracker.state_name(IssueState.READY)}.",
             )
             + notes,

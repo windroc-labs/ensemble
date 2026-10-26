@@ -4,6 +4,7 @@ a valid error response is a BrokerError.
 """
 
 import json
+import logging
 import os
 import re
 import select
@@ -21,7 +22,7 @@ from ensemble.utils import save
 # Installed by src/broker/install.sh and the worker image (src/broker/internal/launcher/assets/Dockerfile).
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
 RELAY = "/opt/ensemble/bin/relay"
-PROTOCOL = "21"
+PROTOCOL = "23"
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
 INSTALL = "install or upgrade it: see docs/docker-host.md#install"
 TIMEOUT = 1800
@@ -71,6 +72,11 @@ CODES = {  # code → (exit code, the commands that report it)
 }
 ERROR_KEYS = frozenset({"command", "code", "message", "cleanup"})
 ERROR_OPTIONAL = frozenset({"cause", "cleanup_error", "container"})
+LOG = logging.getLogger("session")
+AUDIT_WARNING = (
+    "audit_write_failed: broker audit persistence failed; the credential/resource operation "
+    "result still applies. Do not repeat a successful start; check the broker audit log."
+)
 
 
 class BrokerError(SessionError):
@@ -278,8 +284,9 @@ def _show(progress: bytes | bytearray) -> None:
 
 
 class Broker:
-    def __init__(self, runner=_stream) -> None:
+    def __init__(self, runner=_stream, *, warning=None) -> None:
         self.runner = runner
+        self.warning = warning or LOG.warning
 
     def _run(self, command: str, *args: str) -> dict:
         try:
@@ -297,11 +304,25 @@ class Broker:
             raise SessionError(f"broker {BROKER}: {error.strerror}; {INSTALL}") from None
         try:
             if res.returncode == 0:
-                return _object(res.stdout)
-            err = res.stderr
-            if command == "build":  # its progress lines come before the error object
-                err = err[err.rfind("\n{") + 1 :]
-            raise _error(command, res.returncode, _object(err))
+                found = _object(res.stdout)
+            else:
+                err = res.stderr
+                if command == "build":  # its progress lines come before the error object
+                    err = err[err.rfind("\n{") + 1 :]
+                found = _object(err)
+            if "audit_warning" in found:
+                if (
+                    command not in {"start", "refresh", "close", "status"}
+                    or found.pop("audit_warning") != "audit_write_failed"
+                ):
+                    raise _Bad("audit warning")
+                try:
+                    self.warning(AUDIT_WARNING)
+                except (OSError, ValueError):
+                    LOG.warning(AUDIT_WARNING)
+            if res.returncode == 0:
+                return found
+            raise _error(command, res.returncode, found)
         except _Bad as why:
             raise SessionError(f"broker: bad response to {command}: {why}") from None
 

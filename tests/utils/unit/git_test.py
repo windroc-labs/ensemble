@@ -6,6 +6,7 @@ import unittest.mock
 from types import SimpleNamespace
 
 import ensemble.utils.git
+from ensemble.utils import Invalid, check_ref
 from ensemble.utils import git as repos
 from tests.utils.case import Case
 
@@ -174,6 +175,49 @@ class Checkout(Case):
         )
         with self.assertRaises(repos.Invalid):
             repos.checkout("/b", "o", "n", "a/b")
+
+
+class CheckRef(Case):
+    def test_branch_and_tag_names_pass_unchanged(self):
+        for ref in ("main", "v1.2.0", "feature/x", "release-1.0_rc", "abcdef", "a" * 255):
+            with self.subTest(ref=ref):
+                self.assertEqual(check_ref(ref), ref)
+
+    def test_anything_else_is_invalid_and_named(self):
+        for ref, why in (
+            ("", "empty"),
+            ("a" * 256, "longer than 255 characters"),
+            ("--upload-pack=touch /tmp/x", "want letters, digits, ., _, / or -"),
+            ("a b", "want letters, digits, ., _, / or -"),
+            ("a\tb", "want letters, digits, ., _, / or -"),
+            ("a\x1fb", "want letters, digits, ., _, / or -"),
+            ("a\x0bb", "want letters, digits, ., _, / or -"),
+            ("a\nb", "want letters, digits, ., _, / or -"),
+            ("a~1", "want letters, digits, ., _, / or -"),
+            ("a:b", "want letters, digits, ., _, / or -"),
+            ("a@{1}", "want letters, digits, ., _, / or -"),
+            ("é", "want letters, digits, ., _, / or -"),
+            ("-x", "starts with -"),
+            ("--upload-pack", "starts with -"),
+            ("HEAD", "want a branch or tag name, not a full ref"),
+            ("refs/pull/1/head", "want a branch or tag name, not a full ref"),
+            ("refs/heads/main", "want a branch or tag name, not a full ref"),
+            ("abc1234", "looks like a commit SHA"),
+            ("0123456789abcdef0123456789ABCDEF01234567", "looks like a commit SHA"),
+            ("a..b", "not a valid git ref name"),
+            ("a//b", "not a valid git ref name"),
+            ("/a", "not a valid git ref name"),
+            ("a/", "not a valid git ref name"),
+            ("a.", "not a valid git ref name"),
+            (".a", "not a valid git ref name"),
+            ("a/.b", "not a valid git ref name"),
+            ("x.lock", "not a valid git ref name"),
+            ("x.lock/y", "not a valid git ref name"),
+        ):
+            with self.subTest(ref=ref):
+                with self.assertRaises(Invalid) as caught:
+                    check_ref(ref)
+                self.assertEqual(str(caught.exception), f"unsafe ref {ref[:80]!r}: {why}")
 
 
 if __name__ == "__main__":

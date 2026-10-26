@@ -65,7 +65,7 @@ class Supervisor:
         self.run, self.popen = run or subprocess.run, subprocess.Popen
         self.stopping, self.line_max = False, LINE_MAX
         self.seq_file = os.path.join(state, f"{generation}.seq")
-        self.broker, self.clock = Broker(), time.time
+        self.broker, self.clock = Broker(warning=self._audit_warning), time.time
 
     def reject(self, gen: str | None, seq: int | None, reason: str) -> None:
         path = os.path.join(self.state, "rejected.jsonl")
@@ -183,6 +183,12 @@ class Supervisor:
                     else "github_refresh_failed",
                     reason,
                 )
+
+    def _audit_warning(self, reason: str) -> None:
+        if self.events:
+            SessionStatusLog(self.events).write(self.name, "credential_audit_warning", reason)
+        else:
+            LOG.warning("docker session %s: %s", self.name, reason)
 
     def _auth_expired(self, reason: str) -> None:
         LOG.warning("docker session %s: client_auth_expired %s", self.name, reason)
