@@ -3,11 +3,11 @@
 """
 
 import copy
-import unittest
 
 from ensemble.delegate.engine.environment import prefetch_target, resolve, resolve_fields
 from ensemble.delegate.engine.types import ConfigError, Resolved
 from ensemble.session import EnvironmentSpec
+from tests.delegate.case import Case
 
 PACKAGED = {
     "docker": {
@@ -32,7 +32,7 @@ def resolved(cfg: dict, role: str = "dummy-tester", host: str = "docker") -> Res
     return resolve(cfg, role=role, host=host, packaged=PACKAGED)
 
 
-class ResolveTest(unittest.TestCase):
+class ResolveTest(Case):
     def test_a_role_without_an_environment_table_passes_none(self):
         self.assertIsNone(resolved(config(), "engineer"))
         self.assertIsNone(resolved(config(), "engineer", "tmux"))
@@ -130,7 +130,7 @@ class ResolveTest(unittest.TestCase):
         self.assertIsNotNone(resolved(cfg, "engineer"))
 
 
-class PrefetchTargetTest(unittest.TestCase):
+class PrefetchTargetTest(Case):
     def target(self, *lines: str) -> tuple[str, str | None]:
         return prefetch_target("\n".join(lines) + "\n\nThe task.\nRepo: ignored/below\n")
 
@@ -168,7 +168,3 @@ class PrefetchTargetTest(unittest.TestCase):
     def test_no_repo_line_in_the_reference_block(self):
         self.refused("Reference: T-1", "Ref: v1")
         self.refused("Repo: o/r")
-
-
-if __name__ == "__main__":
-    unittest.main()

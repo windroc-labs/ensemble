@@ -1,5 +1,5 @@
-"""A run's EnvironmentSpec from the config layers (engine/config.py checks them at load), and its
-prefetch target from the input's Reference block (docs/docker-host.md › Environment config).
+"""A run's EnvironmentSpec from the config layers and its prefetch target from the input
+(docs/docker-host.md › Environment config).
 """
 
 from collections.abc import Mapping
@@ -47,18 +47,18 @@ def resolve_fields(
         named = environments[name]
     fields = {**default, **named, **overrides}
     prefetch = fields.pop("prefetch", False)
-    spec = _spec(fields, host)
+    spec = _spec(fields, f"{by} on Host {host}")
     base = packaged.get(host)
-    if not prefetch and base is not None and spec == _spec(base, host):
+    if not prefetch and base is not None and spec == _spec(base, f"[environment.{host}]"):
         return None
     return Resolved(spec, prefetch)
 
 
-def _spec(fields: Mapping, host: str) -> EnvironmentSpec:
+def _spec(fields: Mapping, where: str) -> EnvironmentSpec:
     try:
         return EnvironmentSpec.from_fields({k: v for k, v in fields.items() if k != "prefetch"})
     except SessionConfigError as error:
-        raise ConfigError(f"[environment.{host}]: {error}") from None
+        raise ConfigError(f"{where}: {error}") from None
 
 
 def prefetch_target(text: str) -> tuple[str, str | None]:

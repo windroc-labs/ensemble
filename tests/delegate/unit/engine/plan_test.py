@@ -827,3 +827,7 @@ class PrefetchTest(Docker):
         self.assertEqual(got.session.environment, self.SPEC)
         got, _ = self.planned(input=text)
         self.assertIsNone(got.session.environment)
+
+    def test_an_in_process_run_refuses_an_environment(self):
+        message = self.refused(mode="in_process", environment=self.env(prefetch=False))
+        self.assertIn("in_process", message)

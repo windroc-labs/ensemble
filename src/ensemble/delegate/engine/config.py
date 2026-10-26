@@ -13,6 +13,8 @@ DOCKER_HOST = "ensemble.session.hosts.docker.host:DockerHost"
 ENVIRONMENT_NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,62}")
 ENVIRONMENT_KEYS = frozenset({"image", "gateway", "plugins", "lock", "prefetch", "secrets"})
 SECRET_KEYS = frozenset({"item", "file"})
+# what a named or role table, checked alone, may leave to its default
+PLACEHOLDERS = {"image": session.EnvironmentSpec.WORKER, "gateway": "workers"}
 
 
 def read_config(*, local: str = utils.LOCAL, path: str | None = None) -> dict:
@@ -34,6 +36,10 @@ def module_roots() -> tuple[str, ...]:
     return utils.module_roots(config, session, utils)
 
 
+def docker_kind(table) -> bool:
+    return isinstance(table, Mapping) and table.get("implementation") == DOCKER_HOST
+
+
 def packaged_environments() -> Mapping:
     """The packaged config.toml's [environment] tables, without config.local.toml."""
     with open(config.CONFIG, "rb") as stream:
@@ -48,8 +54,7 @@ def check_environments(cfg: Mapping) -> None:
     named = _tables(cfg, "environments")
     for host, table in _tables(cfg, "environment").items():
         where = f"[environment.{host}]"
-        found = hosts.get(host) if isinstance(hosts, Mapping) else None
-        if not isinstance(found, Mapping) or found.get("implementation") != DOCKER_HOST:
+        if not docker_kind(hosts.get(host) if isinstance(hosts, Mapping) else None):
             raise ValueError(
                 f"{where} ([delegate.environment.{host}] in config.local.toml): "
                 f"{host} is not a Docker-kind Host"
@@ -111,9 +116,9 @@ def _check_table(table: Mapping, where: str) -> None:
                 raise ValueError(f"{where} secrets {n} must be a table")
             if extra := sorted(set(secret) - SECRET_KEYS, key=str):
                 raise ValueError(f"unknown key {extra[0]!r} in {where} secrets {n}")
-    fields = {"image": session.EnvironmentSpec.WORKER, "gateway": "workers"}
-    fields |= {key: value for key, value in table.items() if key != "prefetch"}
     try:
-        session.EnvironmentSpec.from_fields(fields)
+        session.EnvironmentSpec.from_fields(
+            PLACEHOLDERS | {key: value for key, value in table.items() if key != "prefetch"}
+        )
     except session.ConfigError as error:
         raise ValueError(f"{where}: {error}") from None

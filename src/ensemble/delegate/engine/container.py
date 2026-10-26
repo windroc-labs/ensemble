@@ -5,7 +5,7 @@ import json
 import os
 from collections.abc import Mapping
 
-from ensemble.delegate.engine.config import DOCKER_HOST
+from ensemble.delegate.engine.config import docker_kind
 from ensemble.delegate.engine.types import ConfigError
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import Host
@@ -18,7 +18,7 @@ def on_docker(settings: Mapping, host: str | None) -> bool:
         hosts = Host.parse_hosts(settings.get("hosts"))
     except SessionConfigError as error:
         raise ConfigError(str(error)) from None
-    return hosts.tables.get(host or hosts.default, {}).get("implementation") == DOCKER_HOST
+    return docker_kind(hosts.tables.get(host or hosts.default))
 
 
 def reference_lines(text: str) -> tuple[list[str], int]:
