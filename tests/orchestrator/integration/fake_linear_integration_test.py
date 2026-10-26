@@ -27,7 +27,6 @@ from ensemble.orchestrator.trackers.linear import (
     issue_edit,
     issue_label,
     issue_list,
-    issue_names,
     issue_read,
     issue_refs,
     issue_relation,
@@ -42,6 +41,8 @@ from tests.orchestrator.integration import fake_linear
 from tests.orchestrator.integration.fake_transport import install, refuse_keychain
 from tests.orchestrator.unit.board_ids import (
     HARNESS_IDENTITY,
+    MANAGER_IDENTITY,
+    MANAGER_USER,
     STATES,
     TASK_GROUP,
     TEAM,
@@ -601,7 +602,6 @@ class FixtureOperations(Case):
             issue_create.M_CREATE,
             issue_create.M_RELATE,
             issue_create.Q_VIEWER,
-            issue_names.Q_VIEWER,
             issue_refs.Q_ISSUE,
             issue_edit.Q_READ,
             issue_edit.M_EDIT,
@@ -941,6 +941,9 @@ class IssueOps(ServerCase):
         self.task7 = self.fake.find("TASK-7")
         self.issues = LinearIssues(self.gql, names_cfg())
         self.me = {"id": self.harness, "name": "Harness"}
+        self.manager = self.fake.user(
+            "manager@x.com", "Manager", MANAGER_IDENTITY.token_service, app=True, uid=MANAGER_USER
+        )
 
     def ops(self):
         return [r.op for r in self.fake.requests]
@@ -950,8 +953,7 @@ class IssueOps(ServerCase):
 
     def test_the_viewer(self):
         self.assertEqual(self.gql(issue_create.Q_VIEWER), {"viewer": self.me})
-        self.assertEqual(self.eng(issue_names.Q_VIEWER), {"viewer": {"id": self.engineer}})
-        self.assertEqual(self.ops(), ["issue_create.Q_VIEWER", "issue_names.Q_VIEWER"])
+        self.assertEqual(self.ops(), ["issue_create.Q_VIEWER"])
 
     def test_an_issue_by_identifier_or_id(self):
         want = {"issue": {"id": self.task7["id"], "identifier": "TASK-7"}}
@@ -1120,7 +1122,8 @@ class IssueOps(ServerCase):
     def test_list_filters(self):
         self.fake.issue(
             "Widget parser",
-            assignee=self.engineer,
+            delegate=self.engineer,
+            assignee=self.human,
             priority=2,
             labels=[TASK_LABELS["build"]],
         )
@@ -1131,16 +1134,18 @@ class IssueOps(ServerCase):
             priority=1,
             labels=[CLIENT_LABELS["codex"]],
         )
-        gone = self.fake.issue("Archived widget", assignee=self.engineer)
+        self.fake.issue("Mine", state="backlog", delegate=self.manager, assignee=self.engineer)
+        gone = self.fake.issue("Archived widget", delegate=self.engineer)
         ops.call(self.gql, linear_tracker.M_ARCHIVE, "issueArchive", i=gone["id"])
         for given, want in (
-            ({}, ["TASK-7", "TASK-8", "TASK-9"]),
-            ({"include_archived": True}, ["TASK-10", "TASK-7", "TASK-8", "TASK-9"]),
+            ({}, ["TASK-10", "TASK-7", "TASK-8", "TASK-9"]),
+            ({"include_archived": True}, ["TASK-10", "TASK-11", "TASK-7", "TASK-8", "TASK-9"]),
             ({"query": "widget"}, ["TASK-8", "TASK-9"]),
-            ({"query": "widget", "include_archived": True}, ["TASK-10", "TASK-8", "TASK-9"]),
+            ({"query": "widget", "include_archived": True}, ["TASK-11", "TASK-8", "TASK-9"]),
             ({"state": IssueState.READY}, ["TASK-8", "TASK-9"]),
             ({"state": IssueState.RUNNING}, ["TASK-7"]),
             ({"role": "engineer"}, ["TASK-7", "TASK-8"]),
+            ({"role": "me"}, ["TASK-10"]),
             ({"role": "unassigned"}, ["TASK-9"]),
             ({"task": "build"}, ["TASK-8"]),
             ({"client": "codex"}, ["TASK-9"]),
@@ -1233,16 +1238,20 @@ class IssueOps(ServerCase):
                 ops.call(self.gql, issue_edit.M_EDIT, "issueUpdate", i="TASK-8", **{"in": bad})
         self.assertEqual(rec["labels"], [TASK_LABELS["light-build"], CLIENT_LABELS["claude"]])
 
-    def test_edit_role_assigns_and_unassigns_only(self):
-        rec = self.fake.issue("Unassigned", description="Kept")
-        for role, want in (("engineer", self.engineer), ("me", self.harness), ("unassigned", None)):
+    def test_edit_role_delegates_clears_the_assignee_and_unassigns_only(self):
+        rec = self.fake.issue("Unassigned", description="Kept", assignee=self.human)
+        for role, want, sent in (
+            ("engineer", self.engineer, {"delegateId": self.engineer, "assigneeId": None}),
+            ("me", self.manager, {"delegateId": self.manager}),
+            ("unassigned", None, {"delegateId": None}),
+        ):
             with self.subTest(role=role):
                 receipt = self.issues.edit(issue_change(rec["identifier"], role=role))
                 self.assertEqual(receipt.result, "changed")
-                self.assertEqual(self.fake.requests[-1].variables["in"], {"assigneeId": want})
+                self.assertEqual(self.fake.requests[-1].variables["in"], sent)
                 self.assertEqual(
-                    (rec["assignee"], rec["title"], rec["description"]),
-                    (want, "Unassigned", "Kept"),
+                    (rec["delegate"], rec["assignee"], rec["title"], rec["description"]),
+                    (want, None, "Unassigned", "Kept"),
                 )
         again = self.issues.edit(issue_change(rec["identifier"], role="unassigned"))
         self.assertEqual(again.result, "unchanged")

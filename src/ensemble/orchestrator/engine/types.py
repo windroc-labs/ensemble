@@ -105,7 +105,7 @@ class LinearSettings:
     states: Mapping[str, str]
     human_members: tuple[str, ...]
     harness: LinearApp
-    # each unset key "": read user_id from it; only config.manager_app gives it as a call identity
+    # unset keys are ""; calls take it from config.manager_app
     manager: LinearApp
     task_label_group: str
     task_labels: Mapping[str, str]
