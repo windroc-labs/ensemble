@@ -14,13 +14,12 @@ import logging
 import os
 import re
 import shlex
-import shutil
 import signal
 import subprocess
 import sys
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import replace
 from datetime import datetime
 from typing import NamedTuple
@@ -108,6 +107,7 @@ from ensemble.utils import (
     piped_popen,
     read_beneath,
     read_regular,
+    remove_tree,
     save,
     source_path,
     timestamp,
@@ -238,6 +238,35 @@ def _image_tag(row: Row) -> str | None:
     except (OSError, ValueError):
         return None
     return found.get("image") if isinstance(found, dict) else None
+
+
+def _reset_home(name: str, home: str, kept: Iterable[str]) -> None:
+    """Empties a new start's client home in place, never following a link: Docker Desktop can
+    report a bind source recreated at a path it saw before as missing, so `home` and each `kept`
+    dir under it stay the same dir, mode 0700; a link or file there is removed.
+    """
+    keep = {os.path.join(home, directory) for directory in kept}
+
+    def empty(path: str) -> None:
+        os.chmod(path, 0o700)
+        with os.scandir(path) as entries:
+            for entry in entries:
+                if not entry.is_dir(follow_symlinks=False):
+                    os.unlink(entry.path)
+                elif entry.path in keep:
+                    empty(entry.path)
+                else:
+                    remove_tree(entry.path)
+
+    try:
+        if os.path.lexists(home) and (os.path.islink(home) or not os.path.isdir(home)):
+            os.unlink(home)
+        os.makedirs(home, mode=0o700, exist_ok=True)
+        empty(home)
+    except OSError as error:
+        raise SessionError(
+            f"docker session {name}: cannot reset {home}: {error.strerror or error}"
+        ) from None
 
 
 def _report_plan(name: str, plan: Mapping) -> None:
@@ -1113,8 +1142,7 @@ class DockerHost(Host):
         persistent = json.loads(metadata.get("home_persistent") or "null")
         if resume == "0":
             self._move_workspace(name, volume, cwd)
-            shutil.rmtree(home, ignore_errors=True)
-            os.makedirs(home, mode=0o700)
+            _reset_home(name, home, persistent or ())
             for file, text in json.loads(metadata.get("home_files") or "{}").items():
                 save(os.path.join(home, file), text)
             for directory in persistent or ():

@@ -563,7 +563,7 @@ The image supplies OpenCode 1.x and its provider config; none of the Mac's OpenC
 Each start, restart or resume runs a new generation in a new container from the current image. `restart` closes the
 running container first; `resume` (after `close`, or once the container is gone) starts one in the same cwd. Both
 keep the client history and [workspace volume](#workspace-volumes) and continue the conversation; a new start
-clears client history, while workspace retention follows [Workspace volumes](#workspace-volumes). A resume whose conversation file is missing or a symlink fails before any container with
+clears client history, emptying the client state dir in place (Docker Desktop can report a bind source deleted and recreated at a path it has seen as missing), while workspace retention follows [Workspace volumes](#workspace-volumes). A resume whose conversation file is missing or a symlink fails before any container with
 `no native history to resume`. Resume with `ensemble-session resume <name>`, never `client-resume`, which runs the
 client on the host. Claude, Codex and [OpenCode](#opencode) terminals and headless runs are supported;
 other clients, detached sessions and a start while a container of that name exists fail before creation.
