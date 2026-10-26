@@ -96,9 +96,11 @@ class TuiTest(Live):
         )
         self.assertEqual(tui.TuiMode.snapshot("w1")["sid"], SID)
         stream = Stream(self, handle)
+        # Hook processes can exceed IDLE between tool and stop on a loaded runner.
         self.assertEqual(
-            [stream.next() for _ in range(3)], [Activity(""), TurnEnd("r1", 0), IdleTimeout(IDLE)]
+            [stream.next(idle=False) for _ in range(2)], [Activity(""), TurnEnd("r1", 0)]
         )
+        self.assertEqual(stream.next(), IdleTimeout(IDLE))
         self.assertEqual(
             [(r["kind"], r.get("client_id")) for r in RunLog(self.workdir).read()],
             [("session", None), ("client_session", "n1")],

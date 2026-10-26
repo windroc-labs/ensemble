@@ -1222,7 +1222,8 @@ class Open(Base):
             self.assertNotIn("ENSEMBLE_SID", os.environ)
             self.assertNotIn("ENSEMBLE_EVENTS", os.environ)
         argv = self.opened.call_args.args[0]
-        self.assertEqual(argv[5:7], ["start", "dummy-1"])
+        self.assertEqual(argv[5], "start")
+        self.assertEqual(argv[-2:], ["--", "dummy-1"])
         for key, value in (
             ("--client", "codex"),
             ("--cwd", self.tmp),

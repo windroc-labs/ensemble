@@ -26,16 +26,17 @@ class Open(Case):
             '[[delegate.environments.dummy.secrets]]\nitem = "ensemble-env/dummy"\nfile = "dummy.txt"\n'
         )
 
-    def open(self, *extra, code="0"):
+    def open(self, *extra, code="0", name="dummy-1"):
         return subprocess.run(
             (
                 *PY,
                 str(Path(REPO, "tests/delegate/fakes/open_launcher.py")),
                 "open",
-                "dummy-1",
                 "--environment",
                 "dummy",
                 *extra,
+                "--",
+                name,
             ),
             cwd=self.cwd,
             env={
@@ -71,6 +72,12 @@ class Open(Case):
         self.assertEqual(spec["secrets"], [{"item": "ensemble-env/dummy", "file": "dummy.txt"}])
         self.assertIsNone(spec["prefetch"])
         self.assertFalse(list(Path(self.home).rglob("delegate.json")))
+
+    def test_leading_dash_name_and_display_survive_both_cli_parsers(self):
+        done = self.open("--display=-pane", name="-pane")
+        self.assertEqual((done.returncode, done.stderr), (0, ""))
+        record = Record.parse(done.stdout)
+        self.assertEqual((record.name, record.display), ("-pane", "-pane"))
 
     def test_busy_has_no_record_and_preserves_stderr_and_exit_75(self):
         done = self.open(code="75")
