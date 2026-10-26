@@ -229,6 +229,27 @@ class NetworkProbeTest(Case):
                 ],
             )
 
+    def test_lan_control_needs_one_default_interface_and_a_private_ipv4(self):
+        two = ("  interface: en0\n  interface: en1\n", "")
+        cases = [
+            ([("", "")], "no unique default interface"),
+            ([two], "no unique default interface"),
+            *(
+                ([self.route, (address, "")], "private LAN IPv4")
+                for address in ("8.8.8.8\n", "127.0.0.1\n", "fd00::1\n", "\n")
+            ),
+        ]
+        for replies, message in cases:
+            with (
+                self.subTest(replies=replies),
+                mock.patch.object(gate, "call", side_effect=replies),
+                mock.patch.object(gate, "listener") as listen,
+                mock.patch.object(self.worker, "probe"),
+                self.assertRaisesRegex(SystemExit, message),
+            ):
+                self.worker.network("container", self.proxy)
+            listen.assert_not_called()
+
     def test_unreachable_host_control_cannot_pass_denial(self):
         with (
             mock.patch.object(

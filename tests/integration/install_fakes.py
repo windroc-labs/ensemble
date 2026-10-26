@@ -327,10 +327,15 @@ def login(client, args, status, start, logout):
 
 def gh(args):
     if args and args[0] == "api" and args[1].startswith("repos/windroc/egress-proxy/tarball/"):
+        # egress_tarball, when present, says how to spoil it: corrupt or noexec.
+        spoil = path.read_text() if (path := FAKES / "egress_tarball").exists() else ""
+        if spoil == "corrupt":
+            sys.stdout.buffer.write(b"not a tarball")
+            return 0
         with tarfile.open(fileobj=sys.stdout.buffer, mode="w|gz") as archive:
             content = b"#!/bin/bash\nset -eu\ndocker egress-start\n"
             info = tarfile.TarInfo("egress-fixture/start.sh")
-            info.size, info.mode = len(content), 0o755
+            info.size, info.mode = len(content), 0o644 if spoil == "noexec" else 0o755
             archive.addfile(info, io.BytesIO(content))
         return 0
     for path in (

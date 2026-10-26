@@ -1133,6 +1133,61 @@ class InstallTest(Case):
             self.again("--clients", "claude", "--docker", answers=DOCKER_LOGINS + ((WRITE_Q, "y"),))
         )
 
+    def test_gateway_unusable_download_leaves_no_version_and_is_retryable(self):
+        versions = Path(self.home, ".egress/versions")
+        (self.fakes / "egress_tarball").write_text("corrupt")
+        result = self.fresh("--clients", "claude", "--docker", gateway_failure=True)
+        self.assertEqual(result.code, 1)
+        self.assertIn("cannot unpack pinned windroc/egress-proxy", result.stderr)
+        self.assertEqual(list(versions.iterdir()), [])
+        (self.fakes / "egress_tarball").write_text("noexec")
+        result = self.again("--clients", "claude", "--docker")
+        self.assertEqual(result.code, 1)
+        self.assertIn("pinned egress version has no executable start.sh", result.stderr)
+        self.assertEqual(list(versions.iterdir()), [])
+        self.assertNotIn("docker egress-start", self.calls())
+        (self.fakes / "egress_tarball").unlink()
+        self.assert_ok(
+            self.again("--clients", "claude", "--docker", answers=DOCKER_LOGINS + ((WRITE_Q, "y"),))
+        )
+
+    def test_gateway_incomplete_checkout_is_kept_and_rejected(self):
+        version = Path(self.home, ".egress/versions/225409bd04954ff1ea81d66e5339c812a519b4f7")
+        version.mkdir(parents=True)
+        executable(version / "start.sh", "#!/bin/sh\n")
+        (version / "COMMIT").write_text("0" * 40 + "\n")
+        before = {p.name: p.read_bytes() for p in version.iterdir()}
+        result = self.fresh("--clients", "claude", "--docker", gateway_failure=True)
+        self.assertEqual(result.code, 1)
+        self.assertIn(f"incomplete egress checkout {version}", result.stderr)
+        self.assertEqual({p.name: p.read_bytes() for p in version.iterdir()}, before)
+        self.assertNotIn("docker egress-start", self.calls())
+        self.assertFalse(any("tarball/" in c for c in self.calls()))
+
+    def test_gateway_config_directory_is_kept_and_rejected(self):
+        config = Path(self.home, ".egress/config.local.yaml")
+        config.mkdir(parents=True)
+        (config / "keep").write_text("mine\n")
+        result = self.fresh("--clients", "claude", "--docker", gateway_failure=True)
+        self.assertEqual(result.code, 1)
+        self.assertIn(
+            "config.local.yaml is not a readable file; existing path was kept", result.stderr
+        )
+        self.assertEqual((config / "keep").read_text(), "mine\n")
+        self.assertNotIn("docker egress-start", self.calls())
+
+    def test_gateway_current_directory_is_kept_and_not_published(self):
+        current = Path(self.home, ".egress/current")
+        current.mkdir(parents=True)
+        (current / "keep").write_text("mine\n")
+        result = self.fresh("--clients", "claude", "--docker", gateway_failure=True)
+        self.assertEqual(result.code, 1)
+        self.assertIn(f"{current} is not an installer symlink; kept it", result.stderr)
+        self.assertFalse(current.is_symlink())
+        self.assertEqual((current / "keep").read_text(), "mine\n")
+        self.assertNotIn("egress_commit", self.state())
+        self.assertNotIn("ensemble-broker login claude", self.calls())
+
     def test_gateway_start_and_health_failures_stop_before_broker_logins(self):
         (self.fakes / "fail").write_text("docker egress-start")
         result = self.fresh("--clients", "claude", "--docker", gateway_failure=True)

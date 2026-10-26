@@ -706,8 +706,11 @@ class Worker:
         if len(interfaces) != 1:
             raise SystemExit("FAIL LAN control: no unique default interface")
         lan = call(["ipconfig", "getifaddr", interfaces[0]])[0].strip()
-        address = ipaddress.ip_address(lan)
-        if address.version != 4 or not address.is_private or address.is_loopback:
+        try:
+            address = ipaddress.ip_address(lan)
+        except ValueError:
+            address = None
+        if address is None or address.version != 4 or not address.is_private or address.is_loopback:
             raise SystemExit("FAIL LAN control: need this mini's private LAN IPv4 address")
         for bind, target in (("127.0.0.1", "host.docker.internal"), (lan, lan)):
             with listener(bind) as port:
