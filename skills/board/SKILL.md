@@ -98,7 +98,7 @@ ensemble-orchestrator issue archive TASK-1 --dry-run
 ensemble-orchestrator issue archive TASK-1
 ```
 
-Archiving takes every sub-issue with it. `archive` reads all of them, at every depth, and archives only when the issue and each unarchived sub-issue are finished (`done` or `canceled`); prune follows the same rule. Otherwise it exits 1 naming the unfinished ones; there is no override. `--dry-run` lists what would go, writing nothing, and exits 0 whatever it finds: read its `result` (`refused` when anything blocks) and `unfinished`. It closes no run and deletes no file.
+Archiving takes every sub-issue with it. `archive` reads all of them, at every depth, and archives only when the issue and each unarchived sub-issue are finished (`done` or `canceled`); prune also waits until it would archive each sub-issue itself. Otherwise it exits 1 naming the unfinished ones; there is no override. `--dry-run` lists what would go, writing nothing, and exits 0 whatever it finds: read its `result` (`refused` when anything blocks) and `unfinished`. It closes no run and deletes no file.
 
 ## Local board
 
@@ -123,5 +123,6 @@ ensemble-orchestrator issue label swap TASK-1 --from todo --to doing
 - `lookup RESOURCE` lists `teams`, `states`, `labels`, `projects`, `milestones` (`--project`) or `users` with their ids.
 - `--label`, `--project` and `--milestone` take an id or an exact name. No match, several, or one outside the team exits 2 naming the candidates and the `lookup` command that lists them: pick an id from it, never the first match.
 - `edit --project` changes only the issue's project. The router starts only issues with a project: give one to an issue created without `--project`.
+- An archived issue: `move` to any state but `done` or `canceled` unarchives it first, putting it back on the lists (the router's included); `comment` on one exits 2, so move it first.
 - `label swap` replaces one label, keeping the rest; it refuses when the issue carries neither label, or when NEW's group already has another of its labels.
 - An operation no command covers (other Linear entities) falls back to your own Linear tool, such as `/linear`.

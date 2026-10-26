@@ -585,7 +585,11 @@ each replacing the keys it sets (a list whole):
 | `[roles.<role>.environment]` | `[delegate.roles.<role>.environment]` | `name` (a named environment) and keys overriding it; without `name`, overrides of the default |
 
 The packaged default is `[environment.docker]`: `image = "@worker"`, `gateway = "workers"`, `plugins = []`,
-`secrets = []`, `prefetch = false`, no `lock`. Keys:
+`secrets = []`, `prefetch = false`, no `lock`. It also ships one named environment, `[environments.mini-op]`: image
+`mini-op:env`, gateway, lock and plugin `mini-op`, and the secrets `ensemble-env/mini-op-password` (file `mini-password`)
+and `ensemble-env/mini-op-ssh-key` (file `mini-ssh-key`); no prefetch. The built-in `verifier` selects it with
+`prefetch = true`, so on a Host without a default table (the packaged `tmux`) a `verifier` run is the configuration error
+below. Keys:
 
 - `image`: a local [base image](#base-images) or `"@worker"`, ensemble's worker base.
 - `gateway`: the caller network the container joins, by the egress proxy's label name
@@ -596,7 +600,8 @@ The packaged default is `[environment.docker]`: `image = "@worker"`, `gateway = 
 - `lock`: a [lock](#broker-locks) name. A locked run's session closes as soon as the run ends (outcome, failure,
   give-up, usage limit), before its result goes out: no TUI is left for a pane to follow; the workspace and history
   stay, so `ensemble-crew reopen` continues.
-- `prefetch`: `true` prefetches the input's Reference block: exactly one `Repo:` line (a clone path names its origin)
+- `prefetch`: `true` prefetches the input's Reference block (its leading lines, opening with `Reference:` or, in an
+  input without an id, `Repo:`): exactly one `Repo:` line (a clone path names its origin)
   and at most one `Ref:` line (the [Prefetch](#prefetch) ref rule; none: the default branch). Both are checked before
   any git or GitHub call; `Base:` is not read.
 

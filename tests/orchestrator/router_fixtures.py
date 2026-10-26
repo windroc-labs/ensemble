@@ -117,7 +117,7 @@ LIGHT, DEEP, STRAY, ORPHAN_LABEL = (
 
 RECHECK = (
     "query($i: String!) { issue(id: $i) { state { id } delegate { id } assignee { id email } project { id name } "
-    "labels { nodes { id name parent { id } } } } }"
+    "labels { nodes { id name parent { id } } } archivedAt } }"
 )
 
 
@@ -153,8 +153,10 @@ def issue(
     project=DR,
     inverse=(),
     labels=(),
+    archived=False,
 ):
     return {
+        "archived": archived,
         "id": ident,
         "identifier": ident,
         "url": f"https://linear.app/x/{ident}",
@@ -321,6 +323,7 @@ class FakeLinear:
                     "delegate": i.get("delegate"),
                     "project": i["project"],
                     "labels": {"nodes": i["labels"]},
+                    "archivedAt": "2026-10-26T04:11:00.000Z" if i["archived"] else None,
                 }
             }
         return None
@@ -349,14 +352,15 @@ class FakeLinear:
         if self.todo_error and "inverseRelations" in query:
             raise LinearError(f"linear api error: {[{'message': 'Entity not found'}]}")
         drop = (
-            {"state", "labels"}
+            {"state", "labels", "archived"}
             if "inverseRelations" in query
-            else {"state", "labels", "inverseRelations"}
+            else {"state", "labels", "archived", "inverseRelations"}
         )
         nodes = [
             {k: x for k, x in i.items() if k not in drop}
             for i in self.issues.values()
             if f["team"]["id"]["eq"] == TEAM
+            and not i["archived"]  # Linear lists none without includeArchived
             and f["project"] == {"null": False}
             and i["project"]
             and i["state"] == NAMES[f["state"]["id"]["eq"]]

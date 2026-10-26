@@ -13,7 +13,9 @@ configured one) reports agent files in (Delegate.checkouts not None):
   app (a researcher's report stays), any other whatever its assignee, none included, unless
   it (reopened since) or a sub-issue, at any depth, is unfinished, every page of them read first
   (Tracker.archive; Linear archives sub-issues with their parent, theirs too): skipped until each
-  is finished or archived.
+  is finished or archived. A finished sub-issue it would not archive itself (not listed, or its
+  finish time unknown or under 2 hours ago) keeps the parent too. A candidate whose version
+  differs from the archive plan's waits for a consistent read next tick.
 
 For each stalled issue (any state but Todo, In Progress or a finished one) whose latest move into its
 state and latest recorded run are both at least 7 days old, it deletes its agent files' checkouts and
@@ -85,6 +87,8 @@ BACKSTOP = timedelta(days=1)  # an entry the feed never names is read again afte
 OVERLAP = timedelta(minutes=10)  # Linear's lists lag a change
 CACHE = "prune.json"
 TOO_BIG = "archive: too many sub-issues to read in one tick"
+QUARANTINED = "finished under 2 hours ago"
+CHANGED = "changed since archive candidate read"
 HELP = """Clean finished issues' recorded runs and files, then archive eligible issues.
 
 Usage: ensemble-orchestrator prune [--dry-run]
@@ -119,8 +123,10 @@ Prerequisites and effects:
   Archive team issues finished at least 2 hours ago: Canceled/Duplicate
   whatever the assignee (none or researcher too), Done only when delegated to
   pm/engineer apps (researcher reports stay). Unknown finish times
-  are skipped, and so is an issue with an unfinished sub-issue at any depth
-  (archiving it archives its sub-issues and theirs).
+  are skipped, and so is an issue with a sub-issue at any depth that prune
+  would not archive itself: unfinished, finished under 2 hours ago or at an
+  unknown time, or a Done one without a pm/engineer delegate (archiving an issue
+  archives its sub-issues and theirs).
   For issues in any other state but Todo/In Progress, 7 days after both their
   latest move into it and their latest recorded run, delete their checkouts
   and temp files through their Delegate, keeping the other agent files and the
@@ -314,7 +320,7 @@ class Pruner:
         except TRACKER_ERRORS as e:
             self.error(error=f"archive: {one_line(e)}")
             return
-        self.finished = {issue.ident for issue in found}
+        finished = self.finished = {issue.ident: issue for issue in found}
         self.see(issue.updated for issue in found)
         due = []
         for issue in found:
@@ -331,7 +337,7 @@ class Pruner:
         for n, issue in enumerate(due):
             alone = self.budget.left == left
             try:
-                self.archive_one(issue)
+                self.archive_one(issue, finished)
             except Spent:
                 if alone:  # its plan alone outgrows a tick: skipped like a refusal
                     versions = {issue.ident: issue.updated}
@@ -341,35 +347,61 @@ class Pruner:
                     self.say("prune-deferred", archive=rest)
                 return
 
-    def archive_one(self, issue):
+    def archive_one(self, issue, finished):
         ident, refused = issue.ident, self.state.refused
         if ident in refused and self.trusted(refused[ident].read):
             self.say("prune-skip", ident, once=True, reason=refused[ident].reason)
             return
-        plan, archived = None, True
+        held = None
         try:
-            if self.dry:
-                plan = self.tracker.archive_plan(issue.key)
-                if plan.outcome == "changed":
-                    self.budget.spend()  # the write a real tick sends
-            else:
-                archived = self.tracker.archive(issue.key)
+            plan = self.tracker.archive_plan(issue.key)
+            held = self.held(plan, issue, finished) if plan.outcome == "changed" else None
+            archived = plan.outcome == "changed" and held is None
+            if archived and self.dry:
+                self.budget.spend()  # the write a real tick sends
+            elif archived:
+                archived = self.tracker.archive(plan.key, plan)
         except ArchiveRefused as e:
-            plan = e.plan
+            plan, archived = e.plan, False
         except Unavailable:
             raise
         except TRACKER_ERRORS as e:
             self.error(ident, error=f"archive: {one_line(e)}")
             return
         refused.pop(ident, None)
-        if plan is not None and plan.outcome == "refused":
+        if plan.outcome == "refused":
             versions = {ident: issue.updated} | {s.ident: s.updated for s in plan.unfinished}
             refused[ident] = Refusal(versions, _kept(plan), self.now)
             self.say("prune-skip", ident, once=True, reason=_kept(plan))
-        elif self.dry:
+        elif held is not None:
+            sub, why = held
+            kind = "issue" if sub.ident == ident else "sub-issue"
+            reason = f"archive: {kind} {sub.ident} {why}"
+            if why not in (QUARANTINED, CHANGED):  # time or a caught-up list can clear these
+                versions = {ident: issue.updated, sub.ident: sub.updated}
+                refused[ident] = Refusal(versions, reason, self.now)
+            self.say("prune-skip", ident, once=True, reason=reason)
+        elif archived and self.dry:
             self.say("prune-plan", ident, what="archive")
         elif archived:
             self.say("prune-archived", ident)
+
+    def held(self, plan, root, finished):
+        """First issue with a stale candidate version or an ineligible descendant, with why."""
+        if root.ident != plan.ident or root.updated != plan.updated:
+            return root, CHANGED
+        for sub in plan.descendants:
+            if sub.ident not in finished:
+                return sub, "not an archive candidate"
+            candidate = finished[sub.ident]
+            if candidate.updated != sub.updated:
+                return sub, CHANGED
+            since = candidate.since
+            if since is None:
+                return sub, "finish time unknown"
+            if self.now - since < QUARANTINE:
+                return sub, QUARANTINED
+        return None
 
     def run(self):
         found, idents = self.inventory(), None

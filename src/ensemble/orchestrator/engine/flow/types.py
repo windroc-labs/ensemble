@@ -61,7 +61,7 @@ class SubIssue:
 
 @dataclass(frozen=True)
 class ArchivePlan:
-    """unfinished: it first; descendants: any depth, none if archived."""
+    """unfinished: it first; descendants: any depth, none if archived; updated: root's version."""
 
     key: str
     ident: str
@@ -69,6 +69,7 @@ class ArchivePlan:
     archived: bool
     descendants: tuple[SubIssue, ...]
     unfinished: tuple[SubIssue, ...]
+    updated: datetime | None = None
 
     @property
     def outcome(self) -> Literal["unchanged", "refused", "changed"]:
