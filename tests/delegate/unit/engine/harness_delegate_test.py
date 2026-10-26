@@ -2200,3 +2200,37 @@ class EnvironmentTest(HarnessCase):
                 with open(os.path.join(top, name), "rb") as file:
                     self.assertNotIn(SECRET_VALUE.encode(), file.read(), name)
         self.assertNotIn(SECRET_VALUE, repr(RecordingHost.launches))
+
+    def answered(self, view, text="The answer."):
+        view._complete(Result(0, Outcome("needs_input", "Q", "A", questions=["Which?"])))
+        return view.resume(input=text)
+
+    def test_resume_keeps_stored_environment_after_config_change(self):
+        self.append(ACCEPTANCE)
+        view = self.make(spec=self.spec(), host="docker", harness_host="harness")
+        stored = self.metadata()["plan"]["session"]["environment"]
+        self.append('[delegate.environment.docker]\ngateway = "x"\n')
+        with open(self.local, encoding="utf-8") as file:
+            changed = file.read().replace("dummy-env:test", "other-env:test")
+        with open(self.local, "w", encoding="utf-8") as file:
+            file.write(changed)
+        self.stop(self.answered(view))
+        self.assertEqual(self.metadata()["plan"]["session"]["environment"], stored)
+        for mode in ("headless", "tui"):
+            with self.subTest(mode=mode):
+                view = HarnessDelegate.attach(self.work, session_cls=HarnessSession)
+                self.stop(view.resume(mode=mode))
+                self.assertEqual(self.metadata()["plan"]["session"]["environment"], stored)
+
+    def test_pre_upgrade_state_resumes_without_environment(self):
+        view = self.make(
+            role="engineer", spec=self.spec(task="build"), host="docker", harness_host="harness"
+        )
+        data = self.metadata()
+        del data["plan"]["session"]["environment"]
+        with open(self.state_record(), "w", encoding="utf-8") as file:
+            json.dump(data, file)
+        self.append('[delegate.environment.docker]\ngateway = "x"\n')
+        view = HarnessDelegate.attach(self.work, session_cls=HarnessSession)
+        self.stop(self.answered(view))
+        self.assertIsNone(self.metadata()["plan"]["session"]["environment"])

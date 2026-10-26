@@ -1204,6 +1204,8 @@ class HarnessDelegate(Delegate):
                 session=replace(
                     accepted.session,
                     name=named,
+                    # never re-resolved from config (WDRC-109 FR-62)
+                    environment=state.plan.session.environment,
                     access=replace(
                         accepted.session.access, cwd=original.cwd, project=original.project
                     ),
