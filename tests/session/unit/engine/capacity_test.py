@@ -140,6 +140,24 @@ class AdmissionTest(Case):
         ):
             self.fail("an unknown reservation must retain its separate slot")
 
+    def test_reconciliation_cleans_known_aliases_but_retains_unavailable_other_hosts(self):
+        closed = self.enter(mode=Mode.TUI, hosts={"closed": self.host})
+        with closed:
+            closed.started(lambda: Liveness.LIVE)
+        other = MemoryHost("offline")
+        unknown = self.enter(mode=Mode.TUI, hosts={"offline": other}, limit=0)
+        with unknown:
+            unknown.started(lambda: Liveness.LIVE)
+        other.calls.list.side_effect = SessionError("offline")
+        hosts = {"closed": self.host, "offline": other}
+        Admission.reconcile("fake", hosts, required="closed")
+        self.assertFalse(os.path.exists(closed.path))
+        self.assertTrue(os.path.exists(unknown.path))
+        with self.assertRaisesRegex(SessionError, "offline"):
+            Admission.reconcile("fake", hosts, required="offline")
+        with self.assertRaisesRegex(SessionError, "offline"), self.enter(hosts=hosts, limit=10):
+            self.fail("admission must still require every configured inventory")
+
     def test_tui_reservation_is_durable_before_the_spawn(self):
         first = self.enter(mode=Mode.TUI)
         with first:

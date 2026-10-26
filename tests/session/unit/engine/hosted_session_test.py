@@ -19,7 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from ensemble.session import Host, NoRecordedSession, NotShowable
+from ensemble.session import Host, NoRecordedSession, NotShowable, Viewer
 from ensemble.session.clients import common as selection
 from ensemble.session.clients.base import Client
 from ensemble.session.clients.claude import ClaudeClient
@@ -274,6 +274,58 @@ def parsed(tables, default) -> Hosts:
 
 
 class AliasedClientCapacityTest(TuiBase):
+    def test_closing_through_an_alias_releases_the_original_reservation_for_disjoint_hosts(self):
+        for action in ("close", "stop", "retire"):
+            with self.subTest(action=action):
+                self.configure(tui=True, max_runs=1)
+                setup = self.session._config()
+                self.host.checked.return_value = SimpleNamespace(stdout="/fake/server.sock\n")
+                offline = ScreenHost("offline")
+
+                def build(kind, name, table, *, unavailable=offline):
+                    return unavailable if name == "offline" else kind(name, table, tmux=self.host)
+
+                self.session = HostedSession.configured(
+                    clients=setup.registry.settings.clients,
+                    hosts=parsed(
+                        {
+                            "tmux": HOSTS["tmux"],
+                            "alias": HOSTS["tmux"],
+                            "offline": {
+                                "implementation": "tests.session.fakes.terminal:ScreenHost"
+                            },
+                        },
+                        "tmux",
+                    ),
+                    class_loader=setup.class_loader,
+                    host_factory=build,
+                    viewer_factory=lambda settings: Viewer(settings, tmux=self.host),
+                )
+                other = ScreenHost("elsewhere")
+                disjoint = HostedSession.configured(
+                    clients=setup.registry.settings.clients,
+                    hosts=parsed(
+                        {
+                            "elsewhere": {
+                                "implementation": "tests.session.fakes.terminal:ScreenHost"
+                            }
+                        },
+                        "elsewhere",
+                    ),
+                    class_loader=setup.class_loader,
+                    host_factory=lambda _kind, _name, _table, target=other: target,
+                    viewer_factory=MemoryViewer,
+                )
+                self.start(mode="tui", name="one", sid=SID)
+                offline.calls.list.side_effect = SessionError("unrelated host offline")
+                if action == "retire":
+                    self.session.retire("one", sid=SID, host="alias")
+                else:
+                    attached = self.session.attach("one", sid=SID, host="alias")
+                    attached.close() if action == "close" else attached.stop()
+                next_session = disjoint.start(self.spec(client="fake", mode="tui", name="two"))
+                next_session.close()
+
     def test_two_tmux_aliases_count_one_existing_tui_and_still_enforce_the_limit(self):
         self.configure(client="checked", max_runs=2)
         setup = self.session._config()

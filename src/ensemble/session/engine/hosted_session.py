@@ -477,7 +477,22 @@ class HostedSession(Session):
             cls.viewer().close(name, on)
         finally:
             for client in clients:
-                Admission.reconcile(client, {_host_key(setup, host or setup.hosts.default): on})
+                cls._reconcile_capacity(client, {_host_key(setup, host or setup.hosts.default): on})
+
+    @classmethod
+    def _reconcile_capacity(cls, client: str, selected: Mapping[str, Host]) -> None:
+        if not selected:
+            return
+        setup = cls._config()
+        hosts = dict(selected)
+        for name in setup.hosts.tables:
+            key = _host_key(setup, name)
+            if key not in hosts:
+                try:
+                    hosts[key] = cls.host(name)
+                except (ConfigError, OSError, SessionError):
+                    continue
+        Admission.reconcile(client, hosts, required=next(iter(selected)))
 
     @classmethod
     def list(
@@ -708,7 +723,7 @@ class HostedSession(Session):
         if self._capacity is not None:
             self._capacity.release_if_absent(self._running.state)
         elif self.mode == Mode.TUI:
-            Admission.reconcile(self.client, self._capacity_hosts)
+            type(self)._reconcile_capacity(self.client, self._capacity_hosts)
 
     def _refresh_metadata(self) -> None:
         if not self._bound:

@@ -27,11 +27,18 @@ POLL = 0.1
 MAX_RECORD = 16384
 
 
-def _inventory(hosts: Mapping[str, Host], client: str) -> tuple[dict, dict]:
+def _inventory(
+    hosts: Mapping[str, Host], client: str, *, required: str | None = None
+) -> tuple[dict, dict]:
     known, holders = {}, {}
     for key, host in hosts.items():
-        rows = {row.name: row for row in host._capacity_rows()}
-        backend = host._capacity_namespace() if rows else None
+        try:
+            rows = {row.name: row for row in host._capacity_rows()}
+            backend = host._capacity_namespace() if rows else None
+        except (OSError, SessionError):
+            if required is None or key == required:
+                raise
+            continue
         namespace = ("backend", backend) if backend is not None else ("configuration", key)
         known[key] = namespace, rows
         for row in rows.values():
@@ -190,13 +197,15 @@ class Admission(AbstractContextManager):
             raise SessionError(f"client {self.client}: capacity: {error}") from error
 
     @classmethod
-    def reconcile(cls, client: str, hosts: Mapping[str, Host]) -> None:
+    def reconcile(
+        cls, client: str, hosts: Mapping[str, Host], *, required: str | None = None
+    ) -> None:
         directory = os.path.join(os.path.expanduser(ROOT), client)
         if not os.path.isdir(directory):
             return
         try:
             with _locked(directory, client):
-                known, holders = _inventory(hosts, client)
+                known, holders = _inventory(hosts, client, required=required)
                 _holders(directory, known, holders)
         except (OSError, ValueError) as error:
             raise SessionError(f"client {client}: capacity: {error}") from error
