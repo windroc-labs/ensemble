@@ -26,9 +26,6 @@ PROTOCOL = "26"
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
 INSTALL = "install or upgrade it: see docs/docker-host.md#install"
 TIMEOUT = 1800
-REFRESH = (
-    7 * 24 * 3600
-)  # seconds: a start rebuilds an older image, which installs the latest clients
 GRACE = 5  # for a broker whose pipes closed by the deadline to be reaped
 
 TEXT = re.compile(r"[^\x00-\x1f\x7f]+")

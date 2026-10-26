@@ -319,9 +319,9 @@ class ResponseTest(Case):
 
     def test_build_passes_a_max_age(self):
         fake = FakeBroker(success("build-cached.json"))
-        Broker(fake).build("/opt/ensemble", max_age=broker.REFRESH)
+        Broker(fake).build("/opt/ensemble", max_age=604800)
         self.assertEqual(fake.calls, [[BROKER, *data("build-input-max-age.json")["argv"]]])
-        self.assertEqual(broker.REFRESH, 7 * 24 * 3600)
+        self.assertFalse(hasattr(broker, "REFRESH"))
 
     def test_build_passes_plugins_before_the_max_age(self):
         fake = FakeBroker(success("build-cached.json"))

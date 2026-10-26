@@ -37,7 +37,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from ensemble.session.engine.config import read_config
 from ensemble.session.engine.types import SessionError
 from ensemble.session.hosts.base import Host
-from ensemble.session.hosts.docker.broker import BROKER, REFRESH, Broker, plugin_root
+from ensemble.session.hosts.docker.broker import BROKER, Broker, plugin_root
 from ensemble.session.hosts.docker.host import LABEL
 from ensemble.session.hosts.docker.mounts import state_dir
 from ensemble.utils import docker_home
@@ -834,13 +834,9 @@ def worker(args: Args) -> int:
     broker = Broker()
     broker.version()
     package = plugin_root(os.path.join(BIN, "ensemble-session"))
-    _, digest = timed(
-        times, "build", lambda: broker.build(package, plugins=plugins, max_age=REFRESH)
-    )
+    _, digest = timed(times, "build", lambda: broker.build(package, plugins=plugins))
     named = [arg for p in plugins for arg in ("--plugin", p)]
-    again = json.loads(
-        call([BROKER, "build", "--ensemble", package, *named, "--max-age", str(REFRESH)], 1920)[0]
-    )
+    again = json.loads(call([BROKER, "build", "--ensemble", package, *named], 1920)[0])
     if again.get("rebuilt") is not False or again.get("digest") != digest:
         raise SystemExit("FAIL a second build rebuilt the image or changed its digest")
     print("PASS a current image is not rebuilt", flush=True)

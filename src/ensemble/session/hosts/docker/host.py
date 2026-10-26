@@ -70,7 +70,6 @@ from ensemble.session.hosts.base import (
 from ensemble.session.hosts.docker import hook as docker_hook
 from ensemble.session.hosts.docker import supervisor as run_supervisor
 from ensemble.session.hosts.docker.broker import (
-    REFRESH,
     RELAY,
     Broker,
     BrokerError,
@@ -229,8 +228,8 @@ def _state_file(name: str) -> str:
     return os.path.join(os.path.expanduser(TUI_DIR), name, TUI_STATE)
 
 
-def _image_digest(row: Row) -> str | None:
-    """The image digest row's generation recorded at start."""
+def _image_tag(row: Row) -> str | None:
+    """The image tag row's generation recorded at start: its key, which a client-only rebuild keeps."""
     try:
         with open(
             os.path.join(state_dir(row.name), f"{row.generation}.result.json"), encoding="utf-8"
@@ -238,7 +237,7 @@ def _image_digest(row: Row) -> str | None:
             found = json.load(f)
     except (OSError, ValueError):
         return None
-    return found.get("image_digest") if isinstance(found, dict) else None
+    return found.get("image") if isinstance(found, dict) else None
 
 
 def _report_plan(name: str, plan: Mapping) -> None:
@@ -842,9 +841,9 @@ class DockerHost(Host):
                 return True
             hook = None
             if not os.path.lexists(stale):
-                hook, _, (_, digest) = self._image(row.name, max_age=None)
-                if _image_digest(row) != digest:
-                    save(stale, digest)
+                hook, _, (image, _) = self._image(row.name)
+                if _image_tag(row) != image:
+                    save(stale, image)
             if hook is None or os.path.lexists(stale):
                 if row.name not in self._warned:
                     self._warned.add(row.name)
@@ -937,16 +936,14 @@ class DockerHost(Host):
         if not os.path.isdir(cwd) and not (missing_ok and not os.path.lexists(cwd)):
             raise ConfigError(f"Docker cwd {cwd}: no such directory")
 
-    def _image(
-        self, name: str, *, max_age: int | None = REFRESH
-    ) -> tuple[str, str, tuple[str, str]]:
-        """(the hook path, the plugin root, the built image and digest); `max_age`: Broker.build's."""
+    def _image(self, name: str) -> tuple[str, str, tuple[str, str]]:
+        """(the hook path, the plugin root, the built image and digest), never waiting on an age refresh."""
         hook = command_path(COMMAND)
         if hook is None:
             raise ConfigError(f"docker session {name}: {COMMAND} is not on PATH (its hooks run it)")
         self.broker.version()
         root = plugin_root(hook)
-        return hook, root, self.broker.build(root, plugins=self.plugins, max_age=max_age)
+        return hook, root, self.broker.build(root, plugins=self.plugins)
 
     def _move_workspace(self, name: str, volume: str, cwd: str) -> None:
         """Deletes a new start's workspace volume mounted at another cwd, unless the broker's check
