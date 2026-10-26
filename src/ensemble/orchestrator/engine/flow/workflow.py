@@ -84,6 +84,7 @@ def _defaults(role):
         "first_failure": "review",
         "approve": False,
         "files": False,
+        "deliverable": False,
         "hint": "",
     }
 
