@@ -7,7 +7,7 @@ from unittest import mock
 
 from ensemble.session import ConfigError, NotShowable, SessionError
 from ensemble.session.engine import tmux_cli
-from ensemble.session.engine.types import PaneStatus
+from ensemble.session.engine.types import PaneStatus, Unanswered
 from ensemble.session.hosts.base import Host
 from ensemble.session.hosts.types import CommandView, SessionView
 from ensemble.session.viewer import display as displays
@@ -447,6 +447,56 @@ class CommandViewTest(Base):
         self.tmux.option.side_effect = TuiError("tmux: boom")
         with self.assertRaisesRegex(SessionError, "^view d1: tmux: boom$"):
             self.viewer.close("d1", self.docker)
+
+    def retried(self, *targets, **show):
+        """show with attach_target answering `targets` in turn; its result and its sleeps."""
+        self.tmux.status.return_value = None
+        self.runner.results["new-session"] = (0,)
+        self.docker.attach_target.side_effect = targets
+        with mock.patch("time.sleep") as slept, self.assertLogs("session", logging.WARNING):
+            try:
+                return self.viewer.show("d1", self.docker, **show)
+            finally:
+                self.slept = [c.args for c in slept.call_args_list]
+
+    def test_an_unanswered_target_is_retried_then_shown(self):
+        late = Unanswered("docker ps: timed out")
+        self.assertEqual(self.retried(late, self.target), self.target.printed)
+        self.assertEqual(self.docker.attach_target.call_count, 2)
+        self.assertEqual(self.slept, [(1,)])
+
+    def test_three_unanswered_targets_raise_the_last(self):
+        errors = [Unanswered(f"docker ps: timed out {n}") for n in range(3)]
+        with self.assertRaisesRegex(Unanswered, "^docker ps: timed out 2$"):
+            self.docker.attach_target.side_effect = errors
+            with mock.patch("time.sleep") as slept:
+                self.viewer.show("d1", self.docker)
+        self.assertEqual(self.docker.attach_target.call_count, 3)
+        self.assertEqual(slept.call_count, 2)
+
+    def test_other_errors_are_not_retried(self):
+        for error in (SessionError("no docker session d1"), ConfigError("bad display")):
+            with self.subTest(error=error):
+                self.docker.attach_target.reset_mock()
+                self.docker.attach_target.side_effect = error
+                with mock.patch("time.sleep") as slept, self.assertRaises(type(error)):
+                    self.viewer.show("d1", self.docker)
+                self.assertEqual(self.docker.attach_target.call_count, 1)
+                self.assertEqual(slept.call_count, 0)
+
+    def test_an_unanswered_mark_after_a_command_runs_it_once(self):
+        self.tmux.status.return_value = None
+        self.runner.results["new-session"] = (0,)
+        self.docker.attach.return_value.session_identity.side_effect = Unanswered("docker ps")
+        with (
+            mock.patch("time.sleep") as slept,
+            self.assertRaisesRegex(Unanswered, "^docker ps$"),
+        ):
+            self.viewer.show("d1", self.docker, command="open -a T {{session}}")
+        self.assertEqual(
+            [c for c in self.runner.calls if c[0] == "/bin/sh"], [["/bin/sh", "-c", "open -a T d1"]]
+        )
+        self.assertEqual(slept.call_count, 0)
 
 
 class SessionViewCloseTest(Base):

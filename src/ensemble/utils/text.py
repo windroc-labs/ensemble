@@ -18,6 +18,10 @@ def one_line(value):
     return " ".join(text.split())
 
 
+def last_lines(text: str, count: int = 5) -> str:
+    return " | ".join([line.strip() for line in text.splitlines() if line.strip()][-count:])
+
+
 def parse_time(value):
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 

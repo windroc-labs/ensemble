@@ -105,8 +105,8 @@ class Headless:
 class Tui(Headless):
     """FR-23: the first turn end without an outcome block gets NUDGE, STOP_LIMIT more give up; a
     progress mark resets that count; a turn end with work pending is ignored. FR-24: an IdleTimeout
-    gives up. The session is left open. A showable session started at a display is shown as the
-    run's `show` says, unless hidden.
+    gives up. The session is left open unless locked (_Attempts.release). A showable session
+    started at a display is shown as the run's `show` says, unless hidden.
     """
 
     stops_failed = False
@@ -203,8 +203,11 @@ def execute(
     *,
     driver: Driver,
     on_event: Callable[[Event], None] | None = None,
+    ending: Callable[[BaseException], Result] | None = None,
 ) -> Result:
-    """Run an accepted plan; every returned Result has one final Finished event."""
+    """Run an accepted plan; every returned Result has one final Finished event; `ending` ends
+    one that raised (else stopped).
+    """
     emit = on_event or (lambda _event: None)
     if not driver.session_based:
         instruction = driver.start(p.driver_spec)
@@ -216,6 +219,7 @@ def execute(
     attempts = _Attempts(p, emit, driver)
     try:
         result = attempts.result()
+        attempts.release()
         attempts.on_event(Finished(result))
     except BaseException as e:
         try:
@@ -225,8 +229,9 @@ def execute(
             say(f"delegate: {p.spec.mode}: stop failed: {_named(failure)}")
             raise e from failure  # the run log's, not the stop's
         finally:
+            attempts.release()
             if not attempts.refused:
-                ended = stopped(e)
+                ended = (ending or stopped)(e)
                 attempts.close({"error": ended.error}, ended.returncode)
         raise
     closing = {"error": result.error}
@@ -276,6 +281,9 @@ class _Attempts:
         self.seen: set[str] = set()
         self.handle: Session | None = None
         self.refused = False  # the Driver refused the start: nothing to close
+        environment = p.session.environment
+        self.lock = None if environment is None else environment.lock
+        self.released = False
 
     def note(self, kind: str, **fields) -> None:
         RunLog(self.run_dir).note(kind, **fields)
@@ -343,6 +351,18 @@ class _Attempts:
                 continue
             return self.finish(outcome, rc, updraft)
 
+    def release(self) -> None:
+        """Closes a locked run's session once, freeing its lock (FR-61); prints a SessionError."""
+        if self.lock is None or self.handle is None or self.released:
+            return
+        self.released = True
+        try:
+            self.handle.close()
+        except SessionError as e:
+            say(f"delegate: {self.plan.spec.mode}: close: {e}")
+            return
+        say(f"delegate: session {self.handle.name or 'agent'} closed (lock {self.lock})")
+
     def stop(self, handle: Session) -> bool:
         """A SessionError is printed, not raised; False then, the session maybe running."""
         try:
@@ -407,7 +427,8 @@ class _Attempts:
                 if name is None:
                     raise SessionError("tui session has no name")
                 command = f": {handle.attach_command()}" if handle.showable else ""
-                say(f"delegate: {answer.reason}; session {name} left open{command}")
+                left = "" if self.lock else f"; session {name} left open{command}"
+                say(f"delegate: {answer.reason}{left}")
                 return 0, None, None, None
             if answer == END:
                 break

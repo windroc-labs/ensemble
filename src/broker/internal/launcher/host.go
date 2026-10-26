@@ -32,9 +32,12 @@ type Credentials interface {
 // CodexCredentials is the broker package's side of a Codex start; the launcher never sees the login.
 type CodexCredentials interface {
 	Ready(context.Context) error
-	// Inject writes the login through exec, as Credentials.Inject does, and returns its expiry (RFC 3339).
-	Inject(context.Context, func([]string, []byte) error) (string, error)
-	Refresh(context.Context, func([]string, []byte) error, func(string) error) (string, error)
+	// Inject writes the login into container through exec, as Credentials.Inject does, records the container's grant
+	// and returns its expiry (RFC 3339).
+	Inject(ctx context.Context, container string, exec func([]string, []byte) error) (string, error)
+	// Refresh writes the current login into container and publishes its expiry before returning it.
+	Refresh(ctx context.Context, container string, exec func([]string, []byte) error, publish func(string) error) (string, error)
+	Release(ctx context.Context, container string) error // withdraws the container's grant; never the login
 }
 
 // ProviderKeys is the broker package's side of an OpenCode start: the listed providers' API keys, which the launcher
@@ -78,6 +81,7 @@ type Host struct {
 	Codex    CodexCredentials
 	Opencode ProviderKeys
 	Env      EnvSecrets
+	Static   StaticMeta // nil: no static secret records, as tests without them
 	GitHub   Tokens
 	Versions CodexVersions
 	Releases Releases                          // nil: a build that must rebuild fails
@@ -178,6 +182,7 @@ type StatusResult struct {
 	Revocations []protocol.Pending    `json:"revocations"`
 	Codex       *protocol.CodexStatus `json:"codex,omitempty"`
 	Claude      map[string]bool       `json:"claude,omitempty"`
+	Static      []StaticStatus        `json:"static,omitempty"`
 }
 
 type CloseResult struct {

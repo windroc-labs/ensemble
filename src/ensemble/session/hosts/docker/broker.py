@@ -1,5 +1,5 @@
 """The root-owned broker at the PROTOCOL version (src/broker/protocol/docker-broker/protocol.schema.json): version, build, start, refresh,
-close, workspace-rm and lock-query with strict response parsing. A missing, malformed or inconsistent response is a transport failure;
+notices, close, workspace-rm and lock-query with strict response parsing. A missing, malformed or inconsistent response is a transport failure;
 a valid error response is a BrokerError.
 """
 
@@ -16,13 +16,13 @@ from dataclasses import fields
 from datetime import datetime
 
 from ensemble.session.engine.types import ConfigError, SessionError
-from ensemble.session.hosts.docker.types import Refreshed, Started
+from ensemble.session.hosts.docker.types import Noticed, Refreshed, Started
 from ensemble.utils import save
 
 # Installed by src/broker/install.sh and the worker image (src/broker/internal/launcher/assets/Dockerfile).
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
 RELAY = "/opt/ensemble/bin/relay"
-PROTOCOL = "27"
+PROTOCOL = "28"
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
 INSTALL = "install or upgrade it: see docs/docker-host.md#install"
 TIMEOUT = 1800
@@ -41,6 +41,7 @@ COMMANDS = frozenset(
         "build",
         "start",
         "refresh",
+        "notices",
         "close",
         "status",
         "workspace-rm",
@@ -51,8 +52,8 @@ COMMANDS = frozenset(
 )
 CODES = {  # code → (exit code, the commands that report it)
     "usage": (2, COMMANDS),
-    "manifest_rejected": (3, {"start", "refresh"}),
-    "mount_rejected": (4, {"start", "refresh"}),
+    "manifest_rejected": (3, {"start", "refresh", "notices"}),
+    "mount_rejected": (4, {"start", "refresh", "notices"}),
     "login_required": (5, {"start", "refresh", "probe-provider"}),
     "image_rejected": (6, {"start"}),
     "docker_unreachable": (7, {"build", "start", "refresh", "close", "workspace-rm", "lock-query"}),
@@ -288,7 +289,7 @@ class Broker:
                 found = _object(err)
             if "audit_warning" in found:
                 if (
-                    command not in {"start", "refresh", "close", "status"}
+                    command not in {"start", "refresh", "notices", "close", "status"}
                     or found.pop("audit_warning") != "audit_write_failed"
                 ):
                     raise _Bad("audit warning")
@@ -403,6 +404,37 @@ class Broker:
         )
         return Refreshed(found["github"], found["credential_expires_at"])
 
+    def notices(
+        self, container: str, manifest: str, delivered: Sequence[str] = (), *, root: str
+    ) -> Noticed:
+        """`container`'s due notices; `delivered`: keys told; keys per `root`'s schema."""
+        found = self._parsed(
+            "notices",
+            lambda d: (
+                d.keys() == {"container", "notices", "next_check"}
+                and d["container"] == container
+                and isinstance(d["notices"], list)
+                and all(
+                    isinstance(n, dict) and n.keys() == {"key", "text"} and _text(n["text"])
+                    for n in d["notices"]
+                )
+                and _credential_expiry(d["next_check"])
+            ),
+            "--container",
+            container,
+            "--manifest",
+            manifest,
+            *(arg for key in delivered for arg in ("--delivered", key)),
+        )
+        if found["notices"]:
+            try:
+                key = notice_key(root)
+            except ConfigError as error:
+                raise SessionError(f"broker: {error}") from None
+            if not all(_matches(key, n["key"]) for n in found["notices"]):
+                raise SessionError("broker: bad response to notices: fields")
+        return Noticed(found["notices"], found["next_check"])
+
     def close(self, container: str) -> bool:
         """Whether it removed `container`; False: it was already gone."""
         found = self._parsed(
@@ -438,9 +470,14 @@ class Broker:
         return found
 
 
+def hook_root(hook_path: str) -> str:
+    """The parent of the bin/ holding `hook_path`."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(hook_path)))
+
+
 def plugin_root(hook_path: str) -> str:
-    """The running plugin's root: the parent of the bin/ holding its ensemble-session."""
-    root = os.path.dirname(os.path.dirname(os.path.abspath(hook_path)))
+    """The running plugin's root: hook_root, holding the protocol schema."""
+    root = hook_root(hook_path)
     if not os.path.isfile(os.path.join(root, SCHEMA)):
         raise ConfigError(f"ensemble plugin {root}: no {SCHEMA}")
     return root
@@ -451,8 +488,7 @@ def client_keys(root: str) -> frozenset[str]:
     inline object property in the protocol schema under `root`.
     """
     try:
-        with open(os.path.join(root, SCHEMA), encoding="utf-8") as f:
-            properties = json.load(f)["$defs"]["start_output"]["properties"]
+        properties = _schema(root)["$defs"]["start_output"]["properties"]
         (keys,) = (
             p["required"]
             for p in properties.values()
@@ -461,6 +497,22 @@ def client_keys(root: str) -> frozenset[str]:
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise ConfigError(f"{SCHEMA}: no start_output client map ({error})") from None
     return frozenset(keys)
+
+
+def _schema(root: str) -> dict:
+    try:
+        with open(os.path.join(root, SCHEMA), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError) as error:
+        raise ConfigError(f"{SCHEMA}: unreadable ({error})") from None
+
+
+def notice_key(root: str) -> re.Pattern:
+    """The schema's notice key pattern."""
+    try:
+        return re.compile(_schema(root)["$defs"]["notice_key"]["pattern"])
+    except (KeyError, TypeError, re.error):
+        raise ConfigError(f"{SCHEMA}: no notice_key pattern") from None
 
 
 def write_manifest(

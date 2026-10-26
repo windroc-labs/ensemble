@@ -14,13 +14,12 @@ import logging
 import os
 import re
 import shlex
-import shutil
 import signal
 import subprocess
 import sys
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import replace
 from datetime import datetime
 from typing import NamedTuple
@@ -77,6 +76,7 @@ from ensemble.session.hosts.docker.broker import (
     Broker,
     BrokerError,
     client_keys,
+    hook_root,
     plugin_root,
     write_manifest,
 )
@@ -107,10 +107,12 @@ from ensemble.utils import (
     docker_home,
     inode_lock,
     kill_group,
+    last_lines,
     module_roots,
     piped_popen,
     read_beneath,
     read_regular,
+    remove_tree,
     save,
     source_path,
     timestamp,
@@ -239,6 +241,35 @@ def _image_tag(row: Row) -> str | None:
     return found.get("image") if isinstance(found, dict) else None
 
 
+def _reset_home(name: str, home: str, kept: Iterable[str]) -> None:
+    """Empties a new start's client home in place, never following a link: Docker Desktop can
+    report a bind source recreated at a path it saw before as missing, so `home` and each `kept`
+    dir under it stay the same dir, mode 0700; a link or file there is removed.
+    """
+    keep = {os.path.join(home, directory) for directory in kept}
+
+    def empty(path: str) -> None:
+        os.chmod(path, 0o700)
+        with os.scandir(path) as entries:
+            for entry in entries:
+                if not entry.is_dir(follow_symlinks=False):
+                    os.unlink(entry.path)
+                elif entry.path in keep:
+                    empty(entry.path)
+                else:
+                    remove_tree(entry.path)
+
+    try:
+        if os.path.lexists(home) and (os.path.islink(home) or not os.path.isdir(home)):
+            os.unlink(home)
+        os.makedirs(home, mode=0o700, exist_ok=True)
+        empty(home)
+    except OSError as error:
+        raise SessionError(
+            f"docker session {name}: cannot reset {home}: {error.strerror or error}"
+        ) from None
+
+
 def _report_plan(name: str, plan: Mapping) -> None:
     """Freeze a generation's plan beside its manifest, then print it to stderr, a line a part."""
     try:
@@ -353,6 +384,15 @@ class _Laps:
     def report(self, head: str) -> None:
         for phase, seconds in self.phases.items():
             print(f"{head}: {phase} {seconds:.2f} s", file=sys.stderr)
+
+
+def _tail(tmux: TmuxCli, name: str) -> str:
+    """`: <last lines>` of a client's pane on one line, read before its rollback; empty unread."""
+    try:
+        tail = last_lines(_text(tmux.read(name)))
+    except TuiError:
+        return ""
+    return f": {tail}" if tail else ""
 
 
 def _wait(ready, timeout: float, poll: float = POLL, cap: float | None = None) -> bool:
@@ -1147,8 +1187,17 @@ class DockerHost(Host):
             )
             _save_record(name, {**_record(name), "process": process})
             laps("tmux")
-            if not _wait(lambda: tmux.status(name) == PaneStatus.RUNNING, READY_WAIT):
+            status = None
+
+            def settled() -> bool:
+                nonlocal status
+                status = tmux.status(name)
+                return status == PaneStatus.RUNNING or isinstance(status, int)
+
+            if not _wait(settled, READY_WAIT):
                 raise SessionError(f"{container}: the client did not start in {READY_WAIT} s")
+            if isinstance(status, int):
+                raise SessionError(f"{container}: the client exited {status}{_tail(tmux, name)}")
             laps("client")
             launched = datetime.now().astimezone().isoformat(timespec="milliseconds")
             _save_result(name, created, laps.phases, launched)
@@ -1206,8 +1255,7 @@ class DockerHost(Host):
         persistent = json.loads(metadata.get("home_persistent") or "null")
         if resume == "0":
             self._move_workspace(name, volume, cwd)
-            shutil.rmtree(home, ignore_errors=True)
-            os.makedirs(home, mode=0o700)
+            _reset_home(name, home, persistent or ())
             for file, text in json.loads(metadata.get("home_files") or "{}").items():
                 save(os.path.join(home, file), text)
             for directory in persistent or ():
@@ -1374,6 +1422,8 @@ class DockerHost(Host):
                 expired=lambda reason: LOG.warning(
                     "docker session %s: client_auth_expired %s", name, reason
                 ),
+                notice=lambda word, text: LOG.warning("docker session %s: %s %s", name, word, text),
+                root=hook_root(created.hook),
             ),
         )
 

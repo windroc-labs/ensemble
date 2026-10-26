@@ -116,11 +116,11 @@ echo:
 
 | Login | Terminal | macOS dialog, at most | Click |
 |---|---|---|---|
-| `login claude [<name>]` | the token; the login keychain password only when the item's access needs a change | one change-access dialog, after the password; one read dialog, announced on the terminal first | Allow; Always Allow |
+| `login claude [<name>] [--fresh-token \| --issued <date> \| --expires <date>]` | the token, hidden, unless stdin is a pipe or file (one line); the login keychain password only when the item's access needs a change, from the terminal | one change-access dialog, after the password; one read dialog, announced on the terminal first | Allow; Always Allow |
 | `login github ensemble-bot [--key-file <pem> --app-id <ID>]` | the login keychain password, when a step is not yet in place | with `--key-file`, none; else one change-access dialog (Deny / Allow), after the password | Allow |
 | `login codex` | the login keychain password, when a step is not yet in place, before the browser opens | one change-access dialog (Deny / Allow), after the password | Allow |
-| `login opencode <name>` | the provider's API key; the login keychain password only when the item's access needs a change | at most one change-access dialog (Deny / Allow), after the password | Allow |
-| `login env <name>` | the value, hidden, unless stdin is a pipe or file; the login keychain password only when the item's access needs a change, from the terminal | at most one change-access dialog (Deny / Allow), after the password | Allow |
+| `login opencode <name> [--expires <date>]` | the provider's API key; the login keychain password only when the item's access needs a change | at most one change-access dialog (Deny / Allow), after the password | Allow |
+| `login env <name> [--expires <date>]` | the value, hidden, unless stdin is a pipe or file; the login keychain password only when the item's access needs a change, from the terminal | at most one change-access dialog (Deny / Allow), after the password | Allow |
 | `start` | none | none: a token or key it cannot read without one names unlocking the login keychain or the login to run (`keychain_failed` for an OpenCode key or an environment secret needing approval; `login_required` for other clients and a missing environment secret) | |
 
 What each login hands a container: [Credentials › Who logs in](credentials.md#who-logs-in).
@@ -134,6 +134,15 @@ claude setup-token          # copy the token it prints
 ```
 
 It saves the token in `ensemble-claude` / `<name>` (`default` without a name), replacing an earlier one, and makes it trust only the broker. If macOS asks, enter the login keychain password and click Always Allow as the terminal instructs.
+
+```sh
+"$B" login claude --fresh-token            # a token claude setup-token just printed: expires in one year
+"$B" login claude --issued 2026-03-01      # generated that day: expires one year later
+"$B" login claude work --expires 2027-03-01
+```
+
+Without one of them the expiry stays unknown ([Static secret expiry](#static-secret-expiry)); `--fresh-token` takes
+no date, and `--issued` with `--expires` must agree.
 
 **GitHub**: the private key of your one GitHub App ([create it](#create-the-github-app)), whatever its name, must be
 a generic-password item in the login keychain, service `ensemble-bot`, account its App ID, content the key. Let the
@@ -152,7 +161,7 @@ With `--key-file` it refuses an existing `ensemble-bot` item. Without it, the it
 "$B" login opencode strata   # paste strata's API key; nothing echoes
 ```
 
-It saves the key in broker-only item `ensemble-opencode` / `<name>`, replacing an earlier one. A Docker OpenCode start needs every configured provider's key; a missing one names this login command.
+It saves the key in broker-only item `ensemble-opencode` / `<name>`, replacing an earlier one. A Docker OpenCode start needs every configured provider's key; a missing one names this login command. `--expires YYYY-MM-DD` records when the key stops working, as `login env` does.
 
 `scripts/install.sh --docker` with OpenCode selected first ensures the local OpenCode API entry, then imports it
 into the broker, so a local commander and Docker workers both have credentials with one key entry. To import an
@@ -426,7 +435,7 @@ prefetches again. None of these errors is `busy`.
 
 ## Audit log
 
-Every `start`, `refresh` and `close` appends to `~/Library/Logs/ensemble/broker.jsonl`, recording credentials issued, renewed, withdrawn or revoked, never a token or key. Past 10 MiB it rotates to `broker.jsonl.1`. An unwritable log may lose records. OpenCode provider keys have no audit line. Each environment secret a start writes is an `env-secret` credential naming its `item`, never its value: `issued` at start, `withdrawn` when close or a failed start removes the container. No container mounts it.
+Every `start`, `refresh` and `close` appends to `~/Library/Logs/ensemble/broker.jsonl`, recording credentials issued, renewed, withdrawn or revoked, never a token or key. Past 10 MiB it rotates to `broker.jsonl.1`. An unwritable log may lose records. OpenCode provider keys appear only on notice lines. Each delivered [static secret notice](#static-secret-expiry) is one `credential-notice` line (command `login`, `status` or `notices`) whose credential has result `notified`, its `item` the reference and its `notice` the threshold or `rotated`. Each environment secret a start writes is an `env-secret` credential naming its `item`, never its value: `issued` at start, `withdrawn` when close or a failed start removes the container. No container mounts it.
 
 Audit persistence failure adds `audit_warning: "audit_write_failed"` to the broker's JSON
 response, alongside the original success fields or error envelope. The operation's exit code,
@@ -442,6 +451,25 @@ resolved entries, preserving the former status behavior. See [credential status]
 ```sh
 jq 'select(.session=="NAME")' ~/Library/Logs/ensemble/broker.jsonl
 ```
+
+## Static secret expiry
+
+Claude setup-tokens, OpenCode keys and environment secrets are static: the broker never renews or revokes them. Each
+login records, in `~/.ensemble/docker/static-secrets.json` (no secret), the item's version (counting logins) and its
+expiry with where it came from: `explicit` (`--expires`), `derived` (`--issued` plus a year), `assumed`
+(`--fresh-token`) or `unknown`. Items saved before this record are `unknown`.
+
+| When | What happens |
+|---|---|
+| 30, 7 and 1 days before a known expiry, and at it | a notice naming the reference, the date, its provenance and the login to rerun: printed by the login, shown by `status`, delivered once per session and version |
+| the item is replaced | running sessions holding the old version get a notice to restart; new starts get the new one |
+| a `start` whose Claude token, OpenCode key or environment secret has expired | `login_required` (exit 5) naming the reference, before the lock and any container; never `busy`. An unknown expiry starts. An environment session whose lock is held still reports `SessionBusy` from the session's preflight first (that ordering is WDRC-168's) |
+
+Running sessions are never stopped. Their tick (the TUI supervisor or the headless harness) asks
+`ensemble-broker notices` at once, then when it says (at most an hour apart), and writes each notice to the session's
+events as `credential_notice <text>` (headless: the log). A notice the events file did not take is asked again; a
+failing check writes `credential_notice_failed <code>` once per streak. `status` lists every recorded static secret
+under `static`; `status --cleanup` also records and audits the notices due to you.
 
 ## Run workers
 
@@ -482,6 +510,7 @@ failures go to the session's events or the harness's log and retry every minute:
 |---|---|---|
 | Codex | 10 minutes before the earliest Codex or GitHub expiry | `client_refresh_failed <reason>` for either credential's failure |
 | Other clients with GitHub tokens | 10 minutes before the earliest GitHub expiry | `github_refresh_failed <reason>` |
+| Static secrets (Claude, OpenCode, env) | 30, 7 and 1 days before a known expiry, at expiry, and on replacement ([Static secret expiry](#static-secret-expiry)) | `credential_notice <text>`; `credential_notice_failed <code>` once per failing streak |
 
 Codex and GitHub renew independently within one broker refresh: a Codex failure still attempts GitHub renewal.
 For Codex, the absence of `github_refresh_failed` does not imply GitHub renewal succeeded; inspect
@@ -545,6 +574,79 @@ issue for 25 minutes (`busy-skip`). `router --issue` exits 75 when busy and igno
 (`ensemble-session resume`, `ensemble-crew reopen`) of the same sid runs the stored one; one giving another (prefetch aside) is refused;
 state from before environments runs without one. Each new container takes the lock again and resolves its secrets
 again; only a workspace the start creates is prefetched.
+
+#### Environment config
+
+A role run's environment comes only from the delegate config: the packaged
+`src/ensemble/delegate/config.toml` and `~/.ensemble/config.local.toml`. A caller overlay (the orchestrator's
+included) holding `environment`, `environments` or `roles.<role>.environment` refuses the run; `ensemble-delegate run`
+has no environment option, and nothing in a run's input (an issue's text included) selects or changes one. Layers,
+each replacing the keys it sets (a list whole):
+
+| Table | Local spelling | Holds |
+|---|---|---|
+| `[environment.<host>]` | `[delegate.environment.<host>]` | the Host's default; only a Docker-kind Host has one, with `image` and `gateway` |
+| `[environments.<name>]` | `[delegate.environments.<name>]` | a named environment: only the keys that differ from the default |
+| `[roles.<role>.environment]` | `[delegate.roles.<role>.environment]` | `name` (a named environment) and keys overriding it; without `name`, overrides of the default |
+
+The packaged default is `[environment.docker]`: `image = "@worker"`, `gateway = "workers"`, `plugins = []`,
+`secrets = []`, `prefetch = false`, no `lock`. Keys:
+
+- `image`: a local [base image](#base-images) or `"@worker"`, ensemble's worker base.
+- `gateway`: the caller network the container joins, by the egress proxy's label name
+  ([Egress proxy](#egress-proxy); WDRC-107 FR-39).
+- `plugins`: in-image names or pinned sources, added to `[hosts.docker] plugins`.
+- `secrets`: `[[…secrets]]` tables of `item` (an `ensemble-env/<name>` reference) and `file`
+  ([Environment secrets](#environment-secrets)); never a value.
+- `lock`: a [lock](#broker-locks) name. A locked run's session closes as soon as the run ends (outcome, failure,
+  give-up, usage limit), before its result goes out: no TUI is left for a pane to follow; the workspace and history
+  stay, so `ensemble-crew reopen` continues.
+- `prefetch`: `true` prefetches the input's Reference block: exactly one `Repo:` line (a clone path names its origin)
+  and at most one `Ref:` line (the [Prefetch](#prefetch) ref rule; none: the default branch). Both are checked before
+  any git or GitHub call; `Base:` is not read.
+
+Environment names, and `name`, match `[a-z0-9][a-z0-9_.-]{0,62}`. Loading the config fails, naming the table, on an
+unknown key (`ports`, `mounts`, `password`…), a default table for a Host that is not Docker-kind, a default without
+`image` or `gateway`, a `name` outside a role table or naming no `[environments.<name>]`, or an invalid value.
+
+The delegate resolves the run's Host default, then the role's named environment, then its overrides, once it knows
+the agent Host. A result equal to the Host's packaged default (local changes aside) passes no environment, so an
+engineer starts as before; a local `[delegate.environment.docker] gateway = "x"` puts every Docker run on `x`. A
+Host without a default table (`tmux`, or a Docker-kind `[hosts.d2]` without `[environment.d2]`) runs a role that
+selects or overrides an environment as a configuration error naming `[environment.<host>]`, before anything is
+written. A run in mode `in_process` starts no container: it runs without the environment, and one with a `lock`,
+`secrets` or `prefetch` is refused as a configuration error. `ensemble-delegate run --dry-run` prints the result as `environment` (secrets as references; `null`: none).
+The run stores it in `delegate.json`'s `plan.session`; resume and `ensemble-crew reopen` reuse it whatever the config
+says now, and a run stored before environments resumes without one.
+
+The acceptance setup, with a local `dummy-env:test` image holding `/opt/windroc/plugins/dummy-plugin/` and
+`"$B" login env dummy` done:
+
+```toml
+[session.hosts]
+default = "docker"
+
+[delegate.delegates]
+harness_host = "tmux"
+
+[delegate.environments.dummy]   # gateway: the default's workers
+image = "dummy-env:test"
+plugins = ["dummy-plugin"]
+lock = "dummy-lock"
+
+[[delegate.environments.dummy.secrets]]
+item = "ensemble-env/dummy"
+file = "dummy.txt"
+
+[delegate.roles.dummy-tester.environment]
+name = "dummy"
+prefetch = true
+```
+
+```sh
+ensemble-delegate run --role dummy-tester --dry-run \
+  --input $'Reference: T-1\nRepo: acme/app\nRef: main\n\nEcho me.'
+```
 
 ### Codex
 
@@ -646,7 +748,7 @@ The image supplies OpenCode 1.x and its provider config; none of the Mac's OpenC
 Each start, restart or resume runs a new generation in a new container from the current image. `restart` closes the
 running container first; `resume` (after `close`, or once the container is gone) starts one in the same cwd. Both
 keep the client history and [workspace volume](#workspace-volumes) and continue the conversation; a new start
-clears client history, while workspace retention follows [Workspace volumes](#workspace-volumes). A resume whose conversation file is missing or a symlink fails before any container with
+clears client history, emptying the client state dir in place, while workspace retention follows [Workspace volumes](#workspace-volumes). A resume whose conversation file is missing or a symlink fails before any container with
 `no native history to resume`. Resume with `ensemble-session resume <name>`, never `client-resume`, which runs the
 client on the host. Claude, Codex and [OpenCode](#opencode) terminals and headless runs are supported;
 other clients, detached sessions and a start while a container of that name exists fail before creation.
@@ -698,7 +800,7 @@ to 3 s old, but the opening is sent only after a fresh capture shows no dialog; 
 - **Egress proxy not ready** (`egress_unavailable`): run `~/.egress/current/start.sh`, as the error says (before
   a first successful install, rerun `scripts/install.sh --docker`), wait for
   `docker ps --filter name=egress-proxy` to show `(healthy)`, then start, restart or resume again ([Egress proxy](#egress-proxy)).
-- **Codex authentication expired** (`client_auth_expired`): run `/usr/local/libexec/ensemble/ensemble-broker login codex` on the host, then `ensemble-session resume NAME`; native history is kept. Renewal failures (`client_refresh_failed`) retry each minute until expiry, when the generation closes. No run logs in or uses another identity.
+- **Codex authentication expired** (`client_auth_expired`): run `/usr/local/libexec/ensemble/ensemble-broker login codex` on the host, then `ensemble-session resume NAME`; native history is kept. Renewal failures (`client_refresh_failed`) retry each minute until expiry, when the generation closes; a retry after a failed delivery or deadline publication delivers the login already renewed, without renewing it again. No run logs in or uses another identity.
 
 ## Broker locks
 

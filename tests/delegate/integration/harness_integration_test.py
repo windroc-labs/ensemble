@@ -713,7 +713,9 @@ class TuiStart(HarnessCase):
         with self.assertRaises(SessionError) as caught:
             delegate.detach()
         name = f"dummy-tester-{SID[:8]}"
-        self.assertEqual(str(caught.exception), f"tui session {name} did not start")
+        self.assertEqual(
+            str(caught.exception), f"tui session {name} did not start: its harness ended"
+        )
         self.assertNotIn(name, HarnessSession.live)
         self.assertTrue(self.metadata()["detached"])
         RecordingHost.harness_starts_agent = True
@@ -757,7 +759,7 @@ class TuiStart(HarnessCase):
             self.assertRaises(SessionError) as caught,
         ):
             delegate.detach()
-        self.assertEqual(str(caught.exception), "tui session X did not start")
+        self.assertEqual(str(caught.exception), "tui session X did not start in 30 s")
         self.assertEqual([launch["name"] for launch in harness_launches()], ["X-drive"])
         self.assertEqual(HarnessSession.live["X"].sid, other)
         self.assertEqual(HarnessSession.live["X"].alive(), True)
