@@ -28,11 +28,15 @@ from typing import NamedTuple
 import ensemble.utils
 from ensemble.session.engine.tmux_cli import (
     DIED,
+    Probe,
     TmuxCli,
     TmuxPane,
     TuiError,
     absent,
     display_error,
+    exit_code,
+    liveness,
+    running,
 )
 from ensemble.session.engine.tmux_cli import POLL as TMUX_POLL
 from ensemble.session.engine.types import (
@@ -128,6 +132,8 @@ LOCK_WAIT = 30
 KILL_WAIT = 5
 POLL = 0.2
 WAIT_MAX = 1.0
+PROBE_MIN = 0.5  # HostedSession's POLL
+PROBE_MAX = 3.0
 LABEL = "ensemble.session"
 PS_FORMAT = "\t".join(
     (
@@ -378,7 +384,8 @@ def _accept_started(
 
 class DockerTerminal(InteractiveProcess):
     """The container's pane, a TmuxPane on the container's TmuxCli. Its Record, display and sid: the
-    Host record's, of the container's generation.
+    Host record's, of the container's generation. state, returncode and screen() share one probe
+    and capture for an interval doubling from PROBE_MIN to PROBE_MAX while nothing changes.
     """
 
     def __init__(
@@ -396,32 +403,56 @@ class DockerTerminal(InteractiveProcess):
         self._pane_pid = process.split(" ")[3]
         self.host, self.container, self.generation = host, container, generation
         self.current = current
+        self._found: Probe | None = None
+        self._at, self._interval = 0.0, PROBE_MIN
+        self._screen: str | SessionError | None = None
+        self._seen: str | None = None
 
     @property
     def identity(self) -> str:
         return self.pane.process
 
+    def _take(self, found: Probe) -> Probe:
+        if found != self._found:
+            self._interval = PROBE_MIN
+        self._found, self._at, self._screen = found, time.monotonic(), None
+        return found
+
+    def _current(self) -> Probe:
+        if self._found is not None and time.monotonic() - self._at < self._interval:
+            return self._found
+        previous = self._found
+        found = self._take(self.pane.probe())
+        if found == previous:
+            self._interval = min(self._interval * 2, PROBE_MAX)
+        return found
+
+    def _alive(self, found: Probe) -> bool:
+        try:
+            return running(found, self.name)
+        except SessionError as error:  # the pane's tmux did not tell
+            raise Unanswered(str(error)) from None
+
     def state(self) -> Liveness:
-        return self.pane.state()
+        return liveness(self._current())
 
     def returncode(self) -> int | None:
-        return self.pane.returncode()
+        return exit_code(self._current())
 
     def activity(self) -> StatusState | None:
         value = self.pane.option("@state")
         return StatusState(value) if value in MARKS else None
 
     def alive(self) -> bool:
-        try:
-            return self.pane.alive()
-        except SessionError as error:  # the pane's tmux did not tell
-            raise Unanswered(str(error)) from None
+        return self._alive(self._take(self.pane.probe()))
 
     def send(self, action: Paste | Key) -> None:
         self.pane.send(action, self.alive)
+        self._interval = PROBE_MIN
 
     def press(self, keys) -> None:
         self.pane.press(keys, self.alive)
+        self._interval = PROBE_MIN
 
     def wait_exit(self, timeout: float) -> bool:
         return _wait(lambda: not (self.alive() or self._group_live()), timeout, TMUX_POLL, WAIT_MAX)
@@ -461,8 +492,24 @@ class DockerTerminal(InteractiveProcess):
         return found.get("sid"), found.get("generation")
 
     def screen(self, lines: int | None = None) -> str:
-        if not self.alive():
+        if not (self._alive(self._current()) if lines is None else self.alive()):
             raise SessionError(f"session {self.name} is not running on host {self.host.name}")
+        if lines is not None:
+            return self._read(lines)
+        if self._screen is None:
+            try:
+                self._screen = self._read(None)
+            except SessionError as error:
+                self._screen = error
+            else:
+                if self._screen != self._seen:
+                    self._interval = PROBE_MIN
+                self._seen = self._screen
+        if isinstance(self._screen, SessionError):
+            raise SessionError(str(self._screen))
+        return self._screen
+
+    def _read(self, lines: int | None) -> str:
         try:
             return _text(self.pane.read(lines))
         except TuiError as error:
