@@ -53,6 +53,7 @@ LINEAR_KEYS = {
     "states",
     "human_members",
     "harness",
+    "manager",
     "manager_key",
     "task_label_group",
     "task_labels",
@@ -74,6 +75,8 @@ class AppKey(StrEnum):
 
 
 LINEAR_ROLE_KEYS = set(AppKey)
+# [linear.manager]: its app user id until the manager calls Linear as its app
+MANAGER_KEYS = frozenset({AppKey.USER_ID})
 
 
 REQUIRED = (
@@ -293,6 +296,7 @@ def _linear_settings(linear):
             "linear.harness",
             **{k.value: linear["harness"][k] for k in AppKey},
         ),
+        manager_user_id=linear["manager"].get("user_id", ""),
         manager_key=linear.get("manager_key", ""),
         task_label_group=linear["task_label_group"],
         agent_label_group=linear["agent_label_group"],
@@ -389,6 +393,7 @@ def _load_config(cfg, local, board):
 
 def _linear(cfg, local):
     _app_table(cfg["linear"], "harness")
+    _app_table(cfg["linear"], "manager", MANAGER_KEYS)
     if missing := utils.unset(cfg, REQUIRED):
         raise ConfigError(
             f"orchestrator/config.toml: required, unset: {', '.join(missing)}: set them in {local} (orchestrator/config.toml's `# local:` lines)"
@@ -397,18 +402,19 @@ def _linear(cfg, local):
     _check_ids(linear)
     _app(linear, "harness")
     _linear_roles(linear)
+    _manager(linear)
     _manager_key(linear)
     _project_repos(linear)
     _task_labels(linear)
     _agent_labels(linear)
 
 
-def _app_table(linear, name):
-    """[linear.<name>]: a table of AppKey keys only (unset ones REQUIRED reports)."""
+def _app_table(linear, name, keys=frozenset(AppKey)):
+    """[linear.<name>]: a table of keys only (unset ones REQUIRED reports)."""
     table = linear.setdefault(name, {})
     if not isinstance(table, dict):
         raise ConfigError(f"orchestrator/config.toml: [linear.{name}] must be a table")
-    if extra := sorted(set(table) - set(AppKey)):
+    if extra := sorted(set(table) - keys):
         raise ConfigError(
             f"orchestrator/config.toml: [linear.{name}] has unknown keys: {', '.join(extra)}"
         )
@@ -448,6 +454,24 @@ def _harness_services(linear):
     return {
         linear["harness"][k]: f"linear.harness.{k}" for k in ("secret_service", "token_service")
     }
+
+
+def _manager(linear):
+    """[linear.manager] user_id: "" or the manager app's user id, which no other app has."""
+    uid = linear["manager"].get("user_id", "")
+    if uid == "":
+        return
+    if not _uuid(uid):
+        raise ConfigError(
+            f"orchestrator/config.toml: linear.manager.user_id must be a Linear user id (UUID): {uid!r}"
+        )
+    taken = {linear["harness"]["user_id"]: "linear.harness.user_id"} | {
+        p["user_id"]: f"linear.roles.{n}.user_id" for n, p in linear["roles"].items()
+    }
+    if uid in taken:
+        raise ConfigError(
+            f"orchestrator/config.toml: linear.manager.user_id {uid!r} is also {taken[uid]}"
+        )
 
 
 def _manager_key(linear):
