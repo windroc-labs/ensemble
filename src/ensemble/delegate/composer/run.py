@@ -254,6 +254,9 @@ def _check_overlay(overlay: Mapping, roles: set[str], where: str) -> None:
     """An overlay's errors name its tables in brackets."""
     if not isinstance(overlay, Mapping):
         raise ConfigError(f"[{where}] must be a table")
+    for key in (ENVIRONMENT_KEY, "environments"):
+        if key in overlay:
+            raise _untrusted(f"{where}.{key}")
     _check_keys(overlay, OVERLAY_KEYS | {"roles", ACCOUNTS_KEY}, f"[{where}]")
     _check_output(overlay, f"{where}.output", _boxed)
     _accounts(overlay, f"{where}.")
@@ -266,7 +269,16 @@ def _check_overlay(overlay: Mapping, roles: set[str], where: str) -> None:
             raise ConfigError(f"unknown role {role!r} in [{where}.roles]")
         if not isinstance(table, Mapping):
             raise ConfigError(f"[{where}.roles.{role}] must be a table")
+        if ENVIRONMENT_KEY in table:
+            raise _untrusted(f"{where}.roles.{role}.{ENVIRONMENT_KEY}")
         _check_role(table, role, f"{where}.", _boxed, OVERLAY_KEYS)
+
+
+def _untrusted(where: str) -> ConfigError:
+    return ConfigError(
+        f"[{where}]: environments come only from the delegate config files "
+        "(config.toml, config.local.toml)"
+    )
 
 
 def _boxed(where: str) -> str:
