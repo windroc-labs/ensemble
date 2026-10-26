@@ -1444,6 +1444,19 @@ class InstallTest(Case):
             result.stderr,
         )
 
+    def test_codex_plugin_from_its_newest_cache_dir(self):
+        self.assert_ok(self.fresh(clients="codex", docker="y"))
+        cache = Path(self.home, ".codex/plugins/cache/windroc/ensemble")
+        # 9.8.10 is newer than 9.8.7 by version, older by text.
+        shutil.copytree(cache / "9.8.7", cache / "9.8.10")
+        (cache / "9.8.10" / CLIENT).write_text(f'PROTOCOL = "{OTHER}"\n')
+        result = self.refused("--clients", "codex", "--docker", rerun=True)
+        self.assertIn(
+            f"install.sh: {cache / '9.8.10'} wants broker protocol {OTHER}, but its broker, release"
+            f" v9.8.7, speaks protocol {PROTOCOL}: update the plugin",
+            result.stderr,
+        )
+
     def test_installed_plugin_with_another_protocol_stops_up_front(self):
         self.assert_ok(self.fresh(clients="claude", docker="y"))
         path = self.claude_ensemble()
