@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Docker broker protocol 22",
+  "title": "Docker broker protocol 23",
   "$comment": "Changes to the protocol format defined by this schema require bumping Version in src/broker/internal/protocol/protocol.go.",
   "$ref": "#/$defs/manifest",
   "$defs": {
@@ -413,7 +413,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "22"
+          "const": "23"
         }
       },
       "required": [
@@ -425,7 +425,7 @@
       "type": "object",
       "properties": {
         "argv": {
-          "$comment": "Then any --plugin NAME pairs, then an optional --max-age SECONDS; JSON Schema cannot pair repeated tokens, so the broker checks the order (usage).",
+          "$comment": "Then an optional --base-image IMAGE, then any --plugin SOURCE pairs, then any --image-plugin NAME pairs, then an optional --max-age SECONDS; JSON Schema cannot pair repeated tokens, so the broker checks the order (usage).",
           "type": "array",
           "prefixItems": [
             {
@@ -442,12 +442,20 @@
             "anyOf": [
               {
                 "enum": [
+                  "--base-image",
                   "--plugin",
+                  "--image-plugin",
                   "--max-age"
                 ]
               },
               {
                 "$ref": "#/$defs/plugin"
+              },
+              {
+                "$ref": "#/$defs/plugin_name"
+              },
+              {
+                "$ref": "#/$defs/base_image"
               },
               {
                 "type": "string",
@@ -1401,6 +1409,17 @@
     "plugin": {
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}@[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}#[a-f0-9]{40}(?:::[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}#[a-f0-9]{40})?$"
+    },
+    "base_image": {
+      "$comment": "A local image the broker layers ensemble on, never pulling it: a tag, repository[:tag] or sha256 ID; no registry port or digest.",
+      "type": "string",
+      "maxLength": 255,
+      "pattern": "^(?:sha256:[a-f0-9]{64}|[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?)$"
+    },
+    "plugin_name": {
+      "$comment": "An in-image plugin: its directory under /opt/windroc/plugins in the stage-1 image.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
     },
     "codex_status": {
       "type": "object",

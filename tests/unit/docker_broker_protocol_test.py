@@ -40,12 +40,48 @@ class DockerBrokerProtocol(Case):
             with self.subTest(value=value):
                 self.assertFalse(validator.is_valid(value))
 
+    def test_build_base_image_and_image_plugin_names(self):
+        schema = json.loads((PROTOCOL / "protocol.schema.json").read_text())
+        for definition, valid, invalid in (
+            (
+                "base_image",
+                (
+                    "dummy-env:test",
+                    "sha256:" + "c" * 64,
+                    "registry.local/team/env:1.0",
+                    "a__b",
+                    "a" * 255,
+                ),
+                (
+                    "-x",
+                    "Dummy:test",
+                    "env:",
+                    "env@sha256:" + "c" * 64,
+                    "localhost:5000/env",
+                    "a" * 256,
+                    "",
+                ),
+            ),
+            (
+                "plugin_name",
+                ("dummy-plugin", "a.b_c", "a" * 64),
+                ("../x", ".x", "-x", "a/b", "a" * 65, ""),
+            ),
+        ):
+            validator = Draft202012Validator({**schema, "$ref": f"#/$defs/{definition}"})
+            for value in valid:
+                with self.subTest(definition=definition, value=value):
+                    self.assertTrue(validator.is_valid(value))
+            for value in invalid:
+                with self.subTest(definition=definition, value=value):
+                    self.assertFalse(validator.is_valid(value))
+
     def test_every_shared_fixture_has_its_expected_schema_outcome(self):
         schema = json.loads((PROTOCOL / "protocol.schema.json").read_text())
         Draft202012Validator.check_schema(schema)
         index = json.loads((PROTOCOL / "fixtures/index.json").read_text())
         self.assertTrue(index["cases"])
-        self.assertEqual(index["protocol_version"], "22")
+        self.assertEqual(index["protocol_version"], "23")
         names = [case["file"] for case in index["cases"]]
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual(

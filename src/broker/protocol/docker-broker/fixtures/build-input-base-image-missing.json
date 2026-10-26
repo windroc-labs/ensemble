@@ -1,0 +1,8 @@
+{
+  "argv": [
+    "build",
+    "--ensemble",
+    "/opt/ensemble",
+    "--base-image"
+  ]
+}

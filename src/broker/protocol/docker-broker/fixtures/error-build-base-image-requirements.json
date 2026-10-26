@@ -1,0 +1,9 @@
+{
+  "exit_code": 8,
+  "error": {
+    "command": "build",
+    "code": "build_failed",
+    "message": "Base image dummy-env:test lacks tmux, a non-root user agent; see docs/docker-host.md#base-images.",
+    "cleanup": "not_needed"
+  }
+}
