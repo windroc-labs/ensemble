@@ -10,11 +10,12 @@ import (
 
 // Kinds and results, the log's only vocabulary for them.
 const (
-	ClaudeSetupToken = "claude-setup-token"
-	CodexAccessToken = "codex-access-token"
-	GitHubToken      = "github-installation-token"
-	EnvSecret        = "env-secret"
-	OpencodeAPIKey   = "opencode-api-key" // notice lines only
+	ClaudeSetupToken  = "claude-setup-token"
+	CodexAccessToken  = "codex-access-token"
+	GitHubToken       = "github-installation-token"
+	LinearAccessToken = "linear-access-token"
+	EnvSecret         = "env-secret"
+	OpencodeAPIKey    = "opencode-api-key" // notice lines only
 
 	Issued           = "issued"
 	Renewed          = "renewed"

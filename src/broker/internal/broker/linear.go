@@ -16,7 +16,9 @@ import (
 	"strings"
 	"time"
 
+	"ensemble/broker/internal/audit"
 	"ensemble/broker/internal/credential"
+	"ensemble/broker/internal/protocol"
 )
 
 const (
@@ -138,6 +140,7 @@ type linearAccount struct {
 
 // Linear owns an enrolled host identity's account and its persistent host grant. No Docker access is involved.
 type Linear struct {
+	Audit    *audit.Recorder
 	keys     linearKeys
 	host     linearHost
 	http     *http.Client
@@ -269,7 +272,7 @@ func (l Linear) Maintain(ctx context.Context, a LinearIdentity) (LinearResult, e
 		return LinearResult{}, errLinear
 	}
 	p := &linearProvider{owner: l, account: &account}
-	lifecycle := credential.Lifecycle{Provider: p, Store: l.keys, NotFound: ErrNotFound, Records: linearGrantsService, Lock: l.lock("grant/" + a.TokenService)}
+	lifecycle := credential.Lifecycle{Provider: p, Store: l.keys, NotFound: ErrNotFound, Records: linearGrantsService, Lock: l.lock("grant/" + a.TokenService), Audit: l.Audit}
 	d := credential.Delivery{Consumer: credential.Consumer{Host: a.TokenService}, Publish: func(m credential.Material) error {
 		value, _ := json.Marshal(linearAccess{AccessToken: m.Token, ExpiresAt: m.ExpiresAt})
 		defer erase(value)
@@ -293,7 +296,7 @@ type linearProvider struct {
 }
 
 func (*linearProvider) Kind() credential.Kind { return credential.Linear }
-func (*linearProvider) AuditKind() string     { return "linear-access-token" }
+func (*linearProvider) AuditKind() string     { return audit.LinearAccessToken }
 func (*linearProvider) SharedAccount() bool   { return true }
 func (p *linearProvider) Now() time.Time      { return p.owner.now() }
 func (*linearProvider) File(credential.Material) (credential.File, error) {
@@ -334,6 +337,7 @@ func (p *linearProvider) Issue(ctx context.Context, scope map[string]string, _ c
 	renewAt, _ := time.Parse(time.RFC3339, a.RenewAt)
 	expires, _ := time.Parse(time.RFC3339, a.Current.ExpiresAt)
 	if !linearClean(a.Current.AccessToken) || !now.Before(renewAt) || !now.Before(expires) {
+		l.Audit.Renewing("")
 		secret, err := l.keys.Secret(a.Identity.SecretService, a.RootAccount)
 		if err != nil {
 			erase(secret)
@@ -345,6 +349,7 @@ func (p *linearProvider) Issue(ctx context.Context, scope map[string]string, _ c
 		}
 		current, seconds, err := l.request(ctx, a.Identity, string(secret))
 		if err != nil {
+			l.Audit.Renewing(protocol.RefreshFailed)
 			return credential.Material{}, errLinear
 		}
 		a.Current = current
