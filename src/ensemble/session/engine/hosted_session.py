@@ -389,6 +389,7 @@ class HostedSession(Session):
                 check_name=check_name,
             )
             try:
+                capacity.started(running.state)
                 if mode == Mode.TUI and name is not None:
                     cls._started(viewer, name, running, on, display)
                 session = cls(
@@ -401,9 +402,11 @@ class HostedSession(Session):
                     idle_timeout=idle_timeout,
                     client=client,
                 )
-                capacity.started(running.state)
             except BaseException:
-                running.close()
+                try:
+                    running.close()
+                finally:
+                    capacity.release_if_absent(running.state)
                 raise
             session._capacity = capacity
             session._capacity_hosts = {_host_key(setup, selected_host): on}

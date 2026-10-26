@@ -12,7 +12,14 @@ import uuid
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager
 
-from ensemble.session.engine.types import Liveness, Mode, SessionError, SessionRow, StatusState
+from ensemble.session.engine.types import (
+    ConfigError,
+    Liveness,
+    Mode,
+    SessionError,
+    SessionRow,
+    StatusState,
+)
 from ensemble.session.hosts.base import Host
 from ensemble.utils import STATE, inode_lock, sync_directory
 
@@ -166,9 +173,13 @@ class Admission(AbstractContextManager):
                     sync_directory(self.directory)
                     self._yielded = True
                     yield self
-                finally:
+                except ConfigError:
                     if not self._committed:
                         self.close()
+                    raise
+                finally:
+                    if not self._committed and not self.finished.is_set():
+                        self._rollback()
         except (OSError, ValueError) as error:
             if self._yielded:
                 raise
@@ -188,13 +199,29 @@ class Admission(AbstractContextManager):
             raise SessionError(f"client {client}: capacity: {error}") from error
 
     def started(self, state: Callable[[], Liveness]) -> None:
+        self._committed = True
         if self.record["kind"] == Mode.TUI:
-            if self._fd is not None:
-                os.close(self._fd)
-                self._fd = None
+            self._detach()
         else:
             threading.Thread(target=self._watch, args=(state,), daemon=True).start()
-        self._committed = True
+
+    def _rollback(self) -> None:
+        if self._yielded and self.record["kind"] == Mode.TUI:
+            try:
+                host = self.record["host"]
+                known, _ = _inventory({host: self.hosts[host]}, self.client)
+                retained = _retained(self.record, known)
+            except (OSError, SessionError):
+                retained = True
+            if retained:
+                self._detach()
+                return
+        self.close()
+
+    def _detach(self) -> None:
+        if self._fd is not None:
+            os.close(self._fd)
+            self._fd = None
 
     def _watch(self, state: Callable[[], Liveness]) -> None:
         while not self.finished.wait(POLL):
@@ -213,7 +240,5 @@ class Admission(AbstractContextManager):
                 return
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(self.path)
-            if self._fd is not None:
-                os.close(self._fd)
-                self._fd = None
+            self._detach()
             self.finished.set()

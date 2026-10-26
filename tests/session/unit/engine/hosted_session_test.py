@@ -96,6 +96,23 @@ class CapacityPiped(Piped):
 
 
 class CapacityHost(ScreenHost):
+    close_failure = None
+    inventory_failure = None
+    launch_failure = None
+
+    def create(self, *args, **kwargs):
+        terminal = super().create(*args, **kwargs)
+        terminal.calls.close.side_effect = self.close_failure
+        if self.inventory_failure is not None:
+            self.calls.list.side_effect = self.inventory_failure
+        return terminal
+
+    def terminal(self, *args, **kwargs):
+        terminal = super().terminal(*args, **kwargs)
+        if self.launch_failure is not None:
+            raise self.launch_failure
+        return terminal
+
     def pipe(self, name, launch, *, metadata=None):
         self.calls.pipe(name, launch, metadata=metadata)
         return CapacityPiped()
@@ -161,6 +178,30 @@ class ClientCapacityTest(HostedTuiBase):
                     self.start(mode=mode, name="one", sid="s1")
                 boundary.side_effect = None
                 self.start(mode=mode, name="one", sid="s2").close()
+
+    def test_unconfirmed_failed_shutdown_keeps_the_durable_reservation(self):
+        for phase in ("publication", "handoff", "handoff-visible"):
+            with self.subTest(phase=phase):
+                other = self._other_configuration()
+                self.host.close_failure = SessionError("shutdown unconfirmed")
+                self.host.inventory_failure = (
+                    None if phase == "handoff-visible" else SessionError("host unavailable")
+                )
+                self.host.launch_failure = (
+                    None if phase == "publication" else SessionError("handoff failed")
+                )
+                self.host.calls.close_view.side_effect = SessionError("publication failed")
+                with self.assertRaises(SessionError):
+                    self.start(mode="tui", name="one", sid="s1")
+                spec = self.spec(client="fake", mode="tui", name="two", sid="s2")
+                with self.assertRaisesRegex(SessionError, "one"):
+                    admitted = other.start(spec)
+                    self.addCleanup(admitted.close)
+                self.host.calls.list.side_effect = None
+                self.host.calls.close_view.side_effect = None
+                self.host.processes["one"].calls.close.side_effect = None
+                self.session.retire("one", sid="s1")
+                other.start(spec).close()
 
     def test_each_mode_and_resumed_start_uses_the_same_client_capacity(self):
         for mode, name in (("tui", "one"), ("headless", None), ("headless", "one")):
