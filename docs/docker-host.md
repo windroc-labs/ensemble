@@ -530,6 +530,11 @@ before starting anything.
 | start | `build` on its image and plugins; the manifest gets `gateway`, `secrets`, `lock` with `lock_owner` (the session name) and `prefetch`; with `prefetch` no GitHub App or bot identity |
 | busy reply | `SessionBusy` (lock, holder), from start, restart, resume and a worker's restart |
 
+A run whose lock is held ([Broker locks](#broker-locks)) is busy: `ensemble-delegate run` (foreground or `--detach`)
+and `ensemble-crew role` exit 75 with `busy: lock <lock> is held by <container> (owner <owner>)` on stderr (a
+configuration error exits 2, a run failure 1). A busy preflight writes no run record; a busy found only at start ends
+the run without an outcome, its error starting `busy: `, and a detached run's harness exits 75.
+
 `host.json` keeps a start's environment and a worker's `worker.json` keeps the one it was given. A resume giving none
 (`ensemble-session resume`, `ensemble-crew reopen`) of the same sid runs the stored one; one giving another (prefetch aside) is refused;
 state from before environments runs without one. Each new container takes the lock again and resolves its secrets
