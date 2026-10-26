@@ -404,6 +404,30 @@ class RunDirTest(HarnessCase):
             self.make()
         self.assertEqual(os.listdir(self.work), [])
 
+    def test_a_busy_preflight_raises_session_busy_and_leaves_no_workdir(self):
+        busy = SessionBusy("dummy-lock", "ensemble-x-1 (owner x)")
+        HarnessSession.preflight_error = busy
+        with self.assertRaises(SessionBusy) as caught:
+            self.make()
+        self.assertIs(caught.exception, busy)
+        self.assertFalse(os.path.lexists(self.work))
+
+    def test_a_busy_preflight_over_an_earlier_run_leaves_its_record(self):
+        self.make(spec=Spec("input", self.work, mode="tui", client="fake", sid=SID)).run()
+        left = HarnessSession.live[self.metadata()["agent_name"]]
+        with open(self.record(), "rb") as file:
+            before = file.read()
+        HarnessSession.preflight_error = SessionBusy("dummy-lock", "ensemble-x-1 (owner x)")
+        with (
+            mock.patch("ensemble.delegate.engine.harness_delegate.sweep") as swept,
+            self.assertRaises(SessionBusy),
+        ):
+            self.make()
+        with open(self.record(), "rb") as file:
+            self.assertEqual(file.read(), before)
+        self.assertFalse(left.alive())
+        swept.assert_called_once()
+
     def test_a_live_run_refuses_a_new_one_before_making_the_agent_dir(self):
         self.make()
         os.rmdir(os.path.join(self.work, "agent"))

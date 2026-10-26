@@ -279,7 +279,8 @@ class HarnessDelegate(Delegate):
     def _persist_new(self) -> None:
         """Every refusal precedes every write: a fresh workdir's session preflight runs before its
         run dir is made; otherwise it follows the replaced run's refusal and cleanup, under the
-        mutex. The agent dir is made last, just before the run record.
+        mutex. The agent dir is made last, just before the run record. A busy preflight raises
+        SessionBusy, writing nothing.
         """
         fresh = not os.path.lexists(self.layout.run)
         try:
@@ -301,6 +302,8 @@ class HarnessDelegate(Delegate):
     def _preflight(self) -> None:
         try:
             self.driver.preflight(self._state.plan.session)
+        except SessionBusy:
+            raise
         except (SessionConfigError, SessionError) as error:
             raise ConfigError(str(error)) from None
 
