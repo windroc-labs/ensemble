@@ -172,6 +172,21 @@ def _spellings(name: str) -> list[str]:
     ]
 
 
+def _check_paths(paths: Iterable[str]) -> None:
+    for path in paths:
+        if "*" in path or "?" in path:
+            raise ConfigError(f"{path!r}: a wildcard in a path the opencode client grants")
+
+
+def _grant_paths(paths: Iterable[str]) -> list[str]:
+    """OpenCode tools check lexical paths; retain those alongside their resolved targets."""
+    found = list(
+        dict.fromkeys(p for path in paths for p in (os.path.abspath(path), os.path.realpath(path)))
+    )
+    _check_paths(found)
+    return found
+
+
 def _git(argv: list[str], timeout: int):
     env = {k: v for k, v in os.environ.items() if k not in LOCAL_ENV_VARS}
     return sh(argv, timeout, env=env)
@@ -203,9 +218,7 @@ def edit_rules(cwd: str, dirs: list[str], reads: list[str]) -> dict[str, str]:
     `worktree`. Each path by its deepest grant (cwd and dirs allow, reads deny), else deny; never
     PROTECTED. One rule per level above the worktree, as "*" also matches "../".
     """
-    for path in (cwd, *dirs, *reads):
-        if "*" in path or "?" in path:
-            raise ConfigError(f"{path!r}: a wildcard in a path the opencode client grants")
+    _check_paths((cwd, *dirs, *reads))
     top = worktree(cwd)
     grants = dict(
         sorted(
@@ -379,13 +392,15 @@ class OpenCodeCommon:
         permission: dict = {
             "bash": {"*": "ask", **commands} if commands else "ask",
         }
-        dirs = [os.path.realpath(d) for d in access.dirs]
-        reads = [os.path.realpath(d) for d in access.reads]
+        dirs = _grant_paths(access.dirs)
+        reads = _grant_paths(access.reads)
         if outside := [*reads, *dirs]:
             permission["external_directory"] = {
                 pattern: "allow" for d in outside for pattern in (d, f"{d}/*")
             }
-        permission["edit"] = edit_rules(os.path.realpath(access.cwd), dirs, reads)
+        permission["edit"] = edit_rules(
+            os.path.realpath(access.cwd), [os.path.realpath(d) for d in access.dirs], reads
+        )
         if context.permission is Permission.YOLO:
             # --auto replies in the TUI after permission.asked; approve at the backend so the
             # plugin never reports those transient asks as blocked. Keep agent and edit denies.

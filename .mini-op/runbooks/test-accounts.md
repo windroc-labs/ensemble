@@ -8,6 +8,8 @@ How the manager builds ensemble's live-test accounts on the Mac mini: its own em
 
 Names, addresses and ids (accounts, keychain items, the workspace and its team, the GitHub user, App and repo) come from the request or the mini's `~/.ensemble/config.local.toml` (template: `install-ensemble/test-board.toml`); never write them into this repo. Before putting a name into an ssh command line, check it matches `^[A-Za-z0-9][A-Za-z0-9._@+:-]*$` (an email: `^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$`); if not, stop and ask the user. This runbook's scripts run from `~/mini-op-projects/ensemble/test-accounts/`; the Linear logins use mini-op's `~/apm/bin/linearlogin` and `~/apm/bin/maillink`.
 
+Renamed on 2026-10-26 (the user's request): the test resources' agent-pm names became ensemble names: the keychain items' prefix, the Linear workspace (name and URL) and its project, the GitHub repo and App (same App ID; the Linear team keeps its key). Run records from before then use the old names. The test accounts' personal Linear API keys were revoked and their keychain items deleted then: the OAuth apps' `linear-app-*` items are the Linear credentials.
+
 ## 3. Email (Outlook)
 
 1. On the mini, generate the password into its keychain (`openssl rand` + `security -i add-generic-password`).
@@ -20,8 +22,6 @@ Names, addresses and ids (accounts, keychain items, the workspace and its team, 
 Do this before the install test: `install.sh` logs `gh` in.
 
 The test GitHub account and its App are the manager's to manage, deletions included, e.g. an App private key no longer used (the user, 2026-10-23).
-
-Pre-rename names: the test resources made before the ensemble rename (the GitHub App and its repo, the Linear workspace, its team and its project) keep their old names, since renaming them changes their URLs and ids.
 
 1. Proton (its free-plan signup page), plain window: username, password generated into the mini keychain, decline the upsell, Human Verification › Email tab › the Outlook address, code from the Outlook mail; Show the recovery phrase, select and copy it into the mini keychain, tick and Continue.
 2. GitHub (`github.com/signup`) with OpenCLI: email the Proton address (GitHub refuses Outlook: `gotchas.md`), password typed from the keychain, username; Create account; the 8-digit launch code comes in the Proton mail (inside its message iframe: read it with `eval` over `iframe.contentDocument`); then sign in.
@@ -41,7 +41,7 @@ Pre-rename names: the test resources made before the ensemble rename (the GitHub
 2. Create the workspace (name and URL by keystrokes), skip the onboarding steps, turn off onboarding emails.
 3. Create the five OAuth apps as in "5. OAuth apps" below.
 4. Run the install with `--board linear` (`install-ensemble.md`). Its Linear apps step stores each app's client secret and first token in the mini's keychain; its board configuration step then stops, as the team lacks the In Review and Handoff states and the Tasks label group. What the apps step stored stays.
-5. As the workspace admin (a team admin), in Linear's web UI on the mini, mini-op driving the browser: in the test team's settings, Workflow: states In Review and Handoff under Started; Labels: label groups `Agent` (Claude, Codex, OpenCode) and `Tasks` (Build, Light Build, Light Research, Deep Research). Trash the onboarding issues. Linear refuses both creations to the manager app's token (`workflowStateCreate`, `issueLabelCreate`: `FORBIDDEN`, live test 2026-10-26); no personal API key either.
+5. As the workspace admin (a team admin), in Linear's web UI on the mini, mini-op driving the browser: in the test team's settings, Workflow: states In Review and Handoff under Started; Labels: label groups `Agent` (Claude, Codex, OpenCode) and `Tasks` (Build, Light Build, Light Research, Deep Research). Trash the onboarding issues. Linear refuses both creations to the manager app's token (`workflowStateCreate`, `issueLabelCreate`: `FORBIDDEN`, live test 2026-10-26), and the test accounts have no personal API key.
 6. Board extras, through `~/mini-op-projects/ensemble/test-accounts/lq <manager-token-service> <manager-token-service> <body-file>` (the manager app's token item: `[orchestrator.linear.manager] token_service` in the mini's local config, default `linear-app-manager-token`; body files built on the user's Mac, scp'd to `/tmp`; a Linear error exits 1): a project (`projectCreate`, the test team); view **Dashboard**, a copy of the real workspace's: `customViewCreate` (name Dashboard, the test team, shared, filter on the team's key), then `viewPreferencesCreate` (type organization, viewType customView, preferences layout board, issueGrouping workflowState, issueSubGrouping project): columns by status, rows by project.
 7. Run the install again: its board configuration fills the team, state and label ids still missing from the mini's local config, and asks each Linear project's GitHub repo: the project's is `<test-owner>/<test-repo>`.
 
@@ -66,7 +66,7 @@ After mini-op's `setup-test-env` runbook has reconnected mini-op to the reset mi
     ssh mini "security dump-keychain $d/export.keychain-db" | grep -E 'class:|"(svce|acct)"<blob>='
     ```
 
-3. Import each generic password (class `genp`) by its service (`svce`) and account (`acct`). Each name must match `^[A-Za-z0-9][A-Za-z0-9._@+:-]*$`, else stop and ask the user; the user says how many items to expect (12 at the last export), any other count: tell the user which and ask before importing. The export predates the ensemble rename: import a service with the old prefix under the new prefix, and the old shared account under the new one (both pairs: the request or the mini's local config); keep other names.
+3. Import each generic password (class `genp`) by its service (`svce`) and account (`acct`). Each name must match `^[A-Za-z0-9][A-Za-z0-9._@+:-]*$`, else stop and ask the user; the user says how many items to expect (12 at the last export), any other count: tell the user which and ask before importing. An export from before 2026-10-26 holds the agent-pm names: import a service with the old prefix under the new prefix, and the old shared account under the new one (both pairs: the request or the mini's local config); keep other names. Import none of its personal Linear API key items (services ending in `-linear-key` or `-linear-<role>` after the old prefix): those keys are revoked.
 
     ```sh
     ssh mini "~/mini-op-projects/ensemble/test-accounts/importkey $d/export.keychain-db <service> <account> [<new-service> [<new-account>]]" < /run/ensemble/secrets/env/mini-password

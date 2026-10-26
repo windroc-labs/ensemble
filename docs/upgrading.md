@@ -54,7 +54,7 @@ images](docker-host.md#base-images)); a build without them is unchanged.
 
 After updating the plugin, rerun `scripts/install.sh --docker`: it installs the pinned private
 `windroc/egress-proxy` with your `gh` access, creates `~/.egress/config.local.yaml` only if absent, starts the
-proxy and waits for healthy. Existing configs are preserved. Add Ollama and local/LAN provider exceptions before starting their workers
+proxy and waits for healthy. Existing configs are preserved, so one without `networks.workers` stops the installer: add it first ([Docker host › Egress proxy](docker-host.md#egress-proxy)). Add Ollama and local/LAN provider exceptions before starting their workers
 ([Egress proxy operations](docker-host.md#egress-proxy)).
 
 An already running worker stays on `bridge` during the upgrade; it is not forcibly migrated or stopped.
