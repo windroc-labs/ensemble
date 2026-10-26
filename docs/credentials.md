@@ -66,6 +66,17 @@ name, even after the container is gone. `status` and `status --cleanup` do not d
 records also stay in place for recovery; fix their access and retry close. A record is removed only after
 confirmed revocation, confirmed expiry or a successful durable transfer to the backlog.
 
+### GitHub prefetch token
+
+| Field | Value |
+|---|---|
+| Purpose | one [prefetch](docker-host.md#prefetch) clone into a new workspace |
+| Minimum permission | `contents: read` on the prefetched repo alone |
+| Stored at | broker item `ensemble-tokens` (the starting container's record) while in use; the prefetch helper's tmpfs `HOME`, never the workspace, the clone's `.git/config` or the run container |
+| Readers | the broker; the helper container's processes and any process that can `docker exec` into it, for the length of the clone |
+| Lifetime | until the helper exits, at most 1 hour |
+| Revoke | the broker revokes it as soon as the helper exits; an unconfirmed revocation goes to the backlog, as installation tokens |
+
 ### Linear harness key
 
 | Field | Value |
@@ -253,8 +264,8 @@ A read that returns bytes fails this check unless the user accepts it: mark the 
 - Its workspace volume `ensemble-ws-<name>` at its cwd.
 - Its own client state: Claude and OpenCode's read-write binds; Codex's volatile home and bound `sessions/` history.
 - Its credentials on tmpfs ([Credentials](#credentials)).
-- The network only through the egress proxy's `workers` policy: the public internet; the Mac (`host.docker.internal`) and LAN providers only through its exceptions ([Egress proxy](docker-host.md#egress-proxy)).
-- Every repo of every App installation.
+- The network only through the egress proxy's policy for its caller network (`workers` unless the manifest's `gateway` names another): the public internet; the Mac (`host.docker.internal`) and LAN providers only through its exceptions ([Egress proxy](docker-host.md#egress-proxy)).
+- Every repo of every App installation; none with [prefetch](docker-host.md#prefetch), whose container gets no GitHub token.
 
 Every container runs as `agent`, with all capabilities dropped and `no-new-privileges`.
 

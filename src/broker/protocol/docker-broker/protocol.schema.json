@@ -299,6 +299,29 @@
               "pattern": "\\S"
             }
           ]
+        },
+        "gateway": {
+          "$comment": "The egress proxy's caller network key (windroc.egress.networks); absent: workers.",
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+        },
+        "prefetch": {
+          "$comment": "The repo a start clones into a workspace volume it creates; no ref: the default branch.",
+          "type": "object",
+          "properties": {
+            "repo": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$",
+              "not": {
+                "pattern": "/\\.\\.?$"
+              }
+            },
+            "ref": {
+              "$ref": "#/$defs/git_ref"
+            }
+          },
+          "required": ["repo"],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -413,6 +436,16 @@
         "lock_owner": [
           "lock"
         ]
+      },
+      "dependentSchemas": {
+        "prefetch": {
+          "$comment": "A prefetching container gets no GitHub credentials.",
+          "properties": {
+            "github": {
+              "type": "null"
+            }
+          }
+        }
       }
     },
     "version_input": {
@@ -438,7 +471,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "26"
+          "const": "27"
         }
       },
       "required": [
@@ -1576,6 +1609,24 @@
         "available"
       ],
       "additionalProperties": false
+    },
+    "git_ref": {
+      "$comment": "A branch or tag name, ensemble.utils.git.check_ref's rule (WDRC-109 FR-52).",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._/-]{1,255}$",
+      "not": {
+        "anyOf": [
+          {"pattern": "^-"},
+          {"const": "HEAD"},
+          {"pattern": "^refs/"},
+          {"pattern": "^[0-9a-fA-F]{7,64}$"},
+          {"pattern": "\\.\\."},
+          {"pattern": "\\.$"},
+          {"pattern": "(^|/)(/|$)"},
+          {"pattern": "(^|/)\\."},
+          {"pattern": "\\.lock(/|$)"}
+        ]
+      }
     },
     "lock_name": {
       "type": "string",

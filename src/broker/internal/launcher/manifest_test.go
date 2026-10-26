@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"encoding/json"
 	"errors"
 	"maps"
 	"os"
@@ -332,5 +333,116 @@ func TestParseManifestSecrets(t *testing.T) {
 	}
 	if _, err := ParseManifest([]byte(strings.Replace(string(valid), `"github": null`, `"github": null, `+doc, 1))); code(t, err) != protocol.ManifestRejected {
 		t.Fatal("duplicate key accepted")
+	}
+}
+
+// withFields is manifest-valid.json with fields set (nil deletes one).
+func withFields(t *testing.T, fields map[string]any) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(fixtures.Dir(), "manifest-valid.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range fields {
+		if v == nil {
+			delete(doc, k)
+			continue
+		}
+		doc[k] = v
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestManifestGateway(t *testing.T) {
+	m, err := ParseManifest(withFields(t, nil))
+	if err != nil || m.Gateway != "workers" {
+		t.Fatalf("absent gateway: %q %v", m.Gateway, err)
+	}
+	for _, ok := range []string{"workers", "mini-op", "a", "a_b-9", strings.Repeat("a", 63)} {
+		if m, err := ParseManifest(withFields(t, map[string]any{"gateway": ok})); err != nil || m.Gateway != ok {
+			t.Errorf("%q: %q %v", ok, m.Gateway, err)
+		}
+	}
+	for _, bad := range []any{"Nope", "", "a.b", "--x", "-a", "a b", "a\nb", strings.Repeat("a", 64), json.RawMessage("null"), 1, []string{"workers"}} {
+		if _, err := ParseManifest(withFields(t, map[string]any{"gateway": bad})); code(t, err) != protocol.ManifestRejected {
+			t.Errorf("gateway %v accepted", bad)
+		}
+	}
+}
+
+func TestValidRef(t *testing.T) {
+	for _, ok := range []string{"main", "release/1.2", "v1.0.0", "feature/x-y_z", "a", "deadbee-x", "abcdef", strings.Repeat("a", 255), "x.locked", "a.b"} {
+		if !ValidRef(ok) {
+			t.Errorf("%q rejected", ok)
+		}
+	}
+	for _, bad := range []string{"", "--upload-pack=x", "-x", "refs/pull/1/head", "refs/heads/main", "HEAD", "deadbeef", "DEADBEE",
+		strings.Repeat("a", 40) + "0", "0123456789abcdef0123456789abcdef01234567", "a b", "a\nb", "a\tb", "a..b", "a.", "x.lock", "a/x.lock/b",
+		"a//b", "/a", "a/", ".a", "a/.b", "a~1", "a^", "a:b", "a?", "a*", "a[", "a\\b", "a@{1}", "ü", strings.Repeat("a", 256)} {
+		if ValidRef(bad) {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+func TestManifestPrefetch(t *testing.T) {
+	m, err := ParseManifest(withFields(t, nil))
+	if err != nil || m.Prefetch != nil {
+		t.Fatalf("absent prefetch: %+v %v", m.Prefetch, err)
+	}
+	m, err = ParseManifest(withFields(t, map[string]any{"prefetch": map[string]any{"repo": "windroc-labs/ensemble", "ref": "release/1.2"}}))
+	if err != nil || m.Prefetch == nil || *m.Prefetch != (Prefetch{Repo: "windroc-labs/ensemble", Ref: "release/1.2"}) {
+		t.Fatalf("%+v %v", m.Prefetch, err)
+	}
+	m, err = ParseManifest(withFields(t, map[string]any{"prefetch": map[string]any{"repo": "o/r.x"}}))
+	if err != nil || m.Prefetch == nil || *m.Prefetch != (Prefetch{Repo: "o/r.x"}) {
+		t.Fatalf("no ref: %+v %v", m.Prefetch, err)
+	}
+	for name, prefetch := range map[string]any{
+		"null":        json.RawMessage("null"),
+		"string":      "o/r",
+		"empty":       map[string]any{},
+		"extra":       map[string]any{"repo": "o/r", "depth": 1},
+		"repo number": map[string]any{"repo": 1},
+		"no owner":    map[string]any{"repo": "r"},
+		"three parts": map[string]any{"repo": "o/r/x"},
+		"dot":         map[string]any{"repo": "o/."},
+		"dotdot":      map[string]any{"repo": "o/.."},
+		"owner dot":   map[string]any{"repo": "./r"},
+		"space":       map[string]any{"repo": "o/r x"},
+		"empty ref":   map[string]any{"repo": "o/r", "ref": ""},
+		"null ref":    map[string]any{"repo": "o/r", "ref": json.RawMessage("null")},
+		"flag ref":    map[string]any{"repo": "o/r", "ref": "--upload-pack=x"},
+		"pull ref":    map[string]any{"repo": "o/r", "ref": "refs/pull/1/head"},
+		"sha ref":     map[string]any{"repo": "o/r", "ref": "0123456789abcdef0123456789abcdef01234567"},
+		"short sha":   map[string]any{"repo": "o/r", "ref": "deadbeef"},
+		"space ref":   map[string]any{"repo": "o/r", "ref": "a b"},
+		"newline ref": map[string]any{"repo": "o/r", "ref": "a\nb"},
+		"dotdot ref":  map[string]any{"repo": "o/r", "ref": "a..b"},
+		"lock ref":    map[string]any{"repo": "o/r", "ref": "x.lock"},
+		"ref number":  map[string]any{"repo": "o/r", "ref": 1},
+	} {
+		if _, err := ParseManifest(withFields(t, map[string]any{"prefetch": prefetch})); code(t, err) != protocol.ManifestRejected {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	// A Linear keychain item is never an environment secret, prefetch or not.
+	_, err = ParseManifest(withFields(t, map[string]any{"prefetch": map[string]any{"repo": "o/r"},
+		"secrets": []any{map[string]any{"item": "linear.harness_key", "file": "linear"}}}))
+	if code(t, err) != protocol.ManifestRejected {
+		t.Fatalf("prefetch with a Linear item: %v", err)
+	}
+	github := map[string]any{"app": "ensemble-bot", "permissions": map[string]any{"contents": "write"}}
+	_, err = ParseManifest(withFields(t, map[string]any{"prefetch": map[string]any{"repo": "o/r"}, "github": github}))
+	if code(t, err) != protocol.ManifestRejected || !strings.Contains(err.Error(), "prefetch requires github null") {
+		t.Fatalf("prefetch with github: %v", err)
 	}
 }

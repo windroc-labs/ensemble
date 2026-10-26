@@ -61,6 +61,9 @@ type Tokens interface {
 	Issue(ctx context.Context, app string, permissions map[string]string, container string, exec func(argv []string, stdin []byte) error) ([]protocol.Expiry, error)
 	Refresh(ctx context.Context, app string, permissions map[string]string, container string, exec func(argv []string, stdin []byte) error) ([]protocol.Expiry, error)
 	Revoke(ctx context.Context, container string) error
+	// Prefetch clones ref ("": the default branch) of repo into dir through run, which starts the helper container
+	// with argv and the token as stdin, and revokes the token once run returns.
+	Prefetch(ctx context.Context, repo, ref, dir, container string, run func(argv []string, stdin []byte) error) error
 	Pending() ([]protocol.Pending, error)                  // read-only backlog snapshot
 	Retry(ctx context.Context) ([]protocol.Pending, error) // the backlog still unrevoked
 }

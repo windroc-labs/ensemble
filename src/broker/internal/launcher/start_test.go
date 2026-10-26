@@ -68,7 +68,11 @@ type world struct {
 	proxy           func(map[string]any) // edits the proxy's inspect object
 	network         func(map[string]any) // edits the workers network's inspect object
 	noNetwork       bool
-	egressErr       error // the proxy listing's error
+	egressErr       error  // the proxy listing's error
+	nonce           string // the prefetch-start label a volume create set
+	otherNonce      bool   // a racing start created the volume with its own prefetch-start label
+	volumeRmErr     error
+	prefetchErr     error // the prefetch helper's run
 }
 
 func (w *world) docker() *fakeDocker {
@@ -87,6 +91,9 @@ func (w *world) docker() *fakeDocker {
 			if w.noNetwork {
 				return nil, &docker.CommandError{Exit: 1, Stderr: "Error: No such network: " + args[2]}
 			}
+			if args[2] == miniOpNetwork {
+				return inspectObject(map[string]any{"Name": miniOpNetwork, "Id": miniOpID, "Internal": true}, w.network), nil
+			}
 			return inspectObject(networkObject(), w.network), nil
 		case "image inspect":
 			if w.imageMissing {
@@ -98,7 +105,14 @@ func (w *world) docker() *fakeDocker {
 		case "volume inspect":
 			switch w.volume {
 			case "matching":
-				return []byte(`{"ensemble.kind":"ws","ensemble.workspace":"` + home + `/src/project"}` + "\n"), nil
+				nonce := ""
+				switch {
+				case w.otherNonce:
+					nonce = `,"ensemble.prefetch-start":"other"`
+				case w.nonce != "":
+					nonce = `,"ensemble.prefetch-start":"` + w.nonce + `"`
+				}
+				return []byte(`{"ensemble.kind":"ws","ensemble.workspace":"` + home + `/src/project"` + nonce + `}` + "\n"), nil
 			case "mismatched":
 				return []byte(`{"ensemble.kind":"ws","ensemble.workspace":"/elsewhere"}` + "\n"), nil
 			case "unlabeled":
@@ -106,12 +120,21 @@ func (w *world) docker() *fakeDocker {
 			}
 			return nil, &docker.CommandError{Exit: 1, Stderr: "Error response from daemon: get " + volume + ": no such volume"}
 		case "volume create":
+			for i, a := range args {
+				if a == "--label" && strings.HasPrefix(args[i+1], "ensemble.prefetch-start=") {
+					w.nonce = strings.TrimPrefix(args[i+1], "ensemble.prefetch-start=")
+				}
+			}
 			w.volume = "matching"
 			if w.createUnlabeled {
 				w.volume = "unlabeled"
 			}
 			return []byte(volume + "\n"), nil
 		case "volume rm":
+			if w.volumeRmErr != nil {
+				return nil, w.volumeRmErr
+			}
+			w.volume = ""
 			return []byte(volume + "\n"), nil
 		case "container inspect":
 			if args[2] == proxyID {
@@ -124,6 +147,9 @@ func (w *world) docker() *fakeDocker {
 		}
 		switch args[0] {
 		case "run":
+			if slices.Contains(args, "ensemble.prefetch=1") {
+				return nil, w.prefetchErr
+			}
 			if args[1] == "--rm" {
 				return nil, w.chownErr
 			}
@@ -167,6 +193,9 @@ const (
 	workersID      = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 	workersNetwork = "egress-workers"
 	workersProxy   = "http://egress-proxy-workers:4750"
+	miniOpID       = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	miniOpNetwork  = "egress-mini-op"
+	miniOpProxy    = "http://egress-proxy-mini-op:4750"
 )
 
 // proxyObject is a healthy contract-v1 proxy's docker inspect object, attached to egress-workers.
@@ -179,14 +208,14 @@ func proxyObject() map[string]any {
 			"windroc.egress.networks":              "mini-op,workers",
 			"windroc.egress.network.workers.name":  workersNetwork,
 			"windroc.egress.network.workers.proxy": workersProxy,
-			"windroc.egress.network.mini-op.name":  "egress-mini-op",
-			"windroc.egress.network.mini-op.proxy": "http://egress-proxy-mini-op:4750",
+			"windroc.egress.network.mini-op.name":  miniOpNetwork,
+			"windroc.egress.network.mini-op.proxy": miniOpProxy,
 			"com.docker.compose.service":           "proxy",
 		}},
 		"State": map[string]any{"Running": true, "Health": map[string]any{"Status": "healthy"}},
 		"NetworkSettings": map[string]any{"Networks": map[string]any{
-			workersNetwork:   map[string]any{"NetworkID": workersID},
-			"egress-mini-op": map[string]any{"NetworkID": strings.Repeat("d", 64)},
+			workersNetwork: map[string]any{"NetworkID": workersID},
+			miniOpNetwork:  map[string]any{"NetworkID": miniOpID},
 		}},
 	}
 }
