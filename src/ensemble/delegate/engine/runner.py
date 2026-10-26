@@ -211,6 +211,9 @@ def execute(
         try:
             if attempts.handle is not None:
                 attempts.stop(attempts.handle)
+        except BaseException as failure:
+            say(f"delegate: {p.spec.mode}: stop failed: {_named(failure)}")
+            raise e from failure  # the run log's, not the stop's
         finally:
             if not attempts.refused:
                 ended = stopped(e)
@@ -230,13 +233,17 @@ def stopped(error: BaseException) -> Result:
     """How a run that raised `error` ends: code `error.code` for a Stopped or an int-coded
     SystemExit, else 1; error `stopped: <Type>[: text]` on one line.
     """
-    text = " ".join(str(error).split())
     code = getattr(error, "code", None)
     return Result(
         code if isinstance(error, (Stopped, SystemExit)) and isinstance(code, int) else 1,
         None,
-        f"stopped: {type(error).__name__}" + (f": {text}" if text else ""),
+        f"stopped: {_named(error)}",
     )
+
+
+def _named(error: BaseException) -> str:
+    text = " ".join(str(error).split())
+    return type(error).__name__ + (f": {text}" if text else "")
 
 
 def _resets(at: float | None) -> str:

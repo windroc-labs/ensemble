@@ -624,11 +624,22 @@ class TuiPolicy(Base):
         self.assertIsNone(self.handle.stop_fail)
         self.assert_closed_as_stopped()
 
-    def test_a_stop_that_raises_still_closes_the_run(self):
+    def test_a_stop_that_raises_closes_the_run_and_keeps_its_stopped(self):
         crash = RuntimeError("stop crashed")
-        self.assertIs(self.killed(stop_fail=crash), crash)
+        error = self.killed(stop_fail=crash)
+        self.assertEqual((type(error), error.code, error.__cause__), (Stopped, 129, crash))
         self.assertEqual(self.handle.calls, [("stop",)])
         self.assert_closed_as_stopped()
+
+        def terminated(event):
+            if isinstance(event, Progress):
+                raise Stopped(128 + signal.SIGTERM)
+
+        self.fresh()
+        with self.assertRaises(Stopped) as raised:
+            self.faked(turn(START), on_event=terminated, stop_fail=crash)
+        self.assertEqual(raised.exception.code, 143)
+        self.assertIn("delegate: tui: stop failed: RuntimeError: stop crashed\n", self.err)
 
     def test_a_failed_stop_is_printed_and_never_replaces_the_limit_or_stale_out_result(self):
         gone = SessionError("gone")
