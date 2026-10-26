@@ -32,6 +32,60 @@ class Log(Logs):
     def log(self, *args, tty=False, fail=None, **kw):
         return self.stderr(lambda: log.log(*args, now=self.now, **kw), tty=tty, fail=fail)[1]
 
+    def test_captured_diagnostics_read_history_once_and_track_new_keys(self):
+        self.log("router", "claim-skip", "TASK-0", reason="no configured role delegate")
+        with mock.patch("builtins.open", wraps=open) as opened:
+            with log.captured():
+                for number in range(1, 21):
+                    for _ in range(2):
+                        self.log(
+                            "router",
+                            "claim-skip",
+                            f"TASK-{number}",
+                            once=True,
+                            reason="no configured role delegate",
+                        )
+                    with log.captured():
+                        self.log(
+                            "router",
+                            "claim-skip",
+                            f"TASK-{number}",
+                            once=True,
+                            reason="no configured role delegate",
+                        )
+            reads = [
+                c
+                for c in opened.call_args_list
+                if c.args[0] == self.path and (len(c.args) == 1 or "r" in c.args[1])
+            ]
+        self.assertEqual(len(reads), 1)
+        self.assertEqual([d["issue"] for d in self.lines()], [f"TASK-{n}" for n in range(21)])
+        self.log("router", "claim-skip", "TASK-21", reason="no configured role delegate")
+        with log.captured():
+            self.log(
+                "router", "claim-skip", "TASK-21", once=True, reason="no configured role delegate"
+            )
+        self.assertEqual(len(self.lines()), 22)
+
+    def test_captured_dedup_keeps_the_window_for_each_event(self):
+        future = datetime.fromisoformat(self.TS) + timedelta(hours=25)
+        with log.captured():
+            self.log(
+                "router", "claim-skip", "TASK-1", once=True, reason="no configured role delegate"
+            )
+            for _ in range(2):
+                self.stderr(
+                    lambda: log.log(
+                        "router",
+                        "claim-skip",
+                        "TASK-1",
+                        once=True,
+                        reason="no configured role delegate",
+                        now=lambda _tz=None: future,
+                    )
+                )
+        self.assertEqual(len(self.lines()), 2)
+
     def test_line_shape_and_key_order(self):
         self.assertEqual(self.log("router", "claim", "TASK-1", role="pm", task=None), "")
         self.log("prune", "prune-skip", entry="TASK-1/src/o/n", reason="not a clone é")

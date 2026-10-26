@@ -239,10 +239,26 @@ class LocalBoard(BinFlow):
         self.use("linear")
         self.seed_linear()
         on_linear = [e for e in self.dry_run() if e["kind"] != "token"]  # Linear's: the harness's
+        unowned = [
+            e
+            for e in on_linear
+            if e["kind"] == "claim-skip" and e.get("reason") == "no configured role delegate"
+        ]
+        self.assertEqual(
+            unowned,
+            router(
+                {"kind": "claim-skip", "issue": "TASK-12", "reason": "no configured role delegate"},
+                {"kind": "claim-skip", "issue": "TASK-13", "reason": "no configured role delegate"},
+            ),
+        )
+        on_linear = [e for e in on_linear if e not in unowned]
         local_comment = next(e for e in on_board if e["kind"] == "would comment")
         linear_comment = next(e for e in on_linear if e["kind"] == "would comment")
         self.assertEqual(local_comment["body"], BAD_TASK)
-        self.assertEqual(linear_comment["body"], BAD_TASK.replace("ready/", "Todo"))
+        self.assertEqual(
+            linear_comment["body"],
+            BAD_TASK.replace("ready/", "Todo").replace("assignee", "delegate"),
+        )
         normalized = [
             json.loads(re.sub(r"\bLOC-(\d+)", r"TASK-\1", json.dumps(e))) for e in on_board
         ]

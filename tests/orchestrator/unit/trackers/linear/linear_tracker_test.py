@@ -1055,6 +1055,31 @@ def listed(state):
 
 
 class Assigned(Case):
+    def test_returns_only_first_100_owned_issues_across_pages(self):
+        first = [todo(f"TASK-{n}") for n in range(1, 101)]
+        extra = todo("TASK-101")
+        unowned = {"identifier": "TASK-102", "delegate": None}
+        gql = Gql(
+            LIST=[
+                {"issues": {"nodes": first, "pageInfo": {"hasNextPage": True, "endCursor": "a"}}},
+                {
+                    "issues": {
+                        "nodes": [extra, unowned],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    }
+                },
+            ]
+        )
+        said = []
+        port = tracker(gql)
+        port.say = lambda *a, **f: said.append((a, f))
+        self.assertEqual(port.assigned(IssueState.READY), first)
+        self.assertEqual(len(gql.calls), 2)
+        self.assertEqual(
+            said,
+            [(("claim-skip", "TASK-102"), {"once": True, "reason": "no configured role delegate"})],
+        )
+
     def test_pages_past_unowned_and_empty_pages(self):
         owned = {"identifier": "TASK-9", "delegate": {"id": role_id("pm")}}
         unowned = {"identifier": "TASK-1", "delegate": None, "assignee": PM}

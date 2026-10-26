@@ -250,7 +250,7 @@ def two():
 class TaskLabelsScenario(Base):
     ORPHAN = (
         'Task "product-design" is not one of researcher\'s tasks (deep-research, research, light-research). '
-        "Fix the task or the assignee, then move the issue back to Todo."
+        "Fix the task or the delegate, then move the issue back to Todo."
     )
 
     def setUp(self):
@@ -5105,7 +5105,7 @@ class ClaimRechecks(Base):
                 "In Review",
                 [
                     'Task "light-research" is not one of pm\'s tasks (product-design). '
-                    "Fix the task or the assignee, then move the issue back to Todo."
+                    "Fix the task or the delegate, then move the issue back to Todo."
                 ],
             ),
         )
@@ -5170,7 +5170,7 @@ class Picks(Base):
             fake.issues["TASK-1"]["comments"],
             [
                 'Task "light-research" is not one of pm\'s tasks (product-design). '
-                "Fix the task or the assignee, then move the issue back to Todo."
+                "Fix the task or the delegate, then move the issue back to Todo."
             ],
         )
 
