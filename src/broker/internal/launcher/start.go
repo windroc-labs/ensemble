@@ -284,6 +284,13 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	}
 	args = append(args,
 		"--label", "ensemble.session="+m.Name, "--label", "ensemble.generation="+m.Generation, "--label", clientLabel+"="+m.Client)
+	if len(m.Secrets) > 0 {
+		items := make([]string, len(m.Secrets))
+		for i, s := range m.Secrets {
+			items[i] = s.Item
+		}
+		args = append(args, "--label", secretsLabel+"="+strings.Join(items, ","))
+	}
 	if m.Lock != "" {
 		args = append(args, "--restart", "no", "--label", lockLabel+"="+m.Lock, "--label", ownerLabel+"="+m.LockOwner)
 	}

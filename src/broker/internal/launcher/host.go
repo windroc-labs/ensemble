@@ -137,8 +137,12 @@ type WorkspaceResult struct {
 	Removed bool   `json:"removed"`
 }
 
-// clientLabel names the client a container was started for; manifest labels cannot use the ensemble. prefix.
-const clientLabel = "ensemble.client"
+// clientLabel names the client a container was started for, secretsLabel the environment secrets it got (their
+// references, comma-joined; never a value); manifest labels cannot use the ensemble. prefix.
+const (
+	clientLabel  = "ensemble.client"
+	secretsLabel = "ensemble.secrets"
+)
 
 // clientKind is the audit kind of the credential client's container holds; "" for none.
 func clientKind(client string) string {

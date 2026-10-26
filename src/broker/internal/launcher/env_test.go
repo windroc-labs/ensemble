@@ -116,6 +116,9 @@ func TestStartEnvSecrets(t *testing.T) {
 	if len(injected) != 2 || created < 0 || claude < created || injected[0] < claude || !slices.Equal(creds.calls, []string{"ready default", "inject default"}) {
 		t.Fatalf("order: create %d, claude %d, env %v: %q", created, claude, injected, d.calls)
 	}
+	if run := detached(d); !slices.Contains(run, "ensemble.secrets=ensemble-env/dummy,ensemble-env/ssh") {
+		t.Fatalf("no secrets label: %q", run)
+	}
 	if got, want := secretsTmpfs(t, d), docker.SecretsDir+":rw,noexec,nosuid,nodev,size=102400,mode=0700,uid=1001,gid=1002"; got != want {
 		t.Fatalf("tmpfs %q, want %q", got, want)
 	}
@@ -127,6 +130,9 @@ func TestStartEnvSecrets(t *testing.T) {
 		}
 		if got := secretsTmpfs(t, d); !strings.Contains(got, ",size=65536,") {
 			t.Fatalf("tmpfs %q", got)
+		}
+		if run := detached(d); slices.ContainsFunc(run, func(a string) bool { return strings.HasPrefix(a, "ensemble.secrets=") }) {
+			t.Fatalf("secrets label without secrets: %q", run)
 		}
 	}
 }
