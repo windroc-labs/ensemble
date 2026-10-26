@@ -523,8 +523,10 @@ func TestBuildRemovesOlderImages(t *testing.T) {
 			putFile(t, e.leasePath(key)+".json", "{}")
 			putFile(t, e.leasePath(key)+".replaced", "[]")
 		}
-		if err := os.Chtimes(e.leasePath(old), stale, stale); err != nil {
-			t.Fatal(err)
+		for _, path := range []string{e.leasePath(old), e.leasePath(old) + ".json"} {
+			if err := os.Chtimes(path, stale, stale); err != nil {
+				t.Fatal(err)
+			}
 		}
 		// kept's record holds it past imageLease, within variantLease.
 		recent := time.Now().Add(-imageLease - time.Minute)
@@ -728,8 +730,10 @@ func TestConcurrentPackagesKeepEachOthersImages(t *testing.T) {
 		}
 		lease := e.leasePath(strings.TrimPrefix(built.Image, "ensemble-worker:"))
 		stale := time.Now().Add(-variantLease - time.Minute)
-		if err := os.Chtimes(lease, stale, stale); err != nil {
-			t.Fatal(err)
+		for _, path := range []string{lease, lease + ".json"} {
+			if err := os.Chtimes(path, stale, stale); err != nil {
+				t.Fatal(err)
+			}
 		}
 		other, err := e.host().Build(ctx, otherPackage(t), BuildSpec{}, -1)
 		if err != nil || e.has(built) || !e.has(other) {

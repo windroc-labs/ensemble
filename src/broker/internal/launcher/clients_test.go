@@ -195,6 +195,22 @@ func TestCheckClientsRebuildsDifferingVariant(t *testing.T) {
 			}
 		})
 	}
+	t.Run("a check rebuild keeps the variant's last use", func(t *testing.T) {
+		e := newBuildEnv(t)
+		first := e.builtImage(t, e.pkg, BuildSpec{})
+		record := e.leasePath(strings.TrimPrefix(first.Image, "ensemble-worker:")) + ".json"
+		used := time.Now().Add(-variantLease + time.Hour)
+		if err := os.Chtimes(record, used, used); err != nil {
+			t.Fatal(err)
+		}
+		e.releases.latest["@openai/codex"] = "0.171.0"
+		if got, err := e.host().CheckClients(ctx); err != nil || !slices.Equal(got.Rebuilt, []string{first.Image}) {
+			t.Fatalf("%+v %v", got, err)
+		}
+		if info, err := os.Stat(record); err != nil || !info.ModTime().Equal(used) {
+			t.Fatalf("the check moved the last use: %v %v", info.ModTime(), err)
+		}
+	})
 	t.Run("a base image and in-image plugins", func(t *testing.T) {
 		e := newBaseEnv(t)
 		spec := BuildSpec{BaseImage: baseRef, Plugins: []string{"x@owner/repo#" + strings.Repeat("a", 40)}, ImagePlugins: []string{"beta", "alpha"}}
@@ -367,10 +383,10 @@ func TestCheckClientsDropsStaleRecords(t *testing.T) {
 			putFile(t, filepath.Join(e.pkg, "src/ensemble/session/sample.py"), "changed")
 			return key
 		}},
-		"unleased": {kept: true, setup: func(t *testing.T, e *buildEnv) string {
+		"unused": {kept: true, setup: func(t *testing.T, e *buildEnv) string {
 			key := strings.TrimPrefix(e.builtImage(t, e.pkg, BuildSpec{}).Image, "ensemble-worker:")
 			stale := time.Now().Add(-variantLease - time.Minute)
-			if err := os.Chtimes(e.leasePath(key), stale, stale); err != nil {
+			if err := os.Chtimes(record(e, key), stale, stale); err != nil {
 				t.Fatal(err)
 			}
 			return key

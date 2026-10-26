@@ -60,8 +60,8 @@ var builtPattern = regexp.MustCompile(`^ensemble-(?:user|worker):[0-9a-f]{64}$`)
 // through a rebuild in progress and the start that follows a build.
 const imageLease = time.Hour
 
-// variantLease is how long prune keeps, and check-clients refreshes, a recorded variant after a build last leased
-// it, so a variant idle for a while still starts without a rebuild.
+// variantLease is how long prune keeps, and check-clients refreshes, a recorded variant after a build last used it
+// (its record's mtime, which only Build writes), so a variant idle for a while still starts without a rebuild.
 const variantLease = 7 * 24 * time.Hour
 
 type imageInfo struct {
@@ -385,13 +385,17 @@ func (h Host) leased(key string, d time.Duration) bool {
 	return err == nil && h.now().Sub(info.ModTime()) < d
 }
 
-// kept reports whether prune keeps key's images: leased within imageLease, or a recorded variant within variantLease.
+// kept reports whether prune keeps key's images: leased within imageLease, or a variant a build used within
+// variantLease.
 func (h Host) kept(key string) bool {
-	if h.leased(key, imageLease) {
-		return true
-	}
-	_, err := os.Stat(h.recordPath(key))
-	return err == nil && h.leased(key, variantLease)
+	return h.leased(key, imageLease) || h.inUse(key)
+}
+
+// inUse reports whether a build used key's recorded variant less than variantLease ago; a check rebuild's own leases
+// never count, so an abandoned variant ages out.
+func (h Host) inUse(key string) bool {
+	info, err := os.Stat(h.recordPath(key))
+	return err == nil && h.now().Sub(info.ModTime()) < variantLease
 }
 
 // rebuild builds both stages of key's images from the context in tmp, stage 1 being baseID's image when set, the

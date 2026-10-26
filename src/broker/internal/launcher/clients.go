@@ -223,7 +223,7 @@ func (h Host) checkLock() (unlock func(), held bool, err error) {
 	return func() { _ = f.Close() }, false, nil
 }
 
-// CheckClients rebuilds, under its own key, every recorded variant a build leased within variantLease whose image's
+// CheckClients rebuilds, under its own key, every recorded variant a build used within variantLease whose image's
 // clients differ from the latest releases, then prunes. Another check running: it does nothing.
 func (h Host) CheckClients(ctx context.Context) (CheckResult, error) {
 	unlock, held, err := h.checkLock()
@@ -288,7 +288,7 @@ func (h Host) checkVariant(ctx context.Context, key string, latest ClientVersion
 	if data, err := os.ReadFile(h.recordPath(key)); err != nil || json.Unmarshal(data, &v) != nil || !filepath.IsAbs(v.Package) {
 		return drop("unreadable")
 	}
-	if !h.leased(key, variantLease) {
+	if !h.inUse(key) {
 		return false, ""
 	}
 	info, found, err := h.inspectImage(ctx, image)
