@@ -6,6 +6,7 @@ import os
 import stat
 import threading
 import time
+from typing import cast
 from unittest import mock
 
 from ensemble.session.engine.types import (
@@ -20,9 +21,10 @@ from ensemble.session.engine.types import (
     TurnEnd,
     TurnFailed,
     TurnStarted,
+    Unanswered,
 )
 from ensemble.session.harness import channel
-from ensemble.session.harness.channel import Channel, Logged, decode, encode
+from ensemble.session.harness.channel import Channel, Logged, Op, decode, encode
 from tests.session.case import Case
 
 EVENTS = (
@@ -160,13 +162,13 @@ class LockTest(Base):
 
 
 class RequestTest(Base):
-    def serve(self, *, ok=True, error=None):
+    def serve(self, *, ok=True, error=None, unanswered=False):
         def answer():
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
                 for request_id, op in self.channel.requests():
                     self.served.append(op)
-                    self.channel.reply(request_id, ok=ok, error=error)
+                    self.channel.reply(request_id, ok=ok, error=error, unanswered=unanswered)
                     return
                 time.sleep(0.01)
 
@@ -178,26 +180,35 @@ class RequestTest(Base):
     def test_an_answered_request_is_true(self):
         self.hold_lock()
         self.serve()
-        self.assertTrue(self.channel.request("close", timeout=5))
-        self.assertEqual(self.served, ["close"])
+        self.assertTrue(self.channel.request(Op.CLOSE, timeout=5))
+        self.assertEqual(self.served, [Op.CLOSE])
         self.assertEqual(os.listdir(os.path.join(self.channel.directory, "replies")), [])
 
     def test_a_refused_request_raises_its_error(self):
         self.hold_lock()
         self.serve(ok=False, error="cannot close")
         with self.assertRaisesRegex(SessionError, "cannot close"):
-            self.channel.request("stop", timeout=5)
+            self.channel.request(Op.STOP, timeout=5)
 
-    def test_no_harness_or_no_answer_is_false(self):
-        self.assertFalse(self.channel.request("close", timeout=1))
+    def test_an_unanswered_reply_raises_unanswered(self):
         self.hold_lock()
-        with mock.patch.object(channel, "SLICE", 0.01):
-            self.assertFalse(self.channel.request("close", timeout=0.05))
+        self.serve(ok=False, error="worker exit not confirmed", unanswered=True)
+        with self.assertRaisesRegex(Unanswered, "not confirmed"):
+            self.channel.request(Op.CLOSE, timeout=5)
+
+    def test_no_harness_is_false(self):
+        self.assertFalse(self.channel.request(Op.CLOSE, timeout=1))
+        self.assertFalse(os.path.exists(os.path.join(self.channel.directory, "requests")))
+
+    def test_no_answer_from_a_live_harness_is_unanswered(self):
+        self.hold_lock()
+        with self.assertRaises(Unanswered):
+            self.channel.request(Op.CLOSE, timeout=0.05)
         self.assertEqual(self.channel.requests(), [])
 
     def test_an_unknown_op_is_refused_before_writing(self):
         with self.assertRaises(ValueError):
-            self.channel.request("kill")
+            self.channel.request(cast(Op, "kill"))
 
     def test_bad_request_files_are_deleted_and_never_served(self):
         folder = os.path.join(self.channel.directory, "requests")
@@ -213,6 +224,12 @@ class RequestTest(Base):
             with open(os.path.join(folder, name), "w") as f:
                 f.write(body)
         os.mkdir(os.path.join(folder, "e" * 32 + ".json"))
+        outside = os.path.join(self.channel.directory, "outside.json")
+        with open(outside, "w") as f:
+            f.write('{"op": "close"}')
+        os.symlink(outside, os.path.join(folder, "f" * 32 + ".json"))
+        with open(os.path.join(folder, "9" * 32 + ".json"), "w") as f:
+            f.write('{"op": "close", "pad": "' + "x" * channel.FILE_MAX + '"}')
         with self.assertLogs("session", "WARNING"):
             self.assertEqual(self.channel.requests(), [(good, "stop")])
         self.assertEqual(os.listdir(folder), [])
@@ -225,6 +242,11 @@ class StatusTest(Base):
         self.assertEqual(self.channel.status(), {"state": "running", "opening": "/color"})
         with open(self.channel.status_file, "w") as f:
             f.write("[]")
+        self.assertEqual(self.channel.status(), {})
+
+    def test_an_oversized_status_is_empty(self):
+        with open(self.channel.status_file, "w") as f:
+            f.write('{"state": "running", "pad": "' + "x" * channel.FILE_MAX + '"}')
         self.assertEqual(self.channel.status(), {})
 
 
@@ -249,7 +271,8 @@ class SweepTest(Base):
         starting = self.make("4" * 32, status=False)
         held = self.make("5" * 32, age=old)
         other = self.make("not-hex", age=old)
-        target = self.make("6" * 32, age=old)
+        target = os.path.join(self.home, "6" * 32)
+        os.makedirs(target)
         link = os.path.join(self.root, "7" * 32)
         os.symlink(target, link)
         fd = os.open(os.path.join(held, "harness.lock"), os.O_RDWR | os.O_CREAT, 0o600)

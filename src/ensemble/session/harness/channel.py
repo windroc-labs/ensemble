@@ -19,6 +19,7 @@ import stat
 import time
 import uuid
 from collections.abc import Mapping
+from enum import StrEnum
 from typing import NamedTuple
 
 from ensemble.session.engine.types import (
@@ -34,19 +35,24 @@ from ensemble.session.engine.types import (
     TurnEnd,
     TurnFailed,
     TurnStarted,
+    Unanswered,
 )
 from ensemble.session.hosts.base import HARNESS_ROOT
 from ensemble.utils import STALE_AGE, append_line, read_regular, save
 
 HEX = re.compile(r"[0-9a-f]{32}")
-OPS = ("close", "stop")
 REQUEST_WAIT = 15
 SLICE = 0.05
 DAY = 24 * 60 * 60
 FILE_MAX = 1 << 20  # bytes of request.json, harness.json or a request read
 LOG = logging.getLogger("session")
 
-Logged = SessionEvent | Stderr | ClientBound
+
+class Op(StrEnum):
+    CLOSE = "close"
+    STOP = "stop"
+
+
 TYPES: dict[str, type] = {
     kind.__name__: kind
     for kind in (
@@ -75,7 +81,9 @@ FIELDS = {  # each type's fields and the check of a decoded value
 }
 
 
-class Logged(NamedTuple):  # noqa: F811  # the record the alias above names the event of
+class Logged(NamedTuple):
+    """One events.jsonl record."""
+
     seq: int
     id: str
     turn: str | None
@@ -90,7 +98,8 @@ def decode(record) -> SessionEvent | Stderr | ClientBound | None:
     """`record`'s event, or None when its type or fields are not one of TYPES' exactly."""
     if not isinstance(record, Mapping):
         return None
-    kind, fields = TYPES.get(record.get("type")), record.get("fields")
+    name, fields = record.get("type"), record.get("fields")
+    kind = TYPES.get(name) if isinstance(name, str) else None
     if kind is None or not isinstance(fields, Mapping):
         return None
     names = {field.name for field in dataclasses.fields(kind)}
@@ -235,12 +244,12 @@ class Channel:
             os.close(self._held)
             self._held = None
 
-    def request(self, op: str, timeout: float = REQUEST_WAIT) -> bool:
-        """`op` done by its harness: True; False when none holds its lock or none answered within
-        `timeout` s; SessionError when it refused.
+    def request(self, op: Op, timeout: float = REQUEST_WAIT) -> bool:
+        """`op` done by its harness: True; False when none holds its lock; Unanswered when it
+        could not confirm or did not answer within `timeout` s; SessionError when it refused.
         """
-        if op not in OPS:
-            raise ValueError(f"request {op!r}: want one of {', '.join(OPS)}")
+        if op not in tuple(Op):
+            raise ValueError(f"request {op!r}: want one of {', '.join(Op)}")
         if not self.alive():
             return False
         ident = uuid.uuid4().hex
@@ -255,13 +264,17 @@ class Channel:
                 if answer.get("ok") is True:
                     return True
                 error = answer.get("error")
-                raise SessionError(error if isinstance(error, str) else f"session harness: {op}")
-            if time.monotonic() >= deadline or not self.alive():
+                text = error if isinstance(error, str) else f"session harness: {op}"
+                raise (Unanswered if answer.get("unanswered") is True else SessionError)(text)
+            if not self.alive():
                 _remove(os.path.join(self._requests, ident + ".json"))
                 return False
+            if time.monotonic() >= deadline:
+                _remove(os.path.join(self._requests, ident + ".json"))
+                raise Unanswered(f"session harness {self.directory}: no answer to {op}")
             time.sleep(SLICE)
 
-    def requests(self) -> list[tuple[str, str]]:
+    def requests(self) -> list[tuple[str, Op]]:
         """Each well-formed pending request (id, op), oldest first, taken; any other entry of
         requests/ is deleted and logged.
         """
@@ -276,17 +289,26 @@ class Channel:
             if suffix == ".json" and HEX.fullmatch(ident) and entry.is_file(follow_symlinks=False):
                 body = _json(entry.path)
             op = body.get("op") if isinstance(body, dict) else None
+            try:
+                when = entry.stat(follow_symlinks=False).st_mtime_ns
+            except OSError:
+                when = None
             _remove(entry.path)
-            if op not in OPS:
+            if op not in tuple(Op) or when is None:
                 LOG.warning("session harness: dropped request %s", entry.name[:80])
                 continue
-            with contextlib.suppress(OSError):
-                found.append((entry.stat(follow_symlinks=False).st_mtime_ns, ident, op))
+            found.append((when, ident, Op(op)))
         return [(ident, op) for _, ident, op in sorted(found)]
 
-    def reply(self, ident: str, *, ok: bool, error: str | None = None) -> None:
+    def reply(
+        self, ident: str, *, ok: bool, error: str | None = None, unanswered: bool = False
+    ) -> None:
         os.makedirs(self._replies, 0o700, exist_ok=True)
-        answer = {"ok": ok, **({"error": error} if error is not None else {})}
+        answer = {
+            "ok": ok,
+            **({"error": error} if error is not None else {}),
+            **({"unanswered": True} if unanswered else {}),
+        }
         save(os.path.join(self._replies, ident + ".json"), json.dumps(answer))
 
     def status(self) -> dict:
