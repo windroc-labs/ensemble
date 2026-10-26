@@ -1,5 +1,10 @@
 # Upgrading
 
+Broker protocol 28 adds `notices` and `status`'s `static`, and records each Claude token's, OpenCode key's and
+environment secret's expiry ([Docker host › Static secret expiry](docker-host.md#static-secret-expiry)). Upgrade the
+broker with the plugin. Existing items keep working with an unknown expiry; to record one, rerun the login with
+`--fresh-token` (Claude, after `claude setup-token`), `--issued` or `--expires`.
+
 Broker protocol 27 adds the start manifest's optional `gateway` (the caller network, default `workers`) and `prefetch`
 ([Docker host › Prefetch](docker-host.md#prefetch)). Upgrade the broker with the plugin: sessions refuse a broker of
 another protocol.

@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/launcher"
 	"ensemble/broker/internal/protocol"
@@ -1112,5 +1113,21 @@ func TestStaticSecretErrorsHideKeychainDetail(t *testing.T) {
 		if err == nil || strings.Contains(err.Error(), sentinel) || errors.Is(err, leak) {
 			t.Errorf("%d: %v", i, err)
 		}
+	}
+}
+
+// TestStaticPrefixesMatchServices: each static secret's reference is its keychain service and account, and its login
+// command is the one this package names.
+func TestStaticPrefixesMatchServices(t *testing.T) {
+	if credential.ClaudePrefix != tokenService+"/" || credential.OpencodePrefix != opencodeService+"/" || credential.EnvPrefix != envServicePrefix {
+		t.Fatal("credential's static prefixes disagree with the keychain services")
+	}
+	for _, account := range []string{"default", "work"} {
+		if ClaudeLogin(account) != credential.LoginCommand(credential.StaticRef(credential.Claude, account)) {
+			t.Fatalf("%s: %q", account, ClaudeLogin(account))
+		}
+	}
+	if opencodeLogin("strata") != "ensemble-broker login opencode strata" || envLogin("db") != "ensemble-broker login env db" {
+		t.Fatal("login commands")
 	}
 }

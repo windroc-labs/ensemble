@@ -81,6 +81,7 @@ type Host struct {
 	Codex    CodexCredentials
 	Opencode ProviderKeys
 	Env      EnvSecrets
+	Static   StaticMeta // nil: no static secret records, as tests without them
 	GitHub   Tokens
 	Versions CodexVersions
 	Releases Releases                          // nil: a build that must rebuild fails
@@ -181,6 +182,7 @@ type StatusResult struct {
 	Revocations []protocol.Pending    `json:"revocations"`
 	Codex       *protocol.CodexStatus `json:"codex,omitempty"`
 	Claude      map[string]bool       `json:"claude,omitempty"`
+	Static      []StaticStatus        `json:"static,omitempty"`
 }
 
 type CloseResult struct {

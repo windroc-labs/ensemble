@@ -125,7 +125,7 @@ One per role: `linear.roles.researcher.key` for `linear.roles.researcher.account
 | Minimum permission | the user's subscription login | a setup-token: subscription, model requests only |
 | Stored at | macOS Keychain (fallback `~/.claude/.credentials.json`) | `ensemble-claude` / account name, one item per [account](docker-host.md#claude-accounts); one copy per running container |
 | Readers | Claude Code and any process running as the user that the Keychain lets read it | the item: the broker; the copies: **three-way readers** |
-| Lifetime | refreshed by Claude Code; `/login` renews | one year |
+| Lifetime | refreshed by Claude Code; `/login` renews | one year; the broker records it from `--fresh-token`, `--issued` or `--expires`, else unknown, and refuses starts once a known expiry passes ([Static secret expiry](docker-host.md#static-secret-expiry)) |
 | Revoke | `/logout` | Unknown: no official route. `claude.ai/settings/claude-code`, cited by the community, is unverified. On a leak: run `claude setup-token` again and rerun `<B> login claude [<name>]` |
 
 ### Environment secrets
@@ -139,7 +139,7 @@ lists in `secrets` ([Docker host › Environment secrets](docker-host.md#environ
 | Minimum permission | whatever the value grants; issue one for ensemble alone |
 | Stored at | `ensemble-env/<name>` / `<name>`; per container `/run/ensemble/secrets/env/<file>` (0400, owner `agent`, tmpfs), written at `start` only |
 | Readers | item: the broker only, once `login env <name>` has made it trust only the broker; container copy: **three-way readers**, and since `<B> start` does not check its caller, any process running as the user can start a container listing any `ensemble-env/*` item and read it |
-| Lifetime | until replaced or deleted; a container's copy until the container goes |
+| Lifetime | until replaced or deleted (an expiry given with `--expires` refuses starts after it); a container's copy until the container goes |
 | Revoke | rotate it at its source, then `<B> login env <name>` with the new value, which replaces the item; `security delete-generic-password -s ensemble-env/<name>` deletes it; running containers keep the old copy until closed |
 
 ### Stored broker credentials
@@ -149,6 +149,11 @@ the item must trust this broker, allow a read without a dialog, and hold a nonem
 This does not contact Claude to check expiry or revocation. The installer checks this status before
 requesting `claude setup-token`, even without its saved login state. Codex already skips login when
 its status is `ready`.
+
+It also lists, under `static`, each recorded Claude token, OpenCode key and environment secret: its reference,
+version, expiry, provenance and any due notice (an unknown default Claude token prompts for a date). The record is
+`~/.ensemble/docker/static-secrets.json`, which holds no secret. Deleting an item (`security delete-generic-password`)
+retires it locally; nothing revokes a static secret remotely.
 
 Status is read-only: it lists the stored GitHub revocation backlog, including expired entries,
 without revoking tokens, changing credential records or writing audit events. Run
@@ -194,7 +199,7 @@ commander can use the key; existing definitions are preserved ([OpenCode session
 | Minimum permission | whatever the provider's key grants; issue one for ensemble alone | the same |
 | Stored at | OpenCode's `auth.json` (`opencode auth login`); ensemble reads the selected API entry for provider availability probes and explicit broker import | `ensemble-opencode` / `<name>`; per container `/run/ensemble/secrets/opencode/<name>.key`; Docker installs also keep the local entry for commanders |
 | Readers | OpenCode and any process running as the user | item: the broker only, once `login opencode <name>` has made it trust only the broker; container copy: **three-way readers**; on the network: anyone between the container and an `http://` `base_url` ([Risks](#risks)) |
-| Lifetime | until the provider revokes it | the same; a container's copy until the container goes |
+| Lifetime | until the provider revokes it | the same, or until the `--expires` date, which refuses starts after it; a container's copy until the container goes |
 | Revoke | revoke it at the provider; `opencode auth logout` removes it locally | revoke it at the provider, then `<B> login opencode <name>` with a new one, which replaces the item; running containers keep the old copy until closed |
 
 `scripts/install.sh --docker` with OpenCode selected stores the key locally first, then imports that provider's

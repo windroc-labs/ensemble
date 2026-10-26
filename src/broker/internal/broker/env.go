@@ -19,6 +19,11 @@ const (
 	envDir           = docker.SecretsDir + "/env"
 )
 
+// envLogin is the command that stores environment secret name.
+func envLogin(name string) string {
+	return credential.LoginCommand(credential.StaticRef(credential.Env, name))
+}
+
 // EnvKeychain holds the environment secrets as broker-only items.
 type EnvKeychain interface{ brokerOnlyStore }
 
@@ -38,7 +43,7 @@ func LoginEnv(name string, read, password func() ([]byte, error), k EnvKeychain,
 		return fmt.Errorf("the value must be 1 to %d bytes", launcher.MaxSecretBytes)
 	}
 	service := envServicePrefix + name
-	if err := storeBrokerOnly(service, name, "rerun ensemble-broker login env "+name, value, k, password); err != nil {
+	if err := storeBrokerOnly(service, name, "rerun "+envLogin(name), value, k, password); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(out, "Environment secret %s saved; keychain trusts only the broker\n", service)
@@ -50,7 +55,7 @@ type EnvKeys struct{ Keychain EnvKeychain }
 
 // envError maps a keychain failure for ref's item to the protocol, naming ref, without its detail.
 func envError(ref, name string, err error) *protocol.Error {
-	login := "run ensemble-broker login env " + name + "."
+	login := "run " + envLogin(name) + "."
 	switch {
 	case errors.Is(err, ErrNotFound):
 		return protocol.New(protocol.LoginRequired, "No keychain item "+ref+": "+login)
@@ -94,7 +99,7 @@ func (e EnvKeys) Ready(refs []string) error {
 			return envError(ref, name, err)
 		}
 		if !trusted {
-			return protocol.New(protocol.LoginRequired, "The keychain item "+ref+" trusts another broker build: run ensemble-broker login env "+name+".")
+			return protocol.New(protocol.LoginRequired, "The keychain item "+ref+" trusts another broker build: run "+envLogin(name)+".")
 		}
 		value, err := e.read(ref)
 		erase(value)
