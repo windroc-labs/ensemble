@@ -19,7 +19,7 @@ OSStatus SecTrustedApplicationCopyRequirement(SecTrustedApplicationRef appRef, S
 // Whether a keychain call may show UI: process-wide, so call sets it around each call under a lock and turns it off
 // after. With it off, securityd refuses whatever would ask (errSecInteractionNotAllowed), file keychains included,
 // which ignore kSecUseAuthenticationUI.
-static OSStatus set_ui(int allowed) { return SecKeychainSetUserInteractionAllowed(allowed ? true : false); }
+static OSStatus set_ui(int allowed) { return SecKeychainSetUserInteractionAllowed(allowed != 0); }
 static OSStatus signed_runtime(void) {
     SecCodeRef code = NULL;
     CFDictionaryRef info = NULL;
