@@ -109,7 +109,7 @@ selects an implementation and `[hosts] default` selects the host. Preserving its
 return types and error semantics keeps upper session, delegate and orchestrator code unchanged.
 Client adaptation remains in `clients/`.
 
-The **egress boundary** is defined by the external [docs/label-contract.md (f5aed5f)](https://github.com/windroc/egress-proxy/blob/225409bd04954ff1ea81d66e5339c812a519b4f7/docs/label-contract.md).
+The **egress boundary** is defined by the external [docs/label-contract.md (225409b)](https://github.com/windroc/egress-proxy/blob/225409bd04954ff1ea81d66e5339c812a519b4f7/docs/label-contract.md).
 Callers depend only on gateway `windroc.egress.*` labels and Docker health, selecting an internal
 network and proxy address from the network key's `.name` and `.proxy`. A replacement gateway preserves
 the consumed contract version, label meanings and health semantics; the contract lists the complete
