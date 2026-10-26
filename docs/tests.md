@@ -50,6 +50,7 @@ has none, and CI's Ruff step still catches it.
 | all unit tests | `python3 .github/run_tests.py Unit --unit` |
 | one unit shard | `python3 .github/run_tests.py Unit --unit --shard 1/8` |
 | one four-process unit job | `python3 .github/run_tests.py Unit --unit --parallel 4 --shard 1/2` |
+| one balanced four-process repository job | `python3 .github/run_tests.py Repository tests/integration --durations .github/test_durations.json --parallel 4 --shard 1/6` |
 | one complete test ID | `python3 .github/run_tests.py Integration tests.manager.integration.crew_close_all_integration_test.CloseAllTest.test_close_all_closes_what_mgr_opened_and_only_that` |
 | one test file | `python3 .github/run_tests.py Integration tests/manager/integration/crew_close_all_integration_test.py` |
 | one repository integration shard | `python3 .github/run_tests.py 'Repository integration 1' tests/integration --shard 1/8` |
@@ -67,15 +68,24 @@ with complete, disjoint coverage. Invalid, empty or duplicate-ID shards fail.
 Subtest annotations use the method ID and keep parameters in the error text; selecting
 that method runs all its subtests.
 
-The `repository` matrix in `.github/workflows/test.yml` runs eight jobs,
-`Repository tests 1` through `Repository tests 8`, when full scope is selected.
-Each job runs one supervised shard using `--shard N/8`; `fail-fast: false` lets all
-shards finish, every shard retains source protection and the unchanged-checkout guard,
-and the existing `CI` dependency on `repository` waits for the entire matrix.
-The CLI help matrix is split by surface and configuration so its long parameter loops
-can land on different shards; both help flags and all three entry modes remain covered.
-Compare all eight job durations with the other jobs, including setup and cleanup;
-the target is about 3.5 minutes per job, with headroom below 15 minutes.
+The `repository` matrix runs six jobs, each with four independently supervised workers.
+The unit matrix keeps two jobs with four workers each. Both use
+`--durations .github/test_durations.json` to assign the longest estimated tests to the least loaded
+worker, with deterministic tie-breaking. Discovery supplies every test exactly once;
+missing IDs default to 0.01 seconds and stale hints never select tests. Without
+`--durations`, `--shard` retains its sorted-ID slicing behavior.
+The timing table's provenance and approximations are in `.github/test_durations.sources.json`.
+Repository artifacts retain each worker's log and per-test durations for later tuning.
+Each repository guard is a separate unit test using the same `tests.checks.checks` entry
+as the design lint. Guard discovery creates every test once; unknown selected names fail.
+`fail-fast: false`, source protection, cleanup, unchanged-checkout guards and the
+aggregate's dependency on the entire matrix remain in force.
+CLI help retains both flags and all three entry modes. The isolated-import check splits
+its complete module list into four disjoint slices, retaining fresh children, empty
+HOME/cwd, layer-specific paths and unchanged `sys.path` assertions for every module.
+Compare job times including setup and cleanup; the target is about 2.5 minutes.
+Runner tool setup tries the existing apt index first, refreshing it only if installation
+fails. This retains zsh/tmux coverage without refreshing unrelated repositories on every job.
 
 Docker protocol fixtures need `python3 -m pip install jsonschema==4.26.0` (test only).
 Run `python3 .github/run_tests.py Protocol tests/unit/docker_broker_protocol_test.py tests/unit/docker_relay_protocol_test.py`.
@@ -86,7 +96,8 @@ Go tool through `src/broker/with-go-state.sh` (state in `.cache/go/`). CI's `Bro
 Linux and macOS and build the darwin/arm64 binary for full scope, including changes to
 `src/broker/**`, `src/broker/protocol/docker-broker/**`, `.github/workflows/test.yml`, and every push to
 `main`. Docs-only, version-only and upper-layer-only PRs skip Go setup, checks, builds and artifact
-upload; both `Broker` jobs still report success, like the required `Worker image` check.
+upload and both broker runners. The required `CI` aggregate validates scope before
+skipping its broker API gate; `Worker image` retains its own scope check.
 
 Integration jobs upload `integration-<run-id>-<attempt>-<job>` artifacts containing
 the discovered IDs, assigned IDs, expected load, Python/tmux versions, runner type, supervised
@@ -129,7 +140,7 @@ python3 .github/coverage_gate.py /tmp/coverage-data origin/main
 flowchart LR
     S[Contract-based path scope] --> U
     S --> I
-    S --> R[Repository tests when full]
+    S --> R[Repository: 6 jobs x 4 workers when full]
     S --> B
     L[Lint groups] --> CI[Required CI aggregate]
     U[Unit: 2 jobs x 4 processes] --> C[Combine every coverage shard]
@@ -141,13 +152,13 @@ flowchart LR
     B[Broker: Linux and macOS when full] --> CI
     M[mini-op guard: every event] --> CI
 ```
-Unit shards use sorted test IDs; integration shards use recorded durations. Every ID
+Unit and repository workers use timing hints; integration shards use recorded durations. Every ID
 occurs exactly once. Coverage applies to pull requests and merge groups; `CI` requires every applicable result.
 
 | Change/event | Unit and integration tests | Repository tests |
 |---|---|---|
 | PR touching only `src/ensemble/manager/`, `src/ensemble/orchestrator/`, their `tests/<layer>/`, `skills/manage/`, `skills/board/`, `hooks/` and `launchd/` | both upper layers | intentionally skipped |
-| PR touching only root `*.md` files and/or `docs/` | upper-layer unit tests (they check the docs skills cite); integration, type and design lints skipped | intentionally skipped |
+| PR touching only root `*.md` files and/or `docs/` | upper skill unit tests in `Lint style` (they check the docs skills cite); unit matrix, coverage, integration, broker and design jobs skipped; no type check | intentionally skipped |
 | PR changing only the release `version` (`X.Y.Z`) of `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json` and/or `package.json` | skipped, with coverage; every lint runs (`Lint design` checks the versions agree) | intentionally skipped |
 | PR touching a lower layer, `tests/`, `.github/`, shared config, an unknown path, or an empty diff | all layers, plus shared unit tests | run |
 | push to `main` or `merge_group` | all layers, plus shared unit tests | run |
@@ -160,7 +171,10 @@ selects the full suite, and `--paths` (no content) never selects it. `TEST_PROJE
 passes the selected group to discovery. Merge groups always select full scope and collect
 unit coverage, comparing changed source lines against `merge_group.base_sha`.
 Static lint remains required; `Lint style` checks
-unit import boundaries on every change. `CI` accepts a skipped repository job only for
+unit import boundaries on every change and upper skill units for docs-only changes.
+Code changes also run Pyright in that runner; `Lint design` keeps the architecture checks.
+`docs/credentials.md`, read by repository checks, still selects full scope.
+`CI` accepts a skipped repository job only for
 a non-full decision, skipped unit, coverage and integration jobs only for the decision that
 allows them, and rejects failures,
 cancellation or unexpected skips. The explicit `broker` output controls Go steps;
