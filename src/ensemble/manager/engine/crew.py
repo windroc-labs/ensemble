@@ -20,6 +20,7 @@ from ensemble.manager.engine.types import (
     Lease,
     RosterError,
     Spec,
+    StartBusy,
     StartRefused,
     State,
     StatusError,
@@ -27,6 +28,7 @@ from ensemble.manager.engine.types import (
 from ensemble.utils import (
     ACCOUNT_ENV,
     EVENTS_ENV,
+    EXIT_BUSY,
     LEASE_ENV,
     REPLY_ID,
     SID_ENV,
@@ -190,7 +192,14 @@ class Crew:
         return self._listed
 
     def _start(
-        self, argv: tuple[str, ...], name: str, sid: str, *, refusal=False, reject_missing=False
+        self,
+        argv: tuple[str, ...],
+        name: str,
+        sid: str,
+        *,
+        refusal=False,
+        reject_missing=False,
+        busy=False,
     ) -> Record:
         env = {**self._env(events=True), SID_ENV: sid}
         try:
@@ -208,6 +217,12 @@ class Crew:
                     reason = result.stderr.strip() or f"exit {result.returncode}"
                     if refusal and result.returncode == 2 and not self.roster.receipt_output(name):
                         raise StartRefused(f"{shlex.join(argv)}: {reason}")
+                    if (
+                        busy
+                        and result.returncode == EXIT_BUSY
+                        and not self.roster.receipt_output(name)
+                    ):
+                        raise StartBusy(f"{shlex.join(argv)}: {reason}")
                     raise RuntimeError(f"{shlex.join(argv)}: {reason}")
                 sys.stderr.write(result.stderr)
                 if reject_missing:
@@ -283,7 +298,7 @@ class Crew:
             command = ("ensemble-delegate", "run", "--role", key, "--detach", "--name", name, *argv)
         else:
             raise ValueError(f"unknown launch kind: {kind}")
-        return self._run(Spec(name, command, note), sid, shorthand=True)
+        return self._run(Spec(name, command, note), sid, shorthand=True, busy=kind == "role")
 
     def _live(self, names: set[str], sid: str) -> list[str]:
         """Roster entries named in names or holding sid, and sessions listed here or below holding
@@ -302,15 +317,20 @@ class Crew:
             print(f"crew: {name}: {reason}", file=sys.stderr)
         return sorted(name for name, status in answers.items() if status.alive)
 
-    def _run(self, spec: Spec, sid: str, *, shorthand: bool) -> Record:
+    def _run(self, spec: Spec, sid: str, *, shorthand: bool, busy=False) -> Record:
         self._listed = None
         intent = self.roster.begin(spec, sid=sid)
         try:
             record = self._start(
-                spec.argv, spec.name, sid, refusal=shorthand, reject_missing=shorthand
+                spec.argv,
+                spec.name,
+                sid,
+                refusal=shorthand,
+                reject_missing=shorthand,
+                busy=busy,
             )
             self.roster.commit(spec.name, record)
-        except StartRefused:
+        except (StartRefused, StartBusy):
             self.roster.remove_if(spec.name, intent)
             raise
         except (RosterError, RuntimeError, ValueError) as error:
