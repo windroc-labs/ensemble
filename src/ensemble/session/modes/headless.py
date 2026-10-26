@@ -12,8 +12,10 @@ from typing import Self
 from ensemble.session.clients.base import Client
 from ensemble.session.clients.registry import Registry
 from ensemble.session.engine.types import (
+    Blocked,
     ClientBound,
     Launch,
+    LimitHit,
     Liveness,
     Mode,
     Prepared,
@@ -22,6 +24,8 @@ from ensemble.session.engine.types import (
     SessionInfo,
     Spec,
     Stderr,
+    TurnEnd,
+    TurnFailed,
 )
 from ensemble.session.hosts.base import Host, Piped
 from ensemble.session.modes.base import BaseMode, identity_drop
@@ -42,6 +46,11 @@ class HeadlessMode(BaseMode):
         self.eof = (threading.Event(), threading.Event())
         self.done = (threading.Event(), threading.Event())
         self.closed, self.stopped = False, threading.Event()
+        self._candidate: TurnEnd | None = None
+        self._failure: TurnFailed | None = None
+        self._diagnostic = ""
+        self._finished = False
+        self._code: int | None = None
 
     @classmethod
     def preflight(
@@ -156,20 +165,55 @@ class HeadlessMode(BaseMode):
                     return
 
     def poll(self, timeout: float) -> tuple[list[SessionEvent | Stderr | ClientBound], bool]:
+        if self._finished:
+            return [], True
         ended = self.stopped.is_set() and all(done.is_set() for done in self.done)
         try:
             item = self.items.get(timeout=timeout)
         except queue.Empty:  # ended read first: a last item may land meanwhile
-            return [], ended
+            return self._finish(timeout) if ended or self.open == 0 else ([], False)
         if isinstance(item, BaseException):
             raise item
         if item is None:
             self.open -= 1
-            return [], self.open == 0
+            return self._finish(timeout) if self.open == 0 else ([], False)
+        if isinstance(item, TurnFailed):
+            self._failure = self._failure or item
+            return [], False
+        if isinstance(item, TurnEnd):
+            self._candidate = item
+            return [], False
+        if isinstance(item, Blocked):
+            self._failure = self._failure or TurnFailed("permission_required", item.reason)
+            self.stop()
+            return [], False
+        if isinstance(item, LimitHit):
+            self._failure = self._failure or TurnFailed("usage_limit")
+        if isinstance(item, Stderr) and item.text:
+            self._diagnostic = item.text
         return [item], False
 
+    def _finish(self, timeout: float) -> tuple[list[SessionEvent | Stderr | ClientBound], bool]:
+        code = self.returncode(timeout)
+        if code is None and not self.stopped.is_set():
+            return [], False
+        if self._failure is not None:
+            terminal = self._failure
+        elif code is None or self.stopped.is_set():
+            terminal = TurnFailed("interrupted", self._diagnostic)
+        elif code != 0:
+            terminal = TurnFailed(
+                "process_exit",
+                f"worker exited {code}" + (f": {self._diagnostic}" if self._diagnostic else ""),
+            )
+        else:
+            terminal = self._candidate or TurnFailed("incomplete_turn", self._diagnostic)
+        self._finished = True
+        return [terminal], True
+
     def returncode(self, timeout: float) -> int | None:
-        code = self.piped.wait(timeout)
+        code = self._code if self._code is not None else self.piped.wait(timeout)
+        self._code = code
         if code is not None and not self.closed:
             self.closed = True
             self.piped.close()

@@ -14,6 +14,8 @@ from ensemble.session.engine.types import (
     LimitHit,
     Reply,
     TurnEnd,
+    TurnFailed,
+    TurnStarted,
 )
 from ensemble.utils import docker_home
 from tests.session.case import Case
@@ -233,6 +235,31 @@ class ArgvTest(Base):
 
 
 class ParseTest(Base):
+    def test_error_result_and_permission_denial_cannot_be_success(self):
+        for fields, kind in (
+            (
+                {"subtype": "error_during_execution", "is_error": True, "errors": ["overloaded"]},
+                "error_during_execution",
+            ),
+            (
+                {
+                    "subtype": "success",
+                    "permission_denials": [{"tool_name": "Bash"}],
+                    "result": "denied",
+                },
+                "permission_required",
+            ),
+        ):
+            with self.subTest(fields=fields):
+                found = self.parse({"type": "result", **fields})
+                self.assertEqual(len(found), 1)
+                self.assertIsInstance(found[0], TurnFailed)
+                self.assertEqual(found[0].error, kind)
+
+    def test_native_initialization_starts_one_accepted_headless_turn(self):
+        self.assertEqual(self.parse(INIT), [ClientBound(SID), TurnStarted()])
+        self.assertFalse(any(isinstance(e, TurnStarted) for e in self.parse(INIT)))
+
     def setUp(self):
         super().setUp()
         self.run = ClaudeClient({}).headless()
@@ -254,11 +281,18 @@ class ParseTest(Base):
         ]
         self.assertEqual(
             list(self.run.events(lines)),
-            [ClientBound(SID), Reply("one"), Reply("two"), Reply("three"), TurnEnd("three", 0)],
+            [
+                ClientBound(SID),
+                TurnStarted(),
+                Reply("one"),
+                Reply("two"),
+                Reply("three"),
+                TurnEnd("three", 0),
+            ],
         )
 
     def test_init_binds_the_sid_it_launched(self):
-        self.assertEqual(self.parse(INIT), [ClientBound(SID)])
+        self.assertEqual(self.parse(INIT), [ClientBound(SID), TurnStarted()])
         self.assertEqual(self.parse({**INIT, "session_id": "other"}), [ClientBound(SID)])
         self.assertEqual(list(ClaudeClient({}).headless().parse(INIT)), [])
         for record in (
@@ -282,10 +316,13 @@ class ParseTest(Base):
         )
 
     def test_result_is_the_turn_end(self):
-        self.assertEqual(self.parse({"type": "result", "result": "done"}), [TurnEnd("done", 0)])
+        self.assertEqual(
+            self.parse({"type": "result", "subtype": "success", "result": "done"}),
+            [TurnEnd("done", 0)],
+        )
         self.assertEqual(
             self.parse({"type": "result", "result": None}, {"type": "result"}),
-            [TurnEnd("", 0), TurnEnd("", 0)],
+            [TurnFailed("incomplete_result"), TurnFailed("incomplete_result")],
         )
 
     def test_other_records_nothing(self):
