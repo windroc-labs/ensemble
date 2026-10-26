@@ -94,7 +94,7 @@ Without `--clients` and `--docker`/`--no-docker` it starts with a checklist of w
 
 | Flag | Does |
 |---|---|
-| `--ref <ref>` | installs the plugins and the broker from this branch or tag of `windroc-labs/ensemble` (default `main`; another ref builds the broker locally and needs `--clients opencode`: Claude Code and Codex install from the `windroc` marketplace) |
+| `--ref <ref>` | installs the plugins and the broker from this branch or tag of `windroc-labs/ensemble` (default the ref the `windroc` marketplace serves ensemble at, `main` until it pins a release). Claude Code and Codex install `ensemble@windroc` from that marketplace, which serves one ref, so with them only that ref; another ref needs `--clients opencode`: a release tag downloads its broker, a branch builds it locally |
 | `--clients <list>` | comma-separated `claude`, `codex`, `opencode`; any one alone works |
 | `--docker`, `--no-docker` | workers in Docker (Docker Desktop, the broker) or on the local tmux Host |
 | `--board <local\|linear>`, `--no-board` | sets up a local or Linear board, or skips board setup (first-run default) |
@@ -102,6 +102,10 @@ Without `--clients` and `--docker`/`--no-docker` it starts with a checklist of w
 | `--opencode-provider <name>`, `--opencode-url <url>`, `--opencode-model <model>`, `--opencode-context <tokens>` | OpenCode's OpenAI-compatible provider, e.g. a LAN model server; its base URL ends `/v1`; its context window (default 65536) |
 | `--opencode-key-stdin` | reads the provider's API key from stdin; Docker imports the same key from local OpenCode's `auth.json` into the broker |
 | `--password-stdin` | reads the `sudo` password from stdin, before the key |
+
+With Docker, before any client step, it checks that each chosen client's ensemble plugin (an installed one, else the
+`--ref` on GitHub) speaks the broker protocol of the release it will install the broker from (`v` + the plugin's
+version), and stops naming both protocols when they differ.
 
 With a stdin flag, stdin cannot also carry the script:
 

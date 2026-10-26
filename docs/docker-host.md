@@ -28,7 +28,9 @@ sh "$PKG/src/broker/install.sh"
 ```
 
 It downloads the broker asset of the plugin's version, installs it root-owned (`sudo` asks once) only after
-`gh attestation verify` proves the ensemble release workflow built it from that version's tag, and seeds
+`gh attestation verify` proves the ensemble release workflow built it from that version's tag and the asset speaks the
+plugin's broker protocol (a plugin ahead of its release, such as `main` after a protocol change, is refused: update the
+plugin to that release, or use `--build`), and seeds
 `~/.ensemble/docker/worker/Dockerfile` (your image, edit freely) only if `~/.ensemble/docker/worker` does not exist.
 The asset appears a few minutes after a Release is published; until then it exits non-zero: retry. `--build`
 instead builds and ad-hoc signs it locally with the hardened runtime (needs Go, `brew install go`, and the Xcode
