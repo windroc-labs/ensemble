@@ -1717,13 +1717,11 @@ command_selection() {
 }
 
 command_launcher() {
-  local client source
-  { read -r client; read -r source; } < <(command_source)
-  printf '#!/bin/bash\ntarget=$(python3 -I - %q %q %q "${0##*/}" <<\x27PY\x27\n' "$pkg" "$client" "$source"
+  printf '#!/bin/bash\ntarget=$(python3 -I - "${0##*/}" <<\x27PY\x27\n'
   cat <<'EOF'
 import glob, json, os, sys, tempfile
 
-root, client, source, name = sys.argv[1:]
+name = sys.argv[1]
 selection = os.path.expanduser("~/.ensemble/plugin-root")
 rel = "skills/manage/scripts/ctmux" if name == "ctmux" else "bin/" + name
 try:

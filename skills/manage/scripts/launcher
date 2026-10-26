@@ -92,7 +92,7 @@ else:
         if os.access(path, os.X_OK):
             print(path)
             sys.exit()
-        if not os.path.exists(root) and data.get("client") in ("claude", "codex", "opencode") and isinstance(data.get("source"), str):
+        if not os.path.exists(root) and data.get("client") in ("claude", "codex", "opencode"):
             for candidate in client_roots(data["client"], data["source"]):
                 if os.access(target := os.path.join(candidate, rel), os.X_OK):
                     data["root"] = candidate
