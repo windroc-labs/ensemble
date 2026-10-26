@@ -10,6 +10,7 @@ import os
 import re
 import runpy
 import shlex
+import shutil
 import signal
 import stat
 import sys
@@ -1008,6 +1009,100 @@ class StartTest(StartBase):
         self.assertEqual(os.listdir(self.home_dir), ["settings.json"])
         with open(os.path.join(self.home_dir, "settings.json")) as f:
             self.assertEqual(f.read(), '{"model": "opus"}')
+
+    CODEX = {
+        "client": "codex",
+        "home_field": "codex_dir",
+        "home_dir": "codex",
+        "credential": "codex-access-token",
+        "home_persistent": '["sessions"]',
+    }
+
+    def used(self, home, *kept):
+        """A home a closed session of the name left: an old file and tree in it and each `kept`
+        dir; a check that each of these dirs is still the same one (an open fd pins its inode).
+        """
+        dirs = [home, *(os.path.join(home, d) for d in kept)]
+        fds = []
+        for path in dirs:
+            os.makedirs(os.path.join(path, "old", "deep"), exist_ok=True)
+            with open(os.path.join(path, "old.jsonl"), "w") as f:
+                f.write("{}\n")
+            fds.append(os.open(path, os.O_RDONLY | os.O_DIRECTORY))
+            self.addCleanup(os.close, fds[-1])
+        return lambda: [
+            os.path.samestat(os.fstat(fd), os.lstat(p)) for fd, p in zip(fds, dirs, strict=True)
+        ]
+
+    def test_a_reused_codex_name_starts_with_its_bind_source_emptied_in_place(self):
+        """Docker Desktop can report a bind source recreated at a path it saw before as missing."""
+        home = os.path.join(self.state, "codex")
+        sessions = os.path.join(home, "sessions")
+        for run in range(3):
+            with self.subTest(run=run):
+                same = self.used(home, "sessions")
+                self.order.clear()
+                self.start(**self.CODEX, home_files=json.dumps({"config.toml": "x"}))
+                self.assertEqual(same(), [True, True])
+                self.assertEqual(sorted(os.listdir(home)), ["config.toml", "sessions"])
+                self.assertEqual(os.listdir(sessions), [])
+                self.assertEqual(stat.S_IMODE(os.lstat(sessions).st_mode), 0o700)
+                self.assertIn(
+                    ("start", os.path.join(self.state, f"{GEN}.json")),
+                    [o[:2] for o in self.order if isinstance(o, tuple)],
+                )
+
+    def test_a_reused_name_keeps_a_whole_bound_home_and_empties_it(self):
+        same = self.used(self.home_dir)
+        self.start(home_files=json.dumps({"settings.json": "{}"}))
+        self.assertEqual(same(), [True])
+        self.assertEqual(os.listdir(self.home_dir), ["settings.json"])
+
+    def test_a_fresh_start_replaces_links_and_files_in_the_home_never_following_them(self):
+        home = os.path.join(self.state, "codex")
+        sessions = os.path.join(home, "sessions")
+        outside = os.path.join(self.home, "outside")
+        os.makedirs(outside)
+        with open(os.path.join(outside, "keep"), "w") as f:
+            f.write("x")
+        for case in ("home link", "sessions link", "sessions file", "links in sessions"):
+            with self.subTest(case=case):
+                if case == "home link":
+                    os.makedirs(self.state, exist_ok=True)
+                    os.symlink(outside, home)
+                else:
+                    os.makedirs(home, exist_ok=True)
+                    if case == "sessions link":
+                        os.symlink(outside, sessions)
+                    elif case == "sessions file":
+                        open(sessions, "w").close()
+                    else:
+                        os.makedirs(sessions)
+                        os.symlink(outside, os.path.join(sessions, "dir"))
+                        os.symlink(os.path.join(outside, "keep"), os.path.join(sessions, "file"))
+                self.start(**self.CODEX)
+                self.assertFalse(os.path.islink(home) or os.path.islink(sessions))
+                self.assertEqual(os.listdir(home), ["sessions"])
+                self.assertEqual(os.listdir(sessions), [])
+                self.assertEqual(os.listdir(outside), ["keep"])
+                shutil.rmtree(home)
+
+    def test_a_home_it_cannot_empty_fails_the_start_before_the_broker(self):
+        for target in ("shutil.rmtree", "os.unlink"):
+            with self.subTest(target=target):
+                self.used(self.home_dir)
+                self.order.clear()
+                with (
+                    mock.patch(target, side_effect=PermissionError(13, "Permission denied")),
+                    self.assertRaisesRegex(
+                        SessionError,
+                        f"^docker session w: cannot reset {re.escape(self.home_dir)}: Permission denied$",
+                    ),
+                ):
+                    self.start()
+                self.assertFalse(
+                    [o for o in self.order if isinstance(o, tuple) and o[0] == "start"]
+                )
 
     def test_the_manifest_lists_the_clients_providers(self):
         self.start(home_providers='["lab", "strata"]')
