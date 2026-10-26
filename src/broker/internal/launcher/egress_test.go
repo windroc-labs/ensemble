@@ -30,12 +30,23 @@ func fixtureManifest(t *testing.T, name string) string {
 }
 
 // credentialHost is startHost with every credential side recording its calls.
-func credentialHost(w *world) (Host, *fakeDocker, *fakeCreds, *fakeTokens, *fakeCodexCreds, *fakeKeys) {
-	creds, tokens, codexCreds, keys := &fakeCreds{}, &fakeTokens{}, &fakeCodexCreds{}, &fakeKeys{}
+func credentialHost(w *world) (Host, *fakeDocker, *fakeCreds, *fakeTokens, *fakeCodexCreds, *fakeKeys, *fakeEnv) {
+	creds, tokens, codexCreds, keys, env := &fakeCreds{}, &fakeTokens{}, &fakeCodexCreds{}, &fakeKeys{}, &fakeEnv{}
 	h, d := startHost(w, creds)
-	h.GitHub, h.Codex, h.Opencode = tokens, codexCreds, keys
-	return h, d, creds, tokens, codexCreds, keys
+	h.GitHub, h.Codex, h.Opencode, h.Env = tokens, codexCreds, keys, env
+	return h, d, creds, tokens, codexCreds, keys, env
 }
+
+// credentialManifest is a fixture manifest by name; withSecretsSuffix adds the environment secrets to it.
+func credentialManifest(t *testing.T, name string) string {
+	t.Helper()
+	if base, ok := strings.CutSuffix(name, withSecretsSuffix); ok {
+		return editedFixture(t, base, withSecrets(dummySecrets))
+	}
+	return fixtureManifest(t, name)
+}
+
+const withSecretsSuffix = "+secrets"
 
 func TestEgressRefusals(t *testing.T) {
 	two := proxyID + "\n" + strings.Repeat("c", 64) + "\n"
@@ -85,12 +96,12 @@ func TestEgressRefusals(t *testing.T) {
 			g["State"].(map[string]any)["Health"] = map[string]any{"Status": "unhealthy"}
 		}}, 2, "Egress proxy my-proxy is unhealthy"},
 	} {
-		for _, manifest := range []string{"manifest-github-app.json", "manifest-codex.json", "manifest-opencode-providers.json"} {
+		for _, manifest := range []string{"manifest-github-app.json", "manifest-codex.json", "manifest-opencode-providers.json", "manifest-github-app.json" + withSecretsSuffix} {
 			t.Run(tc.name+"/"+manifest, func(t *testing.T) {
 				w := tc.world
 				w.labels = goodLabels()
-				h, d, creds, tokens, codexCreds, keys := credentialHost(&w)
-				_, err := h.Start(context.Background(), fixtureManifest(t, manifest))
+				h, d, creds, tokens, codexCreds, keys, env := credentialHost(&w)
+				_, err := h.Start(context.Background(), credentialManifest(t, manifest))
 				e := protoErr(t, err)
 				if e.Code != protocol.EgressUnavailable || protocol.Exit(e.Code) != 17 || e.Cleanup != protocol.NotNeeded {
 					t.Fatalf("%+v", e)
@@ -104,8 +115,8 @@ func TestEgressRefusals(t *testing.T) {
 				if got := d.verbs(); !slices.Equal(got, proxyCalls[:tc.calls]) {
 					t.Fatalf("docker calls %q, want %q", got, proxyCalls[:tc.calls])
 				}
-				if len(creds.calls)+len(tokens.calls)+len(keys.calls)+codexCreds.ready+codexCreds.injected != 0 {
-					t.Fatalf("credential calls: %q %q %q codex=%d/%d", creds.calls, tokens.calls, keys.calls, codexCreds.ready, codexCreds.injected)
+				if len(creds.calls)+len(tokens.calls)+len(keys.calls)+len(env.calls)+codexCreds.ready+codexCreds.injected != 0 {
+					t.Fatalf("credential calls: %q %q %q %q codex=%d/%d", creds.calls, tokens.calls, keys.calls, env.calls, codexCreds.ready, codexCreds.injected)
 				}
 			})
 		}
@@ -126,7 +137,7 @@ func TestEgressDockerFailures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w := tc.w
 			w.labels = goodLabels()
-			h, d, creds, _, _, _ := credentialHost(&w)
+			h, d, creds, _, _, _, _ := credentialHost(&w)
 			_, err := h.Start(context.Background(), validManifest(t))
 			if e := protoErr(t, err); e.Code != tc.want || len(creds.calls) != 0 || hasCall(d, "run") {
 				t.Fatalf("%+v %q %q", e, creds.calls, d.verbs())
@@ -163,7 +174,7 @@ func TestStartJoinsOnlyWorkers(t *testing.T) {
 		for _, generation := range []string{"", "fedcba9876543210fedcba9876543210"} {
 			t.Run(manifest+"/"+generation, func(t *testing.T) {
 				w := &world{labels: goodLabels()}
-				h, d, _, _, _, _ := credentialHost(w)
+				h, d, _, _, _, _, _ := credentialHost(w)
 				path := fixtureManifest(t, manifest)
 				if generation != "" {
 					path = editedFixture(t, manifest, func(f map[string]any) { f["generation"] = generation })
@@ -231,7 +242,7 @@ func TestStartProxyEnv(t *testing.T) {
 func TestHelpersStayOffline(t *testing.T) {
 	for _, manifest := range []string{"manifest-valid.json", "manifest-codex.json", "manifest-opencode.json"} {
 		t.Run(manifest, func(t *testing.T) {
-			h, d, _, _, _, _ := credentialHost(&world{labels: goodLabels()})
+			h, d, _, _, _, _, _ := credentialHost(&world{labels: goodLabels()})
 			if _, err := h.Start(context.Background(), fixtureManifest(t, manifest)); err != nil {
 				t.Fatal(err)
 			}
@@ -289,7 +300,7 @@ func TestEgressListingIgnoresBlankLines(t *testing.T) {
 
 // A manifest's gateway picks the caller network: the container joins it alone, with its proxy.
 func TestStartOnCallerNetwork(t *testing.T) {
-	h, d, _, _, _, _ := credentialHost(&world{labels: goodLabels()})
+	h, d, _, _, _, _, _ := credentialHost(&world{labels: goodLabels()})
 	path := editedFixture(t, "manifest-valid.json", func(f map[string]any) { f["gateway"] = "mini-op" })
 	if _, err := h.Start(context.Background(), path); err != nil {
 		t.Fatal(err)
@@ -335,7 +346,7 @@ func TestEgressRefusalsByKey(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w := tc.world
 			w.labels = goodLabels()
-			h, d, creds, _, _, _ := credentialHost(&w)
+			h, d, creds, _, _, _, _ := credentialHost(&w)
 			path := editedFixture(t, "manifest-valid.json", func(f map[string]any) { f["gateway"] = tc.gateway })
 			_, err := h.Start(context.Background(), path)
 			e := protoErr(t, err)

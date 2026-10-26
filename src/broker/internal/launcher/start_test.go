@@ -740,3 +740,30 @@ func TestCodexStartRunsNoClientUpdate(t *testing.T) {
 		t.Fatal(string(data))
 	}
 }
+
+// TestStartKeepsSecretsOutOfArgvAndEnv starts every credential kind: each fake secret reaches the container only on an
+// exec's stdin, never in a Docker argument, so never in argv or the container's --env configuration.
+func TestStartKeepsSecretsOutOfArgvAndEnv(t *testing.T) {
+	secrets := []string{fakeToken, "ghs_token", "fake-access-only", envValue}
+	for _, manifest := range []string{"manifest-valid.json", "manifest-codex.json", "manifest-opencode-providers.json", "manifest-github-app.json",
+		"manifest-github-app.json" + withSecretsSuffix} {
+		t.Run(manifest, func(t *testing.T) {
+			h, d, _, _, _, _, _ := credentialHost(&world{labels: goodLabels()})
+			if _, err := h.Start(context.Background(), credentialManifest(t, manifest)); err != nil {
+				t.Fatal(err)
+			}
+			delivered := false
+			for i, args := range d.calls {
+				for _, s := range secrets {
+					if strings.Contains(strings.Join(args, "\x00"), s) {
+						t.Fatalf("docker %q carries a secret", args)
+					}
+					delivered = delivered || strings.Contains(string(d.stdin[i]), s)
+				}
+			}
+			if !delivered {
+				t.Fatal("no secret reached the container on stdin")
+			}
+		})
+	}
+}

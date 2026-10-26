@@ -278,3 +278,24 @@ func TestCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRefreshRejectsStaticOnlyManifest(t *testing.T) {
+	for name, edit := range map[string]func(map[string]any){
+		"claude":             func(map[string]any) {},
+		"claude and secrets": withSecrets(dummySecrets),
+	} {
+		tokens := &fakeTokens{}
+		h, d := githubHost(&world{labels: goodLabels()}, tokens)
+		codexCreds := &fakeCodexCreds{}
+		h.Codex = codexCreds
+		path := editedManifest(t, edit)
+		_, err := h.Refresh(context.Background(), "ensemble-worker_1-0123456789abcdef0123456789abcdef", path)
+		e := protoErr(t, err)
+		if e.Code != protocol.ManifestRejected || !strings.Contains(e.Message, "renewable credentials") {
+			t.Fatalf("%s: %+v", name, e)
+		}
+		if len(d.calls)+len(tokens.calls)+codexCreds.ready+codexCreds.injected != 0 {
+			t.Fatalf("%s: docker %q tokens %q", name, d.calls, tokens.calls)
+		}
+	}
+}
