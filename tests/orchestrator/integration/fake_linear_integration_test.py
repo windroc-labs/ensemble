@@ -482,6 +482,7 @@ class GraphQLProjection(ServerCase):
                 "assignee": {"id": self.engineer, "email": ENGINEER_EMAIL},
                 "project": PROJECT,
                 "labels": {"nodes": [{"id": LABEL, "name": "build", "parent": {"id": TASK_GROUP}}]},
+                "archivedAt": None,
             },
         )
         self.fake.move(blocker["id"], "done", actor=self.harness, at=done)

@@ -121,7 +121,7 @@ flowchart LR
     D & C -->|"Finish, 2 h later; Duplicate too"| X[cleaned up]
 ```
 
-- **New work:** a Todo issue in the product's project, assigned to a role account. The description is the brief, or an engineer issue's requirement. Add `Repo: <owner>/<name>` if the repo is not the project's `[orchestrator.linear.project_repos]` entry.
+- **New work:** a Todo issue in the product's project, assigned to a role account, not archived (`ensemble-orchestrator issue move <ID> ready` unarchives one). The description is the brief, or an engineer issue's requirement. Add `Repo: <owner>/<name>` if the repo is not the project's `[orchestrator.linear.project_repos]` entry.
 - **Order work:** the router claims by priority, then later role, then oldest. A blocked issue waits until its blockers are Done, Canceled or Duplicate.
 - **Duplicates:** on an issue's first claim the router searches the team's issues (archived too), configured documents and the target repo's merged PRs by its title words and the issue ids its description names, and lists the matches, minus its Handoff chain, at the end of the agent's input under `## Related work`. A failed search logs `related-skip` and the run goes on.
 - **Linked documents:** the agent's input inlines [configured documents](#document-destinations-and-github-hosts) an issue links, in order, up to 50,000 bytes in all; each one that no longer fits is listed by path and URL for the agent to read. A PRD and an earlier version are always inlined.

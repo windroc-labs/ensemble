@@ -95,7 +95,8 @@ NOT_FOUND = LinearError("linear api error: [{'message': 'Entity not found: Comme
 ROUTER = {
     "RELATIONS": "b443e58b5f277fc5edad3e11004a6af6f76beb96e1858ce1920077c9f20798a8",
     "Q_RELATIONS": "c271398e2c19c59eb040a3f5988e3ddf0d7787ae9dbd824e63541dd45a4afc53",
-    "Q_RECHECK": "585cff398cb172d48816a2e46fe7fa611ed917ddae67fe1cf0678c9d42080572",
+    # archivedAt
+    "Q_RECHECK": "d3603ec011b602aef4c95c6a6986c67b7df39390d80761c415ceb6dbb30b28ce",
     # its nodes' actor and botActor
     "Q_HISTORY": "94ed56d855233bdac06aa95986139dc4ed05aa3d50d442ed2cdd12777b61a463",
 }
@@ -1207,8 +1208,9 @@ class MovedAt(Case):
         self.assertEqual(found.moved_at("id-TASK-1", IssueState.READY), ago(4))
 
 
-def rechecked(state, *, assignee=None, project=None, labels=()):
+def rechecked(state, *, assignee=None, project=None, labels=(), archived=False):
     issue = {"state": {"id": state}, "assignee": assignee, "project": project}
+    issue["archivedAt"] = "2026-10-26T04:11:00.000Z" if archived else None
     return {"issue": issue | {"labels": {"nodes": list(labels)}}}
 
 
@@ -1287,6 +1289,20 @@ class Rechecks(Case):
                 )
         with self.assertRaises(LinearError):
             tracker(Gql(Q_RECHECK=LinearError("linear api error: HTTP 400"))).recheck("TASK-9")
+
+    def test_an_archived_issue_is_refused_as_archived(self):
+        for project, refused in (
+            (PROJECT, linear_tracker.ARCHIVED),
+            (None, f"{linear_tracker.ARCHIVED}; no project"),
+        ):
+            with self.subTest(project=project):
+                gql = Gql(
+                    Q_RECHECK=rechecked(STATES["todo"], assignee=PM, project=project, archived=True)
+                )
+                found = tracker(gql).recheck("id-TASK-1")
+                self.assertEqual((found.ready, found.role, found.refused), (True, "pm", refused))
+        self.assertIn("archived", linear_tracker.ARCHIVED)
+        self.assertIn("issue move", linear_tracker.ARCHIVED)
 
     def test_a_todo_id_shared_with_another_key_stays_ready(self):
         team = replace(TEAM_OBJ, states={**TEAM_OBJ.states, "in_progress": STATES["todo"]})
