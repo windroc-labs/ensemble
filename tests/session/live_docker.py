@@ -77,7 +77,6 @@ BROKER_PHASES = frozenset(
 )
 BROKER_LINE = re.compile(r"^ensemble-broker: start (\S+) ([0-9.]+) s$", re.MULTILINE)
 # Resource → the command docs/credentials.md › What a container cannot reach runs as `sh -c`.
-EGRESS = "windroc.egress."  # the egress gateway's label prefix
 UNREACHABLE = {
     "host keychain": r"find / \( -path /proc -o -path /sys \) -prune -o -path "
     r'"*/Library/Keychains*" -print 2>/dev/null | wc -l; command -v security | wc -c',
@@ -166,23 +165,7 @@ def _host_path(source: str) -> str:
     return source[len(prefix) - 1 :] if source.startswith(prefix) else source
 
 
-def workers_network(docker: str) -> str:
-    """The egress gateway's workers network, by its label contract (src/broker/internal/launcher/egress.go)."""
-    ids = call(
-        [docker, "ps", "--all", "--filter", f"label={EGRESS}contract", "--format", "{{.ID}}"]
-    )[0]
-    if len(ids.split()) != 1:
-        raise SystemExit(
-            f"want one egress gateway (label {EGRESS}contract), found {len(ids.split())}"
-        )
-    (found,) = json.loads(call([docker, "inspect", ids.split()[0]])[0])
-    network = ((found.get("Config") or {}).get("Labels") or {}).get(f"{EGRESS}network.workers.name")
-    if not network:
-        raise SystemExit(f"the egress gateway has no {EGRESS}network.workers.name label")
-    return network
-
-
-def baseline(inspect: dict, name: str, cwd: str, plan_mounts: list[str], network: str) -> list[str]:
+def baseline(inspect: dict, name: str, cwd: str, plan_mounts: list[str]) -> list[str]:
     host, config = inspect.get("HostConfig") or {}, inspect.get("Config") or {}
     problems = []
     if "ALL" not in (host.get("CapDrop") or []):
@@ -193,11 +176,8 @@ def baseline(inspect: dict, name: str, cwd: str, plan_mounts: list[str], network
         problems.append("Config.User is not agent")
     if host.get("Privileged"):
         problems.append("HostConfig.Privileged is true")
-    if host.get("NetworkMode") != network:  # the broker's --network, the gateway's workers network
-        problems.append(f"HostConfig.NetworkMode is {host.get('NetworkMode')}, want {network}")
-    networks = sorted(((inspect.get("NetworkSettings") or {}).get("Networks") or {}).keys())
-    if host.get("NetworkMode") == network and networks != [network]:
-        problems.append(f"NetworkSettings.Networks is {networks}, want only {network}")
+    if host.get("NetworkMode") != "bridge":  # the broker's --network bridge
+        problems.append(f"HostConfig.NetworkMode is {host.get('NetworkMode')}, want bridge")
     if host.get("ExtraHosts"):
         problems.append(f"HostConfig.ExtraHosts is set: {host['ExtraHosts']}")
     problems += [f"HostConfig.{k} is host" for k in ("PidMode", "IpcMode") if host.get(k) == "host"]
@@ -617,11 +597,7 @@ class Worker:
         plan = load(os.path.join(state_dir(self.name), f"{start.generation}.plan.json"))
         (found,) = json.loads(call([self.docker, "inspect", container])[0])
         mounts = [m["path"] for m in plan["mounts"]]
-        network = workers_network(self.docker)
-        passed(
-            baseline(found, self.name, plan["workspace"]["path"], mounts, network),
-            "security baseline",
-        )
+        passed(baseline(found, self.name, plan["workspace"]["path"], mounts), "security baseline")
         for resource, command in UNREACHABLE.items():
             # grep -c exits 1 when it counts 0, the passing case
             counts = call([self.docker, "exec", container, "sh", "-c", f"{command}; true"])[0]

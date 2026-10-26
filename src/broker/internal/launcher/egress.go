@@ -39,8 +39,8 @@ type gatewayInfo struct {
 	Name   string
 	Config struct{ Labels map[string]string }
 	State  struct {
-		Running bool
-		Health  *struct{ Status string }
+		Running, Paused bool
+		Health          *struct{ Status string }
 	}
 	NetworkSettings struct {
 		Networks map[string]struct{ NetworkID string }
@@ -57,10 +57,10 @@ func refuse(format string, args ...any) *protocol.Error {
 	return protocol.New(protocol.EgressUnavailable, fmt.Sprintf(format, args...)+egressHint)
 }
 
-// clip bounds a label value quoted in a message.
+// clip bounds a label value quoted in a message, on a rune boundary.
 func clip(s string) string {
-	if len(s) > 32 {
-		return s[:32]
+	if r := []rune(s); len(r) > 32 {
+		return string(r[:32])
 	}
 	return s
 }
@@ -127,7 +127,7 @@ func (h Host) checkEgress(ctx context.Context) (egress, error) {
 	switch {
 	case labels[contractLabel] != contractVersion:
 		return egress{}, refuse("Egress gateway %s has label contract version %s; this broker knows %s.", name, clip(labels[contractLabel]), contractVersion)
-	case !gw.State.Running:
+	case !gw.State.Running || gw.State.Paused: // a paused gateway keeps its last health but proxies nothing
 		return egress{}, refuse("Egress gateway %s is not running.", name)
 	case gw.State.Health == nil:
 		return egress{}, refuse("Egress gateway %s is without a health check, not healthy.", name)

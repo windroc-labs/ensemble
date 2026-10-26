@@ -37,8 +37,7 @@ var exits = map[Code]int{
 	Usage: 2, ManifestRejected: 3, MountRejected: 4, LoginRequired: 5, ImageRejected: 6,
 	DockerUnreachable: 7, BuildFailed: 8, StartFailed: 9, CloseFailed: 10, KeychainFailed: 11,
 	WorkspaceDirty: 12, WorkspaceRejected: 13, WorkspaceFailed: 14, GitHubFailed: 15, RefreshFailed: 16,
-	EgressUnavailable: 17,
-	InternalError:     70, Busy: 75,
+	EgressUnavailable: 17, InternalError: 70, Busy: 75,
 }
 
 func Exit(c Code) int {

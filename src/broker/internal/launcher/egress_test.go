@@ -54,6 +54,7 @@ func TestEgressRefusals(t *testing.T) {
 		{"stopped", world{gateway: func(g map[string]any) {
 			g["State"] = map[string]any{"Running": false, "Health": map[string]any{"Status": "unhealthy"}}
 		}}, 2, "is not running"},
+		{"paused", world{gateway: func(g map[string]any) { g["State"].(map[string]any)["Paused"] = true }}, 2, "is not running"},
 		{"unhealthy", world{gateway: func(g map[string]any) { g["State"].(map[string]any)["Health"] = map[string]any{"Status": "unhealthy"} }}, 2, "is unhealthy, not healthy"},
 		{"starting", world{gateway: func(g map[string]any) { g["State"].(map[string]any)["Health"] = map[string]any{"Status": "starting"} }}, 2, "is starting, not healthy"},
 		{"no health check", world{gateway: func(g map[string]any) { delete(g["State"].(map[string]any), "Health") }}, 2, "without a health check, not healthy"},

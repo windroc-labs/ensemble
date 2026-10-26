@@ -554,7 +554,7 @@ func (s *scripted) Run(_ context.Context, args []string, stdin []byte) ([]byte, 
 	}
 	gateway := strings.Repeat("e", 64)
 	switch {
-	case strings.HasPrefix(joined, "ps --all"):
+	case strings.HasPrefix(joined, "ps --all") && strings.Contains(joined, "--filter label=windroc.egress.contract "):
 		return []byte(gateway + "\n"), nil
 	case joined == "container inspect "+gateway:
 		return []byte(`[{"Id":"` + gateway + `","Name":"/egress-gateway","State":{"Running":true,"Health":{"Status":"healthy"}},` +
