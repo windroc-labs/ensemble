@@ -34,10 +34,15 @@ class BrokerJob(Case):
         self.assertIn(f"        run: {STATICCHECK}\n", found["Staticcheck"])
         self.assertNotIn("continue-on-error", job("test.yml", "broker"))
 
-    def test_broker_jobs_report_without_running_go_outside_scope(self):
+    def test_broker_jobs_skip_runners_and_gate_outside_scope(self):
         block = job("test.yml", "broker")
         self.assertIn("    needs: [changes]\n", block)
-        self.assertNotRegex(block, r"(?m)^    if:")
+        self.assertIn("    if: ${{ needs.changes.outputs.broker == 'true' }}", block)
+        aggregate = steps(job("test.yml", "ci"))
+        self.assertIn(
+            "always() && steps.gate.outcome == 'success' && needs.changes.outputs.broker == 'true'",
+            aggregate["Require broker results or confirmed unstarted macOS cancellation"],
+        )
         self.assertIn("os: [ubuntu-24.04, macos-15]", block)
         self.assertIn("broker: ${{ steps.scope.outputs.broker }}", job("test.yml", "changes"))
         found = steps(block)

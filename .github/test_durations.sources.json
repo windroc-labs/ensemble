@@ -1,0 +1,10 @@
+{
+  "run": "https://github.com/windroc-labs/ensemble/actions/runs/40378118115/attempts/1",
+  "head_sha": "991541509d9c0198b6bd53a6fa5764ff71d037da",
+  "runner": "ubuntu-24.04",
+  "unit": "Per-test seconds in unit-coverage-40378118115-1-{1,2}/shard-*/durations.jsonl.",
+  "repository": "Per-test seconds in repository-40378118115-1-{1,2,3,4}/shard-*/durations.jsonl.",
+  "selection": "Hints retain measurements >=0.1s. The removed combined guard-loop ID is omitted; individually discovered guard tests receive the new-ID fallback until measured on CI.",
+  "membership": "Current discovery is authoritative. New IDs default to 0.01s; stale IDs never select tests. Hints affect order and assignment only.",
+  "result": "The full PR workflow completed successfully, including Linux/macOS broker legs, all test jobs, lint, coverage and CI."
+}

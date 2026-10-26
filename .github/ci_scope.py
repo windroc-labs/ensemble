@@ -138,7 +138,7 @@ def classify(
     boundary = list(projects.values()).index("ensemble.delegate")
     upper = list(projects)[:boundary]
     if all(_docs(path) for path in paths):
-        # Upper unit tests check the docs the skills cite; nothing else reads these docs.
+        # Style runs the upper skill units that check the docs their skills cite.
         return {
             "full": False,
             "docs": True,
@@ -232,8 +232,8 @@ def gate(needs: dict, event: str) -> list[str]:
         "changes": "success",
         "lint": "success",
         "repository": "skipped" if full == "false" else "success",
-        "unit": "skipped" if version == "true" else "success",
-        "coverage": "success" if event != "push" and version != "true" else "skipped",
+        "unit": "skipped" if "true" in (docs, version) else "success",
+        "coverage": "success" if event != "push" and "true" not in (docs, version) else "skipped",
         "integration": "skipped" if "true" in (docs, version) else "success",
         "mini-op": "success",
     }

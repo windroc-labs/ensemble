@@ -487,8 +487,8 @@ class Aggregate(unittest.TestCase):
             "broker": str(full).lower(),
         }
         result["repository"]["result"] = "success" if full else "skipped"
-        result["unit"]["result"] = "skipped" if version else "success"
-        coverage = event == "pull_request" and not version
+        result["unit"]["result"] = "skipped" if docs or version else "success"
+        coverage = event == "pull_request" and not (docs or version)
         result["coverage"]["result"] = "success" if coverage else "skipped"
         result["integration"]["result"] = "skipped" if docs or version else "success"
         return result
@@ -527,6 +527,8 @@ class Aggregate(unittest.TestCase):
             ("repository", {"full": False}),
             ("coverage", {"event": "push"}),
             ("integration", {"full": False, "docs": True}),
+            ("unit", {"full": False, "docs": True}),
+            ("coverage", {"full": False, "docs": True}),
             ("unit", {"full": False, "version": True}),
             ("coverage", {"full": False, "version": True}),
             ("integration", {"full": False, "version": True}),
@@ -643,13 +645,24 @@ def job(name):
 
 
 class Workflow(unittest.TestCase):
+    def test_style_and_types_share_a_runner_while_docs_keep_style_only(self):
+        lint = job("lint")
+        self.assertIn('\'["style", "design"]\'', lint)
+        self.assertNotIn("matrix.group == 'types'", lint)
+        self.assertIn("run: python3 -m pip install pyright==1.1.414", lint)
+        self.assertIn("run: pyright", lint)
+        self.assertIn("matrix.group == 'style' && needs.changes.outputs.docs == 'false'", lint)
+
     def test_queue_group_and_broker_gate_wiring(self):
         self.assertIn("  merge_group:\n    types: [checks_requested]", WORKFLOW.read_text())
         ci = job("ci")
         self.assertNotRegex(ci, r"needs:.*\bbroker\b")
         self.assertIn("if: ${{ always() }}", ci)
         self.assertIn("actions: write", ci)
-        self.assertIn("if: ${{ always() && steps.gate.outcome == 'success' }}", ci)
+        self.assertIn(
+            "if: ${{ always() && steps.gate.outcome == 'success' && needs.changes.outputs.broker == 'true' }}",
+            ci,
+        )
         self.assertIn("run: python3 .github/ci_broker.py", ci)
         self.assertIn("github.event_name != 'push'", job("unit"))
         self.assertIn("github.event.merge_group.base_sha", job("coverage"))
@@ -661,10 +674,13 @@ class Workflow(unittest.TestCase):
     def test_version_scope_skips_unit_coverage_and_integration_only(self):
         self.assertIn("      version: ${{ steps.scope.outputs.version }}\n", job("changes"))
         for name, condition in (
-            ("unit", "needs.changes.outputs.version == 'false'"),
+            (
+                "unit",
+                "needs.changes.outputs.docs == 'false' && needs.changes.outputs.version == 'false'",
+            ),
             (
                 "coverage",
-                "github.event_name != 'push' && needs.changes.outputs.version == 'false'",
+                "github.event_name != 'push' && needs.changes.outputs.docs == 'false' && needs.changes.outputs.version == 'false'",
             ),
             (
                 "integration",
@@ -673,6 +689,13 @@ class Workflow(unittest.TestCase):
         ):
             with self.subTest(job=name):
                 self.assertIn(f"    if: ${{{{ {condition} }}}}\n", job(name))
-        for name in ("lint", "broker", "mini-op"):
+        for name in ("lint", "mini-op"):
             with self.subTest(job=name):
                 self.assertNotRegex(job(name), r"(?m)^    if:")
+
+    def test_docs_keep_skill_checks_without_allocating_broker_runners(self):
+        self.assertIn("    if: ${{ needs.changes.outputs.broker == 'true' }}", job("broker"))
+        lint = job("lint")
+        self.assertIn("needs.changes.outputs.docs == 'true'", lint)
+        self.assertIn("tests/manager/unit/skills tests/orchestrator/unit/skills", lint)
+        self.assertIn(".github/run_tests.py 'Docs references'", lint)

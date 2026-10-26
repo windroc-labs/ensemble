@@ -30,8 +30,13 @@ def discover(modules=MODULES):
     return sorted(found.items())
 
 
-def checks(root):
-    for name, check in discover():
+def checks(root, *, names=None, modules=MODULES):
+    found = discover(modules)
+    if names is not None and (unknown := set(names) - {name for name, _ in found}):
+        raise ValueError(f"unknown guard names: {sorted(unknown)}")
+    for name, check in found:
+        if names is not None and name not in names:
+            continue
         roots = [os.path.join(root, "src")] if name == "private_imports" else [root]
         yield name, [violation for at in roots for violation in check(str(at))]
 

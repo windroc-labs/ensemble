@@ -2,7 +2,9 @@
 
 import collections
 import contextlib
+import heapq
 import json
+import math
 import os
 import re
 import shutil
@@ -203,13 +205,13 @@ def parallel(title, commands, directory=None):
         return int(any(results))
 
 
-def unit_parallel(title, value, workers):
+def selection_parallel(title, value, workers, selectors):
     match = re.fullmatch(r"([1-9][0-9]*)/([1-9][0-9]*)", value)
     if not match or workers < 1:
-        raise ValueError("unit job must be N/TOTAL with a positive worker count")
+        raise ValueError("test job must be N/TOTAL with a positive worker count")
     number, total = map(int, match.groups())
     if number > total:
-        raise ValueError("unit job must be numbered 1 through TOTAL")
+        raise ValueError("test job must be numbered 1 through TOTAL")
     commands = {
         str(label): [
             sys.executable,
@@ -218,7 +220,7 @@ def unit_parallel(title, value, workers):
             "faulthandler",
             __file__,
             f"{title} / shard {label}",
-            "--unit",
+            *selectors,
             "--shard",
             f"{label}/{total * workers}",
         ]
@@ -391,7 +393,7 @@ def unit_directories(root):
     ]
 
 
-def shard(suite, value):
+def shard(suite, value, durations=None):
     match = re.fullmatch(r"([1-9][0-9]*)/([1-9][0-9]*)", value)
     found = sorted(tests(suite), key=lambda test: test.id())
     if not match:
@@ -401,6 +403,24 @@ def shard(suite, value):
         raise ValueError("test shards must be nonempty, numbered 1 through TOTAL")
     if len({test.id() for test in found}) != len(found):
         raise ValueError("test discovery contains duplicate test IDs")
+    if durations is not None:
+        if not isinstance(durations, dict) or any(
+            not isinstance(key, str)
+            or not isinstance(seconds, int | float)
+            or isinstance(seconds, bool)
+            or not math.isfinite(seconds)
+            or seconds <= 0
+            for key, seconds in durations.items()
+        ):
+            raise ValueError("test durations must map test IDs to finite positive seconds")
+        # Hints only: discovery owns membership, including new IDs absent from the table.
+        loads = [(0.0, index) for index in range(total)]
+        groups = [[] for _ in range(total)]
+        for test in sorted(found, key=lambda test: (-durations.get(test.id(), 0.01), test.id())):
+            seconds, target = heapq.heappop(loads)
+            groups[target].append(test)
+            heapq.heappush(loads, (seconds + durations.get(test.id(), 0.01), target))
+        return unittest.TestSuite(groups[number - 1])
     return unittest.TestSuite(found[number - 1 :: total])
 
 
@@ -409,12 +429,8 @@ def main(argv):
     if len(argv) < 2:
         sys.exit("usage: run_tests.py <title> <directory>... | <title> <test id|test file|--unit>")
     title, *directories = argv
-    if (
-        len(directories) == 5
-        and directories[:2] == ["--unit", "--parallel"]
-        and directories[3] == "--shard"
-    ):
-        return unit_parallel(title, directories[4], int(directories[2]))
+    if len(directories) >= 5 and directories[-4] == "--parallel" and directories[-2] == "--shard":
+        return selection_parallel(title, directories[-1], int(directories[-3]), directories[:-4])
     code = supervise(title)
     if code is not None:
         return code
@@ -429,6 +445,12 @@ def main(argv):
     if len(directories) >= 3 and directories[-2] == "--shard":
         part = directories[-1]
         directories = directories[:-2]
+    durations = None
+    if len(directories) >= 3 and directories[-2] == "--durations":
+        if part is None:
+            raise ValueError("--durations requires --shard")
+        durations = json.loads(Path(directories[-1]).read_text())
+        directories = directories[:-2]
     suite, _ = select(
         root,
         ci_scope.selected(root, unit_directories(root))
@@ -436,7 +458,7 @@ def main(argv):
         else directories,
     )
     if part is not None:
-        suite = shard(suite, part)
+        suite = shard(suite, part, durations)
     code = run(suite, title)
     if cov:
         cov.stop()
