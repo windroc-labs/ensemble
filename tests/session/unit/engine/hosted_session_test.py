@@ -3286,7 +3286,8 @@ class BoundOwnerTest(HostedTuiBase):
         with open(os.path.join(self.root, "w1", "session.json"), "w") as f:
             json.dump(self.state, f)
 
-    def owner(self, **status):
+    def owner(self, **status) -> int | None:
+        """The lock fd it holds."""
         if not self.channel.alive():
             self.held = os.open(self.channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
             fcntl.flock(self.held, fcntl.LOCK_EX)
@@ -3300,6 +3301,7 @@ class BoundOwnerTest(HostedTuiBase):
                 **status,
             }
         )
+        return self.held
 
     def let_go(self):
         """The harness exits: its lock released."""
@@ -3307,8 +3309,10 @@ class BoundOwnerTest(HostedTuiBase):
             os.close(self.held)
             self.held = None
 
-    def serve(self, **answer_with):
-        """Answers one request; an ok one, like a harness, then exits."""
+    def serve(self, let_go=None, **answer_with):
+        """Answers one request; after an ok one it lets go of its lock (`let_go`, the fd owner()
+        returned), as a harness does once it answered an end.
+        """
         self.served = []
         answer_with = answer_with or {"ok": True}
 
@@ -3366,6 +3370,15 @@ class BoundOwnerTest(HostedTuiBase):
         with self.assertRaisesRegex(SessionError, "w1"):
             self.session.attach("w1")
 
+    def test_retire_of_a_running_owner_whose_terminal_is_gone_asks_it(self):
+        held = self.owner()
+        self.host.processes.pop("w1")
+        with self.assertRaisesRegex(SessionError, "expected sid 'other'"):
+            self.session.retire("w1", sid="other")
+        self.serve(let_go=held)
+        self.session.retire("w1", sid=SID)
+        self.assertEqual(self.served, [Op.CLOSE])
+
     def test_a_failed_spawn_closes_the_worker_its_harness_launched(self):
         terminal = self.host.processes["w1"]
         harness = mock.Mock()
@@ -3401,8 +3414,7 @@ class BoundOwnerTest(HostedTuiBase):
             self.session.attach("w1", sid="other")
 
     def test_retire_asks_the_owner_and_closes_nothing_itself(self):
-        self.owner()
-        self.serve()
+        self.serve(let_go=self.owner())
         terminal = self.host.processes["w1"]
         self.session.retire("w1", sid=SID)
         self.assertEqual(self.served, [Op.CLOSE])

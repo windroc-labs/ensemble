@@ -823,9 +823,10 @@ class HostedSession(Session):
 
     @classmethod
     def retire(cls, name: str, *, sid: str | None = None, host: str | None = None) -> None:
-        """A bound owner's confirmed close, asked before any Host probe: OwnerRefused when it
-        refuses, Unanswered when it cannot tell; else closed here. Another sid's session.json skips
-        its owner, so the close here raises on the sid.
+        """A bound owner's confirmed close, asked before any Host probe but a listed terminal of
+        another sid (its terminal gone too: sid from session.json): OwnerRefused when it refuses,
+        Unanswered when it cannot tell; else closed here. Another sid's session.json skips its
+        owner, so the close here raises on the sid.
         """
         setup = cls._config()
         on = cls.host(host)
@@ -839,6 +840,7 @@ class HostedSession(Session):
             and sid in (None, state.get("sid"))
             and (channel := _bound_owner(name, state)) is not None
         ):
+            store.check()
             try:
                 if channel.request(Op.CLOSE):
                     return
