@@ -19,22 +19,18 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
-from datetime import datetime
-from typing import Any
 
 from ensemble.session.engine.status_log import SessionStatusLog
-from ensemble.session.engine.types import SessionError
-from ensemble.session.hosts.docker.broker import Broker, BrokerError, deadline_ok, hook_root
+from ensemble.session.hosts.docker.broker import Broker, hook_root
+from ensemble.session.hosts.docker.maintenance import Maintenance, run
 from ensemble.session.hosts.docker.relay import LINE_MAX, relay_request
-from ensemble.utils import read_regular, save
+from ensemble.utils import save
 
 HOOK_WAIT = 60
 CHECK_WAIT = 10
 START_WAIT = 60
 POLL = 0.5
 LOG_MAX = 1 << 20
-RETRY = 60
 LOG = logging.getLogger("session")
 
 
@@ -221,16 +217,18 @@ class Supervisor:
             stopped.wait(POLL)
 
     def maintain(self, stopped) -> None:
-        maintain(
+        container = f"ensemble-{self.name}-{self.generation}"
+        tick = Maintenance(
             self.name,
             self.state,
             self.generation,
             self.broker,
-            stopped,
             report=self._report,
             root=hook_root(self.hook),
+            close=lambda: self.broker.close(container),
             clock=self.clock,
         )
+        run(tick, stopped, clock=self.clock)
 
     def _audit_warning(self, reason: str) -> None:
         if self.events:
@@ -256,97 +254,6 @@ class Supervisor:
         except OSError:
             return False
         return out.strip() == b"1"
-
-
-def deadline_file(state: str, generation: str) -> str:
-    """The last deadline the broker confirmed for `generation`."""
-    return os.path.join(state, f"{generation}.deadline.json")
-
-
-def maintain(
-    name: str,
-    state: str,
-    generation: str,
-    broker: Broker,
-    stopped: threading.Event,
-    *,
-    report: Callable[[str, str], None],
-    root: str,
-    clock: Callable[[], float] = time.time,
-) -> None:
-    """Until stopped: the broker's maintain at once, then when it says, each failure and notice
-    told to `report` (a notice it refuses is not acknowledged). While the broker fails, reported
-    once per streak, it retries each RETRY s and the last confirmed deadline holds; only a reply
-    with another deadline replaces it.
-    """
-    container, manifest = f"ensemble-{name}-{generation}", os.path.join(state, f"{generation}.json")
-    deadline, due = _cached(deadline_file(state, generation)), clock()
-    delivered: list[str] = []
-    failing = ticked = False
-    while True:
-        if deadline is not None and ticked:
-            at = datetime.fromisoformat(deadline["at"]).timestamp()
-            if due is None or due > at:
-                if not stopped.wait(max(0.0, at - clock())):
-                    _close(report, broker, container, deadline["reason"], stopped)
-                return
-        if due is None or stopped.wait(max(0.0, due - clock())):
-            return
-        ticked = True
-        try:
-            found = broker.maintain(container, manifest, delivered, root=root)
-        except SessionError as error:
-            if not failing:
-                why = str(error) if isinstance(error, BrokerError) else "transport"
-                _tell(report, "credential_maintenance_failed", why)
-            failing, due = True, clock() + RETRY
-            continue
-        failing, delivered = False, []
-        for result in found.results:
-            if (failed := result["error"]) is not None:
-                cause = f" ({failed['cause']})" if "cause" in failed else ""
-                text = f"{result['credential']}: {failed['message']}{cause}"
-                _tell(report, "credential_refresh_failed", text)
-        for notice in found.notices:
-            try:
-                report("credential_notice", notice["text"])
-            except (OSError, ValueError):
-                continue
-            delivered.append(notice["key"])
-        if found.deadline is not None:
-            deadline = found.deadline
-            with contextlib.suppress(OSError):
-                save(deadline_file(state, generation), json.dumps(deadline), durable=True)
-        due = clock() if delivered else _timestamp(found.next_check)
-
-
-def _close(report, broker: Broker, container: str, reason: str, stopped) -> None:
-    _tell(report, "client_auth_expired", reason)
-    while True:
-        try:
-            broker.close(container)
-        except SessionError:
-            if stopped.wait(RETRY):
-                return
-        else:
-            return
-
-
-def _tell(report: Callable[[str, str], None], word: str, text: str) -> None:
-    with contextlib.suppress(OSError, ValueError):
-        report(word, text)
-
-
-def _timestamp(value: str | None) -> float | None:
-    return None if value is None else datetime.fromisoformat(value).timestamp()
-
-
-def _cached(path: str) -> Any:
-    try:
-        found = json.loads(read_regular(path) or b"null")
-    except (OSError, ValueError, RecursionError):
-        return None
-    return found if deadline_ok(found) else None
 
 
 def main(argv=None) -> int:

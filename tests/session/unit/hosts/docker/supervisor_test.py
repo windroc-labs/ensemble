@@ -19,7 +19,7 @@ from unittest import mock
 
 from ensemble.session.engine.status_log import SessionStatusLog
 from ensemble.session.engine.types import SessionError
-from ensemble.session.hosts.docker import relay, supervisor
+from ensemble.session.hosts.docker import maintenance, relay, supervisor
 from ensemble.session.hosts.docker.supervisor import Supervisor
 from ensemble.session.modes import tui_hook
 from tests.session.case import REPO, SRC, Case
@@ -667,7 +667,7 @@ class MaintainTest(Base):
         self.now, self.waits = NOW, []
         self.supervisor.clock = lambda: self.now
         self.supervisor.hook = os.path.join(REPO, "bin", "ensemble-session")
-        self.cache = supervisor.deadline_file(self.state, GEN)
+        self.cache = maintenance.deadline_file(self.state, GEN)
 
     def run_ticks(self, *responses, ticks=20):
         fake = FakeBroker(*responses)
@@ -712,17 +712,7 @@ class MaintainTest(Base):
 
     def test_tick_source_names_no_provider(self):
         source = "".join(
-            inspect.getsource(f)
-            for f in (
-                supervisor.maintain,
-                supervisor._close,
-                supervisor._tell,
-                supervisor._cached,
-                supervisor._timestamp,
-                supervisor.deadline_file,
-                Supervisor.maintain,
-                Supervisor._report,
-            )
+            inspect.getsource(f) for f in (maintenance, Supervisor.maintain, Supervisor._report)
         ).lower()
         for name in ("codex", "github", "claude", "opencode"):
             with self.subTest(name=name):

@@ -70,6 +70,7 @@ from ensemble.session.hosts.base import (
     tui_lock,
 )
 from ensemble.session.hosts.docker import hook as docker_hook
+from ensemble.session.hosts.docker import maintenance
 from ensemble.session.hosts.docker import supervisor as run_supervisor
 from ensemble.session.hosts.docker.broker import (
     RELAY,
@@ -421,7 +422,7 @@ def _accept_started(
     if (started.github_user_id is None) == bool(github):
         raise SessionError("broker: bad response to start: github_user_id")
     save(
-        run_supervisor.deadline_file(state_dir(name), generation),
+        maintenance.deadline_file(state_dir(name), generation),
         json.dumps(started.deadline),
         durable=True,
     )
@@ -1390,14 +1391,19 @@ class DockerHost(Host):
             proc,
             close=lambda: self._close_piped(name, container),
             lock=lock,
-            maintain=lambda stopped: run_supervisor.maintain(
-                name,
-                state_dir(name),
-                generation,
-                self.broker,
+            maintain=lambda stopped: maintenance.run(
+                maintenance.Maintenance(
+                    name,
+                    state_dir(name),
+                    generation,
+                    self.broker,
+                    report=lambda word, text: LOG.warning(
+                        "docker session %s: %s %s", name, word, text
+                    ),
+                    root=hook_root(created.hook),
+                    close=lambda: self.broker.close(container),
+                ),
                 stopped,
-                report=lambda word, text: LOG.warning("docker session %s: %s %s", name, word, text),
-                root=hook_root(created.hook),
             ),
         )
 
