@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from typing import TypeVar
 
 from ensemble.session.engine.base import Session
 from ensemble.session.engine.types import (
@@ -30,6 +31,7 @@ from ensemble.session.harness.types import Logged, Op
 from ensemble.utils import Display, Record, Status
 
 POLL = 0.1
+T = TypeVar("T")
 
 
 def fold(
@@ -83,10 +85,10 @@ class _Reader:
 
 
 class OwnedSession(Session):
-    """attach: the read-only attach, bound to sid and generation; retire: a tui view's non-owner
-    close of that generation; replay: start past the log. A headless view's events() stops its worker on
-    an interrupt, as a headless HostedSession does; tie: a headless start's caller pipe, its
-    harness closing the worker once the view is gone.
+    """attach: the read-only attach, bound to sid and generation (attached: one made already);
+    retire: a tui view's non-owner close of that generation; replay: start past the log. A headless
+    view's events() stops its worker on an interrupt, as a headless HostedSession does; tie: a
+    headless start's caller pipe, its harness closing the worker once the view is gone.
     """
 
     def __init__(
@@ -99,6 +101,7 @@ class OwnedSession(Session):
         generation: str,
         idle_timeout: float | None,
         attach: Callable[[], Session],
+        attached: Session | None = None,
         retire: Callable[[], None] | None = None,
         replay: bool = False,
         mode: Mode = Mode.TUI,
@@ -111,7 +114,7 @@ class OwnedSession(Session):
         self.generation = generation
         self._channel, self._idle, self._attach = channel, idle_timeout, attach
         self._retire = retire
-        self._attached: Session | None = None
+        self._attached = attached
         self._events = _Reader(channel, generation)
         if replay:
             self._events.read(replayed=True)
@@ -193,6 +196,21 @@ class OwnedSession(Session):
             self._attached = self._attach()
         return self._attached
 
+    def _call(self, call: Callable[[Session], T]) -> T:
+        """call on its attach; a held one's SessionError (its display reopened since, say) drops it
+        for one call on a new attach. Unanswered is no proof the call failed: raised.
+        """
+        held = self._attached is not None
+        try:
+            return call(self._session())
+        except Unanswered:
+            raise
+        except SessionError:
+            if not held:
+                raise
+            self._attached = None
+        return call(self._session())
+
     @property
     def opening_pending(self) -> str | None:
         opening = self._channel.status().get("opening")
@@ -220,52 +238,58 @@ class OwnedSession(Session):
         if self._remote():
             self._ask(Op.SEND, {"text": text})
             return
-        self._session().send(text)
+        self._call(lambda session: session.send(text))
 
     def press(self, keys: Sequence[KeyPress]) -> None:
         if self._remote():
             self._ask(Op.PRESS, {"keys": [str(key) for key in keys]})
             return
-        self._session().press(keys)
+        self._call(lambda session: session.press(keys))
 
     def alive(self) -> bool:
+        """A held attach that says not alive is asked once more of a new one."""
+        held = self._attached is not None
         try:
-            session = self._session()
+            if self._session().alive():
+                return True
+            if not held:
+                return False
+            self._attached = None
+            return self._session().alive()
         except SessionError:
             return False
-        return session.alive()
 
     def status(self) -> Status:
-        return self._session().status()
+        return self._call(lambda session: session.status())
 
     def content(self) -> str:
         if not self._remote():
-            return self._session().content()
+            return self._call(lambda session: session.content())
         if self.status().state == StatusState.DONE and (reply := self.reply):
             return reply
         return self.screen()
 
     def info(self) -> SessionInfo:
-        return self._session().info()
+        return self._call(lambda session: session.info())
 
     def session_status(self) -> SessionStatus:
-        return self._session().session_status()
+        return self._call(lambda session: session.session_status())
 
     def record(self) -> Record | None:
-        return self._session().record()
+        return self._call(lambda session: session.record())
 
     @property
     def showable(self) -> bool:
-        return self._session().showable
+        return self._call(lambda session: session.showable)
 
     def show(self, *, display: Display = None, command: str | None = None) -> str | None:
-        return self._session().show(display=display, command=command)
+        return self._call(lambda session: session.show(display=display, command=command))
 
     def hide(self) -> None:
-        self._session().hide()
+        self._call(lambda session: session.hide())
 
     def attach_command(self) -> str:
-        return self._session().attach_command()
+        return self._call(lambda session: session.attach_command())
 
     def screen(self, lines: int | None = None) -> str:
         if self._remote():
@@ -273,4 +297,4 @@ class OwnedSession(Session):
             if not isinstance(text, str):
                 raise SessionError(f"session {self.name}: bad screen from its harness")
             return text
-        return self._session().screen(lines)
+        return self._call(lambda session: session.screen(lines))

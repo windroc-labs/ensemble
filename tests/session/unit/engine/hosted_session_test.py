@@ -3763,6 +3763,21 @@ class BoundOwnerTest(HostedTuiBase):
         self.assertIsInstance(view, OwnedSession)
         self.assertEqual((view.generation, view.reply), (self.state["generation"], "r1"))
 
+    def test_a_control_views_failed_attach_is_made_again(self):
+        """WDRC-304: its first attach, held from attach, is not handed out again."""
+        self.owner()
+        stale, fresh = mock.Mock(name="stale"), mock.Mock(name="fresh")
+        stale.send.side_effect = SessionError("tui session w1 is not running")
+        made = mock.Mock(side_effect=[stale, fresh])
+        with mock.patch.object(self.session, "_attached", made):
+            view = self.session.attach("w1", sid=SID)
+            view.send("hi")
+        fresh.send.assert_called_once_with("hi")
+        self.assertEqual(made.call_count, 2)
+        self.assertEqual(
+            made.call_args, mock.call("w1", sid=SID, host=None, generation=self.state["generation"])
+        )
+
     def test_an_owner_bound_elsewhere_or_gone_is_ignored(self):
         for status in (
             {"name": "w2"},

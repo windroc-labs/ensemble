@@ -3,7 +3,8 @@ server with the fake claude (WDRC-199 FR-13, FR-17, FR-18): the guard parents th
 the harness holds its lifecycle pipe, so kill -9 of the harness ends guard and client; resume then
 starts a new harness, guard and client on the same sid, cwd, account and flags that answers from the
 old conversation, waiting out a reaping guard and refusing a live or unknown generation; resume of a
-live worker whose display was killed reopens it; closes act only on their own generation.
+live worker whose display was killed reopens it, and its handlers' view sends to the reopened one;
+closes act only on their own generation.
 """
 
 import os
@@ -18,6 +19,7 @@ from unittest import mock
 from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.types import Access, HookCallback, Liveness, Spec
 from ensemble.session.harness.channel import Channel
+from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedSession
 from ensemble.session.hosts.base import Host
 from ensemble.session.hosts.tmux import managed
@@ -284,8 +286,8 @@ class CloseTest(CrashCase):
         self.assertFalse(running(found["call"]["pid"]) or running(found["guard"]))
 
 
-class GenerationTest(CrashCase):
-    """A view's close acts on its own generation, never on the newer one now holding the name."""
+class ApiCase(CrashCase):
+    """w1 started through the API, with the recording handler."""
 
     def setUp(self):
         super().setUp()
@@ -299,7 +301,7 @@ class GenerationTest(CrashCase):
         )
         self.addCleanup(Path(self.pause).touch)  # releases a draining harness first
 
-    def started(self, *, resume: bool = False) -> OwnedSession:
+    def started(self, *, resume: bool = False, **state: str) -> OwnedSession:
         spec = Spec(
             workdir=self.cwd,
             access=Access(cwd=self.cwd),
@@ -309,7 +311,9 @@ class GenerationTest(CrashCase):
             sid=self.sid,
             prompt="" if resume else "hi",
             resume=resume,
-            handlers=(HookCallback(HANDLER, {"path": self.out, "pause": self.pause}, (REPO,)),),
+            handlers=(
+                HookCallback(HANDLER, {"path": self.out, "pause": self.pause, **state}, (REPO,)),
+            ),
         )
         session = self.cls.start(spec)
         assert isinstance(session, OwnedSession)
@@ -321,6 +325,45 @@ class GenerationTest(CrashCase):
             timeout=30,
             what="the handler's TurnEnd",
         )
+
+    def turn_end(self, reply: str) -> dict:
+        """The handler's record of the TurnEnd with `reply`."""
+        return live_tmux.wait(
+            lambda: next(
+                (r for r in logged(self.out) if r["type"] == "TurnEnd" and r["reply"] == reply),
+                None,
+            ),
+            timeout=30,
+            what=f"the handler's TurnEnd {reply!r}",
+        )
+
+
+class DisplayTest(ApiCase):
+    def test_a_handlers_send_reaches_the_reopened_display(self):
+        """WDRC-304: the Dispatch view, holding its attach from before, attaches again."""
+        self.sid = str(uuid.uuid4())
+        self.scene("w1", turns=[["second"], ["third"], ["fourth"], ["fifth"]])
+        send = os.path.join(self.root, "send")
+        view = self.started(send=send)
+        self.turn_end("Hi from w1.")
+        Path(send).write_text("from the handler", encoding="utf-8")
+        self.ok(self.session("send", "w1", "go"))
+        self.assertEqual(self.turn_end("second")["sent"], "from the handler")
+        self.turn_end("third")  # its send reached the display: the view holds that attach
+        self.ok(self.server.tmux("kill-session", "-t", "=w1"))
+        self.assertEqual(self.owner("w1").ask(Op.DISPLAY, {}), {"reopened": True})
+        self.assertEqual(self.pane("w1", "#{@generation} #{pane_dead}"), f"{view.generation} 0")
+        Path(send).write_text("again from the handler", encoding="utf-8")
+        self.ok(self.session("send", "w1", "go on"))
+        self.assertEqual(self.turn_end("fourth")["sent"], "again from the handler")
+        self.turn_end("fifth")
+        self.assertFalse(os.path.exists(send))
+        self.assertEqual(len(self.calls("w1")), 1)
+        self.assertEqual(self.owner("w1").status()["generation"], view.generation)
+
+
+class GenerationTest(ApiCase):
+    """A view's close acts on its own generation, never on the newer one now holding the name."""
 
     def assert_lives(self, view: OwnedSession) -> None:
         channel = self.owner("w1")
