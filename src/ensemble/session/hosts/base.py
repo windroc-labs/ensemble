@@ -159,6 +159,18 @@ def activity(name: str, generation: str) -> StatusState | None:
     return StatusState(fields[1])
 
 
+def stored_record(name: str, generation: str) -> Record | None:
+    """Worker `name`'s crew Record while it is generation `generation`'s."""
+    data = worker_file(name, RECORD, STATE_MAX)
+    held, tab, line = (data or b"").decode(errors="replace").partition("\t")
+    if not tab or held != generation:
+        return None
+    try:
+        return Record.parse(line)
+    except (ValueError, TypeError):
+        return None
+
+
 def tui_lock(name: str) -> str:
     return os.path.join(os.path.expanduser(TUI_DIR), f"{name}.lock")
 

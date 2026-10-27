@@ -1,10 +1,12 @@
-"""Worker with a recorded Session class and Host handle: state, Record, the early watch, and
-resume and restart through its session harness (no process, no tmux; files only under the test's
-HOME).
+"""Worker with a recorded Session class and Host handle: state, Record (stored in its worker
+dir), the early watch, and resume and restart through its session harness (no process, no tmux;
+files only under the test's HOME).
 """
 
+import contextlib
 import errno
 import fcntl
+import io
 import itertools
 import json
 import os
@@ -23,12 +25,15 @@ from ensemble.session import (
     Session,
     SessionBusy,
     SessionError,
+    cli,
 )
 from ensemble.session.engine import worker
+from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.types import Blocked, Exited, IdleTimeout, Reply, TurnStarted
 from ensemble.session.engine.worker import Worker, WorkerState
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.types import Op
+from ensemble.session.hosts.base import stored_record
 from ensemble.session.modes.tui import TuiStore
 from ensemble.utils import Record, Status, StatusState, file_lock
 from tests.session.case import Case
@@ -40,6 +45,48 @@ ENVIRONMENT = EnvironmentSpec(image="dummy-env:test", gateway="workers", lock="d
 
 class Killed(BaseException):
     """The start's process dying: no handler runs."""
+
+
+class Unpublished(Process):
+    """A RemoteHost handle: like Docker's, it cannot store a Record after launch."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def alive(self) -> bool:
+        return True
+
+    def close(self) -> None:
+        pass
+
+    def wait_exit(self, timeout: float) -> bool:
+        return False
+
+    def kill(self) -> None:
+        pass
+
+    def record(self) -> Record | None:
+        return None
+
+    def display(self) -> None:
+        return None
+
+
+class RemoteHost(Host):
+    """A Docker-like Host: its tui runs remote, its handles store no Record."""
+
+    _remote_tui = True
+
+    def list(self) -> list[str]:
+        return ["w1"]
+
+    def attach(self, name: str) -> Process:
+        return Unpublished(name)
+
+    def detach(self, *args, **kwargs):
+        raise AssertionError("not called")
+
+    terminal = detach
 
 
 def read(path: str) -> bytes:
@@ -88,6 +135,7 @@ class Base(Case):
             name, host=self.host
         ).close()
         self.session = self.session_cls.start.return_value
+        self.session_cls.start.side_effect = self.launched
         self.session.showable = False
         self.session.opening_pending = None
         self.session.client_up = True
@@ -95,8 +143,7 @@ class Base(Case):
         self.session.events.return_value = iter([IdleTimeout(worker.EARLY)])
         self.order.attach_mock(self.session_cls.start, "start")
         self.order.attach_mock(self.session_cls.preflight, "preflight")
-        for call in ("close", "publish"):
-            self.order.attach_mock(getattr(self.handle, call), call)
+        self.order.attach_mock(self.handle.close, "close")
         self.said = []
         self.tui = os.path.join(self.home, ".ensemble", "tui", "w1")
         os.makedirs(self.tui)
@@ -107,8 +154,24 @@ class Base(Case):
     def calls(self) -> list[str]:
         return [call[0] for call in self.order.mock_calls if "." not in call[0]]
 
+    def launched(self, spec, **_):
+        """A start's harness: w1's session.json of its sid, generation g1, no owner yet."""
+        self.write_state(spec.sid)
+        return mock.DEFAULT
+
+    def stored(self, generation: str = "g1") -> Record | None:
+        return stored_record("w1", generation)
+
+    def unstore(self) -> None:
+        os.unlink(os.path.join(self.tui, "record"))
+
     def owned(
-        self, status: str | None = "running", *, sid: str = SID, answer: dict | None = None
+        self,
+        status: str | None = "running",
+        *,
+        sid: str = SID,
+        answer: dict | None = None,
+        generation: str = "g1",
     ) -> None:
         """w1's session.json of `sid` naming its owner; its harness held and in `status` (None: no
         harness holds it); a running one answers each request with `answer` (default: nothing
@@ -119,9 +182,14 @@ class Base(Case):
             fd = os.open(channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
             fcntl.flock(fd, fcntl.LOCK_EX)
             self.addCleanup(os.close, fd)
-            channel.write_status({"state": status, "name": "w1", "sid": sid, "generation": "g1"})
+            channel.write_status(
+                {"state": status, "name": "w1", "sid": sid, "generation": generation}
+            )
         if status == "running":
             self.serve(channel, answer or {"ok": True, "data": {"reopened": False}})
+        self.write_state(sid, generation=generation, owner=channel.directory)
+
+    def write_state(self, sid: str, *, generation: str = "g1", owner: str | None = None) -> None:
         record = {
             "client": "claude",
             "workdir": state().workdir(),
@@ -133,8 +201,8 @@ class Base(Case):
             "events": "/events",
             "words": {},
             "host": "tmux",
-            "generation": "g1",
-            "owner": channel.directory,
+            "generation": generation,
+            **({} if owner is None else {"owner": owner}),
         }
         with open(os.path.join(self.tui, "session.json"), "w", encoding="utf-8") as f:
             json.dump(record, f)
@@ -221,28 +289,29 @@ class StateTest(Case):
 
 
 class StartTest(Base):
-    def test_a_quiet_start_saves_its_state_then_publishes_and_returns_its_record(self):
+    def test_a_quiet_start_saves_its_state_then_stores_and_returns_its_record(self):
         found = self.worker().start(prompt="hi", resume=False)
         self.assertEqual(found, state().record())
-        self.assertEqual(self.calls(), ["start", "publish"])
+        self.assertEqual(self.calls(), ["start"])
+        self.assertEqual(self.stored(), found)
         saved = Worker.load("w1")
         self.assertEqual(saved.state, state())
         _, kwargs = self.session_cls.start.call_args
         self.assertEqual(kwargs, {"display": "mgr", "host": "tmux", "idle_timeout": worker.TICK})
 
-    def test_a_dialog_ends_the_watch_at_once_and_still_publishes(self):
+    def test_a_dialog_ends_the_watch_at_once_and_still_stores_its_record(self):
         self.session.client_up = False
         self.session.events.return_value = iter([Reply("x"), Blocked("Edit"), Exited(1)])
         self.worker().start(prompt="", resume=False)
         self.assertEqual(self.said, ["session w1: waits on a dialog: Edit"])
-        self.handle.publish.assert_called_once()
+        self.assertEqual(self.stored(), state().record())
 
-    def test_an_early_exit_reports_its_last_lines_and_publishes_nothing_keeping_it(self):
+    def test_an_early_exit_reports_its_last_lines_and_stores_nothing_keeping_it(self):
         self.session.events.return_value = iter([Exited(7)])
         with self.assertRaises(SessionError) as caught:
             self.worker().start(prompt="", resume=False)
         self.assertEqual(str(caught.exception), "w1: claude exited 7 at once")
-        self.handle.publish.assert_not_called()
+        self.assertIsNone(self.stored())
         self.session.close.assert_not_called()
         self.assertEqual(Worker.load("w1").state.sid, SID)
 
@@ -272,7 +341,7 @@ class StartTest(Base):
         type(self.session).client_up = mock.PropertyMock(side_effect=[False, True, True])
         self.session.events.return_value = iter([Reply("a"), Reply("b"), Exited(1)])
         self.worker().start(prompt="", resume=False)
-        self.handle.publish.assert_called_once()
+        self.assertEqual(self.stored(), state().record())
 
     def test_an_exit_that_reaches_the_watch_past_every_deadline_still_fails_the_start(self):
         """The exit chain lagging: idle ticks well past EARLY and COLOR_CAP, its client never up."""
@@ -285,28 +354,34 @@ class StartTest(Base):
                 prompt="", resume=False
             )
         self.assertGreater(next(ticks), late)
-        self.handle.publish.assert_not_called()
+        self.assertIsNone(self.stored())
 
     def test_its_state_is_saved_before_its_client_starts(self):
         seen = []
 
-        def launch(*_, **__):
+        def launch(spec, **kw):
             seen.append(Worker.load("w1").state)
-            return self.session
+            return self.launched(spec, **kw)
 
         self.session_cls.start.side_effect = launch
         self.worker().start(prompt="", resume=False)
         self.assertEqual(seen, [state()])
 
     def test_a_start_killed_after_its_client_starts_is_resumed(self):
-        self.host.attach.side_effect = Killed
-        with self.assertRaises(Killed):
+        replace = os.replace
+
+        def killed(source, target):
+            if os.path.basename(target) == "record":
+                raise Killed
+            replace(source, target)
+
+        with mock.patch("os.replace", side_effect=killed), self.assertRaises(Killed):
             self.worker().start(prompt="", resume=False)
-        self.host.attach.side_effect = None
+        self.assertIsNone(self.stored())
         self.owned()  # its harness runs on
         found = Worker.load("w1", session_cls=self.session_cls).resume()
         self.assertEqual(found, state().record())
-        self.handle.publish.assert_called_once_with(found)
+        self.assertEqual(self.stored(), found)
         self.session_cls.start.assert_called_once()
 
     def test_a_failed_start_puts_back_the_state_and_latest_start_it_found(self):
@@ -316,7 +391,7 @@ class StartTest(Base):
             self.worker().start(prompt="", resume=False)
         self.assertFalse(os.path.exists(state_path()))
         self.assertEqual(Worker.load("w1").state.sid, OTHER)
-        self.session_cls.start.side_effect = None
+        self.session_cls.start.side_effect = self.launched
         self.worker().start(prompt="", resume=False)
         kept = read(state_path())
         self.session_cls.start.side_effect = ConfigError("unknown client claude")
@@ -373,14 +448,14 @@ class ViewTest(Base):
                 self.assertEqual(done, [] if want is None else [want])
                 if want == "show":
                     self.session.show.assert_called_once_with(display="mgr")
-                self.handle.publish.assert_called()
+                self.assertEqual(self.stored(), state().record())
         self.assertEqual(set(self.said), {"session w1: tmux attach -t '=w1'"})
 
     def test_a_failed_hide_is_said_and_the_start_goes_on(self):
         self.session.hide.side_effect = SessionError("boom")
         self.start(stored=False, view=True)
         self.assertEqual(self.said[-1], "session w1: not hidden: boom")
-        self.handle.publish.assert_called_once()
+        self.assertEqual(self.stored(), state().record())
 
     def test_restart_and_resume_keep_its_view(self):
         self.session.events.return_value = iter([IdleTimeout(worker.EARLY)])
@@ -596,22 +671,24 @@ class ColorWatchTest(Base):
         ):
             with self.subTest(sent=sent):
                 self.said.clear()
-                self.handle.publish.reset_mock()
+                with contextlib.suppress(FileNotFoundError):
+                    self.unstore()
                 self.assertEqual(self.watch(sent), ticks)
                 self.assertEqual(self.said, said)
-                self.handle.publish.assert_called_once()
+                self.assertEqual(self.stored(), state().record())
 
     def test_a_started_turn_keeps_the_watch_as_long_and_never_says_unset(self):
         for sent, ticks in ((8, 9), (float("inf"), worker.COLOR_CAP + 1)):
             with self.subTest(sent=sent):
                 self.said.clear()
-                self.handle.publish.reset_mock()
+                with contextlib.suppress(FileNotFoundError):
+                    self.unstore()
                 events = itertools.chain(
                     [TurnStarted()], itertools.repeat(IdleTimeout(worker.TICK))
                 )
                 self.assertEqual(self.watch(sent, events=events), ticks)
                 self.assertEqual(self.said, [])  # its opening follows that turn
-                self.handle.publish.assert_called_once()
+                self.assertEqual(self.stored(), state().record())
 
     def test_a_dialog_just_after_a_turn_started_once_up_is_said(self):
         idle = IdleTimeout(worker.TICK)
@@ -620,7 +697,7 @@ class ColorWatchTest(Base):
         )
         self.watch(float("inf"), events=events)
         self.assertEqual(self.said, ["session w1: waits on a dialog: Edit"])
-        self.handle.publish.assert_called_once()
+        self.assertEqual(self.stored(), state().record())
 
     def test_a_dialog_in_its_state_is_said_wherever_the_watch_ends(self):
         """Its Blocked not yet read: up with no opening, its opening sent, or at the cap."""
@@ -641,12 +718,13 @@ class ColorWatchTest(Base):
         ):
             with self.subTest(case=case):
                 self.said.clear()
-                self.handle.publish.reset_mock()
+                with contextlib.suppress(FileNotFoundError):
+                    self.unstore()
                 idle = itertools.repeat(IdleTimeout(worker.TICK))
                 events = itertools.chain([TurnStarted()], idle) if turned else idle
                 self.assertEqual(self.watch(sent, events=events, dialog="Edit"), ticks)
                 self.assertEqual(self.said, lines)
-                self.handle.publish.assert_called_once()
+                self.assertEqual(self.stored(), state().record())
 
     def test_a_dialog_while_pending_says_both(self):
         self.watch(float("inf"), events=iter([Blocked("Trust")]))
@@ -654,7 +732,7 @@ class ColorWatchTest(Base):
             self.said,
             ["session w1: waits on a dialog: Trust", self.UNSET.format("waits on a dialog")],
         )
-        self.handle.publish.assert_called_once()
+        self.assertEqual(self.stored(), state().record())
 
     def test_the_line_names_the_pending_text(self):
         self.watch(float("inf"), text="/x 'y'")
@@ -670,7 +748,7 @@ class ColorWatchTest(Base):
         with self.assertRaises(SessionError):
             self.watch(float("inf"), events=iter([Exited(1)]))
         self.assertEqual(self.said, [])
-        self.handle.publish.assert_not_called()
+        self.assertIsNone(self.stored())
 
     def plain(self, *events, alive: bool) -> mock.Mock:
         """A session no guard reports up, its client running as `alive` says; its session alive."""
@@ -702,7 +780,7 @@ class ColorWatchTest(Base):
             )
         self.assertEqual(plain.client_alive.call_count, late - worker.EARLY + 1)
         plain.alive.assert_not_called()
-        self.handle.publish.assert_not_called()
+        self.assertIsNone(self.stored())
 
     def test_a_plain_session_returns_once_alive_at_the_early_deadline(self):
         plain = mock.create_autospec(Session, instance=True)
@@ -748,10 +826,10 @@ class LoadTest(Base):
     def test_of_two_starts_claiming_one_sid_at_once_only_the_first_starts(self):
         launching, go = threading.Event(), threading.Event()
 
-        def launch(*_, **__):
+        def launch(spec, **kw):
             launching.set()
             go.wait(10)
-            return self.session
+            return self.launched(spec, **kw)
 
         def run(each: Worker) -> Record:
             with each.locked():
@@ -790,7 +868,8 @@ class LoadTest(Base):
 class ResumeTest(Base):
     def test_a_worker_no_harness_owns_is_resumed_with_no_prompt_closing_nothing(self):
         self.worker().resume()
-        self.assertEqual(self.calls(), ["preflight", "start", "publish"])
+        self.assertEqual(self.calls(), ["preflight", "start"])
+        self.assertEqual(self.stored(), state().record())
         self.session_cls.retire.assert_not_called()
         spec = self.session_cls.start.call_args.args[0]
         self.assertEqual((spec.prompt, spec.resume, spec.sid), ("", True, SID))
@@ -807,7 +886,8 @@ class ResumeTest(Base):
             self.worker().restart()
         self.assertEqual(self.calls(), [])
         self.worker().resume()
-        self.assertEqual(self.calls(), ["preflight", "start", "publish"])
+        self.assertEqual(self.calls(), ["preflight", "start"])
+        self.assertEqual(self.stored(), state().record())
         self.assertEqual(self.asked, [])
         self.session_cls.retire.assert_not_called()
 
@@ -837,12 +917,15 @@ class OwnedTest(Base):
         self.owned()
         self.handle.alive.return_value = False  # its display says nothing of the worker
         self.assertEqual(self.worker().resume(), state().record())
-        self.assertEqual(self.calls(), ["publish"])
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(self.stored(), state().record())
         self.session_cls.retire.assert_not_called()
+        self.unstore()
         self.host.list.return_value = []  # its display killed
         self.host.attach.side_effect = SessionError("no tmux session w1")
         self.assertEqual(self.worker().resume(), state().record())
-        self.assertEqual(self.calls(), ["publish"])
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(self.stored(), state().record())
         self.assertEqual(self.asked, [Op.DISPLAY, Op.DISPLAY])
         self.session_cls.attach.assert_not_called()  # nothing reopened: nothing shown
         self.assertEqual(self.said, [])
@@ -862,7 +945,8 @@ class OwnedTest(Base):
         )
         self.assertEqual(self.worker().resume(), state().record())
         self.assertEqual(self.asked, [Op.DISPLAY])
-        self.assertEqual(self.calls(), ["publish"])
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(self.stored(), state().record())
         self.session_cls.attach.assert_called_once_with("w1", sid=SID, host="tmux")
         view.show.assert_called_once_with(display="mgr")
         self.assertEqual(self.said, ["session w1: tmux attach -t '=w1'"])
@@ -892,12 +976,14 @@ class OwnedTest(Base):
         self.session_cls.attach.side_effect = SessionError("no tui session w1")
         self.assertEqual(self.worker().resume(), state().record())
         self.assertEqual(self.said, ["session w1: not shown: no tui session w1"])
-        self.assertEqual(self.calls(), ["publish", "publish"])
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(self.stored(), state().record())
 
     def test_owned_resume_without_owner_starts_and_closes_nothing(self):
         self.owned(None)
         self.worker().resume()
-        self.assertEqual(self.calls(), ["preflight", "start", "publish"])
+        self.assertEqual(self.calls(), ["preflight", "start"])
+        self.assertEqual(self.stored(), state().record())
         self.session_cls.retire.assert_not_called()
         spec = self.session_cls.start.call_args.args[0]
         self.assertEqual((spec.prompt, spec.resume, spec.sid), ("", True, SID))
@@ -907,7 +993,8 @@ class OwnedTest(Base):
         self.session_cls.retire.side_effect = None  # its owner's confirmed close
         self.worker().restart()
         self.session_cls.retire.assert_called_once_with("w1", host="tmux")
-        self.assertEqual(self.calls(), ["start", "publish"])
+        self.assertEqual(self.calls(), ["start"])
+        self.assertEqual(self.stored(), state().record())
         self.assertTrue(self.session_cls.start.call_args.args[0].resume)
 
     def test_owned_restart_without_owner_refused(self):
@@ -920,4 +1007,78 @@ class OwnedTest(Base):
     def test_exited_owner_is_not_running(self):
         self.owned("exited")
         self.worker().resume()
-        self.assertEqual(self.calls(), ["preflight", "start", "publish"])
+        self.assertEqual(self.calls(), ["preflight", "start"])
+        self.assertEqual(self.stored(), state().record())
+
+
+class RecordTest(Base):
+    """Its Record lives in its worker dir, `<generation>\t<Record line>`, for the generation its
+    session.json names, whatever its Host can store.
+    """
+
+    def test_start_and_resume_store_record(self):
+        found = self.worker().start(prompt="", resume=False)
+        path = os.path.join(self.tui, "record")
+        self.assertEqual(read(path), f"g1\t{found.to_line()}\n".encode())
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+        self.unstore()
+        self.owned(generation="g2")
+        self.assertEqual(self.worker().resume(), found)
+        self.assertEqual((self.stored("g2"), self.stored("g1")), (found, None))
+        self.assertEqual(self.calls(), ["start"])  # the resume started nothing
+
+    def test_other_generation_reads_none(self):
+        found = self.worker().start(prompt="", resume=False)
+        self.write_state(SID, generation="g2")
+        self.assertIsNone(self.stored("g2"))
+        with self.assertRaisesRegex(SessionError, "^session w1 is gone$"):
+            TuiStore.attach("w1", host=self.host).store_record("g1", found)
+        self.assertEqual(self.stored("g1"), found)  # kept, read only as g1's
+        self.owned(sid=OTHER, answer={"ok": True, "data": {"reopened": False}})
+        self.unstore()
+        self.worker().resume()  # another sid's session: a resumed start of its own
+        self.assertEqual(self.stored(), found)
+
+    def test_a_host_that_cannot_store_a_record_still_starts_and_resumes(self):
+        """Docker's handles cannot publish: the start and resume of a crew worker succeed anyway,
+        its Record in its worker dir.
+        """
+        self.session_cls.host.return_value = RemoteHost("docker", {})
+        with self.assertRaisesRegex(SessionError, "cannot store a Record after launch"):
+            RemoteHost("docker", {}).attach("w1").publish(state().record())
+        found = self.worker(host="docker").start(prompt="", resume=False)
+        self.assertEqual(self.stored(), found)
+        self.unstore()
+        self.owned()
+        self.assertEqual(self.worker(host="docker").resume(), found)
+        self.assertEqual(self.stored(), found)
+
+    def test_cli_start_and_resume_on_a_docker_like_host_exit_0(self):
+        with open(os.path.join(self.ensemble, "config.local.toml"), "w", encoding="utf-8") as f:
+            f.write(
+                "[session.hosts.docker]\n"
+                'implementation = "tests.session.unit.engine.worker_test:RemoteHost"\n'
+            )
+        self.addCleanup(setattr, HostedSession, "_setup", None)
+        self.session_cls.host.return_value = RemoteHost("docker", {})
+        session_cls, said = self.session_cls, self.said
+
+        class Bound(Worker):
+            def __init__(self, state: WorkerState, **kw) -> None:
+                super().__init__(state, session_cls=session_cls, say=said.append, **kw)
+
+        def invoke(*argv: str) -> tuple[int, str, str]:
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = cli.main(list(argv), worker_cls=Bound)
+            return code, out.getvalue(), err.getvalue()
+
+        argv = ("start", "w1", "--client", "claude", "--cwd", self.home, "--display", "none")
+        code, out, err = invoke(*argv, "--host", "docker")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out, f"{self.stored().to_line()}\n")
+        self.assertEqual(Record.parse(out), Worker.load("w1").state.record())
+        self.unstore()
+        self.owned()
+        self.assertEqual(invoke("resume", "w1"), (0, out, ""))
+        self.assertEqual(self.stored(), Record.parse(out))

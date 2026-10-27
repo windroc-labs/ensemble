@@ -51,7 +51,7 @@ from ensemble.session.engine.types import (
     Unanswered,
 )
 from ensemble.session.engine.worker import Worker
-from ensemble.session.hosts.base import Host, check_sid
+from ensemble.session.hosts.base import Host, check_sid, stored_record, worker_state
 from ensemble.session.modes import tui_hook
 from ensemble.session.modes.tui import TuiMode
 from ensemble.session.viewer import display as displays
@@ -715,13 +715,10 @@ def _ls(args, hosts: Hosts) -> int:
     if args.descendants and not (args.here and args.records):
         raise UsageError("ls: --descendants needs --here --records")
     if args.records:
-        for host, name in sorted(_listed(args, hosts), key=lambda found: found[1]):
-            try:
-                record = host.attach(name).record()
-            except SessionError:
-                if name in host.list():
-                    raise
-                continue
+        for _, name in sorted(_listed(args, hosts), key=lambda found: found[1]):
+            found = worker_state(name)
+            generation = None if found is None else found.generation
+            record = None if generation is None else stored_record(name, generation)
             if record is not None:
                 print(record.to_line())
         return 0

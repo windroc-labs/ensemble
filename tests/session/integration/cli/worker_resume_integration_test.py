@@ -158,14 +158,14 @@ class ResumeTest(Base):
         self.wait_event("w1", "done")
         (call,) = self.calls("w1")
         pane, state = self.pane("w1"), self.read_bytes(self.state_file(record.sid))
-        stored = self.server.option("w1", "@record")
+        self.assertEqual(self.dir_record("w1"), record)
         res = self.again("resume", "w1", inside=None, cwd=self.root)
         self.assertEqual((self.record(res), res.stderr), (record, ""))
         self.assertEqual(self.calls("w1"), [call])
         self.assertTrue(running(call["pid"]))
         self.assertEqual(self.pane("w1"), pane)
         self.assertEqual(self.read_bytes(self.state_file(record.sid)), state)
-        self.assertEqual(self.server.option("w1", "@record"), stored)
+        self.assertEqual(self.dir_record("w1"), record)
 
     def test_resume_of_a_gone_worker_from_another_caller_replays_its_saved_launch(self):
         dump = os.path.join(self.root, "env.jsonl")
@@ -189,7 +189,7 @@ class ResumeTest(Base):
         self.assertEqual(first["argv"][-2:], ["--", "hi"])
         self.assertNotIn("hi", again["argv"])
         self.assertEqual([entry["env"].get("K") for entry in logged(dump)], ["v", "v"])
-        self.assertEqual(self.server.option("w1", "@record"), record.to_line())
+        self.assertEqual(self.dir_record("w1"), record)
         self.assertIn(self.server.pane_of("w1"), self.server.panes(f"={MANAGER}:"))
 
     def test_a_start_killed_right_after_its_launch_is_resumed_by_name(self):
@@ -209,7 +209,7 @@ class ResumeTest(Base):
         record = self.record(self.again("resume", "w1", inside=None, cwd=self.root, PATH=path))
         self.assertEqual(record.resume, ("ensemble-session", "resume", "w1"))
         self.assertTrue(os.path.isfile(self.state_file(record.sid)))
-        self.assertEqual(self.server.option("w1", "@record"), record.to_line())
+        self.assertEqual(self.dir_record("w1"), record)
         calls = live_tmux.wait(lambda: self.calls("w1")[1:] or None, what="w1's resumed client")
         self.assertTrue(has_pair(calls[-1]["argv"], "--resume", record.sid), calls[-1]["argv"])
         dead = self.server.tmux("display-message", "-p", "-t", "=w1:", "#{pane_dead}")
@@ -232,7 +232,7 @@ class ResumeTest(Base):
         self.assertFalse(running(first["pid"]))
         self.assertTrue(running(again["pid"]))
         self.assertNotEqual(self.pane("w1"), pane)
-        self.assertEqual(self.server.option("w1", "@record"), record.to_line())
+        self.assertEqual(self.dir_record("w1"), record)
 
     def test_two_concurrent_resumes_of_a_gone_worker_start_one_client(self):
         record = self.record(self.start("w1"))

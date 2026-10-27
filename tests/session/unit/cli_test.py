@@ -18,6 +18,7 @@ from ensemble.session.engine.types import ConfigError, Hosts, SessionError, Unan
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.types import Op
 from ensemble.session.hosts.tmux import TmuxHost
+from ensemble.session.modes.tui import TuiStore
 from ensemble.session.viewer import display as displays
 from ensemble.utils import ACCOUNT_ENV, Record
 from tests.session.case import Case
@@ -463,6 +464,56 @@ class RecordControl(HostedTuiBase):
         self.assertEqual(code, 1)
         self.assertIn(SID, err)
         self.assertEqual(out, f"{attach_command('w2')}\n")
+
+
+class Ls(HostedTuiBase):
+    def setUp(self):
+        super().setUp()
+        CliHost.current = self.host
+        self.addCleanup(setattr, HostedSession, "_setup", None)
+        Path(self.ensemble).mkdir(exist_ok=True)
+        Path(self.ensemble, "config.local.toml").write_text(
+            '[session.hosts.tmux]\nimplementation = "tests.session.unit.cli_test:CliHost"\n'
+        )
+
+    def invoke(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli.main(list(argv))
+        return code, out.getvalue(), err.getvalue()
+
+    def test_records_from_worker_dir(self):
+        """Each listed worker's Record stored for its session.json's generation; none for another
+        generation's, none with no worker state, whatever its Host holds.
+        """
+        records = {
+            name: Record(
+                v=1,
+                kind="worker",
+                name=name,
+                sessions=(name,),
+                sid=SID,
+                workdir=None,
+                ctl=("ensemble-session",),
+                resume=("ensemble-session", "resume", name),
+                display=None,
+                detail=None,
+            )
+            for name in ("w1", "w2", "w3")
+        }
+        for name, record in records.items():
+            self.host.create(name, sid=SID, receipt=record)
+        for name, generation in (("w1", "g1"), ("w2", "g1")):
+            Path(self.root, name).mkdir(parents=True)
+            Path(self.root, name, "session.json").write_text(
+                json.dumps({"sid": SID, "generation": generation})
+            )
+            TuiStore.attach(name, host=self.host).store_record(generation, records[name])
+        Path(self.root, "w2", "session.json").write_text(
+            json.dumps({"sid": SID, "generation": "g2"})
+        )
+        self.assertEqual(self.invoke("ls", "--records"), (0, records["w1"].to_line() + "\n", ""))
+        self.assertEqual(self.invoke("ls", "--records", "--match", "w[23]"), (0, "", ""))
 
 
 COMMANDS = (

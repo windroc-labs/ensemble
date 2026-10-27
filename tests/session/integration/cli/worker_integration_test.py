@@ -114,7 +114,7 @@ class EarlyDeathTest(WorkerCase):
         self.assertTrue(self.live("w2"))
         self.assertEqual(self.pane("w2", "#{pane_dead}"), "1")
         self.assertEqual(self.ok(self.session("ls", "--records")).stdout, "")
-        self.assertEqual(self.server.option("w2", "@record"), "")
+        self.assertIsNone(self.dir_record("w2"))
 
 
 class DialogTest(WorkerCase):

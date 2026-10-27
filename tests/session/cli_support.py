@@ -15,6 +15,7 @@ import threading
 from contextlib import contextmanager
 
 from ensemble.session.harness.channel import Channel
+from ensemble.session.hosts.base import stored_record, worker_state
 from ensemble.utils import Record, Status
 from tests.session import live_tmux
 from tests.session.case import REPO, ROOTS, Case
@@ -171,6 +172,12 @@ class CliCase(Case):
         lines = result.stdout.splitlines()
         self.assertEqual(len(lines), 1, result.stdout)
         return Record.parse(lines[0])
+
+    def dir_record(self, name: str) -> Record | None:
+        """The Record worker `name`'s dir stores for its session.json's generation."""
+        found = worker_state(name)
+        generation = None if found is None else found.generation
+        return None if generation is None else stored_record(name, generation)
 
     def status(self, *names: str, stdin: str | None = None, **kw) -> list[Status]:
         result = self.ok(self.session("status", *names, stdin=stdin, **kw))

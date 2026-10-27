@@ -56,6 +56,7 @@ from ensemble.session.hosts.base import (
     GUARD_WAIT,
     HARNESS_ROOT,
     PROMPTED,
+    RECORD,
     TUI_DIR,
     TUI_STATE,
     Host,
@@ -85,6 +86,7 @@ from ensemble.utils import (
     read_regular,
     save,
 )
+from ensemble.utils import Record as ControlRecord
 
 WORDS = {
     HookKind.TURN_END: StatusState.DONE,
@@ -219,6 +221,30 @@ class TuiStore:
         save(os.path.join(self.dir, ACTIVITY), f"{generation} {word}\n")
         if word in (StatusState.DONE, StatusState.BLOCKED) and events:
             SessionStatusLog(events).write(self.name, word)
+
+    def store_record(self, generation: str, record: ControlRecord) -> None:
+        """Its crew Record, for `generation` while session.json names it; else SessionError. Only
+        the crew Worker owning that Record calls it.
+        """
+        found = worker_state(self.name)
+        if found is None or found.generation != generation:
+            raise SessionError(f"session {self.name} is gone")
+        path = os.path.join(self.dir, RECORD)
+        try:
+            fd, temporary = tempfile.mkstemp(dir=self.dir, prefix=f".{RECORD}-")  # 0600, O_NOFOLLOW
+        except FileNotFoundError:
+            raise SessionError(f"session {self.name} is gone") from None
+        except OSError as e:
+            raise SessionError(f"{path}: {e.strerror or e}") from None
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(f"{generation}\t{record.to_line()}\n".encode())
+            os.replace(temporary, path)
+        except OSError as e:
+            raise SessionError(f"{path}: {e.strerror or e}") from None
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(temporary)  # left only when not replaced
 
     def read(self) -> dict:
         return _read_state(self.name, self.state_file)

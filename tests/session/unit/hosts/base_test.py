@@ -32,7 +32,7 @@ from ensemble.session.harness import guard
 from ensemble.session.hosts import base as host_base
 from ensemble.session.hosts.base import Interactive, InteractiveProcess
 from ensemble.session.hosts.types import CommandView, SessionView
-from ensemble.utils import Status, StatusState
+from ensemble.utils import Record, Status, StatusState
 from tests.session.case import Case
 from tests.session.fakes.terminal import MemoryHost
 
@@ -362,8 +362,8 @@ class ManagedWorkerTest(Case):
 
 
 class WorkerStateFilesTest(Case):
-    """worker_state and activity read a worker dir's files only when regular, the user's, not a
-    link and small; anything else reads as absent.
+    """worker_state, activity and stored_record read a worker dir's files only when regular, the
+    user's, not a link and small; anything else reads as absent.
     """
 
     def setUp(self):
@@ -407,3 +407,35 @@ class WorkerStateFilesTest(Case):
         self.assertIsNone(host_base.activity("w1", "g"))
         self.put("session.json", b"{" + b" " * (1 << 16) + b"}")
         self.assertIsNone(host_base.worker_state("w1"))
+
+    def test_stored_record_of_its_generation_only_and_checked(self):
+        record = Record(
+            v=1,
+            kind="worker",
+            name="w1",
+            sessions=("w1",),
+            sid="s",
+            workdir=None,
+            ctl=("ensemble-session",),
+            resume=("ensemble-session", "resume", "w1"),
+            display=None,
+            detail=None,
+        )
+        line = f"g\t{record.to_line()}\n".encode()
+        self.put("record", line)
+        self.assertEqual(host_base.stored_record("w1", "g"), record)
+        self.assertIsNone(host_base.stored_record("w1", "other"))
+        self.assertIsNone(host_base.stored_record("absent", "g"))
+        for bad in (b"g " + line[2:], b"g\t{}\n", b"g\n"):
+            self.put("record", bad)
+            self.assertIsNone(host_base.stored_record("w1", "g"))
+        target = self.put("elsewhere", line)
+        os.unlink(os.path.join(self.dir, "record"))
+        os.symlink(target, os.path.join(self.dir, "record"))
+        self.assertIsNone(host_base.stored_record("w1", "g"))
+        os.unlink(os.path.join(self.dir, "record"))
+        self.put("record", line)
+        with mock.patch("os.getuid", return_value=os.getuid() + 1):
+            self.assertIsNone(host_base.stored_record("w1", "g"))
+        self.put("record", line[:-1] + b" " * (1 << 16) + b"\n")
+        self.assertIsNone(host_base.stored_record("w1", "g"))

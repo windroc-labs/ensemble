@@ -1,5 +1,6 @@
 """OwnedSession, the control view of an owned worker: never its owner. stop and close are
-requests, and so are a remote worker's send, press and screen; the rest goes to a read-only attach.
+requests, and so are a remote worker's send, press and screen; record reads its worker dir; the
+rest goes to a read-only attach.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.harness.channel import Channel, Tie
 from ensemble.session.harness.types import Logged, Op
+from ensemble.session.hosts.base import stored_record
 from ensemble.utils import Display, Record, Status
 
 POLL = 0.1
@@ -305,7 +307,10 @@ class OwnedSession(Session):
         return self._call(lambda session: session.session_status())
 
     def record(self) -> Record | None:
-        return self._call(lambda session: session.record())
+        """Its crew Record, stored in its worker dir for its generation."""
+        if self.mode != Mode.TUI or self.name is None:
+            return None
+        return stored_record(self.name, self.generation)
 
     @property
     def showable(self) -> bool:

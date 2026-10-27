@@ -26,6 +26,7 @@ from ensemble.session.engine.types import (
 from ensemble.session.harness.channel import Channel, encode
 from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedSession, dialog, fold
+from ensemble.utils import Record
 from tests.session.case import Case
 
 GEN = "g1"
@@ -294,7 +295,7 @@ class DelegationTest(Base):
         self.assertEqual(view.dialog, "Edit")
         self.channel.write_status({"state": "running", "dialog": 3})
         self.assertIsNone(view.dialog)
-        for name in ("alive", "status", "content", "info", "session_status", "record", "hide"):
+        for name in ("alive", "status", "content", "info", "session_status", "hide"):
             getattr(view, name)()
             getattr(self.attached, name).assert_called_once_with()
         view.show(display="d")
@@ -303,6 +304,31 @@ class DelegationTest(Base):
         self.attached.send.assert_called_once_with("hi")
         self.attached.screen.assert_called_once_with(3)
         self.assertEqual(self.attaches, 1)
+
+    def test_record_is_its_worker_dirs_for_its_generation_with_no_attach(self):
+        record = Record(
+            v=1,
+            kind="worker",
+            name="w1",
+            sessions=("w1",),
+            sid="s1",
+            workdir=None,
+            ctl=("ensemble-session",),
+            resume=("ensemble-session", "resume", "w1"),
+            display=None,
+            detail=None,
+        )
+        folder = os.path.join(self.ensemble, "tui", "w1")
+        os.makedirs(folder)
+        path = os.path.join(folder, "record")
+        view = self.view()
+        self.assertIsNone(view.record())
+        for generation, found in ((GEN, record), ("g2", None)):
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(f"{generation}\t{record.to_line()}\n")
+            self.assertEqual(view.record(), found)
+        self.assertIsNone(self.view(mode=Mode.HEADLESS).record())
+        self.assertEqual(self.attaches, 0)
 
     def test_alive_is_false_once_the_session_is_gone(self):
         def gone():
@@ -349,7 +375,6 @@ class ReattachTest(Base):
             "content": (),
             "info": (),
             "session_status": (),
-            "record": (),
             "hide": (),
             "attach_command": (),
         }
@@ -476,7 +501,7 @@ class ConcurrencyTest(Base):
     def test_concurrent_failures_on_a_stale_attach_make_one_new_attach(self):
         stale, fresh = self.sessions
         view = self.view()
-        view.record()
+        view.session_status()
 
         def failed():  # the other call fails on it too, and retries, before this one does
             other = threading.Thread(target=view.status)
@@ -495,7 +520,7 @@ class ConcurrencyTest(Base):
         third = mock.Mock(name="third")
         self.sessions.append(third)
         view = self.view()
-        view.record()
+        view.session_status()
 
         def dead():  # another call replaces the stale attach before this one drops it
             other = threading.Thread(target=view.status)

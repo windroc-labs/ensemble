@@ -66,7 +66,7 @@ from ensemble.session.harness.channel import running as channel_running
 from ensemble.session.harness.dispatch import load_handlers
 from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedSession, dialog, fold
-from ensemble.session.hosts.base import SIGNALS, Host, host_resume
+from ensemble.session.hosts.base import SIGNALS, Host, host_resume, stored_record
 from ensemble.session.modes import headless, in_process, tui
 from ensemble.session.modes.base import BaseMode, child_env
 from ensemble.session.viewer import display as displays
@@ -1273,9 +1273,10 @@ class HostedSession(Session):
         return host_resume(self._host, self.name, cwd)
 
     def record(self) -> Record | None:
+        """Its crew Record, stored in its worker dir for its generation."""
         self._running.state()
-        name = self._tui()
-        return None if name is None else self._host.attach(name).record()
+        name, generation = self._tui(), self._running.generation
+        return None if name is None or generation is None else stored_record(name, generation)
 
     @property
     def showable(self) -> bool:

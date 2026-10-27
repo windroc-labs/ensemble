@@ -1,8 +1,9 @@
 """ensemble-session ls through bin/ensemble-session on a private tmux server (Q13): plain ls is its
 header and Session.list's rows; --match fullmatches, a bad RE exits 2; --display D lists the
 sessions opened from D's opener whatever their placement, --here the caller's, nothing outside
-tmux; --records prints the stored Records alone; --descendants adds the workers opened from inside
-a listed one; a second, non-default Host's sessions and Records are listed too (the module entry).
+tmux; --records prints the Records stored in worker dirs alone; --descendants adds the workers
+opened from inside a listed one; a second, non-default Host's sessions are listed too (the module
+entry), a Record only its Host holds never.
 """
 
 import os
@@ -118,7 +119,7 @@ class ListingTest(ListingCase):
 
 
 class SecondHostTest(ListingCase):
-    def test_a_session_on_a_second_host_is_listed_with_its_record(self):
+    def test_a_session_on_a_second_host_is_listed_without_its_hosts_record(self):
         w1 = self.done("w1")
         host = FakeHost("fake", {"root": self.fake_host()})
         f1 = Record(
@@ -151,7 +152,7 @@ class SecondHostTest(ListingCase):
         self.assertEqual([rows[1][i] for i in (1, 3, 4)], ["working", f1.sid, MANAGER])
         self.assertEqual([rows[2][i] for i in (1, 3, 4)], ["working", "-", MANAGER])
         self.assertEqual(rows[4], row(w1).split("\t"))
-        self.assertEqual(self.ls("--records", module=True), lines(f1, w1))
-        self.assertEqual(self.ls("--display", MANAGER, "--records", module=True), lines(f1, w1))
-        self.assertEqual(self.ls("--match", "f.*", "--records", module=True), lines(f1))
+        self.assertEqual(self.ls("--records", module=True), lines(w1))
+        self.assertEqual(self.ls("--display", MANAGER, "--records", module=True), lines(w1))
+        self.assertEqual(self.ls("--match", "f.*", "--records", module=True), "")
         self.assertEqual(self.ls("--here", "--records", module=True), lines(w1))

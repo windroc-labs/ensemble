@@ -1,6 +1,7 @@
 """Worker, a plain tui session started by name (FR-20): WorkerState in
-~/.ensemble/workers/<sid>/worker.json (by-name/<name>: its latest sid); its Record on its Host once
-its early watch passes. Its session harness owns it: it resumes through its running owner, which
+~/.ensemble/workers/<sid>/worker.json (by-name/<name>: its latest sid); its Record in its worker dir
+(~/.ensemble/tui/<name>/record, for its current generation) once its early watch passes, whatever
+its Host can store. Its session harness owns it: it resumes through its running owner, which
 reopens its display if gone, else starts a new harness through the tui gate, closing nothing;
 restart closes it through that owner. Callers hold locked() around start, resume and restart.
 """
@@ -39,7 +40,8 @@ from ensemble.session.engine.types import (
 from ensemble.session.harness import channel
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.types import Op
-from ensemble.session.modes.tui import TuiMode
+from ensemble.session.hosts.base import worker_state
+from ensemble.session.modes.tui import TuiMode, TuiStore
 from ensemble.utils import (
     CONFIG_NAME,
     STALE_AGE,
@@ -310,7 +312,7 @@ class Worker:
 
     def start(self, *, prompt: str, resume: bool, hidden: bool | None = None) -> Record:
         """hidden: True hides, False shows, None keeps its Host's. Watches until its client is up
-        (and its opening sent, up to COLOR_CAP s), then publishes and returns its Record. A failed
+        (and its opening sent, up to COLOR_CAP s), then stores and returns its Record. A failed
         save or start puts its files back; its client exiting first: SessionError with its last
         lines, its terminal kept, no Record.
         """
@@ -337,7 +339,7 @@ class Worker:
             self._show(session, hidden=hidden)
         self._watch(session)
         record = self.state.record()
-        self.session_cls.host(self.state.host).attach(name).publish(record)
+        self._store(record)
         return record
 
     def resume(self) -> Record:
@@ -364,7 +366,7 @@ class Worker:
         return True, channel.running(self.state.name, snapshot)
 
     def _resume_owned(self, owner: Channel | None) -> Record:
-        """Its running owner's: its Record, published on its display, which that owner reopens if
+        """Its running owner's: its Record, stored again, its display reopened by that owner if
         gone (shown then as a resumed start's); else a new harness through the gate (it waits out a
         reaping guard, refuses a live or unknown one).
         """
@@ -379,9 +381,7 @@ class Worker:
             self.say(f"session {name}: display not reopened: {error}")
             reopened = False
         with contextlib.suppress(SessionError):
-            handle = self.session_cls.host(self.state.host).attach(name)
-            if handle.session_identity()[0] == self.state.sid:
-                handle.publish(record)
+            self._store(record)
         if reopened:
             try:
                 session = self.session_cls.attach(name, sid=self.state.sid, host=self.state.host)
@@ -391,6 +391,15 @@ class Worker:
                 if session.showable:
                     self._show(session, hidden=None)
         return record
+
+    def _store(self, record: Record) -> None:
+        """record in its worker dir, for the generation its session.json names while of its sid."""
+        name = self.state.name
+        found = worker_state(name)
+        if found is None or found.sid != self.state.sid or found.generation is None:
+            raise SessionError(f"session {name} is gone")
+        store = TuiStore.attach(name, host=self.session_cls.host(self.state.host))
+        store.store_record(found.generation, record)
 
     def _start_again(self) -> Record:
         try:

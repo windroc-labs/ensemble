@@ -1,6 +1,6 @@
 """A worker's Record and identity through bin/ensemble-session on a private tmux server: the one
-Record line start, restart and resume print, as its Host stores it, `ls --here --records` returns
-it and worker.json backs it (Q05); ENSEMBLE_SID and ENSEMBLE_EVENTS as its session id and events
+Record line start, restart and resume print, as its worker dir stores it, `ls --here --records`
+returns it and worker.json backs it (Q05); ENSEMBLE_SID and ENSEMBLE_EVENTS as its session id and events
 file, and their conflicts (Q06); the producer half of a manager's adoption, which sees only its own
 workers (Q14).
 """
@@ -37,14 +37,14 @@ class RecordCase(WorkerCase):
         )
 
     def stored(self, record: Record, inside: str = MANAGER) -> None:
-        """record is what the Host holds for its session and what `ls --here --records` prints."""
-        self.assertEqual(Record.parse(self.server.option(record.name, "@record")), record)
+        """record is what its worker dir holds and what `ls --here --records` prints."""
+        self.assertEqual(self.dir_record(record.name), record)
         res = self.ok(self.session("ls", "--here", "--records", inside=inside))
         self.assertEqual((res.stdout, res.stderr), (record.to_line() + "\n", ""))
 
 
 class RecordTest(RecordCase):
-    def test_start_prints_one_record_that_the_host_stores_and_worker_json_backs(self):
+    def test_start_prints_one_record_that_its_worker_dir_stores_and_worker_json_backs(self):
         res = self.start("w1", "--env", "WORKER_KEY=v", "--", "--model", "m x")
         record = self.record(res)
         self.assertEqual(str(uuid.UUID(record.sid)), record.sid)
@@ -57,7 +57,6 @@ class RecordTest(RecordCase):
             self.assertEqual(stat.S_IMODE(os.lstat(directory).st_mode), 0o700)
         with open(path, encoding="utf-8") as f:
             state = json.load(f)
-        self.assertIsNone(state.pop("token"))  # its guard, not a process-group token, controls it
         self.assertEqual(
             state,
             {
