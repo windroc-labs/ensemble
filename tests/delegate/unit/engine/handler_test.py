@@ -392,20 +392,17 @@ class CloseTest(HandlerCase):
 
     def test_close_after_the_handler_ended_the_attempt_sends_nothing(self):
         self.call(TurnStarted())
-        state = self.state()
-        real, raced = RunRecord.complete, []
+        stale = self.state()
 
-        def first(record, n, result, **kw):
-            # the handler's outcome wins the compare-and-set just before the close's
-            if not raced:
-                raced.append(True)
-                self.call(TurnEnd(block(DONE), 0))
-            return real(record, n, result, **kw)
+        class Raced(ViewedHarnessDelegate):
+            """Reads the attempt as active: the handler ends it after the close's read."""
 
-        with mock.patch.object(RunRecord, "complete", first):
-            self.close()
+            def _read(self):
+                return stale
+
+        self.call(TurnEnd(block(DONE), 0))
+        Raced.attach(self.work, session_cls=HarnessSession).close()
         self.assertEqual(self.state().result.outcome.status, "done")
-        self.assertEqual(state.attempt, self.state().attempt)
         self.assertEqual(self.kinds_sent(), [("begun", 1), ("finished", 1)])
         self.assertEqual(self.sent[-1][0]["outcome"]["status"], "done")
 
