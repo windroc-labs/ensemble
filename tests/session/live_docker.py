@@ -126,12 +126,12 @@ def reclaimed(lines: list[dict], generation: str, client: str) -> list[str]:
         return [f"{generation}: no close line in the audit log"]
     after = mine[closes[0] :]
     problems = []
-    tokens = _tokens(_credentials(after, "close", "revocation-retry"))
+    tokens = _tokens(_credentials(after, "close"))
     if not tokens:
         problems.append(f"{generation}: close revoked no {GITHUB}")
     for (_, account), entry in tokens.items():
         if entry.get("result") != "revoked":
-            reason = f" ({entry.get('reason')})" if entry.get("result") == "pending" else ""
+            reason = f" ({entry.get('reason')})" if entry.get("result") == "unrevoked" else ""
             problems.append(f"{generation}: {GITHUB} of {account} {entry.get('result')}{reason}")
     kind = CLIENT_KIND[client]
     if kind != NO_CREDENTIAL and not any(

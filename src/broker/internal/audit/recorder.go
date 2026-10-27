@@ -3,7 +3,6 @@ package audit
 import (
 	"encoding/json"
 	"errors"
-	"slices"
 	"time"
 
 	"ensemble/broker/internal/protocol"
@@ -14,12 +13,7 @@ type Appender interface {
 	Append(lines ...[]byte) error
 }
 
-type entry struct {
-	Credential
-	key string // a token's sha256, in memory only: matches its later outcomes
-}
-
-// Recorder collects one broker invocation's lines. The launcher and the GitHub token store add to it, and the
+// Recorder collects one broker invocation's lines. The launcher and the token code add to it, and the
 // command's caller flushes it once. Every method is a no-op on nil.
 type Recorder struct {
 	Command   string
@@ -28,9 +22,7 @@ type Recorder struct {
 	Now       func() time.Time
 	Log       Appender
 
-	own     []entry
-	others  map[string][]entry
-	order   []string
+	own     []Credential
 	notices []Line
 	flushed bool
 
@@ -46,37 +38,12 @@ func (r *Recorder) Begin(container string, start *StartFacts) {
 	r.Container, r.Start = container, start
 }
 
-// merge appends c, or replaces the pending entry of the same token: its revocation resolves it.
-func merge(list []entry, c Credential, key string) []entry {
-	if key != "" {
-		if i := slices.IndexFunc(list, func(e entry) bool { return e.key == key && e.Result == Pending }); i >= 0 {
-			list[i] = entry{c, key}
-			return list
-		}
-	}
-	return append(list, entry{c, key})
-}
-
-// Add records c for container: on the command's line when it is the command's own, else on that container's retry
-// line, which keeps only revoked and expired outcomes. key ("": none) is the token's in-memory identity.
-func (r *Recorder) Add(container string, c Credential, key string) {
-	if r == nil {
+// Add records c on the command's line when container is the command's own; any other container's is dropped.
+func (r *Recorder) Add(container string, c Credential) {
+	if r == nil || r.Container == "" || container != r.Container {
 		return
 	}
-	if r.Container != "" && container == r.Container {
-		r.own = merge(r.own, c, key)
-		return
-	}
-	if container == "" || c.Result != Revoked && c.Result != ExpiredUnrevoked {
-		return
-	}
-	if r.others == nil {
-		r.others = map[string][]entry{}
-	}
-	if _, ok := r.others[container]; !ok {
-		r.order = append(r.order, container)
-	}
-	r.others[container] = merge(r.others[container], c, key)
+	r.own = append(r.own, c)
 }
 
 // Renewing marks a maintain that tried a token provider, so it writes a refresh line; failed ("": none) is that line's
@@ -99,15 +66,7 @@ func (r *Recorder) Notice(container string, c Credential) {
 	r.notices = append(r.notices, Line{Command: r.Command, Event: noticeEvent, Container: container, Credentials: []Credential{c}})
 }
 
-func credentials(list []entry) []Credential {
-	out := make([]Credential, 0, len(list))
-	for _, e := range list {
-		out = append(out, e.Credential)
-	}
-	return out
-}
-
-// Flush writes the retry lines, the notice lines, then the command line for start, refresh and close, and a refresh
+// Flush writes the notice lines, then the command line for start, refresh and close, and a refresh
 // line for a maintain that tried a token provider, err being the command's error.
 // Its error describes only audit persistence; the caller keeps the command's result independently.
 func (r *Recorder) Flush(err error) error {
@@ -121,9 +80,6 @@ func (r *Recorder) Flush(err error) error {
 	}
 	at := now()
 	var lines []Line
-	for _, c := range r.order {
-		lines = append(lines, Line{Time: at, Command: r.Command, Event: retryEvent, Container: c, Credentials: credentials(r.others[c])})
-	}
 	for _, l := range r.notices {
 		l.Time = at
 		lines = append(lines, l)
@@ -134,7 +90,7 @@ func (r *Recorder) Flush(err error) error {
 	}
 	switch event {
 	case startEvent, refreshEvent, closeEvent:
-		line := Line{Time: at, Command: r.Command, Event: event, Container: r.Container, Start: r.Start, Credentials: credentials(r.own),
+		line := Line{Time: at, Command: r.Command, Event: event, Container: r.Container, Start: r.Start, Credentials: r.own,
 			Error: string(r.failed)}
 		if err != nil {
 			line.Error = string(protocol.InternalError)

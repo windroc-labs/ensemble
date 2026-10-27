@@ -80,7 +80,7 @@ func renewCodex(ctx context.Context, h Host, m Manifest, container string, recor
 	if err != nil {
 		return nil, err
 	}
-	h.Audit.Add(container, audit.Credential{Kind: clientKind(m.Client), Result: audit.Renewed, ExpiresAt: &expiry}, "")
+	h.Audit.Add(container, audit.Credential{Kind: clientKind(m.Client), Result: audit.Renewed, ExpiresAt: &expiry})
 	return []string{expiry}, nil
 }
 

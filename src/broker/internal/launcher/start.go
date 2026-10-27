@@ -283,10 +283,10 @@ func (h Host) withdraw(c string, m Manifest, held holding, e *protocol.Error) {
 		return
 	}
 	if kind := clientKind(m.Client); held.client && kind != "" {
-		h.Audit.Add(c, audit.Credential{Kind: kind, Result: audit.Withdrawn}, "")
+		h.Audit.Add(c, audit.Credential{Kind: kind, Result: audit.Withdrawn})
 	}
 	for _, item := range held.secrets {
-		h.Audit.Add(c, audit.Credential{Kind: audit.EnvSecret, Item: item, Result: audit.Withdrawn}, "")
+		h.Audit.Add(c, audit.Credential{Kind: audit.EnvSecret, Item: item, Result: audit.Withdrawn})
 	}
 }
 
@@ -418,14 +418,14 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	}
 	if kind := clientKind(m.Client); kind != "" {
 		held.client = true
-		h.Audit.Add(c, audit.Credential{Kind: kind, Result: audit.Issued, ExpiresAt: codexExpiry}, "")
+		h.Audit.Add(c, audit.Credential{Kind: kind, Result: audit.Issued, ExpiresAt: codexExpiry})
 	}
 	for _, s := range m.Secrets {
 		if err := h.Env.Inject(s, exec); err != nil {
 			return StartResult{}, held, injected(err, protocol.StartFailed, "Writing "+s.Item+" into the container failed.")
 		}
 		held.secrets = append(held.secrets, s.Item)
-		h.Audit.Add(c, audit.Credential{Kind: audit.EnvSecret, Item: s.Item, Result: audit.Issued}, "")
+		h.Audit.Add(c, audit.Credential{Kind: audit.EnvSecret, Item: s.Item, Result: audit.Issued})
 	}
 	if record != nil {
 		if err := h.writeInjected(m, *record, protocol.StartFailed); err != nil {

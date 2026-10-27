@@ -61,13 +61,6 @@ type Expiry struct {
 	ExpiresAt string `json:"expires_at"`
 }
 
-// Pending is a token the broker still has to revoke, as status reports it.
-type Pending struct {
-	Container string `json:"container"`
-	Account   string `json:"account"`
-	ExpiresAt string `json:"expires_at"`
-}
-
 type CodexStatus struct {
 	Version   string `json:"version"`
 	Path      string `json:"path"`

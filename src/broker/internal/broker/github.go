@@ -314,7 +314,7 @@ func (g GitHub) Revoke(ctx context.Context, container string, read func(ctx cont
 	}
 	erase(out)
 	if err != nil {
-		g.Audit.Add(container, audit.Credential{Kind: audit.GitHubToken, Result: audit.Unrevoked, Reason: "token files unreadable"}, "")
+		g.Audit.Add(container, audit.Credential{Kind: audit.GitHubToken, Result: audit.Unrevoked, Reason: "token files unreadable"})
 		return
 	}
 	rctx, cancel = detached(ctx)

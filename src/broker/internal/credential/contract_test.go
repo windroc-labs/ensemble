@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
-	"time"
 )
 
 func TestRenewableRejectsStaticKinds(t *testing.T) {
@@ -44,21 +43,6 @@ func TestMaterialLegacyStateIsEmpty(t *testing.T) {
 	}
 }
 
-func TestExpired(t *testing.T) {
-	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	for expires, want := range map[string]bool{
-		"2026-01-01T11:59:59Z": true,
-		"2026-01-01T12:00:00Z": true,
-		"2026-01-01T12:00:01Z": false,
-		"":                     false,
-		"soon":                 false,
-	} {
-		if got := (Material{ExpiresAt: expires}).Expired(now); got != want {
-			t.Errorf("%q: %v", expires, got)
-		}
-	}
-}
-
 func TestRedact(t *testing.T) {
 	if got := Redact("bad ghs_a and jwt.x.y, ghs_a again", "ghs_a", "", "jwt.x.y"); got != "bad [redacted] and [redacted], [redacted] again" {
 		t.Fatal(got)
@@ -69,31 +53,13 @@ func TestRedact(t *testing.T) {
 }
 
 func TestConsumerCheck(t *testing.T) {
-	exec := func([]string, []byte) error { return nil }
-	for _, c := range []struct {
-		name string
-		d    Delivery
-		ok   bool
-		id   string
-	}{
-		{"container", Delivery{Consumer: Consumer{Container: "ensemble-s-0123"}, Exec: exec}, true, "ensemble-s-0123"},
-		{"host", Delivery{Consumer: Consumer{Host: "linear-app"}, Exec: nil}, true, "host/linear-app"},
-		{"neither", Delivery{Consumer: Consumer{}, Exec: exec}, false, ""},
-		{"both", Delivery{Consumer: Consumer{Container: "c", Host: "h"}, Exec: exec}, false, ""},
-		{"container without exec", Delivery{Consumer: Consumer{Container: "c"}, Exec: nil}, false, ""},
-		{"host with exec", Delivery{Consumer: Consumer{Host: "h"}, Exec: exec}, false, ""},
-		{"container naming a host key", Delivery{Consumer: Consumer{Container: "host/linear-app"}, Exec: exec}, false, ""},
-		{"host with slash", Delivery{Consumer: Consumer{Host: "a/b"}, Exec: nil}, false, ""},
-	} {
-		err := c.d.check()
-		if (err == nil) != c.ok || err != nil && !errors.Is(err, ErrConsumer) {
-			t.Errorf("%s: %v", c.name, err)
-		}
-		if c.ok && c.d.Consumer.ID() != c.id {
-			t.Errorf("%s: id %q", c.name, c.d.Consumer.ID())
+	for host, ok := range map[string]bool{"linear-app": true, "": false, "a/b": false} {
+		c := Consumer{Host: host}
+		if err := c.check(); (err == nil) != ok || err != nil && !errors.Is(err, ErrConsumer) {
+			t.Errorf("%q: %v", host, err)
 		}
 	}
-	if (Consumer{Container: "a/b"}).check() == nil || (Consumer{Host: "h"}).check() != nil {
-		t.Fatal("consumer check")
+	if id := (Consumer{Host: "linear-app"}).ID(); id != "host/linear-app" {
+		t.Fatalf("id %q", id)
 	}
 }

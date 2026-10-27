@@ -78,13 +78,10 @@ func TestCredentialJSON(t *testing.T) {
 		t.Fatal(failed)
 	}
 
-	pending := encode(t, Credential{Kind: GitHubToken, Result: Pending, Reason: "GitHub unreachable: DELETE /installation/token", Account: "acme"})
-	sameKeys(t, pending, "kind", "result", "expires_at", "account", "reason")
-	if encode(t, Credential{Kind: GitHubToken, Result: Pending, Account: "acme"})["reason"] != "unknown" {
-		t.Fatal("a pending entry always has a reason")
-	}
-	if _, ok := encode(t, Credential{Kind: GitHubToken, Result: Revoked, Reason: "x", Account: "acme"})["reason"]; ok {
-		t.Fatal("reason is only for pending and unrevoked")
+	for _, result := range []string{Revoked, "pending"} {
+		if _, ok := encode(t, Credential{Kind: GitHubToken, Result: result, Reason: "x", Account: "acme"})["reason"]; ok {
+			t.Fatalf("reason is only for unrevoked, not %s", result)
+		}
 	}
 
 	unrevoked := encode(t, Credential{Kind: GitHubToken, Result: Unrevoked, Reason: "GitHub unreachable: DELETE /installation/token",

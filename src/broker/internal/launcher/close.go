@@ -63,10 +63,10 @@ func (h Host) Close(ctx context.Context, container string) (CloseResult, error) 
 	removed, err := h.remove(ctx, container)
 	if removed {
 		if kind != "" {
-			h.Audit.Add(container, audit.Credential{Kind: kind, Result: audit.Withdrawn}, "")
+			h.Audit.Add(container, audit.Credential{Kind: kind, Result: audit.Withdrawn})
 		}
 		for _, item := range secrets {
-			h.Audit.Add(container, audit.Credential{Kind: audit.EnvSecret, Item: item, Result: audit.Withdrawn}, "")
+			h.Audit.Add(container, audit.Credential{Kind: audit.EnvSecret, Item: item, Result: audit.Withdrawn})
 		}
 	}
 	if err != nil {
