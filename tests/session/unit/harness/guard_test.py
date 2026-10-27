@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 from ensemble.session.harness import guard
+from ensemble.session.hosts.base import GUARD_HOOK_SOCKET
 from tests.session.case import Case
 
 
@@ -1178,6 +1179,19 @@ class ServeTest(Case):
             },
         )
 
+    def test_run_paths_are_the_ones_the_docker_host_names(self):
+        run = f"/run/ensemble/guard/{GEN}"
+        self.assertEqual(
+            guard.run_paths(GEN),
+            {
+                "dir": run,
+                "hook": f"{run}/hook",
+                "lease": f"{run}/lease",
+                "display": f"{run}/display",
+            },
+        )
+        self.assertEqual(guard.HOOK_ENV, GUARD_HOOK_SOCKET)
+
     def test_a_headless_handoff_has_no_display_socket(self):
         args, _, _ = guard.launched({**HANDOFF, "terminal": False}, b"")
         self.assertIsNone(args.display_socket)
@@ -1222,6 +1236,15 @@ class HeartbeatTest(Case):
             self.assertEqual((runtime.heard, runtime.input), (50.0, b""))
             runtime.read_channel()
         self.assertEqual((runtime.heard, runtime.input), (60.0, b"hi"))
+
+    def test_a_silent_harness_closes_the_guard_only_with_no_bytes_waiting(self):
+        runtime = self.runtime(heartbeat=5.0)
+        runtime.heard = 0.0
+        with mock.patch.object(guard.time, "monotonic", return_value=100.0):
+            runtime.listen([0])
+            self.assertIsNone(runtime.closing)
+            runtime.listen([])
+        self.assertEqual(runtime.closing, 100.0)
 
     def test_eof_on_the_channel_closes(self):
         runtime = self.runtime()

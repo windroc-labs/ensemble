@@ -1,14 +1,10 @@
-"""A fake container, docker CLI and harness for guarded Docker worker tests, without Docker or
-credentials.
+"""A fake container, docker CLI and harness for guarded Docker worker tests, without Docker.
 
-`container NAME` runs this repo's guard `--serve` as its main process, its run dirs under
-$ENSEMBLE_FAKE_RUN and `with-secrets --client C` dropped from the handoff, and keeps the guard's
-stdin open itself, as Docker does with `StdinOnce=false`: an attach that dies or ends its input never
-closes it. One attach at a time reaches the guard through $ENSEMBLE_FAKE_RUN/NAME.sock; the guard's
-output with none attached is dropped. When the guard ends, every process left in it is killed and
-it exits. `docker [--host EP] attach --sig-proxy=false NAME` relays its stdin and stdout over that
-socket; other commands exit 0. `harness DIR CLIENT...` starts a container, holds a DockerWorker over
-an attach to it until killed, and writes DIR/harness.json.
+`container NAME`: this repo's guard `--serve` as its main process (run dirs under $ENSEMBLE_FAKE_RUN,
+`with-secrets --client C` dropped), its stdin held open here as Docker's `StdinOnce=false` does; one
+attach at a time on $ENSEMBLE_FAKE_RUN/NAME.sock; when the guard ends, the rest is killed.
+`docker [--host EP] attach --sig-proxy=false NAME` relays over that socket. `harness DIR CLIENT...`
+holds a DockerWorker over an attach until killed, writing DIR/harness.json.
 """
 
 import importlib.util
@@ -139,7 +135,6 @@ def docker(args: list[str]) -> int:
 
 
 def start_container(name: str = NAME) -> tuple[subprocess.Popen, dict]:
-    """A container in a session of its own, once its socket and info are up."""
     proc = subprocess.Popen(
         [sys.executable, "-I", __file__, "container", name], start_new_session=True
     )
@@ -174,7 +169,6 @@ class _Broker:
 
 
 def worker(directory: str, proc: subprocess.Popen, client: list[str], **options):
-    """A DockerWorker over attach `proc` that handed its guard `client`, once started."""
     from ensemble.session.hosts.docker.maintenance import Maintenance
     from ensemble.session.hosts.docker.worker import DockerWorker
 

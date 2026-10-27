@@ -2554,7 +2554,15 @@ class HeadlessWorkerTest(StartBase):
     def test_a_headless_worker_records_its_kind_and_is_never_listed_or_attachable(self):
         handle = self.headless()
         [(_, _, proc)] = self.execs
-        self.assertFalse(proc.handoff["terminal"])
+        self.assertEqual(
+            proc.handoff,
+            {
+                "argv": ["with-secrets", "--client", "agent", "agent", "--flag"],
+                "env": {"AGENT_HOME": self.home_dir, "K": "v"},
+                "terminal": False,
+                "generation": GEN,
+            },
+        )
         self.assertEqual(self.host_record()["kind"], "headless")
         self.assertNotIn("mode", self.host_record())
         self.listed("w")

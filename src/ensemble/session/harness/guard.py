@@ -613,6 +613,11 @@ class Guard:
         for kind, payload in self.decoder.feed(data):
             self.command(kind, payload)
 
+    def listen(self, ready) -> None:
+        """After a select, so a guard frozen past the limit (docker pause) reads its bytes first."""
+        if 0 not in ready and self.lost(time.monotonic()):
+            self.close()
+
     def lost(self, now: float) -> bool:
         return (
             self.heartbeat is not None
@@ -750,8 +755,6 @@ class Guard:
             scan_due = 0.0
             while True:
                 now = time.monotonic()
-                if self.lost(now):
-                    self.close()
                 if now >= scan_due:
                     ended = self.tick() or ended
                     scan_due = now + 0.1
@@ -780,6 +783,7 @@ class Guard:
                     readers += [p for p, (role, _) in self.peers.items() if role != "ack"]
                     readers += list(self.servers) if len(self.peers) < 64 else []
                 ready, _, _ = select.select(readers, [], [], TICK)
+                self.listen(ready)
                 for descriptor in ready:
                     if descriptor == 0:
                         self.read_channel()
@@ -979,18 +983,24 @@ def serve() -> int:
     return supervise(args, lease, **options)
 
 
+def run_paths(generation: str) -> dict[str, str]:
+    """A --serve guard's run dir and the hook socket, lease and display socket in it."""
+    run = f"{RUN}/{generation}"
+    return {"dir": run, "hook": f"{run}/hook", "lease": f"{run}/lease", "display": f"{run}/display"}
+
+
 def launched(found: dict, pending: bytes) -> tuple[argparse.Namespace, str, dict]:
     """A handoff's guard args, lease path and Guard options, every path under its run dir."""
-    run = f"{RUN}/{found['generation']}"
+    paths = run_paths(found["generation"])
     args = argparse.Namespace(
         terminal=found["terminal"],
-        hook_socket=f"{run}/hook",
-        display_socket=f"{run}/display" if found["terminal"] else None,
+        hook_socket=paths["hook"],
+        display_socket=paths["display"] if found["terminal"] else None,
         display_grace=False,
         command=found["argv"],
     )
     env = {**found["env"], HOOK_ENV: args.hook_socket}
-    return args, f"{run}/lease", {"env": env, "heartbeat": HEARTBEAT, "pending": pending}
+    return args, paths["lease"], {"env": env, "heartbeat": HEARTBEAT, "pending": pending}
 
 
 def supervise(args, lease_path: str | None, **options) -> int:

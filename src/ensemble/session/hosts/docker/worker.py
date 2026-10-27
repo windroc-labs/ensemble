@@ -1,6 +1,7 @@
 """A harness-owned Docker worker: the guard, its container's main process, reached through one
-`docker attach` and kept alive by a heartbeat (docs/architecture.md › Harness-owned workers). Every channel frame is untrusted: the client shares
-the guard's uid. A frame can end its own worker; only confirmed container removal makes it ABSENT.
+`docker attach` and kept alive by a heartbeat (docs/architecture.md › Harness-owned workers). Every
+channel frame is untrusted: the client shares the guard's uid. A frame can end its own worker; only
+confirmed container removal makes it ABSENT.
 """
 
 import contextlib
@@ -24,7 +25,6 @@ from ensemble.session.hosts.docker.maintenance import RETRY, Maintenance, run
 from ensemble.session.hosts.managed import QUEUE_MAX, ManagedProcess
 
 GUARD = "/opt/ensemble/src/ensemble/session/harness/guard.py"
-RUN = guard.RUN
 BEAT = 1.0  # s between heartbeats; the guard ends its worker after guard.HEARTBEAT s without one
 LABEL = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 SEEN = 4096

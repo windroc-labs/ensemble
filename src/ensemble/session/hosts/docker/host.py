@@ -43,6 +43,7 @@ from ensemble.session.engine.types import (
     StatusState,
     Unanswered,
 )
+from ensemble.session.harness import guard
 from ensemble.session.hosts.base import (
     TUI_DIR,
     TUI_STATE,
@@ -76,7 +77,7 @@ from ensemble.session.hosts.docker.mounts import (
     workspace_volume,
 )
 from ensemble.session.hosts.docker.types import GEN, Started
-from ensemble.session.hosts.docker.worker import GUARD, RUN, DockerWorker
+from ensemble.session.hosts.docker.worker import GUARD, DockerWorker
 from ensemble.session.hosts.types import CommandView
 from ensemble.utils import (
     DOCKER_STATE,
@@ -1096,7 +1097,7 @@ class DockerHost(Host):
         argv, env = docker_call(
             self.docker,
             *("exec", "-i", row.container, IMAGE_PYTHON, "-I", GUARD),
-            *("--probe", f"{RUN}/{row.generation}"),
+            *("--probe", guard.run_paths(row.generation)["dir"]),
         )
         try:
             res = self.run(argv, env, timeout=RUN_TIMEOUT)
@@ -1224,7 +1225,7 @@ class DockerHost(Host):
         argv = docker_call(
             self.docker,
             *("exec", "-it", found.container, IMAGE_PYTHON, "-I", GUARD),
-            *("--attach", f"{RUN}/{found.generation}/display"),
+            *("--attach", guard.run_paths(found.generation)["display"]),
         )[0]
         return CommandView(
             printed=shlex.join(argv),
