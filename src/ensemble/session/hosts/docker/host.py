@@ -10,7 +10,6 @@ import functools
 import json
 import logging
 import os
-import re
 import shlex
 import signal
 import subprocess
@@ -92,7 +91,6 @@ from ensemble.utils import (
     module_roots,
     piped_popen,
     read_beneath,
-    read_regular,
     remove_tree,
     save,
     source_path,
@@ -128,7 +126,6 @@ KEPT_LOCK = ".lock"
 KEPT_RETRY = 24 * 3600  # seconds before a volume whose check failed is checked again
 VOLUME_FORMAT = '{{.Name}}\t{{.Label "' + WORKSPACE_LABEL + '"}}'
 STATE_MAX = 1 << 20
-NO_SESSION = re.compile(r"can't find session.*|no server running on /.*", re.S)
 STOPS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
 
 
@@ -464,19 +461,16 @@ class DockerHost(Host):
         ]
 
     def _containers(self, *, required: bool = False) -> dict[str, Row]:
-        """Name → its row; of several, the one of host.json's generation."""
-        found: dict[str, Row] = {}
-        for row in self._rows(required=required):
-            if _piped(row.name, row.generation):
-                continue
-            if row.name not in found or row.generation == _record(row.name).get("generation"):
-                found[row.name] = row
-        return found
+        """Name → its guarded row."""
+        return {
+            row.name: row
+            for row in self._rows(required=required)
+            if _guarded(row.name, row.generation)
+        }
 
     def sweep(self, own: str) -> None:
-        """Closes leftover containers: ones whose session has no session.json, another generation
-        in it, or (running) a tmux that positively answers it has no such session. Other names are
-        judged only under their tui lock taken without waiting; `own`'s caller holds its lock.
+        """Closes debris and workers whose owner or pipe lock is free; other names only under
+        their tui lock taken without waiting (`own`'s caller holds its).
         """
         try:
             rows = self._rows()
@@ -573,39 +567,13 @@ class DockerHost(Host):
 
     def _sweep_row(self, row: Row) -> None:
         if _guarded(row.name, row.generation):
-            if _lock_free(_owner_path(row.name)):
-                self.broker.close(row.container)
-            return
-        if _piped(row.name, row.generation):
-            if _lock_free(os.path.join(state_dir(row.name), PIPE_LOCK)):
-                self.broker.close(row.container)
-            return
-        path = _state_file(row.name)
-        if os.path.lexists(path):
-            try:
-                found = json.loads(read_regular(path, limit=STATE_MAX) or b"")
-            except (ValueError, RecursionError):
-                return
-            generation = found.get("generation") if isinstance(found, dict) else None
-            if not isinstance(generation, str) or (
-                generation == row.generation
-                and not (row.state == "running" and self._no_session(row))
-            ):
-                return
-        self.broker.close(row.container)
-
-    def _no_session(self, row: Row) -> bool:
-        """tmux in row's container answered that it has no session row.name; a timeout or any other
-        answer is no proof.
-        """
-        argv, env = docker_call(
-            self.docker, "exec", "-i", row.container, "tmux", "has-session", "-t", f"={row.name}"
-        )
-        try:
-            res = self.run(argv, env, timeout=RUN_TIMEOUT)
-        except (OSError, subprocess.TimeoutExpired):
-            return False
-        return res.returncode == 1 and NO_SESSION.fullmatch(res.stderr.strip()) is not None
+            lock = _owner_path(row.name)
+        elif _piped(row.name, row.generation):
+            lock = os.path.join(state_dir(row.name), PIPE_LOCK)
+        else:
+            lock = None
+        if lock is None or _lock_free(lock):
+            self.broker.close(row.container)
 
     def _client_context(self) -> ClientContext:
         return replace(
@@ -797,8 +765,13 @@ class DockerHost(Host):
                         f"docker session {name}: a headless run holds it;"
                         " wait for it to end or stop its run"
                     )
+                if len(row) == len(Row._fields) and _guarded(name, row[2]):
+                    raise SessionError(
+                        f"docker session {name}: a container for it exists; close {name} first"
+                    )
                 raise SessionError(
-                    f"docker session {name}: a container for it exists; close {name} first"
+                    f"docker session {name}: container {row[0]} of an earlier start is still up"
+                    " (its removal failed; see the log); the next start retries it"
                 )
         home = docker_home(name, home_dir)
         if resume == "1" and read_beneath(home, launch.transcript, limit=0) is None:
@@ -1296,7 +1269,7 @@ class DockerHost(Host):
 
     def attach(self, name: str) -> InteractiveProcess:
         found = self._containers().get(name)
-        if found is None or not _guarded(name, found.generation):
+        if found is None:
             raise SessionError(f"no docker session {name}")
         return self._guarded_process(found)
 
@@ -1366,7 +1339,7 @@ class DockerHost(Host):
 
     def attach_target(self, name: str) -> CommandView:
         found = self._containers().get(name)
-        if found is None or not _guarded(name, found.generation):
+        if found is None:
             raise SessionError(f"no docker session {name}")
         argv = docker_call(
             self.docker,

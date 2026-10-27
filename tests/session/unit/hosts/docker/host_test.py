@@ -47,7 +47,7 @@ from ensemble.session.hosts.docker.broker import (
     BrokerError,
     client_keys,
 )
-from ensemble.session.hosts.docker.daemon import CLEARED, RUN_TIMEOUT, Overflow
+from ensemble.session.hosts.docker.daemon import CLEARED, RUN_TIMEOUT
 from ensemble.session.hosts.docker.host import (
     KEPT_RETRY,
     PROMPT_STAGE,
@@ -1295,11 +1295,20 @@ class StartTest(StartBase):
         self.assertIn(("close", CONTAINER), self.order)
         self.assertTrue(_free(os.path.join(self.state, "guard.lock")))
 
-    def test_existing_container_refuses_start(self):
-        self.docker.ps = ["ensemble-w-other\tw\tother\trunning"]
-        with self.assertRaisesRegex(SessionError, "a container for it exists"):
+    def test_a_container_the_sweep_could_not_remove_refuses_start_naming_it(self):
+        old = "f" * 32
+        self.docker.ps = [f"ensemble-w-{old}\tw\t{old}\trunning"]
+        self.broker.close = mock.Mock(side_effect=SessionError("broker: boom"))
+        with (
+            self.assertLogs("session", "WARNING"),
+            self.assertRaisesRegex(
+                SessionError,
+                f"^docker session w: container ensemble-w-{old} of an earlier start is still up"
+                r" \(its removal failed; see the log\); the next start retries it$",
+            ),
+        ):
             self.start()
-        self.assertEqual({step[0] for step in self.order}, {"ps"})
+        self.broker.close.assert_called_once_with(f"ensemble-w-{old}")
 
     def test_a_role_runs_cwd_starts_as_any_other(self):
         cwd = os.path.join(self.account, ".ensemble", "adhoc", "x", "agent")
@@ -2118,15 +2127,6 @@ class SweepTest(Base):
     def setUp(self):
         super().setUp()
         self.tui = os.path.join(self.home, ".ensemble", "tui")
-        self.answers = {}
-        self.docker.replies = {("tmux", "has-session"): self.has_session}
-
-    def has_session(self, cmd):
-        container = self.docker.order[-1][2]
-        found = self.answers.get(container, (0, "", ""))
-        if isinstance(found, BaseException):
-            raise found
-        return done(*found)
 
     def row(self, name, gen=GEN, state="running"):
         return f"ensemble-{name}-{gen}\t{name}\t{gen}\t{state}"
@@ -2138,23 +2138,42 @@ class SweepTest(Base):
             for name in names + dirs
         }
 
-    def test_sweep_removes_leftovers_and_skips_busy_invalid_and_live_ones(self):
-        for name, gen in (("b", self.OLD), ("c", GEN), ("d", GEN), ("e", GEN), ("f", GEN)):
-            self.tui_session(name, gen)
+    def host_json(self, name, gen=GEN, **fields):
+        state = os.path.join(self.home, ".ensemble", "docker-state", name)
+        os.makedirs(state, exist_ok=True)
+        with open(os.path.join(state, "host.json"), "w") as f:
+            json.dump({"generation": gen, **fields}, f)
+
+    def held(self, name, lock):
+        fd = os.open(
+            os.path.join(self.home, ".ensemble", "docker-state", name, lock),
+            os.O_RDWR | os.O_CREAT,
+        )
+        self.addCleanup(_close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+
+    def test_sweep_closes_debris_and_free_workers_and_keeps_held_and_busy_ones(self):
+        self.host_json("b", self.OLD, mode="guard")
+        self.host_json("c")  # no mode: an older release's start
+        for name in ("d", "e"):
+            self.host_json(name, mode="guard")
+        for name in ("p", "q"):
+            self.host_json(name, mode="pipe")
+        self.held("d", "guard.lock")
+        self.held("p", "pipe.lock")
+        os.makedirs(self.tui, exist_ok=True)
         busy = os.open(os.path.join(self.tui, "f.lock"), os.O_RDWR | os.O_CREAT)
         self.addCleanup(os.close, busy)
         fcntl.flock(busy, fcntl.LOCK_EX)
-        self.answers = {
-            f"ensemble-c-{GEN}": (1, "", "can't find session: c"),
-            f"ensemble-w-{self.OLD}": (1, "", "no server running on /tmp/tmux-1000/default"),
-        }
         self.docker.ps = [
-            self.row("w", self.OLD),  # own session, older generation
-            self.row("a"),  # no session.json
-            self.row("b"),  # session.json of another generation
-            self.row("c"),  # its tmux has no session c
-            self.row("d"),  # live
-            self.row("e", state="exited"),  # stopped, still its generation: shows dead
+            self.row("w", self.OLD),  # own name, no host.json: debris
+            self.row("a"),  # no host.json
+            self.row("b"),  # host.json of another generation
+            self.row("c"),
+            self.row("d"),  # guarded, its owner holds it
+            self.row("e", state="exited"),  # guarded, its owner gone
+            self.row("p"),  # piped, its run holds it
+            self.row("q"),  # piped, its run gone
             self.row("f"),  # starting or closing elsewhere
             f"ensemble-g-{GEN}\t\t{GEN}\trunning",
             f"ensemble-..-{GEN}\t../x\t{GEN}\trunning",
@@ -2164,35 +2183,10 @@ class SweepTest(Base):
         self.host.sweep("w")
         self.assertEqual(
             self.broker.closed,
-            [
-                f"ensemble-w-{self.OLD}",
-                f"ensemble-a-{GEN}",
-                f"ensemble-b-{GEN}",
-                f"ensemble-c-{GEN}",
-            ],
+            [f"ensemble-w-{self.OLD}"]
+            + [f"ensemble-{name}-{GEN}" for name in ("a", "b", "c", "e", "q")],
         )
-        probed = [call[2] for call in self.docker.order if call[:2] == ["exec", "-i"]]
-        self.assertEqual(probed, [f"ensemble-c-{GEN}", f"ensemble-d-{GEN}"])
-        self.assertEqual(
-            sorted(n for n in os.listdir(self.tui) if n.endswith(".lock")),
-            ["b.lock", "c.lock", "d.lock", "e.lock", "f.lock"],
-        )
-
-    def test_sweep_skips_a_container_whose_tmux_does_not_answer(self):
-        self.tui_session("c")
-        for answer in (
-            TimeoutExpired("docker", 10),
-            Overflow("output over"),
-            (1, "", f"Error response from daemon: Container ensemble-c-{GEN} is not running"),
-            (1, "", "no server running on ensemble-c: timed out"),
-            (0, "", ""),
-            (2, "", "can't find session: c"),
-        ):
-            with self.subTest(answer=answer):
-                self.answers = {f"ensemble-c-{GEN}": answer}
-                self.docker.ps = [self.row("c")]
-                self.host.sweep("w")
-                self.assertEqual(self.broker.closed, [])
+        self.assertFalse([call for call in self.docker.order if call[:1] == ["exec"]])
 
     def test_sweep_creates_nothing_outside_tui_and_drops_orphan_locks(self):
         self.docker.ps = [self.row("a"), self.row("x", state="exited")]
@@ -2473,6 +2467,26 @@ class ListTest(Base):
         )
         self.assertEqual((rows["v"].sid, rows["v"].client), (None, "other"))
 
+    def test_only_guarded_rows_are_listed_or_attached(self):
+        self.listed("w", "v", "p", "o")
+        self.guarded_record()
+        for name, found in (
+            ("v", {}),  # no mode: an older release's start
+            ("p", {"mode": "pipe"}),
+            ("o", {"mode": "guard", "generation": "f" * 32}),  # another generation
+        ):
+            self.state = os.path.join(self.home, ".ensemble", "docker-state", name)
+            self.record(**found)
+        self.assertEqual(self.host.list(), ["w"])
+        self.assertEqual([row.name for row in self.host.rows()], ["w"])
+        self.assertEqual([row.name for row in self.host._capacity_rows()], ["w"])
+        for name in ("v", "p", "o"):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(SessionError, f"^no docker session {name}$"):
+                    self.host.attach(name)
+                with self.assertRaisesRegex(SessionError, f"^no docker session {name}$"):
+                    self.host.attach_target(name)
+
     def test_docker_ps_failure_raises(self):
         for run in (
             mock.Mock(return_value=done(1, "", "Cannot connect")),
@@ -2694,12 +2708,15 @@ class WorkerLivenessTest(StartBase):
         self.assertEqual(self.broker.closed[0], f"ensemble-w-{old}")
         self.assertEqual(len(self.execs), 1)
 
-    def test_legacy_and_piped_rows_are_left_to_the_container_refusal(self):
-        for mode in (None, "pipe"):
+    def test_debris_and_piped_rows_are_left_to_the_container_refusal(self):
+        for mode, refusal in (
+            (None, "container ensemble-w-.* of an earlier start is still up"),
+            ("pipe", "a headless run holds it"),
+        ):
             with self.subTest(mode=mode):
                 self.listed("w")
                 self.record(**({"mode": mode} if mode else {}))
-                with self.assertRaisesRegex(SessionError, "docker session w: a "):
+                with self.assertRaisesRegex(SessionError, f"^docker session w: {refusal}"):
                     self.start()
                 self.assertTrue(_free(os.path.join(self.state, "guard.lock")))
                 self.assertEqual(self.execs, [])
