@@ -144,6 +144,7 @@ def _starts_line(text: str, screen: str) -> bool:
 class CodexTui(Tui):
     hooks = MappingProxyType({label: HookKind(kind) for label, _, kind in HOOKS})
     dialogs = tuple(DIALOGS)
+    _owned = True
 
     def _home(self) -> ClientHome:
         return self.common.home()

@@ -136,6 +136,9 @@ DIALOG_SCREENS = {
 
 
 class TuiTest(Base):
+    def test_a_codex_tui_session_is_owned_by_a_session_harness(self):
+        self.assertTrue(CodexTui._owned)
+
     def test_container_runtime_projects_only_this_identity_without_host_executable(self):
         host = MemoryHost()
         runtime = ClientContext(

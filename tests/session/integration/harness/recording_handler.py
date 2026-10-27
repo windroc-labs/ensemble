@@ -13,6 +13,9 @@ def on_event(call) -> None:
         "sid": call.sid,
         "generation": call.generation,
         "reply": getattr(call.event, "reply", None),
+        "error": getattr(call.event, "error", None),
+        "detail": getattr(call.event, "detail", None),
+        "returncode": getattr(call.event, "returncode", None),
     }
     with open(call.state["path"], "a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")

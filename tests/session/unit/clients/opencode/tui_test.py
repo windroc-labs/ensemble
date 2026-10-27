@@ -64,6 +64,9 @@ class Base(Case):
 
 
 class LaunchTest(Base):
+    def test_an_opencode_tui_session_is_owned_by_a_session_harness(self):
+        self.assertTrue(tui.OpenCodeTui._owned)
+
     def test_a_fresh_start_submits_its_prompt(self):
         launch = self.launch(self.spec(tier=1))
         self.assertEqual(

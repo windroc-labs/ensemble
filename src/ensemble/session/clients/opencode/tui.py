@@ -64,6 +64,7 @@ class OpenCodeTui(Homed, Tui):
             "tool": HookKind.ACTIVITY,
         }
     )
+    _owned = True
 
     def __init__(self, common: OpenCodeCommon):
         self.common = common
