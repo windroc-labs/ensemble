@@ -146,7 +146,7 @@ class DockerWorker(ManagedProcess):
         hooks: HookWorker | None,
         remove: Callable[[], None],
         owner: int,
-        maintenance: Callable[[Callable[[], None]], Maintenance],
+        maintenance: Callable[..., Maintenance],
         load: Callable[[], dict],
         store: Callable[[Mapping], None],
         terminal: bool = True,
@@ -166,7 +166,7 @@ class DockerWorker(ManagedProcess):
         self.stopped = threading.Event()
         self.retry = threading.Event()
         self.ender: threading.Thread | None = None
-        self.maintenance = maintenance(self._expire)
+        self.maintenance = maintenance(close=self._expire)
         super().__init__(name, generation, proc, terminal=terminal, start_reader=start_reader)
 
     @property

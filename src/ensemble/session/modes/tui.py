@@ -558,6 +558,8 @@ class TuiMode(BaseMode):
         prepared = cls._host_resume(prepared, host, name)
         if run._runtime_files:
             metadata = {**metadata, "runtime_files": json.dumps(dict(run._runtime_files))}
+        if owner is not None:
+            metadata = {**metadata, "owner": owner}
         state = _state(prepared, run, host, metadata, owner)
         if field := _bad(state):
             raise SessionError(f"tui session {name}: bad {field} {state.get(field)!r:.80}")
