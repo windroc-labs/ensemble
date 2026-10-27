@@ -458,10 +458,15 @@ class CloseTest(HandlerCase):
 
     def test_a_close_whose_record_cannot_be_written_still_closes(self):
         self.call(TurnStarted())
+        state = self.state()
+        spec = replace(state.plan.session, name=state.agent_name)
+        agent = HarnessSession.start(spec, host=state.host)
+        self.assertTrue(agent.alive())
         with mock.patch("os.replace", side_effect=OSError("disk full")):
             self.close()
         self.assertIn("delegate: disk full", self.err.getvalue())
         self.assertFalse(self.state().completed)
+        self.assertFalse(agent.alive())
 
     def test_close_of_an_ended_owned_attempt_sends_nothing(self):
         self.finish(NEEDS)
