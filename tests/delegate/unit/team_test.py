@@ -691,6 +691,8 @@ class Real(RealConfig):
             "no empty commits",
             'no "base flake" label without a cause',
             "concurrent writers, an unawaited exit",
+            "One another issue owns, its cause found there → name that issue and rerun.",
+            "a bug, a failing or intermittent test, a review blocker",
         ):
             self.assertIn(phrase, method)
         for role, task in runs():
