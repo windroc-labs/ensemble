@@ -16,6 +16,7 @@ import os
 import shutil
 import signal
 import threading
+import unittest
 import uuid
 from collections.abc import Callable
 from dataclasses import asdict, replace
@@ -266,6 +267,31 @@ class DockerPreflightTest(HarnessCase):
             self.create("headless")
         self.assertEqual(self.calls, ["version", "build"])
         self.assertFalse(os.path.exists(self.work))
+
+
+class CallerSessionTest(HarnessCase):
+    """The Docker classes pass in a caller's tmux pane and agent session, as on CI: a plain
+    unittest run in an agent's shell once leaked TMUX (the viewer's placement then ran tmux through
+    their patched Popen) and ENSEMBLE_AGENT_SESSION (a nested run refused)."""
+
+    maxDiff = None
+
+    def test_the_docker_tests_ignore_the_callers_tmux_and_agent_session(self):
+        caller = {
+            "TMUX": "/tmp/tmux-1/default,1,0",
+            "TMUX_PANE": "%1",
+            "ENSEMBLE_AGENT_SESSION": "1",
+        }
+        loader = unittest.defaultTestLoader
+        suite = unittest.TestSuite(
+            loader.loadTestsFromTestCase(case) for case in (DockerPreflightTest, VerifierDockerTest)
+        )
+        result = unittest.TestResult()
+        with mock.patch.dict(os.environ, caller):
+            suite.run(result)
+        failed = [f"{t.id()}: {tb.splitlines()[-1]}" for t, tb in result.failures + result.errors]
+        self.assertEqual(failed, [])
+        self.assertEqual(result.testsRun, 6)
 
 
 class VerifierClientTest(HarnessCase):
