@@ -39,7 +39,7 @@ class RoleCase(LiveCrew):
             (
                 "role",
                 tui,
-                (f"{tui}-drive", tui) if mode == "tui" else (f"{tui}-drive",),
+                (tui,) if mode == "tui" else (),
                 work,
                 ("ensemble-delegate",),
                 ("ensemble-delegate", "resume", work),
@@ -53,17 +53,18 @@ class RoleCase(LiveCrew):
 class RoleTest(RoleCase):
     def test_detach_events_default(self):
         record = self.started("r", steps=[START], turns=[[block(DONE)]])
-        harness, tui = record.sessions
-        self.wait_event(harness, "exited")
+        (tui,) = record.sessions
+        drive = f"{tui}-drive"
+        self.wait_event(drive, "exited")
         self.wait_event(tui, "done", 2)
         self.assertEqual(self.words(tui), [["done"], ["done"]])
-        self.assertEqual(self.words(harness), [["outcome", "done"], ["exited", "0"]])
+        self.assertEqual(self.words(drive), [["outcome", "done"], ["exited", "0"]])
         self.ok(self.crew("attach"))
         self.assertEqual(self.roster()["r"].state, State.DONE)
 
     def test_killed_role_run_gone_then_recovered(self):
         record = self.started("r", steps=[START])
-        harness, tui = record.sessions
+        (tui,) = record.sessions
         self.killed("r", record)
         turns = self.words(tui).count(["done"])
         resumed = self.record(self.crew("resume", "r", **self.scene("r", [START])))
@@ -72,7 +73,9 @@ class RoleTest(RoleCase):
             (record.sid, record.sessions, record.display),
         )
         self.assertTrue(record.display.startswith(MANAGER), record.display)
-        self.until(lambda: self.live(harness, tui), "the harness and the tui back")
+        self.until(
+            lambda: self.live(tui) and self.drive_running(resumed), "the drive and the tui back"
+        )
         self.until(
             lambda: live_tmux.assert_grid(self, self.server, MANAGER, [[tui]]),
             f"the grid [[{tui}]]",
@@ -98,7 +101,7 @@ class RoleTest(RoleCase):
     def test_close_a_role_run_by_its_tui_session(self):
         self.record(self.worker("w1"))
         record = self.started("r", steps=[START])
-        harness, tui = record.sessions
+        (tui,) = record.sessions
         calls = {
             command: self.spy(command) for command in ("ensemble-session", "ensemble-delegate")
         }
@@ -109,7 +112,9 @@ class RoleTest(RoleCase):
                     [c for c in f.read().splitlines() if c.startswith("status")], ["status"]
                 )
         self.assertEqual(self.ok(self.crew("close", tui)).stdout, "")
-        self.until(lambda: self.gone(harness, tui), f"{harness} and {tui} gone")
+        self.until(
+            lambda: self.gone(tui) and not self.drive_running(record), f"{tui} and its drive gone"
+        )
         self.assertEqual(list(self.roster()), ["w1"])
         self.assertTrue(self.live("w1"))
 
@@ -120,10 +125,12 @@ class RoleTest(RoleCase):
         run = ("ensemble-delegate", "run", "--role", ROLE, "--input", "Hello.", "--workdir", work)
         argv = (*run, "--out", os.path.join(work, "out.md"), "--mode", "tui", "--detach")
         record = self.record(self.launch("TASK-9", argv, steps=[START], turns=[[block(DONE)]]))
-        harness, tui = record.sessions
-        self.wait_event(harness, "exited")
+        (tui,) = record.sessions
+        self.wait_event(f"{tui}-drive", "exited")
         self.ok(self.crew("close", "TASK-9"))
-        self.until(lambda: self.gone(harness, tui), f"{harness} and {tui} gone")
+        self.until(
+            lambda: self.gone(tui) and not self.drive_running(record), f"{tui} and its drive gone"
+        )
         self.assertEqual(self.roster(), {})
         run_dir = os.path.join(work, "run")
         before = _snapshot(run_dir)
@@ -163,8 +170,7 @@ class RoleTest(RoleCase):
 
     def test_a_role_run_ended_on_needs_input_is_waiting_and_left_alone(self):
         record = self.started("r", steps=[block(ASKING)], mode="headless")
-        (harness,) = record.sessions
-        self.wait_event(harness, "exited")
+        self.wait_event(f"{record.name}-drive", "exited")
         for _ in range(2):
             self.ok(self.crew("attach"))
             self.assertEqual(self.roster()["r"].state, State.WAITING)
@@ -177,5 +183,5 @@ class RoleTest(RoleCase):
         self.assertEqual((res.returncode, res.stdout), (1, ""), res.stderr)
         self.assertIn("waiting: give --input to answer", res.stderr)
         self.assertEqual(len(logged(self.log("r"))), starts)
-        self.assertTrue(self.gone(harness))
+        self.assertFalse(self.drive_running(record))
         self.assertEqual(self.roster()["r"].state, State.WAITING)

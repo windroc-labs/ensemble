@@ -523,8 +523,8 @@ def _shown(preview: Preview, a: argparse.Namespace) -> dict:
         "tier": preview.plan.session.tier,
         "effort": preview.plan.session.effort,
         "prompt": preview.plan.prompt,
-        "sessions": {"agent": preview.agent, "harness": preview.harness if a.detach else None},
-        "hosts": {"agent": preview.host, "harness": preview.harness_host},
+        "sessions": {"agent": preview.agent},
+        "hosts": {"agent": preview.host},
         "callback": preview.callback,
         "environment": None if environment is None else environment.persisted(),
     }

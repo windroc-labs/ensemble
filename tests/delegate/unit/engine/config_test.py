@@ -1,6 +1,5 @@
-"""src/ensemble/delegate/config.py: its resources; harness_host(), a read delegate
-config's [delegates] harness_host checked against Host.parse_hosts' names (their cases:
-tests/session/unit/hosts/base_test.py); policy()'s shape (plan's Policy cases: through plan) and
+"""src/ensemble/delegate/config.py: its resources; delegates(), a read delegate config's
+[delegates], which takes no keys; policy()'s shape (plan's Policy cases: through plan) and
 trusted_dirs().
 """
 
@@ -13,33 +12,19 @@ from unittest import mock
 from ensemble.delegate.composer.run import check_old_keys
 from ensemble.delegate.config import (
     CONFIG,
-    harness_host,
+    delegates,
     policy,
     trusted_dirs,
 )
 from ensemble.delegate.engine import config as delegate
 from ensemble.delegate.engine.config import read_config
 from ensemble.delegate.engine.environment import resolve_fields
-from ensemble.session import Host
 from ensemble.session.engine.config import read_config as read_session_config
 from tests.delegate import case
 from tests.delegate.case import Case
 from tests.delegate.unit.composer.shipped import (
     generic_names,
 )
-
-TWO = """[hosts]
-default = "a"
-
-[hosts.a]
-implementation = "pkg.mod:AHost"
-per_column = 2
-
-[hosts.b_2]
-implementation = "pkg.b:BHost"
-"""
-NAMES = "a, b_2"
-HOSTS = Host.parse_hosts(tomllib.loads(TWO)["hosts"]).tables
 
 
 def parsed(text: str = "") -> dict:
@@ -69,47 +54,42 @@ class PathsTest(Case):
 
     def test_the_delegate_reads_no_hosts_or_clients(self):
         found = read_config()
-        self.assertEqual(found["delegates"], {"harness_host": ""})
+        self.assertEqual(found["delegates"], {})
         with open(CONFIG, "rb") as f:
             self.assertEqual({"hosts", "clients"} & set(tomllib.load(f)), set())
 
 
-class HarnessHostTest(Case):
+class DelegatesTest(Case):
     def refused(self, config, message):
         with self.assertRaises(ValueError) as caught:
-            harness_host(config, HOSTS)
+            delegates(config)
         self.assertEqual(str(caught.exception), message)
 
-    def test_unset_is_none(self):
-        for text in ("", "[delegates]\n", '[delegates]\nharness_host = ""\n'):
+    def test_an_absent_or_empty_table_passes(self):
+        for text in ("", "[delegates]\n"):
             with self.subTest(text):
-                self.assertIsNone(harness_host(parsed(text), HOSTS))
+                self.assertIsNone(delegates(parsed(text)))
 
-    def test_harness_host(self):
-        self.assertEqual(harness_host(parsed('[delegates]\nharness_host = "b_2"\n'), HOSTS), "b_2")
+    def test_the_committed_config_passes(self):
+        self.assertIsNone(delegates(read_config()))
 
-    def test_the_committed_config_has_no_harness_host(self):
-        hosts = Host.parse_hosts(read_session_config()["hosts"]).tables
-        self.assertIsNone(harness_host(read_config(), hosts))
-
-    def test_delegates_takes_only_harness_host(self):
-        self.refused(
-            parsed("[delegates]\nkind = 1\n"),
-            "[delegates] kind: the delegate takes only harness_host",
-        )
-        self.refused(
-            parsed('[delegates]\nharness_host = "a"\n[delegates.linear]\nx = 1\n'),
-            "[delegates] linear: the delegate takes only harness_host",
-        )
-        self.refused({"delegates": 1}, "[delegates]: the delegate takes only harness_host")
-
-    def test_harness_host_must_name_a_table(self):
-        for value in ('"c"', "1", '"default"', "[1]"):
+    def test_harness_host_refused(self):
+        for value in ('""', '"tmux"'):
             with self.subTest(value=value):
                 self.refused(
                     parsed(f"[delegates]\nharness_host = {value}\n"),
-                    f"[delegates] harness_host: want one of {NAMES}",
+                    "[delegates] harness_host: the delegate takes no keys",
                 )
+
+    def test_delegates_takes_no_keys(self):
+        self.refused(
+            parsed("[delegates]\nkind = 1\n"), "[delegates] kind: the delegate takes no keys"
+        )
+        self.refused(
+            parsed("[delegates.linear]\nx = 1\n"),
+            "[delegates] linear: the delegate takes no keys",
+        )
+        self.refused({"delegates": 1}, "[delegates]: the delegate takes no keys")
 
 
 class PolicyTest(Case):

@@ -17,7 +17,7 @@ from unittest import mock
 
 from ensemble.manager import Entry, Roster, State
 from ensemble.manager.engine.crew import RECOVERY_AGE
-from ensemble.utils import Record
+from ensemble.utils import ProcessControl, Record
 from tests.manager.case import PY, REPO, SRC, Case
 from tests.session import live_tmux
 from tests.session.integration.clients.claude import fake_claude
@@ -239,29 +239,41 @@ class LiveCrew(Case):
             if line.split(" ")[1] == name
         ]
 
-    def killed(self, name: str, record: Record) -> None:
-        """Kills tui run `name`'s drive and client after its first turn; attach says gone."""
-        harness, tui = record.sessions
-        self.wait_event(tui, "done")
-        shown = self.server.tmux("display-message", "-p", "-t", f"={harness}:", "#{pane_pid}")
-        pid = int(shown.stdout)
-        self.kill(harness)
-        os.kill(logged(self.log(name))[-1]["pid"], signal.SIGKILL)
-        self.server.tmux(
-            "kill-session", "-t", f"={tui}"
-        )  # the harness, stopping, may close it first
-        self.until(  # kill-session: no exited hook
-            lambda: (
-                self.gone(tui)
-                and ["outcome", "error"] in self.words(harness)
-                and not live_tmux.alive(pid)
-            ),
-            f"{tui} gone, the harness's outcome and exit",
+    def drive(self, record: Record) -> ProcessControl:
+        with open(os.path.join(record.workdir, "run", "delegate.json"), encoding="utf-8") as f:
+            return ProcessControl.attach(json.load(f)["drive"])
+
+    def drive_running(self, record: Record) -> bool:
+        return self.drive(record).running()
+
+    def kill_drive(self, record: Record) -> None:
+        """SIGKILL to record's drive's group, never this test's, until its control saw it end."""
+        ps = self.ok(
+            subprocess.run(
+                ["ps", "-A", "-ww", "-o", "pid=,pgid=,args="], capture_output=True, text=True
+            )
         )
+        tail = f"-m ensemble.delegate.engine.harness {record.workdir}"
+        rows = [line.split(None, 2) for line in ps.stdout.splitlines()]
+        groups = [int(row[1]) for row in rows if row[2:] and row[2].endswith(tail)]
+        self.assertEqual(len(groups), 1, ps.stdout)
+        self.assertNotEqual(groups[0], os.getpgrp())
+        os.killpg(groups[0], signal.SIGKILL)
+        self.until(lambda: not self.drive_running(record), f"{record.name}'s drive ended")
+
+    def killed(self, name: str, record: Record) -> None:
+        """SIGKILLs tui run `name`'s drive group and client after its first turn; attach: gone."""
+        (tui,) = record.sessions
+        self.wait_event(tui, "done")
+        self.kill_drive(record)
+        os.kill(logged(self.log(name))[-1]["pid"], signal.SIGKILL)
+        self.server.tmux("kill-session", "-t", f"={tui}")
+        self.until(lambda: self.gone(tui), f"{tui} gone")
+        self.assertEqual(self.words(f"{tui}-drive"), [])
         out = self.ok(self.crew("attach")).stdout.splitlines()
         self.assertIn(f"resume: ensemble-crew resume --manager mgr {name}", out)
         self.assertEqual(self.roster()[name].state, State.GONE)
-        self.assertTrue(self.gone(harness, tui))
+        self.assertFalse(self.drive_running(record))
 
     def spy(self, command: str) -> str:
         """Puts a `command` before <repo>/bin that logs its argv, then runs the real one; its log."""

@@ -1,7 +1,7 @@
 """Delegate configuration location and independent setting parsers."""
 
 import os
-from collections.abc import Collection, Mapping
+from collections.abc import Mapping
 
 from ensemble import utils
 from ensemble.utils import real_dirs
@@ -14,17 +14,13 @@ def validate_team_dirs(table: Mapping, source: str, *, local: str = utils.LOCAL)
         raise ValueError(f"team_dirs: set it in {local}, not {os.path.basename(source)}")
 
 
-def harness_host(config: Mapping, hosts: Collection[str]) -> str | None:
-    delegates = config.get("delegates", {})
-    if not isinstance(delegates, Mapping):
-        raise ValueError("[delegates]: the delegate takes only harness_host")
-    for key in delegates:
-        if key != "harness_host":
-            raise ValueError(f"[delegates] {key}: the delegate takes only harness_host")
-    harness = delegates.get("harness_host") or None
-    if harness is not None and (not isinstance(harness, str) or harness not in hosts):
-        raise ValueError(f"[delegates] harness_host: want one of {', '.join(sorted(hosts))}")
-    return harness
+def delegates(config: Mapping) -> None:
+    """[delegates] takes no keys: the delegate spawns its drive itself."""
+    table = config.get("delegates", {})
+    if not isinstance(table, Mapping):
+        raise ValueError("[delegates]: the delegate takes no keys")
+    for key in table:
+        raise ValueError(f"[delegates] {key}: the delegate takes no keys")
 
 
 def policy(client: str, cfg: Mapping) -> tuple[list, dict]:

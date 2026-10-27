@@ -16,7 +16,6 @@ from unittest import mock
 from ensemble.delegate import ConfigError, Outcome, cli
 from ensemble.delegate.composer import Composer, RunParams
 from ensemble.delegate.composer.base import TEAM
-from ensemble.delegate.engine.harness_delegate import HarnessDelegate
 from ensemble.delegate.engine.runner import STOP_LIMIT
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import Layout, Result
@@ -34,7 +33,12 @@ from tests.delegate.cli_case import (
     Base,
     RefusingClient,
 )
-from tests.delegate.fakes.harness_session import HarnessSession, RecordingHost
+from tests.delegate.fakes.harness_session import (
+    DrivenDelegate,
+    HarnessSession,
+    RecordingHost,
+    harness_launches,
+)
 from tests.delegate.harness import SID as HARNESS_SID
 from tests.delegate.harness import HarnessCase
 from tests.delegate.replies import block
@@ -201,15 +205,13 @@ class Detach(Base):
                 ((_, spec, _),) = Detaching.made
                 self.assertEqual((spec.mode, spec.name), want)
 
-    def test_a_name_names_the_tui_and_its_harness(self):
+    def test_a_name_names_the_tui(self):
         self.detaching = False
         for mode, agent in (("headless", None), ("tui", "r1")):
             with self.subTest(mode=mode):
                 code, out, err = self.detaches("--mode", mode, "--name", "r1", "--dry-run")
                 self.assertEqual(code, 0, err)
-                self.assertEqual(
-                    json.loads(out)["sessions"], {"agent": agent, "harness": "r1-drive"}
-                )
+                self.assertEqual(json.loads(out)["sessions"], {"agent": agent})
 
     def test_a_name_breaking_the_session_name_rule_exits_2_and_constructs_nothing(self):
         for name in ("none", "a b", "a.b", ""):
@@ -340,8 +342,8 @@ class Detach(Base):
                     (shown["mode"], shown["sessions"], shown["hosts"], shown["events"]),
                     (
                         mode,
-                        {"agent": tui, "harness": HARNESS},
-                        {"agent": "tmux", "harness": "tmux"},
+                        {"agent": tui},
+                        {"agent": "tmux"},
                         self.events,
                     ),
                 )
@@ -377,7 +379,7 @@ class Harnessed(HarnessCase):
     def cli(
         self, *extra, input="Hello.", stdin=None, role="dummy-tester", task="echo", client="fake"
     ):
-        class Bound(HarnessDelegate):
+        class Bound(DrivenDelegate):
             def __init__(self, role, spec, **placement):
                 super().__init__(role, spec, session_cls=Shown, **placement)
 
@@ -419,7 +421,7 @@ class Environments(Harnessed):
     TARGETED = "Reference: T-1\nRepo: acme/app\nRef: release/1\n\nHello."
 
     def configure(self, default):
-        self.settings(default=default, harness_host="harness")
+        self.settings(default=default)
         # the fake resolves no --host to its "agent" entry: make that the default Host
         Shown.hosts["agent"] = RecordingHost(default)
         with open(self.local, "a", encoding="utf-8") as file:
@@ -462,7 +464,7 @@ class Verifier(Harnessed):
     TARGETED = "Repo: windroc-labs/ensemble\nRef: main"
 
     def configure(self, default):
-        self.settings(default=default, harness_host="harness")
+        self.settings(default=default)
         Shown.hosts["agent"] = RecordingHost(default)
 
     def verify(self, *extra, client=None):
@@ -562,7 +564,7 @@ class DetachDisplay(Harnessed):
                 shown = f"shown:{given}"
                 self.assertEqual(Record.parse(out).display, shown)
                 self.assertEqual(self.metadata()["display"], shown)
-                self.assertEqual(RecordingHost.launches[0]["display"], shown)
+                self.assertEqual(harness_launches()[-1]["display"], shown)
 
 
 class DetachEvents(Harnessed):
@@ -579,7 +581,7 @@ class DetachEvents(Harnessed):
                 code, _, err = self.cli("--sid", HARNESS_SID, "--detach", *extra)
                 self.assertEqual(code, 0, err)
                 self.assertEqual(self.metadata()["events"], want)
-                self.assertEqual(RecordingHost.launches[0]["events"], want)
+                self.assertEqual(harness_launches()[-1]["events"], want)
 
 
 class ReadOnce(io.StringIO):
@@ -617,7 +619,7 @@ class DetachInput(Harnessed):
                 self.assertIn(f"# Input\n\n{text}", state["plan"]["session"]["prompt"])
                 harness = "ensemble.delegate.engine.harness"
                 self.assertEqual(
-                    RecordingHost.launches[0]["argv"],
+                    harness_launches()[-1]["argv"],
                     [sys.executable, "-P", "-s", "-m", harness, self.work],
                 )
 
@@ -629,13 +631,13 @@ class DetachSid(Harnessed):
         self.assertEqual(code, 0, err)
         self.assertEqual(Record.parse(out).sid, HARNESS_SID)
         self.assertEqual(self.metadata()["spec"]["sid"], HARNESS_SID)
-        self.assertNotIn("ENSEMBLE_SID", RecordingHost.launches[0]["env"])
+        self.assertNotIn("ENSEMBLE_SID", harness_launches()[0]["env"])
 
     def test_a_different_sid_starts_and_writes_nothing(self):
         os.environ["ENSEMBLE_SID"] = HARNESS_SID
         code, out, _ = self.cli("--sid", SID, "--detach", "--events", self.events)
         self.assertEqual((code, out), (2, ""))
-        self.assertEqual((RecordingHost.launches, os.path.exists(self.work)), ([], False))
+        self.assertEqual((harness_launches(), os.path.exists(self.work)), ([], False))
 
 
 class DryRun(Base):
@@ -655,8 +657,8 @@ class DryRun(Base):
                 "project": False,
                 "tier": 3,
                 "effort": "low",
-                "sessions": {"agent": None, "harness": None},
-                "hosts": {"agent": "tmux", "harness": "tmux"},
+                "sessions": {"agent": None},
+                "hosts": {"agent": "tmux"},
                 "callback": None,
                 "environment": None,
             },
@@ -965,16 +967,13 @@ class Configures(Base):
         self.ran = Result(1, None, "the agent run returned no outcome")
         self.assertEqual(self.runs()[0], 1)
 
-    def test_an_unknown_harness_host_or_delegates_key_exits_2_and_starts_nothing(self):
+    def test_any_delegates_key_exits_2_and_starts_nothing(self):
         for text, want in (
             (
                 '[delegates]\nharness_host = "nope"\n',
-                "delegate: [delegates] harness_host: want one of docker, tmux",
+                "delegate: [delegates] harness_host: the delegate takes no keys",
             ),
-            (
-                "[delegates]\nkind = 1\n",
-                "delegate: [delegates] kind: the delegate takes only harness_host",
-            ),
+            ("[delegates]\nkind = 1\n", "delegate: [delegates] kind: the delegate takes no keys"),
         ):
             with self.subTest(text):
                 self.local(text)
@@ -1400,7 +1399,7 @@ def record(name):
     )
 
 
-class Views(HarnessDelegate):
+class Views(DrivenDelegate):
     """attach(key): the View registered under a workdir key or a Record's name."""
 
     views: dict = {}

@@ -153,6 +153,8 @@ class RunRecord:
             )
             if type(state.attempt) is not int or state.attempt < 1:
                 raise ValueError("invalid attempt")
+            if state.detached and type(state.drive) is not str:
+                raise ValueError("detached without drive")
         except (AttributeError, KeyError, TypeError, ValueError, SessionConfigError) as error:
             raise ConfigError(f"invalid {self.store.record}: {error}") from None
         else:
@@ -170,6 +172,15 @@ class RunRecord:
             SessionStatusLog(state.events).write(
                 state.harness_name, "outcome", "error" if outcome is None else outcome.status
             )
+        except OSError as error:
+            say(f"delegate: {error}")
+
+    @staticmethod
+    def exited(state: DelegateState, rc: int) -> None:
+        if state.events is None:
+            return
+        try:
+            SessionStatusLog(state.events).write(state.harness_name, "exited", rc)
         except OSError as error:
             say(f"delegate: {error}")
 

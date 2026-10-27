@@ -94,13 +94,13 @@ class LinearCtlContract(CtlContract, TmuxFlow):
         record = self.started_records[name]
         closed = self.call("close", stdin=record.to_line())
         self.assertEqual(closed.returncode, 0, closed.stderr)
-        events, harness = Path(self.root, "events"), record.sessions[0]
+        events, drive = Path(self.root, "events"), f"{record.sessions[0]}-drive"
 
         def ended():
-            # its harness ends the run after its session is gone, then logs its outcome line
+            # its drive ends the run after its session is gone, then logs its outcome line
             lines = events.read_text(encoding="utf-8").splitlines() if events.exists() else []
             return not any(self.live(session) for session in record.sessions) and any(
-                line.split()[1:3] == [harness, "outcome"] for line in lines
+                line.split()[1:3] == [drive, "outcome"] for line in lines
             )
 
         live_tmux.wait(ended, what="the contract's run to stop")

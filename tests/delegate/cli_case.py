@@ -12,6 +12,7 @@ from ensemble.delegate.engine.harness_delegate import HarnessDelegate
 from ensemble.delegate.engine.types import Layout
 from ensemble.session import ConfigError
 from tests.delegate.case import Case
+from tests.delegate.fakes.harness_session import DrivenDelegate
 from tests.delegate.replies import block, completed_steps
 from tests.delegate.unit.runs import DONE, START, said
 from tests.session import fake_client
@@ -132,7 +133,7 @@ class Base(Case):
             {"class_roots": classmethod(lambda _cls, _client: ())},
         )
 
-        class Driven(HarnessDelegate):
+        class Driven(DrivenDelegate):
             def __init__(self, role, spec, **placement):
                 super().__init__(role, spec, driver=driver, session_cls=session_cls, **placement)
 

@@ -1,11 +1,10 @@
 """v1 router behaviors, each against its v1 source (`v1-runtime`'s CLAUDE.md › Architecture or a v1
 test, named in the test's docstring), end to end: bin/ensemble-orchestrator router as a real process
-(BinFlow), fake_claude as client claude, FakeLinear over HTTP, the runs on a private tmux server.
+(BinFlow), fake_claude as client claude, FakeLinear over HTTP, the runs' drives local processes.
 """
 
 import os
 import re
-import signal
 import subprocess
 import time
 import unittest
@@ -137,8 +136,8 @@ class MaxRuns(Parity):
         self.seed(OTHER, "ENG: Session index", priority=3)
 
     def test_a_live_agent_run_on_tmux_holds_the_roles_only_slot(self):
-        """v1 CLAUDE.md › Architecture: a tick compares live tmux sessions with `max_runs`; the
-        issue's driver session holds a slot while its driver runs, so a full role claims nothing.
+        """v1 CLAUDE.md › Architecture: a tick compares live runs (v1: tmux sessions) with
+        `max_runs`; the issue's run holds a slot while its drive runs, so a full role claims nothing.
         """
         gate = os.path.join(self.root, "gate")
         self.scene([START, DONE], gate=gate, usage=usage(0.5))
@@ -146,7 +145,7 @@ class MaxRuns(Parity):
         [first] = self.runs()
         self.assertEqual((first["kind"], first["issue"]), ("start", ID))
         self.started()
-        self.assertTrue(self.live(self.harness("engineer", ID, first["sid"])))
+        self.assertTrue(self.drive_running(ID))
 
         said = self.routed()
         self.tick()
@@ -198,10 +197,7 @@ class Recover(Parity):
             lambda: "start" in self.ledger(ID).get(sid, []), TIMEOUT, "write-back's start step"
         )
         [agent] = self.started()
-        harness = self.harness("engineer", ID, sid)
-        pane = self.server.tmux("list-panes", "-t", f"={harness}", "-F", "#{pane_pid}")
-        self.assertEqual(pane.returncode, 0, pane.stderr)
-        os.kill(int(pane.stdout), signal.SIGTERM)
+        self.drive(ID).terminate()
         self.wait_end(sid, ID)
         live_tmux.wait(lambda: gone(agent["pid"]), TIMEOUT, f"fake claude {agent['pid']} to end")
         self.assertEqual(

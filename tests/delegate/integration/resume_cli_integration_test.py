@@ -1,35 +1,39 @@
-"""ensemble-delegate resume, each a fresh process, on a detached headless run whose Hosts keep their
-sessions on disk (tests/delegate/fakes/harness_session.py PersistentSession): one Record line, a
+"""ensemble-delegate resume, each a fresh process (tests/delegate/fakes/control_launcher.py), on a
+detached headless run whose drive and Hosts keep their state on disk
+(tests/delegate/fakes/harness_session.py FakeControl, PersistentSession): one Record line, a
 live run's unchanged, a stopped run's resumed once (two concurrent commands included), a run of
 another $ENSEMBLE_SID refused, and an old-layout workdir refused naming its missing run record.
 """
 
-import json
 import os
 import shutil
 import subprocess
 import uuid
 
 from ensemble.delegate import Spec
-from ensemble.delegate.engine.harness_delegate import HarnessDelegate
 from ensemble.delegate.engine.types import Layout
 from ensemble.utils import Record
 from tests.delegate.case import PY, REPO, child_env
-from tests.delegate.fakes.harness_session import PersistentSession
+from tests.delegate.fakes.harness_session import (
+    DrivenDelegate,
+    FakeControl,
+    PersistentSession,
+    harness_launches,
+)
 from tests.delegate.harness import SID, HarnessCase
 
-RESUME = (*PY, "-m", "ensemble.delegate.cli", "resume")
+RESUME = (*PY, os.path.join(REPO, "tests", "delegate", "fakes", "control_launcher.py"), "resume")
+DRIVE = f"dummy-tester-{SID[:8]}-drive"
 
 
 class ResumeCommand(HarnessCase):
     def setUp(self):
         super().setUp()
-        self.record = HarnessDelegate(
+        self.record = DrivenDelegate(
             "dummy-tester",
             Spec("input", self.work, client="fake", sid=SID),
             session_cls=PersistentSession,
             host="agent",
-            harness_host="harness",
             display="opaque",
         ).detach()
 
@@ -56,24 +60,22 @@ class ResumeCommand(HarnessCase):
         return Record.parse(res.stdout)
 
     def launches(self):
-        path = os.path.join(self.ensemble, "harness-fake", "launches.jsonl")
-        with open(path, encoding="utf-8") as file:
-            return [(launch["host"], launch["name"]) for launch in map(json.loads, file)]
+        return [launch["name"] for launch in harness_launches()]
 
     def end(self):
-        PersistentSession.host("harness").attach(self.record.sessions[0]).close()
+        FakeControl(self.metadata()["drive"]).close()
 
     def test_a_live_run_prints_its_record_from_the_workdir_or_stdin_starting_nothing(self):
         self.assertEqual(self.resumed(self.work), self.record)
         self.assertEqual(self.resumed(stdin=self.record.to_line() + "\n"), self.record)
-        self.assertEqual(self.launches(), [("harness", self.record.sessions[0])])
+        self.assertEqual(self.launches(), [DRIVE])
         self.assertEqual(self.metadata()["attempt"], 1)
 
     def test_a_stopped_run_resumes_once_keeping_its_identity_and_placement(self):
         self.end()
         self.assertEqual(self.resumed(self.work, sid=SID), self.record)
         self.assertEqual(self.record.display, "opaque")
-        self.assertEqual(self.launches(), [("harness", self.record.sessions[0])] * 2)
+        self.assertEqual(self.launches(), [DRIVE] * 2)
         self.assertEqual(self.metadata()["attempt"], 2)
         self.assertEqual(self.resumed(self.work, sid=SID), self.record)
         self.assertEqual(len(self.launches()), 2)

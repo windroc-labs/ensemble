@@ -211,11 +211,8 @@ file = "mini-password"
 item = "ensemble-broker-env/mini-op-ssh-key"
 file = "mini-ssh-key"
 
-# [delegates]
-#   harness_host  the [hosts.<name>] (src/ensemble/session/config.toml) the harness runs on; "" → the agent's Host.
-#                 An agent on the Docker Host needs a harness on another one, e.g. "tmux"
+# [delegates]  takes no keys (src/ensemble/delegate/config.py refuses each one): the delegate spawns its own drive
 [delegates]
-harness_host = ""
 
 # [policy.<client>]   a role run's flags and env, the Delegate's, after the session's [clients.<client>] flags and
 #                     permission mode (src/ensemble/session/config.toml), which keep ensemble's own plugin off

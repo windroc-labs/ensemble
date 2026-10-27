@@ -6,11 +6,11 @@ import os
 from dataclasses import replace
 
 from ensemble.delegate import ConfigError, Outcome
-from ensemble.delegate.engine.harness_delegate import HarnessDelegate
 from ensemble.delegate.engine.record import HANDLER, RunRecord, worker
 from ensemble.delegate.engine.types import Layout, Limit, Result
 from ensemble.session import HookCallback
 from ensemble.utils import OutcomeStatus
+from tests.delegate.fakes.harness_session import DrivenDelegate
 from tests.delegate.harness import SID, HarnessCase
 
 
@@ -57,7 +57,7 @@ class RunRecordTest(HarnessCase):
         with open(self.local, "w", encoding="utf-8") as file:
             file.write("not toml [")
         with self.assertRaises(ConfigError):
-            HarnessDelegate.attach(self.work)
+            DrivenDelegate.attach(self.work)
         record = self.record()
         record.save(record.read())
 

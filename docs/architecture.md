@@ -80,7 +80,7 @@ flowchart TB
   W -.-> CC
   D & H --> HD
   D --> C
-  HD -.->|"detach on the harness Host"| H
+  HD -.->|"detach: a ProcessControl process"| H
   HD --> E & C
   E --> C
   DL -->|ensemble.session| SE
@@ -94,6 +94,8 @@ flowchart TB
 ```
 
 Solid arrow: an import, the only direction allowed, or a file read (`reads`); its label names the package imported, by its `__all__`. Dotted: runs a command or process. Dashed: shared modules, their imports not drawn.
+
+A detached run's drive (`engine/harness.py`, `<agent>-drive`) is no session: `HarnessDelegate` starts it as a local process in a new session through `ProcessControl` (`src/ensemble/utils/process_control.py`), with `SIGNALS` blocked across the spawn, its stdout and stderr appended to `<workdir>/run/drive.log` (0600, a regular file only). `delegate.json` `drive` holds its control path, saved before it starts; the run is alive while the run lock is held or that control runs, and `close` sends its group SIGTERM, then SIGKILL 5 s later. On exit it appends `HH:MM:SS <agent>-drive exited <rc>` to the run's events file, after its `outcome` line (a SIGKILLed drive writes neither). A run's Record lists only its tui agent session; on Docker the drive runs on the host beside the container, so no other Host is needed.
 
 ## Modules and replacement boundaries
 
@@ -268,7 +270,7 @@ These are approved-list candidates for deletion, not optional deprecations; each
 
 | Removed interface | Replacement | Deletion owner |
 |---|---|---|
-| `Host.terminal`, `Host.detach`, `Host.pipe` | `Host.worker` (`terminal=True` or `False`) | `Host.pipe`: deleted (WDRC-312); `Host.terminal`: the tmux in-session loop's removal; `Host.detach`: the same, once every delegate start is owned (the `-drive` still uses it) |
+| `Host.terminal`, `Host.detach`, `Host.pipe` | `Host.worker` (`terminal=True` or `False`) | `Host.pipe`: deleted (WDRC-312); `Host.terminal`: the tmux in-session loop's removal; `Host.detach`: the same (the delegate's `-drive` no longer uses it) |
 | `Host.attach`, `Host.reclaim` | `Session.attach` control view and `Host.worker_liveness` for crash-resume admission | the tmux in-session loop's removal |
 | `Host.events_path`, `Host.prepare_events`, `Host.hook_callback` | harness-owned records/dispatch and `WorkerHook` on the guard channel | the tmux in-session loop's removal |
 | public `Process` (both session surfaces), `Interactive` (extension), their exported members | fold preserved `name`, `send`, `press`, `screen`, `state`, `close`, `returncode` into existing `InteractiveProcess` | the tmux in-session loop's removal (the tmux terminal is a `Process`) |
@@ -599,7 +601,7 @@ Board role limits: `[orchestrator.roles.<role>] max_runs` (packaged 3 for resear
 
 Copy `[orchestrator.linear]`'s `agent_label_group` and `[orchestrator.linear.agent_labels]` (one line per client, with label ids) from the `# local:` examples in `src/ensemble/orchestrator/config.toml`. No Agent label: the role's default client; one mapped label: its client; several or an unmapped one: a comment and In Review. `router --dry-run` prints each candidate's `client` and `client_source`.
 
-An `OpenCode` label runs OpenCode, on the host's Ollama (live-test issues only) or a configured provider; it needs the [Docker host](#docker-host) with the harness on tmux ([Run workers](#run-workers)), the provider's egress exception ([OpenCode on Docker](#opencode-on-docker)), and for an engineer run the GitHub App on the target repo ([Create the GitHub App](#create-the-github-app)).
+An `OpenCode` label runs OpenCode, on the host's Ollama (live-test issues only) or a configured provider; it needs the [Docker host](#docker-host) ([Run workers](#run-workers)), the provider's egress exception ([OpenCode on Docker](#opencode-on-docker)), and for an engineer run the GitHub App on the target repo ([Create the GitHub App](#create-the-github-app)).
 
 ### Local board
 
@@ -727,10 +729,7 @@ Then run `login github` ([Broker logins](#broker-logins)).
 
 ```toml
 [session.hosts]
-default = "docker"
-
-[delegate.delegates]
-harness_host = "tmux"   # role runs: the client in a container, the harness on the host
+default = "docker"   # role runs: the client in a container, their drive a local process on the host
 ```
 
 `[session.hosts.docker]` keys: `docker` (the CLI, default `/usr/local/bin/docker`), `plugins`, `github.app` (the App slug; `""`: none), `github.permissions` (each token's permissions) and `isolated` (`true`: yolo mode, the container the boundary; `false`: auto mode). Then `ensemble-crew worker NAME --client claude|codex|opencode` starts NAME in its own container; the other verbs and the Viewer work as on tmux. Each start, restart or resume runs a new container from the current image; restart and resume keep the client history, a new start empties its client state dir, and all keep the [workspace volume](#workspace-volumes); `ensemble-session resume <name>` (never `client-resume`) continues a conversation. A container gets user `agent` with all capabilities dropped, no Docker socket, only its egress network, a workspace volume at cwd, credentials on tmpfs and, with GitHub configured, the App's bot identity; each checkout runs its own `.githooks/`.
@@ -789,7 +788,7 @@ A worker's workspace is a Docker volume, `ensemble-ws-<name>`, mounted at its cw
 
 ### Docker live acceptance
 
-Run `tests/session/live_docker.py` only through mini-op on the test Mac mini, from the repo root with `PYTHONPATH` as in [Tests](#tests), with the proxy healthy, the broker installed and logged in, `[session.hosts] default = "docker"`, `harness_host = "tmux"` and a test repo with the App installed:
+Run `tests/session/live_docker.py` only through mini-op on the test Mac mini, from the repo root with `PYTHONPATH` as in [Tests](#tests), with the proxy healthy, the broker installed and logged in, `[session.hosts] default = "docker"` and a test repo with the App installed:
 
 | Command | Checks |
 |---|---|

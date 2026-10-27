@@ -1,5 +1,14 @@
 # Upgrading
 
+## The delegate's drive: harness_host removed
+
+A detached run's drive (`<agent>-drive`) now runs as a local process the delegate starts itself
+([Core architecture](architecture.md)), never as a session on a harness Host, so
+`[delegate.delegates] harness_host` is gone and any key under `[delegate.delegates]` is refused
+(`[delegates] harness_host: the delegate takes no keys`). Delete that line, and the `[delegate.delegates]` table, from
+`~/.ensemble/config.local.toml`; `scripts/install.sh --docker` no longer writes it. Let detached runs end first: a run an
+older release detached reads as invalid.
+
 ## Session harness: close every session first
 
 This release runs every Docker worker under its [session harness](architecture.md#session-harness) and drops the Docker
