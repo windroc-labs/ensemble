@@ -52,6 +52,9 @@ class View:
     def attach_command(self):
         return f"tmux attach -t '={NAME}'"
 
+    def alive(self):
+        return True
+
     def send(self, text):
         self.calls.append(("send", text))
 
@@ -188,6 +191,12 @@ class BindTest(HandlerCase):
         self.assertEqual(self.lines(), [["outcome", "done"]])
         self.assertEqual(self.view.calls, [])
 
+    def test_a_run_without_a_callback_sends_no_event(self):
+        self.record.save(replace(self.state(), callback=None))
+        self.finish()
+        self.assertEqual(self.state().result.outcome.status, "done")
+        self.assertEqual(self.sent, [])
+
     def test_a_startup_exited_or_limit_binds_and_ends_the_attempt(self):
         self.call(Exited(3))
         state = self.state()
@@ -244,6 +253,39 @@ class FollowUpTest(HandlerCase):
         self.call(TurnEnd(block(DONE), 0))
         state = self.state()
         self.assertEqual((state.attempt, state.result.outcome.status), (2, "done"))
+
+    def test_a_fix_nudges_turn_stays_in_its_attempt(self):
+        self.call(TurnStarted())
+        self.call(TurnEnd("no outcome block yet", 0))
+        self.assertEqual(len([c for c in self.view.calls if c[0] == "send"]), 1)
+        self.call(TurnStarted())
+        self.call(TurnEnd(block(DONE), 0))
+        state = self.state()
+        self.assertEqual((state.attempt, state.result.outcome.status), (1, "done"))
+        self.assertEqual(self.kinds_sent(), [("begun", 1), ("finished", 1)])
+
+    def test_an_input_resume_of_a_live_owned_worker_opens_one_attempt(self):
+        self.finish(NEEDS)
+        worker = self.view
+
+        class Live(ViewedHarnessDelegate):
+            """Its owned worker still runs: the answer is only sent to it."""
+
+            def _answered_agent(self, state):
+                return worker
+
+        Live.attach(self.work, session_cls=HarnessSession).resume(input="The answer.")
+        self.assertEqual(self.view.calls[-1], ("send", "The answer."))
+        self.assertEqual((self.state().attempt, self.state().completed), (1, True))
+        self.call(TurnStarted())
+        self.call(TurnStarted())
+        self.call(TurnEnd(block(DONE), 0))
+        state = self.state()
+        self.assertEqual((state.attempt, state.result.outcome.status), (2, "done"))
+        self.assertEqual(
+            self.kinds_sent(),
+            [("begun", 1), ("progress", 1), ("finished", 1), ("begun", 2), ("finished", 2)],
+        )
 
     def test_an_exit_after_completion_ends_nothing(self):
         self.finish()
