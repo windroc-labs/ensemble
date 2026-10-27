@@ -60,13 +60,15 @@ def project_roots(repo: str) -> tuple[str, ...]:
     )
 
 
+CALLER_SESSION = ("TMUX", "TMUX_PANE", "ENSEMBLE_AGENT_SESSION")  # the caller's pane and agent run
+
+
 def clean_env(base=None, *import_roots):
     source = os.environ if base is None else base
     env = {
         key: value
         for key, value in source.items()
-        if not key.startswith(("GIT_", "PYTHON"))
-        and key not in {"TMUX", "TMUX_PANE", "TMUX_TMPDIR", "ENSEMBLE_AGENT_SESSION"}
+        if not key.startswith(("GIT_", "PYTHON")) and key not in {*CALLER_SESSION, "TMUX_TMPDIR"}
     }
     env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
     env["TMUX_TMPDIR"] = _tmux_directory()

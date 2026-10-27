@@ -4,7 +4,7 @@
 Docker Desktop. It keeps the logins and the GitHub App key in the login keychain and writes credentials only into a
 container's tmpfs. Session's Docker Host calls it ([Run workers](#run-workers)); the sections up to [Close](#close)
 install the broker by hand; each credential's readers, lifetime
-and revocation: [Credentials](credentials.md).
+and revocation: [Credentials](architecture.md#credentials).
 
 The host needs no Node and no personal Codex: the clients run in the image. On subscriptions a container holds a
 model credential; an API key behind a host model relay, so that containers hold none, is not supported.
@@ -130,7 +130,7 @@ echo:
 | `retrust` | the login keychain password, once, only when an item needs a change | one change-access dialog per item a broker of v0.4.1 or earlier wrote, once, announced on the terminal; none after | Allow |
 | `start` | none | none: a token or key it cannot read without one names unlocking the login keychain, `retrust` or the login to run (`keychain_failed` for an OpenCode key or an environment secret needing approval; `login_required` for other clients and a missing environment secret) | |
 
-What each login hands a container: [Credentials › Who logs in](credentials.md#who-logs-in).
+What each login hands a container: [Credentials](architecture.md#credentials).
 
 **Claude**:
 
@@ -183,7 +183,7 @@ The installer registers the provider for directly started local OpenCode too
 
 `--auth-file` requires an absolute path and the selected provider's nonempty `type: api` entry in a JSON object
 of at most 1 MiB. It reads no key into argv or env; the keychain password may still be requested. Direct login
-without this option stores only the broker item. Reruns and cleanup ownership: [Credentials](credentials.md#opencode-provider-api-keys).
+without this option stores only the broker item. Reruns and cleanup ownership: [OpenCode sessions](customizing-roles-and-tasks.md#opencode-sessions).
 
 ### Create the GitHub App
 
@@ -210,8 +210,8 @@ dialog. `scripts/install.sh --docker` runs `retrust` before any other broker cal
 ```
 
 It lists each broker item an earlier build wrote (`will re-trust …`), asks the login keychain password once, then makes
-each trust this build: every item whose service starts with `ensemble-broker-` ([Credentials › Keychain
-items](credentials.md#keychain-items)). An item a broker of v0.4.1 or earlier wrote needs one macOS dialog, announced
+each trust this build: every item whose service starts with `ensemble-broker-` ([Keychain
+items](architecture.md#keychain-items)). An item a broker of v0.4.1 or earlier wrote needs one macOS dialog, announced
 first: click Allow; it never needs one again. `retrust` never asks for a value or creates an item (a missing one comes
 from its login), and leaves an item another application owns unchanged, naming the login that replaces it. The
 orchestrator-configured Linear client secrets are not broker items: `login linear` re-trusts them.
@@ -408,7 +408,7 @@ item at `start` only, after the manifest checks and before any container exists,
 refuses the start, naming it and the login to run. It then writes each value to
 `/run/ensemble/secrets/env/<file>` in the container's secrets tmpfs, 0400, owner `agent`, through `docker exec`
 stdin: never in the container's env, arguments or image. The copy goes with the container. Who can read the item
-and the copy, and how to revoke: [Credentials › Environment secrets](credentials.md#environment-secrets).
+and the copy, and how to revoke: [Credentials](architecture.md#credentials).
 
 ## Prefetch
 
@@ -450,7 +450,7 @@ prefetches again. None of these errors is `busy`.
   ([Egress proxy](#egress-proxy)).
 - With [`prefetch`](#prefetch), the repo at its ref in the workspace and no GitHub token.
 - A workspace volume at cwd; Claude and OpenCode have their own client-state bind, Codex only its session history.
-- Credentials on tmpfs, readable by the container's processes ([Credentials](credentials.md)); each listed
+- Credentials on tmpfs, readable by the container's processes ([Credentials](architecture.md#credentials)); each listed
   [environment secret](#environment-secrets) at `/run/ensemble/secrets/env/<file>`.
 - Tools from your `~/.ensemble/docker/worker/Dockerfile`, plus ensemble, clients, plugins and credential wrappers.
 - Each checkout runs its own branch's `.githooks/` through `core.hooksPath = .githooks`; a checkout without that directory runs none.
@@ -479,7 +479,7 @@ recovery storage.
 
 `ensemble-broker status` only reads credential status and the stored revocation backlog; it
 emits no audit. `ensemble-broker status --cleanup` explicitly retries that backlog and audits
-resolved entries, preserving the former status behavior. See [credential status](credentials.md).
+resolved entries, preserving the former status behavior. See [credential status](architecture.md#credentials).
 
 ```sh
 jq 'select(.session=="NAME")' ~/Library/Logs/ensemble/broker.jsonl
@@ -683,9 +683,16 @@ below. Keys:
 - `plugins`: in-image names or pinned sources, added to `[hosts.docker] plugins`.
 - `secrets`: `[[…secrets]]` tables of `item` (an `ensemble-broker-env/<name>` reference) and `file`
   ([Environment secrets](#environment-secrets)); never a value.
-- `lock`: a [lock](#broker-locks) name. A locked run's session closes as soon as the run ends (outcome, failure,
-  give-up, usage limit), before its result goes out: no TUI is left for a pane to follow; the workspace and history
-  stay, so `ensemble-crew reopen` continues.
+- `lock`: a [lock](#broker-locks) name. A locked run is its user's to close (a person, or a manager acting for
+  one), as an unlocked one is: an outcome (`needs_input` included), failure, give-up or usage limit closes nothing,
+  so its container, TUI, harness and lock stay and the user's answer (`ensemble-crew resume --input`) continues in
+  that container. Only the user's close (`ensemble-crew close`, `ensemble-session close`) or the client's own exit
+  (a crash, a credential-expiry close or a killed harness included) ends it; the lock goes once the container is
+  removed, and a later resume takes it again. The Delegate claims the release (stderr `delegate: session <name>
+  closed (lock <lock>)`, run log `release`) only once a close it asked for returns confirmed (`close()`, a stopped
+  start, `resume()` or a replacing run closing the earlier worker); a client's own exit claims none. Meanwhile its
+  environment secrets stay in the container: after rotating one, close the runs waiting on it
+  ([Environment secrets](#environment-secrets)).
 - `prefetch`: `true` prefetches the input's Reference block (its leading lines, opening with `Reference:` or, in an
   input without an id, `Repo:`): exactly one `Repo:` line (a clone path names its origin)
   and at most one `Ref:` line (the [Prefetch](#prefetch) ref rule; none: the default branch). Both are checked before
@@ -791,7 +798,8 @@ The `dummy-tester` run's `prefetch = true` is a role override; direct `dummy` st
 | Check | Action and expected result |
 |---|---|
 | Resolve | Run the dry-run above with an App-installed test repo; spec contains references only, the Host's gateway and role prefetch |
-| Run | `ensemble-crew role dummy-tester --input '...'` with that Repo/Ref input: outcome echoes input, plugin is available, env file is 0400, and completion closes the locked container |
+| Run | `ensemble-crew role dummy-tester --input '...'` with that Repo/Ref input: outcome echoes input, plugin is available, env file is 0400; after the outcome the locked container still runs and holds the lock |
+| Waiting | End a `dummy-tester` run on `needs_input`: `ensemble-crew status` shows it waiting with an attach command, a same-lock run exits 75 naming it, and `ensemble-crew resume --input` continues in the same container (`docker ps` shows the same one); `ensemble-crew close` removes it, then the same-lock run starts |
 | Open | `ensemble-crew run dummy-1 -- ensemble-delegate open dummy-1 --environment dummy`: Claude answers without container login; `ensemble-crew status` lists the worker |
 | Inspect | `docker ps --filter label=windroc.lock.owner=dummy-1 --format '{{.Names}}'`, then `docker inspect CONTAINER`: an `ensemble-worker:` variant of `dummy-env:test`, network `workers`, `windroc.lock=dummy-lock`, owner `dummy-1`, volume `ensemble-ws-dummy-1`, restart policy `no` |
 | Plugin and secret | In the TUI, `/dummy-plugin:` is available; `docker exec CONTAINER stat -c '%a %U' /run/ensemble/secrets/env/dummy.txt` prints `400 agent` |
@@ -867,7 +875,7 @@ Select one:
 An unregistered account, an account selected for Codex or OpenCode, or a registered account not logged in fails before a container starts. `--env ENSEMBLE_ACCOUNT=…` and a policy `env` naming it are refused: use `--account` or a role's `accounts` table.
 
 - Config picks the account; it is no access control: any process running as you can start a container with any
-  logged-in account ([Credentials › Risks](credentials.md#risks)).
+  logged-in account ([Credentials › Risks](architecture.md#risks)).
 - With two or more accounts on the Docker Host, the usage gate and `--brake` read the account a start with no
   selection picks, so the gate skips Claude runs only when every account is over a threshold (`usage-skip`, reason
   `usage`) or none has a reading (`usage unknown`). A worker's or role's selected account is gated the same way, not
@@ -879,7 +887,7 @@ An unregistered account, an account selected for Codex or OpenCode, or a registe
 
 OpenCode sessions run the host's Ollama models, or a configured provider's ([OpenCode sessions](customizing-roles-and-tasks.md#opencode-sessions)).
 Ollama needs no login; each configured provider's API key comes from the broker ([Log in](#log-in)), which writes it
-to the container's `/run/ensemble/secrets/opencode/<name>.key` at start ([Credentials](credentials.md#who-logs-in)).
+to the container's `/run/ensemble/secrets/opencode/<name>.key` at start ([Credentials](architecture.md#credentials)).
 A provider is reached through the [proxy](#egress-proxy). Add the `host:port` of each local or LAN provider's
 `base_url` to `networks.workers.exceptions` in `~/.egress/config.local.yaml`, then run `~/.egress/current/start.sh`.
 Use the URL's default port (80 or 443) when omitted. For example, `http://10.0.0.5:8080/v1` needs `10.0.0.5:8080`;
@@ -1081,18 +1089,18 @@ Nor have guarded Codex and OpenCode TUI workers and environment starts been run 
 
 | Command | Checks |
 |---|---|
-| `python3 tests/session/live_docker.py worker --client claude\|codex\|opencode CWD [NAME]`, from a manager session | a second build reuses the image; with no `--host`, the worker runs in a container; its security flags (`--cap-drop ALL`, only the egress proxy's `workers` network, no extra hosts) and mounts match the plan, and the [unreachable](credentials.md#what-a-container-cannot-reach) resources stay so; restart, close then resume, and `docker rm -f` then resume each answer a prompt; every close revokes the generation's GitHub tokens and withdraws its client credential; no revocation stays pending but the removed container's, whose tokens it reports; for OpenCode also: the first turn leaves `~/.ensemble/docker-state/<NAME>/opencode/opencode/opencode.db`, Ollama listens on `127.0.0.1` only (`lsof`), the container holds only GitHub secrets and each configured provider's key (`find /run/ensemble/secrets`), and each resume continues the same OpenCode session |
+| `python3 tests/session/live_docker.py worker --client claude\|codex\|opencode CWD [NAME]`, from a manager session | a second build reuses the image; with no `--host`, the worker runs in a container; its security flags (`--cap-drop ALL`, only the egress proxy's `workers` network, no extra hosts) and mounts match the plan, and the [unreachable](architecture.md#what-a-container-cannot-reach) resources stay so; restart, close then resume, and `docker rm -f` then resume each answer a prompt; every close revokes the generation's GitHub tokens and withdraws its client credential; no revocation stays pending but the removed container's, whose tokens it reports; for OpenCode also: the first turn leaves `~/.ensemble/docker-state/<NAME>/opencode/opencode/opencode.db`, Ollama listens on `127.0.0.1` only (`lsof`), the container holds only GitHub secrets and each configured provider's key (`find /run/ensemble/secrets`), and each resume continues the same OpenCode session |
 | `python3 tests/session/live_docker.py role --repo OWNER/NAME [--timeout S] [NAME]` | a headless engineer run on the test repo gets one forced token renewal (`maintain --renew`), opens a draft PR as `windroc-bot[bot]` after it, and its close reclaims its credentials |
 | `python3 tests/session/live_docker.py pr URL` | the PR, such as an unattended board run's, was opened as a draft by `windroc-bot[bot]` |
 
 Each prints a `PASS` line per check and per-generation timings. It stops with exit 1 at
-the first failed check. The keychain, Linear preset and board-run checks stay manual
-([Live checks](credentials.md#live-checks)).
+the first failed check. The installer's proxy, Linear preset and Linear app checks stay
+manual ([Upgrading › Live checks](upgrading.md#live-checks)).
 
 ## Risks
 
 - Container credentials are readable by every process in the container and by any process running as you
-  ([Credentials](credentials.md)); each restart and resume writes them into a new container.
+  ([Credentials](architecture.md#credentials)); each restart and resume writes them into a new container.
 - A new broker needs `retrust` ([Re-trust after an upgrade](#re-trust-after-an-upgrade)); until then starts fail
   without a dialog, naming it (`login_required`, or `keychain_failed` for the GitHub items).
 - An OpenCode provider at an `http://` `base_url` gets its API key and every prompt in plaintext: anyone on the LAN

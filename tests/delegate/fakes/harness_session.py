@@ -10,6 +10,7 @@ from dataclasses import replace
 from ensemble.delegate.engine.types import Layout
 from ensemble.session import (
     Access,
+    EnvironmentSpec,
     Exited,
     Host,
     Launch,
@@ -18,6 +19,7 @@ from ensemble.session import (
     Process,
     Resumable,
     Session,
+    SessionBusy,
     SessionError,
     SessionStatus,
 )
@@ -99,13 +101,15 @@ class RecordingHost(Host):
 
 
 def _start_agent(record, display):
-    """The run's agent session on its agent Host, through its stored session class."""
+    """The run's agent session on its agent Host, through its stored session class, in its stored
+    environment."""
     layout = Layout(record.workdir)
     with open(os.path.join(layout.run, "delegate.json"), encoding="utf-8") as file:
         state = json.load(file)
     session_cls = (
         Session if state["session_cls"] is None else load_class(state["session_cls"], Session)
     )
+    environment = state["plan"]["session"].get("environment")
     spec = SessionSpec(
         workdir=layout.run,
         access=Access(cwd=layout.agent),
@@ -113,6 +117,7 @@ def _start_agent(record, display):
         mode=Mode.TUI,
         sid=record.sid,
         name=record.sessions[1],
+        environment=None if environment is None else EnvironmentSpec.from_fields(environment),
     )
     session_cls.start(spec, host=state["host"], display=display)
 
@@ -306,6 +311,20 @@ class PersistentSession(HarnessSession):
     @classmethod
     def host(cls, name=None):
         return DiskHost(name or "agent")
+
+
+class LockingSession(HarnessSession):
+    """A broker lock per environment: a start is busy while another live session holds it; a
+    close, a stop or the client's exit (liveness not LIVE) frees it."""
+
+    @classmethod
+    def start(cls, spec, *, display=None, host=None, idle_timeout=None):
+        lock = None if spec.environment is None else spec.environment.lock
+        for other in cls.live.values():
+            held = other.spec.environment is not None and other.spec.environment.lock == lock
+            if lock and held and other.alive():
+                raise SessionBusy(lock, f"{other.name} (owner {other.name})")
+        return super().start(spec, display=display, host=host, idle_timeout=idle_timeout)
 
 
 class FailingSession(HarnessSession):
