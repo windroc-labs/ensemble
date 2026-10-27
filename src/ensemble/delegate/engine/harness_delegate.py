@@ -849,7 +849,13 @@ class HarnessDelegate(Delegate):
         self, callback: EventCallback | None, on_event: Callable[[Event], None] | None
     ) -> Result:
         """An owned run: an exception after the start leaves the attempt as it is."""
-        attempts = Attempts(self._state.plan, on_event or (lambda _event: None), self.driver)
+
+        def begun(event: Event) -> None:
+            for each in (callback, on_event):
+                if each is not None:
+                    each(event)
+
+        attempts = Attempts(self._state.plan, begun, self.driver)
         try:
             opened = attempts.begin()
         except BaseException as error:

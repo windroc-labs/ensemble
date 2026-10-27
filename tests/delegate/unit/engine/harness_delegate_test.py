@@ -2493,7 +2493,7 @@ class OwnedRun(HarnessCase):
         seen, on = self.at_begun(handled)
         self.assertEqual(view.run(on), self.NEEDS)
         self.assertEqual(seen, ["Begun", "Finished"])
-        self.assertEqual(self.lines, [])
+        self.assertEqual(self.sent(), ["begun"])
         self.assertTrue(view.driver.session.alive())
         self.assertFalse(view.alive())
         self.assertFalse(view.status().alive)
@@ -2530,7 +2530,7 @@ class OwnedRun(HarnessCase):
         state = self.record.read()
         self.assertEqual((state.completed, state.result, state.bound), (False, None, True))
         self.assertTrue(view.driver.session.alive())
-        self.assertEqual(self.lines, [])
+        self.assertEqual(self.sent(), ["begun"])
         self.assertTrue(view.alive())
 
     def test_an_opening_attempt_past_its_idle_timeout_is_given_up(self):
@@ -2542,7 +2542,7 @@ class OwnedRun(HarnessCase):
         self.assertIn(
             f"no event for 5 s; session {view._state.agent_name} left open", self.err.getvalue()
         )
-        self.assertEqual(self.sent(), ["finished"])
+        self.assertEqual(self.sent(), ["begun", "finished"])
         with open(self.events_file, encoding="utf-8") as f:
             self.assertTrue(f.read().rstrip().endswith("outcome error"))
         self.assertTrue(view.driver.session.alive())
@@ -2575,7 +2575,7 @@ class OwnedRun(HarnessCase):
         self.assertEqual(result, Result(1, None, "stopped: session harness ended without a Result"))
         self.assertGreaterEqual(clock.now, DRAIN_WAIT)
         self.assertEqual(self.record.read().result, result)
-        self.assertEqual(self.sent(), ["finished"])
+        self.assertEqual(self.sent(), ["begun", "finished"])
 
     def locked_give_up(self, *, fails: bool) -> str:
         Clock(self)
@@ -2602,7 +2602,7 @@ class OwnedRun(HarnessCase):
         self.assertIn("delegate: tui: close: not confirmed", err)
         self.assertNotIn("closed (lock", err)
         self.assertNotIn("release", self.kinds())
-        self.assertEqual(self.sent(), ["finished"])
+        self.assertEqual(self.sent(), ["begun", "finished"])
 
     def test_a_start_failure_is_stored_announced_and_finished_once(self):
         view = self.owned()

@@ -20,6 +20,7 @@ from ensemble.delegate.engine.types import (
     Finished,
     Layout,
     Result,
+    Stopped,
 )
 from ensemble.session import (
     Blocked,
@@ -80,6 +81,7 @@ class _Run:
         if isinstance(event, Exited) and self.deferred is not None:
             result, self.deferred = self.deferred, None
             self.emit(Finished(result))
+        opened = False
         for _ in range(2):
             state = self.record.read()
             plan, n = state.plan, state.attempt
@@ -89,14 +91,14 @@ class _Run:
                 if not isinstance(event, TurnStarted):
                     return
                 if self.record.follow_up(n, token):
-                    n += 1
+                    n, opened = n + 1, True
                     break
             elif state.bound or self.record.bind(n, token):
                 break
         else:
             return
         if self.attempt is None or self.n != n:
-            self.begin(self.record.read(), call.session)
+            self.begin(self.record.read(), call.session, opened=opened)
         assert self.attempt is not None
         try:
             result = self.attempt.feed(event)
@@ -106,7 +108,12 @@ class _Run:
         if isinstance(event, Exited) and (
             result is None or result.outcome is None and result.limit is None
         ):
-            result = Result(event.returncode, None, f"the client exited {event.returncode}")
+            rc = event.returncode
+            result = (
+                stopped(Stopped(128 - rc))
+                if rc < 0
+                else Result(rc, None, f"the client exited {rc}")
+            )
         if result is not None:
             self.end(result)
             return
@@ -118,7 +125,8 @@ class _Run:
         if not self.blocked:
             self.start_timer()
 
-    def begin(self, state: DelegateState, session: Session) -> None:
+    def begin(self, state: DelegateState, session: Session, *, opened: bool) -> None:
+        """opened: a follow-up, whose Begun it sends (an opening one's drive sends its own)."""
         p = state.plan
         self.n, self.state, self.session, self.blocked = state.attempt, state, session, False
         self.callback = (
@@ -135,7 +143,8 @@ class _Run:
             on_event=self.emit,
             first=not p.spec.resume and state.previous is None,
         )
-        self.emit(Begun(p.sid))
+        if opened:
+            self.emit(Begun(p.sid))
 
     def emit(self, event: Event) -> None:
         if self.callback is not None:
