@@ -1,6 +1,7 @@
-"""HostedSession, the session layer's one concrete Session: a Client run in a Mode on a
-Host. events() yields its events, Stderr and IdleTimeout (none while Blocked) up to its Exited,
-recording `stderr` and each ClientBound as `client_session`, never yielded.
+"""HostedSession, the Session of a Client run in a Mode on a Host (a harness-owned worker's
+control view is harness/view.py's OwnedSession). events() yields its events, Stderr and
+IdleTimeout (none while Blocked) up to its Exited, recording `stderr` and each ClientBound as
+`client_session`, never yielded.
 """
 
 from __future__ import annotations
