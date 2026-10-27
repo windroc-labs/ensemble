@@ -97,7 +97,7 @@ func (noKeychain) Services(string) ([]string, error) { return nil, nil }
 func (noKeychain) Accounts(string) ([]string, error) { return nil, nil }
 
 // legacyError refuses a command while the one-time rename is incomplete, naming the first old names found; nil when
-// it is complete.
+// it is complete. scripts/install.sh's broker_logins looks for "old-name broker items found" in status's error.
 func (a app) legacyError() error {
 	found, err := a.legacy()
 	if err != nil {

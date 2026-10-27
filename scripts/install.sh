@@ -2073,14 +2073,24 @@ token_screen_leave() {
 }
 
 broker_logins() {
-  local sha min need said slug
+  local sha min need said slug refusal
   sha=$(shasum -a 256 "$broker" | cut -d' ' -f1)
   # Before any other broker call: a new broker's items from earlier builds trust it, with one keychain password.
   step "broker re-trust"
   if [ "$(state_get retrust)" = "$sha" ]; then
     skip "done for this broker"
   else
-    "$broker" retrust <&3 >&3 2>&3 || die "broker re-trust failed; rerun install.sh, or run $broker retrust"
+    # retrust's password prompt is on stderr: status, which asks nothing, tells whether old-name items refused it.
+    if ! "$broker" retrust <&3 >&3 2>&3; then
+      refusal=$("$broker" status </dev/null 2>&1 >/dev/null) || :
+      case $refusal in
+        *"old-name broker items found"*)
+          current=
+          die "old-name broker keychain items remain: run the maintainer's one-time rename step ($rename_doc), then rerun install.sh"
+          ;;
+      esac
+      die "broker re-trust failed; rerun install.sh, or run $broker retrust"
+    fi
     state_set retrust "$sha"
   fi
   step "broker login: Claude"
