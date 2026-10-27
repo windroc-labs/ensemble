@@ -518,7 +518,7 @@ The orchestrator runs the core from a board, chosen by `[orchestrator] tracker`:
 
 By hand (macOS; the orchestrator runs this checkout's scripts; `<work_dir>` is `orchestrator.work_dir`):
 
-1. Create `~/.ensemble/config.local.toml` from the `# local:` lines of each packaged `config.toml`, each under its layer's section, researcher's and pm's `[output]` included. With `tracker = "linear"`, a required `[orchestrator.linear]` key left `""` stops every `ensemble-orchestrator` command:
+1. Create `~/.ensemble/config.local.toml` from the `# local:` lines of each packaged `config.toml`, each under its layer's section, researcher's, pm's and verifier's `[output]` included. With `tracker = "linear"`, a required `[orchestrator.linear]` key left `""` stops every `ensemble-orchestrator` command:
 
    ```toml
    [orchestrator]                         # the tracker
