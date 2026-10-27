@@ -9,6 +9,7 @@ import io
 import json
 import os
 import uuid
+from collections.abc import Callable
 from dataclasses import replace
 from unittest import mock
 
@@ -71,6 +72,19 @@ class View:
             raise self.close_fail
 
 
+class RacingView(View):
+    """A view whose stop runs `race`, then fails."""
+
+    def __init__(self, race):
+        super().__init__()
+        self.race = race
+
+    def stop(self):
+        super().stop()
+        self.race()
+        raise SessionError("gone")
+
+
 class Timer:
     """threading.Timer, fired by hand."""
 
@@ -105,6 +119,8 @@ class Child:
         return False
 
     def communicate(self, line, timeout=None):
+        if self.case.racing is not None:
+            self.case.racing()
         self.case.sent.append((json.loads(line), self.case.metadata()))
         return "", ""
 
@@ -154,6 +170,7 @@ class HandlerCase(HarnessCase):
         self.record = RunRecord(Layout(self.work))
         self.register(1)
         self.view, self.sent, self.seq = View(), [], 0
+        self.racing: Callable[[], None] | None = None
         self.generation = uuid.uuid4().hex
         Timer.made = []
         self.enterContext(mock.patch("threading.Timer", Timer))
@@ -665,22 +682,21 @@ class EndingTest(HandlerCase):
     def lost(self, event) -> None:
         """Another owner completes the attempt while the handler decides `event`: no note."""
         self.call(TurnStarted())
-        before, feed = self.kinds(), handler.Attempt.feed
-
-        def racing(attempt, event):
-            self.record.complete(1, self.LOST, sid=SID)
-            return feed(attempt, event)
-
-        with mock.patch.object(handler.Attempt, "feed", racing):
-            self.call(event)
+        before = self.kinds()
+        self.call(event)
         self.assertEqual(self.state().result, self.LOST)
         self.assertEqual(self.kinds(), before)
         self.assertNotIn(("finished", 1), self.kinds_sent())  # a Progress event is not stored
 
-    def test_a_lost_turn_failure_writes_no_notes(self):
-        self.lost(TurnFailed("api_error", "overloaded"))
+    def race(self) -> None:
+        self.record.complete(1, self.LOST, sid=SID)
+
+    def test_a_lost_limit_writes_no_notes(self):
+        self.view = RacingView(self.race)
+        self.lost(LimitHit(None))
 
     def test_a_lost_outcome_writes_no_progress_note(self):
+        self.racing = self.race  # at its Progress delivery
         self.lost(TurnEnd(f"{START}\n{block(DONE)}", 0))
 
     def test_a_lost_give_up_writes_no_notes(self):

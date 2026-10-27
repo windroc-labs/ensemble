@@ -3427,7 +3427,7 @@ class OwnedStartTest(Case):
     def test_a_stop_while_its_view_is_built_kills_its_harness(self):
         self.harness_writes({"state": "running", "name": "w1", "sid": SID, "generation": "g7"})
         with (
-            mock.patch.object(HostedSession, "_view", side_effect=KeyboardInterrupt),
+            mock.patch.object(self.session_cls, "_view", side_effect=KeyboardInterrupt),
             self.assertRaises(KeyboardInterrupt),
         ):
             self.session_cls.start(self.spec())

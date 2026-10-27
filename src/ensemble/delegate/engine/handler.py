@@ -85,10 +85,12 @@ class _Run:
         self.notes.append((kind, fields))
 
     def flush(self) -> None:
+        if not self.notes:
+            return
         notes, self.notes, log = self.notes, [], self.log
+        assert log is not None
         for kind, fields in notes:
             try:
-                assert log is not None
                 log.note(kind, **fields)
             except OSError as error:
                 say(f"delegate: {error}")
@@ -217,9 +219,13 @@ class _Run:
         self.stop_timer()
         state, n, self.attempt = self.state, self.n, None
         assert state is not None and n is not None
-        if not self.record.complete(n, result, sid=state.plan.sid):
-            self.notes.clear()
+        try:
+            won = self.record.complete(n, result, sid=state.plan.sid)
+        finally:
+            notes, self.notes = self.notes, []
+        if not won:
             return
+        self.notes = notes
         self.flush()
         if finish(state, result, self.session) and timer:
             self.deferred = result

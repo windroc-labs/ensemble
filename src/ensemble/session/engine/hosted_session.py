@@ -485,9 +485,9 @@ class HostedSession(Session):
         roots = cls._roots(spec.client)
         request = cls.harness_request(spec, display=display, host=host, roots=roots)
         channel = Channel.create()
-        tie = None
-        held = signal.pthread_sigmask(signal.SIG_BLOCK, SIGNALS)
+        tie, held = None, signal.pthread_sigmask(signal.SIG_BLOCK, ())
         try:
+            signal.pthread_sigmask(signal.SIG_BLOCK, SIGNALS)
             tie = None if mode in (Mode.TUI, Mode.IN_PROCESS) else Tie()  # these outlive it
             caller = () if tie is None else ("--caller", str(tie.far))
             channel.write_request(request)

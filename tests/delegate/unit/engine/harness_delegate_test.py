@@ -10,10 +10,12 @@ place.
 
 import fcntl
 import io
+import itertools
 import json
 import os
 import shutil
 import signal
+import threading
 from collections.abc import Callable
 from dataclasses import asdict, replace
 from types import SimpleNamespace
@@ -2591,13 +2593,14 @@ class OwnedRun(HarnessCase):
 
     def test_a_stop_before_the_start_returns_closes_the_drivers_session(self):
         view = self.owned()
-        start = AgentDriver.start
 
-        def stopped(driver, spec, **kw):
-            start(driver, spec, **kw)
-            raise Stopped(129)
+        class Stopping(AgentDriver):
+            def start(self, spec, **kw):
+                super().start(spec, **kw)
+                raise Stopped(129)
 
-        with mock.patch.object(AgentDriver, "start", stopped), self.assertRaises(Stopped):
+        view.driver = Stopping(HarnessSession, display=None)
+        with self.assertRaises(Stopped):
             view.run()
         self.assert_stopped_start_left_nothing(view)
 
@@ -2796,7 +2799,8 @@ class OwnedRun(HarnessCase):
             HarnessDelegate.attach(self.work, session_cls=HarnessSession).resume(input="the answer")
         self.assertEqual(agent.sent, ["the answer"])
 
-    def test_status_and_resume_agree_while_the_run_lock_is_held(self):
+    def stopped_run_whose_drive_holds_the_run_lock(self) -> int:
+        """A completed owned run, its worker gone, its run lock held here: the descriptor."""
         view = self.owned()
         stopped = Result(129, None, "stopped: Stopped: 129")
         _seen, on = self.at_begun(
@@ -2804,21 +2808,29 @@ class OwnedRun(HarnessCase):
         )
         view.run(on)
         view.driver.session.liveness = Liveness.ABSENT
-        again, launches = (
-            HarnessDelegate.attach(self.work, session_cls=HarnessSession),
-            len(harness_launches()),
-        )
-        with RunState(Layout(self.work)).run_lock():
-            status = again.status()
-            self.assertEqual((status.alive, status.state), (True, StatusState.WORKING))
-            self.assertTrue(again.alive())
-            self.assertEqual(again.resume().sid, SID)
-            self.assertEqual(len(harness_launches()), launches)
-            self.assertEqual(self.metadata()["attempt"], 1)
+        fd = os.open(os.path.join(Layout(self.work).run, "delegate.run.lock"), os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return fd
+
+    def test_resume_waits_for_a_completed_runs_drive_to_return(self):
+        fd = self.stopped_run_whose_drive_holds_the_run_lock()
+        again = HarnessDelegate.attach(self.work, session_cls=HarnessSession)
         status = again.status()
         self.assertEqual((status.alive, status.state), (False, StatusState.GONE))
+        threading.Timer(0.3, os.close, (fd,)).start()
         again.resume()
         self.assertEqual(self.metadata()["attempt"], 2)
+
+    def test_resume_of_a_run_whose_drive_never_returns_is_refused(self):
+        fd = self.stopped_run_whose_drive_holds_the_run_lock()
+        self.addCleanup(os.close, fd)
+        clock = itertools.count(0.0, 100.0)
+        with (
+            mock.patch("time.monotonic", side_effect=lambda: next(clock)),
+            self.assertRaisesRegex(ConfigError, "delegate is still alive"),
+        ):
+            HarnessDelegate.attach(self.work, session_cls=HarnessSession).resume()
+        self.assertEqual(self.metadata()["attempt"], 1)
 
     def test_resume_of_an_ended_worker_registers_the_next_worker(self):
         view = self.owned()

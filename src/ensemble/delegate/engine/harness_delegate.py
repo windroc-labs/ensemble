@@ -104,6 +104,7 @@ DRAIN_WAIT = (
     35  # seconds a worker is gone before its drive ends the attempt: past the harness's drain
 )
 GONE_EVERY = 1.0  # seconds between the drive's worker checks
+WIND_DOWN_WAIT = 30.0  # seconds
 
 
 class HarnessDelegate(Delegate):
@@ -347,6 +348,17 @@ class HarnessDelegate(Delegate):
         except (BlockingIOError, ConfigError, OSError, SessionError, SessionConfigError):
             return
 
+    def _wound_down(self) -> None:
+        """Up to WIND_DOWN_WAIT s for a completed run's drive to let the run lock go."""
+        deadline = time.monotonic() + WIND_DOWN_WAIT
+        while self.store.running() and time.monotonic() < deadline:
+            try:
+                if not self._read().completed:
+                    return
+            except ConfigError:
+                return
+            time.sleep(TUI_POLL)
+
     def _sweep(self) -> None:
         try:
             sweep(self.store)
@@ -589,17 +601,17 @@ class HarnessDelegate(Delegate):
             raise ConfigError(str(error)) from None
 
     def _alive(self, state: DelegateState) -> bool:
-        if self.store.running():
-            return True
         if owned(state.plan):
             if state.completed:
                 return False
+            if self.store.running():
+                return True
             agent = self._answered_agent(state) if state.bound else None
             return agent is not None and agent.alive()
         if state.detached:
             process = self._harness(state)
-            return process is not None and process.alive()
-        return False
+            return process is not None and process.alive() or self.store.running()
+        return not state.completed and self.store.running()
 
     def alive(self) -> bool:
         return self._alive(self._read())
@@ -876,7 +888,6 @@ class HarnessDelegate(Delegate):
         refused: bool | None = None,
         handle: Session | None = None,
     ) -> Result:
-        """refused not None: an owned start's, its `handle` then closed."""
         ended = self._start_failure_end(error)
         if isinstance(error, (Exception, SystemExit)):
             RunLog(self.layout.run).note(
@@ -970,10 +981,13 @@ class HarnessDelegate(Delegate):
         tried a close.
         """
         n, sid = self._state.attempt, self._state.plan.sid
-        record = RunRecord(self.layout, self.store)
-        won = record.complete(n, result, sid=sid, unbound=unbound, closing=closing)
-        if then is not None:
-            then()
+        try:
+            won = RunRecord(self.layout, self.store).complete(
+                n, result, sid=sid, unbound=unbound, closing=closing
+            )
+        finally:
+            if then is not None:
+                then()
         if not won:
             return None
         closed = finish(self._read(), result, handle, give_up=give_up, notes=notes)
@@ -1284,6 +1298,8 @@ class HarnessDelegate(Delegate):
         if mode not in (None, Mode.HEADLESS, Mode.TUI):
             raise ConfigError(f"resume: mode must be headless or tui, got {mode!r}")
         self._settle()
+        if input is None:
+            self._wound_down()
         with self.store.mutex():
             state = self._read()
             if state.plan.sid != self._state.plan.sid:
@@ -1293,7 +1309,7 @@ class HarnessDelegate(Delegate):
             previous = self._state = state
             alive = self._alive(state)
             if input is not None:
-                if alive and not (owned(state.plan) and state.completed):  # D9
+                if alive:
                     raise ConfigError(f"{self.workdir}: delegate is still alive")
                 outcome = state.result.outcome if state.result is not None else None
                 if outcome is None or outcome.status != OutcomeStatus.NEEDS_INPUT:

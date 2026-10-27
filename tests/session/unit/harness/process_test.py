@@ -415,16 +415,11 @@ class CallerTest(Base):
             signal.SIG_SETMASK,
             signal.pthread_sigmask(signal.SIG_BLOCK, SIGNALS),
         )
-        channel = Channel.create()
+        channel = Channel.create()  # no request: its start fails at once
         self.addCleanup(channel.release)
-        masks = []
-        harness = mock.Mock()
-        harness.return_value.run.side_effect = lambda _begin: (
-            masks.append(signal.pthread_sigmask(signal.SIG_BLOCK, ())) or 0
-        )
-        with mock.patch.object(process, "Harness", harness), mock.patch("signal.signal"):
-            self.assertEqual(process.main(["process", channel.directory]), 0)
-        self.assertEqual(set(SIGNALS) & masks[0], set())
+        with mock.patch("signal.signal"):
+            self.assertEqual(process.main(["process", channel.directory]), 1)
+        self.assertEqual(set(SIGNALS) & signal.pthread_sigmask(signal.SIG_BLOCK, ()), set())
 
     def is_open(self, fd) -> bool:
         try:
