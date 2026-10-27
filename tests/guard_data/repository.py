@@ -93,3 +93,11 @@ STANDALONE = frozenset(
 
 
 COMMAND_DOCS = ("skills/",)
+
+
+KEYCHAIN_FREE_ALLOWED = {
+    (
+        "src/broker/internal/broker/keychain_dialog_darwin_test.go",
+        "c96d40cdb530d8fcc9f1e9383f88fa44f2c0217eb28ba9291d96b558f8504b92",
+    ): "A fileKeychain without ui on a path with no keychain file: GetWithDialog and TrustAppsByDialog return ErrNeedsDialog before any Security call.",
+}

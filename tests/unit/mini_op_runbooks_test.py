@@ -10,12 +10,23 @@ from tests.case import REPO, Case
 
 RUNBOOKS = Path(REPO, ".mini-op/runbooks")
 SCRIPTS = {
+    "broker-keychain": {"noui-test"},
     "install-ensemble": {"install-test", "storekey-stdin"},
     "clean-ensemble": {"clean-test"},
     "test-accounts": {"importkey", "lq"},
 }
-DATA = {"install-ensemble": {"strata.conf.example", "test-board.toml"}}
-NAMES = {"install-ensemble", "clean-ensemble", "manager-on-mini", "test-accounts", "gotchas"}
+DATA = {
+    "broker-keychain": {"keychain_noui_darwin_test.go"},
+    "install-ensemble": {"strata.conf.example", "test-board.toml"},
+}
+NAMES = {
+    "broker-keychain",
+    "install-ensemble",
+    "clean-ensemble",
+    "manager-on-mini",
+    "test-accounts",
+    "gotchas",
+}
 SECRET_READERS = (
     "install-ensemble/storekey-stdin",
     "test-accounts/importkey",
