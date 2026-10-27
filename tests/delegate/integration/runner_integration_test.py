@@ -1,7 +1,6 @@
 """Real process behavior in isolated integration fixtures."""
 
 import dataclasses
-import io
 import json
 import os
 import re
@@ -165,7 +164,9 @@ class Fix(Base):
             r = self.go(said(START, block(INVALID)))
         self.assertEqual((r.returncode, r.outcome), (1, None))
         self.assertTrue(
-            r.error.startswith(f"invalid outcome: {INVALID_ERROR}; resume failed: cannot start "),
+            r.error.startswith(
+                f"invalid outcome: {INVALID_ERROR}; resume failed: worker headless-"
+            ),
             r.error,
         )
         self.assertEqual(
@@ -196,7 +197,7 @@ class UsageLimit(Base):
         self.assertFalse(running(self.launches()[0]["pid"]))
         when = datetime.fromtimestamp(at).astimezone().isoformat(timespec="seconds")
         self.assertEqual(
-            r, Result(-signal.SIGKILL, None, f"usage limit; resets at {when}", Limit(at))
+            r, Result(-signal.SIGHUP, None, f"usage limit; resets at {when}", Limit(at))
         )
         self.assertEqual(r.limit.resets_at, at)
         self.assertEqual(self.kinds(), ["session", "input", "progress", "limit", "result", "end"])
@@ -275,7 +276,7 @@ class Stops(Base):
         ):
             r = self.go(said(START, block(DONE)))
         self.assertEqual((r.returncode, r.outcome, self.events), (1, None, [Finished(r)]))
-        self.assertTrue(r.error.startswith("headless: cannot start "), r.error)
+        self.assertRegex(r.error, r"^headless: worker headless-[0-9a-f]{32}: cannot start guard: ")
         self.assertEqual(self.kinds(), ["session", "input", "result", "end"])
         self.assertEqual((self.last("result")["error"], self.last("end")["rc"]), (r.error, 1))
 
@@ -303,10 +304,7 @@ class Stops(Base):
                 }
             }
         )
-        proc = mock.Mock(stdout=io.StringIO(), stderr=io.StringIO())
-        with mock.patch("subprocess.Popen", return_value=proc) as popen:
-            r = self.go(said(START, block(DONE)))
-        popen.assert_called_once()
+        r = self.go(said(START, block(DONE)))
         error = f"headless: cannot start {sys.executable}: no stream"
         self.assertEqual((r, self.events), (Result(1, None, error), [Finished(r)]))
         self.assertEqual(self.kinds(), ["session", "input", "result", "end"])
@@ -506,8 +504,8 @@ class Start(Base):
         self.assertEqual((r.returncode, r.outcome, self.events), (1, None, [Finished(r)]))
         self.assertRegex(r.error, r"^cannot remove the stale out: .*Not a directory")
         self.assertEqual(
-            (procs[0].returncode, self.kinds()),
-            (-signal.SIGKILL, ["session", "input", "result", "end"]),
+            (procs[0].poll(), self.kinds()),  # its guard ended, its client with it
+            (0, ["session", "input", "result", "end"]),
         )
         self.assertEqual(self.last("result")["error"], r.error)
 
