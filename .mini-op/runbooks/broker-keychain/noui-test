@@ -5,12 +5,14 @@ scratch clone, against a temporary keychain, in this Terminal. REF=<ref> (defaul
 commit. Saves the user keychain search list to ~/.mini-op-local/ensemble/search-list.before and restores
 it on exit. Prints "noui-test: go test exited <rc>, search list <unchanged|CHANGED (restored)>"; exits 0
 (passed, list unchanged), 1 (fetch, build or test failed, the list changed, or an earlier run left
-search-list.before) or 2 (usage error, or a bad REF).'
+search-list.before) or 2 (usage error, or a bad or pull request REF).'
 [[ $# -eq 1 && $1 == -h ]] && { print -r -- $usage; exit 0; }
 (( $# == 0 )) || { print -u2 -r -- 'noui-test: usage: noui-test (REF=<ref> in the environment)'; exit 2; }
 ref=${REF:-main}
 [[ $ref =~ '^[A-Za-z0-9][A-Za-z0-9._/-]*$' ]] ||
   { print -u2 -r -- 'noui-test: REF must match ^[A-Za-z0-9][A-Za-z0-9._/-]*$; ran nothing'; exit 2; }
+[[ $ref == pull/* || $ref == refs/pull/* ]] &&
+  { print -u2 -r -- 'noui-test: REF is a pull request ref, which may be a fork'"'"'s code; ran nothing'; exit 2; }
 state=~/.mini-op-local/ensemble
 before=$state/search-list.before
 asset=.mini-op/runbooks/broker-keychain/keychain_noui_darwin_test.go

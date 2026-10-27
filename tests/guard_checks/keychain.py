@@ -40,13 +40,17 @@ GO = {
         r'"[^"\n]*(?:go-keychain|go-keyring|99designs/keyring)[^"\n]*"'
     ),
     "security-exec": re.compile(
-        r'exec\.Command(?:Context)?\(\s*(?:[^,()]+,\s*)?"(?:/usr/bin/)?security"'
-        r'|exec\.Command(?:Context)?\([^)]*"(?:find|add|delete)-(?:generic|internet)-password"'
+        r'exec\.(?:Command\(|CommandContext\([^,]*,)\s*"(?:/usr/bin/)?security"'
+        r'|exec\.Command(?:Context)?\((?:[^()]|\([^()]*\))*"(?:find|add|delete)-(?:generic|internet)-password"'
     ),
     "file-keychain": re.compile(r"fileKeychain\{|\.login\(\)"),
 }
+# The program at a command's start: a line's (or a workflow run:'s), after a separator, or after a
+# shell keyword.
 COMMAND = re.compile(
-    r"(?:^\s*(?:-\s+)?(?:run:\s*)?|[;&|(`]\s*|\$\(\s*)(?:/usr/bin/)?security\s+[A-Za-z]"
+    r"(?:^\s*(?:(?:-\s+)?run:\s*[\"']?)?|[;&|(`]\s*|\$\(\s*"
+    r"|(?<![\w-])(?:if|then|else|do|while|until|exec|command|time|!)\s+)"
+    r"(?:/usr/bin/)?security\s+[A-Za-z]"
 )
 PROGRAMS = {"security", "/usr/bin/security"}
 SUBCOMMAND = re.compile(r"(?:find|add|delete)-(?:generic|internet)-password")
@@ -126,13 +130,14 @@ def _python(text):
             names = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module]
             if any(name and name.split(".")[0] == "keyring" for name in names):
                 found.add((node.lineno, "credential-library"))
-        elif (
-            isinstance(node, ast.Call)
-            and node.args
-            and SPAWNS.fullmatch(_dotted(node.func, bound))
-            and _calls_security(node.args[0])
-        ):
-            found.add((node.lineno, "security-spawn"))
+        elif isinstance(node, ast.Call) and SPAWNS.fullmatch(name := _dotted(node.func, bound)):
+            # os.spawn*'s first argument is the mode; a program may also come as args=.
+            first = 1 if name.startswith("os.spawn") else 0
+            program = node.args[first : first + 1] + [
+                k.value for k in node.keywords if k.arg == "args"
+            ]
+            if any(_calls_security(arg) for arg in program):
+                found.add((node.lineno, "security-spawn"))
     return found
 
 
@@ -141,7 +146,7 @@ def _calls_security(arg):
         return (arg.value.split() or [""])[0] in PROGRAMS
     if not isinstance(arg, ast.List | ast.Tuple):
         return False
-    words = [e.value for e in arg.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)]
-    first = arg.elts[0] if arg.elts else None
-    program = isinstance(first, ast.Constant) and first.value in PROGRAMS
-    return program or any(SUBCOMMAND.fullmatch(word) for word in words)
+    words = [e.value if isinstance(e, ast.Constant) else None for e in arg.elts]
+    return (bool(words) and words[0] in PROGRAMS) or any(
+        isinstance(word, str) and SUBCOMMAND.fullmatch(word) for word in words
+    )
