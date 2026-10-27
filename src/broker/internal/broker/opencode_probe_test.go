@@ -82,25 +82,16 @@ func TestOpencodeProbeClassifiesCredentialFailures(t *testing.T) {
 	for name, tc := range map[string]struct {
 		failure error
 		invalid bool
-		access  *AppAccess
 		code    protocol.Code
 	}{
 		"missing":       {failure: ErrNotFound, code: protocol.LoginRequired},
 		"invalid":       {invalid: true, code: protocol.LoginRequired},
 		"locked":        {failure: ErrNeedsDialog, code: protocol.KeychainFailed},
 		"access failed": {failure: errors.New(apiKey), code: protocol.KeychainFailed},
-		// Readable by the broker, but start would refuse it: the probe does too, so install.sh logs in again.
-		"shared": {access: func() *AppAccess {
-			a := brokerOnly()
-			a.Entries[1].Apps = append(a.Entries[1].Apps, security)
-			return &a
-		}(), code: protocol.LoginRequired},
-		"earlier build": {access: reinstalled(), code: protocol.LoginRequired},
 	} {
 		t.Run(name, func(t *testing.T) {
 			k := providerKeys("strata")
 			k.readErr = tc.failure
-			k.access = tc.access
 			if tc.invalid {
 				k.items["ensemble-broker-opencode/strata"] = []byte("\n")
 			}

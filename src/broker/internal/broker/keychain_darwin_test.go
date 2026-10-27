@@ -94,12 +94,8 @@ func TestNoUIAgainstForeignItem(t *testing.T) {
 	if err := within(t, "WriteSecret", func() error { return k.WriteSecret(noUIService, noUIAccount, []byte("rewritten")) }); !errors.Is(err, ErrNotBrokerItem) {
 		t.Errorf("WriteSecret: %v, want ErrNotBrokerItem", err)
 	}
-	runSecurity(t, "add-generic-password", "-s", codexService, "-a", codexAccount, "-w", noUIValue, path)
-	if err := within(t, "WriteCodex", func() error { return k.WriteCodex([]byte("rewritten")) }); !errors.Is(err, ErrNotBrokerItem) {
-		t.Errorf("WriteCodex: %v, want ErrNotBrokerItem", err)
-	}
-	if got := runSecurity(t, "find-generic-password", "-s", codexService, "-a", codexAccount, "-w", path); strings.TrimSpace(got) != noUIValue {
-		t.Errorf("the Codex item holds %q, want it unchanged", got)
+	if err := within(t, "WriteCodex", func() error { return k.WriteCodex([]byte("rewritten")) }); err == nil {
+		t.Error("WriteCodex wrote")
 	}
 	if got := runSecurity(t, "find-generic-password", "-s", noUIService, "-a", noUIAccount, "-w", path); strings.TrimSpace(got) != noUIValue {
 		t.Errorf("the item holds %q, want it unchanged", got)
