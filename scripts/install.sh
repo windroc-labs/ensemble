@@ -1075,6 +1075,7 @@ client_login() {
 }
 
 client_logins() {
+  local output
   step "GitHub CLI login"
   if login_status gh; then
     skip "logged in"
@@ -1093,6 +1094,8 @@ client_logins() {
   if ! has codex; then
     skip "Codex not chosen"
   elif login_status codex; then
+    # codex login status reads only the saved login; the plugin step's first read asks the server.
+    if ! output=$(codex plugin list --json </dev/null 2>&1 >/dev/null); then codex_rejected "$output"; fi
     skip "logged in"
   else
     client_login codex codex login
@@ -1362,6 +1365,26 @@ claude_plugins() {
   ensemble_plugin_check claude "Claude Code"
 }
 
+# Dies with the re-login command when Codex's output $1 says its server rejected the saved login (401).
+codex_rejected() {
+  local text
+  text=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  if [[ $text =~ (^|[^0-9])401([^0-9]|$) || $text == *unauthori[sz]ed* ]]; then
+    die "Codex: the saved login was rejected (401 Unauthorized): run codex login, then rerun install.sh"
+  fi
+}
+
+# Runs codex $2…, its output on stderr; when it fails, dies with $1, or as codex_rejected says.
+codex_call() {
+  local message=$1 output rc=0
+  shift
+  output=$(codex "$@" </dev/null 4>&2 2>&1 1>&4 4>&-) || rc=$?
+  if [ -n "$output" ]; then say "$output"; fi
+  [ "$rc" != 0 ] || return 0
+  codex_rejected "$output"
+  die "$message"
+}
+
 codex_plugins() {
   local rc id ids=(ensemble@windroc)
   step "Codex plugins"
@@ -1373,11 +1396,10 @@ codex_plugins() {
   codex_market windroc https://github.com/windroc-labs/agent-plugins-marketplace.git || rc=$?
   if [ "$rc" = 1 ]; then
     ledger_add codex-marketplace windroc
-    codex plugin marketplace add windroc-labs/agent-plugins-marketplace </dev/null >&2 \
-      || die "Codex: cannot add marketplace windroc"
+    codex_call "Codex: cannot add marketplace windroc" plugin marketplace add windroc-labs/agent-plugins-marketplace
   else
     [ "$rc" = 0 ] || die "Codex: marketplace windroc has another source"
-    codex plugin marketplace upgrade windroc </dev/null >&2 || die "Codex: cannot refresh marketplace windroc"
+    codex_call "Codex: cannot refresh marketplace windroc" plugin marketplace upgrade windroc
   fi
   if [ "$docker" != yes ]; then ids+=(updraft@windroc); fi
   for id in "${ids[@]}"; do
@@ -1386,15 +1408,15 @@ codex_plugins() {
     case $rc in
       0)
         if [ "$id" = ensemble@windroc ]; then
-          codex plugin add "$id" </dev/null >&2 || die "Codex: cannot update $id to $ref"
+          codex_call "Codex: cannot update $id to $ref" plugin add "$id"
         else
           skip "$id installed"
         fi
         ;;
-      2) codex plugin add "$id" </dev/null >&2 || die "Codex: cannot enable/update $id to $ref" ;;
+      2) codex_call "Codex: cannot enable/update $id to $ref" plugin add "$id" ;;
       *)
         ledger_add codex-plugin "$id"
-        codex plugin add "$id" </dev/null >&2 || die "Codex: cannot install $id at $ref"
+        codex_call "Codex: cannot install $id at $ref" plugin add "$id"
         ;;
     esac
   done
