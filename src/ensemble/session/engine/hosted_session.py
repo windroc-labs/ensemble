@@ -833,10 +833,8 @@ class HostedSession(Session):
 
     @classmethod
     def retire(cls, name: str, *, sid: str | None = None, host: str | None = None) -> None:
-        """A bound owner's confirmed close, asked before any Host probe but a listed terminal of
-        another sid (its terminal gone too: sid from session.json): OwnerRefused when it refuses,
-        Unanswered when it cannot tell; else closed here. Another sid's session.json raises before
-        any owner is asked or anything closed.
+        """A bound owner's confirmed close, asked before any Host probe (OwnerRefused: refused;
+        Unanswered: it cannot tell), else closed here; another sid raises first.
         """
         cls._retire(name, sid=sid, host=host)
 
