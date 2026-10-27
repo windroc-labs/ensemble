@@ -4,7 +4,7 @@ import contextlib
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum, StrEnum, auto
 from typing import TypedDict
 
 from ensemble.delegate.composer import ConfigError, RunConfig, RunParams, Team
@@ -236,12 +236,12 @@ class GateStatus(StrEnum):
     KEPT = "kept"
 
 
-class Close(StrEnum):
+class Close(Enum):
     """A stored ending's locked close: none, it returned, or it failed."""
 
-    NONE = "none"
-    RETURNED = "returned"
-    FAILED = "failed"
+    NONE = auto()
+    RETURNED = auto()
+    FAILED = auto()
 
 
 @dataclass(frozen=True)

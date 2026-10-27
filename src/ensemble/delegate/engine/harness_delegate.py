@@ -11,7 +11,7 @@ import time
 import traceback
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
-from enum import StrEnum
+from enum import Enum, auto
 
 import ensemble.utils as utils_package
 from ensemble.delegate import config
@@ -83,12 +83,12 @@ from ensemble.utils import (
 )
 
 
-class _Ended(StrEnum):
+class _Ended(Enum):
     """_drive_end's compare-and-set; closed: finish tried its locked close."""
 
-    LOST = "lost"
-    STORED = "stored"
-    CLOSED = "closed"
+    LOST = auto()
+    STORED = auto()
+    CLOSED = auto()
 
 
 def _team(team: Team) -> Team:
@@ -388,7 +388,7 @@ class HarnessDelegate(Delegate):
         if payload is None:
             return self.store.running()
         try:
-            return self._live_or_held(self._parse(payload))
+            return self._alive(self._parse(payload))
         except ConfigError:
             data = _loaded(payload)
         host, name = data.get("harness_host"), data.get("harness_name")
@@ -627,10 +627,6 @@ class HarnessDelegate(Delegate):
             process = self._harness(state)
             return process is not None and process.alive() or self.store.running()
         return not state.completed and self.store.running()
-
-    def _live_or_held(self, state: DelegateState) -> bool:
-        """Alive, or a winding drive holds the run lock."""
-        return self.store.running() or self._alive(state)
 
     def alive(self) -> bool:
         return self._alive(self._read())
