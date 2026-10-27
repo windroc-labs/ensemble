@@ -925,6 +925,11 @@ main() {
   docker_reachable
   if [ -z "$yes" ] && ! ask_yn "Remove all of this?"; then die "nothing removed"; fi
   trap on_exit EXIT
+  # On a signal bash runs the EXIT trap with the last command's status, often 0: exit with the signal's, so on_exit
+  # names the rerun.
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   sudo_once
   if [ -x "$root/opt/homebrew/bin/brew" ]; then eval "$("$root/opt/homebrew/bin/brew" shellenv)"; fi
   if grep -qxF "dir"$'\t'"$HOME/.ensemble" "$ledger"; then agent_root=1; fi
