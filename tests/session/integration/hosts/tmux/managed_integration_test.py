@@ -198,6 +198,24 @@ class ManagedIntegrationTest(Case):
         worker.close()
         worker.close()
 
+    def test_end_of_input_delivers_the_bytes_before_it_then_eof(self):
+        worker = self.worker()
+        worker.write(b"recall\n")
+        worker.write(b"")
+        messages = []
+
+        def exited():
+            messages.extend(worker.read(0.1))
+            return any(isinstance(message, WorkerExit) for message in messages)
+
+        live_tmux.wait(exited, what="worker exit at stdin EOF")
+        self.assertEqual(messages[-1], WorkerExit(0))
+        self.assertIn(
+            b"violet compass",
+            b"".join(message.data for message in messages if isinstance(message, WorkerOutput)),
+        )
+        worker.close()
+
     def test_stalled_consumer_triggers_close_and_reader_keeps_draining(self):
         worker = self.worker()
         worker.write(b"flood\n")

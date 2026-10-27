@@ -184,6 +184,7 @@ class InteractiveProcess(Process, Interactive):
         raise NotImplementedError
 
     def write(self, data: bytes) -> None:
+        """b"": headless EOF; refused after exit."""
         raise NotImplementedError
 
     def tick(self, now: float) -> float | None:

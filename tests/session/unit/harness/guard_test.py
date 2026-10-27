@@ -557,6 +557,46 @@ class GuardTest(Case):
             runtime.read_stream(8)
         self.assertFalse(runtime.streams)
 
+    def test_an_empty_input_frame_closes_stdin_after_the_queued_bytes(self):
+        runtime = self.runtime()
+        runtime.proc, runtime.input_fd = mock.Mock(), 10
+        runtime.command(b"i", b"queued")
+        runtime.command(b"i", b"")
+        runtime.command(b"i", b"late")
+        written = []
+        with mock.patch.object(
+            os, "write", side_effect=lambda _fd, data: written.append(bytes(data)) or 3
+        ):
+            runtime.write_input(ended=False)
+            runtime.proc.stdin.close.assert_not_called()
+            runtime.write_input(ended=False)
+            runtime.write_input(ended=False)
+        self.assertEqual(written, [b"queued", b"ued"])
+        runtime.proc.stdin.close.assert_called_once()
+
+    def test_a_terminal_guard_ignores_an_empty_input_frame(self):
+        runtime = self.runtime(terminal=True)
+        runtime.proc, runtime.master, runtime.input_fd = mock.Mock(), 8, 8
+        runtime.command(b"i", b"")
+        runtime.command(b"i", b"typed")
+        written = []
+        with mock.patch.object(
+            os, "write", side_effect=lambda _fd, data: written.append(bytes(data)) or len(data)
+        ):
+            runtime.write_input(ended=False)
+        self.assertEqual(written, [b"typed"])
+        runtime.proc.stdin.close.assert_not_called()
+
+    def test_input_queued_at_the_clients_exit_is_dropped(self):
+        runtime = self.runtime()
+        runtime.proc, runtime.input_fd = mock.Mock(), 10
+        runtime.command(b"i", b"queued")
+        runtime.command(b"i", b"")
+        with mock.patch.object(os, "write") as write:
+            runtime.write_input(ended=True)
+        write.assert_not_called()
+        runtime.proc.stdin.close.assert_not_called()
+
     def test_pidfd_prevents_recycled_pid_signal(self):
         with (
             mock.patch.object(os, "pidfd_open", return_value=9),

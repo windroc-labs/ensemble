@@ -284,6 +284,55 @@ class ManagedProcessTest(Case):
         self.assertEqual((channel.state(), channel.returncode()), (Liveness.ABSENT, 0))
         self.assertEqual(channel.read(0), [WorkerExit(0)])
 
+    def test_an_empty_write_ends_headless_input_and_later_writes_are_refused(self):
+        channel = self.channel()
+        channel.accept(b"s", b'{"pid":123}')
+        written = []
+        with (
+            mock.patch.object(
+                managed.select, "select", return_value=([], [channel.proc.stdin], [])
+            ),
+            mock.patch.object(
+                os, "write", side_effect=lambda _fd, data: written.append(bytes(data)) or len(data)
+            ),
+        ):
+            channel.write(b"queued")
+            channel.write(b"")
+            for data in (b"late", b""):
+                with self.assertRaisesRegex(SessionError, "^worker worker: input ended$"):
+                    channel.write(data)
+        self.assertEqual(guard.Decoder().feed(b"".join(written)), [(b"i", b"queued"), (b"i", b"")])
+        self.assertEqual(channel.state(), Liveness.LIVE)
+
+    def test_a_write_after_the_exit_frame_is_refused_while_the_guard_lingers(self):
+        channel = self.channel()
+        channel.accept(b"s", b'{"pid":123}')
+        channel.accept(b"x", b'{"returncode":0}')
+        with mock.patch.object(os, "write") as write:
+            for data in (b"x", b""):
+                with self.assertRaisesRegex(SessionError, "^worker worker: exited$") as caught:
+                    channel.write(data)
+                self.assertNotIsInstance(caught.exception, Unanswered)
+        write.assert_not_called()
+        self.assertEqual(channel.read(0), [WorkerExit(0)])
+
+    def test_an_empty_write_on_a_terminal_handle_sends_nothing(self):
+        channel = self.channel(terminal=True)
+        channel.accept(b"s", b'{"pid":123}')
+        written = []
+        with (
+            mock.patch.object(
+                managed.select, "select", return_value=([], [channel.proc.stdin], [])
+            ),
+            mock.patch.object(
+                os, "write", side_effect=lambda _fd, data: written.append(bytes(data)) or len(data)
+            ),
+        ):
+            channel.write(b"")
+            channel.press([])
+            channel.write(b"typed")
+        self.assertEqual(guard.Decoder().feed(b"".join(written)), [(b"i", b"typed")])
+
     def test_close_racing_the_clients_own_exit_succeeds(self):
         channel = self.channel(terminal=True)
         channel.accept(b"s", b'{"pid":123}')
