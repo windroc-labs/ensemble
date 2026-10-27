@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import signal
 import stat
 import sys
 import time
@@ -24,7 +23,7 @@ from ensemble.delegate.engine.drivers import AgentDriver, Driver, InstructionDri
 from ensemble.delegate.engine.environment import resolve
 from ensemble.delegate.engine.handler import finish
 from ensemble.delegate.engine.plan import plan
-from ensemble.delegate.engine.record import HANDLER, RunRecord, owned
+from ensemble.delegate.engine.record import CLOSED, HANDLER, RunRecord, owned
 from ensemble.delegate.engine.runner import Attempts, execute, idle_reason, say, stopped
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import (
@@ -736,20 +735,17 @@ class HarnessDelegate(Delegate):
 
     def close(self) -> None:
         """Unanswered after closing the harness when the agent's Host could not tell. An owned
-        run's active attempt ends as a stop, reported once its close is confirmed."""
+        run's attempt still active after it ends as CLOSED."""
         state = self._read()
-        try:
-            agent, unanswered = self._agent(state), None
-        except Unanswered as error:
-            agent, unanswered = None, error
-        stop = None if unanswered is not None else self._interrupt(state)
-        try:
+        claim = self.store.closing_claim() if owned(state.plan) else contextlib.nullcontext()
+        with claim:
+            try:
+                agent, unanswered = self._agent(state), None
+            except Unanswered as error:
+                agent, unanswered = None, error
             if agent is not None:
                 agent.close()
-        except BaseException:
-            if stop is not None:
-                RunRecord(self.layout, self.store).reopen(state.attempt, stop)
-            raise
+        stop = None if unanswered is not None else self._interrupt(self._read())
         if stop is not None:
             self._stopped(state, stop, closed=agent is not None)
         unchecked = (
@@ -773,11 +769,10 @@ class HarnessDelegate(Delegate):
         """None: none active, or another ended it first."""
         if not owned(state.plan) or state.completed:
             return None
-        result = stopped(Stopped(128 + signal.SIGHUP))
         p = state.plan
-        if not RunRecord(self.layout, self.store).complete(state.attempt, result, sid=p.sid):
+        if not RunRecord(self.layout, self.store).complete(state.attempt, CLOSED, sid=p.sid):
             return None
-        return result
+        return CLOSED
 
     def _stopped(self, state: DelegateState, result: Result, *, closed: bool) -> None:
         finish(state, result, None)

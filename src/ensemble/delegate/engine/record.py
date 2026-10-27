@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from dataclasses import fields, is_dataclass, replace
 
 from ensemble.delegate.composer import RunConfig, Team
-from ensemble.delegate.engine.runner import say
+from ensemble.delegate.engine.runner import say, stopped
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import (
     ConfigError,
@@ -19,6 +19,7 @@ from ensemble.delegate.engine.types import (
     Plan,
     Result,
     Spec,
+    Stopped,
 )
 from ensemble.delegate.event.types import Outcome
 from ensemble.session import Access, EnvironmentSpec, HookCallback, SessionStatusLog
@@ -50,7 +51,7 @@ def _result(data: dict | None) -> Result | None:
 HANDLER = "ensemble.delegate.engine.handler"
 
 
-HANGUP = 128 + signal.SIGHUP
+CLOSED = stopped(Stopped(128 + signal.SIGHUP))
 
 
 def owned(plan: Plan) -> bool:
@@ -176,15 +177,12 @@ class RunRecord:
             return True
 
     def follow_up(self, n: int, token: int) -> bool:
-        """Not after a hangup's stop: its worker ends."""
+        """Not while a close holds its claim."""
         with self.store.mutex():
             state = self.read()
             if state.attempt != n or not state.completed or worker(state) != token:
                 return False
-            if (r := state.result) and (r.returncode, r.error) == (
-                HANGUP,
-                f"stopped: Stopped: {HANGUP}",
-            ):
+            if self.store.closing():
                 return False
             self.save(
                 replace(
@@ -197,13 +195,6 @@ class RunRecord:
                 )
             )
             return True
-
-    def reopen(self, n: int, result: Result) -> None:
-        """Attempt n active again while `result` still ends it."""
-        with self.store.mutex():
-            state = self.read()
-            if state.attempt == n and state.completed and state.result == result:
-                self.save(replace(state, completed=False, result=None))
 
     def complete(self, n: int, result: Result, *, sid: str, unbound: bool = False) -> bool:
         """Compare-and-set; unbound: only while opening."""

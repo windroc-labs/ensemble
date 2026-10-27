@@ -1,6 +1,8 @@
 """RunRecord reads and writes delegate.json without the Session or ensemble config."""
 
+import fcntl
 import json
+import os
 from dataclasses import replace
 
 from ensemble.delegate import ConfigError, Outcome
@@ -137,3 +139,21 @@ class PhaseTest(HarnessCase):
         )
         self.assertEqual(self.record.read(), state)
         self.assertFalse(self.record.follow_up(1, 1))
+
+    def test_follow_up_is_refused_while_a_close_holds_its_claim(self):
+        self.record.complete(1, self.done, sid=SID)
+        self.assertFalse(self.record.store.closing())
+        with self.record.store.closing_claim(), self.record.store.closing_claim():
+            self.assertTrue(self.record.store.closing())
+            self.assertFalse(self.record.follow_up(1, 1))
+        self.assertFalse(self.record.store.closing())
+        self.assertTrue(self.record.follow_up(1, 1))
+
+    def test_a_killed_closers_claim_goes_with_it(self):
+        """No state to clear: the kernel drops the lock with its holder's descriptors."""
+        self.record.complete(1, self.done, sid=SID)
+        fd = os.open(self.record.store.close_lock, os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_SH)
+        self.assertFalse(self.record.follow_up(1, 1))
+        os.close(fd)  # as at its holder's death
+        self.assertTrue(self.record.follow_up(1, 1))
