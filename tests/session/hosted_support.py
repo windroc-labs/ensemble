@@ -325,7 +325,7 @@ def fake_tmux(case=None) -> mock.Mock:
     host.listing.return_value = []
     tags = {}
     host.option.side_effect = lambda _target, key: tags.get(key)
-    host.detach.return_value = host.process.return_value = "1 $1 %1 4242"
+    host.process.return_value = "1 $1 %1 4242"
 
     def started(_name, _launch, **kw):
         tags.update(kw["tags"], **{"@process": host.process.return_value})
