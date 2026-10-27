@@ -433,7 +433,9 @@ on_exit() {
   trap '' HUP INT TERM
   token_screen_leave
   sudo_end
-  # A login that failed or was cut short after storing its credential is still the cleanup's to remove.
+  # A login that failed or was cut short after storing its credential is still the cleanup's to remove. Handled, not
+  # ignored, signals reach its probe with their default action: Ctrl-C stops a hung one.
+  trap : HUP INT TERM
   if [ -n "$login_pending" ] && login_status "$login_pending"; then ledger_add login "$login_pending"; fi
   if [ "$rc" -ne 0 ] && [ -n "$current" ]; then
     say "$me: $current failed; rerun the same command to continue"

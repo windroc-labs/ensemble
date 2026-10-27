@@ -6252,6 +6252,26 @@ exec /bin/rm "$@"
             self.assertEqual(list(self.tmp.glob("ensemble-sudo.*")), [])
             self.assertTrue(self.group_gone(result.pid))
 
+    def test_i3a_hung_login_probe_stops_on_ctrl_c(self):
+        """I3a: on_exit's login probe gets the default signals, so a second Ctrl-C stops a hung one."""
+        self.assert_ok(self.fresh("--clients", "claude", "--no-docker", "--no-board"))
+        self.logged_out("claude")
+        (self.fakes / "hang/claude-status").write_text("")
+        start = time.monotonic()
+        result = self.run_install(
+            "--password-stdin",
+            stdin=PASSWORD + "\n",
+            interrupt=(self.fakes / "hung", self.fakes / "status-hung"),
+        )
+        self.assertTrue((self.fakes / "status-hung").exists(), result.stderr)
+        self.assertLess(time.monotonic() - start, 20)
+        self.assertEqual(result.code, 130, result.stderr)
+        self.assertIn(
+            "install.sh: Claude Code login failed; rerun the same command to continue",
+            result.stderr,
+        )
+        self.assertNotIn("login\tclaude", self.ledger())
+
     def codex_rejects(self, words=""):
         """Codex logged in, its server rejecting the `codex plugin` sub-commands `words` (all when empty)."""
         (self.fakes / "login").mkdir(exist_ok=True)
