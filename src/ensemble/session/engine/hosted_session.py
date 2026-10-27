@@ -264,20 +264,22 @@ def _reconstructible(setup: _Setup) -> bool:
     )
 
 
-def _owned(setup: _Setup, mode: Mode, client: Client, on: Host) -> bool:
-    """An in_process start, or an owned client's tui or headless start on a harnessed Host; a
-    remote tui only for a client owned there.
+def _check_owned(setup: _Setup, mode: Mode, client: Client, on: Host, client_name: str) -> None:
+    """Every start runs under a session harness: refuses one no harness can run (injected
+    callables it cannot rebuild, a Host without managed workers, a remote tui its client cannot be).
     """
     if not _reconstructible(setup):
-        return False
+        raise ConfigError(
+            f"{client_name} {mode}: runs only under a session harness, which builds its session "
+            "class from configuration, not injected callables"
+        )
     if mode == Mode.IN_PROCESS:
-        return client.in_process() is not None
-    if not on._harnessed:
-        return False
-    run = {Mode.TUI: client.tui, Mode.HEADLESS: client.headless}.get(mode, lambda: None)()
-    if run is None or not run._owned:
-        return False
-    return mode != Mode.TUI or not on._remote_tui or run._remote_owned
+        return
+    if type(on).worker is Host.worker:
+        raise _harness_only(client_name, mode, on)
+    run = client.tui() if mode == Mode.TUI and on._remote_tui else None
+    if run is not None and not run._remote_owned:
+        raise _harness_only(client_name, mode, on)
 
 
 def _terminal_less(mode: Mode) -> bool:
@@ -286,10 +288,6 @@ def _terminal_less(mode: Mode) -> bool:
 
 def _harness_only(client: str, mode: Mode, on: Host) -> ConfigError:
     return ConfigError(f"{client} {mode} on host {on.name}: runs only under a session harness")
-
-
-def _unharnessed(client: str, mode: Mode, on: Host) -> ConfigError:
-    return ConfigError(f"handlers: {client} {mode} on host {on.name} has no session harness yet")
 
 
 def _refuse_running(name: str, on: Host) -> None:
@@ -431,14 +429,10 @@ class HostedSession(Session):
         spec = replace(spec, sid=spec.sid or str(uuid.uuid4()))
         on = cls.host(host)
         _environment_check(spec, on, mode)
-        owned = _owned(setup, mode, client, on)
-        if not owned and not on._unowned:
-            raise _harness_only(client_name, mode, on)
-        if spec.handlers and not owned:
-            raise _unharnessed(client_name, mode, on)
+        _check_owned(setup, mode, client, on, client_name)
         cls.viewer()
         displays.validate_display(display, on)
-        if mode == Mode.TUI and owned:
+        if mode == Mode.TUI:
             name = tui.TuiMode.resolve_name(spec)
             _refuse_running(name, on)
             _resume_check(spec, client, name, on)
@@ -460,28 +454,21 @@ class HostedSession(Session):
         host: str | None = None,
         idle_timeout: float | None = None,
     ) -> Session:
-        """spec.sid: its id, else a new one; display: kept by its Host. An owned start runs under a
+        """spec.sid: its id, else a new one; display: kept by its Host. Every start runs under a
         session harness of its own and returns its control view.
         """
         setup = cls._config()
         client_name, mode = _request(spec, idle_timeout)
         on, client = cls.host(host), setup.registry.client(client_name)
         _environment_check(spec, on, mode)
-        if not _owned(setup, mode, client, on):
-            if not on._unowned:
-                raise _harness_only(client_name, mode, on)
-            if spec.handlers:
-                raise _unharnessed(client_name, mode, on)
-            return cls._begin(
-                spec, display=display, host=host, idle_timeout=idle_timeout, client=client
-            )
+        _check_owned(setup, mode, client, on, client_name)
         spec = replace(spec, sid=spec.sid or str(uuid.uuid4()))
         if mode == Mode.TUI:
             spec = replace(spec, name=tui.TuiMode.resolve_name(spec))
             assert spec.name is not None
             _refuse_running(spec.name, on)
             _resume_check(spec, client, spec.name, on)
-        else:  # an unowned start's refusals, before any harness
+        else:  # its refusals before any harness
             cls.preflight(spec, display=display, host=host, idle_timeout=idle_timeout)
         return cls._spawn(spec, mode, display=display, host=host, idle_timeout=idle_timeout)
 
@@ -699,12 +686,11 @@ class HostedSession(Session):
         display: Display = None,
         host: str | None = None,
         idle_timeout: float | None = None,
-        owner: str | None = None,
-        client: Client | None = None,
+        owner: str,
     ) -> HostedSession:
         setup = cls._config()
         client_name, mode = _request(spec, idle_timeout)
-        client = client or setup.registry.client(client_name)
+        client = setup.registry.client(client_name)
         spec = replace(spec, sid=spec.sid or str(uuid.uuid4()))
         on = cls.host(host)
         _environment_check(spec, on, mode)

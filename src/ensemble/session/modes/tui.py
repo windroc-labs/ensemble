@@ -672,10 +672,9 @@ class TuiMode(BaseMode):
         replayed: tuple[SessionEvent | Stderr | ClientBound, ...] = (),
         opening: tuple[str, str] | None = None,
         owned: bool = False,
-        marks: bool = False,
     ) -> None:
-        """cursor: its next hook record (TuiStore.records); owned: `terminal` is the owner's;
-        marks: it writes its worker's activity (its starter's; a view never does).
+        """cursor: its next hook record (TuiStore.records); owned: `terminal` is the owner's (its
+        harness's start), which alone marks its worker's activity; else a view.
         """
         super().__init__(prepared)
         self.name, self.run, self.host, self._terminal = store.name, run, store.host, terminal
@@ -687,7 +686,7 @@ class TuiMode(BaseMode):
         self._held, self._checked = False, -POLL_SCREEN
         self._active_turn = run._turn_open is True
         self._absorbed, self._launching = 0, bool(prepared.spec.prompt) and not run._opening_prompt
-        self._owned, self._marks, self._hook_logged = owned, marks, False
+        self._owned, self._hook_logged = owned, False
 
     @classmethod
     def preflight(
@@ -783,18 +782,10 @@ class TuiMode(BaseMode):
             try:
                 if pending.prompt_file:
                     cls._write_prompt(*pending.prompt_file)
-                if owner is not None:
-                    return host.worker(
-                        store.name,
-                        pending.launch,
-                        terminal=True,
-                        display=display,
-                        events=prepared.spec.events,
-                        metadata=pending.metadata,
-                    )
-                return host.terminal(
+                return host.worker(
                     store.name,
                     pending.launch,
+                    terminal=True,
                     display=display,
                     events=prepared.spec.events,
                     metadata=pending.metadata,
@@ -818,8 +809,7 @@ class TuiMode(BaseMode):
             store,
             generation,
             opening=run.opening,
-            owned=owner is not None,
-            marks=True,
+            owned=True,
         )
 
     @classmethod
@@ -1067,8 +1057,8 @@ class TuiMode(BaseMode):
         return frozenset(d for d in self.run.dialogs if self.run.shows(d, screen))
 
     def _mark(self, word: StatusState, *, again: bool = True) -> None:
-        """Its starter's alone (a view never marks); not again: only when its word differs."""
-        if self._marks and (again or activity(self.name, self._generation) != word):
+        """Its owner's alone (a view never marks); not again: only when its word differs."""
+        if self._owned and (again or activity(self.name, self._generation) != word):
             try:
                 self._store.set_activity(self._generation, word, self.prepared.spec.events)
             except (OSError, ValueError) as error:

@@ -1,10 +1,8 @@
 """Worker, a plain tui session started by name (FR-20): WorkerState in
 ~/.ensemble/workers/<sid>/worker.json (by-name/<name>: its latest sid); its Record on its Host once
-its early watch passes. A worker its session harness owns resumes through its running owner, which
+its early watch passes. Its session harness owns it: it resumes through its running owner, which
 reopens its display if gone, else starts a new harness through the tui gate, closing nothing;
-restart closes it through that owner.
-Other workers' restart and resume close the old session and wait for its group (FR-36).
-Callers hold locked() around start, resume and restart.
+restart closes it through that owner. Callers hold locked() around start, resume and restart.
 """
 
 from __future__ import annotations
@@ -18,7 +16,7 @@ import stat
 import sys
 import time
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Protocol, runtime_checkable
 
@@ -41,7 +39,6 @@ from ensemble.session.engine.types import (
 from ensemble.session.harness import channel
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.types import Op
-from ensemble.session.hosts.base import Process
 from ensemble.session.modes.tui import TuiMode
 from ensemble.utils import (
     CONFIG_NAME,
@@ -103,8 +100,8 @@ def _text(value) -> bool:
 
 @dataclass(frozen=True)
 class WorkerState:
-    """What a worker's resume replays; token: its last launch's Process.token; environment: its
-    start's, absent from a pre-upgrade worker.json.
+    """What a worker's resume replays; environment: its start's, absent from a pre-upgrade
+    worker.json.
     """
 
     name: str
@@ -116,7 +113,6 @@ class WorkerState:
     env: Mapping[str, str] = field(default_factory=dict)
     events: str | None = None
     display: Display = None
-    token: str | None = None
     environment: EnvironmentSpec | None = None
 
     def __post_init__(self):
@@ -140,7 +136,6 @@ class WorkerState:
             ),
             "events": self.events is None or printable_abs(self.events),
             "display": self.display is None or _text(self.display),
-            "token": self.token is None or _text(self.token),
             "environment": self.environment is None
             or isinstance(self.environment, EnvironmentSpec),
         }
@@ -323,7 +318,6 @@ class Worker:
         self._drop_stale()
         self._claim()
         before = self._saved()
-        self.state = replace(self.state, token=None)
         try:
             self._save()
         except (SessionError, OSError) as error:
@@ -339,53 +333,22 @@ class Worker:
         except (SessionError, ConfigError):
             self._put_back(before)
             raise
-        host = self.session_cls.host(self.state.host)
-        try:
-            handle = host.attach(name)
-        except SessionError:  # it exited already: the watch reports it
-            handle = None
-        self.state = replace(self.state, token=None if handle is None else handle.token)
-        try:
-            self._save()
-        except (SessionError, OSError) as error:
-            with contextlib.suppress(SessionError, ConfigError):
-                session.close()
-            self._put_back(before)
-            raise SessionError(f"{name}: {_detail(error)}; start undone") from None
         if session.showable:
             self._show(session, hidden=hidden)
         self._watch(session)
         record = self.state.record()
-        (host.attach(name) if handle is None else handle).publish(record)
+        self.session_cls.host(self.state.host).attach(name).publish(record)
         return record
 
     def resume(self) -> Record:
-        """Its Record, starting nothing, while its session lives; else a resumed start."""
-        owned, owner = self._owner()
-        if owned:
-            return self._resume_owned(owner)
-        session = self._session()
-        if session is not None and session.alive():
-            record = session.record()
-            if record is None or record.sid != self.state.sid:
-                record = self.state.record()
-                session.publish(record)
-            return record
-        self.check(prompt="", resume=True)
-        self.replace(session or self._group())
-        return self._start_again()
+        """Its Record, starting nothing, while its owner runs it; else a resumed start."""
+        return self._resume_owned(self._owner()[1])
 
     def restart(self) -> Record:
-        owned, owner = self._owner()
-        if owned:
-            if owner is None:
-                raise SessionError(f"{self.state.name}: no session to restart; resume starts it")
-            self.session_cls.retire(self.state.name, host=self.state.host)
-            return self._start_again()
-        session = self._session()
-        if session is None:
+        owner = self._owner()[1]
+        if owner is None:
             raise SessionError(f"{self.state.name}: no session to restart; resume starts it")
-        self.replace(session)
+        self.session_cls.retire(self.state.name, host=self.state.host)
         return self._start_again()
 
     def _owner(self) -> tuple[bool, Channel | None]:
@@ -436,37 +399,6 @@ class Worker:
             raise SessionError(
                 f"{self.state.name}: old session closed, none started: {error}"
             ) from None
-
-    def replace(self, handle: Process | None) -> None:
-        """Close its session by name, close `handle`, wait WAIT s, else kill and wait again."""
-        name = self.state.name
-        self.session_cls.retire(name, host=self.state.host)
-        if handle is None:
-            return
-        handle.close()
-        if handle.wait_exit(WAIT):
-            return
-        handle.kill()
-        if not handle.wait_exit(WAIT):
-            raise SessionError(f"{name}: its old client did not exit; nothing started")
-
-    def _session(self) -> Process | None:
-        """Its Host's session of its name, refused if another's; None when absent."""
-        host = self.session_cls.host(self.state.host)
-        name = self.state.name
-        if name not in host.list():
-            return None
-        handle = host.attach(name)
-        sid, _ = handle.session_identity()
-        if sid != self.state.sid:
-            raise SessionError(f"session {name} is not worker {self.state.sid} (its sid: {sid})")
-        return handle
-
-    def _group(self) -> Process | None:
-        """Its last launch's process group, while it outlives its session."""
-        if self.state.token is None:
-            return None
-        return self.session_cls.host(self.state.host).reclaim(self.state.token)
 
     def _drop_stale(self) -> None:
         """Removes each workers/<sid>/ no by-name/ entry names, whose worker.json is over STALE_AGE

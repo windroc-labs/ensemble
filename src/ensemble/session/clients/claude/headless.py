@@ -22,8 +22,6 @@ from ensemble.utils import number
 
 
 class ClaudeHeadless(JsonHeadless):
-    _owned = True
-
     def __init__(self, common: ClaudeCommon):
         self.common = common
         self.limit_sent = False

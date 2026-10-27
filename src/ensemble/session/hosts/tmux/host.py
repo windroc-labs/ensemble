@@ -35,7 +35,6 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.hosts.base import Host, InteractiveProcess, Process, worker_state
 from ensemble.session.hosts.base import activity as worker_activity
-from ensemble.session.hosts.reclaimed import ReclaimedGroup
 from ensemble.session.hosts.tmux import managed
 from ensemble.session.hosts.types import SessionView
 from ensemble.utils import (
@@ -226,7 +225,6 @@ class TmuxHost(Host):
     """settings: [hosts.<name>]'s status_line."""
 
     attachable = True
-    _harnessed = True
 
     def __init__(
         self, name: str, settings: Mapping | None = None, *, tmux: TmuxCli | None = None
@@ -427,9 +425,6 @@ class TmuxHost(Host):
             return self.tmux.listing()
         except TuiError as error:
             raise SessionError(f"tmux sessions unknown: {error}") from error
-
-    def reclaim(self, token: str) -> ReclaimedGroup | None:
-        return ReclaimedGroup.reclaim(token)
 
     def rows(self) -> list[SessionRow]:
         """A tui worker's state from its harness's mark, any other session's from its @state."""

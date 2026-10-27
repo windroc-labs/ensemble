@@ -381,9 +381,7 @@ class DockerHost(Host):
     _inherit_env = False  # the container gets only the launch's own env (D10)
     attachable = True
     _environments = True
-    _harnessed = True
     _remote_tui = True  # as DockerWorker.remote
-    _unowned = False
     _named_headless = True
 
     def __init__(
