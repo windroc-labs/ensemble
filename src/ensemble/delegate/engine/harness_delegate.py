@@ -373,7 +373,7 @@ class HarnessDelegate(Delegate):
         if payload is None:
             return self.store.running()
         try:
-            return self._alive(self._parse(payload))
+            return self._live_or_held(self._parse(payload))
         except ConfigError:
             data = _loaded(payload)
         host, name = data.get("harness_host"), data.get("harness_name")
@@ -613,6 +613,10 @@ class HarnessDelegate(Delegate):
             return process is not None and process.alive() or self.store.running()
         return not state.completed and self.store.running()
 
+    def _live_or_held(self, state: DelegateState) -> bool:
+        """Alive, or a winding drive holds the run lock."""
+        return self.store.running() or self._alive(state)
+
     def alive(self) -> bool:
         return self._alive(self._read())
 
@@ -663,11 +667,10 @@ class HarnessDelegate(Delegate):
             found, unanswered = None, True
         except SessionError:  # its terminal gone
             found = None
-        alive = self._alive(state) and (
-            state.plan.spec.mode != Mode.TUI
-            or unanswered
-            or found is not None
-            or self.store.running()
+        alive = (
+            self.store.running()
+            or self._alive(state)
+            and (state.plan.spec.mode != Mode.TUI or unanswered or found is not None)
         )
         if unanswered or found is not None and found.state == StatusState.UNKNOWN:
             word = StatusState.UNKNOWN

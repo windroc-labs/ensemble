@@ -2816,21 +2816,35 @@ class OwnedRun(HarnessCase):
         fd = self.stopped_run_whose_drive_holds_the_run_lock()
         again = HarnessDelegate.attach(self.work, session_cls=HarnessSession)
         status = again.status()
-        self.assertEqual((status.alive, status.state), (False, StatusState.GONE))
+        self.assertEqual((status.alive, status.state), (True, StatusState.WORKING))
+        self.assertFalse(again.alive())  # not alive from its Finished on
         threading.Timer(0.3, os.close, (fd,)).start()
         again.resume()
         self.assertEqual(self.metadata()["attempt"], 2)
 
-    def test_resume_of_a_run_whose_drive_never_returns_is_refused(self):
+    def test_status_and_resume_agree_on_a_drive_that_never_returns(self):
         fd = self.stopped_run_whose_drive_holds_the_run_lock()
         self.addCleanup(os.close, fd)
+        again = HarnessDelegate.attach(self.work, session_cls=HarnessSession)
         clock = itertools.count(0.0, 100.0)
         with (
             mock.patch("time.monotonic", side_effect=lambda: next(clock)),
             self.assertRaisesRegex(ConfigError, "delegate is still alive"),
         ):
-            HarnessDelegate.attach(self.work, session_cls=HarnessSession).resume()
+            again.resume()
+        status = again.status()
+        self.assertEqual((status.alive, status.state), (True, StatusState.WORKING))
         self.assertEqual(self.metadata()["attempt"], 1)
+
+    def test_a_detached_owned_run_reads_the_run_lock(self):
+        fd = self.stopped_run_whose_drive_holds_the_run_lock()
+        self.record.save(replace(self.record.read(), detached=True))  # its harness gone
+        again = HarnessDelegate.attach(self.work, session_cls=HarnessSession)
+        self.assertEqual(again.status().state, StatusState.WORKING)
+        os.close(fd)
+        self.assertEqual(again.status().state, StatusState.GONE)
+        again.resume()
+        self.assertEqual(self.metadata()["attempt"], 2)
 
     def test_resume_of_an_ended_worker_registers_the_next_worker(self):
         view = self.owned()
