@@ -28,11 +28,13 @@ from ensemble.session.engine.types import (
     ConfigError,
     HookError,
     HookKind,
+    Key,
     KeyPress,
     Launch,
     Liveness,
     Mode,
     NotShowable,
+    Paste,
     Prepared,
     SessionBusy,
     SessionError,
@@ -84,6 +86,7 @@ WORDS = {
 SLICE = 0.1
 OPEN_AFTER = 1.0  # keys sent before a client's input box shows are lost
 POLL_SCREEN = 0.5
+SEND_LOCK, PROMPTED = "send.lock", "prompted"
 LOG = logging.getLogger("session")
 Cursor = tuple[int | None, int]  # inode, offset
 OWNER = re.compile(r"[0-9a-f]{32}")
@@ -235,6 +238,32 @@ class TuiStore:
 
     def _lookup(self) -> Process | None:
         return self.host.attach(self.name) if self.name in self.host.list() else None
+
+    @contextlib.contextmanager
+    def sending(self, *, wait: bool = True) -> Iterator[bool]:
+        """Every sender's, in any thread or process; wait False: False while another holds it."""
+        path = os.path.join(self.dir, SEND_LOCK)
+        with contextlib.ExitStack() as stack:
+            try:
+                held = stack.enter_context(inode_lock(path, wait=wait))
+            except FileNotFoundError:
+                raise SessionError(f"tui session {self.name} is not running") from None
+            except OSError as e:
+                raise SessionError(f"{path}: {e.strerror or e}") from None
+            yield held
+
+    def prompted(self, generation: str) -> bool:
+        """A send went to `generation`."""
+        return read_regular(os.path.join(self.dir, PROMPTED)) == generation.encode()
+
+    def mark_prompted(self, generation: str) -> None:
+        path = os.path.join(self.dir, PROMPTED)
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(generation.encode())
+        except OSError as e:
+            LOG.warning("tui session %s: %s: %s", self.name, path, e.strerror or e)
 
     def check(self) -> None:
         """A terminal of another sid raises; none does not."""
@@ -1024,13 +1053,28 @@ class TuiMode(BaseMode):
             return False
 
     def send(self, text: str) -> None:
-        self._running()
-        for action in self.run.submit(text):
-            self._terminal.send(action)
+        with self._store.sending():
+            self._running()
+            self._deliver(self.run.submit(text), prompted=True)
+
+    def _deliver(self, actions: Sequence[Paste | Key], *, prompted: bool) -> None:
+        """Failing after the first action: Unanswered. prompted: marks its generation."""
+        for index, action in enumerate(actions):
+            try:
+                self._terminal.send(action)
+            except SessionError as error:
+                if index == 0:
+                    raise
+                raise Unanswered(
+                    f"send to tui session {self.name}: partly sent: {error}"
+                ) from error
+            if index == 0 and prompted:
+                self._store.mark_prompted(self._generation)
 
     def press(self, keys: Sequence[KeyPress]) -> None:
-        self._running()
-        self._terminal.press(keys)
+        with self._store.sending():
+            self._running()
+            self._terminal.press(keys)
 
     def screen(self, lines: int | None = None) -> str:
         self._running()

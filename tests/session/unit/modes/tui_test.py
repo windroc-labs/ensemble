@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import stat
 import sys
@@ -33,6 +34,7 @@ from ensemble.session.engine.types import (
     HookCallback,
     HookKind,
     Key,
+    KeyPress,
     Launch,
     LimitHit,
     Liveness,
@@ -1826,6 +1828,86 @@ class PollTest(Base):
         )
         self.assertEqual(mode.poll(0.1), ([LimitHit(9.0)], False))
         self.assertEqual(mode.poll(0.1), ([], False))
+
+
+class SendLockTest(Base):
+    """Two TuiModes of one session (the started one and an attach) share one terminal."""
+
+    def setUp(self):
+        super().setUp()
+        self.mode = self.started()
+        self.other = tui.TuiMode.attach(
+            NAME, tui.TuiMode.snapshot(NAME), self.client, host=self.host
+        )
+        self.calls = self.mode._terminal.calls
+        self.order = []
+        self.calls.send.side_effect = lambda action: self.order.append(action)
+        self.calls.press.side_effect = lambda keys: self.order.append(keys)
+
+    def racing(self, first, second, arrived) -> None:
+        """second runs on a thread started from first's Paste, which then waits up to 0.5 s for
+        arrived (set once second reaches the terminal: Paste("two") sets it).
+        """
+        threads = []
+
+        def send(action):
+            self.order.append(action)
+            if action == Paste("two"):
+                arrived.set()
+            if action == Paste("one") and not threads:
+                threads.append(threading.Thread(target=second))
+                threads[0].start()
+                arrived.wait(0.5)
+
+        self.calls.send.side_effect = send
+        first()
+        threads[0].join(5)
+
+    def test_two_concurrent_senders_never_interleave(self):
+        arrived = threading.Event()
+        self.racing(lambda: self.mode.send("one"), lambda: self.other.send("two"), arrived)
+        self.assertEqual(self.order, [Paste("one"), Key("Enter"), Paste("two"), Key("Enter")])
+
+    def test_a_press_waits_for_a_send_in_progress(self):
+        arrived = threading.Event()
+
+        def press(keys):
+            self.order.append(keys)
+            arrived.set()
+
+        self.calls.press.side_effect = press
+        escape = KeyPress.parse("Escape")
+        self.racing(lambda: self.mode.send("one"), lambda: self.other.press([escape]), arrived)
+        self.assertEqual(self.order, [Paste("one"), Key("Enter"), (escape,)])
+
+    def test_no_lock_dir_refuses_and_sends_nothing(self):
+        shutil.rmtree(self.dir)
+        for call in (lambda: self.mode.send("one"), lambda: self.mode.press([KeyPress.parse("a")])):
+            with self.assertRaisesRegex(SessionError, f"tui session {NAME} is not running"):
+                call()
+        self.assertEqual(self.order, [])
+
+    def test_a_failure_on_the_paste_is_a_session_error(self):
+        self.calls.send.side_effect = SessionError("gone")
+        with self.assertRaises(SessionError) as raised:
+            self.mode.send("one")
+        self.assertNotIsInstance(raised.exception, Unanswered)
+        self.assertFalse(tui.TuiStore.attach(NAME, host=self.host).prompted(self.mode.generation))
+
+    def test_a_failure_after_the_paste_is_unanswered(self):
+        self.calls.send.side_effect = [None, SessionError("gone")]
+        with self.assertRaisesRegex(Unanswered, f"send to tui session {NAME}: partly sent: gone"):
+            self.mode.send("one")
+        self.assertTrue(tui.TuiStore.attach(NAME, host=self.host).prompted(self.mode.generation))
+
+    def test_a_send_marks_its_generation_prompted(self):
+        store = tui.TuiStore.attach(NAME, host=self.host)
+        self.assertFalse(store.prompted(self.mode.generation))
+        self.other.send("one")
+        self.assertTrue(store.prompted(self.mode.generation))
+        self.assertFalse(store.prompted("another"))
+        self.mode.press([KeyPress.parse("a")])
+        self.assertEqual(self.order[-1], (KeyPress.parse("a"),))
 
 
 class Opening(ScanTui):

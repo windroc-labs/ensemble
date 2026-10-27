@@ -368,6 +368,14 @@ class ReattachTest(Base):
             view.send("hi")
         self.assertEqual(self.attaches, 1)
 
+    def test_a_partly_sent_send_is_not_retried(self):
+        view = self.held()
+        self.stale.send.side_effect = Unanswered("send to tui session w1: partly sent: gone")
+        with self.assertRaisesRegex(Unanswered, "partly sent"):
+            view.send("hi")
+        self.fresh.send.assert_not_called()
+        self.assertEqual(self.attaches, 1)
+
     def test_a_failed_reattach_raises_its_error(self):
         view = self.held()
         self.stale.send.side_effect = SessionError("not running")
