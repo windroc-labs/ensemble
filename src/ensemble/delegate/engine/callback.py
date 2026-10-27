@@ -3,7 +3,8 @@ configured callback command: synchronously, in its own process group, from the r
 discarded, its stderr relayed. A delivery that fails (exit ≠ 0, CALLBACK_TIMEOUT, OSError) is one
 `callback_error` row in run.jsonl, never retried, an exit's with its stderr's tail; an exception
 once the child exists kills and reaps the group, then propagates. The child inherits the held,
-emptied callback lock, then the lock gets its pid. sweep kills the group a dead harness's held lock names.
+emptied callback lock, then the lock gets `<child pid> <parent pid>`; the parent holds the parent
+lock while delivering. sweep kills the group a held lock names once its parent is gone.
 """
 
 import contextlib
@@ -65,8 +66,15 @@ class EventCallback:
             self._failed(str(error))
             return
         try:
+            parent = _hold(self.store.callback_parent_lock, wait=True)
+        except OSError as error:
+            os.close(descriptor)
+            self._failed(str(error))
+            return
+        try:
             self._deliver(line, descriptor)
         finally:
+            os.close(parent)
             os.close(descriptor)
 
     def _deliver(self, line: str, descriptor: int) -> None:
@@ -90,7 +98,7 @@ class EventCallback:
             with child:
                 try:
                     try:
-                        os.write(descriptor, f"{child.pid}\n".encode())
+                        os.write(descriptor, f"{child.pid} {os.getpid()}\n".encode())
                     except OSError as error:
                         kill_group(child)
                         self._failed(f"callback lock {self.store.callback_lock}: {error}")
@@ -127,14 +135,16 @@ class EventCallback:
             log.note("callback_error", error=error, stderr=stderr, best_effort=True)
 
 
-def _hold(lock: str) -> int:
-    """Held and emptied; BlockingIOError while held elsewhere."""
+def _hold(lock: str, *, wait: bool = False) -> int:
+    """Held and emptied; BlockingIOError while held elsewhere (wait: until free)."""
     descriptor = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NONBLOCK, 0o600)
     try:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise OSError(errno.EINVAL, "not a regular lock file", lock)
+        if wait:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
         # a killed group's members hold it until they exit
-        if not _within(lambda: _locked(descriptor)):
+        elif not _within(lambda: _locked(descriptor)):
             raise BlockingIOError(errno.EWOULDBLOCK, "callback lock held", lock)
         os.ftruncate(descriptor, 0)
     except BaseException:
@@ -144,8 +154,8 @@ def _hold(lock: str) -> int:
 
 
 def sweep(store: RunState) -> None:
-    """Kills the callback group a dead harness left, then awaits its lock; ConfigError while the
-    run lock is held or past CALLBACK_STOP_WAIT.
+    """Kills the callback group a dead parent left, then awaits its lock; ConfigError while the
+    run lock or its parent's lock is held or past CALLBACK_STOP_WAIT.
     """
     if store.running():
         raise ConfigError(f"{store.layout.workdir}: delegate is still alive")
@@ -154,9 +164,12 @@ def sweep(store: RunState) -> None:
         return
     with open(lock, encoding="utf-8", errors="replace") as file:
         text = file.read()
-    if not re.fullmatch(r"[0-9]{1,19}\n?", text) or int(text) <= 1:
+    found = re.fullmatch(r"([0-9]{1,19})(?: ([0-9]{1,19}))?\n?", text)
+    if not found or any(int(p) <= 1 for p in found.groups() if p is not None):
         raise ConfigError(f"{lock}: invalid callback pid {text!r}")
-    pid = int(text)
+    pid, parent = int(found[1]), found[2]
+    if parent is not None and store.held(store.callback_parent_lock):
+        raise ConfigError(f"{lock}: callback still delivered by pid {int(parent)}")
     try:
         if not _gone(pid):
             with contextlib.suppress(ProcessLookupError):

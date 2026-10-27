@@ -274,8 +274,25 @@ class Delivery(Case):
         self.popen.side_effect = spawned
         self.callback(Begun(SID))
         self.assertEqual(seen, [(1, True), ""])
-        self.assertEqual(self.lock_text(), f"{PID}\n")
+        self.assertEqual(self.lock_text(), f"{PID} {os.getpid()}\n")
         self.assertFalse(self.store.held(self.store.callback_lock))
+
+    def test_the_parent_lock_is_held_while_delivering_and_never_passed_on(self):
+        seen, store = [], self.store
+
+        class Watched(Child):
+            def communicate(self, input=None, timeout=None):
+                seen.append(store.held(store.callback_parent_lock))
+                return super().communicate(input, timeout)
+
+        def spawned(argv, **kwargs):
+            seen.append((len(kwargs["pass_fds"]), store.held(store.callback_parent_lock)))
+            return Watched(argv, **kwargs)
+
+        self.popen.side_effect = spawned
+        self.callback(Begun(SID))
+        self.assertEqual(seen, [(1, True), True])
+        self.assertFalse(store.held(store.callback_parent_lock))
 
     def hold(self) -> int:
         holder = os.open(self.store.callback_lock, os.O_RDWR | os.O_CREAT, 0o600)
@@ -395,8 +412,47 @@ class Sweep(Case):
                 self.assertEqual(orphan.calls, calls)
                 orphan.free()
 
+    def parent(self) -> None:
+        holder = os.open(self.store.callback_parent_lock, os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(close, holder)
+        fcntl.flock(holder, fcntl.LOCK_EX)
+
+    def test_a_group_its_live_parent_still_delivers_is_refused_unsignalled(self):
+        orphan = self.orphan(f"{PID} 5151\n")
+        self.parent()
+        with self.assertRaises(ConfigError) as caught:
+            sweep(self.store)
+        self.assertEqual(
+            str(caught.exception),
+            f"{self.store.callback_lock}: callback still delivered by pid 5151",
+        )
+        self.killpg.assert_not_called()
+        self.assertTrue(self.held())
+        orphan.free()
+
+    def test_a_group_whose_parent_is_gone_is_killed_as_before(self):
+        orphan = self.orphan(f"{PID} 5151\n")
+        sweep(self.store)
+        self.assertEqual(orphan.calls, [(PID, 0), (PID, signal.SIGKILL), (PID, 0)])
+        self.assertFalse(self.held())
+
     def test_a_held_lock_without_a_pid_above_1_sends_no_signal(self):
-        for text in ("", "x", "1", "0", "-3", " 12a", "12 ", "١٢", "9" * 5000):
+        for text in (
+            "",
+            "x",
+            "1",
+            "0",
+            "-3",
+            " 12a",
+            "12 ",
+            "١٢",
+            "9" * 5000,
+            f"{PID} 1",
+            f"{PID}  5151",
+            f"{PID} x",
+            f"{PID} 5151 6",
+            "1 5151",
+        ):
             with self.subTest(text=text[:20]):
                 orphan = self.orphan(text)
                 with self.assertRaises(ConfigError) as caught:
