@@ -701,6 +701,13 @@ def broker(args):
             response["audit_warning"] = load(warning, None)
         out(json.dumps(response))
         return 0
+    if args[:1] == ["probe-provider"]:
+        key = FAKES / "keychain/ensemble-broker-opencode"
+        if not key.exists() or (FAKES / "keychain/unreadable-ensemble-broker-opencode").exists():
+            out('{"error": {"code": "keychain_failed"}}\n', sys.stderr)
+            return 13
+        out('{"available": true}\n')
+        return 0
     if args == ["retrust"]:
         out("every broker keychain item already trusts this broker\n")
         return 0
@@ -759,6 +766,7 @@ def broker(args):
             out("ensemble-broker: API key must be 1 to 16384 bytes\n", sys.stderr)
             return 1
         store_key("ensemble-broker-opencode", key)
+        (FAKES / "keychain/unreadable-ensemble-broker-opencode").unlink(missing_ok=True)
         return 0
     return 2
 

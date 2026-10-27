@@ -105,7 +105,7 @@ func TestStartGitHub(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Deadline != nil || !slices.Equal(tokens.calls, []string{"ready ensemble-bot", "user ensemble-bot", "retry", "issue ensemble-bot " + container}) {
+	if got.Deadline != nil || !slices.Equal(tokens.calls, []string{"ready ensemble-broker-bot", "user ensemble-broker-bot", "retry", "issue ensemble-broker-bot " + container}) {
 		t.Fatalf("%+v %q", got, tokens.calls)
 	}
 	if len(tokens.permissions) != 1 || !maps.Equal(tokens.permissions[0], fixtureSet) {

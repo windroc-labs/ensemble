@@ -834,7 +834,7 @@ func TestAuditHoldsNoSecret(t *testing.T) {
 	_ = json.Unmarshal(manifest, &m)
 	c := "ensemble-" + m.Name + "-" + m.Generation
 	log := filepath.Join(t.TempDir(), "Library/Logs/ensemble/broker.jsonl")
-	keys := memSecrets{"ensemble-broker-github-users/ensemble-broker-bot": []byte(`{"slug":"ensemble-bot","id":343764394}`)}
+	keys := memSecrets{"ensemble-broker-github-users/ensemble-broker-bot": []byte(`{"slug":"ensemble-broker-bot","id":343764394}`)}
 	lock := broker.FileLock(filepath.Join(t.TempDir(), "tokens.lock"))
 	for _, command := range []string{"start", "maintain", "close"} {
 		rec := &audit.Recorder{Command: command, Now: time.Now, Log: audit.Log{Path: log}}

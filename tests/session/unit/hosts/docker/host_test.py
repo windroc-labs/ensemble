@@ -441,13 +441,13 @@ class ConfigTest(Base):
         local = os.path.join(self.home, "config.local.toml")
         with open(local, "w") as f:
             f.write(
-                '[session.hosts.docker.github]\napp = "ensemble-bot"\n'
+                '[session.hosts.docker.github]\napp = "ensemble-broker-bot"\n'
                 '[session.hosts.docker.github.permissions]\nstatuses = "write"\nissues = "write"\n'
             )
         settings = read_config(local=local)["hosts"]["docker"]
         del settings["implementation"]
         host = DockerHost("docker", settings)
-        self.assertEqual(host.github, "ensemble-bot")
+        self.assertEqual(host.github, "ensemble-broker-bot")
         self.assertEqual(
             host.github_permissions, {**PERMISSIONS, "statuses": "write", "issues": "write"}
         )
@@ -461,7 +461,7 @@ class ConfigTest(Base):
                 r"^unknown key 'mount_roots' in \[hosts.docker\]; delete it: workspaces are volumes$",
             ),
             (
-                {"docker": DOCKER, "github": "ensemble-bot"},
+                {"docker": DOCKER, "github": "ensemble-broker-bot"},
                 r"^\[hosts.docker\] github: want a table$",
             ),
             (
@@ -1562,7 +1562,7 @@ class StartTest(StartBase):
         self.assertNotIn("exited 3:", error)
 
     def test_a_bot_user_id_that_does_not_match_the_app_rolls_back(self):
-        for github, user_id in (("ensemble-bot", None), ("", 343764394)):
+        for github, user_id in (("ensemble-broker-bot", None), ("", 343764394)):
             with self.subTest(github=github, user_id=user_id):
                 self.host.github = github
                 self.broker.started = replace(self.broker.started, github_user_id=user_id)

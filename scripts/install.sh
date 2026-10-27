@@ -1682,9 +1682,10 @@ opencode_key() {
   if [ "$docker" = yes ]; then
     sha=$(shasum -a 256 "$broker" | cut -d' ' -f1)
     saved=$(state_get login_opencode)
-    # This broker's retrust already made an earlier login's item trust it: no second keychain password.
+    # This broker's retrust already made an earlier login's item trust it: no second keychain password. The broker's
+    # probe reads the key without a dialog, so an item it cannot read (another application's) is logged in again.
     if { [ "$saved" = "$sha $provider" ] || { [ "$(state_get retrust)" = "$sha" ] && [ "${saved#* }" = "$provider" ]; }; } \
-      && security find-generic-password -s ensemble-broker-opencode -a "$provider" </dev/null >/dev/null 2>&1; then
+      && "$broker" probe-provider --provider "$provider" --base-url "$url" </dev/null >/dev/null 2>&1; then
       state_set login_opencode "$sha $provider"
       skip "$provider logged in to this broker"
     else

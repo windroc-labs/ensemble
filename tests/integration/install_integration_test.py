@@ -3507,6 +3507,29 @@ exec /bin/rm "$@"
         self.assert_ok(self.again())
         self.assertIn(login, self.calls())
 
+    def test_opencode_key_relogs_an_item_this_broker_cannot_read(self):
+        """retrust leaves another application's item unchanged; the broker's probe cannot read it, so it is logged in."""
+        result = self.fresh(
+            clients="opencode",
+            docker="y",
+            opencode=PROVIDER_ANSWERS,
+            logins=[(PEM_Q, ""), (OPENCODE_LOGIN_Q, "lan"), (r"API key:", KEY)],
+        )
+        self.assert_ok(result)
+        login = f"ensemble-broker login opencode lan --auth-file {self.auth_json()}"
+        binary = self.root / "usr/local/libexec/ensemble/ensemble-broker"
+        binary.write_text(binary.read_text() + "\n# replacement fake broker build\n")
+        unreadable = self.fakes / "keychain/unreadable-ensemble-broker-opencode"
+        unreadable.touch()
+        self.assert_ok(self.again())
+        calls = self.calls()
+        self.assertIn("ensemble-broker retrust", calls)
+        self.assertTrue(
+            [c for c in calls if c.startswith("ensemble-broker probe-provider --provider lan")]
+        )
+        self.assertIn(login, calls)
+        self.assertFalse(unreadable.exists())
+
     def test_opencode_docker_import_existing_auth_and_preserve_on_cleanup(self):
         self.auth_json().parent.mkdir(parents=True)
         self.auth_json().write_text(json.dumps({"lan": {"type": "api", "key": KEY}}))

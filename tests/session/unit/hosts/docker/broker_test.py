@@ -609,13 +609,16 @@ class ManifestTest(Case):
             workspace="ensemble-ws-w",
             home=("x_dir", "/home/x"),
             hook_path="/plugin/bin/ensemble-session",
-            github="ensemble-bot",
+            github="ensemble-broker-bot",
             permissions={"contents": "write", "statuses": "read"},
         )
         with open(path) as f:
             self.assertEqual(
                 json.load(f)["github"],
-                {"app": "ensemble-bot", "permissions": {"contents": "write", "statuses": "read"}},
+                {
+                    "app": "ensemble-broker-bot",
+                    "permissions": {"contents": "write", "statuses": "read"},
+                },
             )
 
     def test_an_opencode_manifest_lists_its_providers(self):

@@ -71,7 +71,7 @@ func TestMaintainCodexFailureKeepsGitHubSuccess(t *testing.T) {
 	if got.Deadline == nil || *got.Deadline != (Deadline{At: soon(5 * time.Minute), Action: "close", Reason: codexReason}) {
 		t.Fatalf("deadline %+v", got.Deadline)
 	}
-	if got.NextCheck == nil || *got.NextCheck != soon(time.Minute) || !slices.Contains(tokens.calls, "refresh ensemble-bot "+container) {
+	if got.NextCheck == nil || *got.NextCheck != soon(time.Minute) || !slices.Contains(tokens.calls, "refresh ensemble-broker-bot "+container) {
 		t.Fatalf("%+v %q", got, tokens.calls)
 	}
 }
@@ -101,7 +101,7 @@ func TestMaintainGitHubFailureKeepsCodexSuccess(t *testing.T) {
 	// The immediate call that acknowledges a notice must not try GitHub again before its retry time.
 	tokens.calls = nil
 	again, err := h.Maintain(context.Background(), container, manifest, nil, false)
-	if err != nil || len(again.Results) != 0 || slices.Contains(tokens.calls, "refresh ensemble-bot "+container) {
+	if err != nil || len(again.Results) != 0 || slices.Contains(tokens.calls, "refresh ensemble-broker-bot "+container) {
 		t.Fatalf("%+v %v %q", again, err, tokens.calls)
 	}
 }
@@ -114,7 +114,7 @@ func TestMaintainRenewsOnlyDueProviders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if creds.injected != 0 || len(got.Results) != 1 || got.Results[0].Credential != "github" || !slices.Contains(tokens.calls, "refresh ensemble-bot "+container) {
+	if creds.injected != 0 || len(got.Results) != 1 || got.Results[0].Credential != "github" || !slices.Contains(tokens.calls, "refresh ensemble-broker-bot "+container) {
 		t.Fatalf("%+v %d", got, creds.injected)
 	}
 	// GitHub's new expiry 13:00 is due at 12:50, before Codex's at 11:50 the next day.
@@ -167,7 +167,7 @@ func TestMaintainWithoutTokenProvidersOrStaticSecretsNeverChecksAgain(t *testing
 func TestMaintainWithoutRecordRenewsAll(t *testing.T) {
 	h, manifest, tokens, creds := maintainHost(t, true, nil)
 	got, err := h.Maintain(context.Background(), container, manifest, nil, false)
-	if err != nil || len(got.Results) != 2 || creds.injected != 1 || !slices.Contains(tokens.calls, "refresh ensemble-bot "+container) {
+	if err != nil || len(got.Results) != 2 || creds.injected != 1 || !slices.Contains(tokens.calls, "refresh ensemble-broker-bot "+container) {
 		t.Fatalf("%+v %v", got, err)
 	}
 	record := h.Schedule.Read(tokensManifest)
@@ -180,7 +180,7 @@ func TestMaintainRenewFlag(t *testing.T) {
 	far := map[credential.Kind][]string{credential.Codex: {"2026-10-20T12:00:00Z"}, credential.GitHub: {"2026-10-20T12:00:00Z"}}
 	h, manifest, tokens, creds := maintainHost(t, true, far)
 	got, err := h.Maintain(context.Background(), container, manifest, nil, true)
-	if err != nil || len(got.Results) != 2 || creds.injected != 1 || !slices.Contains(tokens.calls, "refresh ensemble-bot "+container) {
+	if err != nil || len(got.Results) != 2 || creds.injected != 1 || !slices.Contains(tokens.calls, "refresh ensemble-broker-bot "+container) {
 		t.Fatalf("%+v %v", got, err)
 	}
 }

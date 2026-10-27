@@ -144,7 +144,7 @@ func TestManifestGitHub(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m, err := ParseManifest(data); err != nil || m.GitHubApp != "ensemble-bot" || !maps.Equal(m.GitHubPermissions, fixtureSet) {
+	if m, err := ParseManifest(data); err != nil || m.GitHubApp != "ensemble-broker-bot" || !maps.Equal(m.GitHubPermissions, fixtureSet) {
 		t.Fatalf("%+v %v", m, err)
 	}
 	valid, err := os.ReadFile(filepath.Join(fixtures.Dir(), "manifest-valid.json"))
@@ -155,7 +155,7 @@ func TestManifestGitHub(t *testing.T) {
 		t.Fatalf("%+v %v", m, err)
 	}
 	const set = `"permissions":{"contents":"write"}`
-	for _, github := range []string{`[]`, `"ensemble-bot"`, `{"app":null,` + set + `}`, `{"app":"a","app":"b",` + set + `}`, `{"app":"-a",` + set + `}`,
+	for _, github := range []string{`[]`, `"ensemble-broker-bot"`, `{"app":null,` + set + `}`, `{"app":"a","app":"b",` + set + `}`, `{"app":"-a",` + set + `}`,
 		`{"app":"a"}`, `{"app":"a","permissions":null}`, `{"app":"a","permissions":[]}`, `{"app":"a","permissions":{"contents":1}}`,
 		`{"app":"a",` + set + `,"repo":"acme/x"}`} {
 		doc := strings.Replace(string(valid), `"github": null`, `"github": `+github, 1)
@@ -441,7 +441,7 @@ func TestManifestPrefetch(t *testing.T) {
 	if code(t, err) != protocol.ManifestRejected {
 		t.Fatalf("prefetch with a Linear item: %v", err)
 	}
-	github := map[string]any{"app": "ensemble-bot", "permissions": map[string]any{"contents": "write"}}
+	github := map[string]any{"app": "ensemble-broker-bot", "permissions": map[string]any{"contents": "write"}}
 	_, err = ParseManifest(withFields(t, map[string]any{"prefetch": map[string]any{"repo": "o/r"}, "github": github}))
 	if code(t, err) != protocol.ManifestRejected || !strings.Contains(err.Error(), "prefetch requires github null") {
 		t.Fatalf("prefetch with github: %v", err)

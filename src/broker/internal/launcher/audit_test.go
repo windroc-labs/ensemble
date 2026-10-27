@@ -303,7 +303,7 @@ func TestNoSecretsInLog(t *testing.T) {
 			raw, _ := os.ReadFile(codexManifest(t))
 			var m map[string]any
 			_ = json.Unmarshal(raw, &m)
-			m["github"] = map[string]any{"app": "ensemble-bot", "permissions": fixtureSet}
+			m["github"] = map[string]any{"app": "ensemble-broker-bot", "permissions": fixtureSet}
 			raw, _ = json.Marshal(m)
 			manifest = writeManifest(t, raw)
 		}
