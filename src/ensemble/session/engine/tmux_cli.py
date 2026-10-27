@@ -231,12 +231,6 @@ def display_error(value) -> str | None:
     return f"display {value!r:.80}: want printable text not ending in ;"
 
 
-def tmux_path() -> str | None:
-    """The real path (symlinks resolved) of the tmux on PATH, else None."""
-    found = shutil.which("tmux")
-    return None if found is None else os.path.realpath(found)
-
-
 def _out_of_mode(target: str, *command: str) -> list[str]:
     """copy-mode -q first: a pane in a mode (scrolled back) would swallow the keys."""
     return ["copy-mode", "-q", "-t", target, ";", *command]

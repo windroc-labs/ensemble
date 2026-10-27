@@ -248,26 +248,6 @@ class StatusTest(Case):
                 self.assertEqual(len(fake.calls), 1)
 
 
-class TmuxPathTest(Case):
-    def test_the_real_path_of_the_tmux_on_path_else_none(self):
-        with tempfile.TemporaryDirectory() as d:
-            real, bin_dir = os.path.join(d, "real"), os.path.join(d, "bin")
-            os.mkdir(real)
-            os.mkdir(bin_dir)
-            exe = os.path.join(real, "tmux-3.7")
-            with open(exe, "w"):
-                pass
-            os.chmod(exe, 0o755)
-            os.symlink(exe, os.path.join(bin_dir, "tmux"))
-            with environ(PATH=bin_dir):
-                self.assertEqual(
-                    tmux_cli.tmux_path(), os.path.join(os.path.realpath(d), "real", "tmux-3.7")
-                )
-            for path in (real, ""):
-                with self.subTest(path=path), environ(PATH=path):
-                    self.assertIsNone(tmux_cli.tmux_path())
-
-
 class KillTest(Case):
     def test_kill(self):
         fake = FakeTmux()
