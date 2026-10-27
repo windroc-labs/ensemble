@@ -577,8 +577,9 @@ class AttachTest(Base):
         self.assertEqual(mode.poll(0), ([Blocked("Sign in")], False))
         self.assertFalse(os.path.exists(os.path.join(self.dir, "activity")))
         self.assertFalse(os.path.exists(self.events) and os.path.getsize(self.events))
-        mode.stop()
-        self.process.calls.close.assert_called_once_with()
+        mode.stop()  # no owner named: no worker to end, only its dir
+        self.process.calls.close.assert_not_called()
+        self.assertNoSessionDir()
 
     def test_an_attached_session_ends_once_another_terminal_holds_its_name(self):
         mode = self.attach()
@@ -674,13 +675,17 @@ class StartTest(Base):
 
     def test_the_names_lock_is_held_from_session_dir_to_terminal_launch(self):
         held = []
-        self.host.calls.list.side_effect = lambda: held.append(self.locked()) or []
-        self.host.calls.worker.side_effect = lambda *_args, **_kwargs: held.append(self.locked())
+
+        def launch(*_args, **_kwargs):
+            held.append(self.locked())
+            if len(held) > 1:
+                raise SessionError("host launch failed")
+
+        self.host.calls.worker.side_effect = launch
         self.start()
-        self.host.calls.worker.side_effect = SessionError("host launch failed")
         with self.assertRaisesRegex(SessionError, "host launch failed"):
             self.start()
-        self.assertEqual((held, self.locked()), ([True, True, True], False))
+        self.assertEqual((held, self.locked()), ([True, True], False))
 
     def test_the_spec_as_started_names_the_session(self):
         self.start()
@@ -1109,7 +1114,7 @@ class SweepTest(Base):
     def test_nothing_idle_lists_no_sessions_for_the_sweep(self):
         self.leftover("young", days=29)
         self.start()
-        self.assertEqual(len(self.host.calls.list.mock_calls), 1)
+        self.host.calls.list.assert_not_called()
 
     def test_a_symlinked_name_and_its_target_stay(self):
         self.leftover("a")
@@ -1167,15 +1172,7 @@ class SweepTest(Base):
         self.leftover("b")
         for failure in (SessionError("tmux failed"), PermissionError("denied")):
             with self.subTest(failure=failure):
-                listings = iter(([], failure))
-
-                def listed(listings=listings):
-                    found = next(listings)
-                    if isinstance(found, Exception):
-                        raise found
-                    return found
-
-                self.host.calls.list.side_effect = listed
+                self.host.calls.list.side_effect = failure
                 with self.assertLogs("session") as logs:
                     mode = self.start()
                 self.host.processes.clear()
@@ -1528,22 +1525,6 @@ class CloseStopTest(Base):
         self.assertNoSessionDir()
         self.assertFalse(os.path.lexists(os.path.join(self.root, f"{NAME}.lock")))
         self.assertEqual((mode.poll(0), mode.returncode(0)), (([], True), -signal.SIGHUP))
-
-    def test_a_sid_bound_stop_whose_sid_read_fails_raises_and_a_later_stop_closes_it(self):
-        terminal = self.host.create(NAME, SID)
-        self.write_state(self.state())
-        mode = tui.TuiMode.attach(
-            NAME, tui.TuiMode.snapshot(NAME), self.client, host=self.host, sid=SID
-        )
-        terminal.calls.session_identity.side_effect = SessionError("tmux session w1: tmux failed")
-        with self.assertRaisesRegex(SessionError, r"\Atmux session w1: tmux failed\Z"):
-            mode.stop()
-        terminal.calls.close.assert_not_called()
-        self.assertTrue(os.path.isdir(self.dir))
-        terminal.calls.session_identity.side_effect = None
-        mode.stop()
-        terminal.calls.close.assert_called_once_with()
-        self.assertNoSessionDir()
 
     def test_close_and_stop_remove_the_names_lock(self):
         lock = os.path.join(self.root, f"{NAME}.lock")
@@ -2357,20 +2338,6 @@ class PrepareTest(Base):
                 self.start()
                 self.assertTrue(os.path.isfile(os.path.join(self.dir, "session.json")))
 
-    def test_a_running_or_unknown_session_is_refused_with_nothing_made(self):
-        for failure, message in (
-            (None, "tui session w1 is running"),
-            (SessionError("host state unknown"), "host state unknown"),
-        ):
-            with self.subTest(failure=failure):
-                process = self.host.create(NAME, SID)
-                process.calls.alive.side_effect = failure
-                with self.assertRaisesRegex(SessionError, message):
-                    self.start()
-                self.assertNoSessionDir()
-        self.assertEqual(self.recorded, [])
-        self.host.calls.worker.assert_not_called()
-
     def test_a_bad_session_state_is_refused_before_host_launch_or_a_path(self):
         class BadLabel(ScanTui):
             hooks = {"a b": HookKind.TURN_END}
@@ -2820,7 +2787,8 @@ class RecordRuleTest(Base):
         return state
 
     def handle(self, state: Liveness = Liveness.LIVE) -> mock.Mock:
-        handle = mock.create_autospec(InteractiveProcess, instance=True)
+        """Its owner's handle, which closes its own display."""
+        handle = mock.create_autospec(ManagedProcess, instance=True)
         handle.state.return_value = state
         return handle
 
@@ -2859,6 +2827,7 @@ class RecordRuleTest(Base):
     def test_owned_stale_absent_closes_the_display(self):
         self.owned()
         self.start()
+        self.host.calls.release.assert_called_once_with(NAME, "g1")
         self.display.calls.close.assert_called_once_with()
         self.assertIsNot(self.host.processes[NAME], self.display)
 
@@ -2876,7 +2845,7 @@ class RecordRuleTest(Base):
         order = mock.Mock()
         handle = self.handle()
         handle.close.side_effect = lambda: order("handle")
-        self.display.calls.close.side_effect = lambda: order("display")
+        handle.close_display.side_effect = lambda: order("display")
         self.assertTrue(self.store.close(handle, "g1"))
         self.assertEqual(order.call_args_list, [mock.call("display"), mock.call("handle")])
         self.assertNoSessionDir()
@@ -2885,7 +2854,7 @@ class RecordRuleTest(Base):
     def test_owned_stop_closes_the_handle(self):
         self.owned()
         handle = self.handle()
-        self.store.stop(handle, SID, owned=True, generation="g1")
+        self.store.stop(handle, owned=True, generation="g1")
         handle.close.assert_called_once_with()
         self.assertNoSessionDir()
 
@@ -2898,7 +2867,7 @@ class RecordRuleTest(Base):
                 with self.assertRaisesRegex(Unanswered, "^worker w1: exit unconfirmed$"):
                     self.store.close(handle, "g1")
                 self.assertEqual(handle.close.call_count, 0 if failure == "unknown" else 1)
-                self.display.calls.close.assert_called_once_with()
+                handle.close_display.assert_called_once_with()
                 self.assertEqual(self.saved(), state)
 
     def test_owned_close_of_an_old_generation_keeps_the_new_record_and_display(self):
@@ -2915,9 +2884,20 @@ class RecordRuleTest(Base):
             with self.subTest(generation=generation):
                 self.owned()
                 self.assertTrue(self.store.close(None, generation))
+                self.host.calls.release.assert_called_with(NAME, "g1")
                 self.display.calls.close.assert_called_once_with()
                 self.assertNoSessionDir()
                 self.liveness.assert_called_with(NAME, "g1")
+
+    def test_non_owner_close_whose_release_fails_keeps_the_record(self):
+        state = self.owned()
+        self.host.calls.release.side_effect = SessionError("tmux session w1: boom")
+        with self.assertRaisesRegex(
+            SessionError, r"\Acannot close tui session w1: tmux session w1: boom\Z"
+        ):
+            self.store.close()
+        self.assertEqual(self.saved(), state)
+        self.assertTrue(os.path.exists(os.path.join(self.root, f"{NAME}.lock")))
 
     def test_non_owner_close_live_or_unknown_is_busy_untouched(self):
         for liveness in (Liveness.LIVE, Liveness.UNKNOWN):
@@ -2958,12 +2938,12 @@ class RecordRuleTest(Base):
         state = self.owned()
         self.liveness.return_value = Liveness.UNKNOWN
         with self.assertRaises(SessionBusy):
-            self.store.stop(self.display, SID, generation="g1")
-        self.store.stop(self.display, SID, generation="g0")  # another generation's: untouched
+            self.store.stop(self.display, generation="g1")
+        self.store.stop(self.display, generation="g0")  # another generation's: untouched
         self.display.calls.close.assert_not_called()
         self.assertEqual(self.saved(), state)
         self.liveness.return_value = Liveness.ABSENT
-        self.store.stop(self.display, SID, generation="g1")
+        self.store.stop(self.display, generation="g1")
         self.assertNoSessionDir()
 
     def test_expire_keeps_a_live_owned_record(self):

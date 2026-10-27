@@ -2470,6 +2470,30 @@ class AdmissionTest(StartBase):
         self.assertFalse(os.path.exists(self.held_run))
 
 
+class Release(StartBase):
+    """_release: a dead generation's container goes once its owner lock is free."""
+
+    def test_that_generations_container_is_removed_once_its_owner_lock_is_free(self):
+        self.listed("w")
+        self.host._release("w", GEN)
+        self.assertEqual(self.broker.closed, [CONTAINER])
+        self.assertEqual(self.docker.execs(), [])
+
+    def test_a_held_owner_lock_refuses_removing_nothing(self):
+        self.listed("w")
+        self.owner_held()
+        with self.assertRaisesRegex(SessionError, r"\Adocker session w: owned by its harness\Z"):
+            self.host._release("w", GEN)
+        self.assertEqual(self.broker.closed, [])
+
+    def test_another_generations_container_or_none_is_left(self):
+        self.listed("w", gen="e" * 32)
+        self.host._release("w", GEN)
+        self.docker.ps = []
+        self.host._release("w", GEN)
+        self.assertEqual(self.broker.closed, [])
+
+
 class HeadlessWorkerTest(StartBase):
     """A headless run's guarded worker: started directly, kind headless, never listed as a tui."""
 

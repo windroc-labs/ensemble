@@ -181,6 +181,13 @@ class MemoryHost(Host):
         """calls.worker_liveness's answer: ABSENT unless a test sets it."""
         return self.calls.worker_liveness(name, generation)
 
+    def _release(self, name, generation):
+        """calls.release; its session of `name` closed while it is `generation`'s (a display)."""
+        self.calls.release(name, generation)
+        process = self.processes.get(name)
+        if process is not None and process.session_identity()[1] == generation:
+            process.close()
+
     def detach(self, name, launch: Launch, *, display=None, events=None, record=None):
         self.calls.detach(name, launch, display=display, events=events, record=record)
         return self.create(

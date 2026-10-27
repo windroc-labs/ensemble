@@ -386,6 +386,12 @@ class Host(ABC):
     def worker_liveness(self, name: str, generation: str) -> Liveness:
         raise SessionError(f"host {self.name} runs no managed worker")
 
+    def _release(self, name: str, generation: str) -> None:
+        """Worker `name`'s generation `generation`'s leftovers removed, once its worker_liveness
+        is ABSENT; a Host that overrides worker overrides this too.
+        """
+        return None
+
     @abstractmethod
     def attach(self, name: str) -> Process: ...
 

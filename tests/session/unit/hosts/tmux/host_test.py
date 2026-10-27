@@ -660,6 +660,39 @@ class ReturncodeTest(Base):
         self.assertIsNone(process.returncode())
 
 
+class Release(Base):
+    """_release: a dead generation's display, the tmux session of its name, goes only while
+    tagged with that generation.
+    """
+
+    def shown(self, generation):
+        self.tmux.option.side_effect = lambda _target, key: (
+            generation if key == "@generation" else None
+        )
+
+    def test_the_display_of_that_generation_is_killed(self):
+        self.shown("g1")
+        self.host._release("w1", "g1")
+        self.tmux.kill.assert_called_once_with("w1")
+
+    def test_another_generations_display_or_none_is_left(self):
+        for shown in ("g2", None):
+            with self.subTest(shown=shown):
+                self.shown(shown)
+                self.host._release("w1", "g1")
+        self.tmux.kill.assert_not_called()
+
+    def test_a_tmux_failure_is_a_driver_error_and_a_bad_name_reaches_no_tmux(self):
+        self.shown("g1")
+        self.tmux.kill.side_effect = TuiError("tmux: boom")
+        with self.assertRaisesRegex(SessionError, r"\Atmux session w1: tmux: boom\Z"):
+            self.host._release("w1", "g1")
+        self.tmux.reset_mock()
+        with self.assertRaisesRegex(SessionError, "^no tmux session 'a b'$"):
+            self.host._release("a b", "g1")
+        self.assertEqual(self.tmux.mock_calls, [])
+
+
 class ListTest(Base):
     def test_a_failed_listing_names_why_in_list_and_rows(self):
         self.tmux.listing.side_effect = TuiError("tmux list-sessions exited 1: lost server")

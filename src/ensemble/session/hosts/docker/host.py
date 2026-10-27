@@ -1081,6 +1081,14 @@ class DockerHost(Host):
             return Liveness.LIVE
         return self._row_liveness(name, generation)
 
+    def _release(self, name: str, generation: str) -> None:
+        """Its container of `generation`, once its owner lock is free."""
+        if not any(r.name == name and r.generation == generation for r in self._rows()):
+            return
+        if not _lock_free(_owner_path(name)):
+            raise SessionError(f"docker session {name}: owned by its harness")
+        self._remove(container_name(name, generation))
+
     def _row_liveness(self, name: str, generation: str) -> Liveness:
         """The container of `generation` and its guard's lease, by docker; ABSENT permits only that
         container's removal.
@@ -1187,19 +1195,13 @@ class DockerHost(Host):
         elif handle is not None and handle.generation == row.generation:
             return handle
         name, generation = row.name, row.generation
-
-        def remove() -> None:
-            if not _lock_free(_owner_path(name)):
-                raise SessionError(f"docker session {name}: owned by its harness")
-            self._remove(row.container)
-
         return GuardedView(
             name,
             generation,
             state=state_dir(name),
             load=lambda: _record(name),
             liveness=lambda: self.worker_liveness(name, generation),
-            remove=remove,
+            remove=lambda: self._release(name, generation),
         )
 
     def list(self) -> list[str]:

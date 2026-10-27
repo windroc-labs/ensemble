@@ -4135,6 +4135,76 @@ class BoundOwnerTest(HostedTuiBase):
         self.assertFalse(os.path.exists(os.path.join(self.channel.directory, "requests")))
 
 
+class DeadOwner(HostedTuiBase):
+    """A tui worker whose session harness exited or died (session.json still naming it): attach
+    finds it not alive; retire and an attached close remove its worker dir, releasing its dead
+    generation through the Host, only once worker_liveness says ABSENT, else SessionBusy (exit 75)
+    with nothing touched.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tui(name="w1", sid=SID)
+        self.state = tui.TuiMode.snapshot("w1")
+        self.display = self.host.processes["w1"]
+        harnesses.end(self.home)  # its harness gone; its worker with it
+        self.dead()
+
+    def dead(self):
+        """Its worker dir as its gone harness left it; its display kept, dead (remain-on-exit)."""
+        os.makedirs(os.path.join(self.root, "w1"), 0o700, exist_ok=True)
+        with open(os.path.join(self.root, "w1", "session.json"), "w") as f:
+            json.dump(self.state, f)
+        self.host.processes["w1"] = self.display
+        self.display.calls.state.return_value = Liveness.ABSENT
+        self.display.calls.alive.return_value = False
+        self.display.calls.reset_mock(return_value=False)
+        self.host.calls.reset_mock(return_value=False)
+
+    def closes(self):
+        return {
+            "retire": lambda: self.session.retire("w1", sid=SID),
+            "attached close": lambda: self.session.attach("w1", sid=SID).close(),
+        }
+
+    def test_attach_not_alive(self):
+        session = self.session.attach("w1", sid=SID)
+        self.assertNotIsInstance(session, OwnedSession)
+        self.assertFalse(session.alive())
+        self.assertEqual(session.status().state, StatusState.GONE)
+
+    def test_close_absent_removes(self):
+        for how, close in self.closes().items():
+            with self.subTest(how=how):
+                self.dead()
+                close()
+                self.assertFalse(os.path.lexists(os.path.join(self.root, "w1")))
+                self.host.calls.worker_liveness.assert_called_with("w1", self.state["generation"])
+                self.host.calls.release.assert_called_once_with("w1", self.state["generation"])
+                self.display.calls.close.assert_called_once_with()
+                self.host.calls.close_view.assert_called_once_with("w1")
+
+    def test_close_live_or_unknown_busy(self):
+        self.addCleanup(
+            self.host.calls.worker_liveness.configure_mock, return_value=Liveness.ABSENT
+        )
+        for liveness in (Liveness.LIVE, Liveness.UNKNOWN):
+            for how, close in self.closes().items():
+                with self.subTest(liveness=liveness, how=how):
+                    self.dead()
+                    self.host.calls.worker_liveness.return_value = liveness
+                    with (
+                        mock.patch("time.monotonic", side_effect=itertools.count(0, 5)),
+                        self.assertRaises(engine_types.SessionBusy) as caught,
+                    ):
+                        close()
+                    self.assertEqual(caught.exception.holder, "worker generation (live or unknown)")
+                    self.assertEqual(tui.TuiMode.snapshot("w1"), self.state)
+                    self.host.calls.release.assert_not_called()
+                    self.display.calls.close.assert_not_called()
+                    self.host.calls.close_view.assert_not_called()
+
+
 class DockerOwnedTest(Case):
     """On the Docker Host every built-in tui and headless start is harness-owned, a tui worker
     remote there.

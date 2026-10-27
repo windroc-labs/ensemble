@@ -378,6 +378,17 @@ class HostContract:
         with self.assertRaises(SessionError):
             terminal.publish(published)
 
+    def test_release_leaves_what_is_not_that_generations(self):
+        """_release(name, generation) removes only that generation's leftovers: a session of
+        another (here none) stays; an unknown name is no error.
+        """
+        name = self.fresh()
+        process = self.start("terminal", name, SLEEP)
+        self.host._release(name, uuid.uuid4().hex)
+        self.assertTrue(process.alive())
+        self.assertIn(name, self.host.list())
+        self.host._release(f"nope-{uuid.uuid4().hex[:12]}", uuid.uuid4().hex)
+
     def test_attach_of_an_unknown_name_raises_driver_error(self):
         with self.assertRaises(SessionError):
             self.host.attach(f"nope-{uuid.uuid4().hex[:12]}")

@@ -254,6 +254,14 @@ class TmuxHost(Host):
     def worker_liveness(self, name: str, generation: str) -> Liveness:
         return managed.liveness(self.name, _session(name), generation)
 
+    def _release(self, name: str, generation: str) -> None:
+        """Its display, the tmux session `name`, only while tagged with `generation`."""
+        try:
+            if self.tmux.option(_session(name), "@generation") == generation:
+                self.tmux.kill(name)
+        except TuiError as error:
+            raise SessionError(f"tmux session {name}: {error}") from error
+
     def detach(
         self,
         name: str,
