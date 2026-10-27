@@ -31,7 +31,7 @@ var datedFlags = map[credential.Kind]map[string]bool{
 // datedLogin parses login claude [NAME] | opencode PROVIDER | env NAME with at least one of its expiry options, in
 // any order: nil when args is no such login, which is usage. A malformed date or a repeated option is the returned
 // login's error.
-func datedLogin(args []string, a app, stdout io.Writer) func() error {
+func datedLogin(args []string, a app, stdout io.Writer) func(keys) error {
 	if len(args) < 3 || args[0] != "login" {
 		return nil
 	}
@@ -70,7 +70,7 @@ func datedLogin(args []string, a app, stdout io.Writer) func() error {
 	if authFile, ok := values["--auth-file"]; !dated || ok && !isPath(authFile) {
 		return nil
 	}
-	return func() error {
+	return func(k keys) error {
 		if repeated != "" {
 			return fmt.Errorf("%s given twice", repeated)
 		}
@@ -85,7 +85,7 @@ func datedLogin(args []string, a app, stdout io.Writer) func() error {
 				*date = d
 			}
 		}
-		return a.dated(kind, name, values["--auth-file"], reg, stdout)
+		return a.dated(k, kind, name, values["--auth-file"], reg, stdout)
 	}
 }
 

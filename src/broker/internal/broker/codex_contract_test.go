@@ -334,7 +334,7 @@ func (brokenGrants) PutSecret(string, string, []byte) error {
 
 func TestCodexGrantErrors(t *testing.T) {
 	for name, want := range map[string]string{
-		"store": "Keychain access to the Codex grants failed.",
+		"store": "Keychain access to the Codex grants failed: unlock the login keychain, or run " + RetrustCommand + ".",
 		"lock":  "Taking the Codex grant lock ~/.ensemble/docker/codex-grants.lock failed.",
 	} {
 		t.Run(name, func(t *testing.T) {

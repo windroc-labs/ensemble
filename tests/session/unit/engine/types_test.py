@@ -477,7 +477,7 @@ SOURCE = "dummy@owner/repo#" + "a" * 40
 ENVIRONMENT = {
     "image": "dummy-env:test",
     "gateway": "workers",
-    "secrets": [{"item": "ensemble-env/dummy", "file": "dummy.txt"}],
+    "secrets": [{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}],
     "plugins": ["dummy-plugin", SOURCE],
     "lock": "dummy-lock",
     "prefetch": {"repo": "o/r", "ref": "main"},
@@ -512,7 +512,7 @@ class EnvironmentSpecTest(Case):
             session.EnvironmentSpec.from_fields(["image"])
 
     def test_bad_secret_files_and_items_are_refused(self):
-        item = "ensemble-env/dummy"
+        item = "ensemble-broker-env/dummy"
         for secrets in (
             [{"item": item, "file": "../x"}],
             [{"item": item, "file": ""}],
@@ -523,10 +523,10 @@ class EnvironmentSpecTest(Case):
             [{"item": item, "file": "x" * 256}],
             [
                 {"item": item, "file": "dummy.txt"},
-                {"item": "ensemble-env/other", "file": "dummy.txt"},
+                {"item": "ensemble-broker-env/other", "file": "dummy.txt"},
             ],
-            [{"item": "ensemble-bot", "file": "dummy.txt"}],
-            [{"item": "ensemble-env/A", "file": "dummy.txt"}],
+            [{"item": "ensemble-broker-bot", "file": "dummy.txt"}],
+            [{"item": "ensemble-broker-env/A", "file": "dummy.txt"}],
             [{"item": item}],
             [{"item": item, "file": "dummy.txt", "value": "s3cret"}],
             [{"item": item, "file": f"f{i}"} for i in range(17)],
@@ -540,7 +540,8 @@ class EnvironmentSpecTest(Case):
         self.assertEqual(found.image, "dummy-env:test")
         self.assertEqual(found.gateway, "workers")
         self.assertEqual(
-            [dict(s) for s in found.secrets], [{"item": "ensemble-env/dummy", "file": "dummy.txt"}]
+            [dict(s) for s in found.secrets],
+            [{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}],
         )
         self.assertEqual(found.plugins, ("dummy-plugin", SOURCE))
         self.assertEqual(found.lock, "dummy-lock")
@@ -593,7 +594,7 @@ class EnvironmentSpecTest(Case):
     def test_the_constructor_wants_tuples_and_freezes_mappings(self):
         with self.assertRaisesRegex(ConfigError, "plugins"):
             session.EnvironmentSpec(image="x", gateway="workers", plugins=["a"])
-        secret = {"item": "ensemble-env/dummy", "file": "dummy.txt"}
+        secret = {"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}
         prefetch = {"repo": "o/r"}
         found = session.EnvironmentSpec(
             image="x", gateway="workers", secrets=(secret,), prefetch=prefetch

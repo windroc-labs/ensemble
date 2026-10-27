@@ -13,9 +13,9 @@ import (
 // A static secret's reference, its safe name: the prefix of its kind, then its name. The broker package pins each
 // prefix to its keychain service.
 const (
-	ClaudePrefix   = "ensemble-claude/"
-	OpencodePrefix = "ensemble-opencode/"
-	EnvPrefix      = "ensemble-env/"
+	ClaudePrefix   = "ensemble-broker-claude/"
+	OpencodePrefix = "ensemble-broker-opencode/"
+	EnvPrefix      = "ensemble-broker-env/"
 )
 
 // Provenance is where a static secret's expiry came from.
@@ -154,7 +154,7 @@ var thresholds = []struct {
 const Rotated = "rotated"
 
 // NoticeKeyPattern matches every notice key Due can produce.
-var NoticeKeyPattern = regexp.MustCompile(`^ensemble-(claude|opencode|env)/[A-Za-z0-9._-]{1,64}@[0-9]{1,9}:(` + labels() + `)$`)
+var NoticeKeyPattern = regexp.MustCompile(`^ensemble-broker-(claude|opencode|env)/[A-Za-z0-9._-]{1,64}@[0-9]{1,9}:(` + labels() + `)$`)
 
 // labels are the thresholds, least urgent first, then Rotated: the schema's order.
 func labels() string {

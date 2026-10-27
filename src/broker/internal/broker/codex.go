@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	codexService        = "ensemble-codex"
+	codexService        = "ensemble-broker-codex"
 	codexAccount        = "auth"
 	maxCodexAuth        = 64 * 1024
 	codexLoginCommand   = InstalledPath + " login codex"
@@ -66,8 +66,9 @@ type Codex struct {
 	uid         func() int
 }
 
-func NewCodex(home string, password func() ([]byte, error)) Codex {
-	return Codex{native: codex.New(), keychain: SystemKeychain{Home: home}, grants: SystemKeychain{Home: home},
+// NewCodex is the Codex login of the account at home, its items in k.
+func NewCodex(home string, k SystemKeychain, password func() ([]byte, error)) Codex {
+	return Codex{native: codex.New(), keychain: k, grants: k,
 		grantsLock: FileLock(filepath.Join(home, ".ensemble/docker/codex-grants.lock")), password: password,
 		revisionDir: filepath.Join(home, ".ensemble/docker/codex-refresh"), tempRoot: "/private/tmp", now: time.Now, uid: os.Geteuid}
 }
@@ -314,6 +315,15 @@ func (c Codex) trusted() error {
 	return nil
 }
 
+// loginRepair is the command that makes the login usable when trusted fails: retrust for an earlier broker build's
+// item, else login codex.
+func (c Codex) loginRepair() string {
+	if _, earlier, err := checkItem(c.keychain, codexService, codexAccount); err == nil && earlier {
+		return RetrustCommand
+	}
+	return codexLoginCommand
+}
+
 // codexWriterMessages are bootstrap.py's fixed codex-auth exit messages. The writer runs in the untrusted container,
 // so writerCause passes on only these, or a write failure's errno text.
 var (
@@ -361,6 +371,7 @@ func (c Codex) Status(ctx context.Context) protocol.CodexStatus {
 	}
 	defer unlock()
 	if c.trusted() != nil {
+		s.Repair = c.loginRepair()
 		return s
 	}
 	data, err := c.keychain.Secret(codexService, codexAccount)

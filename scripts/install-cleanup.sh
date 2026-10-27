@@ -327,7 +327,7 @@ broker_files() {
     return
   fi
   sudo -A rm -rf "$root/usr/local/libexec/ensemble"
-  for service in ensemble-tokens ensemble-revocations ensemble-codex-grants; do
+  for service in ensemble-broker-tokens ensemble-broker-revocations ensemble-broker-codex-grants; do
     count=0
     while delete_item "$service"; do
       count=$((count + 1))

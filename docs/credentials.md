@@ -17,13 +17,14 @@ with the broker; a provider API key or an environment secret is the same long-li
 |---|---|---|---|---|---|
 | `tmux` | Claude Code | the user, beforehand: `claude`, then `/login` ([Claude auth]) | macOS Keychain; `~/.claude/.credentials.json` (0600) if the Keychain refuses the write ([Claude auth]) | no container | — |
 | `tmux` | Codex | the user, beforehand: `codex login` ([Codex auth]) | `~/.codex/auth.json`, or the OS credential store per `cli_auth_credentials_store` ([Codex auth]) | no container | — |
-| Docker | Claude Code | the user, once per broker install and [account](docker-host.md#claude-accounts): `claude setup-token` in its subscription, pasted into `<B> login claude [<name>]` ([Log in](docker-host.md#log-in)) | `ensemble-claude` / account name | the selected account's token alone, `/run/ensemble/secrets/claude`, 0400 on tmpfs, given to the client only as `CLAUDE_CODE_OAUTH_TOKEN` | deleted with the container (close, restart, resume start a new one); never revoked |
-| Docker | Codex | an admin installs the pinned Codex (`sudo <B> install-codex <version>`); the user, once per broker install: `<B> login codex` in a browser ([Codex](docker-host.md#codex)) | `ensemble-codex` / `auth` | `/run/ensemble/secrets/codex/auth.json`, 0400 on tmpfs, with no refresh token; the broker publishes each renewal | deleted with the container; never revoked |
+| Docker | Claude Code | the user, once per [account](docker-host.md#claude-accounts): `claude setup-token` in its subscription, pasted into `<B> login claude [<name>]` ([Log in](docker-host.md#log-in)) | `ensemble-broker-claude` / account name | the selected account's token alone, `/run/ensemble/secrets/claude`, 0400 on tmpfs, given to the client only as `CLAUDE_CODE_OAUTH_TOKEN` | deleted with the container (close, restart, resume start a new one); never revoked |
+| Docker | Codex | an admin installs the pinned Codex (`sudo <B> install-codex <version>`); the user, once: `<B> login codex` in a browser ([Codex](docker-host.md#codex)) | `ensemble-broker-codex` / `auth` | `/run/ensemble/secrets/codex/auth.json`, 0400 on tmpfs, with no refresh token; the broker publishes each renewal | deleted with the container; never revoked |
 | `tmux` | OpenCode | no one for the host's Ollama on `127.0.0.1` ([Docker host › OpenCode](docker-host.md#opencode)); a configured provider's API key: the user, beforehand: `opencode auth login` ([OpenCode sessions](sessions.md#opencode-sessions)) | OpenCode's `auth.json`; ensemble reads the selected API entry for availability probes and explicit broker import | no container | — |
-| Docker | OpenCode | no one for the host's Ollama (through `host.docker.internal`); each configured provider's API key: `scripts/install.sh --docker` imports the local entry, or the user runs `<B> login opencode <name>` per broker install and provider ([Log in](docker-host.md#log-in)) | `ensemble-opencode` / `<name>` | the GitHub tokens and each configured provider's key, `/run/ensemble/secrets/opencode/<name>.key`, 0400 on tmpfs, read by OpenCode through `{file:…}` in its inline config, never env or argv | deleted with the container; never revoked |
+| Docker | OpenCode | no one for the host's Ollama (through `host.docker.internal`); each configured provider's API key: `scripts/install.sh --docker` imports the local entry, or the user runs `<B> login opencode <name>` per provider ([Log in](docker-host.md#log-in)) | `ensemble-broker-opencode` / `<name>` | the GitHub tokens and each configured provider's key, `/run/ensemble/secrets/opencode/<name>.key`, 0400 on tmpfs, read by OpenCode through `{file:…}` in its inline config, never env or argv | deleted with the container; never revoked |
 
-GitHub on the Docker Host needs no per-run login: `<B> login github ensemble-bot` once per broker install
-([Log in](docker-host.md#log-in)). The local Host uses the host `gh` login below.
+GitHub on the Docker Host needs no per-run login: `<B> login github ensemble-broker-bot` once
+([Log in](docker-host.md#log-in)); a new broker keeps every broker item through `<B> retrust`
+([Re-trust after an upgrade](docker-host.md#re-trust-after-an-upgrade)). The local Host uses the host `gh` login below.
 
 ## Credentials
 
@@ -51,10 +52,10 @@ all skipped or unstarted-cancelled checks together still mean CI did not run.
 |---|---|
 | Purpose | signs the 9-minute JWT that issues installation tokens; never leaves the broker |
 | Minimum permission | one private App, installed only on repos agents may push to; the broker requests `[session.hosts.docker.github] permissions`, by default contents, pull requests and workflows write, checks, actions and statuses read |
-| Stored at | login keychain, service `ensemble-bot` (`[session.hosts.docker.github] app`), account the App ID, created by `<B> login github ensemble-bot --key-file <pem> --app-id <ID>`; delete the downloaded `.pem` once the item holds it |
-| Readers | the broker only: an item `--key-file` creates trusts only it for reads from the start, and the login finishes its partition list; an item made otherwise trusts its creator (`/usr/bin/security`: any process running as the user) until `<B> login github ensemble-bot`; a `.pem` left on disk, any process running as the user |
+| Stored at | login keychain, service `ensemble-broker-bot` (`[session.hosts.docker.github] app`), account the App ID, created by `<B> login github ensemble-broker-bot --key-file <pem> --app-id <ID>`; delete the downloaded `.pem` once the item holds it |
+| Readers | the broker only: an item `--key-file` creates trusts only it for reads from the start, and the login finishes its partition list; an item made otherwise trusts its creator (`/usr/bin/security`: any process running as the user) until `<B> login github ensemble-broker-bot`; a `.pem` left on disk, any process running as the user |
 | Lifetime | until the key is deleted in the App's settings |
-| Revoke | generate a new key and delete the old one in the App's settings; delete the item (`security delete-generic-password -s ensemble-bot`) and rerun `<B> login github ensemble-bot --key-file <new pem> --app-id <ID>` |
+| Revoke | generate a new key and delete the old one in the App's settings; delete the item (`security delete-generic-password -s ensemble-broker-bot`) and rerun `<B> login github ensemble-broker-bot --key-file <new pem> --app-id <ID>` |
 
 ### GitHub installation tokens
 
@@ -62,17 +63,17 @@ all skipped or unstarted-cancelled checks together still mean CI did not run.
 |---|---|
 | Purpose | git (credential helper) and `gh` (wrapper setting `GH_TOKEN` for its own process) inside a Docker container |
 | Minimum permission | one token per installation, covering every repo of it, with the permissions above |
-| Stored at | broker items `ensemble-tokens` (per container) and `ensemble-revocations` (backlog); the container's `/run/ensemble/secrets/github/<owner>` (0400, tmpfs) |
+| Stored at | broker items `ensemble-broker-tokens` (per container) and `ensemble-broker-revocations` (backlog); the container's `/run/ensemble/secrets/github/<owner>` (0400, tmpfs) |
 | Readers | **three-way readers** |
 | Lifetime | 1 hour; each session renews them 10 minutes before the first expires |
 | Revoke | `close` releases the container's grant: it attempts revocation before removing the container, even if revocation fails; backlog entries retry at the next start, close or `status --cleanup` until revoked or expired; `<B> status` lists pending backlog entries without changing them |
 
-The `ensemble-tokens` record holds each token's state: prepared (issued, not yet confirmed in the container),
+The `ensemble-broker-tokens` record holds each token's state: prepared (issued, not yet confirmed in the container),
 delivered, or retiring (replaced, awaiting revocation). Start and maintain report a token only once it is delivered;
 a renewal or close interrupted at any step leaves the record consistent, and the next maintain or close finishes it.
 
 If the backlog cannot be read or written and direct revocation fails, the broker retains the original
-`ensemble-tokens` record and reports pending cleanup. Retry `<B> close --container <container>` with the original container
+`ensemble-broker-tokens` record and reports pending cleanup. Retry `<B> close --container <container>` with the original container
 name, even after the container is gone. `status` and `status --cleanup` do not discover these retained records. Unreadable token
 records also stay in place for recovery; fix their access and retry close. A record is removed only after
 confirmed revocation, confirmed expiry or a successful durable transfer to the backlog.
@@ -83,7 +84,7 @@ confirmed revocation, confirmed expiry or a successful durable transfer to the b
 |---|---|
 | Purpose | one [prefetch](docker-host.md#prefetch) clone into a new workspace |
 | Minimum permission | `contents: read` on the prefetched repo alone |
-| Stored at | broker item `ensemble-tokens` (the starting container's record) while in use; the prefetch helper's tmpfs `HOME`, never the workspace, the clone's `.git/config` or the run container |
+| Stored at | broker item `ensemble-broker-tokens` (the starting container's record) while in use; the prefetch helper's tmpfs `HOME`, never the workspace, the clone's `.git/config` or the run container |
 | Readers | the broker; the helper container's processes and any process that can `docker exec` into it, for the length of the clone |
 | Lifetime | until the helper exits, at most 1 hour |
 | Revoke | the broker revokes it as soon as the helper exits; an unconfirmed revocation goes to the backlog, as installation tokens |
@@ -149,9 +150,9 @@ The same role path supports a configured verifier; an absent verifier needs no e
 | Material | Readers and owner |
 |---|---|
 | Client secret, existing `secret_service` / existing account | only the installed broker after enrollment; Python never reads it on this path |
-| Authoritative access token and enrollment, `ensemble-linear` / `app/<token_service>` | broker only; version 1 binds the complete identity and preserves access material before publication |
-| Identity reservations, `ensemble-linear` / `registry` | broker only; prevents client ID, user ID and root/token service collisions |
-| Host grant, `ensemble-linear-grants` / `host/<token_service>` | broker only; prepared/delivered revision bookkeeping |
+| Authoritative access token and enrollment, `ensemble-broker-linear` / `app/<token_service>` | broker only; version 1 binds the complete identity and preserves access material before publication |
+| Identity reservations, `ensemble-broker-linear` / `registry` | broker only; prevents client ID, user ID and root/token service collisions |
+| Host grant, `ensemble-broker-linear-grants` / `host/<token_service>` | broker only; prepared/delivered revision bookkeeping |
 | Published token, existing `token_service` / existing account | installed broker and `/usr/bin/security`; any process running as the user can invoke that reader; contains only access token and expiry |
 
 Enrollment and recovery order: [Upgrading › Linear broker renewal](upgrading.md#linear-broker-renewal).
@@ -203,8 +204,8 @@ expiry, optionally `audit_warning: "audit_write_failed"`; enrollment returns ver
 or storage failure is distinct from audit failure; an audit warning preserves the successful credential result.
 
 To rotate an enrolled app's secret, stop its host callers, rotate at Linear, replace only its root item in Keychain
-Access, and delete its published token plus its `ensemble-linear` account `app/<token_service>` and
-`ensemble-linear-grants` account `host/<token_service>`. Preserve `registry` and all other identities' items.
+Access, and delete its published token plus its `ensemble-broker-linear` account `app/<token_service>` and
+`ensemble-broker-linear-grants` account `host/<token_service>`. Preserve `registry` and all other identities' items.
 Store the replacement root at the configured service/account, rerun `login linear` and `linear-maintain`, then
 restart callers. Removing only the published token would republish the broker's cached access token.
 
@@ -214,7 +215,7 @@ restart callers. Removing only the published token would republish the broker's 
 |---|---|---|
 | Purpose | the user's own Claude Code | worker and role-run Claude Code in a container |
 | Minimum permission | the user's subscription login | a setup-token: subscription, model requests only |
-| Stored at | macOS Keychain (fallback `~/.claude/.credentials.json`) | `ensemble-claude` / account name, one item per [account](docker-host.md#claude-accounts); one copy per running container |
+| Stored at | macOS Keychain (fallback `~/.claude/.credentials.json`) | `ensemble-broker-claude` / account name, one item per [account](docker-host.md#claude-accounts); one copy per running container |
 | Readers | Claude Code and any process running as the user that the Keychain lets read it | the item: the broker; the copies: **three-way readers** |
 | Lifetime | refreshed by Claude Code; `/login` renews | one year; the broker records it from `--fresh-token`, `--issued` or `--expires`, else unknown, and refuses starts once a known expiry passes ([Static secret expiry](docker-host.md#static-secret-expiry)) |
 | Revoke | `/logout` | Unknown: no official route. `claude.ai/settings/claude-code`, cited by the community, is unverified. On a leak: run `claude setup-token` again and rerun `<B> login claude [<name>]` |
@@ -226,12 +227,12 @@ lists in `secrets` ([Docker host › Environment secrets](docker-host.md#environ
 
 | Field | Value |
 |---|---|
-| Purpose | whatever the container's tools use it for; ensemble passes it only by reference, `ensemble-env/<name>` |
+| Purpose | whatever the container's tools use it for; ensemble passes it only by reference, `ensemble-broker-env/<name>` |
 | Minimum permission | whatever the value grants; issue one for ensemble alone |
-| Stored at | `ensemble-env/<name>` / `<name>`; per container `/run/ensemble/secrets/env/<file>` (0400, owner `agent`, tmpfs), written at `start` only |
-| Readers | item: the broker only, once `login env <name>` has made it trust only the broker; container copy: **three-way readers**, and since `<B> start` does not check its caller, any process running as the user can start a container listing any `ensemble-env/*` item and read it |
+| Stored at | `ensemble-broker-env/<name>` / `<name>`; per container `/run/ensemble/secrets/env/<file>` (0400, owner `agent`, tmpfs), written at `start` only |
+| Readers | item: the broker only, once `login env <name>` has made it trust only the broker; container copy: **three-way readers**, and since `<B> start` does not check its caller, any process running as the user can start a container listing any `ensemble-broker-env/*` item and read it |
 | Lifetime | until replaced or deleted (an expiry given with `--expires` refuses starts after it); a container's copy until the container goes |
-| Revoke | rotate it at its source, then `<B> login env <name>` with the new value, which replaces the item; `security delete-generic-password -s ensemble-env/<name>` deletes it; running containers keep the old copy until closed |
+| Revoke | rotate it at its source, then `<B> login env <name>` with the new value, which replaces the item; `security delete-generic-password -s ensemble-broker-env/<name>` deletes it; running containers keep the old copy until closed |
 
 ### Stored broker credentials
 
@@ -253,7 +254,7 @@ entries. This explicit option preserves the former status behavior; the installe
 
 If a broker login reports `keychain status -25244` (`errSecInvalidOwnerEdit`), another process
 owns the item's access controls. In Keychain Access, select the login keychain and delete only
-the named service/account, such as `ensemble-opencode` / your provider or `ensemble-codex` / `auth`,
+the named service/account, such as `ensemble-broker-opencode` / your provider or `ensemble-broker-codex` / `auth`,
 then rerun `scripts/install.sh` (or the broker login command). The installer stops retrying this
 error. For a Codex `login_unavailable` failure with an existing item, it also names that item and
 this recovery when another process created it. The installer leaves deletion to you.
@@ -264,12 +265,12 @@ this recovery when another process created it. The installer leaves deletion to 
 |---|---|---|
 | Purpose | the user's own Codex | worker and role-run Codex in a container |
 | Minimum permission | the user's ChatGPT login | the broker's own ChatGPT login; the container gets an access token without a refresh token |
-| Stored at | `~/.codex/auth.json` or the OS store | the full login, refresh token included: `ensemble-codex` / `auth`; the access token: `/run/ensemble/secrets/codex/auth.json` per container |
+| Stored at | `~/.codex/auth.json` or the OS store | the full login, refresh token included: `ensemble-broker-codex` / `auth`; the access token: `/run/ensemble/secrets/codex/auth.json` per container |
 | Readers | Codex and any process running as the user | refresh token: the broker only, except that during `login codex` and each renewal the full login also sits in a 0700 temp dir under `/private/tmp` that any process running as the user can read; access token: **three-way readers** |
 | Lifetime | refreshed by Codex during use | access token renewed by the broker 10 minutes before it expires; refresh token: not documented |
-| Revoke | `codex logout` clears it locally | Unknown upstream: no documented route. Rerun `<B> login codex` to replace the login, or delete the `ensemble-codex` item |
+| Revoke | `codex logout` clears it locally | Unknown upstream: no documented route. Rerun `<B> login codex` to replace the login, or delete the `ensemble-broker-codex` item |
 
-Each Docker container's grant, `ensemble-codex-grants` / `<container>`, records the login's fingerprint, expiry,
+Each Docker container's grant, `ensemble-broker-codex-grants` / `<container>`, records the login's fingerprint, expiry,
 revision and delivery state, never a token. Renewals of the one login are serialized across broker processes:
 concurrent renewals renew it once. A renewal whose delivery or deadline record failed delivers the same login
 on retry without renewing it again. `close` deletes the grant after removing the container, leaving other containers
@@ -288,7 +289,7 @@ commander can use the key; existing definitions are preserved ([OpenCode session
 |---|---|---|
 | Purpose | OpenCode's requests to the provider | the same, from a container |
 | Minimum permission | whatever the provider's key grants; issue one for ensemble alone | the same |
-| Stored at | OpenCode's `auth.json` (`opencode auth login`); ensemble reads the selected API entry for provider availability probes and explicit broker import | `ensemble-opencode` / `<name>`; per container `/run/ensemble/secrets/opencode/<name>.key`; Docker installs also keep the local entry for commanders |
+| Stored at | OpenCode's `auth.json` (`opencode auth login`); ensemble reads the selected API entry for provider availability probes and explicit broker import | `ensemble-broker-opencode` / `<name>`; per container `/run/ensemble/secrets/opencode/<name>.key`; Docker installs also keep the local entry for commanders |
 | Readers | OpenCode and any process running as the user | item: the broker only, once `login opencode <name>` has made it trust only the broker; container copy: **three-way readers**; on the network: anyone between the container and an `http://` `base_url` ([Risks](#risks)) |
 | Lifetime | until the provider revokes it | the same, or until the `--expires` date, which refuses starts after it; a container's copy until the container goes |
 | Revoke | revoke it at the provider; `opencode auth logout` removes it locally | revoke it at the provider, then `<B> login opencode <name>` with a new one, which replaces the item; running containers keep the old copy until closed |
@@ -302,27 +303,29 @@ broker-only install needs one local login to fill the missing entry; the broker 
 entries are not compared or synchronized when both are skipped.
 
 The install ledger records each entry it adds: `opencode-auth` for the local provider and `keychain` for
-`ensemble-opencode` / `<name>`. `scripts/install-cleanup.sh` removes both recorded entries, preserving preexisting
+`ensemble-broker-opencode` / `<name>`. `scripts/install-cleanup.sh` removes both recorded entries, preserving preexisting
 credentials and other providers. This deletes the stored copies; it does not revoke the key at the provider.
 
 ## Keychain items
 
 All in the login keychain. "Readers" is by design; [Measured readers](#measured-readers) records what a live read
-shows.
+shows. Every service starting with `ensemble-broker-` is a broker item; `<B> retrust` makes each trust a new broker
+build ([Docker host › Re-trust after an upgrade](docker-host.md#re-trust-after-an-upgrade)). The `linear.*` services
+are not broker items.
 
 | Service | Account | Config key | Holds | Written by | Readers |
 |---|---|---|---|---|---|
-| `ensemble-claude` | account name (`default` or `<name>`) | `[session.clients.claude.accounts.<name>]` | that Claude account's setup-token | `<B> login claude [<name>]` | the broker |
-| `ensemble-bot` | App ID | `[session.hosts.docker.github] app` | App private key | the user; access set by `<B> login github ensemble-bot` | the broker, once logged in |
-| `ensemble-github-users` | `ensemble-bot` | — | the App's slug and its bot user's ID, for git identity (not a secret) | `<B> login github ensemble-bot` | the broker |
-| `ensemble-tokens` | container name | — | that container's installation tokens and expiries, including retained recovery material | `<B> start`, `maintain`; `close` removes only safely retired entries | the broker |
-| `ensemble-revocations` | `pending` | — | tokens awaiting revocation | `<B> close`, `maintain` failures | the broker |
-| `ensemble-codex` | `auth` | — | the full Codex login | `<B> login codex`; renewals at `start`, `maintain` | the broker |
-| `ensemble-codex-grants` | container name | — | that container's Codex grant: the login's fingerprint, expiry, revision and delivery state; no token | `<B> start`, `maintain`; `close` deletes it | the broker |
-| `ensemble-linear` | `registry`, `app/<token_service>` | — | enrolled host identities and authoritative access tokens; no client secret copy | `<B> login linear`, `linear-maintain` | the broker |
-| `ensemble-linear-grants` | `host/<token_service>` | — | host app's prepared/delivered access-token grant | `<B> linear-maintain` | the broker |
-| `ensemble-opencode` | provider name | `[session.clients.opencode.providers.<name>]` | that OpenCode provider's API key | `<B> login opencode <name>` | the broker |
-| `ensemble-env/<name>` | `<name>` | — | that environment secret | `<B> login env <name>` | the broker |
+| `ensemble-broker-claude` | account name (`default` or `<name>`) | `[session.clients.claude.accounts.<name>]` | that Claude account's setup-token | `<B> login claude [<name>]` | the broker |
+| `ensemble-broker-bot` | App ID | `[session.hosts.docker.github] app` | App private key | the user; access set by `<B> login github ensemble-broker-bot` | the broker, once logged in |
+| `ensemble-broker-github-users` | `ensemble-broker-bot` | — | the App's slug and its bot user's ID, for git identity (not a secret) | `<B> login github ensemble-broker-bot` | the broker |
+| `ensemble-broker-tokens` | container name | — | that container's installation tokens and expiries, including retained recovery material | `<B> start`, `maintain`; `close` removes only safely retired entries | the broker |
+| `ensemble-broker-revocations` | `pending` | — | tokens awaiting revocation | `<B> close`, `maintain` failures | the broker |
+| `ensemble-broker-codex` | `auth` | — | the full Codex login | `<B> login codex`; renewals at `start`, `maintain` | the broker |
+| `ensemble-broker-codex-grants` | container name | — | that container's Codex grant: the login's fingerprint, expiry, revision and delivery state; no token | `<B> start`, `maintain`; `close` deletes it | the broker |
+| `ensemble-broker-linear` | `registry`, `app/<token_service>` | — | enrolled host identities and authoritative access tokens; no client secret copy | `<B> login linear`, `linear-maintain` | the broker |
+| `ensemble-broker-linear-grants` | `host/<token_service>` | — | host app's prepared/delivered access-token grant | `<B> linear-maintain` | the broker |
+| `ensemble-broker-opencode` | provider name | `[session.clients.opencode.providers.<name>]` | that OpenCode provider's API key | `<B> login opencode <name>` | the broker |
+| `ensemble-broker-env/<name>` | `<name>` | — | that environment secret | `<B> login env <name>` | the broker |
 | the `linear.harness.secret_service` value | any | `linear.harness.secret_service` | harness app client secret | installer or the user ([Linear presets](#linear-presets)); broker owns enrolled access | broker when enrolled; otherwise any process running as the user |
 | the `linear.harness.token_service` value | the existing item's, else the service | `linear.harness.token_service` | harness app token and expiry | selected writer: transport/installer or broker | any process running as the user through the restricted host reader |
 | the `linear.manager.secret_service` value | any | `linear.manager.secret_service` | manager app client secret | installer or the user ([Linear presets](#linear-presets)); broker owns enrolled access | broker when enrolled; otherwise any process running as the user |
@@ -345,34 +348,34 @@ the value, and `perl … alarm 10` stands for `timeout 10`, which macOS lacks. P
 column, and after `!` in the manager's Claude Code prompt for the manager column:
 
 ```sh
-for s in ensemble-claude ensemble-bot ensemble-github-users ensemble-tokens ensemble-revocations ensemble-codex ensemble-codex-grants ensemble-opencode; do security find-generic-password -s "$s" >/dev/null 2>&1; e=$?; r=$(bash -c 'perl -e "alarm 10; exec @ARGV" security find-generic-password -s "$0" -w 2>/dev/null | wc -c | tr -d " "; echo "exit=${PIPESTATUS[0]}"' "$s" | tr '\n' ' '); echo "$s exists=$e bytes/$r"; done
+for s in ensemble-broker-claude ensemble-broker-bot ensemble-broker-github-users ensemble-broker-tokens ensemble-broker-revocations ensemble-broker-codex ensemble-broker-codex-grants ensemble-broker-opencode; do security find-generic-password -s "$s" >/dev/null 2>&1; e=$?; r=$(bash -c 'perl -e "alarm 10; exec @ARGV" security find-generic-password -s "$0" -w 2>/dev/null | wc -c | tr -d " "; echo "exit=${PIPESTATUS[0]}"' "$s" | tr '\n' ' '); echo "$s exists=$e bytes/$r"; done
 ```
 
-For each environment secret, add `ensemble-env/<name>` to the loop's list. An item must exist to be measured (`exists=0`); `exists=44` means absent: record `absent, not measured` and make it
-first. `ensemble-claude`, `ensemble-github-users`, `ensemble-codex` and `ensemble-opencode` exist after their `login`; `ensemble-bot` once
-the user stores the key; `ensemble-tokens` while a Docker session runs; `ensemble-codex-grants` while a Docker Codex
-session runs; `ensemble-revocations` after a `close` with the
+For each environment secret, add `ensemble-broker-env/<name>` to the loop's list. An item must exist to be measured (`exists=0`); `exists=44` means absent: record `absent, not measured` and make it
+first. `ensemble-broker-claude`, `ensemble-broker-github-users`, `ensemble-broker-codex` and `ensemble-broker-opencode` exist after their `login`; `ensemble-broker-bot` once
+the user stores the key; `ensemble-broker-tokens` while a Docker session runs; `ensemble-broker-codex-grants` while a Docker Codex
+session runs; `ensemble-broker-revocations` after a `close` with the
 network off, until the next start, close or `status --cleanup` online.
 
 Pass: `exists=0`, `exit=` non-zero (142 when the alarm stops it, 128 when the dialog is denied) and a byte count of `0`. Click Deny on any dialog, never Always
 Allow; if Always Allow was clicked, `/usr/bin/security` now reads the item: rerun the `login` that writes it
-(`login github ensemble-bot` for `ensemble-bot` and `ensemble-github-users`), or for `ensemble-tokens` and
-`ensemble-revocations` delete the item in Keychain Access (its tokens expire within an hour), for
-`ensemble-codex-grants` close the session (its item holds no token), and note it here. Record only
+(`login github ensemble-broker-bot` for `ensemble-broker-bot` and `ensemble-broker-github-users`), or for `ensemble-broker-tokens` and
+`ensemble-broker-revocations` delete the item in Keychain Access (its tokens expire within an hour), for
+`ensemble-broker-codex-grants` close the session (its item holds no token), and note it here. Record only
 `exists=<n>, exit=<n>, bytes=<n>`.
 A read that returns bytes fails this check unless the user accepts it: mark the row `silently readable, accepted <date>`.
 
 | Service | Manager | Shell |
 |---|---|---|
-| `ensemble-claude` | exists=0, exit=128, bytes=0 | exists=0, exit=128, bytes=0 |
-| `ensemble-bot` | exists=0, exit=128, bytes=0 | exists=0, exit=128, bytes=0 |
-| `ensemble-github-users` | exists=0, exit=128, bytes=0 | exists=0, exit=128, bytes=0 |
-| `ensemble-tokens` | exists=0, exit=128, bytes=0 | exists=0, exit=128, bytes=0 |
-| `ensemble-revocations` | absent, not measured | absent, not measured |
-| `ensemble-codex` | exists=0, exit=128, bytes=0 | exists=0, exit=128, bytes=0 |
-| `ensemble-codex-grants` | pending | pending |
-| `ensemble-opencode` | pending | pending |
-| `ensemble-env/<name>` | pending | pending |
+| `ensemble-broker-claude` | exists=0, exit=128, bytes=0 | exists=0, exit=128, bytes=0 |
+| `ensemble-broker-bot` | exists=0, exit=128, bytes=0 | exists=0, exit=128, bytes=0 |
+| `ensemble-broker-github-users` | exists=0, exit=128, bytes=0 | exists=0, exit=128, bytes=0 |
+| `ensemble-broker-tokens` | exists=0, exit=128, bytes=0 | exists=0, exit=128, bytes=0 |
+| `ensemble-broker-revocations` | absent, not measured | absent, not measured |
+| `ensemble-broker-codex` | exists=0, exit=128, bytes=0 | exists=0, exit=128, bytes=0 |
+| `ensemble-broker-codex-grants` | pending | pending |
+| `ensemble-broker-opencode` | pending | pending |
+| `ensemble-broker-env/<name>` | pending | pending |
 
 ## What a container reaches
 
@@ -492,7 +495,7 @@ acceptance on a developer's Mac. The 2026-10-18 results below predate the egress
   Handoff, next role's claim.
 - [ ] WDRC-67, after cutover: [Upgrading › Linear apps](upgrading.md#linear-apps) step 7 is done: the old credentials
   revoked in Linear and every Keychain item written down in its step 3 deleted.
-- [ ] [Measured readers](#measured-readers): `ensemble-opencode`.
+- [ ] [Measured readers](#measured-readers): `ensemble-broker-opencode`.
 
 A failed WDRC-67 before-cutover check stops the cutover; report it to the user.
 
@@ -500,14 +503,14 @@ A failed WDRC-67 before-cutover check stops the cutover; report it to the user.
 
 - **Three-way readers** of handed-out credentials: accepted by the user on 2026-10-18; the broker is unchanged.
 - Transport-owned Linear client secrets and published access tokens trust `/usr/bin/security`: any process running as the user reads them without a dialog. Enrolled client secrets trust only the broker; published access tokens trust both the broker and `/usr/bin/security` ([Keychain items](#keychain-items)).
-- Each broker release changes its ad-hoc code identity: rerun `login claude`, each `login claude <name>`,
-  `login github ensemble-bot`, `login codex`, each `login opencode <name>` and each `login env <name>`
-  ([Log in](docker-host.md#log-in)).
+- Each broker build has its own partition ID: `scripts/install.sh --docker` runs `retrust` on each new broker, the
+  login keychain password once ([Re-trust after an upgrade](docker-host.md#re-trust-after-an-upgrade)); until then a
+  start fails without a dialog, naming `retrust`.
 - Config picks a Docker Claude session's account ([Claude accounts](docker-host.md#claude-accounts)); it is no
   access control: any process running as the user can start a container with any logged-in account (`<B> start`
   does not check its caller).
 - An environment secret reaches whoever can start a container: `<B> start` does not check its caller, so any process
-  running as the user can list any `ensemble-env/*` item in a manifest and read the copy (**three-way readers**).
+  running as the user can list any `ensemble-broker-env/*` item in a manifest and read the copy (**three-way readers**).
 - `<B> probe-provider --provider NAME --base-url URL` also does not check its caller: any process running as
   the user can choose an endpoint and have the broker send that provider's stored API key to it.
 - An OpenCode provider whose `base_url` is `http://` gets its API key in plaintext: anyone on the LAN path, or on the

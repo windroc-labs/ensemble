@@ -21,7 +21,7 @@ func TestOpenCodeOwnershipRecovery(t *testing.T) {
 				k.appsErr = ErrInvalidOwnerEdit
 			}
 			_, err := loginOpencode(t, k, &askOnce{}, apiKey)
-			assertOwnershipRecovery(t, err, "ensemble-opencode/strata")
+			assertOwnershipRecovery(t, err, "ensemble-broker-opencode/strata")
 		})
 	}
 }
@@ -40,7 +40,7 @@ func TestCodexOwnershipRecovery(t *testing.T) {
 				k.appsErr = ErrInvalidOwnerEdit
 			}
 			err := c.Login(context.Background(), &bytes.Buffer{})
-			assertOwnershipRecovery(t, err, "ensemble-codex/auth")
+			assertOwnershipRecovery(t, err, "ensemble-broker-codex/auth")
 			if strings.Contains(err.Error(), "fake-") {
 				t.Fatal("credential in diagnostic")
 			}
