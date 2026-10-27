@@ -164,10 +164,20 @@ class GuardedDockerTest(Case):
         worker.await_start()
         socket_path = os.path.join(self.run_dir, "g1", "hook")
         payload = b'{"sid": "s1", "transcript_path": "/Users/x/secret"}'
-        with mock.patch.dict(os.environ, {"ENSEMBLE_GUARD_HOOK_SOCKET": socket_path}):
-            # a Codex tui's turn start, a forged label (FR-36), then its turn end
-            for label in ("UserPromptSubmit", "Stop/../x", "Stop"):
-                self.assertEqual(stub.main(["hook", "/tui/w1", label], io.BytesIO(payload)), 0)
+        oversize = json.dumps({"sid": "s1", "x": "y" * guard.HOOK_MAX}).encode()
+        with (
+            mock.patch.dict(os.environ, {"ENSEMBLE_GUARD_HOOK_SOCKET": socket_path}),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            # a Codex tui's turn start, a forged label and an oversize payload (FR-36, its stub
+            # retrying for stub.WAIT until it gives up), then its turn end
+            for label, body in (
+                ("UserPromptSubmit", payload),
+                ("Stop/../x", payload),
+                ("Stop", oversize),
+                ("Stop", payload),
+            ):
+                self.assertEqual(stub.main(["hook", "/tui/w1", label], io.BytesIO(body)), 0)
         found = []
 
         def hooked():

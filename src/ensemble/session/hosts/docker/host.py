@@ -18,6 +18,7 @@ import threading
 import time
 from collections.abc import Iterable, Mapping
 from dataclasses import replace
+from datetime import datetime
 from typing import NamedTuple
 
 import ensemble.utils
@@ -297,7 +298,9 @@ class _Container(NamedTuple):
     ended: str
 
 
-def _save_result(name: str, created: _Container, phases: Mapping[str, float]) -> None:
+def _save_result(
+    name: str, created: _Container, phases: Mapping[str, float], launched: str | None = None
+) -> None:
     result = {
         "container": created.started.container,
         "image": created.image,
@@ -306,12 +309,17 @@ def _save_result(name: str, created: _Container, phases: Mapping[str, float]) ->
         "started_at": created.began,
         "ended_at": created.ended,
         "phases": dict(phases),
+        **({} if launched is None else {"launched_at": launched}),
     }
     save(
         os.path.join(state_dir(name), f"{created.generation}.result.json"),
         json.dumps(result),
         durable=True,
     )
+
+
+def _now() -> str:
+    return datetime.now().astimezone().isoformat(timespec="milliseconds")
 
 
 class _Laps:
@@ -722,7 +730,7 @@ class DockerHost(Host):
             raise
 
     def detach(self, name, launch, *, display=None, events=None, record=None) -> Process:
-        raise SessionError(f"detach {name}: the Docker Host runs only terminal sessions")
+        raise SessionError(f"detach {name}: runs only under a session harness")
 
     def terminal(
         self,
@@ -769,9 +777,14 @@ class DockerHost(Host):
                     raise SessionError(
                         f"docker session {name}: a container for it exists; close {name} first"
                     )
+                if any(found.container == row[0] for found in self._rows()):
+                    raise SessionError(
+                        f"docker session {name}: container {row[0]} of an earlier start is still"
+                        " up (its removal failed; see the log); the next start retries it"
+                    )
                 raise SessionError(
-                    f"docker session {name}: container {row[0]} of an earlier start is still up"
-                    " (its removal failed; see the log); the next start retries it"
+                    f"docker session {name}: container {row[0]} is labelled for it but not named"
+                    f" as this Host names one; remove it: docker rm -f {row[0]}"
                 )
         home = docker_home(name, home_dir)
         if resume == "1" and read_beneath(home, launch.transcript, limit=0) is None:
@@ -1024,7 +1037,7 @@ class DockerHost(Host):
             handle.await_start()
             handle.begin()
             laps("client")
-            _save_result(name, created, laps.phases)
+            _save_result(name, created, laps.phases, _now())
             stops.check()
         except BaseException as error:
             cleanup = ""
@@ -1155,7 +1168,7 @@ class DockerHost(Host):
             )
             proc = piped_popen(argv, env={**docker_env, **env})
             laps("client")
-            _save_result(name, created, laps.phases)
+            _save_result(name, created, laps.phases, _now())
             stops.check()
         except (SessionError, OSError, ValueError) as error:
             if proc is not None:
@@ -1259,10 +1272,6 @@ class DockerHost(Host):
         return ""
 
     def hook_callback(self, name: str, metadata: Mapping[str, str]) -> HookCallback:
-        if not metadata.get("owner"):
-            raise SessionError(
-                f"docker session {name}: hook_callback: runs only under a session harness"
-            )
         return HookCallback(
             guard_hook.__name__, {"target": name, "generation": metadata["generation"]}
         )

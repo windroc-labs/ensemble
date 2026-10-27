@@ -882,7 +882,15 @@ class HostedSession(Session):
         tie: Tie | None = None,
     ) -> OwnedSession:
         """The only way a view is built; a headless one's (`spec` its run's) holds its start's Tie."""
-        if not _terminal_less(mode):
+        retiring: Callable[[], None] | None = None
+        if _terminal_less(mode):
+            assert spec is not None
+            unhosted = _Unhosted(cls, channel, replace(spec, sid=sid), mode)
+
+            def attach() -> Session:
+                return unhosted
+
+        else:
             assert name is not None
 
             def attach() -> Session:
@@ -891,15 +899,7 @@ class HostedSession(Session):
             def retire() -> None:
                 cls._retire(name, sid=sid, host=host, generation=generation)
 
-            retiring: Callable[[], None] | None = retire
-        else:
-            assert spec is not None
-            unhosted = _Unhosted(cls, channel, replace(spec, sid=sid), mode)
-
-            def attach() -> Session:
-                return unhosted
-
-            retiring = None
+            retiring = retire
 
         return OwnedSession(
             channel,

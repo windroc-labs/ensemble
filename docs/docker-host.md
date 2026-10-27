@@ -894,7 +894,7 @@ An `http://` `base_url` sends the key in plaintext on the permitted path ([Risks
 3. Pull every `ollama/` model of the tiers and `model`, `ollama pull qwen3.6:35b-mlx` by default
    (`[session.clients.opencode.tiers]`; `ollama_port`, default 11434, is its port).
 
-The image supplies OpenCode 1.x and its provider config; none of the Mac's OpenCode install, config or plugins goes into the container. The cwd's own `opencode.json` and `.opencode/` still load: OpenCode has no project trust. An existing `~/.ensemble/docker/worker/Dockerfile` needs no edit. Session state stays in `~/.ensemble/docker-state/<name>/opencode/`. Start a worker with `ensemble-crew worker NAME --client opencode`; board setup: [Board › OpenCode](board.md#opencode). Keep its display at least 40 columns wide: OpenCode 1.19.3's OpenTUI crashes its home screen in a window under 38 columns.
+The image supplies OpenCode 1.x and its provider config; none of the Mac's OpenCode install, config or plugins goes into the container. The cwd's own `opencode.json` and `.opencode/` still load: OpenCode has no project trust. An existing `~/.ensemble/docker/worker/Dockerfile` needs no edit. Session state stays in `~/.ensemble/docker-state/<name>/opencode/`. Start a worker with `ensemble-crew worker NAME --client opencode`; board setup: [Board › OpenCode](board.md#opencode). Its guard's terminal is a fixed 120 columns, above the 38 columns under which OpenCode 1.19.3's OpenTUI crashes its home screen.
 
 ### Lifecycle
 

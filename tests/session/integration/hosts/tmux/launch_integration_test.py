@@ -89,25 +89,22 @@ class LaunchTest(Case):
                 gate.touch()
                 self.assertTrue(process.wait_exit(WAIT))
 
-    def test_launch_hands_a_long_argv_and_env_over_in_cwd_and_views_are_not_listed(self):
+    def test_start_hands_a_long_argv_and_env_over_in_cwd_and_views_are_not_listed(self):
         out = os.path.join(self.home, "launched.json")
         code = "import json, os, sys, time; json.dump([sys.argv[1:], os.getcwd(), os.environ['X']], open(sys.argv[1], 'w')); time.sleep(30)"
         prompt = "a b ; $(echo x)\n" * 4096
         tmux = TmuxCli()
-        tmux.launch(
+        tmux.start(
             "v1",
-            [sys.executable, "-I", "-c", code, out, prompt],
-            cwd=self.home,
-            env={"X": "x y"},
-            python=sys.executable,
-            handover_dir=self.home,
+            Launch(
+                (sys.executable, "-I", "-c", code, out, prompt), cwd=self.home, env={"X": "x y"}
+            ),
             tags={"@view": "docker"},
         )
         self.addCleanup(tmux.kill, "v1")
         self.poll(lambda: os.path.exists(out) and os.path.getsize(out))
         with open(out) as f:
             self.assertEqual(json.load(f), [[out, prompt], os.path.realpath(self.home), "x y"])
-        self.assertFalse([name for name in os.listdir(self.home) if name.startswith("launch-")])
         self.assertEqual(tmux.sessions(), ["manager"])
         self.assertEqual([row["name"] for row in tmux.listing()], ["manager"])
 
