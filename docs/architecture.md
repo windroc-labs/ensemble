@@ -32,9 +32,9 @@ flowchart TB
   end
   subgraph DL[ensemble.delegate]
     D["cli.py<br>ensemble-delegate"]
-    HD["engine/harness_delegate.py<br>HarnessDelegate · state.py RunState"]
+    HD["engine/harness_delegate.py<br>HarnessDelegate · state.py RunState · record.py RunRecord"]
     H["engine/harness.py<br>detached run"]
-    E["engine/: base · plan · drivers · runner · callback · types · config · ready_gate"]
+    E["engine/: base · plan · drivers · runner · handler · callback · types · config · ready_gate"]
     C["composer/<br>prompt · run spec"]
     EV["event/<br>reply · outcome check · callback line"]
     CF["config.py<br>package settings"]
@@ -102,7 +102,7 @@ Each Host implementation supplies its process capabilities.
 | `src/ensemble/orchestrator/` | Board scheduling, state and write-back | delegate, utils | Keep | Public delegate API; tracker contract in `engine/flow/tracker.py` |
 | `src/ensemble/delegate/` | Prompts, run plans, harness and result protocol | session, utils | Keep | Public session API and `event/` progress and outcome formats |
 | `src/ensemble/session/engine/`, `modes/`, `clients/` | Session lifecycle, run modes and client adapters | Host, utils, client commands | Keep session and client logic | Host, Process, Interactive and Piped capabilities in `hosts/base.py` and data types in `engine/types.py`; tmux operations remain in `engine/tmux_cli.py` and `viewer/` |
-| `src/ensemble/session/harness/` | The session harness process that owns a Claude tui worker on tmux, its dir, handler dispatch and control view | session engine, utils | Keep | `Spec.handlers`, `EventCall` and the files in [Session harness](sessions.md#session-harness) |
+| `src/ensemble/session/harness/` | The session harness process that owns a Claude tui worker on tmux or an in_process adapter, its dir, handler dispatch and control views | session engine, utils | Keep | `Spec.handlers`, `EventCall` and the files in [Session harness](sessions.md#session-harness) |
 | `src/ensemble/session/hosts/tmux/` | Local processes and tmux sessions through `TmuxHost` | Host, `engine/tmux_cli.py`, utils, local tmux | Replace as a unit if local tmux is unavailable | Host start, enumeration, status, input and close semantics; display boundary shown above |
 | `src/ensemble/session/hosts/docker/`, `src/broker/`, `src/broker/protocol/` | Docker adaptation, hook relay, worker image, containers and credential injection | Host, Docker Desktop, broker; broker uses macOS Keychain | Replace as a unit | Preserve Host for callers; retaining the broker also requires its protocol JSON schemas, versions, exit codes and shared fixtures |
 | `src/ensemble/manager/`, `skills/manage/`, `hooks/` | Crew, Roster, event cursors and commander sessions | utils; commands to other layers | Keep scheduling logic; adapt local display and client hooks | Record ctl and resume commands, CLI output; import relationships shown above |
