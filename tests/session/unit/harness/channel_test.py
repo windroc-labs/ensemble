@@ -297,6 +297,34 @@ class StatusTest(Base):
         self.assertEqual(self.channel.status(), {})
 
 
+class BoundTest(Base):
+    """bound: a record's owner, only while its held harness.json names that name, sid, generation."""
+
+    def record(self, **changes) -> dict:
+        return {"owner": self.channel.directory, "sid": "s1", "generation": "g1", **changes}
+
+    def test_a_running_or_exited_owner_of_the_record_is_bound(self):
+        self.hold_lock()
+        for state in ("running", "exited"):
+            with self.subTest(state=state):
+                self.channel.write_status(
+                    {"state": state, "name": "w1", "sid": "s1", "generation": "g1"}
+                )
+                found = channel.bound("w1", self.record())
+                self.assertIsNotNone(found)
+                self.assertEqual(cast(Channel, found).directory, self.channel.directory)
+
+    def test_another_generation_no_owner_or_no_harness_is_none(self):
+        self.assertIsNone(channel.bound("w1", self.record()))  # nobody holds it
+        self.hold_lock()
+        self.channel.write_status(
+            {"state": "running", "name": "w1", "sid": "s1", "generation": "g2"}
+        )
+        with self.assertLogs("session", "WARNING"):
+            self.assertIsNone(channel.bound("w1", self.record()))
+        self.assertIsNone(channel.bound("w1", {"sid": "s1", "generation": "g1"}))
+
+
 class SweepTest(Base):
     def make(self, name, *, status=True, age=0.0) -> str:
         path = os.path.join(self.root, name)

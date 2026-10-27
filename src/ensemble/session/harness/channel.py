@@ -302,6 +302,29 @@ class Channel:
         save(self.status_file, json.dumps(status, ensure_ascii=False))
 
 
+def bound(name: str, state: Mapping) -> Channel | None:
+    """Its owner, once that harness.json binds it to `name`, sid and generation."""
+    owner = state.get("owner")
+    if owner is None:
+        return None
+    channel = Channel(owner)
+    deadline = time.monotonic() + REQUEST_WAIT
+    while channel.alive() and (found := channel.status()).get("state") in (None, "starting"):
+        if time.monotonic() > deadline:
+            raise Unanswered(f"session harness {owner}: still starting {name}")
+        time.sleep(SLICE)
+    if not channel.alive():
+        return None
+    if found.get("state") in ("running", "exited") and (
+        found.get("name"),
+        found.get("sid"),
+        found.get("generation"),
+    ) == (name, state.get("sid"), state.get("generation")):
+        return channel
+    LOG.warning("session %s: owner %s does not own it; ignored", name, owner)
+    return None
+
+
 def sweep() -> None:
     """Removes unheld HARNESS_ROOT/<32 hex> dirs whose harness.json is STALE_AGE old (none: a
     day); errors logged.

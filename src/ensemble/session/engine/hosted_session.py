@@ -53,10 +53,10 @@ from ensemble.session.engine.types import (
     Spec,
     StatusState,
     Stderr,
-    Unanswered,
     Usage,
 )
-from ensemble.session.harness.channel import REQUEST_WAIT, SLICE, Channel
+from ensemble.session.harness.channel import SLICE, Channel
+from ensemble.session.harness.channel import bound as channel_bound
 from ensemble.session.harness.dispatch import load_handlers
 from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedSession, fold
@@ -253,29 +253,6 @@ def _owned(setup: _Setup, mode: Mode, client: Client, on: Host) -> bool:
         return False
     run = client.tui()
     return run is not None and run._owned
-
-
-def _bound_owner(name: str, state: Mapping) -> Channel | None:
-    """Its owner, once that harness.json binds it to `name`, sid and generation."""
-    owner = state.get("owner")
-    if owner is None:
-        return None
-    channel = Channel(owner)
-    deadline = time.monotonic() + REQUEST_WAIT
-    while channel.alive() and (found := channel.status()).get("state") in (None, "starting"):
-        if time.monotonic() > deadline:
-            raise Unanswered(f"session harness {owner}: still starting {name}")
-        time.sleep(SLICE)
-    if not channel.alive():
-        return None
-    if found.get("state") in ("running", "exited") and (
-        found.get("name"),
-        found.get("sid"),
-        found.get("generation"),
-    ) == (name, state.get("sid"), state.get("generation")):
-        return channel
-    LOG.warning("session %s: owner %s does not own it; ignored", name, owner)
-    return None
 
 
 def _start_error(channel: Channel, status: Mapping) -> SessionError | ConfigError:
@@ -709,7 +686,7 @@ class HostedSession(Session):
             raise SessionError(
                 f"session {name}: expected sid {sid!r}, found {state.get('sid')!r} in session.json"
             )
-        channel = _bound_owner(name, state)
+        channel = channel_bound(name, state)
         if channel is None or channel.status().get("state") != "running":
             return cls._attached(name, sid=sid, host=host, idle_timeout=idle_timeout)
         attached = cls._attached(name, sid=sid, host=host, generation=state["generation"])
@@ -805,7 +782,7 @@ class HostedSession(Session):
             state = store.read()
         except SessionError:
             state = None
-        if state is not None and (channel := _bound_owner(name, state)) is not None:
+        if state is not None and (channel := channel_bound(name, state)) is not None:
             store.check()
             if channel.request(Op.CLOSE):
                 return
