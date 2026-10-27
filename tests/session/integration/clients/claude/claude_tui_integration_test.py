@@ -3,7 +3,7 @@ tui_integration_test sets it up: the real ClaudeClient runs
 tests/session/integration/clients/claude/fake_claude.py (on PATH as `claude`) interactively, its
 hooks from --settings. Turns, Blocked (a hook, the trust dialog), idle timeouts, the usage-limit
 screen, deaths, resume, attach from another process, show (beside a detached session), close by
-name and the launch's /color (tests that send wait for it: two senders' pastes could interleave).
+name and the launch's /color, typed once no turn runs (tests that send wait for it first).
 CLAUDE_CONFIG_DIR is a temp dir; the iTerm2 path fails the test.
 """
 
@@ -370,10 +370,10 @@ class LimitTest(Live):
         stream.quiet(1.0)
         self.lines("w1 done")
         self.assertEqual((handle.alive(), self.server.option("w1", "@state")), (True, "done"))
-        self.colored()
-        handle.send("go on")
+        handle.send("go on")  # the limit ended no turn: the launch's /color waits for this one
         self.assertEqual([stream.next() for _ in range(2)], [TurnStarted(), TurnEnd("Back.", 0)])
         self.lines("w1 done", "w1 done")
+        self.colored()
         self.assertIn("You've hit your weekly limit", handle.screen())
         stream.quiet(1.0)
 

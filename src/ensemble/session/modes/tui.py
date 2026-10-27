@@ -660,7 +660,7 @@ class TuiMode(BaseMode):
         self._due: float | None = None  # its label's latest record
         self._held, self._checked = False, -POLL_SCREEN
         self._active_turn = run._turn_open is True
-        self._started, self._launch = 0, int(bool(prepared.spec.prompt) and not run._opening_prompt)
+        self._absorbed, self._launching = 0, bool(prepared.spec.prompt) and not run._opening_prompt
         self._owned, self._hook_logged = owned, False
 
     @classmethod
@@ -928,13 +928,13 @@ class TuiMode(BaseMode):
                 )
 
     def _open(self) -> None:
-        """Submits the opening once due and past every prompt's turn (a launch's too), unless a
-        dialog shows, the client is blocked or the send lock is held.
+        """Submits the opening once due, no turn runs and a turn boundary took in every send,
+        unless a dialog shows, the client is blocked or the send lock is held.
         """
         now = time.monotonic()
         if self._opening is None or self._due is None or self._gone or now < self._due:
             return
-        if self._held or self._active_turn or now < self._checked + POLL_SCREEN:
+        if self._held or self._active_turn or self._launching or now < self._checked + POLL_SCREEN:
             return
         self._checked = now
         try:
@@ -948,7 +948,7 @@ class TuiMode(BaseMode):
         except SessionError:
             return
         with contextlib.suppress(SessionError), self._store.sending(wait=False) as held:
-            if not held or self._started < self._launch + self._store.prompts(self._generation):
+            if not held or self._store.prompts(self._generation) > self._absorbed:
                 return
             text, self._opening = self._opening[1], None
             self._running()
@@ -957,10 +957,11 @@ class TuiMode(BaseMode):
     def _track(self, events: list[SessionEvent | Stderr | ClientBound]) -> None:
         for event in events:
             if isinstance(event, TurnStarted):
-                self._active_turn = True
-                self._started += 1
+                self._active_turn, self._launching = True, False
             elif isinstance(event, TurnEnd | TurnFailed):
                 self._active_turn = False
+            if self._opening is not None and isinstance(event, TurnStarted | TurnEnd | TurnFailed):
+                self._absorbed = self._store.prompts(self._generation)
             if isinstance(event, Blocked | Activity | TurnEnd | TurnFailed | TurnStarted):
                 self._held = isinstance(event, Blocked)
 

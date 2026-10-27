@@ -2135,6 +2135,17 @@ class OpeningTest(Base):
         self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
         self.assertIsNone(mode.opening_pending)
 
+    def test_a_send_joining_a_running_turn_does_not_hold_the_opening(self):
+        mode = self.launched(prompt="go")
+        self.append(record("ready"), record("start"))
+        mode.poll(0)
+        self.other().send("also")  # joins the running turn: no TurnStarted of its own
+        self.append(record("stop"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode)[2:], [Paste("/color"), Key("Enter")])
+        self.assertIsNone(mode.opening_pending)
+
     def test_no_turn_yet_keeps_the_opening(self):
         mode = self.launched()
         self.append(record("ready"))
