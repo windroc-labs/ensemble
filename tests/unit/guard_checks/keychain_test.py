@@ -12,6 +12,9 @@ ADMIN = "create" + "-keychain"
 SETTINGS = "set-keychain" + "-settings"
 LOGIN = "Library/" + "Keychains/login" + ".keychain-db"
 FRAMEWORK = "-framework" + " Security"
+# Contexts whose parentheses nest two and three levels deep.
+CTX2 = "context.WithValue(context.WithValue(ctx, a, b), c, d)"
+CTX3 = f"context.WithValue({CTX2}, e, f)"
 
 
 def key(path, line):
@@ -248,6 +251,46 @@ class KeychainFree(Sample):
                 go('exec.CommandContext(context.WithValue(ctx, k, v), "security", "dump")'),
                 6,
                 go('exec.CommandContext(context.WithValue(ctx, k, v), "ls")'),
+                "security-exec",
+            ),
+            (
+                "exec ctx depth 2",
+                test_go,
+                go(f'exec.CommandContext({CTX2}, "security", "dump")'),
+                6,
+                go(f'exec.CommandContext({CTX2}, "ls")'),
+                "security-exec",
+            ),
+            (
+                "exec ctx depth 3",
+                test_go,
+                go(f'exec.CommandContext({CTX3}, "/usr/bin/security")'),
+                6,
+                go(f'exec.CommandContext({CTX3}, "ls", "security")'),
+                "security-exec",
+            ),
+            (
+                "exec subcommand depth 2",
+                test_go,
+                go(f'exec.CommandContext({CTX2}, bin, "find-generic-password")'),
+                6,
+                go(f'exec.CommandContext({CTX2}, bin, "log")'),
+                "security-exec",
+            ),
+            (
+                "exec subcommand depth 3",
+                test_go,
+                go(f'exec.CommandContext({CTX3}, bin, "add-internet-password")'),
+                6,
+                go(f'exec.CommandContext({CTX3}, bin, "log")'),
+                "security-exec",
+            ),
+            (
+                "exec paren in string",
+                test_go,
+                go('exec.CommandContext(f(")", ctx), "security")'),
+                6,
+                go('exec.CommandContext(f("(", ctx), "ls")'),
                 "security-exec",
             ),
             (

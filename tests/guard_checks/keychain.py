@@ -39,12 +39,17 @@ GO = {
     "credential-library": re.compile(
         r'"[^"\n]*(?:go-keychain|go-keyring|99designs/keyring)[^"\n]*"'
     ),
-    "security-exec": re.compile(
-        r'exec\.(?:Command\(|CommandContext\((?:[^(),]|\([^()]*\))*,)\s*"(?:/usr/bin/)?security"'
-        r'|exec\.Command(?:Context)?\((?:[^()]|\([^()]*\))*"(?:find|add|delete)-(?:generic|internet)-password"'
-    ),
     "file-keychain": re.compile(r"fileKeychain\{|\.login\(\)"),
 }
+# A Go exec call's start (security-exec): its program is its first argument, or the second after a
+# context; its arguments, at any nesting depth, are read by _arguments.
+EXEC = re.compile(r"exec\.Command(Context)?\(")
+GO_PROGRAM = re.compile(r'\s*"(?:/usr/bin/)?security"')
+# Go's string, raw string, rune and comment tokens, so their brackets and commas are skipped, then
+# the brackets and commas a call's arguments nest and split by.
+GO_TOKEN = re.compile(
+    r'"(?:[^"\\\n]|\\.)*"|`[^`]*`|\'(?:[^\'\\\n]|\\.)*\'|//[^\n]*|/\*.*?\*/|[()\[\]{},]', re.S
+)
 # The program at command position: a line's start (or a workflow run:'s) or after a separator, then
 # any subshell parens and shell keywords.
 COMMAND = re.compile(
@@ -99,6 +104,7 @@ def _violations(path, text):
     found = {(line, rule) for rule, pattern in TEXT.items() for line in _lines(pattern, text)}
     if path.endswith("_test.go"):
         found.update((line, rule) for rule, pattern in GO.items() for line in _lines(pattern, text))
+        found.update((line, "security-exec") for line in _security_execs(text))
     if path.endswith(".py"):
         found.update(_python(text))
     if (
@@ -116,6 +122,38 @@ def _violations(path, text):
 
 def _lines(pattern, text):
     return {text.count("\n", 0, match.start()) + 1 for match in pattern.finditer(text)}
+
+
+def _security_execs(text):
+    found = set()
+    for call in EXEC.finditer(text):
+        args, strings = _arguments(text, call.end())
+        program = args[1:2] if call.group(1) else args[:1]
+        if any(GO_PROGRAM.match(arg) for arg in program) or any(
+            SUBCOMMAND.fullmatch(string) for string in strings
+        ):
+            found.add(text.count("\n", 0, call.start()) + 1)
+    return found
+
+
+def _arguments(text, start):
+    """The top-level arguments of the Go call whose "(" ends at start, and the contents of every
+    double-quoted string in them."""
+    args, strings, depth = [], [], 0
+    for token in GO_TOKEN.finditer(text, start):
+        mark = token.group()
+        if mark.startswith('"'):
+            strings.append(mark[1:-1])
+        elif mark in ("(", "[", "{"):
+            depth += 1
+        elif depth and mark in (")", "]", "}"):
+            depth -= 1
+        elif not depth and mark in (",", ")"):
+            args.append(text[start : token.start()])
+            start = token.end()
+            if mark == ")":
+                break
+    return args, strings
 
 
 def _python(text):
