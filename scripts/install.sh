@@ -1943,6 +1943,10 @@ def package_version(path):
     except (OSError, ValueError, AttributeError):
         return version(os.path.basename(path)) if client == "claude" else []
 
+def ref(path):
+    # An OpenCode copy's ref: its package spec's #fragment; a spec without one is the default branch.
+    return os.path.dirname(os.path.dirname(os.path.relpath(path, source))).partition("#")[2] or "main"
+
 roots = []
 if os.path.isabs(root) and "\n" not in root and not os.path.exists(root):
     if client == "claude":
@@ -1962,6 +1966,8 @@ if os.path.isabs(root) and "\n" not in root and not os.path.exists(root):
     roots = sorted(p for p in roots if isinstance(p, str) and os.path.isabs(p) and "\n" not in p)
     key = (lambda p: version(os.path.basename(p))) if client == "codex" else package_version
     for candidate in sorted(roots, key=key, reverse=True):
+        if client == "opencode" and ref(candidate) != ref(root):
+            continue
         if os.access(path := os.path.join(candidate, rel), os.X_OK):
             fd, temp = tempfile.mkstemp(prefix=".plugin-root.", dir=os.path.dirname(selection))
             try:
