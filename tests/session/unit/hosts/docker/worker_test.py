@@ -459,9 +459,13 @@ class EndTest(Base):
         self.assertEqual(self.removed, [GEN])
 
     def test_a_failed_removal_raises_and_keeps_the_owner_lock(self):
-        self.remove_errors = [SessionError("broker: close failed")]
+        failed = SessionError("broker: close failed")
+        self.remove_errors = [failed, failed]
         channel = self.make()
         channel.fail("broken")
+        # fail() starts the removal on a thread of its own: its first attempt, then close's retry
+        with channel.condition:
+            self.assertTrue(channel.condition.wait_for(lambda: channel.attempts >= 1, 5))
         with self.assertRaisesRegex(SessionError, "close failed"):
             channel.close()
         self.assertEqual(channel.state(), Liveness.UNKNOWN)

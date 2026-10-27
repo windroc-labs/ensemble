@@ -3282,14 +3282,15 @@ class BoundOwnerTest(HostedTuiBase):
         self.state = tui.TuiMode.snapshot("w1")
         self.channel = Channel.create()
         self.state["owner"] = self.channel.directory
+        self.held = None
         with open(os.path.join(self.root, "w1", "session.json"), "w") as f:
             json.dump(self.state, f)
 
     def owner(self, **status):
         if not self.channel.alive():
-            fd = os.open(self.channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            self.addCleanup(os.close, fd)
+            self.held = os.open(self.channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(self.held, fcntl.LOCK_EX)
+            self.addCleanup(self.let_go)
         self.channel.write_status(
             {
                 "state": "running",
@@ -3300,7 +3301,14 @@ class BoundOwnerTest(HostedTuiBase):
             }
         )
 
+    def let_go(self):
+        """The harness exits: its lock released."""
+        if self.held is not None:
+            os.close(self.held)
+            self.held = None
+
     def serve(self, **answer_with):
+        """Answers one request; an ok one, like a harness, then exits."""
         self.served = []
         answer_with = answer_with or {"ok": True}
 
@@ -3310,6 +3318,8 @@ class BoundOwnerTest(HostedTuiBase):
                 for ident, op in self.channel.requests():
                     self.served.append(op)
                     self.channel.reply(ident, **answer_with)
+                    if answer_with.get("ok"):
+                        self.let_go()
                     return
                 time.sleep(0.01)
 

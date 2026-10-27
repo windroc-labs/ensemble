@@ -152,6 +152,7 @@ class WorkerEnvironment(Case):
 class RecordControl(HostedTuiBase):
     def setUp(self):
         super().setUp()
+        self.locks = {}
         CliHost.current = self.host
         self.addCleanup(setattr, HostedSession, "_setup", None)
         Path(self.ensemble).mkdir(exist_ok=True)
@@ -272,7 +273,8 @@ class RecordControl(HostedTuiBase):
         if held:
             fd = os.open(channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
             fcntl.flock(fd, fcntl.LOCK_EX)
-            self.addCleanup(os.close, fd)
+            self.locks[channel.directory] = fd
+            self.addCleanup(lambda: self.locks.get(channel.directory) and self.let_go(channel))
         channel.write_status(
             {"state": "running", "name": name, "sid": sid, "generation": state["generation"]}
         )
@@ -280,8 +282,14 @@ class RecordControl(HostedTuiBase):
             self.host.processes.pop(name)
         return channel
 
+    def let_go(self, channel):
+        """Its harness exits: its lock released."""
+        os.close(self.locks.pop(channel.directory))
+
     def serve(self, channel, *replies, before=None) -> list:
-        """Answers one request per reply, in order, calling `before` first; the ops it served."""
+        """Answers one request per reply, in order, calling `before` first, and exits after an ok
+        one, like a harness; the ops it served.
+        """
         served = []
 
         def answer():
@@ -292,7 +300,10 @@ class RecordControl(HostedTuiBase):
                     served.append(op)
                     if before is not None:
                         before()
-                    channel.reply(ident, **pending.pop(0))
+                    reply = pending.pop(0)
+                    channel.reply(ident, **reply)
+                    if reply.get("ok"):
+                        self.let_go(channel)
                 time.sleep(0.01)
 
         thread = threading.Thread(target=answer)
@@ -336,6 +347,16 @@ class RecordControl(HostedTuiBase):
                 code, out, err = self.invoke("close", record=self.record)
                 self.assertEqual((code, out), (0, "") if stale else (1, ""), err)
                 self.host.processes.pop("w1", None)
+
+    def test_a_session_failing_its_close_fails_it_after_another_closed(self):
+        self.host.create("w1", sid=SID)
+        failing = self.host.create("w2", sid=SID)
+        failing.calls.close.side_effect = SessionError("w2: cannot close")
+        record = replace(self.record, sessions=("w1", "w2"))
+        code, out, err = self.invoke("close", record=record)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("w2: cannot close", err)
+        self.assertNotIn("w1", self.host.processes)
 
     def test_a_stale_record_skips_an_owner_of_another_sid(self):
         channel = self.owned(sid="replacement")

@@ -22,6 +22,8 @@ turn with StopFailure; {"kind": "dialog", "text": S} prints S and reads another 
 queues (an enqueue record) and joins to the turn once the tool returns (PostToolUse, then a
 queued_command attachment), then answers A; {"kind": "pause", "file": F} waits for F to exist.
 - turns: interactive steps of turn 2 on.
+- trust: interactive: a dialog printed before SessionStart, as Claude's folder trust; the next line
+answers it, then SessionStart.
 - background: interactive background_tasks per Stop.
 - resume: print steps run instead of `steps` on --resume.
 - rate_limit: print a rate_limit_info after init.
@@ -56,6 +58,7 @@ DEFAULTS = {
     "steps": [],
     "resume": None,
     "turns": [],
+    "trust": None,
     "background": 0,
     "rate_limit": None,
     "usage": "Current session: 0% used\n",
@@ -126,6 +129,7 @@ CHECKS = {
         v is None or isinstance(v, list) and all(_step(step, tui=False) for step in v)
     ),
     "turns": lambda v: isinstance(v, list) and all(isinstance(t, list) for t in v),
+    "trust": lambda v: v is None or _text(v),
     "background": lambda v: isinstance(v, int) and not isinstance(v, bool) and v >= 0,
     "rate_limit": lambda v: v is None or isinstance(v, dict),
     "usage": lambda v: (
@@ -420,7 +424,11 @@ class InteractiveSession:
 
     def run(self):
         try:
-            self.ready()
+            if (trust := self.request.scenario["trust"]) is not None:
+                print(trust, flush=True)
+                self.answer()
+            else:
+                self.ready()
             prompt = self.request.prompt or self.request.stdin.line()
             for k in itertools.count():
                 self.turn(prompt, self.request.turns[k] if k < len(self.request.turns) else [])

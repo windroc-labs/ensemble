@@ -571,15 +571,27 @@ def _carried(
     if record is None:
         return sessions
     for session in sessions:
-        host = Session.host(_host_of(session, hosts))
-        process = host.attach(session) if session in host.list() else None
         try:
-            check_sid(session, process, record.sid)
+            _check_held(session, record.sid, hosts)
         except SessionError:
             if stale_ok:
                 return ()
             raise
     return sessions
+
+
+def _check_held(session: str, sid: str | None, hosts: Hosts) -> None:
+    """SessionError unless its Host lists `session` holding `sid`."""
+    host = Session.host(_host_of(session, hosts))
+    check_sid(session, host.attach(session) if session in host.list() else None, sid)
+
+
+def _holds(session: str, sid: str | None, hosts: Hosts) -> bool:
+    try:
+        _check_held(session, sid, hosts)
+    except SessionError:
+        return False
+    return True
 
 
 def _show(name: str, record: Record | None, hosts: Hosts) -> None:
@@ -611,8 +623,9 @@ def _owned(session: str, sid: str | None) -> bool:
 
 
 def _close(name: str, record: Record | None, hosts: Hosts) -> None:
-    """An owner's refusal or unconfirmed end always fails; a Record stale on its Host is done unless
-    an owner of its sid still answers for it.
+    """An owner's refusal or unconfirmed end always fails; any other failure fails only while the
+    session still holds the Record's sid. A Record stale on its Host is done unless an owner of its
+    sid still answers for it.
     """
     sid = None if record is None else record.sid
     carried = _carried(name, record, hosts, stale_ok=True)
@@ -622,10 +635,8 @@ def _close(name: str, record: Record | None, hosts: Hosts) -> None:
         except (Unanswered, OwnerRefused):
             raise
         except SessionError:
-            if record is None or _carried(name, record, hosts, stale_ok=True):
+            if record is None or _holds(session, record.sid, hosts):
                 raise
-            if carried:
-                return  # gone meanwhile: nothing more of it to close
 
 
 def _content(name: str, record: Record | None, hosts: Hosts) -> str:

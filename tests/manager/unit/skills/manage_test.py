@@ -267,7 +267,7 @@ class Manage(Case):
                 "transcript",
                 f"`{reader}`",
                 "`client_id` in `<work_dir>/work/<ID>/run/run.jsonl`",
-                "No harness watches it now",
+                "No attempt is active now",
                 "`blocked` and `done` events",
                 "per Events",
                 "for this one call only, never",
