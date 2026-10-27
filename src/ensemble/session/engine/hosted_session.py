@@ -1271,7 +1271,6 @@ class Owned:
 
     @property
     def up(self) -> bool:
-        """Its guard reported its client up."""
         return self._session._running.client_up
 
     def send(self, text: str) -> None:

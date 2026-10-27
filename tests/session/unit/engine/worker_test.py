@@ -91,6 +91,7 @@ class Base(Case):
         self.session = self.session_cls.start.return_value
         self.session.showable = False
         self.session.opening_pending = None
+        self.session.client_up = True
         self.session.events.return_value = iter([IdleTimeout(worker.EARLY)])
         self.order.attach_mock(self.session_cls.start, "start")
         self.order.attach_mock(self.session_cls.preflight, "preflight")
@@ -183,6 +184,7 @@ class StartTest(Base):
         self.assertEqual(kwargs, {"display": "mgr", "host": "tmux", "idle_timeout": worker.TICK})
 
     def test_a_dialog_ends_the_watch_at_once_and_still_publishes(self):
+        self.session.client_up = False
         self.session.events.return_value = iter([Reply("x"), Blocked("Edit"), Exited(1)])
         self.worker().start(prompt="", resume=False)
         self.assertEqual(self.said, ["session w1: waits on a dialog: Edit"])
@@ -219,13 +221,24 @@ class StartTest(Base):
             self.worker().start(prompt="", resume=False)
         self.assertEqual(str(caught.exception), "w1: claude exited 7 at once")
 
-    def test_the_watch_ends_at_its_deadline_without_an_idle_timeout(self):
-        ticks = iter([0, 1, worker.EARLY + 1])
+    def test_the_watch_ends_on_the_first_event_once_its_client_is_up(self):
+        type(self.session).client_up = mock.PropertyMock(side_effect=[False, True, True])
         self.session.events.return_value = iter([Reply("a"), Reply("b"), Exited(1)])
-        Worker(state(), session_cls=self.session_cls, clock=lambda: next(ticks)).start(
-            prompt="", resume=False
-        )
+        self.worker().start(prompt="", resume=False)
         self.handle.publish.assert_called_once()
+
+    def test_an_exit_that_reaches_the_watch_past_every_deadline_still_fails_the_start(self):
+        """The exit chain lagging: idle ticks well past EARLY and COLOR_CAP, its client never up."""
+        self.session.client_up = False
+        late = worker.COLOR_CAP * 2
+        self.session.events.return_value = iter([*[IdleTimeout(worker.TICK)] * late, Exited(2)])
+        ticks = itertools.count()
+        with self.assertRaisesRegex(SessionError, "^w1: claude exited 2 at once"):
+            Worker(state(), session_cls=self.session_cls, clock=lambda: next(ticks)).start(
+                prompt="", resume=False
+            )
+        self.assertGreater(next(ticks), late)
+        self.handle.publish.assert_not_called()
 
     def test_its_state_is_saved_before_its_client_starts(self):
         seen = []
@@ -531,6 +544,7 @@ class ColorWatchTest(Base):
         type(self.session).opening_pending = mock.PropertyMock(
             side_effect=lambda: text if now[0] < sent else None
         )
+        type(self.session).client_up = mock.PropertyMock(side_effect=lambda: now[0] >= worker.EARLY)
         self.session.events.return_value = events or itertools.repeat(IdleTimeout(worker.TICK))
         Worker(state(), session_cls=self.session_cls, say=self.said.append, clock=tick).start(
             prompt="", resume=False
@@ -574,17 +588,35 @@ class ColorWatchTest(Base):
         self.assertEqual(self.said, [])
         self.handle.publish.assert_not_called()
 
-    def test_a_session_without_an_opening_returns_at_the_early_deadline(self):
+    def plain(self, *events, alive: bool) -> Session:
+        """A session no guard reports up, alive as `alive` says."""
         plain = mock.create_autospec(Session, instance=True)
         plain.showable = False
-        plain.events.return_value = itertools.repeat(IdleTimeout(worker.TICK))
+        plain.alive.return_value = alive
+        plain.events.return_value = iter(events) if events else itertools.repeat(IdleTimeout(1))
         self.session_cls.start.return_value = plain
+        return plain
+
+    def test_a_session_without_a_guard_returns_once_alive_at_the_early_deadline(self):
+        plain = self.plain(alive=True)
         ticks = itertools.count()
         Worker(
             state(), session_cls=self.session_cls, say=self.said.append, clock=lambda: next(ticks)
         ).start(prompt="", resume=False)
         self.assertEqual(next(ticks), worker.EARLY + 1)
         self.assertEqual(self.said, [])
+        plain.alive.assert_called_once_with()
+
+    def test_a_session_without_a_guard_not_alive_at_the_deadline_waits_for_its_exit(self):
+        late = worker.COLOR_CAP * 2
+        plain = self.plain(*[IdleTimeout(worker.TICK)] * late, Exited(2), alive=False)
+        ticks = itertools.count()
+        with self.assertRaisesRegex(SessionError, "^w1: claude exited 2 at once"):
+            Worker(state(), session_cls=self.session_cls, clock=lambda: next(ticks)).start(
+                prompt="", resume=False
+            )
+        self.assertEqual(plain.alive.call_count, late - worker.EARLY + 1)
+        self.handle.publish.assert_not_called()
 
 
 class LoadTest(Base):
