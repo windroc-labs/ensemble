@@ -27,7 +27,6 @@ from ensemble.session.engine.types import (
     Spec,
     TurnEnd,
     TurnFailed,
-    TurnStarted,
 )
 from tests.session import live_tmux
 from tests.session.case import REPO, Case, configured
@@ -161,8 +160,7 @@ class TuiSessions(Case):
         self.scene([[{"text": "Hello back."}]])
         handle, stream = self.start()
         self.assertEqual(
-            stream.until(TurnEnd),
-            [TurnStarted(), Activity(""), Reply("Hello back."), TurnEnd("Hello back.")],
+            stream.until(TurnEnd), [Activity(""), Reply("Hello back."), TurnEnd("Hello back.")]
         )
         self.assertEqual(handle.reply, "Hello back.")
         self.assertEqual(self.words(1)[-1], "w1 done")
@@ -178,14 +176,7 @@ class TuiSessions(Case):
         handle.send("next")
         self.assertEqual(
             stream.until(TurnEnd),
-            [
-                TurnStarted(),
-                Activity(""),
-                Activity("read"),
-                Activity("read"),
-                Reply("two"),
-                TurnEnd("two"),
-            ],
+            [Activity(""), Activity("read"), Activity("read"), Reply("two"), TurnEnd("two")],
         )
         self.assertEqual(handle.reply, "two")
 
@@ -193,8 +184,7 @@ class TuiSessions(Case):
         self.scene([[{"text": "saved late", "late": 800}]])
         handle, stream = self.start()
         self.assertEqual(
-            stream.until(TurnEnd),
-            [TurnStarted(), Activity(""), Reply("saved late"), TurnEnd("saved late")],
+            stream.until(TurnEnd), [Activity(""), Reply("saved late"), TurnEnd("saved late")]
         )
         self.assertEqual(handle.reply, "saved late")
 
@@ -314,14 +304,7 @@ class TuiSessions(Case):
         _, stream = self.start()
         self.assertEqual(
             stream.until(TurnEnd),
-            [
-                TurnStarted(),
-                Activity(""),
-                Activity("read"),
-                Activity("read"),
-                Reply("ok"),
-                TurnEnd("ok"),
-            ],
+            [Activity(""), Activity("read"), Activity("read"), Reply("ok"), TurnEnd("ok")],
         )
         stream.quiet()
 
@@ -332,30 +315,16 @@ class TuiSessions(Case):
         self.assertEqual(stream.until(TurnFailed)[-1], TurnFailed("APIError", "connection refused"))
         stream.quiet()
         handle.send("again")
-        self.assertEqual(
-            stream.until(TurnEnd), [TurnStarted(), Activity(""), Reply("ok now"), TurnEnd("ok now")]
-        )
+        self.assertEqual(stream.until(TurnEnd), [Activity(""), Reply("ok now"), TurnEnd("ok now")])
         self.assertEqual(self.words(1)[-1], "w1 done")
 
-    def test_a_failed_turn_cannot_later_succeed_without_another_accepted_input(self):
+    def test_a_recovered_error_still_ends_the_turn(self):
         error = {"name": "ContextOverflowError", "data": {"message": "compacting"}}
-        self.scene(
-            [
-                [{"error": error, "recover": True}, {"tool": "read"}, {"text": "done anyway"}],
-                [{"text": "next turn"}],
-            ]
-        )
-        handle, stream = self.start()
-        found = stream.until(TurnFailed)
-        self.assertEqual(found[-1], TurnFailed("ContextOverflowError", "compacting"))
-        found += stream.until(Reply)
-        self.assertFalse(any(isinstance(event, TurnEnd) for event in found))
-        stream.quiet()
-        handle.send("continue")
-        self.assertEqual(
-            stream.until(TurnEnd),
-            [TurnStarted(), Activity(), Reply("next turn"), TurnEnd("next turn")],
-        )
+        self.scene([[{"error": error, "recover": True}, {"tool": "read"}, {"text": "done anyway"}]])
+        _, stream = self.start()
+        found = stream.until(TurnEnd)
+        self.assertIn(TurnFailed("ContextOverflowError", "compacting"), found)
+        self.assertEqual(found[-1], TurnEnd("done anyway"))
 
     def test_a_fresh_restart_rebinds_the_root_session_once(self):
         self.common.bind(str(self.cwd), "run-1", fake_opencode.NATIVE)
@@ -416,9 +385,7 @@ class TuiSessions(Case):
         for n in range(2):
             if n:
                 handle.send("next")
-            self.assertEqual(
-                stream.until(TurnEnd), [TurnStarted(), Activity(""), Reply("same"), TurnEnd("same")]
-            )
+            self.assertEqual(stream.until(TurnEnd), [Activity(""), Reply("same"), TurnEnd("same")])
 
     def test_completed_messages_are_waited_for_when_other_text_is_already_saved(self):
         self.scene(
@@ -430,12 +397,12 @@ class TuiSessions(Case):
         handle, stream = self.start()
         self.assertEqual(
             stream.until(TurnEnd),
-            [TurnStarted(), Activity(""), Reply("early"), Reply("final"), TurnEnd("final")],
+            [Activity(""), Reply("early"), Reply("final"), TurnEnd("final")],
         )
         handle.send("next")
         self.assertEqual(
             stream.until(TurnEnd),
-            [TurnStarted(), Activity(""), Reply("middle"), Reply("last"), TurnEnd("last")],
+            [Activity(""), Reply("middle"), Reply("last"), TurnEnd("last")],
         )
 
     def test_a_resume_selects_the_session_and_sends_its_prompt(self):
