@@ -364,9 +364,7 @@ def _await_start(
     clock: Callable[[], float] | None = None,
     pause: Callable[[float], None] | None = None,
 ) -> dict:
-    """harness.json once its harness runs the worker, else its start error; each phase it names
-    gets START_WAIT plus its `phase_wait`.
-    """
+    """harness.json once its harness runs the worker; a phase it names adds its `phase_wait`."""
     clock, pause = clock or time.monotonic, pause or time.sleep
     began = clock()
     phase, deadline = (None, None), began + START_WAIT
