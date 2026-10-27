@@ -151,7 +151,7 @@ func TestDiscardRecoveryMatrix(t *testing.T) {
 				g := recoveryLifecycle(t, store, remote)
 				switch action {
 				case "replacement", "rollback":
-					_, err := g.Refresh(context.Background(), "ensemble-bot", perms, ctr, func([]string, []byte) error {
+					_, err := g.Refresh(context.Background(), "ensemble-bot", "", perms, ctr, func([]string, []byte) error {
 						if action == "rollback" {
 							return errors.New("fake injection failed")
 						}
@@ -251,7 +251,7 @@ func TestIssueRollbackWithUnreadableRecord(t *testing.T) {
 			store.readFail = tokensService
 			remote.fail = func(string) bool { return revokeFails }
 			g := recoveryLifecycle(t, store, remote)
-			_, err := g.Issue(context.Background(), "ensemble-bot", perms, ctr, func([]string, []byte) error {
+			_, err := g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, func([]string, []byte) error {
 				t.Fatal("an unrecorded token must never reach the container")
 				return nil
 			})

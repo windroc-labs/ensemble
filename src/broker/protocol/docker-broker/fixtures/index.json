@@ -1371,6 +1371,16 @@
       }
     },
     {
+      "file": "manifest-github-bad-repo.json",
+      "definition": "manifest",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
       "file": "manifest-github-bad-app.json",
       "definition": "manifest",
       "valid": false,
@@ -2188,6 +2198,16 @@
         "stage": "schema",
         "exit_code": 3,
         "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "manifest-prefetch-github-repo.json",
+      "definition": "manifest",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
       }
     },
     {

@@ -101,7 +101,7 @@ func TestIssueFailureAudit(t *testing.T) {
 	r := newRig(t, "acme", "other")
 	r.api.issueFail = map[int]int{2: 500}
 	rec, sink := r.audited("start", ctr)
-	if _, err := r.g.Issue(context.Background(), "ensemble-bot", perms, ctr, r.exec.run); err == nil {
+	if _, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run); err == nil {
 		t.Fatal("no error")
 	}
 	if got := resultsOf(flush(t, rec, sink)[0]); !slices.Equal(got, []string{audit.Issued, audit.Revoked}) {
@@ -113,7 +113,7 @@ func TestRefreshAudit(t *testing.T) {
 	r := newRig(t, "acme")
 	issued(t, r)
 	rec, sink := r.audited("refresh", ctr)
-	if _, err := r.g.Refresh(context.Background(), "ensemble-bot", perms, ctr, r.exec.run); err != nil {
+	if _, err := r.g.Refresh(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run); err != nil {
 		t.Fatal(err)
 	}
 	got := flush(t, rec, sink)[0]
@@ -130,7 +130,7 @@ func TestRefreshAudit(t *testing.T) {
 		return 0
 	}
 	rec, sink = r.audited("refresh", ctr)
-	if _, err := r.g.Refresh(context.Background(), "ensemble-bot", perms, ctr, r.exec.run); err != nil {
+	if _, err := r.g.Refresh(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run); err != nil {
 		t.Fatal(err)
 	}
 	got = flush(t, rec, sink)[0]
@@ -224,7 +224,7 @@ func TestListingFollowsTheRecord(t *testing.T) {
 	}
 	r.audited("start", ctr)
 	issued(t, r)
-	if _, err := r.g.Refresh(context.Background(), "ensemble-bot", perms, ctr, r.exec.run); err != nil {
+	if _, err := r.g.Refresh(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run); err != nil {
 		t.Fatal(err)
 	}
 	if r.api.issued != 4 || len(unrecorded) != 0 {
@@ -236,7 +236,7 @@ func TestUnrecordedTokenAudit(t *testing.T) {
 	r := newRig(t, "acme")
 	r.lockFails(0)
 	rec, sink := r.audited("start", ctr)
-	if _, err := r.g.Issue(context.Background(), "ensemble-bot", perms, ctr, r.exec.run); err == nil {
+	if _, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run); err == nil {
 		t.Fatal("no error")
 	}
 	got := flush(t, rec, sink)[0]

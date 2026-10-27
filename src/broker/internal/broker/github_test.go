@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"ensemble/broker/internal/audit"
 	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/github"
@@ -129,7 +130,8 @@ type api struct {
 	onRepos   func(token string)
 	bodies    []string // each token request's body
 	repo      *fakeRepo
-	repoPaths []string // each /repos/ request's path and its token
+	repoPaths []string            // each /repos/ request's path and its token
+	scoped    map[string][]string // each repository-limited token's repository names
 }
 
 // fakeRepo is the one repository a prefetch test reaches: acme/app, on the acme installation when installed.
@@ -165,8 +167,16 @@ func (a *api) handler(t *testing.T) http.HandlerFunc {
 				return
 			}
 			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/app/installations/"), "/access_tokens")
+			token := fmt.Sprintf("ghs_%s_%d", id, a.issued)
+			var req struct{ Repositories []string }
+			if json.Unmarshal(body, &req) == nil && req.Repositories != nil {
+				if a.scoped == nil {
+					a.scoped = map[string][]string{}
+				}
+				a.scoped[token] = req.Repositories
+			}
 			w.WriteHeader(http.StatusCreated)
-			_, _ = fmt.Fprintf(w, `{"token":"ghs_%s_%d","expires_at":"2026-10-17T13:00:00Z"}`, id, a.issued)
+			_, _ = fmt.Fprintf(w, `{"token":%q,"expires_at":"2026-10-17T13:00:00Z"}`, token)
 		case r.Method == http.MethodDelete && r.URL.Path == "/installation/token":
 			token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 			if a.revokeErr != nil {
@@ -185,9 +195,18 @@ func (a *api) handler(t *testing.T) http.HandlerFunc {
 				w.WriteHeader(a.reposFail)
 				return
 			}
+			token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 			var id int
-			_, _ = fmt.Sscanf(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ghs_"), "%d_", &id)
+			_, _ = fmt.Sscanf(strings.TrimPrefix(token, "ghs_"), "%d_", &id)
 			login := a.installs[id-1]
+			if names, ok := a.scoped[token]; ok {
+				var items []string
+				for _, name := range names {
+					items = append(items, fmt.Sprintf(`{"full_name":"%s/%s"}`, login, name))
+				}
+				_, _ = fmt.Fprintf(w, `{"total_count":%d,"repository_selection":"selected","repositories":[%s]}`, len(items), strings.Join(items, ","))
+				return
+			}
 			_, _ = fmt.Fprintf(w, `{"total_count":2,"repository_selection":"all","repositories":[{"full_name":"%s/two"},{"full_name":"%s/one"}]}`, login, login)
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/repos/"):
 			a.repoPaths = append(a.repoPaths, r.URL.Path+" "+r.Header.Get("Authorization"))
@@ -421,7 +440,7 @@ func TestBotUserID(t *testing.T) {
 
 func TestIssueWritesFiles(t *testing.T) {
 	r := newRig(t, "acme", "Other-Org")
-	got, err := r.g.Issue(context.Background(), "ensemble-bot", perms, ctr, r.exec.run)
+	got, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -465,14 +484,14 @@ func TestIssueRecordsBeforeWrite(t *testing.T) {
 		_, recorded = r.record(t)
 		return nil
 	}
-	if _, err := r.g.Issue(context.Background(), "ensemble-bot", perms, ctr, exec); err != nil || !recorded {
+	if _, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, exec); err != nil || !recorded {
 		t.Fatalf("recorded %v err %v", recorded, err)
 	}
 }
 
 func TestIssueNoInstallations(t *testing.T) {
 	r := newRig(t)
-	got, err := r.g.Issue(context.Background(), "ensemble-bot", perms, ctr, r.exec.run)
+	got, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
 	if err != nil || len(got) != 0 || len(r.exec.argv) != 0 {
 		t.Fatalf("%v %v %v", got, err, r.exec.argv)
 	}
@@ -492,7 +511,7 @@ func TestIssueFailureRevokes(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			r := newRig(t, "acme", "other")
 			tc.setup(r)
-			_, err := r.g.Issue(context.Background(), "ensemble-bot", perms, ctr, r.exec.run)
+			_, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
 			if err == nil {
 				t.Fatal("no error")
 			}
@@ -513,7 +532,7 @@ func TestIssueRollbackOffline(t *testing.T) {
 	r := newRig(t, "acme", "other")
 	r.api.issueFail = map[int]int{2: 500}
 	r.api.revokeErr = func(string) int { return 503 }
-	_, err := r.g.Issue(context.Background(), "ensemble-bot", perms, ctr, r.exec.run)
+	_, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
 	wantCode(t, err, protocol.GitHubFailed)
 	if b := r.backlog(t); len(b) != 1 || b[0] != (pending{Container: ctr, Account: "acme", Token: "ghs_1_1", ExpiresAt: "2026-10-17T13:00:00Z"}) {
 		t.Fatalf("backlog %v", b)
@@ -535,13 +554,13 @@ func TestLockFailureRevokesTheNewToken(t *testing.T) {
 	for name, run := range map[string]func(r *rig) error{
 		"issue": func(r *rig) error {
 			r.lockFails(0)
-			_, err := r.g.Issue(context.Background(), "ensemble-bot", perms, ctr, r.exec.run)
+			_, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
 			return err
 		},
 		"refresh": func(r *rig) error {
 			issued(t, r)
 			r.lockFails(1)
-			_, err := r.g.Refresh(context.Background(), "ensemble-bot", perms, ctr, r.exec.run)
+			_, err := r.g.Refresh(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
 			return err
 		},
 	} {
@@ -563,7 +582,7 @@ func TestLockFailureQueuesAnUnrevokedToken(t *testing.T) {
 	r := newRig(t, "acme")
 	r.lockFails(0)
 	r.api.revokeErr = func(string) int { return 503 }
-	_, err := r.g.Issue(context.Background(), "ensemble-bot", perms, ctr, r.exec.run)
+	_, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
 	wantCode(t, err, protocol.KeychainFailed)
 	if b := r.backlog(t); len(b) != 1 || b[0].Token != "ghs_1_1" {
 		t.Fatalf("backlog %v", b)
@@ -608,7 +627,7 @@ func TestRevokeLockFailsKeepsATokenRecordedMeanwhile(t *testing.T) {
 func TestIssueLockFailureLeavesNoRecord(t *testing.T) {
 	r := newRig(t, "acme", "other")
 	r.lockFails(1)
-	_, err := r.g.Issue(context.Background(), "ensemble-bot", perms, ctr, r.exec.run)
+	_, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
 	wantCode(t, err, protocol.KeychainFailed)
 	if _, ok := r.record(t); ok || !slices.Contains(r.api.revoked, "ghs_1_1") {
 		t.Fatalf("record kept or revoked %v", r.api.revoked)
@@ -636,10 +655,10 @@ func TestRevokeReadsTheRecordUnderTheLock(t *testing.T) {
 func TestIssueKeyProblems(t *testing.T) {
 	r := newRig(t, "acme")
 	r.g.Apps = keys{account: "1234567", key: []byte("garbage")}
-	_, err := r.g.Issue(context.Background(), "ensemble-bot", perms, ctr, r.exec.run)
+	_, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
 	wantCode(t, err, protocol.GitHubFailed)
 	r.g.Apps = keys{err: ErrNotFound}
-	_, err = r.g.Issue(context.Background(), "ensemble-bot", perms, ctr, r.exec.run)
+	_, err = r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
 	wantCode(t, err, protocol.LoginRequired)
 	if r.api.issued != 0 {
 		t.Fatal("issued without a key")
@@ -648,7 +667,7 @@ func TestIssueKeyProblems(t *testing.T) {
 
 func issued(t *testing.T, r *rig) {
 	t.Helper()
-	if _, err := r.g.Issue(context.Background(), "ensemble-bot", perms, ctr, r.exec.run); err != nil {
+	if _, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run); err != nil {
 		t.Fatal(err)
 	}
 	r.exec.argv, r.exec.stdin = nil, nil
@@ -657,7 +676,7 @@ func issued(t *testing.T, r *rig) {
 func TestRefresh(t *testing.T) {
 	r := newRig(t, "acme")
 	issued(t, r)
-	got, err := r.g.Refresh(context.Background(), "ensemble-bot", perms, ctr, r.exec.run)
+	got, err := r.g.Refresh(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
 	if err != nil || !slices.Equal(got, []protocol.Expiry{{Account: "acme", ExpiresAt: "2026-10-17T13:00:00Z"}}) {
 		t.Fatalf("%v %v", got, err)
 	}
@@ -678,7 +697,7 @@ func TestRefresh(t *testing.T) {
 
 func TestRefreshNoRecord(t *testing.T) {
 	r := newRig(t, "acme")
-	_, err := r.g.Refresh(context.Background(), "ensemble-bot", perms, ctr, r.exec.run)
+	_, err := r.g.Refresh(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
 	wantCode(t, err, protocol.RefreshFailed)
 	if r.api.issued != 0 {
 		t.Fatal("issued")
@@ -699,7 +718,7 @@ func TestRefreshRecordGone(t *testing.T) {
 		}
 		return srv.HTTP.Transport.RoundTrip(req)
 	})}
-	_, err := r.g.Refresh(context.Background(), "ensemble-bot", perms, ctr, r.exec.run)
+	_, err := r.g.Refresh(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
 	wantCode(t, err, protocol.RefreshFailed)
 	if len(r.exec.argv) != 0 || !slices.Contains(r.api.revoked, "ghs_1_2") {
 		t.Fatalf("writes %v revoked %v", r.exec.argv, r.api.revoked)
@@ -717,7 +736,7 @@ func TestRefreshWriteFails(t *testing.T) {
 	r := newRig(t, "acme")
 	issued(t, r)
 	r.exec.err = errors.New("gone")
-	if _, err := r.g.Refresh(context.Background(), "ensemble-bot", perms, ctr, r.exec.run); err == nil {
+	if _, err := r.g.Refresh(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run); err == nil {
 		t.Fatal("no error")
 	}
 	rec, _ := r.record(t)
@@ -735,7 +754,7 @@ func TestRefreshOldRevokeFails(t *testing.T) {
 		}
 		return 0
 	}
-	if _, err := r.g.Refresh(context.Background(), "ensemble-bot", perms, ctr, r.exec.run); err != nil {
+	if _, err := r.g.Refresh(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run); err != nil {
 		t.Fatal(err)
 	}
 	rec, _ := r.record(t)
@@ -835,7 +854,7 @@ func TestUnreadableRecord(t *testing.T) {
 	}
 	r.keys.unreadable[tokensService] = true
 	r.keys.items[tokensService+"/"+ctr] = []byte("{}")
-	_, err = r.g.Refresh(context.Background(), "ensemble-bot", perms, ctr, r.exec.run)
+	_, err = r.g.Refresh(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
 	wantCode(t, err, protocol.KeychainFailed)
 }
 
@@ -876,5 +895,147 @@ func TestTokensStoreErrorNamesRetrust(t *testing.T) {
 	wantCode(t, err, protocol.KeychainFailed)
 	if want := "Keychain access to the GitHub tokens failed: unlock the login keychain, or run " + RetrustCommand + "."; err.(*protocol.Error).Message != want {
 		t.Fatalf("%q", err.(*protocol.Error).Message)
+	}
+}
+
+// repoBody is a repo grant's token request for acme/app with perms.
+const repoBody = `{"permissions":{"contents":"write","statuses":"read","workflows":"write"},"repositories":["app"]}`
+
+// repoRig is a rig whose App is installed on other and acme, acme/app among acme's repositories, auditing a start.
+func repoRig(t *testing.T, installed bool) (*rig, audited) {
+	t.Helper()
+	r := newRig(t, "other", "acme")
+	r.api.repo = &fakeRepo{installed: installed}
+	rec, sink := r.audited("start", ctr)
+	return r, audited{rec, sink}
+}
+
+func TestIssueRepoWritesOneFile(t *testing.T) {
+	r, a := repoRig(t, true)
+	got, err := r.g.Issue(context.Background(), "ensemble-bot", "acme/app", perms, ctr, r.exec.run)
+	if err != nil || !slices.Equal(got, []protocol.Expiry{{Account: "acme", ExpiresAt: "2026-10-17T13:00:00Z"}}) {
+		t.Fatalf("%v %v", got, err)
+	}
+	if len(r.api.repoPaths) != 1 || !strings.HasPrefix(r.api.repoPaths[0], "/repos/acme/app/installation Bearer ey") {
+		t.Fatalf("repo requests %q", r.api.repoPaths)
+	}
+	if !slices.Equal(r.api.bodies, []string{repoBody}) {
+		t.Fatalf("token requests %q", r.api.bodies)
+	}
+	if len(r.exec.argv) != 1 || !slices.Equal(r.exec.argv[0], []string{"/bin/sh", "-c", writeScript, "sh", "acme"}) || string(r.exec.stdin[0]) != "ghs_2_1" {
+		t.Fatalf("writes %q", r.exec.argv)
+	}
+	rec, ok := r.record(t)
+	want := tokenEntry{Account: "acme", Target: 2, Token: "ghs_2_1", ExpiresAt: "2026-10-17T13:00:00Z", Revision: 1, State: credential.Delivered, Repo: "acme/app"}
+	if !ok || rec.Subject != "ensemble-bot" || len(rec.Tokens) != 1 || rec.Tokens[0] != want {
+		t.Fatalf("record %+v", rec)
+	}
+	lines := flush(t, a.rec, a.sink)
+	if len(lines) != 1 || len(lines[0].Credentials) != 1 {
+		t.Fatalf("%+v", lines)
+	}
+	if c := lines[0].Credentials[0]; c.Result != audit.Issued || c.Account != "acme" || c.Selection == nil || *c.Selection != "selected" ||
+		c.Repositories == nil || !slices.Equal(*c.Repositories, []string{"acme/app"}) {
+		t.Fatalf("audit %+v", c)
+	}
+}
+
+func TestIssueRepoNotInstalled(t *testing.T) {
+	r, _ := repoRig(t, false)
+	_, err := r.g.Issue(context.Background(), "ensemble-bot", "acme/app", perms, ctr, r.exec.run)
+	wantCode(t, err, protocol.GitHubFailed)
+	if msg := err.(*protocol.Error).Message; msg != "GitHub App ensemble-broker-bot is not installed on acme/app; install it there." {
+		t.Fatalf("message %q", msg)
+	}
+	if r.api.issued != 0 || len(r.exec.argv) != 0 {
+		t.Fatalf("issued %d writes %q", r.api.issued, r.exec.argv)
+	}
+	if _, ok := r.record(t); ok {
+		t.Fatal("record kept")
+	}
+}
+
+// A renewal issues for the recorded repo with the recorded set, whatever the caller's set.
+func TestRefreshRepoKeepsTheRepo(t *testing.T) {
+	r, _ := repoRig(t, true)
+	if _, err := r.g.Issue(context.Background(), "ensemble-bot", "acme/app", perms, ctr, r.exec.run); err != nil {
+		t.Fatal(err)
+	}
+	r.exec.argv, r.exec.stdin = nil, nil
+	got, err := r.g.Refresh(context.Background(), "ensemble-bot", "acme/app", map[string]string{"contents": "read"}, ctr, r.exec.run)
+	if err != nil || !slices.Equal(got, []protocol.Expiry{{Account: "acme", ExpiresAt: "2026-10-17T13:00:00Z"}}) {
+		t.Fatalf("%v %v", got, err)
+	}
+	if !slices.Equal(r.api.bodies, []string{repoBody, repoBody}) {
+		t.Fatalf("token requests %q", r.api.bodies)
+	}
+	if len(r.exec.argv) != 1 || r.exec.argv[0][4] != "acme" || string(r.exec.stdin[0]) != "ghs_2_2" || !slices.Equal(r.api.revoked, []string{"ghs_2_1"}) {
+		t.Fatalf("writes %q revoked %q", r.exec.argv, r.api.revoked)
+	}
+	rec, _ := r.record(t)
+	if len(rec.Tokens) != 1 || rec.Tokens[0].Token != "ghs_2_2" || rec.Tokens[0].Repo != "acme/app" || rec.Tokens[0].Target != 2 {
+		t.Fatalf("record %+v", rec)
+	}
+}
+
+// A repo grant renews only its own slot: one recorded for another repository (here a prefetch token whose revocation
+// and backlog write both failed) gets no token request, and the renewal fails naming it.
+func TestRefreshRepoRefusesASlotOutsideTheGrant(t *testing.T) {
+	r, _ := repoRig(t, true)
+	held := tokenEntry{Account: "other", Target: 1, Token: "ghs_held", ExpiresAt: "2026-10-17T13:00:00Z", Revision: 1, State: credential.Prepared, Repo: "other/src"}
+	data, _ := json.Marshal(tokenRecord{Subject: "ensemble-bot", Tokens: []tokenEntry{held}})
+	r.keys.items[tokensService+"/"+ctr] = data
+	if _, err := r.g.Issue(context.Background(), "ensemble-bot", "acme/app", perms, ctr, r.exec.run); err != nil {
+		t.Fatal(err)
+	}
+	r.exec.argv, r.exec.stdin = nil, nil
+	_, err := r.g.Refresh(context.Background(), "ensemble-bot", "acme/app", perms, ctr, r.exec.run)
+	wantCode(t, err, protocol.RefreshFailed)
+	if msg := err.(*protocol.Error).Message; msg != "The GitHub token of other for other/src is outside the repo grant acme/app; not renewed." {
+		t.Fatalf("message %q", msg)
+	}
+	if r.api.issued != 1 || len(r.exec.argv) != 0 {
+		t.Fatalf("issued %d writes %q", r.api.issued, r.exec.argv)
+	}
+	if rec, _ := r.record(t); len(rec.Tokens) != 2 || rec.Tokens[0] != held {
+		t.Fatalf("record %+v", rec)
+	}
+}
+
+// The token a prefetch holds while cloning records the one repository it reaches.
+func TestPrefetchHoldsItsRepo(t *testing.T) {
+	r, _ := prefetchRig(t, installed())
+	var during []tokenEntry
+	run := func(argv []string, stdin []byte) error {
+		rec, _ := r.record(t)
+		during = rec.Tokens
+		return r.exec.run(argv, stdin)
+	}
+	if err := r.g.Prefetch(context.Background(), "acme/app", "main", "/w", ctr, run); err != nil {
+		t.Fatal(err)
+	}
+	if len(during) != 1 || during[0].Token != "ghs_2_1" || during[0].Repo != "acme/app" {
+		t.Fatalf("held %+v", during)
+	}
+}
+
+func TestRevokeRepoGrant(t *testing.T) {
+	r, _ := repoRig(t, true)
+	if _, err := r.g.Issue(context.Background(), "ensemble-bot", "acme/app", perms, ctr, r.exec.run); err != nil {
+		t.Fatal(err)
+	}
+	rec, sink := r.audited("close", ctr)
+	if err := r.g.Release(context.Background(), ctr); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(r.api.revoked, []string{"ghs_2_1"}) {
+		t.Fatalf("revoked %q", r.api.revoked)
+	}
+	if _, ok := r.record(t); ok || len(r.backlog(t)) != 0 {
+		t.Fatal("left state")
+	}
+	lines := flush(t, rec, sink)
+	if len(lines) != 1 || !slices.Contains(resultsOf(lines[0]), audit.Revoked) || lines[0].Credentials[len(lines[0].Credentials)-1].Account != "acme" {
+		t.Fatalf("audit %+v", lines)
 	}
 }

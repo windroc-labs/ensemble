@@ -122,10 +122,11 @@ func tokensError(container string, err error) error {
 	return err
 }
 
-// lifecycle is g's token lifecycle over the ensemble-broker-tokens records and the ensemble-broker-revocations backlog.
-func (g GitHub) lifecycle() credential.Lifecycle {
+// lifecycle is g's token lifecycle over the ensemble-broker-tokens records and the ensemble-broker-revocations backlog;
+// repo ("": none) limits it to a repo grant, one token reaching that repository alone.
+func (g GitHub) lifecycle(repo string) credential.Lifecycle {
 	return credential.Lifecycle{
-		Provider: githubProvider{g},
+		Provider: githubProvider{g, repo},
 		Store:    g.Keychain,
 		NotFound: ErrNotFound,
 		Records:  tokensService,
@@ -139,17 +140,19 @@ func to(container string, exec func([]string, []byte) error) credential.Delivery
 	return credential.Delivery{Consumer: credential.Consumer{Container: container}, Exec: exec}
 }
 
-// Issue gives container one token per installation of app, limited to permissions, recording each before the next
-// request and writing them in; on any failure it revokes every token it issued.
-func (g GitHub) Issue(ctx context.Context, app string, permissions map[string]string, container string, exec func([]string, []byte) error) ([]protocol.Expiry, error) {
-	expiries, err := g.lifecycle().Acquire(ctx, to(container, exec), app, permissions)
+// Issue gives container one token per installation of app, limited to permissions, or with repo ("": none) one token
+// for repo alone, recording each before the next request and writing them in; on any failure it revokes every token
+// it issued.
+func (g GitHub) Issue(ctx context.Context, app, repo string, permissions map[string]string, container string, exec func([]string, []byte) error) ([]protocol.Expiry, error) {
+	expiries, err := g.lifecycle(repo).Acquire(ctx, to(container, exec), app, permissions)
 	return expiries, tokensError(container, err)
 }
 
 // Refresh replaces each of container's tokens with one limited to its recorded permissions (permissions for a record
-// an older broker wrote): a new one is recorded and written in before the old is revoked.
-func (g GitHub) Refresh(ctx context.Context, _ string, permissions map[string]string, container string, exec func([]string, []byte) error) ([]protocol.Expiry, error) {
-	expiries, err := g.lifecycle().Refresh(ctx, to(container, exec), permissions)
+// an older broker wrote) and repository: a new one is recorded and written in before the old is revoked. With repo
+// ("": none), the repo grant's, a token recorded for another repository is not renewed.
+func (g GitHub) Refresh(ctx context.Context, _, repo string, permissions map[string]string, container string, exec func([]string, []byte) error) ([]protocol.Expiry, error) {
+	expiries, err := g.lifecycle(repo).Refresh(ctx, to(container, exec), permissions)
 	return expiries, tokensError(container, err)
 }
 
@@ -162,19 +165,15 @@ func (g GitHub) Prefetch(ctx context.Context, repo, ref, dir, container string, 
 		return err
 	}
 	in, err := g.API.RepoInstallation(ctx, jwt, repo)
-	var se *github.StatusError
-	if errors.As(err, &se) && se.Status == http.StatusNotFound {
-		return protocol.New(protocol.GitHubFailed, "GitHub App "+AppKeyService+" is not installed on "+repo+"; install it there or drop prefetch.")
-	}
 	if err != nil {
-		return apiError(err)
+		return installError(repo, " or drop prefetch", err)
 	}
 	token, expires, err := g.API.IssueRepo(ctx, jwt, in.ID, repo, prefetchPermissions)
 	if err != nil {
 		return apiError(err)
 	}
-	lc, c := g.lifecycle(), credential.Consumer{Container: container}
-	m := credential.Material{Account: in.Account, Target: in.ID, Token: token, ExpiresAt: expires.Format(time.RFC3339)}
+	lc, c := g.lifecycle(""), credential.Consumer{Container: container}
+	m := credential.Material{Account: in.Account, Target: in.ID, Token: token, ExpiresAt: expires.Format(time.RFC3339), Repo: repo}
 	if err := lc.Hold(ctx, c, m); err != nil {
 		return tokensError(container, err)
 	}
@@ -214,11 +213,25 @@ func (g GitHub) Prefetch(ctx context.Context, repo, ref, dir, container string, 
 
 // Release retires every token of container's record, its grant; an unreadable record is kept for recovery.
 func (g GitHub) Release(ctx context.Context, container string) error {
-	return tokensError(container, g.lifecycle().Release(ctx, credential.Consumer{Container: container}))
+	return tokensError(container, g.lifecycle("").Release(ctx, credential.Consumer{Container: container}))
 }
 
-// githubProvider is GitHub's side of the lifecycle: installations, the App JWT and the token API.
-type githubProvider struct{ g GitHub }
+// installError is the protocol's account of err, looking up the App's installation on repo; remedy follows the
+// not-installed message's own.
+func installError(repo, remedy string, err error) *protocol.Error {
+	var se *github.StatusError
+	if errors.As(err, &se) && se.Status == http.StatusNotFound {
+		return protocol.New(protocol.GitHubFailed, "GitHub App "+AppKeyService+" is not installed on "+repo+"; install it there"+remedy+".")
+	}
+	return apiError(err)
+}
+
+// githubProvider is GitHub's side of the lifecycle: installations, the App JWT and the token API; repo ("": none)
+// is its repo grant's repository.
+type githubProvider struct {
+	g    GitHub
+	repo string
+}
 
 func (p githubProvider) Kind() credential.Kind { return credential.GitHub }
 func (p githubProvider) AuditKind() string     { return audit.GitHubToken }
@@ -230,7 +243,7 @@ func (p githubProvider) Begin(_ context.Context, _ string) (credential.Issuer, e
 	if err != nil {
 		return nil, err
 	}
-	return githubIssuer{p.g.API, jwt}, nil
+	return githubIssuer{p.g.API, jwt, p.repo}, nil
 }
 
 // File is m's token file, refusing an account that is not a GitHub login before anything is written.
@@ -264,13 +277,22 @@ func (p githubProvider) Describe(ctx context.Context, m credential.Material) *au
 }
 
 type githubIssuer struct {
-	api github.Client
-	jwt string
+	api  github.Client
+	jwt  string
+	repo string // the repo grant's repository; "": every repository of every installation
 }
 
 func (i githubIssuer) Secret() string { return i.jwt }
 
+// Targets is one slot per installation, or the repo grant's one: its repository's installation.
 func (i githubIssuer) Targets(ctx context.Context) ([]credential.Material, error) {
+	if i.repo != "" {
+		in, err := i.api.RepoInstallation(ctx, i.jwt, i.repo)
+		if err != nil {
+			return nil, installError(i.repo, "", err)
+		}
+		return []credential.Material{{Account: in.Account, Target: in.ID, Repo: i.repo}}, nil
+	}
 	installs, err := i.api.Installations(ctx, i.jwt)
 	if err != nil {
 		return nil, apiError(err)
@@ -282,12 +304,29 @@ func (i githubIssuer) Targets(ctx context.Context) ([]credential.Material, error
 	return targets, nil
 }
 
+// Issue issues target's token: for its repository alone when it has one. A repo grant issues only its own slot's, so
+// a slot recorded for another repository (a prefetch token left unrevoked) is never renewed with the grant's scope.
 func (i githubIssuer) Issue(ctx context.Context, scope map[string]string, target credential.Material) (credential.Material, error) {
-	token, expires, err := i.api.Issue(ctx, i.jwt, target.Target, scope)
+	if i.repo != "" && target.Repo != i.repo {
+		reach := target.Repo
+		if reach == "" {
+			reach = "every repository"
+		}
+		return credential.Material{}, protocol.Newf(protocol.RefreshFailed, "The GitHub token of %s for %s is outside the repo grant %s; not renewed.",
+			target.Account, reach, i.repo)
+	}
+	var token string
+	var expires time.Time
+	var err error
+	if target.Repo != "" {
+		token, expires, err = i.api.IssueRepo(ctx, i.jwt, target.Target, target.Repo, scope)
+	} else {
+		token, expires, err = i.api.Issue(ctx, i.jwt, target.Target, scope)
+	}
 	if err != nil {
 		return credential.Material{}, apiError(err)
 	}
-	return credential.Material{Token: token, ExpiresAt: expires.Format(time.RFC3339)}, nil
+	return credential.Material{Token: token, ExpiresAt: expires.Format(time.RFC3339), Repo: target.Repo}, nil
 }
 
 // SaveUser asks GitHub which App the AppKeyService key is (its slug), looks up its bot user (`<slug>[bot]`) and keeps

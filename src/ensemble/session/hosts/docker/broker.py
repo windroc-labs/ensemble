@@ -538,6 +538,7 @@ def write_manifest(
     lock: str | None = None,
     lock_owner: str | None = None,
     prefetch: Mapping[str, str] | None = None,
+    repo: str = "",
 ) -> None:
     field, home_path = home
     client = field.removesuffix("_dir")
@@ -550,7 +551,13 @@ def write_manifest(
         "client": client,
         field: home_path,
         "hook_path": hook_path,
-        "github": {"app": github, "permissions": dict(permissions or {})} if github else None,
+        "github": {
+            "app": github,
+            "permissions": dict(permissions or {}),
+            **({"repo": repo} if repo else {}),
+        }
+        if github
+        else None,
         "labels": {},
         **({f"{client}_providers": list(providers)} if providers else {}),
         **({f"{client}_account": account} if account else {}),
