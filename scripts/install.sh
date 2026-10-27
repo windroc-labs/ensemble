@@ -390,13 +390,20 @@ iterm_dirs=("Application Support/iTerm2" "Application Support/iTerm" "Caches/com
   "Application Scripts/com.googlecode.iterm2.iTermFileProvider")
 iterm_files=("Preferences/com.googlecode.iterm2.plist" "Preferences/com.googlecode.iterm2.private.plist"
   "Cookies/com.googlecode.iterm2.binarycookies" "HTTPStorages/com.googlecode.iterm2.binarycookies")
+# What Docker Desktop and Codex write in the parents they share with other tools (~/.docker, CODEX_HOME), recorded
+# when install.sh installs them: directories parent first, then files. The context is desktop-linux's (sha256 of it).
+docker_home_dirs=(bin buildx cli-plugins contexts contexts/meta
+  contexts/meta/fe9c6bd7a66301f49ca9b6a70b217107cd1284598bfc254700c989b916da791e mutagen run scout)
+docker_home_files=(config.json daemon.json features.json .token_seed .token_seed.lock)
+codex_home_dirs=(plugins)
+codex_home_files=(config.toml)
 
-# Records each of the paths after $1 under ~/Library, $1 the kind: dir or file.
-record_library() {
-  local kind=$1 path
-  shift
+# Records each of the paths after $2 under directory $2, $1 the kind: dir or file.
+record_in() {
+  local kind=$1 parent=$2 path
+  shift 2
   for path in "$@"; do
-    if [ "$kind" = dir ]; then record_dir "$HOME/Library/$path"; else record_file "$HOME/Library/$path"; fi
+    if [ "$kind" = dir ]; then record_dir "$parent/$path"; else record_file "$parent/$path"; fi
   done
 }
 
@@ -585,10 +592,14 @@ formula() {
   fi
 }
 
-# cask <name> <command or app path that proves it installed>
+# cask_present <name> <command or app path that proves it installed>: exit 0 when cask <name> is there.
+cask_present() {
+  { [ -n "$2" ] && command -v "$2" >/dev/null; } || [ -e "${3:-/nonexistent}" ] \
+    || brew list --cask "$1" </dev/null >/dev/null 2>&1
+}
+
 cask() {
-  if { [ -n "$2" ] && command -v "$2" >/dev/null; } || [ -e "${3:-/nonexistent}" ] \
-    || brew list --cask "$1" </dev/null >/dev/null 2>&1; then
+  if cask_present "$@"; then
     skip "$1 installed"
   else
     brew_install --cask "$1"
@@ -610,8 +621,8 @@ dependencies() {
   record_dir "$HOME/.config"
   if [ ! -e "$root/Applications/iTerm.app" ]; then
     record_dir "$HOME/.config/iterm2"
-    record_library dir "${iterm_dirs[@]}"
-    record_library file "${iterm_files[@]}"
+    record_in dir "$HOME/Library" "${iterm_dirs[@]}"
+    record_in file "$HOME/Library" "${iterm_files[@]}"
   fi
   cask iterm2 "" "$root/Applications/iTerm.app"
 }
@@ -1034,21 +1045,32 @@ backup_config() {
 }
 
 apps() {
-  local rc
+  local rc codex_home=${CODEX_HOME:-$HOME/.codex}
+  local -a codex_cask=(codex codex) docker_cask=(docker-desktop "" "$root/Applications/Docker.app")
   step apps
   record_dir "$HOME/.config/gh"
   if has claude; then
     record_dir "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
     if [ -z "${CLAUDE_CONFIG_DIR:-}" ]; then record_file "$HOME/.claude.json"; fi
   fi
-  if has codex; then record_dir "${CODEX_HOME:-$HOME/.codex}"; fi
+  if has codex; then
+    record_dir "$codex_home"
+    if ! cask_present "${codex_cask[@]}"; then
+      record_in dir "$codex_home" "${codex_home_dirs[@]}"
+      record_in file "$codex_home" "${codex_home_files[@]}"
+    fi
+  fi
   if [ "$docker" = yes ]; then
     record_dir "$HOME/.docker"
+    if ! cask_present "${docker_cask[@]}"; then
+      record_in dir "$HOME/.docker" "${docker_home_dirs[@]}"
+      record_in file "$HOME/.docker" "${docker_home_files[@]}"
+    fi
     record_dir "$HOME/Library/Containers/com.docker.docker"
     record_dir "$HOME/Library/Group Containers/group.com.docker"
     record_dir "$HOME/.config/cagent"
-    record_library dir "${docker_dirs[@]}"
-    record_library file "${docker_files[@]}"
+    record_in dir "$HOME/Library" "${docker_dirs[@]}"
+    record_in file "$HOME/Library" "${docker_files[@]}"
     # Docker Desktop adds its CLI completion block to the shell's rc files, creating them if needed: the cleanup
     # removes the block where it was not before, and a file that was not there once empty.
     for rc in .zshrc .bashrc .bash_profile .zprofile; do
@@ -1060,9 +1082,9 @@ apps() {
     done
   fi
   if has claude; then cask claude-code claude; else skip "Claude Code: not chosen"; fi
-  if has codex; then cask codex codex; else skip "Codex: not chosen"; fi
+  if has codex; then cask "${codex_cask[@]}"; else skip "Codex: not chosen"; fi
   if [ "$docker" = yes ]; then
-    cask docker-desktop "" "$root/Applications/Docker.app"
+    cask "${docker_cask[@]}"
     docker_build
     if [ "$broker_mode" = build ]; then formula go; else skip "go: the broker comes from release $release_tag"; fi
   else
