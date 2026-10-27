@@ -834,7 +834,7 @@ class HostedSession(Session):
     @classmethod
     def retire(cls, name: str, *, sid: str | None = None, host: str | None = None) -> None:
         """A bound owner's confirmed close, asked before any Host probe (OwnerRefused: refused;
-        Unanswered: it cannot tell), else closed here; another sid raises first.
+        Unanswered: it cannot tell), else closed here; another sid raises.
         """
         cls._retire(name, sid=sid, host=host)
 
