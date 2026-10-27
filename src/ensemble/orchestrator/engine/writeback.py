@@ -74,7 +74,7 @@ class Context:
     redelivered: bool = False
     host: str = "github.com"
     document: str | None = None
-    published: str = ""  # a github [output]'s https://<host>/<repo>/blob/<branch>/; "" → none
+    published: str = ""
 
 
 LEDGER = "writeback.json"
