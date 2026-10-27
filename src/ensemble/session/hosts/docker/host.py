@@ -18,6 +18,7 @@ import threading
 import time
 from collections.abc import Iterable, Mapping
 from dataclasses import replace
+from enum import StrEnum
 from typing import NamedTuple
 
 import ensemble.utils
@@ -100,7 +101,6 @@ from ensemble.utils import (
 RECORD = "host.json"
 PIPE_LOCK = "pipe.lock"  # held by a headless run's harness while its client runs
 PIPED = "pipe"
-GUARDED = "guard"
 OWNER_LOCK = "guard.lock"
 BUSY = "previous worker generation (live or unknown)"
 IMAGE_PYTHON = "/opt/ensemble/venv/bin/python"
@@ -152,9 +152,21 @@ def _piped(name: str, generation: str) -> bool:
     return found.get("generation") == generation and found.get("mode") == PIPED
 
 
-def _guarded(name: str, generation: str) -> bool:
+class Kind(StrEnum):
+    """host.json `kind`: which guarded worker a generation's record is."""
+
+    TUI = "tui"
+    HEADLESS = "headless"
+
+
+def _kind(name: str, generation: str) -> Kind | None:
     found = _record(name)
-    return found.get("generation") == generation and found.get("mode") == GUARDED
+    kind = found.get("kind")
+    return Kind(kind) if found.get("generation") == generation and kind in set(Kind) else None
+
+
+def _guarded(name: str, generation: str) -> bool:
+    return _kind(name, generation) is not None
 
 
 def _owner_path(name: str) -> str:
@@ -375,6 +387,7 @@ class DockerHost(Host):
     _harnessed = True
     _remote_tui = True  # as DockerWorker.remote
     _unowned = False
+    _named_headless = True
 
     def __init__(
         self,
@@ -461,11 +474,11 @@ class DockerHost(Host):
         ]
 
     def _containers(self, *, required: bool = False) -> dict[str, Row]:
-        """Name → its guarded row."""
+        """Name → its guarded tui row."""
         return {
             row.name: row
             for row in self._rows(required=required)
-            if _guarded(row.name, row.generation)
+            if _kind(row.name, row.generation) == Kind.TUI
         }
 
     def sweep(self, own: str) -> None:
@@ -864,8 +877,8 @@ class DockerHost(Host):
         events: str | None = None,
         metadata: Mapping[str, str] | None = None,
     ) -> DockerWorker:
-        """A direct caller's start: under the tui lock, as pipe; an owned one's (metadata `owner`)
-        TuiStore already holds it.
+        """A direct caller's (a headless run's) start: under the tui lock, whose file goes after
+        unless a session.json names it; an owned one's (metadata `owner`) TuiStore holds it.
         """
         if (metadata or {}).get("owner"):
             return self._worker(
@@ -876,9 +889,18 @@ class DockerHost(Host):
         with inode_lock(lock, wait=False) as held:
             if not held:
                 raise SessionError(f"docker session {name}: busy")
-            return self._worker(
-                name, launch, terminal=terminal, display=display, events=events, metadata=metadata
-            )
+            try:
+                return self._worker(
+                    name,
+                    launch,
+                    terminal=terminal,
+                    display=display,
+                    events=events,
+                    metadata=metadata,
+                )
+            finally:
+                if not os.path.lexists(_state_file(name)):
+                    os.unlink(lock)
 
     def _worker(
         self,
@@ -965,7 +987,7 @@ class DockerHost(Host):
                     "display": display,
                     "record": None,
                     "events": events,
-                    "mode": GUARDED,
+                    "kind": Kind.TUI if terminal else Kind.HEADLESS,
                     "environment": None if environment is None else environment.persisted(),
                 },
             )

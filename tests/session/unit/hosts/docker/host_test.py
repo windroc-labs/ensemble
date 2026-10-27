@@ -234,8 +234,8 @@ class Base(Case):
     def listed(self, *names, state="running", gen=GEN):
         self.docker.ps = [f"ensemble-{name}-{gen}\t{name}\t{gen}\t{state}" for name in names]
 
-    def guarded_record(self, gen=GEN):
-        self.record(generation=gen, mode="guard")
+    def guarded_record(self, gen=GEN, kind="tui"):
+        self.record(generation=gen, kind=kind)
 
 
 def _close(fd):
@@ -815,7 +815,7 @@ class StartTest(StartBase):
                 "display": "lead/below",
                 "record": None,
                 "events": os.path.join(self.home, "events"),
-                "mode": "guard",
+                "kind": "tui",
                 "environment": None,
             },
         )
@@ -2153,13 +2153,14 @@ class SweepTest(Base):
         fcntl.flock(fd, fcntl.LOCK_EX)
 
     def test_sweep_closes_debris_and_free_workers_and_keeps_held_and_busy_ones(self):
-        self.host_json("b", self.OLD, mode="guard")
-        self.host_json("c")  # no mode: an older release's start
-        for name in ("d", "e"):
-            self.host_json(name, mode="guard")
+        self.host_json("b", self.OLD, kind="tui")
+        self.host_json("c", mode="guard")  # no kind: an older release's start
+        for name, kind in (("d", "tui"), ("e", "tui"), ("k", "headless"), ("l", "headless")):
+            self.host_json(name, kind=kind)
         for name in ("p", "q"):
             self.host_json(name, mode="pipe")
         self.held("d", "guard.lock")
+        self.held("k", "guard.lock")
         self.held("p", "pipe.lock")
         os.makedirs(self.tui, exist_ok=True)
         busy = os.open(os.path.join(self.tui, "f.lock"), os.O_RDWR | os.O_CREAT)
@@ -2172,6 +2173,8 @@ class SweepTest(Base):
             self.row("c"),
             self.row("d"),  # guarded, its owner holds it
             self.row("e", state="exited"),  # guarded, its owner gone
+            self.row("k"),  # headless, its owner holds it
+            self.row("l"),  # headless, its owner gone
             self.row("p"),  # piped, its run holds it
             self.row("q"),  # piped, its run gone
             self.row("f"),  # starting or closing elsewhere
@@ -2184,7 +2187,7 @@ class SweepTest(Base):
         self.assertEqual(
             self.broker.closed,
             [f"ensemble-w-{self.OLD}"]
-            + [f"ensemble-{name}-{GEN}" for name in ("a", "b", "c", "e", "q")],
+            + [f"ensemble-{name}-{GEN}" for name in ("a", "b", "c", "e", "l", "q")],
         )
         self.assertFalse([call for call in self.docker.order if call[:1] == ["exec"]])
 
@@ -2455,7 +2458,7 @@ class ListTest(Base):
         ]
         self.guarded_record()
         self.state = os.path.join(self.home, ".ensemble", "docker-state", "v")
-        self.record(sid=None, client="other", display=None, mode="guard")
+        self.record(sid=None, client="other", display=None, kind="tui")
         self.assertEqual(self.host.list(), ["v", "w"])
         before = len(self.docker.order)
         rows = {row.name: row for row in self.host.rows()}
@@ -2468,19 +2471,20 @@ class ListTest(Base):
         self.assertEqual((rows["v"].sid, rows["v"].client), (None, "other"))
 
     def test_only_guarded_rows_are_listed_or_attached(self):
-        self.listed("w", "v", "p", "o")
+        self.listed("w", "v", "p", "o", "h")
         self.guarded_record()
         for name, found in (
-            ("v", {}),  # no mode: an older release's start
+            ("v", {"mode": "guard"}),  # no kind: an older release's start
             ("p", {"mode": "pipe"}),
-            ("o", {"mode": "guard", "generation": "f" * 32}),  # another generation
+            ("o", {"kind": "tui", "generation": "f" * 32}),  # another generation
+            ("h", {"kind": "headless"}),
         ):
             self.state = os.path.join(self.home, ".ensemble", "docker-state", name)
             self.record(**found)
         self.assertEqual(self.host.list(), ["w"])
         self.assertEqual([row.name for row in self.host.rows()], ["w"])
         self.assertEqual([row.name for row in self.host._capacity_rows()], ["w"])
-        for name in ("v", "p", "o"):
+        for name in ("v", "p", "o", "h"):
             with self.subTest(name=name):
                 with self.assertRaisesRegex(SessionError, f"^no docker session {name}$"):
                     self.host.attach(name)
@@ -2529,10 +2533,10 @@ class ListTest(Base):
         self.assertEqual((self.host.list(), self.host.rows(), self.order), ([], [], []))
 
     def test_attach_of_an_unknown_or_unguarded_row_is_no_session(self):
-        for mode in (None, "pipe", "guard"):
-            with self.subTest(mode=mode):
-                self.record(**({} if mode is None else {"mode": mode}))
-                self.listed(*(() if mode == "guard" else ("w",)))
+        for found in ({}, {"mode": "pipe"}, {"kind": "headless"}, {"kind": "tui"}):
+            with self.subTest(found=found):
+                self.record(**found)
+                self.listed(*(() if found == {"kind": "tui"} else ("w",)))
                 with self.assertRaisesRegex(SessionError, "^no docker session w$") as caught:
                     self.host.attach("w")
                 self.assertNotIsInstance(caught.exception, Unanswered)
@@ -2592,7 +2596,8 @@ class GuardedStartTest(StartBase):
         execs = self.docker.execs()
         self.assertFalse(any("tmux" in call for call in execs), execs)
         self.assertFalse(any(isinstance(c, tuple) and c[0] == "popen" for c in self.order))
-        self.assertEqual(self.host_record()["mode"], "guard")
+        self.assertEqual(self.host_record()["kind"], "tui")
+        self.assertNotIn("mode", self.host_record())
         self.assertFalse(_free(os.path.join(self.state, "guard.lock")))
         self.assertEqual(handle.session_identity(), ("s1", GEN))
         handle.close()
@@ -2763,3 +2768,83 @@ class GuardedRowTest(StartBase):
         self.host.sweep("x")
         self.assertEqual(self.broker.closed, [CONTAINER])
         self.assertEqual(self.docker.execs(), [])
+
+
+class HeadlessWorkerTest(StartBase):
+    """A headless run's guarded worker: started directly, kind headless, never listed as a tui."""
+
+    def headless(self, **metadata):
+        handle = self.host.worker(
+            "w", self.launch, terminal=False, metadata={**self.METADATA, **metadata}
+        )
+        self.addCleanup(self.close_quietly, handle)
+        return handle
+
+    def test_a_headless_worker_records_its_kind_and_is_never_listed_or_attached(self):
+        handle = self.headless()
+        [(argv, _, _)] = self.execs
+        self.assertNotIn("--terminal", argv)
+        self.assertEqual(self.host_record()["kind"], "headless")
+        self.assertNotIn("mode", self.host_record())
+        self.listed("w")
+        self.assertEqual(self.host.list(), [])
+        self.assertEqual(self.host.rows(), [])
+        self.assertEqual(self.host._capacity_rows(), [])
+        with self.assertRaisesRegex(SessionError, "^no docker session w$"):
+            self.host.attach("w")
+        with self.assertRaisesRegex(SessionError, "^no docker session w$"):
+            self.host.attach_target("w")
+        handle.close()
+        self.assertIn(CONTAINER, self.broker.closed)
+
+    def test_a_held_owner_lock_refuses_either_kind(self):
+        handle = self.headless()
+        with self.assertRaises(SessionBusy):
+            self.start()
+        self.assertEqual(len(self.execs), 1)
+        handle.close()
+        self.start()
+        with self.assertRaises(SessionBusy):
+            self.headless()
+        self.assertEqual(len(self.execs), 2)
+
+    def test_a_direct_headless_start_drops_its_tui_lock_file_without_a_session(self):
+        os.unlink(os.path.join(self.home, ".ensemble", "tui", "w", "session.json"))
+        self.headless()
+        self.assertFalse(os.path.lexists(tui_lock("w")))
+
+    def test_a_headless_environment_worker_runs_maintenance(self):
+        self.headless(environment=carried(ENVIRONMENT))
+        manifest = os.path.join(self.state, f"{GEN}.json")
+        deadline = time.monotonic() + 5
+        while ("maintain", CONTAINER, manifest) not in self.order and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertIn(("maintain", CONTAINER, manifest), self.order)
+        self.assertEqual(self.host_record()["kind"], "headless")
+        self.assertEqual(self.host_record()["environment"], ENVIRONMENT.persisted())
+
+    def test_a_headless_environment_worker_closes_at_its_deadline(self):
+        reason = "Client authentication expired; run ensemble-broker login, then resume."
+        self.broker.started = replace(
+            self.broker.started,
+            deadline={"at": "2000-01-01T00:00:00Z", "action": "close", "reason": reason},
+        )
+        expired = threading.Event()
+        original = self.broker.close
+
+        def close(container):
+            result = original(container)
+            expired.set()
+            return result
+
+        self.broker.close = close
+        with self.assertLogs("session", "WARNING") as logs:
+            handle = self.headless(environment=carried(ENVIRONMENT))
+            self.assertTrue(expired.wait(5))
+        self.assertEqual(self.host_record()["kind"], "headless")
+        self.assertEqual(
+            logs.output, [f"WARNING:session:docker session w: client_auth_expired {reason}"]
+        )
+        self.assertEqual(self.broker.closed, [CONTAINER])
+        self.assertTrue(handle.wait_exit(5))
+        self.assertEqual(handle.state(), Liveness.ABSENT)
