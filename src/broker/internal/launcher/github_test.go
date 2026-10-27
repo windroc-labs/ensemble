@@ -20,13 +20,12 @@ var expiry = []protocol.Expiry{{Account: "acme", ExpiresAt: "2026-10-17T13:00:00
 
 // fakeTokens records the launcher's Tokens calls; each err field fails its method.
 type fakeTokens struct {
-	calls                                      []string
-	ready, user, issue, refresh, revoke, retry error
-	prefetch                                   error
-	pending                                    []protocol.Pending
-	onRelease                                  func()
-	revokeContexts                             []error
-	permissions                                []map[string]string // each Issue's and Refresh's set
+	calls                               []string
+	ready, user, issue, refresh, revoke error
+	prefetch                            error
+	onRelease                           func()
+	revokeContexts                      []error
+	permissions                         []map[string]string // each Issue's and Refresh's set
 }
 
 // fixtureSet is manifest-github-app.json's permissions.
@@ -74,16 +73,6 @@ func (f *fakeTokens) Prefetch(_ context.Context, repo, ref, dir, c string, run f
 	}
 	return nil
 }
-func (f *fakeTokens) Retry(context.Context) ([]protocol.Pending, error) {
-	f.calls = append(f.calls, "retry")
-	return f.pending, f.retry
-}
-
-func (f *fakeTokens) Pending() ([]protocol.Pending, error) {
-	f.calls = append(f.calls, "pending")
-	return f.pending, f.retry
-}
-
 func githubManifest(t *testing.T) string {
 	data, err := os.ReadFile(filepath.Join(fixtures.Dir(), "manifest-github-app.json"))
 	if err != nil {
@@ -105,7 +94,7 @@ func TestStartGitHub(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Deadline != nil || !slices.Equal(tokens.calls, []string{"ready ensemble-broker-bot", "user ensemble-broker-bot", "retry", "issue ensemble-broker-bot " + container}) {
+	if got.Deadline != nil || !slices.Equal(tokens.calls, []string{"ready ensemble-broker-bot", "user ensemble-broker-bot", "issue ensemble-broker-bot " + container}) {
 		t.Fatalf("%+v %q", got, tokens.calls)
 	}
 	if len(tokens.permissions) != 1 || !maps.Equal(tokens.permissions[0], fixtureSet) {
@@ -131,7 +120,7 @@ func TestStartGitHubNull(t *testing.T) {
 	tokens := &fakeTokens{}
 	h, _ := githubHost(&world{labels: goodLabels()}, tokens)
 	got, err := h.Start(context.Background(), validManifest(t))
-	if err != nil || got.Deadline != nil || got.GitHubUserID != nil || !slices.Equal(tokens.calls, []string{"retry"}) {
+	if err != nil || got.Deadline != nil || got.GitHubUserID != nil || len(tokens.calls) != 0 {
 		t.Fatalf("%+v %v %q", got, err, tokens.calls)
 	}
 	if out, _ := json.Marshal(got); !strings.Contains(string(out), `"github_user_id":null`) {
@@ -168,24 +157,6 @@ func TestStartGitHubFailureRollsBack(t *testing.T) {
 				t.Fatalf("%+v", e)
 			}
 		})
-	}
-}
-
-func TestStartRetryStderr(t *testing.T) {
-	var progress strings.Builder
-	h, _ := githubHost(&world{labels: goodLabels()}, &fakeTokens{retry: protocol.New(protocol.KeychainFailed, "unreadable")})
-	h.Progress = &progress
-	if _, err := h.Start(context.Background(), validManifest(t)); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasPrefix(progress.String(), "ensemble-broker: start revocations skipped\nensemble-broker: start preflight ") {
-		t.Fatalf("%q", progress.String())
-	}
-	progress.Reset()
-	h, _ = githubHost(&world{labels: goodLabels(), runErr: errors.New("boom")}, &fakeTokens{retry: errors.New("x")})
-	h.Progress = &progress
-	if _, err := h.Start(context.Background(), validManifest(t)); err == nil || progress.Len() != 0 {
-		t.Fatalf("%v %q", err, progress.String())
 	}
 }
 
@@ -265,32 +236,5 @@ func TestMaintainGitHub(t *testing.T) {
 	host.Docker, host.GitHub = &fakeDocker{}, &fakeTokens{}
 	if got, err := host.Maintain(context.Background(), container, validManifest(t), nil, false); err != nil || len(got.Results) != 0 {
 		t.Errorf("github null: %+v %v", got, err)
-	}
-}
-
-func TestStatus(t *testing.T) {
-	pending := []protocol.Pending{{Container: container, Account: "acme", ExpiresAt: "2026-10-17T13:00:00Z"}}
-	tokens := &fakeTokens{pending: pending}
-	got, err := Host{GitHub: tokens}.Status(context.Background())
-	if err != nil || !slices.Equal(got.Revocations, pending) {
-		t.Fatalf("%+v %v", got, err)
-	}
-	if !slices.Equal(tokens.calls, []string{"pending"}) {
-		t.Fatalf("status performed maintenance: %v", tokens.calls)
-	}
-	if _, err := (Host{GitHub: &fakeTokens{retry: protocol.New(protocol.KeychainFailed, "x")}}).Status(context.Background()); protoErr(t, err).Code != protocol.KeychainFailed {
-		t.Fatal(err)
-	}
-}
-
-func TestCleanup(t *testing.T) {
-	pending := []protocol.Pending{{Container: container, Account: "acme", ExpiresAt: "2026-10-17T13:00:00Z"}}
-	tokens := &fakeTokens{pending: pending}
-	got, err := (Host{GitHub: tokens}).Cleanup(context.Background())
-	if err != nil || !slices.Equal(got.Revocations, pending) || !slices.Equal(tokens.calls, []string{"retry"}) {
-		t.Fatalf("%+v %v %v", got, err, tokens.calls)
-	}
-	if _, err := (Host{GitHub: &fakeTokens{retry: protocol.New(protocol.KeychainFailed, "x")}}).Cleanup(context.Background()); protoErr(t, err).Code != protocol.KeychainFailed {
-		t.Fatal(err)
 	}
 }

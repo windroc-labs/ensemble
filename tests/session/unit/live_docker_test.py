@@ -689,18 +689,6 @@ class BotPrTest(Case):
         self.assertEqual(gate.bot_pr(view(), ["ready_for_review"], None, need_refresh=False), [])
 
 
-class PendingExceptTest(Case):
-    def test_rules(self):
-        removed = f"ensemble-live-{G1}"
-        entry = {"container": removed, "account": "acme", "expires_at": "2026-10-18T13:00:00Z"}
-        self.assertEqual(gate.pending_except({"revocations": []}, removed), [])
-        self.assertEqual(gate.pending_except({"revocations": [entry]}, removed), [])
-        other = {**entry, "container": f"ensemble-live-{G2}"}
-        (problem,) = gate.pending_except({"revocations": [entry, other]}, removed)
-        self.assertIn(G2, problem)
-        self.assertEqual(len(gate.pending_except({"revocations": [entry]}, None)), 1)
-
-
 class UnreachableDocTest(Case):
     def test_gate_runs_the_documented_commands(self):
         with open(DOCS, encoding="utf-8") as f:

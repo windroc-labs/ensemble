@@ -829,3 +829,15 @@ func TestStartKeepsSecretsOutOfArgvAndEnv(t *testing.T) {
 		})
 	}
 }
+
+// A start reaches GitHub only to issue its own tokens: no revocation precedes it (no backlog).
+func TestStartMakesNoRevocationBeforeIssue(t *testing.T) {
+	tokens := &fakeTokens{}
+	h, _ := githubHost(&world{labels: goodLabels()}, tokens)
+	if _, err := h.Start(context.Background(), githubManifest(t)); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(tokens.calls, []string{"ready ensemble-broker-bot", "user ensemble-broker-bot", "issue ensemble-broker-bot " + container}) {
+		t.Fatalf("%q", tokens.calls)
+	}
+}

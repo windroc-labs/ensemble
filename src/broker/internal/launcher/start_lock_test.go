@@ -599,7 +599,7 @@ func TestMutexFailureRevokesIssuedTokens(t *testing.T) {
 			if e.Code != protocol.StartFailed || e.Cleanup != protocol.Removed || got.Container != "" {
 				t.Fatalf("%+v %+v", got, e)
 			}
-			if !slices.Equal(tokens.calls, []string{"ready ensemble-broker-bot", "user ensemble-broker-bot", "retry", "issue ensemble-broker-bot " + container, "revoke " + container}) {
+			if !slices.Equal(tokens.calls, []string{"ready ensemble-broker-bot", "user ensemble-broker-bot", "issue ensemble-broker-bot " + container, "revoke " + container}) {
 				t.Fatalf("%q", tokens.calls)
 			}
 			if len(tokens.revokeContexts) != 1 || tokens.revokeContexts[0] != nil {

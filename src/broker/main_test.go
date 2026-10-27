@@ -52,7 +52,7 @@ func recording(calls *[]call) app {
 		maintain: func(ctx context.Context, k keys, container, _ string, _ []string, _ bool) (any, error) {
 			return result("maintain")(ctx, k, container, nil)
 		},
-		status: func(ctx context.Context, k keys, _ bool) (any, error) { return result("status")(ctx, k, "", nil) },
+		status: func(ctx context.Context, k keys) (any, error) { return result("status")(ctx, k, "", nil) },
 		probeOpencode: func(ctx context.Context, k keys, provider, base string) (any, error) {
 			return result("probe-provider")(ctx, k, provider+" "+base, nil)
 		},
@@ -79,7 +79,7 @@ func invoke(a app, args ...string) (int, string, string) {
 
 func TestVersion(t *testing.T) {
 	code, out, errOut := invoke(app{}, "version")
-	if code != 0 || out != `{"protocol_version":"30"}`+"\n" || errOut != "" {
+	if code != 0 || out != `{"protocol_version":"32"}`+"\n" || errOut != "" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
 	for _, c := range fixtures.Cases(t, "version_output") {
@@ -282,6 +282,7 @@ func TestUsageErrors(t *testing.T) {
 		{"maintain", []string{"maintain", "--manifest", "/m.json", "--container", "ensemble-x-0123456789abcdef0123456789abcdef"}},
 		{"maintain", []string{"maintain", "--container", "ensemble-x-0123456789abcdef0123456789abcdef", "--manifest", "m.json"}},
 		{"status", []string{"status", "x"}},
+		{"status", []string{"status", "--cleanup"}},
 		{"close", []string{"close", "--container", "ensemble-x-0123"}},
 		{"version", []string{"version", "x"}},
 		{"workspace-rm", []string{"workspace-rm"}},
@@ -730,41 +731,19 @@ func TestBuildProgressGoesToStderr(t *testing.T) {
 }
 
 func TestStatus(t *testing.T) {
-	a := app{status: func(context.Context, keys, bool) (any, error) {
-		return launcher.StatusResult{Revocations: []protocol.Pending{{Container: "c", Account: "acme", ExpiresAt: "2026-10-17T13:00:00Z"}}}, nil
+	a := app{status: func(context.Context, keys) (any, error) {
+		return launcher.StatusResult{Claude: map[string]bool{"default": true}}, nil
 	}}
 	code, out, errOut := invoke(a, "status")
-	if code != 0 || errOut != "" || out != `{"revocations":[{"container":"c","account":"acme","expires_at":"2026-10-17T13:00:00Z"}]}`+"\n" {
+	if code != 0 || errOut != "" || out != `{"claude":{"default":true}}`+"\n" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
-	a = app{status: func(context.Context, keys, bool) (any, error) { return nil, protocol.New(protocol.KeychainFailed, "x") }}
+	a = app{status: func(context.Context, keys) (any, error) { return nil, protocol.New(protocol.KeychainFailed, "x") }}
 	code, out, errOut = invoke(a, "status")
 	if code != 11 {
 		t.Fatalf("%d %q", code, errOut)
 	}
 	assertError(t, errOut, out, "status", protocol.KeychainFailed)
-}
-
-func TestStatusCleanupOption(t *testing.T) {
-	var calls []call
-	a := recording(&calls)
-	var choices []bool
-	a.status = func(ctx context.Context, k keys, cleanup bool) (any, error) {
-		choices = append(choices, cleanup)
-		return recording(&calls).status(ctx, k, cleanup)
-	}
-	code, out, errOut := invoke(a, "status", "--cleanup")
-	if code != 0 || len(calls) != 1 || out == "" || errOut != "" {
-		t.Fatalf("explicit cleanup not dispatched: %d %q %q %v", code, out, errOut, calls)
-	}
-	for _, args := range [][]string{{"status", "--other"}, {"status", "--cleanup", "--cleanup"}} {
-		if code, _, _ := invoke(recording(&calls), args...); code != 2 || len(calls) != 1 {
-			t.Fatal("invalid status options dispatched")
-		}
-	}
-	if code, _, _ := invoke(a, "status"); code != 0 || !slices.Equal(choices, []bool{true, false}) {
-		t.Fatalf("wrong status choices: %v", choices)
-	}
 }
 
 // noSecrets is an empty broker-only keychain.
@@ -1395,7 +1374,7 @@ func TestOnlyLoginsAndRetrustAreInteractive(t *testing.T) {
 		{[]string{"start", "--manifest", "/m.json"}, []bool{false}},
 		{[]string{"maintain", "--container", container, "--manifest", "/m.json"}, []bool{false}},
 		{[]string{"close", "--container", container}, []bool{false}},
-		{[]string{"status", "--cleanup"}, []bool{false}},
+		{[]string{"status"}, []bool{false}},
 		{[]string{"build", "--ensemble", "/e"}, []bool{false}},
 		{[]string{"lock-query", "--lock", "dummy"}, []bool{false}},
 		{[]string{"probe-provider", "--provider", "strata", "--base-url", "https://strata.test/v1"}, []bool{false}},

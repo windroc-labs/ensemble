@@ -802,14 +802,14 @@ def broker(args):
                 sys.stderr,
             )
             return 11
-    if args == ["status", "--cleanup"]:
+    if args == ["status"]:
         default = {"state": "installation_invalid", "version": ""}
         default["repair"] = (
             "sudo /usr/local/libexec/ensemble/ensemble-broker install-codex <version>"
         )
         claude = (FAKES / "keychain/ensemble-broker-claude").exists()
         claude = claude and not (FAKES / "src/broker/claude_unusable").exists()
-        response = {"revocations": [], "codex": state or default, "claude": {"default": claude}}
+        response = {"codex": state or default, "claude": {"default": claude}}
         warning = FAKES / "src/broker/audit_warning.json"
         if warning.exists():
             response["audit_warning"] = load(warning, None)

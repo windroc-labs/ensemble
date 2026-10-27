@@ -2263,7 +2263,7 @@ class InstallTest(Case):
             self.assertIn("the operation result still applies", result.stderr)
             self.assertNotIn("AUDIT_SECRET_SENTINEL", result.stdout + result.stderr + result.tty)
             calls = self.calls()
-            self.assertIn("ensemble-broker status --cleanup", calls)
+            self.assertIn("ensemble-broker status", calls)
             self.assertNotIn("ensemble-broker login claude", calls)
             self.assertNotIn("ensemble-broker login codex", calls)
 
@@ -2410,7 +2410,7 @@ class InstallTest(Case):
         calls = self.calls()
         self.assertEqual(calls.count("ensemble-broker retrust"), 1)
         self.assertLess(
-            calls.index("ensemble-broker retrust"), calls.index("ensemble-broker status --cleanup")
+            calls.index("ensemble-broker retrust"), calls.index("ensemble-broker status")
         )
         self.assertLess(
             calls.index("ensemble-broker retrust"), calls.index("ensemble-broker login claude")

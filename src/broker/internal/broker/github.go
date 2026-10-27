@@ -217,19 +217,6 @@ func (g GitHub) Release(ctx context.Context, container string) error {
 	return tokensError(container, g.lifecycle().Release(ctx, credential.Consumer{Container: container}))
 }
 
-// Pending projects a single Keychain snapshot without locking, mutation, remote requests or audit.
-func (g GitHub) Pending() ([]protocol.Pending, error) {
-	pending, err := g.lifecycle().Pending()
-	return pending, tokensError("", err)
-}
-
-// Retry revokes the backlog: expired entries are dropped unrevoked, and the first request that gets no answer
-// stops the run, keeping the rest for next time.
-func (g GitHub) Retry(ctx context.Context) ([]protocol.Pending, error) {
-	pending, err := g.lifecycle().Retry(ctx)
-	return pending, tokensError("", err)
-}
-
 // githubProvider is GitHub's side of the lifecycle: installations, the App JWT and the token API.
 type githubProvider struct{ g GitHub }
 

@@ -415,14 +415,6 @@ def own_containers(names: set[str], name: str) -> list[str]:
     )
 
 
-def pending_except(status: dict, removed: str | None) -> list[str]:
-    return [
-        f"pending revocation for {e.get('container')} ({e.get('account')})"
-        for e in status.get("revocations") or []
-        if e.get("container") != removed
-    ]
-
-
 @dataclass(frozen=True)
 class Args:
     command: str
@@ -532,10 +524,6 @@ def containers(docker: str, *, running: bool = False, label: str = "") -> set[st
     listed = () if running else ("--all",)
     labelled = ("--filter", f"label={LABEL}={label}") if label else ()
     return set(call([docker, "ps", *listed, *labelled, "--format", "{{.Names}}"])[0].split())
-
-
-def broker_status() -> dict:
-    return json.loads(call([BROKER, "status"])[0])
 
 
 def drained(events: tuple[str, ...], after: str) -> str:
@@ -839,7 +827,6 @@ def worker(args: Args) -> int:
     except BaseException:
         w.cleanup()
         raise
-    passed(pending_except(broker_status(), removed), "no pending revocation but the removed one")
     lines = audit_lines(read_text(AUDIT))
     if removed:
         print(removed_tokens(lines, removed.rsplit("-", 1)[1]), flush=True)

@@ -13,9 +13,10 @@ class DockerBrokerProtocol(Case):
         schema = json.loads((PROTOCOL / "protocol.schema.json").read_text())
         validator = Draft202012Validator({**schema, "$ref": "#/$defs/status_output"})
         for ready in (True, False):
-            self.assertTrue(validator.is_valid({"revocations": [], "claude": {"default": ready}}))
+            self.assertTrue(validator.is_valid({"claude": {"default": ready}}))
         for value in ({}, {"default": "token"}, {"default": True, "token": "secret"}):
-            self.assertFalse(validator.is_valid({"revocations": [], "claude": value}))
+            self.assertFalse(validator.is_valid({"claude": value}))
+        self.assertFalse(validator.is_valid({"revocations": []}))
 
     def test_plugin_sources_require_full_commits(self):
         schema = json.loads((PROTOCOL / "protocol.schema.json").read_text())
@@ -81,7 +82,7 @@ class DockerBrokerProtocol(Case):
         Draft202012Validator.check_schema(schema)
         index = json.loads((PROTOCOL / "fixtures/index.json").read_text())
         self.assertTrue(index["cases"])
-        self.assertEqual(index["protocol_version"], "30")
+        self.assertEqual(index["protocol_version"], "32")
         self.assertEqual(
             index["protocol_version"],
             schema["$defs"]["version_output"]["properties"]["protocol_version"]["const"],

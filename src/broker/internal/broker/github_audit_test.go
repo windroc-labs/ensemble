@@ -11,8 +11,6 @@ import (
 	"ensemble/broker/internal/audit"
 )
 
-const ctr2 = "ensemble-worker_2-fedcba9876543210fedcba9876543210"
-
 type lines struct{ got [][]byte }
 
 func (l *lines) Append(data ...[]byte) error { l.got = append(l.got, data...); return nil }
@@ -215,37 +213,6 @@ func TestDiscardRecordsQueuedTokens(t *testing.T) {
 	}
 }
 
-func TestRetryAudit(t *testing.T) {
-	r := newRig(t)
-	list := []pending{
-		{Container: ctr2, Account: "a", Token: "ghs_expired", ExpiresAt: "2026-10-17T11:59:59Z"},
-		{Container: ctr2, Account: "b", Token: "ghs_live", ExpiresAt: "2026-10-17T12:30:00Z"},
-		{Container: ctr2, Account: "c", Token: "ghs_refused", ExpiresAt: "2026-10-17T12:30:00Z"},
-	}
-	data, _ := json.Marshal(list)
-	r.keys.items[revocationsService+"/"+revocationsAccount] = data
-	r.api.revokeErr = func(token string) int {
-		if token == "ghs_refused" {
-			return 500
-		}
-		return 0
-	}
-	rec, sink := r.audited("status", "")
-	if _, err := r.g.Retry(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	got := flush(t, rec, sink)
-	if len(got) != 1 || got[0].Event != "revocation-retry" || got[0].Container != ctr2 || got[0].Session != "worker_2" {
-		t.Fatalf("%+v", got)
-	}
-	if !slices.Equal(resultsOf(got[0]), []string{audit.ExpiredUnrevoked, audit.Revoked}) {
-		t.Fatalf("a still-pending entry adds nothing: %v", resultsOf(got[0]))
-	}
-	if c := got[0].Credentials[1]; c.Account != "b" || c.ExpiresAt != "2026-10-17T12:30:00Z" || c.Kind != audit.GitHubToken {
-		t.Fatalf("%+v", c)
-	}
-}
-
 func TestListingFollowsTheRecord(t *testing.T) {
 	r := newRig(t, "acme", "other")
 	var unrecorded []string
@@ -275,19 +242,5 @@ func TestUnrecordedTokenAudit(t *testing.T) {
 	got := flush(t, rec, sink)[0]
 	if !slices.Equal(resultsOf(got), []string{audit.Issued, audit.Revoked}) || got.Credentials[0].ReposError != "not listed: the token could not be recorded" {
 		t.Fatalf("%+v", got)
-	}
-}
-
-func TestRetryAuditNotesAfterRemoval(t *testing.T) {
-	r := newRig(t)
-	data, _ := json.Marshal([]pending{{Container: ctr2, Account: "b", Token: "ghs_live", ExpiresAt: "2026-10-17T12:30:00Z"}})
-	r.keys.items[revocationsService+"/"+revocationsAccount] = data
-	r.lockFails(1)
-	rec, sink := r.audited("status", "")
-	if _, err := r.g.Retry(context.Background()); err == nil {
-		t.Fatal("removal under a failing lock succeeded")
-	}
-	if got := flush(t, rec, sink); len(got) != 0 {
-		t.Fatalf("an entry the backlog still holds is noted: %+v", got)
 	}
 }

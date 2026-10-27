@@ -137,9 +137,6 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	if err := h.checkStatic(staticRefs(m)); err != nil {
 		return StartResult{}, err
 	}
-	if _, err := h.GitHub.Retry(ctx); err != nil {
-		times.WriteString("ensemble-broker: start revocations skipped\n")
-	}
 	lap("preflight")
 	info, err := h.checkImage(ctx, m.Image)
 	if err != nil {

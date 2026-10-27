@@ -1,5 +1,5 @@
 {
-  "protocol_version": "30",
+  "protocol_version": "32",
   "cases": [
     {
       "file": "manifest-valid.json",
@@ -1471,16 +1471,6 @@
       }
     },
     {
-      "file": "status-output-token.json",
-      "definition": "status_output",
-      "valid": false,
-      "expected": {
-        "stage": "response",
-        "exit_code": null,
-        "error_code": null
-      }
-    },
-    {
       "file": "error-github_failed.json",
       "definition": "error",
       "valid": true,
@@ -1498,16 +1488,6 @@
         "stage": "response",
         "exit_code": 17,
         "error_code": "egress_unavailable"
-      }
-    },
-    {
-      "file": "error-close-keychain_failed.json",
-      "definition": "error",
-      "valid": true,
-      "expected": {
-        "stage": "response",
-        "exit_code": 11,
-        "error_code": "keychain_failed"
       }
     },
     {
@@ -2415,16 +2395,6 @@
       "file": "error-nonbusy-holder.json",
       "definition": "error",
       "valid": false,
-      "expected": {
-        "stage": "schema",
-        "exit_code": 0,
-        "error_code": null
-      }
-    },
-    {
-      "file": "status-input-cleanup.json",
-      "definition": "status_input",
-      "valid": true,
       "expected": {
         "stage": "schema",
         "exit_code": 0,

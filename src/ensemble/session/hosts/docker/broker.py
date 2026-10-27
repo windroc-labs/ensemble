@@ -20,7 +20,7 @@ from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.utils import save
 
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
-PROTOCOL = "30"
+PROTOCOL = "32"
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
 INSTALL = "install or upgrade it: see docs/architecture.md#docker-install"
 TIMEOUT = 1800

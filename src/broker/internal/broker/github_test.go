@@ -801,47 +801,10 @@ func TestRevokeOffline(t *testing.T) {
 	}
 }
 
-func TestRetryRevocations(t *testing.T) {
-	r := newRig(t)
-	list := []pending{
-		{Container: "c1", Account: "a", Token: "ghs_expired", ExpiresAt: "2026-10-17T11:59:59Z"},
-		{Container: "c1", Account: "b", Token: "ghs_live", ExpiresAt: "2026-10-17T12:30:00Z"},
-		{Container: "c2", Account: "c", Token: "ghs_down", ExpiresAt: "2026-10-17T12:30:00Z"},
-		{Container: "c2", Account: "d", Token: "ghs_after", ExpiresAt: "2026-10-17T12:30:00Z"},
-	}
-	data, _ := json.Marshal(list)
-	r.keys.items[revocationsService+"/"+revocationsAccount] = data
-	var calls []string
-	r.g.API.HTTP = &http.Client{Transport: roundTrip(func(req *http.Request) (*http.Response, error) {
-		token := strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
-		calls = append(calls, token)
-		if token == "ghs_down" {
-			return nil, errors.New("dial tcp: timeout")
-		}
-		return &http.Response{StatusCode: 204, Body: http.NoBody}, nil
-	})}
-	got, err := r.g.Retry(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Equal(calls, []string{"ghs_live", "ghs_down"}) {
-		t.Fatalf("calls %v: expired skipped, stop at the first transport error", calls)
-	}
-	want := []protocol.Pending{{Container: "c2", Account: "c", ExpiresAt: "2026-10-17T12:30:00Z"}, {Container: "c2", Account: "d", ExpiresAt: "2026-10-17T12:30:00Z"}}
-	if !slices.Equal(got, want) {
-		t.Fatalf("pending %v", got)
-	}
-	if b := r.backlog(t); len(b) != 2 {
-		t.Fatalf("backlog %v", b)
-	}
-}
-
 func TestUnreadableBacklog(t *testing.T) {
 	r := newRig(t, "acme")
 	issued(t, r)
 	r.keys.unreadable[revocationsService] = true
-	_, err := r.g.Retry(context.Background())
-	wantCode(t, err, protocol.KeychainFailed)
 	if err := r.g.Release(context.Background(), ctr); err != nil {
 		t.Fatalf("readable record revoked directly: %v", err)
 	}

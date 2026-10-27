@@ -2210,7 +2210,7 @@ store_app_key() {
 
 # Claude's default credential or pinned Codex: install, update, login, ready or busy.
 broker_need() {
-  "$broker" status --cleanup </dev/null | python3 -I -c '
+  "$broker" status </dev/null | python3 -I -c '
 import json, sys
 data = json.load(sys.stdin)
 if "audit_warning" in data:

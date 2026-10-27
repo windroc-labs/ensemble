@@ -103,10 +103,6 @@ func TestGitHubContractReconstruction(t *testing.T) {
 		if _, ok := r.record(t); ok || !slices.Equal(r.queued(t), []string{"ghs_1_1"}) {
 			t.Fatalf("release did not transfer to the backlog: %v", r.queued(t))
 		}
-		r.api.revokeErr = nil
-		if left, err := r.rebuilt().Retry(ctx); err != nil || len(left) != 0 || !slices.Equal(r.api.revoked, []string{"ghs_1_1"}) {
-			t.Fatalf("rebuilt retry: %v %v %q", left, err, r.api.revoked)
-		}
 	})
 	t.Run("start rollback", func(t *testing.T) {
 		r := newRig(t, "acme", "Other-Org")
@@ -208,12 +204,8 @@ func TestGitHubSentinelRedacted(t *testing.T) {
 	for _, service := range []string{tokensService, revocationsService} {
 		g := r.rebuilt()
 		g.Keychain = sentinelKeychain{r.keys, service}
-		var errs []error
-		_, err := g.Pending()
-		errs = append(errs, err, g.Release(ctx, ctr))
-		_, err = g.Refresh(ctx, "ensemble-bot", perms, ctr, (&written{}).exec)
-		errs = append(errs, err)
-		_, err = g.Retry(ctx)
+		errs := []error{g.Release(ctx, ctr)}
+		_, err := g.Refresh(ctx, "ensemble-bot", perms, ctr, (&written{}).exec)
 		errs = append(errs, err)
 		for _, err := range errs {
 			if err != nil && strings.Contains(err.Error(), "KEYCHAIN_SENTINEL") {
@@ -221,8 +213,8 @@ func TestGitHubSentinelRedacted(t *testing.T) {
 			}
 		}
 		var e *protocol.Error
-		if !errors.As(errs[2], &e) || e.Code != protocol.KeychainFailed && e.Code != protocol.RefreshFailed {
-			t.Fatalf("%s refresh: %v", service, errs[2])
+		if !errors.As(errs[1], &e) || e.Code != protocol.KeychainFailed && e.Code != protocol.RefreshFailed {
+			t.Fatalf("%s refresh: %v", service, errs[1])
 		}
 	}
 	for _, l := range flush(t, rec, sink) {

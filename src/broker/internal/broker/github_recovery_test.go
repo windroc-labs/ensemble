@@ -243,20 +243,6 @@ func TestDiscardExpiryConfirmation(t *testing.T) {
 	}
 }
 
-func TestRetryInvalidExpiryStaysTracked(t *testing.T) {
-	store, remote := recoverySeed(t)
-	b, err := json.Marshal([]pending{{Container: ctr, Account: "acme", Token: "ghs_recovery", ExpiresAt: "invalid"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	store.items[revocationsService+"/"+revocationsAccount] = b
-	remote.fail = func(string) bool { return true }
-	got, err := recoveryLifecycle(t, store, remote).Retry(context.Background())
-	if err != nil || len(got) != 1 || len(remote.calls) != 1 {
-		t.Fatalf("invalid expiry must remain pending after failed revoke: pending=%d calls=%d err=%v", len(got), len(remote.calls), err)
-	}
-}
-
 func TestIssueRollbackWithUnreadableRecord(t *testing.T) {
 	for _, revokeFails := range []bool{false, true} {
 		t.Run(fmt.Sprint(revokeFails), func(t *testing.T) {
