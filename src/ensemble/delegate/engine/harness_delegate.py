@@ -769,7 +769,7 @@ class HarnessDelegate(Delegate):
             raise Unanswered(unchecked)
 
     def _stop_owned(self, state: DelegateState) -> None:
-        """FR-34: an active attempt ends once as a stop."""
+        """A close of an owned tui run ends its active attempt once, as a stop, with one Finished."""
         p = state.plan
         if p.spec.mode != Mode.TUI or not p.session.handlers:
             return

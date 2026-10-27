@@ -334,7 +334,7 @@ def _url(ctx, url):
 
 
 def _scope(attempt: int) -> str:
-    """Attempt 1 keeps existing ledgers' unscoped names."""
+    """Outcome steps' prefix, none at attempt 1; no-outcome failures': NO_OUTCOME{n}:."""
     return "" if attempt == 1 else f"attempt:{attempt}:"
 
 
@@ -529,25 +529,28 @@ def _limited(ctx, attempt, resets_at, *, move=True) -> bool:
     """A usage limit: its comment once per sid and guarded move to In Review per attempt."""
     at = local_time(resets_at)
     step = f"limit-move:{attempt}"
-    moved = step in _done(ctx) or (
+    if step in _done(ctx):
+        return True
+    if (
         _post(
             ctx,
             "limit",
             say(LIMIT, f"resets at {at}." if at else "reset time unknown.")
             + ctx.tracker.notify(ctx.issue_id, ctx.humans),
         )
-        is None
-        and (
-            not move
-            or _step(
-                ctx,
-                step,
-                lambda: _guarded_move(ctx, ctx.issue_id, ctx.ident, "in_review", "in_progress"),
-            )
-            is None
+        is not None
+    ):
+        return False
+    moved_ok = (
+        not move
+        or _step(
+            ctx,
+            step,
+            lambda: _guarded_move(ctx, ctx.issue_id, ctx.ident, "in_review", "in_progress"),
         )
+        is None
     )
-    return moved
+    return moved_ok
 
 
 def _claim(cfg, issue, sid) -> Claim:
@@ -638,8 +641,7 @@ def _deliver(ctx, cfg, claim, event, *, now) -> bool:
         return _running(ctx, attempt) and progress(
             ctx, Progress(event.name or "", event.text or "")
         )
-    # Finished: the outcome (once ledgered, never again), the limit, then the session's end; a
-    # later attempt owns the issue's state
+    # Finished: outcome (once), limit, session end; stale: no move
     outcome, move = event.outcome, not _stale(ctx, attempt)
     if (
         outcome is None
@@ -667,6 +669,7 @@ def _deliver(ctx, cfg, claim, event, *, now) -> bool:
 
 
 def _stale(ctx, attempt) -> bool:
+    """A later attempt is ledgered."""
     return any(int(n) > attempt for n in _ledger(ctx).get(ctx.sid, {}).get("attempts", {}))
 
 
