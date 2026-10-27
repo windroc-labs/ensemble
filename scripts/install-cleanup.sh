@@ -211,8 +211,8 @@ usage: install-cleanup.sh [--yes] [--password-stdin]
 
 Internal, for test machines only: removes what install.sh recorded in ~/.ensemble/install/added,
 so the machine is as before install.sh ran; a parent other tools also write (~/.config, ~/.codex,
-~/.docker, ~/Library/LaunchAgents) goes only when nothing else is left in it. Lists it and asks first;
---yes skips the question (automation only). An app or group container to remove (~/Library/Containers/<app>, ~/Library/Group
+~/.docker, ~/Library/LaunchAgents) goes only when nothing else is left in it. Removing Docker Desktop
+also drops its credsStore and currentContext from ~/.docker/config.json. Lists it and asks first; --yes skips the question (automation only). An app or group container to remove (~/Library/Containers/<app>, ~/Library/Group
 Containers/<group>) needs the terminal's Full Disk Access: without it the cleanup lists what it would
 remove and stops before removing anything. Run by hand:
   curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install-cleanup.sh | bash
@@ -310,6 +310,9 @@ show() {
   done
   if [ -n "$(of_kind 'docker-(container|image)')" ]; then
     printf '  keeps worker images (ensemble-worker) and ensemble-ws-* volumes\n' >&3
+  fi
+  if grep -qxF "cask"$'\t'"docker-desktop" "$ledger"; then
+    printf "  edits ~/.docker/config.json: drops Docker Desktop's credsStore and currentContext\n" >&3
   fi
 }
 
@@ -815,6 +818,65 @@ docker_processes() {
   if left=$(pgrep -f "$pattern" </dev/null); then die "Docker Desktop processes still running: ${left//$'\n'/ }"; fi
 }
 
+# Once Docker Desktop is gone: drops what in ~/.docker/config.json names it (its desktop credential helper as
+# credsStore or in credHelpers, its desktop-linux context), keeping the rest, and its CLI plugin links into Docker.app.
+docker_config() {
+  local config=$HOME/.docker/config.json link
+  if [ -f "$config" ]; then
+    python3 -I -c '
+import json, os, sys, tempfile
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+except ValueError:
+    data = None
+except OSError as err:
+    sys.exit("cannot read %s: %s" % (path, err.strerror))
+if not isinstance(data, dict):
+    print("    kept %s: not a JSON object; check its credsStore" % path, file=sys.stderr)
+    sys.exit()
+dropped = []
+if data.get("credsStore") == "desktop":
+    del data["credsStore"]
+    dropped.append("credsStore")
+helpers = data.get("credHelpers")
+if isinstance(helpers, dict) and "desktop" in helpers.values():
+    for host in [host for host, helper in helpers.items() if helper == "desktop"]:
+        del helpers[host]
+        dropped.append("credHelpers " + host)
+    if not helpers:
+        del data["credHelpers"]
+if data.get("currentContext") == "desktop-linux":
+    del data["currentContext"]
+    dropped.append("currentContext")
+if not dropped:
+    sys.exit()
+real = os.path.realpath(path)
+try:
+    mode = os.stat(real).st_mode & 0o7777
+    fd, temp = tempfile.mkstemp(dir=os.path.dirname(real), prefix=".config.json.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(data, indent="\t", ensure_ascii=False))
+        os.chmod(temp, mode)
+        os.replace(temp, real)
+    except BaseException:
+        os.unlink(temp)
+        raise
+except OSError as err:
+    sys.exit("cannot write %s: %s" % (real, err.strerror))
+print("    dropped Docker Desktop\x27s %s from %s" % (", ".join(dropped), path), file=sys.stderr)' "$config" \
+      || die "cannot edit $config; its record stays for a rerun"
+  fi
+  for link in "$HOME/.docker/cli-plugins/"*; do
+    [ -L "$link" ] || continue
+    case $(readlink "$link") in
+      "$root/Applications/Docker.app/"*) rm -f "$link" || die "cannot remove $link; its record stays for a rerun" ;;
+    esac
+  done
+}
+
 brew_packages() {
   local kind name reason
   step "Homebrew packages"
@@ -833,7 +895,10 @@ brew_packages() {
         fi
       fi
       if brew list --cask "$name" </dev/null >/dev/null 2>&1; then brew uninstall --cask "$name" </dev/null >&2; fi
-      if [ "$name" = docker-desktop ]; then docker_processes; fi
+      if [ "$name" = docker-desktop ]; then
+        docker_processes
+        docker_config
+      fi
     elif brew list --formula "$name" </dev/null >/dev/null 2>&1; then
       if ! reason=$(brew uninstall "$name" </dev/null 2>&1); then
         case $reason in
@@ -879,6 +944,7 @@ board_dirs() {
 shared_dir() {
   case $1 in
     "$HOME/.config" | "$HOME/.codex" | "${CODEX_HOME:-$HOME/.codex}" | "$HOME/.docker" | "$HOME/Library/LaunchAgents") ;;
+    "$HOME/.docker/contexts" | "$HOME/.docker/contexts/meta" | "$HOME/.docker/cli-plugins") ;;
     *) return 1 ;;
   esac
 }
