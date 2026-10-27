@@ -1,9 +1,12 @@
 """harnesses.end closes a test HOME's session harnesses and returns only once each has let go."""
 
+import json
 import os
+import signal
 import threading
 import time
 import uuid
+from unittest import mock
 
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.types import Op
@@ -39,6 +42,11 @@ class FakeHarness(threading.Thread):
 
 
 class EndTest(Case):
+    def setUp(self):
+        super().setUp()
+        self.ending: dict[int, tuple[FakeHarness, tuple[signal.Signals, ...]]] = {}
+        self.signals: list[tuple[int, signal.Signals]] = []
+
     def harness(self, **kwargs) -> FakeHarness:
         harness = FakeHarness(self.home, **kwargs)
         harness.start()
@@ -74,3 +82,75 @@ class EndTest(Case):
             harnesses.end(self.home, wait=0.5)
         self.assertIn(harness.channel.directory, str(caught.exception))
         self.assertTrue(harness.channel.alive())
+
+    def stuck(self, pid, *, ends_on=(signal.SIGTERM,)) -> FakeHarness:
+        """A harness that answers nothing, naming `pid`; patched os.kill ends it on `ends_on`."""
+        harness = self.harness(answers=False)
+        with open(harness.channel.status_file, "w", encoding="utf-8") as f:
+            json.dump({"state": "running", "pid": pid}, f)
+        self.ending[pid] = (harness, ends_on)
+        return harness
+
+    def kill(self, pid, sig):
+        self.signals.append((pid, sig))
+        if pid not in self.ending:
+            raise OverflowError("signed integer is greater than maximum")
+        harness, ends_on = self.ending[pid]
+        if sig in ends_on:
+            harness.halt.set()
+
+    def end(self, **kwargs) -> AssertionError:
+        with (
+            mock.patch("os.kill", side_effect=self.kill),
+            self.assertRaises(AssertionError) as caught,
+        ):
+            harnesses.end(self.home, **kwargs)
+        return caught.exception
+
+    def test_a_stuck_harness_is_terminated_and_still_fails(self):
+        harness = self.stuck(4242)
+        failed = self.end(wait=0.3)
+        self.assertIn(harness.channel.directory, str(failed))
+        self.assertEqual(self.signals, [(4242, signal.SIGTERM)])
+        self.assertFalse(harness.channel.alive())
+
+    def test_a_harness_ignoring_sigterm_is_killed_and_still_fails(self):
+        harness = self.stuck(4242, ends_on=(signal.SIGKILL,))
+        with mock.patch.object(harnesses, "KILL_WAIT", 0.3):
+            failed = self.end(wait=0.3)
+        self.assertIn(harness.channel.directory, str(failed))
+        self.assertEqual(self.signals, [(4242, signal.SIGTERM), (4242, signal.SIGKILL)])
+        self.assertFalse(harness.channel.alive())
+
+    def test_an_unsignallable_pid_is_named_and_never_signalled(self):
+        for pid in (True, 0, -1, 1, os.getpid(), None, "7"):
+            with self.subTest(pid=pid):
+                harness = self.harness(answers=False)
+                with open(harness.channel.status_file, "w", encoding="utf-8") as f:
+                    json.dump({"state": "running", "pid": pid}, f)
+                with (
+                    mock.patch("os.kill") as kill,
+                    self.assertRaises(AssertionError) as caught,
+                ):
+                    harnesses.end(self.home, wait=0.2)
+                self.assertIn(harness.channel.directory, str(caught.exception))
+                kill.assert_not_called()
+                harness.halt.set()
+                harness.join(5)
+
+    def test_a_pid_os_kill_refuses_is_named_and_the_rest_still_signalled(self):
+        refused = self.harness(answers=False)
+        with open(refused.channel.status_file, "w", encoding="utf-8") as f:
+            json.dump({"state": "running", "pid": 2**40}, f)
+        harness = self.stuck(4242)
+        failed = self.end(wait=0.3)
+        self.assertIn(refused.channel.directory, str(failed))
+        self.assertIn(harness.channel.directory, str(failed))
+        self.assertIn((4242, signal.SIGTERM), self.signals)
+        self.assertFalse(harness.channel.alive())
+
+    def test_a_harness_that_let_go_is_not_named_with_no_time_left(self):
+        harness = self.harness()
+        harness.halt.set()
+        harness.join(5)
+        self.assertTrue(harnesses._let_go(harness.channel, 0.0))
