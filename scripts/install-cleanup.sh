@@ -153,6 +153,7 @@ EOF
   unset password
   export SUDO_ASKPASS=$askpass_dir/askpass
   (
+    nap=
     trap 'kill "$nap" 2>/dev/null; exit 0' TERM
     while kill -0 $$ 2>/dev/null; do
       sudo -n -v || true
