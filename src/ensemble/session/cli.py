@@ -42,10 +42,12 @@ from ensemble.session.engine.types import (
     Hosts,
     KeyPress,
     NotShowable,
+    OwnerRefused,
     SessionBusy,
     SessionError,
     SessionInfo,
     SessionRow,
+    Unanswered,
 )
 from ensemble.session.engine.worker import Worker
 from ensemble.session.hosts.base import Host, check_sid
@@ -599,12 +601,26 @@ def _attach_command(name: str, record: Record | None, hosts: Hosts) -> str:
     return hosted_viewer().attach_command(session, _shown(session, hosts))
 
 
+def _owned(session: str, sid: str | None) -> bool:
+    """Its session.json names a session harness, and `sid` when given."""
+    try:
+        state = TuiMode.snapshot(session)
+    except SessionError:
+        return False
+    return state.get("owner") is not None and sid in (None, state.get("sid"))
+
+
 def _close(name: str, record: Record | None, hosts: Hosts) -> None:
-    for session in _carried(name, record, hosts, stale_ok=True):
+    """An owner's refusal or unconfirmed end always fails; a Record stale on its Host is done unless
+    an owner of its sid still answers for it.
+    """
+    sid = None if record is None else record.sid
+    carried = _carried(name, record, hosts, stale_ok=True)
+    for session in carried or [s for s in _sessions(name, record) if _owned(s, sid)]:
         try:
-            Session.retire(
-                session, sid=None if record is None else record.sid, host=_host_of(session, hosts)
-            )
+            Session.retire(session, sid=sid, host=_host_of(session, hosts))
+        except (Unanswered, OwnerRefused):
+            raise
         except SessionError:
             if record is None or _carried(name, record, hosts, stale_ok=True):
                 raise

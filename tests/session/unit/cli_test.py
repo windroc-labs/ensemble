@@ -11,7 +11,14 @@ from unittest import mock
 from ensemble.session import EnvironmentSpec, SessionBusy, cli
 from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.tmux_cli import attach_command
-from ensemble.session.engine.types import ConfigError, Hosts
+from ensemble.session.engine.types import (
+    ConfigError,
+    Hosts,
+    OwnerRefused,
+    SessionError,
+    Unanswered,
+)
+from ensemble.session.harness.channel import Channel
 from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.session.viewer import display as displays
 from ensemble.utils import ACCOUNT_ENV, Record
@@ -256,6 +263,63 @@ class RecordControl(HostedTuiBase):
         self.assertIsNone(process.record())
         self.assertEqual(self.invoke("close", record=self.record)[:2], (0, ""))
         self.assertNotIn("w1", self.host.processes)
+
+    def owned(self, *, sid=SID):
+        """Tui session w1 of `sid` whose session.json names a session harness, its terminal gone."""
+        self.tui(name="w1", sid=sid)
+        path = Path(self.root, "w1", "session.json")
+        state = json.loads(path.read_text())
+        path.write_text(json.dumps({**state, "owner": Channel.create().directory}))
+        self.host.processes.pop("w1")
+
+    def test_a_stale_record_still_asks_the_owner_its_session_json_names(self):
+        self.owned()
+        for error in (Unanswered("w1: worker exit not confirmed"), OwnerRefused("cannot close w1")):
+            with (
+                self.subTest(error=type(error).__name__),
+                mock.patch.object(cli.Session, "retire", side_effect=error) as retire,
+            ):
+                code, out, err = self.invoke("close", record=self.record)
+                self.assertEqual((code, out), (1, ""))
+                self.assertIn(str(error), err)
+                retire.assert_called_once_with("w1", sid=SID, host="tmux")
+        with mock.patch.object(cli.Session, "retire") as retire:
+            self.assertEqual(self.invoke("close", record=self.record)[:2], (0, ""))
+        retire.assert_called_once_with("w1", sid=SID, host="tmux")
+
+    def test_a_stale_record_skips_an_owner_of_another_sid_or_none(self):
+        for sid in ("replacement", None):
+            with self.subTest(sid=sid):
+                if sid is None:
+                    self.tui(name="w1", sid=SID)
+                    self.host.processes.pop("w1")
+                else:
+                    self.owned(sid=sid)
+                with mock.patch.object(cli.Session, "retire") as retire:
+                    self.assertEqual(self.invoke("close", record=self.record)[:2], (0, ""))
+                retire.assert_not_called()
+
+    def test_an_owner_refusal_is_a_failed_close_even_when_the_record_then_looks_stale(self):
+        self.host.create("w1", sid=SID)
+
+        def refuse(name, **_):
+            self.host.processes.pop(name)
+            raise OwnerRefused("cannot close w1")
+
+        with mock.patch.object(cli.Session, "retire", side_effect=refuse):
+            code, out, err = self.invoke("close", record=self.record)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("cannot close w1", err)
+
+    def test_a_plain_error_with_a_record_that_then_looks_stale_is_still_done(self):
+        self.host.create("w1", sid=SID)
+
+        def fail(name, **_):
+            self.host.processes.pop(name)
+            raise SessionError("w1: gone meanwhile")
+
+        with mock.patch.object(cli.Session, "retire", side_effect=fail):
+            self.assertEqual(self.invoke("close", record=self.record)[:2], (0, ""))
 
     def test_all_record_sessions_are_checked_before_effects(self):
         first = self.host.create("w1", sid=SID)
