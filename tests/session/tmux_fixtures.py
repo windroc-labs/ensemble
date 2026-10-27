@@ -526,8 +526,8 @@ class StartFixture(Case):
         os.chmod(self.tool, 0o755)
         for p in (
             unittest.mock.patch.object(tempfile, "tempdir", self.temp),
-            unittest.mock.patch(
-                "shutil.get_terminal_size", return_value=os.terminal_size((120, 40))
+            unittest.mock.patch(  # the session's size is not the caller's terminal's
+                "shutil.get_terminal_size", return_value=os.terminal_size((33, 19))
             ),
             unittest.mock.patch.dict(os.environ),
         ):

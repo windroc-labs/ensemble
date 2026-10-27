@@ -111,6 +111,8 @@ DEAD_EVENT = (
 
 BORDER = " #{session_name} #{@state} "
 
+READABLE = ("-x", "120", "-y", "40")
+
 
 TERMINAL_KEYS = (
     "TMUX",
@@ -421,6 +423,13 @@ class TmuxCli:
         else:
             self.checked(["kill-session", "-t", address(target, "")])
 
+    def unview(self, session: str) -> None:
+        target = address(session)
+        self.checked(
+            ["resize-window", "-t", target, *READABLE, ";"]
+            + ["set-option", "-w", "-u", "-t", target, "window-size"]
+        )
+
     def keys(self, target: str, *names: str) -> None:
         """Presses tmux keys (Enter, Escape, C-c); a name tmux would misread raises TuiError first."""
         target = address(target)
@@ -558,7 +567,6 @@ class TmuxCli:
             if isinstance(state, int):
                 raise TuiError(f"session {session} exists")
             pipe = _handover(path, argv, cwd, env)
-            cols, rows = shutil.get_terminal_size()
             decorations = [
                 arg
                 for args in _decorations(session, events, status_line=status_line)
@@ -575,10 +583,7 @@ class TmuxCli:
                     PROCESS,
                     "-s",
                     session,
-                    "-x",
-                    str(cols),
-                    "-y",
-                    str(rows),
+                    *READABLE,
                     *wrapper,
                     ";",
                     "set-option",

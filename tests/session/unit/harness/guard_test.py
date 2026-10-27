@@ -41,7 +41,7 @@ class GuardTest(Case):
         runtime = self.runtime(terminal=True)
         peer = mock.Mock()
         peer.send.return_value = 0
-        runtime.peers[peer] = ("display", bytearray())
+        runtime.peers[peer] = ("display", guard.Decoder())
         proc = mock.Mock(returncode=0, pid=100)
         captured = []
         with (
@@ -140,6 +140,22 @@ class GuardTest(Case):
         self.assertTrue(screen.text(None).startswith("B"))
         self.assertIn("Q", screen.text(None))
 
+    def test_screen_swallows_every_string_sequence_however_long(self):
+        """The client's own kitty-graphics query (APC) once showed as prompt text (WDRC-344)."""
+        screen = guard.Screen(rows=2, columns=40)
+        screen.append(b"> \x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\typed")
+        self.assertEqual(screen.text(None), "> typed")
+        for start, end in ((b"\x1bP", b"\x1b\\"), (b"\x1b^", b"\x1b\\"), (b"\x1bX", b"\x07")):
+            with self.subTest(start=start):
+                screen = guard.Screen(rows=2, columns=40)
+                screen.append(start + b"+q544e" + end + b"ok")
+                self.assertEqual(screen.text(None), "ok")
+        screen = guard.Screen(rows=2, columns=40)
+        for part in (b"\x1b]8;;https://example.com/", b"x" * 1000, b"\x1b", b"\\link"):
+            screen.append(part)
+        self.assertEqual(screen.text(None), "link")
+        self.assertLess(len(screen.escape), 4)
+
     def test_live_client_adopted_zombie_is_reaped_and_direct_exit_code_kept(self):
         runtime = self.runtime()
         runtime.proc = mock.Mock(pid=10, returncode=None)
@@ -169,30 +185,71 @@ class GuardTest(Case):
         ):
             self.assertFalse(runtime.tick())
 
-    def test_display_attach_copies_bytes_and_restores_terminal(self):
+    def attached(self, *, terminal, ready, sizes=()):
+        """guard.main --attach: (what it sent the guard, what it wrote out, restore, raw) with
+        stdin and the SIGWINCH pipe (30) read in ready's order.
+        """
         peer = mock.Mock()
         peer.recv.side_effect = [b"terminal output", b""]
         output = io.BytesIO()
+        reads = {0: b"typed", 30: b"\x1c"}
+        sizes = iter(sizes)
+
+        def size(fd):
+            if fd != 0:
+                raise OSError(errno.ENOTTY, "not a terminal")
+            return next(sizes)
+
         with (
             mock.patch.object(guard.socket, "socket", return_value=peer),
-            mock.patch.object(os, "isatty", return_value=True),
+            mock.patch.object(os, "isatty", return_value=terminal),
             mock.patch.object(termios, "tcgetattr", return_value=["saved"]),
             mock.patch.object(termios, "tcsetattr") as restore,
             mock.patch.object(tty, "setraw") as raw,
+            mock.patch.object(os, "pipe", return_value=(30, 31)),
+            mock.patch.object(os, "set_blocking"),
+            mock.patch.object(os, "close"),
+            mock.patch.object(signal, "signal", return_value=signal.SIG_DFL) as handlers,
+            mock.patch.object(signal, "set_wakeup_fd", return_value=-1) as wakeup,
+            mock.patch.object(os, "get_terminal_size", side_effect=size),
             mock.patch.object(
                 guard.select,
                 "select",
-                side_effect=[([0], [], []), ([peer], [], []), ([peer], [], [])],
+                side_effect=[([fd if fd != "peer" else peer], [], []) for fd in ready],
             ),
-            mock.patch.object(os, "read", return_value=b"typed"),
+            mock.patch.object(os, "read", side_effect=lambda fd, _size: reads[fd]),
             mock.patch.object(sys, "stdout", buffer=output),
         ):
             self.assertEqual(guard.main(["--attach", self.home + "/display"]), 0)
-        self.assertEqual(output.getvalue(), b"terminal output")
-        peer.sendall.assert_called_once_with(b"typed")
+        self.assertEqual(wakeup.call_args_list, [mock.call(31), mock.call(-1)])
+        self.assertEqual(handlers.call_args_list[-1], mock.call(signal.SIGWINCH, signal.SIG_DFL))
+        peer.close.assert_called_once()
+        sent = guard.Decoder().feed(b"".join(c.args[0] for c in peer.sendall.call_args_list))
+        return sent, output.getvalue(), restore, raw
+
+    def test_display_attach_sends_its_size_typing_and_each_resize(self):
+        sent, output, restore, raw = self.attached(
+            terminal=True,
+            ready=[0, 30, "peer", "peer"],
+            sizes=[os.terminal_size((33, 19)), os.terminal_size((80, 24))],
+        )
+        self.assertEqual(
+            sent,
+            [
+                (b"w", b'{"rows":19,"columns":33}'),
+                (b"i", b"typed"),
+                (b"w", b'{"rows":24,"columns":80}'),
+            ],
+        )
+        self.assertEqual(output, b"terminal output")
         raw.assert_called_once_with(0, termios.TCSANOW)  # keeps what was typed before it
         restore.assert_called_once_with(0, termios.TCSADRAIN, ["saved"])
-        peer.close.assert_called_once()
+
+    def test_display_attach_without_a_terminal_sends_no_size(self):
+        sent, output, restore, raw = self.attached(terminal=False, ready=[0, 30, "peer", "peer"])
+        self.assertEqual((sent, output), ([(b"i", b"typed")], b"terminal output"))
+        raw.assert_not_called()
+        restore.assert_not_called()
 
     def test_a_missing_display_socket_is_one_line_not_a_traceback(self):
         peer = mock.Mock()
@@ -527,19 +584,109 @@ class GuardTest(Case):
     def test_display_input_and_backpressure(self):
         runtime = self.runtime()
         peer = mock.Mock()
-        peer.recv.return_value = b"type"
-        runtime.peers[peer] = ("display", bytearray())
+        peer.recv.return_value = guard.frame(b"i", b"type")
+        runtime.peers[peer] = ("display", guard.Decoder())
         runtime.peer_read(peer)
         self.assertEqual(runtime.input, b"type")
-        peer.recv.return_value = b"x" * (guard.BUFFER_MAX + 1)
+        peer.recv.return_value = guard.frame(b"i", b"x" * guard.BUFFER_MAX)
         runtime.peer_read(peer)
         self.assertNotIn(peer, runtime.peers)
+        self.assertEqual(runtime.input, b"type")
+
+    def display(self, runtime):
+        peer = mock.Mock()
+        runtime.peers[peer] = ("display", guard.Decoder())
+        return peer
+
+    def test_the_pty_takes_the_latest_display_size_and_without_one_the_readable_one(self):
+        runtime = self.runtime(terminal=True)
+        runtime.master = 20
+        first, second = self.display(runtime), self.display(runtime)
+
+        def sized(peer, rows, columns, extra=b""):
+            peer.recv.return_value = (
+                guard.json_frame(b"w", {"rows": rows, "columns": columns}) + extra
+            )
+            runtime.peer_read(peer)
+
+        with mock.patch.object(guard.fcntl, "ioctl") as ioctl:
+            sized(first, 19, 33, guard.frame(b"i", b"typed"))
+            sized(second, 50, 200)
+            sized(first, 20, 34)  # a resize is the latest too
+            runtime.drop(first)
+            sized(second, 50, 200)  # unchanged: no redraw
+            runtime.drop(second)
+        self.assertEqual(
+            [
+                (c.args[0], c.args[1], struct.unpack("HHHH", c.args[2]))
+                for c in ioctl.call_args_list
+            ],
+            [
+                (20, termios.TIOCSWINSZ, (rows, columns, 0, 0))
+                for rows, columns in ((19, 33), (50, 200), (20, 34), (50, 200), (40, 120))
+            ],
+        )
+        self.assertEqual(runtime.input, b"typed")
+        runtime.screen.append(b"x" * 120)
+        runtime.command(b"q", b'{"lines": null}')
+        self.assertEqual(json.loads(runtime.output[-1][0][5:]), {"text": "x" * 120})
+
+    def test_a_display_closing_with_its_client_redraws_nothing(self):
+        runtime = self.runtime(terminal=True)
+        runtime.master = 20
+        peer = self.display(runtime)
+        peer.recv.return_value = guard.json_frame(b"w", {"rows": 19, "columns": 33})
+        with mock.patch.object(guard.fcntl, "ioctl") as ioctl:
+            runtime.peer_read(peer)
+            runtime.close()
+            runtime.drop(peer)
+        self.assertEqual(ioctl.call_count, 1)
+
+    def test_an_invalid_display_frame_drops_only_that_display(self):
+        for wire in (
+            b"typed by an old display",
+            guard.frame(b"z", b""),
+            guard.frame(b"w", b"not json"),
+            guard.json_frame(b"w", {"rows": 19}),
+            guard.json_frame(b"w", {"rows": 0, "columns": 33}),
+            guard.json_frame(b"w", {"rows": True, "columns": 33}),
+            guard.json_frame(b"w", {"rows": 19, "columns": 65536}),
+            guard.json_frame(b"w", {"rows": 19, "columns": 33, "x": 1}),
+            guard.frame(b"i", b"x")[:5] + b"x" * (guard.BUFFER_MAX + 1),
+        ):
+            with self.subTest(wire=wire[:30]):
+                runtime = self.runtime(terminal=True)
+                runtime.master = 20
+                peer, other = self.display(runtime), self.display(runtime)
+                peer.recv.return_value = wire
+                with mock.patch.object(guard.fcntl, "ioctl") as ioctl:
+                    runtime.peer_read(peer)
+                self.assertEqual(list(runtime.peers), [other])
+                ioctl.assert_not_called()
+                self.assertEqual(runtime.input, b"")
+
+    def test_screen_resize_keeps_lines_and_the_cursor_line(self):
+        screen = guard.Screen(rows=3, columns=10)
+        screen.append(b"one\r\ntwo\r\nthree")
+        screen.resize(2, 4)
+        self.assertEqual((screen.text(None), screen.text(3)), ("two\nthre", "one\ntwo\nthre"))
+        self.assertEqual((screen.row, screen.column), (1, 4))
+        screen.resize(4, 12)
+        screen.append(b"e!")
+        self.assertEqual(screen.text(None), "two\nthree!")
+        self.assertEqual([len(line) for line in screen.cells], [12] * 4)
+        screen = guard.Screen(rows=3, columns=10)
+        screen.append(b"main\x1b[?1049halt")
+        screen.resize(2, 6)
+        screen.append(b"\x1b[?1049l")
+        self.assertEqual(screen.text(None), "main")
+        self.assertEqual([len(line) for line in screen.cells], [6] * 2)
 
     def test_terminal_output_screen_and_slow_viewer(self):
         runtime = self.runtime()
         peer = mock.Mock()
         peer.send.return_value = 1
-        runtime.peers[peer] = ("display", bytearray())
+        runtime.peers[peer] = ("display", guard.Decoder())
         runtime.streams[8] = b"t"
         with mock.patch.object(os, "read", return_value=b"hello"):
             runtime.read_stream(8)
@@ -724,6 +871,35 @@ class GuardTest(Case):
             library.return_value.prctl.return_value = 0
             runtime.start()
         self.assertFalse(runtime.output)
+
+    def started_env(self, *, terminal, **environ):
+        """The env a started guard gave its client, under environ."""
+        runtime = self.runtime(terminal=terminal)
+        with (
+            mock.patch.dict(os.environ, environ),
+            mock.patch.object(guard.ctypes, "CDLL") as library,
+            mock.patch.object(guard.socket, "socket"),
+            mock.patch.object(os, "chmod"),
+            mock.patch.object(os, "openpty", return_value=(20, 21)),
+            mock.patch.object(guard.fcntl, "ioctl"),
+            mock.patch.object(os, "close"),
+            mock.patch.object(os, "listdir", return_value=[]),
+            mock.patch.object(os, "set_blocking"),
+            mock.patch.object(guard.subprocess, "Popen") as spawn,
+        ):
+            library.return_value.prctl.return_value = 0
+            spawn.return_value.pid = 100
+            if "TERM" not in environ:
+                os.environ.pop("TERM", None)
+            runtime.start()
+        return spawn.call_args.kwargs["env"]
+
+    def test_a_pty_client_without_term_gets_a_color_term(self):
+        """A Docker client inherits no TERM: without one it drew no color (WDRC-344)."""
+        env = self.started_env(terminal=True, KEEP="1")
+        self.assertEqual((env["TERM"], env["KEEP"]), ("xterm-256color", "1"))
+        self.assertEqual(self.started_env(terminal=True, TERM="screen")["TERM"], "screen")
+        self.assertIsNone(self.started_env(terminal=False))
 
     def test_run_places_exit_after_last_output(self):
         runtime = self.runtime()

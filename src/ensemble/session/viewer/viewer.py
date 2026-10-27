@@ -193,6 +193,10 @@ class Viewer:
                 self._placement.forget(name)
         except TuiError as e:
             raise SessionError(f"tmux session {name}: {e}") from None
+        try:
+            self._tmux.unview(name)
+        except TuiError as e:
+            LOG.warning("hide %s: readable size: %s", name, e)
         self._mark(name, host, hidden=True)
         try:
             # a show meanwhile may have written hidden=False before this mark
@@ -253,7 +257,7 @@ class Viewer:
             if self._tmux.status(name) is None:
                 self._tmux.checked(
                     [
-                        *("new-session", "-d", "-s", name, "--", *target.argv),
+                        *("new-session", "-d", "-s", name, *tmux_cli.READABLE, "--", *target.argv),
                         *(";", "set-option", "-t", f"={name}:", VIEW, VIEW_TAG),
                     ]
                 )
