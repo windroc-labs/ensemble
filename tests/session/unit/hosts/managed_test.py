@@ -356,3 +356,49 @@ class ManagedProcessTest(Case):
         ):
             with self.subTest(kind=kind), self.assertRaises(ValueError):
                 self.channel().accept(kind, payload)
+
+    def test_deeply_nested_frames_fail_closed_and_keep_draining(self):
+        nested = b'{"label":"done","payload":' + b"[" * 100000 + b"]" * 100000 + b"}"
+        for kind in (b"h", b"x"):
+            with self.subTest(kind=kind):
+                channel = self.channel()
+                channel.proc.stdout.read.side_effect = [
+                    guard.json_frame(b"s", {"pid": 1}) + guard.frame(kind, nested),
+                    b"more",
+                    b"",
+                ]
+                channel.pump()
+                self.assertEqual(channel.state(), Liveness.UNKNOWN)
+                self.assertEqual(channel.proc.stdout.read.call_count, 3)
+
+    def test_dropped_hook_queues_nothing(self):
+        class Dropping(managed.ManagedProcess):
+            def accept_hook(self, data):
+                return None
+
+        channel = Dropping("worker", "a" * 32, mock.Mock(), terminal=False, start_reader=False)
+        channel.accept(b"s", b'{"pid":1}')
+        channel.accept(
+            b"h", json.dumps({"label": "done", "payload": {}, "delivery_id": "a" * 32}).encode()
+        )
+        self.assertEqual(channel.read(0), [])
+
+    def test_on_exit_runs_once_after_exit_or_failure(self):
+        calls = []
+
+        class Told(managed.ManagedProcess):
+            def on_exit(self):
+                calls.append(self.code)
+
+        for end in ("exit", "failure"):
+            with self.subTest(end=end):
+                calls.clear()
+                channel = Told("worker", "a" * 32, mock.Mock(), terminal=False, start_reader=False)
+                channel.accept(b"s", b'{"pid":1}')
+                if end == "exit":
+                    channel.accept(b"x", b'{"returncode":3}')
+                channel.fail("broken")
+                channel.fail("again")
+                assert channel.exit_thread is not None
+                channel.exit_thread.join(5)
+                self.assertEqual(calls, [3] if end == "exit" else [None])

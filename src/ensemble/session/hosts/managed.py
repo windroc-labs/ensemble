@@ -96,6 +96,7 @@ class ManagedProcess(InteractiveProcess):
         self.view = None
         self.view_pending = False
         self.reader = None
+        self.exit_thread: threading.Thread | None = None
         if start_reader:
             self.reader = threading.Thread(target=self.pump, name=f"guard-{name}", daemon=True)
             self.reader.start()
@@ -109,6 +110,23 @@ class ManagedProcess(InteractiveProcess):
                 # Unbuffered FileIO.close never waits for a consumer or a buffered flush.
                 self.proc.stdin.close()
                 self.condition.notify_all()
+                self._ended()
+
+    def _ended(self) -> None:
+        """Under the condition: on_exit, once, on a thread of its own."""
+        if self.exit_thread is None:
+            self.exit_thread = threading.Thread(
+                target=self.on_exit, name=f"guard-{self.name}-end", daemon=True
+            )
+            self.exit_thread.start()
+
+    def on_exit(self) -> None:
+        """After the exit frame or a channel failure, once."""
+
+    def accept_hook(self, data: bytes) -> WorkerHook | None:
+        """An h frame's hook; None: dropped. Raises ValueError for the channel's failure."""
+        value = guard.hook_message(data)
+        return WorkerHook(value["label"], value["payload"], value["delivery_id"])
 
     def accept(self, kind: bytes, data: bytes) -> None:
         with self.condition:
@@ -131,8 +149,7 @@ class ManagedProcess(InteractiveProcess):
             elif kind in (b"o", b"e"):
                 message = WorkerOutput(data, "stdout" if kind == b"o" else "stderr")
             elif kind == b"h":
-                value = guard.hook_message(data)
-                message = WorkerHook(value["label"], value["payload"], value["delivery_id"])
+                message = self.accept_hook(data)
             elif kind == b"v":
                 value = json.loads(data)
                 if not isinstance(value, dict) or not isinstance(value.get("text"), str):
@@ -145,6 +162,7 @@ class ManagedProcess(InteractiveProcess):
                     raise ValueError("invalid guard exit")
                 self.code = value["returncode"]
                 message = WorkerExit(self.code)
+                self._ended()
             else:
                 raise ValueError("invalid guard frame")
             if message is not None:
@@ -164,7 +182,7 @@ class ManagedProcess(InteractiveProcess):
                 try:
                     for kind, payload in decoder.feed(data):
                         self.accept(kind, payload)
-                except (ValueError, UnicodeError, TypeError) as error:
+                except (ValueError, UnicodeError, TypeError, RecursionError) as error:
                     self.fail(str(error))
             if self.code is None or decoder.pending:
                 self.fail("guard channel ended without confirmed worker exit")
