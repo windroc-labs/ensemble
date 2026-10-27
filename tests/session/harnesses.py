@@ -1,4 +1,4 @@
-"""A test's session harnesses ended before its cleanup removes what they write (docs/tests.md)."""
+"""A test's session harnesses ended before its cleanup removes what they write."""
 
 import contextlib
 import fcntl

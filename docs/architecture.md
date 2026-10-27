@@ -8,7 +8,7 @@ The harness owns the lifecycle pipe; the guard directly parents the client and o
 tmux runs only the display attachment. Handle readers drain the framed channel continuously.
 A task attempt's ending closes no worker, a locked one's included: the run's user (a person, or a manager acting
 for one) closes it, or its client exits; an environment lock goes with its container's confirmed removal
-([Docker host › Environment config](docker-host.md#environment-config)).
+([Docker host › Environment config](#environments)).
 Reclamation limits and the migration from legacy mode launchers are in
 [Session harness interfaces](#session-harness-interfaces).
 
@@ -174,10 +174,10 @@ After installing or updating the Codex plugin, open `/hooks`, review and trust t
 
 `bin/ensemble-session --help` lists its subcommands. `ls` prints a header, then one tab-separated row per session: `name`, `state` (`working`, `done`, `blocked`, `dead`, `unknown` when its host could not tell), `client`, `sid`, `display`, with `-` for an empty value.
 
-Sessions run on `[session.hosts] default`: `tmux`, or `docker` ([Docker host](docker-host.md)).
+Sessions run on `[session.hosts] default`: `tmux`, or `docker` ([Docker host](#docker-host)).
 
 `start --account NAME` (also `ensemble-crew worker`'s) runs a Claude session on a registered Claude account
-([Docker host › Claude accounts](docker-host.md#claude-accounts)). Restart and resume keep the account; `--env
+([Docker host › Claude accounts](#claude-accounts)). Restart and resume keep the account; `--env
 ENSEMBLE_ACCOUNT=…` and a `[delegate.policy.<client>] env` naming it are refused (exit 2).
 
 `start --display none` starts a worker without a pane, still opened by the caller, and hidden. Hidden (from that, `hide`, or closing its pane by hand; not from losing the manager's window or detaching its viewer) lasts through `restart` and `resume` until `show`.
@@ -206,7 +206,7 @@ TUI sessions count while their client is alive, including `done` between turns a
 
 Admission checks all configured Hosts; an unavailable inventory fails closed. Shared TUI reservations from a Host configuration the caller does not have remain counted until a caller with the matching configuration confirms the session ended. Close the original session or retry using its original Host configuration to reconcile it. Changing an unrelated Host setting changes that configuration's identity, so close its sessions before changing its settings.
 
-The orchestrator's [role limits](board.md#run-limits) and usage gate remain separate. Direct client commands outside `Session.start`, including `client-resume`'s native client handoff, do not create ensemble sessions.
+The orchestrator's [role limits](#operating-the-board) and usage gate remain separate. Direct client commands outside `Session.start`, including `client-resume`'s native client handoff, do not create ensemble sessions.
 
 ## Session harness
 
@@ -229,7 +229,7 @@ The control view never owns the worker: for a tui session, its caller exiting, i
 
 A tui worker runs under the guard ([Guard protocol](#guard-protocol)), and only its harness holds the guard's lifecycle pipe: `kill -9` of the harness ends guard and client, and its display (a tmux worker's: the tmux session of its name) ends no worker when killed. Its `session.json`, display and dir go only with their own worker generation. Resume (`ensemble-session resume`, a crew or delegate resume) of a worker whose harness runs returns its Record and starts nothing; it first asks that harness to open its display again where it was killed (a tmux worker's tmux session, or the `guard.py --attach` in it), on the same guard and generation, and shows a reopened one unless hidden; a refusal is said on stderr, the Record still returned; after a crash it starts a new harness, guard and client on the same sid, transcript, cwd, client, account and flags, waiting up to 10 s for a reaping guard. It is refused while the old generation is unknown (busy, exit 75; a guard killed before it confirmed its client's exit) and when the client keeps no transcript of the conversation (exit 2), never starting an empty one. `ensemble-session close` of such a worker without a running harness removes its record only once its generation is gone: it waits out reaping and fails busy, the record kept, while unknown. A tmux worker's way out of a permanent unknown: once no client of it is left, remove its guard dir, `<ENSEMBLE_CONTROL_ROOT, else the temp dir>/eg-<uid>/<key>` (`hosts/tmux/managed.py` `location`).
 
-A headless worker runs under the guard too (`Host.worker(name, launch, terminal=False)`, named by `Spec.name`, else `headless-<generation>`; Docker refuses a nameless one: [Harness-owned workers](docker-host.md#harness-owned-workers)), its input ended at start (an empty `i`), so `kill -9` of its harness ends its client as well (on Docker: [Harness-owned workers](docker-host.md#harness-owned-workers)). Its output is read as lines (UTF-8, undecodable bytes replaced, universal newlines); a line over 8 MiB (`modes/headless.py` `LINE_MAX`) fails the run. A Host without a managed worker (the base `Host.worker` raises `SessionError("host <host> runs no managed worker")`) runs no headless session. On tmux its guard dir is a one-shot dir, `<ENSEMBLE_CONTROL_ROOT, else the temp dir>/eg-<uid>/o<15 hex>` keyed by host and generation (`hosts/tmux/managed.py` `one_shot`), never a tui's: a headless run named like a tui leaves that tui's dir alone, and two of one name may run at once. Its starting process holds `owner.lock` there and removes the dir at the confirmed close; after that process died (`kill -9`), the next tmux worker start removes each one-shot dir over 60 s old whose owner lock and leases are free (`sweep`).
+A headless worker runs under the guard too (`Host.worker(name, launch, terminal=False)`, named by `Spec.name`, else `headless-<generation>`; Docker refuses a nameless one: [Harness-owned workers](#harness-owned-workers)), its input ended at start (an empty `i`), so `kill -9` of its harness ends its client as well (on Docker: [Harness-owned workers](#harness-owned-workers)). Its output is read as lines (UTF-8, undecodable bytes replaced, universal newlines); a line over 8 MiB (`modes/headless.py` `LINE_MAX`) fails the run. A Host without a managed worker (the base `Host.worker` raises `SessionError("host <host> runs no managed worker")`) runs no headless session. On tmux its guard dir is a one-shot dir, `<ENSEMBLE_CONTROL_ROOT, else the temp dir>/eg-<uid>/o<15 hex>` keyed by host and generation (`hosts/tmux/managed.py` `one_shot`), never a tui's: a headless run named like a tui leaves that tui's dir alone, and two of one name may run at once. Its starting process holds `owner.lock` there and removes the dir at the confirmed close; after that process died (`kill -9`), the next tmux worker start removes each one-shot dir over 60 s old whose owner lock and leases are free (`sweep`).
 
 An `in_process` adapter runs on a thread of the harness, so it ends with the harness; its control view has no terminal (`send`, `press`, `screen`: `SessionError`; `show`, `hide`, `attach_command`: `NotShowable`) and is alive while its harness holds its lock and has not logged `Exited`.
 
@@ -237,7 +237,7 @@ Any process of the user that can write the 0700 harness dir can stop or close it
 
 ## Session harness interfaces
 
-Frozen (WDRC-199, WDRC-226): a session harness owns each worker from start to close and calls the handlers its caller registers. Every TUI and headless adapter yields `TurnStarted`. [Session harness](#session-harness) names the starts it owns. The harness launches a tui worker through `TmuxHost.worker` or `DockerHost.worker`, the managed transport below ([Harness-owned workers](docker-host.md#harness-owned-workers)), a headless one with `terminal=False`; an unowned start keeps the in-session path on the tmux Host and is refused on Docker. No other client, Host or mode reads `Spec.handlers` yet.
+Frozen (WDRC-199, WDRC-226): a session harness owns each worker from start to close and calls the handlers its caller registers. Every TUI and headless adapter yields `TurnStarted`. [Session harness](#session-harness) names the starts it owns. The harness launches a tui worker through `TmuxHost.worker` or `DockerHost.worker`, the managed transport below ([Harness-owned workers](#harness-owned-workers)), a headless one with `terminal=False`; an unowned start keeps the in-session path on the tmux Host and is refused on Docker. No other client, Host or mode reads `Spec.handlers` yet.
 
 **Handlers.** `Spec.handlers` is an ordered tuple of `HookCallback(module, state, roots)`, default `()`. The harness records each event before it calls each handler module's `on_event(EventCall)` in event order; a failure is retried with the same ids and never stops supervision. `EventCall` carries `session` (an `ensemble.session.Session` to send, stop or close through), `event`, `sid`, `generation` (the worker's start), `event_id`, `turn` (`None` outside a turn) and the handler's `state`. `on_event` returns `None`; returning or failing never closes the worker, only a close request through `session` does. Every event field (reply text, Blocked reason, TurnFailed detail) is untrusted worker output.
 
@@ -287,7 +287,7 @@ These are approved-list candidates for deletion, not optional deprecations; each
 
 Each attempt preserves `Begun`/`Progress`/one `Finished`, the existing Result/Outcome formats and Record `ctl`/`resume` control routing; subsequent attempts do not reuse the previous outcome or its completion marker. `close()` ends an active attempt once, never emits another failure for an ended attempt, and asks the session owner to close. Locks and roster entries remain until confirmed resource termination; close failures remain traceable. Delegate persisted `plan.session.handlers` lists are restored to tuples only when the key exists; old records default to `()`.
 
-Implemented (WDRC-208) for **owned runs**, the tui runs a session harness owns: the Delegate preflights the start with the handler `ensemble.delegate.engine.handler` registered as `{"workdir", "worker": n}` (`n`, the attempt whose call starts the worker); a refused preflight plans the run without it, and the run keeps the earlier caller loop (every other mode, and an unowned tui on the tmux Host: [Session harness](#session-harness); on Docker an unowned start is refused). Each attempt has one owner: the call that starts a worker owns it while opening, that worker's first handled call binds it to the handler, and the handler's `TurnStarted` after an ending opens the next attempt (`delegate.json` keeps the earlier one's Result as `previous`); calls of another sid or worker are ignored. An ending stores the Result, then writes its notes (the attempt's own and `result`/`end`) and the run's outcome line, then sends `Finished`; an ending another owner stored first writes and sends nothing. An ending closes no worker, a locked run's included: its user closes it or its client exits ([Docker host › Environment config](docker-host.md#environment-config) has the release claim). `run()` (a detached run's `-drive`) starts the worker and waits for its attempt's Result; it ends the attempt itself only while opening past `idle_timeout` (a give-up) or once its worker has been gone 35 s. A signal before it sends `Begun` (its TUI start) stores the stopped ending, then closes the worker; a signal after leaves the attempt to the handler. A stale out it cannot set aside is stored as the attempt's Result, with `closing` set, before its worker is stopped. A completed run is not alive from its `Finished` on, though its drive holds the run lock until it returns; meanwhile `status` reports it `working`, and `resume()` (and `resume(input=...)` unless a live worker takes the input) waits up to 30 s for that lock before it sweeps and starts. `resume(input=...)` on a live owned worker only sends the input; `resume()` and a replacing `run` first retire a gone worker outside the run mutex, under the run lock (which every start takes) and only while `delegate.json` still names the attempt they checked, so they follow its harness's end (its handler's last write-back) before the callback sweep. `close()` holds a shared lock, `run/delegate.close.lock`, from before it attaches the worker until the owner's close returns: meanwhile a `TurnStarted` opens no follow-up, and the client's exit the close causes (`TurnFailed("exited")` or `TurnFailed("process_exit")`, `Exited`) ends an active attempt as a stop (`stopped: Stopped: 143`, its `Finished` sent once), never as a failure, while other endings keep their own Result. Without a close, such an exit failure of an open turn waits for its `Exited`: a client killed by signal n ends the attempt interrupted (`stopped: Stopped: <128+n>`, left In Progress: [Board](board.md)), a nonzero exit as `the client exited <code>`. Once the close is confirmed, or its worker is gone, `delegate.json` `closing` is set (no follow-up of that worker until `resume(input=...)` or a new run clears it) and an attempt still active ends as that stop (a locked run's `release` first). A refused close drops the lock and leaves `closing` unset; input taken on an ended attempt during it opens no follow-up, the next does. `delegate.json` must hold `previous`, `bound` and the bool `closing`, and the callback lock both pids (`<child> <parent>`); anything else is invalid. Board write-back of each attempt: `docs/board.md` › Using the board.
+Implemented (WDRC-208) for **owned runs**, the tui runs a session harness owns: the Delegate preflights the start with the handler `ensemble.delegate.engine.handler` registered as `{"workdir", "worker": n}` (`n`, the attempt whose call starts the worker); a refused preflight plans the run without it, and the run keeps the earlier caller loop (every other mode, and an unowned tui on the tmux Host: [Session harness](#session-harness); on Docker an unowned start is refused). Each attempt has one owner: the call that starts a worker owns it while opening, that worker's first handled call binds it to the handler, and the handler's `TurnStarted` after an ending opens the next attempt (`delegate.json` keeps the earlier one's Result as `previous`); calls of another sid or worker are ignored. An ending stores the Result, then writes its notes (the attempt's own and `result`/`end`) and the run's outcome line, then sends `Finished`; an ending another owner stored first writes and sends nothing. An ending closes no worker, a locked run's included: its user closes it or its client exits ([Docker host › Environment config](#environments) has the release claim). `run()` (a detached run's `-drive`) starts the worker and waits for its attempt's Result; it ends the attempt itself only while opening past `idle_timeout` (a give-up) or once its worker has been gone 35 s. A signal before it sends `Begun` (its TUI start) stores the stopped ending, then closes the worker; a signal after leaves the attempt to the handler. A stale out it cannot set aside is stored as the attempt's Result, with `closing` set, before its worker is stopped. A completed run is not alive from its `Finished` on, though its drive holds the run lock until it returns; meanwhile `status` reports it `working`, and `resume()` (and `resume(input=...)` unless a live worker takes the input) waits up to 30 s for that lock before it sweeps and starts. `resume(input=...)` on a live owned worker only sends the input; `resume()` and a replacing `run` first retire a gone worker outside the run mutex, under the run lock (which every start takes) and only while `delegate.json` still names the attempt they checked, so they follow its harness's end (its handler's last write-back) before the callback sweep. `close()` holds a shared lock, `run/delegate.close.lock`, from before it attaches the worker until the owner's close returns: meanwhile a `TurnStarted` opens no follow-up, and the client's exit the close causes (`TurnFailed("exited")` or `TurnFailed("process_exit")`, `Exited`) ends an active attempt as a stop (`stopped: Stopped: 143`, its `Finished` sent once), never as a failure, while other endings keep their own Result. Without a close, such an exit failure of an open turn waits for its `Exited`: a client killed by signal n ends the attempt interrupted (`stopped: Stopped: <128+n>`, left In Progress: [Board](#board)), a nonzero exit as `the client exited <code>`. Once the close is confirmed, or its worker is gone, `delegate.json` `closing` is set (no follow-up of that worker until `resume(input=...)` or a new run clears it) and an attempt still active ends as that stop (a locked run's `release` first). A refused close drops the lock and leaves `closing` unset; input taken on an ended attempt during it opens no follow-up, the next does. `delegate.json` must hold `previous`, `bound` and the bool `closing`, and the callback lock both pids (`<child> <parent>`); anything else is invalid. Board write-back of each attempt: `docs/architecture.md` › Board › Using the board.
 
 ### Guard protocol
 
@@ -322,7 +322,7 @@ A hook invocation creates one `delivery_id` (32 lowercase hex characters) before
 ensemble-crew reopen [--work-dir <work_dir>] <ID> [--display D]
 ```
 
-It reads the run record, `<work_dir>/work/<ID>/run/delegate.json` (`--work-dir` only when the board's `work_dir` is not `~/.ensemble`), and resumes its session id as worker `<agent name>` on the run's Host, client, cwd and Claude account: a Docker run comes back in a new container with its client history and [workspace volume](docker-host.md#workspace-volumes). The worker is tracked like any other; `ensemble-crew close <agent name>` ends it. It brings back the conversation, not the run: where its start is owned (every built-in client's tui, on tmux or Docker), it runs under a [session harness](#session-harness) of its own with no handlers, so its events are only logged: no outcome or write-back, and the board is untouched. A conversation known only by its session id: `ensemble-crew worker <name> --resume <sid> --client <client> --cwd <cwd> [--host <host>]`.
+It reads the run record, `<work_dir>/work/<ID>/run/delegate.json` (`--work-dir` only when the board's `work_dir` is not `~/.ensemble`), and resumes its session id as worker `<agent name>` on the run's Host, client, cwd and Claude account: a Docker run comes back in a new container with its client history and [workspace volume](#workspace-volumes). The worker is tracked like any other; `ensemble-crew close <agent name>` ends it. It brings back the conversation, not the run: where its start is owned (every built-in client's tui, on tmux or Docker), it runs under a [session harness](#session-harness) of its own with no handlers, so its events are only logged: no outcome or write-back, and the board is untouched. A conversation known only by its session id: `ensemble-crew worker <name> --resume <sid> --client <client> --cwd <cwd> [--host <host>]`.
 
 These do not recall it:
 
@@ -332,7 +332,7 @@ These do not recall it:
 
 `reopen` fails when:
 
-- the issue finished and prune cleaned it: prune deletes the run's agent files, its cwd among them, at once ([State cleanup](board.md#state-cleanup)), and the run record 7 days later;
+- the issue finished and prune cleaned it: prune deletes the run's agent files, its cwd among them, at once ([State cleanup](#state-cleanup)), and the run record 7 days later;
 - `work/<ID>/run/delegate.json` is gone (pruned, or deleted by hand): `no run record` (exit 1);
 - the run, or a session holding its session id, is still alive, or its liveness is unknown (a status or the session listing failed): exit 2; close it first, or `ensemble-crew forget` an entry whose work is gone;
 - its client history is gone: a Docker run's is in `~/.ensemble/docker-state/<agent name>/` (`no native history to resume`). A removed workspace volume comes back empty.
@@ -361,7 +361,7 @@ Every session, crew workers and role runs, gets one permission mode from the Hos
 
 OpenCode's pre-approved commands match a command's text without its redirections, so an allowed `git status` also allows `git status > <file>`. An OpenCode run edits only its cwd and Access dirs, never `.git` or OpenCode's own config, and reads its Access reads without editing them; a refused call does not end its turn. External-directory grants cover both supplied symlink paths and resolved targets, so installed-plugin tasks under `~/.ensemble/links/` remain readable; read-only edit denies cover both spellings. Write-directory edit grants remain resolved-only: use the resolved path for writes through a supplied directory alias. OpenCode matches these paths case-sensitively: on a case-insensitive disk (macOS's default) only `.git` is denied in every spelling, so `OPENCODE.JSON` or a read dir spelled in another case stays editable, and its `apply_patch` tool (models named `gpt-…`) checks only a moved file's source.
 
-`yolo` asks for nothing: no permission prompt, approval or sandbox; the container is the boundary ([Docker host](docker-host.md#permissions)). OpenCode approves tools at the backend, so toggling its TUI approval mode cannot restore those prompts; question dialogs still wait for an answer. When the selected OpenCode mode includes `--auto`, permission requests emit no `blocked`; questions still do, as do permission requests in modes without `--auto`. Claude refuses it as root; the container's clients run as `agent`. `danger-full-access` ignores writable roots and team dirs; a Docker container cannot run Codex's sandbox ([Permissions](docker-host.md#permissions)). For `workspace-write` outside the Docker Host:
+`yolo` asks for nothing: no permission prompt, approval or sandbox; the container is the boundary ([Docker host](#run-workers)). OpenCode approves tools at the backend, so toggling its TUI approval mode cannot restore those prompts; question dialogs still wait for an answer. When the selected OpenCode mode includes `--auto`, permission requests emit no `blocked`; questions still do, as do permission requests in modes without `--auto`. Claude refuses it as root; the container's clients run as `agent`. `danger-full-access` ignores writable roots and team dirs; a Docker container cannot run Codex's sandbox ([Permissions](#run-workers)). For `workspace-write` outside the Docker Host:
 
 ```toml
 [session.clients.codex.modes]
@@ -371,8 +371,8 @@ auto = ["-s", "workspace-write", "-c", 'approval_policy="on-request"', "-c", 'ap
 ## Credentials
 
 Every credential ensemble uses. `<B>` is `/usr/local/libexec/ensemble/ensemble-broker`; the logins and their dialogs:
-[Docker host › Log in](docker-host.md#log-in); what a container gets: [Docker host › What a container
-gets](docker-host.md#what-a-container-gets).
+[Docker host › Log in](#broker-logins); what a container gets: [Docker host › What a container
+gets](#run-workers).
 
 **Three-way readers**: a credential the broker hands to a container (the Claude setup-token copy, GitHub installation
 tokens, the Codex access token, OpenCode provider API keys, environment secrets) can be read by the broker, by every
@@ -386,15 +386,15 @@ it. Each container copy is 0400 on the container's tmpfs and goes with the conta
 |---|---|---|---|---|---|---|
 | host `gh` login | `tmux`; the orchestrator and manager on either | target-repo check, docs fetch, duplicate search; the Delegate's ready gate (`gh pr ready`, `--undo`, Actions job and workflow-run reads); `repo.py`; the manager's PR reads. Push and PR rights on every target repo: a classic token needs `repo`, `read:org`, `gist`; a fine-grained one also Actions read | the system credential store, else a plain-text file (`gh auth status` says which) | any process running as the user; never a container | until revoked | github.com › Settings › Applications › GitHub CLI › Revoke access (every token gh made); `gh auth logout` is local only |
 | Claude Code login | `tmux` | the user's own Claude Code: `claude`, then `/login` | macOS Keychain; `~/.claude/.credentials.json` (0600) if the Keychain refuses the write | Claude Code and any process running as the user the Keychain lets read it | refreshed by Claude Code | `/logout` |
-| Claude setup-token | Docker | a container's Claude Code, model requests only: `claude setup-token` in each [account](docker-host.md#claude-accounts)'s subscription, pasted into `<B> login claude [<name>]` | `ensemble-broker-claude` / account name; copy `/run/ensemble/secrets/claude`, given to the client only as `CLAUDE_CODE_OAUTH_TOKEN` | item: the broker; copy: three-way | one year; starts refused past a known expiry ([Static secret expiry](docker-host.md#static-secret-expiry)) | no documented route; on a leak, `claude setup-token` again and rerun `<B> login claude [<name>]` |
+| Claude setup-token | Docker | a container's Claude Code, model requests only: `claude setup-token` in each [account](#claude-accounts)'s subscription, pasted into `<B> login claude [<name>]` | `ensemble-broker-claude` / account name; copy `/run/ensemble/secrets/claude`, given to the client only as `CLAUDE_CODE_OAUTH_TOKEN` | item: the broker; copy: three-way | one year; starts refused past a known expiry ([Static secret expiry](#broker-logins)) | no documented route; on a leak, `claude setup-token` again and rerun `<B> login claude [<name>]` |
 | Codex login | `tmux` | the user's own Codex: `codex login` | `~/.codex/auth.json`, or the OS store per `cli_auth_credentials_store` | Codex and any process running as the user | refreshed by Codex | `codex logout`, locally |
-| Codex login | Docker | a container's Codex: the broker's own ChatGPT login, `<B> login codex` ([Codex](docker-host.md#codex)) | full login, refresh token included: `ensemble-broker-codex` / `auth`; copy, access token only: `/run/ensemble/secrets/codex/auth.json` | refresh token: the broker, but during `login codex` and each renewal the full login sits in a 0700 temp dir under `/private/tmp` (a SIGKILL or host failure leaves it) that any process running as the user reads; copy: three-way | access token renewed 10 minutes before it expires; refresh token undocumented | no documented route; rerun `<B> login codex`, or delete the item |
+| Codex login | Docker | a container's Codex: the broker's own ChatGPT login, `<B> login codex` ([Codex](#broker-logins)) | full login, refresh token included: `ensemble-broker-codex` / `auth`; copy, access token only: `/run/ensemble/secrets/codex/auth.json` | refresh token: the broker, but during `login codex` and each renewal the full login sits in a 0700 temp dir under `/private/tmp` (a SIGKILL or host failure leaves it) that any process running as the user reads; copy: three-way | access token renewed 10 minutes before it expires; refresh token undocumented | no documented route; rerun `<B> login codex`, or delete the item |
 | OpenCode provider API key | `tmux` | OpenCode's requests to a `[session.clients.opencode.providers.<name>]` provider: `opencode auth login` ([OpenCode sessions](customizing-roles-and-tasks.md#opencode-sessions)) | OpenCode's `auth.json`; ensemble reads its selected API entry for availability probes and broker import | OpenCode and any process running as the user | until the provider revokes it | at the provider; `opencode auth logout` removes it locally |
 | OpenCode provider API key | Docker | the same, from a container | `ensemble-broker-opencode` / `<name>`; copy `/run/ensemble/secrets/opencode/<name>.key`, read through `{file:…}` in OpenCode's inline config, never env or argv | item: the broker; copy: three-way; on the network, anyone between the container and an `http://` `base_url` | until the provider revokes it, or its `--expires` date | at the provider, then `<B> login opencode <name>` with a new key; running containers keep the old copy until closed |
-| GitHub App private key | Docker | signs the 9-minute JWT that issues installation tokens; one private App, installed only on repos agents may push to ([Create the GitHub App](docker-host.md#create-the-github-app)) | `ensemble-broker-bot` / App ID, from `<B> login github ensemble-broker-bot --key-file <pem> --app-id <ID>`; then delete the `.pem` | the broker; an item made otherwise trusts `/usr/bin/security` until that login; a `.pem` left on disk: any process running as the user | until deleted in the App's settings | generate a new key and delete the old in the App's settings; `security delete-generic-password -s ensemble-broker-bot`, then the login with the new `.pem` |
+| GitHub App private key | Docker | signs the 9-minute JWT that issues installation tokens; one private App, installed only on repos agents may push to ([Create the GitHub App](#create-the-github-app)) | `ensemble-broker-bot` / App ID, from `<B> login github ensemble-broker-bot --key-file <pem> --app-id <ID>`; then delete the `.pem` | the broker; an item made otherwise trusts `/usr/bin/security` until that login; a `.pem` left on disk: any process running as the user | until deleted in the App's settings | generate a new key and delete the old in the App's settings; `security delete-generic-password -s ensemble-broker-bot`, then the login with the new `.pem` |
 | GitHub installation tokens | Docker | git (credential helper) and `gh` (a wrapper setting `GH_TOKEN` for its own process) in a container: one per installation, covering every repo of it, with `[session.hosts.docker.github] permissions` | `ensemble-broker-tokens` (per container), `ensemble-broker-revocations` (backlog); copy `/run/ensemble/secrets/github/<owner>` | three-way | 1 hour; renewed 10 minutes before the first expires | `close` attempts revocation before removing the container; the backlog retries at the next start, close or `status --cleanup` until revoked or expired |
-| GitHub prefetch token | Docker | one [prefetch](docker-host.md#prefetch) clone, `contents: read` on that repo alone | `ensemble-broker-tokens` while in use; the helper's tmpfs `HOME` | the broker; the helper container's processes and any process that can `docker exec` into it, during the clone | until the helper exits, at most 1 hour | revoked when the helper exits; an unconfirmed revocation goes to the backlog |
-| environment secret | Docker | whatever a container's tools use it for ([Environment secrets](docker-host.md#environment-secrets)); issue one for ensemble alone | `ensemble-broker-env/<name>` / `<name>`; copy `/run/ensemble/secrets/env/<file>` | item: the broker; copy: three-way, and any process running as the user can start a container listing any `ensemble-broker-env/*` item | until replaced or deleted, or its `--expires` date | rotate it at its source, then `<B> login env <name>`; `security delete-generic-password -s ensemble-broker-env/<name>` deletes it; running containers keep the old copy until closed |
+| GitHub prefetch token | Docker | one [prefetch](#environments) clone, `contents: read` on that repo alone | `ensemble-broker-tokens` while in use; the helper's tmpfs `HOME` | the broker; the helper container's processes and any process that can `docker exec` into it, during the clone | until the helper exits, at most 1 hour | revoked when the helper exits; an unconfirmed revocation goes to the backlog |
+| environment secret | Docker | whatever a container's tools use it for ([Environment secrets](#environments)); issue one for ensemble alone | `ensemble-broker-env/<name>` / `<name>`; copy `/run/ensemble/secrets/env/<file>` | item: the broker; copy: three-way, and any process running as the user can start a container listing any `ensemble-broker-env/*` item | until replaced or deleted, or its `--expires` date | rotate it at its source, then `<B> login env <name>`; `security delete-generic-password -s ensemble-broker-env/<name>` deletes it; running containers keep the old copy until closed |
 | Linear harness app | host | router, promote, prune, a run's issue read and run comments; scopes `read,write` | client secret: `linear.harness.secret_service`; token and expiry (`{"access_token", "expires_at"}`): `linear.harness.token_service`; Client ID `linear.harness.client_id`, app user `linear.harness.user_id` | [Keychain items](#keychain-items) | token 30 days | transport: rotate the client secret in Linear › Settings › API › Applications (revoking every token of the app), `security add-generic-password -U -s <secret service> -a <secret service> -w` with the new one, then `security delete-generic-password -s <token service>`; broker: [Linear broker renewal](upgrading.md#linear-broker-renewal) |
 | Linear manager app | host | the `ensemble-orchestrator issue` commands; scopes `read,write,app:assignable` | as the harness's: `linear.manager.secret_service`, `linear.manager.token_service`, `linear.manager.client_id`, `linear.manager.user_id` | [Keychain items](#keychain-items) | token 30 days | as the harness app's |
 | Linear role apps | host | role write-back: comments, state moves, subscriptions, attachments, retitles; scopes `read,write,app:assignable,app:mentionable` | `linear.roles.<role>.secret_service`, `linear.roles.<role>.token_service`, with `client_id` and `user_id` | [Keychain items](#keychain-items) | token 30 days | as the harness app's |
@@ -436,7 +436,7 @@ never deletes it.
 ### Keychain items
 
 All in the login keychain; every `ensemble-broker-` service is a broker item ([Re-trust after an
-upgrade](docker-host.md#re-trust-after-an-upgrade)), the `linear.*` services are not.
+upgrade](#docker-install)), the `linear.*` services are not.
 
 | Service | Account | Config key | Holds | Written by | Readers |
 |---|---|---|---|---|---|
@@ -473,12 +473,12 @@ count is `0`. Each search covers every mount (the workspace volume, the binds, t
 
 ### Risks
 
-Beside [Docker host › Risks](docker-host.md#risks):
+Beside [Docker host › Risks](#docker-risks):
 
 - **Three-way readers** of handed-out credentials: accepted by the user on 2026-10-18; the broker is unchanged.
 - Transport-owned Linear client secrets and every published Linear access token trust `/usr/bin/security`: any process
   running as the user reads them without a dialog. Enrolled client secrets trust only the broker.
-- Config picks a Docker Claude session's account ([Claude accounts](docker-host.md#claude-accounts)); it is no access
+- Config picks a Docker Claude session's account ([Claude accounts](#claude-accounts)); it is no access
   control: any process running as the user can start a container with any logged-in account.
 - An environment secret reaches whoever can start a container: any process running as the user can list any
   `ensemble-broker-env/*` item in a manifest and read the copy.
@@ -503,3 +503,371 @@ Limits:
 - Manual monitoring only (`/ensemble:manage` › Start): OpenCode has no Monitor, and its shell tool has no background mode and no completion notification. The commander reads events with `ensemble-crew pending --content` at the start of each active turn; nothing wakes an idle commander.
 - The skills' `allowed-tools` and `disable-model-invocation` mean nothing to OpenCode: its own `permission` settings decide which commands ask. The three are commands, never skills the model loads itself.
 - No mod hides the `ensemble-crew` tool calls.
+
+## Board
+
+The orchestrator runs the core from a board, chosen by `[orchestrator] tracker`: `"local"` (the default), a [local board](#local-board) of Markdown files, or `"linear"`, a Linear board.
+
+### Board setup
+
+[`scripts/install.sh`](../README.md#install) offers no Board (`--no-board`, the first-run default), a local board (`--board local`) or Linear (`--board linear`), and separately the router and promote launchd jobs (`--launchd`, `--no-launchd`; either without Board exits 2). Local never asks for Linear credentials. Linear asks for each transport-owned harness, manager and role app's Client ID and hidden client secret, stores them in Keychain, reads the team, states, labels, members and projects, and shows the config it fills; apps with [`renewal = "broker"`](upgrading.md#linear-broker-renewal) use the broker's published tokens instead. Reruns keep both choices and skip completed setup. `scripts/install-cleanup.sh` removes only what the installer created; a non-empty board directory stays.
+
+By hand (macOS; the orchestrator runs this checkout's scripts; `<work_dir>` is `orchestrator.work_dir`):
+
+1. Create `~/.ensemble/config.local.toml` from the `# local:` lines of each packaged `config.toml`, each under its layer's section, researcher's and pm's `[output]` included. With `tracker = "linear"`, a required `[orchestrator.linear]` key left `""` stops every `ensemble-orchestrator` command:
+
+   ```toml
+   [orchestrator]                         # the tracker
+   tracker = "linear"
+
+   [delegate.roles.engineer]              # run settings
+   tier = 2
+
+   [orchestrator.roles.engineer]          # board settings
+   max_runs = 1
+
+   [orchestrator.linear.roles.engineer]   # Linear settings: its app
+   client_id = "<engineer Client ID>"
+   secret_service = "linear-app-engineer-secret"
+   token_service = "linear-app-engineer-token"
+   user_id = "<engineer app user UUID>"
+   ```
+
+   A role's board runs use the Claude account `[orchestrator.core.roles.<role>.accounts]` ([Claude accounts](#claude-accounts)).
+2. Create the Linear presets, apps and Keychain items the keys above name, and fill their configuration: [Linear presets](upgrading.md#linear-presets).
+3. Dry-run each job: `bin/ensemble-orchestrator router --dry-run`, `bin/ensemble-orchestrator promote --dry-run`.
+4. Install the launchd jobs (router at :00 and :30, promote every 5 min); the plists hard-code this checkout's path and `~/.ensemble`:
+
+   ```bash
+   mkdir -p ~/.ensemble/logs   # launchd can't start a job without it
+   for job in router promote; do
+     launchctl bootout gui/$(id -u)/com.windroc.ensemble.$job 2>/dev/null   # fails harmlessly if none is loaded
+     sed -e "s|@HOME@|$HOME|g" -e "s|@PATH@|$PATH|" \
+       launchd/com.windroc.ensemble.$job.plist \
+       > ~/Library/LaunchAgents/com.windroc.ensemble.$job.plist   # needs ctmux --install's ~/.ensemble/bin
+     launchctl enable gui/$(id -u)/com.windroc.ensemble.$job
+     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.windroc.ensemble.$job.plist
+   done
+   ```
+
+   Uninstall a job: `launchctl bootout gui/$(id -u)/com.windroc.ensemble.<job>`, then remove its plist.
+
+Document roles' `[output]` goes in `[delegate.roles.<role>.output]` (or `[orchestrator.core.roles.<role>.output]` for board runs only); an overlay replaces the whole table. `type = "github"` roles share `host` (default `github.com`), `repo` and `branch`, each with its own `dir`; `type = "local"` saves each run to `<work_dir>/docs/<role>/document-<issue>-<sid>.md`, referenced by `file://` and readable only on the board host. A build role's target host is its output's `host`, else the GitHub document host, else `github.com`; authenticate `gh` for each host. `[orchestrator.local_clones]` maps `"acme/app"` (or `"host/acme/app"`) to a clone.
+
+### Using the board
+
+```mermaid
+flowchart LR
+    T[Todo] -->|router claims| P[In Progress]
+    T -->|"bad label, or 4 attempts"| R[In Review]
+    P -->|"outcome, failure, usage limit, or 4 attempts"| R
+    P -->|"failed new research run, or Recover"| T
+    R -->|Approve| H[Handoff]
+    R -->|Revise| T
+    R -->|"resume or pane follow-up"| P
+    H -->|"promote, after 10 min: next role's Todo issue"| D[Done]
+    D & C[Canceled] -->|"Finish, 2 h later"| X[cleaned up]
+```
+
+- **New work:** a Todo issue in the product's project, delegated to a role app (Linear's Agent field); the description is the brief. Add `Repo: <owner>/<name>` unless the project's `[orchestrator.linear.project_repos]` entry names it. The router claims by priority, then later role, then oldest; a blocked issue waits for its blockers to be Done, Canceled or Duplicate. On first claim it lists possible duplicates under `## Related work` in the agent's input, and inlines linked configured documents up to 50,000 bytes.
+- **Approve:** move to Handoff and comment what's next; after 10 minutes promote creates the next role's issue and marks this one Done.
+- **Revise:** comment and move back to Todo; the agent resumes. An engineer issue's PR comments and reviews count too. After 4 attempts the issue goes to In Review; moving it to Todo restarts the count.
+- **Who counts as you:** every Linear user but the harness and role apps and automation; the manager's app counts as you. Your comments are instructions: keep the team's membership and guest access tight.
+- **Runs without an outcome** are written back as failures with the reason; a stopped or interrupted attempt stays In Progress for Recover.
+- **Finish:** set Done, Canceled or Duplicate. 2 hours later prune closes the run, deletes its `agent/` dir and pushed branches, and archives the issue (Done only for pm or engineer issues; never while a sub-issue would stay); 7 days later it deletes the issue's workdir. An issue left in another state but Todo or In Progress for 7 days loses its checkouts and temp files (`agent/src`, `agent/publish`, `agent/tmp`). Uncommitted and unpushed work is lost.
+
+### Task labels
+
+A `Tasks` group label picks the role's task, mapped by `[task_labels]`; none: the agent picks and says why; a bad label sends the issue to In Review. To upgrade a report (Light Research → Research → Deep Research), set the next task's label (to Research: remove the label), comment the claims to verify, and move it back to Todo. `[orchestrator.task_tiers]` sets a task's model tier (`light-build = 3`, 1 the strongest).
+
+### Operating the board
+
+```bash
+bin/ensemble-orchestrator router --issue <ID>         # run one issue now, skipping role limits and usage gates
+bin/ensemble-orchestrator router --issue <ID> --tui   # the same, attended in a TUI
+bin/ensemble-orchestrator status <ID>
+bin/ensemble-orchestrator attach-command <ID>
+bin/ensemble-orchestrator close <ID>                  # the issue stays In Progress for Recover
+bin/ensemble-orchestrator resume <ID>
+```
+
+`--help` lists each command's options; issue operations: `/ensemble:board` ([skills/board/SKILL.md](../skills/board/SKILL.md)). Keep `<work_dir>/logs/runs.jsonl`: deleting it breaks resume, Recover, write-back and the first-claim search. Router events go to `<work_dir>/logs/orchestrator.jsonl`. The commander needs no Linear MCP server (`/ensemble:board` replaces it): in the project you run it from, `/mcp` › the Linear entry › **Disable** turns it off there only. Move an issue out of In Progress before opening its session, or the router may resume it after 30 idle minutes.
+
+Board role limits: `[orchestrator.roles.<role>] max_runs` (packaged 3 for researcher, pm and engineer), counting live runs in `runs.jsonl`; client limits are the session's ([Run limits](#run-limits)). For a client without a usage dashboard set `[orchestrator.usage_limit] <client> = "off"`. A host usage probe failure stops the tick with exit 2.
+
+### Agent label
+
+Copy `[orchestrator.linear]`'s `agent_label_group` and `[orchestrator.linear.agent_labels]` (one line per client, with label ids) from the `# local:` examples in `src/ensemble/orchestrator/config.toml`. No Agent label: the role's default client; one mapped label: its client; several or an unmapped one: a comment and In Review. `router --dry-run` prints each candidate's `client` and `client_source`.
+
+An `OpenCode` label runs OpenCode, on the host's Ollama (live-test issues only) or a configured provider; it needs the [Docker host](#docker-host) with the harness on tmux ([Run workers](#run-workers)), the provider's egress exception ([OpenCode on Docker](#opencode-on-docker)), and for an engineer run the GitHub App on the target repo ([Create the GitHub App](#create-the-github-app)).
+
+### Local board
+
+`$ENSEMBLE_BOARD_DIR` (default `~/.ensemble/board/`) is one board; boards never sync. The router, `promote`, `prune` and `ensemble-orchestrator issue` run on it by the Linear rules above; without launchd jobs run `ensemble-orchestrator promote` (it prunes too) once an approved issue's 10-minute undo window has passed. Create the first issue with `ensemble-orchestrator issue create --title "First issue" --body-file <file>` (`LOC-1`; `[orchestrator.local] issue_prefix` picks another prefix).
+
+```text
+<board>/
+├── .next-id                 the next issue number
+├── .lock                    the board lock
+├── .state/                  logs/ and work/<ID>/, in place of <work_dir>
+├── unassigned/<state>/      assigned to no one
+├── me/<state>/              assigned to you
+├── <role>/<state>/          assigned to a role
+└── archive/                 archived issue files, flat
+```
+
+`<state>`: `backlog`, `ready`, `running`, `review`, `approved`, `done`, `canceled`. A file's directory is its assignee and state: moving it from `review/` to `approved/` approves it, to `ready/` revises it. An issue file:
+
+```markdown
+---
+id: LOC-12
+title: "ENG: Session registry"
+task: light-build
+client: claude
+priority: 2
+created: 2026-10-19T14:02:00-04:00
+blocked_by: [LOC-10]
+related: [LOC-7]
+parent: LOC-5
+---
+
+### Description
+Repo: <owner>/<name>
+Add a session registry.
+
+### Comments
+
+#### other · 2026-10-19 14:05
+Read LOC-7 first.
+
+###
+My new comment.
+
+### History
+- 2026-10-19 14:02 ready other
+```
+
+`id`, `title` and `created` are required; `priority` 0 none … 4 low; `task` and `client` act as the Tasks and Agent labels. Comment by adding a `###` line at the end of Comments and your text below it. Only `<role>/ready/` issues are queued: one in `unassigned/` or `me/` never runs. A board file that cannot be read stops the router with `router.py: <path>: <reason>`, exit 2. A `dependency-cycle` diagnostic names a `blocked_by` cycle: remove its links. A `launch-error` (an issue's client missing or not executable) moves the issue to `review/`: fix the client choice or installation, then move it to `ready/`.
+
+### State cleanup
+
+ensemble keeps its state in `~/.ensemble/` (`work/` and `logs/` in `<work_dir>`, or `<board>/.state/` on a local board).
+
+| Entry | Safe to delete by hand |
+|---|---|
+| `config.local.toml`, `logs/runs.jsonl`, board issue files and `.next-id`, `docker/worker/` | never |
+| `work/<ID>/agent/` | no: prune also drops its worktrees and pushed branches |
+| `work/<ID>/run/`, `work/<ID>/writeback.json` | once you won't resume or recover the run |
+| `logs/orchestrator.jsonl`, `logs/prune.json`, `probe/`, `bin/`, `hidden/<name>.json` | any time (keep `logs/`) |
+| `logs/router.lock`, `board/.lock` | while no router runs, no program writes the board |
+| `sessions/`, `workers/<sid>/`, `docker-state/<name>/` | once you won't restart or resume that session |
+| `tui/<name>/` | no: closing the session removes it |
+| `tui/<name>.lock` | while no session of that name starts or closes |
+| `managers/<name>/` | while no manager holds it; its Roster is lost |
+| `adhoc/` | a folder whose run is not running (`ensemble-delegate status <dir>`) |
+
+## Docker host
+
+`ensemble-broker` builds the worker image and starts and closes worker containers on macOS (Apple silicon) with Docker Desktop. It keeps the logins and the GitHub App key in the login keychain and writes credentials only into a container's tmpfs. `B` below is `/usr/local/libexec/ensemble/ensemble-broker`; `PKG` the installed ensemble plugin directory. Run every step as yourself.
+
+### Docker install
+
+`scripts/install.sh --docker` installs and starts Docker Desktop, the [egress proxy](#egress-proxy) and the broker, and runs the logins. By hand, with Docker Desktop running and `gh` logged in: `sh "$PKG/src/broker/install.sh"` (`--build` builds locally; needs Go and the Xcode command line tools). It installs the release's broker root-owned only when it matches its sha256 and the plugin's broker protocol, and seeds `~/.ensemble/docker/worker/Dockerfile` (your image, edit freely) if absent. To upgrade, rerun it, then `"$B" retrust`: a new broker build must re-trust each `ensemble-broker-*` keychain item (the login keychain password once; an item a broker of v0.4.1 or earlier wrote needs one Allow dialog). Docker Desktop file sharing must include `~/.ensemble/docker-state`.
+
+### Egress proxy
+
+Workers reach the network only through the `egress-proxy` container (private `windroc/egress-proxy`, pinned, under `~/.egress/current`; config `~/.egress/config.local.yaml`, created by the installer with a `workers` network in denylist mode). It allows public destinations and denies private ranges, the Mac and LAN, `host.docker.internal` included, unless a `host:port` is in `networks.workers.exceptions`; each exception holds for every worker. `config.example.yaml` in the installed version defines the config, `networks.workers` included. Add the Mac's public IPv4 and global IPv6 prefix to `deny_ranges`.
+
+| Operation | Command |
+|---|---|
+| Start; apply a config change | `~/.egress/current/start.sh` (before a first install, `scripts/install.sh --docker`) |
+| After the Mac changes networks | `docker restart egress-proxy` |
+| Health | `docker ps --filter name=egress-proxy`; `docker inspect --format '{{json .State.Health}}' egress-proxy` |
+| Errors | `docker logs egress-proxy` |
+
+A start without a healthy proxy fails `egress_unavailable` (exit 17): run `start.sh`, wait for `(healthy)`, then start, restart or resume again. A proxy restart breaks connections on every caller network.
+
+### Broker logins
+
+| Login | Stores |
+|---|---|
+| `"$B" login claude [<name>] [--fresh-token \| --issued <date> \| --expires <date>]` | a `claude setup-token`, pasted, for the `default` or a named [Claude account](#claude-accounts) |
+| `"$B" login github ensemble-broker-bot --key-file <key>.pem --app-id <App ID>` | the [GitHub App](#create-the-github-app)'s private key (delete the `.pem` after); it prints the App slug for `[session.hosts.docker.github] app` |
+| `"$B" login codex` | a Codex browser login; first `sudo "$B" install-codex <version>` (≥ 0.163.0; `update-codex` to update) |
+| `"$B" login opencode <name> [--auth-file <auth.json>]` | each `[session.clients.opencode.providers.<name>]` API key (Ollama needs none) |
+| `"$B" login env <name> [--expires <date>]` | an environment secret, 1–16384 bytes (pipe a long value) |
+
+What each login hands a container: [Credentials](#credentials). Only a login or `retrust` shows a keychain dialog; a start that cannot read an item names the login or `retrust` to run. Claude tokens, OpenCode keys and environment secrets are static: the broker records their expiry, gives notices 30, 7 and 1 days before, and refuses a start with an expired one (`login_required`, exit 5). `"$B" status` lists credentials, static expiries and unrevoked GitHub tokens. Every `start` and `close` is logged to `~/Library/Logs/ensemble/broker.jsonl`, never a secret.
+
+### Create the GitHub App
+
+`scripts/install.sh` does not create it. In GitHub › Settings › Developer settings › GitHub Apps › New GitHub App:
+
+1. Owned by you, installable **Only on this account** (private): every session gets a token for every repo it is installed on.
+2. Webhook off.
+3. Repository permissions: Contents, Pull requests and Workflows **Read and write**; Checks, Actions, Commit statuses and Metadata **Read-only** (at least `github.permissions`).
+4. Note its **App ID**, then **Generate a private key**.
+5. **Install App** on only the repositories agents may push to, your docs repo included.
+
+Then run `login github` ([Broker logins](#broker-logins)).
+
+### Worker image
+
+`"$B" build --ensemble "$PKG" [--base-image IMAGE] [--plugin SOURCE]... [--image-plugin NAME]... [--max-age SECONDS]` builds `ensemble-worker:<key>` from `~/.ensemble/docker/worker/Dockerfile` plus ensemble, the clients and plugins; starts build as needed. Each build pins Claude Code, Codex and OpenCode at their npm `latest`; an hourly detached `check-clients` rebuilds when one moves, and running workers keep theirs. A Claude Code or Codex your Dockerfile installs is never run.
+
+#### Plugins
+
+`[session.hosts.docker] plugins` lists the plugins each container's Claude Code and Codex install; the packaged default (`src/ensemble/session/config.toml`) pins updraft; `[]`: none. An entry is `name@plugin-owner/repo#commit::marketplace-owner/repo#commit`, both commits full 40-hex SHAs, or `name@marketplace-owner/repo#commit` for a self-contained marketplace. To upgrade one, review the target commit, set the pin (a local list replaces the packaged one whole), rebuild with `"$B" build --ensemble "$PKG" --plugin '<entry>' --max-age 0`, and check the build logs report that commit for both clients. OpenCode finds the same skills through `skills.paths`. The image never installs ensemble's own plugin; on the tmux Host, OpenCode has no `/updraft:*` commands.
+
+#### Base images
+
+`--base-image IMAGE` builds on a local image (never pulled) in place of `~/.ensemble/docker/worker`. It needs `apt-get` and `dpkg`, `node` and `npm`, `tmux` and `git`, and a non-root user `agent`; labels starting `windroc.` or `ensemble.` are refused. Tag your base images, or removing older images can delete them. An amd64-only base image needs Rosetta (`softwareupdate --install-rosetta`, then Docker Desktop › Settings › General › **Use Rosetta for x86_64/amd64 emulation on Apple Silicon**); Rosetta cannot be uninstalled. `--image-plugin NAME` adds a Claude Code plugin the image holds at `/opt/windroc/plugins/NAME/`. A base image is trusted like your Dockerfile.
+
+### Run workers
+
+```toml
+[session.hosts]
+default = "docker"
+
+[delegate.delegates]
+harness_host = "tmux"   # role runs: the client in a container, the harness on the host
+```
+
+`[session.hosts.docker]` keys: `docker` (the CLI, default `/usr/local/bin/docker`), `plugins`, `github.app` (the App slug; `""`: none), `github.permissions` (each token's permissions) and `isolated` (`true`: yolo mode, the container the boundary; `false`: auto mode). Then `ensemble-crew worker NAME --client claude|codex|opencode` starts NAME in its own container; the other verbs and the Viewer work as on tmux. Each start, restart or resume runs a new container from the current image; restart and resume keep the client history, a new start empties its client state dir, and all keep the [workspace volume](#workspace-volumes); `ensemble-session resume <name>` (never `client-resume`) continues a conversation. A container gets user `agent` with all capabilities dropped, no Docker socket, only its egress network, a workspace volume at cwd, credentials on tmpfs and, with GitHub configured, the App's bot identity; each checkout runs its own `.githooks/`.
+
+Docker role runs refuse host `read`/`write` dirs, a role `cwd`, custom `team_dirs` roles and multiple or non-GitHub target repos. An engineer opens its draft PR as the App's bot.
+
+#### Claude accounts
+
+A Docker Claude session runs on one account: `default` unless a worker or role selects another. Register more in `~/.ensemble/config.local.toml`, then `"$B" login claude work`:
+
+```toml
+[session.clients.claude.accounts.work]
+dir = "~/.claude-work"   # its CLAUDE_CONFIG_DIR on the host, for the usage probe
+account = "me@work"      # a display string
+```
+
+Select one with `ensemble-crew worker NAME --client claude --account work`, or for a role `[delegate.roles.<role>.accounts] claude = "work"` (`[delegate.accounts]` for every role; board runs: `[orchestrator.core.accounts]` and `[orchestrator.core.roles.<role>.accounts]` after). With none selected and two or more registered, a start picks the account with the most usage left, under the usage-gate thresholds first (readings cached 5 minutes); the usage gate skips Claude runs only when every account is over. On tmux a selection is checked, then ignored.
+
+#### OpenCode on Docker
+
+OpenCode runs the host's Ollama models or a configured provider ([OpenCode sessions](customizing-roles-and-tasks.md#opencode-sessions)); provider keys come from `login opencode`. Add each local or LAN provider's `host:port` (Ollama: `host.docker.internal:11434`) to `networks.workers.exceptions` in `~/.egress/config.local.yaml`, then run `~/.egress/current/start.sh`; the installer does not. Host-side `probe-provider` bypasses the proxy, so it can pass while a worker still lacks its exception; Docker may also need macOS Local Network permission. An `http://` `base_url` sends the key in plaintext. Once, on the Mac: keep Ollama on `127.0.0.1`, set `OLLAMA_CONTEXT_LENGTH` to at least 65536 (`launchctl setenv OLLAMA_CONTEXT_LENGTH 65536`, then reopen the app), and pull every `ollama/` model of `[session.clients.opencode.tiers]` and `model`. Session state stays in `~/.ensemble/docker-state/<name>/opencode/`.
+
+### Harness-owned workers
+
+Every Docker session runs under its [session harness](#session-harness): the [guard](#guard-protocol) runs inside the container as the client's parent, over one `docker exec -i`; container hooks reach it through `hook-stub`, retried until acknowledged. A headless run needs a name, and a start no harness can own is refused before anything is written. The harness closes the worker at its deadline, end or `close`, then removes the container; a sweep at the next start removes an ownerless one. A credential tick on the harness calls `"$B" maintain`, which renews GitHub and Codex credentials 10 minutes before expiry and posts `credential_refresh_failed`, `credential_notice` and `client_auth_expired` to the session's events.
+
+### Environments
+
+A role's environment comes only from the trusted delegate config, never a run's input: `[delegate.environment.<host>]` (the Docker Host's default: `image`, `gateway`), `[delegate.environments.<name>]` (keys that differ), and `[delegate.roles.<role>.environment]` (`name` and overrides). Keys: `image` (a [base image](#base-images) or `"@worker"`), `gateway` (the egress caller network), `plugins`, `secrets` (`[[…secrets]]` of `item = "ensemble-broker-env/<name>"` and `file`, written 0400 to `/run/ensemble/secrets/env/<file>`), `lock` (one holder at a time: another start is busy, exit 75; a board run gets a normal failed attempt; a locked run's container, TUI, harness and lock stay after its outcome, `needs_input` included, until the user closes it (`ensemble-crew close`, `ensemble-session close`) or the client exits, and the Delegate claims the release (stderr `delegate: session <name> closed (lock <lock>)`, run log `release`) only once a close it asked for returns confirmed, a worker of unknown liveness included (a client's own exit claims none); `ensemble-crew resume --input` continues in that container; after rotating an environment secret, close the runs waiting on it), and `prefetch` (`true`: clone the input's `Repo:` at its `Ref:` into a new workspace, with no GitHub token in the container). The packaged `[environments.mini-op]` is the `verifier`'s. Release a lock with `ensemble-session close <name>` or `docker stop <container>`. `ensemble-delegate run --dry-run` prints the resolved `environment`; `ensemble-delegate open <name> --environment <env>` opens one without a role.
+
+### Workspace volumes
+
+A worker's workspace is a Docker volume, `ensemble-ws-<name>`, mounted at its cwd; work reaches the host only through GitHub. A new start of the same name keeps it; `close` reclaims volumes whose cwd is gone, keeping any with unsaved work (warnings in `~/.ensemble/docker-state/reclaim.log`). Remove one with `"$B" workspace-rm --volume <volume>` (exit 12 `workspace_dirty` names unpushed repos; `--force` skips the check). The check sees only git: ignored files (updraft plan docs, progress logs) go with the volume. A board issue that switches client gets a new name and an empty volume; the old one goes when the issue is pruned, so fetch its unpushed work by hand. A kept dirty volume takes disk until you act; anyone with Docker access can read volumes.
+
+### Docker recovery
+
+- **Container gone** or worker `dead`: `ensemble-session resume NAME` continues in a new container.
+- **Older image** (`restart it to upgrade`): restart the worker.
+- **`egress_unavailable`**: [Egress proxy](#egress-proxy).
+- **`client_auth_expired`** (Codex): `"$B" login codex`, then `ensemble-session resume NAME`.
+- **`login_required`** / **`keychain_failed`**: run the login or `retrust` the error names.
+
+### Docker risks
+
+- Container credentials are readable by every process in the container and by any process running as you ([Credentials](#credentials)).
+- Every Docker session can push to any unprotected branch of every repo the App is installed on; a token the broker could not revoke stays valid up to an hour (`"$B" status`).
+- A worker's branch can carry files your tools run: review a bot PR on GitHub before `gh pr checkout`, then read every change to `Makefile` and `package.json` scripts, `.claude/`, `.vscode/`, `.envrc` and hooks config (`.githooks/`, `.husky/`, `.pre-commit-config.yaml`, `core.hooksPath`, `core.fsmonitor`). For an output repo runs push to directly, `git diff --stat HEAD @{upstream}` before `git pull`. Require approval for workflow runs on target repos.
+- Git in a container runs each checkout's `.githooks/` with the container's tokens in reach; image builds trust the client vendors' npm packages.
+- Claude's client state is a read-write bind a worker can plant files in; host readers must not follow its symlinks.
+- A harness killed with `kill -9` ends its client only if Docker passes the closed stdin to the exec (unverified until WDRC-212); else the client keeps running, with its token, until the next Docker start or close.
+- A headless run's output comes from its container, where client and tools share uid `agent`: a forged rate-limit line can end the run, notify a usage limit and move the issue to review, as can a forged transcript record for a TUI run.
+- A manual `docker start` of a stopped lock container bypasses the [lock](#environments) and can make two holders: start through the broker.
+- The audit log (`broker.jsonl`) is yours to change: it records what the broker did, not that nothing else happened.
+- A resume after an upgrade runs a newer Claude than the one that wrote the conversation; if it cannot read it, the resume fails rather than starting anew. Claude may show an onboarding prompt after a rebuild.
+- A bad egress policy section makes the whole proxy unhealthy (an edited config stays so until `start.sh` applies it) and blocks new workers.
+
+### Docker live acceptance
+
+Run `tests/session/live_docker.py` only through mini-op on the test Mac mini, from the repo root with `PYTHONPATH` as in [Tests](#tests), with the proxy healthy, the broker installed and logged in, `[session.hosts] default = "docker"`, `harness_host = "tmux"` and a test repo with the App installed:
+
+| Command | Checks |
+|---|---|
+| `python3 tests/session/live_docker.py worker --client claude\|codex\|opencode CWD [NAME]` | build reuse, container flags, egress isolation, restart, close then resume, `docker rm -f` then resume, credential revocation |
+| `python3 tests/session/live_docker.py role --repo OWNER/NAME [--timeout S] [NAME]` | a headless engineer run renews its token and opens a draft PR as the App's bot |
+| `python3 tests/session/live_docker.py pr URL` | the PR was opened as a draft by the App's bot |
+
+The installer's proxy, Linear preset and Linear app checks stay manual ([Upgrading › Live checks](upgrading.md#live-checks)).
+
+## Tests
+
+```bash
+export PYTHONPATH=.:.github:src   # from the repo root
+```
+
+Lint (tool versions pinned in `.github/workflows/test.yml`):
+
+```bash
+python3 .github/comment_budget.py
+python3 .github/mini_op_guard.py
+ruff check --no-cache
+ruff format --check --no-cache
+python3 -m tests.unit_imports
+pyright
+lint-imports --no-cache
+pylint --disable=all --enable=cyclic-import,duplicate-code src/ensemble
+vulture
+python3 -m tests.checks
+python3 .github/run_tests.py "Repository integration" tests/integration
+python3 .github/integration_jobs.py --check
+actionlint -shellcheck= -pyflakes=
+typos --config pyproject.toml
+```
+
+`.github/mini_op_guard.py` rejects private and CGNAT IPv4 addresses, email addresses, UUIDs, `.local` host names and literal keychain item names under `.mini-op/` (and, on a PR changing it, in the PR's title, body and commits); its findings never print the matched text.
+
+Pre-commit hook, once per clone: `git config core.hooksPath .githooks`. `.githooks/pre-commit` runs `ruff check --fix` and `ruff format` on each staged `.py` file at CI's `ruff==` pin and re-stages it. Docker Host checkouts run it (the worker image sets `core.hooksPath`).
+
+| Suite | Command |
+|---|---|
+| one project's unit tests | `python3 .github/run_tests.py "Session unit" tests/session/unit` |
+| all unit tests | `python3 .github/run_tests.py Unit --unit` |
+| one unit shard | `python3 .github/run_tests.py Unit --unit --shard 1/8` |
+| one test file or complete test ID | `python3 .github/run_tests.py Integration <file or ID>` |
+| one repository integration shard | `python3 .github/run_tests.py 'Repository integration 1' tests/integration --shard 1/8` |
+| integration shard (labels in `.github/workflows/test.yml`) | `python3 .github/integration_jobs.py <N>` |
+| Docker protocol fixtures (needs `jsonschema==4.26.0`) | `python3 .github/run_tests.py Protocol tests/unit/docker_broker_protocol_test.py` |
+| Go broker, in `src/broker/` | `sh with-go-state.sh gofmt -l .`, `… go vet ./...`, `… go test ./...`, `… go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...` |
+
+Run tests only through these supervised, sandboxed entries. Unit tests are pure logic with fakes: no processes, no sockets, writes only in the runner's temp dir. Integration tests run real tools in `tests/utils/sandbox.py`, tmux only on `tests/session/live_tmux.py` servers. A harness outlives the start that made it: `tests/session/harnesses.py`'s `end(home)` closes the harnesses under a HOME before cleanup. Broker tests use fake credentials, never the real keychain.
+
+A PR's added and changed `*/src` lines need unit coverage of at least `THRESHOLD` in `.github/coverage_gate.py` (CI job `Coverage`):
+
+```bash
+RUN_TESTS_COVERAGE=/tmp/coverage-data python3 .github/run_tests.py Unit --unit
+python3 .github/coverage_gate.py /tmp/coverage-data origin/main
+```
+
+`# pragma: no cover` is allowed only in the header of a function only integration tests run, registered in `NO_COVER_ALLOWED` of its layer's `tests/guard_data/<package>.py`.
+
+`.github/ci_scope.py` picks what CI runs (`python3 .github/ci_scope.py --event pull_request --paths <path>…`):
+
+| Change/event | Unit and integration tests | Repository tests |
+|---|---|---|
+| PR touching only `src/ensemble/manager/`, `src/ensemble/orchestrator/`, their `tests/<layer>/`, `skills/manage/`, `skills/board/`, `hooks/` and `launchd/` | both upper layers | skipped |
+| PR touching only root `*.md` files and/or `docs/` but `docs/architecture.md` (read by repository checks) | upper skill unit tests in `Lint style` only | skipped |
+| PR changing only the release `version` of the plugin manifests and `package.json` | skipped; every lint runs | skipped |
+| anything else, a push to `main` or `merge_group` | all layers | run |
+
+The required `CI` aggregate accepts only the skips its scope allows. `Broker ubuntu-24.04` runs the Go checks for full scope; the `Broker macOS` and `Installer macOS` workflows run apart and never block `CI`. `Worker image` (`.github/workflows/worker-image.yml`) builds the real image when a PR changes an image input.
+
+To regenerate the integration timing table, let a PR's whole `CI` workflow finish (rerun it for more samples), then per attempt, each into its own empty directory:
+
+```bash
+gh run download <run-id> --repo windroc-labs/ensemble --pattern 'integration-<run-id>-<attempt>-*' --dir /tmp/integration-samples/<attempt>
+gh api repos/windroc-labs/ensemble/actions/runs/<run-id>/attempts/<attempt> > /tmp/integration-samples/<attempt>/run.json
+python3 .github/integration_timings.py /tmp/integration-samples --output .github/integration_durations.json
+python3 .github/integration_jobs.py --check
+```
+
+Live tests run a real client by hand, outside CI ([Docker live acceptance](#docker-live-acceptance)); OpenCode on the host's Ollama runs them without spending quota, gating only tests that need just a running agent, not ones that depend on the reply protocol.

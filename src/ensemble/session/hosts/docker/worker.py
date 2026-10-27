@@ -1,5 +1,5 @@
 """A harness-owned Docker worker: the guard in its container, reached through one `docker exec -i`
-(docs/docker-host.md › Harness-owned workers). Every channel frame is untrusted: the client shares
+(docs/architecture.md › Harness-owned workers). Every channel frame is untrusted: the client shares
 the guard's uid. A frame can end its own worker; only confirmed container removal makes it ABSENT.
 """
 

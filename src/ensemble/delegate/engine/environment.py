@@ -1,5 +1,5 @@
 """A run's EnvironmentSpec from the config layers and its prefetch target from the input
-(docs/docker-host.md › Environment config).
+(docs/architecture.md › Environments).
 """
 
 from collections.abc import Mapping

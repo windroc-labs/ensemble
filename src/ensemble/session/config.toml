@@ -35,7 +35,7 @@
 #                            starting a run whose tier or effort has no entry here is a config error
 # [clients.claude.accounts.<name>]  a Claude account a worker or role may select (ENSEMBLE_ACCOUNT); only the Docker
 #                    Host uses it, injecting that account's setup-token alone (ensemble-broker login claude <name>;
-#                    docs/docker-host.md › Claude accounts); <name> 1–64 lowercase letters, digits, ., _ or -, never
+#                    docs/architecture.md › Claude accounts); <name> 1–64 lowercase letters, digits, ., _ or -, never
 #                    setup-token. default, the account of no selection, is always registered; selecting an
 #                    unregistered name is a config error. None packaged; no secret:
 #   dir              its CLAUDE_CONFIG_DIR on the host, ~ expanded, absolute; absent → ~/.claude; never on default.
@@ -143,7 +143,7 @@ max = "max"
 #   models           model names it lists beside those tiers map to it; [] → only those
 #   context          optional: its context window in tokens, as ollama_context; absent → 65536
 #                    Its API key: on tmux, `opencode auth login` (provider <name>), which ensemble never reads;
-#                    on Docker, `ensemble-broker login opencode <name>`, every listed one (docs/docker-host.md › OpenCode)
+#                    on Docker, `ensemble-broker login opencode <name>`, every listed one (docs/architecture.md › OpenCode on Docker)
 # [clients.opencode.efforts]  effort → its --variant (a model without that variant ignores it)
 [clients.opencode]
 implementation = "ensemble.session.clients.opencode:OpenCodeClient"
@@ -185,10 +185,10 @@ max = "max"
 #                     ([clients.<name>.modes]); false → auto mode
 # [hosts.tmux]
 #   status_line       true → tui sessions show tmux's status line
-# [hosts.docker]      each tui session in its own container, made by ensemble-broker (docs/docker-host.md):
+# [hosts.docker]      each tui session in its own container, made by ensemble-broker (docs/architecture.md#docker-host):
 #   docker            the docker CLI, an absolute path
 #   plugins           pinned sources: name@owner/repo#commit[::marketplace-owner/repo#commit]; []: none
-#                     Both commits are full 40-hex hashes (docs/docker-host.md › Plugins).
+#                     Both commits are full 40-hex hashes (docs/architecture.md › Plugins).
 #   github.app        the slug of the GitHub App whose installation tokens every Docker session gets, the one
 #                     `ensemble-broker login github ensemble-broker-bot` saved (scripts/install.sh writes it); "": none
 [hosts]

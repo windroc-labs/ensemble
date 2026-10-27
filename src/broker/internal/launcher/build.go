@@ -650,7 +650,7 @@ func (h Host) useBase(ctx context.Context, ref, baseID, userImage string) (strin
 				lacks = append(lacks, item)
 			}
 		}
-		return "", "", protocol.New(protocol.BuildFailed, "Base image "+ref+" lacks "+strings.Join(lacks, ", ")+"; see docs/docker-host.md#base-images.")
+		return "", "", protocol.New(protocol.BuildFailed, "Base image "+ref+" lacks "+strings.Join(lacks, ", ")+"; see docs/architecture.md#base-images.")
 	}
 	if _, err := h.Docker.Run(ctx, []string{"tag", baseID, userImage}, nil); err != nil {
 		return "", "", diagnosed(err, protocol.BuildFailed, "Tagging base image "+ref+" failed.")
