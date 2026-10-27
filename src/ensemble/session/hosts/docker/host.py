@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import functools
 import json
 import logging
 import os
@@ -25,6 +26,7 @@ from datetime import datetime
 from typing import NamedTuple
 
 import ensemble.utils
+from ensemble.session.engine.status_log import SessionStatusLog
 from ensemble.session.engine.tmux_cli import (
     DIED,
     Probe,
@@ -69,8 +71,10 @@ from ensemble.session.hosts.base import (
     Process,
     tui_lock,
 )
+from ensemble.session.hosts.docker import guard_hook, maintenance
 from ensemble.session.hosts.docker import hook as docker_hook
 from ensemble.session.hosts.docker import supervisor as run_supervisor
+from ensemble.session.hosts.docker.activity import activity
 from ensemble.session.hosts.docker.broker import (
     RELAY,
     Broker,
@@ -89,6 +93,7 @@ from ensemble.session.hosts.docker.daemon import (
     endpoint,
     exec_runner,
 )
+from ensemble.session.hosts.docker.hooks import HookWorker
 from ensemble.session.hosts.docker.mounts import (
     KIND_LABEL,
     WORKSPACE_LABEL,
@@ -98,6 +103,7 @@ from ensemble.session.hosts.docker.mounts import (
 from ensemble.session.hosts.docker.pipe import DockerPiped
 from ensemble.session.hosts.docker.relay import GEN, SOCKET
 from ensemble.session.hosts.docker.types import Started
+from ensemble.session.hosts.docker.worker import GUARD, RUN, DockerWorker, GuardedView
 from ensemble.session.hosts.types import CommandView
 from ensemble.utils import (
     DOCKER_STATE,
@@ -123,6 +129,9 @@ DEAD_SIGNAL = "ensemble-dead"
 RECORD = "host.json"
 PIPE_LOCK = "pipe.lock"  # held by a headless run's harness while its client runs
 PIPED = "pipe"
+GUARDED = "guard"
+OWNER_LOCK = "guard.lock"
+BUSY = "previous worker generation (live or unknown)"
 READY_WAIT = 10
 IMAGE_PYTHON = "/opt/ensemble/venv/bin/python"
 STATE_ROOT = "/run/ensemble"  # the client context's Container.state_root
@@ -183,6 +192,27 @@ def _record(name: str) -> dict:
 def _piped(name: str, generation: str) -> bool:
     found = _record(name)
     return found.get("generation") == generation and found.get("mode") == PIPED
+
+
+def _guarded(name: str, generation: str) -> bool:
+    found = _record(name)
+    return found.get("generation") == generation and found.get("mode") == GUARDED
+
+
+def _owner_path(name: str) -> str:
+    return os.path.join(state_dir(name), OWNER_LOCK)
+
+
+def _take_owner(name: str) -> int | None:
+    """guard.lock's fd, flocked for its worker's life; None while another holds it."""
+    os.makedirs(state_dir(name), mode=0o700, exist_ok=True)
+    fd = os.open(_owner_path(name), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return None
+    return fd
 
 
 def _save_record(name: str, data: Mapping) -> None:
@@ -421,7 +451,7 @@ def _accept_started(
     if (started.github_user_id is None) == bool(github):
         raise SessionError("broker: bad response to start: github_user_id")
     save(
-        run_supervisor.deadline_file(state_dir(name), generation),
+        maintenance.deadline_file(state_dir(name), generation),
         json.dumps(started.deadline),
         durable=True,
     )
@@ -649,6 +679,7 @@ class DockerHost(Host):
     _inherit_env = False  # the container gets only the launch's own env (D10)
     attachable = True
     _environments = True
+    _harnessed = True
 
     def __init__(
         self,
@@ -698,6 +729,7 @@ class DockerHost(Host):
         self.run = run
         self.broker = Broker() if broker is None else broker
         self._warned: set[str] = set()
+        self._workers: dict[str, DockerWorker] = {}
 
     def container_tmux(self, container: str) -> TmuxCli:
         return TmuxCli(exec_runner(self.docker, container, run=self.run))
@@ -846,6 +878,10 @@ class DockerHost(Host):
                         os.unlink(marker)
 
     def _sweep_row(self, row: Row) -> None:
+        if _guarded(row.name, row.generation):
+            if _lock_free(_owner_path(row.name)):
+                self.broker.close(row.container)
+            return
         if _piped(row.name, row.generation):
             if _lock_free(os.path.join(state_dir(row.name), PIPE_LOCK)):
                 self.broker.close(row.container)
@@ -884,6 +920,8 @@ class DockerHost(Host):
         """
         record = _record(row.name)
         if row.state != "running" or record.get("generation") != row.generation:
+            return True
+        if record.get("mode") == GUARDED:
             return True
         state = state_dir(row.name)
         stale = os.path.join(state, f"{row.generation}.stale")
@@ -1087,7 +1125,11 @@ class DockerHost(Host):
         events: str | None = None,
         record: Record | None = None,
         metadata: Mapping[str, str] | None = None,
-    ) -> DockerTerminal:
+    ) -> InteractiveProcess:
+        if (metadata or {}).get("owner"):
+            return self._worker(
+                name, launch, terminal=True, display=display, events=events, metadata=metadata
+            )
         with _Stops() as stops:
             return self._terminal(
                 name,
@@ -1312,6 +1354,240 @@ class DockerHost(Host):
             raise SessionError(f"docker session {name}: {error}{cleanup}") from error
         return created
 
+    def worker(
+        self,
+        name: str,
+        launch: Launch,
+        *,
+        terminal: bool,
+        display: Display = None,
+        events: str | None = None,
+        metadata: Mapping[str, str] | None = None,
+    ) -> DockerWorker:
+        """A direct caller's start: under the tui lock, as pipe; the terminal path's TuiStore
+        already holds it.
+        """
+        lock = tui_lock(name)
+        os.makedirs(os.path.dirname(lock), mode=0o700, exist_ok=True)
+        with inode_lock(lock, wait=False) as held:
+            if not held:
+                raise SessionError(f"docker session {name}: busy")
+            return self._worker(
+                name, launch, terminal=terminal, display=display, events=events, metadata=metadata
+            )
+
+    def _worker(
+        self,
+        name: str,
+        launch: Launch,
+        *,
+        terminal: bool,
+        display: Display,
+        events: str | None,
+        metadata: Mapping[str, str] | None,
+    ) -> DockerWorker:
+        """The guard in a new container over one `docker exec -i`, holding the owner lock; a live or
+        unknown earlier guarded generation refuses (SessionBusy), an ended one is removed first.
+        """
+        if why := display_error(display):
+            raise ConfigError(why)
+        for key in launch.env:
+            if key in CLEARED or key.startswith("DOCKER_"):
+                raise ConfigError(
+                    f"docker session {name}: env {key} would reconfigure the docker CLI"
+                )
+        self._check_cwd(name, launch)
+        events = self.prepare_events(self.events_path(events))
+        metadata = metadata or {}
+        environment = self._environment(name, metadata)
+        owner = _take_owner(name)
+        if owner is None:
+            raise SessionBusy(name, BUSY)
+        made: list[DockerWorker] = []  # once built, the handle alone owns `owner`
+        try:
+            for row in self._rows():
+                if row.name == name and _guarded(name, row.generation):
+                    if self._row_liveness(name, row.generation) != Liveness.ABSENT:
+                        raise SessionBusy(name, BUSY)
+                    self.broker.close(row.container)
+            with _Stops() as stops:
+                handle = self._guard(
+                    name,
+                    launch,
+                    stops,
+                    owner=owner,
+                    made=made,
+                    terminal=terminal,
+                    display=display,
+                    events=events,
+                    metadata=metadata,
+                    environment=environment,
+                )
+        except BaseException:
+            if not made:
+                os.close(owner)
+            raise
+        return handle
+
+    def _guard(
+        self,
+        name: str,
+        launch: Launch,
+        stops: _Stops,
+        *,
+        owner: int,
+        made: list[DockerWorker],
+        terminal: bool,
+        display: Display,
+        events: str | None,
+        metadata: Mapping[str, str],
+        environment: EnvironmentSpec | None,
+    ) -> DockerWorker:
+        laps = _Laps()
+        created = self._container(name, launch, stops, laps, metadata, environment=environment)
+        container, generation, hook, _, cwd, _, _, _ = created
+        run = f"{RUN}/{generation}"
+        handle = proc = None
+        try:
+            stops.check()
+            self._stage_files(container, metadata)
+            self._stage_prompt(container, metadata)
+            _save_record(
+                name,
+                {
+                    "generation": generation,
+                    "sid": metadata.get("sid"),
+                    "client": metadata.get("client"),
+                    "display": display,
+                    "record": None,
+                    "events": events,
+                    "mode": GUARDED,
+                    "environment": None if environment is None else environment.persisted(),
+                },
+            )
+            env = {
+                **self._exec_env(launch, created.started, self._app(environment)),
+                "ENSEMBLE_GUARD_HOOK_SOCKET": f"{run}/hook",
+            }
+            shown = ("--terminal", "--display-socket", f"{run}/display") if terminal else ()
+            argv, docker_env = docker_call(
+                self.docker,
+                *("exec", "-i", "--workdir", cwd),
+                *(arg for key in env for arg in ("--env", key)),
+                *(container, IMAGE_PYTHON, "-I", GUARD, *shown),
+                *("--hook-socket", f"{run}/hook", "--lease", f"{run}/lease", "--"),
+                *("with-secrets", "--client", metadata["home_field"].removesuffix("_dir")),
+                *launch.argv,
+            )
+            proc = subprocess.Popen(
+                argv,
+                env={**docker_env, **env},
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                start_new_session=True,
+                bufsize=0,
+            )
+            assert proc.stdin is not None
+            os.set_blocking(proc.stdin.fileno(), False)
+            tui_dir = os.path.join(os.path.expanduser(TUI_DIR), name)
+            handle = DockerWorker(
+                name,
+                generation,
+                proc,
+                state=state_dir(name),
+                events=events,
+                hooks=HookWorker([hook, "hook", "--serve", tui_dir])
+                if metadata.get("owner")
+                else None,
+                remove=lambda: self._remove(container),
+                owner=owner,
+                maintenance=functools.partial(
+                    maintenance.Maintenance,
+                    name,
+                    state_dir(name),
+                    generation,
+                    self.broker,
+                    root=hook_root(hook),
+                ),
+                report=self._reporter(name, events),
+                load=lambda: _record(name),
+                store=lambda data: _save_record(name, data),
+                terminal=terminal,
+            )
+            made.append(handle)
+            handle.await_start()
+            handle.begin()
+            laps("client")
+            _save_result(name, created, laps.phases)
+            stops.check()
+        except BaseException as error:
+            cleanup = ""
+            if handle is not None:
+                try:
+                    handle.close()
+                except SessionError as failed:
+                    cleanup = f"; {failed}"
+            else:
+                if proc is not None:
+                    kill_group(proc)
+                cleanup = self._roll_back(None, container)
+            if not isinstance(error, (SessionError, OSError, ValueError)):
+                raise
+            raise SessionError(f"docker session {name}: {error}{cleanup}") from error
+        laps.report(f"docker timing {name} {generation}")
+        self._workers[name] = handle
+        return handle
+
+    def _remove(self, container: str) -> None:
+        self.broker.close(container)
+        self._spawn_reclaim()
+
+    def _reporter(self, name: str, events: str | None):
+        def report(word: str, text: str) -> None:
+            if events:
+                SessionStatusLog(events).write(name, word, text)
+            else:
+                LOG.warning("docker session %s: %s %s", name, word, text)
+
+        return report
+
+    def worker_liveness(self, name: str, generation: str) -> Liveness:
+        """LIVE while another process holds its owner lock, with no docker call; else the row's."""
+        if not GEN.fullmatch(generation) or not SESSION_NAME.fullmatch(name):
+            return Liveness.UNKNOWN
+        if not _lock_free(_owner_path(name)):
+            return Liveness.LIVE
+        return self._row_liveness(name, generation)
+
+    def _row_liveness(self, name: str, generation: str) -> Liveness:
+        """The container of `generation` and its guard's lease, by docker; ABSENT permits only that
+        container's removal.
+        """
+        try:
+            rows = self._rows()
+        except SessionError:
+            return Liveness.UNKNOWN
+        row = next((r for r in rows if r.name == name and r.generation == generation), None)
+        if row is None or row.state != "running":
+            return Liveness.ABSENT
+        if not _guarded(name, generation):
+            return Liveness.UNKNOWN
+        argv, env = docker_call(
+            self.docker,
+            *("exec", "-i", row.container, IMAGE_PYTHON, "-I", GUARD),
+            *("--probe", f"{RUN}/{generation}"),
+        )
+        try:
+            res = self.run(argv, env, timeout=RUN_TIMEOUT)
+        except (OSError, subprocess.TimeoutExpired):
+            return Liveness.UNKNOWN
+        word = res.stdout.strip() if res.returncode == 0 else ""
+        if word in ("exited", "absent"):
+            return Liveness.ABSENT
+        return Liveness.LIVE if word == "live" else Liveness.UNKNOWN
+
     def pipe(
         self, name: str | None, launch: Launch, *, metadata: Mapping[str, str] | None = None
     ) -> DockerPiped:
@@ -1390,14 +1666,19 @@ class DockerHost(Host):
             proc,
             close=lambda: self._close_piped(name, container),
             lock=lock,
-            maintain=lambda stopped: run_supervisor.maintain(
-                name,
-                state_dir(name),
-                generation,
-                self.broker,
+            maintain=lambda stopped: maintenance.run(
+                maintenance.Maintenance(
+                    name,
+                    state_dir(name),
+                    generation,
+                    self.broker,
+                    report=lambda word, text: LOG.warning(
+                        "docker session %s: %s %s", name, word, text
+                    ),
+                    root=hook_root(created.hook),
+                    close=lambda: self.broker.close(container),
+                ),
                 stopped,
-                report=lambda word, text: LOG.warning("docker session %s: %s %s", name, word, text),
-                root=hook_root(created.hook),
             ),
         )
 
@@ -1528,6 +1809,8 @@ class DockerHost(Host):
 
     def hook_callback(self, name: str, metadata: Mapping[str, str]) -> HookCallback:
         generation = metadata["generation"]
+        if metadata.get("owner"):
+            return HookCallback(guard_hook.__name__, {"target": name, "generation": generation})
         return HookCallback(
             docker_hook.__name__,
             {
@@ -1539,10 +1822,12 @@ class DockerHost(Host):
             },
         )
 
-    def attach(self, name: str) -> DockerTerminal:
+    def attach(self, name: str) -> InteractiveProcess:
         found = self._containers().get(name)
         if found is None:
             raise SessionError(f"no docker session {name}")
+        if _guarded(name, found.generation):
+            return self._guarded_process(found)
         current = self._recover(found)
         container, generation = found.container, found.generation
         tmux = self.container_tmux(container)
@@ -1563,6 +1848,29 @@ class DockerHost(Host):
             container=container,
             generation=generation,
             current=current,
+        )
+
+    def _guarded_process(self, row: Row) -> InteractiveProcess:
+        """The handle this process holds, else a view of the worker its owner holds."""
+        handle = self._workers.get(row.name)
+        if handle is not None and handle.removed:
+            del self._workers[row.name]
+        elif handle is not None and handle.generation == row.generation:
+            return handle
+        name, generation = row.name, row.generation
+
+        def remove() -> None:
+            if not _lock_free(_owner_path(name)):
+                raise SessionError(f"docker session {name}: owned by its harness")
+            self._remove(row.container)
+
+        return GuardedView(
+            name,
+            generation,
+            state=state_dir(name),
+            load=lambda: _record(name),
+            liveness=lambda: self.worker_liveness(name, generation),
+            remove=remove,
         )
 
     def list(self) -> list[str]:
@@ -1593,9 +1901,28 @@ class DockerHost(Host):
         ]
 
     def _row(self, name: str, container: str, generation: str) -> SessionRow:
-        """unknown when the container's tmux did not answer: no proof its client exited."""
+        """unknown when the container's tmux did not answer: no proof its client exited. A guarded
+        row's state: its owner lock and activity, with no docker call.
+        """
         record = _record(name)
         record = record if record.get("generation") == generation else {}
+        if record.get("mode") == GUARDED:
+            word = activity(state_dir(name), generation)
+            state = StatusState.WORKING
+            if _lock_free(_owner_path(name)):
+                state = StatusState.UNKNOWN
+            elif word is not None and word != StatusState.WORKING:
+                state = word
+            return SessionRow(
+                name=name,
+                sid=record.get("sid"),
+                client=record.get("client"),
+                state=state,
+                display=record.get("display"),
+                shown=None,
+                last_lines=None,
+                own=False,
+            )
         try:
             listing = self.container_tmux(container).listing()
         except TuiError:
@@ -1625,6 +1952,16 @@ class DockerHost(Host):
         found = self._containers().get(name)
         if found is None:
             raise SessionError(f"no docker session {name}")
+        if _guarded(name, found.generation):
+            argv = docker_call(
+                self.docker,
+                *("exec", "-it", found.container, IMAGE_PYTHON, "-I", GUARD),
+                *("--attach", f"{RUN}/{found.generation}/display"),
+            )[0]
+            return CommandView(
+                printed=shlex.join(argv),
+                argv=("/usr/bin/env", *(arg for key in CLEARED for arg in ("-u", key)), *argv),
+            )
         argv = _attach_argv(self.docker, found.container, name)
         return CommandView(
             # '=<name>' quoted, as tmux_cli.attach_command: zsh expands a bare =word.

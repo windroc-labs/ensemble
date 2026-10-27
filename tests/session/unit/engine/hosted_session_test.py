@@ -61,6 +61,7 @@ from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedInProcess, OwnedSession
 from ensemble.session.hosts.base import Piped
+from ensemble.session.hosts.docker.host import DockerHost
 from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.session.modes import tui
 from ensemble.session.viewer import hidden as hidden_store
@@ -3400,3 +3401,39 @@ class BoundOwnerTest(HostedTuiBase):
         with self.assertRaisesRegex(SessionError, "expected sid 'other'"):
             self.session.retire("w1", sid="other")
         self.assertFalse(os.path.exists(os.path.join(self.channel.directory, "requests")))
+
+
+class DockerOwnedTest(Case):
+    """A Claude tui start on the Docker Host is harness-owned, and its worker remote there; Codex
+    and OpenCode starts keep the legacy path until the harness owns them.
+    """
+
+    def setUp(self):
+        self.setup = HostedSession.configured(
+            clients={
+                "claude": {"implementation": "ensemble.session.clients.claude:ClaudeClient"},
+                "codex": {"implementation": "ensemble.session.clients.codex:CodexClient"},
+            },
+            hosts=Host.parse_hosts(
+                {
+                    "docker": {
+                        "implementation": "ensemble.session.hosts.docker.host:DockerHost",
+                        "docker": "/usr/local/bin/docker",
+                    },
+                    "default": "docker",
+                }
+            ),
+        )._config()
+
+    def test_only_a_claude_tui_start_on_docker_is_owned(self):
+        docker = DockerHost("docker", {"docker": "/usr/local/bin/docker"})
+        claude, codex = (self.setup.registry.client(name) for name in ("claude", "codex"))
+        self.assertTrue(hosted_session._owned(self.setup, Mode.TUI, claude, docker))
+        self.assertFalse(hosted_session._owned(self.setup, Mode.TUI, codex, docker))
+        self.assertFalse(hosted_session._owned(self.setup, Mode.HEADLESS, claude, docker))
+
+    def test_owned_is_remote_as_its_mode_says(self):
+        for remote in (True, False):
+            with self.subTest(remote=remote):
+                session = SimpleNamespace(_running=SimpleNamespace(remote=remote))
+                self.assertIs(hosted_session.Owned(session, "docker").remote, remote)
