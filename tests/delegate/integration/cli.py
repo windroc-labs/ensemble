@@ -39,14 +39,14 @@ UNSAVED = {k: v for k, v in DONE.items() if k != "deliverable"}
 UNSAVED_ERROR = "done with a local destination must carry the deliverable"
 
 
-RACED = ("client_session", "stderr")  # noted by the session harness
+RACED = ("client_session", "session_metadata", "stderr")  # noted by the session harness
 
 
 class Runs(Case):
     """A CLI run's records in `work` and the fake client's calls in `log`."""
 
     def records(self) -> list[dict]:
-        """A session harness notes its worker's client_session and stderr as the run notes its
+        """A session harness notes its worker's RACED rows as the run notes its
         input: those notes are put after the input they raced.
         """
         with open(os.path.join(self.work, "run", "run.jsonl")) as f:
