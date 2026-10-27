@@ -169,9 +169,11 @@ class Screen:
                 if self.escape.startswith("\x1b[") and len(self.escape) > 2 and "@" <= char <= "~":
                     self.csi(self.escape[2:])
                     self.escape = ""
-                elif self.escape.startswith("\x1b]"):
+                elif self.escape[1] in "]P_^X":  # OSC, DCS, APC, PM, SOS: up to BEL or ST
                     if char == "\x07" or self.escape.endswith("\x1b\\"):
                         self.escape = ""
+                    else:
+                        self.escape = self.escape[:2] + char  # enough to see ST
                 elif len(self.escape) == 2 and char not in "[]()":
                     if char == "7":
                         self.saved = self.row, self.column

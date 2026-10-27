@@ -140,6 +140,22 @@ class GuardTest(Case):
         self.assertTrue(screen.text(None).startswith("B"))
         self.assertIn("Q", screen.text(None))
 
+    def test_screen_swallows_every_string_sequence_however_long(self):
+        """The client's own kitty-graphics query (APC) once showed as prompt text (WDRC-344)."""
+        screen = guard.Screen(rows=2, columns=40)
+        screen.append(b"> \x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\typed")
+        self.assertEqual(screen.text(None), "> typed")
+        for start, end in ((b"\x1bP", b"\x1b\\"), (b"\x1b^", b"\x1b\\"), (b"\x1bX", b"\x07")):
+            with self.subTest(start=start):
+                screen = guard.Screen(rows=2, columns=40)
+                screen.append(start + b"+q544e" + end + b"ok")
+                self.assertEqual(screen.text(None), "ok")
+        screen = guard.Screen(rows=2, columns=40)
+        for part in (b"\x1b]8;;https://example.com/", b"x" * 1000, b"\x1b", b"\\link"):
+            screen.append(part)
+        self.assertEqual(screen.text(None), "link")
+        self.assertLess(len(screen.escape), 4)
+
     def test_live_client_adopted_zombie_is_reaped_and_direct_exit_code_kept(self):
         runtime = self.runtime()
         runtime.proc = mock.Mock(pid=10, returncode=None)
