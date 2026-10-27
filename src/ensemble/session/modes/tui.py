@@ -44,6 +44,7 @@ from ensemble.session.engine.types import (
     TurnEnd,
     TurnFailed,
     TurnStarted,
+    Unanswered,
 )
 from ensemble.session.hosts.base import (
     HARNESS_ROOT,
@@ -83,6 +84,10 @@ POLL_SCREEN = 0.5
 LOG = logging.getLogger("session")
 Cursor = tuple[int | None, int]  # inode, offset
 OWNER = re.compile(r"[0-9a-f]{32}")
+WAIT = 10  # a killed harness's guard reaps its client in about 2 s
+RECHECK = 0.1
+GATE_BUSY = "previous worker generation (live or unknown)"
+CLOSE_BUSY = "worker generation (live or unknown)"
 
 
 def checked_name(name) -> str:
@@ -164,7 +169,9 @@ class TuiStore:
     """Tui session `name`'s dir and lock under TUI_DIR; what changes them takes the lock.
     attach(name, host=...) takes by name whatever is there: a tui session, a half-gone one (its dir
     or its host session alone), a non-tui host session or nothing. close: under its lock, closes the
-    host's session of that name and removes the dir; absent is fine.
+    host's session of that name and removes the dir; absent is fine. An owned record (session.json
+    naming its harness) and its display go only with their own worker generation (the record rule):
+    its owner closes by its handle; anyone else asks that generation's liveness.
     """
 
     def __init__(self, name: str, *, host: Host, sid: str | None = None) -> None:
@@ -253,10 +260,19 @@ class TuiStore:
                 self._unmake(made)
                 raise
 
-    def close(self) -> None:
+    def close(self, handle: Process | None = None, generation: str | None = None) -> bool:
+        """handle: the owner's, of `generation`; else `generation`: the caller's (None: whichever
+        holds the name). Whether the dir went.
+        """
         with self._locked():
+            record = _owned_record(self)
+            if handle is not None:
+                return self._close_own(handle, generation, record)
+            if record is not None:
+                return self._close_other(record, generation)
             self._close()
             self._forget()
+            return True
 
     def tracked(self) -> tuple[str, str]:
         return self.dir, os.path.join(self.dir, tui_hook.HOOKS)
@@ -273,12 +289,31 @@ class TuiStore:
                 state = {}
             if isinstance(state, dict) and state.get("host", self.host.name) != self.host.name:
                 return
+            if (record := _owned_record(self)) is not None and _generation(
+                self, record, wait=False
+            ) != Liveness.ABSENT:
+                return
             self._drop()
             os.unlink(lock)
 
-    def stop(self, terminal: Process, sid: str | None) -> None:
-        """Closes `terminal` while it holds the name or, unlisted, its @sid is sid."""
+    def stop(
+        self,
+        terminal: Process,
+        sid: str | None,
+        *,
+        owned: bool = False,
+        generation: str | None = None,
+    ) -> None:
+        """Closes `terminal` while it holds the name or, unlisted, its @sid is sid; an owned record
+        by the record rule (owned: `terminal` is the owner's handle of `generation`).
+        """
+        if owned:
+            self.close(terminal, generation)
+            return
         with self._locked():
+            if (record := _owned_record(self)) is not None:
+                self._close_other(record, generation)
+                return
             try:
                 process = self._lookup()
             except SessionError:
@@ -345,6 +380,52 @@ class TuiStore:
             self._unmake(made)
             raise SessionError(f"{folder}: {e.strerror or e}") from None
         return made
+
+    def _close_own(self, handle: Process, generation: str | None, record: dict | None) -> bool:
+        """The owner's: its handle, its own display, then the dir while session.json is its."""
+        failed = handle.state() == Liveness.UNKNOWN
+        if not failed:
+            try:
+                handle.close()
+            except Unanswered:
+                failed = True
+            except SessionError as error:
+                raise SessionError(f"cannot close tui session {self.name}: {error}") from error
+        self._close_display(generation)
+        if failed:
+            raise Unanswered(f"worker {self.name}: exit unconfirmed")
+        if record is None or record.get("generation") != generation:
+            return False
+        self._drop()
+        self._forget()
+        return True
+
+    def _close_display(self, generation: str | None) -> None:
+        """The name's host session while it is `generation`'s display."""
+        try:
+            process = self._lookup()
+            if process is None or process.session_identity()[1] != generation:
+                return
+        except SessionError:
+            return
+        try:
+            process.close()
+        except SessionError as error:
+            raise SessionError(f"cannot close tui session {self.name}: {error}") from error
+
+    def _close_other(self, record: dict, generation: str | None) -> bool:
+        """A non-owner's: nothing unless `record` is the caller's generation and it is gone."""
+        if generation is not None and record.get("generation") != generation:
+            return False
+        if _generation(self, record, wait=True) != Liveness.ABSENT:
+            raise SessionBusy(self.name, CLOSE_BUSY)
+        try:
+            process = self._lookup()
+        except SessionError as error:
+            raise SessionError(f"cannot close tui session {self.name}: {error}") from error
+        self._shut(process)
+        self._forget()
+        return True
 
     def _close(self) -> None:
         try:
@@ -437,14 +518,65 @@ def _sweep(store: TuiStore) -> None:
             LOG.warning("tui sweep %s: %s", name, error)
 
 
+def _owned_record(store: TuiStore) -> dict | None:
+    """session.json if it names an owner; unreadable but naming one: {"owner": ...} (its
+    generation unknown); else None.
+    """
+    try:
+        record = store.read()
+    except SessionError:
+        try:
+            raw = json.loads(read_regular(store.state_file) or b"{}")
+        except ValueError:
+            return None
+        return {"owner": raw["owner"]} if isinstance(raw, dict) and "owner" in raw else None
+    return record if "owner" in record else None
+
+
+def _generation(store: TuiStore, record: Mapping, *, wait: bool) -> Liveness:
+    """Owned `record`'s worker generation; wait: LIVE re-checked every RECHECK s for up to WAIT s
+    (a reaping guard). Asked only once no running owner answers for it.
+    """
+    generation = record.get("generation")
+    if not isinstance(generation, str):
+        return Liveness.UNKNOWN
+    deadline = time.monotonic() + WAIT
+    while True:
+        try:
+            found = store.host.worker_liveness(store.name, generation)
+        except SessionError:
+            return Liveness.UNKNOWN
+        if not wait or found != Liveness.LIVE or time.monotonic() >= deadline:
+            return found
+        time.sleep(RECHECK)
+
+
+def _running(name: str, host: Host) -> SessionError:
+    target = host.attach_target(name)
+    hint = "" if target is None else f"; {printed(target)}"
+    return SessionError(f"tui session {name} is running{hint}")
+
+
 def _stale(store: TuiStore) -> Process | None:
-    """Tui session `store.name`'s dead process, else None; SessionError while it runs."""
-    process = store.process()
-    if process is not None and process.alive():
-        target = store.host.attach_target(store.name)
-        hint = "" if target is None else f"; {printed(target)}"
-        raise SessionError(f"tui session {store.name} is running{hint}")
-    return process
+    """The gate: tui session `store.name`'s dead process, else None; SessionError while it runs.
+    An owned record goes by its worker generation, never by its display: SessionBusy while
+    unknown, the wait out of a reaping guard; once gone, the name's host session is stale.
+    """
+    record = _owned_record(store)
+    if record is None:
+        process = store.process()
+        if process is not None and process.alive():
+            raise _running(store.name, store.host)
+        return process
+    liveness = _generation(store, record, wait=True)
+    if liveness == Liveness.UNKNOWN:
+        raise SessionBusy(store.name, GATE_BUSY)
+    if liveness == Liveness.LIVE:
+        raise _running(store.name, store.host)
+    try:
+        return store._lookup()
+    except SessionError:
+        return None
 
 
 @dataclass(frozen=True)
@@ -492,8 +624,11 @@ class TuiMode(BaseMode):
         cursor: Cursor = (None, 0),
         replayed: tuple[SessionEvent | Stderr | ClientBound, ...] = (),
         opening: tuple[str, str] | None = None,
+        owned: bool = False,
     ) -> None:
-        """cursor: its next hook record (TuiStore.records)."""
+        """cursor: its next hook record (TuiStore.records); owned: `terminal` is its owner's
+        handle.
+        """
         super().__init__(prepared)
         self.name, self.run, self.host, self._terminal = store.name, run, store.host, terminal
         self._store, self._replayed, self._generation = store, replayed, generation
@@ -502,6 +637,7 @@ class TuiMode(BaseMode):
         self._opening = opening  # start's: sent once, OPEN_AFTER s after
         self._due: float | None = None  # its label's latest record
         self._held, self._checked = False, -POLL_SCREEN
+        self._owned = owned
 
     @classmethod
     def preflight(
@@ -615,6 +751,11 @@ class TuiMode(BaseMode):
         _sweep(store)
         generation = pending.state["generation"]
         return cls(prepared, run, terminal, store, generation, opening=run.opening)
+
+    @classmethod
+    def running(cls, name: str, *, host: Host) -> None:
+        """Raises the gate's refusal of a start while tui session `name` runs."""
+        raise _running(checked_name(name), host)
 
     @classmethod
     def snapshot(cls, name: str) -> dict:
@@ -854,12 +995,18 @@ class TuiMode(BaseMode):
         if not self._terminal.alive():
             raise SessionError(f"tui session {self.name} is not running")
 
-    def close(self) -> None:
-        self._store.close()
+    def close(self) -> bool:
+        """Whether its dir went (an owned record of another generation, or unconfirmed, stays)."""
+        return self._store.close(self._terminal if self._owned else None, self._generation)
 
     def stop(self) -> None:
         """Once, unless it raises; then ends (returncode: the code seen, else -SIGHUP)."""
         if self._live:
-            self._store.stop(self._terminal, self.prepared.spec.sid)
+            self._store.stop(
+                self._terminal,
+                self.prepared.spec.sid,
+                owned=self._owned,
+                generation=self._generation,
+            )
             self._live = False
         self._end()

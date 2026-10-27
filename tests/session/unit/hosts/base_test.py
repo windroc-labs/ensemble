@@ -338,7 +338,7 @@ class ManagedWorkerTest(Case):
         with self.assertRaisesRegex(SessionError, r"\Ahost h1 runs no managed worker\Z"):
             host.worker("w1", Launch(("client",), cwd="/w"), terminal=True)
         with self.assertRaisesRegex(SessionError, r"\Ahost h1 runs no managed worker\Z"):
-            host.worker_liveness("w1", "g1")
+            Host.worker_liveness(host, "w1", "g1")  # MemoryHost fakes its own
         self.assertEqual(host.calls.mock_calls, [])
 
     def test_a_worker_has_no_periodic_duty_unless_its_host_gives_one(self):

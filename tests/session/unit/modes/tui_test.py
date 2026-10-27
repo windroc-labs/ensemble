@@ -41,10 +41,12 @@ from ensemble.session.engine.types import (
     Permission,
     Prepared,
     Reply,
+    SessionBusy,
     SessionError,
     SessionInfo,
     Spec,
     TurnEnd,
+    Unanswered,
 )
 from ensemble.session.engine.worker import WorkerState
 from ensemble.session.hosts.base import InteractiveProcess, Process
@@ -2657,3 +2659,193 @@ class OwnerTest(Base):
                 self.assertEqual(str(caught.exception), f"no tui session w1: {path}: bad owner")
         self.write_state(self.state(owner=self.owner()))
         self.assertEqual(tui.TuiMode.snapshot(NAME)["owner"], self.owner())
+
+
+class RecordRuleTest(Base):
+    """An owned record (session.json with an owner) goes only with its own worker generation: the
+    owner closes by its handle; anyone else asks the generation's liveness (the gate, too).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.liveness = mock.Mock(return_value=Liveness.ABSENT)
+        self.host.worker_liveness = self.liveness
+        self.store = tui.TuiStore.attach(NAME, host=self.host)
+
+    def owned(self, generation: str = "g1", **changes) -> dict:
+        """An owned session.json of `generation` and its display."""
+        path = os.path.join(self.ensemble, "harness", "a" * 32)
+        os.makedirs(path, 0o700, exist_ok=True)
+        self.display = self.host.create(
+            NAME, identity=f"display-{generation}", metadata={"sid": SID, "generation": generation}
+        )
+        state = self.state(owner=path, generation=generation, **changes)
+        self.write_state(state)
+        return state
+
+    def handle(self, state: Liveness = Liveness.LIVE) -> mock.Mock:
+        handle = mock.create_autospec(InteractiveProcess, instance=True)
+        handle.state.return_value = state
+        return handle
+
+    def saved(self) -> dict:
+        with open(os.path.join(self.dir, "session.json"), encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_owned_stale_unknown_is_busy(self):
+        state = self.owned()
+        self.liveness.return_value = Liveness.UNKNOWN
+        with self.assertRaises(SessionBusy) as caught:
+            self.start()
+        self.assertEqual(caught.exception.holder, "previous worker generation (live or unknown)")
+        self.assertEqual(self.saved(), state)
+        self.assertIs(self.host.processes[NAME], self.display)
+        self.display.calls.close.assert_not_called()
+        self.liveness.assert_called_with(NAME, "g1")
+
+    def test_owned_stale_live_waits_then_goes_on(self):
+        self.owned()
+        self.liveness.side_effect = [Liveness.LIVE, Liveness.LIVE, Liveness.ABSENT]
+        self.start()
+        self.assertEqual(self.log.count(("sleep", tui.RECHECK)), 2)
+        self.display.calls.close.assert_called_once_with()
+        self.assertNotIn("owner", self.saved())
+
+    def test_owned_stale_live_refused_after_wait_untouched(self):
+        state = self.owned()
+        self.liveness.return_value = Liveness.LIVE
+        with self.assertRaisesRegex(SessionError, "^tui session w1 is running"):
+            self.start()
+        self.assertGreaterEqual(self.clock.now, tui.WAIT)
+        self.assertEqual(self.saved(), state)
+        self.display.calls.close.assert_not_called()
+
+    def test_owned_stale_absent_closes_the_display(self):
+        self.owned()
+        self.start()
+        self.display.calls.close.assert_called_once_with()
+        self.assertIsNot(self.host.processes[NAME], self.display)
+
+    def test_owned_stale_ignores_a_killed_display(self):
+        state = self.owned()
+        self.host.processes.clear()  # its display killed; the worker lives on
+        self.liveness.return_value = Liveness.LIVE
+        with self.assertRaisesRegex(SessionError, "is running"):
+            self.start()
+        self.assertEqual(self.saved(), state)
+
+    def test_owned_close_closes_the_handle_then_the_dir(self):
+        self.owned()
+        order = mock.Mock()
+        handle = self.handle()
+        handle.close.side_effect = lambda: order("handle")
+        self.display.calls.close.side_effect = lambda: order("display")
+        self.assertTrue(self.store.close(handle, "g1"))
+        self.assertEqual(order.call_args_list, [mock.call("handle"), mock.call("display")])
+        self.assertNoSessionDir()
+        self.liveness.assert_not_called()
+
+    def test_owned_stop_closes_the_handle(self):
+        self.owned()
+        handle = self.handle()
+        self.store.stop(handle, SID, owned=True, generation="g1")
+        handle.close.assert_called_once_with()
+        self.assertNoSessionDir()
+
+    def test_owned_close_failed_handle_keeps_the_record(self):
+        for failure in ("unknown", "unanswered"):
+            with self.subTest(failure=failure):
+                state = self.owned()
+                handle = self.handle(Liveness.UNKNOWN if failure == "unknown" else Liveness.LIVE)
+                handle.close.side_effect = Unanswered("worker w1: guard exit unconfirmed")
+                with self.assertRaisesRegex(Unanswered, "^worker w1: exit unconfirmed$"):
+                    self.store.close(handle, "g1")
+                self.assertEqual(handle.close.call_count, 0 if failure == "unknown" else 1)
+                self.display.calls.close.assert_called_once_with()
+                self.assertEqual(self.saved(), state)
+
+    def test_owned_close_of_an_old_generation_keeps_the_new_record_and_display(self):
+        state = self.owned("g2")
+        handle = self.handle(Liveness.ABSENT)
+        self.assertFalse(self.store.close(handle, "g1"))
+        self.display.calls.close.assert_not_called()
+        self.assertEqual(self.saved(), state)
+        self.assertFalse(self.store.close(handle, "g1"))  # a drain-window repeat, still harmless
+        self.liveness.assert_not_called()
+
+    def test_non_owner_close_absent_cleans_up(self):
+        for generation in (None, "g1"):
+            with self.subTest(generation=generation):
+                self.owned()
+                self.assertTrue(self.store.close(None, generation))
+                self.display.calls.close.assert_called_once_with()
+                self.assertNoSessionDir()
+                self.liveness.assert_called_with(NAME, "g1")
+
+    def test_non_owner_close_live_or_unknown_is_busy_untouched(self):
+        for liveness in (Liveness.LIVE, Liveness.UNKNOWN):
+            with self.subTest(liveness=liveness):
+                state = self.owned()
+                self.liveness.return_value = liveness
+                with self.assertRaises(SessionBusy) as caught:
+                    self.store.close()
+                self.assertEqual(caught.exception.holder, "worker generation (live or unknown)")
+                self.assertEqual(
+                    str(caught.exception),
+                    "busy: lock w1 is held by worker generation (live or unknown)",
+                )
+                self.display.calls.close.assert_not_called()
+                self.assertEqual(self.saved(), state)
+
+    def test_non_owner_close_of_another_generation_touches_nothing(self):
+        state = self.owned("g2")
+        self.liveness.return_value = Liveness.LIVE
+        self.assertFalse(self.store.close(None, "g1"))
+        self.liveness.assert_not_called()
+        self.assertNotIn(("sleep", tui.RECHECK), self.log)
+        self.display.calls.close.assert_not_called()
+        self.assertEqual(self.saved(), state)
+
+    def test_owned_record_without_generation_is_unknown(self):
+        state = self.owned()
+        del state["generation"]
+        self.write_state(state)
+        with self.assertRaises(SessionBusy):
+            self.store.close()
+        with self.assertRaises(SessionBusy) as caught:
+            tui._stale(self.store)
+        self.assertEqual(caught.exception.holder, "previous worker generation (live or unknown)")
+        self.liveness.assert_not_called()
+
+    def test_non_owner_stop_takes_the_record_rule(self):
+        state = self.owned()
+        self.liveness.return_value = Liveness.UNKNOWN
+        with self.assertRaises(SessionBusy):
+            self.store.stop(self.display, SID, generation="g1")
+        self.store.stop(self.display, SID, generation="g0")  # another generation's: untouched
+        self.display.calls.close.assert_not_called()
+        self.assertEqual(self.saved(), state)
+        self.liveness.return_value = Liveness.ABSENT
+        self.store.stop(self.display, SID, generation="g1")
+        self.assertNoSessionDir()
+
+    def test_expire_keeps_a_live_owned_record(self):
+        self.owned()
+        self.host.processes.clear()
+        with mock.patch.object(tui, "idle", return_value=True):
+            for liveness in (Liveness.LIVE, Liveness.UNKNOWN):
+                self.liveness.return_value = liveness
+                self.store.expire(set())
+                self.assertTrue(os.path.isdir(self.dir))
+            self.liveness.return_value = Liveness.ABSENT
+            self.store.expire(set())
+        self.assertNoSessionDir()
+        self.assertNotIn(("sleep", tui.RECHECK), self.log)
+
+    def test_unowned_close_unchanged(self):
+        self.write_state(self.state())
+        display = self.host.create(NAME, metadata={"sid": SID, "generation": "fixture-generation"})
+        self.assertTrue(self.store.close())
+        display.calls.close.assert_called_once_with()
+        self.assertNoSessionDir()
+        self.liveness.assert_not_called()

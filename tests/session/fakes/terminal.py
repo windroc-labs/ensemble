@@ -120,6 +120,7 @@ class MemoryHost(Host):
         self.serial = 0
         self.hook = hook
         self.calls.list.return_value = None
+        self.calls.worker_liveness.return_value = Liveness.ABSENT
 
     def create(self, name, sid=None, *, identity=None, receipt=None, metadata=None, display=None):
         self.serial += 1
@@ -150,6 +151,10 @@ class MemoryHost(Host):
             fd = os.open(events, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
             os.close(fd)
         return self.create(name, receipt=record, metadata=metadata, display=display)
+
+    def worker_liveness(self, name, generation):
+        """calls.worker_liveness's answer: ABSENT unless a test sets it."""
+        return self.calls.worker_liveness(name, generation)
 
     def detach(self, name, launch: Launch, *, display=None, events=None, record=None):
         self.calls.detach(name, launch, display=display, events=events, record=record)
