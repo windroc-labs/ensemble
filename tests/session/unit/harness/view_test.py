@@ -282,6 +282,118 @@ class DelegationTest(Base):
         self.assertFalse(view.alive())
 
 
+class ReattachTest(Base):
+    """A held attach that fails (its display reopened since, say) is made again once."""
+
+    def setUp(self):
+        super().setUp()
+        self.stale, self.fresh = mock.Mock(name="stale"), mock.Mock(name="fresh")
+        self.sessions = [self.stale, self.fresh]
+
+    def attach(self):
+        self.attaches += 1
+        if not self.sessions:
+            raise SessionError("its worker g1 is gone")
+        return self.sessions.pop(0)
+
+    def held(self) -> OwnedSession:
+        view = self.view()
+        view.info()
+        return view
+
+    def test_each_delegated_call_retries_on_a_new_attach(self):
+        calls = {
+            "send": ("hi",),
+            "press": ((KeyPress.parse("Enter"),),),
+            "screen": (3,),
+            "status": (),
+            "content": (),
+            "info": (),
+            "session_status": (),
+            "record": (),
+            "hide": (),
+            "attach_command": (),
+        }
+        for name, args in calls.items():
+            with self.subTest(name=name):
+                self.attaches, self.stale, self.fresh = 0, mock.Mock(), mock.Mock()
+                self.sessions = [self.stale, self.fresh]
+                view = self.held()
+                getattr(self.stale, name).side_effect = SessionError("not running")
+                found = getattr(view, name)(*args)
+                if name not in ("send", "press", "hide"):
+                    self.assertIs(found, getattr(self.fresh, name).return_value)
+                getattr(self.fresh, name).assert_called_once_with(*args)
+                self.assertEqual(self.attaches, 2)
+
+    def test_show_and_showable_retry_on_a_new_attach(self):
+        view = self.held()
+        self.stale.show.side_effect = SessionError("not running")
+        type(self.stale).showable = mock.PropertyMock(side_effect=SessionError("gone"))
+        self.fresh.showable = True
+        self.assertIs(view.show(display="d"), self.fresh.show.return_value)
+        self.fresh.show.assert_called_once_with(display="d", command=None)
+        self.assertTrue(view.showable)
+        self.assertEqual(self.attaches, 2)
+
+    def test_the_new_attach_is_kept(self):
+        view = self.held()
+        self.stale.send.side_effect = SessionError("not running")
+        view.send("a")
+        view.send("b")
+        self.assertEqual(self.fresh.send.call_args_list, [mock.call("a"), mock.call("b")])
+        self.assertEqual(self.attaches, 2)
+
+    def test_a_failure_of_the_new_attach_raises(self):
+        view = self.held()
+        self.stale.send.side_effect = SessionError("not running")
+        self.fresh.send.side_effect = SessionError("still")
+        with self.assertRaisesRegex(SessionError, "still"):
+            view.send("hi")
+        self.assertEqual(self.attaches, 2)
+        self.fresh.send.assert_called_once_with("hi")
+
+    def test_a_new_attach_that_fails_is_not_retried(self):
+        view = self.view()
+        self.stale.send.side_effect = SessionError("not running")
+        with self.assertRaisesRegex(SessionError, "not running"):
+            view.send("hi")
+        self.assertEqual(self.attaches, 1)
+        self.fresh.send.assert_not_called()
+
+    def test_unanswered_is_not_retried(self):
+        view = self.held()
+        self.stale.send.side_effect = Unanswered("timed out")
+        with self.assertRaises(Unanswered):
+            view.send("hi")
+        self.assertEqual(self.attaches, 1)
+
+    def test_a_failed_reattach_raises_its_error(self):
+        view = self.held()
+        self.stale.send.side_effect = SessionError("not running")
+        self.sessions = []
+        with self.assertRaisesRegex(SessionError, "its worker g1 is gone"):
+            view.send("hi")
+
+    def test_alive_asks_a_new_attach_once_when_the_held_one_says_not(self):
+        view = self.held()
+        self.stale.alive.return_value = False
+        self.fresh.alive.return_value = True
+        self.assertTrue(view.alive())
+        self.assertEqual(self.attaches, 2)
+        self.fresh.alive.return_value = False
+        third = mock.Mock(name="third")
+        third.alive.return_value = False
+        self.sessions.append(third)
+        self.assertFalse(view.alive())
+        third.alive.assert_called_once_with()
+
+    def test_alive_of_a_fresh_attach_is_its_answer(self):
+        self.stale.alive.return_value = False
+        self.assertFalse(self.view().alive())
+        self.assertEqual(self.attaches, 1)
+
+
 class HeadlessViewTest(Base):
     def test_a_headless_view_has_its_mode_and_no_name(self):
         view = self.view(mode=Mode.HEADLESS)
