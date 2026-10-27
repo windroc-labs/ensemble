@@ -32,7 +32,7 @@ from ensemble.session.engine.types import (
     TurnStarted,
     Unanswered,
 )
-from ensemble.session.harness.types import Logged, Op
+from ensemble.session.harness.types import SERVED, Logged, Op
 from ensemble.session.hosts.base import HARNESS_ROOT
 from ensemble.utils import STALE_AGE, append_line, read_regular, save
 
@@ -231,19 +231,36 @@ class Channel:
         """
         if op not in tuple(Op):
             raise ValueError(f"request {op!r}: want one of {', '.join(Op)}")
+        return self._exchange({"op": op}, timeout) is not None
+
+    def ask(self, op: Op, data: Mapping, timeout: float = REQUEST_WAIT) -> dict:
+        """A remote worker's SEND, PRESS or SCREEN, its answer's data; SessionError refused or with
+        no harness, Unanswered unanswered.
+        """
+        if op not in SERVED:
+            raise ValueError(f"ask {op!r}: want one of {', '.join(SERVED)}")
+        answer = self._exchange({"op": op, "data": dict(data)}, timeout)
+        if answer is None:
+            raise SessionError(f"session harness {self.directory} is gone")
+        found = answer.get("data")
+        return found if isinstance(found, dict) else {}
+
+    def _exchange(self, body: Mapping, timeout: float) -> dict | None:
+        """The answer once ok; None with no harness."""
+        op = body["op"]
         if not self.alive():
-            return False
+            return None
         ident = uuid.uuid4().hex
         reply = os.path.join(self._replies, ident + ".json")
         os.makedirs(self._requests, 0o700, exist_ok=True)
-        save(os.path.join(self._requests, ident + ".json"), json.dumps({"op": op}))
+        save(os.path.join(self._requests, ident + ".json"), json.dumps(body))
         deadline = time.monotonic() + timeout
         while True:
             answer = _json(reply)
             if isinstance(answer, dict):
                 _remove(reply)
                 if answer.get("ok") is True:
-                    return True
+                    return answer
                 error = answer.get("error")
                 text = error if isinstance(error, str) else f"session harness: {op}"
                 raise (Unanswered if answer.get("unanswered") is True else SessionError)(text)
@@ -251,7 +268,7 @@ class Channel:
                 _remove(os.path.join(self._requests, ident + ".json"))
                 if isinstance(_json(reply), dict):  # answered just before it let go
                     continue
-                return False
+                return None
             if time.monotonic() >= deadline:
                 _remove(os.path.join(self._requests, ident + ".json"))
                 raise Unanswered(f"session harness {self.directory}: no answer to {op}")
@@ -259,6 +276,12 @@ class Channel:
 
     def requests(self) -> list[tuple[str, Op]]:
         """Pending requests (id, op), oldest first, taken; malformed ones deleted."""
+        return [(ident, op) for ident, op, _ in self.pending()]
+
+    def pending(self) -> list[tuple[str, Op, dict]]:
+        """Pending requests (id, op, data), oldest first, taken; malformed ones deleted. Only the
+        user's processes can write this 0700 dir; no worker or container can.
+        """
         try:
             entries = list(os.scandir(self._requests))
         except FileNotFoundError:
@@ -272,25 +295,33 @@ class Channel:
             if suffix == ".json" and HEX.fullmatch(ident) and entry.is_file(follow_symlinks=False):
                 body = _json(entry.path)
             op = body.get("op") if isinstance(body, dict) else None
+            data = body.get("data", {}) if isinstance(body, dict) else None
             try:
                 when = entry.stat(follow_symlinks=False).st_mtime_ns
             except OSError:
                 when = None
             _remove(entry.path)
-            if op not in tuple(Op) or when is None:
+            if op not in tuple(Op) or not isinstance(data, dict) or when is None:
                 LOG.warning("session harness: dropped request %s", entry.name[:80])
                 continue
-            found.append((when, ident, Op(op)))
-        return [(ident, op) for _, ident, op in sorted(found)]
+            found.append((when, ident, Op(op), data))
+        return [(ident, op, data) for _, ident, op, data in sorted(found, key=lambda f: f[:2])]
 
     def reply(
-        self, ident: str, *, ok: bool, error: str | None = None, unanswered: bool = False
+        self,
+        ident: str,
+        *,
+        ok: bool,
+        error: str | None = None,
+        unanswered: bool = False,
+        data: Mapping | None = None,
     ) -> None:
         os.makedirs(self._replies, 0o700, exist_ok=True)
         answer = {
             "ok": ok,
             **({"error": error} if error is not None else {}),
             **({"unanswered": True} if unanswered else {}),
+            **({"data": dict(data)} if data is not None else {}),
         }
         save(os.path.join(self._replies, ident + ".json"), json.dumps(answer))
 
