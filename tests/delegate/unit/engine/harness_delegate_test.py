@@ -2806,6 +2806,15 @@ class OwnedRun(HarnessCase):
             f"session {first._state.agent_name} closed (lock dummy-lock)", self.err.getvalue()
         )
 
+    def test_closing_a_live_locked_run_whose_status_lost_its_host_claims_release(self):
+        first = self.waiting(self.work, SID)
+        agent = first.driver.session
+        gone = replace(agent.status(), alive=False, state=StatusState.GONE)
+        with mock.patch.object(agent, "status", return_value=gone):
+            HarnessDelegate.attach(self.work, session_cls=LockingSession).close()
+        self.assertEqual(agent.liveness, Liveness.ABSENT)
+        self.assertEqual(self.kinds().count("release"), 1)
+
     def test_a_closed_locked_run_resumes_by_taking_its_lock_again(self):
         first = self.waiting(self.work, SID)
         HarnessDelegate.attach(self.work, session_cls=LockingSession).close()
