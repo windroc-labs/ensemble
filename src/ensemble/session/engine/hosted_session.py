@@ -491,12 +491,14 @@ class HostedSession(Session):
                 raise error
             time.sleep(SLICE)
         generation = status.get("generation")
-        if (status.get("name"), status.get("sid")) != (spec.name or spec.sid, spec.sid) or not (
+        in_process = spec.mode == Mode.IN_PROCESS
+        named = spec.sid if in_process else spec.name
+        if (status.get("name"), status.get("sid")) != (named, spec.sid) or not (
             isinstance(generation, str)
         ):
             cls._unspawn(channel, harness, spec.name, host)
             raise SessionError(f"session harness {channel.directory}: started another session")
-        if spec.name is None:
+        if in_process:
             return OwnedInProcess(
                 channel,
                 client=spec.client,
@@ -505,6 +507,7 @@ class HostedSession(Session):
                 idle_timeout=idle_timeout,
                 info=SessionInfo(spec.sid, spec.access.cwd, spec.access.project, "", ""),
             )
+        assert spec.name is not None
         return cls._view(
             channel,
             name=spec.name,
@@ -1239,7 +1242,7 @@ class Owned:
         """The exit code once its terminal is gone, else None."""
         deadline = time.monotonic() + timeout
         code = self._session._running.returncode(timeout)
-        if self._session.name is None:
+        if self._session.mode == Mode.IN_PROCESS:
             return code
         while code is not None:
             try:
@@ -1253,7 +1256,7 @@ class Owned:
         return None
 
     def view(self, channel: Channel, idle_timeout: float | None = None) -> OwnedSession:
-        if self._session.name is None:
+        if self._session.mode == Mode.IN_PROCESS:
             return OwnedInProcess(
                 channel,
                 client=self._session.client,

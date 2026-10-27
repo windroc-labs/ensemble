@@ -46,9 +46,18 @@ def _result(data: dict | None) -> Result | None:
     )
 
 
+HANDLER = "ensemble.delegate.engine.handler"
+
+
+def owned(plan: Plan) -> bool:
+    """A run planned with the delegation handler: a session harness owns its worker."""
+    return any(h.module == HANDLER for h in plan.session.handlers)
+
+
 def worker(state: DelegateState) -> int | None:
-    handlers = state.plan.session.handlers
-    found = handlers[0].state.get("worker") if handlers else None
+    found = next(
+        (h.state.get("worker") for h in state.plan.session.handlers if h.module == HANDLER), None
+    )
     return found if type(found) is int else None
 
 

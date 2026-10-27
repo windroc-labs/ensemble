@@ -13,7 +13,7 @@ from unittest import mock
 
 from ensemble.delegate import Spec
 from ensemble.delegate.engine import handler
-from ensemble.delegate.engine.record import RunRecord
+from ensemble.delegate.engine.record import HANDLER, RunRecord
 from ensemble.delegate.engine.types import Layout, Result
 from ensemble.session import (
     Activity,
@@ -120,7 +120,7 @@ class HandlerCase(HarnessCase):
 
     def register(self, token, **changes) -> None:
         state = self.record.read()
-        handlers = (HookCallback(handler.HANDLER, {"workdir": self.work, "worker": token}, ()),)
+        handlers = (HookCallback(HANDLER, {"workdir": self.work, "worker": token}, ()),)
         run = replace(state.plan.run, idle_timeout=IDLE)
         session = replace(state.plan.session, handlers=handlers)
         self.record.save(
@@ -392,3 +392,19 @@ class IdleTest(HandlerCase):
         self.call(TurnEnd(block(DONE), 0))
         stale.fire()
         self.assertEqual(self.state().result.outcome.status, "done")
+
+
+class FailureTest(HandlerCase):
+    def test_a_deliverable_it_cannot_save_ends_the_attempt_stopped(self):
+        blocker = os.path.join(self.home, "a-file")
+        with open(blocker, "w", encoding="utf-8") as f:
+            f.write("")
+        state = self.state()
+        spec = replace(state.plan.spec, out=os.path.join(blocker, "out.md"))
+        self.record.save(replace(state, plan=replace(state.plan, spec=spec)))
+        self.finish()
+        result = self.state().result
+        self.assertTrue(self.state().completed)
+        self.assertTrue(result.error.startswith("stopped: FileExistsError: "), result.error)
+        self.assertEqual(self.kinds_sent()[-1], ("finished", 1))
+        self.assertEqual(self.lines(), [["outcome", "error"]])

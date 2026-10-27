@@ -1,4 +1,4 @@
-"""The delegation handler, registered as HANDLER with state {"workdir", "worker": n} on an owned tui
+"""The delegation handler, registered as record.HANDLER with state {"workdir", "worker": n} on an owned tui
 run: the session harness calls on_event for each event of that worker. Its worker's first call
 binds the opening attempt, its TurnStarted after an ending opens a follow-up; the attempt core
 decides each event. An ending stores the Result, then notes it, writes the outcome line, closes a
@@ -11,7 +11,7 @@ import threading
 
 from ensemble.delegate.engine.callback import EventCallback
 from ensemble.delegate.engine.record import RunRecord, worker
-from ensemble.delegate.engine.runner import POLICIES, Attempt, closing, say
+from ensemble.delegate.engine.runner import POLICIES, Attempt, closing, say, stopped
 from ensemble.delegate.engine.types import (
     Begun,
     ConfigError,
@@ -32,8 +32,6 @@ from ensemble.session import (
     SessionError,
     TurnStarted,
 )
-
-HANDLER = "ensemble.delegate.engine.handler"
 
 _runs: dict[tuple[str, str], _Run] = {}
 _runs_lock = threading.Lock()
@@ -100,7 +98,11 @@ class _Run:
         if self.attempt is None or self.n != n:
             self.begin(self.record.read(), call.session)
         assert self.attempt is not None
-        result = self.attempt.feed(event)
+        try:
+            result = self.attempt.feed(event)
+        except OSError as error:  # a deliverable it could not save: the attempt ends
+            say(f"delegate: {error}")
+            result = stopped(error)
         if isinstance(event, Exited) and (
             result is None or result.outcome is None and result.limit is None
         ):
@@ -167,43 +169,56 @@ class _Run:
                 say(f"delegate: {error}")
 
     def end(self, result: Result, *, timer: bool = False) -> None:
-        """timer: a locked run's Finished waits for its close's Exited."""
+        """Off the Dispatch thread (timer), a locked run's Finished waits for its close's Exited."""
         self.stop_timer()
         state, n, self.attempt = self.state, self.n, None
         assert state is not None and n is not None
-        p = state.plan
-        if not self.record.complete(n, result, sid=p.sid):
+        if not self.record.complete(n, result, sid=state.plan.sid):
             return
-        log = RunLog(p.session.workdir)
-        for kind, fields in (
-            ("result", closing(result)),
-            ("end", {"sid": p.sid, "rc": result.returncode}),
-        ):
-            try:
-                log.note(kind, **fields)
-            except OSError as error:
-                say(f"delegate: {error}")
-        RunRecord.announce(state, result)
-        environment = p.session.environment
-        lock = None if environment is None else environment.lock
-        if lock is not None:
-            if timer:
-                self.deferred = result
-            if self.close(lock, log):
-                return
-            self.deferred = None
+        if finish(state, result, self.session) and timer:
+            self.deferred = result
+            return
         self.emit(Finished(result))
 
-    def close(self, lock: str, log: RunLog) -> bool:
-        assert self.session is not None
+
+def finish(
+    state: DelegateState,
+    result: Result,
+    session: Session | None,
+    *,
+    give_up: str | None = None,
+    notes: bool = True,
+) -> bool:
+    """A stored ending's notes, outcome line and locked close; whether that close returned."""
+    p = state.plan
+    log = RunLog(p.session.workdir)
+    environment = p.session.environment
+    lock = None if environment is None else environment.lock
+    rows = [("result", closing(result)), ("end", {"sid": p.sid, "rc": result.returncode})]
+    if give_up is not None:
         try:
-            self.session.close()
-        except SessionError as error:
-            say(f"delegate: tui: close: {error}")
-            return False
-        say(f"delegate: session {self.session.name or 'agent'} closed (lock {lock})")
+            command = f": {session.attach_command()}" if session and session.showable else ""
+        except SessionError:
+            command = ""
+        left = "" if lock else f"; session {state.agent_name} left open{command}"
+        say(f"delegate: {give_up}{left}")
+        rows.insert(0, ("give_up", {"reason": give_up}))
+    for kind, fields in rows if notes else ():
         try:
-            log.note("release", lock=lock)
+            log.note(kind, **fields)
         except OSError as error:
             say(f"delegate: {error}")
-        return self.deferred is not None
+    RunRecord.announce(state, result)
+    if lock is None or session is None:
+        return False
+    try:
+        session.close()
+    except SessionError as error:
+        say(f"delegate: tui: close: {error}")
+        return False
+    say(f"delegate: session {state.agent_name} closed (lock {lock})")
+    try:
+        log.note("release", lock=lock)
+    except OSError as error:
+        say(f"delegate: {error}")
+    return True
