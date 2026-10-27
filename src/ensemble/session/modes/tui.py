@@ -102,6 +102,7 @@ Cursor = tuple[int | None, int]  # inode, offset
 Record = tuple[str, dict, str | None]  # label, payload, sent
 OWNER = re.compile(r"[0-9a-f]{32}")
 RECHECK = 0.1
+SETTLE_EVERY = 1.0  # s between an owner's settles of its run's mid-turn replies
 GATE_BUSY = "previous worker generation (live or unknown)"
 CLOSE_BUSY = "worker generation (live or unknown)"
 
@@ -676,7 +677,7 @@ class TuiMode(BaseMode):
         self._live, self._gone = True, False
         self._opening = opening  # start's: sent once, OPEN_AFTER s after
         self._due: float | None = None  # its label's latest record
-        self._held, self._checked = False, -POLL_SCREEN
+        self._held, self._checked, self._settled = False, -POLL_SCREEN, -SETTLE_EVERY
         self._active_turn = run._turn_open is True
         self._absorbed, self._launching = 0, bool(prepared.spec.prompt) and not run._opening_prompt
         self._owned, self._hook_logged = terminal is not None, False
@@ -998,6 +999,9 @@ class TuiMode(BaseMode):
             return []
         records, end = self._store.stamped(self._cursor)
         observed = self.run.observe()
+        if self._owned and (now := time.monotonic()) - self._settled >= SETTLE_EVERY:
+            self._settled = now
+            self.run._settle_replies(self.prepared.spec.workdir, self.prepared.info.sid)
         if end == self._cursor and not observed or self._replaced():
             return []
         self._cursor = end

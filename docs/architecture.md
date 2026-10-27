@@ -184,7 +184,7 @@ ENSEMBLE_ACCOUNT=…` and a `[delegate.policy.<client>] env` naming it are refus
 
 `start --display none` starts a worker without a pane, still opened by the caller, and hidden. Hidden (from that, `hide`, or closing its pane by hand; not from losing the manager's window or detaching its viewer) lasts through `restart` and `resume` until `show`. A display's tmux session starts at 120x40 and a hide sets it back to that until the next viewer sizes it, so a hidden worker's screen text (`read`, events) stays unwrapped ([Guard protocol](#guard-protocol)).
 
-Text sent to a Codex or Claude tui session mid-turn joins that turn. Codex takes it at once; Claude queues it until the running tool returns. Text sent after a Claude turn ended starts a new turn. When the session has an events file, `ensemble-crew pending --content` and `next-event --content` print mid-turn replies; reply text stays for 30 days.
+Text sent to a Codex or Claude tui session mid-turn joins that turn. Codex takes it at once; Claude queues it until the running tool returns. Text sent after a Claude turn ended starts a new turn. When the session has an events file, `ensemble-crew pending --content` and `next-event --content` print mid-turn replies, which the turn's hooks or, for an answer no hook follows, its session harness's pump (once a second) announce; reply text stays for 30 days.
 
 A Codex or Claude turn that fails ends a role run's attempt at once. A usage limit stays a usage limit.
 

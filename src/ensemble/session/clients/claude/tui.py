@@ -156,6 +156,9 @@ class ClaudeTui(Tui):
         self._cutoff = None
         self._pending = chain[at + 1] if at + 1 < len(chain) else None
 
+    def _settle_replies(self, workdir, sid):
+        replies.settle_pending(self.common.store, workdir, sid)
+
     def observe(self):
         found: list[Reply | LimitHit] = []
         while True:
