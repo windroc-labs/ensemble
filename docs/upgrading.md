@@ -1,12 +1,12 @@
 # Upgrading
 
-## Broker protocol 31: the guard is the Docker container's main process
+## Broker protocol 32: the guard is the Docker container's main process
 
 The broker now starts each worker container with the guard as its main process, and the harness reaches it over
 `docker attach` ([Harness-owned workers](architecture.md#harness-owned-workers)), so a killed harness no longer leaves
 its container running. Install this release's broker with its plugin (`scripts/install.sh` does both); the plugin
-refuses a protocol 30 broker. Close every running Docker session first (`ensemble-session ls`, then
-`ensemble-session close NAME`): a protocol 30 container has no guard for this release's harness to attach to.
+refuses an older broker. Close every running Docker session first (`ensemble-session ls`, then
+`ensemble-session close NAME`): an older container has no guard for this release's harness to attach to.
 Conversations stay: resume them after the upgrade.
 
 ## The delegate's drive: harness_host removed
