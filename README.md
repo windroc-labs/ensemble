@@ -119,7 +119,7 @@ With a stdin flag, stdin cannot also carry the script: download it first, so its
 other users can read:
 
 ```bash
-f=$(mktemp) && curl -fsSL -o "$f" https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh && security find-generic-password -s <item> -w | bash "$f" --password-stdin; rm -f "$f"
+(f=$(mktemp) && trap 'rm -f "$f"' EXIT && curl -fsSL -o "$f" https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh && security find-generic-password -s <item> -w | bash "$f" --password-stdin)
 ```
 
 What it sets up, for reference or by hand:

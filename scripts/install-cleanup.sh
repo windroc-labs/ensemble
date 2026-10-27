@@ -216,7 +216,7 @@ Containers/<group>) needs the terminal's Full Disk Access: without it the cleanu
 remove and stops before removing anything. Run by hand:
   curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install-cleanup.sh | bash
 With --password-stdin (sudo password on stdin), stdin cannot carry the script; download it first:
-  f=\$(mktemp) && curl -fsSL -o "\$f" https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install-cleanup.sh && security find-generic-password -s <item> -w | bash "\$f" --yes --password-stdin; rm -f "\$f"
+  (f=\$(mktemp) && trap 'rm -f "\$f"' EXIT && curl -fsSL -o "\$f" https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install-cleanup.sh && security find-generic-password -s <item> -w | bash "\$f" --yes --password-stdin)
 EOF
 }
 

@@ -103,8 +103,8 @@ usage: $synopsis
   --opencode-key-stdin        read the provider's API key from stdin
   --password-stdin            read the sudo password from stdin (first line, before the key)
 
-With --password-stdin or --opencode-key-stdin, stdin cannot carry the script:
-  security find-generic-password -s <item> -w | bash -c "\$(curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh)" scripts/install.sh --password-stdin
+With --password-stdin or --opencode-key-stdin, stdin cannot carry the script; download it first:
+  (f=\$(mktemp) && trap 'rm -f "\$f"' EXIT && curl -fsSL -o "\$f" https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh && security find-generic-password -s <item> -w | bash "\$f" --password-stdin)
 
 It shows a checklist only when clients or Docker has no flag or saved answer. Flags pre-tick their choices;
 saved choices and existing config fill the other ticks. It installs the dependencies, asks what is still
