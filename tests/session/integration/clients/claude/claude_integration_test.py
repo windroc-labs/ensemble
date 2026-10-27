@@ -418,7 +418,7 @@ class RunTest(Base):
         found = self.drain(handle, on)
         self.assertEqual(
             [e for e in found if not isinstance(e, IdleTimeout)],
-            [TurnStarted(), Reply("working"), TurnFailed("interrupted"), Exited(-signal.SIGKILL)],
+            [TurnStarted(), Reply("working"), TurnFailed("interrupted"), Exited(-signal.SIGHUP)],
         )
         self.assertEqual(found[-3], IdleTimeout(IDLE))
 

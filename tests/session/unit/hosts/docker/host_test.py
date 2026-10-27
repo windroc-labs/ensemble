@@ -6,7 +6,6 @@ import contextlib
 import fcntl
 import io
 import json
-import logging
 import os
 import re
 import runpy
@@ -60,7 +59,7 @@ from ensemble.utils import inode_lock, parse_time
 from tests.session.case import REPO, Case
 from tests.session.unit.hosts.docker.support import FakeBroker as BrokerRunner
 from tests.session.unit.hosts.docker.support import data
-from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired
+from tests.utils.process_fixtures import DEVNULL, TimeoutExpired
 
 DOCKER = "/usr/local/bin/docker"
 # The packaged config's GitHub token permissions.
@@ -235,8 +234,8 @@ class Base(Case):
     def listed(self, *names, state="running", gen=GEN):
         self.docker.ps = [f"ensemble-{name}-{gen}\t{name}\t{gen}\t{state}" for name in names]
 
-    def guarded_record(self, gen=GEN):
-        self.record(generation=gen, mode="guard")
+    def guarded_record(self, gen=GEN, kind="tui"):
+        self.record(generation=gen, kind=kind)
 
 
 def _close(fd):
@@ -816,7 +815,7 @@ class StartTest(StartBase):
                 "display": "lead/below",
                 "record": None,
                 "events": os.path.join(self.home, "events"),
-                "mode": "guard",
+                "kind": "tui",
                 "environment": None,
             },
         )
@@ -1587,8 +1586,11 @@ class EnvironmentTest(StartBase):
         os.unlink(os.path.join(self.home, ".ensemble", "tui", "w", "session.json"))
         for call in (
             lambda: self.start(environment=carried(ENVIRONMENT)),
-            lambda: self.host.pipe(
-                "w", self.launch, metadata={**self.METADATA, "environment": carried(ENVIRONMENT)}
+            lambda: self.host.worker(
+                "w",
+                self.launch,
+                terminal=False,
+                metadata={**self.METADATA, "environment": carried(ENVIRONMENT)},
             ),
         ):
             with self.subTest(call), self.assertRaises(SessionBusy) as raised:
@@ -1659,395 +1661,6 @@ class EnvironmentTest(StartBase):
         self.assertEqual(self.broker.closed, [])
 
 
-class PipeTest(Base):
-    METADATA = StartTest.METADATA
-
-    def setUp(self):
-        super().setUp()
-        os.unlink(os.path.join(self.home, ".ensemble", "tui", "w", "session.json"))
-        self.home_dir = os.path.join(self.state, "agent")
-        self.exec = mock.Mock(pid=4321, returncode=None)
-        self.exec.stdout, self.exec.stderr = io.StringIO("out\n"), io.StringIO()
-        self.exec.wait.return_value = 0
-        self.spawn_mock.side_effect = self.popen
-        self.launch = Launch(
-            ("agent", "-p"),
-            cwd=self.cwd,
-            env={"PATH": "/host/bin", "AGENT_HOME": self.home_dir, "K": "secret"},
-        )
-
-    def popen(self, argv, **kw):
-        self.order.append("exec")
-        self.popened = (argv, kw)
-        self.lock_held = not _free(os.path.join(self.state, "pipe.lock"))
-        self.popen_record = self.host_record()
-        return self.exec
-
-    def pipe(self, name="w", **metadata):
-        return self.host.pipe(
-            name,
-            self.launch,
-            metadata={k: v for k, v in {**self.METADATA, **metadata}.items() if v is not None},
-        )
-
-    def test_no_name_or_a_docker_env_key_is_refused_before_docker(self):
-        with self.assertRaisesRegex(
-            ConfigError, "^a headless session on the Docker Host needs a name$"
-        ):
-            self.pipe(None)
-        for key in (*CLEARED, "DOCKER_CERT_PATH"):
-            self.launch = replace(self.launch, env={**self.launch.env, key: "x"})
-            with (
-                self.subTest(key=key),
-                self.assertRaisesRegex(
-                    ConfigError, f"^docker session w: env {key} would reconfigure the docker CLI$"
-                ),
-            ):
-                self.pipe()
-            self.launch = replace(self.launch, env={"K": "v"})
-        self.assertEqual(self.order, [])
-
-    def test_with_secrets_gets_the_implementations_client_not_the_table_name(self):
-        piped = self.pipe(client="work")
-        argv, _ = self.popened
-        start = argv.index("with-secrets")
-        self.assertEqual(argv[start : start + 4], ["with-secrets", "--client", "agent", "agent"])
-        piped.close()
-
-    def test_pipe_starts_the_container_then_docker_exec_without_tmux(self):
-        piped = self.pipe()
-        manifest = os.path.join(self.state, f"{GEN}.json")
-        self.assertEqual(
-            [
-                step if isinstance(step, str | tuple) else step[:5]
-                for step in self.order
-                if step[0] != "maintain"  # the tick's own thread, at any time
-            ],
-            [
-                ["ps", "-a", "--filter", "label=ensemble.session", "--format"],
-                ["ps", "-a", "--filter", "label=ensemble.session", "--format"],
-                "version",
-                ("build", REPO),
-                ["volume", "ls", "--filter", "label=ensemble.kind", "--format"],
-                ("start", manifest, client_keys(REPO)),
-                "exec",
-            ],
-        )
-        argv, kw = self.popened
-        self.assertEqual(
-            argv,
-            [
-                *(DOCKER, "--host", self.ep, "exec", "-i", "--workdir", self.cwd),
-                *("--env", "AGENT_HOME", "--env", "K"),
-                *(CONTAINER, "with-secrets", "--client", "agent", "agent", "-p"),
-            ],
-        )
-        self.assertEqual((kw["env"]["K"], kw["env"]["AGENT_HOME"]), ("secret", self.home_dir))
-        self.assertEqual(kw["env"]["PATH"], os.environ["PATH"])
-        self.assertFalse(set(CLEARED) & kw["env"].keys())
-        self.assertFalse(set(GIT_IDENTITY) & kw["env"].keys())
-        self.assertEqual(
-            {k: kw[k] for k in ("stdin", "stdout", "stderr", "text", "errors", "process_group")},
-            {
-                "stdin": DEVNULL,
-                "stdout": PIPE,
-                "stderr": PIPE,
-                "text": True,
-                "errors": "replace",
-                "process_group": 0,
-            },
-        )
-        record = {
-            "generation": GEN,
-            "sid": "s1",
-            "client": "agent",
-            "mode": "pipe",
-            "environment": None,
-        }
-        self.assertEqual((self.popen_record, self.host_record()), (record, record))
-        self.assertTrue(self.lock_held)
-        self.assertFalse(_free(os.path.join(self.state, "pipe.lock")))
-        with open(os.path.join(self.state, f"{GEN}.result.json")) as source:
-            self.assertIn("launched_at", json.load(source))
-        self.assertFalse(os.path.lexists(os.path.join(self.home, ".ensemble", "tui", "w.lock")))
-        with piped.stdout as out:
-            self.assertEqual(list(out), ["out\n"])
-        self.assertEqual((piped.wait(0), self.broker.closed), (0, []))
-        piped.close()
-        piped.close()
-        self.assertEqual(self.broker.closed, [CONTAINER])
-        self.assertTrue(_free(os.path.join(self.state, "pipe.lock")))
-
-    def test_a_prompt_file_is_staged_before_docker_exec(self):
-        path = "/run/ensemble/prompt/prompt.md"
-        self.pipe(prompt_file=path, prompt="雪" * 9).close()
-        calls = [call for call in self.order if isinstance(call, list) or call == "exec"]
-        staged = [i for i, call in enumerate(calls) if PROMPT_STAGE in call]
-        self.assertEqual(len(staged), 1)
-        self.assertLess(staged[0], calls.index("exec"))
-        self.assertIn("雪" * 9, self.docker.inputs)
-
-    def test_a_failed_prompt_stage_ends_the_pipe_before_docker_exec(self):
-        with (
-            mock.patch.object(self.host, "_stage_prompt", side_effect=SessionError("no room")),
-            self.assertRaisesRegex(SessionError, "no room"),
-        ):
-            self.pipe(prompt_file="/run/ensemble/prompt/prompt.md", prompt="x")
-        self.assertNotIn("exec", self.order)
-        self.assertEqual(self.broker.closed, [CONTAINER])
-
-    def test_a_github_app_reaches_the_piped_client_and_its_tokens_are_refreshed(self):
-        self.host.github, self.host.github_permissions = "ensemble-bot", PERMISSIONS
-        self.broker.started = replace(self.broker.started, github_user_id=343764394)
-        piped = self.pipe()
-        argv, kw = self.popened
-        self.assertIn("ENSEMBLE_PR_AUTHOR", argv)
-        self.assertEqual(kw["env"]["ENSEMBLE_PR_AUTHOR"], "ensemble-bot[bot]")
-        for key, value in GIT_IDENTITY.items():
-            self.assertIn(key, argv)
-            self.assertNotIn(f"{key}={value}", argv)
-            self.assertEqual(kw["env"][key], value)
-        with open(os.path.join(self.state, f"{GEN}.json")) as f:
-            self.assertEqual(
-                json.load(f)["github"], {"app": "ensemble-bot", "permissions": PERMISSIONS}
-            )
-        self.assertTrue(self.broker.refreshed.wait(5))
-        piped.close()
-        self.assertIn(("maintain", CONTAINER, os.path.join(self.state, f"{GEN}.json")), self.order)
-
-    def test_codex_pipe_uses_its_manifest_history_and_reports_expiry(self):
-        home = os.path.join(self.state, "codex")
-        self.launch = replace(
-            self.launch,
-            argv=("/opt/ensemble/bin/codex", "exec", "--json", "hello"),
-            env={"CODEX_HOME": home},
-        )
-        reason = (
-            "Client authentication expired; run /usr/local/libexec/ensemble/ensemble-broker login"
-            " codex on the host, then resume."
-        )
-        self.broker.started = replace(
-            self.broker.started,
-            deadline={"at": "2000-01-01T00:00:00Z", "action": "close", "reason": reason},
-        )
-        expired = threading.Event()
-        original = self.broker.close
-
-        def close(container):
-            result = original(container)
-            expired.set()
-            return result
-
-        self.broker.close = close
-        with self.assertLogs("session", "WARNING") as logs:
-            piped = self.pipe(
-                client="codex",
-                home_field="codex_dir",
-                home_dir="codex",
-                credential="codex-access-token",
-                home_persistent='["sessions"]',
-            )
-            self.assertTrue(expired.wait(5))
-        with open(os.path.join(self.state, f"{GEN}.json")) as stream:
-            manifest = json.load(stream)
-        self.assertEqual(manifest["codex_dir"], home)
-        self.assertNotIn("claude_dir", manifest)
-        self.assertTrue(os.path.isdir(os.path.join(home, "sessions")))
-        self.assertEqual(
-            self.popened[0],
-            [
-                *(DOCKER, "--host", self.ep, "exec", "-i", "--workdir", self.cwd),
-                *("--env", "CODEX_HOME"),
-                *(CONTAINER, "with-secrets", "--client", "codex"),
-                *("/opt/ensemble/bin/codex", "exec", "--json", "hello"),
-            ],
-        )
-        self.assertEqual(
-            logs.output,
-            [f"WARNING:session:docker session w: client_auth_expired {reason}"],
-        )
-        self.assertEqual(self.broker.closed, [CONTAINER])
-        piped.close()
-
-    def test_piped_tick_logs_partial_result(self):
-        response = data("maintain-output.json") | {"container": CONTAINER}
-        log, runner = self.logged_to_file(), BrokerRunner((0, json.dumps(response), ""))
-        called, wire = threading.Event(), Broker(runner).maintain
-
-        def maintain(*args, **kwargs):
-            try:
-                return wire(*args, **kwargs)
-            finally:
-                called.set()
-
-        self.broker.maintain = maintain
-        piped = self.pipe()
-        self.assertTrue(called.wait(5))
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and "credential_refresh_failed" not in _read(log):
-            time.sleep(0.01)
-        piped.close()
-        self.assertEqual(
-            _read(log).splitlines(),
-            [
-                "docker session w: credential_refresh_failed codex: Renewal unavailable. (status 503)"
-            ],
-        )
-        self.assertEqual(runner.calls[0][1], "maintain")
-
-    def test_piped_tick_log_holds_only_the_brokers_message(self):
-        log, called = self.logged_to_file(), threading.Event()
-        message = f"Writing a GitHub token into {CONTAINER} failed."
-        failed = {"code": "refresh_failed", "message": message}
-        renewed = {"credential": "codex", "expires_at": "2100-01-01T00:00:00Z", "error": None}
-
-        def maintain(*_args, **_kwargs):
-            called.set()
-            results = [{"credential": "github", "expires_at": None, "error": failed}, renewed]
-            return Maintained(results, [], None, None)
-
-        self.broker.maintain = maintain
-        with mock.patch.dict(os.environ, {"SENTINEL_ENV": "SENTINEL-p1p3d"}):
-            piped = self.pipe()
-            self.assertTrue(called.wait(5))
-            deadline = time.monotonic() + 5
-            while time.monotonic() < deadline and "credential_refresh_failed" not in _read(log):
-                time.sleep(0.01)
-            piped.close()
-        text = _read(log)
-        self.assertEqual(
-            text.splitlines(), [f"docker session w: credential_refresh_failed github: {message}"]
-        )
-        self.assertNotIn("SENTINEL", text)
-
-    def logged_to_file(self):
-        path = os.path.join(self.home, "session.log")
-        handler = logging.FileHandler(path)
-        logger = logging.getLogger("session")
-        logger.addHandler(handler)
-        self.addCleanup(handler.close)
-        self.addCleanup(logger.removeHandler, handler)
-        return path
-
-    def test_a_piped_session_logs_and_acks_its_credential_notice(self):
-        log, acked, calls = self.logged_to_file(), threading.Event(), []
-
-        def maintain(_container, _manifest, delivered=(), *, root):
-            self.assertEqual(root, REPO)
-            calls.append(tuple(delivered))
-            if delivered:
-                acked.set()
-                return Maintained([], [], None, None)
-            notice = {
-                "key": "ensemble-broker-env/db@1:7d",
-                "text": "ensemble-broker-env/db expires soon",
-            }
-            return Maintained([], [notice], None, None)
-
-        self.broker.maintain = maintain
-        piped = self.pipe()
-        self.assertTrue(acked.wait(5))
-        piped.close()
-        with open(log) as stream:
-            self.assertIn(
-                "docker session w: credential_notice ensemble-broker-env/db expires soon",
-                stream.read(),
-            )
-        self.assertEqual(calls, [(), ("ensemble-broker-env/db@1:7d",)])
-
-    def test_a_piped_maintain_failure_logs_a_fixed_marker(self):
-        log, failed = self.logged_to_file(), threading.Event()
-
-        def maintain(*_args, **_kwargs):
-            failed.set()
-            raise SessionError("broker: bad response to maintain: SENTINEL-headless")
-
-        self.broker.maintain = maintain
-        piped = self.pipe()
-        self.assertTrue(failed.wait(5))
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and "credential_maintenance_failed" not in _read(log):
-            time.sleep(0.01)
-        piped.close()
-        with open(log) as stream:
-            text = stream.read()
-        self.assertIn("docker session w: credential_maintenance_failed transport", text)
-        self.assertNotIn("SENTINEL", text)
-
-    def test_stop_kills_the_exec_then_closes_and_a_close_failure_only_warns(self):
-        piped = self.pipe()
-        self.broker.close = mock.Mock(side_effect=SessionError("broker: boom"))
-        with mock.patch("os.killpg") as killpg, self.assertLogs("session", "WARNING") as logs:
-            piped.stop(ended=False)
-        killpg.assert_called_once_with(4321, signal.SIGKILL)
-        self.broker.close.assert_called_once_with(CONTAINER)
-        self.assertIn("docker session w: broker: boom", logs.output[0])
-        self.assertTrue(_free(os.path.join(self.state, "pipe.lock")))
-
-    def test_a_busy_name_or_a_failed_exec_rolls_back(self):
-        os.makedirs(os.path.join(self.home, ".ensemble", "tui"), exist_ok=True)
-        busy = os.open(
-            os.path.join(self.home, ".ensemble", "tui", "w.lock"), os.O_RDWR | os.O_CREAT
-        )
-        fcntl.flock(busy, fcntl.LOCK_EX)
-        with self.assertRaisesRegex(SessionError, "^docker session w: busy$"):
-            self.pipe()
-        os.close(busy)
-        self.assertEqual(self.order, [])
-        self.spawn_mock.side_effect = OSError("no docker")
-        with self.assertRaisesRegex(SessionError, "^docker session w: no docker$"):
-            self.pipe()
-        self.assertEqual(self.broker.closed, [CONTAINER])
-        self.assertTrue(_free(os.path.join(self.state, "pipe.lock")))
-
-    def test_resume_keeps_home_and_checks_history(self):
-        with self.assertRaisesRegex(ConfigError, "no native history to resume"):
-            self.pipe(resume="1")
-        transcript = os.path.join(self.home_dir, "projects", "p", "s1.jsonl")
-        os.makedirs(os.path.dirname(transcript))
-        with open(transcript, "w") as f:
-            f.write("{}\n")
-        self.launch = replace(self.launch, transcript=transcript)
-        self.pipe(resume="1").close()
-        self.assertTrue(os.path.exists(transcript))
-
-    def piped_row(self, held):
-        """w's container, a headless generation, its pipe lock held or not."""
-        self.listed("w")
-        self.record(mode="pipe")
-        if held:
-            fd = os.open(os.path.join(self.state, "pipe.lock"), os.O_RDWR | os.O_CREAT)
-            self.addCleanup(_close, fd)
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            return fd
-        return None
-
-    def test_a_live_piped_container_is_kept_unlisted_and_an_orphan_closed(self):
-        fd = self.piped_row(held=True)
-        self.host.sweep("x")
-        self.host.sweep("w")
-        self.assertEqual(self.broker.closed, [])
-        self.assertEqual((self.host.list(), self.host.rows()), ([], []))
-        for call in (self.host.attach, self.host.attach_target):
-            with (
-                self.subTest(call=call),
-                self.assertRaisesRegex(SessionError, "^no docker session w$"),
-            ):
-                call("w")
-        self.tui_session("w")
-        with self.assertRaisesRegex(
-            SessionError,
-            "^docker session w: a headless run holds it; wait for it to end or stop its run$",
-        ):
-            self.host.worker(
-                "w", self.launch, terminal=True, metadata={**self.METADATA, "owner": "/h"}
-            )
-        self.assertEqual(self.broker.closed, [])
-        _close(fd)
-        self.host.sweep("x")
-        self.assertEqual(self.broker.closed, [CONTAINER])
-
-
 class PreflightTest(Base):
     def validate(self):
         self.host.validate("w", Launch(("agent",), cwd=self.cwd, env={}))
@@ -2091,7 +1704,7 @@ class PreflightTest(Base):
         with self.assertRaisesRegex(ConfigError, want):
             self.host.worker("w", Launch(("agent", over), cwd=self.cwd), terminal=True)
         with self.assertRaisesRegex(ConfigError, want):
-            self.host.pipe("w", Launch(("agent", over), cwd=self.cwd), metadata={})
+            self.host.worker("w", Launch(("agent", over), cwd=self.cwd), terminal=False)
         self.assertEqual(self.order, [])
 
     def test_a_failed_handshake_stops_before_build(self):
@@ -2115,7 +1728,10 @@ class PreflightTest(Base):
         def worker(name, launch):
             return self.host.worker(name, launch, terminal=True)
 
-        for check in (self.host.validate, worker, self.host.pipe):
+        def headless(name, launch):
+            return self.host.worker(name, launch, terminal=False)
+
+        for check in (self.host.validate, worker, headless):
             with (
                 self.subTest(check=check.__name__),
                 self.assertRaisesRegex(ConfigError, f"Docker cwd {launch.cwd}: no such directory"),
@@ -2169,14 +1785,12 @@ class SweepTest(Base):
         fcntl.flock(fd, fcntl.LOCK_EX)
 
     def test_sweep_closes_debris_and_free_workers_and_keeps_held_and_busy_ones(self):
-        self.host_json("b", self.OLD, mode="guard")
-        self.host_json("c")  # no mode: an older release's start
-        for name in ("d", "e"):
-            self.host_json(name, mode="guard")
-        for name in ("p", "q"):
-            self.host_json(name, mode="pipe")
+        self.host_json("b", self.OLD, kind="tui")
+        self.host_json("c", mode="guard")  # no kind: an older release's start
+        for name, kind in (("d", "tui"), ("e", "tui"), ("k", "headless"), ("l", "headless")):
+            self.host_json(name, kind=kind)
         self.held("d", "guard.lock")
-        self.held("p", "pipe.lock")
+        self.held("k", "guard.lock")
         os.makedirs(self.tui, exist_ok=True)
         busy = os.open(os.path.join(self.tui, "f.lock"), os.O_RDWR | os.O_CREAT)
         self.addCleanup(os.close, busy)
@@ -2188,8 +1802,8 @@ class SweepTest(Base):
             self.row("c"),
             self.row("d"),  # guarded, its owner holds it
             self.row("e", state="exited"),  # guarded, its owner gone
-            self.row("p"),  # piped, its run holds it
-            self.row("q"),  # piped, its run gone
+            self.row("k"),  # headless, its owner holds it
+            self.row("l"),  # headless, its owner gone
             self.row("f"),  # starting or closing elsewhere
             f"ensemble-g-{GEN}\t\t{GEN}\trunning",
             f"ensemble-..-{GEN}\t../x\t{GEN}\trunning",
@@ -2200,7 +1814,7 @@ class SweepTest(Base):
         self.assertEqual(
             self.broker.closed,
             [f"ensemble-w-{self.OLD}"]
-            + [f"ensemble-{name}-{GEN}" for name in ("a", "b", "c", "e", "q")],
+            + [f"ensemble-{name}-{GEN}" for name in ("a", "b", "c", "e", "l")],
         )
         self.assertFalse([call for call in self.docker.order if call[:1] == ["exec"]])
 
@@ -2349,12 +1963,12 @@ class ReclaimTest(Base):
         self.assertEqual(self.order, [])
         self.spawn_mock.assert_not_called()
 
-    def test_a_piped_close_schedules_reclaim_after_closing_the_container(self):
+    def test_a_workers_removal_schedules_reclaim_after_closing_the_container(self):
         def spawn():
             self.order.append("reclaim")
 
         with mock.patch.object(self.host, "_spawn_reclaim", side_effect=spawn):
-            self.host._close_piped("w", CONTAINER)
+            self.host._remove(CONTAINER)
         self.assertEqual(self.order, [("close", CONTAINER), "reclaim"])
 
     def test_unsaved_work_keeps_the_volume_and_warns_once_for_good(self):
@@ -2471,7 +2085,7 @@ class ListTest(Base):
         ]
         self.guarded_record()
         self.state = os.path.join(self.home, ".ensemble", "docker-state", "v")
-        self.record(sid=None, client="other", display=None, mode="guard")
+        self.record(sid=None, client="other", display=None, kind="tui")
         self.assertEqual(self.host.list(), ["v", "w"])
         before = len(self.docker.order)
         rows = {row.name: row for row in self.host.rows()}
@@ -2484,19 +2098,19 @@ class ListTest(Base):
         self.assertEqual((rows["v"].sid, rows["v"].client), (None, "other"))
 
     def test_only_guarded_rows_are_listed_or_attached(self):
-        self.listed("w", "v", "p", "o")
+        self.listed("w", "v", "o", "h")
         self.guarded_record()
         for name, found in (
-            ("v", {}),  # no mode: an older release's start
-            ("p", {"mode": "pipe"}),
-            ("o", {"mode": "guard", "generation": "f" * 32}),  # another generation
+            ("v", {"mode": "guard"}),  # no kind: an older release's start
+            ("o", {"kind": "tui", "generation": "f" * 32}),  # another generation
+            ("h", {"kind": "headless"}),
         ):
             self.state = os.path.join(self.home, ".ensemble", "docker-state", name)
             self.record(**found)
         self.assertEqual(self.host.list(), ["w"])
         self.assertEqual([row.name for row in self.host.rows()], ["w"])
         self.assertEqual([row.name for row in self.host._capacity_rows()], ["w"])
-        for name in ("v", "p", "o"):
+        for name in ("v", "o", "h"):
             with self.subTest(name=name):
                 with self.assertRaisesRegex(SessionError, f"^no docker session {name}$"):
                     self.host.attach(name)
@@ -2545,10 +2159,10 @@ class ListTest(Base):
         self.assertEqual((self.host.list(), self.host.rows(), self.order), ([], [], []))
 
     def test_attach_of_an_unknown_or_unguarded_row_is_no_session(self):
-        for mode in (None, "pipe", "guard"):
-            with self.subTest(mode=mode):
-                self.record(**({} if mode is None else {"mode": mode}))
-                self.listed(*(() if mode == "guard" else ("w",)))
+        for found in ({}, {"mode": "guard"}, {"kind": "headless"}, {"kind": "tui"}):
+            with self.subTest(found=found):
+                self.record(**found)
+                self.listed(*(() if found == {"kind": "tui"} else ("w",)))
                 with self.assertRaisesRegex(SessionError, "^no docker session w$") as caught:
                     self.host.attach("w")
                 self.assertNotIsInstance(caught.exception, Unanswered)
@@ -2607,7 +2221,8 @@ class GuardedStartTest(StartBase):
         execs = self.docker.execs()
         self.assertFalse(any("tmux" in call for call in execs), execs)
         self.assertFalse(any(isinstance(c, tuple) and c[0] == "popen" for c in self.order))
-        self.assertEqual(self.host_record()["mode"], "guard")
+        self.assertEqual(self.host_record()["kind"], "tui")
+        self.assertNotIn("mode", self.host_record())
         self.assertFalse(_free(os.path.join(self.state, "guard.lock")))
         self.assertEqual(handle.session_identity(), ("s1", GEN))
         handle.close()
@@ -2723,18 +2338,14 @@ class WorkerLivenessTest(StartBase):
         self.assertEqual(self.broker.closed[0], f"ensemble-w-{old}")
         self.assertEqual(len(self.execs), 1)
 
-    def test_debris_and_piped_rows_are_left_to_the_container_refusal(self):
-        for mode, refusal in (
-            (None, "container ensemble-w-.* of an earlier start is still up"),
-            ("pipe", "a headless run holds it"),
-        ):
-            with self.subTest(mode=mode):
-                self.listed("w")
-                self.record(**({"mode": mode} if mode else {}))
-                with self.assertRaisesRegex(SessionError, f"^docker session w: {refusal}"):
-                    self.start()
-                self.assertTrue(_free(os.path.join(self.state, "guard.lock")))
-                self.assertEqual(self.execs, [])
+    def test_a_debris_row_is_left_to_the_container_refusal(self):
+        self.listed("w")
+        self.record()
+        refusal = "container ensemble-w-.* of an earlier start is still up"
+        with self.assertRaisesRegex(SessionError, f"^docker session w: {refusal}"):
+            self.start()
+        self.assertTrue(_free(os.path.join(self.state, "guard.lock")))
+        self.assertEqual(self.execs, [])
 
 
 class GuardedRowTest(StartBase):
@@ -2778,3 +2389,83 @@ class GuardedRowTest(StartBase):
         self.host.sweep("x")
         self.assertEqual(self.broker.closed, [CONTAINER])
         self.assertEqual(self.docker.execs(), [])
+
+
+class HeadlessWorkerTest(StartBase):
+    """A headless run's guarded worker: started directly, kind headless, never listed as a tui."""
+
+    def headless(self, **metadata):
+        handle = self.host.worker(
+            "w", self.launch, terminal=False, metadata={**self.METADATA, **metadata}
+        )
+        self.addCleanup(self.close_quietly, handle)
+        return handle
+
+    def test_a_headless_worker_records_its_kind_and_is_never_listed_or_attached(self):
+        handle = self.headless()
+        [(argv, _, _)] = self.execs
+        self.assertNotIn("--terminal", argv)
+        self.assertEqual(self.host_record()["kind"], "headless")
+        self.assertNotIn("mode", self.host_record())
+        self.listed("w")
+        self.assertEqual(self.host.list(), [])
+        self.assertEqual(self.host.rows(), [])
+        self.assertEqual(self.host._capacity_rows(), [])
+        with self.assertRaisesRegex(SessionError, "^no docker session w$"):
+            self.host.attach("w")
+        with self.assertRaisesRegex(SessionError, "^no docker session w$"):
+            self.host.attach_target("w")
+        handle.close()
+        self.assertIn(CONTAINER, self.broker.closed)
+
+    def test_a_held_owner_lock_refuses_either_kind(self):
+        handle = self.headless()
+        with self.assertRaises(SessionBusy):
+            self.start()
+        self.assertEqual(len(self.execs), 1)
+        handle.close()
+        self.start()
+        with self.assertRaises(SessionBusy):
+            self.headless()
+        self.assertEqual(len(self.execs), 2)
+
+    def test_a_direct_headless_start_drops_its_tui_lock_file_without_a_session(self):
+        os.unlink(os.path.join(self.home, ".ensemble", "tui", "w", "session.json"))
+        self.headless()
+        self.assertFalse(os.path.lexists(tui_lock("w")))
+
+    def test_a_headless_environment_worker_runs_maintenance(self):
+        self.headless(environment=carried(ENVIRONMENT))
+        manifest = os.path.join(self.state, f"{GEN}.json")
+        deadline = time.monotonic() + 5
+        while ("maintain", CONTAINER, manifest) not in self.order and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertIn(("maintain", CONTAINER, manifest), self.order)
+        self.assertEqual(self.host_record()["kind"], "headless")
+        self.assertEqual(self.host_record()["environment"], ENVIRONMENT.persisted())
+
+    def test_a_headless_environment_worker_closes_at_its_deadline(self):
+        reason = "Client authentication expired; run ensemble-broker login, then resume."
+        self.broker.started = replace(
+            self.broker.started,
+            deadline={"at": "2000-01-01T00:00:00Z", "action": "close", "reason": reason},
+        )
+        expired = threading.Event()
+        original = self.broker.close
+
+        def close(container):
+            result = original(container)
+            expired.set()
+            return result
+
+        self.broker.close = close
+        with self.assertLogs("session", "WARNING") as logs:
+            handle = self.headless(environment=carried(ENVIRONMENT))
+            self.assertTrue(expired.wait(5))
+        self.assertEqual(self.host_record()["kind"], "headless")
+        self.assertEqual(
+            logs.output, [f"WARNING:session:docker session w: client_auth_expired {reason}"]
+        )
+        self.assertEqual(self.broker.closed, [CONTAINER])
+        self.assertTrue(handle.wait_exit(5))
+        self.assertEqual(handle.state(), Liveness.ABSENT)

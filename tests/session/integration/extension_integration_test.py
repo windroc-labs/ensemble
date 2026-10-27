@@ -46,11 +46,9 @@ class OutsideTest(Case):
         self.assertEqual(others, {"ensemble.session.extension"})
         self.assertLessEqual(others, PUBLIC)
 
-    def test_a_headless_session_yields_the_events_the_client_reads_from_its_stream(self):
-        session = self.started(Mode.HEADLESS)
-        self.assertEqual(list(session.events()), [Reply("hello"), TurnEnd("hello"), Exited(0)])
-        self.assertEqual(session.reply, "hello")
-        self.assertFalse(session.showable)
+    def test_a_headless_session_is_refused_on_a_host_without_a_managed_worker(self):
+        with self.assertRaisesRegex(SessionError, "^host outside runs no managed worker$"):
+            self.started(Mode.HEADLESS)
 
     def test_an_in_process_session_yields_its_runs_events(self):
         session = self.started(Mode.IN_PROCESS)

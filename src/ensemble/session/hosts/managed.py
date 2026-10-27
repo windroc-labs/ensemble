@@ -101,6 +101,7 @@ class ManagedProcess(InteractiveProcess):
         self.releases = 0
         self.releaser: threading.Thread | None = None
         self.closing = False  # its stdin about to close: the releaser stops
+        self.input_ended = False
         if start_reader:
             self.reader = threading.Thread(target=self.pump, name=f"guard-{name}", daemon=True)
             self.reader.start()
@@ -307,6 +308,15 @@ class ManagedProcess(InteractiveProcess):
         self.checked()
 
     def write(self, data: bytes) -> None:
+        with self.condition:
+            self.checked()
+            if self.code is not None:
+                raise SessionError(f"worker {self.name}: exited")
+            if self.input_ended:
+                raise SessionError(f"worker {self.name}: input ended")
+            if not data and self.terminal:
+                return
+            self.input_ended = not data
         self.send_frame(b"i", data)
 
     def require_terminal(self) -> None:

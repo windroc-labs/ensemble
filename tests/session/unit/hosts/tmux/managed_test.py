@@ -3,6 +3,7 @@
 import os
 import sys
 import threading
+import time
 from unittest import mock
 
 from ensemble.session.engine.tmux_cli import TuiError
@@ -44,7 +45,7 @@ class ManagedTest(Case):
             mock.patch.object(managed.subprocess, "Popen", side_effect=FileNotFoundError),
             self.assertRaises(managed.SessionError),
         ):
-            host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=False)
+            host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=True)
         current = managed.load_json(managed.location("tmux", "worker") + "/current.json")
         self.assertEqual(host.worker_liveness("worker", current["generation"]), Liveness.ABSENT)
 
@@ -80,7 +81,7 @@ class ManagedTest(Case):
         self.assertEqual(managed.liveness("tmux", "worker", generation), Liveness.UNKNOWN)
         with self.assertRaises(SessionBusy):
             TmuxHost("tmux", tmux=mock.Mock()).worker(
-                "worker", Launch((sys.executable,), cwd=self.home), terminal=False
+                "worker", Launch((sys.executable,), cwd=self.home), terminal=True
             )
 
     def test_bad_generation_and_missing_record_refuse_before_spawn(self):
@@ -94,7 +95,7 @@ class ManagedTest(Case):
             )
         managed.private_directory(managed.location("tmux", "worker"))
         with mock.patch.object(managed.subprocess, "Popen") as spawn, self.assertRaises(Unanswered):
-            host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=False)
+            host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=True)
         spawn.assert_not_called()
 
     def test_worker_start_inherits_only_lease_into_guard(self):
@@ -389,3 +390,173 @@ class ManagedTest(Case):
         tmux.option.return_value = None  # its display killed
         self.assertTrue(channel.redisplay())
         self.assertEqual(tmux.start.call_args_list, [first, first])
+
+
+class OneShotTest(Case):
+    """A headless worker's one-shot guard dir: never a tui's, removed by its owner or the sweep."""
+
+    def setUp(self):
+        super().setUp()
+        self.host = TmuxHost("tmux", tmux=mock.Mock())
+        self.root = os.path.dirname(managed.location("tmux", "x"))
+
+    def headless(self, name="x", generation=None):
+        proc = mock.Mock()
+        proc.stdout.read.side_effect = [
+            guard.json_frame(b"s", {"pid": 123}),
+            guard.json_frame(b"x", {"returncode": 0}),
+            b"",
+        ]
+        with (
+            mock.patch.object(managed.subprocess, "Popen", return_value=proc),
+            mock.patch.object(os, "set_blocking"),
+        ):
+            return self.host.worker(
+                name,
+                Launch((sys.executable,), cwd=self.home),
+                terminal=False,
+                metadata={"generation": generation} if generation else None,
+            )
+
+    def live_tui(self, name, generation):
+        """A tui worker's guard dir whose lease this test holds, as its running guard would."""
+        directory = managed.location("tmux", name)
+        managed.private_directory(directory + "/" + generation)
+        managed.save_json(directory + "/current.json", {"generation": generation})
+        managed.save_json(
+            directory + "/" + generation + "/state.json",
+            {"generation": generation, "state": "running"},
+        )
+        lease = managed.lease_file(directory + "/" + generation + "/lease")
+        managed.fcntl.flock(lease, managed.fcntl.LOCK_EX)
+        self.addCleanup(os.close, lease)
+        return directory
+
+    def dead_one_shot(self, generation, *, age=120):
+        """A one-shot dir whose owner and guard died: both locks free, older than the floor."""
+        directory = managed.one_shot("tmux", generation)
+        managed.private_directory(directory + "/" + generation)
+        os.close(managed.lease_file(directory + "/owner.lock"))
+        os.close(managed.lease_file(directory + "/" + generation + "/lease"))
+        os.utime(directory, (time.time() - age,) * 2)
+        return directory
+
+    def tree(self, directory):
+        return sorted(
+            os.path.join(base, name)
+            for base, dirs, files in os.walk(directory)
+            for name in dirs + files
+        )
+
+    def test_a_headless_worker_never_touches_a_tui_guard_dir_of_its_name(self):
+        tui = self.live_tui("x", "a" * 32)
+        before = self.tree(tui)
+        worker = self.headless("x")
+        self.assertEqual(self.tree(tui), before)
+        self.assertEqual(self.host.worker_liveness("x", "a" * 32), Liveness.LIVE)
+        self.assertTrue(os.path.isdir(managed.one_shot("tmux", worker.generation)))
+        worker.close()
+        self.assertEqual(managed.load_json(tui + "/current.json"), {"generation": "a" * 32})
+        self.assertEqual(self.tree(tui), before)
+
+    def test_two_headless_workers_of_one_name_run_at_once(self):
+        first, second = self.headless("x"), self.headless("x")
+        directories = {managed.one_shot("tmux", w.generation) for w in (first, second)}
+        self.assertEqual(len(directories), 2)
+        self.assertTrue(all(os.path.isdir(directory) for directory in directories))
+        first.close()
+        second.close()
+
+    def test_a_one_shot_dir_is_named_apart_from_every_tui_dir(self):
+        self.assertRegex(os.path.basename(managed.one_shot("tmux", "a" * 32)), r"\Ao[0-9a-f]{15}\Z")
+        self.assertRegex(os.path.basename(managed.location("tmux", "x")), r"\A[0-9a-f]{16}\Z")
+        self.assertNotEqual(managed.one_shot("tmux", "a" * 32), managed.one_shot("other", "a" * 32))
+
+    def test_a_one_shot_dir_is_removed_at_close(self):
+        worker = self.headless("x")
+        directory = managed.one_shot("tmux", worker.generation)
+        self.assertTrue(os.path.isfile(directory + "/owner.lock"))
+        self.assertFalse(os.path.lexists(directory + "/current.json"))
+        worker.close()
+        self.assertFalse(os.path.lexists(directory))
+        worker.close()
+        self.host.tmux.option.assert_not_called()  # a headless worker has no display
+
+    def test_a_headless_handle_without_tmux_has_no_display(self):
+        channel = managed.TmuxManagedProcess(
+            "x", "a" * 32, mock.Mock(), terminal=False, tmux=None, start_reader=False
+        )
+        channel.close_display()
+        channel.mark(StatusState.WORKING, None)
+        self.assertEqual((channel.activity(), channel.redisplay()), (None, False))
+
+    def test_a_failed_close_removes_the_dir_only_once_its_guard_is_gone(self):
+        for gone in (False, True):
+            with self.subTest(gone=gone):
+                worker = self.headless("x")
+                directory = managed.one_shot("tmux", worker.generation)
+                worker.proc.poll.return_value = 0 if gone else None
+                worker.fail("guard channel: boom")
+                with self.assertRaises(Unanswered):
+                    worker.close()
+                self.assertEqual(os.path.lexists(directory), not gone)
+
+    def test_a_failed_headless_start_removes_its_one_shot_dir(self):
+        with (
+            mock.patch.object(managed.subprocess, "Popen", side_effect=FileNotFoundError),
+            self.assertRaises(SessionError),
+        ):
+            self.host.worker(
+                "x",
+                Launch((sys.executable,), cwd=self.home),
+                terminal=False,
+                metadata={"generation": "a" * 32},
+            )
+        self.assertFalse(os.path.lexists(managed.one_shot("tmux", "a" * 32)))
+
+    def test_a_used_generation_is_refused(self):
+        self.dead_one_shot("a" * 32, age=0)
+        with self.assertRaisesRegex(managed.ConfigError, "worker generation: in use"):
+            self.headless("x", "a" * 32)
+
+    def test_the_next_start_removes_a_one_shot_dir_whose_owner_died(self):
+        dead = self.dead_one_shot("a" * 32)
+        managed.sweep(self.root)
+        self.assertFalse(os.path.lexists(dead))
+        dead = self.dead_one_shot("b" * 32)
+        self.headless("y").close()
+        self.assertFalse(os.path.lexists(dead))
+
+    def test_the_sweep_keeps_held_young_and_tui_dirs(self):
+        owned = self.dead_one_shot("a" * 32)
+        lock = managed.lease_file(owned + "/owner.lock", create=False)
+        managed.fcntl.flock(lock, managed.fcntl.LOCK_EX)
+        self.addCleanup(os.close, lock)
+        guarded = self.dead_one_shot("b" * 32)
+        lease = managed.lease_file(guarded + "/" + "b" * 32 + "/lease", create=False)
+        managed.fcntl.flock(lease, managed.fcntl.LOCK_EX)
+        self.addCleanup(os.close, lease)
+        young = self.dead_one_shot("c" * 32, age=0)
+        tui = managed.location("tmux", "x")
+        managed.private_directory(tui)
+        os.utime(tui, (time.time() - 120,) * 2)
+        other = self.root + "/o" + "z" * 15
+        managed.private_directory(other)
+        os.utime(other, (time.time() - 120,) * 2)
+        managed.sweep(self.root)
+        for directory in (owned, guarded, young, tui, other):
+            self.assertTrue(os.path.isdir(directory), directory)
+
+    def test_the_sweep_skips_a_missing_or_foreign_root_and_a_foreign_lock(self):
+        managed.sweep(self.root)  # none yet
+        self.assertFalse(os.path.lexists(self.root))
+        dead = self.dead_one_shot("a" * 32)
+        os.chmod(self.root, 0o755)
+        with self.assertLogs("session", "WARNING"):
+            managed.sweep(self.root)
+        self.assertTrue(os.path.isdir(dead))
+        os.chmod(self.root, 0o700)
+        os.chmod(dead + "/owner.lock", 0o644)
+        with self.assertLogs("session", "WARNING"):
+            managed.sweep(self.root)
+        self.assertTrue(os.path.isdir(dead))
