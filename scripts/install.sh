@@ -33,6 +33,7 @@ board_tracker=
 board_stages=
 jobs_flag=
 board_jobs_choice=
+board_job_names=(router promote)
 local_board_ready=
 provider_flag=
 url_flag=
@@ -50,9 +51,11 @@ key_stdin=
 password_stdin=
 sudo_mine=
 keepalive=
+deferred=
 feeder=
 askpass_dir=
 current=
+login_pending=
 answer=
 token_screen=
 app_pem=
@@ -421,8 +424,11 @@ state_set() {
 
 on_exit() {
   local rc=$?
+  trap '' HUP INT TERM
   token_screen_leave
   sudo_end
+  # A login that failed or was cut short after storing its credential is still the cleanup's to remove.
+  if [ -n "$login_pending" ] && login_status "$login_pending"; then ledger_add login "$login_pending"; fi
   if [ "$rc" -ne 0 ] && [ -n "$current" ]; then
     say "$me: $current failed; rerun the same command to continue"
   fi
@@ -430,6 +436,14 @@ on_exit() {
     case $reload in "$HOME"/*) reload="~/${reload#"$HOME"/}" ;; esac
     say "$me: in this terminal, run source $reload first (or open a new one): its PATH lacks what install.sh added to $reload"
   fi
+}
+
+# On a signal bash runs the EXIT trap with the last command's status, often 0, and on HUP or TERM not at all: exit with
+# the signal's, so on_exit cleans up and names the rerun.
+exit_traps() {
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 }
 
 # Reads the sudo password once (stdin's first line, else the terminal) and checks it. A FIFO then
@@ -457,6 +471,11 @@ sudo_once() {
       printf 'Sorry, try again.\n' >&3
     done
   fi
+  # Until the feeder and keep-alive hold their PIDs a signal waits, so sudo_end has them and askpass_dir to clean up.
+  # Not trap '': a subshell forked while a signal is ignored keeps ignoring it, and sudo_end could not stop it.
+  trap 'deferred=129' HUP
+  trap 'deferred=130' INT
+  trap 'deferred=143' TERM
   askpass_dir=$(mktemp -d "${TMPDIR:-/tmp}/ensemble-sudo.XXXXXX")
   case $askpass_dir in *"'"* | *$'\n'*) die "unusable TMPDIR: $askpass_dir" ;; esac
   mkfifo -m 600 "$askpass_dir/fifo"
@@ -488,6 +507,8 @@ EOF
     rm -rf "$askpass_dir"
   ) </dev/null >/dev/null 2>&1 &
   keepalive=$!
+  exit_traps
+  if [ -n "$deferred" ]; then exit "$deferred"; fi
 }
 
 # Stops the keep-alive and the askpass feeder, and drops the ticket sudo_once made.
@@ -655,7 +676,7 @@ checklist() {
 # The configuration: each answer from its flag, else the last answer (State), else the config, else the default;
 # the checklist appears only when clients or Docker has no flag or saved answer. save_answers keeps them.
 answers() {
-  local said default client item choose=
+  local said default client item found board_text choose=
   local -a labels ticks names=(claude codex opencode)
   step configuration
   said=$(config_says)
@@ -714,14 +735,12 @@ answers() {
       done
     fi
     if [ -z "$board_jobs_choice" ]; then
-      if [ -f "$HOME/Library/LaunchAgents/com.windroc.ensemble.router.plist" ] \
-        || [ -f "$HOME/Library/LaunchAgents/com.windroc.ensemble.promote.plist" ]; then
-        board_jobs_choice=yes
-      elif ask_yn "Install board launchd jobs?"; then
-        board_jobs_choice=yes
-      else
-        board_jobs_choice=no
-      fi
+      for item in "${board_job_names[@]}"; do
+        if [ -f "$HOME/Library/LaunchAgents/com.windroc.ensemble.$item.plist" ]; then board_jobs_choice=yes; fi
+      done
+    fi
+    if [ -z "$board_jobs_choice" ]; then
+      if ask_yn "Install board launchd jobs?"; then board_jobs_choice=yes; else board_jobs_choice=no; fi
     fi
   fi
   board_tracker=${board_tracker:-local}
@@ -731,6 +750,18 @@ answers() {
   prev_model=$(state_get opencode_model)
   prev_context=$(state_get opencode_context)
   if has opencode; then
+    # Without a saved provider, reuse a configured one as if saved: config_plan then keeps or updates its tables.
+    if [ -z "$prev_provider" ]; then
+      found=$(configured_provider "$provider_flag")
+      if [ -n "$found" ]; then
+        prev_provider=${found%%$'\t'*}
+        found=${found#*$'\t'}
+        prev_url=${found%%$'\t'*}
+        found=${found#*$'\t'}
+        prev_model=${found%%$'\t'*}
+        prev_context=${found#*$'\t'}
+      fi
+    fi
     provider=${provider_flag:-$prev_provider}
     url=${url_flag:-$prev_url}
     model=${model_flag:-$prev_model}
@@ -752,7 +783,12 @@ answers() {
       if valid_context "${answer:-65536}"; then context=${answer:-65536}; fi
     done
   fi
-  say "    clients: $clients, Docker: $docker, board: $board ($board_tracker), launchd: ${board_jobs_choice:-no}${provider:+, OpenCode provider: $provider}"
+  if [ "$board" = yes ]; then
+    board_text="yes ($board_tracker), launchd: ${board_jobs_choice:-no}"
+  else
+    board_text=no
+  fi
+  say "    clients: $clients, Docker: $docker, board: $board_text${provider:+, OpenCode provider: $provider}"
 }
 
 # Saves answers' choices once the run's refusals (ref_check, broker_plan preflight) have passed: a refused run
@@ -778,7 +814,7 @@ save_answers() {
 config_plan() {
   python3 -I -c '
 import json, os, re, sys, tomllib
-path, out, default, harness, client, exe, name, url, model, context, prev_name, prev_url, prev_model, prev_context, only, board = sys.argv[1:]
+path, out, default, harness, clients, exe, name, url, model, context, prev_name, prev_url, prev_model, prev_context, only, board = sys.argv[1:]
 fresh = not os.path.exists(path)
 text = ""
 if not fresh:
@@ -808,8 +844,9 @@ elif only:
     want(*only)
 elif fresh or (get(data, "session.hosts", "default") or "tmux") != default:
     wanted.append(("session.hosts", "default", default))
-if not scoped and client and (get(data, "delegate", "client") or "claude") != client:
-    wanted.append(("delegate", "client", client))
+chosen = [name for name in ("claude", "codex", "opencode") if name in clients.split(",")]
+if not scoped and chosen and (get(data, "delegate", "client") or "claude") not in chosen:
+    wanted.append(("delegate", "client", chosen[0]))
 if not scoped and harness and get(data, "delegate.delegates", "harness_host") in (None, "", "docker"):
     wanted.append(("delegate.delegates", "harness_host", harness))
 if name and not scoped:
@@ -877,15 +914,67 @@ if any(get(edited, table, key) != value for table, key, value in wanted):
     sys.exit(4)
 with open(out, "w", encoding="utf-8") as f:
     f.write(result)
-sys.exit(3)' "$config" "$1" "$wanted_default" "$wanted_harness" "$wanted_client" \
+sys.exit(3)' "$config" "$1" "$wanted_default" "$wanted_harness" "$clients" \
     "$opencode_executable" "$provider" "$url" "$model" "$context" \
     "$prev_provider" "$prev_url" "$prev_model" "$prev_context" "$only" "$board_file"
+}
+
+# The OpenCode provider already configured, for a run without a saved one: "name\turl\tmodel\tcontext" from one entry,
+# with model or context empty when missing or invalid; nothing when none qualifies. Given $1, only that provider.
+# config.local.toml first (config_plan owns the providers-table schema read here), then opencode.json(c). An entry
+# qualifies with a valid name and URL; a table its [session.clients.opencode] model names that does not, or several
+# that do, stop the search.
+configured_provider() {
+  local found rc=0
+  found=$(python3 -I -c '
+import re, sys, tomllib
+path, flag, name_re, url_re, model_re, context_re = sys.argv[1:]
+def ok(pattern, value):
+    return isinstance(value, str) and "\n" not in value and re.search(pattern, value) is not None
+def table(node, *keys):
+    for key in keys:
+        node = node.get(key) if isinstance(node, dict) else None
+    return node if isinstance(node, dict) else {}
+try:
+    with open(path, "rb") as f:
+        data = tomllib.load(f)
+except (OSError, tomllib.TOMLDecodeError):
+    sys.exit()
+opencode = table(data, "session", "clients", "opencode")
+providers = table(opencode, "providers")
+current = opencode.get("model")
+prefix, _, suffix = current.partition("/") if isinstance(current, str) else ("", "", "")
+def candidate(name):
+    entry = providers.get(name)
+    # valid_name rejects ollama too
+    return isinstance(entry, dict) and ok(name_re, name) and name != "ollama" and ok(url_re, entry.get("base_url"))
+if flag or prefix in providers:
+    names = [flag or prefix] if (flag or prefix) in providers else []
+else:
+    names = [name for name in providers if candidate(name)]
+if not names:
+    sys.exit()
+if len(names) > 1 or not candidate(names[0]):
+    sys.exit(3)
+name, entry = names[0], providers[names[0]]
+models = [m for m in entry.get("models", []) if isinstance(m, str)] if isinstance(entry.get("models"), list) else []
+model = suffix if prefix == name and suffix in models else models[0] if len(models) == 1 else ""
+context = entry.get("context")
+context = str(context) if isinstance(context, int) and not isinstance(context, bool) else ""
+print("\t".join((name, entry["base_url"], model if ok(model_re, model) else "", context if ok(context_re, context) else "")))' \
+    "$config" "$1" "$name_pattern" "$url_pattern" "$model_pattern" "$context_pattern") || rc=$?
+  [ "$rc" = 0 ] || return 0
+  if [ -z "$found" ]; then
+    found=$(opencode_config_edit show "${XDG_CONFIG_HOME:-$HOME/.config}/opencode" "$1" \
+      "$name_pattern" "$url_pattern" "$model_pattern" "$context_pattern" 2>/dev/null) || found=
+  fi
+  printf '%s' "$found"
 }
 
 # Writes the configuration's settings into config.local.toml with consent; given <table> <key> <value>, only that;
 # given board <file>, the settings board_plan wrote to <file>.
 config_file() {
-  local wanted_default=tmux wanted_harness= wanted_client= only= board_file= changes rc=0 plan
+  local wanted_default=tmux wanted_harness= only= board_file= changes rc=0 plan
   if [ $# = 2 ] && [ "$1" = board ]; then
     board_file=$2
   elif [ $# = 3 ]; then
@@ -895,10 +984,6 @@ config_file() {
   if [ "$docker" = yes ]; then
     wanted_default=docker
     wanted_harness=tmux
-  fi
-  if ! has claude; then
-    wanted_client=opencode
-    if has codex; then wanted_client=codex; fi
   fi
   mkdir -p "$state_dir"
   plan=$state_dir/config.local.toml.plan
@@ -970,31 +1055,50 @@ apps() {
   fi
 }
 
+# Exit 0 when client $1 (gh, claude or codex) has a saved login.
+login_status() {
+  case $1 in
+    gh) gh auth status ;;
+    claude) claude auth status ;;
+    codex) codex login status ;;
+  esac </dev/null >/dev/null 2>&1
+}
+
+# Logs client $1 in with the command $2…, recording the login for the cleanup only once it succeeded (on_exit records
+# one that stored its credential before failing).
+client_login() {
+  login_pending=$1
+  shift
+  "$@" <&3 >&3 2>&3
+  ledger_add login "$login_pending"
+  login_pending=
+}
+
 client_logins() {
+  local output
   step "GitHub CLI login"
-  if gh auth status </dev/null >/dev/null 2>&1; then
+  if login_status gh; then
     skip "logged in"
   else
-    ledger_add login gh
-    gh auth login --hostname github.com --git-protocol https --web <&3 >&3 2>&3
+    client_login gh gh auth login --hostname github.com --git-protocol https --web
   fi
   step "Claude Code login"
   if ! has claude; then
     skip "Claude Code not chosen"
-  elif claude auth status </dev/null >/dev/null 2>&1; then
+  elif login_status claude; then
     skip "logged in"
   else
-    ledger_add login claude
-    claude auth login <&3 >&3 2>&3
+    client_login claude claude auth login
   fi
   step "Codex login"
   if ! has codex; then
     skip "Codex not chosen"
-  elif codex login status </dev/null >/dev/null 2>&1; then
+  elif login_status codex; then
+    # codex login status reads only the saved login; the plugin step's first read asks the server.
+    if ! output=$(codex plugin list --json </dev/null 2>&1 >/dev/null); then codex_rejected "$output"; fi
     skip "logged in"
   else
-    ledger_add login codex
-    codex login <&3 >&3 2>&3
+    client_login codex codex login
   fi
 }
 
@@ -1261,6 +1365,26 @@ claude_plugins() {
   ensemble_plugin_check claude "Claude Code"
 }
 
+# Dies with the re-login command when Codex's output $1 says its server rejected the saved login (401).
+codex_rejected() {
+  local text
+  text=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  if [[ $text =~ (^|[^[:alnum:]_])401([^[:alnum:]_]|$) || $text == *unauthori[sz]ed* ]]; then
+    die "Codex: the saved login was rejected (401 Unauthorized): run codex login, then rerun install.sh"
+  fi
+}
+
+# Runs codex $2…, its output on stderr; when it fails, dies with $1, or as codex_rejected says.
+codex_call() {
+  local message=$1 output rc=0
+  shift
+  output=$(codex "$@" </dev/null 4>&2 2>&1 1>&4 4>&-) || rc=$?
+  if [ -n "$output" ]; then say "$output"; fi
+  [ "$rc" != 0 ] || return 0
+  codex_rejected "$output"
+  die "$message"
+}
+
 codex_plugins() {
   local rc id ids=(ensemble@windroc)
   step "Codex plugins"
@@ -1272,11 +1396,10 @@ codex_plugins() {
   codex_market windroc https://github.com/windroc-labs/agent-plugins-marketplace.git || rc=$?
   if [ "$rc" = 1 ]; then
     ledger_add codex-marketplace windroc
-    codex plugin marketplace add windroc-labs/agent-plugins-marketplace </dev/null >&2 \
-      || die "Codex: cannot add marketplace windroc"
+    codex_call "Codex: cannot add marketplace windroc" plugin marketplace add windroc-labs/agent-plugins-marketplace
   else
     [ "$rc" = 0 ] || die "Codex: marketplace windroc has another source"
-    codex plugin marketplace upgrade windroc </dev/null >&2 || die "Codex: cannot refresh marketplace windroc"
+    codex_call "Codex: cannot refresh marketplace windroc" plugin marketplace upgrade windroc
   fi
   if [ "$docker" != yes ]; then ids+=(updraft@windroc); fi
   for id in "${ids[@]}"; do
@@ -1285,15 +1408,15 @@ codex_plugins() {
     case $rc in
       0)
         if [ "$id" = ensemble@windroc ]; then
-          codex plugin add "$id" </dev/null >&2 || die "Codex: cannot update $id to $ref"
+          codex_call "Codex: cannot update $id to $ref" plugin add "$id"
         else
           skip "$id installed"
         fi
         ;;
-      2) codex plugin add "$id" </dev/null >&2 || die "Codex: cannot enable/update $id to $ref" ;;
+      2) codex_call "Codex: cannot enable/update $id to $ref" plugin add "$id" ;;
       *)
         ledger_add codex-plugin "$id"
-        codex plugin add "$id" </dev/null >&2 || die "Codex: cannot install $id at $ref"
+        codex_call "Codex: cannot install $id at $ref" plugin add "$id"
         ;;
     esac
   done
@@ -1468,7 +1591,8 @@ opencode_plugin() {
   state_set opencode_plugin_commit "$commit"
 }
 
-# Shared with install-cleanup.sh; edits JSONC values without rewriting unrelated text.
+# Shared with install-cleanup.sh; edits JSONC values without rewriting unrelated text, and shows a configured
+# provider (configured_provider).
 opencode_config_edit() {
   python3 -I -c '
 import json, os, re, sys
@@ -1601,6 +1725,31 @@ def run():
             path.unlink()
         else:
             write(path, new)
+    elif action == "show":
+        name, name_re, url_re, model_re, context_re = args
+        def ok(pattern, value):
+            return isinstance(value, str) and "\n" not in value and re.search(pattern, value) is not None
+        providers = {}
+        for file in (path / "opencode.json", path / "opencode.jsonc"):
+            found = parse(load(file))[0].get("provider", {})
+            providers.update(found if isinstance(found, dict) else {})
+        def candidate(key):
+            entry = providers.get(key)
+            options = entry.get("options") if isinstance(entry, dict) else None
+            # valid_name rejects ollama too
+            return (ok(name_re, key) and key != "ollama" and isinstance(options, dict)
+                    and ok(url_re, options.get("baseURL")))
+        names = [name] if name else [key for key in providers if candidate(key)]
+        if len(names) != 1 or not candidate(names[0]):
+            return
+        entry = providers[names[0]]
+        models = entry.get("models") if isinstance(entry.get("models"), dict) else {}
+        model = next(iter(models)) if len(models) == 1 else ""
+        limit = models[model].get("limit") if isinstance(models.get(model), dict) else None
+        context = limit.get("context") if isinstance(limit, dict) else None
+        context = str(context) if isinstance(context, int) and not isinstance(context, bool) else ""
+        print("\t".join((names[0], entry["options"]["baseURL"], model if ok(model_re, model) else "",
+                         context if ok(context_re, context) else "")))
     else:
         raise ValueError()
 
@@ -2728,12 +2877,30 @@ with open(out, "w", encoding="utf-8") as f:
     f.write(text)' "$pkg/launchd/com.windroc.ensemble.$1.plist" "$2" "$HOME" "$path"
 }
 
+# Says which installed board jobs launchd still runs: skipping Board or jobs leaves them in place (README).
+board_jobs_loaded() {
+  local job uid loaded=
+  uid=$(id -u)
+  for job in "${board_job_names[@]}"; do
+    [ -f "$HOME/Library/LaunchAgents/com.windroc.ensemble.$job.plist" ] || continue
+    if launchctl print "gui/$uid/com.windroc.ensemble.$job" </dev/null >/dev/null 2>&1; then
+      loaded="$loaded com.windroc.ensemble.$job"
+    fi
+  done
+  [ -n "$loaded" ] || return 0
+  say "    still loaded:$loaded; unload them as docs/board.md#setup says (launchctl bootout gui/<uid>/com.windroc.ensemble.<job>, then remove its plist)"
+}
+
 board_jobs() {
   local job target new offered= shown= uid
   step "board launchd jobs"
-  board_wanted || return 0
+  if ! board_wanted; then
+    board_jobs_loaded
+    return 0
+  fi
   if [ "$board_jobs_choice" != yes ]; then
     skip "launchd jobs not chosen"
+    board_jobs_loaded
     return 0
   fi
   if [ "$(configured_tracker "$(config_says)")" != "$board_tracker" ]; then
@@ -2749,7 +2916,7 @@ board_jobs() {
     return
   fi
   mkdir -p "$state_dir"
-  for job in router promote; do
+  for job in "${board_job_names[@]}"; do
     target=$HOME/Library/LaunchAgents/com.windroc.ensemble.$job.plist
     new=$state_dir/com.windroc.ensemble.$job.plist
     board_plist "$job" "$new"
@@ -2829,6 +2996,7 @@ main() {
   if [ ! -e "$root/dev/tty" ] || ! (: <>"$root/dev/tty") 2>/dev/null; then die "needs a terminal for its questions and logins"; fi
   exec 3<>"$(terminal)"
   trap on_exit EXIT
+  exit_traps
   [ -d "$HOME/.ensemble" ] || ledger_add dir "$HOME/.ensemble"
   if ! recorded agent-tree "$HOME/.ensemble" || [ ! -f "$state_dir/agent-tree.paths" ] \
     || [ -f "$state_dir/agent-tree.cleaned" ] || [ -f "$state_dir/agent-tree.pending" ]; then
