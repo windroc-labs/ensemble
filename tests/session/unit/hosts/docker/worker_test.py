@@ -224,6 +224,51 @@ class HookTest(Base):
         self.assertFalse(thread.is_alive())
         self.assertEqual(hooks.calls, [])
 
+    def test_hooks_queued_at_stop_are_each_rejected(self):
+        hooks = Hooks()
+        channel = self.make(hooks=hooks)
+        channel.accept(b"h", hook(delivery="a" * 32))
+        channel.accept(b"h", hook(delivery="b" * 32))
+        channel.stopped.set()
+        thread = threading.Thread(target=channel._deliver)
+        thread.start()
+        thread.join(5)
+        self.assertEqual(hooks.calls, [])
+        self.assertEqual(self.rejected(), ["hook", "hook"])
+        self.assertFalse(channel._hooks_pending())
+        self.assertEqual(channel.hook_bytes, 0)
+
+    def test_a_delivered_hook_is_not_rejected_with_those_left_at_stop(self):
+        calling, release = threading.Event(), threading.Event()
+
+        class Slow(Hooks):
+            def call(self, label, body, event):
+                calling.set()
+                release.wait(5)
+                return super().call(label, body, event)
+
+        hooks = Slow()
+        channel = self.make(hooks=hooks)
+        for delivery in "abc":
+            channel.accept(b"h", hook(delivery=delivery * 32))
+        thread = threading.Thread(target=channel._deliver)
+        thread.start()
+        self.assertTrue(calling.wait(5))
+        channel.stopped.set()
+        release.set()
+        thread.join(5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual([event for _, _, event in hooks.calls], ["a" * 32])
+        self.assertEqual(self.rejected(), ["hook", "hook"])
+        self.assertFalse(channel._hooks_pending())
+
+    def test_a_hook_accepted_after_stop_is_rejected_not_queued(self):
+        channel = self.make(hooks=Hooks())
+        channel.stopped.set()
+        channel.accept(b"h", hook(delivery="a" * 32))
+        self.assertEqual(self.rejected(), ["hook"])
+        self.assertFalse(channel._hooks_pending())
+
     def test_hooks_stay_in_order_and_hold_the_exit_code_until_journaled(self):
         gate = threading.Event()
 

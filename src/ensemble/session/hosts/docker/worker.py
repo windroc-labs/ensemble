@@ -169,6 +169,9 @@ class DockerWorker(ManagedProcess):
             return None
         if self.hooks is None:
             return found
+        if self.stopped.is_set():
+            reject(self.state_dir, self.generation, "hook")
+            return None
         if found.delivery_id in self.seen or any(
             queued.delivery_id == found.delivery_id for queued, _ in self.hook_queue
         ):
@@ -186,7 +189,8 @@ class DockerWorker(ManagedProcess):
         while True:
             with self.condition:
                 self.condition.wait_for(lambda: self.hook_queue or self.stopped.is_set())
-                if not self.hook_queue or self.stopped.is_set():
+                if self.stopped.is_set():
+                    self._drop_queued()
                     return
                 hook, size = self.hook_queue[0]
                 self.delivering = True
@@ -203,6 +207,14 @@ class DockerWorker(ManagedProcess):
                     self.seen.popitem(last=False)
                 self.delivering = False
                 self.condition.notify_all()
+
+    def _drop_queued(self) -> None:
+        """Stopped: each hook still queued is rejected, not lost; under its condition."""
+        for _ in self.hook_queue:
+            reject(self.state_dir, self.generation, "hook")
+        self.hook_queue.clear()
+        self.hook_bytes = 0
+        self.condition.notify_all()
 
     def _report(self, word: str, text: str) -> None:
         """Maintenance's report, dropped once the worker is gone."""
