@@ -18,6 +18,7 @@ from ensemble.manager.engine.roster import LOCK_TIMEOUT, Roster
 from ensemble.manager.engine.types import (
     Entry,
     Lease,
+    Liveness,
     RosterError,
     Spec,
     StartBusy,
@@ -273,12 +274,15 @@ class Crew:
             }:
                 raise ValueError(f"reopen sets {', '.join(sorted(fixed))} from the run record")
             _, client, sid, cwd, name, host, account = _closed_run(work_dir, key)
-            live, unknown = self._live({key, name}, sid)
-            if live:
-                raise ValueError(f"{key}: still live ({', '.join(live)}); close it before reopen")
-            if unknown:
+            found = self._live({key, name}, sid)
+            if found.live:
                 raise ValueError(
-                    f"{key}: liveness unknown ({', '.join(unknown)}); close or forget it before reopen"
+                    f"{key}: still live ({', '.join(found.live)}); close it before reopen"
+                )
+            if found.unknown:
+                raise ValueError(
+                    f"{key}: liveness unknown ({', '.join(found.unknown)}); "
+                    "close or forget it before reopen"
                 )
             command = (
                 "ensemble-session",
@@ -305,7 +309,7 @@ class Crew:
             raise ValueError(f"unknown launch kind: {kind}")
         return self._run(Spec(name, command, note), sid, shorthand=True, busy=kind == "role")
 
-    def _live(self, names: set[str], sid: str) -> tuple[list[str], list[str]]:
+    def _live(self, names: set[str], sid: str) -> Liveness:
         """Roster entries named in names or holding sid, and sessions listed here or below holding
         sid: those that answer alive, and those whose liveness is unknown (status failed, reported
         on stderr; `session listing` when the listing failed).
@@ -323,7 +327,9 @@ class Crew:
         for name, reason in failures.items():
             print(f"crew: {name}: {reason}", file=sys.stderr)
         unknown = [*failures, *(["session listing"] if listed is None else [])]
-        return sorted(name for name, status in answers.items() if status.alive), sorted(unknown)
+        return Liveness(
+            sorted(name for name, status in answers.items() if status.alive), sorted(unknown)
+        )
 
     def _run(self, spec: Spec, sid: str, *, shorthand: bool, busy=False) -> Record:
         self._listed = None
