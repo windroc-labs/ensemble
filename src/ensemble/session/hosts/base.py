@@ -337,7 +337,14 @@ class Host(ABC):
     def list(self) -> list[str]: ...
 
     def rows(self) -> list[SessionRow]:
-        return [self.attach(name).row() for name in self.list()]
+        rows = []
+        for name in self.list():
+            try:
+                rows.append(self.attach(name).row())
+            except SessionError:
+                if name in self.list():
+                    raise
+        return rows
 
     def _capacity_rows(self) -> list[SessionRow]:
         names = set(self.list())

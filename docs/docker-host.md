@@ -45,7 +45,8 @@ A missing asset or sha256 file, or a mismatch, installs nothing and exits non-ze
 shortly after publishing a Release: retry. `--build` instead builds and ad-hoc signs it locally with the hardened
 runtime (needs Go, `brew install go`, and the Xcode command line tools).
 
-To upgrade, rerun it (your Dockerfile is never overwritten), then [log in](#log-in) again. The image pins `gh`, and
+To upgrade, rerun it (your Dockerfile is never overwritten), then run `retrust` ([Re-trust after an
+upgrade](#re-trust-after-an-upgrade); `scripts/install.sh --docker` runs it). The image pins `gh`, and
 Claude Code, Codex and OpenCode each at its npm `latest` release when the image was built; the broker rebuilds it when
 one moves ([Client releases](#client-releases)). A worker runs only those clients, `/opt/ensemble/bin/claude`, `codex`
 and `opencode`, first on `PATH`: a Claude Code or Codex your Dockerfile installs is never run, so drop it to shrink the
@@ -108,20 +109,24 @@ proxy and the key, never `busy`.
 
 ## Log in
 
-After every install or reinstall, run all three logins: `login claude`, `login github ensemble-bot` and
+After the first install, run all three logins: `login claude`, `login github ensemble-broker-bot` and
 `login codex` ([Codex](#codex)), plus `login claude <name>` for each other registered
 [Claude account](#claude-accounts), `login opencode <name>` for each configured OpenCode provider and
-`login env <name>` for each [environment secret](#environment-secrets). A reinstalled broker cannot read the old items without asking; `start` never asks and instead names the login to rerun. Each login asks its terminal questions first, without
+`login env <name>` for each [environment secret](#environment-secrets). A new broker keeps them through
+[`retrust`](#re-trust-after-an-upgrade), which `scripts/install.sh --docker` runs; no command but a login or `retrust`
+shows a keychain dialog: each instead names `retrust` for an item an earlier broker build wrote, or the login to rerun
+for one another application owns. Each login asks its terminal questions first, without
 echo:
 
 | Login | Terminal | macOS dialog, at most | Click |
 |---|---|---|---|
 | `login claude [<name>] [--fresh-token \| --issued <date> \| --expires <date>]` | the token, hidden, unless stdin is a pipe or file (one line); the login keychain password only when the item's access needs a change, from the terminal | one change-access dialog, after the password; one read dialog, announced on the terminal first | Allow; Always Allow |
-| `login github ensemble-bot [--key-file <pem> --app-id <ID>]` | the login keychain password, when a step is not yet in place | with `--key-file`, none; else one change-access dialog (Deny / Allow), after the password | Allow |
+| `login github ensemble-broker-bot [--key-file <pem> --app-id <ID>]` | the login keychain password, when a step is not yet in place | with `--key-file`, none; else one change-access dialog (Deny / Allow), after the password | Allow |
 | `login codex` | the login keychain password, when a step is not yet in place, before the browser opens | one change-access dialog (Deny / Allow), after the password | Allow |
 | `login opencode <name> [--expires <date>]` | the provider's API key; the login keychain password only when the item's access needs a change | at most one change-access dialog (Deny / Allow), after the password | Allow |
 | `login env <name> [--expires <date>]` | the value, hidden, unless stdin is a pipe or file; the login keychain password only when the item's access needs a change, from the terminal | at most one change-access dialog (Deny / Allow), after the password | Allow |
-| `start` | none | none: a token or key it cannot read without one names unlocking the login keychain or the login to run (`keychain_failed` for an OpenCode key or an environment secret needing approval; `login_required` for other clients and a missing environment secret) | |
+| `retrust` | the login keychain password, once, only when an item needs a change | one change-access dialog per item a broker of v0.4.1 or earlier wrote, once, announced on the terminal; none after | Allow |
+| `start` | none | none: a token or key it cannot read without one names unlocking the login keychain, `retrust` or the login to run (`keychain_failed` for an OpenCode key or an environment secret needing approval; `login_required` for other clients and a missing environment secret) | |
 
 What each login hands a container: [Credentials › Who logs in](credentials.md#who-logs-in).
 
@@ -133,7 +138,7 @@ claude setup-token          # copy the token it prints
 "$B" login claude work      # another registered account's token, from its own subscription
 ```
 
-It saves the token in `ensemble-claude` / `<name>` (`default` without a name), replacing an earlier one, and makes it trust only the broker. If macOS asks, enter the login keychain password and click Always Allow as the terminal instructs.
+It saves the token in `ensemble-broker-claude` / `<name>` (`default` without a name), replacing an earlier one, and makes it trust only the broker. If macOS asks, enter the login keychain password and click Always Allow as the terminal instructs.
 
 ```sh
 "$B" login claude --fresh-token            # a token claude setup-token just printed: expires in one year
@@ -145,15 +150,15 @@ Without one of them the expiry stays unknown ([Static secret expiry](#static-sec
 no date, and `--issued` with `--expires` must agree.
 
 **GitHub**: the private key of your one GitHub App ([create it](#create-the-github-app)), whatever its name, must be
-a generic-password item in the login keychain, service `ensemble-bot`, account its App ID, content the key. Let the
+a generic-password item in the login keychain, service `ensemble-broker-bot`, account its App ID, content the key. Let the
 broker create it from the downloaded `.pem` (`scripts/install.sh` does), so the key never goes on a command line:
 
 ```sh
-"$B" login github ensemble-bot --key-file <key>.pem --app-id <App ID>   # then delete <key>.pem
-"$B" login github ensemble-bot                                          # after a broker reinstall
+"$B" login github ensemble-broker-bot --key-file <key>.pem --app-id <App ID>   # then delete <key>.pem
+"$B" login github ensemble-broker-bot                                          # sets the access of a key stored otherwise
 ```
 
-With `--key-file` it refuses an existing `ensemble-bot` item. Without it, the item must exist. If login exits non-zero, rerun it. It prints the App's slug and bot user ID; set `[session.hosts.docker.github] app = "<slug>"` in `~/.ensemble/config.local.toml` (`scripts/install.sh` writes it). The App must be private (installable only on your account): every session gets a token for every repo of every installation.
+With `--key-file` it refuses an existing `ensemble-broker-bot` item. Without it, the item must exist. If login exits non-zero, rerun it. It prints the App's slug and bot user ID; set `[session.hosts.docker.github] app = "<slug>"` in `~/.ensemble/config.local.toml` (`scripts/install.sh` writes it). The App must be private (installable only on your account): every session gets a token for every repo of every installation.
 
 **OpenCode**: for each `[session.clients.opencode.providers.<name>]` table (Ollama needs none):
 
@@ -161,7 +166,7 @@ With `--key-file` it refuses an existing `ensemble-bot` item. Without it, the it
 "$B" login opencode strata   # paste strata's API key; nothing echoes
 ```
 
-It saves the key in broker-only item `ensemble-opencode` / `<name>`, replacing an earlier one. A Docker OpenCode start needs every configured provider's key; a missing one names this login command. `--expires YYYY-MM-DD` records when the key stops working, as `login env` does.
+It saves the key in broker-only item `ensemble-broker-opencode` / `<name>`, replacing an earlier one. A Docker OpenCode start needs every configured provider's key; a missing one names this login command. `--expires YYYY-MM-DD` records when the key stops working, as `login env` does.
 
 `scripts/install.sh --docker` with OpenCode selected first ensures the local OpenCode API entry, then imports it
 into the broker, so a local commander and Docker workers both have credentials with one key entry. To import an
@@ -191,6 +196,24 @@ without this option stores only the broker item. Reruns and cleanup ownership: [
 Then store the key and run `login github` as [above](#log-in); `scripts/install.sh` asks for the `.pem` and the App ID, does
 both and writes the App's slug to `github.app`.
 
+### Re-trust after an upgrade
+
+macOS ties a keychain item to the code signatures it trusts. The broker signs with a stable designated requirement,
+so a new build differs from the last only in its partition ID, which the login keychain password changes without a
+dialog. `scripts/install.sh --docker` runs `retrust` before any other broker call whenever it installed a new broker
+(state key `retrust`, the broker's sha256); after installing a broker by hand, run it yourself:
+
+```sh
+"$B" retrust
+```
+
+It lists each broker item an earlier build wrote (`will re-trust …`), asks the login keychain password once, then makes
+each trust this build: every item whose service starts with `ensemble-broker-` ([Credentials › Keychain
+items](credentials.md#keychain-items)). An item a broker of v0.4.1 or earlier wrote needs one macOS dialog, announced
+first: click Allow; it never needs one again. `retrust` never asks for a value or creates an item (a missing one comes
+from its login), and leaves an item another application owns unchanged, naming the login that replaces it. The
+orchestrator-configured Linear client secrets are not broker items: `login linear` re-trusts them.
+
 ## Build
 
 ```sh
@@ -202,6 +225,12 @@ both and writes the App's slug to `github.app`.
 
 The full form is `build --ensemble DIR [--base-image IMAGE] [--plugin SOURCE]... [--image-plugin NAME]... [--max-age
 SECONDS]`, in that order.
+
+The caller's umask does not affect ensemble image content or its key: staged package directories and executables
+use `0755`, other package files `0644`. The staging root stays private; the user's worker definition keeps its source
+modes. Before bootstrap and credential injection, start checks `/opt/ensemble` as `agent`, including symlink targets.
+Unreadable content fails `start_failed` with `Image content under /opt/ensemble is unreadable by agent; rebuild with
+ensemble-broker build.` Upgrade the broker and rebuild an affected older image before starting it again.
 
 A changed Dockerfile or ensemble version gives a new key. No build log shows a secret. Rebuilds skip Docker's cache.
 A build that must rebuild first looks up each client's npm `latest` and installs exactly those versions, recorded in
@@ -352,14 +381,14 @@ It prints the container name (`C` below) and client versions.
 ## Environment secrets
 
 Named values a container gets by reference, such as a password, an API key or an ssh private key. Import each once
-per broker install:
+([Re-trust after an upgrade](#re-trust-after-an-upgrade) keeps it through broker upgrades):
 
 ```sh
 "$B" login env dummy                      # type or paste the value; nothing echoes
 "$B" login env mini-ssh < ~/.ssh/id_mini  # a pipe or file: stored verbatim, newlines included
 ```
 
-It saves the value, 1 to 16384 bytes, in broker-only item `ensemble-env/<name>` / `<name>`, replacing an earlier one.
+It saves the value, 1 to 16384 bytes, in broker-only item `ensemble-broker-env/<name>` / `<name>`, replacing an earlier one.
 Names match `[a-z0-9][a-z0-9._-]{0,63}`. With a pipe or file on stdin, the keychain password, when needed, is read
 from the terminal. The value never goes on a command line. Pipe a long value: the terminal's line mode limits a
 typed line (1024 bytes on macOS).
@@ -367,10 +396,10 @@ typed line (1024 bytes on macOS).
 A start manifest lists the secrets it wants, at most 16:
 
 ```json
-"secrets": [{"item": "ensemble-env/dummy", "file": "dummy.txt"}]
+"secrets": [{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}]
 ```
 
-`item` must be an `ensemble-env/<name>` reference; any other keychain service, the broker's own and Linear's
+`item` must be an `ensemble-broker-env/<name>` reference; any other keychain service, the broker's own and Linear's
 included, is `manifest_rejected`. `file` is one name of at most 255 bytes: no `/`, no control character, not `.`
 or `..`, and not repeated in the list. The broker checks both itself whatever sent the manifest. It reads each
 item at `start` only, after the manifest checks and before any container exists, so a missing or unreadable item
@@ -399,7 +428,7 @@ After the volume's chown and before the [lock](#broker-locks), the broker:
 
 1. finds the App's installation on the repo: not installed is `github_failed`;
 2. issues a token of that installation for this one repo, `contents: read` only, and keeps it in the container's
-   `ensemble-tokens` record while in use;
+   `ensemble-broker-tokens` record while in use;
 3. resolves the ref with that token, a branch first, then a tag (neither: `manifest_rejected`);
 4. runs a throwaway helper, `ensemble-prefetch-<hex>`: the newest default worker image (a build without a base image;
    none: `start_failed` naming `ensemble-broker build`), `--pull never`, on the proxy's `workers` network whatever
@@ -630,8 +659,8 @@ each replacing the keys it sets (a list whole):
 
 The packaged default is `[environment.docker]`: `image = "@worker"`, `gateway = "workers"`, `plugins = []`,
 `secrets = []`, `prefetch = false`, no `lock`. It also ships one named environment, `[environments.mini-op]`: image
-`mini-op:env`, gateway and lock `mini-op`, and the secrets `ensemble-env/mini-op-password` (file `mini-password`)
-and `ensemble-env/mini-op-ssh-key` (file `mini-ssh-key`); no prefetch. The built-in `verifier` selects it with
+`mini-op:env`, gateway and lock `mini-op`, and the secrets `ensemble-broker-env/mini-op-password` (file `mini-password`)
+and `ensemble-broker-env/mini-op-ssh-key` (file `mini-ssh-key`); no prefetch. The built-in `verifier` selects it with
 `prefetch = true`. It uses the selected client, like every other role: Claude and Codex bootstrap links
 `/opt/windroc/mini-op/skills/mini-op` into Claude's effective config directory's `skills/mini-op` or
 Codex's `~/.agents/skills/mini-op` (independent of `CODEX_HOME`);
@@ -644,7 +673,7 @@ below. Keys:
 - `gateway`: the caller network the container joins, by the egress proxy's label name
   ([Egress proxy](#egress-proxy); WDRC-107 FR-39).
 - `plugins`: in-image names or pinned sources, added to `[hosts.docker] plugins`.
-- `secrets`: `[[…secrets]]` tables of `item` (an `ensemble-env/<name>` reference) and `file`
+- `secrets`: `[[…secrets]]` tables of `item` (an `ensemble-broker-env/<name>` reference) and `file`
   ([Environment secrets](#environment-secrets)); never a value.
 - `lock`: a [lock](#broker-locks) name. A locked run's session closes as soon as the run ends (outcome, failure,
   give-up, usage limit), before its result goes out: no TUI is left for a pane to follow; the workspace and history
@@ -684,7 +713,7 @@ plugins = ["dummy-plugin"]
 lock = "dummy-lock"
 
 [[delegate.environments.dummy.secrets]]
-item = "ensemble-env/dummy"
+item = "ensemble-broker-env/dummy"
 file = "dummy.txt"
 
 [delegate.roles.dummy-tester.environment]
@@ -1072,8 +1101,8 @@ the first failed check. The keychain, Linear preset and board-run checks stay ma
 
 - Container credentials are readable by every process in the container and by any process running as you
   ([Credentials](credentials.md)); each restart and resume writes them into a new container.
-- A broker reinstall needs all three logins, each `login claude <name>` and each `login opencode <name>` again
-  ([Log in](#log-in)); until then starts fail (`login_required`, or `keychain_failed` for the GitHub items).
+- A new broker needs `retrust` ([Re-trust after an upgrade](#re-trust-after-an-upgrade)); until then starts fail
+  without a dialog, naming it (`login_required`, or `keychain_failed` for the GitHub items).
 - An OpenCode provider at an `http://` `base_url` gets its API key and every prompt in plaintext: anyone on the LAN
   path can capture them. Prefer `https://`, or a key that only that server accepts.
 - A GitHub token the broker could not revoke stays valid until it expires (an hour); `"$B" status` lists it.

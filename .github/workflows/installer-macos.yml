@@ -1,0 +1,48 @@
+name: Installer macOS
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/installer-macos.yml
+      - scripts/install.sh
+      - scripts/install-cleanup.sh
+      - skills/manage/scripts/ctmux
+      - skills/manage/scripts/launcher
+      - tests/integration/install_fakes.py
+      - tests/integration/install_integration_test.py
+      - tests/integration/fixtures/legacy-*
+      - tests/manager/integration/ctmux_integration_test.py
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    name: Installer macos-15
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      PYTHONPATH: .:.github:src
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Install tmux
+        run: brew install tmux
+      - name: Protect shipped source
+        run: chmod -R a-w src
+      - name: Installer and command launcher tests with fake credentials
+        run: python3 .github/run_tests.py 'Installer macOS' tests/integration/install_integration_test.py tests/manager/integration/ctmux_integration_test.py --parallel 4 --shard 1/1
+      - name: Require unchanged checkout
+        if: ${{ always() }}
+        run: |
+          status=$(git -c core.fsmonitor=false -c core.hooksPath=/dev/null status --porcelain)
+          if [[ -n "$status" ]]; then
+            printf '%s\n' "$status"
+            exit 1
+          fi

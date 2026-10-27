@@ -1,4 +1,5 @@
 import ast
+import gc
 import hashlib
 from pathlib import Path
 
@@ -133,6 +134,16 @@ class EmbeddedPrograms(Sample):
                 source = f"from pathlib import Path\nscript = Path('probe.py')\nscript.write_text('print(1)')\n{call}"
                 (found,) = self.checked(source)
                 self.assertIn("written to a file and run", found)
+
+    def test_a_write_and_a_run_in_different_methods_never_match_after_collection(self):
+        self.addCleanup(gc.set_threshold, *gc.get_threshold())
+        gc.set_threshold(1)
+        methods = "".join(
+            f"    def test_write_{i}(self):\n        Path(self.home, 'state').write_text('x=1')\n"
+            f"    def test_run_{i}(self):\n        subprocess.run([str(Path(self.home, 'bin'))])\n"
+            for i in range(50)
+        )
+        self.assertEqual(self.checked(f"class Example:\n{methods}"), [])
 
     def test_open_write_then_interpreter_run_and_wrapped_write(self):
         for write in (

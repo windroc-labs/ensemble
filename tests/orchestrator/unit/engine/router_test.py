@@ -2441,8 +2441,8 @@ class ScheduledUsageGates(TickBase):
         for dry in (False, True):
             for selected in (False, True):
                 for message in (
-                    "No API key in ensemble-opencode",
-                    "Invalid API key in ensemble-opencode",
+                    "No API key in ensemble-broker-opencode",
+                    "Invalid API key in ensemble-broker-opencode",
                 ):
                     with self.subTest(dry=dry, selected=selected, message=message):
                         self.lines = []
@@ -2486,9 +2486,9 @@ class ScheduledUsageGates(TickBase):
                 with self.subTest(dry=dry, host_failure=host_failure):
                     self.lines = []
                     message = (
-                        "ensemble-opencode: keychain locked"
+                        "ensemble-broker-opencode: keychain locked"
                         if host_failure
-                        else "ensemble-opencode: no API key"
+                        else "ensemble-broker-opencode: no API key"
                     )
                     error = SessionError(message) if host_failure else ConfigError(message)
                     self.api.usages = {"a": error, "b": reading(10)}

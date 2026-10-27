@@ -592,14 +592,14 @@ func TestMutexFailureRevokesIssuedTokens(t *testing.T) {
 			h.GitHub = tokens
 			path := editedManifest(t, func(f map[string]any) {
 				f["lock"], f["lock_owner"] = "dummy", "worker_1"
-				f["github"] = map[string]any{"app": "ensemble-bot", "permissions": map[string]string{"contents": "read"}}
+				f["github"] = map[string]any{"app": "ensemble-broker-bot", "permissions": map[string]string{"contents": "read"}}
 			})
 			got, err := h.Start(ctx, path)
 			e := protoErr(t, err)
 			if e.Code != protocol.StartFailed || e.Cleanup != protocol.Removed || got.Container != "" {
 				t.Fatalf("%+v %+v", got, e)
 			}
-			if !slices.Equal(tokens.calls, []string{"ready ensemble-bot", "user ensemble-bot", "retry", "issue ensemble-bot " + container, "revoke " + container}) {
+			if !slices.Equal(tokens.calls, []string{"ready ensemble-broker-bot", "user ensemble-broker-bot", "retry", "issue ensemble-broker-bot " + container, "revoke " + container}) {
 				t.Fatalf("%q", tokens.calls)
 			}
 			if len(tokens.revokeContexts) != 1 || tokens.revokeContexts[0] != nil {

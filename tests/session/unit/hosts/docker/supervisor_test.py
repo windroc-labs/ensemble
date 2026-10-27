@@ -636,8 +636,8 @@ REASON = (
     " on the host, then resume."
 )
 NOTICE = {
-    "key": "ensemble-env/db@1:7d",
-    "text": "ensemble-env/db expires 2026-10-23 (explicit), in 6 days: rerun its login",
+    "key": "ensemble-broker-env/db@1:7d",
+    "text": "ensemble-broker-env/db expires 2026-10-23 (explicit), in 6 days: rerun its login",
 }
 
 

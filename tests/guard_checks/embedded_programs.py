@@ -157,6 +157,8 @@ class _Scan:
         self.found = set()
         self.written = []
         self.executed = []
+        # Identities hold id(env); keeping every env alive stops a collected one's id being reused.
+        self.envs = []
 
     def findings(self):
         for identities, codes, line in self.written:
@@ -166,6 +168,7 @@ class _Scan:
 
     def scope(self, tree, inherited, supplied=None, active=()):
         env = dict(inherited)
+        self.envs.append(env)
         body = tree.body if isinstance(tree.body, list) else [tree.body]
         nodes = list(_nodes(body))
         if isinstance(tree, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):

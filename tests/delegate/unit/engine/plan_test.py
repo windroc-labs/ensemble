@@ -768,7 +768,7 @@ class Docker(Base):
         self.assertIn("team_dirs", self.refused("poet", "verse", team=team, out=None))
 
 
-SECRET = {"item": "ensemble-env/dummy", "file": "dummy.txt"}
+SECRET = {"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}
 
 
 class PrefetchTest(Docker):

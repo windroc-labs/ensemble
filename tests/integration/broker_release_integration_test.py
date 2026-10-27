@@ -40,6 +40,7 @@ case "$(basename "$0") $*" in
     [ "$GOOS/$GOARCH" = darwin/arm64 ] || exit 1
     while [ "$#" -gt 0 ]; do [ "$1" = -o ] && echo built > "$2"; shift; done ;;
   "codesign -dv "*) echo "CodeDirectory v=20500 size=1 flags=0x10002(adhoc,runtime) hashes=1" >&2 ;;
+  "codesign -d -r- "*) echo 'designated => identifier "com.github.windroc.ensemble-broker"' >&2 ;;
 esac
 """
 

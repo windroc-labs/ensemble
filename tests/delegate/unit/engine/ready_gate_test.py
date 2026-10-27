@@ -20,6 +20,8 @@ CONVERGED = Updraft(UpdraftStatus.CONVERGED, HEAD)
 VIEW = ["gh", "pr", "view", URL, "--json", "state,isDraft,headRefOid,statusCheckRollup"]
 READY = ["gh", "pr", "ready", URL]
 UNDO = ["gh", "pr", "ready", URL, "--undo"]
+JOB_URL = "https://github.com/o/n/actions/runs/100/job/200"
+JOB_API = ["gh", "api", "--hostname", "github.com", "repos/o/n/actions/jobs/200"]
 
 
 def run_(name, conclusion="SUCCESS", status="COMPLETED"):
@@ -44,15 +46,25 @@ class Gh:
     records calls and timeouts; an exception answer is raised; a list answers views in turn.
     """
 
-    def __init__(self, view_answer=None, ready=OK, undo=OK):
-        self.answers = {"view": view_answer, "ready": ready, "undo": undo}
+    def __init__(self, view_answer=None, ready=OK, undo=OK, api=OK):
+        self.answers = {"view": view_answer, "ready": ready, "undo": undo, "api": api}
         self.calls, self.timeouts = [], []
 
     def __call__(self, argv, timeout):
         self.calls.append(argv)
         self.timeouts.append(timeout)
-        key = "view" if argv[2] == "view" else "undo" if "--undo" in argv else "ready"
+        key = (
+            "api"
+            if argv[1] == "api"
+            else "view"
+            if argv[2] == "view"
+            else "undo"
+            if "--undo" in argv
+            else "ready"
+        )
         answer = self.answers[key]
+        if key == "api" and isinstance(answer, dict):
+            answer = answer.get(argv[-1], failed("unexpected API path"))
         if isinstance(answer, list):
             answer = answer.pop(0)
         if isinstance(answer, BaseException):
@@ -186,6 +198,347 @@ class Done(Base):
         long = self.go(Gh(view([run_("n" * 1000, "FAILURE")])), out=outcome(summary="x" * 300))
         self.assertEqual(long.outcome.summary, f"ready gate: {long.reason}")
         self.assertLessEqual(len(long.outcome.summary), 300)
+
+
+class Cancelled(Base):
+    def check(self, **changes):
+        return {**run_("arbitrary CI leg", "CANCELLED"), "detailsUrl": JOB_URL, **changes}
+
+    def job(self, **changes):
+        return {
+            "id": 200,
+            "run_id": 100,
+            "head_sha": HEAD,
+            "status": "completed",
+            "conclusion": "cancelled",
+            "runner_id": 0,
+            "runner_name": "",
+            "steps": [],
+            "started_at": "2026-10-26T00:00:00Z",
+            **changes,
+        }
+
+    def go_job(self, job, *, checks=None, api=None, draft=True):
+        checks = [run_("passing"), self.check()] if checks is None else checks
+        return self.go(Gh(view(checks, draft=draft), api=api or ok(json.dumps(job))))
+
+    def test_cancelled_before_start_readies_with_other_checks_passing(self):
+        for changes in ({}, {"runner_id": None, "runner_name": None, "started_at": None}):
+            with self.subTest(changes=changes):
+                gated = self.go_job(self.job(**changes))
+                self.assertEqual((gated.status, gated.outcome), (GateStatus.PASSED, outcome()))
+                self.assertEqual(self.gh.calls, [VIEW, JOB_API, READY])
+                self.assertEqual(set(self.gh.timeouts), {SHORT})
+
+    def test_started_cancellation_and_incomplete_evidence_still_fail(self):
+        cases = [
+            {"runner_id": 9},
+            {"runner_name": "runner"},
+            {"steps": [{"name": "Set up"}]},
+            {"runner_id": False},
+            {"runner_id": "0"},
+            {"steps": None},
+            {"id": 201},
+            {"id": "200"},
+            {"run_id": 101},
+            {"head_sha": OLDER},
+            {"status": "in_progress"},
+            {"conclusion": "failure"},
+        ]
+        jobs = [self.job(**changes) for changes in cases]
+        jobs.extend(
+            {k: v for k, v in self.job().items() if k != missing}
+            for missing in ("runner_id", "runner_name", "steps", "id", "run_id", "head_sha")
+        )
+        jobs.extend((None, [], "junk"))
+        for job in jobs:
+            with self.subTest(job=job):
+                self.assert_failed(
+                    self.go_job(job, draft=False), "G3: check arbitrary CI leg CANCELLED"
+                )
+                self.assertEqual(self.gh.calls, [VIEW, JOB_API, UNDO])
+
+    def test_api_errors_fail_closed(self):
+        for api in (failed("HTTP 403"), ok("not json"), *PROCESS_ERRORS):
+            with self.subTest(api=api):
+                self.assert_failed(
+                    self.go_job(None, api=api), "G3: check arbitrary CI leg CANCELLED"
+                )
+
+    def test_untrusted_or_missing_job_links_are_not_followed(self):
+        for link in (
+            None,
+            "",
+            200,
+            "https://evil.example/o/n/actions/runs/100/job/200",
+            "https://github.com/other/n/actions/runs/100/job/200",
+            "http://github.com/o/n/actions/runs/100/job/200",
+            "https://github.com/o/n/actions/runs/100/job/200/extra",
+            "https://[",
+        ):
+            with self.subTest(link=link):
+                self.assert_failed(
+                    self.go_job(None, checks=[self.check(detailsUrl=link)]), "CANCELLED"
+                )
+                self.assertEqual(self.gh.calls, [VIEW])
+
+    def test_no_executed_checks_does_not_pass(self):
+        for checks in ([self.check()], [self.check(), run_("skipped", "SKIPPED")]):
+            with self.subTest(checks=checks):
+                self.assert_failed(self.go_job(self.job(), checks=checks), "G3: CI did not run")
+
+    def test_failure_and_pending_never_use_the_cancelled_exception(self):
+        for changes, said in (
+            ({"conclusion": "FAILURE"}, "FAILURE"),
+            ({"status": "QUEUED", "conclusion": None}, "QUEUED"),
+        ):
+            with self.subTest(changes=changes):
+                self.assert_failed(
+                    self.go_job(self.job(), checks=[run_("pass"), self.check(**changes)]), said
+                )
+                self.assertEqual(self.gh.calls, [VIEW])
+
+    def test_g1_g2_fail_without_reading_job_evidence(self):
+        for updraft in (None, Updraft(UpdraftStatus.CONVERGED, OLDER)):
+            with self.subTest(updraft=updraft):
+                self.assert_failed(
+                    self.go(Gh(view([self.check()])), updraft), "G1:" if updraft is None else "G2:"
+                )
+                self.assertEqual(self.gh.calls, [VIEW])
+
+    def test_enterprise_host_and_another_repo_use_their_own_api(self):
+        url = "https://ghe.example.com/company/project/pull/3"
+        check = self.check(
+            detailsUrl="https://ghe.example.com/company/project/actions/runs/100/job/200"
+        )
+        gh = Gh(view([run_("pass"), check]), api=ok(json.dumps(self.job())))
+        self.assertEqual(self.go(gh, out=outcome(url=url)).status, GateStatus.PASSED)
+        self.assertEqual(
+            gh.calls[1],
+            [
+                "gh",
+                "api",
+                "--hostname",
+                "ghe.example.com",
+                "repos/company/project/actions/jobs/200",
+            ],
+        )
+
+    def test_repository_case_does_not_change_job_identity(self):
+        url = "https://github.com/O/N/pull/7"
+        gh = Gh(view([run_("pass"), self.check()]), api=ok(json.dumps(self.job())))
+        self.assertEqual(self.go(gh, out=outcome(url=url)).status, GateStatus.PASSED)
+        self.assertEqual(
+            gh.calls[1], ["gh", "api", "--hostname", "github.com", "repos/O/N/actions/jobs/200"]
+        )
+
+
+class Superseded(Base):
+    def check(self, job=200, run=100, **changes):
+        return {
+            **run_("Test scope", "CANCELLED" if job == 200 else "SUCCESS"),
+            "workflowName": "CI",
+            "detailsUrl": f"https://github.com/o/n/actions/runs/{run}/job/{job}",
+            **changes,
+        }
+
+    def evidence(self):
+        return {
+            "repos/o/n/actions/jobs/200": {
+                "id": 200,
+                "run_id": 100,
+                "run_attempt": 1,
+                "head_sha": HEAD,
+                "name": "Test scope",
+                "runner_id": 9,
+                "runner_name": "runner",
+                "steps": [{"name": "Set up"}],
+                "status": "completed",
+                "conclusion": "cancelled",
+            },
+            "repos/o/n/actions/jobs/201": {
+                "id": 201,
+                "run_id": 101,
+                "run_attempt": 1,
+                "head_sha": HEAD,
+                "name": "Test scope",
+                "runner_id": 9,
+            },
+            "repos/o/n/actions/runs/100": {
+                "id": 100,
+                "head_sha": HEAD,
+                "workflow_id": 50,
+                "run_number": 1,
+            },
+            "repos/o/n/actions/runs/101": {
+                "id": 101,
+                "head_sha": HEAD,
+                "workflow_id": 50,
+                "run_number": 2,
+            },
+        }
+
+    def go_checks(self, checks=None, *, evidence=None, out=None, draft=True):
+        evidence = self.evidence() if evidence is None else evidence
+        api = {path: ok(json.dumps(data)) for path, data in evidence.items()}
+        gh = Gh(view(checks or [self.check(), self.check(201, 101)], draft=draft), api=api)
+        return self.go(gh, out=out)
+
+    def test_superseded_started_cancelled_failed_and_pending_checks_are_ignored(self):
+        for conclusion, status in (
+            ("CANCELLED", "COMPLETED"),
+            ("FAILURE", "COMPLETED"),
+            ("TIMED_OUT", "COMPLETED"),
+            (None, "IN_PROGRESS"),
+            (None, "QUEUED"),
+        ):
+            for reverse in (False, True):
+                with self.subTest(conclusion=conclusion, status=status, reverse=reverse):
+                    checks = [
+                        self.check(conclusion=conclusion, status=status),
+                        self.check(201, 101),
+                    ]
+                    gated = self.go_checks(checks[::-1] if reverse else checks)
+                    self.assertEqual((gated.status, gated.outcome), (GateStatus.PASSED, outcome()))
+                    self.assertEqual(self.gh.calls[-1], READY)
+                    self.assertEqual(set(self.gh.timeouts), {SHORT})
+
+    def test_latest_cancelled_failure_and_pending_still_fail_and_draft(self):
+        for conclusion, status, reason in (
+            ("CANCELLED", "COMPLETED", "CANCELLED"),
+            ("FAILURE", "COMPLETED", "FAILURE"),
+            (None, "QUEUED", "QUEUED"),
+            (None, "IN_PROGRESS", "IN_PROGRESS"),
+        ):
+            with self.subTest(conclusion=conclusion, status=status):
+                checks = [
+                    self.check(conclusion="SUCCESS"),
+                    self.check(201, 101, conclusion=conclusion, status=status),
+                ]
+                evidence = self.evidence()
+                evidence["repos/o/n/actions/jobs/201"].update(
+                    status=status.lower(),
+                    conclusion=conclusion.lower() if conclusion else None,
+                    runner_name="runner",
+                    steps=[{"name": "Set up"}],
+                )
+                self.assert_failed(
+                    self.go_checks(checks, evidence=evidence, draft=False),
+                    f"G3: check Test scope {reason}",
+                )
+                self.assertEqual(self.gh.calls[-1], UNDO)
+
+    def test_workflow_order_wins_over_job_times_and_workflow_display_names(self):
+        checks = [
+            self.check(startedAt="2026-10-26T20:51:00Z", completedAt="2026-10-26T20:52:00Z"),
+            self.check(201, 101, startedAt=None, workflowName="renamed CI"),
+        ]
+        self.assertEqual(self.go_checks(checks).status, GateStatus.PASSED)
+
+    def test_run_attempt_orders_reruns_of_the_same_workflow_run(self):
+        evidence = self.evidence()
+        evidence["repos/o/n/actions/jobs/201"].update(run_id=100, run_attempt=2)
+        self.assertEqual(
+            self.go_checks([self.check(), self.check(201, 100)], evidence=evidence).status,
+            GateStatus.PASSED,
+        )
+
+    def test_equal_run_and_attempt_do_not_prove_supersession(self):
+        evidence = self.evidence()
+        evidence["repos/o/n/actions/jobs/201"]["run_id"] = 100
+        self.assert_failed(
+            self.go_checks([self.check(), self.check(201, 100)], evidence=evidence), "CANCELLED"
+        )
+
+    def test_same_display_name_in_a_different_workflow_does_not_supersede(self):
+        evidence = self.evidence()
+        evidence["repos/o/n/actions/runs/101"]["workflow_id"] = 51
+        self.assert_failed(self.go_checks(evidence=evidence), "CANCELLED")
+
+    def test_different_check_name_and_legacy_status_do_not_supersede(self):
+        for check in (self.check(201, 101, name="Other check"), context("Test scope", "SUCCESS")):
+            with self.subTest(check=check):
+                self.assert_failed(self.go_checks([self.check(), check]), "CANCELLED")
+
+    def test_metadata_must_identify_each_job_run_workflow_and_head(self):
+        invalid = {
+            "repos/o/n/actions/jobs/201": [
+                {"id": 202},
+                {"run_id": 102},
+                {"head_sha": OLDER},
+                {"name": "Other check"},
+                {"run_attempt": None},
+                {"run_attempt": True},
+                {"run_attempt": 0},
+            ],
+            "repos/o/n/actions/runs/101": [
+                {"id": 102},
+                {"head_sha": OLDER},
+                {"workflow_id": None},
+                {"workflow_id": True},
+                {"run_number": "2"},
+                {"run_number": 0},
+            ],
+        }
+        for path, changes in invalid.items():
+            for change in changes:
+                with self.subTest(path=path, change=change):
+                    evidence = self.evidence()
+                    evidence[path].update(change)
+                    self.assert_failed(self.go_checks(evidence=evidence), "CANCELLED")
+
+    def test_api_errors_and_unreadable_metadata_preserve_the_older_failure(self):
+        for answer in (failed("HTTP 403"), ok("not json"), ok("[]"), ok("null"), *PROCESS_ERRORS):
+            with self.subTest(answer=answer):
+                api = {path: ok(json.dumps(data)) for path, data in self.evidence().items()}
+                api["repos/o/n/actions/runs/101"] = answer
+                gh = Gh(view([self.check(), self.check(201, 101)]), api=api)
+                self.assert_failed(self.go(gh), "CANCELLED")
+
+    def test_untrusted_links_are_not_followed_for_supersession(self):
+        for link in (
+            None,
+            201,
+            "https://evil.example/o/n/actions/runs/101/job/201",
+            "https://github.com/other/n/actions/runs/101/job/201",
+            "http://github.com/o/n/actions/runs/101/job/201",
+            "https://[",
+        ):
+            with self.subTest(link=link):
+                self.assert_failed(
+                    self.go_checks([self.check(), self.check(201, 101, detailsUrl=link)]),
+                    "CANCELLED",
+                )
+                for argv in self.gh.calls:
+                    if argv[1] == "api":
+                        self.assertIn(
+                            argv[-1], ("repos/o/n/actions/jobs/200", "repos/o/n/actions/runs/100")
+                        )
+
+    def test_only_latest_checks_count_toward_all_skipped(self):
+        checks = [self.check(conclusion="SUCCESS"), self.check(201, 101, conclusion="SKIPPED")]
+        self.assert_failed(self.go_checks(checks), "all 1 checks skipped")
+
+    def test_job_and_workflow_metadata_are_cached_across_checks(self):
+        checks = [self.check(), self.check(201, 101)] * 2
+        self.assertEqual(self.go_checks(checks).status, GateStatus.PASSED)
+        api = [tuple(argv) for argv in self.gh.calls if argv[1] == "api"]
+        self.assertEqual(len(api), 4)
+        self.assertEqual(len(set(api)), 4)
+
+    def test_enterprise_host_and_case_insensitive_repository_identity(self):
+        url = "https://ghe.example.com/O/N/pull/7"
+        checks = [self.check(), self.check(201, 101)]
+        for check in checks:
+            check["detailsUrl"] = check["detailsUrl"].replace("github.com", "ghe.example.com")
+        evidence = {path.replace("o/n", "O/N"): data for path, data in self.evidence().items()}
+        self.assertEqual(
+            self.go_checks(checks, evidence=evidence, out=outcome(url=url)).status,
+            GateStatus.PASSED,
+        )
+        for argv in self.gh.calls:
+            if argv[1] == "api":
+                self.assertEqual(argv[2:4], ["--hostname", "ghe.example.com"])
 
 
 class Errors(Base):
