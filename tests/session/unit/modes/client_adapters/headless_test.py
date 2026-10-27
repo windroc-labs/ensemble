@@ -26,6 +26,9 @@ class StreamHeadless(Headless):
 
 
 class HeadlessTest(Case):
+    def test_a_headless_is_unowned_unless_its_client_says_so(self):
+        self.assertFalse(Headless._owned)
+
     def test_the_stream_is_required_and_parse_is_not(self):
         self.assertEqual(list(StreamHeadless().events(["a\n", "b"])), [Reply("a"), Reply("b")])
         for interface, method in ((Headless, "events"), (JsonHeadless, "parse")):

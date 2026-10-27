@@ -434,6 +434,29 @@ class ThroughItsHost(Base):
         )
         self.assertEqual(len(self.recorded), 1)
 
+    def test_a_named_runs_generation_is_its_hosts_and_a_nameless_ones_its_own(self):
+        host = PipingHost(FakePiped())
+        named = self.start_on(host, name="r1")
+        self.assertEqual(named.generation, host.pipes[0][2]["generation"])
+        nameless = self.start_on(PipingHost(FakePiped()))
+        self.assertRegex(nameless.generation, "^[0-9a-f]{32}$")
+        self.assertEqual(nameless.generation, nameless.generation)
+        self.assertNotEqual(nameless.generation, named.generation)
+
+    def test_an_owner_is_accepted_and_kept_nowhere(self):
+        host = PipingHost(FakePiped())
+        spec = Spec(workdir=self.dir, access=Access(cwd=self.dir), sid=SID, client="stub")
+        mode = HeadlessMode.start(
+            spec,
+            StubClient(Launch(NOTHING, transcript="/t.jsonl"), run=StubRun),
+            registry=self.session_cls._config().registry,
+            record=self.recorded.append,
+            host=host,
+            owner="/h",
+        )
+        self.assertEqual(host.pipes[0][2], None)
+        self.assertEqual(mode.opening_pending, None)
+
     def test_returncode_closes_the_piped_once_and_state_never(self):
         piped = FakePiped(codes=[None, None, 0, 0])
         mode = self.start_on(PipingHost(piped))

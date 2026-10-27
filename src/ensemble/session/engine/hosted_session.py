@@ -7,6 +7,7 @@ IdleTimeout (none while Blocked) up to its Exited, recording `stderr` and each C
 from __future__ import annotations
 
 import builtins
+import contextlib
 import hashlib
 import json
 import logging
@@ -95,6 +96,7 @@ def _request(spec: Spec, idle_timeout: float | None) -> tuple[str, Mode]:
 
 POLL = 0.5
 START_WAIT = 60
+CLOSE_WAIT = 10  # an owned headless worker's, or its failed harness's, end
 HARNESS = "ensemble.session.harness.process"
 LOG = logging.getLogger("session")
 PROBE_DIR = f"{STATE}/probe"
@@ -249,10 +251,10 @@ def _reconstructible(setup: _Setup) -> bool:
 
 
 def _owned(setup: _Setup, mode: Mode, client: Client, on: Host) -> bool:
-    """An owned client's tui start on a harnessed Host."""
-    if mode != Mode.TUI or not on._harnessed or not _reconstructible(setup):
+    """An owned client's tui or headless start on a harnessed Host."""
+    if not on._harnessed or not _reconstructible(setup):
         return False
-    run = client.tui()
+    run = {Mode.TUI: client.tui, Mode.HEADLESS: client.headless}.get(mode, lambda: None)()
     return run is not None and run._owned
 
 
@@ -414,8 +416,9 @@ class HostedSession(Session):
         host: str | None = None,
         idle_timeout: float | None = None,
     ) -> Session:
-        """spec.sid: its id, else a new one; display: kept by its Host. An owned client's tui start
-        on a harnessed Host runs under a session harness of its own and returns its control view.
+        """spec.sid: its id, else a new one; display: kept by its Host. An owned client's tui or
+        headless start on a harnessed Host runs under a session harness of its own and returns its
+        control view.
         """
         setup = cls._config()
         client_name, mode = _request(spec, idle_timeout)
@@ -430,15 +433,22 @@ class HostedSession(Session):
                 spec, display=display, host=host, idle_timeout=idle_timeout, client=client
             )
         spec = replace(spec, sid=spec.sid or str(uuid.uuid4()))
-        spec = replace(spec, name=tui.TuiMode.resolve_name(spec))
-        return cls._spawn(spec, display=display, host=host, idle_timeout=idle_timeout)
+        if mode == Mode.TUI:
+            spec = replace(spec, name=tui.TuiMode.resolve_name(spec))
+        return cls._spawn(spec, mode, display=display, host=host, idle_timeout=idle_timeout)
 
     @classmethod
     def _spawn(
-        cls, spec: Spec, *, display: Display, host: str | None, idle_timeout: float | None
+        cls,
+        spec: Spec,
+        mode: Mode,
+        *,
+        display: Display,
+        host: str | None,
+        idle_timeout: float | None,
     ) -> Session:
         """Its view once a new harness runs it; else the start error, nothing left."""
-        assert spec.client is not None and spec.name is not None and spec.sid is not None
+        assert spec.client is not None and spec.sid is not None
         roots = cls._roots(spec.client)
         request = cls.harness_request(spec, display=display, host=host, roots=roots)
         channel = Channel.create()
@@ -479,14 +489,14 @@ class HostedSession(Session):
                 or time.monotonic() > deadline
             ):
                 error = _start_error(channel, status)
-                cls._unspawn(channel, harness, spec.name, host)
+                cls._unspawn(channel, harness, spec.name, host, mode)
                 raise error
             time.sleep(SLICE)
         generation = status.get("generation")
         if (status.get("name"), status.get("sid")) != (spec.name, spec.sid) or not isinstance(
             generation, str
         ):
-            cls._unspawn(channel, harness, spec.name, host)
+            cls._unspawn(channel, harness, spec.name, host, mode)
             raise SessionError(f"session harness {channel.directory}: started another session")
         return cls._view(
             channel,
@@ -496,6 +506,8 @@ class HostedSession(Session):
             generation=generation,
             host=host,
             idle_timeout=idle_timeout,
+            mode=mode,
+            spec=spec,
         )
 
     @classmethod
@@ -504,11 +516,24 @@ class HostedSession(Session):
 
     @classmethod
     def _unspawn(
-        cls, channel: Channel, harness: subprocess.Popen, name: str, host: str | None
+        cls,
+        channel: Channel,
+        harness: subprocess.Popen,
+        name: str | None,
+        host: str | None,
+        mode: Mode,
     ) -> None:
+        """A headless worker is the harness's child: SIGTERM has its harness close it first."""
+        if mode != Mode.TUI and harness.poll() is None:
+            harness.terminate()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                harness.wait(CLOSE_WAIT)
         if harness.poll() is None:
             harness.kill()
         harness.wait()
+        if name is None or mode != Mode.TUI:
+            shutil.rmtree(channel.directory, ignore_errors=True)
+            return
         try:
             owned = tui.TuiMode.snapshot(name).get("owner") == channel.directory
         except SessionError:
@@ -779,7 +804,7 @@ class HostedSession(Session):
         cls,
         channel: Channel,
         *,
-        name: str,
+        name: str | None,
         client: str,
         sid: str,
         generation: str,
@@ -787,8 +812,22 @@ class HostedSession(Session):
         idle_timeout: float | None = None,
         replay: bool = False,
         attached: Session | None = None,
+        mode: Mode = Mode.TUI,
+        spec: Spec | None = None,
     ) -> OwnedSession:
-        """The only way a view is built."""
+        """The only way a view is built; a headless one's (`spec` its run's) has no terminal."""
+        if mode == Mode.TUI:
+            assert name is not None
+
+            def attach() -> Session:
+                return attached or cls._attached(name, sid=sid, host=host, generation=generation)
+        else:
+            assert spec is not None
+            unhosted = _Unhosted(cls, channel, replace(spec, sid=sid), mode)
+
+            def attach() -> Session:
+                return unhosted
+
         return OwnedSession(
             channel,
             name,
@@ -796,10 +835,9 @@ class HostedSession(Session):
             sid=sid,
             generation=generation,
             idle_timeout=idle_timeout,
-            attach=lambda: (
-                attached or cls._attached(name, sid=sid, host=host, generation=generation)
-            ),
+            attach=attach,
             replay=replay,
+            mode=mode,
         )
 
     @classmethod
@@ -1181,8 +1219,7 @@ class Owned:
         self._session, self._host = session, host
 
     @property
-    def name(self) -> str:
-        assert self._session.name is not None
+    def name(self) -> str | None:
         return self._session.name
 
     @property
@@ -1205,25 +1242,38 @@ class Owned:
     def record(self, event: SessionEvent | Stderr | ClientBound) -> None:
         self._session._record(event)
 
-    def stop(self) -> list[SessionEvent | Stderr | ClientBound]:
-        """Its last read's events, then stopped."""
+    def stop(self, timeout: float = CLOSE_WAIT) -> list[SessionEvent | Stderr | ClientBound]:
+        """Its last read's events, then stopped; a headless one's after it, up to its end."""
         final = self._session._step(0)[0]
         self._session.stop()
-        return final
+        return final + self._ending(timeout)
 
-    def close(self) -> list[SessionEvent | Stderr | ClientBound]:
-        """Its last read's events, then closed."""
+    def close(self, timeout: float = CLOSE_WAIT) -> list[SessionEvent | Stderr | ClientBound]:
+        """Its last read's events, then closed; a headless one's after it, up to its end."""
         final = self._session._step(0)[0]
         self._session.close()
-        return final
+        return final + self._ending(timeout)
+
+    def _ending(self, timeout: float) -> list[SessionEvent | Stderr | ClientBound]:
+        """A headless run's reads up to its own terminal event, within `timeout`."""
+        found: list[SessionEvent | Stderr | ClientBound] = []
+        deadline = time.monotonic() + timeout
+        while self._session.mode != Mode.TUI and (left := deadline - time.monotonic()) > 0:
+            batch, ended = self._session._step(min(POLL, left))
+            found += batch
+            if ended:
+                break
+        return found
 
     def returncode(self) -> int | None:
         return self._session._running.returncode(0)
 
     def confirm_end(self, timeout: float) -> int | None:
-        """The exit code once its terminal is gone, else None."""
+        """The exit code once its terminal is gone (headless: once known), else None."""
         deadline = time.monotonic() + timeout
         code = self._session._running.returncode(timeout)
+        if self._session.mode != Mode.TUI:
+            return code
         while code is not None:
             try:
                 if self.name not in self._session._host.list():
@@ -1244,4 +1294,86 @@ class Owned:
             generation=self.generation,
             host=self._host,
             idle_timeout=idle_timeout,
+            mode=self._session.mode,
+            spec=self._session._running.prepared.spec,
         )
+
+
+class _Unhosted(Session):
+    """What a headless view reads beside its harness's log: that harness's state and the run's
+    RunLog record; no terminal, so send, press, screen and show refuse as a headless run does.
+    stop and close: nothing, reached only once no harness is left.
+    """
+
+    def __init__(self, cls: type[HostedSession], channel: Channel, spec: Spec, mode: Mode):
+        assert spec.client is not None and spec.sid is not None
+        self.sid, self.client, self.mode, self.name = spec.sid, spec.client, mode, spec.name
+        self._cls, self._channel, self._spec = cls, channel, spec
+
+    def events(self) -> Iterator[SessionEvent | Stderr | IdleTimeout]:
+        return iter(())
+
+    def send(self, text: str) -> None:
+        raise SessionError("send: tui mode only")
+
+    def press(self, keys: Sequence[KeyPress]) -> None:
+        raise SessionError("press: tui mode only")
+
+    def alive(self) -> bool:
+        return self._channel.alive() and self._channel.status().get("state") == "running"
+
+    def status(self) -> Status:
+        alive = self.alive()
+        return Status(
+            name=self.name or self.sid,
+            alive=alive,
+            state=StatusState.WORKING if alive else StatusState.DEAD,
+            outcome=None,
+            attach=None,
+            hidden=False,
+            cwd=self.info().cwd if alive else None,
+        )
+
+    def content(self) -> str:
+        return self.screen()
+
+    def stop(self) -> None:
+        return None
+
+    def info(self) -> SessionInfo:
+        try:
+            info = RunLog(self._spec.workdir).session(self.sid)
+        except OSError as error:
+            raise SessionError(f"session {self.sid}: {error}") from error
+        if info is None:
+            raise NoRecordedSession(f"no recorded session {self.sid} in {self._spec.workdir}")
+        return info
+
+    @property
+    def reply(self) -> str | None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+    def session_status(self) -> SessionStatus:
+        return self._cls.inspect(self._spec)
+
+    def record(self) -> Record | None:
+        return None
+
+    @property
+    def showable(self) -> bool:
+        return False
+
+    def show(self, *, display: Display = None, command: str | None = None) -> str | None:
+        raise NotShowable("show: tui mode only")
+
+    def hide(self) -> None:
+        raise NotShowable("hide: tui mode only")
+
+    def attach_command(self) -> str:
+        raise NotShowable("attach_command: tui mode only")
+
+    def screen(self, lines: int | None = None) -> str:
+        raise NotShowable("screen: tui mode only")

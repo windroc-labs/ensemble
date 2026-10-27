@@ -6,6 +6,7 @@ the pipes dies too; every wait is bounded.
 
 import queue
 import threading
+import uuid
 from collections.abc import Callable, Iterable, Mapping
 from typing import Self
 
@@ -40,8 +41,9 @@ PUT_WAIT = 0.5
 class HeadlessMode(BaseMode):
     kind = Mode.HEADLESS
 
-    def __init__(self, prepared: Prepared, piped: Piped):
+    def __init__(self, prepared: Prepared, piped: Piped, generation: str | None = None):
         super().__init__(prepared)
+        self._generation = generation or uuid.uuid4().hex
         self.piped, self.items, self.open = piped, queue.Queue(QUEUE_MAX), 2
         self.eof = (threading.Event(), threading.Event())
         self.done = (threading.Event(), threading.Event())
@@ -115,7 +117,6 @@ class HeadlessMode(BaseMode):
         check_name: Callable[[str], None] | None = None,
         owner: str | None = None,
     ) -> Self:
-        cls._unowned(owner)
         prepared, run, metadata, prompt_file = cls._prepare(
             spec, client, registry=registry, host=host, display=display
         )
@@ -125,7 +126,7 @@ class HeadlessMode(BaseMode):
         record(prepared.info)
         try:
             piped = host.pipe(prepared.spec.name, _launch(prepared), metadata=metadata)
-            mode = cls(prepared, piped)
+            mode = cls(prepared, piped, (metadata or {}).get("generation"))
             out, err = piped.stdout, piped.stderr
             for pipe, events, eof, done in (
                 (out, run.events(out), mode.eof[0], mode.done[0]),
@@ -165,6 +166,11 @@ class HeadlessMode(BaseMode):
             except queue.Full:
                 if self.stopped.is_set():
                     return
+
+    @property
+    def generation(self) -> str:
+        """Its Host's for a named run, else its own."""
+        return self._generation
 
     def poll(self, timeout: float) -> tuple[list[SessionEvent | Stderr | ClientBound], bool]:
         if self._finished:

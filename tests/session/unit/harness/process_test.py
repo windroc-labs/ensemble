@@ -326,6 +326,24 @@ class ExitTest(Base):
         self.assertEqual((status["state"], status["pending"]), ("exited", 2))
 
 
+class HeadlessExitTest(Base):
+    def test_an_end_with_its_code_not_yet_known_waits_for_the_confirmed_code(self):
+        owned = FakeOwned(([TurnFailed("interrupted")], True), code=None)
+        owned.confirm_end = lambda _timeout: 7
+        self.assertEqual(self.harness(owned).run(self.begin), 0)
+        self.assertEqual(self.logged()[-1]["fields"], {"returncode": 7})
+
+    def test_a_nameless_workers_unconfirmed_close_names_its_sid(self):
+        owned = FakeOwned(code=None)
+        owned.name = None
+        thread = self.run_in_thread(self.harness(owned))
+        with self.assertRaisesRegex(SessionError, "^s1: worker exit not confirmed"):
+            self.request(Op.CLOSE)
+        owned.code = 0
+        self.assertTrue(self.request(Op.CLOSE))
+        thread.join(WAIT)
+
+
 class DrainTest(Base):
     def test_requests_during_the_drain_are_answered_ok(self):
         gate = threading.Event()

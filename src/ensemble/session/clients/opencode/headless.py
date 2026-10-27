@@ -33,6 +33,7 @@ SESSION_TIMEOUT = 120  # seconds a run may take to print its first sessionID
 
 class OpenCodeHeadless(Homed, JsonHeadless):
     _invalid_output = "opencode: invalid JSON event"
+    _owned = True
 
     def __init__(self, common: OpenCodeCommon):
         self.common = common

@@ -82,12 +82,14 @@ class _Reader:
 
 
 class OwnedSession(Session):
-    """attach: the read-only attach, bound to sid and generation; replay: start past the log."""
+    """attach: the read-only attach, bound to sid and generation; replay: start past the log. A
+    headless view's events() stops its worker on an interrupt, as a headless HostedSession does.
+    """
 
     def __init__(
         self,
         channel: Channel,
-        name: str,
+        name: str | None,
         *,
         client: str,
         sid: str,
@@ -95,8 +97,9 @@ class OwnedSession(Session):
         idle_timeout: float | None,
         attach: Callable[[], Session],
         replay: bool = False,
+        mode: Mode = Mode.TUI,
     ) -> None:
-        self.sid, self.client, self.mode, self.name = sid, client, Mode.TUI, name
+        self.sid, self.client, self.mode, self.name = sid, client, mode, name
         self.generation = generation
         self._channel, self._idle, self._attach = channel, idle_timeout, attach
         self._attached: Session | None = None
@@ -106,6 +109,19 @@ class OwnedSession(Session):
         self._latest = self._events.copy()
 
     def events(self) -> Iterator[SessionEvent | Stderr | IdleTimeout]:
+        try:
+            yield from self._read()
+        except GeneratorExit:  # the caller closed this iterator; the worker goes on
+            raise
+        except BaseException as error:
+            if self.mode != Mode.TUI:
+                try:
+                    self.stop()
+                except SessionError as failed:
+                    error.add_note(f"stop: {failed}")
+            raise
+
+    def _read(self) -> Iterator[SessionEvent | Stderr | IdleTimeout]:
         reader, last = self._events, time.monotonic()
         while not reader.exited:
             taken = reader.read()
@@ -154,7 +170,7 @@ class OwnedSession(Session):
         else:
             session.close()
         if session.alive():
-            raise Unanswered(f"session {self.name}: still running after {op}")
+            raise Unanswered(f"session {self.name or self.sid}: still running after {op}")
 
     def _session(self) -> Session:
         if self._attached is None:

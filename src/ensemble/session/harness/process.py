@@ -42,7 +42,7 @@ class Worker(Protocol):
     """hosted_session.Owned."""
 
     @property
-    def name(self) -> str: ...
+    def name(self) -> str | None: ...
     @property
     def sid(self) -> str: ...
     @property
@@ -169,6 +169,8 @@ class Harness:
             self._write_pending()
             if ended:
                 code = worker.returncode()
+                if code is None:  # a stopped headless run's may land later
+                    code = worker.confirm_end(self._close_wait)
                 return -signal.SIGHUP if code is None else code
 
     def _end(self, worker: Worker, op: Op, ident: str | None) -> int | None:
@@ -182,7 +184,10 @@ class Harness:
         code = worker.confirm_end(self._close_wait)
         if code is None:
             self._answer(
-                ident, ok=False, error=f"{worker.name}: worker exit not confirmed", unanswered=True
+                ident,
+                ok=False,
+                error=f"{worker.name or worker.sid}: worker exit not confirmed",
+                unanswered=True,
             )
             return None
         self._exited(code)

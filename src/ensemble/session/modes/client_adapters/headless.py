@@ -5,6 +5,7 @@ output; JsonHeadless calls parse per JSON line.
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator
+from typing import ClassVar
 
 from ensemble.session.engine.types import (
     LOCAL_CONTEXT,
@@ -21,6 +22,7 @@ from ensemble.session.engine.types import (
 
 class Headless(ABC):
     _context: ClientContext = LOCAL_CONTEXT
+    _owned: ClassVar[bool] = False  # a session harness owns it
 
     def _home(self) -> ClientHome | None:
         return None

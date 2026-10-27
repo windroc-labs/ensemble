@@ -31,6 +31,7 @@ from ensemble.session.modes.client_adapters.headless import JsonHeadless
 
 class CodexHeadless(JsonHeadless):
     _invalid_output = "codex: invalid JSON event"
+    _owned = True
 
     def _home(self):
         return self.common.home()
