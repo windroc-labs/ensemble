@@ -173,8 +173,14 @@ change to your config or shell profile. Flags change the configuration (`--clien
 Each run refreshes the selected Claude Code/Codex marketplaces and updates their ensemble plugins to the served ref
 before reading installed files. An update or version check failure stops with the client's name and reason.
 For OpenCode, when `--ref` (default `<tag>`) names a newer commit than the one it last downloaded, it deletes
-OpenCode's copy and downloads it again. The `~/.ensemble/bin` commands follow [launcher precedence](../README.md#commands),
-so updating OpenCode's copy alone may not change the code they run. After plugin refresh, when
+OpenCode's copy and downloads it again. Each successful install selects its plugin for all `~/.ensemble/bin` commands,
+ignoring other clients’ caches and older OpenCode packages ([commands](../README.md#commands)).
+Rerun the installer once to refresh older launchers and record that selection, even if their files already exist.
+After a client plugin update removes the selected directory, the next command selects that same client's newest
+installed ensemble copy, records its path and reports it on stderr; no installer rerun is needed. It never selects
+another client's copy. If the selected client has no installed copy left, the command keeps the selected-plugin error.
+Equal versions use sorted paths to break ties. The installer also handles older refs whose launchers predate selection support.
+After plugin refresh, when
 the plugin's broker sources changed, or the installed broker speaks another protocol, it reinstalls the broker, reusing locally usable Claude and ready Codex
 credentials and requesting any missing logins ([Log in](docker-host.md#log-in)).
 It does not edit config keys a release renames.

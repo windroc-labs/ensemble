@@ -89,7 +89,7 @@ ensemble이 시작하는 session이 당신의 설정을 어떻게 불러오는�
 
 | 명령 | 하는 일 |
 |---|---|
-| `ctmux <name>` | commander의 tmux session을 엽니다. iTerm2에서는 네이티브 창, 다른 터미널에서는 일반 tmux attach, tmux 안에서는 전환입니다. `ctmux --install`은 ctmux와 네 명령 `ensemble-crew`, `ensemble-session`, `ensemble-delegate`, `ensemble-orchestrator`를 `~/.ensemble/bin/`에 둡니다. 그 경로로 실행하거나 `PATH`에 추가하세요. 각 명령은 실행 시점에 설치된 플러그인(Claude Code 설치를 먼저, 그다음 Codex의 최신 설치)에서 실행되므로 업그레이드 후 재설치가 필요 없습니다. `--install`을 다시 실행하면 갱신됩니다. |
+| `ctmux <name>` | commander의 tmux session을 엽니다. iTerm2에서는 네이티브 창, 다른 터미널에서는 일반 tmux attach, tmux 안에서는 전환입니다. `ctmux --install`은 ctmux와 네 명령 `ensemble-crew`, `ensemble-session`, `ensemble-delegate`, `ensemble-orchestrator`를 `~/.ensemble/bin/`에 둡니다. 그 경로로 실행하거나 `PATH`에 추가하세요. 명령은 이번 설치에서 선택한 플러그인을 사용하며 다른 클라이언트의 남은 복사본에 영향을 받지 않습니다. 업데이트로 선택한 디렉터리가 삭제되면 다음 명령은 같은 클라이언트에 설치된 최신 복사본을 선택하고 기록한 뒤 실행하며 경로를 stderr에 표시합니다. 설치 프로그램을 다시 실행할 필요가 없습니다. 같은 클라이언트의 복사본이 남아 있지 않으면 기존 선택 오류를 유지합니다. 이전 ref에는 설치 프로그램을 사용하세요. |
 | `/ensemble:manage` | commander의 가이드라인에 따라 worker, role run, pipeline run을 시작하고 지시합니다. |
 | `/ensemble:act-as <role>[:<task>] <input>` | 이 대화에서 코어 role을 실행합니다. |
 | `/ensemble:board` | 고정된 `ensemble-orchestrator issue` 명령으로 보드의 issue를 읽고, 찾고, 만들고, 편집하고, 옮기고, 보관합니다. |

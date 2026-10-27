@@ -94,7 +94,7 @@ ledger_valid() {
     profile:3) under_home "$2" && case $3 in *$'\t'* | *$'\n'* | '') false ;; esac ;;
     docker-block:2) under_home "$2" && case ${2##*/} in .zshrc | .bashrc | .bash_profile | .zprofile) true ;; *) false ;; esac ;;
     homebrew:2) [ "$2" = "$root/opt/homebrew" ] ;;
-    clt:1 | broker:1) true ;;
+    clt:1 | broker:1 | plugin-root:1) true ;;
     agent-tree:2) [ "$2" = "$HOME/.ensemble" ] ;;
     config:2) case $2 in created | backup) true ;; *) false ;; esac ;;
     formula:2) case $2 in gh | tmux | git | python | go | node) true ;; *) false ;; esac ;;
@@ -280,7 +280,7 @@ show() {
   local kind
   printf 'install-cleanup.sh will remove what install.sh added:\n' >&3
   for kind in launchd keychain broker codex-plugin codex-marketplace claude-plugin claude-marketplace \
-    login opencode-auth opencode-provider opencode-config agent-tree docker-block profile profile-file config cask formula homebrew clt file board-dir dir; do
+    login opencode-auth opencode-provider opencode-config plugin-root agent-tree docker-block profile profile-file config cask formula homebrew clt file board-dir dir; do
     of_kind "$kind" | tr '\t' ' ' | sed 's/^/  /' >&3
   done
 }
@@ -621,6 +621,17 @@ profiles() {
   done <<<"$(of_kind profile-file)"
 }
 
+plugin_root() {
+  local backup=$state_dir/plugin-root.orig
+  step plugin-root
+  if grep -qxF plugin-root "$ledger"; then
+    [ -e "$backup" ] || [ -L "$backup" ] || die "no $backup to restore"
+    cp -P "$backup" "$state_dir/plugin-root.restore"
+    mv -f "$state_dir/plugin-root.restore" "$HOME/.ensemble/plugin-root"
+    drop plugin-root
+  fi
+}
+
 config_file() {
   local backup=$state_dir/config.local.toml.orig
   step config.local.toml
@@ -835,6 +846,7 @@ main() {
   profiles
   config_file
   opencode_configs
+  plugin_root
   keep_root=$(agent_tree)
   brew_packages
   homebrew_and_clt
