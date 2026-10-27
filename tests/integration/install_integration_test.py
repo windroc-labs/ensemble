@@ -1772,6 +1772,7 @@ class InstallTest(Case):
             f" v9.8.7, speaks protocol {OTHER}: use --ref v9.8.7 or a branch other than main\n",
             result.stderr,
         )
+        self.assertNotIn("rerun the same command", result.stderr)
 
     def test_codex_plugin_from_its_newest_cache_dir(self):
         self.assert_ok(self.fresh(clients="codex", docker="y"))

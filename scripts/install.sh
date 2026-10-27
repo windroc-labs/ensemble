@@ -1175,6 +1175,7 @@ broker_plan() {
       else
         remedy="the windroc marketplace serves ensemble at $ref, ahead of release $release_tag: wait until it serves a release, or use --clients opencode --ref $release_tag"
       fi
+      current=
       die "$label wants broker protocol $want, but its broker, $broker_label, speaks protocol $got: $remedy"
     fi
     agreed+="${agreed:+, }$label"
