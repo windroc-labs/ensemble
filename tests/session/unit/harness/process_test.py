@@ -492,6 +492,17 @@ class OpeningTest(Base):
         self.assertEqual(self.code, 0)
 
 
+class StatusFirstTest(Base):
+    def test_a_pumps_status_is_written_before_its_events_are_logged(self):
+        owned = FakeOwned(([Blocked("Trust")], False), ([], True))
+        owned.opening_pending = "/color"
+        seen = []
+        owned.record = lambda event: seen.append((event, self.channel.status().get("opening")))
+        thread = self.run_in_thread(self.harness(owned))
+        thread.join(WAIT)
+        self.assertEqual((self.code, seen[0]), (0, (Blocked("Trust"), "/color")))
+
+
 class UpTest(Base):
     def test_its_client_up_is_in_its_status_once_its_worker_reports_it(self):
         owned = FakeOwned(([], False))
