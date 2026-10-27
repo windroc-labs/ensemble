@@ -183,7 +183,6 @@ def grid_tree(
             head = cell.children[0] if cell.kind == LEFT_RIGHT else None
             if head is None or head.kind != LEAF or head.pane in spans[q]:
                 continue
-            # R is a pane's own cell ({pane, its children}) only with two children and that pane the
             # one main pane
             if (
                 head.pane == manager

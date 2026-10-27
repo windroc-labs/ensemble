@@ -184,9 +184,6 @@ class MemoryHost(Host):
         return sorted(self.processes) if listed is None else listed
 
     def rows(self):
-        """Its terminals' own rows, as a Host whose listing carries each session's identity; one
-        ending meanwhile is left out, one still listed fails.
-        """
         rows = []
         for name in self.list():
             try:

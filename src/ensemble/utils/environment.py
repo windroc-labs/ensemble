@@ -7,7 +7,6 @@ SID_ENV = "ENSEMBLE_SID"
 ACCOUNT_ENV = "ENSEMBLE_ACCOUNT"
 EVENTS_ENV = "ENSEMBLE_EVENTS"
 
-# a manager's roster lease: its holder's command alone carries it, no launch below it
 LEASE_ENV = (
     "ENSEMBLE_MANAGER",
     "ENSEMBLE_HOLDER_ID",

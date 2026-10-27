@@ -7,7 +7,6 @@ import json
 import os
 import re
 import stat
-import subprocess
 import sys
 import tempfile
 import types
@@ -86,7 +85,9 @@ class InProcess(Case):
         with (
             unittest.mock.patch("fcntl.flock", wraps=fcntl.flock) as flock,
             unittest.mock.patch("os.write", wraps=os.write) as write,
-            unittest.mock.patch("subprocess.Popen", wraps=subprocess.Popen) as popen,
+            unittest.mock.patch(
+                "subprocess.Popen", side_effect=AssertionError("a process")
+            ) as popen,
         ):
             calls.attach_mock(flock, "flock")
             calls.attach_mock(write, "write")

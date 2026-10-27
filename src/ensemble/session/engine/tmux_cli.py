@@ -72,7 +72,6 @@ USER_OPTION = re.compile(r"@[A-Za-z0-9_-]+")
 PAUSE = 0.5
 
 
-# tmux 3.4 (CI) and 3.5+ both send these as the same C0 or DEL byte; other punctuation and digits
 # lose Ctrl, send nothing or differ between them
 
 
@@ -405,8 +404,6 @@ class TmuxCli:
         if dead == "0":
             return PaneStatus.RUNNING
         if not (code or sig):
-            # dead, not reaped: tmux 3.4 with utempter can lose the SIGCHLD, then reaps (and runs
-            # pane-died) only when another child exits; a no-op job is one
             with contextlib.suppress(TuiError):
                 self.run(["run-shell", "-b", "true"])
             return PaneStatus.RUNNING
@@ -515,7 +512,6 @@ class TmuxCli:
         return out
 
     def _table(self, args: list[str], width: int) -> list[list[str]]:
-        # -u: else, without a UTF-8 locale or $TMUX, tmux prints tabs as _
         res = self.run(["-u", *args])
         if res.returncode:
             if absent(res):

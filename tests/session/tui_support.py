@@ -153,6 +153,4 @@ class Live(Case):
         live_tmux.wait(check, what=f"events lines {want}")
 
     def poke(self):
-        # tmux on Linux (CI: 3.4) can leave a dead pane's process unreaped, so its status unset and
-        # no pane-died, until another child of the server exits: a no-op job is one.
         self.server.tmux("run-shell", "-b", "true")

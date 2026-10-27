@@ -532,7 +532,7 @@ class DisplayGone(ControlBase):
         self.owner, self.generation = state["owner"], state["generation"]
         self.host.calls.list.return_value = []
 
-    def test_status_is_its_harnesss_with_its_activity(self):
+    def test_status_is_its_harness_with_its_activity(self):
         Path(self.root, "w1", "activity").write_text(f"{self.generation} done\n")
         code, out, err = self.invoke("status", "w1")
         self.assertEqual(code, 0, err)

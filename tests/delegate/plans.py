@@ -70,10 +70,6 @@ class Base(Case):
         self.configure_session(committed(local) | {"fake": fake})
 
     def planned(self, role="researcher", task="research", *, keys=None, team=None, run=None, **kw):
-        """(Plan, stderr) of `run`, else `role` resolved with run keys `keys`: input "Research X.",
-        client "fake", headless, out self.out, workdir self.work, the cwd its agent dir, unless `kw`
-        says otherwise; `accounts`, when given, is plan's.
-        """
         kw = {"client": "fake", "mode": "headless", "out": self.out, "input": "Research X.", **kw}
         workdir, accounts = kw.pop("workdir", self.work), kw.pop("accounts", None)
         environment = kw.pop("environment", None)

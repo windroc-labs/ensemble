@@ -15,13 +15,13 @@ import time
 from typing import NamedTuple
 from unittest import mock
 
+from ensemble.session.harness import guard
 from ensemble.session.hosts import base as host_base
 from tests.session import harnesses
 from tests.session.case import PLUGIN_BIN, child_env
 from tests.session.grid import GridCheck
 from tests.session.integration.clients.claude import fake_claude
 
-# two words: tmux execs them, not the user's login shell (and its rc files)
 IDLE = ("cat", "-")
 TIMEOUT = 10
 POLL = 0.05
@@ -252,7 +252,6 @@ class Server:
         wait(sized, what=f"{session}'s window at {width}x{height}")
 
     def tmux(self, *args: str) -> subprocess.CompletedProcess:
-        # -u: without locale or TMUX, tmux prints tabs and non-ASCII as "_"
         return subprocess.run(
             [self._program, "-u", "-S", self.socket, *args],
             env=self.env(),
@@ -332,13 +331,9 @@ def crash_owner(ensemble: str, name: str) -> None:
 
 
 def alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        pass
-    return True
+    """Not ended: a zombie has, its parent (a delegate drive that started it) not reaping it yet."""
+    info = guard.process_info(pid)
+    return info is not None and not info[2]
 
 
 def activity(name: str, home: str | None = None) -> str | None:

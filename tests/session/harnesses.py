@@ -111,10 +111,6 @@ class Inline:
 
 
 def threaded_spawn(cls, spec, mode, *, display, host, idle_timeout):
-    """Threaded._spawn for a class with injected callables: its harness (the real loop) runs on a
-    thread here, so the class's fakes answer; a harness process rebuilds its class from
-    configuration alone, which HostedSession._spawn refuses for these.
-    """
     roots = cls._roots(spec.client)
     channel = Channel.create()
     channel.write_request(cls.harness_request(spec, display=display, host=host, roots=roots))

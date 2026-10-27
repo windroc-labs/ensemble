@@ -183,7 +183,6 @@ class Viewer:
             return
         try:
             if if_closed:
-                # the judged pane is gone: kill nothing, and forget it only while still recorded
                 closed = self._placement.closed(name)
                 if closed is None or not self._placement.forget(name, closed):
                     return

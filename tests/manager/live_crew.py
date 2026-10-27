@@ -28,7 +28,6 @@ ROLE = "dummy-tester"
 TIMEOUT = 90
 CREW = (*PY, "-m", "ensemble.manager.cli")
 BIN = os.path.join(REPO, "bin")
-# Runs the starter argv, then marks $1 and waits for $2: its Record printed, its crew run waiting.
 WRAP = ("sh", "-c", 'e=$1 g=$2; shift 2; "$@"; : > "$e"; until [ -e "$g" ]; do sleep 0.05; done')
 
 

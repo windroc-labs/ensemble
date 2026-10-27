@@ -247,7 +247,6 @@ def find_module(name: str, search: list[str], kind: str, error):
     paths, specs = search, []
     parts = name.split(".")
     for index in range(len(parts)):
-        # A segment lookup needs no loaded parent, including for namespace packages.
         spec = importlib.machinery.PathFinder.find_spec(parts[index], paths)
         if spec is None or (spec.origin is None and index == len(parts) - 1):
             raise error(f"{kind} {name}: cannot find Python module")
@@ -318,7 +317,6 @@ def append(path: str, record: dict) -> None:
     line = (json.dumps(record) + "\n").encode()
     try:
         while True:
-            # O_NONBLOCK: a FIFO put there fails instead of hanging the hook
             fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NONBLOCK, 0o600)
             try:
                 if not stat.S_ISREG(os.fstat(fd).st_mode):
@@ -352,10 +350,6 @@ def run(
     event: str | None = None,
     stamp: Callable[[str], str | None] = sent,
 ) -> bool:
-    """One hook call, as `ensemble-session hook DIR LABEL` runs it with its own source roots (`event`:
-    serve's relay event), its payload stdin's bytes (stdin may be None): returns success, never
-    raises or writes stdout; a failure keeps its traceback in DIR/hook.log and one stderr line.
-    """
     try:
         main(argv, stdin.buffer, roots=roots, event=event, stamp=stamp)
     except Exception as e:  # noqa: BLE001  # the hook must never fail the client

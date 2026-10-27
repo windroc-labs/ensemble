@@ -496,7 +496,6 @@ class TuiStore:
         except FileNotFoundError:
             return
         if stat.S_ISDIR(st.st_mode) and (made is None or os.path.samestat(st, made)):
-            # A hook may outlive its terminal; retire its public path before deleting files.
             with tempfile.TemporaryDirectory(dir=self.root, prefix=".closed-") as retired:
                 os.rename(self.dir, retired)
 
@@ -596,10 +595,6 @@ def _running(name: str, host: Host) -> SessionError:
 
 
 def _stale(store: TuiStore) -> str | None:
-    """Tui session `store.name`'s ended worker generation, whose leftovers go before a start, else
-    None (no owned record: no worker); SessionError while it runs, by its owned record's
-    generation (never its display), SessionBusy while that is unknown.
-    """
     record = _owned_record(store)
     if record is None:
         return None
@@ -964,7 +959,6 @@ class TuiMode(BaseMode):
         try:
             if self._shown(terminal.screen()):
                 return
-            # may be cached until its liveness is asked
             if terminal.state() != Liveness.LIVE or self._shown(terminal.screen()):
                 return
         except NotShowable:

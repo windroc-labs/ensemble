@@ -237,10 +237,6 @@ class Host(ABC):
 
     @classmethod
     def parse_hosts(cls, table) -> Hosts:
-        """The [hosts] parser's only home: an already-read [hosts] table as Hosts(default, tables),
-        else ConfigError. An implementation is checked only for the module.path:Class form, never
-        imported.
-        """
         if not isinstance(table, Mapping):
             raise ConfigError("[hosts]: missing")
         tables = {}

@@ -512,7 +512,7 @@ def _host_of(name: str, hosts: Hosts) -> str:
         recorded = TuiMode.snapshot(name).get("host")
     except SessionError:
         recorded = None
-    if recorded in hosts.tables:
+    if isinstance(recorded, str) and recorded in hosts.tables:
         return recorded
     return next((h for h in hosts.tables if name in Session.host(h).list()), hosts.default)
 

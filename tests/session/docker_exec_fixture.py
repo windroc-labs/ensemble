@@ -102,7 +102,6 @@ def harness(directory: str, client: list[str]) -> None:
     assert proc.stdin is not None
     os.set_blocking(proc.stdin.fileno(), False)
     owner = os.open(os.path.join(directory, "guard.lock"), os.O_RDWR | os.O_CREAT, 0o600)
-    record = {"generation": "g1"}
     worker = DockerWorker(
         "w1",
         "g1",
@@ -116,8 +115,6 @@ def harness(directory: str, client: list[str]) -> None:
             "w1", directory, "g1", _Broker(), report=report, root="/", close=close
         ),
         report=lambda *_: None,
-        load=lambda: record,
-        store=record.update,
         terminal=False,
     )
     worker.await_start()

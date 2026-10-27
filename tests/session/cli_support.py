@@ -193,8 +193,6 @@ class CliCase(Case):
         return live_tmux.wait(found, what=f"{count} x {name} {word}")
 
     def poke(self) -> None:
-        # tmux on Linux (CI: 3.4) can leave a dead pane's process unreaped, so no pane-died, until
-        # another child of the server exits: a no-op job is one
         self.server.tmux("run-shell", "-b", "true")
 
     @contextmanager

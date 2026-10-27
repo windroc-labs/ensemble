@@ -100,7 +100,6 @@ BUSY = "previous worker generation (live or unknown)"
 IMAGE_PYTHON = "/opt/ensemble/venv/bin/python"
 STATE_ROOT = "/run/ensemble"  # the client context's Container.state_root
 _ARG_STRLEN_MAX = 131072  # Linux exec's limit on one argument, its NUL included
-# modes/base.py BaseMode._write_prompt in the container: keep the two alike
 PROMPT_STAGE = """import os, sys
 os.makedirs(os.path.dirname(sys.argv[1]), 0o700, exist_ok=True)
 fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
@@ -425,7 +424,6 @@ class DockerHost(Host):
         if app and not permissions:
             raise ConfigError(f"[hosts.{name}.github] permissions: want at least one with app set")
         self.github = app
-        # The broker validates the names and levels.
         self.github_permissions: dict[str, str] = dict(permissions)
         self.run = run
         self.broker = Broker() if broker is None else broker

@@ -524,7 +524,6 @@ class Worker:
                 continue
             if elapsed < COLOR_CAP and _pending(session) is not None:
                 continue
-            # after its state: a dialog found by then, its Blocked maybe unread
             if (dialog := _dialog(session)) is not None:
                 self._waits(session, dialog, turned=turned)
             elif elapsed >= COLOR_CAP and not turned:

@@ -76,7 +76,6 @@ BROKER_PHASES = frozenset(
     )
 )
 BROKER_LINE = re.compile(r"^ensemble-broker: start (\S+) ([0-9.]+) s$", re.MULTILINE)
-# Resource → the command docs/architecture.md › What a container cannot reach runs as `sh -c`.
 EGRESS = "windroc.egress."  # the egress proxy's label prefix
 UNREACHABLE = {
     "host keychain": r"find / \( -path /proc -o -path /sys \) -prune -o -path "
@@ -161,7 +160,6 @@ def _related(a: str, b: str) -> bool:
 
 
 def _host_path(source: str) -> str:
-    # Docker Desktop reports a shared-folder bind's source under /host_mnt
     prefix = "/host_mnt/"
     return source[len(prefix) - 1 :] if source.startswith(prefix) else source
 
@@ -651,7 +649,6 @@ class Worker:
         )
         self.network(container, egress["Config"]["Labels"][f"{EGRESS}network.workers.proxy"])
         for resource, command in UNREACHABLE.items():
-            # grep -c exits 1 when it counts 0, the passing case
             counts = call([self.docker, "exec", container, "sh", "-c", f"{command}; true"])[0]
             if not zero_counts(counts):
                 raise SystemExit(f"FAIL cannot reach {resource}: {' '.join(counts.split())}")

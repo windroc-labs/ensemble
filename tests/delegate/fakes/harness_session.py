@@ -223,8 +223,6 @@ class DrivenDelegate(HarnessDelegate):
 
 
 def _start_agent(workdir, state):
-    """The run's agent session on its agent Host, through its stored session class, in its stored
-    environment."""
     layout = Layout(workdir)
     session_cls = (
         Session if state["session_cls"] is None else load_class(state["session_cls"], Session)
@@ -350,7 +348,6 @@ class HarnessSession(SessionClass):
         return FakeViewer().attach_command(self.name, self.host(self.host_names[self.name]))
 
     def publish(self, record):
-        """Its Record, kept on its agent session (a tui worker's view stores it in its worker dir)."""
         self.host(self.host_names[self.name]).process(self.name).publish(record)
 
     def stop(self):
