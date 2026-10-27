@@ -50,9 +50,8 @@ class MinimalPath(BinFlow):
         self.assertEqual((res.returncode, res.stdout), (0, ""), (res.stderr, self.said()))
         [row] = self.runs()
         sid = row["sid"]
-        harness = self.harness("engineer", ID, sid)
         live_tmux.wait(lambda: agent_calls(self.calls()), TIMEOUT, "the agent at its gate")
-        self.assertTrue(self.live(harness))
+        self.assertTrue(self.drive_running(ID))
         with open(gate, "w"):
             pass
         self.wait_end(sid, ID)

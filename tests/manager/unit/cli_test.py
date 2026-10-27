@@ -1132,7 +1132,7 @@ class Report(CliCase):
             1,
             "role",
             name,
-            (f"{name}-drive", name),
+            (name,),
             None,
             workdir,
             ("ensemble-delegate",),

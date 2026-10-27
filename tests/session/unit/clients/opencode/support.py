@@ -92,5 +92,16 @@ def make_db(path, sessions=None, messages=()) -> str:
     return str(path)
 
 
+def titled_session(path, ident: str, title: str, created: int, parent: str | None = None) -> None:
+    """A session row of `title` in make_db's db at `path`, made first when missing."""
+    if not os.path.exists(path):
+        make_db(path)
+    with closing(sqlite3.connect(path)) as db, db:
+        db.execute(
+            "INSERT INTO session VALUES (?, ?, '/', ?, ?, ?)",
+            (ident, parent, title, created, created),
+        )
+
+
 def text(value: str, **flags) -> dict:
     return {"type": "text", "text": value, **flags}

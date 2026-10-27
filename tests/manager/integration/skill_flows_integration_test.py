@@ -77,7 +77,8 @@ class SkillFlows(LiveCrew):
         record = self.record(
             self.call(*argv, **self.crew_env(), **self.scene("r", [block(ASKING)]))
         )
-        (harness,) = record.sessions
+        self.assertEqual(record.sessions, ())
+        harness = f"{record.name}-drive"
         self.wait_event(harness, "exited")
         self.ok(self.crew("attach"))
         self.assertEqual(self.roster()["r"].state, State.WAITING)

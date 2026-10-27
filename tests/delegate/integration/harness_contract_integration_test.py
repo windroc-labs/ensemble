@@ -11,6 +11,7 @@ from ensemble.session import Exited, NotShowable, Reply
 from tests.delegate.case import REPO, child_env
 from tests.delegate.contracts.delegate import DelegateContract
 from tests.delegate.fakes.harness_session import (
+    FakeControl,
     FakeViewer,
     HarnessSession,
     RecordingHost,
@@ -69,9 +70,7 @@ class HarnessContract(DelegateContract, HarnessCase):
     def make(self, workdir, **kw):
         role = kw.pop("role", self.ROLE)
         spec = Spec("Hello.", workdir, client="fake", mode="tui", **kw)
-        return ViewedHarnessDelegate(
-            role, spec, session_cls=HarnessSession, host="agent", harness_host="harness"
-        )
+        return ViewedHarnessDelegate(role, spec, session_cls=HarnessSession, host="agent")
 
     def end(self, record):
         self.stop(record)
@@ -91,7 +90,6 @@ class HarnessContract(DelegateContract, HarnessCase):
             Spec("Hello.", workdir, sid=SID, client="fake"),
             session_cls=HarnessSession,
             host="agent",
-            harness_host="harness",
         )
         seen = []
         result = first.run(seen.append)
@@ -104,7 +102,6 @@ class HarnessContract(DelegateContract, HarnessCase):
             Spec(answer, workdir, sid=SID, resume=True, client="fake"),
             session_cls=HarnessSession,
             host="agent",
-            harness_host="harness",
         )
         self.addCleanup(continued.close)
         seen = []
@@ -131,11 +128,9 @@ class ShowingHarnessContract(HarnessContract):
 
 
 class Ownership(HarnessCase):
-    def pair(self, *, agent_showable=True, harness_showable=True):
+    def pair(self, *, agent_showable=True):
         HarnessSession.reset()
-        for name, capable in (("agent", agent_showable), ("harness", harness_showable)):
-            kind = ShowingHost if capable else RecordingHost
-            HarnessSession.hosts[name] = kind(name)
+        HarnessSession.hosts["agent"] = (ShowingHost if agent_showable else RecordingHost)("agent")
         delegate = self.make(
             spec=Spec(
                 "input",
@@ -146,7 +141,6 @@ class Ownership(HarnessCase):
                 name="agent-window",
             ),
             host="agent",
-            harness_host="harness",
             display="target",
         )
         record = delegate.detach()
@@ -159,36 +153,30 @@ class Ownership(HarnessCase):
         self.assertEqual((view.status().state, agent.alive()), ("working", True))
         self.assertEqual(view.attach_command(), agent.attach_command())
         self.assertEqual(view.status().attach, agent.attach_command())
-        harness = RecordingHost.processes["harness", self.metadata()["harness_name"]]
-        harness.close()
+        FakeControl(self.metadata()["drive"]).close()
         self.assertFalse(view.alive())
         self.assertEqual(view.status().state, "working")
         self.assertEqual(view.attach_command(), agent.attach_command())
         self.assertEqual(record.sid, SID)
 
-    def test_dead_agent_falls_back_to_harness_and_close_closes_all_twice(self):
+    def test_dead_agent_has_no_attach_and_close_closes_all_twice(self):
         _, view = self.pair()
         agent_name = self.metadata()["agent_name"]
-        harness_name = self.metadata()["harness_name"]
         HarnessSession.live[agent_name].close()
-        self.assertEqual(view.attach_command(), f"harness attach {harness_name}")
+        self.assertIsNone(view.attach_command())
         view.close()
         view.close()
         self.assertFalse(view.alive())
         self.assertFalse(RecordingHost.processes["agent", agent_name].alive())
-        self.assertFalse(RecordingHost.processes["harness", harness_name].alive())
+        self.assertFalse(FakeControl(self.metadata()["drive"]).running())
 
     def test_show_reaches_only_the_live_agent(self):
         _, view = self.pair()
         view.show()
         self.assertEqual(FakeViewer.shown, [(self.metadata()["agent_name"], "target", None)])
 
-    def test_hidden_agent_uses_harness_target_and_hidden_pair_has_no_attach(self):
+    def test_a_hidden_agent_has_no_attach(self):
         _, view = self.pair(agent_showable=False)
-        self.assertEqual(view.attach_command(), f"harness attach {self.metadata()['harness_name']}")
-        view.close()
-        self.work += "-hidden"
-        _, view = self.pair(agent_showable=False, harness_showable=False)
         self.assertIsNone(view.status().attach)
         self.assertIsNone(view.attach_command())
         with self.assertRaises(NotShowable):
@@ -197,7 +185,7 @@ class Ownership(HarnessCase):
     def test_resume_closes_leftover_agent_before_restarting_lifecycle_owner(self):
         record, view = self.pair()
         agent_name = self.metadata()["agent_name"]
-        RecordingHost.processes["harness", self.metadata()["harness_name"]].close()
+        FakeControl(self.metadata()["drive"]).close()
         before = len(harness_launches())
         old_agent = HarnessSession.live[agent_name]
         resumed = view.resume()

@@ -15,7 +15,7 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-// The egress proxy's label contract, version 1 (windroc/egress-proxy docs/label-contract.md): the broker finds the
+// The egress proxy's label contract, version 1 (windroc-labs/egress-proxy docs/label-contract.md): the broker finds the
 // proxy and each caller network it serves only through these labels and Docker health, and never probes the proxy.
 const (
 	egressPrefix    = "windroc.egress."

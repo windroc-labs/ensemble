@@ -22,6 +22,7 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest import mock
 
+from ensemble.session.engine.capacity import Admission
 from ensemble.session.engine.config import read_config
 from ensemble.session.engine.types import (
     ClientContext,
@@ -31,6 +32,7 @@ from ensemble.session.engine.types import (
     EnvironmentSpec,
     Launch,
     Liveness,
+    Mode,
     Paste,
     Permission,
     SessionBusy,
@@ -1818,6 +1820,29 @@ class SweepTest(Base):
         )
         self.assertFalse([call for call in self.docker.order if call[:1] == ["exec"]])
 
+    def test_sweep_keeps_another_names_container_while_its_owner_lock_is_held(self):
+        os.makedirs(os.path.join(self.home, ".ensemble", "docker-state", "a"))
+        self.host_json("b", self.OLD, kind="tui")
+        self.host_json("c", mode="guard")  # no kind: an older release's start
+        self.host_json("d", kind="tui")
+        self.host_json("k", kind="headless")
+        for name in ("a", "b", "c", "d", "k"):
+            self.held(name, "guard.lock")
+        self.docker.ps = [self.row(name) for name in ("a", "b", "c", "d", "k")]
+        self.host.sweep("w")
+        self.assertEqual(self.broker.closed, [])
+
+    def test_own_rows_keep_the_record_rule(self):
+        self.host_json("w", mode="guard")
+        self.held("w", "guard.lock")  # the caller's own start holds it
+        self.docker.ps = [self.row("w")]
+        self.host.sweep("w")
+        self.assertEqual(self.broker.closed, [f"ensemble-w-{GEN}"])
+        self.broker.closed.clear()
+        self.host_json("w", kind="tui")
+        self.host.sweep("w")
+        self.assertEqual(self.broker.closed, [])
+
     def test_sweep_creates_nothing_outside_tui_and_drops_orphan_locks(self):
         self.docker.ps = [self.row("a"), self.row("x", state="exited")]
         before = self.files()
@@ -2357,6 +2382,24 @@ class GuardedRowTest(StartBase):
         self.assertEqual(self.host.list(), ["w"])
         self.assertEqual(self.docker.execs(), [])
 
+    def test_an_ownerless_stopped_container_is_dead(self):
+        self.guarded_record()
+        for state, want in (
+            ("created", StatusState.DEAD),
+            ("exited", StatusState.DEAD),
+            ("dead", StatusState.DEAD),
+            ("running", StatusState.UNKNOWN),
+            ("paused", StatusState.UNKNOWN),
+            ("restarting", StatusState.UNKNOWN),
+        ):
+            with self.subTest(state=state):
+                self.listed("w", state=state)
+                self.assertEqual([row.state for row in self.host.rows()], [want])
+                self.assertEqual([row.state for row in self.host._capacity_rows()], [want])
+        self.owner_held()
+        self.listed("w", state="exited")
+        self.assertEqual([row.state for row in self.host.rows()], [StatusState.WORKING])
+
     def test_attach_is_the_held_handle_here_and_a_view_elsewhere(self):
         handle = self.start()
         self.listed("w")
@@ -2382,6 +2425,49 @@ class GuardedRowTest(StartBase):
         self.host.sweep("x")
         self.assertEqual(self.broker.closed, [CONTAINER])
         self.assertEqual(self.docker.execs(), [])
+
+
+class AdmissionTest(StartBase):
+    def setUp(self):
+        super().setUp()
+        self.guarded_record()
+        self.runs = os.path.join(self.home, ".ensemble", "client-runs", "agent")
+        os.makedirs(self.runs)
+        self.held_run = os.path.join(self.runs, "w.run")
+        with open(self.held_run, "w") as f:
+            json.dump({"kind": "tui", "name": "w", "sid": "s1", "host": "docker"}, f)
+
+    def admit(self):
+        with Admission(
+            "agent",
+            1,
+            name="n",
+            sid="s2",
+            mode=Mode.TUI,
+            hosts={"docker": self.host},
+            host="docker",
+        ):
+            pass
+
+    def test_a_killed_generation_frees_its_slot_once_its_container_is_stopped(self):
+        self.listed("w", state="exited")
+        self.admit()
+        self.assertFalse(os.path.exists(self.held_run))
+
+    def test_a_running_or_owned_generation_keeps_its_slot(self):
+        for state, owned in (("running", False), ("exited", True)):
+            with self.subTest(state=state, owned=owned):
+                self.listed("w", state=state)
+                if owned:
+                    self.owner_held()
+                with self.assertRaisesRegex(SessionError, "reached max_runs limit 1; held by: w"):
+                    self.admit()
+                self.assertTrue(os.path.exists(self.held_run))
+
+    def test_a_swept_generation_frees_its_slot(self):
+        self.docker.ps = []
+        self.admit()
+        self.assertFalse(os.path.exists(self.held_run))
 
 
 class HeadlessWorkerTest(StartBase):

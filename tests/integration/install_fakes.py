@@ -405,7 +405,7 @@ def login(client, args, status, start, logout):
 
 
 def gh(args):
-    if args and args[0] == "api" and args[1].startswith("repos/windroc/egress-proxy/tarball/"):
+    if args and args[0] == "api" and args[1].startswith("repos/windroc-labs/egress-proxy/tarball/"):
         # egress_tarball, when present, says how to spoil it: corrupt or noexec.
         spoil = path.read_text() if (path := FAKES / "egress_tarball").exists() else ""
         if spoil == "corrupt":

@@ -117,6 +117,7 @@ PS_FORMAT = "\t".join(
         "{{.State}}",
     )
 )
+STOPPED = frozenset({"created", "exited", "dead"})  # narrower than _row_liveness's not running
 LOG = logging.getLogger("session")
 KEPT = f"{DOCKER_STATE}/.kept"  # a marker per run volume kept: unsaved work, or a failed check
 KEPT_LOCK = ".lock"
@@ -477,8 +478,8 @@ class DockerHost(Host):
         }
 
     def sweep(self, own: str) -> None:
-        """Closes debris and workers whose owner lock is free; other names only under
-        their tui lock taken without waiting (`own`'s caller holds its).
+        """Closes rows whose owner lock is free, and `own`'s debris; others only under their tui
+        lock taken without waiting (`own`'s caller holds its).
         """
         try:
             rows = self._rows()
@@ -488,13 +489,13 @@ class DockerHost(Host):
         for row in rows:
             try:
                 if row.name == own:
-                    self._sweep_row(row)
+                    self._sweep_row(row, own=True)
                     continue
                 lock = tui_lock(row.name)
                 with inode_lock(lock, wait=False) as held:
                     if held:
                         try:
-                            self._sweep_row(row)
+                            self._sweep_row(row, own=False)
                         finally:
                             if not os.path.lexists(_state_file(row.name)):
                                 os.unlink(lock)
@@ -573,8 +574,8 @@ class DockerHost(Host):
                     with contextlib.suppress(FileNotFoundError):
                         os.unlink(marker)
 
-    def _sweep_row(self, row: Row) -> None:
-        if not _guarded(row.name, row.generation) or _lock_free(_owner_path(row.name)):
+    def _sweep_row(self, row: Row, *, own: bool) -> None:
+        if _lock_free(_owner_path(row.name)) or own and not _guarded(row.name, row.generation):
             self.broker.close(row.container)
 
     def _client_context(self) -> ClientContext:
@@ -1206,7 +1207,7 @@ class DockerHost(Host):
 
     def _capacity_rows(self) -> list[SessionRow]:
         containers = self._containers(required=True)
-        return [self._row(name, row.generation) for name, row in sorted(containers.items())]
+        return [self._row(row) for _, row in sorted(containers.items())]
 
     def _capacity_namespace(self) -> str:
         return f"docker:{endpoint()}"
@@ -1220,15 +1221,16 @@ class DockerHost(Host):
         except SessionError as error:
             LOG.warning("docker rows: %s", error)
             return []
-        return [self._row(name, containers[name].generation) for name in sorted(containers)]
+        return [self._row(containers[name]) for name in sorted(containers)]
 
-    def _row(self, name: str, generation: str) -> SessionRow:
+    def _row(self, row: Row) -> SessionRow:
+        name, generation = row.name, row.generation
         record = _record(name)
         record = record if record.get("generation") == generation else {}
         word = worker_activity(name, generation)
         state = StatusState.WORKING
         if _lock_free(_owner_path(name)):
-            state = StatusState.UNKNOWN
+            state = StatusState.DEAD if row.state in STOPPED else StatusState.UNKNOWN
         elif word is not None and word != StatusState.WORKING:
             state = word
         return SessionRow(

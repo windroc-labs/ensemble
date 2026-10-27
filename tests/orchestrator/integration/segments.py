@@ -364,12 +364,12 @@ class Segment(TmuxFlow):
         return line, call, logged
 
     def attended(self, ident, role, sid, res):
-        """res's one Record line, the run's pipeline Record shown at MANAGER; its attach command and
-        each session's attach-command line on stderr.
+        """res's one Record line, the run's pipeline Record shown at MANAGER, its one session the
+        TUI (the drive is none); its attach command and the TUI's attach-command line on stderr.
         """
         self.assertEqual(len(res.stdout.splitlines()), 1, res.stdout)
         record = Record.parse(res.stdout)
-        sessions = (self.harness(role, ident, sid), config.tui_name(role, ident, sid))
+        sessions = (config.tui_name(role, ident, sid),)
         self.assertEqual(
             (record.kind, record.name, record.sessions, record.sid, record.workdir, record.display),
             ("pipeline", ident, sessions, sid, os.path.join(self.workdirs, ident), MANAGER),
@@ -378,10 +378,11 @@ class Segment(TmuxFlow):
             (record.ctl, record.resume),
             (("ensemble-orchestrator",), ("ensemble-orchestrator", "resume", ident)),
         )
-        self.assertIn(f"router.py: {ident}: attach: tmux attach -t '={sessions[1]}'\n", res.stderr)
+        self.assertIn(f"router.py: {ident}: attach: tmux attach -t '={sessions[0]}'\n", res.stderr)
         for name in sessions:
             line = f"router.py: {ident}: {name}: ensemble-session attach-command {name}\n"
             self.assertIn(line, res.stderr)
+        self.assertNotIn(self.harness(role, ident, sid), res.stderr)
         return record
 
     def agent_run(self):
@@ -459,7 +460,7 @@ class Segment(TmuxFlow):
 
     def wait_written_back(self, p):
         """Until p's outcome is written back (its ledger's last step, then its session comment's
-        end) and its harness is gone: a run after a stop, whose session's count of write-back ends
+        end) and its drive ended: a run after a stop, whose session's count of write-back ends
         is unknown.
         """
         self.assertIsNotNone(p.script.report, "a run after a stop waits for its outcome")
@@ -470,10 +471,10 @@ class Segment(TmuxFlow):
                     r"(attempt:\d+:)?outcome", (self.ledger(p.ident).get(p.sid) or [""])[-1]
                 )
                 and self.session_status(p.ident, p.sid) == status
-                and not self.live(harness)
+                and not self.drive_running(p.ident)
             ),
             TIMEOUT,
-            f"{p.sid}'s outcome and session end written back and {harness} gone",
+            f"{p.sid}'s outcome and session end written back and {harness} ended",
         )
 
     def backlog_issue(self, role, title, description, labels=()):

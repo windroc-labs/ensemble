@@ -80,7 +80,7 @@ flowchart TB
   W -.-> CC
   D & H --> HD
   D --> C
-  HD -.->|"detach on the harness Host"| H
+  HD -.->|"detach: a ProcessControl process"| H
   HD --> E & C
   E --> C
   DL -->|ensemble.session| SE
@@ -94,6 +94,8 @@ flowchart TB
 ```
 
 Solid arrow: an import, the only direction allowed, or a file read (`reads`); its label names the package imported, by its `__all__`. Dotted: runs a command or process. Dashed: shared modules, their imports not drawn.
+
+A detached run's drive (`engine/harness.py`, `<agent>-drive`) is no session: `HarnessDelegate` starts it as a local process in a new session through `ProcessControl` (`src/ensemble/utils/process_control.py`), with `SIGNALS` blocked across the spawn, its stdout and stderr appended to `<workdir>/run/drive.log` (0600, a regular file only). `delegate.json` `drive` holds its control path, saved before it starts; the run is alive while the run lock is held or that control runs, and `close` sends its group SIGTERM, then SIGKILL 5 s later. On exit it appends `HH:MM:SS <agent>-drive exited <rc>` to the run's events file, after its `outcome` line (a SIGKILLed drive writes neither). A run's Record lists only its tui agent session; on Docker the drive runs on the host beside the container, so no other Host is needed.
 
 ## Modules and replacement boundaries
 
@@ -111,7 +113,7 @@ Each Host implementation supplies its process capabilities.
 | `src/ensemble/session/hosts/docker/`, `src/broker/`, `src/broker/protocol/` | Docker adaptation, the guarded worker, worker image, containers and credential injection | Host, Docker Desktop, broker; broker uses macOS Keychain | Replace as a unit | Preserve Host for callers; retaining the broker also requires its protocol JSON schemas, versions, exit codes and shared fixtures |
 | `src/ensemble/manager/`, `skills/manage/`, `hooks/` | Crew, Roster, event cursors and commander sessions | utils; commands to other layers | Keep scheduling logic; adapt local display and client hooks | Record ctl and resume commands, CLI output; import relationships shown above |
 | `src/ensemble/utils/` | Configuration overlays, shared types, paths and process control | Python standard library | Keep, with the required OS process capabilities | Public exports and shared data formats |
-| External `windroc/egress-proxy` | Egress service, outside this repository | Docker labels and health, read by broker start ([`launcher/egress.go`](../src/broker/internal/launcher/egress.go)); `scripts/install.sh` fetches a pinned commit and starts the egress proxy | Replace the independent service as a unit | Versions, label meanings and health semantics in [docs/label-contract.md](https://github.com/windroc/egress-proxy/blob/122d7454d738db4a9b7e0c4a89d2cfa5ff564339/docs/label-contract.md) |
+| External `windroc-labs/egress-proxy` | Egress service, outside this repository | Docker labels and health, read by broker start ([`launcher/egress.go`](../src/broker/internal/launcher/egress.go)); `scripts/install.sh` fetches a pinned commit and starts the egress proxy | Replace the independent service as a unit | Versions, label meanings and health semantics in [docs/label-contract.md](https://github.com/windroc-labs/egress-proxy/blob/122d7454d738db4a9b7e0c4a89d2cfa5ff564339/docs/label-contract.md) |
 | `src/broker/internal/broker/keychain_darwin.go` | Read credentials from macOS Keychain for broker injection into containers | macOS Security; storage interface in `keychain.go` | Replace the credential source as a unit | Credentials, CodexCredentials, ProviderKeys and Tokens in `launcher/host.go`; credential readers and lifecycle in [Credentials](#credentials) |
 | `src/broker/internal/credential/` | Provider-neutral token lifecycle (records, renewal, release, revocation backlog) and the container delivery every credential shares | audit, docker, protocol; a Store and a Provider from its caller | Keep | The `Provider` contract and record JSON in `contract.go`; GitHub is its provider (`broker/github.go`), Codex its shared one (`broker/codex_grants.go`: each container's grant is withdrawn, never revoked) |
 
@@ -121,7 +123,7 @@ selects an implementation and `[hosts] default` selects the host. Preserving its
 return types and error semantics keeps upper session, delegate and orchestrator code unchanged.
 Client adaptation remains in `clients/`.
 
-The **egress boundary** is defined by the external [docs/label-contract.md (122d745)](https://github.com/windroc/egress-proxy/blob/122d7454d738db4a9b7e0c4a89d2cfa5ff564339/docs/label-contract.md).
+The **egress boundary** is defined by the external [docs/label-contract.md (122d745)](https://github.com/windroc-labs/egress-proxy/blob/122d7454d738db4a9b7e0c4a89d2cfa5ff564339/docs/label-contract.md).
 Callers depend only on the proxy's `windroc.egress.*` labels and Docker health, selecting an internal
 network and proxy address from the network key's `.name` and `.proxy`. A replacement proxy preserves
 the consumed contract version, label meanings and health semantics; the contract lists the complete
@@ -202,7 +204,7 @@ max_runs = 3
 
 Every `Session.start` shares admission for that client across processes using the same user state directory, regardless of caller, Host, mode, name or resume flag. Board runs, `router --issue`, ad-hoc role runs and crew workers all count. The check and start hold one client admission lock; a full client raises the existing `SessionError` before launching or recording a new session, naming the client, limit and holding names (session ids for unnamed runs). There is no capacity queue. Preflight, inspect and attaching to an existing session reserve nothing.
 
-TUI sessions count while their client is alive, including `done` between turns and `blocked`; an unknown state keeps its slot. Close a retained TUI when it should stop using capacity. Headless and in-process modes hold a lease until their mode ends or is stopped/closed, even when nobody reads events. A failed start releases its reservation once shutdown is confirmed; an unconfirmed TUI shutdown retains its reservation until matching Host inventory proves the client is gone. TUI ownership survives its launcher; transient leases belong to their caller process, or to its session harness for a harnessed headless run. An abnormal caller exit does not add a recovery protocol for orphaned children.
+TUI sessions count while their client is alive, including `done` between turns and `blocked`; an unknown state keeps its slot. On Docker, a generation whose owner lock is free and whose container is stopped is dead and frees its slot; one whose container still runs keeps it until a sweep removes the container. Close a retained TUI when it should stop using capacity. Headless and in-process modes hold a lease until their mode ends or is stopped/closed, even when nobody reads events. A failed start releases its reservation once shutdown is confirmed; an unconfirmed TUI shutdown retains its reservation until matching Host inventory proves the client is gone. TUI ownership survives its launcher; transient leases belong to their caller process, or to its session harness for a harnessed headless run. An abnormal caller exit does not add a recovery protocol for orphaned children.
 
 Admission checks all configured Hosts; an unavailable inventory fails closed. Shared TUI reservations from a Host configuration the caller does not have remain counted until a caller with the matching configuration confirms the session ended. Close the original session or retry using its original Host configuration to reconcile it. Changing an unrelated Host setting changes that configuration's identity, so close its sessions before changing its settings.
 
@@ -247,7 +249,7 @@ Frozen (WDRC-199, WDRC-226): a session harness owns each worker from start to cl
 
 Claude and Codex use accepted-prompt hooks; Codex also observes native turn records, including failures without Stop. Codex turn ids reconcile the two sources and reject late old-turn terminal hooks. OpenCode starts a turn on a new root user-message id; busy/tool steps do not start turns, and asynchronous replies retain that id. Replay restores state without publishing a new `TurnStarted`.
 
-Headless streams replies and diagnostics while retaining terminal candidates until both output streams drain and the exit code is known. Success requires native completion and exit 0. Nonzero exit, missing completion, native failure or an uninteractive permission request produces `TurnFailed` before `Exited`; a partial reply or EOF alone cannot succeed. Claude checks result subtype, error and permission-denial fields; Codex checks turn completion/failure; OpenCode requires a final `step_finish` with reason `stop`. A permission/question request stops the headless worker rather than waiting for an answer.
+Headless streams replies and diagnostics while retaining terminal candidates until both output streams drain and the exit code is known. Success requires native completion and exit 0. Nonzero exit, missing completion, native failure or an uninteractive permission request produces `TurnFailed` before `Exited`; a partial reply or EOF alone cannot succeed. Claude checks result subtype, error and permission-denial fields; Codex checks turn completion/failure; OpenCode requires a final `step_finish` with reason `stop`. A permission/question request stops the headless worker rather than waiting for an answer. OpenCode prints its session id only once its model streams, so a new headless OpenCode run titles its session `ensemble-<sid>` (its flags must not set `--title`): a resume (or session status) of a run whose harness died before that id finds the session by its title in `opencode.db` and binds it.
 
 **Managed workers.** `Host.worker(name, launch, *, terminal, display=None, events=None, metadata=None) -> InteractiveProcess` launches every worker. `InteractiveProcess` is a standalone ABC, no longer a `Process`: `name`, `send(action: Paste | Key)`, `press(keys: Sequence[KeyPress])`, `screen(lines=None)`, `state() -> Liveness`, `close() -> None` and `returncode() -> int | None`, plus the channel members below; there is no parallel `WorkerHandle`. Managed `close()` returns only after confirmed worker exit, else raises `SessionError` (`Unanswered` when unknown); `returncode()` supplies the confirmed exit code, never a guessed SIGHUP code. Headless handles reject `send`, `press` and `screen` with `NotShowable`; their input uses `write`.
 
@@ -266,14 +268,14 @@ A Docker handle reports `UNKNOWN` from a broken channel until its container's re
 
 ### End-state removals
 
-Approved deletions, not deprecations. `InteractiveProcess` survives as the sole managed handle, a standalone ABC holding the preserved declarations; public `Process` stays only for the delegate drive.
+Approved deletions, not deprecations. `InteractiveProcess` survives as the sole managed handle, a standalone ABC holding the preserved declarations.
 
 | Removed interface | Replacement | Deletion owner |
 |---|---|---|
-| `Host.terminal`, `Host.detach`, `Host.pipe` | `Host.worker` (`terminal=True` or `False`) | `Host.pipe`: deleted (WDRC-312); `Host.terminal`: deleted (WDRC-323); `Host.detach`: WDRC-328 (the delegate drive) |
-| `Host.attach`, `Host.reclaim` | `Session.attach` control view and `Host.worker_liveness` for crash-resume admission | `Host.reclaim`: deleted (WDRC-323); `Host.attach`: WDRC-328 (the delegate drive) |
+| `Host.terminal`, `Host.detach`, `Host.pipe` | `Host.worker` (`terminal=True` or `False`) | `Host.pipe`: deleted (WDRC-312); `Host.terminal`, `Host.detach`: deleted (WDRC-323) |
+| `Host.attach`, `Host.reclaim` | `Session.attach` control view and `Host.worker_liveness` for crash-resume admission | deleted (WDRC-323) |
 | `Host.events_path`, `Host.prepare_events`, `Host.hook_callback` | harness-owned records/dispatch and worker-dir `activity`; `WorkerHook` on the guard channel; events-file checks `ensemble.utils.validate_events`/`events_file` | deleted (WDRC-323) |
-| public `Process` (both session surfaces), `Interactive` (extension), their exported members | fold preserved `name`, `send`, `press`, `screen`, `state`, `close`, `returncode` into existing `InteractiveProcess` | `Interactive`: deleted (WDRC-323); public `Process`: WDRC-328 (the delegate drive) |
+| public `Process` (both session surfaces), `Interactive` (extension), their exported members | fold preserved `name`, `send`, `press`, `screen`, `state`, `close`, `returncode` into existing `InteractiveProcess` | deleted (WDRC-323) |
 | `InteractiveProcess.alive`, `.wait_exit`, `.kill`, `.identity`, `.token`, `.session_identity`; `check_sid` | channel `state`, `generation`, `read`/`WorkerExit`, confirmed `close`, no caller-owned kill; the worker state's sid | deleted (WDRC-323) |
 | `InteractiveProcess.activity`, `.status`, `.mark`, `.row`, `.record`, `.publish`, `.display` | harness event/state and crew-written Record in the worker dir; `Host.attach_target` retains display targeting | deleted (WDRC-323) |
 | extension `Piped`, `Lines`, all their exported members; internal `LocalPiped` | `InteractiveProcess.read`/`write`, `WorkerOutput`/`WorkerExit` | deleted (WDRC-312) |
@@ -601,7 +603,7 @@ Board role limits: `[orchestrator.roles.<role>] max_runs` (packaged 3 for resear
 
 Copy `[orchestrator.linear]`'s `agent_label_group` and `[orchestrator.linear.agent_labels]` (one line per client, with label ids) from the `# local:` examples in `src/ensemble/orchestrator/config.toml`. No Agent label: the role's default client; one mapped label: its client; several or an unmapped one: a comment and In Review. `router --dry-run` prints each candidate's `client` and `client_source`.
 
-An `OpenCode` label runs OpenCode, on the host's Ollama (live-test issues only) or a configured provider; it needs the [Docker host](#docker-host) with the harness on tmux ([Run workers](#run-workers)), the provider's egress exception ([OpenCode on Docker](#opencode-on-docker)), and for an engineer run the GitHub App on the target repo ([Create the GitHub App](#create-the-github-app)).
+An `OpenCode` label runs OpenCode, on the host's Ollama (live-test issues only) or a configured provider; it needs the [Docker host](#docker-host) ([Run workers](#run-workers)), the provider's egress exception ([OpenCode on Docker](#opencode-on-docker)), and for an engineer run the GitHub App on the target repo ([Create the GitHub App](#create-the-github-app)).
 
 ### Local board
 
@@ -678,7 +680,7 @@ ensemble keeps its state in `~/.ensemble/` (`work/` and `logs/` in `<work_dir>`,
 
 ### Egress proxy
 
-Workers reach the network only through the `egress-proxy` container (private `windroc/egress-proxy`, pinned, under `~/.egress/current`; config `~/.egress/config.local.yaml`, created by the installer with a `workers` network in denylist mode). It allows public destinations and denies private ranges, the Mac and LAN, `host.docker.internal` included, unless a `host:port` is in `networks.workers.exceptions`; each exception holds for every worker. `config.example.yaml` in the installed version defines the config, `networks.workers` included. Add the Mac's public IPv4 and global IPv6 prefix to `deny_ranges`.
+Workers reach the network only through the `egress-proxy` container (private `windroc-labs/egress-proxy`, pinned, under `~/.egress/current`; config `~/.egress/config.local.yaml`, created by the installer with a `workers` network in denylist mode). It allows public destinations and denies private ranges, the Mac and LAN, `host.docker.internal` included, unless a `host:port` is in `networks.workers.exceptions`; each exception holds for every worker. `config.example.yaml` in the installed version defines the config, `networks.workers` included. Add the Mac's public IPv4 and global IPv6 prefix to `deny_ranges`.
 
 | Operation | Command |
 |---|---|
@@ -729,10 +731,7 @@ Then run `login github` ([Broker logins](#broker-logins)).
 
 ```toml
 [session.hosts]
-default = "docker"
-
-[delegate.delegates]
-harness_host = "tmux"   # role runs: the client in a container, the harness on the host
+default = "docker"   # role runs: the client in a container, their drive a local process on the host
 ```
 
 `[session.hosts.docker]` keys: `docker` (the CLI, default `/usr/local/bin/docker`), `plugins`, `github.app` (the App slug; `""`: none), `github.permissions` (each token's permissions) and `isolated` (`true`: yolo mode, the container the boundary; `false`: auto mode). Then `ensemble-crew worker NAME --client claude|codex|opencode` starts NAME in its own container; the other verbs and the Viewer work as on tmux. Each start, restart or resume runs a new container from the current image; restart and resume keep the client history, a new start empties its client state dir, and all keep the [workspace volume](#workspace-volumes); `ensemble-session resume <name>` (never `client-resume`) continues a conversation. A container gets user `agent` with all capabilities dropped, no Docker socket, only its egress network, a workspace volume at cwd, credentials on tmpfs and, with GitHub configured, the App's bot identity; each checkout runs its own `.githooks/`.
@@ -757,7 +756,7 @@ OpenCode runs the host's Ollama models or a configured provider ([OpenCode sessi
 
 ### Harness-owned workers
 
-Every Docker session runs under its [session harness](#session-harness): the [guard](#guard-protocol) runs inside the container as the client's parent, over one `docker exec -i`; container hooks reach it through `hook-stub`, retried until acknowledged. A headless run needs a name, and a start no harness can own is refused before anything is written. The harness closes the worker at its deadline, end or `close`, then removes the container; a sweep at the next start removes an ownerless one. A credential tick on the harness calls `"$B" maintain`, which renews GitHub and Codex credentials 10 minutes before expiry and posts `credential_refresh_failed`, `credential_notice` and `client_auth_expired` to the session's events.
+Every Docker session runs under its [session harness](#session-harness): the [guard](#guard-protocol) runs inside the container as the client's parent, over one `docker exec -i`; container hooks reach it through `hook-stub`, retried until acknowledged. A headless run needs a name, and a start no harness can own is refused before anything is written. The harness closes the worker at its deadline, end or `close`, then removes the container; a sweep at the next start removes an ownerless one, never a container whose owner lock is held, whatever release started it. A credential tick on the harness calls `"$B" maintain`, which renews GitHub and Codex credentials 10 minutes before expiry and posts `credential_refresh_failed`, `credential_notice` and `client_auth_expired` to the session's events.
 
 ### Environments
 
@@ -791,7 +790,7 @@ A worker's workspace is a Docker volume, `ensemble-ws-<name>`, mounted at its cw
 
 ### Docker live acceptance
 
-Run `tests/session/live_docker.py` only through mini-op on the test Mac mini, from the repo root with `PYTHONPATH` as in [Tests](#tests), with the proxy healthy, the broker installed and logged in, `[session.hosts] default = "docker"`, `harness_host = "tmux"` and a test repo with the App installed:
+Run `tests/session/live_docker.py` only through mini-op on the test Mac mini, from the repo root with `PYTHONPATH` as in [Tests](#tests), with the proxy healthy, the broker installed and logged in, `[session.hosts] default = "docker"` and a test repo with the App installed:
 
 | Command | Checks |
 |---|---|

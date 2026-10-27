@@ -28,7 +28,10 @@ class CloseAllTest(LiveCrew):
         self.assertEqual(self.roster(), entries)
         res = self.ok(self.crew("close-all"))
         self.assertEqual(res.stdout.splitlines(), sorted(("o2", "r", role.name, "w1", "w2", "w3")))
-        self.until(lambda: self.gone(*sessions), f"{sessions} gone")
+        self.until(
+            lambda: self.gone(*sessions) and not self.drive_running(role),
+            f"{sessions} and {role.name}'s drive gone",
+        )
         self.assertTrue(self.live("mgr", OTHER, "o1"))
         self.assertEqual(self.roster(), {})
         self.assertEqual(self.ok(self.crew("close-all")).stdout, "nothing to close\n")

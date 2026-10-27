@@ -1,5 +1,14 @@
 # Upgrading
 
+## The delegate's drive: harness_host removed
+
+A detached run's drive (`<agent>-drive`) now runs as a local process the delegate starts itself
+([Core architecture](architecture.md)), never as a session on a harness Host, so
+`[delegate.delegates] harness_host` is gone and any key under `[delegate.delegates]` is refused
+(`[delegates] harness_host: the delegate takes no keys`). Delete that line, and the `[delegate.delegates]` table, from
+`~/.ensemble/config.local.toml`; `scripts/install.sh --docker` no longer writes it. Let detached runs end first: a run an
+older release detached reads as invalid; its other runs read as before.
+
 ## Session harness: close every session first
 
 This release runs every tui and headless worker, on every Host, under its [session harness](architecture.md#session-harness)
@@ -108,7 +117,7 @@ Zero or an omitted `max_runs` means unlimited. The old local table is now an unk
 ## Egress proxy
 
 After updating the plugin, rerun `scripts/install.sh --docker`: it installs the pinned private
-`windroc/egress-proxy` with your `gh` access, creates `~/.egress/config.local.yaml` only if absent, starts the
+`windroc-labs/egress-proxy` with your `gh` access, creates `~/.egress/config.local.yaml` only if absent, starts the
 proxy and waits for healthy. Existing configs are preserved, so one without `networks.workers` stops the installer: add it first ([Docker host › Egress proxy](architecture.md#egress-proxy)). Add Ollama and local/LAN provider exceptions before starting their workers
 ([Egress proxy operations](architecture.md#egress-proxy)).
 

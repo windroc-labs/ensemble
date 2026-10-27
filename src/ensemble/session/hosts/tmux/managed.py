@@ -11,7 +11,6 @@ import shutil
 import stat
 import subprocess
 import sys
-import tempfile
 import time
 import uuid
 from collections.abc import Callable
@@ -33,6 +32,7 @@ from ensemble.session.hosts.managed import ManagedProcess
 GENERATION = re.compile(r"[A-Za-z0-9_-]{1,64}")
 ONE_SHOT = re.compile(r"o[0-9a-f]{15}")
 SWEEP_AGE = 60  # seconds a new one-shot dir may take to lock its owner.lock
+SOCKET_PATH_MAX = 103  # bytes: macOS's AF_UNIX sun_path holds 104 with its NUL, Linux's 108
 LOG = logging.getLogger("session")
 
 
@@ -120,7 +120,7 @@ def check_directory(path: str) -> None:
 
 
 def control_root() -> str:
-    root = os.environ.get("ENSEMBLE_CONTROL_ROOT", tempfile.gettempdir())
+    root = os.environ.get("ENSEMBLE_CONTROL_ROOT", "/tmp")  # never macOS's long $TMPDIR
     return os.path.join(root, f"eg-{os.getuid()}")
 
 
@@ -258,11 +258,17 @@ def start(
     generation = (metadata or {}).get("generation") or uuid.uuid4().hex
     if not GENERATION.fullmatch(generation):
         raise ConfigError("worker generation: invalid")
+    directory = location(host.name, name) if terminal else one_shot(host.name, generation)
+    socket = os.path.join(directory, generation, "display" if terminal else "hook")
+    if (size := len(os.fsencode(socket))) > SOCKET_PATH_MAX:
+        raise ConfigError(
+            f"guard socket {socket}: {size} bytes, over the {SOCKET_PATH_MAX}-byte AF_UNIX limit;"
+            " set a shorter ENSEMBLE_CONTROL_ROOT"
+        )
     private_directory(control_root())
     sweep(control_root())
     if not terminal:
         return _start_one_shot(host, name, launch, generation, metadata=metadata)
-    directory = location(host.name, name)
     fresh = not os.path.lexists(directory)
     private_directory(directory)
     lock = lease_file(os.path.join(directory, "start.lock"))

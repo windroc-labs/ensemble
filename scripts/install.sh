@@ -840,7 +840,7 @@ save_answers() {
 config_plan() {
   python3 -I -c '
 import json, os, re, sys, tomllib
-path, out, default, harness, clients, exe, name, url, model, context, prev_name, prev_url, prev_model, prev_context, only, board = sys.argv[1:]
+path, out, default, clients, exe, name, url, model, context, prev_name, prev_url, prev_model, prev_context, only, board = sys.argv[1:]
 fresh = not os.path.exists(path)
 text = ""
 if not fresh:
@@ -873,8 +873,6 @@ elif fresh or (get(data, "session.hosts", "default") or "tmux") != default:
 chosen = [name for name in ("claude", "codex", "opencode") if name in clients.split(",")]
 if not scoped and chosen and (get(data, "delegate", "client") or "claude") not in chosen:
     wanted.append(("delegate", "client", chosen[0]))
-if not scoped and harness and get(data, "delegate.delegates", "harness_host") in (None, "", "docker"):
-    wanted.append(("delegate.delegates", "harness_host", harness))
 if name and not scoped:
     target, before = f"{name}/{model}", f"{prev_name}/{prev_model}" if prev_name else None
     if get(data, "session.clients.opencode", "executable") in (None, ""):
@@ -940,7 +938,7 @@ if any(get(edited, table, key) != value for table, key, value in wanted):
     sys.exit(4)
 with open(out, "w", encoding="utf-8") as f:
     f.write(result)
-sys.exit(3)' "$config" "$1" "$wanted_default" "$wanted_harness" "$clients" \
+sys.exit(3)' "$config" "$1" "$wanted_default" "$clients" \
     "$opencode_executable" "$provider" "$url" "$model" "$context" \
     "$prev_provider" "$prev_url" "$prev_model" "$prev_context" "$only" "$board_file"
 }
@@ -1000,7 +998,7 @@ print("\t".join((name, entry["base_url"], model if ok(model_re, model) else "", 
 # Writes the configuration's settings into config.local.toml with consent; given <table> <key> <value>, only that;
 # given board <file>, the settings board_plan wrote to <file>.
 config_file() {
-  local wanted_default=tmux wanted_harness= only= board_file= changes rc=0 plan
+  local wanted_default=tmux only= board_file= changes rc=0 plan
   if [ $# = 2 ] && [ "$1" = board ]; then
     board_file=$2
   elif [ $# = 3 ]; then
@@ -1009,7 +1007,6 @@ config_file() {
   step "config.local.toml${only:+: [$1] $2}${board_file:+: Linear board}"
   if [ "$docker" = yes ]; then
     wanted_default=docker
-    wanted_harness=tmux
   fi
   mkdir -p "$state_dir"
   plan=$state_dir/config.local.toml.plan
@@ -2375,11 +2372,11 @@ egress_download() (
   versions=$HOME/.egress/versions
   tmp=$(mktemp -d "$versions/.download.XXXXXX")
   trap "rm -rf $(printf '%q' "$tmp")" EXIT
-  gh api "repos/windroc/egress-proxy/tarball/$egress_commit" </dev/null >"$tmp/source.tar.gz" \
-    || die "cannot fetch pinned windroc/egress-proxy $egress_commit; check gh auth status and repository access, then rerun"
+  gh api "repos/windroc-labs/egress-proxy/tarball/$egress_commit" </dev/null >"$tmp/source.tar.gz" \
+    || die "cannot fetch pinned windroc-labs/egress-proxy $egress_commit; check gh auth status and repository access, then rerun"
   mkdir "$tmp/source"
   tar -xzf "$tmp/source.tar.gz" --strip-components=1 -C "$tmp/source" \
-    || die "cannot unpack pinned windroc/egress-proxy $egress_commit"
+    || die "cannot unpack pinned windroc-labs/egress-proxy $egress_commit"
   [ -x "$tmp/source/start.sh" ] || die "pinned egress version has no executable start.sh"
   printf '%s\n' "$egress_commit" >"$tmp/source/COMMIT"
   mv "$tmp/source" "$versions/$egress_commit"

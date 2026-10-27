@@ -1,6 +1,7 @@
 """HarnessDelegate plans before writing and persists its identity for durable views."""
 
 import io
+import itertools
 import json
 import os
 import shutil
@@ -14,14 +15,12 @@ from unittest import mock
 
 from ensemble.delegate import ConfigError, DelegateEvent, Outcome, Progress, Spec
 from ensemble.delegate.engine.drivers import InstructionDriver
-from ensemble.delegate.engine.harness_delegate import HarnessDelegate
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import Begun, Finished, Layout, Limit, Result
 from ensemble.session import (
     SIGNALS,
     Access,
     Exited,
-    Launch,
     LimitHit,
     Mode,
     NoRecordedSession,
@@ -37,7 +36,9 @@ from ensemble.utils import Record
 from tests.delegate.case import REPO, SRC, child_env
 from tests.delegate.fakes import callback_recorder
 from tests.delegate.fakes.harness_session import (
+    DrivenDelegate,
     FailingSession,
+    FakeControl,
     HarnessSession,
     PersistentSession,
     RecordingHost,
@@ -92,7 +93,7 @@ def _close_child(child):
 class Planning(HarnessCase):
     def test_constructor_persists_resolved_metadata_0600_without_starting(self):
         callback = ["writeback", "--issue", "ticket-id"]
-        self.make(host="agent", harness_host="harness", display="opaque-display", callback=callback)
+        self.make(host="agent", display="opaque-display", callback=callback)
         path = self.state_record()
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
         data = self.metadata()
@@ -100,16 +101,17 @@ class Planning(HarnessCase):
             (
                 data["role"],
                 data["host"],
-                data["harness_host"],
+                data["drive"],
                 data["display"],
                 data["callback"],
                 data["attempt"],
             ),
-            ("dummy-tester", "agent", "harness", "opaque-display", callback, 1),
+            ("dummy-tester", "agent", None, "opaque-display", callback, 1),
         )
+        self.assertNotIn("harness_host", data)
         self.assertEqual(data["spec"]["sid"], SID)
         self.assertEqual(data["spec"]["input"], "Hello.\nLiteral input.")
-        self.assertEqual((HarnessSession.started, RecordingHost.launches), ([], []))
+        self.assertEqual((HarnessSession.started, harness_launches()), ([], []))
 
     def test_invalid_role_task_and_mode_write_nothing(self):
         original = Spec("input", self.work)
@@ -121,7 +123,7 @@ class Planning(HarnessCase):
             with self.subTest(role=role, spec=spec), self.assertRaises(ConfigError):
                 self.make(role=role, spec=spec)
             self.assertFalse(os.path.exists(self.work))
-            self.assertEqual((HarnessSession.started, RecordingHost.launches), ([], []))
+            self.assertEqual((HarnessSession.started, harness_launches()), ([], []))
 
     def test_invalid_replacement_preserves_existing_files_and_metadata(self):
         self.make()
@@ -138,13 +140,13 @@ class Planning(HarnessCase):
             self.assertEqual(file.read(), "Draft")
 
     def test_live_owner_refuses_replacement_without_writing(self):
-        delegate = self.make(host="agent", harness_host="harness")
+        delegate = self.make(host="agent")
         record = delegate.detach()
         before = self.metadata()
         with self.assertRaises(ConfigError):
             self.make()
         self.assertEqual(self.metadata(), before)
-        self.assertTrue(HarnessDelegate.attach(record).alive())
+        self.assertTrue(DrivenDelegate.attach(record).alive())
 
     def test_ended_run_replacement_counts_attempt_and_stale_detach_is_refused(self):
         first = self.make()
@@ -152,59 +154,23 @@ class Planning(HarnessCase):
         self.assertEqual(self.metadata()["attempt"], 2)
         with self.assertRaises(ConfigError):
             first.detach()
-        self.assertEqual(RecordingHost.launches, [])
+        self.assertEqual(harness_launches(), [])
 
-    def test_a_harness_host_named_default_is_refused_naming_the_configured_hosts(self):
-        self.settings(harness_host="default")
+    def test_a_delegates_harness_host_is_refused(self):
+        with open(self.local, "a", encoding="utf-8") as file:
+            file.write('[delegate.delegates]\nharness_host = "harness"\n')
         with self.assertRaises(ConfigError) as caught:
             self.make()
         self.assertEqual(
-            str(caught.exception),
-            "[delegates] harness_host: want one of agent, changed, docker, harness, tmux",
+            str(caught.exception), "[delegates] harness_host: the delegate takes no keys"
         )
         self.assertFalse(os.path.lexists(self.work))
 
-    def test_replacing_a_run_whose_harness_host_left_the_config_is_refused(self):
-        ConfiguredSession.reset()
-        self.make(harness_host="harness", session_cls=ConfiguredSession).detach()
-        with open(self.state_record(), "rb") as file:
-            before = file.read()
-        self.settings(hosts=("agent", "changed"))
-        with self.assertRaises(ConfigError) as caught:
-            self.make(session_cls=ConfiguredSession)
-        self.assertEqual(str(caught.exception), "unknown host harness")
-        with open(self.state_record(), "rb") as file:
-            self.assertEqual(file.read(), before)
-
-    def test_an_injected_harness_host_must_be_a_configured_host(self):
-        with self.assertRaises(ConfigError) as caught:
-            self.make(harness_host=RecordingHost("ghost"))
-        self.assertEqual(
-            str(caught.exception),
-            "harness_host ghost: want one of agent, changed, docker, harness, tmux",
-        )
-        self.assertFalse(os.path.lexists(self.work))
-
-    def test_an_injected_harness_host_launches_the_harness(self):
-        used = []
-
-        class Injected(RecordingHost):
-            def detach(self, name, launch, **kw):
-                used.append((self.name, name))
-                return super().detach(name, launch, **kw)
-
-        record = self.make(host="agent", harness_host=Injected("harness")).detach()
-        self.assertEqual(used, [("harness", record.sessions[0])])
-        self.assertEqual(
-            (self.metadata()["host"], self.metadata()["harness_host"]), ("agent", "harness")
-        )
-
-    def test_an_unset_harness_host_is_the_agents_host(self):
-        self.make(host="changed").detach()
-        self.assertEqual(
-            (self.metadata()["host"], self.metadata()["harness_host"]), ("changed", "changed")
-        )
-        self.assertEqual(RecordingHost.launches[0]["host"], "changed")
+    def test_the_drive_is_a_local_process_whatever_the_agents_host(self):
+        record = self.make(host="changed").detach()
+        self.assertEqual(self.metadata()["host"], "changed")
+        self.assertEqual(self.metadata()["drive"], FakeControl.named(record.name + "-drive").path)
+        self.assertEqual(RecordingHost.launches, [])
 
     def test_in_process_and_instruction_detach_refused(self):
         for spec, driver, message in (
@@ -224,17 +190,17 @@ class Planning(HarnessCase):
                 with self.assertRaises(ConfigError) as caught:
                     delegate.detach()
                 self.assertEqual(str(caught.exception), message)
-                self.assertEqual(RecordingHost.launches, [])
+                self.assertEqual(harness_launches(), [])
 
     def test_a_failed_launch_keeps_the_state_not_detached(self):
         for failure, raised in (
-            (SessionError("detach refused"), SessionError),
-            (SessionConfigError("events file refused"), ConfigError),
+            (PermissionError(13, "Permission denied"), SessionError),
+            (RuntimeError("spawn refused"), RuntimeError),
         ):
             with self.subTest(failure=failure):
-                FailingHost.failure = failure
+                FakeControl.spawn_error = failure
                 self.work = os.path.join(self.home, type(failure).__name__)
-                delegate = self.make(harness_host=FailingHost("harness"))
+                delegate = self.make()
                 with open(self.state_record(), "rb") as file:
                     before = file.read()
                 with self.assertRaises(raised):
@@ -242,6 +208,7 @@ class Planning(HarnessCase):
                 with open(self.state_record(), "rb") as file:
                     self.assertEqual(file.read(), before)
                 self.assertFalse(self.metadata()["detached"])
+                self.assertEqual(harness_launches(), [])
 
     def test_the_events_path_is_checked_at_construction_and_given_to_the_harness(self):
         spec = Spec("input", self.work, client="fake", sid=SID, events="ev#1")
@@ -249,8 +216,9 @@ class Planning(HarnessCase):
             self.make(spec=spec)
         self.assertIn("tmux would misread it", str(caught.exception))
         self.assertFalse(os.path.lexists(self.work))
+        HarnessSession.hosts["agent"] = RecordingHost("agent")
         record = self.make(spec=replace(spec, events="events.log")).detach()
-        self.assertEqual(RecordingHost.launches[0]["events"], os.path.abspath("events.log"))
+        self.assertEqual(harness_launches()[0]["events"], os.path.abspath("events.log"))
         self.assertEqual(self.metadata()["events"], os.path.abspath("events.log"))
         self.stop(record)
 
@@ -280,7 +248,7 @@ class Planning(HarnessCase):
 
 class Views(HarnessCase):
     def test_attach_keeps_identity_after_default_client_and_rules_change(self):
-        delegate = self.make(host="agent", harness_host="harness", display="original")
+        delegate = self.make(host="agent", display="original")
         record = delegate.detach(
             outer={
                 "kind": "outer",
@@ -290,12 +258,12 @@ class Views(HarnessCase):
         )
         before = self.metadata()
         self.settings(language="French", client="changed-client", default="changed")
-        view = HarnessDelegate.attach(record)
+        view = DrivenDelegate.attach(record)
         self.assertTrue(view.alive())
         self.assertEqual(view.resume(), record)
         self.assertEqual(self.metadata(), before)
         self.assertEqual(HarnessSession.started, [])
-        self.assertEqual(len(RecordingHost.launches), 1)
+        self.assertEqual(len(harness_launches()), 1)
 
     def test_attach_refuses_missing_malformed_and_foreign_metadata(self):
         os.makedirs(os.path.dirname(self.state_record()))
@@ -305,25 +273,17 @@ class Views(HarnessCase):
                     with open(self.state_record(), "w", encoding="utf-8") as file:
                         file.write(value)
                 with self.assertRaises(ConfigError) as caught:
-                    HarnessDelegate.attach(self.work)
+                    DrivenDelegate.attach(self.work)
                 self.assertIn(self.work, str(caught.exception))
-        self.assertEqual((HarnessSession.started, RecordingHost.launches), ([], []))
+        self.assertEqual((HarnessSession.started, harness_launches()), ([], []))
 
     def test_attach_refuses_a_stored_host_removed_from_config(self):
-        for removed in ("changed", "harness"):
-            with self.subTest(removed=removed):
-                ConfiguredSession.reset()
-                self.settings()
-                self.work = os.path.join(self.home, removed)
-                self.make(
-                    host="changed", harness_host="harness", session_cls=ConfiguredSession
-                ).detach()
-                self.settings(
-                    hosts=tuple(h for h in ("agent", "harness", "changed") if h != removed)
-                )
-                with self.assertRaises(ConfigError) as caught:
-                    HarnessDelegate.attach(self.work, session_cls=ConfiguredSession)
-                self.assertEqual(str(caught.exception), f"unknown host {removed}")
+        ConfiguredSession.reset()
+        self.make(host="changed", session_cls=ConfiguredSession).detach()
+        self.settings(hosts=("agent", "harness"))
+        with self.assertRaises(ConfigError) as caught:
+            DrivenDelegate.attach(self.work, session_cls=ConfiguredSession)
+        self.assertEqual(str(caught.exception), "unknown host changed")
 
     def test_resume_refuses_a_cwd_no_longer_trusted_and_launches_nothing(self):
         project = os.path.join(self.home, "project")
@@ -334,14 +294,12 @@ class Views(HarnessCase):
         self.assertTrue(self.metadata()["plan"]["session"]["access"]["project"])
         self.stop(record)
         self.settings()
-        view = HarnessDelegate.attach(self.work)
-        launches, starts = len(RecordingHost.launches), len(HarnessSession.started)
+        view = DrivenDelegate.attach(self.work)
+        launches, starts = len(harness_launches()), len(HarnessSession.started)
         with self.assertRaises(ConfigError) as caught:
             view.resume()
         self.assertEqual(str(caught.exception), f"cwd {project} is no longer in trusted_dirs")
-        self.assertEqual(
-            (len(RecordingHost.launches), len(HarnessSession.started)), (launches, starts)
-        )
+        self.assertEqual((len(harness_launches()), len(HarnessSession.started)), (launches, starts))
 
     def test_a_completed_foreground_tui_left_open_is_not_alive(self):
         spec = Spec("input", self.work, task="echo", sid=SID, client="fake", mode="tui")
@@ -350,7 +308,7 @@ class Views(HarnessCase):
         agent = HarnessSession.attach(f"dummy-tester-{SID[:8]}")
         self.assertEqual(agent.alive(), True)
         self.assertEqual(
-            (delegate.alive(), HarnessDelegate.attach(self.work).alive()), (False, False)
+            (delegate.alive(), DrivenDelegate.attach(self.work).alive()), (False, False)
         )
 
     def test_a_completed_object_refuses_a_second_run_keeping_its_result(self):
@@ -369,11 +327,11 @@ class Views(HarnessCase):
     def test_a_completed_object_refuses_to_detach_launching_nothing(self):
         delegate = self.make()
         delegate.run()
-        launched = list(RecordingHost.launches)
+        launched = harness_launches()
         with self.assertRaises(ConfigError) as caught:
             delegate.detach()
         self.assertEqual(str(caught.exception), f"{self.work}: delegate run already completed")
-        self.assertEqual(RecordingHost.launches, launched)
+        self.assertEqual(harness_launches(), launched)
 
     def test_a_run_whose_session_was_never_recorded_is_not_resumable(self):
         delegate = self.make()
@@ -381,7 +339,7 @@ class Views(HarnessCase):
             HarnessSession, "inspect", side_effect=NoRecordedSession("no recorded session")
         ):
             self.assertEqual(
-                HarnessDelegate.attach(self.work).session_status(), SessionStatus("no", None, "")
+                DrivenDelegate.attach(self.work).session_status(), SessionStatus("no", None, "")
             )
         self.assertFalse(delegate.alive())
 
@@ -390,7 +348,7 @@ class Views(HarnessCase):
         delegate.run()
         delegate.close()
         count = len(HarnessSession.started)
-        view = HarnessDelegate.attach(self.work)
+        view = DrivenDelegate.attach(self.work)
         self.assertEqual(view.session_status(), HarnessSession.history)
         self.assertEqual(len(HarnessSession.started), count)
         self.assertEqual(HarnessSession.inspected[-1].sid, SID)
@@ -406,13 +364,13 @@ class Views(HarnessCase):
                 delegate = self.make()
                 result = delegate.run()
                 self.assertEqual(result.outcome, Outcome(**data, url=Layout(self.work).out))
-                view = HarnessDelegate.attach(self.work)
+                view = DrivenDelegate.attach(self.work)
                 starts = len(HarnessSession.started)
-                launches = len(RecordingHost.launches)
+                launches = len(harness_launches())
                 first = view.resume()
                 self.assertEqual(view.resume(), first)
                 self.assertEqual(
-                    (len(HarnessSession.started), len(RecordingHost.launches)), (starts, launches)
+                    (len(HarnessSession.started), len(harness_launches())), (starts, launches)
                 )
 
     def test_latest_interrupted_attempt_does_not_reuse_an_earlier_outcome(self):
@@ -420,7 +378,7 @@ class Views(HarnessCase):
         first.run()
         first.close()
         self.make()
-        view = HarnessDelegate.attach(self.work)
+        view = DrivenDelegate.attach(self.work)
         self.assertIsNone(view.outcome())
         record = view.resume()
         self.assertTrue(view.alive())
@@ -432,7 +390,7 @@ class Views(HarnessCase):
         self.settings(team_dirs=(team,))
         self.make(spec=Spec("input", self.work, task="echo", client="fake", sid=SID))
         self.settings(language="French", team_dirs=(team,))
-        view = HarnessDelegate.attach(self.work)
+        view = DrivenDelegate.attach(self.work)
         self.settings(
             language="German", client="changed-client", default="changed", team_dirs=(team,)
         )
@@ -486,7 +444,7 @@ class UsageQueries(HarnessCase):
                 asked.append(client)
                 return sentinel
 
-        self.assertIs(HarnessDelegate.usage("dummy-tester", session_cls=Probe), sentinel)
+        self.assertIs(DrivenDelegate.usage("dummy-tester", session_cls=Probe), sentinel)
         self.assertEqual(asked, ["fake"])
         self.assertEqual(
             sorted(Probe.configured["hosts"].tables),
@@ -500,11 +458,11 @@ class UsageQueries(HarnessCase):
                 raise SessionConfigError(f"[clients.{client}]: no usage probe")
 
         with self.assertRaises(ConfigError) as caught:
-            HarnessDelegate.usage("dummy-tester", session_cls=Refusing)
+            DrivenDelegate.usage("dummy-tester", session_cls=Refusing)
         self.assertEqual(str(caught.exception), "[clients.fake]: no usage probe")
         self.settings(default="nope")
         with self.assertRaises(ConfigError) as caught:
-            HarnessDelegate.usage("dummy-tester", session_cls=SessionClass)
+            DrivenDelegate.usage("dummy-tester", session_cls=SessionClass)
         self.assertEqual(
             str(caught.exception),
             "[hosts] default: 'nope' is not a Host here; "
@@ -528,7 +486,7 @@ class Completion(HarnessCase):
             else:
                 self.assertFalse(delegate.alive())
                 self.assertEqual(delegate.outcome(), event.result.outcome)
-                view = HarnessDelegate.attach(self.work)
+                view = DrivenDelegate.attach(self.work)
                 self.assertFalse(view.alive())
                 self.assertEqual(view.outcome(), event.result.outcome)
 
@@ -538,10 +496,10 @@ class Completion(HarnessCase):
         self.assertEqual(HarnessSession.started[0]["spec"].sid, SID)
 
     def test_headless_keeps_display_for_harness_and_passes_none_to_agent(self):
-        delegate = self.make(display="opaque", host="agent", harness_host="harness")
+        delegate = self.make(display="opaque", host="agent")
         record = delegate.detach()
         self.assertEqual(record.display, "opaque")
-        self.assertEqual(RecordingHost.launches[0]["display"], "opaque")
+        self.assertEqual(harness_launches()[0]["display"], "opaque")
         self.stop(record)
         delegate.run()
         self.assertIsNone(HarnessSession.started[0]["display"])
@@ -554,7 +512,7 @@ class Completion(HarnessCase):
         def observe(event):
             if isinstance(event, Finished):
                 finished.append(event)
-                view = HarnessDelegate.attach(self.work)
+                view = DrivenDelegate.attach(self.work)
                 self.assertFalse(view.alive())
                 self.assertEqual(view.outcome(), event.result.outcome)
                 self.assertEqual(view.status().outcome, "done")
@@ -586,7 +544,7 @@ class Completion(HarnessCase):
 
     def test_spawn_failure_is_finished_without_begun(self):
         FailingSession.reset()
-        delegate = HarnessDelegate(
+        delegate = DrivenDelegate(
             "dummy-tester",
             Spec("input", self.work, client="fake"),
             session_cls=FailingSession,
@@ -623,23 +581,6 @@ class CountingDisplay(HarnessSession):
         return f"completed:{value}"
 
 
-class ValidatingHost(RecordingHost):
-    validated: list = []
-
-    def validate(self, name, launch):
-        super().validate(name, launch)
-        ValidatingHost.validated.append((self.name, name, launch))
-        if not name.replace("-", "").replace("_", "").isalnum():
-            raise SessionConfigError(f"session name {name!r}: want [A-Za-z0-9_-]+")
-
-
-class FailingHost(RecordingHost):
-    failure: Exception = SessionError("detach refused")
-
-    def detach(self, name, launch, *, display=None, events=None, record=None):
-        raise FailingHost.failure
-
-
 class RootedSession(HarnessSession):
     asked: list = []
     failure: Exception | None = None
@@ -656,9 +597,9 @@ class HarnessLaunch(HarnessCase):
     def test_pythonpath_is_the_harness_import_roots_not_the_callers(self):
         RootedSession.asked, RootedSession.failure = [], None
         with mock.patch.dict(os.environ, {"PYTHONPATH": "/caller/only"}):
-            self.make(session_cls=RootedSession, host="agent", harness_host="harness").detach()
+            self.make(session_cls=RootedSession, host="agent").detach()
         roots = (SRC["delegate"], REPO, "/extra/root")
-        self.assertEqual(RecordingHost.launches[0]["env"]["PYTHONPATH"], os.pathsep.join(roots))
+        self.assertEqual(harness_launches()[0]["env"]["PYTHONPATH"], os.pathsep.join(roots))
         self.assertEqual(RootedSession.asked[-1], "fake")
 
     def test_an_unloadable_class_is_refused_writing_nothing(self):
@@ -673,21 +614,14 @@ class HarnessLaunch(HarnessCase):
         os.mkdir(project)
         spec = Spec("input", self.work, client="fake", sid=SID, cwd=project)
         self.make(spec=spec).detach()
-        launch = RecordingHost.launches[0]
+        launch = harness_launches()[0]
         self.assertEqual(
-            (launch["cwd"], launch["blocked_signals"]), (Layout(self.work).run, SIGNALS)
+            (launch["cwd"], launch["blocked_signals"]), (Layout(self.work).run, list(SIGNALS))
         )
         self.assertEqual(
             launch["argv"],
             [sys.executable, "-P", "-s", "-m", "ensemble.delegate.engine.harness", self.work],
         )
-
-
-class DeadOnArrival(RecordingHost):
-    def detach(self, name, launch, **kw):
-        process = super().detach(name, launch, **kw)
-        process.live = False
-        return process
 
 
 class TuiStart(HarnessCase):
@@ -696,14 +630,14 @@ class TuiStart(HarnessCase):
         return self.make(spec=spec, host="agent", **placement)
 
     def test_detach_returns_once_the_agent_session_is_live(self):
-        record = self.tui(harness_host="harness").detach()
-        agent = HarnessSession.live[record.sessions[1]]
+        record = self.tui().detach()
+        agent = HarnessSession.live[record.sessions[0]]
         self.assertEqual(agent.alive(), True)
-        self.assertTrue(HarnessDelegate.attach(record).alive())
+        self.assertTrue(DrivenDelegate.attach(record).alive())
 
     def test_a_harness_ending_first_fails_the_detach_and_stays_resumable(self):
-        RecordingHost.harness_starts_agent = False
-        delegate = self.tui(harness_host=DeadOnArrival("harness"))
+        FakeControl.harness_starts_agent, FakeControl.ends_at_start = False, True
+        delegate = self.tui()
         with self.assertRaises(SessionError) as caught:
             delegate.detach()
         name = f"dummy-tester-{SID[:8]}"
@@ -712,14 +646,14 @@ class TuiStart(HarnessCase):
         )
         self.assertNotIn(name, HarnessSession.live)
         self.assertTrue(self.metadata()["detached"])
-        RecordingHost.harness_starts_agent = True
-        resumed = HarnessDelegate.attach(self.work).resume()
-        self.assertEqual(HarnessSession.live[resumed.sessions[1]].alive(), True)
+        FakeControl.harness_starts_agent, FakeControl.ends_at_start = True, False
+        resumed = DrivenDelegate.attach(self.work).resume()
+        self.assertEqual(HarnessSession.live[resumed.sessions[0]].alive(), True)
 
     def test_a_timeout_closes_the_harness_and_fails_the_detach(self):
-        RecordingHost.harness_starts_agent = False
-        delegate = self.tui(harness_host="harness")
-        clock = iter((0.0, 1.0, 31.0))
+        FakeControl.harness_starts_agent = False
+        delegate = self.tui()
+        clock = itertools.chain((0.0, 1.0), itertools.repeat(31.0))
         with (
             mock.patch("time.monotonic", side_effect=lambda: next(clock)),
             mock.patch("time.sleep") as slept,
@@ -727,12 +661,12 @@ class TuiStart(HarnessCase):
         ):
             delegate.detach()
         self.assertEqual(slept.call_count, 1)
-        harness = RecordingHost.processes["harness", f"dummy-tester-{SID[:8]}-drive"]
-        self.assertFalse(harness.alive())
+        drive = FakeControl.named(f"dummy-tester-{SID[:8]}-drive")
+        self.assertEqual((drive.running(), drive.data()["signals"]), (False, ["terminate"]))
 
     def test_an_unrelated_live_tui_of_the_same_name_does_not_stand_for_this_run(self):
         spec = Spec("input", self.work, mode="tui", client="fake", sid=SID, name="X")
-        delegate = self.make(spec=spec, host="agent", harness_host="harness")
+        delegate = self.make(spec=spec, host="agent")
         other = "22222222-0000-4000-8000-000000000000"
         HarnessSession.start(
             SessionSpec(
@@ -745,8 +679,8 @@ class TuiStart(HarnessCase):
             ),
             host="agent",
         )
-        RecordingHost.harness_starts_agent = False
-        clock = iter((0.0, 1.0, 31.0))
+        FakeControl.harness_starts_agent = False
+        clock = itertools.chain((0.0, 1.0), itertools.repeat(31.0))
         with (
             mock.patch("time.monotonic", side_effect=lambda: next(clock)),
             mock.patch("time.sleep"),
@@ -759,10 +693,10 @@ class TuiStart(HarnessCase):
         self.assertEqual(HarnessSession.live["X"].alive(), True)
 
     def test_a_headless_detach_waits_for_nothing(self):
-        RecordingHost.harness_starts_agent = False
+        FakeControl.harness_starts_agent = False
         with mock.patch("time.sleep", side_effect=AssertionError("waited")):
-            record = self.make(host="agent", harness_host="harness").detach()
-        self.assertEqual(len(record.sessions), 1)
+            record = self.make(host="agent").detach()
+        self.assertEqual(record.sessions, ())
 
 
 class Announce(HarnessCase):
@@ -813,44 +747,22 @@ class Names(HarnessCase):
                 HarnessSession.reset()
                 self.work = os.path.join(self.home, f"{mode}-{name}")
                 spec = Spec("input", self.work, mode=mode, client="fake", sid=SID, name=name)
-                record = self.make(spec=spec, host="agent", harness_host="harness").detach()
+                record = self.make(spec=spec, host="agent").detach()
                 want = name or default
                 self.assertEqual(record.name, want)
-                self.assertEqual(
-                    record.sessions, (f"{want}-drive",) + ((want,) if mode == "tui" else ())
-                )
+                self.assertEqual(record.sessions, (want,) if mode == "tui" else ())
                 self.assertEqual(
                     (self.metadata()["agent_name"], self.metadata()["harness_name"]),
                     (want, f"{want}-drive"),
                 )
-                self.assertEqual(RecordingHost.launches[0]["name"], f"{want}-drive")
-
-    def test_the_harness_host_validates_the_harness_name_and_launch_at_construction(self):
-        ValidatingHost.validated = []
-        HarnessSession.hosts["harness"] = ValidatingHost("harness")
-        self.make(host="agent", harness_host="harness")
-        ((host, name, launch),) = ValidatingHost.validated
-        self.assertEqual((host, name), ("harness", f"dummy-tester-{SID[:8]}-drive"))
-        self.assertEqual(launch.cwd, Layout(self.work).run)
-        self.assertEqual(RecordingHost.launches, [])
-
-    def test_an_invalid_name_is_refused_writing_nothing(self):
-        HarnessSession.hosts["harness"] = ValidatingHost("harness")
-        for mode in ("headless", "tui"):
-            with self.subTest(mode=mode):
-                spec = Spec("input", self.work, mode=mode, client="fake", sid=SID, name="bad name")
-                with self.assertRaises(ConfigError) as caught:
-                    self.make(spec=spec, host="agent", harness_host="harness")
-                self.assertIn("bad name", str(caught.exception))
-                self.assertFalse(os.path.lexists(self.state_record()))
-                self.assertFalse(os.path.lexists(self.work))
+                self.assertEqual(harness_launches()[-1]["name"], f"{want}-drive")
 
     def test_resume_reuses_the_recorded_names(self):
         spec = Spec("input", self.work, mode="tui", client="fake", sid=SID, name="base")
-        record = self.make(spec=spec, host="agent", harness_host="harness").detach()
+        record = self.make(spec=spec, host="agent").detach()
         self.stop(record)
-        resumed = HarnessDelegate.attach(self.work).resume()
-        self.assertEqual((resumed.name, resumed.sessions), ("base", ("base-drive", "base")))
+        resumed = DrivenDelegate.attach(self.work).resume()
+        self.assertEqual((resumed.name, resumed.sessions), ("base", ("base",)))
         self.assertEqual(harness_launches()[-1]["name"], "base-drive")
 
 
@@ -873,19 +785,17 @@ class Outer(HarnessCase):
             ),
         )
 
-    def test_outer_is_the_hosts_record_and_resumes_record(self):
-        record = self.make(host="agent", harness_host="harness").detach(outer=self.OUTER)
+    def test_outer_is_the_record_and_resumes_record(self):
+        record = self.make(host="agent").detach(outer=self.OUTER)
         self.assertEqual((record.kind, record.ctl, record.resume), tuple(self.OUTER.values()))
         self.assertEqual(
             self.metadata()["outer"],
             {k: list(v) if k != "kind" else v for k, v in self.OUTER.items()},
         )
-        harness = HarnessSession.hosts["harness"].attach(record.sessions[0])
-        self.assertEqual(harness.record(), record)
         self.stop(record)
-        resumed = HarnessDelegate.attach(self.work).resume()
-        self.assertEqual((resumed.kind, resumed.ctl, resumed.resume), tuple(self.OUTER.values()))
-        self.assertEqual(RecordingHost.launches[-1]["record"], resumed)
+        resumed = DrivenDelegate.attach(self.work).resume()
+        self.assertEqual(resumed, record)
+        self.assertEqual(len(harness_launches()), 2)
 
     def test_an_unknown_or_invalid_outer_launches_nothing(self):
         for outer, message in (
@@ -899,7 +809,7 @@ class Outer(HarnessCase):
                 with self.assertRaises(ConfigError) as caught:
                     delegate.detach(outer=outer)
                 self.assertIn(message, str(caught.exception))
-                self.assertEqual(RecordingHost.launches, [])
+                self.assertEqual(harness_launches(), [])
                 self.assertFalse(self.metadata()["detached"])
 
 
@@ -908,29 +818,28 @@ class Display(HarnessCase):
         CountingDisplay.calls = []
         CountingDisplay.reset()
         spec = Spec("input", self.work, mode="tui", client="fake", sid=SID)
-        record = HarnessDelegate(
+        record = DrivenDelegate(
             "dummy-tester",
             spec,
             session_cls=CountingDisplay,
             host="agent",
-            harness_host="harness",
             display="given",
         ).detach()
         self.assertEqual(CountingDisplay.calls, [("given", "agent")])
         self.assertEqual((self.metadata()["display"], record.display), ("completed:given",) * 2)
-        self.assertEqual(RecordingHost.launches[0]["display"], "completed:given")
+        self.assertEqual(harness_launches()[0]["display"], "completed:given")
         self.assertEqual(CountingDisplay.started[-1]["display"], "completed:given")
-        CountingDisplay.live[record.sessions[1]].close()
-        HarnessDelegate.attach(self.work, session_cls=CountingDisplay).run()
+        CountingDisplay.live[record.sessions[0]].close()
+        DrivenDelegate.attach(self.work, session_cls=CountingDisplay).run()
         self.assertEqual(CountingDisplay.started[-1]["display"], "completed:given")
         self.stop(record)
-        HarnessDelegate.attach(self.work, session_cls=CountingDisplay).resume()
+        DrivenDelegate.attach(self.work, session_cls=CountingDisplay).resume()
         self.assertEqual(harness_launches()[-1]["display"], "completed:given")
         self.assertEqual(CountingDisplay.calls, [("given", "agent")])
 
     def test_a_headless_agent_starts_without_a_display(self):
         CountingDisplay.reset()
-        HarnessDelegate(
+        DrivenDelegate(
             "dummy-tester",
             Spec("input", self.work, client="fake", sid=SID),
             session_cls=CountingDisplay,
@@ -943,11 +852,11 @@ class ConcurrentDetach(HarnessCase):
     def test_two_processes_launch_one_harness(self):
         code = (
             "import os, sys, time\n"
-            "from ensemble.delegate import ConfigError, HarnessDelegate, Spec\n"
-            "from tests.delegate.fakes.harness_session import PersistentSession\n"
+            "from ensemble.delegate import ConfigError, Spec\n"
+            "from tests.delegate.fakes.harness_session import DrivenDelegate, PersistentSession\n"
             "spec = Spec('input', sys.argv[1], client='fake', sid=sys.argv[4])\n"
-            "delegate = HarnessDelegate('dummy-tester', spec, session_cls=PersistentSession,\n"
-            "                           host='agent', harness_host='harness')\n"
+            "delegate = DrivenDelegate('dummy-tester', spec, session_cls=PersistentSession,\n"
+            "                           host='agent')\n"
             "open(sys.argv[2] + str(os.getpid()), 'w').close()\n"
             "while not os.path.exists(sys.argv[3]): time.sleep(0.01)\n"
             "try:\n"
@@ -987,9 +896,7 @@ class ConcurrentDetach(HarnessCase):
             ("delegate attempt was replaced", "delegate is still alive"),
         )
         self.assertEqual(Record.parse(next(o for o in outputs if o not in refused)).sid, SID)
-        path = os.path.join(self.ensemble, "harness-fake", "launches.jsonl")
-        with open(path, encoding="utf-8") as file:
-            self.assertEqual(len(file.readlines()), 1)
+        self.assertEqual(len(harness_launches()), 1)
 
 
 class RunDir(HarnessCase):
@@ -1034,7 +941,7 @@ class RunDir(HarnessCase):
 
     def test_no_state_dir_under_home(self):
         self.make().run()
-        self.make(host="agent", harness_host="harness").detach()
+        self.make(host="agent").detach()
         self.assertFalse(os.path.lexists(os.path.join(self.ensemble, "delegates")))
         records = [
             os.path.join(root, name)
@@ -1057,7 +964,7 @@ class RunDir(HarnessCase):
             os.path.join(Layout(self.work).agent, "delegate.json"), "w", encoding="utf-8"
         ) as file:
             file.write("edited by the agent")
-        view = HarnessDelegate.attach(self.work)
+        view = DrivenDelegate.attach(self.work)
         self.assertEqual(view.outcome().status, "done")
         self.assertEqual(self.make().run().returncode, 0)
 
@@ -1109,8 +1016,8 @@ class Corrupt(HarnessCase):
     def test_attach_by_workdir_or_record_refuses_a_corrupt_record(self):
         self.corrupt('{"version": 2}')
         for call in (
-            lambda: HarnessDelegate.attach(self.work),
-            lambda: HarnessDelegate.attach(Record.parse(self.record_line())),
+            lambda: DrivenDelegate.attach(self.work),
+            lambda: DrivenDelegate.attach(Record.parse(self.record_line())),
         ):
             with self.subTest(call=call), self.assertRaises(ConfigError) as caught:
                 call()
@@ -1138,24 +1045,16 @@ class Corrupt(HarnessCase):
         with open(self.state_record(), encoding="utf-8") as file:
             self.assertEqual(file.read(), "not json")
 
-    def test_a_live_harness_named_by_a_corrupt_record_keeps_it(self):
-        HarnessSession.hosts["harness"].detach("x-drive", Launch(("x",), cwd=self.home))
-        self.corrupt('{"harness_host": "harness", "harness_name": "x-drive", "attempt": 2}')
+    def test_a_live_drive_named_by_a_corrupt_record_keeps_it(self):
+        drive = FakeControl.prepare(("x",), self.home)
+        drive._save(alive=True)
+        self.corrupt(json.dumps({"drive": drive.path, "attempt": 2}))
         with self.assertRaises(ConfigError) as caught:
             self.make()
         self.assertEqual(str(caught.exception), f"{self.work}: delegate is still alive")
-        RecordingHost.processes["harness", "x-drive"].close()
+        drive.close()
         self.make()
         self.assertEqual(self.metadata()["attempt"], 3)
-
-    def test_an_unknown_harness_host_in_a_corrupt_record_is_refused(self):
-        self.corrupt('{"harness_host": "ghost", "harness_name": "x-drive"}')
-        ConfiguredSession.reset()
-        with self.assertRaises(ConfigError) as caught:
-            self.make(session_cls=ConfiguredSession)
-        self.assertEqual(str(caught.exception), "unknown host ghost")
-        with open(self.state_record(), encoding="utf-8") as file:
-            self.assertEqual(json.load(file)["harness_host"], "ghost")
 
 
 class Attempts(HarnessCase):
@@ -1165,12 +1064,12 @@ class Attempts(HarnessCase):
         record = self.make(callback=callback).detach()
         self.assertEqual(self.metadata()["attempt"], 1)
         self.stop(record)
-        view = HarnessDelegate.attach(self.work)
+        view = DrivenDelegate.attach(self.work)
         view.resume()
         self.assertEqual(self.metadata()["attempt"], 2)
         view.resume()
         self.assertEqual(self.metadata()["attempt"], 2)
-        HarnessDelegate.attach(self.work).run()
+        DrivenDelegate.attach(self.work).run()
         with open(log, encoding="utf-8") as file:
             lines = [json.loads(entry)["line"] for entry in file]
         stamps = {(event.sid, event.attempt) for event in map(DelegateEvent.parse, lines)}
@@ -1191,12 +1090,10 @@ class Answer(HarnessCase):
     def test_an_answer_closes_the_ended_runs_open_tui_and_detaches_its_next_attempt(self):
         LiveNameSession.reset()
         tui = Spec("Hello.", self.work, client="fake", sid=SID, mode="tui")
-        placed = {"host": "agent", "harness_host": "harness", "session_cls": LiveNameSession}
+        placed = {"host": "agent", "session_cls": LiveNameSession}
         record = self.make(spec=tui, **placed).detach()
-        harness, agent = (
-            RecordingHost.processes[host, name]
-            for host, name in zip(("harness", "agent"), record.sessions, strict=True)
-        )
+        harness = FakeControl(self.metadata()["drive"])
+        agent = RecordingHost.processes["agent", record.sessions[0]]
         answer = replace(tui, input="Use option B.", resume=True)
         with self.assertRaisesRegex(ConfigError, "delegate is still alive"):
             self.make(spec=answer, **placed)
@@ -1213,20 +1110,19 @@ class Answer(HarnessCase):
 
 class ConcurrentResume(HarnessCase):
     def test_two_processes_resume_once_and_return_the_same_record(self):
-        delegate = HarnessDelegate(
+        delegate = DrivenDelegate(
             "dummy-tester",
             Spec("input", self.work, client="fake", sid=SID),
             session_cls=PersistentSession,
             host="agent",
-            harness_host="harness",
             display="opaque",
         )
         code = (
             "import os, sys, time\n"
-            "from ensemble.delegate import HarnessDelegate\n"
+            "from tests.delegate.fakes.harness_session import DrivenDelegate\n"
             "open(sys.argv[2] + str(os.getpid()), 'w').close()\n"
             "while not os.path.exists(sys.argv[3]): time.sleep(0.01)\n"
-            "print(HarnessDelegate.attach(sys.argv[1]).resume().to_line())\n"
+            "print(DrivenDelegate.attach(sys.argv[1]).resume().to_line())\n"
         )
         ready, gate = os.path.join(self.home, "ready-"), os.path.join(self.home, "go")
         children = [
@@ -1255,7 +1151,5 @@ class ConcurrentResume(HarnessCase):
             records.append(Record.parse(stdout))
         self.assertEqual(records[0], records[1])
         self.assertEqual((records[0].sid, records[0].display), (SID, "opaque"))
-        path = os.path.join(self.ensemble, "harness-fake", "launches.jsonl")
-        with open(path, encoding="utf-8") as file:
-            self.assertEqual(len(file.readlines()), 1)
+        self.assertEqual(len(harness_launches()), 1)
         self.assertTrue(delegate.alive())

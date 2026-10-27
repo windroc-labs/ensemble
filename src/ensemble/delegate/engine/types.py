@@ -68,6 +68,10 @@ class Layout:
         return (os.path.join(self.agent, "src"), os.path.join(self.agent, "publish"), self.tmp)
 
     @property
+    def drive_log(self) -> str:
+        return os.path.join(self.run, "drive.log")
+
+    @property
     def out(self) -> str:
         """A session run's default `out`."""
         return os.path.join(self.run, "out.md")
@@ -180,9 +184,7 @@ class Preview:
 
     plan: Plan
     agent: str | None
-    harness: str
     host: str
-    harness_host: str
     callback: tuple[str, ...] | None
 
 
@@ -255,14 +257,13 @@ class Resolved:
 class DelegateState:
     """delegate.json's run state (engine/record.py); previous: attempt - 1's Result once a
     follow-up opened attempt; bound: an owned attempt's worker took it (its owner phase);
-    closing: a close stopped its worker (no follow-up).
+    closing: a close stopped its worker (no follow-up); drive: its ProcessControl path.
     """
 
     role: str
     plan: Plan
     session_cls: str | None
     host: str
-    harness_host: str
     display: Display
     callback: tuple[str, ...] | None
     agent_name: str
@@ -278,3 +279,4 @@ class DelegateState:
     previous: Result | None = None
     bound: bool = False
     closing: bool = False
+    drive: str | None = None

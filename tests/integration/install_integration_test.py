@@ -974,20 +974,17 @@ class InstallTest(Case):
             self.config().read_text(),
             "# Written by install.sh. Keys and defaults: each layer's packaged config.toml "
             "(its `# local:` lines);\n# the Linear board: docs/architecture.md#board-setup.\n"
-            '[session.hosts]\ndefault = "docker"\n\n[delegate]\nclient = "codex"\n\n'
-            '[delegate.delegates]\nharness_host = "tmux"\n',
+            '[session.hosts]\ndefault = "docker"\n\n[delegate]\nclient = "codex"\n',
         )
         cases = (
             (
                 '# mine\n[session.hosts]\ndefault = "tmux" # x\n\n[other]\nx = 1\n',
                 '# mine\n[session.hosts]\ndefault = "docker"\n\n[other]\nx = 1\n\n'
-                '[delegate]\nclient = "codex"\n\n'
-                '[delegate.delegates]\nharness_host = "tmux"\n',
+                '[delegate]\nclient = "codex"\n',
             ),
             (
-                '[delegate.delegates]\n\n[session.hosts]\ndefault = "docker"\n[delegate]\nclient = "codex"\n',
-                '[delegate.delegates]\nharness_host = "tmux"\n\n[session.hosts]\ndefault = "docker"\n'
-                '[delegate]\nclient = "codex"\n',
+                '[delegate]\n\n[session.hosts]\ndefault = "docker"\n',
+                '[delegate]\nclient = "codex"\n\n[session.hosts]\ndefault = "docker"\n',
             ),
         )
         for before, after in cases:
@@ -1268,7 +1265,7 @@ class InstallTest(Case):
         )
         before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in checkout.iterdir()}
         before[config] = (config.read_bytes(), config.stat().st_mtime_ns)
-        self.assertIn(f"gh api repos/windroc/egress-proxy/tarball/{sha}", self.calls())
+        self.assertIn(f"gh api repos/windroc-labs/egress-proxy/tarball/{sha}", self.calls())
         self.assertIn("docker egress-start", self.calls())
         self.assert_ok(self.again("--clients", "claude", "--docker"))
         self.assertEqual({p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before}, before)
@@ -1425,10 +1422,10 @@ class InstallTest(Case):
         self.assertFalse((egress / "current").exists())
 
     def test_egress_download_failure_is_retryable(self):
-        (self.fakes / "fail").write_text("gh api repos/windroc/egress-proxy/tarball/")
+        (self.fakes / "fail").write_text("gh api repos/windroc-labs/egress-proxy/tarball/")
         result = self.fresh("--clients", "claude", "--docker", egress_failure=True)
         self.assertEqual(result.code, 1)
-        self.assertIn("cannot fetch pinned windroc/egress-proxy", result.stderr)
+        self.assertIn("cannot fetch pinned windroc-labs/egress-proxy", result.stderr)
         versions = Path(self.home, ".egress/versions")
         self.assertEqual(list(versions.iterdir()), [])
         self.assert_ok(
@@ -1436,12 +1433,12 @@ class InstallTest(Case):
         )
 
     def test_u1a_failed_egress_fetch_leaves_nothing(self):
-        (self.fakes / "fail").write_text("gh api repos/windroc/egress-proxy/tarball/")
+        (self.fakes / "fail").write_text("gh api repos/windroc-labs/egress-proxy/tarball/")
         result = self.fresh(
             "--clients", "claude", "--docker", egress_failure=True, shell="/bin/bash"
         )
         self.assertEqual(result.code, 1)
-        self.assertIn("cannot fetch pinned windroc/egress-proxy", result.stderr)
+        self.assertIn("cannot fetch pinned windroc-labs/egress-proxy", result.stderr)
         self.assertNotIn("unbound variable", result.stderr)
         self.assertEqual(list(Path(self.home, ".egress/versions").iterdir()), [])
 
@@ -1450,12 +1447,12 @@ class InstallTest(Case):
         versions = Path(self.home, ".egress/versions")
         (versions / ".download.stale").mkdir(parents=True)
         (versions / ".download.stale/source.tar.gz").write_text("partial")
-        (self.fakes / "fail").write_text("gh api repos/windroc/egress-proxy/tarball/")
+        (self.fakes / "fail").write_text("gh api repos/windroc-labs/egress-proxy/tarball/")
         result = self.fresh(
             "--clients", "claude", "--docker", egress_failure=True, shell="/bin/bash"
         )
         self.assertEqual(result.code, 1)
-        self.assertIn("cannot fetch pinned windroc/egress-proxy", result.stderr)
+        self.assertIn("cannot fetch pinned windroc-labs/egress-proxy", result.stderr)
         self.assertEqual(list(versions.iterdir()), [])
         (versions / ".download.stale").mkdir()
         self.assert_ok(
@@ -1470,7 +1467,7 @@ class InstallTest(Case):
         (self.fakes / "egress_tarball").write_text("corrupt")
         result = self.fresh("--clients", "claude", "--docker", egress_failure=True)
         self.assertEqual(result.code, 1)
-        self.assertIn("cannot unpack pinned windroc/egress-proxy", result.stderr)
+        self.assertIn("cannot unpack pinned windroc-labs/egress-proxy", result.stderr)
         self.assertEqual(list(versions.iterdir()), [])
         (self.fakes / "egress_tarball").write_text("noexec")
         result = self.again("--clients", "claude", "--docker")

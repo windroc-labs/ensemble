@@ -90,7 +90,7 @@ class LivePipeline(LiveCrew):
         tui = f"engineer-{ID}-{record.sid[:8]}"
         self.assertEqual(
             (record.kind, record.name, record.sessions, record.workdir, record.ctl, record.resume),
-            ("pipeline", ID, (f"{tui}-drive", tui), os.path.join(self.workdirs, ID), CTL, RESUME),
+            ("pipeline", ID, (tui,), os.path.join(self.workdirs, ID), CTL, RESUME),
         )
         entry = self.roster()[name]
         self.assertEqual((entry.state, entry.record, entry.sid), (State.LIVE, record, record.sid))
