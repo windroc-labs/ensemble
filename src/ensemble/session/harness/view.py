@@ -4,6 +4,7 @@ requests, and so are a remote worker's send, press and screen; the rest goes to 
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import TypeVar
@@ -52,6 +53,13 @@ def fold(
         reply = event.reply
     # a Reply can land after the block it preceded
     return reply, isinstance(event, Blocked) or blocked and isinstance(event, Stderr | Reply)
+
+
+def dialog(current: str | None, event: SessionEvent | Stderr | ClientBound) -> str | None:
+    """The dialog its client waits on: the first Blocked's reason, kept as `fold` keeps blocked."""
+    if isinstance(event, Blocked):
+        return event.reason if current is None else current
+    return current if isinstance(event, Stderr | Reply | ClientBound) else None
 
 
 class _Reader:
@@ -115,6 +123,7 @@ class OwnedSession(Session):
         self._channel, self._idle, self._attach = channel, idle_timeout, attach
         self._retire = retire
         self._attached = attached
+        self._lock = threading.Lock()  # over _attached, never over a call on it
         self._events = _Reader(channel, generation)
         if replay:
             self._events.read(replayed=True)
@@ -191,24 +200,36 @@ class OwnedSession(Session):
         if session.alive():
             raise Unanswered(f"session {self.name or self.sid}: still running after {op}")
 
-    def _session(self) -> Session:
-        if self._attached is None:
+    def _held(self) -> tuple[Session, bool]:
+        """Its attach, and whether it was held already."""
+        with self._lock:
+            if self._attached is not None:
+                return self._attached, True
             self._attached = self._attach()
-        return self._attached
+            return self._attached, False
+
+    def _session(self) -> Session:
+        return self._held()[0]
+
+    def _drop(self, session: Session) -> None:
+        with self._lock:
+            if self._attached is session:
+                self._attached = None
 
     def _call(self, call: Callable[[Session], T]) -> T:
         """call on its attach; a held one's SessionError (its display reopened since, say) drops it
-        for one call on a new attach. Unanswered is no proof the call failed: raised.
+        for one call on a new attach. Unanswered (a partly sent send, say) is no proof the call
+        failed: raised.
         """
-        held = self._attached is not None
+        session, held = self._held()
         try:
-            return call(self._session())
+            return call(session)
         except Unanswered:
             raise
         except SessionError:
             if not held:
                 raise
-            self._attached = None
+            self._drop(session)
         return call(self._session())
 
     @property
@@ -220,6 +241,12 @@ class OwnedSession(Session):
     def client_up(self) -> bool:
         """Its harness says its guard reported its client up (harness.json `up`)."""
         return self._channel.status().get("up") is True
+
+    @property
+    def dialog(self) -> str | None:
+        """The dialog its client waits on, by its harness's latest pump (harness.json `dialog`)."""
+        found = self._channel.status().get("dialog")
+        return found if isinstance(found, str) else None
 
     def _remote(self) -> bool:
         return self._channel.status().get("remote") is True
@@ -248,13 +275,13 @@ class OwnedSession(Session):
 
     def alive(self) -> bool:
         """A held attach that says not alive is asked once more of a new one."""
-        held = self._attached is not None
         try:
-            if self._session().alive():
+            session, held = self._held()
+            if session.alive():
                 return True
             if not held:
                 return False
-            self._attached = None
+            self._drop(session)
             return self._session().alive()
         except SessionError:
             return False

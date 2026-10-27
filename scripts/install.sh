@@ -97,14 +97,14 @@ usage: $synopsis
   --no-board                 skip board setup (first-run default)
   --launchd, --no-launchd     choose router/promote jobs (docs/board.md)
   --opencode-provider <name>  the OpenAI-compatible provider OpenCode runs on, e.g. a LAN model server
-  --opencode-url <url>        its base URL, ending /v1
+  --opencode-url <url>        its base URL, ending /v1; a provider other than the saved one needs it
   --opencode-model <model>    its model
   --opencode-context <tokens> its context window in tokens (default 65536)
   --opencode-key-stdin        read the provider's API key from stdin
   --password-stdin            read the sudo password from stdin (first line, before the key)
 
-With --password-stdin or --opencode-key-stdin, stdin cannot carry the script:
-  security find-generic-password -s <item> -w | bash -c "\$(curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh)" scripts/install.sh --password-stdin
+With --password-stdin or --opencode-key-stdin, stdin cannot carry the script; download it first:
+  (f=\$(mktemp) && trap 'rm -f "\$f"' EXIT && curl -fsSL -o "\$f" https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh && security find-generic-password -s <item> -w | bash "\$f" --password-stdin)
 
 It shows a checklist only when clients or Docker has no flag or saved answer. Flags pre-tick their choices;
 saved choices and existing config fill the other ticks. It installs the dependencies, asks what is still
@@ -227,8 +227,14 @@ opencode_flags() { [ -n "$provider_flag$url_flag$model_flag$context_flag$key_std
 
 # The flags' conflicts that flags and State already decide, before anything runs.
 early_checks() {
+  local saved
   if opencode_flags && [ -n "$clients_flag" ]; then
     case ",$clients_flag," in *,opencode,*) ;; *) usage_error "--opencode-*: opencode is not among the clients" ;; esac
+  fi
+  # A provider's fields come with its name (answers): another provider without its URL would get the saved one's.
+  saved=$(state_get opencode_provider)
+  if [ -n "$provider_flag" ] && [ -z "$url_flag" ] && [ -n "$saved" ] && [ "$provider_flag" != "$saved" ]; then
+    usage_error "--opencode-provider $provider_flag: a provider other than the saved $saved needs --opencode-url"
   fi
 }
 
@@ -427,7 +433,9 @@ on_exit() {
   trap '' HUP INT TERM
   token_screen_leave
   sudo_end
-  # A login that failed or was cut short after storing its credential is still the cleanup's to remove.
+  # A login that failed or was cut short after storing its credential is still the cleanup's to remove. Handled, not
+  # ignored, signals reach its probe with their default action: Ctrl-C stops a hung one.
+  trap : HUP INT TERM
   if [ -n "$login_pending" ] && login_status "$login_pending"; then ledger_add login "$login_pending"; fi
   if [ "$rc" -ne 0 ] && [ -n "$current" ]; then
     say "$me: $current failed; rerun the same command to continue"
@@ -763,9 +771,16 @@ answers() {
       fi
     fi
     provider=${provider_flag:-$prev_provider}
-    url=${url_flag:-$prev_url}
-    model=${model_flag:-$prev_model}
-    context=${context_flag:-$prev_context}
+    # Another provider takes none of the saved one's fields: its key would go to that provider's server.
+    if [ "$provider" = "$prev_provider" ]; then
+      url=${url_flag:-$prev_url}
+      model=${model_flag:-$prev_model}
+      context=${context_flag:-$prev_context}
+    else
+      url=$url_flag
+      model=$model_flag
+      context=$context_flag
+    fi
     if [ -z "$provider" ]; then
       ask_valid "OpenCode provider name:" valid_name
       provider=$answer
@@ -1943,6 +1958,10 @@ def package_version(path):
     except (OSError, ValueError, AttributeError):
         return version(os.path.basename(path)) if client == "claude" else []
 
+def ref(path):
+    # An OpenCode copy's ref: its package spec's #fragment; a spec without one is the default branch.
+    return os.path.dirname(os.path.dirname(os.path.relpath(path, source))).partition("#")[2] or "main"
+
 roots = []
 if os.path.isabs(root) and "\n" not in root and not os.path.exists(root):
     if client == "claude":
@@ -1962,6 +1981,8 @@ if os.path.isabs(root) and "\n" not in root and not os.path.exists(root):
     roots = sorted(p for p in roots if isinstance(p, str) and os.path.isabs(p) and "\n" not in p)
     key = (lambda p: version(os.path.basename(p))) if client == "codex" else package_version
     for candidate in sorted(roots, key=key, reverse=True):
+        if client == "opencode" and ref(candidate) != ref(root):
+            continue
         if os.access(path := os.path.join(candidate, rel), os.X_OK):
             fd, temp = tempfile.mkstemp(prefix=".plugin-root.", dir=os.path.dirname(selection))
             try:

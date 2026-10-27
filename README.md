@@ -106,7 +106,7 @@ It shows the installation checklist only when clients or Docker has no flag or s
 | `--docker`, `--no-docker` | workers in Docker (Docker Desktop, the broker) or on the local tmux Host |
 | `--board <local\|linear>`, `--no-board` | sets up a local or Linear board, or skips board setup (first-run default) |
 | `--launchd`, `--no-launchd` | router/promote jobs; see [Board setup](docs/board.md#setup) |
-| `--opencode-provider <name>`, `--opencode-url <url>`, `--opencode-model <model>`, `--opencode-context <tokens>` | OpenCode's OpenAI-compatible provider, e.g. a LAN model server; its base URL ends `/v1`; its context window (default 65536) |
+| `--opencode-provider <name>`, `--opencode-url <url>`, `--opencode-model <model>`, `--opencode-context <tokens>` | OpenCode's OpenAI-compatible provider, e.g. a LAN model server; its base URL ends `/v1`; its context window (default 65536). A provider other than the saved one needs its own `--opencode-url` and takes nothing from the saved one |
 | `--opencode-key-stdin` | reads the provider's API key from stdin; Docker imports the same key from local OpenCode's `auth.json` into the broker |
 | `--password-stdin` | reads the `sudo` password from stdin, before the key |
 
@@ -115,10 +115,11 @@ Claude Code/Codex plugins, it checks their installed copies too. OpenCode's inst
 `--ref`'s commit; otherwise it checks `--ref` on GitHub. For installed copies it uses the installed broker when it came
 from that plugin and speaks its protocol, else the plugin's release (`v` + its version). A mismatch names both protocols.
 
-With a stdin flag, stdin cannot also carry the script:
+With a stdin flag, stdin cannot also carry the script: download it first, so its text is not a process argument
+other users can read:
 
 ```bash
-security find-generic-password -s <item> -w | bash -c "$(curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh)" scripts/install.sh --password-stdin
+(f=$(mktemp) && trap 'rm -f "$f"' EXIT && curl -fsSL -o "$f" https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh && security find-generic-password -s <item> -w | bash "$f" --password-stdin)
 ```
 
 What it sets up, for reference or by hand:
@@ -147,7 +148,7 @@ How the sessions ensemble starts load your settings, and why some commands refus
 
 | Command | Does |
 |---|---|
-| `ctmux <name>` | Open the commander's tmux session: native windows in iTerm2, a plain tmux attach in other terminals, a switch from inside tmux. `ctmux --install` puts ctmux and the four commands `ensemble-crew`, `ensemble-session`, `ensemble-delegate` and `ensemble-orchestrator` in `~/.ensemble/bin/`: run them by that path, or add it to `PATH`. `--install` records this plugin’s absolute path in `~/.ensemble/plugin-root`; all five commands run from that selection, including after an OpenCode-only `--ref` install with other client caches present. Rerun the installer to select another ref, including older refs whose own launchers predate selection support. If a plugin update removes the selected directory, the next command records and runs the newest installed copy from the same client and reports its path on stderr; no installer rerun is needed. A missing command in an existing directory, or no remaining copy from the selected client, keeps the selected-plugin error. Launchers without a source record retain Claude Code → newest Codex → newest OpenCode discovery; equal versions use ascending path order. |
+| `ctmux <name>` | Open the commander's tmux session: native windows in iTerm2, a plain tmux attach in other terminals, a switch from inside tmux. `ctmux --install` puts ctmux and the four commands `ensemble-crew`, `ensemble-session`, `ensemble-delegate` and `ensemble-orchestrator` in `~/.ensemble/bin/`: run them by that path, or add it to `PATH`. `--install` records this plugin’s absolute path in `~/.ensemble/plugin-root`; all five commands run from that selection, including after an OpenCode-only `--ref` install with other client caches present. Rerun the installer to select another ref, including older refs whose own launchers predate selection support. If a plugin update removes the selected directory, the next command records and runs the newest installed copy from the same client and reports its path on stderr; no installer rerun is needed. For OpenCode that copy must hold the same ref (its package's `#<ref>`, none meaning `main`), so another ref's leftover copy never replaces the installed one. A missing command in an existing directory, or no remaining copy from the selected client (OpenCode: of the selected ref), keeps the selected-plugin error and `~/.ensemble/plugin-root`; rerun the installer. Launchers without a source record retain Claude Code → newest Codex → newest OpenCode discovery; equal versions use ascending path order. |
 | `/ensemble:manage` | Launch and direct workers, role runs and pipeline runs, with the commander's guidelines. |
 | `/ensemble:act-as <role>[:<task>] <input>` | Run a core role in this conversation. |
 | `/ensemble:board` | Read, find, create, edit, move and archive board issues with fixed `ensemble-orchestrator issue` commands. |

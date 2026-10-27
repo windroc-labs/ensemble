@@ -36,6 +36,7 @@ from ensemble.session.engine.types import (
     Mode,
     SessionError,
     Spec,
+    TurnStarted,
 )
 from ensemble.session.harness import channel
 from ensemble.session.harness.channel import Channel
@@ -84,6 +85,12 @@ class _Guarded(Protocol):
 @runtime_checkable
 class _Probed(Protocol):
     def client_alive(self) -> bool: ...
+
+
+@runtime_checkable
+class _Dialogs(Protocol):
+    @property
+    def dialog(self) -> str | None: ...
 
 
 def _say(text: str) -> None:
@@ -207,6 +214,10 @@ class WorkerState:
 
 def _pending(session: Session) -> str | None:
     return session.opening_pending if isinstance(session, _Opens) else None
+
+
+def _dialog(session: Session) -> str | None:
+    return session.dialog if isinstance(session, _Dialogs) else None
 
 
 def _up(session: Session, elapsed: float) -> bool:
@@ -559,22 +570,30 @@ class Worker:
             self.say(f"session {name}: not {'hidden' if hidden else 'shown'}: {error}")
 
     def _watch(self, session: Session) -> None:
-        began = self.clock()
+        began, turned = self.clock(), False  # turned: its opening follows that turn
         for event in session.events():
             if isinstance(event, Exited):
                 raise SessionError(self._died(event.returncode))
+            turned = turned or isinstance(event, TurnStarted)
             if isinstance(event, Blocked):
-                self.say(f"session {self.state.name}: waits on a dialog: {event.reason}")
-                self._uncolored(session, "waits on a dialog")
+                self._waits(session, event.reason, turned=turned)
                 return
             elapsed = self.clock() - began
             if not _up(session, elapsed):
                 continue
-            if elapsed >= COLOR_CAP:
+            if elapsed < COLOR_CAP and _pending(session) is not None:
+                continue
+            # after its state: a dialog found by then, its Blocked maybe unread
+            if (dialog := _dialog(session)) is not None:
+                self._waits(session, dialog, turned=turned)
+            elif elapsed >= COLOR_CAP and not turned:
                 self._uncolored(session, f"not ready within {COLOR_CAP} s")
-                return
-            if _pending(session) is None:
-                return
+            return
+
+    def _waits(self, session: Session, dialog: str, *, turned: bool) -> None:
+        self.say(f"session {self.state.name}: waits on a dialog: {dialog}")
+        if not turned:
+            self._uncolored(session, "waits on a dialog")
 
     def _uncolored(self, session: Session, reason: str) -> None:
         text = _pending(session)

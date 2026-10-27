@@ -32,6 +32,7 @@ from ensemble.session.engine.types import (
 from ensemble.session.harness.channel import CLOSE_WAIT, DRAIN, SLICE, Channel, encode, hung_up
 from ensemble.session.harness.dispatch import Dispatch, load_handlers
 from ensemble.session.harness.types import SERVED, Logged, Op
+from ensemble.session.harness.view import dialog
 from ensemble.session.hosts.base import SIGNALS
 
 POLL = 0.5
@@ -194,13 +195,7 @@ class Harness:
                     return code
                 self._signal = None
             found, ended = worker.pump(self._poll)
-            # before its events: a view acting on one reads the status it came with
-            if (opening := worker.opening_pending) != self._status.get("opening"):
-                self._status["opening"] = opening
-                self._write()
-            if worker.up and "up" not in self._status:
-                self._status["up"] = True
-                self._write()
+            self._pumped(worker, found)
             self._log(found)
             self._write_pending()
             if ended:
@@ -208,6 +203,22 @@ class Harness:
                 if code is None:  # a stopped headless run's may land later
                     code = worker.confirm_end(self._close_wait)
                 return -signal.SIGHUP if code is None else code
+
+    def _pumped(self, worker: Worker, found: Sequence[Event]) -> None:
+        """A pump's opening, up and dialog, in one write before its events are logged: a view
+        acting on an event reads the status it came with, and one acting on the status (a start's
+        watch) finds any dialog of the events it has yet to read.
+        """
+        status = dict(self._status, opening=worker.opening_pending)
+        if worker.up:
+            status["up"] = True
+        found_dialog = self._status.get("dialog")
+        for event in found:
+            found_dialog = dialog(found_dialog, event)
+        status["dialog"] = found_dialog
+        if status != self._status:
+            self._status = status
+            self._write()
 
     def _serve(self, worker: Worker, op: Op, data: dict, ident: str) -> None:
         """A remote worker's input or screen, or its display; any failure is a refusal that leaves

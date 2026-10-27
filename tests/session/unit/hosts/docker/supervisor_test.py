@@ -186,7 +186,8 @@ class HandleTest(Base):
     def test_transcript_path_is_dropped_before_the_hook_runs(self):
         self.assertEqual(self.supervisor.handle(request()), {"gen": GEN, "seq": 1, "ok": True})
         self.assertEqual(
-            self.ran, [{"label": "Stop", "event": f"{GEN}.1", "payload": {"session_id": "s"}}]
+            self.ran,
+            [{"label": "Stop", "event": f"{GEN}.1", "payload": {"session_id": "s"}, "sent": None}],
         )
         ((argv, kw),) = self.workers.calls
         self.assertEqual(argv, [HOOK, "hook", "--serve", TUI])
@@ -424,7 +425,8 @@ class HookWorkerTest(Base):
     """
 
     def call(self, n=1, body=None):
-        return self.supervisor.worker.call("Stop", {"n": n} if body is None else body, f"{GEN}.{n}")
+        body = {"n": n} if body is None else body
+        return self.supervisor.worker.call("Stop", body, f"{GEN}.{n}", None)
 
     def test_n_calls_start_one_process(self):
         for n in range(1, 6):

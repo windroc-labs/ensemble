@@ -25,7 +25,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.harness.channel import Channel, encode
 from ensemble.session.harness.types import Op
-from ensemble.session.harness.view import OwnedSession, fold
+from ensemble.session.harness.view import OwnedSession, dialog, fold
 from tests.session.case import Case
 
 GEN = "g1"
@@ -82,6 +82,22 @@ class FoldTest(Case):
         self.assertEqual(fold("a", Reply("c"), blocked=True, replayed=False), ("c", True))
         self.assertEqual(fold("a", TurnStarted(), blocked=True, replayed=False), ("a", False))
         self.assertEqual(fold("a", ClientBound("c"), blocked=True, replayed=False), ("a", True))
+
+
+class DialogFoldTest(Case):
+    def test_the_first_blocked_reason_until_anything_but_stderr_reply_or_client_bound(self):
+        for current, event, want in (
+            (None, Blocked("a"), "a"),
+            ("a", Blocked("b"), "a"),
+            ("a", Stderr("x"), "a"),
+            ("a", Reply("r"), "a"),
+            ("a", ClientBound("c1"), "a"),
+            ("a", TurnStarted(), None),
+            ("a", TurnEnd("t"), None),
+            (None, Reply("r"), None),
+        ):
+            with self.subTest(current=current, event=event):
+                self.assertEqual(dialog(current, event), want)
 
 
 class EventsTest(Base):
@@ -255,6 +271,11 @@ class DelegationTest(Base):
         self.assertFalse(view.client_up)
         self.channel.write_status({"state": "running", "up": True})
         self.assertTrue(view.client_up)
+        self.assertIsNone(view.dialog)
+        self.channel.write_status({"state": "running", "dialog": "Edit"})
+        self.assertEqual(view.dialog, "Edit")
+        self.channel.write_status({"state": "running", "dialog": 3})
+        self.assertIsNone(view.dialog)
         for name in ("alive", "status", "content", "info", "session_status", "record", "hide"):
             getattr(view, name)()
             getattr(self.attached, name).assert_called_once_with()
@@ -368,6 +389,14 @@ class ReattachTest(Base):
             view.send("hi")
         self.assertEqual(self.attaches, 1)
 
+    def test_a_partly_sent_send_is_not_retried(self):
+        view = self.held()
+        self.stale.send.side_effect = Unanswered("send to tui session w1: partly sent: gone")
+        with self.assertRaisesRegex(Unanswered, "partly sent"):
+            view.send("hi")
+        self.fresh.send.assert_not_called()
+        self.assertEqual(self.attaches, 1)
+
     def test_a_failed_reattach_raises_its_error(self):
         view = self.held()
         self.stale.send.side_effect = SessionError("not running")
@@ -392,6 +421,76 @@ class ReattachTest(Base):
         self.stale.alive.return_value = False
         self.assertFalse(self.view().alive())
         self.assertEqual(self.attaches, 1)
+
+
+class ConcurrencyTest(Base):
+    """Calls from two threads (a session harness's handlers share one view)."""
+
+    def setUp(self):
+        super().setUp()
+        self.sessions = [mock.Mock(name="first"), mock.Mock(name="second")]
+
+    def attach(self):
+        self.attaches += 1
+        if not self.sessions:
+            raise SessionError("its worker g1 is gone")
+        return self.sessions.pop(0)
+
+    def test_concurrent_first_calls_make_one_attach(self):
+        first, threads = self.sessions[0], []
+        view = self.view()
+
+        def attach():
+            session = type(self).attach(self)
+            if not threads:  # another call while this attach is being made
+                threads.append(threading.Thread(target=view.status))
+                threads[0].start()
+                threads[0].join(0.5)
+            return session
+
+        view._attach = attach
+        view.info()
+        threads[0].join(5)
+        self.assertEqual(self.attaches, 1)
+        first.info.assert_called_once_with()
+        first.status.assert_called_once_with()
+
+    def test_concurrent_failures_on_a_stale_attach_make_one_new_attach(self):
+        stale, fresh = self.sessions
+        view = self.view()
+        view.record()
+
+        def failed():  # the other call fails on it too, and retries, before this one does
+            other = threading.Thread(target=view.status)
+            other.start()
+            other.join(5)
+            raise SessionError("not running")
+
+        stale.info.side_effect = failed
+        stale.status.side_effect = SessionError("not running")
+        self.assertIs(view.info(), fresh.info.return_value)
+        fresh.status.assert_called_once_with()
+        self.assertEqual(self.attaches, 2)
+
+    def test_alive_keeps_an_attach_another_call_made_meanwhile(self):
+        stale, fresh = self.sessions
+        third = mock.Mock(name="third")
+        self.sessions.append(third)
+        view = self.view()
+        view.record()
+
+        def dead():  # another call replaces the stale attach before this one drops it
+            other = threading.Thread(target=view.status)
+            other.start()
+            other.join(5)
+            return False
+
+        stale.alive.side_effect = dead
+        stale.status.side_effect = SessionError("not running")
+        fresh.alive.return_value = True
+        self.assertTrue(view.alive())
+        self.assertEqual(self.attaches, 2)
+        third.alive.assert_not_called()
 
 
 class HeadlessViewTest(Base):

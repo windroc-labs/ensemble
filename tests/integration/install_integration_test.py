@@ -273,14 +273,15 @@ def menu(want, have=("claude", "codex")):
     return "".join((" " if (i in want) != (i in have) else "") + "\x1b[B" for i in ITEMS)
 
 
-def ctrl_c(marker, proc, sig=signal.SIGINT):
-    """`sig` (SIGINT: a terminal's Ctrl-C) to `proc`'s process group once `marker` exists."""
-    deadline = time.monotonic() + 30
-    while not marker.exists():
-        if proc.poll() is not None or time.monotonic() > deadline:
-            return
-        time.sleep(0.02)
-    os.killpg(proc.pid, sig)
+def ctrl_c(markers, proc, sig=signal.SIGINT):
+    """`sig` (SIGINT: a terminal's Ctrl-C) to `proc`'s process group once each of `markers`, in turn, exists."""
+    for marker in markers:
+        deadline = time.monotonic() + 30
+        while not marker.exists():
+            if proc.poll() is not None or time.monotonic() > deadline:
+                return
+            time.sleep(0.02)
+        os.killpg(proc.pid, sig)
 
 
 def executable(path, text):
@@ -462,7 +463,8 @@ class InstallTest(Case):
     ):
         """`ctty`: what /dev/tty opens, else the terminal, which is also /dev/ttys001.
         `shell`: what runs `script`, as `curl … | bash` does on a Mac: its /bin/bash.
-        `interrupt`: a path; once it exists, `sig` (Ctrl-C's SIGINT) to the script's process group.
+        `interrupt`: a path, or a tuple of them; once each exists, in turn, `sig` (Ctrl-C's SIGINT) to the script's
+        process group.
         `group`: the script leads a process group of its own (Result.pid), as with `interrupt`."""
         self.log.unlink(missing_ok=True)
         terminal = Tty() if tty else None
@@ -485,9 +487,8 @@ class InstallTest(Case):
                     process_group=0 if interrupt or group else None,
                 )
                 if interrupt:
-                    threading.Thread(
-                        target=ctrl_c, args=(interrupt, proc, sig), daemon=True
-                    ).start()
+                    markers = interrupt if isinstance(interrupt, tuple) else (interrupt,)
+                    threading.Thread(target=ctrl_c, args=(markers, proc, sig), daemon=True).start()
                 if stdin is not None:
                     proc.stdin.write(stdin)
                     proc.stdin.close()
@@ -2518,8 +2519,9 @@ class InstallTest(Case):
         self.assert_ok(result)
         self.assertIn("1.19.3", (self.fakes / "opencode_version").read_text())
 
-    def opencode_only(self, provider_answer="y", *, provider="lan", path_answer="y"):
-        flags = ("--clients", "opencode", "--no-docker", "--opencode-provider", provider)
+    def opencode_only(self, provider_answer="y", *, provider="lan", path_answer="y", ref=""):
+        flags = ("--ref", ref) if ref else ()
+        flags += ("--clients", "opencode", "--no-docker", "--opencode-provider", provider)
         flags += ("--opencode-url", "http://localhost:8080/v1", "--opencode-model", "m")
         flags += ("--opencode-context", "65536", "--opencode-key-stdin")
         provider_answers = [(WRITE_Q, provider_answer)] if provider_answer is not None else []
@@ -2870,6 +2872,37 @@ class InstallTest(Case):
         self.assertEqual(
             json.loads(Path(self.ensemble, "plugin-root").read_text())["root"], str(newer)
         )
+
+    def test_x1_launcher_keeps_installed_ref(self):
+        commands = self.legacy_command_package()
+        self.assert_ok(self.opencode_only(ref="WDRC-241"))
+        packages = Path(self.home, ".cache/opencode/packages")
+        selected = packages / "ensemble@git+https:/github.com/windroc-labs/ensemble.git#WDRC-241"
+        selected /= "node_modules/ensemble"
+        main = self.opencode_package()
+        shutil.copytree(selected, main)
+        (main / "package.json").write_text(json.dumps({"version": "10.0.0"}))
+        shutil.rmtree(selected)
+        record = Path(self.ensemble, "plugin-root").read_bytes()
+        self.assertEqual(json.loads(record)["root"], str(selected))
+        for name in commands:
+            with self.subTest(name=name):
+                result = subprocess.run(
+                    [str(Path(self.ensemble, "bin", name))],
+                    env=self.env,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(
+                    result.stderr,
+                    f"{name}: selected plugin {str(selected)!r} has no executable bin/{name}; "
+                    "rerun install.sh or the plugin's ctmux --install\n",
+                )
+                self.assertEqual(Path(self.ensemble, "plugin-root").read_bytes(), record)
 
     def test_installer_adapters_refuse_other_clients_after_the_selected_path_disappears(self):
         commands = self.legacy_command_package()
@@ -5494,6 +5527,30 @@ exec /bin/rm "$@"
         self.assertTrue(result.stderr.endswith("Removed what install.sh added.\n"), result.stderr)
         self.assertFalse(self.auth_json().exists())
 
+    def test_cleanup_second_signal_keeps_sudo_end(self):
+        """A second Ctrl-C while on_exit ends sudo cannot cut sudo_end short: its sudo -k still drops the ticket."""
+        self.assert_ok(self.opencode_only())
+        marker, hang = self.fakes / "ctrl-c", self.fakes / "hang/sudo-k"
+        hang.parent.mkdir(exist_ok=True)
+        python = self.bin / "python3"
+        python.unlink()
+        executable(
+            python,
+            f'#!/bin/sh\ncase $* in *.auth.json.*) : >"{hang}"; : >"{marker}"; exec sleep 30 ;; esac\n'
+            f'exec {sys.executable} "$@"\n',
+        )
+        result = self.cleanup(
+            "--yes",
+            "--password-stdin",
+            stdin=PASSWORD + "\n",
+            interrupt=(marker, self.fakes / "sudo-k-hung"),
+        )
+        self.assertTrue((self.fakes / "sudo-k-hung").exists(), result.stderr)
+        self.assertEqual(result.code, 130, result.stderr)
+        self.assertTrue((self.fakes / "sudo-k-done").exists(), result.stderr)
+        self.assertFalse((self.fakes / "sudo_ticket").exists())
+        self.assertEqual(list(self.tmp.glob("ensemble-sudo.*")), [])
+
     def test_cleanup_stops_docker_processes(self):
         """What still runs from Docker.app after its cask is gone ends; nothing else is signalled."""
         self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
@@ -6085,6 +6142,41 @@ exec /bin/rm "$@"
         self.assertEqual(self.opencode_files()[1], providers)
         self.assertEqual(self.provider_state(), ("lan", "http://localhost:8080/v1", "m", "65536"))
 
+    def test_new_provider_takes_nothing_from_the_saved_one(self):
+        """A --opencode-provider other than the saved one never gets the saved provider's URL, model or context,
+        so its key never goes to that provider's server: without --opencode-url it is a usage error before sudo,
+        with it its model and context are asked. Naming the saved provider still reuses it."""
+        self.assert_ok(self.opencode_only())
+        saved = self.provider_state()
+        result = self.opencode_again("--opencode-provider", "lan")
+        self.assert_ok(result)
+        self.assert_not_asked(result)
+        self.assertEqual(self.provider_state(), saved)
+        result = self.opencode_again("--opencode-provider", "other", key=True)
+        self.assertEqual(result.code, 2, result.stderr)
+        self.assertIn(
+            "install.sh: --opencode-provider other: a provider other than the saved lan needs"
+            " --opencode-url\n",
+            result.stderr,
+        )
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(self.provider_state(), saved)
+        self.assert_secret_free(KEY, PASSWORD, result=result)
+        with self.subTest("with its own URL"):
+            result = self.opencode_again(
+                "--opencode-provider",
+                "other",
+                "--opencode-url",
+                "http://localhost:9090/v1",
+                answers=[(MODEL_Q, "m2"), (CONTEXT_Q, "4096"), (WRITE_Q, "n"), (WRITE_Q, "n")],
+                key=True,
+            )
+            self.assert_ok(result)
+            self.assertEqual(
+                self.provider_state(), ("other", "http://localhost:9090/v1", "m2", "4096")
+            )
+            self.assert_secret_free(KEY, PASSWORD, result=result)
+
     def logged_out(self, client, hang=""):
         """`client` logged out with no login record; its next login hangs (`stored`: after logging in)."""
         (self.fakes / "login" / client).unlink(missing_ok=True)
@@ -6159,6 +6251,26 @@ exec /bin/rm "$@"
             self.assert_ok(result)
             self.assertEqual(list(self.tmp.glob("ensemble-sudo.*")), [])
             self.assertTrue(self.group_gone(result.pid))
+
+    def test_i3a_hung_login_probe_stops_on_ctrl_c(self):
+        """I3a: on_exit's login probe gets the default signals, so a second Ctrl-C stops a hung one."""
+        self.assert_ok(self.fresh("--clients", "claude", "--no-docker", "--no-board"))
+        self.logged_out("claude")
+        (self.fakes / "hang/claude-status").write_text("")
+        start = time.monotonic()
+        result = self.run_install(
+            "--password-stdin",
+            stdin=PASSWORD + "\n",
+            interrupt=(self.fakes / "hung", self.fakes / "status-hung"),
+        )
+        self.assertTrue((self.fakes / "status-hung").exists(), result.stderr)
+        self.assertLess(time.monotonic() - start, 20)
+        self.assertEqual(result.code, 130, result.stderr)
+        self.assertIn(
+            "install.sh: Claude Code login failed; rerun the same command to continue",
+            result.stderr,
+        )
+        self.assertNotIn("login\tclaude", self.ledger())
 
     def codex_rejects(self, words=""):
         """Codex logged in, its server rejecting the `codex plugin` sub-commands `words` (all when empty)."""
