@@ -32,6 +32,7 @@ READ_SIZE = 65536
 TICK = 0.05
 DISPLAY_GRACE = 2.0  # a client dead at once still reaches the display its Host starts at launch
 UP = 5.0  # s its client runs after exec before the guard reports it up (`u`)
+SIZE = (40, 120)  # rows, columns of a PTY no display sizes: read and events stay unwrapped
 DELIVERY = re.compile(r"[0-9a-f]{32}")
 
 
@@ -214,6 +215,18 @@ class Screen:
                     self.cells[self.row][self.column + 1] = ""
                 self.column += width
 
+    def resize(self, rows: int, columns: int) -> None:
+        if self.normal is None:
+            for line in self.cells[: max(0, self.row + 1 - rows)]:
+                self.history.append("".join(line).rstrip())
+        else:
+            cells, row, column = self.normal
+            cells, row = fit(cells, row, rows, columns)
+            self.normal = cells, row, min(column, columns)
+        self.cells, self.row = fit(self.cells, self.row, rows, columns)
+        self.rows, self.columns, self.column = rows, columns, min(self.column, columns)
+        self.saved = min(self.saved[0], rows - 1), min(self.saved[1], columns - 1)
+
     def text(self, lines: int | None) -> str:
         rows = ["".join(row).rstrip() for row in self.cells]
         while rows and not rows[-1]:
@@ -223,6 +236,24 @@ class Screen:
     def snapshot(self) -> bytes:
         text = self.text(None).replace("\n", "\r\n")
         return f"\x1b[2J\x1b[H{text}\x1b[{self.row + 1};{min(self.column, self.columns - 1) + 1}H".encode()
+
+
+def fit(cells: list[list[str]], row: int, rows: int, columns: int) -> tuple[list[list[str]], int]:
+    """cells cut or padded to rows x columns, top lines dropped to keep row: (cells, its row)."""
+    shift = max(0, row + 1 - rows)
+    lines = [line[:columns] + [" "] * (columns - len(line)) for line in cells[shift : shift + rows]]
+    return lines + [[" "] * columns for _ in range(rows - len(lines))], row - shift
+
+
+def window(data: bytes) -> tuple[int, int]:
+    value = json.loads(data)
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"rows", "columns"}
+        or any(type(value[key]) is not int or not 0 < value[key] < 1 << 16 for key in value)
+    ):
+        raise ValueError("invalid display size")
+    return value["rows"], value["columns"]
 
 
 def parse_stat(text: str) -> tuple[int, str, bool]:
@@ -348,6 +379,8 @@ class Guard:
         self.input_closed = False
         self.decoder = Decoder()
         self.screen = Screen()
+        self.size = SIZE
+        self.sizes = {}  # display peer: its terminal's (rows, columns), the latest last
         self.known = {}
         self.closing = None
         self.signalled = {}
@@ -384,7 +417,7 @@ class Guard:
         try:
             if self.args.terminal:
                 self.master, slave = os.openpty()
-                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", *SIZE, 0, 0))
             self.proc = subprocess.Popen(
                 self.args.command,
                 stdin=slave if slave is not None else subprocess.PIPE,
@@ -433,6 +466,16 @@ class Guard:
     def drop(self, peer) -> None:
         self.peers.pop(peer, None)
         peer.close()
+        if self.sizes.pop(peer, None) is not None and self.closing is None:
+            self.follow()
+
+    def follow(self) -> None:
+        """The PTY at the latest sized display's size, else SIZE; a change redraws its client."""
+        size = next(reversed(self.sizes.values()), SIZE)
+        if self.master is not None and size != self.size:
+            fcntl.ioctl(self.master, termios.TIOCSWINSZ, struct.pack("HHHH", *size, 0, 0))
+            self.screen.resize(*size)
+            self.size = size
 
     def flush(self) -> None:
         while self.output and self.channel:
@@ -509,9 +552,13 @@ class Guard:
         if not data:
             self.drop(peer)
         elif kind == "display":
-            if len(self.input) + len(data) <= BUFFER_MAX:
-                self.input.extend(data)
-            else:
+            try:
+                for what, payload in pending.feed(data):
+                    self.display_frame(peer, what, payload)
+            except (ValueError, UnicodeError):
+                self.drop(peer)
+                return
+            if len(pending.pending) > BUFFER_MAX:
                 self.drop(peer)
         else:
             pending.extend(data)
@@ -525,6 +572,17 @@ class Guard:
                     return
                 self.peers[peer] = ("ack", bytearray())
                 self.emit(json_frame(b"h", message), peer, message["delivery_id"])
+
+    def display_frame(self, peer, kind: bytes, data: bytes) -> None:
+        if kind == b"i" and len(self.input) + len(data) <= BUFFER_MAX:
+            self.input.extend(data)
+        elif kind == b"w":
+            size = window(data)
+            self.sizes.pop(peer, None)
+            self.sizes[peer] = size
+            self.follow()
+        else:
+            raise ValueError("invalid display frame")
 
     def read_stream(self, descriptor: int) -> None:
         try:
@@ -679,7 +737,7 @@ class Guard:
         except BlockingIOError:
             return
         peer.settimeout(0)
-        self.peers[peer] = ("display", bytearray())
+        self.peers[peer] = ("display", Decoder())
         self.displayed = True
         snapshot = self.screen.snapshot()
         try:
@@ -713,21 +771,40 @@ def attach(path: str) -> int:
         print(f"guard: display {path}: {error.strerror or error}", file=sys.stderr)
         return 1
     previous = termios.tcgetattr(0) if os.isatty(0) else None
+    resized, poke = os.pipe()  # SIGWINCH wakes the select through it
+    os.set_blocking(poke, False)
+    handler = signal.signal(signal.SIGWINCH, lambda _sig, _frame: None)
+    wakeup = signal.set_wakeup_fd(poke)
+
+    def send_size() -> None:
+        if previous is not None:
+            columns, rows = os.get_terminal_size(0)
+            peer.sendall(json_frame(b"w", {"rows": rows, "columns": columns}))
+
     try:
         if previous is not None:
             tty.setraw(0, termios.TCSANOW)  # TCSAFLUSH would drop what was typed before it
+        send_size()
         while True:
-            ready, _, _ = select.select([0, peer], [], [])
+            ready, _, _ = select.select([0, peer, resized], [], [])
             for descriptor in ready:
+                if descriptor == resized:
+                    os.read(resized, READ_SIZE)
+                    send_size()
+                    continue
                 data = os.read(0, READ_SIZE) if descriptor == 0 else peer.recv(READ_SIZE)
                 if not data:
                     return 0
                 if descriptor == 0:
-                    peer.sendall(data)
+                    peer.sendall(frame(b"i", data))
                 else:
                     sys.stdout.buffer.write(data)
                     sys.stdout.buffer.flush()
     finally:
+        signal.set_wakeup_fd(wakeup)
+        signal.signal(signal.SIGWINCH, handler)
+        os.close(resized)
+        os.close(poke)
         if previous is not None:
             termios.tcsetattr(0, termios.TCSADRAIN, previous)
         peer.close()
