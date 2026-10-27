@@ -1,4 +1,4 @@
-"""Worker with a recorded Session class and Host handle: state, Record (stored in its worker
+"""Worker with a recorded Session class and Host: state, Record (stored in its worker
 dir), the early watch, and resume and restart through its session harness (no process, no tmux;
 files only under the test's HOME).
 """
@@ -21,7 +21,6 @@ from ensemble.session import (
     Host,
     Mode,
     NotShowable,
-    Process,
     Session,
     SessionBusy,
     SessionError,
@@ -47,46 +46,13 @@ class Killed(BaseException):
     """The start's process dying: no handler runs."""
 
 
-class Unpublished(Process):
-    """A RemoteHost handle: like Docker's, it cannot store a Record after launch."""
-
-    def __init__(self, name: str) -> None:
-        self.name = name
-
-    def alive(self) -> bool:
-        return True
-
-    def close(self) -> None:
-        pass
-
-    def wait_exit(self, timeout: float) -> bool:
-        return False
-
-    def kill(self) -> None:
-        pass
-
-    def record(self) -> Record | None:
-        return None
-
-    def display(self) -> None:
-        return None
-
-
 class RemoteHost(Host):
-    """A Docker-like Host: its tui runs remote, its handles store no Record."""
+    """A Docker-like Host: its tui runs remote."""
 
     _remote_tui = True
 
     def list(self) -> list[str]:
         return ["w1"]
-
-    def attach(self, name: str) -> Process:
-        return Unpublished(name)
-
-    def detach(self, *args, **kwargs):
-        raise AssertionError("not called")
-
-    terminal = detach
 
 
 def read(path: str) -> bytes:
@@ -123,12 +89,8 @@ class Base(Case):
     def setUp(self):
         super().setUp()
         self.order = mock.Mock()
-        self.handle = mock.create_autospec(Process, instance=True)
-        self.handle.session_identity.return_value = (SID, "g1")
-        self.handle.alive.return_value = False
         self.host = mock.create_autospec(Host, instance=True)
         self.host.list.return_value = ["w1"]
-        self.host.attach.return_value = self.handle
         self.session_cls = mock.Mock()
         self.session_cls.host.return_value = self.host
         self.session_cls.retire.side_effect = lambda name, **_: TuiStore.attach(
@@ -144,7 +106,6 @@ class Base(Case):
         self.session.events.return_value = iter([IdleTimeout(worker.EARLY)])
         self.order.attach_mock(self.session_cls.start, "start")
         self.order.attach_mock(self.session_cls.preflight, "preflight")
-        self.order.attach_mock(self.handle.close, "close")
         self.said = []
         self.tui = os.path.join(self.home, ".ensemble", "tui", "w1")
         os.makedirs(self.tui)
@@ -918,14 +879,12 @@ class OwnedTest(Base):
 
     def test_owned_resume_with_running_owner_starts_and_closes_nothing(self):
         self.owned()
-        self.handle.alive.return_value = False  # its display says nothing of the worker
         self.assertEqual(self.worker().resume(), state().record())
         self.assertEqual(self.calls(), [])
         self.assertEqual(self.stored(), state().record())
         self.session_cls.retire.assert_not_called()
         self.unstore()
         self.host.list.return_value = []  # its display killed
-        self.host.attach.side_effect = SessionError("no tmux session w1")
         self.assertEqual(self.worker().resume(), state().record())
         self.assertEqual(self.calls(), [])
         self.assertEqual(self.stored(), state().record())
@@ -1042,13 +1001,8 @@ class RecordTest(Base):
         self.worker().resume()  # another sid's session: a resumed start of its own
         self.assertEqual(self.stored(), found)
 
-    def test_a_host_that_cannot_store_a_record_still_starts_and_resumes(self):
-        """Docker's handles cannot publish: the start and resume of a crew worker succeed anyway,
-        its Record in its worker dir.
-        """
+    def test_a_remote_tui_host_starts_and_resumes_with_the_record_in_its_worker_dir(self):
         self.session_cls.host.return_value = RemoteHost("docker", {})
-        with self.assertRaisesRegex(SessionError, "cannot store a Record after launch"):
-            RemoteHost("docker", {}).attach("w1").publish(state().record())
         found = self.worker(host="docker").start(prompt="", resume=False)
         self.assertEqual(self.stored(), found)
         self.unstore()

@@ -20,7 +20,6 @@ from ensemble.session import (
     Launch,
     Mode,
     NotShowable,
-    Process,
     Resumable,
     Session,
     SessionBusy,
@@ -33,7 +32,9 @@ from ensemble.utils import Record, append_line, load_class, read_regular, save
 from tests.delegate.fakes.session import SessionClass
 
 
-class RecordingProcess(Process):
+class RecordingProcess:
+    """A RecordingHost's agent session: its liveness, closes and Record."""
+
     def __init__(self, name, *, display=None, record=None):
         self.name, self.display_value, self.record_value = name, display, record
         self.live = True
@@ -67,19 +68,20 @@ class RecordingProcess(Process):
 
 
 class RecordingHost(Host):
+    """HarnessSession's agent sessions by (host, name): `run` records each launch, `process`
+    finds one.
+    """
+
     processes: dict[tuple[str, str], RecordingProcess] = {}
     launches: list[dict] = []
 
-    def detach(self, name, launch, *, display=None, events=None, record=None):
-        process = RecordingProcess(name, display=display, record=record)
+    def run(self, name, launch, *, display=None):
+        process = RecordingProcess(name, display=display)
         self.processes[self.name, name] = process
         self.launches.append({"host": self.name, "name": name, "argv": list(launch.argv)})
         return process
 
-    def terminal(self, name, launch, *, display=None, events=None, record=None, metadata=None):
-        raise NotImplementedError("HarnessSession owns its terminal without a process")
-
-    def attach(self, name):
+    def process(self, name):
         if (self.name, name) not in self.processes:
             raise SessionError(f"no {self.name} session {name}")
         return self.processes[self.name, name]
@@ -308,7 +310,7 @@ class HarnessSession(SessionClass):
         session = super().start(spec, display=display, host=host, idle_timeout=idle_timeout)
         name = spec.name or f"{spec.client}-{session.sid[:8]}"
         cls.host_names[name] = host or "agent"
-        cls.host(host).detach(name, Launch(("fake-agent",), cwd=spec.workdir), display=display)
+        cls.host(host).run(name, Launch(("fake-agent",), cwd=spec.workdir), display=display)
         return session
 
     @classmethod
@@ -347,9 +349,13 @@ class HarnessSession(SessionClass):
     def attach_command(self):
         return FakeViewer().attach_command(self.name, self.host(self.host_names[self.name]))
 
+    def publish(self, record):
+        """Its Record, kept on its agent session (a tui worker's view stores it in its worker dir)."""
+        self.host(self.host_names[self.name]).process(self.name).publish(record)
+
     def stop(self):
         self.liveness = Liveness.ABSENT
-        self.host(self.host_names[self.name]).attach(self.name).close()
+        self.host(self.host_names[self.name]).process(self.name).close()
         super().stop()
 
     def events(self):
@@ -359,7 +365,9 @@ class HarnessSession(SessionClass):
             yield event
 
 
-class DiskProcess(Process):
+class DiskProcess:
+    """A DiskHost's agent session, on disk so other processes see it."""
+
     def __init__(self, name, path):
         self.name, self.path = name, path
 
@@ -381,6 +389,9 @@ class DiskProcess(Process):
     def kill(self):
         self.close()
 
+    def publish(self, record):
+        save(self.path, json.dumps({**self.data(), "record": record.to_line(), "sid": record.sid}))
+
     def record(self):
         line = self.data().get("record")
         return None if line is None else Record.parse(line)
@@ -396,26 +407,16 @@ class DiskHost(RecordingHost):
     def path(self, name):
         return os.path.join(self.root(), f"{self.name}-{name}.json")
 
-    def detach(self, name, launch, *, display=None, events=None, record=None):
+    def run(self, name, launch, *, display=None):
         path = self.path(name)
-        save(
-            path,
-            json.dumps(
-                {
-                    "alive": True,
-                    "display": display,
-                    "record": record.to_line() if record else None,
-                    "sid": record.sid if record else None,
-                }
-            ),
-        )
+        save(path, json.dumps({"alive": True, "display": display, "record": None, "sid": None}))
         append_line(
             os.path.join(self.root(), "launches.jsonl"),
             json.dumps({"host": self.name, "name": name, "argv": list(launch.argv)}) + "\n",
         )
         return DiskProcess(name, path)
 
-    def attach(self, name):
+    def process(self, name):
         if not os.path.isfile(self.path(name)):
             raise SessionError(f"no {self.name} session {name}")
         return DiskProcess(name, self.path(name))

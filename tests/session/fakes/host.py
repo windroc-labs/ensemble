@@ -15,7 +15,7 @@ import threading
 import time
 import uuid
 
-from ensemble.session import ConfigError, Host, Process, SessionError
+from ensemble.session import ConfigError, Host, SessionError
 from ensemble.session.engine.status_log import SessionStatusLog
 from ensemble.session.engine.types import (
     MARKS,
@@ -27,7 +27,6 @@ from ensemble.session.engine.types import (
     Paste,
     StatusState,
 )
-from ensemble.session.hosts.base import InteractiveProcess
 from ensemble.utils import Display, ProcessControl, Record
 from tests.session.case import ROOTS
 from tests.utils.sandbox import clean_env
@@ -63,6 +62,7 @@ XTERM = {
 }
 SUPERVISOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "supervisor.py")
 START_TIMEOUT = 10
+SLEEP = (sys.executable, "-I", "-c", "import time; time.sleep(30)")
 POLL = 0.05
 
 
@@ -81,7 +81,9 @@ def _meta(folder: str) -> dict:
         return {}
 
 
-class FakeProcess(Process):
+class FakeProcess:
+    """A FakeHost session's program, by its generation-scoped ProcessControl."""
+
     def __init__(self, name: str, folder: str, *, meta: dict | None = None) -> None:
         self.name = name
         self.folder = folder
@@ -172,7 +174,9 @@ class FakeProcess(Process):
             raise SessionError(f"process group {self.name}: {error}") from error
 
 
-class FakeTerminal(FakeProcess, InteractiveProcess):
+class FakeTerminal(FakeProcess):
+    """A FakeHost session whose input is a FIFO its supervisor feeds the program."""
+
     def send(self, action: Paste | Key) -> None:
         if isinstance(action, Paste):
             data = action.text.encode()
@@ -226,7 +230,7 @@ class FakeHost(Host):
     def root(self) -> str:
         return os.path.expanduser(self.settings.get("root", "~/.ensemble/fake-host"))
 
-    def detach(self, name, launch: Launch, *, display=None, events=None, record=None):
+    def run(self, name, launch: Launch, *, display=None, events=None, record=None) -> FakeProcess:
         return self._start(
             "detach",
             name,
@@ -237,9 +241,9 @@ class FakeHost(Host):
             metadata={} if record is None or record.sid is None else {"sid": record.sid},
         )
 
-    def terminal(
+    def run_terminal(
         self, name, launch: Launch, *, display=None, events=None, record=None, metadata=None
-    ):
+    ) -> FakeTerminal:
         return self._start(
             "terminal",
             name,
@@ -250,7 +254,7 @@ class FakeHost(Host):
             metadata=metadata,
         )
 
-    def attach(self, name: str) -> FakeProcess:
+    def process(self, name: str) -> FakeProcess:
         folder = os.path.join(self.root(), name)
         cls = KINDS.get(_meta(folder).get("kind")) if NAME.fullmatch(name) else None
         if cls is None:

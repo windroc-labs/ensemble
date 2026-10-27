@@ -1,7 +1,8 @@
-"""Host process interfaces and defaults, attach targets, SIGNALS; Host.parse_hosts, the one [hosts]
+"""Host and InteractiveProcess interfaces and defaults, attach targets, SIGNALS; Host.parse_hosts, the one [hosts]
 parser.
 """
 
+import abc
 import dataclasses
 import inspect
 import json
@@ -12,12 +13,13 @@ import tomllib
 from types import MappingProxyType
 from unittest import mock
 
+import ensemble.session as session_package
+import ensemble.session.extension as extension
 from ensemble.session import (
     SIGNALS,
     ConfigError,
     Host,
     NotShowable,
-    Process,
     SessionError,
 )
 from ensemble.session.engine.types import (
@@ -25,14 +27,13 @@ from ensemble.session.engine.types import (
     ClientContext,
     Hosts,
     Launch,
-    Liveness,
     SessionRow,
 )
 from ensemble.session.harness import guard
 from ensemble.session.hosts import base as host_base
-from ensemble.session.hosts.base import Interactive, InteractiveProcess
+from ensemble.session.hosts.base import InteractiveProcess
 from ensemble.session.hosts.types import CommandView, SessionView
-from ensemble.utils import Record, Status, StatusState
+from ensemble.utils import Record, StatusState
 from tests.session.case import Case
 from tests.session.fakes.terminal import MemoryHost
 
@@ -48,21 +49,46 @@ implementation = "pkg.b:BHost"
 """
 NAMES = "a, b_2"
 
-PROCESS = {"alive", "close", "wait_exit", "kill", "record", "display"}
-
 ABSTRACT = {
-    Host: {"detach", "terminal", "attach", "list"},
-    Process: PROCESS,
-    Interactive: {"send", "press"},
-    InteractiveProcess: PROCESS | {"send", "press"},
+    Host: {"list"},
+    InteractiveProcess: {"send", "press", "state", "close", "returncode"},
+}
+HANDLE = {
+    "name",
+    "generation",
+    "send",
+    "press",
+    "screen",
+    "state",
+    "close",
+    "returncode",
+    "read",
+    "write",
+    "tick",
+}
+REMOVED_HOST = {
+    "terminal",
+    "detach",
+    "attach",
+    "reclaim",
+    "events_path",
+    "prepare_events",
+    "hook_callback",
 }
 
 
 class MinimalHost(Host):
-    def detach(self, *args, **kwargs):
+    def list(self):
         raise AssertionError("not called")
 
-    terminal = attach = list = detach
+
+class MinimalHandle(InteractiveProcess):
+    name, generation = "p", "g"
+
+    def send(self, action):
+        raise AssertionError("not called")
+
+    press = state = close = returncode = send
 
 
 class Abstract(Case):
@@ -71,10 +97,6 @@ class Abstract(Case):
             with self.subTest(cls=cls.__name__):
                 self.assertTrue(inspect.isabstract(cls))
                 self.assertEqual(cls.__abstractmethods__, methods)
-
-    def test_an_interactive_process_is_a_process_and_interactive(self):
-        self.assertTrue(issubclass(InteractiveProcess, Process))
-        self.assertTrue(issubclass(InteractiveProcess, Interactive))
 
     def test_list_rows_and_validate_take_no_display(self):
         for method, parameters in (
@@ -96,59 +118,11 @@ class HostDefaults(Case):
         self.assertIsNone(MinimalHost("m")._client_context().container)
         self.assertIsNone(LOCAL_CONTEXT.container)
 
-    def test_a_host_reclaims_nothing_and_a_process_neither_publishes_nor_has_a_token(self):
-        self.assertIsNone(MinimalHost("m").reclaim("/tmp/apm-group-x"))
-        process = mock.create_autospec(Process, instance=True)
-        process.name = "p"
-        self.assertIsNone(Process.token.fget(process))
-        with self.assertRaisesRegex(SessionError, "^session p: its host cannot store a Record"):
-            Process.publish(process, mock.sentinel.record)
-
-    def test_a_process_cannot_show_its_screen_unless_its_terminal_reads_one(self):
-        process = mock.create_autospec(Process, instance=True)
-        process.name = "p"
+    def test_a_handle_cannot_show_its_screen_unless_its_host_reads_one(self):
         for lines in (None, 5):
             with self.subTest(lines=lines), self.assertRaises(NotShowable) as caught:
-                Process.screen(process, lines)
+                MinimalHandle().screen(lines)
             self.assertEqual(str(caught.exception), "session p: its host cannot show")
-
-    def test_a_process_status_is_its_liveness_and_activity(self):
-        process = mock.create_autospec(Process, instance=True)
-        process.name = "p"
-        for liveness, alive, activity, state in (
-            (Liveness.LIVE, True, None, StatusState.WORKING),
-            (Liveness.LIVE, True, StatusState.BLOCKED, StatusState.BLOCKED),
-            (Liveness.LIVE, False, None, StatusState.DEAD),
-            (Liveness.ABSENT, False, None, StatusState.DEAD),
-            (Liveness.UNKNOWN, False, None, StatusState.UNKNOWN),
-        ):
-            with self.subTest(liveness=liveness, alive=alive, activity=activity):
-                process.state.return_value, process.alive.return_value = liveness, alive
-                process.activity.return_value = activity
-                self.assertEqual(
-                    Process.status(process),
-                    Status(
-                        name="p",
-                        alive=alive,
-                        state=state,
-                        outcome=None,
-                        attach=None,
-                        hidden=False,
-                    ),
-                )
-
-    def test_a_host_failing_after_telling_liveness_is_unknown(self):
-        process = mock.create_autospec(Process, instance=True)
-        process.name, process.state.return_value = "p", Liveness.LIVE
-        for failing in (process.alive, process.activity):
-            with self.subTest(failing=failing):
-                process.reset_mock()
-                process.state.return_value, process.alive.return_value = Liveness.LIVE, True
-                failing.side_effect = SessionError("tmux failed")
-                found = Process.status(process)
-                self.assertEqual(
-                    (found.alive, found.state, found.hidden), (False, "unknown", False)
-                )
 
     def test_a_host_is_not_attachable_and_names_no_attach_target(self):
         host = MinimalHost("m")
@@ -190,6 +164,28 @@ class HostDefaults(Case):
 
     def test_signals_a_detached_run_blocks_are_hup_term_and_int(self):
         self.assertEqual(SIGNALS, (signal.SIGHUP, signal.SIGTERM, signal.SIGINT))
+
+
+class InteractiveProcessShape(Case):
+    """AC8: InteractiveProcess is the one managed handle, a standalone ABC; Process, Interactive
+    and the in-session Host members are gone from both session surfaces.
+    """
+
+    def test_interactive_process_is_a_standalone_abc_of_exactly_the_kept_members(self):
+        self.assertEqual(InteractiveProcess.__bases__, (abc.ABC,))
+        members = {n for n in vars(InteractiveProcess) if not n.startswith("_")}
+        self.assertEqual(members | set(InteractiveProcess.__annotations__), HANDLE)
+
+    def test_neither_surface_exports_process_or_interactive(self):
+        for module in (session_package, extension, host_base):
+            for name in ("Process", "Interactive", "check_sid"):
+                with self.subTest(module=module.__name__, name=name):
+                    self.assertFalse(hasattr(module, name))
+                    self.assertNotIn(name, getattr(module, "__all__", ()))
+
+    def test_host_has_none_of_the_removed_members(self):
+        for host in (Host, extension.Host):
+            self.assertEqual({n for n in REMOVED_HOST if hasattr(host, n)}, set())
 
 
 class CapacityRows(Case):
@@ -342,12 +338,6 @@ class ManagedWorkerTest(Case):
         ):
             with self.subTest(operation=operation), self.assertRaises(NotImplementedError):
                 operation()
-
-    def test_managed_workers_reuse_existing_input_and_lifecycle_members(self):
-        for name in ("send", "press"):
-            self.assertIs(getattr(InteractiveProcess, name), getattr(Interactive, name))
-        for name in ("screen", "state", "close", "returncode"):
-            self.assertIs(getattr(InteractiveProcess, name), getattr(Process, name))
 
     def test_the_guard_requires_an_explicit_client_command(self):
         with self.assertRaises(SystemExit) as caught:

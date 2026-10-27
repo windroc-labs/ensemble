@@ -14,8 +14,7 @@ from unittest import mock
 from ensemble.session import ConfigError, Launch, SessionError
 from ensemble.utils import ProcessControl
 from tests.session.case import Case
-from tests.session.contracts.host import SLEEP
-from tests.session.fakes.host import FakeHost, FakeProcess
+from tests.session.fakes.host import SLEEP, FakeHost, FakeProcess
 
 
 class FakeHostOnly(Case):
@@ -69,7 +68,7 @@ class FailedStart(Case):
             mock.patch("time.sleep"),
             self.assertRaises((SessionError, OSError)) as raised,
         ):
-            host.detach("w1", Launch(SLEEP, cwd=self.home))
+            host.run("w1", Launch(SLEEP, cwd=self.home))
         meta = json.loads(Path(self.home, "hosts", "w1", "meta.json").read_text())
         self.assertFalse(os.path.exists(meta["control"]))
         return raised.exception, killpg

@@ -297,7 +297,7 @@ class NotShowableTest(ControlCase):
         super().setUp()
         host = FakeHost("fake", {"root": self.fake_host(default="fake")})
         self.f1 = dataclasses.replace(absent("f1"), display=MANAGER)
-        process = host.terminal(
+        process = host.run_terminal(
             "f1",
             Launch((sys.executable, "-I", "-c", SLEEP), cwd=self.cwd),
             display=MANAGER,

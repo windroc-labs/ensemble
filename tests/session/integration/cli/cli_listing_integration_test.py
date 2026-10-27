@@ -134,14 +134,14 @@ class SecondHostTest(ListingCase):
             display=MANAGER,
             detail="claude",
         )
-        process = host.terminal(
+        process = host.run_terminal(
             "f1",
             Launch((sys.executable, "-I", "-c", SLEEP), cwd=self.cwd),
             display=MANAGER,
             record=f1,
         )
         self.addCleanup(process.close)
-        bare = host.terminal(
+        bare = host.run_terminal(
             "f2", Launch((sys.executable, "-I", "-c", SLEEP), cwd=self.cwd), display=MANAGER
         )
         self.addCleanup(bare.close)

@@ -2110,7 +2110,7 @@ class StartedTest(HarnessCase):
             json.dump(data, file)
 
     def published(self):
-        return HarnessSession.host(self.host).attach(AGENT).record()
+        return HarnessSession.host(self.host).process(AGENT).record()
 
     def test_a_started_agent_session_carries_the_runs_record(self):
         record = self.detach(self.tui(), live_at=5)

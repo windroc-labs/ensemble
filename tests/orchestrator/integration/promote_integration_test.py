@@ -191,7 +191,7 @@ class PruneSessionDelegate(FakeDelegate):
 
     def close(self):
         Session.configure_from(read_config())
-        Session.host().attach(self.status().name).close()
+        Session.attach(self.status().name).close()
         super().close()
 
 
