@@ -494,7 +494,7 @@ class ExitTest(Base):
                 gate.set()
                 deadline = time.monotonic() + WAIT
                 while len(handler.calls) < 2 and time.monotonic() < deadline:
-                    time.sleep(0.01)  # its Reply delivery is done once its Exited is called
+                    time.sleep(0.01)
 
         self.channel.write_status = written
         owned = FakeOwned(([Reply("x")], True))

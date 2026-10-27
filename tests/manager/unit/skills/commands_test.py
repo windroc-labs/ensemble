@@ -119,8 +119,10 @@ class Names(Case):
 
     def test_only_the_commander_has_it_as_the_session_config_turns_it_off(self):
         self.assertIn("so a worker or role run starts no sessions of its own", body("manage"))
-        self.assertIn("refuse inside them (`docs/sessions.md` › Session settings)", body("manage"))
-        with open(os.path.join(REPO, "docs", "sessions.md"), encoding="utf-8") as f:
+        self.assertIn(
+            "refuse inside them (`docs/architecture.md` › Session settings)", body("manage")
+        )
+        with open(os.path.join(REPO, "docs", "architecture.md"), encoding="utf-8") as f:
             self.assertIn("`ENSEMBLE_AGENT_SESSION=1`", f.read())
         [config] = {p for p in paths("manage") if p.endswith("config.toml")}
         with open(config, "rb") as f:

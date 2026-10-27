@@ -12,12 +12,11 @@ from ensemble.session.harness import process
 from ensemble.session.harness.channel import HEX, SLICE, Channel
 from ensemble.session.harness.types import Op
 
-WAIT = 60  # seconds: past process.DRAIN
-KILL_WAIT = 10  # seconds: FR-13's reap bound
+WAIT = 60  # s, past process.DRAIN
+KILL_WAIT = 10  # s, FR-13's reap bound
 
 
 def _let_go(channel: Channel, timeout: float) -> bool:
-    """Polled here, so nothing left waiting can take the lock once this returns."""
     try:
         fd = os.open(channel.lock, os.O_RDONLY | os.O_NOFOLLOW)
     except OSError:

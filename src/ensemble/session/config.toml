@@ -11,7 +11,8 @@
 #                    client name a Spec's client names, independent of the module and class
 #   implementation   required: "module.path:Class", the Client subclass that runs it
 #   max_runs         session-wide concurrent starts for this client, across every caller and mode; 0 or absent:
-#                    unlimited. The session owns this key, not the Client adapter (docs/sessions.md › Run limits)
+#                    unlimited. The session owns this key, not the Client adapter (docs/architecture.md
+#                    › Run limits)
 #   any other key    the client's own (its class's `keys`); a key it does not list is a config error
 # [clients.<name>.modes]  its permission modes, auto and yolo (skips every permission and approval), each a list of
 #                    flags added to every launch, a resume's included, after flags; an isolated Host's sessions get
@@ -28,7 +29,7 @@
 #                    rules; empty → none
 #   env              variables added to every command's environment, over the client's defaults; empty → none
 # [clients.claude.modes]    auto: Claude's auto mode classifier; yolo: bypassPermissions, its first-start dialog
-#                            skipped (docs/sessions.md › Client policy)
+#                            skipped (docs/architecture.md › Client policy)
 # [clients.claude.tiers]    tier "1".."4" → its --model
 # [clients.claude.efforts]  effort (low, medium, high, xhigh, max) → its --effort
 #                            starting a run whose tier or effort has no entry here is a config error
@@ -72,10 +73,10 @@ max = "max"
 # [clients.codex]   Codex (src/ensemble/session/clients/codex/)
 #   flags            codex flags added before a Spec's to every launch, a resume's too; no --add-dir or --; empty → none.
 #                    Default: as [clients.claude] flags', plus Codex 0.163.0's bundled browser and computer-use
-#                    plugins, Apps and tool_suggest off (docs/sessions.md › Session settings); a plugin id stays
+#                    plugins, Apps and tool_suggest off (docs/architecture.md › Session settings); a plugin id stays
 #                    unquoted, or the key never matches
 # [clients.codex.modes]  auto: no Codex sandbox, auto-reviewed approvals; yolo: no sandbox, no approvals. Neither
-#                    grants a directory, hooks, session or cwd (docs/sessions.md › Client policy)
+#                    grants a directory, hooks, session or cwd (docs/architecture.md › Client policy)
 [clients.codex]
 implementation = "ensemble.session.clients.codex:CodexClient"
 max_runs = 0
@@ -119,14 +120,15 @@ max = "max"
 #                    auto's permission.bash = "ask" (but a run's pre-approved commands): headless refuses the shell call, the
 #                    TUI asks and the session is blocked. OpenCode runs any cwd's .opencode plugins and opencode.json
 #                    (it has no project trust), so outside an isolated Host a launch, a resume's included, whose cwd is
-#                    not trusted (Access.project) is refused before it starts (docs/sessions.md › OpenCode sessions)
+#                    not trusted (Access.project) is refused before it starts
+#                    (docs/customizing-roles-and-tasks.md › OpenCode sessions)
 #   flags            opencode flags added to every launch; never a session selector, --model, --format, --attach,
 #                    --dir or a permission flag (modes'), nor for the TUI --prompt or --pure; empty → none
 #   executable       the OpenCode 1.x command both modes run (a name PATH finds, or an absolute path); empty → the
 #                    client's own name on PATH; a launch whose `<executable> --version` is not 1.x is refused
 #   ollama_port      the host's Ollama port
 #   ollama_context   its context window in tokens (OLLAMA_CONTEXT_LENGTH): ollama/ models compact before it fills
-#                    (docs/sessions.md › OpenCode sessions)
+#                    (docs/customizing-roles-and-tasks.md › OpenCode sessions)
 #   model            the --model of a run without a tier (ollama/<model> or <name>/<model>, as tiers'); never empty,
 #                    and without it such a run is refused
 #   env              variables added to every launch; never one that overrides the launch's OpenCode config
@@ -135,8 +137,8 @@ max = "max"
 #                            doom_loop, avoiding transient permission.asked events; edit denies stay, questions still ask
 # [clients.opencode.tiers]    tier "1".."4" → its --model: ollama/<model> or <name>/<model> of a providers table, which
 #                             lists the model; any other provider is refused
-# [clients.opencode.providers.<name>]  an OpenAI-compatible provider (e.g. a LAN server; docs/sessions.md › OpenCode
-#                    sessions), <name> up to 64 letters, digits, ., _ or -; none packaged:
+# [clients.opencode.providers.<name>]  an OpenAI-compatible provider (e.g. a LAN server;
+#                    docs/customizing-roles-and-tasks.md › OpenCode sessions), <name> up to 64 letters, digits, ., _ or -; none packaged:
 #   base_url         its http(s) URL, ending /v1 (http://<host>:8080/v1)
 #   models           model names it lists beside those tiers map to it; [] → only those
 #   context          optional: its context window in tokens, as ollama_context; absent → 65536

@@ -3,6 +3,8 @@ name: Broker macOS
 on:
   push:
     branches: [main]
+  pull_request:
+    paths: [.github/workflows/broker-macos.yml, src/broker/**]
   workflow_dispatch:
 
 permissions:
