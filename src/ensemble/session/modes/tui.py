@@ -45,7 +45,6 @@ from ensemble.session.engine.types import (
     TurnFailed,
     TurnStarted,
     Unanswered,
-    WorkerExit,
     WorkerHook,
 )
 from ensemble.session.hosts.base import (
@@ -871,10 +870,8 @@ class TuiMode(BaseMode):
     def _drain(self) -> None:
         if not self._owned:
             return
-        for message in self._terminal.read(0):
-            if isinstance(message, WorkerExit):
-                self._code = message.returncode
-            elif isinstance(message, WorkerHook) and not self._hook_logged:
+        for message in self._terminal.read(0):  # its exit code: the handle's returncode()
+            if isinstance(message, WorkerHook) and not self._hook_logged:
                 self._hook_logged = True
                 LOG.warning(
                     "tui session %s: hook %r over the guard channel ignored; hooks use hooks.jsonl",

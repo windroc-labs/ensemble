@@ -2662,7 +2662,7 @@ class OwnerTest(Base):
             host=self.host,
             owner=owner,
         )
-        self.assertEqual(self.host.calls.terminal.call_args.kwargs["metadata"]["owner"], owner)
+        self.assertEqual(self.host.calls.worker.call_args.kwargs["metadata"]["owner"], owner)
         self.assertFalse(running.remote)
         running._terminal.remote = True
         self.assertTrue(running.remote)

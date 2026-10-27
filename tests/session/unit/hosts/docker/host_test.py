@@ -3623,7 +3623,17 @@ class GuardedBase(StartBase):
         return mock.Mock(pid=4321)
 
     def owned(self, **metadata):
-        handle = self.start(owner=self.OWNER, **metadata)
+        """An owned start, as its TuiStore makes it holding the tui lock."""
+        handle = self.host.worker(
+            "w",
+            self.launch,
+            terminal=True,
+            display="lead/below",
+            events=os.path.join(self.home, "events"),
+            metadata={
+                k: v for k, v in {**self.METADATA, "owner": self.OWNER, **metadata}.items() if v
+            },
+        )
         self.addCleanup(self.close_quietly, handle)
         return handle
 
