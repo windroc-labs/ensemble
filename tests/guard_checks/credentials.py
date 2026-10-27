@@ -1,6 +1,6 @@
-"""The credentials inventory names every credential, label and state config key of [linear] and every broker
-keychain service, and holds no secret-like value. A prefix item (a service ending in "/") needs its own Keychain items
-row, `<prefix><name>`. .github/ci_scope.py's CHECKED_DOCS names INVENTORY too.
+"""The credentials inventory, docs/architecture.md › Credentials, names every credential, label and state config key
+of [linear] and every broker keychain service, and holds no secret-like value. A prefix item (a service ending in "/")
+needs its own Keychain items row, `<prefix><name>`. .github/ci_scope.py's CHECKED_DOCS names INVENTORY too.
 """
 
 import os
@@ -9,7 +9,7 @@ import tomllib
 
 from tests.guard_data.orchestrator import ORCH_FILES
 
-INVENTORY = "docs/credentials.md"
+INVENTORY = "docs/architecture.md"
 CONFIG = f"{ORCH_FILES}config.toml"
 SERVICES = "src/broker/internal/broker/keychain.go"
 LIST = re.compile(r"var KeychainServices = \[\]string\{(.*?)\}", re.S)

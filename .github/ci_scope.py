@@ -66,7 +66,7 @@ def _owner(path: str) -> str | None:
 
 
 # Docs a repository check reads (tests/guard_checks/credentials.py), so they are not docs-only.
-CHECKED_DOCS = ("docs/credentials.md",)
+CHECKED_DOCS = ("docs/architecture.md",)
 
 
 def _docs(path: str) -> bool:

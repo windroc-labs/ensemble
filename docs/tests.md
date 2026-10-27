@@ -188,7 +188,7 @@ unit coverage, comparing changed source lines against `merge_group.base_sha`.
 Static lint remains required; `Lint style` checks
 unit import boundaries on every change and upper skill units for docs-only changes.
 Code changes also run Pyright in that runner; `Lint design` keeps the architecture checks.
-`docs/credentials.md`, read by repository checks, still selects full scope.
+`docs/architecture.md`, read by repository checks, still selects full scope.
 `CI` accepts a skipped repository job only for
 a non-full decision, skipped unit, coverage and integration jobs only for the decision that
 allows them, and rejects failures,
@@ -227,7 +227,7 @@ scheduling, setup and cleanup. Report observed times and flakes; no hard timing 
 
 ## Live tests
 
-Live tests run a real client by hand, outside CI: [Docker host › Live acceptance](docker-host.md#live-acceptance), [Credentials › Live checks](credentials.md#live-checks). OpenCode on the host's Ollama ([Docker host › OpenCode](docker-host.md#opencode)) runs them without spending quota. A local model's result gates only a test that needs just a running agent; for one that depends on the reply protocol it is reported, not a gate: a weak model may drop a mark (haiku once lost one in 9 runs).
+Live tests run a real client by hand, outside CI: [Docker host › Live acceptance](docker-host.md#live-acceptance), [Upgrading › Live checks](upgrading.md#live-checks). OpenCode on the host's Ollama ([Docker host › OpenCode](docker-host.md#opencode)) runs them without spending quota. A local model's result gates only a test that needs just a running agent; for one that depends on the reply protocol it is reported, not a gate: a weak model may drop a mark (haiku once lost one in 9 runs).
 
 | Live test | Needs only a running agent | Depends on the reply protocol |
 |---|---|---|

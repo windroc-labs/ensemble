@@ -71,7 +71,7 @@ func ownershipError(service, account string, err error) error {
 // the App's own slug, whatever it is, comes from GitHub at login.
 const AppKeyService = "ensemble-broker-bot"
 
-// KeychainServices are every keychain service the broker reads or writes, one literal each: docs/credentials.md names
+// KeychainServices are every keychain service the broker reads or writes, one literal each: docs/architecture.md names
 // them all (tests/guard_checks/credentials.py reads this list). Declare each service as a package-level `...Service`
 // string constant, and each prefix item, an entry ending in "/" that stands for every service starting with it, as a
 // `...ServicePrefix` one: TestKeychainServices pins this list to exactly those.

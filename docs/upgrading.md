@@ -17,7 +17,7 @@ listed, and the next Docker start removes its container as debris.
 
 Broker protocol 30 renames every broker keychain item to start with `ensemble-broker-` (`ensemble-claude` →
 `ensemble-broker-claude`, `ensemble-bot` → `ensemble-broker-bot`, `ensemble-env/<name>` → `ensemble-broker-env/<name>`
-and so on: [Credentials › Keychain items](credentials.md#keychain-items)), and the static secret references with
+and so on: [Keychain items](architecture.md#keychain-items)), and the static secret references with
 them: a manifest or `[[delegate.environments.<name>.secrets]]` item names `ensemble-broker-env/<name>`, and one naming
 `ensemble-env/<name>` is rejected (`manifest_rejected`). Upgrading from v0.4.1 or earlier, the maintainer gives you a
 one-time rename step; in this order:
@@ -141,13 +141,51 @@ all five launchers already exist. Python imports and user configuration stay the
 Docker-host users must rerun `scripts/install.sh` after the release containing this layout change
 to reinstall the broker. An older broker fails on the new layout with `session/src unreadable`.
 
+## Linear presets
+
+What a Linear board needs in its team. `scripts/install.sh --board linear` then fills each id ([Board ›
+Setup](board.md#setup)); by hand, put each in `~/.ensemble/config.local.toml` as a `linear.<key>` under
+`[orchestrator.linear]` (`linear.states.todo` is `todo` in `[orchestrator.linear.states]`, `linear.roles.pm.client_id`
+is `client_id` in `[orchestrator.linear.roles.pm]`).
+
+| Create in Linear | Config key |
+|---|---|
+| the team | `linear.team` |
+| workflow states Backlog, Todo, In Progress, In Review, Handoff, Done, Canceled | `linear.states.<state>`: `backlog`, `todo`, `in_progress`, `in_review`, `handoff`, `done`, `canceled` |
+| a `Tasks` label group, its id from `issueLabels { nodes { id name isGroup } }` | `linear.task_label_group` |
+| one label per task under `Tasks` (`build`, `light-build`, …), optional | `linear.task_labels` |
+| an `Agent` label group and one label per client, optional; both or neither | `linear.agent_label_group`, `linear.agent_labels` |
+| the harness's, the manager's and each role's OAuth app (below) | `client_id`, `secret_service`, `token_service`, `user_id` of `linear.harness`, `linear.manager` and `linear.roles.<role>` |
+| the humans subscribed on In Review | `linear.human_members` |
+| the Linear project of each product repo, optional | `linear.project_repos` |
+
+Each OAuth app:
+
+1. Linear › Settings › API › Applications › New: Client credentials on, Public and Webhooks off (the app page has no
+   team-access setting). Its Client ID → `client_id`.
+2. Store its client secret, then paste it (nothing echoes):
+
+   ```sh
+   security add-generic-password -s <secret_service> -a <secret_service> -w
+   ```
+
+3. Its Linear user id → `user_id`; runtime commands never fetch it. The first non-dry call as the app requests and
+   stores its token.
+
+The installer does steps 2 and 3 for each transport-owned app, with the services `linear-app-<slot>-secret` and
+`linear-app-<slot>-token` unless configured, reuses a token with over five days left, and leaves an enrolled app's
+token to the broker; cleanup removes only the items it created. A key the orchestrator does not know, in
+`[orchestrator.linear]` or an app table, stops it ([Linear apps](#linear-apps)). Once every app has a usable token,
+`bin/ensemble-orchestrator router --dry-run`, `bin/ensemble-orchestrator promote --dry-run` and
+`bin/ensemble-orchestrator issue list` report no configuration error.
+
 ## Linear apps
 
 The Linear board's harness, manager and roles are OAuth apps now; member accounts and personal API keys are gone.
 On a Linear board, switch once, in this order:
 
 1. Create the five apps (harness, manager, one per role) in Linear › Settings › API › Applications: Client
-   credentials on, Public and Webhooks off ([Linear presets](credentials.md#linear-presets)).
+   credentials on, Public and Webhooks off ([Linear presets](#linear-presets)).
 2. Stop the board's launchd jobs and start no router by hand; wait until no run is left.
 3. Write down the value of each old setting, `linear.harness_key`, `linear.manager_key` and each
    `[orchestrator.linear.roles.<role>]` `key`: it names the Keychain item holding that personal key. Unset, it
@@ -157,7 +195,7 @@ On a Linear board, switch once, in this order:
 5. Delegate every issue not Done, Canceled or Duplicate from a role's member account to that role's app, and
    from the harness's to the manager app: Linear's bulk edit, or `ensemble-orchestrator issue edit <ID> --role <role>`
    (`--role me` for the manager app).
-6. Start the jobs again and let each role run one round ([Live checks](credentials.md#live-checks)).
+6. Start the jobs again and let each role run one round ([Live checks](#live-checks)).
 7. Revoke the old personal keys in Linear › Settings › Account › Security & Access, run
    `security delete-generic-password -s <service>` for each item written down in step 3, deactivate the old member
    accounts and remove their emails from `linear.human_members`. If the manager's old key was your own account's,
@@ -179,12 +217,35 @@ flowchart LR
 Stop launchd router/promote jobs, manual host commands and active role write-back before enrollment so no old process
 holds a root secret in memory. Docker workers themselves receive no Linear material.
 
-Use that identity's public JSON, commands and terminal/dialog approval instructions from
-[Credentials › Linear broker renewal](credentials.md#linear-broker-renewal).
-After `login linear` succeeds, set `renewal = "broker"` in its `[orchestrator.linear.harness]`,
-`[orchestrator.linear.manager]` or `[orchestrator.linear.roles.<role>]` table in `~/.ensemble/config.local.toml`.
-Run `linear-maintain` while callers remain stopped; success contains version 1, `renewed` and `expires_at`, never a
-token. Then restart callers. Repeat for the next identity, including verifier when configured. An unconfigured
+Copy the identity's six public values from its config table into a local `linear-identity.json` (no secret):
+
+```json
+{
+  "name": "harness",
+  "kind": "harness",
+  "client_id": "<configured client_id>",
+  "user_id": "<configured user_id>",
+  "secret_service": "<configured secret_service>",
+  "token_service": "<configured token_service>"
+}
+```
+
+`kind` is `harness`, `manager` or `role` (verifier included). The name and services are 1–128 ASCII letters, digits
+or `._@+-`, not `.` or `..`; the client ID 1–256 printable ASCII characters without whitespace; the user ID a lowercase
+UUID. The secret and token services differ and are no broker service; enrollment rejects an alias of another identity
+before changing access. Enroll it:
+
+```sh
+/usr/local/libexec/ensemble/ensemble-broker login linear < linear-identity.json
+```
+
+It may ask the login Keychain password on the terminal, then open a macOS SecurityAgent dialog to change the client
+secret item's access: enter the login Keychain password and click **Allow**. It records a pending binding before
+changing access, so after a failure rerun the same enrollment.
+Then set `renewal = "broker"` in its `[orchestrator.linear.harness]`, `[orchestrator.linear.manager]` or
+`[orchestrator.linear.roles.<role>]` table in `~/.ensemble/config.local.toml` and, callers still stopped, run
+`/usr/local/libexec/ensemble/ensemble-broker linear-maintain < linear-identity.json`; success contains version 1,
+`renewed` and `expires_at`, never a token. Then restart callers. Repeat for the next identity, including verifier when configured. An unconfigured
 verifier is not an error. If enrollment/maintenance fails, complete recovery while that identity's callers stay
 stopped; do not change its writer back as an automatic fallback.
 
@@ -198,12 +259,41 @@ identity replacement, stop callers and remove only that identity's reservation f
 and its `app/<token_service>` and host grant records through a controlled Keychain recovery; preserve every other
 identity and all GitHub recovery material. There is no automatic rebinding command.
 
+To rotate an enrolled app's secret, stop its host callers, rotate it at Linear, replace only its root item in Keychain
+Access, and delete its published token, its `ensemble-broker-linear` / `app/<token_service>` and its
+`ensemble-broker-linear-grants` / `host/<token_service>`, keeping `registry` and every other identity's items. Store
+the new root at the configured service and account, rerun `login linear` and `linear-maintain`, then restart callers.
+Deleting only the published token would republish the broker's cached access token.
+
 Downgrade is explicit: stop the host callers, keep the broker's records, and remove `renewal` from each switched
 local app table before loading an older plugin (which rejects the new key). In Keychain Access restore only that
 identity's root item to its previous `/usr/bin/security` reader and partition settings, or recreate the root item
 with the same service/account using the old installer's hidden prompt. Do not resume the old writer until its root
 access is restored. Broker-only access never silently changes because a process selected the old writer. Re-enroll
 before selecting broker again. This does not delete or migrate pending GitHub revocations.
+
+## Live checks
+
+Manual, for the manager and the user, through mini-op on the test Mac mini with Docker Desktop, never on a developer's
+Mac; the `tests/session/live_docker.py` checks: [Docker host › Live acceptance](docker-host.md#live-acceptance).
+
+- [ ] Fresh `scripts/install.sh --docker` ends with `egress-proxy` healthy; rerunning keeps the proxy's ID and start
+  time, pinned checkout, and config bytes, mode and modification time. Repeat with an existing config.
+- [ ] After changing or recreating `~/.egress/config.local.yaml`, rerunning `scripts/install.sh --docker` makes the
+  proxy serve the new config; with no change, the proxy keeps its start time.
+- [ ] [Linear presets](#linear-presets) in a new Linear team, from only that section and the config: both dry-runs
+  report no configuration error. Deferred until there is a new Linear team.
+- [ ] [Linear apps](#linear-apps), before cutover: the harness app claims, moves, comments (the comment's `user` has
+  `isMe` true), creates an issue, a relation and an attachment, archives, and subscribes the user.
+- [ ] Before cutover: the manager app creates and edits issues, comments (`user` is the manager app user) and moves an
+  issue (the move's actor is recognisable by its app user id).
+- [ ] Before cutover: the harness and manager apps both fail to read or write another team's issue.
+- [ ] After cutover: each role app fails on another team's issue and runs one round: claim, write-back, Handoff, next
+  role's claim.
+- [ ] After cutover: [Linear apps](#linear-apps) step 7 is done: the old credentials revoked in Linear and every
+  Keychain item written down in its step 3 deleted.
+
+A failed before-cutover check stops the cutover; report it to the user.
 
 ## With scripts/install.sh
 
@@ -232,7 +322,7 @@ It does not edit config keys a release renames.
 For OpenCode with `--docker`, rerunning the installer also ensures the local `auth.json` entry for a commander,
 then imports it into the broker without a second key entry. A broker-only install needs one local login;
 existing local API entries are reused, including after a broker reinstall. Both entries follow the install ledger's
-cleanup ownership ([Credentials](credentials.md#opencode-provider-api-keys)).
+cleanup ownership ([OpenCode sessions](customizing-roles-and-tasks.md#opencode-sessions)).
 
 With OpenCode selected, an existing stable 1.x executable on `PATH` at or above the minimum version is reused.
 Otherwise, the installer installs a private copy and offers a shell profile addition for `~/.ensemble/opencode/bin`;
