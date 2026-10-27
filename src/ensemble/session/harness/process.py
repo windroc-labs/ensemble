@@ -1,6 +1,7 @@
 """The session harness, `python3 -P -s -m ensemble.session.harness.process [--caller FD] <dir>`:
 owns one worker from start to close (docs/sessions.md › Session harness). SIGTERM, SIGHUP and EOF
-on FD (a headless start's caller pipe, channel.Tie) close.
+on FD (a headless start's caller pipe, channel.Tie) close. SIGNALS a caller held over its spawn are
+unblocked once handled.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from ensemble.session.engine.types import (
 from ensemble.session.harness.channel import CLOSE_WAIT, DRAIN, SLICE, Channel, encode, hung_up
 from ensemble.session.harness.dispatch import Dispatch, load_handlers
 from ensemble.session.harness.types import SERVED, Logged, Op
+from ensemble.session.hosts.base import SIGNALS
 
 POLL = 0.5
 STATUS_EVERY = 1.0
@@ -425,6 +427,7 @@ def main(argv: Sequence[str]) -> int:
             return 1
         for number in (signal.SIGTERM, signal.SIGHUP):
             signal.signal(number, harness.signalled)
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, SIGNALS)
         return harness.run(_begin(channel.directory))
     finally:
         channel.release()

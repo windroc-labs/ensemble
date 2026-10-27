@@ -389,6 +389,13 @@ class TuiPolicy(Base):
                 self.assertEqual(r.outcome.status, "done")
                 self.assertIn(f"delegate: show {NAME}: {failure}\n", self.err)
 
+    def test_a_stop_during_the_tui_show_stops_its_session(self):
+        self.driver.display = "mgr"
+        with self.assertRaises(Stopped):
+            self.faked(turn(START, block(DONE)), show_fail=Stopped(129))
+        self.assertEqual(self.handle.calls, [("stop",)])
+        self.assertEqual(self.last("result")["error"], "stopped: Stopped: 129")
+
     def test_a_valid_outcome_at_a_turn_end_is_done_and_leaves_the_session_even_with_work_pending(
         self,
     ):

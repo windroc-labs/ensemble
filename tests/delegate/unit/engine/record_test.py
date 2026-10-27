@@ -147,6 +147,11 @@ class PhaseTest(HarnessCase):
         state = self.record.read()
         self.assertEqual((state.completed, state.result), (True, self.done))
 
+    def test_complete_closing_sets_closing_so_no_follow_up_opens(self):
+        self.assertTrue(self.record.complete(1, self.done, sid=SID, closing=True))
+        self.assertTrue(self.record.read().closing)
+        self.assertFalse(self.record.follow_up(1, 1))
+
     def test_follow_up_opens_the_next_attempt_bound_keeping_the_previous_result(self):
         self.assertFalse(self.record.follow_up(1, 1))
         self.record.complete(1, self.done, sid=SID)

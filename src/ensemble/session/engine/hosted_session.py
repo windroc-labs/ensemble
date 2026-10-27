@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -64,7 +65,7 @@ from ensemble.session.harness.channel import running as channel_running
 from ensemble.session.harness.dispatch import load_handlers
 from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedSession, fold
-from ensemble.session.hosts.base import Host, host_resume
+from ensemble.session.hosts.base import SIGNALS, Host, host_resume
 from ensemble.session.modes import headless, in_process, tui
 from ensemble.session.modes.base import BaseMode, child_env
 from ensemble.session.viewer import display as displays
@@ -479,13 +480,14 @@ class HostedSession(Session):
         host: str | None,
         idle_timeout: float | None,
     ) -> Session:
-        """Its view once a new harness runs it; else the start error, nothing left."""
+        """Its view once a new harness runs it; else the start error or stop, nothing left."""
         assert spec.client is not None and spec.sid is not None
         roots = cls._roots(spec.client)
         request = cls.harness_request(spec, display=display, host=host, roots=roots)
         channel = Channel.create()
-        tie = None
+        tie, held = None, signal.pthread_sigmask(signal.SIG_BLOCK, ())
         try:
+            signal.pthread_sigmask(signal.SIG_BLOCK, SIGNALS)
             tie = None if mode in (Mode.TUI, Mode.IN_PROCESS) else Tie()  # these outlive it
             caller = () if tie is None else ("--caller", str(tie.far))
             channel.write_request(request)
@@ -509,18 +511,22 @@ class HostedSession(Session):
                     pass_fds=() if tie is None else (tie.far,),
                 )
         except BaseException as error:
-            if tie is not None:
-                tie.close()
-            shutil.rmtree(channel.directory, ignore_errors=True)  # request.json holds spec.env
+            try:
+                if tie is not None:
+                    tie.close()
+                shutil.rmtree(channel.directory, ignore_errors=True)  # request.json holds spec.env
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, held)
             if isinstance(error, TypeError | ValueError):
                 raise ConfigError(f"session harness request: not JSON: {error}") from None
             if isinstance(error, OSError):
                 raise SessionError(f"session harness: {error.strerror or error}") from None
             raise
-        if tie is not None:
-            tie.handed()
-        deadline = time.monotonic() + START_WAIT
         try:  # an interrupt too: no view would close it
+            signal.pthread_sigmask(signal.SIG_SETMASK, held)  # a stop held over Popen lands here
+            if tie is not None:
+                tie.handed()
+            deadline = time.monotonic() + START_WAIT
             while True:
                 status = channel.status()
                 if status.get("state") in ("running", "draining", "exited"):  # its end at once
@@ -537,23 +543,24 @@ class HostedSession(Session):
                 generation, str
             ):
                 raise SessionError(f"session harness {channel.directory}: started another session")
+            view = cls._view(
+                channel,
+                name=spec.name,
+                client=spec.client,
+                sid=spec.sid,
+                generation=generation,
+                host=host,
+                idle_timeout=idle_timeout,
+                mode=mode,
+                spec=spec,
+                tie=tie,
+            )
         except BaseException:
             cls._unspawn(channel, harness, spec.name, host, mode)
             if tie is not None:
                 tie.close()
             raise
-        return cls._view(
-            channel,
-            name=spec.name,
-            client=spec.client,
-            sid=spec.sid,
-            generation=generation,
-            host=host,
-            idle_timeout=idle_timeout,
-            mode=mode,
-            spec=spec,
-            tie=tie,
-        )
+        return view
 
     @classmethod
     def _roots(cls, client: str) -> tuple[str, ...]:
