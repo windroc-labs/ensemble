@@ -681,9 +681,13 @@ below. Keys:
 - `plugins`: in-image names or pinned sources, added to `[hosts.docker] plugins`.
 - `secrets`: `[[…secrets]]` tables of `item` (an `ensemble-broker-env/<name>` reference) and `file`
   ([Environment secrets](#environment-secrets)); never a value.
-- `lock`: a [lock](#broker-locks) name. A locked run's session closes as soon as the run ends (outcome, failure,
-  give-up, usage limit), before its result goes out: no TUI is left for a pane to follow; the workspace and history
-  stay, so `ensemble-crew reopen` continues.
+- `lock`: a [lock](#broker-locks) name. A locked run is its user's to close (a person, or a manager acting for
+  one), as an unlocked one is: an outcome (`needs_input` included), failure, give-up or usage limit closes nothing,
+  so its container, TUI, harness and lock stay and the user's answer (`ensemble-crew resume --input`) continues in
+  that container. Only the user's close (`ensemble-crew close`, `ensemble-session close`) or the client's own exit
+  (a crash, a credential-expiry close or a killed harness included) ends it; the lock goes once the container is
+  removed, and a later resume takes it again. Meanwhile its environment secrets stay in the container: after
+  rotating one, close the runs waiting on it ([Environment secrets](credentials.md#environment-secrets)).
 - `prefetch`: `true` prefetches the input's Reference block (its leading lines, opening with `Reference:` or, in an
   input without an id, `Repo:`): exactly one `Repo:` line (a clone path names its origin)
   and at most one `Ref:` line (the [Prefetch](#prefetch) ref rule; none: the default branch). Both are checked before
@@ -789,7 +793,8 @@ The `dummy-tester` run's `prefetch = true` is a role override; direct `dummy` st
 | Check | Action and expected result |
 |---|---|
 | Resolve | Run the dry-run above with an App-installed test repo; spec contains references only, the Host's gateway and role prefetch |
-| Run | `ensemble-crew role dummy-tester --input '...'` with that Repo/Ref input: outcome echoes input, plugin is available, env file is 0400, and completion closes the locked container |
+| Run | `ensemble-crew role dummy-tester --input '...'` with that Repo/Ref input: outcome echoes input, plugin is available, env file is 0400; after the outcome the locked container still runs and holds the lock |
+| Waiting | End a `dummy-tester` run on `needs_input`: `ensemble-crew status` shows it waiting with an attach command, a same-lock run exits 75 naming it, and `ensemble-crew resume --input` continues in the same container (`docker ps` shows the same one); `ensemble-crew close` removes it, then the same-lock run starts |
 | Open | `ensemble-crew run dummy-1 -- ensemble-delegate open dummy-1 --environment dummy`: Claude answers without container login; `ensemble-crew status` lists the worker |
 | Inspect | `docker ps --filter label=windroc.lock.owner=dummy-1 --format '{{.Names}}'`, then `docker inspect CONTAINER`: an `ensemble-worker:` variant of `dummy-env:test`, network `workers`, `windroc.lock=dummy-lock`, owner `dummy-1`, volume `ensemble-ws-dummy-1`, restart policy `no` |
 | Plugin and secret | In the TUI, `/dummy-plugin:` is available; `docker exec CONTAINER stat -c '%a %U' /run/ensemble/secrets/env/dummy.txt` prints `400 agent` |

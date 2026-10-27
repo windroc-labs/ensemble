@@ -58,7 +58,7 @@ has none, and CI's Ruff step still catches it.
 
 Run tests only through these supervised, sandboxed entries; they retain diagnostics and cleanup.
 
-A session harness outlives the start that made it (a lockless tui's until its worker ends) and
+A session harness outlives the start that made it (a tui's until its worker ends or is closed) and
 writes its dir, the workdir's run log and its handlers' records after its close reply.
 `tests/session/harnesses.py`'s `end(home)` closes the harnesses under a HOME and waits for each to
 exit. The tmux `Server` fixture (before it kills the server), each project's `Case` (before its HOME

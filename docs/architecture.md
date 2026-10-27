@@ -6,6 +6,9 @@ The session harness's tui workers run under the standalone `harness/guard.py`: a
 (`hosts/tmux/managed.py`), over one `docker exec -i` per container on Docker (`hosts/docker/worker.py`).
 The harness owns the lifecycle pipe; the guard directly parents the client and owns its PTY;
 tmux runs only the display attachment. Handle readers drain the framed channel continuously.
+A task attempt's ending closes no worker, a locked one's included: the run's user (a person, or a manager acting
+for one) closes it, or its client exits; an environment lock goes with its container's confirmed removal
+([Session harness interfaces](sessions.md#session-harness-interfaces)).
 Reclamation limits and the migration from legacy mode launchers are in
 [Session harness interfaces](sessions.md#session-harness-interfaces).
 
