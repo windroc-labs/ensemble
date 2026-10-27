@@ -3708,6 +3708,14 @@ class GuardedStartTest(GuardedBase):
         self.assertTrue(_free(os.path.join(self.state, "guard.lock")))
         self.assertEqual(handle.state(), Liveness.ABSENT)
 
+    def test_an_owned_start_in_an_environment_builds_and_locks_it(self):
+        self.owned(environment=carried(ENVIRONMENT))
+        self.assertEqual(self.broker.built["base_image"], "dummy-env:test")
+        with open(os.path.join(self.state, f"{GEN}.json")) as f:
+            manifest = json.load(f)
+        self.assertEqual((manifest["lock"], manifest["lock_owner"]), ("dummy-lock", "w"))
+        self.assertEqual(self.host_record()["environment"], ENVIRONMENT.persisted())
+
     def test_unowned_terminal_keeps_the_legacy_path(self):
         self.popen_mock.side_effect = self.popen
         self.start()

@@ -23,7 +23,6 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
 from unittest import mock
 
 from ensemble.session import Host, NoRecordedSession, NotShowable, Viewer
@@ -281,10 +280,6 @@ class ClientCapacityTest(HostedTuiBase):
             release.set()
             self.assertTrue(first._capacity.finished.wait(5))
             self.start(client="checked", mode="in_process", sid="c").close()
-
-
-PLAIN = cast(Spec, SimpleNamespace(environment=None))  # all _owned reads of a spec
-ENVIRONED = cast(Spec, SimpleNamespace(environment=mock.Mock(spec=engine_types.EnvironmentSpec)))
 
 
 def parsed(tables, default) -> Hosts:
@@ -3183,6 +3178,15 @@ class HarnessRequestTest(HostedTuiBase):
         self.assertEqual((start.spec, start.pythonpath), (spec, "lib:/abs/src"))
         self.assertEqual(fresh._config().hosts, self.session._config().hosts)
 
+    def test_an_environment_round_trips(self):
+        spec = self.spec(client="fake", mode="tui", name="w1", sid=SID, environment=ENVIRONMENT)
+        request = json.loads(
+            json.dumps(self.session.harness_request(spec, display=None, host="d2", roots=()))
+        )
+        self.assertEqual(request["spec"]["environment"], ENVIRONMENT.persisted())
+        fresh = type("Fresh", (HostedSession,), {"__module__": __name__})
+        self.assertEqual(fresh.from_harness_request(request).spec, spec)
+
     def test_a_caller_without_pythonpath_sends_none(self):
         env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
         with mock.patch.dict(os.environ, env, clear=True):
@@ -3205,6 +3209,9 @@ class HarnessRequestTest(HostedTuiBase):
             {**good, "pythonpath": ["/a"]},
             {**good, "pythonpath": 5},
             {**good, "pythonpath": "/a\n/b"},
+            {**good, "spec": {**good["spec"], "environment": "dummy-env:test"}},
+            {**good, "spec": {**good["spec"], "environment": {"image": "dummy-env:test"}}},
+            {**good, "spec": {**good["spec"], "environment": {"image": 5, "gateway": "w"}}},
         ):
             with self.subTest(bad=bad), self.assertRaises(ConfigError):
                 fresh.from_harness_request(bad)
@@ -3543,16 +3550,6 @@ class OwnedStartTest(Case):
             session_cls.preflight(missing)
         self.popen.assert_not_called()
 
-    def test_an_environment_is_refused_before_any_harness(self):
-        with self.assertRaises(ConfigError):
-            self.session_cls.harness_request(
-                self.spec(environment=mock.Mock(spec=engine_types.EnvironmentSpec)),
-                display=None,
-                host=None,
-                roots=(),
-            )
-        self.popen.assert_not_called()
-
 
 class OwnedHeadlessStartTest(Case):
     """A built-in client's headless start on tmux spawns a session harness too, nameless."""
@@ -3646,25 +3643,8 @@ class OwnedGateTest(Case):
             client = setup.registry.client(name)
             for mode in (Mode.TUI, Mode.HEADLESS):
                 with self.subTest(client=name, mode=mode):
-                    self.assertTrue(hosted_session._owned(setup, PLAIN, mode, client, on))
-            self.assertFalse(hosted_session._owned(setup, PLAIN, Mode.IN_PROCESS, client, on))
-
-    def test_a_start_with_an_environment_is_never_owned(self):
-        cls = HostedSession.configured(
-            clients={
-                "claude": {"implementation": "ensemble.session.clients.claude:ClaudeClient"},
-                "codex": {"implementation": "ensemble.session.clients.codex:CodexClient"},
-                "opencode": {"implementation": "ensemble.session.clients.opencode:OpenCodeClient"},
-            },
-            hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"}),
-        )
-        setup, docker = cls._config(), DockerHost("docker", {"docker": "/usr/local/bin/docker"})
-        for on in (cls.host(), docker):
-            for name in ("claude", "codex", "opencode"):
-                for mode in (Mode.TUI, Mode.HEADLESS):
-                    with self.subTest(host=on.name, client=name, mode=mode):
-                        client = setup.registry.client(name)
-                        self.assertFalse(hosted_session._owned(setup, ENVIRONED, mode, client, on))
+                    self.assertTrue(hosted_session._owned(setup, mode, client, on))
+            self.assertFalse(hosted_session._owned(setup, Mode.IN_PROCESS, client, on))
 
 
 class LegacyHandlersTest(HostedTuiBase):
@@ -3957,7 +3937,7 @@ class DockerOwnedTest(Case):
         )
         self.setup = self.cls._config()
 
-    def test_handlers_with_an_environment_are_refused_before_any_harness(self):
+    def test_handlers_with_an_environment_run_under_a_harness(self):
         workdir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, workdir)
         spec = Spec(
@@ -3970,24 +3950,24 @@ class DockerOwnedTest(Case):
             handlers=(engine_types.HookCallback("pkg.handler"),),
         )
         with (
-            mock.patch.object(hosted_session.subprocess, "Popen") as popen,
-            self.assertRaisesRegex(
-                ConfigError, "claude headless on host docker has no session harness yet"
-            ),
+            mock.patch.object(self.cls, "preflight") as preflight,
+            mock.patch.object(
+                hosted_session.subprocess, "Popen", side_effect=RuntimeError("spawned")
+            ) as popen,
+            self.assertRaisesRegex(RuntimeError, "spawned"),
         ):
             self.cls.start(spec)
-        popen.assert_not_called()
+        preflight.assert_called_once()
+        popen.assert_called_once()
 
     def test_on_docker_claude_tui_and_headless_are_owned_codex_and_opencode_tui_are_not(self):
         docker = DockerHost("docker", {"docker": "/usr/local/bin/docker"})
         for name, tui_owned in (("claude", True), ("codex", False), ("opencode", False)):
             client = self.setup.registry.client(name)
             with self.subTest(client=name):
-                owned = hosted_session._owned(self.setup, PLAIN, Mode.TUI, client, docker)
+                owned = hosted_session._owned(self.setup, Mode.TUI, client, docker)
                 self.assertIs(owned, tui_owned)
-                self.assertTrue(
-                    hosted_session._owned(self.setup, PLAIN, Mode.HEADLESS, client, docker)
-                )
+                self.assertTrue(hosted_session._owned(self.setup, Mode.HEADLESS, client, docker))
 
     def test_a_remote_tui_host_has_remote_workers(self):
         self.assertTrue(DockerHost._remote_tui)
