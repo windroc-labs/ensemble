@@ -74,6 +74,7 @@ class Context:
     redelivered: bool = False
     host: str = "github.com"
     document: str | None = None
+    published: str = ""  # a github [output]'s https://<host>/<repo>/blob/<branch>/; "" → none
 
 
 LEDGER = "writeback.json"
@@ -115,7 +116,14 @@ def context(cfg, role, writers: Writers, *, ident, issue_id, sid, resume, projec
         harness=writers.harness,
         host=cfg.repo_host(role),
         document=cfg.docs.local_out(role, ident, sid),
+        published=_published(cfg.roles[role].run.output, cfg.repo_host(role)),
     )
+
+
+def _published(output, host):
+    if output["type"] != "github":
+        return ""
+    return f"https://{host}/{output['repo']}/blob/{output['branch']}/"
 
 
 def for_run(cfg, role, spec: Spec, writers: Writers):
@@ -320,9 +328,8 @@ def _read_file(path, workdir):
 def _url(ctx, url):
     if not url or TASKS[ctx.role].input != "build":
         return url
-    if ctx.target and url.lower().startswith(
-        f"https://{ctx.host}/{ctx.target[0]}/{ctx.target[1]}/".lower()
-    ):
+    on = (f"https://{ctx.host}/{ctx.target[0]}/{ctx.target[1]}/",) if ctx.target else ()
+    if any(url.lower().startswith(p.lower()) for p in (*on, ctx.published) if p):
         return url
     log(
         "writeback",

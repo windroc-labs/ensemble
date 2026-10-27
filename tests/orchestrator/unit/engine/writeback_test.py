@@ -710,10 +710,33 @@ class WritebackContext(run_fixtures.Base):
                     target=TARGET,
                 )
                 self.assertEqual(ctx.host, expected)
+                self.assertEqual(ctx.published, "")
                 self.assertEqual(
                     writeback._url(ctx, f"https://{expected}/acme/ensemble/pull/1"),
                     f"https://{expected}/acme/ensemble/pull/1",
                 )
+
+    def test_context_names_a_github_outputs_blob_prefix(self):
+        cfg = config.load()
+        role = cfg.roles["engineer"]
+        output = {"type": "github", "repo": "windroc/docs", "branch": "main", "dir": "V/"}
+        cfg = replace(
+            cfg,
+            roles=dict(cfg.roles)
+            | {"engineer": replace(role, run=replace(role.run, output=output))},
+        )
+        ctx = writeback.context(
+            cfg,
+            "engineer",
+            WRITERS,
+            ident=ID,
+            issue_id=UUID,
+            sid=SID,
+            resume=False,
+            project=PROJECT,
+            target=TARGET,
+        )
+        self.assertEqual(ctx.published, "https://github.com/windroc/docs/blob/main/")
 
     def test_local_document_reference_is_constructed_for_launch_and_recovery(self):
         cfg = config.load()
@@ -1125,6 +1148,19 @@ class EngineeringUrls(Base):
                     [line for line in self.lines()[before:] if line.startswith("skip ")],
                     [skip] if skip else [],
                 )
+
+    def test_a_build_url_on_its_own_github_output_is_kept(self):
+        report = "https://github.com/windroc/docs/blob/main/Verification/x-ENG-7-check.md"
+        ctx = replace(self.ctx(), published="https://github.com/windroc/docs/blob/main/")
+        for target in (TARGET, None):
+            with self.subTest(target=target):
+                self.assertEqual(writeback._url(replace(ctx, target=target), report), report)
+        for url in (
+            report.replace("/blob/main/", "/blob/dev/"),
+            report.replace("windroc/docs/", "windroc/docs-evil/"),
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(writeback._url(ctx, url), "")
 
 
 class ApprovalMessages(Base):
