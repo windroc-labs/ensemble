@@ -32,7 +32,6 @@ from ensemble.session import (
     TurnStarted,
     Unanswered,
 )
-from ensemble.session.engine.types import OwnerRefused
 from tests.delegate.fakes.harness_session import HarnessSession
 from tests.delegate.harness import SID, HarnessCase
 from tests.delegate.replies import block
@@ -104,6 +103,10 @@ class Child:
     def communicate(self, line, timeout=None):
         self.case.sent.append((json.loads(line), self.case.metadata()))
         return "", ""
+
+
+class OwnerRefused(SessionError):
+    """As ensemble.session's internal one, which delegate tests may not import."""
 
 
 class Agent:
@@ -417,7 +420,7 @@ class CloseTest(HandlerCase):
     def test_a_refused_close_drops_its_claim_and_loses_no_event(self):
         for refusal in (
             SessionError("cannot close"),
-            OwnerRefused("cannot close w1"),
+            OwnerRefused("cannot close w1"),  # the owner's refusal, a SessionError
             Unanswered("not confirmed"),
         ):
             with self.subTest(refusal=type(refusal).__name__):
