@@ -277,7 +277,7 @@ class ConfigTest(Base):
         with self.assertRaisesRegex(SessionError, "protocol '18', want '30'") as caught:
             self.host._provider_usage(request)
         self.assertIn(
-            "install or upgrade it: see docs/docker-host.md#install", str(caught.exception)
+            "install or upgrade it: see docs/architecture.md#docker-install", str(caught.exception)
         )
         self.assertEqual(runner.calls, [[BROKER, "version"]])
         self.assertEqual(len(runner.results), 1)

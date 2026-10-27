@@ -1,4 +1,4 @@
-"""DockerHost runs each session in its own broker-made container (docs/docker-host.md): its
+"""DockerHost runs each session in its own broker-made container (docs/architecture.md#docker-host): its
 worker's guard (worker.py), tui or headless, through `docker exec -i`.
 """
 
@@ -324,7 +324,7 @@ def _now() -> str:
 
 
 class _Laps:
-    """Seconds per phase, since the previous one ended (docs/docker-host.md › Start timing)."""
+    """Seconds per phase, since the previous one ended."""
 
     def __init__(self) -> None:
         self.phases: dict[str, float] = {}

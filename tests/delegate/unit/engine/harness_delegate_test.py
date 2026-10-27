@@ -286,12 +286,13 @@ class CallerSessionTest(HarnessCase):
         suite = unittest.TestSuite(
             loader.loadTestsFromTestCase(case) for case in (DockerPreflightTest, VerifierDockerTest)
         )
-        result = unittest.TestResult()
+        cases, result = suite.countTestCases(), unittest.TestResult()
         with mock.patch.dict(os.environ, caller):
             suite.run(result)
         failed = [f"{t.id()}: {tb.splitlines()[-1]}" for t, tb in result.failures + result.errors]
         self.assertEqual(failed, [])
-        self.assertEqual(result.testsRun, 6)
+        self.assertGreater(cases, 0)
+        self.assertEqual((result.testsRun, result.skipped), (cases, []))
 
 
 class VerifierClientTest(HarnessCase):
@@ -2795,6 +2796,25 @@ class OwnedRun(HarnessCase):
         first.close()  # its exited worker: the third run holds the lock now
         self.assertNotIn("release", self.kinds())
         self.assertNotIn(f"session {first._state.agent_name} closed (lock", self.err.getvalue())
+
+    def test_closing_a_locked_run_of_unknown_liveness_claims_release_once_it_closed(self):
+        first = self.waiting(self.work, SID)
+        first.driver.session.liveness = Liveness.UNKNOWN
+        HarnessDelegate.attach(self.work, session_cls=LockingSession).close()
+        self.assertEqual(first.driver.session.liveness, Liveness.ABSENT)
+        self.assertEqual(self.kinds().count("release"), 1)
+        self.assertIn(
+            f"session {first._state.agent_name} closed (lock dummy-lock)", self.err.getvalue()
+        )
+
+    def test_closing_a_live_locked_run_whose_status_lost_its_host_claims_release(self):
+        first = self.waiting(self.work, SID)
+        agent = first.driver.session
+        gone = replace(agent.status(), alive=False, state=StatusState.GONE)
+        with mock.patch.object(agent, "status", return_value=gone):
+            HarnessDelegate.attach(self.work, session_cls=LockingSession).close()
+        self.assertEqual(agent.liveness, Liveness.ABSENT)
+        self.assertEqual(self.kinds().count("release"), 1)
 
     def test_a_closed_locked_run_resumes_by_taking_its_lock_again(self):
         first = self.waiting(self.work, SID)
