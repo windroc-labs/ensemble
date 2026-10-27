@@ -31,6 +31,16 @@ with open(sys.argv[1], "ab", buffering=0) as log:
                 break
             log.write(data)
 """
+LOGGED = """import os, select, sys, time
+end = time.monotonic() + 120
+with open(sys.argv[1], "ab", buffering=0) as log:
+    while time.monotonic() < end:
+        if select.select([0], [], [], 0.2)[0]:
+            data = os.read(0, 1024)
+            if not data:
+                break
+            log.write(data)
+"""
 BAD_KEY = (
     "ensemble-session: key 'Bogus': want one printable character or one of Enter, Escape, Tab, "
     "BTab, BSpace, Up, Down, Left, Right, Home, End, PageUp, PageDown, F1, F2, F3, F4, F5, F6, F7, "
@@ -192,7 +202,7 @@ class KeyTest(Base):
         arrives alone.
         """
         log = os.path.join(self.root, "h1.keys")
-        argv = (sys.executable, "-I", "-c", RAW.replace("tty.setraw(0)\n", ""), log)
+        argv = (sys.executable, "-I", "-c", LOGGED, log)
         with mock.patch.dict(os.environ, self.server.env(), clear=True):
             worker = TmuxHost("tmux").worker("h1", Launch(argv, cwd=self.cwd), terminal=False)
         self.addCleanup(self.under_server_env, worker.close)

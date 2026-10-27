@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from unittest import mock
 
@@ -261,11 +261,15 @@ class LiveCrew(Case):
         self.until(lambda: not self.drive_running(record), f"{record.name}'s drive ended")
 
     def killed(self, name: str, record: Record) -> None:
-        """SIGKILLs tui run `name`'s drive group and client after its first turn; attach: gone."""
+        """SIGKILLs tui run `name`'s drive group, harness and client after its first turn; attach:
+        gone.
+        """
         (tui,) = record.sessions
         self.wait_event(tui, "done")
         self.kill_drive(record)
-        os.kill(logged(self.log(name))[-1]["pid"], signal.SIGKILL)
+        live_tmux.crash_owner(self.ensemble, tui)  # its display alone ends no worker
+        with suppress(ProcessLookupError):
+            os.kill(logged(self.log(name))[-1]["pid"], signal.SIGKILL)
         self.server.tmux("kill-session", "-t", f"={tui}")
         self.until(lambda: self.gone(tui), f"{tui} gone")
         self.assertEqual(self.words(f"{tui}-drive"), [])
