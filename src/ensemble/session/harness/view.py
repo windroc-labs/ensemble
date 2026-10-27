@@ -1,6 +1,5 @@
 """OwnedSession, the control view of an owned worker: never its owner. stop and close are
 requests, and so are a remote worker's send, press and screen; the rest goes to a read-only attach.
-OwnedInProcess: an in_process worker's, no attach.
 """
 
 from __future__ import annotations
@@ -16,9 +15,7 @@ from ensemble.session.engine.types import (
     IdleTimeout,
     KeyPress,
     Mode,
-    NotShowable,
     Reply,
-    Resumable,
     SessionError,
     SessionEvent,
     SessionInfo,
@@ -28,7 +25,7 @@ from ensemble.session.engine.types import (
     TurnEnd,
     Unanswered,
 )
-from ensemble.session.harness.channel import Channel
+from ensemble.session.harness.channel import Channel, Tie
 from ensemble.session.harness.types import Logged, Op
 from ensemble.utils import Display, Record, Status
 
@@ -86,23 +83,34 @@ class _Reader:
 
 
 class OwnedSession(Session):
-    """attach: the read-only attach, bound to sid and generation; replay: start past the log."""
+    """attach: the read-only attach, bound to sid and generation; retire: a tui view's non-owner
+    close of that generation; replay: start past the log. A headless view's events() stops its worker on
+    an interrupt, as a headless HostedSession does; tie: a headless start's caller pipe, its
+    harness closing the worker once the view is gone.
+    """
 
     def __init__(
         self,
         channel: Channel,
-        name: str,
+        name: str | None,
         *,
         client: str,
         sid: str,
         generation: str,
         idle_timeout: float | None,
         attach: Callable[[], Session],
+        retire: Callable[[], None] | None = None,
         replay: bool = False,
+        mode: Mode = Mode.TUI,
+        tie: Tie | None = None,
     ) -> None:
-        self.sid, self.client, self.mode, self.name = sid, client, Mode.TUI, name
+        if mode == Mode.TUI and retire is None:
+            raise ValueError("retire: required for a tui view")
+        self.sid, self.client, self.mode, self.name = sid, client, mode, name
+        self._tie = tie
         self.generation = generation
         self._channel, self._idle, self._attach = channel, idle_timeout, attach
+        self._retire = retire
         self._attached: Session | None = None
         self._events = _Reader(channel, generation)
         if replay:
@@ -110,6 +118,19 @@ class OwnedSession(Session):
         self._latest = self._events.copy()
 
     def events(self) -> Iterator[SessionEvent | Stderr | IdleTimeout]:
+        try:
+            yield from self._read()
+        except GeneratorExit:  # the caller closed this iterator; the worker goes on
+            raise
+        except BaseException as error:
+            if self.mode != Mode.TUI:
+                try:
+                    self.stop()
+                except SessionError as failed:
+                    error.add_note(f"stop: {failed}")
+            raise
+
+    def _read(self) -> Iterator[SessionEvent | Stderr | IdleTimeout]:
         reader, last = self._events, time.monotonic()
         while not reader.exited:
             taken = reader.read()
@@ -133,6 +154,8 @@ class OwnedSession(Session):
                     yield IdleTimeout(self._idle)
                     continue
             time.sleep(wait)
+        if self._tie is not None:  # its run is over
+            self._tie.close()
 
     @property
     def reply(self) -> str | None:
@@ -146,8 +169,13 @@ class OwnedSession(Session):
         self._end(Op.CLOSE)
 
     def _end(self, op: Op) -> None:
-        """With no owner: closed through the attach, confirmed."""
+        """With no owner: a tui view retires, its generation only (the record rule), for either
+        op; a headless one ends through the attach, confirmed.
+        """
         if self._channel.request(op):
+            return
+        if self._retire is not None and self.mode == Mode.TUI:
+            self._retire()
             return
         try:
             session = self._attach()
@@ -158,7 +186,7 @@ class OwnedSession(Session):
         else:
             session.close()
         if session.alive():
-            raise Unanswered(f"session {self.name}: still running after {op}")
+            raise Unanswered(f"session {self.name or self.sid}: still running after {op}")
 
     def _session(self) -> Session:
         if self._attached is None:
@@ -169,6 +197,11 @@ class OwnedSession(Session):
     def opening_pending(self) -> str | None:
         opening = self._channel.status().get("opening")
         return opening if isinstance(opening, str) else None
+
+    @property
+    def client_up(self) -> bool:
+        """Its harness says its guard reported its client up (harness.json `up`)."""
+        return self._channel.status().get("up") is True
 
     def _remote(self) -> bool:
         return self._channel.status().get("remote") is True
@@ -241,84 +274,3 @@ class OwnedSession(Session):
                 raise SessionError(f"session {self.name}: bad screen from its harness")
             return text
         return self._session().screen(lines)
-
-
-class OwnedInProcess(OwnedSession):
-    """alive: its harness holds on and has not logged Exited; info: its start's."""
-
-    def __init__(
-        self,
-        channel: Channel,
-        *,
-        client: str,
-        sid: str,
-        generation: str,
-        idle_timeout: float | None,
-        info: SessionInfo,
-        replay: bool = False,
-    ) -> None:
-        super().__init__(
-            channel,
-            sid,
-            client=client,
-            sid=sid,
-            generation=generation,
-            idle_timeout=idle_timeout,
-            attach=self._unattached,
-            replay=replay,
-        )
-        self.mode, self.name, self._info = Mode.IN_PROCESS, None, info
-
-    @staticmethod
-    def _unattached() -> Session:
-        raise SessionError("an in_process worker has no attach")
-
-    def send(self, text: str) -> None:
-        raise SessionError("send: tui mode only")
-
-    def press(self, keys: Sequence[KeyPress]) -> None:
-        raise SessionError("press: tui mode only")
-
-    def screen(self, lines: int | None = None) -> str:
-        raise SessionError("screen: tui mode only")
-
-    def alive(self) -> bool:
-        self._latest.read()
-        return self._channel.alive() and not self._latest.exited
-
-    def status(self) -> Status:
-        alive = self.alive()
-        return Status(
-            name=self.sid,
-            alive=alive,
-            state=StatusState.WORKING if alive else StatusState.DEAD,
-            outcome=None,
-            attach=None,
-            hidden=False,
-            cwd=self._info.cwd if alive else None,
-        )
-
-    def content(self) -> str:
-        return self.reply or ""
-
-    def info(self) -> SessionInfo:
-        return self._info
-
-    def session_status(self) -> SessionStatus:
-        return SessionStatus(Resumable.NO, None, "")
-
-    def record(self) -> Record | None:
-        return None
-
-    @property
-    def showable(self) -> bool:
-        return False
-
-    def show(self, *, display: Display = None, command: str | None = None) -> str | None:
-        raise NotShowable("show: tui mode only")
-
-    def hide(self) -> None:
-        raise NotShowable("hide: tui mode only")
-
-    def attach_command(self) -> str:
-        raise NotShowable("attach_command: tui mode only")

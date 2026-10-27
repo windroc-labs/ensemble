@@ -10,7 +10,7 @@ import shutil
 import tempfile
 
 from ensemble.session.harness.channel import Channel
-from tests.session import live_tmux
+from tests.session import harnesses, live_tmux
 from tests.session.case import REPO
 from tests.session.cli_support import MANAGER, WorkerCase, logged
 from tests.session.integration.clients.codex import fake_tui
@@ -138,6 +138,7 @@ class DialogTest(WorkerCase):
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         self.addCleanup(self.server.kill)
         home, bin_dir = os.path.join(root, "home"), os.path.join(root, "bin")
+        self.addCleanup(harnesses.end, home)
         for path in (home, bin_dir):
             os.mkdir(path)
         shutil.copy2(self.server.program, bin_dir)
@@ -182,7 +183,8 @@ class ColorTest(WorkerCase):
         )
 
     def test_exit_after_color_still_fails_start(self):
-        res = self.start("w1", steps=[{"kind": "sleep", "seconds": 3}, {"kind": "exit"}])
+        # exits once its opening (/color) arrived: inside the start's early watch on any runner
+        res = self.start("w1", steps=[{"kind": "input"}, {"kind": "exit"}])
         self.assertEqual((res.returncode, res.stdout), (1, ""), res.stderr)
         lines = res.stderr.splitlines()
         head = "ensemble-session: w1: claude exited 0 at once; its last lines:"
@@ -192,7 +194,8 @@ class ColorTest(WorkerCase):
         self.assertEqual(self.ok(self.session("ls", "--records")).stdout, "")
 
     def test_dialog_start_says_color_not_set(self):
-        res = self.start("w1", steps=[{"kind": "dialog", "text": TRUST}, "Trusted."])
+        # before SessionStart, as Claude's: no opening is due before it shows
+        res = self.start("w1", steps=["Trusted."], dialog=TRUST)
         self.assertEqual(self.record(res).name, "w1")
         self.assertEqual(
             res.stderr.splitlines(),

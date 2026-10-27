@@ -11,6 +11,7 @@ from ensemble.session.engine.types import (
     KeyPress,
     Liveness,
     Paste,
+    SessionError,
     Unanswered,
     WorkerExit,
     WorkerHook,
@@ -18,6 +19,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.harness import guard
 from ensemble.session.hosts import managed
+from ensemble.session.hosts.base import GUARD_WAIT
 from tests.session.case import Case
 from tests.utils.process_fixtures import TimeoutExpired
 
@@ -76,7 +78,7 @@ class ManagedProcessTest(Case):
         channel = self.channel()
         channel.proc.stdout.read.side_effect = [guard.json_frame(b"s", {"pid": 123}), b""]
         channel.pump()
-        channel.proc.wait.assert_called_once_with(timeout=managed.WAIT)
+        channel.proc.wait.assert_called_once_with(timeout=GUARD_WAIT)
         self.assertEqual(channel.state(), Liveness.UNKNOWN)
         with self.assertRaises(Unanswered):
             channel.close()
@@ -107,6 +109,7 @@ class ManagedProcessTest(Case):
                 managed.select, "select", return_value=([], [channel.proc.stdin], [])
             ),
             mock.patch.object(os, "write", side_effect=BrokenPipeError),
+            mock.patch.object(threading.Condition, "wait_for", return_value=False),
             self.assertRaises(Unanswered),
         ):
             channel.write(b"x")
@@ -116,6 +119,40 @@ class ManagedProcessTest(Case):
             self.assertRaises(Unanswered),
         ):
             channel.write(b"x")
+
+    def test_input_after_a_confirmed_exit_is_refused_without_failing(self):
+        """A guard that confirmed its client's exit and went: input fails, the exit stands."""
+        channel = self.channel(terminal=True)
+        channel.accept(b"s", b'{"pid":123}')
+        channel.accept(b"x", b'{"returncode":0}')
+        with (
+            mock.patch.object(
+                managed.select, "select", return_value=([], [channel.proc.stdin], [])
+            ),
+            mock.patch.object(os, "write", side_effect=BrokenPipeError),
+            self.assertRaisesRegex(SessionError, "exited") as caught,
+        ):
+            channel.send(Paste("/color"))
+        self.assertNotIsInstance(caught.exception, Unanswered)
+        self.assertEqual((channel.state(), channel.returncode()), (Liveness.ABSENT, 0))
+        self.assertEqual(channel.read(0), [WorkerExit(0)])
+
+    def test_close_racing_the_clients_own_exit_succeeds(self):
+        channel = self.channel(terminal=True)
+        channel.accept(b"s", b'{"pid":123}')
+
+        def gone(_fd, _data):
+            channel.accept(b"x", b'{"returncode":0}')
+            raise BrokenPipeError
+
+        with (
+            mock.patch.object(
+                managed.select, "select", return_value=([], [channel.proc.stdin], [])
+            ),
+            mock.patch.object(os, "write", side_effect=gone),
+        ):
+            channel.close()
+        self.assertEqual((channel.state(), channel.returncode()), (Liveness.ABSENT, 0))
 
     def test_terminal_input_is_encoded(self):
         channel = self.channel(terminal=True)
@@ -151,7 +188,7 @@ class ManagedProcessTest(Case):
         channel.close()
         channel.close()
         self.assertEqual(channel.read(0), [WorkerOutput(b"last"), WorkerExit(0)])
-        channel.proc.wait.assert_called_with(timeout=managed.WAIT)
+        channel.proc.wait.assert_called_with(timeout=GUARD_WAIT)
 
     def test_confirmed_worker_but_live_guard_does_not_report_close_success(self):
         channel = self.channel()
@@ -332,6 +369,28 @@ class ManagedProcessTest(Case):
         self.assertEqual(channel.returncode(), 0)
         with self.assertRaises(ValueError):
             channel.accept(b"o", b"late")
+
+    def test_up_marks_its_client_up_and_queues_nothing(self):
+        channel = self.channel()
+        channel.accept(b"s", b'{"pid":123}')
+        self.assertFalse(channel.up)
+        channel.accept(b"u", b"{}")
+        self.assertTrue(channel.up)
+        self.assertEqual(channel.read(0), [])
+        channel.accept(b"x", b'{"returncode":0}')
+        self.assertTrue(channel.up)
+
+    def test_an_up_before_start_twice_after_exit_or_with_a_payload_fails(self):
+        for frames in (
+            [(b"u", b"{}")],
+            [(b"s", b'{"pid":123}'), (b"u", b"{}"), (b"u", b"{}")],
+            [(b"s", b'{"pid":123}'), (b"x", b'{"returncode":0}'), (b"u", b"{}")],
+            [(b"s", b'{"pid":123}'), (b"u", b'{"after":5}')],
+        ):
+            with self.subTest(frames=frames), self.assertRaises(ValueError):
+                channel = self.channel()
+                for kind, payload in frames:
+                    channel.accept(kind, payload)
 
     def test_overflow_fails_and_closes_lifecycle(self):
         channel = self.channel()

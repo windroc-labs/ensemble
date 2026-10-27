@@ -2,9 +2,9 @@
 `-p /usage` (the usage probe) or neither (interactive); install() puts it on PATH. An option
 src/ensemble/session/clients/claude/ never emits exits 2. Interactive: PROMPT, else the first stdin
 line, is turn 1; each later line runs the next of [steps, *turns] between UserPromptSubmit and Stop
-hooks. Stdin's end exits `exit`;
-orphaned or HANG_CAP s idle, 1. Interactive readiness: SessionStart (source startup, or resume on
---resume; matched on source) fires before turn 1 and after each dialog's answer; input arriving from
+hooks. Stdin's end exits `exit`; stranded (orphaned, or its scenario file gone), 1. Interactive
+readiness: SessionStart (source startup, or resume on --resume; matched on source) fires before
+turn 1 and after each dialog's answer; input arriving from
 then until READY s after it is dropped, as Claude drops keys before its input box. A stdin line
 starting with / is a local command: logged to `commands`, never a prompt, an answer or a turn.
 
@@ -18,10 +18,15 @@ with error "rate_limit". {"kind": "write", "path": P, "text": T} writes T to P (
 Interactive {"kind": "limit", "text": S} prints S, keeps it as a rate_limit API error and ends the
 turn with StopFailure; {"kind": "dialog", "text": S} prints S and reads another line. Other steps: {"kind": "hook", "event": E, ...}; {"kind": "sleep", "seconds": X};
 {"kind": "exit"} exits at once with `exit`.
+{"kind": "recall"} replies with the text of its transcript's first user prompt, so a resumed
+conversation can answer from the first generation's.
 {"kind": "queued", "answer": A} runs a tool while the next stdin line arrives, which Claude Code
 queues (an enqueue record) and joins to the turn once the tool returns (PostToolUse, then a
-queued_command attachment), then answers A; {"kind": "pause", "file": F} waits for F to exist.
+queued_command attachment), then answers A; {"kind": "pause", "file": F} waits for F to exist;
+{"kind": "input"} waits for any input to arrive (kept for the next line).
 - turns: interactive steps of turn 2 on.
+- dialog: interactive text printed at startup, before the first SessionStart (as Claude's workspace
+trust dialog), awaiting its answer as a dialog step does.
 - background: interactive background_tasks per Stop.
 - resume: print steps run instead of `steps` on --resume.
 - rate_limit: print a rate_limit_info after init.
@@ -44,6 +49,7 @@ import select
 import shlex
 import subprocess
 import sys
+import termios
 import time
 import uuid
 from dataclasses import dataclass
@@ -56,6 +62,7 @@ DEFAULTS = {
     "steps": [],
     "resume": None,
     "turns": [],
+    "dialog": None,
     "background": 0,
     "rate_limit": None,
     "usage": "Current session: 0% used\n",
@@ -103,6 +110,8 @@ TUI = {
     "exit": {},
     "queued": {"answer": _text},
     "pause": {"file": lambda v: _text(v) and v != ""},
+    "input": {},
+    "recall": {},
 }
 
 
@@ -126,6 +135,7 @@ CHECKS = {
         v is None or isinstance(v, list) and all(_step(step, tui=False) for step in v)
     ),
     "turns": lambda v: isinstance(v, list) and all(isinstance(t, list) for t in v),
+    "dialog": lambda v: v is None or _text(v),
     "background": lambda v: isinstance(v, int) and not isinstance(v, bool) and v >= 0,
     "rate_limit": lambda v: v is None or isinstance(v, dict),
     "usage": lambda v: (
@@ -253,15 +263,20 @@ def waited(done, parent: int) -> bool:
     return True
 
 
+def stranded(parent: int, scenario: str) -> bool:
+    """Orphaned, or its scenario file gone: the test that started it has ended."""
+    return os.getppid() != parent or not os.path.exists(scenario)
+
+
 class Stranded(Exception):
-    """Orphaned, or idle HANG_CAP s."""
+    """Orphaned, or its scenario file gone."""
 
 
 class Stdin:
     """By os.read: select can't see what a buffered reader holds."""
 
-    def __init__(self, parent: int, commands: str | None = None):
-        self.parent, self.buf, self.eof = parent, b"", False
+    def __init__(self, parent: int, scenario: str, commands: str | None = None):
+        self.parent, self.scenario, self.buf, self.eof = parent, scenario, b"", False
         self.commands, self.dialog = commands, False
 
     def read(self, wait: float) -> bytes | None:
@@ -277,6 +292,12 @@ class Stdin:
         """Buffers what has arrived so far."""
         while not self.eof and (chunk := self.read(0)):
             self.buf += chunk
+
+    def arrival(self) -> None:
+        """Waits, at most HANG_CAP s, until something arrived; it stays buffered."""
+        until = time.monotonic() + HANG_CAP
+        while not self.buf and not self.eof and time.monotonic() < until:
+            self.buf += self.read(0.1) or b""
 
     def drop(self, until: float) -> None:
         """Discards what arrives before monotonic `until`."""
@@ -300,15 +321,15 @@ class Stdin:
                     f.write(json.dumps(entry) + "\n")
 
     def raw(self) -> str:
-        until = time.monotonic() + HANG_CAP
         while b"\n" not in self.buf and not self.eof:
-            if os.getppid() != self.parent or time.monotonic() > until:
+            if stranded(self.parent, self.scenario):
                 raise Stranded
             self.buf += self.read(0.1) or b""
         if not self.buf:
             raise EOFError
         line, _, self.buf = self.buf.partition(b"\n")
-        return line.decode(errors="replace")
+        # A managed worker's guard sends a paste bracketed, as Claude reads it.
+        return line.replace(b"\x1b[200~", b"").replace(b"\x1b[201~", b"").decode(errors="replace")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -372,8 +393,14 @@ class InteractiveSession:
                 until = time.monotonic() + HANG_CAP
                 while not os.path.exists(step["file"]) and time.monotonic() < until:
                     time.sleep(0.05)
+            elif kind == "input":
+                self.request.stdin.arrival()
             elif kind == "exit":
                 sys.exit(self.request.scenario["exit"])
+            elif kind == "recall":
+                last = first_prompt(self.request.payload["transcript_path"])
+                print(last, flush=True)
+                self.request.keep("assistant", [{"type": "text", "text": last}])
             else:
                 print(step["text"], flush=True)
                 if kind == "limit":
@@ -420,7 +447,11 @@ class InteractiveSession:
 
     def run(self):
         try:
-            self.ready()
+            if self.request.scenario["dialog"] is None:
+                self.ready()
+            else:
+                print(self.request.scenario["dialog"], flush=True)
+                self.answer()  # SessionStart follows its answer
             prompt = self.request.prompt or self.request.stdin.line()
             for k in itertools.count():
                 self.turn(prompt, self.request.turns[k] if k < len(self.request.turns) else [])
@@ -444,6 +475,25 @@ def invocation(argv: list[str]):
     if not all(_step(step, tui=not a.print) for steps in turns for step in steps):
         sys.exit("fake_claude.py: bad scenario steps")
     return (parent, s, a, turns)
+
+
+def quiet_controls() -> None:
+    """A terminal stdin echoes no ^[ for a paste's bracket, as Claude's input box shows none."""
+    if os.isatty(0):
+        attrs = termios.tcgetattr(0)
+        attrs[3] &= ~termios.ECHOCTL
+        termios.tcsetattr(0, termios.TCSANOW, attrs)
+
+
+def first_prompt(path: str) -> str:
+    """The text of the first user prompt `path` keeps, "" when none."""
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            record = json.loads(line)
+            content = record.get("message", {}).get("content")
+            if record.get("type") == "user" and isinstance(content, str):
+                return content
+    return ""
 
 
 @dataclass(frozen=True)
@@ -586,6 +636,7 @@ def main(argv: list[str]) -> int:
     os.makedirs(os.path.dirname(transcript), exist_ok=True)
     journal = Transcript(sid, cwd, transcript)
     if not a.print:
+        quiet_controls()
         return InteractiveSession(
             InteractiveRequest(
                 scenario=s,
@@ -594,7 +645,7 @@ def main(argv: list[str]) -> int:
                 payload={"session_id": sid, "transcript_path": transcript, "cwd": cwd},
                 keep=journal.keep,
                 record=journal.record,
-                stdin=Stdin(parent, s["commands"]),
+                stdin=Stdin(parent, os.environ[ENV], s["commands"]),
                 prompt=a.prompt,
                 source="resume" if a.resume else "startup",
             )

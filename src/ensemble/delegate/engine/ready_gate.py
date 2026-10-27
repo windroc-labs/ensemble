@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -70,7 +71,7 @@ def gate(outcome: Outcome, updraft: Updraft | None, *, run: Runner = sh) -> Gate
     if not done:
         status, error = _undo(url, view, run)
         return Gated(outcome, status, _line(error))
-    reason = _judge(updraft, view)
+    reason = _judge(updraft, view, url, run)
     if reason is not None:
         _, error = _undo(url, view, run)
         return _failed(outcome, f"{reason}; {error}" if error else reason)
@@ -170,7 +171,7 @@ def _draft(url: str, run: Runner) -> str:
     return ""
 
 
-def _judge(updraft: Updraft | None, view: _View) -> str | None:
+def _judge(updraft: Updraft | None, view: _View, url: str, run: Runner) -> str | None:
     """The first of G1–G3 that fails, as a reason; None if all pass."""
     if updraft is None:
         return "G1: no updraft result"
@@ -180,7 +181,9 @@ def _judge(updraft: Updraft | None, view: _View) -> str | None:
         return f"G2: PR is {view.state}"
     if updraft.head != view.head:
         return f"G2: updraft head {updraft.head[:12]} is not PR head {view.head[:12]}"
-    checks = [_check(item) for item in view.checks]
+    checks = [
+        _check(item, url, view.head, run) for item in _latest(view.checks, url, view.head, run)
+    ]
     for name, kind, said in checks:
         if kind == _Check.FAIL:
             return f"G3: check {name} {said}"
@@ -189,7 +192,73 @@ def _judge(updraft: Updraft | None, view: _View) -> str | None:
     return None
 
 
-def _check(item: object) -> tuple[str, _Check, str]:
+def _latest(checks: list[object], url: str, head: str, run: Runner) -> list[object]:
+    """Discard only checks proven older within the same workflow and PR head."""
+    names = Counter(
+        item["name"]
+        for item in checks
+        if isinstance(item, dict)
+        and item.get("__typename") == "CheckRun"
+        and isinstance(item.get("name"), str)
+        and item["name"]
+    )
+    orders: dict[int, tuple[str, int, int, int]] = {}
+    newest: dict[tuple[str, int], tuple[int, int]] = {}
+    cache: dict[str, dict] = {}
+    for i, item in enumerate(checks):
+        if (
+            not isinstance(item, dict)
+            or item.get("__typename") != "CheckRun"
+            or not isinstance(item.get("name"), str)
+            or names[item["name"]] < 2
+        ):
+            continue
+        if order := _order(item, url, head, run, cache):
+            orders[i] = order
+            key, rank = order[:2], order[2:]
+            newest[key] = max(newest.get(key, rank), rank)
+    return [
+        item
+        for i, item in enumerate(checks)
+        if i not in orders or orders[i][2:] == newest[orders[i][:2]]
+    ]
+
+
+def _order(
+    item: dict, url: str, head: str, run: Runner, cache: dict[str, dict]
+) -> tuple[str, int, int, int] | None:
+    if not (link := _job_link(item, url)):
+        return None
+    host, repo, run_id, job_id = link
+
+    def read(path: str) -> dict:
+        if path not in cache:
+            try:
+                data = json.loads(_gh(run, "gh api check order", ["api", "--hostname", host, path]))
+            except (_GhError, ValueError):
+                data = None
+            cache[path] = data if isinstance(data, dict) else {}
+        return cache[path]
+
+    job = read(f"repos/{repo}/actions/jobs/{job_id}")
+    workflow = read(f"repos/{repo}/actions/runs/{run_id}")
+    if not (
+        all(type(job.get(k)) is int and job[k] > 0 for k in ("id", "run_id", "run_attempt"))
+        and all(
+            type(workflow.get(k)) is int and workflow[k] > 0
+            for k in ("id", "workflow_id", "run_number")
+        )
+        and job["id"] == job_id
+        and job["run_id"] == workflow["id"] == run_id
+        and job.get("head_sha") == workflow.get("head_sha") == head
+        and job.get("name") == item["name"]
+    ):
+        return None
+    # Run numbers order workflow creation, not job scheduling; attempts order reruns.
+    return item["name"], workflow["workflow_id"], workflow["run_number"], job["run_attempt"]
+
+
+def _check(item: object, url: str, head: str, run: Runner) -> tuple[str, _Check, str]:
     """(name, kind, GitHub's word) of a statusCheckRollup entry; unknown fails."""
     if not isinstance(item, dict):
         return "?", _Check.FAIL, "unreadable"
@@ -199,9 +268,60 @@ def _check(item: object) -> tuple[str, _Check, str]:
         status, conclusion = str(item.get("status")), str(item.get("conclusion"))
         if status != "COMPLETED":
             return name, _Check.FAIL, status
+        if conclusion == "CANCELLED" and _unstarted(item, url, head, run):
+            return name, _Check.SKIPPED, conclusion
         found = {"SUCCESS": _Check.PASS, "NEUTRAL": _Check.PASS, "SKIPPED": _Check.SKIPPED}
         return name, found.get(conclusion, _Check.FAIL), conclusion
     if kind == "StatusContext":
         state = str(item.get("state"))
         return name, _Check.PASS if state == "SUCCESS" else _Check.FAIL, state
     return name, _Check.FAIL, f"of unknown type {kind}"
+
+
+def _job_link(item: dict, url: str) -> tuple[str, str, int, int] | None:
+    link = item.get("detailsUrl")
+    if not isinstance(link, str):
+        return None
+    try:
+        pr, job = urlsplit(url), urlsplit(link)
+        repo = "/".join(pr.path.split("/")[1:3])
+        path = re.fullmatch(
+            rf"/{re.escape(repo)}/actions/runs/([1-9]\d*)/job/([1-9]\d*)", job.path, re.IGNORECASE
+        )
+        if job.scheme != "https" or job.netloc.lower() != pr.netloc.lower() or path is None:
+            return None
+        return pr.netloc, repo, int(path[1]), int(path[2])
+    except ValueError:
+        return None
+
+
+def _unstarted(item: dict, url: str, head: str, run: Runner) -> bool:
+    """Confirm terminal cancellation without a runner or steps; missing evidence fails closed."""
+    if not (link := _job_link(item, url)):
+        return False
+    host, repo, run_id, job_id = link
+    try:
+        data = json.loads(
+            _gh(
+                run,
+                "gh api job",
+                ["api", "--hostname", host, f"repos/{repo}/actions/jobs/{job_id}"],
+            )
+        )
+    except (_GhError, ValueError):
+        return False
+    # GitHub can populate started_at while queued; use execution evidence instead.
+    return (
+        isinstance(data, dict)
+        and type(data.get("id")) is int
+        and data["id"] == job_id
+        and type(data.get("run_id")) is int
+        and data["run_id"] == run_id
+        and data.get("head_sha") == head
+        and data.get("status") == "completed"
+        and data.get("conclusion") == "cancelled"
+        and all(key in data for key in ("runner_id", "runner_name", "steps"))
+        and (data["runner_id"] is None or type(data["runner_id"]) is int and data["runner_id"] == 0)
+        and data["runner_name"] in (None, "")
+        and data["steps"] == []
+    )

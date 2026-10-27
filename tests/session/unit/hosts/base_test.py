@@ -214,6 +214,39 @@ class CapacityRows(Case):
         host = self.host([["a", "b"]], ["b", "a"])
         self.assertEqual([row.name for row in host._capacity_rows()], ["b", "a"])
 
+    def test_default_rows_tolerate_a_session_ending_before_attach_or_row(self):
+        for boundary in ("attach", "row"):
+            with self.subTest(boundary=boundary):
+                host = MinimalHost("m")
+                host.list = mock.Mock(
+                    side_effect=[["ended", "live"], ["ended", "live"], ["live"], ["live"]]
+                )
+                live = SessionRow(
+                    "live", None, "c", StatusState.WORKING, None, None, None, own=False
+                )
+                process = mock.Mock()
+                process.row.return_value = live
+                ended = mock.Mock()
+                ended.row.side_effect = SessionError("ended")
+                host.attach = mock.Mock(
+                    side_effect=[SessionError("ended") if boundary == "attach" else ended, process]
+                )
+                self.assertEqual(host._capacity_rows(), [live])
+
+    def test_default_rows_preserve_read_failures_for_sessions_still_listed(self):
+        host = MinimalHost("m")
+        host.list = mock.Mock(return_value=["live"])
+        host.attach = mock.Mock(side_effect=SessionError("cannot read"))
+        with self.assertRaisesRegex(SessionError, "cannot read"):
+            host._capacity_rows()
+
+    def test_default_rows_fail_closed_when_absence_cannot_be_confirmed(self):
+        host = MinimalHost("m")
+        host.list = mock.Mock(side_effect=[["live"], ["live"], SessionError("cannot list")])
+        host.attach = mock.Mock(side_effect=SessionError("cannot read"))
+        with self.assertRaisesRegex(SessionError, "cannot list"):
+            host._capacity_rows()
+
 
 def table(base: str = TWO, text: str = ""):
     return tomllib.loads(base + text).get("hosts")
@@ -336,9 +369,9 @@ class ManagedWorkerTest(Case):
     def test_a_host_without_managed_workers_refuses_to_start_one(self):
         host = MemoryHost("h1")
         with self.assertRaisesRegex(SessionError, r"\Ahost h1 runs no managed worker\Z"):
-            host.worker("w1", Launch(("client",), cwd="/w"), terminal=True)
+            Host.worker(host, "w1", Launch(("client",), cwd="/w"), terminal=True)
         with self.assertRaisesRegex(SessionError, r"\Ahost h1 runs no managed worker\Z"):
-            host.worker_liveness("w1", "g1")
+            Host.worker_liveness(host, "w1", "g1")  # MemoryHost fakes its own
         self.assertEqual(host.calls.mock_calls, [])
 
     def test_a_worker_has_no_periodic_duty_unless_its_host_gives_one(self):

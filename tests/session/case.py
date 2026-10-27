@@ -17,6 +17,7 @@ from ensemble.session.engine.types import Permission
 from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.session.viewer.viewer import Viewer
 from ensemble.utils import load_class
+from tests.session import harnesses
 from tests.utils.sandbox import clean_env, project_roots
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -100,6 +101,7 @@ class Case(unittest.TestCase):
             self.ensemble = os.path.join(self.home, ".ensemble")
             os.mkdir(self.ensemble)
             self.configure_session({})
+            self.addCleanup(harnesses.end, self.home)
             return super().run(result)
 
     def configure_session(self, clients, tmux=None) -> None:

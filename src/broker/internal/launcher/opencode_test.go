@@ -29,7 +29,7 @@ func opencodeManifest(t *testing.T, edit func(map[string]any)) string {
 }
 
 func withGitHub(fields map[string]any) {
-	fields["github"] = map[string]any{"app": "ensemble-bot", "permissions": fixtureSet}
+	fields["github"] = map[string]any{"app": "ensemble-broker-bot", "permissions": fixtureSet}
 }
 
 // opencodeHost fails any read of the Claude or Codex credentials and of the Codex version policy.
@@ -256,7 +256,7 @@ func TestStartOpencode(t *testing.T) {
 		if string(gotJSON) != string(wantJSON) || codexCreds.ready != 0 || codexCreds.injected != 0 {
 			t.Fatalf("got %s\nwant %s", gotJSON, wantJSON)
 		}
-		if issued := slices.Contains(tokens.calls, "issue ensemble-bot "+container); issued != github {
+		if issued := slices.Contains(tokens.calls, "issue ensemble-broker-bot "+container); issued != github {
 			t.Fatalf("github %v: %q", github, tokens.calls)
 		}
 		run := strings.Join(detached(d), " ")
@@ -384,7 +384,7 @@ func TestMaintainOpencode(t *testing.T) {
 			continue
 		}
 		if err != nil || got.Deadline != nil || len(got.Results) != 1 || *got.Results[0].ExpiresAt != expiry[0].ExpiresAt || codexCreds.injected != 0 ||
-			!slices.Equal(tokens.calls, []string{"ready ensemble-bot", "refresh ensemble-bot " + container}) {
+			!slices.Equal(tokens.calls, []string{"ready ensemble-broker-bot", "refresh ensemble-broker-bot " + container}) {
 			t.Fatalf("%+v %v %q", got, err, tokens.calls)
 		}
 		if l := readLines(t, path)[0]; len(l.Credentials) != 0 {

@@ -64,14 +64,14 @@ KEYS = [
     "linear.agent_labels",
 ]
 
-SERVICES = ["ensemble-claude", "ensemble-tokens"]
+SERVICES = ["ensemble-broker-claude", "ensemble-broker-tokens"]
 
 GO = """package broker
 
 var KeychainServices = []string{
-	"ensemble-claude",
+	"ensemble-broker-claude",
 	// a comment
-	"ensemble-tokens", // trailing
+	"ensemble-broker-tokens", // trailing
 
 }
 """
@@ -132,8 +132,8 @@ class CredentialsInventory(Sample):
 
     def test_a_missing_service_is_reported(self):
         self.assertEqual(
-            _violations(self.config(), SERVICES, inventory(missing={"ensemble-tokens"})),
-            ["docs/credentials.md: missing keychain service `ensemble-tokens`"],
+            _violations(self.config(), SERVICES, inventory(missing={"ensemble-broker-tokens"})),
+            ["docs/credentials.md: missing keychain service `ensemble-broker-tokens`"],
         )
 
     def test_each_secret_pattern_is_reported_by_line_without_the_value(self):
@@ -148,26 +148,28 @@ class CredentialsInventory(Sample):
                 self.assertNotIn("tail", found[0])
 
     def test_a_prefix_item_needs_its_table_row(self):
-        services = [*SERVICES, "ensemble-env/"]
-        row = "| `ensemble-env/<name>` | `<name>` | — | a secret | login | the broker |\n"
+        services = [*SERVICES, "ensemble-broker-env/"]
+        row = "| `ensemble-broker-env/<name>` | `<name>` | — | a secret | login | the broker |\n"
         self.assertEqual(_violations(self.config(), services, inventory() + row), [])
-        missing = ["docs/credentials.md: missing keychain prefix item row `ensemble-env/<name>`"]
+        missing = [
+            "docs/credentials.md: missing keychain prefix item row `ensemble-broker-env/<name>`"
+        ]
         for text in (
             "",
-            "`ensemble-env/` is named in prose\n",
-            "see `ensemble-env/<name>` in prose\n",
-            "| `ensemble-env/` | — |\n",
+            "`ensemble-broker-env/` is named in prose\n",
+            "see `ensemble-broker-env/<name>` in prose\n",
+            "| `ensemble-broker-env/` | — |\n",
             "| `ensemble-other/<name>` | — |\n",
         ):
             with self.subTest(text=text):
                 self.assertEqual(_violations(self.config(), services, inventory() + text), missing)
 
     def test_services_reads_a_commented_prefix_entry(self):
-        go = GO.replace("\n\n}", '\n\t"ensemble-env/", // prefix item\n}')
-        self.assertEqual(_services(go), ([*SERVICES, "ensemble-env/"], []))
+        go = GO.replace("\n\n}", '\n\t"ensemble-broker-env/", // prefix item\n}')
+        self.assertEqual(_services(go), ([*SERVICES, "ensemble-broker-env/"], []))
 
     def test_services_reads_only_the_declared_list(self):
-        go = 'const codexService = "ensemble-codex"\n' + GO + 'var other = []string{"x"}\n'
+        go = 'const codexService = "ensemble-broker-codex"\n' + GO + 'var other = []string{"x"}\n'
         self.assertEqual(_services(go), (SERVICES, []))
 
     def test_a_non_literal_service_entry_is_reported(self):

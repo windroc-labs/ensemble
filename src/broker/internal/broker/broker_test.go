@@ -205,7 +205,7 @@ func loginClaude(t *testing.T, k *fakeKeychain, ask *askOnce) (notice string, er
 }
 
 func TestLoginTrustsOnlyBroker(t *testing.T) {
-	const item = " ensemble-claude default"
+	const item = " ensemble-broker-claude default"
 	for name, tc := range map[string]struct {
 		access          *AppAccess
 		appsErr, askErr error
@@ -234,7 +234,7 @@ func TestLoginTrustsOnlyBroker(t *testing.T) {
 			}
 			continue
 		}
-		if err == nil || !strings.Contains(err.Error(), "keychain item ensemble-claude") || !strings.Contains(err.Error(), tc.fails) ||
+		if err == nil || !strings.Contains(err.Error(), "keychain item ensemble-broker-claude") || !strings.Contains(err.Error(), tc.fails) ||
 			!strings.HasSuffix(err.Error(), "rerun ensemble-broker login claude to finish") || k.gets != 0 {
 			t.Fatalf("%s: %v, reads %d", name, err, k.gets)
 		}
@@ -243,7 +243,7 @@ func TestLoginTrustsOnlyBroker(t *testing.T) {
 
 // A no-dialog read that would ask moves the one dialog into login claude, announced, and proves it lasts.
 func TestLoginNeedsDialog(t *testing.T) {
-	const announce = "macOS will ask to let ensemble-broker use ensemble-claude default: enter the login keychain password if asked and click Always Allow\n"
+	const announce = "macOS will ask to let ensemble-broker use ensemble-broker-claude default: enter the login keychain password if asked and click Always Allow\n"
 	for name, tc := range map[string]struct {
 		getErrs   []error
 		dialogErr error
@@ -252,10 +252,10 @@ func TestLoginNeedsDialog(t *testing.T) {
 		fails     string
 	}{
 		"always allowed": {getErrs: []error{ErrNeedsDialog}, dialog: true},
-		"allowed once":   {getErrs: []error{ErrNeedsDialog, ErrNeedsDialog}, dialog: true, fails: "keychain item ensemble-claude default still needs a keychain dialog: click Always Allow, not Allow; rerun ensemble-broker login claude"},
-		"denied":         {getErrs: []error{ErrNeedsDialog}, dialogErr: errors.New("keychain status -128"), dialog: true, fails: "keychain item ensemble-claude default: reading it failed: keychain status -128; rerun ensemble-broker login claude"},
-		"other bytes":    {readBack: "sk-ant-other", fails: "keychain item ensemble-claude default: reading it failed: it holds other bytes; rerun ensemble-broker login claude"},
-		"read error":     {getErrs: []error{errors.New("keychain status -25300")}, fails: "keychain item ensemble-claude default: reading it failed: keychain status -25300; rerun ensemble-broker login claude"},
+		"allowed once":   {getErrs: []error{ErrNeedsDialog, ErrNeedsDialog}, dialog: true, fails: "keychain item ensemble-broker-claude default still needs a keychain dialog: click Always Allow, not Allow; rerun ensemble-broker login claude"},
+		"denied":         {getErrs: []error{ErrNeedsDialog}, dialogErr: errors.New("keychain status -128"), dialog: true, fails: "keychain item ensemble-broker-claude default: reading it failed: keychain status -128; rerun ensemble-broker login claude"},
+		"other bytes":    {readBack: "sk-ant-other", fails: "keychain item ensemble-broker-claude default: reading it failed: it holds other bytes; rerun ensemble-broker login claude"},
+		"read error":     {getErrs: []error{errors.New("keychain status -25300")}, fails: "keychain item ensemble-broker-claude default: reading it failed: keychain status -25300; rerun ensemble-broker login claude"},
 	} {
 		k := &fakeKeychain{getErrs: tc.getErrs, dialogErr: tc.dialogErr}
 		if tc.readBack != "" {
@@ -272,7 +272,7 @@ func TestLoginNeedsDialog(t *testing.T) {
 	}
 }
 
-// Two accounts log in separately: each its own ensemble-claude item, its own token, trusting only the broker.
+// Two accounts log in separately: each its own ensemble-broker-claude item, its own token, trusting only the broker.
 func TestLoginAccounts(t *testing.T) {
 	k := accounts{"default": {fakeApps: fakeApps{access: reinstalled()}}}
 	tokens := map[string]string{"default": token, "work": "sk-ant-oat01-WORK"}
@@ -303,7 +303,7 @@ func TestLoginAccounts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if steps := k["default"].steps; !slices.Equal(steps, []string{"partition ensemble-claude default", "apps ensemble-claude default"}) {
+	if steps := k["default"].steps; !slices.Equal(steps, []string{"partition ensemble-broker-claude default", "apps ensemble-broker-claude default"}) {
 		t.Fatalf("default steps %q", steps)
 	}
 	if steps := k["work"].steps; len(steps) != 0 {
@@ -311,7 +311,7 @@ func TestLoginAccounts(t *testing.T) {
 	}
 	k["work"].getErrs = []error{errors.New("keychain status -25300")}
 	err := Login("work", func() ([]byte, error) { return []byte(tokens["work"]), nil }, (&askOnce{}).read, k, io.Discard, io.Discard)
-	if err == nil || err.Error() != "keychain item ensemble-claude work: reading it failed: keychain status -25300; rerun ensemble-broker login claude work" {
+	if err == nil || err.Error() != "keychain item ensemble-broker-claude work: reading it failed: keychain status -25300; rerun ensemble-broker login claude work" {
 		t.Fatalf("work rerun: %v", err)
 	}
 	for _, bad := range []string{"Work", "setup-token", "", "a/b", "-x", strings.Repeat("a", 65)} {
@@ -357,7 +357,7 @@ const (
 	keychainPass    = "login-keychain-password"
 )
 
-// brokerOnly is the ensemble-claude item's shape: an owner entry, one decrypt entry with only the broker,
+// brokerOnly is the ensemble-broker-claude item's shape: an owner entry, one decrypt entry with only the broker,
 // the partition list with only the broker's partition ID.
 func brokerOnly() AppAccess {
 	return AppAccess{
@@ -492,17 +492,17 @@ func TestLoginGitHub(t *testing.T) {
 		k := &fakeApps{account: "1234567", key: appKey, access: tc.access}
 		ask := &askOnce{}
 		var out bytes.Buffer
-		if err := LoginGitHub("ensemble-bot", k, ask.read, &out); err != nil {
+		if err := LoginGitHub("ensemble-broker-bot", k, ask.read, &out); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 		var steps []string
 		for _, s := range k.steps {
-			steps = append(steps, strings.TrimSuffix(s, " ensemble-bot 1234567"))
+			steps = append(steps, strings.TrimSuffix(s, " ensemble-broker-bot 1234567"))
 		}
 		if !slices.Equal(steps, tc.steps) || ask.calls != tc.asks {
 			t.Fatalf("%s: steps %q, asked %d times", name, k.steps, ask.calls)
 		}
-		if out.String() != "GitHub App ensemble-bot private key (App ID 1234567) now trusts only the broker\n" {
+		if out.String() != "GitHub App ensemble-broker-bot private key (App ID 1234567) now trusts only the broker\n" {
 			t.Fatalf("%s: %q", name, out.String())
 		}
 		if !bytes.Equal(k.got, make([]byte, len(appKey))) {
@@ -518,7 +518,7 @@ func TestLoginGitHub(t *testing.T) {
 			t.Fatalf("%s: left %#v", name, *k.access)
 		}
 		var again bytes.Buffer
-		if err := LoginGitHub("ensemble-bot", k, ask.read, &again); err != nil || ask.calls != tc.asks || again.String() != out.String() {
+		if err := LoginGitHub("ensemble-broker-bot", k, ask.read, &again); err != nil || ask.calls != tc.asks || again.String() != out.String() {
 			t.Fatalf("%s: rerun %v, asked %d times, %q", name, err, ask.calls, again.String())
 		}
 	}
@@ -532,7 +532,7 @@ func TestLoginGitHub(t *testing.T) {
 	} {
 		ask := &askOnce{}
 		var out bytes.Buffer
-		err := LoginGitHub("ensemble-bot", k, ask.read, &out)
+		err := LoginGitHub("ensemble-broker-bot", k, ask.read, &out)
 		if err == nil || k.steps != nil || ask.calls != 0 || out.Len() != 0 || strings.Contains(err.Error(), appKey) {
 			t.Fatalf("%s: %v steps %q out %q", name, err, k.steps, out.String())
 		}
@@ -547,18 +547,18 @@ func TestLoginGitHubKeyAfterAccess(t *testing.T) {
 	}{
 		"read failed": {
 			k:    &fakeApps{key: appKey, getErr: errors.New("keychain status -128")},
-			want: "keychain item ensemble-bot trusts only the broker, but reading it failed: keychain status -128",
+			want: "keychain item ensemble-broker-bot trusts only the broker, but reading it failed: keychain status -128",
 		},
-		"empty": {k: &fakeApps{}, want: "keychain item ensemble-bot trusts only the broker, but it is empty"},
+		"empty": {k: &fakeApps{}, want: "keychain item ensemble-broker-bot trusts only the broker, but it is empty"},
 	} {
 		tc.k.account, tc.k.access = "1234567", added()
 		ask := &askOnce{}
 		var out bytes.Buffer
-		err := LoginGitHub("ensemble-bot", tc.k, ask.read, &out)
+		err := LoginGitHub("ensemble-broker-bot", tc.k, ask.read, &out)
 		if err == nil || err.Error() != tc.want || ask.calls != 1 || out.Len() != 0 {
 			t.Fatalf("%s: %v asked %d times out %q", name, err, ask.calls, out.String())
 		}
-		if !slices.Equal(tc.k.steps, []string{"partition ensemble-bot 1234567", "apps ensemble-bot 1234567", "key ensemble-bot 1234567"}) {
+		if !slices.Equal(tc.k.steps, []string{"partition ensemble-broker-bot 1234567", "apps ensemble-broker-bot 1234567", "key ensemble-broker-bot 1234567"}) {
 			t.Fatalf("%s: steps %q", name, tc.k.steps)
 		}
 		if !bytes.Equal(tc.k.got, make([]byte, len(tc.k.got))) {
@@ -587,18 +587,18 @@ func TestStoreAppKey(t *testing.T) {
 	}
 	pemKey := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
 	k := &fakeAppStore{fakeApps: fakeApps{accountErr: ErrNotFound}}
-	if err := StoreAppKey("ensemble-bot", "1234567", pemKey, k); err != nil {
+	if err := StoreAppKey("ensemble-broker-bot", "1234567", pemKey, k); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(k.puts, []string{"ensemble-bot 1234567"}) || k.key != string(pemKey) {
+	if !slices.Equal(k.puts, []string{"ensemble-broker-bot 1234567"}) || k.key != string(pemKey) {
 		t.Fatalf("puts %q", k.puts)
 	}
 	ask := &askOnce{}
 	var out bytes.Buffer
-	if err := LoginGitHub("ensemble-bot", k, ask.read, &out); err != nil {
+	if err := LoginGitHub("ensemble-broker-bot", k, ask.read, &out); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(k.steps, []string{"partition ensemble-bot 1234567", "key ensemble-bot 1234567"}) || ask.calls != 1 {
+	if !slices.Equal(k.steps, []string{"partition ensemble-broker-bot 1234567", "key ensemble-broker-bot 1234567"}) || ask.calls != 1 {
 		t.Fatalf("steps %q, asked %d times", k.steps, ask.calls)
 	}
 	for name, tc := range map[string]struct {
@@ -609,14 +609,14 @@ func TestStoreAppKey(t *testing.T) {
 		"zero id":   {id: "0123", pem: string(pemKey), want: `App ID "0123" is not 1 to 20 digits`},
 		"word id":   {id: "-w", pem: string(pemKey), want: `App ID "-w" is not 1 to 20 digits`},
 		"not pem":   {id: "1", pem: "SENTINEL", want: "not a GitHub App private key: App private key is not PEM"},
-		"exists":    {id: "1", pem: string(pemKey), k: &fakeAppStore{fakeApps: fakeApps{account: "9"}}, want: "keychain item ensemble-bot exists: run ensemble-broker login github ensemble-bot without --key-file, or delete it first"},
-		"ambiguous": {id: "1", pem: string(pemKey), k: &fakeAppStore{fakeApps: fakeApps{accountErr: ErrAmbiguous}}, want: "keychain item ensemble-bot exists: run ensemble-broker login github ensemble-bot without --key-file, or delete it first"},
+		"exists":    {id: "1", pem: string(pemKey), k: &fakeAppStore{fakeApps: fakeApps{account: "9"}}, want: "keychain item ensemble-broker-bot exists: run ensemble-broker login github ensemble-broker-bot without --key-file, or delete it first"},
+		"ambiguous": {id: "1", pem: string(pemKey), k: &fakeAppStore{fakeApps: fakeApps{accountErr: ErrAmbiguous}}, want: "keychain item ensemble-broker-bot exists: run ensemble-broker login github ensemble-broker-bot without --key-file, or delete it first"},
 		"keychain":  {id: "1", pem: string(pemKey), k: &fakeAppStore{fakeApps: fakeApps{accountErr: errors.New("keychain status -25308")}}, want: "keychain status -25308"},
 	} {
 		if tc.k == nil {
 			tc.k = &fakeAppStore{fakeApps: fakeApps{accountErr: ErrNotFound}}
 		}
-		err := StoreAppKey("ensemble-bot", tc.id, []byte(tc.pem), tc.k)
+		err := StoreAppKey("ensemble-broker-bot", tc.id, []byte(tc.pem), tc.k)
 		if err == nil || err.Error() != tc.want || len(tc.k.puts) != 0 || strings.Contains(err.Error(), "PRIVATE KEY") {
 			t.Fatalf("%s: %v, puts %q", name, err, tc.k.puts)
 		}
@@ -628,7 +628,7 @@ func TestLoginGitHubStepFails(t *testing.T) {
 		apps      = "done: its read and export entries trust only the broker"
 		partition = `its partition list is ["apple-tool:"], not ["cdhash:0a1b2c"]`
 		security  = `entry trusts ["/usr/bin/security"]`
-		rerun     = "rerun ensemble-broker login github ensemble-bot"
+		rerun     = "rerun ensemble-broker login github ensemble-broker-bot"
 	)
 	denied := errors.New("keychain status -25300")
 	for name, tc := range map[string]struct {
@@ -640,33 +640,33 @@ func TestLoginGitHubStepFails(t *testing.T) {
 		"partition first": {
 			k:     &fakeApps{access: added(), partitionErr: ErrAuthFailed},
 			asks:  1,
-			wants: []string{"ensemble-bot unchanged: changing its partition list failed: keychain status -25293", "done: nothing", security, partition, rerun},
+			wants: []string{"ensemble-broker-bot unchanged: changing its partition list failed: keychain status -25293", "done: nothing", security, partition, rerun},
 		},
 		"partition on half done": {
 			k:     &fakeApps{access: halfDone(), partitionErr: denied},
 			asks:  1,
-			wants: []string{"ensemble-bot unchanged: changing its partition list failed", apps, "not done: " + partition, rerun},
+			wants: []string{"ensemble-broker-bot unchanged: changing its partition list failed", apps, "not done: " + partition, rerun},
 		},
 		"apps after partition": {
 			k:     &fakeApps{access: added(), appsErr: denied},
 			asks:  1,
-			wants: []string{"ensemble-bot partly changed: changing its read and export entries failed: keychain status -25300", "done: its partition list holds only the broker's partition ID", security, rerun},
+			wants: []string{"ensemble-broker-bot partly changed: changing its read and export entries failed: keychain status -25300", "done: its partition list holds only the broker's partition ID", security, rerun},
 		},
 		"apps by dialog after refusal": {
 			k:     &fakeApps{access: added(), appsErr: ErrAuthFailed, dialogErr: errors.New("keychain status -128")},
 			asks:  1,
-			wants: []string{"ensemble-bot partly changed: changing its read and export entries failed: keychain status -25293; through the keychain dialog: keychain status -128", "done: its partition list", security, rerun},
+			wants: []string{"ensemble-broker-bot partly changed: changing its read and export entries failed: keychain status -25293; through the keychain dialog: keychain status -128", "done: its partition list", security, rerun},
 		},
 		"password read": {
 			k:     &fakeApps{access: added()},
 			ask:   &askOnce{err: errors.New("needs an interactive terminal")},
 			asks:  1,
-			wants: []string{"ensemble-bot unchanged: reading the login keychain password failed: needs an interactive terminal", "done: nothing", security, partition, rerun},
+			wants: []string{"ensemble-broker-bot unchanged: reading the login keychain password failed: needs an interactive terminal", "done: nothing", security, partition, rerun},
 		},
 		"read back": {
 			k:     &fakeApps{access: added(), partitionErr: denied, readBackErr: errors.New("keychain status -25308")},
 			asks:  1,
-			wants: []string{"ensemble-bot: changing its partition list failed: keychain status -25300", "reading its access back failed: keychain status -25308", "unknown", rerun},
+			wants: []string{"ensemble-broker-bot: changing its partition list failed: keychain status -25300", "reading its access back failed: keychain status -25308", "unknown", rerun},
 		},
 	} {
 		tc.k.account, tc.k.key = "1234567", appKey
@@ -674,7 +674,7 @@ func TestLoginGitHubStepFails(t *testing.T) {
 			tc.ask = &askOnce{}
 		}
 		var out bytes.Buffer
-		err := LoginGitHub("ensemble-bot", tc.k, tc.ask.read, &out)
+		err := LoginGitHub("ensemble-broker-bot", tc.k, tc.ask.read, &out)
 		if err == nil || out.Len() != 0 || tc.ask.calls != tc.asks || slices.ContainsFunc(tc.k.steps, func(s string) bool { return strings.HasPrefix(s, "key ") }) {
 			t.Fatalf("%s: %v out %q asked %d times, steps %q", name, err, out.String(), tc.ask.calls, tc.k.steps)
 		}
@@ -693,18 +693,19 @@ func TestLoginGitHubStepFails(t *testing.T) {
 }
 
 // securityd can refuse the read and export entries' change with the password (seen on macOS with the partition
-// list not yet holding the broker): the keychain's dialog is the fallback, after the partition step.
+// list not yet holding the broker), or, without UI, answer that it would ask: the keychain's dialog is the fallback,
+// after the partition step.
 func TestLoginGitHubAppsDialogFallback(t *testing.T) {
-	for name, appsErr := range map[string]error{"refused": ErrAuthFailed, "other": errors.New("keychain status -25300")} {
+	for name, appsErr := range map[string]error{"refused": ErrAuthFailed, "needs dialog": ErrNeedsDialog, "other": errors.New("keychain status -25300")} {
 		k := &fakeApps{account: "1234567", key: appKey, access: added(), appsErr: appsErr}
 		ask := &askOnce{}
 		var out bytes.Buffer
-		err := LoginGitHub("ensemble-bot", k, ask.read, &out)
-		want := []string{"partition ensemble-bot 1234567", "apps ensemble-bot 1234567"}
-		if name == "refused" {
-			want = append(want, "apps by dialog ensemble-bot 1234567", "key ensemble-bot 1234567")
+		err := LoginGitHub("ensemble-broker-bot", k, ask.read, &out)
+		want := []string{"partition ensemble-broker-bot 1234567", "apps ensemble-broker-bot 1234567"}
+		if name != "other" {
+			want = append(want, "apps by dialog ensemble-broker-bot 1234567", "key ensemble-broker-bot 1234567")
 		}
-		if (err == nil) != (name == "refused") || !slices.Equal(k.steps, want) || ask.calls != 1 {
+		if (err == nil) != (name != "other") || !slices.Equal(k.steps, want) || ask.calls != 1 {
 			t.Fatalf("%s: %v steps %q asked %d times", name, err, k.steps, ask.calls)
 		}
 	}
@@ -714,8 +715,8 @@ func TestLoginGitHubAppsDialogFallback(t *testing.T) {
 func TestLoginGitHubStepErrorButDone(t *testing.T) {
 	k := &fakeApps{account: "1234567", key: appKey, access: added()}
 	var out bytes.Buffer
-	err := LoginGitHub("ensemble-bot", &appliedThenFailed{k}, (&askOnce{}).read, &out)
-	if err != nil || out.String() != "GitHub App ensemble-bot private key (App ID 1234567) now trusts only the broker\n" {
+	err := LoginGitHub("ensemble-broker-bot", &appliedThenFailed{k}, (&askOnce{}).read, &out)
+	if err != nil || out.String() != "GitHub App ensemble-broker-bot private key (App ID 1234567) now trusts only the broker\n" {
 		t.Fatalf("%v %q", err, out.String())
 	}
 }
@@ -773,11 +774,11 @@ func TestLoginGitHubVerifiesAccess(t *testing.T) {
 	} {
 		k := &fakeApps{account: "1234567", key: appKey, access: tc.access, frozen: true}
 		var out bytes.Buffer
-		err := LoginGitHub("ensemble-bot", k, (&askOnce{}).read, &out)
+		err := LoginGitHub("ensemble-broker-bot", k, (&askOnce{}).read, &out)
 		if err == nil || out.Len() != 0 || strings.Contains(err.Error(), appKey) {
 			t.Fatalf("%s: %v out %q", name, err, out.String())
 		}
-		for _, want := range []string{"keychain item ensemble-bot unchanged", tc.want, "rerun ensemble-broker login github ensemble-bot"} {
+		for _, want := range []string{"keychain item ensemble-broker-bot unchanged", tc.want, "rerun ensemble-broker login github ensemble-broker-bot"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Fatalf("%s: %v lacks %q", name, err, want)
 			}
@@ -835,7 +836,8 @@ func TestReady(t *testing.T) {
 			{nil, nil, "", ""},
 			{ErrNotFound, nil, protocol.LoginRequired, "No Claude setup-token for account " + account + ": run " + login + "."},
 			{errors.New("user denied"), nil, protocol.KeychainFailed, "Keychain access to the Claude account " + account + " setup-token failed."},
-			{nil, reinstalled(), protocol.LoginRequired, "The Claude account " + account + " setup-token trusts another broker build: run " + login + "."},
+			{nil, reinstalled(), protocol.LoginRequired, "The Claude account " + account + " setup-token trusts an earlier broker build: run " + RetrustCommand + "."},
+			{nil, added(), protocol.LoginRequired, "The Claude account " + account + " setup-token trusts another broker build: run " + login + "."},
 			{nil, halfDone(), protocol.LoginRequired, "The Claude account " + account + " setup-token trusts another broker build: run " + login + "."},
 		} {
 			k := &fakeKeychain{account: account, fakeApps: fakeApps{access: tc.access, accessErr: tc.err}}
@@ -1035,9 +1037,9 @@ func checkServices(list []string, services, prefixes map[string]bool) []error {
 
 // TestCheckServices: each way a list can disagree with the constants is reported.
 func TestCheckServices(t *testing.T) {
-	services := map[string]bool{"ensemble-claude": true, "ensemble-bot": true}
-	prefixes := map[string]bool{"ensemble-env/": true}
-	if errs := checkServices([]string{"ensemble-claude", "ensemble-bot", "ensemble-env/"}, services, prefixes); len(errs) != 0 {
+	services := map[string]bool{"ensemble-broker-claude": true, "ensemble-broker-bot": true}
+	prefixes := map[string]bool{"ensemble-broker-env/": true}
+	if errs := checkServices([]string{"ensemble-broker-claude", "ensemble-broker-bot", "ensemble-broker-env/"}, services, prefixes); len(errs) != 0 {
 		t.Fatal(errs)
 	}
 	for name, tc := range map[string]struct {
@@ -1045,13 +1047,13 @@ func TestCheckServices(t *testing.T) {
 		services, prefixes map[string]bool
 		want               string
 	}{
-		"prefix missing":       {[]string{"ensemble-claude", "ensemble-bot"}, services, prefixes, "misses prefix item ensemble-env/"},
-		"prefix not constant":  {[]string{"ensemble-claude", "ensemble-bot", "ensemble-env/", "other/"}, services, prefixes, "lists other/, neither"},
-		"prefix without slash": {[]string{"ensemble-claude", "ensemble-bot", "ensemble-env"}, services, map[string]bool{"ensemble-env": true}, "does not end in /"},
-		"service with slash":   {[]string{"ensemble-claude", "ensemble-bot", "x/", "ensemble-env/"}, map[string]bool{"ensemble-claude": true, "ensemble-bot": true, "x/": true}, prefixes, "service x/ ends in /"},
-		"service under prefix": {[]string{"ensemble-claude", "ensemble-env/x", "ensemble-env/"}, map[string]bool{"ensemble-claude": true, "ensemble-env/x": true}, prefixes, "starts with prefix item ensemble-env/"},
-		"service missing":      {[]string{"ensemble-claude", "ensemble-env/"}, services, prefixes, "misses ensemble-bot"},
-		"twice":                {[]string{"ensemble-claude", "ensemble-bot", "ensemble-env/", "ensemble-env/"}, services, prefixes, "lists ensemble-env/ twice"},
+		"prefix missing":       {[]string{"ensemble-broker-claude", "ensemble-broker-bot"}, services, prefixes, "misses prefix item ensemble-broker-env/"},
+		"prefix not constant":  {[]string{"ensemble-broker-claude", "ensemble-broker-bot", "ensemble-broker-env/", "other/"}, services, prefixes, "lists other/, neither"},
+		"prefix without slash": {[]string{"ensemble-broker-claude", "ensemble-broker-bot", "ensemble-broker-env"}, services, map[string]bool{"ensemble-broker-env": true}, "does not end in /"},
+		"service with slash":   {[]string{"ensemble-broker-claude", "ensemble-broker-bot", "x/", "ensemble-broker-env/"}, map[string]bool{"ensemble-broker-claude": true, "ensemble-broker-bot": true, "x/": true}, prefixes, "service x/ ends in /"},
+		"service under prefix": {[]string{"ensemble-broker-claude", "ensemble-broker-env/x", "ensemble-broker-env/"}, map[string]bool{"ensemble-broker-claude": true, "ensemble-broker-env/x": true}, prefixes, "starts with prefix item ensemble-broker-env/"},
+		"service missing":      {[]string{"ensemble-broker-claude", "ensemble-broker-env/"}, services, prefixes, "misses ensemble-broker-bot"},
+		"twice":                {[]string{"ensemble-broker-claude", "ensemble-broker-bot", "ensemble-broker-env/", "ensemble-broker-env/"}, services, prefixes, "lists ensemble-broker-env/ twice"},
 	} {
 		errs := checkServices(tc.list, tc.services, tc.prefixes)
 		if !strings.Contains(fmt.Sprint(errs), tc.want) {
@@ -1079,8 +1081,8 @@ func TestTrustedItem(t *testing.T) {
 		trusted, err := trustedItem(accessOf(func(service, account string) (AppAccess, error) {
 			asked = append(asked, service+"/"+account)
 			return tc.access, tc.err
-		}), "ensemble-env/x", "x")
-		if trusted != tc.trusted || !errors.Is(err, tc.err) || !slices.Equal(asked, []string{"ensemble-env/x/x"}) {
+		}), "ensemble-broker-env/x", "x")
+		if trusted != tc.trusted || !errors.Is(err, tc.err) || !slices.Equal(asked, []string{"ensemble-broker-env/x/x"}) {
 			t.Errorf("%s: %v %v %q", name, trusted, err, asked)
 		}
 	}
@@ -1105,10 +1107,10 @@ func TestStaticSecretErrorsHideKeychainDetail(t *testing.T) {
 	errs = append(errs, OpencodeKeys{Keychain: keys}.Inject([]string{"strata"}, exec))
 	env := envKeys("dummy")
 	env.accessErr = leak
-	errs = append(errs, EnvKeys{Keychain: env}.Ready([]string{"ensemble-env/dummy"}))
+	errs = append(errs, EnvKeys{Keychain: env}.Ready([]string{"ensemble-broker-env/dummy"}))
 	env = envKeys("dummy")
 	env.readErr = leak
-	errs = append(errs, EnvKeys{Keychain: env}.Inject(launcher.Secret{Item: "ensemble-env/dummy", File: "dummy.txt"}, exec))
+	errs = append(errs, EnvKeys{Keychain: env}.Inject(launcher.Secret{Item: "ensemble-broker-env/dummy", File: "dummy.txt"}, exec))
 	for i, err := range errs {
 		if err == nil || strings.Contains(err.Error(), sentinel) || errors.Is(err, leak) {
 			t.Errorf("%d: %v", i, err)
@@ -1129,5 +1131,89 @@ func TestStaticPrefixesMatchServices(t *testing.T) {
 	}
 	if opencodeLogin("strata") != "ensemble-broker login opencode strata" || envLogin("db") != "ensemble-broker login env db" {
 		t.Fatal("login commands")
+	}
+}
+
+// stableApp is the broker's identity once signed with its designated requirement: the same on every build.
+const stableApp = InstalledPath + ` (identifier "com.github.windroc.ensemble-broker")`
+
+func TestEarlierBuild(t *testing.T) {
+	for name, want := range map[string]bool{
+		"current": true, "earlier build": true, "stable identity": true,
+		"any": false, "foreign": false, "mixed": false, "two apps": false, "other path": false, "no requirement": false,
+		"partition": false, "teamid": false, "two partitions": false, "two partition lists": false, "no decrypt": false,
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := *reinstalled()
+			switch name {
+			case "current":
+				a = brokerOnly()
+			case "stable identity":
+				a.Entries[1].Apps = []string{stableApp}
+			case "any":
+				a.Entries[1].Any = true
+			case "foreign":
+				a.Entries[1].Apps = []string{"/foreign (signature)"}
+			case "mixed":
+				a.Entries[1].Apps = append(a.Entries[1].Apps, security)
+			case "two apps":
+				a.Entries = append(a.Entries, ACLEntry{Authorizations: []string{"export_clear"}, Apps: []string{brokerApp}})
+			case "other path":
+				a.Entries[1].Apps = []string{`/tmp/ensemble-broker (cdhash H"1ce471")`}
+			case "no requirement":
+				a.Entries[1].Apps = []string{InstalledPath}
+			case "partition":
+				a.Entries[2].Partitions = []string{"apple-tool:"}
+			case "teamid":
+				a.Entries[2].Partitions = []string{"teamid:ABCDE12345"}
+			case "two partitions":
+				a.Entries[2].Partitions = append(a.Entries[2].Partitions, brokerPartition)
+			case "two partition lists":
+				a.Entries = append(a.Entries, a.Entries[2])
+			case "no decrypt":
+				a.Entries[1].Authorizations = []string{"encrypt"}
+			}
+			if got := earlierBuild(a); got != want {
+				t.Fatalf("earlierBuild = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// A guard failing on secureGuarded's own first read leaves the item unchanged and asks no password.
+func TestSecureGuardedRefusesSwappedItem(t *testing.T) {
+	k := &fakeApps{account: "1234567", access: added()}
+	ask := &askOnce{}
+	err := secureGuarded("ensemble-broker-bot", "1234567", "rerun x", k, ask.read, earlierBuild)
+	if !errors.Is(err, errNotEarlierBuild) || len(k.steps) != 0 || ask.calls != 0 {
+		t.Fatalf("%v steps %q asked %d", err, k.steps, ask.calls)
+	}
+	k = &fakeApps{account: "1234567", access: reinstalled()}
+	if err := secureGuarded("ensemble-broker-bot", "1234567", "rerun x", k, ask.read, earlierBuild); err != nil || onlyBroker(*k.access) != nil {
+		t.Fatalf("earlier build's item not re-trusted: %v %q", err, k.steps)
+	}
+}
+
+// An in-place write never changes an item that does not trust only the broker: macOS allows it without UI when the
+// item's encrypt entry trusts any application.
+func TestWriteOwnedRefusesForeignItem(t *testing.T) {
+	for name, tc := range map[string]struct {
+		access *AppAccess
+		err    error
+		want   error
+	}{
+		"broker's":      {access: current()},
+		"foreign":       {access: added(), want: ErrNotBrokerItem},
+		"earlier build": {access: reinstalled(), want: ErrNotBrokerItem},
+		"missing":       {err: ErrNotFound, want: ErrNotFound},
+	} {
+		t.Run(name, func(t *testing.T) {
+			k := &fakeApps{access: tc.access, accessErr: tc.err}
+			wrote := false
+			err := writeOwned(k, "ensemble-broker-test", "a", func() error { wrote = true; return nil })
+			if !errors.Is(err, tc.want) || err == nil && tc.want != nil || wrote != (tc.want == nil) {
+				t.Fatalf("%v, wrote %v", err, wrote)
+			}
+		})
 	}
 }

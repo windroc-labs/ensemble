@@ -58,6 +58,13 @@ has none, and CI's Ruff step still catches it.
 
 Run tests only through these supervised, sandboxed entries; they retain diagnostics and cleanup.
 
+A session harness outlives the start that made it (a lockless tui's until its worker ends) and
+writes its dir, the workdir's run log and its handlers' records after its close reply.
+`tests/session/harnesses.py`'s `end(home)` closes the harnesses under a HOME and waits for each to
+exit. The tmux `Server` fixture (before it kills the server), each project's `Case` (before its HOME
+goes) and each fixture with a HOME or workdir of its own register it, so no cleanup removes what a
+harness still writes.
+
 Single-test and file selection need the same repository-root `PYTHONPATH` above and the
 selected test's dependencies (tmux for live tmux tests; `node` for the OpenCode TUI tests, which run its plugin and skip without it). Copy the complete ID from the
 failure annotation or summary; no shard number is needed. Files must be repository test
@@ -102,6 +109,9 @@ The required `CI` aggregate depends on that job and validates its result against
 darwin/arm64 binary and uploads its artifact on pushes to `main` and manual dispatch only.
 It reports no PR or merge-group checks and does not block required CI. Broker tests use
 fakes for credentials; they never call the real macOS keychain or Security API.
+Installer and launcher changes also run the separate `Installer macOS` PR workflow:
+`python3 .github/run_tests.py 'Installer macOS' tests/integration/install_integration_test.py tests/manager/integration/ctmux_integration_test.py --parallel 4 --shard 1/1`.
+It uses fake clients and credential storage in isolated homes, plus a private tmux server.
 
 Integration jobs upload `integration-<run-id>-<attempt>-<job>` artifacts containing
 the discovered IDs, assigned IDs, expected load, Python/tmux versions, runner type, supervised

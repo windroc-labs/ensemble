@@ -54,6 +54,9 @@ from ensemble.utils import (
 SIGNALS = (signal.SIGHUP, signal.SIGTERM, signal.SIGINT)
 TUI_DIR = f"{STATE}/tui"
 HARNESS_ROOT = f"{STATE}/harness"
+GUARD_LEASE_FD = "ENSEMBLE_GUARD_LEASE_FD"
+GUARD_HOOK_SOCKET = "ENSEMBLE_GUARD_HOOK_SOCKET"
+GUARD_WAIT = 10  # s for a guard's reply, or its exit after a close (it gives up 9 s after one)
 TUI_STATE = "session.json"
 
 
@@ -234,7 +237,8 @@ class Host(ABC):
 
     attachable: ClassVar[bool] = False
     _environments: ClassVar[bool] = False  # runs Spec.environment
-    _harnessed: ClassVar[bool] = False  # session harnesses own its tui sessions
+    _harnessed: ClassVar[bool] = False  # harnesses own its tui and headless sessions
+    _remote_tui: ClassVar[bool] = False  # its owned tui workers are reached only through a guard
 
     def _provider_usage(self, request: ProviderProbe) -> bool | None:
         """Probe with this Host's credentials, when supported."""
@@ -334,7 +338,14 @@ class Host(ABC):
     def list(self) -> list[str]: ...
 
     def rows(self) -> list[SessionRow]:
-        return [self.attach(name).row() for name in self.list()]
+        rows = []
+        for name in self.list():
+            try:
+                rows.append(self.attach(name).row())
+            except SessionError:
+                if name in self.list():
+                    raise
+        return rows
 
     def _capacity_rows(self) -> list[SessionRow]:
         names = set(self.list())

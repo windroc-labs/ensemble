@@ -336,14 +336,15 @@ class ConfigTest(Base):
         request = SimpleNamespace(provider="strata", base_url="https://strata.test/v1")
         locked = data("error-login_required.json")
         locked["error"].update(
-            command="probe-provider", message="secret-store ensemble-opencode: keychain locked"
+            command="probe-provider",
+            message="secret-store ensemble-broker-opencode: keychain locked",
         )
         runner = BrokerRunner(
             (0, '{"protocol_version":"18"}\n', ""),
             (5, "", json.dumps(locked)),
         )
         self.host.broker = Broker(runner)
-        with self.assertRaisesRegex(SessionError, "protocol '18', want '29'") as caught:
+        with self.assertRaisesRegex(SessionError, "protocol '18', want '30'") as caught:
             self.host._provider_usage(request)
         self.assertIn(
             "install or upgrade it: see docs/docker-host.md#install", str(caught.exception)
@@ -374,7 +375,10 @@ class ConfigTest(Base):
 
     def test_provider_usage_reports_missing_or_invalid_key_as_client_configuration(self):
         request = SimpleNamespace(provider="strata", base_url="https://strata.test/v1")
-        for message in ("No API key in ensemble-opencode", "Invalid API key in ensemble-opencode"):
+        for message in (
+            "No API key in ensemble-broker-opencode",
+            "Invalid API key in ensemble-broker-opencode",
+        ):
             with self.subTest(message=message):
                 error = BrokerError(5, "login_required", message, "not_needed", None)
                 self.broker.failing["probe-provider"] = error
@@ -439,13 +443,13 @@ class ConfigTest(Base):
         local = os.path.join(self.home, "config.local.toml")
         with open(local, "w") as f:
             f.write(
-                '[session.hosts.docker.github]\napp = "ensemble-bot"\n'
+                '[session.hosts.docker.github]\napp = "ensemble-broker-bot"\n'
                 '[session.hosts.docker.github.permissions]\nstatuses = "write"\nissues = "write"\n'
             )
         settings = read_config(local=local)["hosts"]["docker"]
         del settings["implementation"]
         host = DockerHost("docker", settings)
-        self.assertEqual(host.github, "ensemble-bot")
+        self.assertEqual(host.github, "ensemble-broker-bot")
         self.assertEqual(
             host.github_permissions, {**PERMISSIONS, "statuses": "write", "issues": "write"}
         )
@@ -459,7 +463,7 @@ class ConfigTest(Base):
                 r"^unknown key 'mount_roots' in \[hosts.docker\]; delete it: workspaces are volumes$",
             ),
             (
-                {"docker": DOCKER, "github": "ensemble-bot"},
+                {"docker": DOCKER, "github": "ensemble-broker-bot"},
                 r"^\[hosts.docker\] github: want a table$",
             ),
             (
@@ -1560,7 +1564,7 @@ class StartTest(StartBase):
         self.assertNotIn("exited 3:", error)
 
     def test_a_bot_user_id_that_does_not_match_the_app_rolls_back(self):
-        for github, user_id in (("ensemble-bot", None), ("", 343764394)):
+        for github, user_id in (("ensemble-broker-bot", None), ("", 343764394)):
             with self.subTest(github=github, user_id=user_id):
                 self.host.github = github
                 self.broker.started = replace(self.broker.started, github_user_id=user_id)
@@ -1695,7 +1699,7 @@ ENV_SOURCE = "gamma@owner/market#" + "e" * 40
 ENVIRONMENT = EnvironmentSpec(
     image="dummy-env:test",
     gateway="mini-op",
-    secrets=({"item": "ensemble-env/dummy", "file": "dummy.txt"},),
+    secrets=({"item": "ensemble-broker-env/dummy", "file": "dummy.txt"},),
     plugins=("dummy-plugin", HOST_SOURCE, ENV_SOURCE),
     lock="dummy-lock",
 )
@@ -1786,7 +1790,7 @@ class EnvironmentTest(StartBase):
             {key: manifest.get(key) for key in ("gateway", "secrets", "lock", "lock_owner")},
             {
                 "gateway": "mini-op",
-                "secrets": [{"item": "ensemble-env/dummy", "file": "dummy.txt"}],
+                "secrets": [{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}],
                 "lock": "dummy-lock",
                 "lock_owner": "w",
             },
@@ -2160,7 +2164,10 @@ class PipeTest(Base):
             if delivered:
                 acked.set()
                 return Maintained([], [], None, None)
-            notice = {"key": "ensemble-env/db@1:7d", "text": "ensemble-env/db expires soon"}
+            notice = {
+                "key": "ensemble-broker-env/db@1:7d",
+                "text": "ensemble-broker-env/db expires soon",
+            }
             return Maintained([], [notice], None, None)
 
         self.broker.maintain = maintain
@@ -2169,9 +2176,10 @@ class PipeTest(Base):
         piped.close()
         with open(log) as stream:
             self.assertIn(
-                "docker session w: credential_notice ensemble-env/db expires soon", stream.read()
+                "docker session w: credential_notice ensemble-broker-env/db expires soon",
+                stream.read(),
             )
-        self.assertEqual(calls, [(), ("ensemble-env/db@1:7d",)])
+        self.assertEqual(calls, [(), ("ensemble-broker-env/db@1:7d",)])
 
     def test_a_piped_maintain_failure_logs_a_fixed_marker(self):
         log, failed = self.logged_to_file(), threading.Event()
@@ -3398,6 +3406,19 @@ class ListTest(Base):
         self.listed("w")
         self.assertEqual([row.name for row in self.host._capacity_rows()], ["w"])
 
+    def test_admission_inventory_counts_a_container_removed_before_its_row_as_dead(self):
+        self.listed("w")
+        self.record()
+
+        def removed(_argv):
+            self.docker.ps.clear()
+            return done(1, "", f"Error response from daemon: No such container: {CONTAINER}")
+
+        self.docker.replies = {("tmux", "-u", "list-sessions"): removed}
+        (row,) = self.host._capacity_rows()
+        self.assertEqual((row.name, row.client, row.state), ("w", "agent", StatusState.DEAD))
+        self.assertEqual(self.host.list(), [])
+
     def test_list_and_rows_from_labelled_containers(self):
         self.listed("w", "v")
         self.docker.ps += [
@@ -3623,7 +3644,17 @@ class GuardedBase(StartBase):
         return mock.Mock(pid=4321)
 
     def owned(self, **metadata):
-        handle = self.start(owner=self.OWNER, **metadata)
+        """An owned start, as its TuiStore makes it holding the tui lock."""
+        handle = self.host.worker(
+            "w",
+            self.launch,
+            terminal=True,
+            display="lead/below",
+            events=os.path.join(self.home, "events"),
+            metadata={
+                k: v for k, v in {**self.METADATA, "owner": self.OWNER, **metadata}.items() if v
+            },
+        )
         self.addCleanup(self.close_quietly, handle)
         return handle
 

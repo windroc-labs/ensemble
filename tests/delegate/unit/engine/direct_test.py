@@ -34,7 +34,7 @@ class Direct(Case):
                     "image": "dummy-env:test",
                     "lock": "dummy-lock",
                     "plugins": ["dummy-plugin"],
-                    "secrets": [{"item": "ensemble-env/dummy", "file": "dummy.txt"}],
+                    "secrets": [{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}],
                 }
             },
             "roles": {"engineer": {"environment": {"name": "dummy", "gateway": "ignored"}}},
@@ -94,7 +94,7 @@ class Direct(Case):
                 "gateway": "workers",
                 "lock": "dummy-lock",
                 "plugins": ["dummy-plugin"],
-                "secrets": [{"item": "ensemble-env/dummy", "file": "dummy.txt"}],
+                "secrets": [{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}],
                 "prefetch": None,
             },
         )

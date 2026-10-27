@@ -31,7 +31,7 @@ from ensemble.session.engine.types import (
     Spec,
     Stderr,
 )
-from ensemble.session.hosts.base import Host, host_resume
+from ensemble.session.hosts.base import GUARD_HOOK_SOCKET, GUARD_LEASE_FD, Host, host_resume
 from ensemble.utils import (
     ACCOUNT_ENV,
     AGENT_SESSION_ENV,
@@ -81,11 +81,19 @@ def child_env(
 
 def identity_drop(registry: Registry) -> frozenset[str]:
     """SID_ENV and EVENTS_ENV (a caller's start token and events file, never a nested start's),
-    LEASE_ENV (a manager's roster lease), each configured Client class's identity_env, and its
-    child_defaults at their value inside it; builds no Client.
+    LEASE_ENV (a manager's roster lease), a managed worker's guard lease and hook socket, each
+    configured Client class's identity_env, and its child_defaults at their value inside it;
+    builds no Client.
     """
     kinds = [registry.client_class(name) for name in registry.configured()]
-    drop = {SID_ENV, EVENTS_ENV, *LEASE_ENV, *(key for kind in kinds for key in kind.identity_env)}
+    drop = {
+        SID_ENV,
+        EVENTS_ENV,
+        *LEASE_ENV,
+        GUARD_LEASE_FD,
+        GUARD_HOOK_SOCKET,
+        *(key for kind in kinds for key in kind.identity_env),
+    }
     for kind in kinds:
         if kind.session_env and kind.session_env in os.environ:
             drop.update(k for k, v in kind.child_defaults.items() if os.environ.get(k) == v)
@@ -127,6 +135,11 @@ class BaseMode(ABC):
     def remote(self) -> bool:
         return False
 
+    @property
+    def client_up(self) -> bool:
+        """Its guard reported its client up (an owned tui's), else False."""
+        return False
+
     @classmethod
     def preflight(
         cls,
@@ -155,7 +168,7 @@ class BaseMode(ABC):
     ) -> Self:
         """The session started; spec.sid set; registry: tui settings and identity_drop; host: the
         selected execution Host; display: a tui session's, kept as given (other modes refuse one);
-        owner: its session harness's dir (tui, in_process).
+        owner: its session harness's dir (tui, headless, in_process).
         """
 
     @property
@@ -174,6 +187,9 @@ class BaseMode(ABC):
     @abstractmethod
     def state(self) -> Liveness: ...
 
+    def client_alive(self) -> bool:
+        return self.state() == Liveness.LIVE
+
     @abstractmethod
     def send(self, text: str) -> None: ...
 
@@ -186,14 +202,10 @@ class BaseMode(ABC):
     @abstractmethod
     def stop(self) -> None: ...
 
-    def close(self) -> None:
+    def close(self) -> bool | None:
         """Ends the run for good; a tui one also drops its state."""
         self.stop()
-
-    @classmethod
-    def _unowned(cls, owner: str | None) -> None:
-        if owner is not None:
-            raise ConfigError(f"owner: {cls.kind.value} mode has no session harness")
+        return None
 
     @classmethod
     def _unsupported(cls, spec: Spec) -> ConfigError:

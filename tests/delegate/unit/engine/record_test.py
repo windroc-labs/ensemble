@@ -72,14 +72,18 @@ class PhaseTest(HarnessCase):
         self.record.save(replace(state, plan=replace(state.plan, session=session)))
         self.done = Result(0, Outcome(OutcomeStatus.NEEDS_INPUT, "title", "summary"))
 
-    def test_an_old_record_reads_with_the_defaults(self):
-        data = self.metadata()
-        for key in ("previous", "bound"):
-            del data[key]
-        with open(self.state_record(), "w", encoding="utf-8") as file:
-            json.dump(data, file)
-        state = self.record.read()
-        self.assertEqual((state.previous, state.bound), (None, False))
+    def test_a_record_without_previous_or_bound_or_a_bad_bound_is_invalid(self):
+        for key, value in (("previous", None), ("bound", None), ("bound", 1)):
+            with self.subTest(key=key, value=value):
+                data = self.metadata()
+                if value is None:
+                    del data[key]
+                else:
+                    data[key] = value
+                with open(self.state_record(), "w", encoding="utf-8") as file:
+                    json.dump(data, file)
+                with self.assertRaisesRegex(ConfigError, "^invalid .*delegate.json: "):
+                    self.record.read()
 
     def test_the_worker_token_comes_from_the_registration(self):
         self.assertEqual(worker(self.record.read()), 1)

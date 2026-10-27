@@ -2,6 +2,8 @@
 assertions the fake-ctl Crew's tests use passes.
 """
 
+import os
+import signal
 import unittest
 
 from ensemble.utils import Record
@@ -28,6 +30,9 @@ class SessionCtlContract(NamedCtlContract, CliCase):
         return self.session("start", "refused", "--client", "no-such-client", "--prompt", "hi")
 
     def end(self, name):
+        channel = self.owner(name)
+        os.kill(channel.status()["pid"], signal.SIGKILL)  # a crash: its guard ends the client
+        live_tmux.wait(lambda: not channel.alive(), what="the killed harness to let go")
         self.server.tmux("kill-session", "-t", f"={name}")
         live_tmux.wait(
             lambda: self.server.tmux("has-session", "-t", f"={name}").returncode,

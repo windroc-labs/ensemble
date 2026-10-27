@@ -318,7 +318,7 @@ func TestCodexLoginIsolation(t *testing.T) {
 	if n.locked {
 		t.Fatal("lock leaked")
 	}
-	if !slices.Equal(k.steps, []string{"partition ensemble-codex auth", "apps ensemble-codex auth"}) {
+	if !slices.Equal(k.steps, []string{"partition ensemble-broker-codex auth", "apps ensemble-broker-codex auth"}) {
 		t.Fatalf("ACL order %v", k.steps)
 	}
 	if !bytes.Equal(k.data, n.data) {
@@ -368,7 +368,7 @@ func TestCodexLoginAsksBeforeBrowser(t *testing.T) {
 			if wantAsk && asked != 1 || !wantAsk && asked != 0 {
 				t.Fatalf("password questions %v", k.events)
 			}
-			if wantAsk && !slices.Equal(stepsAtRun, []string{"partition ensemble-codex auth", "apps ensemble-codex auth"}) {
+			if wantAsk && !slices.Equal(stepsAtRun, []string{"partition ensemble-broker-codex auth", "apps ensemble-broker-codex auth"}) {
 				t.Fatalf("trust at browser start %v", stepsAtRun)
 			}
 			if !wantAsk && len(k.steps) != 0 {
@@ -663,5 +663,21 @@ func TestCodexRejectsCredentialSymlink(t *testing.T) {
 	}
 	if c.Login(context.Background(), &bytes.Buffer{}) == nil || k.data != nil {
 		t.Fatal("accepted credential symlink")
+	}
+}
+
+func TestCodexStatusEarlierBuildRepairsWithRetrust(t *testing.T) {
+	for access, want := range map[*AppAccess]string{reinstalled(): RetrustCommand, added(): codexLoginCommand} {
+		c, _, k := codexFixture(t)
+		if err := c.Login(context.Background(), io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		k.access = access
+		if s := c.Status(context.Background()); s.State != "login_unavailable" || s.Repair != want {
+			t.Fatalf("%+v, want repair %q", s, want)
+		}
+		if err := c.Ready(context.Background()); err == nil || !strings.HasSuffix(err.Error(), "Codex login unavailable; run "+want) {
+			t.Fatalf("Ready: %v, want run %q", err, want)
+		}
 	}
 }

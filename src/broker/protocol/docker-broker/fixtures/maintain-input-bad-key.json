@@ -6,6 +6,6 @@
     "--manifest",
     "/Users/example/.ensemble/docker-state/worker_1/0123456789abcdef0123456789abcdef.json",
     "--delivered",
-    "ensemble-bot/x@1:7d"
+    "ensemble-broker-bot/x@1:7d"
   ]
 }

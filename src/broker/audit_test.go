@@ -34,7 +34,7 @@ func TestSuccessfulAuditDoesNotMaskRecoveryFailure(t *testing.T) {
 	failure := protocol.New(protocol.KeychainFailed, "Recovery persistence failed.")
 	failure.Container, failure.Cleanup, failure.CleanupError = container, protocol.Failed, "Container removal failed."
 	failure.Cause = "safe persistence diagnostic"
-	a := app{start: func(context.Context, string, io.Writer) (any, error) {
+	a := app{start: func(context.Context, keys, string, io.Writer) (any, error) {
 		return withAudit(rec, func() (any, error) { return nil, failure })
 	}}
 	code, out, errOut := invoke(a, "start", "--manifest", "/manifest")
@@ -73,8 +73,10 @@ func TestAuditWarningKeepsOperationOutcome(t *testing.T) {
 					}
 					return map[string]any{"container": container, "removed": true, "github_user_id": int64(9007199254740993)}, operationErr
 				}
-				step := func(context.Context, string, io.Writer) (any, error) { return withAudit(rec, f) }
-				a := app{start: step, close: step, maintain: func(ctx context.Context, c, _ string, _ []string, _ bool) (any, error) { return step(ctx, c, nil) }, status: func(ctx context.Context, _ bool) (any, error) { return step(ctx, "", nil) }}
+				step := func(context.Context, keys, string, io.Writer) (any, error) { return withAudit(rec, f) }
+				a := app{start: step, close: step, maintain: func(ctx context.Context, _ keys, c, _ string, _ []string, _ bool) (any, error) {
+					return step(ctx, keys{}, c, nil)
+				}, status: func(ctx context.Context, _ keys, _ bool) (any, error) { return step(ctx, keys{}, "", nil) }}
 				args := map[string][]string{"start": {"start", "--manifest", "/manifest"}, "maintain": {"maintain", "--container", container, "--manifest", "/manifest"}, "close": {"close", "--container", container}, "status": {"status", "--cleanup"}}[command]
 				code, out, errOut := invoke(a, args...)
 				wire := out

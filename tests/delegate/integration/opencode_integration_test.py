@@ -84,6 +84,13 @@ class OpenCodeTui(OpenCodeIntegration):
     def scene(self, steps, **scenario):
         Path(self.scenario).write_text(json.dumps({"turns": [steps], **scenario}))
 
+    def printed(self) -> str:
+        """What the run's handler printed: an owned tui run's handler runs in its session harness,
+        whose stderr is its harness.log.
+        """
+        logs = Path(self.home, ".ensemble", "harness").glob("*/harness.log")
+        return "".join(log.read_text(encoding="utf-8", errors="replace") for log in logs)
+
     def test_tui_records_intermediate_progress_once_and_excludes_child_replies(self):
         final = mark("step", "finished") + "\n" + block(DONE)
         res = self.drive(
@@ -103,9 +110,10 @@ class OpenCodeTui(OpenCodeIntegration):
             [(r["name"], r["text"]) for r in self.records() if r["kind"] == "progress"],
             [("start", "working"), ("step", "finished")],
         )
-        self.assertEqual(res.stderr.count("intermediate prose"), 1)
-        self.assertEqual(res.stderr.count("Progress (step): finished"), 1)
-        self.assertNotIn("excluded", res.stderr)
+        printed = self.printed()
+        self.assertEqual(printed.count("intermediate prose"), 1)
+        self.assertEqual(printed.count("Progress (step): finished"), 1)
+        self.assertNotIn("excluded", printed + res.stderr)
         self.assertNotIn("missing progress mark", json.dumps(self.records()))
         self.assertEqual(self.read(self.out), DONE["deliverable"])
 

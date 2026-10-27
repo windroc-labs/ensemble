@@ -162,6 +162,7 @@ class Attended(Segment):
         record, tui = self.printed, config.tui_name("pm", ident, sid)
         self.agent_run()
         self.human_move(ident, "in_progress", "human: retry failed run")
+        live_tmux.crash_owner(self.ensemble, tui)  # its display alone ends no worker
         self.assertEqual(self.server.tmux("kill-session", "-t", f"={tui}").returncode, 0)
         self.scene(**tui_scene(self.agent_script("pm", "done", ident)), usage=USAGE)
         seen = len(agent_calls(self.calls()))

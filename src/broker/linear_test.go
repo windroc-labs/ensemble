@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -11,7 +12,7 @@ import (
 
 func TestLinearHostCommands(t *testing.T) {
 	var enrollments []bool
-	a := app{linear: func(_ context.Context, enroll bool) (any, error) {
+	a := app{linear: func(_ context.Context, _ keys, enroll bool) (any, error) {
 		enrollments = append(enrollments, enroll)
 		if enroll {
 			return map[string]any{"version": 1, "enrolled": true}, nil
@@ -32,11 +33,22 @@ func TestLinearHostCommands(t *testing.T) {
 			t.Fatalf("invalid args accepted: %d", code)
 		}
 	}
-	a.linear = func(context.Context, bool) (any, error) { return nil, errors.New("ROOT-SENTINEL") }
+	a.linear = func(context.Context, keys, bool) (any, error) { return nil, errors.New("ROOT-SENTINEL") }
 	for _, args := range [][]string{{"login", "linear"}, {"linear-maintain"}} {
 		code, out, errOut := invoke(a, args...)
 		if code != 1 || out != "" || strings.Contains(errOut, "SENTINEL") || !strings.Contains(errOut, "Linear") {
 			t.Fatalf("%d %q %q", code, out, errOut)
 		}
+	}
+}
+
+// A broker Linear item an earlier broker build wrote names its repair, retrust.
+func TestLinearStaleItemNamesRetrust(t *testing.T) {
+	a := app{linear: func(context.Context, keys, bool) (any, error) {
+		return nil, fmt.Errorf("maintenance: %w", broker.ErrLinearStale)
+	}}
+	code, out, errOut := invoke(a, "linear-maintain")
+	if code != 1 || out != "" || errOut != "ensemble-broker: "+broker.ErrLinearStale.Error()+"\n" || !strings.Contains(errOut, broker.RetrustCommand) {
+		t.Fatalf("%d %q %q", code, out, errOut)
 	}
 }

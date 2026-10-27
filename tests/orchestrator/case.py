@@ -15,6 +15,7 @@ import ensemble
 from ensemble.orchestrator.engine import log
 from ensemble.orchestrator.engine.flow import workflow
 from ensemble.orchestrator.trackers.linear import client
+from tests.session import harnesses
 from tests.utils.sandbox import clean_env, project_roots
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -62,6 +63,7 @@ class Case(unittest.TestCase):
             workflow.DEFAULT.load()  # a test's own workflow must not reach the next
             self.ensemble = os.path.join(self.home, ".ensemble")
             os.mkdir(self.ensemble)
+            self.addCleanup(harnesses.end, self.home)
             return super().run(result)
 
 

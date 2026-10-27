@@ -42,6 +42,9 @@ class TuiTest(Case):
             with self.subTest(screen=screen):
                 self.assertIsNone(run.limit(screen))
 
+    def test_a_new_tui_has_seen_no_turn_ids(self):
+        self.assertEqual(StubTui()._turn_ids, frozenset())
+
     def test_submit_pastes_then_presses_enter(self):
         self.assertEqual(self.run.submit("x"), (Paste("x"), Key("Enter")))
 

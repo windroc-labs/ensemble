@@ -11,33 +11,106 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from collections.abc import Callable
 
-from ensemble.session.engine.tmux_cli import TuiError
+from ensemble.session.engine.tmux_cli import PROCESS_ID, TmuxPane, TuiError
 from ensemble.session.engine.types import (
+    MARKS,
     ConfigError,
     Launch,
     Liveness,
+    PaneStatus,
     SessionBusy,
     SessionError,
+    StatusState,
     Unanswered,
 )
 from ensemble.session.harness import guard
-from ensemble.session.hosts.managed import WAIT, ManagedProcess
+from ensemble.session.hosts.base import GUARD_HOOK_SOCKET, GUARD_LEASE_FD, GUARD_WAIT
+from ensemble.session.hosts.managed import ManagedProcess
 
 GENERATION = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 
 class TmuxManagedProcess(ManagedProcess):
-    """Its display: the host tmux session of its name, while tagged with its generation."""
+    """Its display: the host tmux session of its name, while tagged with its generation; opener
+    starts it (None: it has none); marked: its last status mark, kept for a reopened display.
+    """
 
-    def __init__(self, name, generation, proc, *, terminal, tmux, start_reader=True):
-        self.tmux = tmux
+    def __init__(
+        self,
+        name,
+        generation,
+        proc,
+        *,
+        terminal,
+        tmux,
+        opener: Callable[[], None] | None = None,
+        start_reader=True,
+    ):
+        self.tmux, self.opener = tmux, opener
+        self.marked: StatusState | None = None
         super().__init__(name, generation, proc, terminal=terminal, start_reader=start_reader)
+
+    def _display(self) -> TmuxPane | None:
+        """Its own generation's display pane, else None (another's, gone, or tmux failed)."""
+        try:
+            if self.tmux.option(self.name, "@generation") != self.generation:
+                return None
+            process = self.tmux.option(self.name, "@process")
+        except TuiError:
+            return None
+        return (
+            TmuxPane(self.name, process, self.tmux) if PROCESS_ID.fullmatch(process or "") else None
+        )
+
+    def activity(self) -> StatusState | None:
+        pane = self._display()
+        try:
+            value = None if pane is None else pane.option("@state")
+        except SessionError:
+            return None
+        return StatusState(value) if value in MARKS else None
+
+    def mark(self, word: StatusState, events: str | None) -> None:
+        self.marked = word
+        pane = self._display()
+        if pane is not None:
+            with contextlib.suppress(SessionError):
+                pane.mark(word, events)
 
     def close_display(self) -> None:
         with contextlib.suppress(TuiError):
             if self.tmux.option(self.name, "@generation") == self.generation:
                 self.tmux.kill(self.name)
+
+    def redisplay(self) -> bool:
+        """False while its own display runs; its own dead one is replaced. Another session of its
+        name is refused, left alone; the worker is never restarted.
+        """
+        if self.opener is None:
+            return False
+        self.checked()
+        if self.code is not None:
+            raise SessionError(f"worker {self.name}: exited")
+        try:
+            shown = self.tmux.option(self.name, "@generation")
+            if shown is not None:
+                if shown != self.generation:
+                    raise SessionError(f"worker {self.name}: its name shows another display")
+                state = self.tmux.status(self.name)
+                if state == PaneStatus.RUNNING:
+                    return False
+                if state == PaneStatus.UNKNOWN:
+                    raise Unanswered(f"worker {self.name}: its display unknown")
+                if state is not None:
+                    self.tmux.kill(self.name)
+            self.opener()
+        except TuiError as error:
+            raise SessionError(f"worker {self.name}: display: {error}") from error
+        if self.marked is not None:
+            self.mark(self.marked, None)  # its state again, no second event line
+        return True
 
 
 def private_directory(path: str) -> None:
@@ -177,16 +250,18 @@ def start(
                 os.path.join(run, "hook"),
             ]
             if terminal:
-                argv += ["--terminal", "--display-socket", os.path.join(run, "display")]
+                argv += ["--terminal", "--display-grace"]
+                argv += ["--display-socket", os.path.join(run, "display")]
             argv += ["--", *launch.argv]
+            # Launch.env passes verbatim; the PTY is no tmux pane, the display relays its bytes.
             environment = {
-                **os.environ,
                 **launch.env,
-                "ENSEMBLE_GUARD_LEASE_FD": str(lease),
-                "ENSEMBLE_GUARD_HOOK_SOCKET": os.path.join(run, "hook"),
+                GUARD_LEASE_FD: str(lease),
+                GUARD_HOOK_SOCKET: os.path.join(run, "hook"),
             }
             for key in ("TMUX", "TMUX_PANE"):
                 environment.pop(key, None)
+            environment.setdefault("TERM", "xterm-256color")
             try:
                 proc = subprocess.Popen(
                     argv,
@@ -207,42 +282,53 @@ def start(
                 raise SessionError(f"worker {name}: cannot start guard: {error}") from error
         finally:
             os.close(lease)
+
+        def open_display() -> None:
+            host.tmux.start(
+                name,
+                Launch(
+                    (
+                        sys.executable,
+                        "-I",
+                        guard.__file__,
+                        "--attach",
+                        os.path.join(run, "display"),
+                    ),
+                    cwd=launch.cwd,
+                ),
+                events=events,
+                status_line=host.tui_settings().status_line,
+                tags={
+                    "@kind": "guard",
+                    "@generation": generation,
+                    **{
+                        f"@{key}": value
+                        for key, value in (metadata or {}).items()
+                        if key in ("sid", "client")
+                    },
+                    **({"@display": display} if display is not None else {}),
+                },
+            )
+            if sys.platform == "darwin":
+                host.tmux.checked(
+                    ["set-hook", "-p", "-t", name, "pane-died", f"kill-session -t ={name}"]
+                )
+
         handle = None
         try:
             assert proc.stdin is not None
             os.set_blocking(proc.stdin.fileno(), False)
-            handle = TmuxManagedProcess(name, generation, proc, terminal=terminal, tmux=host.tmux)
+            handle = TmuxManagedProcess(
+                name,
+                generation,
+                proc,
+                terminal=terminal,
+                tmux=host.tmux,
+                opener=open_display if terminal else None,
+            )
             handle.await_start()
             if terminal:
-                host.tmux.start(
-                    name,
-                    Launch(
-                        (
-                            sys.executable,
-                            "-I",
-                            guard.__file__,
-                            "--attach",
-                            os.path.join(run, "display"),
-                        ),
-                        cwd=launch.cwd,
-                    ),
-                    events=events,
-                    status_line=host.tui_settings().status_line,
-                    tags={
-                        "@kind": "guard",
-                        "@generation": generation,
-                        **{
-                            f"@{key}": value
-                            for key, value in (metadata or {}).items()
-                            if key in ("sid", "client")
-                        },
-                        **({"@display": display} if display is not None else {}),
-                    },
-                )
-                if sys.platform == "darwin":
-                    host.tmux.checked(
-                        ["set-hook", "-p", "-t", name, "pane-died", f"kill-session -t ={name}"]
-                    )
+                open_display()
         except BaseException:
             if handle is not None:
                 with contextlib.suppress(SessionError):
@@ -252,7 +338,7 @@ def start(
                 proc.stdin.close()
                 proc.stdout.close()
                 with contextlib.suppress(subprocess.TimeoutExpired):
-                    proc.wait(timeout=WAIT)
+                    proc.wait(timeout=GUARD_WAIT)
             raise
         return handle
     finally:

@@ -344,12 +344,80 @@ class Launch(CliCase):
         self.assertTrue(line.startswith("crew: ensemble-delegate run --role pm "), line)
         self.assertTrue(line.endswith(f": {busy}"), line)
 
-    def test_only_a_role_start_maps_exit_75(self):
+    def test_a_busy_run_exits_75_naming_the_holder_and_allows_name_reuse(self):
+        busy = "delegate: busy: lock dummy-lock is held by ensemble-x-1 (owner x)"
+        for resume in ((), ("--resume", str(uuid.uuid4()))):
+            with self.subTest(resume=resume):
+                result, stdout, stderr = self.start(
+                    "run",
+                    "--manager",
+                    "mgr",
+                    *resume,
+                    "dummy-1",
+                    "--",
+                    "ensemble-delegate",
+                    "open",
+                    "dummy-1",
+                    "--environment",
+                    "dummy",
+                    code=75,
+                    output="",
+                    stderr=f"{busy}\n",
+                )
+                self.assertEqual((result, stdout, self.roster.entries()), (75, "", {}))
+                self.assertIn(busy, stderr)
+                result, stdout, stderr = self.start(
+                    "run", "--manager", "mgr", *resume, "dummy-1", "--", "starter"
+                )
+                self.assertEqual(result, 0, stderr)
+                self.assertEqual(self.roster.entries()["dummy-1"].record, Record.parse(stdout))
+                self.roster.remove("dummy-1")
+
+    def test_a_busy_run_without_stderr_keeps_the_exit_code(self):
+        result, stdout, stderr = self.start(
+            "run",
+            "--manager",
+            "mgr",
+            "r1",
+            "--",
+            "starter",
+            code=75,
+            output="",
+            stderr="",
+        )
+        self.assertEqual((result, stdout, self.roster.entries()), (75, "", {}))
+        self.assertIn("exit 75", stderr)
+
+    def test_worker_and_issue_starts_keep_exit_75_as_failure(self):
         for verb, key in (("worker", "w1"), ("issue", "TASK-12")):
             with self.subTest(verb=verb):
                 result, stdout, _ = self.start(verb, "--manager", "mgr", key, code=75, output="")
                 self.assertEqual((result, stdout), (1, ""))
                 self.assertEqual(self.roster.entries()[key].state.value, "lost")
+
+    def test_exit_75_with_receipt_output_stays_a_failure(self):
+        for arguments, name in (
+            (("run", "--manager", "mgr", "r1", "--", "starter"), "r1"),
+            (("role", "--manager", "mgr", "--name", "r1", "pm"), "r1"),
+        ):
+            for output in (None, "invalid Record\n", " \n"):
+                with self.subTest(arguments=arguments, output=output):
+                    result, stdout, stderr = self.start(*arguments, code=75, output=output)
+                    self.assertEqual((result, stdout), (1, ""))
+                    self.assertIn("layer message", stderr)
+                    self.assertEqual(self.roster.entries()[name].state.value, "lost")
+                    self.roster.remove(name)
+
+    def test_other_run_failures_keep_exit_one_and_lost(self):
+        for code in (1, 2, 3, 74, 76):
+            with self.subTest(code=code):
+                result, stdout, stderr = self.start(
+                    "run", "--manager", "mgr", "r1", "--", "starter", code=code, output=""
+                )
+                self.assertEqual((result, stdout), (1, ""))
+                self.assertIn("layer message", stderr)
+                self.assertEqual(self.roster.entries()["r1"].state.value, "lost")
+                self.roster.remove("r1")
 
     def test_other_failures_keep_lost_and_generic_run_keeps_exit_two(self):
         for arguments, code, output in (

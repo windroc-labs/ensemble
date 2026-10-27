@@ -16,6 +16,7 @@ from ensemble.delegate.engine.types import Layout
 from tests.delegate.case import REPO as CHECKOUT
 from tests.delegate.case import Case
 from tests.delegate.skills.act_as import argv, head, prefix
+from tests.session import harnesses
 from tests.utils.case import local_section
 
 SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
@@ -29,6 +30,7 @@ class Instruction(Case):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
+        self.addCleanup(harnesses.end, self.home)
         self.proj = os.path.realpath(tmp.name)
         self.adhoc = os.path.join(self.ensemble, "adhoc")
         self.local = os.path.join(self.ensemble, "config.local.toml")

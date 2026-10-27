@@ -9,7 +9,7 @@ import (
 )
 
 // linearSystem is host-only: it never constructs a Docker client or launcher.
-func linearSystem(ctx context.Context, enroll bool) (any, error) {
+func linearSystem(ctx context.Context, k keys, enroll bool) (any, error) {
 	identity, err := broker.ReadLinearIdentity(os.Stdin)
 	if err != nil {
 		return nil, err
@@ -17,11 +17,8 @@ func linearSystem(ctx context.Context, enroll bool) (any, error) {
 	if err = broker.CheckInstalled(); err != nil {
 		return nil, err
 	}
-	home, err := accountHome()
-	if err != nil {
-		return nil, err
-	}
-	l := broker.NewLinear(home, func() ([]byte, error) {
+	home := k.Home
+	l := broker.NewLinear(home, k, func() ([]byte, error) {
 		fmt.Fprint(os.Stderr, "Login keychain password, to make this Linear client secret trust only the broker (hidden): ")
 		return broker.ReadHiddenTTY()
 	})

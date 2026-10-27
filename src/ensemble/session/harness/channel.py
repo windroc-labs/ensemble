@@ -127,6 +127,44 @@ def _remove(path: str) -> None:
             os.unlink(path)
 
 
+class Tie:
+    """A headless start's caller pipe: its harness gets `far`, the caller's view keeps the other
+    end. Every copy of that end closed (the view dropped or its process ended, however) is EOF on
+    `far`, and the harness closes its worker: a headless run dies with its caller, as a piped
+    client did.
+    """
+
+    def __init__(self) -> None:
+        self.far = self._near = -1  # for __del__ when os.pipe fails
+        self.far, self._near = os.pipe()  # neither inheritable
+
+    def handed(self) -> None:
+        """The harness has its copy of `far`."""
+        self.far = _closed(self.far)
+
+    def close(self) -> None:
+        self.far, self._near = _closed(self.far), _closed(self._near)
+
+    __del__ = close
+
+
+def _closed(fd: int) -> int:
+    if fd >= 0:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+    return -1
+
+
+def hung_up(fd: int) -> bool:
+    """EOF on non-blocking `far`; its caller writes nothing, so anything read is ignored."""
+    try:
+        return os.read(fd, 1 << 10) == b""
+    except BlockingIOError:
+        return False
+    except OSError:
+        return True
+
+
 class Channel:
     """One harness dir: its harness holds its lock; views read its log and send requests."""
 
@@ -245,8 +283,8 @@ class Channel:
         return True
 
     def ask(self, op: Op, data: Mapping, timeout: float = REQUEST_WAIT) -> dict:
-        """A remote worker's SEND, PRESS or SCREEN, its answer's data; SessionError refused or with
-        no harness, Unanswered unanswered.
+        """A remote worker's SEND, PRESS or SCREEN, or any worker's DISPLAY, its answer's data;
+        SessionError refused or with no harness, Unanswered unanswered.
         """
         if op not in SERVED:
             raise ValueError(f"ask {op!r}: want one of {', '.join(SERVED)}")
@@ -350,6 +388,35 @@ class Channel:
 
     def write_status(self, status: Mapping) -> None:
         save(self.status_file, json.dumps(status, ensure_ascii=False))
+
+
+def bound(name: str, state: Mapping) -> Channel | None:
+    """Its owner, once that harness.json binds it to `name`, sid and generation."""
+    owner = state.get("owner")
+    if owner is None:
+        return None
+    channel = Channel(owner)
+    deadline = time.monotonic() + REQUEST_WAIT
+    while channel.alive() and (found := channel.status()).get("state") in (None, "starting"):
+        if time.monotonic() > deadline:
+            raise Unanswered(f"session harness {owner}: still starting {name}")
+        time.sleep(SLICE)
+    if not channel.alive():
+        return None
+    if found.get("state") in ("running", "draining", "exited") and (
+        found.get("name"),
+        found.get("sid"),
+        found.get("generation"),
+    ) == (name, state.get("sid"), state.get("generation")):
+        return channel
+    LOG.warning("session %s: owner %s does not own it; ignored", name, owner)
+    return None
+
+
+def running(name: str, state: Mapping) -> Channel | None:
+    """Its bound owner while that harness still runs its worker."""
+    channel = bound(name, state)
+    return channel if channel is not None and channel.status().get("state") == "running" else None
 
 
 def sweep() -> None:

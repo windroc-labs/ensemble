@@ -190,9 +190,82 @@ class GuardTest(Case):
             self.assertEqual(guard.main(["--attach", self.home + "/display"]), 0)
         self.assertEqual(output.getvalue(), b"terminal output")
         peer.sendall.assert_called_once_with(b"typed")
-        raw.assert_called_once_with(0)
+        raw.assert_called_once_with(0, termios.TCSANOW)  # keeps what was typed before it
         restore.assert_called_once_with(0, termios.TCSADRAIN, ["saved"])
         peer.close.assert_called_once()
+
+    def test_a_missing_display_socket_is_one_line_not_a_traceback(self):
+        peer = mock.Mock()
+        peer.connect.side_effect = FileNotFoundError(errno.ENOENT, "No such file or directory")
+        err = io.StringIO()
+        with (
+            mock.patch.object(guard.socket, "socket", return_value=peer),
+            mock.patch.object(sys, "stderr", err),
+        ):
+            self.assertEqual(guard.main(["--attach", self.home + "/display"]), 1)
+        self.assertEqual(
+            err.getvalue(), f"guard: display {self.home}/display: No such file or directory\n"
+        )
+        peer.close.assert_called_once()
+
+    def test_a_client_dead_before_any_display_lingers_for_its_first_one(self):
+        """A --display-grace terminal guard waits DISPLAY_GRACE s after the exit for a display."""
+        runtime = self.runtime(terminal=True, display_grace=True)
+        runtime.exit_at = 100.0
+        self.assertFalse(runtime.lingers(100.5))  # headless: no PTY
+        runtime.master = 20
+        self.assertTrue(runtime.lingers(100.5))
+        runtime.args.display_grace = False
+        self.assertFalse(runtime.lingers(100.5))  # no display starts with it
+        runtime.args.display_grace = True
+        self.assertFalse(runtime.lingers(100.0 + guard.DISPLAY_GRACE))
+        server, peer = mock.Mock(), mock.Mock()
+        server.accept.side_effect = BlockingIOError
+        runtime.take_display(server)
+        self.assertTrue(runtime.lingers(100.5))
+        runtime.screen.append(b"claude: error: unrecognized arguments: --bogus")
+        server.accept.side_effect, server.accept.return_value = None, (peer, "")
+        peer.send.side_effect = len
+        runtime.take_display(server)
+        self.assertIn(b"unrecognized arguments", peer.send.call_args.args[0])
+        self.assertFalse(runtime.lingers(100.5))
+
+    def test_a_close_with_no_display_ever_connected_skips_the_grace(self):
+        """An owned Docker tui worker nobody viewed: no --display-grace, so a close ends at once."""
+        self.assertEqual(self.closed_without_display(display_grace=False), 0)
+        with self.assertRaisesRegex(AssertionError, "lingered"):
+            self.closed_without_display(display_grace=True)
+
+    def closed_without_display(self, *, display_grace):
+        """A terminal guard told to close before any display connected, the clock frozen."""
+        runtime = self.runtime(terminal=True, display_grace=display_grace)
+        runtime.args.display_socket = self.home + "/display"
+        hook_server, display_server = mock.Mock(), mock.Mock()
+        hook_server.accept.side_effect = BlockingIOError
+        display_server.accept.side_effect = BlockingIOError
+        proc = mock.Mock(returncode=None, pid=100)
+        with (
+            mock.patch.object(guard.ctypes, "CDLL") as library,
+            mock.patch.object(guard.socket, "socket", side_effect=[hook_server, display_server]),
+            mock.patch.object(os, "chmod"),
+            mock.patch.object(os, "openpty", return_value=(20, 21)),
+            mock.patch.object(guard.fcntl, "ioctl"),
+            mock.patch.object(os, "close"),
+            mock.patch.object(os, "listdir", return_value=[]),
+            mock.patch.object(os, "set_blocking"),
+            mock.patch.object(guard.subprocess, "Popen", return_value=proc),
+            mock.patch.object(os, "waitpid", side_effect=ChildProcessError),
+            mock.patch.object(guard.select, "select", side_effect=[([0], [], []), ([20], [], [])]),
+            mock.patch.object(os, "read", side_effect=[guard.frame(b"c", b"{}"), b""]),
+            mock.patch.object(os, "write", side_effect=lambda _fd, data: len(data)),
+            mock.patch.object(guard.time, "monotonic", return_value=100.0),
+            mock.patch.object(
+                guard.time, "sleep", side_effect=AssertionError("lingered for a display")
+            ),
+        ):
+            library.return_value.prctl.return_value = 0
+            proc.poll.side_effect = lambda: setattr(proc, "returncode", 0)
+            return runtime.run()
 
     def test_macos_kernel_process_identity_and_enumeration(self):
         library = mock.Mock()
@@ -262,11 +335,12 @@ class GuardTest(Case):
             runtime.emit(b"x" * (guard.BUFFER_MAX + 1))
         self.assertFalse(runtime.output)
 
-    def runtime(self, *, terminal=False):
+    def runtime(self, *, terminal=False, display_grace=False):
         return guard.Guard(
             argparse.Namespace(
                 hook_socket=self.home + "/hook",
                 display_socket=None,
+                display_grace=display_grace,
                 terminal=terminal,
                 command=["fake"],
             )
@@ -464,6 +538,61 @@ class GuardTest(Case):
             mock.patch.object(os, "waitpid", side_effect=ChildProcessError),
         ):
             self.assertTrue(runtime.tick())
+
+    def up_frames(self, returncode: int | None, now: float) -> list[bytes]:
+        """The u frames two ticks at `now` emit for a client spawned at 100, reaped as
+        `returncode` (None: still running).
+        """
+        runtime = self.runtime()
+        runtime.proc = mock.Mock(pid=10, returncode=None)
+        runtime.spawned = 100.0
+        reaped = (0, 0) if returncode is None else (10, returncode << 8)
+        with (
+            mock.patch.object(os, "listdir", return_value=[]),
+            mock.patch.object(os, "waitpid", side_effect=[reaped, ChildProcessError] * 2),
+            mock.patch.object(guard.time, "monotonic", return_value=now),
+        ):
+            runtime.tick()
+            runtime.tick()
+        return [wire for wire, _, _ in runtime.output if wire[:1] == b"u"]
+
+    def test_a_client_running_up_seconds_after_exec_gets_one_up(self):
+        self.assertEqual(self.up_frames(None, 100 + guard.UP), [guard.json_frame(b"u", {})])
+
+    def test_a_client_running_less_than_up_seconds_gets_no_up_yet(self):
+        self.assertEqual(self.up_frames(None, 100 + guard.UP - 0.1), [])
+
+    def test_a_client_that_exited_before_up_never_gets_up_however_late_its_guard_looks(self):
+        self.assertEqual(self.up_frames(2, 100 + guard.UP + 60), [])
+
+    def test_up_is_timed_by_the_clock_read_before_its_reap(self):
+        """Running when reaped just under UP: it may die before a later clock read says UP."""
+        runtime = self.runtime()
+        runtime.proc = mock.Mock(pid=10, returncode=None)
+        runtime.spawned = 100.0
+        reaped = []
+        answers = iter([(0, 0), (10, 2 << 8), ChildProcessError()])  # its next reap: exited
+
+        def waitpid(*_):
+            reaped.append(True)
+            answer = next(answers)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        with (
+            mock.patch.object(os, "listdir", return_value=[]),
+            mock.patch.object(os, "waitpid", side_effect=waitpid),
+            mock.patch.object(
+                guard.time,
+                "monotonic",
+                side_effect=lambda: 100 + guard.UP + (len(reaped) * 60 if reaped else -0.001),
+            ),
+        ):
+            runtime.tick()
+            runtime.tick()
+        self.assertEqual(runtime.proc.returncode, 2)
+        self.assertEqual([wire for wire, _, _ in runtime.output if wire[:1] == b"u"], [])
 
     def test_stopped_child_requires_escalation_and_no_false_confirmation(self):
         runtime = self.runtime()

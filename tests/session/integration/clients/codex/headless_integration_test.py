@@ -27,6 +27,8 @@ from ensemble.session.engine.types import (
     Spec,
     Stderr,
     TurnEnd,
+    TurnFailed,
+    TurnStarted,
 )
 from tests.session.case import REPO, Case, configured
 from tests.session.integration.clients.codex import fake_codex
@@ -262,6 +264,7 @@ class HeadlessEventsIntegrationTest(HeadlessSessions):
         self.assertEqual(
             self.drain(handle),
             [
+                TurnStarted(),
                 Reply("one\n\nnext line\n"),
                 Reply("two"),
                 Reply("three"),
@@ -299,7 +302,7 @@ class HeadlessEventsIntegrationTest(HeadlessSessions):
         handle = self.start("hello", dataclasses.replace(self.spec, sid=self.sid))
         self.assertEqual(
             self.drain(handle),
-            [*(Reply(text) for text in texts), TurnEnd(texts[-1]), Exited(0)],
+            [TurnStarted(), *(Reply(text) for text in texts), TurnEnd(texts[-1]), Exited(0)],
         )
         self.assertEqual(handle.reply, texts[-1])
         self.assertEqual(
@@ -327,11 +330,14 @@ class HeadlessEventsIntegrationTest(HeadlessSessions):
         )
         self.assertEqual(found[-1], Exited(0))
 
-    def test_nonzero_exit_preserves_raw_reply_and_final_turn(self):
+    def test_nonzero_exit_preserves_reply_but_fails_the_turn(self):
         text = json.dumps(DONE)
         self.scene([fake_codex.message(text), {"out": {"type": "turn.completed"}}, {"exit": 7}])
         handle = self.start("hello", dataclasses.replace(self.spec, sid=self.sid))
-        self.assertEqual(self.drain(handle), [Reply(text), TurnEnd(text), Exited(7)])
+        self.assertEqual(
+            self.drain(handle),
+            [TurnStarted(), Reply(text), TurnFailed("process_exit", "worker exited 7"), Exited(7)],
+        )
         self.assertEqual(handle.reply, text)
         self.assertEqual(self.common.load(str(self.work), self.sid).native_id, NATIVE)
 
@@ -339,7 +345,12 @@ class HeadlessEventsIntegrationTest(HeadlessSessions):
         self.scene([fake_codex.message("Thinking."), {"exit": 7}])
         self.assertEqual(
             self.drain(self.start("hello", dataclasses.replace(self.spec, sid=self.sid))),
-            [Reply("Thinking."), Exited(7)],
+            [
+                TurnStarted(),
+                Reply("Thinking."),
+                TurnFailed("process_exit", "worker exited 7"),
+                Exited(7),
+            ],
         )
 
     def test_activity_and_usage_limit_pass_through_the_session(self):
@@ -354,10 +365,11 @@ class HeadlessEventsIntegrationTest(HeadlessSessions):
         self.assertEqual(
             self.drain(self.start("one", dataclasses.replace(self.spec, sid=self.sid))),
             [
+                TurnStarted(),
                 Activity("item.started"),
                 Stderr(error),
                 LimitHit(None),
-                TurnEnd(""),
+                TurnFailed("usage_limit"),
                 Exited(0),
             ],
         )
@@ -688,7 +700,7 @@ class HeadlessRecoveryIntegrationTest(HeadlessSessions):
         found = self.drain(
             handle, lambda event: handle.stop() if isinstance(event, Reply) else None
         )
-        self.assertEqual(found[:-1], [Reply(before)])
+        self.assertEqual(found[:-1], [TurnStarted(), Reply(before), TurnFailed("interrupted")])
         self.assertIsInstance(found[-1], Exited)
         self.assertLess(found[-1].returncode, 0)
         self.assertFalse(handle.alive())
@@ -697,7 +709,9 @@ class HeadlessRecoveryIntegrationTest(HeadlessSessions):
         self.assertEqual(self.common.load(str(self.work), self.sid).native_id, NATIVE)
         self.scene([fake_codex.message(after), {"out": {"type": "turn.completed"}}])
         resumed = self.start("recover", dataclasses.replace(self.spec, sid=self.sid), resume=True)
-        self.assertEqual(self.drain(resumed), [Reply(after), TurnEnd(after), Exited(0)])
+        self.assertEqual(
+            self.drain(resumed), [TurnStarted(), Reply(after), TurnEnd(after), Exited(0)]
+        )
         self.assertEqual(self.logged()[-1]["resume_id"], NATIVE)
         self.assertEqual(
             [entry["client_id"] for entry in self.written() if entry["kind"] == "client_session"],
@@ -714,7 +728,7 @@ class HeadlessRecoveryIntegrationTest(HeadlessSessions):
                 found = self.drain(
                     self.start("hello", dataclasses.replace(self.spec, sid=self.sid), resume=resume)
                 )
-                self.assertEqual(found, [Reply(said), TurnEnd(said), Exited(0)])
+                self.assertEqual(found, [TurnStarted(), Reply(said), TurnEnd(said), Exited(0)])
 
     def test_different_native_id_on_resume_is_not_published_or_saved(self):
         self.drain(self.start("first", dataclasses.replace(self.spec, sid=self.sid)))

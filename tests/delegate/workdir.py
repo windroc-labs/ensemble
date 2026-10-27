@@ -20,3 +20,17 @@ def checkout_path(workdir: str, owner: str, name: str, slug: str) -> str:
 
 def run_log(workdir: str) -> str:
     return os.path.join(Layout(workdir).run, "run.jsonl")
+
+
+RACED = ("client_session", "session_metadata", "stderr")
+
+
+def input_first(records: list[dict]) -> list[dict]:
+    """RACED rows, the session harness's, after the run's input they raced."""
+    found: list[dict] = []
+    for record in records:
+        at = len(found)
+        while record["kind"] == "input" and at and found[at - 1]["kind"] in RACED:
+            at -= 1
+        found.insert(at, record)
+    return found

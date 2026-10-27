@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -505,6 +506,7 @@ func TestStartOrder(t *testing.T) {
 		steps = append(steps, step)
 	}
 	wantSteps := []string{"ps --all", "container inspect", "network inspect", "image inspect", "container inspect", "volume inspect", "volume create", "volume inspect", "ps --filter", "run --rm", "run --detach",
+		"--interactive --user -s",
 		"agent /opt/ensemble/venv/bin/python -I /opt/ensemble/lib/bootstrap.py",
 		"root /opt/ensemble/venv/bin/python -I /opt/ensemble/lib/bootstrap.py",
 		"agent claude --version", "agent /opt/ensemble/clients/bin/codex --version", "agent /opt/ensemble/clients/bin/opencode --version",
@@ -515,7 +517,7 @@ func TestStartOrder(t *testing.T) {
 	if inject := d.calls[len(d.calls)-1]; !slices.Equal(inject, []string{"exec", "--interactive", "--user", "agent", container, "inject"}) {
 		t.Fatalf("inject %q", inject)
 	}
-	boot, hook := d.calls[11], d.calls[12]
+	boot, hook := d.calls[12], d.calls[13]
 	if !slices.Equal(boot[len(boot)-3:], []string{"claude", home + "/.ensemble/docker-state/worker_1/claude", home + "/src/project"}) ||
 		!slices.Equal(hook[len(hook)-2:], []string{"hook", "/usr/local/bin/ensemble-session"}) {
 		t.Fatalf("%q %q", boot, hook)
@@ -531,6 +533,66 @@ func TestStartOrder(t *testing.T) {
 	for _, c := range d.calls {
 		if slices.Contains(c, "root") {
 			t.Fatalf("hook installed without hook_path: %q", c)
+		}
+	}
+}
+
+func TestStartUnreadableImage(t *testing.T) {
+	for _, client := range []string{"claude", "codex", "opencode"} {
+		for _, unreachable := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/unreachable=%t", client, unreachable), func(t *testing.T) {
+				w := &world{labels: goodLabels(), execErr: func(args []string) error {
+					if slices.Contains(args, "/bin/sh") && slices.Contains(args, "-s") {
+						if unreachable {
+							return docker.ErrUnreachable
+						}
+						return &docker.CommandError{Exit: 1, Stderr: "synthetic permission denied"}
+					}
+					return nil
+				}}
+				creds, codex := &fakeCreds{}, &fakeCodexCreds{}
+				h, d := startHost(w, creds)
+				h.Codex, h.Versions = codex, &fakeVersions{}
+				path := validManifest(t)
+				switch client {
+				case "codex":
+					path = codexManifest(t)
+				case "opencode":
+					path = opencodeManifest(t, nil)
+				}
+				_, err := h.Start(context.Background(), path)
+				if err == nil {
+					t.Fatal("start accepted unreadable image content")
+				}
+				e := protoErr(t, err)
+				want := protocol.StartFailed
+				if unreachable {
+					want = protocol.DockerUnreachable
+				}
+				if e.Code != want || e.Cleanup != protocol.Removed || !hasCall(d, "rm") {
+					t.Fatalf("wrong failure or cleanup: %+v %v", e, d.verbs())
+				}
+				if !unreachable && (!strings.Contains(e.Message, "/opt/ensemble") || !strings.Contains(e.Message, "unreadable by agent") || !strings.Contains(e.Message, "ensemble-broker build")) {
+					t.Fatalf("missing cause and recovery: %+v", e)
+				}
+				if slices.ContainsFunc(creds.calls, func(c string) bool { return strings.HasPrefix(c, "inject ") }) || codex.injected != 0 {
+					t.Fatal("credentials injected before content check")
+				}
+				for i, call := range d.calls {
+					if slices.Contains(call, Bootstrap) || slices.Contains(call, "--version") {
+						t.Fatalf("bootstrap or probe ran before content check: %v", call)
+					}
+					if slices.Contains(call, "/bin/sh") {
+						want := []string{"exec", "--interactive", "--user", "agent", container, "/bin/sh", "-s"}
+						if !slices.Equal(call, want) || !strings.Contains(string(d.stdin[i]), "/opt/ensemble") || !strings.Contains(string(d.stdin[i]), "find -L") {
+							t.Fatalf("content check must run as agent over stdin: %v %q", call, d.stdin[i])
+						}
+					}
+					if strings.Contains(strings.Join(call, " "), "inject") {
+						t.Fatalf("secret injection before content check: %v", call)
+					}
+				}
+			})
 		}
 	}
 }

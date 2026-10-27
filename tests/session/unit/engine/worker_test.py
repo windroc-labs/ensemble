@@ -3,6 +3,7 @@ FR-36 replace ladder (no process, no tmux; files only under the test's HOME).
 """
 
 import errno
+import fcntl
 import itertools
 import json
 import os
@@ -25,6 +26,8 @@ from ensemble.session import (
 from ensemble.session.engine import worker
 from ensemble.session.engine.types import Blocked, Exited, IdleTimeout, Reply
 from ensemble.session.engine.worker import Worker, WorkerState
+from ensemble.session.harness.channel import Channel
+from ensemble.session.harness.types import Op
 from ensemble.session.modes.tui import TuiStore
 from ensemble.utils import Record, Status, StatusState, file_lock
 from tests.session.case import Case
@@ -89,6 +92,7 @@ class Base(Case):
         self.session = self.session_cls.start.return_value
         self.session.showable = False
         self.session.opening_pending = None
+        self.session.client_up = True
         self.session.events.return_value = iter([IdleTimeout(worker.EARLY)])
         self.order.attach_mock(self.session_cls.start, "start")
         self.order.attach_mock(self.session_cls.preflight, "preflight")
@@ -181,6 +185,7 @@ class StartTest(Base):
         self.assertEqual(kwargs, {"display": "mgr", "host": "tmux", "idle_timeout": worker.TICK})
 
     def test_a_dialog_ends_the_watch_at_once_and_still_publishes(self):
+        self.session.client_up = False
         self.session.events.return_value = iter([Reply("x"), Blocked("Edit"), Exited(1)])
         self.worker().start(prompt="", resume=False)
         self.assertEqual(self.said, ["session w1: waits on a dialog: Edit"])
@@ -217,13 +222,24 @@ class StartTest(Base):
             self.worker().start(prompt="", resume=False)
         self.assertEqual(str(caught.exception), "w1: claude exited 7 at once")
 
-    def test_the_watch_ends_at_its_deadline_without_an_idle_timeout(self):
-        ticks = iter([0, 1, worker.EARLY + 1])
+    def test_the_watch_ends_on_the_first_event_once_its_client_is_up(self):
+        type(self.session).client_up = mock.PropertyMock(side_effect=[False, True, True])
         self.session.events.return_value = iter([Reply("a"), Reply("b"), Exited(1)])
-        Worker(state(), session_cls=self.session_cls, clock=lambda: next(ticks)).start(
-            prompt="", resume=False
-        )
+        self.worker().start(prompt="", resume=False)
         self.handle.publish.assert_called_once()
+
+    def test_an_exit_that_reaches_the_watch_past_every_deadline_still_fails_the_start(self):
+        """The exit chain lagging: idle ticks well past EARLY and COLOR_CAP, its client never up."""
+        self.session.client_up = False
+        late = worker.COLOR_CAP * 2
+        self.session.events.return_value = iter([*[IdleTimeout(worker.TICK)] * late, Exited(2)])
+        ticks = itertools.count()
+        with self.assertRaisesRegex(SessionError, "^w1: claude exited 2 at once"):
+            Worker(state(), session_cls=self.session_cls, clock=lambda: next(ticks)).start(
+                prompt="", resume=False
+            )
+        self.assertGreater(next(ticks), late)
+        self.handle.publish.assert_not_called()
 
     def test_its_state_is_saved_before_its_client_starts(self):
         seen = []
@@ -529,6 +545,7 @@ class ColorWatchTest(Base):
         type(self.session).opening_pending = mock.PropertyMock(
             side_effect=lambda: text if now[0] < sent else None
         )
+        type(self.session).client_up = mock.PropertyMock(side_effect=lambda: now[0] >= worker.EARLY)
         self.session.events.return_value = events or itertools.repeat(IdleTimeout(worker.TICK))
         Worker(state(), session_cls=self.session_cls, say=self.said.append, clock=tick).start(
             prompt="", resume=False
@@ -572,17 +589,49 @@ class ColorWatchTest(Base):
         self.assertEqual(self.said, [])
         self.handle.publish.assert_not_called()
 
-    def test_a_session_without_an_opening_returns_at_the_early_deadline(self):
-        plain = mock.create_autospec(Session, instance=True)
-        plain.showable = False
-        plain.events.return_value = itertools.repeat(IdleTimeout(worker.TICK))
+    def plain(self, *events, alive: bool) -> mock.Mock:
+        """A session no guard reports up, its client running as `alive` says; its session alive."""
+        plain = mock.Mock(spec=["showable", "events", "alive", "client_alive"], showable=False)
+        plain.alive.return_value = True
+        plain.client_alive.return_value = alive
+        plain.events.return_value = iter(events) if events else itertools.repeat(IdleTimeout(1))
         self.session_cls.start.return_value = plain
+        return plain
+
+    def test_a_session_without_a_guard_returns_once_its_client_runs_at_the_early_deadline(self):
+        plain = self.plain(alive=True)
         ticks = itertools.count()
         Worker(
             state(), session_cls=self.session_cls, say=self.said.append, clock=lambda: next(ticks)
         ).start(prompt="", resume=False)
         self.assertEqual(next(ticks), worker.EARLY + 1)
         self.assertEqual(self.said, [])
+        plain.client_alive.assert_called_once_with()
+
+    def test_a_session_without_a_guard_whose_client_ended_waits_for_its_exit(self):
+        """Its session still alive (a kept dead pane), its exit not yet polled."""
+        late = worker.COLOR_CAP * 2
+        plain = self.plain(*[IdleTimeout(worker.TICK)] * late, Exited(2), alive=False)
+        ticks = itertools.count()
+        with self.assertRaisesRegex(SessionError, "^w1: claude exited 2 at once"):
+            Worker(state(), session_cls=self.session_cls, clock=lambda: next(ticks)).start(
+                prompt="", resume=False
+            )
+        self.assertEqual(plain.client_alive.call_count, late - worker.EARLY + 1)
+        plain.alive.assert_not_called()
+        self.handle.publish.assert_not_called()
+
+    def test_a_plain_session_returns_once_alive_at_the_early_deadline(self):
+        plain = mock.create_autospec(Session, instance=True)
+        plain.showable = False
+        plain.alive.return_value = True
+        plain.events.return_value = itertools.repeat(IdleTimeout(worker.TICK))
+        self.session_cls.start.return_value = plain
+        ticks = itertools.count()
+        Worker(state(), session_cls=self.session_cls, clock=lambda: next(ticks)).start(
+            prompt="", resume=False
+        )
+        self.assertEqual(next(ticks), worker.EARLY + 1)
 
 
 class LoadTest(Base):
@@ -754,3 +803,162 @@ class RestartTest(Base):
         with self.assertRaisesRegex(SessionError, "^w1: no session to restart; resume starts it$"):
             self.worker().restart()
         self.assertEqual(self.calls(), [])
+
+
+class OwnedTest(Base):
+    """A worker its session harness owns (session.json names the harness and its sid): resume asks
+    its running owner, else starts a new harness through the gate; it never closes or reclaims.
+    """
+
+    def owned(
+        self, status: str | None = "running", *, owner: bool = True, answer: dict | None = None
+    ) -> None:
+        """w1's session.json (with an owner unless `owner` is False); its harness held and in
+        `status` (None: no harness holds it); a running one answers each request with `answer`
+        (default: nothing reopened), its ops in self.asked.
+        """
+        channel = Channel.create()
+        if status is not None:
+            fd = os.open(channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            self.addCleanup(os.close, fd)
+            channel.write_status({"state": status, "name": "w1", "sid": SID, "generation": "g1"})
+        if status == "running":
+            self.serve(channel, answer or {"ok": True, "data": {"reopened": False}})
+        record = {
+            "client": "claude",
+            "workdir": state().workdir(),
+            "sid": SID,
+            "cwd": "/work",
+            "project": True,
+            "transcript": "",
+            "resume": "",
+            "events": "/events",
+            "words": {},
+            "host": "tmux",
+            "generation": "g1",
+            **({"owner": channel.directory} if owner else {}),
+        }
+        with open(os.path.join(self.tui, "session.json"), "w", encoding="utf-8") as f:
+            json.dump(record, f)
+
+    def serve(self, channel: Channel, answer: dict) -> None:
+        self.asked: list[Op] = []
+        done = threading.Event()
+
+        def run():
+            while not done.is_set():
+                for ident, op, _ in channel.pending():
+                    self.asked.append(op)
+                    channel.reply(ident, **answer)
+                time.sleep(0.01)
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        self.addCleanup(done.set)
+
+    def test_owned_resume_with_running_owner_starts_and_closes_nothing(self):
+        self.owned()
+        self.handle.alive.return_value = False  # its display says nothing of the worker
+        self.assertEqual(self.worker().resume(), state().record())
+        self.assertEqual(self.calls(), ["publish"])
+        self.session_cls.retire.assert_not_called()
+        self.host.list.return_value = []  # its display killed
+        self.host.attach.side_effect = SessionError("no tmux session w1")
+        self.assertEqual(self.worker().resume(), state().record())
+        self.assertEqual(self.calls(), ["publish"])
+        self.assertEqual(self.asked, [Op.DISPLAY, Op.DISPLAY])
+        self.session_cls.attach.assert_not_called()  # nothing reopened: nothing shown
+        self.assertEqual(self.said, [])
+
+    def test_owned_resume_reopens_its_killed_display_and_shows_it(self):
+        self.owned(answer={"ok": True, "data": {"reopened": True}})
+        view = self.session_cls.attach.return_value
+        view.showable = True
+        view.attach_command.return_value = "tmux attach -t '=w1'"
+        view.status.return_value = Status(
+            name="w1",
+            alive=True,
+            state=StatusState.WORKING,
+            outcome=None,
+            attach=None,
+            hidden=False,
+        )
+        self.assertEqual(self.worker().resume(), state().record())
+        self.assertEqual(self.asked, [Op.DISPLAY])
+        self.assertEqual(self.calls(), ["publish"])
+        self.session_cls.attach.assert_called_once_with("w1", sid=SID, host="tmux")
+        view.show.assert_called_once_with(display="mgr")
+        self.assertEqual(self.said, ["session w1: tmux attach -t '=w1'"])
+        self.session_cls.retire.assert_not_called()
+
+    def test_owned_resume_keeps_a_reopened_hidden_display_hidden(self):
+        self.owned(answer={"ok": True, "data": {"reopened": True}})
+        view = self.session_cls.attach.return_value
+        view.showable = True
+        view.status.return_value = Status(
+            name="w1", alive=True, state=StatusState.WORKING, outcome=None, attach=None, hidden=True
+        )
+        self.worker().resume()
+        view.show.assert_not_called()
+        view.hide.assert_not_called()
+
+    def test_owned_resume_says_a_display_refused_or_unshown_and_returns_its_record(self):
+        self.owned(answer={"ok": False, "error": "worker w1: its name shows another display"})
+        self.assertEqual(self.worker().resume(), state().record())
+        self.assertEqual(
+            self.said,
+            ["session w1: display not reopened: worker w1: its name shows another display"],
+        )
+        self.session_cls.attach.assert_not_called()
+        self.owned(answer={"ok": True, "data": {"reopened": True}})
+        self.said.clear()
+        self.session_cls.attach.side_effect = SessionError("no tui session w1")
+        self.assertEqual(self.worker().resume(), state().record())
+        self.assertEqual(self.said, ["session w1: not shown: no tui session w1"])
+        self.assertEqual(self.calls(), ["publish", "publish"])
+
+    def test_owned_resume_without_owner_starts_and_closes_nothing(self):
+        self.owned(None)
+        self.worker().resume()
+        self.assertEqual(self.calls(), ["preflight", "start", "publish"])
+        self.session_cls.retire.assert_not_called()
+        spec = self.session_cls.start.call_args.args[0]
+        self.assertEqual((spec.prompt, spec.resume, spec.sid), ("", True, SID))
+
+    def test_owned_restart_closes_through_the_owner(self):
+        self.owned()
+        self.session_cls.retire.side_effect = None  # its owner's confirmed close
+        self.worker().restart()
+        self.session_cls.retire.assert_called_once_with("w1", host="tmux")
+        self.assertEqual(self.calls(), ["start", "publish"])
+
+    def test_owned_restart_without_owner_refused(self):
+        self.owned(None)
+        with self.assertRaisesRegex(SessionError, "^w1: no session to restart; resume starts it$"):
+            self.worker().restart()
+        self.assertEqual(self.calls(), [])
+        self.session_cls.retire.assert_not_called()
+
+    def test_exited_owner_is_not_running(self):
+        self.owned("exited")
+        self.worker().resume()
+        self.assertEqual(self.calls(), ["preflight", "start", "publish"])
+
+    def test_owned_resume_never_reclaims(self):
+        self.owned(None)
+        self.host.list.return_value = []
+        self.host.reclaim.return_value = self.handle
+        self.worker(token="/tmp/apm-group-1").resume()
+        self.host.reclaim.assert_not_called()
+        self.handle.close.assert_not_called()
+        self.handle.kill.assert_not_called()
+
+    def test_unowned_resume_still_reclaims(self):
+        self.owned(None, owner=False)
+        self.host.list.return_value = []
+        self.host.reclaim.return_value = self.handle
+        self.handle.wait_exit.return_value = True
+        self.worker(token="/tmp/apm-group-1").resume()
+        self.host.reclaim.assert_called_once_with("/tmp/apm-group-1")

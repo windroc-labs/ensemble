@@ -67,6 +67,7 @@ class PreflightHeadless(JsonHeadless):
 
 class PreflightTui(Tui):
     def __init__(self, client):
+        super().__init__()
         self.owner = client
 
     def launch(self, spec, hook):

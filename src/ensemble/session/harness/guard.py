@@ -29,6 +29,8 @@ BUFFER_MAX = 8 << 20
 HOOK_MAX = 1 << 20
 READ_SIZE = 65536
 TICK = 0.05
+DISPLAY_GRACE = 2.0  # a client dead at once still reaches the display its Host starts at launch
+UP = 5.0  # s its client runs after exec before the guard reports it up (`u`)
 DELIVERY = re.compile(r"[0-9a-f]{32}")
 
 
@@ -345,6 +347,10 @@ class Guard:
         self.signalled = {}
         self.channel = True
         self.exit_sent = False
+        self.exit_at = 0.0
+        self.spawned = 0.0
+        self.up_sent = False
+        self.displayed = False
         self.children_pending = False
         self.lease = os.environ.get("ENSEMBLE_GUARD_LEASE_FD") if lease is None else lease
         self.directory = os.path.dirname(args.lease if lease is not None else args.hook_socket)
@@ -382,6 +388,7 @@ class Guard:
                 close_fds=True,
                 preexec_fn=lambda: child_setup(slave),
             )
+            self.spawned = time.monotonic()
         finally:
             if slave is not None:
                 os.close(slave)
@@ -525,9 +532,13 @@ class Guard:
         assert self.proc is not None
         rows = processes(self.known)
         self.known = descendants(rows, self.known, os.getpid())
+        now = time.monotonic()  # before the reap: an exit before UP s can never be reported up
         self.reap()
         if self.proc.returncode is not None:
             self.close()
+        elif not self.up_sent and self.channel and now - self.spawned >= UP:
+            self.emit(json_frame(b"u", {}))
+            self.up_sent = True
         if self.closing is None:
             return False
         elapsed = time.monotonic() - self.closing
@@ -557,10 +568,14 @@ class Guard:
                     self.state("exited")
                     if self.channel:
                         self.emit(json_frame(b"x", {"returncode": self.proc.returncode}))
-                    self.exit_sent = True
+                    self.exit_sent, self.exit_at = True, time.monotonic()
                 self.flush()
                 if self.exit_sent and (not self.output or not self.channel):
-                    return 0
+                    if not self.lingers(time.monotonic()):
+                        return 0
+                    for server, role in self.servers.items():
+                        if role == "display":
+                            self.take_display(server)
                 # A stalled consumer must not hold an already-reclaimed guard indefinitely.
                 if ended and self.closing is not None and time.monotonic() - self.closing > 9:
                     return 1
@@ -582,16 +597,12 @@ class Guard:
                             for kind, payload in self.decoder.feed(data):
                                 self.command(kind, payload)
                     elif not isinstance(descriptor, int) and descriptor in self.servers:
-                        peer, _ = descriptor.accept()
-                        peer.settimeout(0)
-                        self.peers[peer] = (self.servers[descriptor], bytearray())
                         if self.servers[descriptor] == "display":
-                            snapshot = self.screen.snapshot()
-                            try:
-                                if peer.send(snapshot) != len(snapshot):
-                                    self.drop(peer)
-                            except OSError:
-                                self.drop(peer)
+                            self.take_display(descriptor)
+                        else:
+                            peer, _ = descriptor.accept()
+                            peer.settimeout(0)
+                            self.peers[peer] = (self.servers[descriptor], bytearray())
                     elif descriptor in self.peers:
                         self.peer_read(descriptor)
                     elif isinstance(descriptor, int) and descriptor in self.streams:
@@ -617,6 +628,33 @@ class Guard:
                     if stream is not None:
                         stream.close()
 
+    def lingers(self, now: float) -> bool:
+        """A --display-grace terminal guard whose client ended before any display came waits
+        DISPLAY_GRACE s.
+        """
+        return (
+            self.args.display_grace
+            and self.master is not None
+            and not self.displayed
+            and now - self.exit_at < DISPLAY_GRACE
+        )
+
+    def take_display(self, server) -> None:
+        """A display connecting: the current screen first, then live output."""
+        try:
+            peer, _ = server.accept()
+        except BlockingIOError:
+            return
+        peer.settimeout(0)
+        self.peers[peer] = ("display", bytearray())
+        self.displayed = True
+        snapshot = self.screen.snapshot()
+        try:
+            if peer.send(snapshot) != len(snapshot):
+                self.drop(peer)
+        except OSError:
+            self.drop(peer)
+
     def final_hooks(self) -> None:
         for server, role in self.servers.items():
             if role == "hook":
@@ -635,11 +673,16 @@ class Guard:
 
 def attach(path: str) -> int:
     peer = socket.socket(socket.AF_UNIX)
-    previous = termios.tcgetattr(0) if os.isatty(0) else None
     try:
         peer.connect(path)
+    except OSError as error:
+        peer.close()
+        print(f"guard: display {path}: {error.strerror or error}", file=sys.stderr)
+        return 1
+    previous = termios.tcgetattr(0) if os.isatty(0) else None
+    try:
         if previous is not None:
-            tty.setraw(0)
+            tty.setraw(0, termios.TCSANOW)  # TCSAFLUSH would drop what was typed before it
         while True:
             ready, _, _ = select.select([0, peer], [], [])
             for descriptor in ready:
@@ -701,6 +744,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--terminal", action="store_true")
     parser.add_argument("--hook-socket")
     parser.add_argument("--display-socket")
+    parser.add_argument("--display-grace", action="store_true")
     parser.add_argument("--lease")
     parser.add_argument("--probe")
     parser.add_argument("command", nargs=argparse.REMAINDER)

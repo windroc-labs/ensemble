@@ -332,22 +332,21 @@ class HarnessDelegate(Delegate):
         return previous.attempt + 1 if previous.plan.sid == self._state.plan.sid else 1
 
     def _settle(self) -> None:
-        """A gone owned worker retired outside the mutex: its owner answers once it drained the
-        handler, before the sweep."""
+        """A gone owned worker retired outside the mutex, after its handler drained. Only under
+        the run lock, which every start takes, and only the attempt it checked there.
+        """
         try:
             state = self._read()
-        except (ConfigError, OSError):
+            if not owned(state.plan) or not (state.completed or state.bound):
+                return
+            with self.store.run_lock(wait=False):
+                if self._read() != state:
+                    return
+                agent = self._agent(state)
+                if agent is None or not agent.alive():
+                    self.session_cls.retire(state.agent_name, sid=state.plan.sid, host=state.host)
+        except (BlockingIOError, ConfigError, OSError, SessionError, SessionConfigError):
             return
-        if not owned(state.plan):
-            return
-        try:
-            agent = self._agent(state)
-        except Unanswered:
-            return
-        if agent is not None and agent.alive():
-            return
-        with contextlib.suppress(SessionError, SessionConfigError):
-            self.session_cls.retire(state.agent_name, sid=state.plan.sid, host=state.host)
 
     def _sweep(self) -> None:
         try:
@@ -600,7 +599,7 @@ class HarnessDelegate(Delegate):
             return agent is not None and agent.alive()
         if state.detached:
             process = self._harness(state)
-            return process is not None and process.alive()
+            return process is not None and process.alive() or self.store.running()
         return not state.completed and self.store.running()
 
     def alive(self) -> bool:
@@ -654,7 +653,10 @@ class HarnessDelegate(Delegate):
         except SessionError:  # its terminal gone
             found = None
         alive = self._alive(state) and (
-            state.plan.spec.mode != Mode.TUI or unanswered or found is not None
+            state.plan.spec.mode != Mode.TUI
+            or unanswered
+            or found is not None
+            or self.store.running()
         )
         if unanswered or found is not None and found.state == StatusState.UNKNOWN:
             word = StatusState.UNKNOWN

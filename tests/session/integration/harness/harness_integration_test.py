@@ -10,9 +10,9 @@ import signal
 from unittest import mock
 
 from ensemble.session.engine.hosted_session import HostedSession
-from ensemble.session.engine.types import Access, Exited, HookCallback, Reply, Spec, TurnEnd
+from ensemble.session.engine.types import Access, Exited, HookCallback, Mode, Reply, Spec, TurnEnd
 from ensemble.session.harness.channel import Channel
-from ensemble.session.harness.view import OwnedInProcess, OwnedSession
+from ensemble.session.harness.view import OwnedSession
 from ensemble.session.hosts.base import HARNESS_ROOT, Host
 from tests.session import live_tmux
 from tests.session.case import HOSTS, REPO, Case
@@ -24,11 +24,6 @@ DISPATCHED = ("TurnStarted", "Blocked", "TurnEnd", "Exited")
 
 
 class HarnessCase(WorkerCase):
-    def owner(self, name: str) -> Channel:
-        path = os.path.join(self.ensemble, "tui", name, "session.json")
-        with open(path, encoding="utf-8") as f:
-            return Channel(json.load(f)["owner"])
-
     def logged_events(self, channel: Channel) -> list[dict]:
         return logged(channel.events)
 
@@ -139,7 +134,7 @@ class InProcessOwnerTest(Case):
             hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"}),
         )
 
-    def start(self, *steps) -> OwnedInProcess:
+    def start(self, *steps) -> OwnedSession:
         with open(self.scenario, "w", encoding="utf-8") as f:
             json.dump({"steps": list(steps)}, f)
         spec = Spec(
@@ -150,8 +145,8 @@ class InProcessOwnerTest(Case):
             prompt="hello",
         )
         session = self.session_cls.start(spec)
-        self.assertIsInstance(session, OwnedInProcess)
-        assert isinstance(session, OwnedInProcess)
+        assert isinstance(session, OwnedSession)
+        self.assertEqual((session.mode, session.name), (Mode.IN_PROCESS, None))
         self.addCleanup(session.close)
         return session
 

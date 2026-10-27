@@ -899,7 +899,7 @@ class TranscriptTest(TranscriptCase):
                 ("Stop", {"session_id": SID, "last_assistant_message": "C"}),
             ]
         )
-        self.assertEqual(replayed, [Reply("A"), TurnStarted(), TurnEnd("C", 0)])
+        self.assertEqual(replayed, [Reply("A"), TurnEnd("C", 0)])
         self.append(said("m2", text("C")))
         self.assertEqual(run.observe(), [])
 

@@ -164,12 +164,12 @@ def sweep(store: RunState) -> None:
         return
     with open(lock, encoding="utf-8", errors="replace") as file:
         text = file.read()
-    found = re.fullmatch(r"([0-9]{1,19})(?: ([0-9]{1,19}))?\n?", text)
-    if not found or any(int(p) <= 1 for p in found.groups() if p is not None):
+    found = re.fullmatch(r"([0-9]{1,19}) ([0-9]{1,19})\n?", text)
+    if not found or any(int(p) <= 1 for p in found.groups()):
         raise ConfigError(f"{lock}: invalid callback pid {text!r}")
-    pid, parent = int(found[1]), found[2]
-    if parent is not None and store.held(store.callback_parent_lock):
-        raise ConfigError(f"{lock}: callback still delivered by pid {int(parent)}")
+    pid, parent = int(found[1]), int(found[2])
+    if store.held(store.callback_parent_lock):
+        raise ConfigError(f"{lock}: callback still delivered by pid {parent}")
     try:
         if not _gone(pid):
             with contextlib.suppress(ProcessLookupError):
