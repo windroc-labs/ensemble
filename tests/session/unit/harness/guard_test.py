@@ -194,6 +194,39 @@ class GuardTest(Case):
         restore.assert_called_once_with(0, termios.TCSADRAIN, ["saved"])
         peer.close.assert_called_once()
 
+    def test_a_missing_display_socket_is_one_line_not_a_traceback(self):
+        peer = mock.Mock()
+        peer.connect.side_effect = FileNotFoundError(errno.ENOENT, "No such file or directory")
+        err = io.StringIO()
+        with (
+            mock.patch.object(guard.socket, "socket", return_value=peer),
+            mock.patch.object(sys, "stderr", err),
+        ):
+            self.assertEqual(guard.main(["--attach", self.home + "/display"]), 1)
+        self.assertEqual(
+            err.getvalue(), f"guard: display {self.home}/display: No such file or directory\n"
+        )
+        peer.close.assert_called_once()
+
+    def test_a_client_dead_before_any_display_lingers_for_its_first_one(self):
+        """A terminal guard waits DISPLAY_GRACE s after the exit for a display to show it."""
+        runtime = self.runtime(terminal=True)
+        runtime.exit_at = 100.0
+        self.assertFalse(runtime.lingers(100.5))  # headless: no PTY
+        runtime.master = 20
+        self.assertTrue(runtime.lingers(100.5))
+        self.assertFalse(runtime.lingers(100.0 + guard.DISPLAY_GRACE))
+        server, peer = mock.Mock(), mock.Mock()
+        server.accept.side_effect = BlockingIOError
+        runtime.take_display(server)
+        self.assertTrue(runtime.lingers(100.5))
+        runtime.screen.append(b"claude: error: unrecognized arguments: --bogus")
+        server.accept.side_effect, server.accept.return_value = None, (peer, "")
+        peer.send.side_effect = len
+        runtime.take_display(server)
+        self.assertIn(b"unrecognized arguments", peer.send.call_args.args[0])
+        self.assertFalse(runtime.lingers(100.5))
+
     def test_macos_kernel_process_identity_and_enumeration(self):
         library = mock.Mock()
 

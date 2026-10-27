@@ -83,9 +83,10 @@ class _Reader:
 
 
 class OwnedSession(Session):
-    """attach: the read-only attach, bound to sid and generation; replay: start past the log. A
-    headless view's events() stops its worker on an interrupt, as a headless HostedSession does;
-    tie: a headless start's caller pipe, its harness closing the worker once the view is gone.
+    """attach: the read-only attach, bound to sid and generation; retire: a tui view's non-owner
+    close of that generation; replay: start past the log. A headless view's events() stops its worker on
+    an interrupt, as a headless HostedSession does; tie: a headless start's caller pipe, its
+    harness closing the worker once the view is gone.
     """
 
     def __init__(
@@ -98,6 +99,7 @@ class OwnedSession(Session):
         generation: str,
         idle_timeout: float | None,
         attach: Callable[[], Session],
+        retire: Callable[[], None] | None = None,
         replay: bool = False,
         mode: Mode = Mode.TUI,
         tie: Tie | None = None,
@@ -106,6 +108,7 @@ class OwnedSession(Session):
         self._tie = tie
         self.generation = generation
         self._channel, self._idle, self._attach = channel, idle_timeout, attach
+        self._retire = retire
         self._attached: Session | None = None
         self._events = _Reader(channel, generation)
         if replay:
@@ -164,8 +167,14 @@ class OwnedSession(Session):
         self._end(Op.CLOSE)
 
     def _end(self, op: Op) -> None:
-        """With no owner: closed through the attach, confirmed."""
+        """With no owner: a tui view retires, its generation only (the record rule), for either
+        op; a headless one ends through the attach, confirmed.
+        """
         if self._channel.request(op):
+            return
+        if self.mode == Mode.TUI:
+            assert self._retire is not None
+            self._retire()
             return
         try:
             session = self._attach()

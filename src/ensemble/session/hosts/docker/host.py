@@ -64,6 +64,7 @@ from ensemble.session.engine.types import (
     Unanswered,
 )
 from ensemble.session.hosts.base import (
+    GUARD_HOOK_SOCKET,
     TUI_DIR,
     TUI_STATE,
     Host,
@@ -1127,10 +1128,6 @@ class DockerHost(Host):
         record: Record | None = None,
         metadata: Mapping[str, str] | None = None,
     ) -> InteractiveProcess:
-        if (metadata or {}).get("owner"):
-            return self._worker(
-                name, launch, terminal=True, display=display, events=events, metadata=metadata
-            )
         with _Stops() as stops:
             return self._terminal(
                 name,
@@ -1365,9 +1362,13 @@ class DockerHost(Host):
         events: str | None = None,
         metadata: Mapping[str, str] | None = None,
     ) -> DockerWorker:
-        """A direct caller's start: under the tui lock, as pipe; the terminal path's TuiStore
-        already holds it.
+        """A direct caller's start: under the tui lock, as pipe; an owned one's (metadata `owner`)
+        TuiStore already holds it.
         """
+        if (metadata or {}).get("owner"):
+            return self._worker(
+                name, launch, terminal=terminal, display=display, events=events, metadata=metadata
+            )
         lock = tui_lock(name)
         os.makedirs(os.path.dirname(lock), mode=0o700, exist_ok=True)
         with inode_lock(lock, wait=False) as held:
@@ -1468,7 +1469,7 @@ class DockerHost(Host):
             )
             env = {
                 **self._exec_env(launch, created.started, self._app(environment)),
-                "ENSEMBLE_GUARD_HOOK_SOCKET": f"{run}/hook",
+                GUARD_HOOK_SOCKET: f"{run}/hook",
             }
             shown = ("--terminal", "--display-socket", f"{run}/display") if terminal else ()
             argv, docker_env = docker_call(

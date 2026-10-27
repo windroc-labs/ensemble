@@ -9,6 +9,7 @@ killed viewer marks it hidden.
 
 import os
 import shutil
+import signal
 import tempfile
 
 from ensemble.utils import Record
@@ -52,6 +53,12 @@ class HiddenCase(CliCase):
     def kill_session(self, name: str = "w1") -> None:
         self.ok(self.server.tmux("kill-session", "-t", f"={name}"))
 
+    def crash(self, name: str = "w1") -> None:
+        """kill -9 of its session harness (its guard then ends the client)."""
+        channel = self.owner(name)
+        os.kill(channel.status()["pid"], signal.SIGKILL)
+        live_tmux.wait(lambda: not channel.alive(), what="the killed harness to let go")
+
 
 class HiddenStartTest(HiddenCase):
     def test_display_none_starts_without_a_pane_hidden_and_opened_by_the_caller(self):
@@ -88,6 +95,7 @@ class HiddenStartTest(HiddenCase):
         self.record(self.again("restart"))
         self.assertEqual((self.count(), self.viewer()), (before, ""))
         self.assertTrue(self.hidden())
+        self.crash()
         self.kill_session()
         self.record(self.again("resume"))
         self.assertEqual((self.count(), self.viewer()), (before, ""))

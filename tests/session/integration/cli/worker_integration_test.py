@@ -183,7 +183,8 @@ class ColorTest(WorkerCase):
         )
 
     def test_exit_after_color_still_fails_start(self):
-        res = self.start("w1", steps=[{"kind": "sleep", "seconds": 3}, {"kind": "exit"}])
+        # exits once its opening (/color) arrived: inside the start's early watch on any runner
+        res = self.start("w1", steps=[{"kind": "input"}, {"kind": "exit"}])
         self.assertEqual((res.returncode, res.stdout), (1, ""), res.stderr)
         lines = res.stderr.splitlines()
         head = "ensemble-session: w1: claude exited 0 at once; its last lines:"

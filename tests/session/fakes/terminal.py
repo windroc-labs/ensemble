@@ -20,6 +20,7 @@ class MemoryTerminal(InteractiveProcess):
         self.calls.state.return_value = Liveness.LIVE
         self.calls.returncode.return_value = None
         self.calls.activity.return_value = None
+        self.calls.read.return_value = []
         self.calls.record.return_value = receipt
         self.calls.row.return_value = None
         self.calls.session_identity.return_value = (
@@ -52,6 +53,10 @@ class MemoryTerminal(InteractiveProcess):
         if self._own():
             self.calls.mark(word, events)
             self.calls.activity.return_value = word
+
+    def read(self, timeout):
+        """A managed worker's channel messages: calls.read's, none unless a test sets them."""
+        return self.calls.read(timeout)
 
     def send(self, action):
         if not self.alive():
@@ -120,6 +125,7 @@ class MemoryHost(Host):
         self.serial = 0
         self.hook = hook
         self.calls.list.return_value = None
+        self.calls.worker_liveness.return_value = Liveness.ABSENT
 
     def create(self, name, sid=None, *, identity=None, receipt=None, metadata=None, display=None):
         self.serial += 1
@@ -150,6 +156,20 @@ class MemoryHost(Host):
             fd = os.open(events, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
             os.close(fd)
         return self.create(name, receipt=record, metadata=metadata, display=display)
+
+    def worker(self, name, launch: Launch, *, terminal, display=None, events=None, metadata=None):
+        """A managed worker: one MemoryTerminal is both its owner handle and its display."""
+        self.calls.worker(
+            name, launch, terminal=terminal, display=display, events=events, metadata=metadata
+        )
+        if events:
+            fd = os.open(events, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            os.close(fd)
+        return self.create(name, metadata=metadata, display=display)
+
+    def worker_liveness(self, name, generation):
+        """calls.worker_liveness's answer: ABSENT unless a test sets it."""
+        return self.calls.worker_liveness(name, generation)
 
     def detach(self, name, launch: Launch, *, display=None, events=None, record=None):
         self.calls.detach(name, launch, display=display, events=events, record=record)
