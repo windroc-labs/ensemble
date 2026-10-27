@@ -2,12 +2,14 @@
 
 import os
 import sys
+import tempfile
 import threading
 import time
 from unittest import mock
 
 from ensemble.session.engine.tmux_cli import TuiError
 from ensemble.session.engine.types import (
+    ConfigError,
     Launch,
     Liveness,
     PaneStatus,
@@ -560,3 +562,50 @@ class OneShotTest(Case):
         with self.assertLogs("session", "WARNING"):
             managed.sweep(self.root)
         self.assertTrue(os.path.isdir(dead))
+
+
+class SocketPathTest(Case):
+    """Every guard socket path fits macOS's 104-byte AF_UNIX sun_path: 103 bytes and its NUL."""
+
+    def socket(self, directory, name):
+        return os.path.join(directory, "a" * 32, name)
+
+    def test_the_default_root_bounds_every_socket_under_a_long_temp_dir(self):
+        with (
+            mock.patch.dict(os.environ),
+            mock.patch.object(tempfile, "tempdir", "/var/folders/" + "x" * 80 + "/T"),
+            mock.patch.object(os, "getuid", return_value=2**32 - 1),
+        ):
+            del os.environ["ENSEMBLE_CONTROL_ROOT"]
+            for directory in (managed.location("tmux", "x"), managed.one_shot("tmux", "a" * 32)):
+                for name in ("hook", "display"):
+                    path = self.socket(directory, name)
+                    self.assertLessEqual(len(os.fsencode(path)), 103, path)
+
+    def test_a_worker_passes_the_check_at_the_limit_and_is_refused_one_byte_over_it(self):
+        """Roots sized from `/`, whatever the host's temp dir; a start stops at its first mkdir."""
+        host = TmuxHost("tmux", tmux=mock.Mock())
+        launch = Launch((sys.executable,), cwd=self.home)
+        for terminal, name in ((True, "display"), (False, "hook")):
+            with self.subTest(terminal=terminal):
+                with mock.patch.dict(os.environ, {"ENSEMBLE_CONTROL_ROOT": "/"}):
+                    pad = 103 - len(os.fsencode(self.socket(managed.location("tmux", "x"), name)))
+                at, over = "/" + "r" * (pad - 1), "/" + "r" * pad
+                for root in (at, over):
+                    self.assertFalse(os.path.lexists(root))
+                    with (
+                        mock.patch.dict(os.environ, {"ENSEMBLE_CONTROL_ROOT": root}),
+                        mock.patch.object(os, "mkdir", side_effect=PermissionError) as mkdir,
+                        mock.patch.object(managed.subprocess, "Popen") as spawn,
+                    ):
+                        if root == at:
+                            with self.assertRaises(PermissionError):
+                                host.worker("worker", launch, terminal=terminal)
+                            self.assertEqual(mkdir.call_args.args[0], at)
+                        else:
+                            with self.assertRaisesRegex(
+                                ConfigError, "104 bytes, over the 103-byte"
+                            ):
+                                host.worker("worker", launch, terminal=terminal)
+                            mkdir.assert_not_called()
+                        spawn.assert_not_called()
