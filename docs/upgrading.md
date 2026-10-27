@@ -7,7 +7,7 @@ A detached run's drive (`<agent>-drive`) now runs as a local process the delegat
 `[delegate.delegates] harness_host` is gone and any key under `[delegate.delegates]` is refused
 (`[delegates] harness_host: the delegate takes no keys`). Delete that line, and the `[delegate.delegates]` table, from
 `~/.ensemble/config.local.toml`; `scripts/install.sh --docker` no longer writes it. Let detached runs end first: a run an
-older release detached reads as invalid.
+older release detached reads as invalid; its other runs read as before.
 
 ## Session harness: close every session first
 

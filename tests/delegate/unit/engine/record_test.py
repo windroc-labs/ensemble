@@ -1,8 +1,10 @@
 """RunRecord reads and writes delegate.json without the Session or ensemble config."""
 
 import fcntl
+import io
 import json
 import os
+from contextlib import redirect_stderr
 from dataclasses import replace
 
 from ensemble.delegate import ConfigError, Outcome
@@ -36,6 +38,8 @@ class RunRecordTest(HarnessCase):
             previous=Result(1, None, "stopped: Stopped"),
             bound=True,
             closing=True,
+            detached=True,
+            drive="/tmp/apm-group-x",
         )
         record.save(full)
         self.assertEqual(record.read(), full)
@@ -51,6 +55,38 @@ class RunRecordTest(HarnessCase):
                     self.record().read()
         with self.assertRaisesRegex(ConfigError, "missing metadata"):
             self.record().parse(None)
+
+    def test_a_detached_record_without_a_drive_is_a_config_error(self):
+        self.make()
+        data = self.metadata()
+        for drive in (None, 7):
+            with self.subTest(drive=drive):
+                with open(self.state_record(), "w", encoding="utf-8") as file:
+                    json.dump({**data, "detached": True, "drive": drive}, file)
+                with self.assertRaisesRegex(ConfigError, "detached without drive"):
+                    self.record().read()
+
+    def test_an_older_records_harness_host_is_ignored(self):
+        self.make()
+        before = self.record().read()
+        data = {k: v for k, v in self.metadata().items() if k != "drive"}
+        with open(self.state_record(), "w", encoding="utf-8") as file:
+            json.dump({**data, "harness_host": "tmux"}, file)
+        self.assertEqual(self.record().read(), before)
+
+    def test_exited_appends_the_drives_line_and_only_prints_a_failure(self):
+        self.make()
+        state = self.record().read()
+        events = os.path.join(self.home, "events")
+        RunRecord.exited(state, 0)
+        self.assertFalse(os.path.exists(events))
+        RunRecord.exited(replace(state, events=events), 143)
+        with open(events, encoding="utf-8") as file:
+            self.assertRegex(file.read(), rf"^\d\d:\d\d:\d\d {state.harness_name} exited 143\n$")
+        err = io.StringIO()
+        with redirect_stderr(err):
+            RunRecord.exited(replace(state, events=self.home), 1)
+        self.assertTrue(err.getvalue().startswith("delegate: "), err.getvalue())
 
     def test_it_reads_and_writes_while_the_config_is_unreadable(self):
         self.make()

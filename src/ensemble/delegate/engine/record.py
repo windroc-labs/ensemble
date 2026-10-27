@@ -141,6 +141,7 @@ class RunRecord:
                 raise ValueError("invalid closing")
             callback = data.pop("callback")
             overlays = tuple(data.pop("overlays"))
+            data.pop("harness_host", None)  # older runs
             state = DelegateState(
                 **data,
                 plan=accepted,
