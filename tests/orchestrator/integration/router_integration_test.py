@@ -161,7 +161,9 @@ class Router(TmuxFlow):
         )
         self.assertEqual(self.attachments(ID), [ATTACHMENT])
         self.assertEqual(self.subscribers(ID), [HUMAN])
-        ledger = [*LEDGER[:2], *(["running:2"] if resumed else []), *LEDGER[2:]]
+        # a resumed run's outcome is attempt 2's: its steps are scoped to it
+        scoped = [s if s.startswith("attach:") else f"attempt:2:{s}" for s in LEDGER[2:]]
+        ledger = [*LEDGER[:2], "running:2", *scoped] if resumed else LEDGER
         self.assertEqual(self.ledger(ID), {sid: ledger})
         [running] = [v["b"] for v in self.sent("linear.M_COMMENT_ID", HARNESS_USER)]
         self.assertTrue(running.startswith(f"Run {sid} · running · "), running)

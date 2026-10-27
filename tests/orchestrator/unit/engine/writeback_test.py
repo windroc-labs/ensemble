@@ -836,6 +836,15 @@ class CompletionSteps(Base):
         )
         self.assertIn(f"attach:{PR}", self.steps(ctx)[SID])
 
+    def test_a_finish_without_its_move_neither_moves_nor_notifies(self):
+        gql = Gql(attachments=[PR])
+        ctx = self.ctx(gql=gql)
+        done = Outcome(status="done", title="ENG-7: x", summary="Ready.", url=PR)
+        self.assertTrue(writeback.finish(ctx, done, move=False))
+        body = "Build ready:\nAgent report before delivery:\n\n> Ready."
+        self.assertEqual(gql.calls, expect(body=body, state="in_review", subscribe=False)[:-2])
+        self.assertEqual(self.steps(ctx)[SID], ["comment", f"attach:{PR}", "outcome"])
+
     def test_already_linked_errors_count_as_attached(self):
         for text in (
             "url has already been linked to issue",
@@ -1702,6 +1711,7 @@ EVENT_OPS = {
     linear_tracker.Q_ATTACHED: "read",
     linear_tracker.M_TITLE: "title",
     linear_tracker.M_ATTACH: "attach",
+    linear_tracker.Q_STATE_NAME: "state_name",
 }
 
 EVENT_FIELDS = {
@@ -1746,6 +1756,8 @@ class Linear:
             self.state = v["s"]
         elif op == "read":
             return {"issue": {"attachments": {"nodes": []}}}
+        elif op == "state_name":
+            return {"workflowState": {"name": "Todo"}}
         return {EVENT_FIELDS[op]: {"success": True}}
 
     def writes(self, op):
@@ -2393,13 +2405,21 @@ class FinishedEvents(Events):
         self.linear.fail = lambda _op, _v: None
         self.assertTrue(self.deliver(self.finished(outcome=outcome_data(), attempt=2)))
         self.assertEqual(
-            self.linear.comments[board_ids.comment_id("engineer", RUN_SID, "comment")]["body"],
+            self.linear.comments[board_ids.comment_id("engineer", RUN_SID, "attempt:2:comment")][
+                "body"
+            ],
             "Build ready:\nAgent report before delivery:\n\n> Ready.",
         )
         self.assertEqual(self.linear.state, self.cfg.linear.states["in_review"])
         self.assertEqual(
             self.ledger()[RUN_SID]["steps"],
-            ["no-outcome:1:comment", "comment", f"attach:{PR}", "move:in_review", "outcome"],
+            [
+                "no-outcome:1:comment",
+                "attempt:2:comment",
+                f"attach:{PR}",
+                "attempt:2:move:in_review",
+                "attempt:2:outcome",
+            ],
         )
 
     def test_a_failed_turn_with_a_limit_or_an_outcome_is_not_rewritten(self):
@@ -2448,6 +2468,144 @@ class FinishedEvents(Events):
                 self.deliver(self.finished(outcome=data))
         self.assertEqual(self.linear.calls, [])
         self.assertFalse(os.path.exists(os.path.join(self.workdir, writeback.LEDGER)))
+
+
+class FollowUpAttempts(Events):
+    """FR-30 to FR-32: each attempt of one sid gets its own result, steps and moves, once."""
+
+    NEEDS = outcome_data(status="needs_input", questions=["Which?"], url="")
+    DONE_BODY = "Build ready:\nAgent report before delivery:\n\n> Ready."
+
+    def setUp(self):
+        super().setUp()
+        self.now = iter([STARTED] * 50)
+
+    @staticmethod
+    def cid(step):
+        return board_ids.comment_id("engineer", RUN_SID, step)
+
+    def asked(self):
+        self.assertTrue(self.deliver(delegate_event("begun")))
+        self.assertTrue(self.deliver(self.finished(outcome=self.NEEDS)))
+        self.assertTrue(self.deliver(delegate_event("begun", 2)))
+
+    def posts(self, step):
+        return [
+            v for _, op, v in self.linear.calls if op == "comment" and v.get("c") == self.cid(step)
+        ]
+
+    def test_needs_input_then_answer_then_done_writes_each_attempt(self):
+        states = self.cfg.linear.states
+        self.assertTrue(self.deliver(delegate_event("begun")))
+        self.assertTrue(self.deliver(self.finished(outcome=self.NEEDS)))
+        question = self.linear.comments[self.cid("comment")]["body"]
+        self.assertIn("1. Which?", question)
+        self.assertEqual(self.linear.state, states["in_review"])
+        self.assertTrue(self.deliver(delegate_event("begun", 2)))
+        self.assertEqual(self.linear.state, states["in_progress"])
+        self.assertTrue(self.deliver(self.finished(outcome=outcome_data(), attempt=2)))
+        self.assertEqual(
+            self.linear.comments[self.cid("attempt:2:comment")]["body"], self.DONE_BODY
+        )
+        self.assertEqual(self.linear.comments[self.cid("comment")]["body"], question)
+        self.assertEqual(self.linear.state, states["in_review"])
+        steps = self.ledger()[RUN_SID]["steps"]
+        self.assertEqual(
+            steps[steps.index("outcome") :][-3:],
+            [f"attach:{PR}", "attempt:2:move:in_review", "attempt:2:outcome"],
+        )
+        self.assertEqual(steps.count("outcome"), 1)
+
+    def test_replayed_events_of_both_attempts_write_nothing(self):
+        events = (
+            delegate_event("begun"),
+            delegate_event("progress", name="step", text="one"),
+            self.finished(outcome=self.NEEDS),
+            delegate_event("begun", 2),
+            delegate_event("progress", 2, name="step", text="two"),
+            self.finished(outcome=outcome_data(), attempt=2),
+        )
+        for event in events:
+            self.assertTrue(self.deliver(event))
+        n = len(self.linear.calls)
+        for event in events:
+            with self.subTest(event=event):
+                self.assertTrue(self.deliver(event))
+        writes = [op for _, op, _ in self.linear.calls[n:] if op in ("comment", "state")]
+        self.assertEqual(writes, [])
+
+    def test_a_redelivered_second_outcome_whose_ledger_write_was_lost_is_found_not_reposted(self):
+        self.asked()
+        with mock.patch.object(os, "replace", side_effect=OSError("disk full")):
+            self.assertFalse(self.deliver(self.finished(outcome=outcome_data(), attempt=2)))
+        self.assertTrue(self.deliver(self.finished(outcome=outcome_data(), attempt=2)))
+        self.assertEqual(len(self.posts("attempt:2:comment")), 1)
+        self.assertEqual(self.linear.state, self.cfg.linear.states["in_review"])
+        self.assertEqual(self.ledger()[RUN_SID]["steps"][-1], "attempt:2:outcome")
+
+    def test_a_failed_second_attempt_does_not_rewrite_the_first_done(self):
+        self.assertTrue(self.deliver(delegate_event("begun")))
+        self.assertTrue(self.deliver(self.finished(outcome=outcome_data())))
+        self.assertTrue(self.deliver(delegate_event("begun", 2)))
+        self.assertTrue(self.deliver(self.finished(1, error="the client exited 1", attempt=2)))
+        self.assertEqual(
+            self.linear.comments[self.cid("no-outcome:2:comment")]["body"],
+            "Build failed: the client exited 1",
+        )
+        self.assertEqual(self.linear.state, self.cfg.linear.states["in_review"])
+        done = [v for v in self.linear.comments.values() if v["body"] == self.DONE_BODY]
+        self.assertEqual(len(done), 1)
+        self.assertEqual(len(self.posts("comment")), 1)
+
+    def test_a_failed_second_outcome_step_is_completed_on_redelivery(self):
+        self.asked()
+        self.linear.fail = lambda op, _v: (
+            LinearError("linear api error: down") if op == "state" else None
+        )
+        self.assertFalse(self.deliver(self.finished(outcome=outcome_data(), attempt=2)))
+        self.assertNotIn("attempt:2:outcome", self.ledger()[RUN_SID]["steps"])
+        self.linear.fail = lambda _op, _v: None
+        self.assertTrue(self.deliver(self.finished(outcome=outcome_data(), attempt=2)))
+        self.assertEqual(len(self.posts("attempt:2:comment")), 1)
+        self.assertEqual(self.linear.state, self.cfg.linear.states["in_review"])
+        self.assertEqual(self.ledger()[RUN_SID]["steps"][-1], "attempt:2:outcome")
+
+    def test_a_user_moved_issue_keeps_its_state_at_the_next_outcome(self):
+        self.asked()
+        self.linear.state = self.cfg.linear.states["done"]
+        self.assertTrue(self.deliver(self.finished(outcome=outcome_data(), attempt=2)))
+        self.assertEqual(
+            self.linear.comments[self.cid("attempt:2:comment")]["body"], self.DONE_BODY
+        )
+        self.assertEqual(self.linear.state, self.cfg.linear.states["done"])
+
+    def test_a_stale_finished_writes_its_comment_but_moves_nothing(self):
+        self.assertTrue(self.deliver(delegate_event("begun")))
+        self.linear.fail = lambda op, _v: (
+            LinearError("linear api error: down") if op == "state" else None
+        )
+        self.assertFalse(self.deliver(self.finished(outcome=self.NEEDS)))
+        self.linear.fail = lambda _op, _v: None
+        self.assertTrue(self.deliver(delegate_event("begun", 2)))
+        n, calls = len(self.linear.writes("state")), len(self.linear.calls)
+        self.assertTrue(self.deliver(self.finished(outcome=self.NEEDS)))
+        self.assertEqual(len(self.linear.writes("state")), n)
+        self.assertNotIn("subscribe", [op for _, op, _ in self.linear.calls[calls:]])
+        self.assertEqual(self.linear.state, self.cfg.linear.states["in_progress"])
+        steps = self.ledger()[RUN_SID]["steps"]
+        self.assertIn("outcome", steps)
+        self.assertNotIn("move:in_review", steps)
+        self.assertEqual(len(self.posts("comment")), 1)
+
+    def test_a_stale_limit_moves_nothing(self):
+        self.assertTrue(self.deliver(delegate_event("begun")))
+        self.assertTrue(self.deliver(delegate_event("begun", 2)))
+        n = len(self.linear.writes("state"))
+        self.assertTrue(self.deliver(self.finished(-9, limit={"resets_at": None})))
+        self.assertEqual(len(self.linear.writes("state")), n)
+        self.assertEqual(self.linear.state, self.cfg.linear.states["in_progress"])
+        self.assertIn(self.cid("limit"), self.linear.comments)
+        self.assertNotIn("limit-move:1", self.ledger()[RUN_SID]["steps"])
 
 
 class LimitEvents(Events):
@@ -2707,6 +2865,21 @@ class RecoverReplay(Events):
         )
         self.assertEqual(sorted(self.ledger()[RUN_SID]["attempts"]), ["1", "2"])
 
+    def test_a_replay_writes_a_second_attempts_outcome_after_the_first(self):
+        self.now = iter([STARTED] * 20)
+        needs = outcome_data(status="needs_input", questions=["Which?"], url="")
+        self.assertTrue(self.deliver(delegate_event("begun")))
+        self.assertTrue(self.deliver(self.finished(outcome=needs)))
+        self.assertTrue(self.deliver(delegate_event("begun", 2)))
+        self.assertTrue(self.replay())
+        second = board_ids.comment_id("engineer", RUN_SID, "attempt:2:comment")
+        self.assertEqual(
+            self.linear.comments[second]["body"],
+            "Build ready:\nAgent report before delivery:\n\n> Ready.",
+        )
+        self.assertEqual(self.linear.state, self.cfg.linear.states["in_review"])
+        self.assertIsNone(self.replay())
+
     def test_a_replay_of_a_lost_finished_ends_its_session_comment_once(self):
         self.assertTrue(self.deliver(delegate_event("begun")))
         self.assertTrue(self.replay())
@@ -2934,6 +3107,18 @@ class BusyFinished(Events):
         self.assertIn(BUSY_ERROR, body)
         self.assertEqual(self.linear.state, self.cfg.linear.states["in_review"])
         self.assertEqual(router.attempt_count(runs.parse_log(self.cfg.runs_log), RUN_ISSUE), 2)
+
+    def test_four_busy_attempts_write_four_failures(self):
+        self.now = iter([STARTED] * 20)
+        for attempt in range(1, 5):
+            with self.subTest(attempt=attempt):
+                self.linear.state = self.cfg.linear.states["in_progress"]
+                self.assertTrue(self.deliver(self.finished(75, error=BUSY_ERROR, attempt=attempt)))
+                failure = board_ids.comment_id("engineer", RUN_SID, f"no-outcome:{attempt}:comment")
+                self.assertIn(BUSY_ERROR, self.linear.comments[failure]["body"])
+                self.assertEqual(self.linear.state, self.cfg.linear.states["in_review"])
+        failures = [v for v in self.linear.comments.values() if BUSY_ERROR in v["body"]]
+        self.assertEqual(len(failures), 4)
 
     def test_an_environment_start_failure_comments_naming_the_image_or_gateway(self):
         for attempt, error, named in (

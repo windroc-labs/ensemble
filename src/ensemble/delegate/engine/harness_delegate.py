@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import signal
 import stat
 import sys
 import time
@@ -645,7 +646,12 @@ class HarnessDelegate(Delegate):
             agent, unanswered = self._agent(state), False
         except Unanswered:
             agent, unanswered = None, True
-        found = None if agent is None else agent.status()
+        try:
+            found = None if agent is None else agent.status()
+        except Unanswered:
+            found, unanswered = None, True
+        except SessionError:  # its terminal gone
+            found = None
         alive = self._alive(state) and (
             state.plan.spec.mode != Mode.TUI
             or unanswered
@@ -738,6 +744,7 @@ class HarnessDelegate(Delegate):
     def close(self) -> None:
         """Unanswered after closing the harness when the agent's Host could not tell."""
         state = self._read()
+        self._stop_owned(state)
         try:
             agent, unanswered = self._agent(state), None
         except Unanswered as error:
@@ -760,6 +767,24 @@ class HarnessDelegate(Delegate):
                 raise SessionError(f"close {state.harness_name}: {error}{also}") from error
         if unchecked is not None:
             raise Unanswered(unchecked)
+
+    def _stop_owned(self, state: DelegateState) -> None:
+        """A close of an owned tui run ends its active attempt once, as a stop, with one Finished."""
+        p = state.plan
+        if p.spec.mode != Mode.TUI or not p.session.handlers:
+            return
+        result = stopped(Stopped(128 + signal.SIGTERM))
+        try:
+            n = RunRecord(self.layout, self.store).stop(result, sid=p.sid)
+        except (ConfigError, OSError) as error:
+            say(f"delegate: {error}")
+            return
+        if n is None:
+            return
+        state = replace(state, attempt=n)
+        finish(state, result, None)
+        if state.callback is not None:
+            EventCallback(state.callback, self.store, sid=p.sid, attempt=n)(Finished(result))
 
     def session_status(self) -> SessionStatus:
         """Its own live agent session's status, else the plan's: an attached one lacks its env;
@@ -1212,6 +1237,8 @@ class HarnessDelegate(Delegate):
                 agent = self._answered_agent(state) if owned(state.plan) else None
                 if agent is not None and agent.alive():
                     # its worker's TurnStarted opens the follow-up attempt (D9)
+                    if state.closing:
+                        RunRecord(self.layout, self.store).save(replace(state, closing=False))
                     RunLog(state.plan.session.workdir).note("input", text=input)
                     agent.send(input)
                     return self._record(state)
@@ -1273,6 +1300,7 @@ class HarnessDelegate(Delegate):
                 attempt=state.attempt + 1,
                 previous=None,
                 bound=False,
+                closing=False,
             )
             try:
                 os.makedirs(self.layout.agent, exist_ok=True)

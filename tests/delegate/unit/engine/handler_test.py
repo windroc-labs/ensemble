@@ -29,7 +29,9 @@ from ensemble.session import (
     TurnFailed,
     TurnStarted,
 )
-from tests.delegate.harness import SID, HarnessCase
+from ensemble.utils import StatusState
+from tests.delegate.fakes.harness_session import HarnessSession
+from tests.delegate.harness import SID, HarnessCase, ViewedHarnessDelegate
 from tests.delegate.replies import block
 from tests.delegate.unit.runs import DONE, GAVE_UP, START
 
@@ -50,6 +52,9 @@ class View:
 
     def attach_command(self):
         return f"tmux attach -t '={NAME}'"
+
+    def alive(self):
+        return True
 
     def send(self, text):
         self.calls.append(("send", text))
@@ -187,6 +192,12 @@ class BindTest(HandlerCase):
         self.assertEqual(self.lines(), [["outcome", "done"]])
         self.assertEqual(self.view.calls, [])
 
+    def test_a_run_without_a_callback_sends_no_event(self):
+        self.record.save(replace(self.state(), callback=None))
+        self.finish()
+        self.assertEqual(self.state().result.outcome.status, "done")
+        self.assertEqual(self.sent, [])
+
     def test_a_startup_exited_or_limit_binds_and_ends_the_attempt(self):
         self.call(Exited(3))
         state = self.state()
@@ -247,6 +258,55 @@ class FollowUpTest(HandlerCase):
         self.call(TurnEnd(block(DONE), 0))
         state = self.state()
         self.assertEqual((state.attempt, state.result.outcome.status), (2, "done"))
+
+    def test_a_fix_nudges_turn_stays_in_its_attempt(self):
+        self.call(TurnStarted())
+        self.call(TurnEnd("no outcome block yet", 0))
+        self.assertEqual(len([c for c in self.view.calls if c[0] == "send"]), 1)
+        self.call(TurnStarted())
+        self.call(TurnEnd(block(DONE), 0))
+        state = self.state()
+        self.assertEqual((state.attempt, state.result.outcome.status), (1, "done"))
+        self.assertEqual(self.kinds_sent(), [("finished", 1)])
+
+    def test_an_input_resume_of_a_live_owned_worker_opens_one_attempt(self):
+        self.finish(NEEDS)
+        worker = self.view
+
+        class Live(ViewedHarnessDelegate):
+            """Its owned worker still runs: the answer is only sent to it."""
+
+            def _answered_agent(self, state):
+                return worker
+
+        Live.attach(self.work, session_cls=HarnessSession).resume(input="The answer.")
+        self.assertEqual(self.view.calls[-1], ("send", "The answer."))
+        self.assertEqual((self.state().attempt, self.state().completed), (1, True))
+        self.call(TurnStarted())
+        self.call(TurnStarted())
+        self.call(TurnEnd(block(DONE), 0))
+        state = self.state()
+        self.assertEqual((state.attempt, state.result.outcome.status), (2, "done"))
+        self.assertEqual(
+            self.kinds_sent(),
+            [("progress", 1), ("finished", 1), ("begun", 2), ("finished", 2)],
+        )
+
+    def test_an_answer_to_a_worker_a_failed_close_left_opens_its_attempt(self):
+        self.finish(NEEDS)
+        self.record.save(replace(self.state(), closing=True))
+        worker = self.view
+
+        class Live(ViewedHarnessDelegate):
+            """A close whose agent close failed left its worker running."""
+
+            def _answered_agent(self, state):
+                return worker
+
+        Live.attach(self.work, session_cls=HarnessSession).resume(input="The answer.")
+        self.assertFalse(self.state().closing)
+        self.call(TurnStarted())
+        self.assertEqual((self.state().attempt, self.state().completed), (2, False))
 
     def test_an_exit_after_completion_ends_nothing(self):
         self.finish()
@@ -358,6 +418,110 @@ class EndingTest(HandlerCase):
         self.assertEqual(self.kinds(), before)
         self.assertEqual(self.kinds_sent(), [])
         self.assertEqual(self.lines(), [])
+
+
+class CloseTest(HandlerCase):
+    """FR-34: a close ends the owned run's active attempt once, as a stop; never an ended one."""
+
+    STOPPED = Result(143, None, "stopped: Stopped: 143")
+
+    def close(self):
+        ViewedHarnessDelegate.attach(self.work, session_cls=HarnessSession).close()
+
+    def test_close_ends_an_active_owned_attempt_once_as_stopped(self):
+        self.call(TurnStarted())
+        self.close()
+        state = self.state()
+        self.assertEqual((state.attempt, state.completed, state.result), (1, True, self.STOPPED))
+        self.assertEqual(self.kinds_sent(), [("finished", 1)])
+        finished, at = self.sent[-1]
+        self.assertEqual(
+            (finished["returncode"], finished["outcome"], finished["error"]),
+            (143, None, "stopped: Stopped: 143"),
+        )
+        self.assertTrue(at["completed"])
+        self.assertEqual(self.kinds()[-2:], ["result", "end"])
+        self.assertEqual(self.lines(), [["outcome", "error"]])
+        self.call(Exited(143))
+        self.assertEqual(self.state().result, self.STOPPED)
+        self.assertEqual(self.kinds_sent(), [("finished", 1)])
+
+    def test_a_closed_workers_turn_opens_no_follow_up(self):
+        self.finish(NEEDS)
+        self.close()
+        sent = list(self.sent)
+        self.call(TurnStarted())
+        self.call(Exited(143))
+        state = self.state()
+        self.assertEqual((state.attempt, state.result.outcome.status), (1, "needs_input"))
+        self.assertEqual(self.sent, sent)
+
+    def test_a_close_whose_record_cannot_be_written_still_closes(self):
+        self.call(TurnStarted())
+        state = self.state()
+        spec = replace(state.plan.session, name=state.agent_name)
+        agent = HarnessSession.start(spec, host=state.host)
+        self.assertTrue(agent.alive())
+        with mock.patch("os.replace", side_effect=OSError("disk full")):
+            self.close()
+        self.assertIn("delegate: disk full", self.err.getvalue())
+        self.assertFalse(self.state().completed)
+        self.assertFalse(agent.alive())
+
+    def test_close_of_an_ended_owned_attempt_sends_nothing(self):
+        self.finish(NEEDS)
+        before = (replace(self.state(), closing=True), list(self.sent), self.kinds())
+        self.close()
+        self.call(Exited(0))
+        self.assertEqual((self.state(), self.sent, self.kinds()), before)
+
+    def test_close_after_the_handler_ended_the_attempt_sends_nothing(self):
+        self.call(TurnStarted())
+        stale = self.state()
+
+        class Raced(ViewedHarnessDelegate):
+            """Reads the attempt as active: the handler ends it after the close's read."""
+
+            def _read(self):
+                return stale
+
+        self.call(TurnEnd(block(DONE), 0))
+        Raced.attach(self.work, session_cls=HarnessSession).close()
+        self.assertEqual(self.state().result.outcome.status, "done")
+        self.assertEqual(self.kinds_sent(), [("finished", 1)])
+        self.assertEqual(self.sent[-1][0]["outcome"]["status"], "done")
+
+    def test_close_of_a_run_no_harness_owns_ends_nothing_itself(self):
+        state = self.state()
+        self.record.save(
+            replace(
+                state, plan=replace(state.plan, session=replace(state.plan.session, handlers=()))
+            )
+        )
+        self.close()
+        self.assertFalse(self.state().completed)
+        self.assertEqual(self.sent, [])
+
+
+class StatusTest(HandlerCase):
+    def test_a_draining_owners_view_whose_terminal_is_gone_reads_gone(self):
+        self.call(TurnStarted())
+
+        class Gone:
+            """A running owner's view whose terminal was killed: its status raises."""
+
+            def alive(self):
+                return False
+
+            def status(self):
+                raise SessionError(f"session {NAME}: expected sid {SID!r}, found None")
+
+        class Draining(ViewedHarnessDelegate):
+            def _agent(self, state):
+                return Gone()
+
+        found = Draining.attach(self.work, session_cls=HarnessSession).status()
+        self.assertEqual((found.alive, found.state), (False, StatusState.GONE))
 
 
 class IdleTest(HandlerCase):
