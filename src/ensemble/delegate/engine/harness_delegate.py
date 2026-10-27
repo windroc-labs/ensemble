@@ -921,6 +921,8 @@ class HarnessDelegate(Delegate):
             raise
         if not isinstance(opened, Result):
             return self._await(opened, callback, on_event)
+        if attempts.stale and attempts.handle is not None:
+            attempts.stop(attempts.handle)
         if self._drive_end(opened, attempts.handle, callback, on_event) or attempts.handle is None:
             return opened
         return self._await(attempts.handle, callback, on_event)
