@@ -365,7 +365,7 @@ def bound(name: str, state: Mapping) -> Channel | None:
         time.sleep(SLICE)
     if not channel.alive():
         return None
-    if found.get("state") in ("running", "exited") and (
+    if found.get("state") in ("running", "draining", "exited") and (
         found.get("name"),
         found.get("sid"),
         found.get("generation"),

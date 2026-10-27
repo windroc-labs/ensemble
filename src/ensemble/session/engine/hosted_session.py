@@ -487,7 +487,7 @@ class HostedSession(Session):
         deadline = time.monotonic() + START_WAIT
         while True:
             status = channel.status()
-            if status.get("state") in ("running", "exited"):  # exited: its worker ended at once
+            if status.get("state") in ("running", "draining", "exited"):  # its worker ended at once
                 break
             if (
                 status.get("state") == "failed"

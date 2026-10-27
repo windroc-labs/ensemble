@@ -379,7 +379,7 @@ class DrainTest(Base):
         while "Exited" not in self.types():
             time.sleep(0.01)
         time.sleep(0.1)
-        self.assertEqual((done, self.channel.status()["state"]), ([], "running"))
+        self.assertEqual((done, self.channel.status()["state"]), ([], "draining"))
         gate.set()
         closer.join(WAIT)
         self.assertEqual(done, [True, ("exited", False)])
@@ -393,7 +393,7 @@ class DrainTest(Base):
 
         owned = FakeOwned(([Reply("x")], True))
         self.assertEqual(self.harness(owned, Handler(on=on), drain=WAIT).run(self.begin), 0)
-        self.assertEqual((seen, self.channel.status()["state"]), (["running"], "exited"))
+        self.assertEqual((seen, self.channel.status()["state"]), (["draining"], "exited"))
 
     def test_a_handler_closing_on_exited_returns(self):
         results = []
