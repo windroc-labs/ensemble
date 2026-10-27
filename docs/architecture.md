@@ -457,7 +457,7 @@ flowchart LR
 
 ### Task labels
 
-A `Tasks` group label picks the role's task, mapped by `[task_labels]`; none: the agent picks and says why; a bad label sends the issue to In Review. `[orchestrator.task_tiers]` sets a task's model tier (`light-build = 3`, 1 the strongest).
+A `Tasks` group label picks the role's task, mapped by `[task_labels]`; none: the agent picks and says why; a bad label sends the issue to In Review. To upgrade a report (Light Research → Research → Deep Research), set the next task's label (to Research: remove the label), comment the claims to verify, and move it back to Todo. `[orchestrator.task_tiers]` sets a task's model tier (`light-build = 3`, 1 the strongest).
 
 ### Operating the board
 
@@ -541,6 +541,8 @@ ensemble keeps its state in `~/.ensemble/` (`work/` and `logs/` in `<work_dir>`,
 | `logs/router.lock`, `board/.lock` | while no router runs, no program writes the board |
 | `sessions/`, `workers/<sid>/`, `docker-state/<name>/` | once you won't restart or resume that session |
 | `tui/<name>/` | no: closing the session removes it |
+| `tui/<name>.lock` | while no session of that name starts or closes |
+| `managers/<name>/` | while no manager holds it; its Roster is lost |
 | `adhoc/` | a folder whose run is not running (`ensemble-delegate status <dir>`) |
 
 ## Docker host
@@ -553,7 +555,7 @@ ensemble keeps its state in `~/.ensemble/` (`work/` and `logs/` in `<work_dir>`,
 
 ### Egress proxy
 
-Workers reach the network only through the `egress-proxy` container (private `windroc/egress-proxy`, pinned, under `~/.egress/current`; config `~/.egress/config.local.yaml`, created by the installer with a `workers` network in denylist mode). It allows public destinations and denies private ranges, the Mac and LAN, `host.docker.internal` included, unless a `host:port` is in `networks.workers.exceptions`; each exception holds for every worker. Add the Mac's public IPv4 and global IPv6 prefix to `deny_ranges`.
+Workers reach the network only through the `egress-proxy` container (private `windroc/egress-proxy`, pinned, under `~/.egress/current`; config `~/.egress/config.local.yaml`, created by the installer with a `workers` network in denylist mode). It allows public destinations and denies private ranges, the Mac and LAN, `host.docker.internal` included, unless a `host:port` is in `networks.workers.exceptions`; each exception holds for every worker. `config.example.yaml` in the installed version defines the config, `networks.workers` included. Add the Mac's public IPv4 and global IPv6 prefix to `deny_ranges`.
 
 | Operation | Command |
 |---|---|
@@ -628,7 +630,7 @@ Select one with `ensemble-crew worker NAME --client claude --account work`, or f
 
 #### OpenCode on Docker
 
-OpenCode runs the host's Ollama models or a configured provider ([OpenCode sessions](customizing-roles-and-tasks.md#opencode-sessions)); provider keys come from `login opencode`. Add each local or LAN provider's `host:port` (Ollama: `host.docker.internal:11434`) to `networks.workers.exceptions` in `~/.egress/config.local.yaml`, then run `~/.egress/current/start.sh`; the installer does not. An `http://` `base_url` sends the key in plaintext. Once, on the Mac: keep Ollama on `127.0.0.1`, set `OLLAMA_CONTEXT_LENGTH` to at least 65536 (`launchctl setenv OLLAMA_CONTEXT_LENGTH 65536`, then reopen the app), and pull every `ollama/` model of `[session.clients.opencode.tiers]` and `model`. Session state stays in `~/.ensemble/docker-state/<name>/opencode/`.
+OpenCode runs the host's Ollama models or a configured provider ([OpenCode sessions](customizing-roles-and-tasks.md#opencode-sessions)); provider keys come from `login opencode`. Add each local or LAN provider's `host:port` (Ollama: `host.docker.internal:11434`) to `networks.workers.exceptions` in `~/.egress/config.local.yaml`, then run `~/.egress/current/start.sh`; the installer does not. Host-side `probe-provider` bypasses the proxy, so it can pass while a worker still lacks its exception; Docker may also need macOS Local Network permission. An `http://` `base_url` sends the key in plaintext. Once, on the Mac: keep Ollama on `127.0.0.1`, set `OLLAMA_CONTEXT_LENGTH` to at least 65536 (`launchctl setenv OLLAMA_CONTEXT_LENGTH 65536`, then reopen the app), and pull every `ollama/` model of `[session.clients.opencode.tiers]` and `model`. Session state stays in `~/.ensemble/docker-state/<name>/opencode/`.
 
 ### Harness-owned workers
 
@@ -661,6 +663,8 @@ A worker's workspace is a Docker volume, `ensemble-ws-<name>`, mounted at its cw
 - A headless run's output comes from its container, where client and tools share uid `agent`: a forged rate-limit line can end the run, notify a usage limit and move the issue to review, as can a forged transcript record for a TUI run.
 - A manual `docker start` of a stopped lock container bypasses the [lock](#environments) and can make two holders: start through the broker.
 - The audit log (`broker.jsonl`) is yours to change: it records what the broker did, not that nothing else happened.
+- A resume after an upgrade runs a newer Claude than the one that wrote the conversation; if it cannot read it, the resume fails rather than starting anew. Claude may show an onboarding prompt after a rebuild.
+- A bad egress policy section makes the whole proxy unhealthy (an edited config stays so until `start.sh` applies it) and blocks new workers.
 
 ### Docker live acceptance
 
