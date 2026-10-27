@@ -98,16 +98,16 @@ class Attended(Segment):
                     return True
         return False
 
-    def joined_mid_turn(self, joined, send=None):
+    def joined_mid_turn(self, *joined, send=None):
         """An attended run whose turn takes input Claude joins to it with its UserPromptSubmit
-        (`joined`; `send`, the manager's text it waits for), then gives its done outcome: written
+        (`joined` steps; `send`, the manager's text one waits for), then gives its done outcome: written
         back as any done run; the events file gets the TUI's one turn end and any reply, outcome
         done and the drive's exit 0 (WDRC-346: `turn failed: superseded`, outcome error, exited 1).
         """
         ident = self.pm_ready()
         script = self.agent_script("pm", "done", ident)
         start, report = script.steps
-        sid = self.claim(ident, "pm", script._replace(steps=[start, joined, report]), tui=True)
+        sid = self.claim(ident, "pm", script._replace(steps=[start, *joined, report]), tui=True)
         harness, tui = self.harness("pm", ident, sid), config.tui_name("pm", ident, sid)
         if send is not None:  # its start mark's write-back runs meanwhile: agent_run checks it
             with open(self.pending.gate, "w"):
@@ -136,9 +136,15 @@ class Attended(Segment):
         joined = {"kind": "queued", "answer": "Noted.", "prompted": True}
         self.joined_mid_turn(joined, send="Also cover the registry's CLI.")
 
-    def test_a_background_notice_mid_turn_is_no_failure(self):
-        notice = "<task-notification>sleep 30 completed</task-notification>"
-        self.joined_mid_turn({"kind": "notice", "text": notice})
+    def test_background_notices_mid_turn_are_no_failure(self):
+        """No send: a council's background agents end one by one, each with a notice (WDRC-278)."""
+        self.joined_mid_turn(
+            {"kind": "tool", "name": "Agent"},
+            *(
+                {"kind": "notice", "text": f"<task-notification>agent {n} done</task-notification>"}
+                for n in range(3)
+            ),
+        )
 
     def test_a_tick_from_the_manager_starts_its_run_attended_and_an_idle_one_prints_nothing(self):
         ident = self.pm_ready()

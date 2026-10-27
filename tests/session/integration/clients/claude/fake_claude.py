@@ -24,8 +24,8 @@ conversation can answer from the first generation's.
 queues (an enqueue record) and joins to the turn once the tool returns (PostToolUse, then a
 queued_command attachment), then answers A; with "prompted": true, UserPromptSubmit runs for the line
 as the turn joins it, before its attachment, as Claude Code 2.1.312 does. {"kind": "notice", "text":
-T} is a background task's completion Claude Code joins to the turn: UserPromptSubmit for T, then a
-task-notification queued_command attachment; it reads no input. {"kind": "pause", "file": F} waits
+T} is a background task's completion Claude Code queues and joins to the turn: an enqueue record,
+UserPromptSubmit for T, then a task-notification queued_command attachment; it reads no input. {"kind": "pause", "file": F} waits
 for F to exist; {"kind": "input"} waits for any input to arrive (kept for the next line).
 - turns: interactive steps of turn 2 on.
 - dialog: interactive text printed at startup, before the first SessionStart (as Claude's workspace
@@ -396,6 +396,12 @@ class InteractiveSession:
             elif kind == "queued":
                 last = self.queued(k, step["answer"], prompted=step.get("prompted", False))
             elif kind == "notice":
+                queued = {
+                    "type": "queue-operation",
+                    "operation": "enqueue",
+                    "content": step["text"],
+                }
+                self.request.record(queued)
                 self.joined(step["text"], "task-notification")
             elif kind == "pause":
                 until = time.monotonic() + HANG_CAP

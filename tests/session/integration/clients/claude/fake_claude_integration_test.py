@@ -431,7 +431,7 @@ class Steps(Case):
                 ("Stop", None),
             ],
         )
-        self.assertEqual(self.joined(), [("task-notification", notice)])
+        self.assertEqual(self.joined(), [("enqueue", notice), ("task-notification", notice)])
 
 
 class Pane(Case):
