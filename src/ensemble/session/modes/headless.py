@@ -186,7 +186,8 @@ class HeadlessMode(BaseMode):
             self.open -= 1
             return self._finish(timeout) if self.open == 0 else ([], False)
         if isinstance(item, TurnFailed):
-            self._failure = self._failure or item
+            if not self.stopped.is_set():  # a stop's cut output fails as interrupted instead
+                self._failure = self._failure or item
             return [], False
         if isinstance(item, TurnEnd):
             self._candidate = item

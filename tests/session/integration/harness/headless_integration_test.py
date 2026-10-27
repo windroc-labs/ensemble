@@ -291,6 +291,17 @@ class OpenCodeSuccessTest(OpenCodeHeadless):
         self.succeeds(self.spec, "two")
 
 
+class OpenCodeStopTest(OpenCodeHeadless):
+    def test_stopping_a_hung_run_interrupts_its_turn(self):
+        self.scenario.write_text(json.dumps({"steps": [{"text": "working"}, {"sleep": 60}]}))
+        view = self.owned(self.spec)
+        self.wait_for("TurnStarted")
+        view.stop()
+        handled = self.wait_for("Exited")
+        self.assertEqual([r["type"] for r in handled], ["TurnStarted", "TurnFailed", "Exited"])
+        self.assertEqual(handled[1]["error"], "interrupted")
+
+
 class OpenCodePermissionTest(OpenCodeHeadless):
     def test_an_uninteractive_permission_request_fails_the_turn(self):
         self.scenario.write_text(

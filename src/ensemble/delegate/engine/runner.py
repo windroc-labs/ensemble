@@ -298,19 +298,21 @@ class _Attempts:
 
     def result(self) -> Result:
         p = self.plan
+        aside, stale = self.set_aside_stale_out()
         try:
             handle = self.policy.start(p)
             self.handle = handle
         except SessionConfigError as e:
             self.refused = True
+            self.settle_stale_out(aside, keep=True)
             raise ConfigError(str(e)) from None
         except SessionError as e:
-            self.drop_stale_out()
+            self.settle_stale_out(aside, keep=False)
             self.note("input", text=p.params.input)
             if isinstance(e, SessionBusy):
                 return Result(EXIT_BUSY, None, str(e))
             return Result(1, None, f"{p.spec.mode}: {e}")
-        stale = self.drop_stale_out()
+        self.settle_stale_out(aside, keep=False)
         self.note("input", text=p.params.input)
         if stale:
             self.stop(handle)
@@ -374,19 +376,33 @@ class _Attempts:
             return False
         return True
 
-    def drop_stale_out(self) -> str:
-        """Removes a new run's earlier `out`, only once the Driver took the run; returns why it
-        could not, else "".
+    def set_aside_stale_out(self) -> tuple[str | None, str]:
+        """Before the start (its client may write `out` before start returns): a new run's earlier
+        `out` moved aside, its path; else None and why it could not, else "".
         """
         s = self.plan.spec
-        if (
-            s.out and not s.resume and not os.path.isdir(s.out)
-        ):  # a resume keeps its session's draft
-            try:
-                Path(s.out).unlink(missing_ok=True)
-            except OSError as e:
-                return f"cannot remove the stale out: {e}"
-        return ""
+        if not s.out or s.resume or os.path.isdir(s.out):  # a resume keeps its session's draft
+            return None, ""
+        aside = os.path.join(os.path.dirname(s.out), f".{os.path.basename(s.out)}.stale")
+        try:
+            os.replace(s.out, aside)
+        except FileNotFoundError:
+            return None, ""
+        except OSError as e:
+            return None, f"cannot remove the stale out: {e}"
+        return aside, ""
+
+    def settle_stale_out(self, aside: str | None, *, keep: bool) -> None:
+        """keep: back as `out` (the Driver refused the run); else removed. Best effort."""
+        if aside is None:
+            return
+        try:
+            if keep and (out := self.plan.spec.out):
+                os.replace(aside, out)
+            else:
+                Path(aside).unlink(missing_ok=True)
+        except OSError as e:
+            say(f"delegate: stale out: {e}")
 
     def attempt(self, handle: Session) -> tuple[int, str | None, Limit | None, TurnFailed | None]:
         """rc 0 when the policy or a failed turn ended it, the session running on."""

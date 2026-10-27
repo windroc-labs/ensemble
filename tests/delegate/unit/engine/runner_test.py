@@ -270,6 +270,25 @@ class TuiPolicy(Base):
                     (session.mode, session.name, session.events), ("headless", name, None)
                 )
 
+    def test_a_draft_written_while_the_session_starts_outlives_the_stale_out(self):
+        self.write(self.out, "# Earlier\n")
+        self.handle = FakeHandle([turn(START, block(DONE)), Exited(0)])
+
+        def start(spec, **kw):
+            self.write(self.out, "# Draft\n")  # its client, already running when start returns
+            return self.handle.start(spec, **kw)
+
+        seen = []
+        with mock.patch.object(self.driver, "start", side_effect=start):
+            self.go(
+                mode="headless",
+                on_event=lambda e: (
+                    seen.append(self.read(self.out)) if isinstance(e, Begun) else None
+                ),
+            )
+        self.assertEqual(seen, ["# Draft\n"])
+        self.assertEqual(sorted(os.listdir(os.path.dirname(self.out))).count("out.md"), 1)
+
     def test_a_tui_handle_without_a_name_reports_a_driver_error(self):
         os.makedirs(self.work)
         handle = FakeHandle([])

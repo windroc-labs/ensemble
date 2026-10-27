@@ -117,13 +117,13 @@ These are approved-list candidates for deletion, not optional deprecations. This
 
 | Removed interface | Replacement | Deletion owner |
 |---|---|---|
-| `Host.terminal`, `Host.detach`, `Host.pipe` | `Host.worker` (`terminal=True` or `False`) | WDRC-204/206 local, WDRC-205 headless, WDRC-207 Docker; WDRC-208 removes delegate callers; WDRC-211 removes ABCs |
+| `Host.terminal`, `Host.detach`, `Host.pipe` | `Host.worker` (`terminal=True` or `False`) | WDRC-204/206 local, headless unassigned (WDRC-205 kept it on `Host.pipe`), WDRC-207 Docker; WDRC-208 removes delegate callers; WDRC-211 removes ABCs |
 | `Host.attach`, `Host.reclaim` | `Session.attach` control view and `Host.worker_liveness` for crash-resume admission | WDRC-206/207; WDRC-210 crew callers; WDRC-211 ABCs |
 | `Host.events_path`, `Host.prepare_events`, `Host.hook_callback` | harness-owned records/dispatch and `WorkerHook` on the guard channel | WDRC-204/207; WDRC-211 ABCs |
 | public `Process` (both session surfaces), `Interactive` (extension), their exported members | fold preserved `name`, `send`, `press`, `screen`, `state`, `close`, `returncode` into existing `InteractiveProcess` | WDRC-211 after WDRC-204..210 migrate callers |
 | `InteractiveProcess.alive`, `.wait_exit`, `.kill`, `.identity`, `.token`, `.session_identity` | channel `state`, `generation`, `read`/`WorkerExit`, confirmed `close`; no caller-owned kill | WDRC-206/207 implementations; WDRC-211 base cleanup |
 | `InteractiveProcess.activity`, `.status`, `.mark`, `.row`, `.record`, `.publish`, `.display` | harness event/state/Record ownership; `Host.attach_target` retains display targeting | WDRC-204/207; WDRC-211 base cleanup |
-| extension `Piped`, `Lines`, all their exported members; internal `LocalPiped` | `InteractiveProcess.read`/`write`, `WorkerOutput`/`WorkerExit` | WDRC-205/207; WDRC-211 exports/ABC cleanup |
+| extension `Piped`, `Lines`, all their exported members; internal `LocalPiped` | `InteractiveProcess.read`/`write`, `WorkerOutput`/`WorkerExit` | WDRC-207, headless unassigned; WDRC-211 exports/ABC cleanup |
 | Docker `supervisor.py` (`HookWorker`, `Supervisor`, `main`, maintenance/deadline helpers) and Host `_supervise` | harness dispatch/lifecycle; Docker handle `tick` reuses broker maintenance policy | WDRC-207 |
 | Docker `relay.py` (`Queue`, `Daemon`, `answer`, `pump`, `connect`, `main`, relay request/reply protocol) and Host `_serve_relay` | guard hook socket and the same worker's long-lived `h`/output/exit channel | WDRC-207; retain equivalent input validation, no second relay daemon |
 | delegate harness worker ownership, runner-driven supervision/attempt lifetime | session `Spec.handlers`/`EventCall`; attempt-only Result and delegation policy | WDRC-208; WDRC-209 consumes attempt events |

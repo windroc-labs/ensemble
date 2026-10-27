@@ -355,6 +355,14 @@ class TerminalEvents(Base):
         self.assertEqual(mode.returncode(0), 0)
         self.assertEqual(mode.poll(0), ([], True))
 
+    def test_a_failure_read_after_a_stop_is_the_interrupt(self):
+        mode = self.mode_for([TurnStarted(), TurnFailed("incomplete_turn")], (-15,))
+        mode.stop()
+        found = self.drain(mode)
+        self.assertEqual(
+            [e for e in found if isinstance(e, TurnFailed)], [TurnFailed("interrupted")]
+        )
+
     def test_nonzero_exit_overrides_structured_success(self):
         for code in (2, -9):
             with self.subTest(code=code):

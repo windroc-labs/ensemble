@@ -435,6 +435,8 @@ class HostedSession(Session):
         spec = replace(spec, sid=spec.sid or str(uuid.uuid4()))
         if mode == Mode.TUI:
             spec = replace(spec, name=tui.TuiMode.resolve_name(spec))
+        else:  # its refusals as an unowned start's, before any harness dir or process
+            cls.preflight(spec, display=display, host=host, idle_timeout=idle_timeout)
         return cls._spawn(spec, mode, display=display, host=host, idle_timeout=idle_timeout)
 
     @classmethod
