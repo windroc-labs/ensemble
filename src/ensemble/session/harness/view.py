@@ -56,9 +56,9 @@ def fold(
 
 
 def dialog(current: str | None, event: SessionEvent | Stderr | ClientBound) -> str | None:
-    """The dialog its client waits on: a Blocked's reason, kept as `fold` keeps blocked."""
+    """The dialog its client waits on: the first Blocked's reason, kept as `fold` keeps blocked."""
     if isinstance(event, Blocked):
-        return event.reason
+        return event.reason if current is None else current
     return current if isinstance(event, Stderr | Reply | ClientBound) else None
 
 

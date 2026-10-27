@@ -85,10 +85,10 @@ class FoldTest(Case):
 
 
 class DialogFoldTest(Case):
-    def test_a_blocked_reason_until_anything_but_stderr_reply_or_client_bound(self):
+    def test_the_first_blocked_reason_until_anything_but_stderr_reply_or_client_bound(self):
         for current, event, want in (
             (None, Blocked("a"), "a"),
-            ("a", Blocked("b"), "b"),
+            ("a", Blocked("b"), "a"),
             ("a", Stderr("x"), "a"),
             ("a", Reply("r"), "a"),
             ("a", ClientBound("c1"), "a"),

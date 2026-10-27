@@ -654,7 +654,7 @@ class DialogTest(Base):
                 (Stderr("x"), "Trust"),
                 (Reply("r"), "Trust"),
                 (ClientBound("c1"), "Trust"),
-                (Blocked("Edit"), "Edit"),
+                (Blocked("Edit"), "Trust"),
                 (Activity(""), None),
             ],
         )
@@ -663,8 +663,27 @@ class DialogTest(Base):
         """The CI miss: the pump that reports its client up (no opening) found a Blocked; a start's
         watch acts on that status at the turn start logged before it, the Blocked not yet logged.
         """
-        owned = FakeOwned(([TurnStarted()], False), ([Blocked("Edit")], False), ([], True))
-        pump, record, said = owned.pump, owned.record, []
+        said = self.watched([Blocked("Edit")], up=True, at=0)
+        self.assertEqual((self.code, said), (0, ["session w1: waits on a dialog: Edit"]))
+
+    def test_a_start_watch_says_the_first_blocked_reason_by_its_events_or_its_status(self):
+        """Claude's PermissionRequest, then its Notification: read as events the watch stops at
+        the first; read from the status it must say the same.
+        """
+        found = [Blocked("Edit"), Blocked("Claude needs your permission to use Edit")]
+        for up, at in ((False, 1), (True, 0)):
+            with self.subTest(up=up):
+                self.setUp()  # a fresh harness channel
+                said = self.watched(found, up=up, at=at)
+                self.assertEqual((self.code, said), (0, ["session w1: waits on a dialog: Edit"]))
+
+    def watched(self, found, *, up, at):
+        """What a start's watch says, run as its harness records the Blocked `at` of `found`,
+        pumped after a turn start (that pump's status written, that Blocked not yet logged); up:
+        that pump reports its client up.
+        """
+        owned = FakeOwned(([TurnStarted()], False), (found, False), ([], True))
+        pump, record, said, blocks = owned.pump, owned.record, [], []
         view = OwnedSession(
             self.channel,
             "w1",
@@ -679,18 +698,20 @@ class DialogTest(Base):
         start = Worker(state, session_cls=mock.Mock(), say=said.append)
 
         def pumped(wait):
-            found, ended = pump(wait)
-            owned.up = owned.up or any(isinstance(event, Blocked) for event in found)
-            return found, ended
+            taken, ended = pump(wait)
+            owned.up = owned.up or up and any(isinstance(event, Blocked) for event in taken)
+            return taken, ended
 
         def recorded(event):
-            if isinstance(event, Blocked):  # its pump's status written, it not yet logged
-                start._watch(view)
+            if isinstance(event, Blocked):
+                blocks.append(event)
+                if len(blocks) == at + 1:
+                    start._watch(view)
             record(event)
 
         owned.pump, owned.record = pumped, recorded
         self.run_in_thread(self.harness(owned)).join(WAIT)
-        self.assertEqual((self.code, said), (0, ["session w1: waits on a dialog: Edit"]))
+        return said
 
 
 class UpTest(Base):

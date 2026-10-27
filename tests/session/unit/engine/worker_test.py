@@ -595,6 +595,7 @@ class ColorWatchTest(Base):
             ("no opening", 0, False, worker.EARLY + 1, [said]),
             ("no opening, a turn started", 0, True, worker.EARLY + 1, [said]),
             ("its opening sent", 8, False, 9, [said]),
+            ("its opening sent, a turn started", 8, True, 9, [said]),
             (
                 "at the cap",
                 float("inf"),
