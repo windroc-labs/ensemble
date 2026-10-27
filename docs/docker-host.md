@@ -686,8 +686,11 @@ below. Keys:
   so its container, TUI, harness and lock stay and the user's answer (`ensemble-crew resume --input`) continues in
   that container. Only the user's close (`ensemble-crew close`, `ensemble-session close`) or the client's own exit
   (a crash, a credential-expiry close or a killed harness included) ends it; the lock goes once the container is
-  removed, and a later resume takes it again. Meanwhile its environment secrets stay in the container: after
-  rotating one, close the runs waiting on it ([Environment secrets](credentials.md#environment-secrets)).
+  removed, and a later resume takes it again. The Delegate claims the release (stderr `delegate: session <name>
+  closed (lock <lock>)`, run log `release`) only once a close it asked for returns confirmed (`close()`, a stopped
+  start, `resume()` or a replacing run closing the earlier worker); a client's own exit claims none. Meanwhile its
+  environment secrets stay in the container: after rotating one, close the runs waiting on it
+  ([Environment secrets](credentials.md#environment-secrets)).
 - `prefetch`: `true` prefetches the input's Reference block (its leading lines, opening with `Reference:` or, in an
   input without an id, `Repo:`): exactly one `Repo:` line (a clone path names its origin)
   and at most one `Ref:` line (the [Prefetch](#prefetch) ref rule; none: the default branch). Both are checked before
