@@ -40,7 +40,6 @@ _runs_lock = threading.Lock()
 
 
 def on_event(call: EventCall) -> None:
-    """A ConfigError, OSError or SessionError is printed and the call counted handled."""
     workdir, token = call.state.get("workdir"), call.state.get("worker")
     if not isinstance(workdir, str) or type(token) is not int:
         return
@@ -168,7 +167,7 @@ class _Run:
                 say(f"delegate: {error}")
 
     def end(self, result: Result, *, timer: bool = False) -> None:
-        """Off the Dispatch thread (timer), a locked run's Finished waits for its close's Exited."""
+        """timer: a locked run's Finished waits for its close's Exited."""
         self.stop_timer()
         state, n, self.attempt = self.state, self.n, None
         assert state is not None and n is not None
@@ -196,7 +195,6 @@ class _Run:
         self.emit(Finished(result))
 
     def close(self, lock: str, log: RunLog) -> bool:
-        """Whether a timer's give-up left its Finished to the close's Exited."""
         assert self.session is not None
         try:
             self.session.close()

@@ -96,7 +96,7 @@ class Headless:
 class Tui(Headless):
     """FR-23: the first turn end without an outcome block gets NUDGE, STOP_LIMIT more give up; a
     progress mark resets that count; a turn end with work pending is ignored. FR-24: an IdleTimeout
-    gives up. The session is left open unless locked (_Attempts.release).
+    gives up. The session is left open unless locked (Attempts.release).
     """
 
     stops_failed = False
@@ -131,8 +131,12 @@ class Tui(Headless):
         self.count = 0
 
     def idle(self, seconds: float) -> str | GiveUp | None:
-        size, unit = (3600, "h") if seconds >= 3600 else (60, "min") if seconds >= 60 else (1, "s")
-        return GiveUp(f"no event for {seconds / size:g} {unit}")
+        return GiveUp(idle_reason(seconds))
+
+
+def idle_reason(seconds: float) -> str:
+    size, unit = (3600, "h") if seconds >= 3600 else (60, "min") if seconds >= 60 else (1, "s")
+    return f"no event for {seconds / size:g} {unit}"
 
 
 POLICIES = {Mode.HEADLESS: Headless, Mode.TUI: Tui, Mode.IN_PROCESS: Headless}
@@ -192,7 +196,7 @@ def execute(
             emit(Finished(result))
             return result
         raise ConfigError("instruction driver returned a Session")
-    attempts = _Attempts(p, emit, driver)
+    attempts = Attempts(p, emit, driver)
     try:
         result = attempts.result()
         attempts.release()
@@ -406,7 +410,7 @@ class Attempt:
         return Result(rc, outcome, f"the client exited {rc}" if rc else "")
 
 
-class _Attempts:
+class Attempts:
     def __init__(self, p: Plan, on_event: Callable[[Event], None], driver: Driver):
         self.plan, self.on_event, self.driver = p, on_event, driver
         self.policy = POLICIES[Mode(p.spec.mode)](self.note, driver)
@@ -454,7 +458,8 @@ class _Attempts:
                     say(f"delegate: show {name}: {e}")
         return handle
 
-    def result(self) -> Result:
+    def begin(self) -> Session | Result:
+        """The started session, Begun sent; a Result when it did not start."""
         p = self.plan
         try:
             handle = self.start()
@@ -474,6 +479,12 @@ class _Attempts:
             self.stop(handle)
             return Result(1, None, stale)
         self.on_event(Begun(p.sid))
+        return handle
+
+    def result(self) -> Result:
+        p, handle = self.plan, self.begin()
+        if isinstance(handle, Result):
+            return handle
         attempt = Attempt(
             p, self.policy, handle, note=self.note, on_event=self.on_event, first=not p.spec.resume
         )

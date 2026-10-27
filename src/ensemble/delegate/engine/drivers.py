@@ -26,7 +26,9 @@ class Driver(ABC):
         return ()
 
     def preflight(self, spec: Spec) -> None:
-        return None
+        """No session harness runs a start without a Session: handlers are refused."""
+        if spec.handlers:
+            raise SessionConfigError("handlers: this driver has no session harness")
 
     @abstractmethod
     def start(

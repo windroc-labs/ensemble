@@ -2,10 +2,11 @@
 a control-mode client on the manager, the session config's ClaudeClient running
 tests/session/integration/clients/claude/fake_claude.py: the one Record line whose sessions are live
 on return, the harness session, the TUI beside the caller or in no pane, the harness's outcome and
-exited lines, a kill-session of the harness session, an events path tmux would misread, the events
-file and sid a launcher gives in $ENSEMBLE_EVENTS and $ENSEMBLE_SID, a needs_input run answered by
-`resume WORKDIR --input TEXT` (refused while the run lives) whose outcome a
-`resume WORKDIR` then leaves alone. Ports main's
+exited lines, a kill-session of the harness session (an owned tui keeps its attempt), an events
+path tmux would misread, the events file and sid a launcher gives in $ENSEMBLE_EVENTS and
+$ENSEMBLE_SID, a needs_input run answered by `resume WORKDIR --input TEXT` (refused while the run
+lives; an owned tui's live pane gets it) whose outcome a `resume WORKDIR` then leaves alone, and an
+owned tui's next attempts opened by input in its pane. Ports main's
 tests/integration/core/drive_tui_integration_test.py
 test_detach_from_the_manager. Its test_detach_events_default and main's
 tests/manager/integration/crew_integration_test.py role-run cases run through ensemble-crew in
@@ -26,7 +27,7 @@ import unittest
 from ensemble.delegate import DelegateEvent
 from ensemble.delegate.engine.types import Layout
 from ensemble.session import SIGNALS
-from ensemble.utils import Record
+from ensemble.utils import Record, Status
 from tests.delegate.case import PY, PYTHONPATH, Case
 from tests.delegate.fakes import callback_recorder
 from tests.delegate.integration.cli import ASKING, DONE, RUN, SID
@@ -301,29 +302,20 @@ class Tui(Detach):
         )
         self.assertNotIn(SECRET, "\0".join(resumed["argv"]))
 
-    def test_kill_session_of_the_harness_stops_the_tui_one_outcome_error(self):
+    def test_kill_session_of_the_harness_leaves_the_owned_tui_and_its_attempt(self):
         res = self.detach(mode="tui", steps=[START])
         self.said(res, tui=True)
         self.until(lambda: "nudge" in self.kinds(), "the nudge")
         shown = self.server.tmux("display-message", "-p", "-t", f"={HARNESS}:", "#{pane_pid}")
         pid = int(shown.stdout)
         self.assertEqual(self.server.tmux("kill-session", "-t", f"={HARNESS}").returncode, 0)
-        self.until(
-            lambda: not self.live(TUI),
-            f"{TUI} stopped",
-            diagnostics=lambda: (
-                f"harness ({pid}) running: {running(pid)}; run.jsonl: {self.records()}"
-            ),
-        )
         self.until(lambda: not running(pid), f"the harness ({pid}) ended")
+        self.assertTrue(self.live(TUI))
         outcomes = [s for s in shape(live_tmux.events(self.events)) if s.startswith("outcome")]
-        self.assertEqual(outcomes, ["outcome error"])
-        self.assertEqual(self.kinds()[-2:], ["result", "end"])
-        rc = 128 + signal.SIGHUP
-        self.assertEqual(
-            (self.last("result")["error"], self.last("end")["rc"]),
-            (f"stopped: Stopped: {rc}", rc),
-        )
+        self.assertEqual(outcomes, [])
+        self.assertNotIn("result", self.kinds())
+        with open(os.path.join(Layout(self.work).run, "delegate.json")) as f:
+            self.assertEqual(json.load(f)["completed"], False)
 
     def test_the_launchers_events_file_gets_the_turn_ends_and_one_outcome(self):
         res = self.detach(mode="tui", steps=[START], turns=[[block(DONE)]], launcher=True)
@@ -460,14 +452,28 @@ class Answer(Detach):
         res = self.answer(steps=[START, block(DONE)])
         self.answered(self.said(res, tui=False), turn_ends=0)
 
-    def test_tui_needs_input_answered_by_a_detached_resume_closing_its_open_tui(self):
-        res = self.detach(mode="tui", steps=[START], turns=[[block(ASKING)]])
-        self.said(res, tui=True)
+    def test_tui_needs_input_answered_by_resume_input_in_its_live_pane(self):
+        res = self.detach(mode="tui", steps=[START], turns=[[block(ASKING)], [block(DONE)]])
+        record = self.said(res, tui=True)
         shaped = self.ended(turn_ends=2)
         self.assertEqual(self.harness_lines(shaped), ["outcome needs_input", "exited 0"])
         self.assertTrue(self.live(TUI))
-        res = self.answer(steps=[START], turns=[[block(DONE)]])
-        self.answered(self.said(res, tui=True), turn_ends=2)
+        offset = len(live_tmux.events(self.events_used))
+        res = self.cli([*RESUME, self.work, "--input", ANSWER])
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(Record.parse(res.stdout), record)
+        self.assertFalse(self.live(HARNESS))
+        self.until(
+            lambda: "outcome done" in shape(live_tmux.events(self.events_used)[offset:]),
+            "the answered attempt's outcome",
+        )
+        self.assertEqual(
+            self.harness_lines(shape(live_tmux.events(self.events_used)[offset:])), ["outcome done"]
+        )
+        self.assertEqual(self.read(self.out), DONE["deliverable"])
+        self.assertEqual(self.attempt(), 2)
+        inputs = [e["text"] for e in self.records() if e["kind"] == "input"]
+        self.assertEqual(inputs, ["Hello.", ANSWER])
 
     def test_an_answer_while_the_run_lives_exits_2_starting_nothing(self):
         self.said(self.detach(steps=[START], hang=True), tui=False)
@@ -480,6 +486,68 @@ class Answer(Detach):
         shown = self.server.tmux("display-message", "-p", "-t", f"={HARNESS}:", "#{pane_pid}")
         self.assertEqual(self.server.tmux("kill-session", "-t", f"={HARNESS}").returncode, 0)
         self.until(lambda: not running(int(shown.stdout)), "the harness ended")
+
+
+class Owned(Detach):
+    """A tui run its session harness owns: after its attempt ends, input typed into the live pane
+    opens the next attempt, which the delegation handler drives to its own outcome.
+    """
+
+    CONTINUE = "continue"
+
+    def send(self, text: str) -> None:
+        res = self.cli([*PY, "-m", "ensemble.session.cli", "send", TUI, text])
+        self.assertEqual(res.returncode, 0, res.stderr)
+
+    def status(self) -> Status:
+        res = self.cli([*PY, "-m", "ensemble.delegate.cli", "status", self.work])
+        self.assertEqual(res.returncode, 0, res.stderr)
+        return Status.parse(res.stdout)
+
+    def attempt(self) -> dict:
+        with open(os.path.join(Layout(self.work).run, "delegate.json")) as f:
+            return json.load(f)
+
+    def test_needs_input_then_an_answer_in_the_pane_is_attempt_two(self):
+        res = self.detach(mode="tui", steps=[START], turns=[[block(ASKING)], [block(DONE)]])
+        self.said(res, tui=True)
+        shaped = self.ended(turn_ends=2)
+        self.assertEqual(self.harness_lines(shaped), ["outcome needs_input", "exited 0"])
+        status = self.status()
+        self.assertEqual((status.alive, status.outcome), (False, "needs_input"))
+        self.assertTrue(self.live(TUI))
+        offset = len(live_tmux.events(self.events_used))
+        self.send(ANSWER)
+        self.until(
+            lambda: "outcome done" in shape(live_tmux.events(self.events_used)[offset:]),
+            "attempt 2's outcome",
+        )
+        state = self.attempt()
+        self.assertEqual(
+            (state["attempt"], state["completed"], state["result"]["outcome"]["status"]),
+            (2, True, "done"),
+        )
+        self.assertEqual(state["previous"]["outcome"]["status"], "needs_input")
+        self.assertEqual(self.read(self.out), DONE["deliverable"])
+        self.assertEqual(self.kinds().count("result"), 2)
+        self.assertTrue(self.live(TUI))
+
+    def test_continue_after_a_failed_turn_in_the_pane_is_the_next_attempt(self):
+        failed = {"kind": "hook", "event": "StopFailure", "error": "server_overloaded"}
+        res = self.detach(mode="tui", steps=[START, failed], turns=[[block(DONE)]])
+        self.said(res, tui=True)
+        self.ended()
+        state = self.attempt()
+        self.assertEqual(state["result"]["error"], "the client's turn failed: server_overloaded")
+        self.assertFalse(self.status().alive)
+        offset = len(live_tmux.events(self.events_used))
+        self.send(self.CONTINUE)
+        self.until(
+            lambda: "outcome done" in shape(live_tmux.events(self.events_used)[offset:]),
+            "the continued attempt's outcome",
+        )
+        state = self.attempt()
+        self.assertEqual((state["attempt"], state["result"]["outcome"]["status"]), (2, "done"))
 
 
 if __name__ == "__main__":

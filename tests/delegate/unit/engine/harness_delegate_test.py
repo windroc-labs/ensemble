@@ -21,8 +21,11 @@ from unittest import mock
 
 from ensemble.delegate import ConfigError, Outcome, Spec
 from ensemble.delegate.composer import Composer, RunParams
+from ensemble.delegate.engine.config import module_roots
 from ensemble.delegate.engine.drivers import AgentDriver
-from ensemble.delegate.engine.harness_delegate import HarnessDelegate
+from ensemble.delegate.engine.handler import HANDLER
+from ensemble.delegate.engine.harness_delegate import DRAIN_WAIT, HarnessDelegate
+from ensemble.delegate.engine.record import RunRecord
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import Begun, Finished, Layout, Result
 from ensemble.session import (
@@ -42,7 +45,7 @@ from ensemble.session import (
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import Spec as SessionSpec
 from ensemble.session.engine.types import Liveness, SessionRow
-from ensemble.utils import ACCOUNT_ENV, StatusState, Stopped
+from ensemble.utils import ACCOUNT_ENV, OutcomeStatus, StatusState, Stopped
 from tests.delegate.fakes.harness_session import (
     FakeViewer,
     HarnessSession,
@@ -2402,3 +2405,233 @@ class EnvironmentTest(HarnessCase):
         assert result.outcome is not None
         self.assertEqual(result.outcome.deliverable.strip(), TARGETED)
         self.assertEqual(order, ["close", "finished"])
+
+
+class OwnedRun(HarnessCase):
+    """An owned tui run (its preflight takes the handler): run() starts the worker, then waits for
+    the attempt's Result its handler stores, ending the attempt itself only while opening past the
+    idle timeout or once its worker is gone.
+    """
+
+    NEEDS = Result(0, Outcome(OutcomeStatus.NEEDS_INPUT, "T", "S", questions=["Q"]))
+
+    def setUp(self):
+        super().setUp()
+        HarnessSession.owns = True
+        self.lines: list[str] = []
+        self.enterContext(
+            mock.patch("subprocess.Popen", side_effect=lambda _argv, **_kw: Child(self.lines))
+        )
+        self.err = self.enterContext(mock.patch("sys.stderr", new_callable=io.StringIO))
+        self.events_file = os.path.join(self.home, "events.log")
+        self.record = RunRecord(Layout(self.work))
+
+    def owned(self, *, idle=600.0, lock=None):
+        spec = Spec(
+            "input",
+            self.work,
+            task="echo",
+            sid=SID,
+            client="fake",
+            mode="tui",
+            events=self.events_file,
+        )
+        view = self.make(spec=spec, callback=("callback",))
+        p = view._state.plan
+        session = p.session
+        if lock is not None:
+            session = replace(
+                session, environment=EnvironmentSpec(image="img", gateway="gw", lock=lock)
+            )
+        view._state = replace(
+            view._state,
+            plan=replace(p, session=session, run=replace(p.run, idle_timeout=idle)),
+        )
+        view._save(view._state)
+        return view
+
+    def kinds(self) -> list[str]:
+        with open(os.path.join(Layout(self.work).run, "run.jsonl"), encoding="utf-8") as f:
+            return [json.loads(line)["kind"] for line in f]
+
+    def sent(self) -> list[str]:
+        return [json.loads(line)["kind"] for line in self.lines]
+
+    def at_begun(self, act):
+        seen = []
+
+        def on(event):
+            seen.append(type(event).__name__)
+            if isinstance(event, Begun):
+                act()
+
+        return seen, on
+
+    def test_a_tui_run_a_harness_owns_is_planned_with_the_handler(self):
+        view = self.owned()
+        (handler,) = view._state.plan.session.handlers
+        self.assertEqual(
+            (handler.module, dict(handler.state), handler.roots),
+            (HANDLER, {"workdir": self.work, "worker": 1}, module_roots()),
+        )
+        self.assertEqual(self.metadata()["plan"]["session"]["handlers"][0]["state"]["worker"], 1)
+        for owns, mode in ((False, "tui"), (True, "headless")):
+            with self.subTest(owns=owns, mode=mode):
+                HarnessSession.owns = owns
+                self.work = os.path.join(self.home, f"{owns}-{mode}")
+                spec = Spec("input", self.work, task="echo", sid=SID, client="fake", mode=mode)
+                self.assertEqual(self.make(spec=spec)._state.plan.session.handlers, ())
+
+    def test_run_returns_the_result_the_handler_stored_and_stops_nothing(self):
+        view = self.owned()
+
+        def handled():
+            self.assertTrue(view.alive())
+            self.assertTrue(self.record.bind(1, 1))
+            self.assertTrue(self.record.complete(1, self.NEEDS, sid=SID))
+
+        seen, on = self.at_begun(handled)
+        self.assertEqual(view.run(on), self.NEEDS)
+        self.assertEqual(seen, ["Begun", "Finished"])
+        self.assertEqual(self.lines, [])
+        self.assertTrue(view.driver.session.alive())
+        self.assertFalse(view.alive())
+        self.assertFalse(view.status().alive)
+        self.assertEqual(view.status().outcome, "needs_input")
+
+    def test_run_returns_its_attempts_result_once_a_follow_up_opened(self):
+        view = self.owned()
+
+        def followed():
+            self.record.bind(1, 1)
+            self.record.complete(1, self.NEEDS, sid=SID)
+            self.assertTrue(self.record.follow_up(1, 1))
+
+        _seen, on = self.at_begun(followed)
+        self.assertEqual(view.run(on), self.NEEDS)
+        self.assertEqual(self.record.read().attempt, 2)
+
+    def test_a_replaced_attempt_is_a_config_error(self):
+        view = self.owned()
+        _seen, on = self.at_begun(lambda: self.record.save(replace(self.record.read(), attempt=3)))
+        with self.assertRaisesRegex(ConfigError, "delegate attempt was replaced"):
+            view.run(on)
+
+    def test_an_exception_after_the_start_leaves_the_attempt_and_worker_alone(self):
+        view = self.owned()
+
+        def interrupted():
+            self.record.bind(1, 1)
+            raise Stopped(129)
+
+        _seen, on = self.at_begun(interrupted)
+        with self.assertRaises(Stopped):
+            view.run(on)
+        state = self.record.read()
+        self.assertEqual((state.completed, state.result, state.bound), (False, None, True))
+        self.assertTrue(view.driver.session.alive())
+        self.assertEqual(self.lines, [])
+        self.assertTrue(view.alive())
+
+    def test_an_opening_attempt_past_its_idle_timeout_is_given_up(self):
+        Clock(self)
+        view = self.owned(idle=5)
+        result = view.run()
+        self.assertEqual(result, Result(0, None, "the agent run returned no outcome"))
+        self.assertEqual(self.kinds()[-3:], ["give_up", "result", "end"])
+        self.assertIn(
+            f"no event for 5 s; session {view._state.agent_name} left open", self.err.getvalue()
+        )
+        self.assertEqual(self.sent(), ["finished"])
+        with open(self.events_file, encoding="utf-8") as f:
+            self.assertTrue(f.read().rstrip().endswith("outcome error"))
+        self.assertTrue(view.driver.session.alive())
+
+    def test_a_bound_attempt_is_never_given_up_by_its_drive(self):
+        clock = Clock(self)
+        view = self.owned(idle=5)
+        advance = clock.advance
+
+        def later(seconds):
+            advance(seconds)
+            if clock.now >= 20 and not self.record.read().completed:
+                self.record.complete(1, self.NEEDS, sid=SID)
+
+        self.enterContext(mock.patch("time.sleep", side_effect=later))
+        _seen, on = self.at_begun(lambda: self.record.bind(1, 1))
+        self.assertEqual(view.run(on), self.NEEDS)
+        self.assertNotIn("give_up", self.kinds())
+
+    def test_a_gone_worker_ends_the_attempt_after_the_drain_wait(self):
+        clock = Clock(self)
+        view = self.owned()
+
+        def gone():
+            self.record.bind(1, 1)
+            view.driver.session.liveness = Liveness.ABSENT
+
+        _seen, on = self.at_begun(gone)
+        result = view.run(on)
+        self.assertEqual(result, Result(1, None, "stopped: session harness ended without a Result"))
+        self.assertGreaterEqual(clock.now, DRAIN_WAIT)
+        self.assertEqual(self.record.read().result, result)
+        self.assertEqual(self.sent(), ["finished"])
+
+    def locked_give_up(self, *, fails: bool) -> str:
+        Clock(self)
+        view = self.owned(idle=5, lock="dummy-lock")
+
+        def failing():
+            raise SessionError("not confirmed")
+
+        def break_close():
+            if fails:
+                view.driver.session.close = failing
+
+        _seen, on = self.at_begun(break_close)
+        view.run(on)
+        return self.err.getvalue()
+
+    def test_a_locked_give_up_claims_release_once_its_close_returns(self):
+        err = self.locked_give_up(fails=False)
+        self.assertIn("closed (lock dummy-lock)", err)
+        self.assertIn("release", self.kinds())
+
+    def test_a_locked_give_up_whose_close_fails_claims_no_release(self):
+        err = self.locked_give_up(fails=True)
+        self.assertIn("delegate: tui: close: not confirmed", err)
+        self.assertNotIn("closed (lock", err)
+        self.assertNotIn("release", self.kinds())
+        self.assertEqual(self.sent(), ["finished"])
+
+    def test_resume_input_on_a_live_worker_only_sends_it(self):
+        view = self.owned()
+        _seen, on = self.at_begun(
+            lambda: (self.record.bind(1, 1), self.record.complete(1, self.NEEDS, sid=SID))
+        )
+        view.run(on)
+        agent, before, launches = view.driver.session, self.metadata(), len(harness_launches())
+        again = HarnessDelegate.attach(self.work, session_cls=HarnessSession)
+        record = again.resume(input="the answer")
+        self.assertEqual(record.sid, SID)
+        self.assertEqual(agent.sent, ["the answer"])
+        self.assertEqual(self.metadata(), before)
+        self.assertEqual(len(harness_launches()), launches)
+        self.assertEqual(self.kinds()[-1], "input")
+        agent.send = lambda _text: (_ for _ in ()).throw(SessionError("pane gone"))
+        with self.assertRaisesRegex(SessionError, "pane gone"):
+            again.resume(input="again")
+
+    def test_resume_of_an_ended_worker_registers_the_next_worker(self):
+        view = self.owned()
+        _seen, on = self.at_begun(lambda: (_ for _ in ()).throw(Stopped(129)))
+        with self.assertRaises(Stopped):
+            view.run(on)
+        view.driver.session.liveness = Liveness.ABSENT
+        HarnessDelegate.attach(self.work, session_cls=HarnessSession).resume()
+        data = self.metadata()
+        self.assertEqual(
+            (data["attempt"], data["bound"], data["previous"]),
+            (2, False, None),
+        )
+        self.assertEqual(data["plan"]["session"]["handlers"][0]["state"]["worker"], 2)

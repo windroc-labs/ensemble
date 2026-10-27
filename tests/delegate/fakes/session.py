@@ -1,16 +1,19 @@
-"""A caller-owned fake Session class for Delegate driver contract tests."""
+"""A caller-owned fake Session class for Delegate driver contract tests; like an unowned start,
+its preflight refuses handlers unless `owns`.
+"""
 
-from ensemble.session import Host, Session, Spec
+from ensemble.session import ConfigError, Host, Session, Spec
 from tests.session.fakes.session import FakeSession
 
 
 class SessionClass(FakeSession):
     preflights: list[dict] = []
     preflight_error: Exception | None = None
+    owns = False
 
     def __init_subclass__(cls, **keywords):
         super().__init_subclass__(**keywords)
-        cls.preflights, cls.preflight_error = [], None
+        cls.preflights, cls.preflight_error, cls.owns = [], None, False
 
     @classmethod
     def fresh(cls):
@@ -29,6 +32,8 @@ class SessionClass(FakeSession):
 
     @classmethod
     def preflight(cls, spec, *, display=None, host=None, idle_timeout=None):
+        if spec.handlers and not cls.owns:
+            raise ConfigError(f"handlers: {spec.client} {spec.mode} has no session harness yet")
         cls.preflights.append(
             {"spec": spec, "display": display, "host": host, "idle_timeout": idle_timeout}
         )
