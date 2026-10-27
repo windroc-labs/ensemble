@@ -348,6 +348,11 @@ class HarnessDelegate(Delegate):
         except (BlockingIOError, ConfigError, OSError, SessionError, SessionConfigError):
             return
 
+    def _input_agent(self, state: DelegateState) -> Session | None:
+        """Its live owned agent, for resume's input."""
+        agent = self._answered_agent(state) if owned(state.plan) else None
+        return agent if agent is not None and agent.alive() else None
+
     def _wound_down(self) -> None:
         """Up to WIND_DOWN_WAIT s for a completed run's drive to let the run lock go."""
         deadline = time.monotonic() + WIND_DOWN_WAIT
@@ -1301,7 +1306,11 @@ class HarnessDelegate(Delegate):
         if mode not in (None, Mode.HEADLESS, Mode.TUI):
             raise ConfigError(f"resume: mode must be headless or tui, got {mode!r}")
         self._settle()
-        if input is None:
+        try:
+            takes = input is not None and self._input_agent(self._read()) is not None
+        except ConfigError:
+            takes = False
+        if not takes:
             self._wound_down()
         with self.store.mutex():
             state = self._read()
@@ -1317,8 +1326,7 @@ class HarnessDelegate(Delegate):
                 outcome = state.result.outcome if state.result is not None else None
                 if outcome is None or outcome.status != OutcomeStatus.NEEDS_INPUT:
                     raise ConfigError(f"{self.workdir}: --input requires a needs_input outcome")
-                agent = self._answered_agent(state) if owned(state.plan) else None
-                if agent is not None and agent.alive():
+                if (agent := self._input_agent(state)) is not None:
                     # its worker's TurnStarted opens the follow-up attempt (D9)
                     if state.closing:
                         RunRecord(self.layout, self.store).save(replace(state, closing=False))

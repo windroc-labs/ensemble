@@ -2822,6 +2822,20 @@ class OwnedRun(HarnessCase):
         again.resume()
         self.assertEqual(self.metadata()["attempt"], 2)
 
+    def test_resume_input_waits_for_a_drive_whose_worker_exited(self):
+        view = self.owned()
+        _seen, on = self.at_begun(
+            lambda: (self.record.bind(1, 1), self.record.complete(1, self.NEEDS, sid=SID))
+        )
+        view.run(on)
+        view.driver.session.liveness = Liveness.ABSENT
+        fd = os.open(os.path.join(Layout(self.work).run, "delegate.run.lock"), os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        threading.Timer(0.3, os.close, (fd,)).start()
+        HarnessDelegate.attach(self.work, session_cls=HarnessSession).resume(input="the answer")
+        data = self.metadata()
+        self.assertEqual((data["attempt"], data["spec"]["input"]), (2, "the answer"))
+
     def test_status_and_resume_agree_on_a_drive_that_never_returns(self):
         fd = self.stopped_run_whose_drive_holds_the_run_lock()
         self.addCleanup(os.close, fd)
