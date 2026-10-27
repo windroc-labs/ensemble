@@ -98,6 +98,7 @@ NAMES = {
     ops.Q_COMMENT: "find",
     ops.M_STATE: "state",
     linear_tracker.M_TITLE: "title",
+    linear_tracker.M_ASSIGN: "assign",
     linear_tracker.M_ATTACH: "attach",
     linear_tracker.M_UNARCHIVE: "unarchive",
     linear_tracker.Q_ATTACHED: "read",
@@ -110,6 +111,7 @@ FIELDS = {
     "comment": "commentCreate",
     "state": "issueUpdate",
     "title": "issueUpdate",
+    "assign": "issueUpdate",
     "attach": "attachmentLinkURL",
     "unarchive": "issueUnarchive",
 }
@@ -1157,6 +1159,12 @@ class ApprovalMessages(Base):
 
     def test_queries_verbatim(self):
         self.assertEqual(
+            linear_tracker.M_ASSIGN,
+            (
+                "mutation($i: String!, $a: String!) { issueUpdate(id: $i, input: { assigneeId: $a }) { success } }"
+            ),
+        )
+        self.assertEqual(
             linear_tracker.M_TITLE,
             (
                 "mutation($i: String!, $t: String!) { issueUpdate(id: $i, input: { title: $t }) { success } }"
@@ -1408,6 +1416,80 @@ class CompletionMessages(Base):
                 attach_title="Session Registry",
             ),
         )
+
+
+USER = "c0000000-0000-4000-8000-000000000041"
+
+
+class QuestionAssignee(Base):
+    """A run's question assigns its issue to the configured user before its comment."""
+
+    QUESTION = Outcome("needs_input", "Question", "", questions=["Which repo?"])
+    BODY = f"Question:\n1. Which repo?\n\n{FOOTER}"
+
+    def calls(self, body, *, assign=True):
+        calls = expect(body=body, state="in_review")
+        return [calls[0], ("assign", {"i": UUID, "a": USER}), *calls[1:]] if assign else calls
+
+    def test_question_assigns_the_issue_to_the_user(self):
+        gql = Gql()
+        self.assertTrue(writeback.finish(replace(self.ctx(gql=gql), assignee=USER), self.QUESTION))
+        self.assertEqual(gql.calls, self.calls(self.BODY))
+
+    def test_no_assignee_no_assignment(self):
+        gql = Gql()
+        self.assertTrue(writeback.finish(self.ctx(gql=gql), self.QUESTION))
+        self.assertEqual(gql.calls, self.calls(self.BODY, assign=False))
+
+    def test_done_and_failed_never_assign(self):
+        for o in (
+            Outcome("done", "ENG-7: x", "Adds x.", url=PR),
+            Outcome("failed", "ENG-7: x", "push not permitted"),
+        ):
+            with self.subTest(status=o.status):
+                gql = Gql()
+                writeback.finish(
+                    replace(self.ctx(gql=gql), assignee=USER, target=TARGET, resume=True), o
+                )
+                self.assertNotIn("assign", [name for name, _ in gql.calls])
+
+    def test_assign_failure_noted_move_made(self):
+        gql = Gql(fail=lambda name, _v: False if name == "assign" else None)
+        self.assertTrue(writeback.finish(replace(self.ctx(gql=gql), assignee=USER), self.QUESTION))
+        self.assertEqual(
+            gql.calls,
+            self.calls(
+                self.BODY + f"\n\nCould not assign {USER}: LinearError: issueUpdate: success: false"
+            ),
+        )
+
+    def test_signal_exit_raises(self):
+        gql = Gql(fail=lambda name, _v: Stopped(129) if name == "assign" else None)
+        self.assertFalse(writeback.finish(replace(self.ctx(gql=gql), assignee=USER), self.QUESTION))
+        self.assertEqual(gql.calls[-1][0], "assign")
+
+    def test_context_takes_the_writers_assignee(self):
+        cfg = config.load()
+        ctx = writeback.context(
+            cfg,
+            "pm",
+            replace(WRITERS, assignee=USER),
+            ident=ID,
+            issue_id=UUID,
+            sid=SID,
+            resume=False,
+            project=PROJECT,
+            target=None,
+        )
+        self.assertEqual(ctx.assignee, USER)
+
+    def test_local_board_never_reassigns(self):
+        from ensemble.orchestrator.trackers.local.local_tracker import LocalTracker
+
+        board = tempfile.mkdtemp(dir=self.tmp)
+        local = LocalTracker(board, (), prefix="LOC")
+        self.assertIsNone(local.assign("LOC-1", USER))
+        self.assertEqual(os.listdir(board), [])
 
 
 class CompletionMarker(Base):
