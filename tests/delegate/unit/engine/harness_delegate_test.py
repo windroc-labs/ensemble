@@ -17,7 +17,6 @@ import json
 import os
 import shutil
 import signal
-import subprocess
 import threading
 import unittest
 import uuid
@@ -61,6 +60,7 @@ from tests.delegate.fakes.harness_session import (
     HarnessSession,
     LockingSession,
     RecordingHost,
+    RecordingProcess,
     harness_launches,
 )
 from tests.delegate.harness import SID, HarnessCase
@@ -69,6 +69,7 @@ from tests.delegate.unit.engine.orphans import Clock, Orphan
 from tests.session import harnesses
 from tests.session.case import PLUGIN_BIN
 from tests.session.unit.hosts.docker import support
+from tests.utils.process_fixtures import DEVNULL, STDOUT
 
 ORPHAN = 4242
 
@@ -192,8 +193,8 @@ class Drive(HarnessCase):
             {k: seen[k] for k in ("cwd", "stdin", "stderr", "start_new_session")},
             {
                 "cwd": os.path.join(self.work, "run"),
-                "stdin": subprocess.DEVNULL,
-                "stderr": subprocess.STDOUT,
+                "stdin": DEVNULL,
+                "stderr": STDOUT,
                 "start_new_session": True,
             },
         )
@@ -2107,6 +2108,29 @@ class StartedTest(HarnessCase):
         data.update(completed=True, result=asdict(result))
         with open(self.state_record(), "w", encoding="utf-8") as file:
             json.dump(data, file)
+
+    def published(self):
+        return HarnessSession.host(self.host).attach(AGENT).record()
+
+    def test_a_started_agent_session_carries_the_runs_record(self):
+        record = self.detach(self.tui(), live_at=5)
+        self.assertEqual(self.published(), record)
+
+    def test_a_started_docker_agent_session_carries_the_runs_record(self):
+        record = self.detach(self.tui(docker=True), live_at=5)
+        self.assertEqual(self.published(), record)
+
+    def test_a_record_its_host_refuses_is_said_and_the_start_stands(self):
+        refused = SessionError(f"session {AGENT}: its host cannot store a Record after launch")
+        with (
+            mock.patch.object(RecordingProcess, "publish", side_effect=refused),
+            contextlib.redirect_stderr(io.StringIO()) as err,
+        ):
+            record = self.detach(self.tui(), live_at=5)
+        self.assertEqual(record.sessions, (AGENT,))
+        self.assertTrue(self.drive().running())
+        self.assertIsNone(self.published())
+        self.assertEqual(err.getvalue(), f"delegate: Record not published: {refused}\n")
 
     def test_a_docker_start_live_at_35_s_is_not_failed(self):
         record = self.detach(self.tui(docker=True), live_at=35)

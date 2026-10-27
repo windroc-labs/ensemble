@@ -2,7 +2,7 @@
 prompt on stdin (`run` quotes an argument holding a space). The first sessionID binds the run; text
 parts are Replies, tools Activity, an error the failed turn; the end is the turn's, its last text.
 opencode prints that sessionID only once its model streams, so a new run titles its session
-TITLE: a resume of a run whose harness died before then finds it by that title (common.py).
+TITLE, by which a resume finds it if its harness died before then (common.py).
 """
 
 import os

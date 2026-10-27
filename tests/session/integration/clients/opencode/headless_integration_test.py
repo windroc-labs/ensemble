@@ -90,7 +90,16 @@ class HeadlessSessions(Case):
         self.assertIn(Exited(0), events)
         (call,) = self.calls()
         self.assertEqual(
-            call["argv"][:5], ["run", "--format", "json", "--model", "ollama/qwen3.6:35b-mlx"]
+            call["argv"][:7],
+            [
+                "run",
+                "--format",
+                "json",
+                "--title",
+                "ensemble-run-1",
+                "--model",
+                "ollama/qwen3.6:35b-mlx",
+            ],
         )
         self.assertEqual(call["prompt"], "Hi there\n- a list")
         self.assertEqual((call["cwd"], call["session"], call["auto"]), (str(self.cwd), None, False))
