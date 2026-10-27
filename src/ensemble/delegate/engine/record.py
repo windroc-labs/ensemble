@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from dataclasses import fields, is_dataclass, replace
 
 from ensemble.delegate.composer import RunConfig, Team
-from ensemble.delegate.engine.runner import say
+from ensemble.delegate.engine.runner import closing, say
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import (
     ConfigError,
@@ -20,7 +20,7 @@ from ensemble.delegate.engine.types import (
     Spec,
 )
 from ensemble.delegate.event.types import Outcome
-from ensemble.session import Access, EnvironmentSpec, HookCallback, SessionStatusLog
+from ensemble.session import Access, EnvironmentSpec, HookCallback, RunLog, SessionStatusLog
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import Spec as SessionSpec
 
@@ -152,6 +152,26 @@ class RunRecord:
             )
         except OSError as error:
             say(f"delegate: {error}")
+
+    @staticmethod
+    def ended(
+        state: DelegateState, result: Result, before: tuple[tuple[str, dict], ...] = ()
+    ) -> None:
+        """An ended attempt's run notes (`before`, then `result` and `end`), then its events line;
+        an OSError is printed, never raised.
+        """
+        p = state.plan
+        log = RunLog(p.session.workdir)
+        for kind, values in (
+            *before,
+            ("result", closing(result)),
+            ("end", {"sid": p.sid, "rc": result.returncode}),
+        ):
+            try:
+                log.note(kind, **values)
+            except OSError as error:
+                say(f"delegate: {error}")
+        RunRecord.announce(state, result)
 
     def bind(self, n: int, token: int) -> bool:
         with self.store.mutex():

@@ -11,7 +11,7 @@ import threading
 
 from ensemble.delegate.engine.callback import EventCallback
 from ensemble.delegate.engine.record import RunRecord, worker
-from ensemble.delegate.engine.runner import POLICIES, Attempt, closing, say
+from ensemble.delegate.engine.runner import POLICIES, Attempt, say
 from ensemble.delegate.engine.types import (
     Begun,
     ConfigError,
@@ -174,16 +174,8 @@ class _Run:
         p = state.plan
         if not self.record.complete(n, result, sid=p.sid):
             return
+        RunRecord.ended(state, result)
         log = RunLog(p.session.workdir)
-        for kind, fields in (
-            ("result", closing(result)),
-            ("end", {"sid": p.sid, "rc": result.returncode}),
-        ):
-            try:
-                log.note(kind, **fields)
-            except OSError as error:
-                say(f"delegate: {error}")
-        RunRecord.announce(state, result)
         environment = p.session.environment
         lock = None if environment is None else environment.lock
         if lock is not None:

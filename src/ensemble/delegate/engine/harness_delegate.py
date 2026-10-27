@@ -906,22 +906,17 @@ class HarnessDelegate(Delegate):
         log = RunLog(p.session.workdir)
         environment = p.session.environment
         lock = None if environment is None else environment.lock
-        notes = [("result", closing(result)), ("end", {"sid": p.sid, "rc": result.returncode})]
+        before: tuple[tuple[str, dict], ...] = ()
         if give_up:
             reason = idle_reason(p.run.idle_timeout)
-            notes.insert(0, ("give_up", {"reason": reason}))
+            before = (("give_up", {"reason": reason}),)
             try:
                 command = f": {handle.attach_command()}" if handle.showable else ""
             except SessionError:
                 command = ""
             left = "" if lock else f"; session {state.agent_name} left open{command}"
             say(f"delegate: {reason}{left}")
-        for kind, fields in notes:
-            try:
-                log.note(kind, **fields)
-            except OSError as error:
-                say(f"delegate: {error}")
-        RunRecord.announce(state, result)
+        RunRecord.ended(state, result, before)
         if lock is None:
             return
         try:
