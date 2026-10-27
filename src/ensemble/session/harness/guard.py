@@ -393,6 +393,8 @@ class Guard:
                 start_new_session=True,
                 close_fds=True,
                 preexec_fn=lambda: child_setup(slave),
+                # A Docker client inherits no TERM; without one it draws no color.
+                env={"TERM": "xterm-256color", **os.environ} if slave is not None else None,
             )
             self.spawned = time.monotonic()
         finally:

@@ -741,6 +741,35 @@ class GuardTest(Case):
             runtime.start()
         self.assertFalse(runtime.output)
 
+    def started_env(self, *, terminal, **environ):
+        """The env a started guard gave its client, under environ."""
+        runtime = self.runtime(terminal=terminal)
+        with (
+            mock.patch.dict(os.environ, environ),
+            mock.patch.object(guard.ctypes, "CDLL") as library,
+            mock.patch.object(guard.socket, "socket"),
+            mock.patch.object(os, "chmod"),
+            mock.patch.object(os, "openpty", return_value=(20, 21)),
+            mock.patch.object(guard.fcntl, "ioctl"),
+            mock.patch.object(os, "close"),
+            mock.patch.object(os, "listdir", return_value=[]),
+            mock.patch.object(os, "set_blocking"),
+            mock.patch.object(guard.subprocess, "Popen") as spawn,
+        ):
+            library.return_value.prctl.return_value = 0
+            spawn.return_value.pid = 100
+            if "TERM" not in environ:
+                os.environ.pop("TERM", None)
+            runtime.start()
+        return spawn.call_args.kwargs["env"]
+
+    def test_a_pty_client_without_term_gets_a_color_term(self):
+        """A Docker client inherits no TERM: without one it drew no color (WDRC-344)."""
+        env = self.started_env(terminal=True, KEEP="1")
+        self.assertEqual((env["TERM"], env["KEEP"]), ("xterm-256color", "1"))
+        self.assertEqual(self.started_env(terminal=True, TERM="screen")["TERM"], "screen")
+        self.assertIsNone(self.started_env(terminal=False))
+
     def test_run_places_exit_after_last_output(self):
         runtime = self.runtime()
         proc = mock.Mock(returncode=0, pid=100)
