@@ -75,8 +75,14 @@ class Base(Case):
             return [json.loads(line) for line in f]
 
     def kinds(self) -> list[str]:
+        """run.jsonl's kinds, the first client_session moved after the input: its session harness
+        may bind the client before the run notes the input.
+        """
         with open(os.path.join(Layout(self.work).run, "run.jsonl")) as f:
-            return [json.loads(line)["kind"] for line in f]
+            kinds = [json.loads(line)["kind"] for line in f]
+        if kinds[1:3] == ["client_session", "input"]:
+            kinds[1:3] = ["input", "client_session"]
+        return kinds
 
 
 class Callbacks(Base):

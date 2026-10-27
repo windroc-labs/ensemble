@@ -477,7 +477,7 @@ class HostContract:
         self.addCleanup(session.stop)
         self.assertIs(configured.host(), self.host)
         self.assertFalse(session.showable)
-        for call in ("show", "attach_command", "screen"):
+        for call in ("show", "attach_command", "screen"):  # its harness's view: no tui, no show
             with self.subTest(call=call), self.assertRaises(NotShowable) as caught:
                 getattr(session, call)()
-            self.assertEqual(str(caught.exception), f"host {self.host.name} cannot show")
+            self.assertEqual(str(caught.exception), f"{call}: tui mode only")

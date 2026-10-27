@@ -98,7 +98,8 @@ class OwnedSession(Session):
     """attach: the read-only attach, bound to sid and generation (attached: one made already);
     retire: a tui view's non-owner close of that generation; replay: start past the log. A headless
     view's events() stops its worker on an interrupt, as a headless HostedSession does; tie: a
-    headless start's caller pipe, its harness closing the worker once the view is gone.
+    headless start's caller pipe, its harness closing the worker once the view is gone; clock: its
+    session class's, timing its idle timeouts.
     """
 
     def __init__(
@@ -116,13 +117,14 @@ class OwnedSession(Session):
         replay: bool = False,
         mode: Mode = Mode.TUI,
         tie: Tie | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if (mode == Mode.TUI) != (retire is not None):
             raise ValueError(
                 "retire: required for a tui view" if retire is None else "retire: a tui view's only"
             )
         self.sid, self.client, self.mode, self.name = sid, client, mode, name
-        self._tie = tie
+        self._tie, self._clock = tie, clock
         self.generation = generation
         self._channel, self._idle, self._attach = channel, idle_timeout, attach
         self._retire = retire
@@ -147,7 +149,7 @@ class OwnedSession(Session):
             raise
 
     def _read(self) -> Iterator[SessionEvent | Stderr | IdleTimeout]:
-        reader, last = self._events, time.monotonic()
+        reader, last = self._events, self._clock()
         while not reader.exited:
             taken = reader.read()
             if not taken and not self._channel.alive():
@@ -158,15 +160,15 @@ class OwnedSession(Session):
                     )
             for logged in taken:
                 if not isinstance(logged.event, ClientBound):
-                    last = time.monotonic()
+                    last = self._clock()
                     yield logged.event
             if taken:
                 continue
             wait = POLL
             if self._idle is not None and not reader.blocked:
-                wait = min(POLL, last + self._idle - time.monotonic())
+                wait = min(POLL, last + self._idle - self._clock())
                 if wait <= 0:
-                    last = time.monotonic()
+                    last = self._clock()
                     yield IdleTimeout(self._idle)
                     continue
             time.sleep(wait)

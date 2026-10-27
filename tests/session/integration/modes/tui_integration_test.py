@@ -80,7 +80,8 @@ class RawSessionCloseTest(Live):
 
 
 class PollCostTest(Live):
-    def test_a_quiet_poll_of_a_live_terminal_runs_five_tmux_commands(self):
+    def test_a_quiet_poll_of_a_live_worker_runs_no_tmux_command(self):
+        """Its guard answers: tmux shows the worker, never polled."""
         commands = []
 
         def counted(argv, **kwargs):
@@ -112,16 +113,7 @@ class PollCostTest(Live):
             pass
         commands.clear()
         self.assertEqual(mode.poll(0), ([], False))
-        self.assertEqual(
-            commands,
-            [
-                "display-message",
-                "display-message",
-                "display-message",
-                "capture-pane",
-                "display-message",
-            ],
-        )
+        self.assertEqual(commands, [])
 
 
 class LongPromptTest(Live):

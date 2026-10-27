@@ -2,8 +2,8 @@
 tui_integration_test sets it up: the real ClaudeClient runs
 tests/session/integration/clients/claude/fake_claude.py (on PATH as `claude`) interactively, its
 hooks from --settings. Turns, Blocked (a hook, the trust dialog), idle timeouts, the usage-limit
-screen, deaths, resume, attach from another process, show (beside a detached session), close by
-name and the launch's /color, typed once no turn runs (tests that send wait for it first).
+screen, deaths, resume, attach from another process, show, close by name and the launch's /color,
+typed once no turn runs (tests that send wait for it first).
 CLAUDE_CONFIG_DIR is a temp dir; the iTerm2 path fails the test.
 """
 
@@ -13,12 +13,11 @@ import os
 import shlex
 import signal
 import subprocess
-import sys
 import unittest
 from datetime import UTC, datetime
 from unittest import mock
 
-from ensemble.session import SIGNALS, Session
+from ensemble.session import Session
 from ensemble.session.clients.claude.tui import ClaudeTui
 from ensemble.session.engine import tmux_cli as tmux_model
 from ensemble.session.engine.records import RunLog
@@ -29,13 +28,13 @@ from ensemble.session.engine.types import (
     Blocked,
     Exited,
     IdleTimeout,
-    Launch,
     LimitHit,
     Mode,
     Reply,
     SessionError,
     Spec,
     TurnEnd,
+    TurnFailed,
     TurnStarted,
 )
 from ensemble.session.modes import tui
@@ -69,19 +68,6 @@ before = [handle.sid, handle.alive(), handle.reply]
 handle.send(text)
 event = next(e for e in handle.events() if isinstance(e, TurnEnd))
 print(json.dumps([*before, repr(event), handle.reply]))
-"""
-# A detached child: writes its blocked signals to argv[1], unblocks them, then runs until argv[2]
-# exists, at most 30 s.
-CHILD = """import json, os, signal, sys, time
-report, go = sys.argv[1:]
-with open(report + ".tmp", "w") as f:
-    blocked = signal.pthread_sigmask(signal.SIG_BLOCK, [])
-    json.dump(sorted(int(s) for s in blocked), f)
-os.replace(report + ".tmp", report)
-signal.pthread_sigmask(signal.SIG_UNBLOCK, [signal.SIGHUP, signal.SIGTERM, signal.SIGINT])
-for _ in range(600):
-    if os.path.exists(go): break
-    time.sleep(0.05)
 """
 
 
@@ -206,7 +192,7 @@ class TurnsTest(Live):
         live_tmux.wait(
             lambda: "Waiting after prompt" in handle.screen(), what="second turn waiting"
         )
-        self.assertEqual(self.server.option("w1", "@state"), "working")
+        live_tmux.wait(lambda: live_tmux.activity("w1") == "working", what="w1 marked working")
         before = live_tmux.events(self.events)
         store = tui.TuiStore.attach("w1", host=self.session_cls.host())
         hooks = live_tmux.events(os.path.join(store.dir, "hooks.jsonl"))
@@ -225,7 +211,7 @@ class TurnsTest(Live):
             timeout=WAIT,
         )
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
-        self.assertEqual(self.server.option("w1", "@state"), "working")
+        self.assertEqual(live_tmux.activity("w1"), "working")
         self.assertEqual(live_tmux.events(self.events), before)
         self.assertEqual(live_tmux.events(os.path.join(store.dir, "hooks.jsonl")), hooks)
         self.assertIn("Waiting after prompt", handle.content())
@@ -253,9 +239,7 @@ class TurnsTest(Live):
             {label: shlex.join((*hook, label)) for label in (*ClaudeTui.hooks, "SessionStart")},
         )
         self.lines("w1 done")
-        self.assertEqual(
-            (self.server.option("w1", "@state"), handle.reply), ("done", "Hi from w1.")
-        )
+        self.assertEqual((live_tmux.activity("w1"), handle.reply), ("done", "Hi from w1."))
 
         self.colored()
         handle.send("more")
@@ -263,7 +247,7 @@ class TurnsTest(Live):
             [stream.next(idle=False) for _ in range(2)], [TurnStarted(), TurnEnd("Second.", 2)]
         )
         self.lines("w1 done", "w1 done")
-        self.assertEqual((self.server.option("w1", "@state"), handle.reply), ("done", "Second."))
+        self.assertEqual((live_tmux.activity("w1"), handle.reply), ("done", "Second."))
         self.assertEqual(self.users(handle.info().transcript), ["hello", "more"])
         border = self.server.tmux("show-options", "-wqv", "-t", "=w1:", "pane-border-format").stdout
         self.assertEqual(border, tmux_model.BORDER + "\n")
@@ -300,7 +284,7 @@ class RepliesTest(Live):
         first = self.start("w1", scenario={"steps": ["One."]}, sid=SID)
         stream = self.stream(first, replies=True)
         self.assertEqual(delivered(self.until_turn_end(stream)), ["One."])
-        tui.TuiStore.attach("w1", host=self.session_cls.host()).close()
+        self.session_cls.retire("w1")
         again = self.start("w1", "again", scenario={"steps": ["Two."]}, sid=SID, resume=True)
         events = self.until_turn_end(self.stream(again, replies=True))
         self.assertEqual(delivered(events), ["Two."])
@@ -333,7 +317,7 @@ class BlockedTest(Live):
             [TurnStarted(), Blocked("Edit")],
         )
         self.lines("w1 blocked")
-        self.assertEqual(self.server.option("w1", "@state"), "blocked")
+        self.assertEqual(live_tmux.activity("w1"), "blocked")
         live_tmux.wait(
             lambda: "Allow this edit?" in handle.screen(), what="the dialog on the screen"
         )
@@ -353,7 +337,7 @@ class BlockedTest(Live):
             [TurnStarted(), Blocked("Quick safety check")],
         )
         self.lines("w1 blocked")
-        self.assertEqual(self.server.option("w1", "@state"), "blocked")
+        self.assertEqual(live_tmux.activity("w1"), "blocked")
         TmuxCli().keys("w1", "Enter")
         self.assertEqual(stream.next(), TurnEnd("Trusted.", 0))
         self.lines("w1 blocked", "w1 done")
@@ -369,9 +353,12 @@ class LimitTest(Live):
         self.assertCountEqual([stream.next() for _ in range(2)], [TurnStarted(), LimitHit(RESETS)])
         stream.quiet(1.0)
         self.lines("w1 done")
-        self.assertEqual((handle.alive(), self.server.option("w1", "@state")), (True, "done"))
+        self.assertEqual((handle.alive(), live_tmux.activity("w1")), (True, "done"))
         handle.send("go on")  # the limit ended no turn: the launch's /color waits for this one
-        self.assertEqual([stream.next() for _ in range(2)], [TurnStarted(), TurnEnd("Back.", 0)])
+        self.assertEqual(  # its harness fails the open limit turn as the new one starts
+            [stream.next() for _ in range(3)],
+            [TurnFailed("superseded"), TurnStarted(), TurnEnd("Back.", 0)],
+        )
         self.lines("w1 done", "w1 done")
         self.colored()
         self.assertIn("You've hit your weekly limit", handle.screen())
@@ -430,14 +417,15 @@ class ResumeTest(Live):
         first = self.start("w1", scenario={"steps": ["One."]}, sid=SID)
         stream = self.stream(first)
         self.assertEqual([stream.next() for _ in range(2)], [TurnStarted(), TurnEnd("One.", 0)])
-        tui.TuiStore.attach("w1", host=self.session_cls.host()).close()
+        transcript = first.info().transcript
+        self.session_cls.retire("w1")
         self.assertEqual(stream.until_exited(), [Exited(-signal.SIGHUP)])
         again = self.start("w1", "again", scenario={"steps": ["Two."]}, sid=SID, resume=True)
         stream = self.stream(again)
         self.assertEqual([stream.next() for _ in range(2)], [TurnStarted(), TurnEnd("Two.", 0)])
         argv = self.calls()[1]["argv"]
         self.assertEqual((argv[argv.index("--resume") + 1], "--session-id" in argv), (SID, False))
-        self.assertEqual(again.info().transcript, first.info().transcript)
+        self.assertEqual(again.info().transcript, transcript)
         self.assertEqual(self.users(again.info().transcript), ["hello", "again"])
 
 
@@ -469,37 +457,16 @@ class AttachTest(Live):
 class ShowTest(Live):
     def test_show_from_inside_the_manager_puts_it_in_the_grid_close_takes_it_out(self):
         self.server.attach(MANAGER)
-        go = os.path.join(self.dir, "go")
-        self.addCleanup(lambda: open(go, "w").close())
-        self.session_cls.host().detach(
-            "w1-drive",
-            Launch(
-                (
-                    sys.executable,
-                    "-I",
-                    "-c",
-                    CHILD,
-                    os.path.join(self.dir, "d.json"),
-                    go,
-                ),
-                self.server.env(),
-                cwd=self.dir,
-                blocked_signals=SIGNALS,
-            ),
-            display=MANAGER,
-        )
         handle = self.start("w1", scenario={"steps": ["Hi."]})
         self.assertEqual(self.panes(), 1)
         with mock.patch.dict(os.environ, self.server.inside(MANAGER)):
             self.assertIsNone(self.show("w1"))
         live_tmux.wait(
             functools.partial(live_tmux.assert_grid, self, self.server, MANAGER, [["w1"]]),
-            what="the grid [['w1']], the detached session in no cell",
+            what="the grid [['w1']]",
         )
-        self.assertEqual(
-            [self.server.option(n, "@opener") for n in ("w1", "w1-drive")], [MANAGER, ""]
-        )
-        tui.TuiStore.attach("w1", host=self.session_cls.host()).close()
+        self.assertEqual(self.server.option("w1", "@opener"), MANAGER)
+        self.session_cls.retire("w1")
 
         def alone() -> bool:
             self.poke()
@@ -531,7 +498,7 @@ class ShowTest(Live):
                 self.assertEqual(self.show("w1"), attach_command("w1"))
             self.assertIn(why, logs.output[0])
         self.assertEqual((self.panes(), self.server.pane_of("w1")), (1, ""))
-        tui.TuiStore.attach("w1", host=self.session_cls.host()).close()
+        self.session_cls.retire("w1")
         self.assertEqual(stream.until_exited(), [Exited(-signal.SIGHUP)])
         self.closed(handle)
         with self.assertRaises(SessionError):

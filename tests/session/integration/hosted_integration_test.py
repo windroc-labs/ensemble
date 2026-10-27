@@ -1,6 +1,6 @@
 """HostedSession on a private tmux server (tests/session/live_tmux.py), os.environ that server's env,
-the fake client's Tui: Session.attach(name).close() and TuiStore.attach(name, host=...).close() leave the
-same state (FR-4); list and a by-name close refused until a class is configured (FR-2: the session reads no config
+the fake client's Tui: Session.attach(name).close() and the by-name close Session.retire(name) leave
+the same state (FR-4); list and a by-name close refused until a class is configured (FR-2: the session reads no config
 itself); a display given to start stored, read back and listed (FR-48).
 """
 
@@ -51,7 +51,7 @@ class CloseTest(Live):
         found = {}
         for name, close_it in (
             ("w1", lambda: self.session_cls.attach("w1").close()),
-            ("w2", lambda: tui.TuiStore.attach("w2", host=Session.host()).close()),
+            ("w2", lambda: Session.retire("w2")),
         ):
             handle = self.start(name, {"read": True})
             close_it()
@@ -80,7 +80,7 @@ class CloseTest(Live):
         self.configure_hosted()
         self.assertEqual([row.name for row in HostedSession.list("w.*")], ["w3"])
         self.assertEqual(Session.list("w.*"), HostedSession.list("w.*"))
-        tui.TuiStore.attach("w3", host=Session.host()).close()
+        Session.retire("w3")
         self.assertEqual(HostedSession.list("w.*"), [])
         self.assertFalse(
             os.path.lexists(tui.TuiStore.attach("w3", host=self.session_cls.host()).dir)

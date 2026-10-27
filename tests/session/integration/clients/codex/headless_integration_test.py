@@ -733,9 +733,10 @@ class HeadlessRecoveryIntegrationTest(HeadlessSessions):
     def test_different_native_id_on_resume_is_not_published_or_saved(self):
         self.drain(self.start("first", dataclasses.replace(self.spec, sid=self.sid)))
         self.scene(thread_id=CHANGED)
-        handle = self.start("again", dataclasses.replace(self.spec, sid=self.sid), resume=True)
-        with self.assertRaisesRegex(ConfigError, "already bound to a different native ID"):
-            self.drain(handle)
+        with self.assertLogs("session", "ERROR") as logs:  # its harness fails, ending the run
+            handle = self.start("again", dataclasses.replace(self.spec, sid=self.sid), resume=True)
+            self.assertIsInstance(self.drain(handle)[-1], Exited)
+        self.assertIn("already bound to a different native ID", logs.output[0])
         self.assertFalse(handle.alive())
         self.assertEqual(self.common.load(str(self.work), self.sid).native_id, NATIVE)
         self.assertEqual(

@@ -1,7 +1,8 @@
 """A Client and a Host written outside the session package (tests/session/outside.py, importing only
 ensemble.session.extension and ensemble.session), configured as module.path:Class in
-[clients.outside] and [hosts.outside]: a session starts in each mode the client offers and yields
-its events; the Host keeps, lists and ends the processes it detaches.
+[clients.outside] and [hosts.outside]: an in_process session yields its events, a headless one is
+refused (the Host runs no managed worker for a session harness); the Host keeps, lists and ends the
+processes it detaches.
 """
 
 import ast
@@ -17,6 +18,7 @@ from tests.session.case import Case
 
 CLIENTS = {"outside": {"implementation": "tests.session.outside:OutsideClient"}}
 HOSTS = {"default": "outside", "outside": {"implementation": "tests.session.outside:OutsideHost"}}
+TMUX = {"implementation": "ensemble.session.hosts.tmux:TmuxHost"}
 PUBLIC = {"ensemble.session", "ensemble.session.extension"}
 WAIT = 20  # seconds
 
@@ -46,14 +48,22 @@ class OutsideTest(Case):
         self.assertLessEqual(others, PUBLIC)
 
     def test_a_headless_session_is_refused_on_a_host_without_a_managed_worker(self):
-        with self.assertRaisesRegex(SessionError, "^host outside runs no managed worker$"):
+        with self.assertRaises(ConfigError) as caught:
             self.started(Mode.HEADLESS)
+        self.assertEqual(
+            str(caught.exception),
+            "outside headless on host outside: runs only under a session harness",
+        )
 
     def test_an_in_process_session_yields_its_runs_events(self):
         session = self.started(Mode.IN_PROCESS)
         self.assertEqual(list(session.events()), [Reply("hello"), TurnEnd("hello"), Exited(0)])
 
     def test_a_mode_the_client_does_not_offer_is_refused(self):
+        # a Host whose managed workers a session harness runs
+        self.session = harnesses.Threaded.configured(
+            clients=CLIENTS, hosts=Host.parse_hosts({"default": "tmux", "tmux": TMUX})
+        )
         with self.assertRaises(ConfigError) as caught:
             self.started(Mode.TUI)
         self.assertEqual(str(caught.exception), "client 'outside' does not support tui mode")

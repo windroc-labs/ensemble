@@ -47,7 +47,7 @@ class HookLifecycleTest(Live):
         )
         stream = Stream(self, session)
         self.assertEqual(stream.next(idle=False), Activity(""))
-        live_tmux.wait(lambda: self.server.option(name, "@state") == "working", what="working mark")
+        live_tmux.wait(lambda: live_tmux.activity(name) == "working", what="working mark")
         self.assert_events(self.events, name)
 
         session.send("done")
