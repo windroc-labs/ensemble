@@ -34,6 +34,7 @@ class Tui(ABC):
     _turn_id = ""
     _turn_open: bool | None = None
     _owned: ClassVar[bool] = False  # a session harness owns it
+    _remote_owned: ClassVar[bool] = False  # also as a remote tui, its hooks through a guard
 
     def __init__(self) -> None:
         self._turn_ids: frozenset[str] = frozenset()  # every turn accepted so far

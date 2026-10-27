@@ -235,6 +235,7 @@ class Host(ABC):
     attachable: ClassVar[bool] = False
     _environments: ClassVar[bool] = False  # runs Spec.environment
     _harnessed: ClassVar[bool] = False  # harnesses own its tui and headless sessions
+    _remote_tui: ClassVar[bool] = False  # its owned tui workers are reached only through a guard
 
     def _provider_usage(self, request: ProviderProbe) -> bool | None:
         """Probe with this Host's credentials, when supported."""

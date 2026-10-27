@@ -680,6 +680,7 @@ class DockerHost(Host):
     attachable = True
     _environments = True
     _harnessed = True
+    _remote_tui = True  # as DockerWorker.remote
 
     def __init__(
         self,

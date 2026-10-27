@@ -260,12 +260,16 @@ def _reconstructible(setup: _Setup) -> bool:
     )
 
 
-def _owned(setup: _Setup, mode: Mode, client: Client, on: Host) -> bool:
-    """An owned client's tui or headless start on a harnessed Host."""
-    if not on._harnessed or not _reconstructible(setup):
+def _owned(setup: _Setup, spec: Spec, mode: Mode, client: Client, on: Host) -> bool:
+    """An owned client's tui or headless start, with no environment, on a harnessed Host; a
+    remote tui only for a client owned there too.
+    """
+    if spec.environment is not None or not on._harnessed or not _reconstructible(setup):
         return False
     run = {Mode.TUI: client.tui, Mode.HEADLESS: client.headless}.get(mode, lambda: None)()
-    return run is not None and run._owned
+    if run is None or not run._owned:
+        return False
+    return mode != Mode.TUI or not on._remote_tui or run._remote_owned
 
 
 def _bound_owner(name: str, state: Mapping) -> Channel | None:
@@ -434,7 +438,7 @@ class HostedSession(Session):
         client_name, mode = _request(spec, idle_timeout)
         on, client = cls.host(host), setup.registry.client(client_name)
         _environment_check(spec, on, mode)
-        if not _owned(setup, mode, client, on):
+        if not _owned(setup, spec, mode, client, on):
             if spec.handlers:
                 raise ConfigError(
                     f"handlers: {client_name} {mode} on host {on.name} has no session harness yet"
