@@ -624,6 +624,21 @@ class RequestTest(Base):
         self.assertEqual(self.served, [(Op.DISPLAY, {})])
         self.attached.show.assert_called_once_with(display="d", command=None)
 
+    def test_a_refused_reopen_shows_an_ended_worker_as_left_and_fails_a_live_one(self):
+        self.hold()
+        self.serve({Op.DISPLAY: (False, "worker exited")})
+        view = self.view()
+        with mock.patch.object(type(view), "alive", return_value=False):
+            view.show(display="d")
+        self.attached.show.assert_called_once_with(display="d", command=None)
+        self.serve({Op.DISPLAY: (False, "worker exited")})
+        with (
+            mock.patch.object(type(view), "alive", return_value=True),
+            self.assertRaisesRegex(SessionError, "worker exited"),
+        ):
+            view.show(display="d")
+        self.attached.show.assert_called_once()
+
     def test_a_headless_views_input_and_screen_are_refused_by_its_attach(self):
         self.attached.send.side_effect = SessionError("send: tui mode only")
         view = self.view(mode=Mode.HEADLESS)

@@ -4,6 +4,7 @@ files only under the test's HOME).
 """
 
 import contextlib
+import dataclasses
 import errno
 import fcntl
 import io
@@ -28,7 +29,14 @@ from ensemble.session import (
 )
 from ensemble.session.engine import worker
 from ensemble.session.engine.hosted_session import HostedSession
-from ensemble.session.engine.types import Blocked, Exited, IdleTimeout, Reply, TurnStarted
+from ensemble.session.engine.types import (
+    Blocked,
+    Exited,
+    IdleTimeout,
+    Reply,
+    SessionRow,
+    TurnStarted,
+)
 from ensemble.session.engine.worker import Worker, WorkerState
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.types import Op
@@ -297,6 +305,23 @@ class StartTest(Base):
         with self.assertRaises(SessionError) as caught:
             self.worker().start(prompt="", resume=False)
         self.assertEqual(str(caught.exception), "w1: claude exited 7 at once")
+
+    def test_an_early_exit_its_harness_cannot_show_reports_its_host_rows_last_lines(self):
+        self.session.events.return_value = iter([Exited(2)])
+        self.session.screen.side_effect = SessionError("session w1: worker exited")
+        row = SessionRow("w1", SID, "claude", StatusState.DEAD, None, None, "a\n\nb", own=False)
+        other = dataclasses.replace(row, sid=OTHER, last_lines="not this")
+        self.host.rows.return_value = [other, row]
+        with self.assertRaises(SessionError) as caught:
+            self.worker().start(prompt="", resume=False)
+        self.assertEqual(
+            str(caught.exception), "w1: claude exited 2 at once; its last lines:\na\nb"
+        )
+        self.host.rows.side_effect = SessionError("tmux sessions unknown")
+        self.session.events.return_value = iter([Exited(2)])
+        with self.assertRaises(SessionError) as caught:
+            self.worker().start(prompt="", resume=False)
+        self.assertEqual(str(caught.exception), "w1: claude exited 2 at once")
 
     def test_the_watch_ends_on_the_first_event_once_its_client_is_up(self):
         type(self.session).client_up = mock.PropertyMock(side_effect=[False, True, True])

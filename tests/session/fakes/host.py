@@ -25,6 +25,7 @@ from ensemble.session.engine.types import (
     Liveness,
     NamedKey,
     Paste,
+    SessionRow,
     StatusState,
 )
 from ensemble.utils import Display, ProcessControl, Record
@@ -269,6 +270,32 @@ class FakeHost(Host):
             for name in names
             if NAME.fullmatch(name) and _meta(os.path.join(root, name)).get("kind") in KINDS
         ]
+
+    def rows(self) -> "list[SessionRow]":
+        """Its sessions' own rows, not worker state: sid from its Record, display from its start,
+        state its mark while alive (none: working), else dead; a name gone meanwhile is skipped.
+        """
+        rows = []
+        for name in self.list():
+            try:
+                process = self.process(name)
+            except SessionError:
+                continue
+            record = process.record()
+            alive = process.alive()
+            rows.append(
+                SessionRow(
+                    name,
+                    None if record is None else record.sid,
+                    None,
+                    (process.activity() or StatusState.WORKING) if alive else StatusState.DEAD,
+                    process.display(),
+                    None,
+                    None,
+                    own=False,
+                )
+            )
+        return rows
 
     def _start(self, kind, name, launch: Launch, *, display, events, record, metadata=None):
         argv, cwd, env = launch.argv, launch.cwd, launch.env

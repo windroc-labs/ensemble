@@ -322,9 +322,15 @@ class OwnedSession(Session):
         return self._call(lambda session: session.showable)
 
     def show(self, *, display: Display = None, command: str | None = None) -> str | None:
-        """Its running harness reopens its display where gone, then the Viewer shows it."""
+        """Its running harness reopens its display where gone, then the Viewer shows it; a worker
+        that ended meanwhile (its harness refusing or gone) is shown as its display was left.
+        """
         if self.mode == Mode.TUI and self._channel.alive():
-            self._ask(Op.DISPLAY, {})
+            try:
+                self._ask(Op.DISPLAY, {})
+            except SessionError:
+                if self.alive():
+                    raise
         return self._call(lambda session: session.show(display=display, command=command))
 
     def hide(self) -> None:
