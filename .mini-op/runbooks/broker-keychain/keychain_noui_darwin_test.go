@@ -1,7 +1,8 @@
+// Runbook data for ../broker-keychain.md, never part of the Go module: noui-test copies it into
+// src/broker/internal/broker/ of a scratch clone on the test Mac mini, the only place it may run.
 package broker
 
 import (
-	"bytes"
 	"errors"
 	"os/exec"
 	"path/filepath"
@@ -20,7 +21,7 @@ const (
 	noUIValue   = "foreign-value"
 )
 
-func runSecurity(t *testing.T, args ...string) string {
+func noUISecurity(t *testing.T, args ...string) string {
 	t.Helper()
 	out, err := exec.Command("/usr/bin/security", args...).CombinedOutput()
 	if err != nil {
@@ -29,11 +30,11 @@ func runSecurity(t *testing.T, args ...string) string {
 	return string(out)
 }
 
-// userSearchList is the user's keychain search list, for restoring after create-keychain adds the new one to it.
-func userSearchList(t *testing.T) []string {
+// noUISearchList is the user's keychain search list, for restoring after create-keychain adds the new one to it.
+func noUISearchList(t *testing.T) []string {
 	t.Helper()
 	var list []string
-	for _, line := range strings.Split(runSecurity(t, "list-keychains", "-d", "user"), "\n") {
+	for _, line := range strings.Split(noUISecurity(t, "list-keychains", "-d", "user"), "\n") {
 		if line = strings.Trim(strings.TrimSpace(line), `"`); line != "" {
 			list = append(list, line)
 		}
@@ -41,10 +42,10 @@ func userSearchList(t *testing.T) []string {
 	return list
 }
 
-func tempKeychain(t *testing.T) string {
+func noUITempKeychain(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "noui.keychain-db")
-	list := userSearchList(t)
+	list := noUISearchList(t)
 	restore := func() {
 		if err := exec.Command("/usr/bin/security", append([]string{"list-keychains", "-d", "user", "-s"}, list...)...).Run(); err != nil {
 			t.Errorf("restoring the keychain search list: %v", err)
@@ -54,15 +55,15 @@ func tempKeychain(t *testing.T) string {
 		restore()
 		_ = exec.Command("/usr/bin/security", "delete-keychain", path).Run()
 	})
-	runSecurity(t, "create-keychain", "-p", "test-password", path)
+	noUISecurity(t, "create-keychain", "-p", "test-password", path)
 	restore()
-	runSecurity(t, "unlock-keychain", "-p", "test-password", path)
-	runSecurity(t, "set-keychain-settings", path)
+	noUISecurity(t, "unlock-keychain", "-p", "test-password", path)
+	noUISecurity(t, "set-keychain-settings", path)
 	return path
 }
 
-// within fails the test unless f returns within 10 s: a call that waits for a dialog never returns.
-func within(t *testing.T, what string, f func() error) error {
+// noUIWithin fails the test unless f returns within 10 s: a call that waits for a dialog never returns.
+func noUIWithin(t *testing.T, what string, f func() error) error {
 	t.Helper()
 	done := make(chan error, 1)
 	go func() { done <- f() }()
@@ -76,28 +77,28 @@ func within(t *testing.T, what string, f func() error) error {
 }
 
 func TestNoUIAgainstForeignItem(t *testing.T) {
-	path := tempKeychain(t)
-	runSecurity(t, "add-generic-password", "-s", noUIService, "-a", noUIAccount, "-w", noUIValue, path)
+	path := noUITempKeychain(t)
+	noUISecurity(t, "add-generic-password", "-s", noUIService, "-a", noUIAccount, "-w", noUIValue, path)
 	k := fileKeychain{path: path}
 
-	if err := within(t, "Secret", func() error { _, err := k.Secret(noUIService, noUIAccount); return err }); !errors.Is(err, ErrNeedsDialog) {
+	if err := noUIWithin(t, "Secret", func() error { _, err := k.Secret(noUIService, noUIAccount); return err }); !errors.Is(err, ErrNeedsDialog) {
 		t.Errorf("Secret: %v, want ErrNeedsDialog", err)
 	}
-	if err := within(t, "AppKey", func() error { _, err := k.AppKey(noUIService, noUIAccount); return err }); !errors.Is(err, ErrNeedsDialog) {
+	if err := noUIWithin(t, "AppKey", func() error { _, err := k.AppKey(noUIService, noUIAccount); return err }); !errors.Is(err, ErrNeedsDialog) {
 		t.Errorf("AppKey: %v, want ErrNeedsDialog", err)
 	}
-	if err := within(t, "PutSecret", func() error { return k.PutSecret(noUIService, noUIAccount, []byte("replaced")) }); err == nil {
+	if err := noUIWithin(t, "PutSecret", func() error { return k.PutSecret(noUIService, noUIAccount, []byte("replaced")) }); err == nil {
 		t.Error("PutSecret replaced a foreign item")
 	}
 	// macOS itself lets any application update an item whose encrypt entry trusts any application, as
 	// add-generic-password leaves it: WriteSecret must refuse it.
-	if err := within(t, "WriteSecret", func() error { return k.WriteSecret(noUIService, noUIAccount, []byte("rewritten")) }); !errors.Is(err, ErrNotBrokerItem) {
+	if err := noUIWithin(t, "WriteSecret", func() error { return k.WriteSecret(noUIService, noUIAccount, []byte("rewritten")) }); !errors.Is(err, ErrNotBrokerItem) {
 		t.Errorf("WriteSecret: %v, want ErrNotBrokerItem", err)
 	}
-	if err := within(t, "WriteCodex", func() error { return k.WriteCodex([]byte("rewritten")) }); err == nil {
+	if err := noUIWithin(t, "WriteCodex", func() error { return k.WriteCodex([]byte("rewritten")) }); err == nil {
 		t.Error("WriteCodex wrote")
 	}
-	if got := runSecurity(t, "find-generic-password", "-s", noUIService, "-a", noUIAccount, "-w", path); strings.TrimSpace(got) != noUIValue {
+	if got := noUISecurity(t, "find-generic-password", "-s", noUIService, "-a", noUIAccount, "-w", path); strings.TrimSpace(got) != noUIValue {
 		t.Errorf("the item holds %q, want it unchanged", got)
 	}
 
@@ -111,15 +112,5 @@ func TestNoUIAgainstForeignItem(t *testing.T) {
 	services, err := k.Services("ensemble-broker-test-")
 	if err != nil || !slices.Equal(services, []string{noUIService}) {
 		t.Errorf("Services = %q, %v", services, err)
-	}
-}
-
-func TestNonInteractiveDialogCallsRefuse(t *testing.T) {
-	k := fileKeychain{path: filepath.Join(t.TempDir(), "none.keychain-db")} // no file: a Security call would fail otherwise
-	if b, err := k.GetWithDialog("default"); !errors.Is(err, ErrNeedsDialog) || !bytes.Equal(b, nil) {
-		t.Errorf("GetWithDialog: %q, %v", b, err)
-	}
-	if err := k.TrustAppsByDialog(noUIService, noUIAccount); !errors.Is(err, ErrNeedsDialog) {
-		t.Errorf("TrustAppsByDialog: %v", err)
 	}
 }

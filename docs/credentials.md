@@ -496,6 +496,7 @@ acceptance on a developer's Mac. The 2026-10-18 results below predate the egress
 - [ ] WDRC-67, after cutover: [Upgrading › Linear apps](upgrading.md#linear-apps) step 7 is done: the old credentials
   revoked in Linear and every Keychain item written down in its step 3 deleted.
 - [ ] [Measured readers](#measured-readers): `ensemble-broker-opencode`.
+- [ ] The broker's no-UI keychain contract against a foreign item: mini-op's `.mini-op/runbooks/broker-keychain.md`.
 
 A failed WDRC-67 before-cutover check stops the cutover; report it to the user.
 
