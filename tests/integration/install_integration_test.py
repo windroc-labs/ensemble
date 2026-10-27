@@ -5,6 +5,7 @@ import plistlib
 import re
 import select
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -261,6 +262,16 @@ def menu(want, have=("claude", "codex")):
     return "".join((" " if (i in want) != (i in have) else "") + "\x1b[B" for i in ITEMS)
 
 
+def ctrl_c(marker, proc):
+    """SIGINT to `proc`'s process group, as a terminal's Ctrl-C, once `marker` exists."""
+    deadline = time.monotonic() + 30
+    while not marker.exists():
+        if proc.poll() is not None or time.monotonic() > deadline:
+            return
+        time.sleep(0.02)
+    os.killpg(proc.pid, signal.SIGINT)
+
+
 def executable(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
@@ -426,10 +437,19 @@ class InstallTest(Case):
         return result
 
     def run_install(
-        self, *args, answers=(), stdin=None, tty=True, script=SCRIPT, ctty=None, shell="bash"
+        self,
+        *args,
+        answers=(),
+        stdin=None,
+        tty=True,
+        script=SCRIPT,
+        ctty=None,
+        shell="bash",
+        interrupt=None,
     ):
         """`ctty`: what /dev/tty opens, else the terminal, which is also /dev/ttys001.
-        `shell`: what runs `script`, as `curl … | bash` does on a Mac: its /bin/bash."""
+        `shell`: what runs `script`, as `curl … | bash` does on a Mac: its /bin/bash.
+        `interrupt`: a path; once it exists, Ctrl-C: SIGINT to the script's process group."""
         self.log.unlink(missing_ok=True)
         terminal = Tty() if tty else None
         links = (self.root / "dev/tty", self.root / "dev/ttys001")
@@ -448,7 +468,10 @@ class InstallTest(Case):
                     stdout=stdout,
                     stderr=stderr,
                     text=True,
+                    process_group=0 if interrupt else None,
                 )
+                if interrupt:
+                    threading.Thread(target=ctrl_c, args=(interrupt, proc), daemon=True).start()
                 if stdin is not None:
                     proc.stdin.write(stdin)
                     proc.stdin.close()
@@ -5081,11 +5104,13 @@ exec /bin/rm "$@"
         self.assertEqual(Path(self.ensemble, "install/config.local.toml.orig").read_text(), mine)
         self.assertEqual(self.ledger().count("config\tbackup"), 1)
 
-    def cleanup(self, *args, answers=(), stdin=None, ctty=None):
+    def cleanup(self, *args, answers=(), stdin=None, ctty=None, interrupt=None):
         """Without --password-stdin, --yes runs answer sudo's prompt."""
         if stdin is None and "--yes" in args:
             answers = [(SUDO_Q, PASSWORD), *answers]
-        return self.run_install(*args, answers=answers, stdin=stdin, script=CLEANUP, ctty=ctty)
+        return self.run_install(
+            *args, answers=answers, stdin=stdin, script=CLEANUP, ctty=ctty, interrupt=interrupt
+        )
 
     def snapshot(self):
         skip = {"fakes", "bin"}
@@ -5370,6 +5395,81 @@ exec /bin/rm "$@"
         self.assertEqual(self.ledger(), ledger)
         self.assertEqual(self.snapshot(), before)
         self.assertFalse([c for c in self.calls() if c.startswith("sudo")])
+
+    def test_cl1a_listing_without_fda_shows_list(self):
+        """Listing what cleanup would remove needs no Full Disk Access; only removing does."""
+        self.assert_ok(self.fresh("--docker", logins=list(DOCKER_LOGINS)))
+        self.tcc.unlink()
+        container = Path(self.home, "Library/Containers/com.docker.docker")
+        (container / "Data").mkdir(parents=True, exist_ok=True)
+        self.assertIn(f"dir\t{container}", self.ledger())
+        ledger = Path(self.ensemble, "install/added")
+        recorded = ledger.read_bytes()
+        result = self.cleanup()
+        self.assertEqual(result.code, 0, f"stderr:\n{result.stderr}\nterminal:\n{result.tty}")
+        self.assertIn("install-cleanup.sh will remove what install.sh added:", result.tty)
+        self.assertIn(f"  dir {container}", result.tty)
+        self.assertIn("  cask docker-desktop", result.tty)
+        self.assertNotIn("nothing removed", result.stderr + result.tty)
+        self.assertNotRegex(result.tty, REMOVE_Q)
+        self.assertIn(f"Full Disk Access remove {container}", result.stderr)
+        self.assertEqual(ledger.read_bytes(), recorded)
+        self.assertTrue((container / "Data").exists())
+        self.assertFalse([c for c in self.calls() if c.startswith("sudo")])
+
+    def test_cl_gate_shared_parent_keeps_foreign_content(self):
+        """A parent other tools also write goes only when empty once the ledger's other records
+        are removed; trees only the installer writes go whole."""
+        self.assert_ok(self.fresh("--docker", logins=list(DOCKER_LOGINS)))
+        config, docker = Path(self.home, ".config"), Path(self.home, ".docker")
+        for recorded in (config, docker):
+            self.assertIn(f"dir\t{recorded}", self.ledger())
+        foreign = config / "foreign/settings.json"
+        foreign.parent.mkdir(parents=True)
+        foreign.write_text('{"mine": true}')
+        docker.mkdir(exist_ok=True)
+        owned = [
+            Path(self.home, "Library/Containers/com.docker.docker/Data/state"),
+            config / "gh/hosts.yml",
+        ]
+        for path in owned:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("installer's")
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
+        self.assert_ok(result)
+        self.assertEqual(foreign.read_text(), '{"mine": true}')
+        self.assertFalse(docker.exists())
+        for path in owned:
+            self.assertFalse(path.parent.exists(), path.parent)
+        self.assertIn(f"    kept {config}: not empty", result.stderr)
+        self.assertFalse(Path(self.ensemble, "install").exists())
+
+    def test_cl3_sigint_during_cleanup_names_rerun(self):
+        """Ctrl-C during a cleanup step names the step and the rerun; the rerun completes."""
+        self.assert_ok(self.opencode_only())
+        self.assertTrue([r for r in self.ledger() if r.startswith("opencode-auth\t")])
+        marker = self.fakes / "ctrl-c"
+        python = self.bin / "python3"
+        python.unlink()
+        executable(
+            python,
+            f'#!/bin/sh\ncase $* in *.auth.json.*) : >"{marker}"; exec sleep 30 ;; esac\n'
+            f'exec {sys.executable} "$@"\n',
+        )
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n", interrupt=marker)
+        self.assertTrue(marker.exists(), result.stderr)
+        self.assertNotEqual(result.code, 0)
+        self.assertIn(
+            "install-cleanup.sh: OpenCode keys failed; rerun the same command to continue",
+            result.stderr,
+        )
+        self.assertTrue([r for r in self.ledger() if r.startswith("opencode-auth\t")])
+        python.unlink()
+        python.symlink_to(sys.executable)
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
+        self.assert_ok(result)
+        self.assertTrue(result.stderr.endswith("Removed what install.sh added.\n"), result.stderr)
+        self.assertFalse(self.auth_json().exists())
 
     def test_cleanup_stops_docker_processes(self):
         """What still runs from Docker.app after its cask is gone ends; nothing else is signalled."""
