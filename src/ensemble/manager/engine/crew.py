@@ -615,6 +615,11 @@ class Crew:
             reopen = ("ensemble-crew", "reopen", f"--manager={manager}", name)
             raise ValueError(f"{name}: not in roster; a closed issue run: {shlex.join(reopen)}")
         entry = entries[name]
+        status = None
+        if entry.state == State.LIVE and entry.record is not None:
+            # only attach marks the roster; an attempt that ended since still reads live (FR-22)
+            status = self.status((name,))[0]
+            entry = self._marked(name, entry, _reconciled(entry, status))
         if input is not None and entry.state != State.WAITING:
             raise ValueError(f"{name}: --input requires waiting (state {entry.state})")
         if input is None and entry.state == State.WAITING:
@@ -624,7 +629,7 @@ class Crew:
         if entry.record is None:
             raise RuntimeError(f"{name}: {entry.state}: no Record to resume")
         if input is None:
-            status = self.status((name,))[0]
+            status = status or self.status((name,))[0]
             if status.alive:
                 return entry.record
             if entry.state != State.GONE:
@@ -651,6 +656,17 @@ class Crew:
                 error.add_note(f"{name}: could not mark gone: {mark_error}")
             raise
         return resumed
+
+    def _marked(self, name: str, entry: Entry, state: State) -> Entry:
+        """`entry` marked `state`; the roster's entry when another writer changed it first."""
+        if state == entry.state:
+            return entry
+        if self.roster.mark_if(name, entry, state):
+            return replace(entry, state=state)
+        current = self.roster.entries().get(name)
+        if current is None:
+            raise ValueError(f"{name}: not in roster")
+        return current
 
     def close(self, name: str) -> None:
         self._listed = None

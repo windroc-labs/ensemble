@@ -219,19 +219,71 @@ class ResumeInput(RosterCase):
         run.assert_not_called()
 
     def test_input_rejects_other_states_without_queries_or_changes(self):
-        for state in (State.LIVE, State.GONE, State.DONE, State.RESUMING):
+        for state in (State.GONE, State.DONE, State.RESUMING):
             with self.subTest(state=state):
                 self.roster.remove("x")
                 self.live()
-                if state != State.LIVE:
-                    self.roster.mark("x", State.GONE if state == State.RESUMING else state)
-                    if state == State.RESUMING:
-                        self.roster.claim_resume("x")
+                self.roster.mark("x", State.GONE if state == State.RESUMING else state)
+                if state == State.RESUMING:
+                    self.roster.claim_resume("x")
                 before = self.roster.entries()
                 with mock.patch("subprocess.run") as run, self.assertRaises(ValueError):
                     Crew(self.roster).resume("x", input="answer")
                 run.assert_not_called()
                 self.assertEqual(self.roster.entries(), before)
+
+
+class ResumeLive(RosterCase):
+    """A live entry no attach has reconciled since its attempt ended: resume reads its Status
+    first (FR-22: alive=false, outcome needs_input while its harness and tui live).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.live()
+
+    def resume(self, *, alive: bool, outcome: str | None, input: str | None = "answer"):
+        started = []
+
+        def query(argv, **_options):
+            self.assertEqual(tuple(argv), (*self.record.ctl, "status"))
+            status = Status(
+                name=self.record.name,
+                alive=alive,
+                state="working" if alive else "done",
+                outcome=outcome,
+                attach=None,
+                hidden=False,
+            )
+            return mock.Mock(returncode=0, stdout=status.to_line() + "\n", stderr="")
+
+        def run(argv, **options):
+            started.append(tuple(argv))
+            os.write(options["stdout"].fileno(), (self.record.to_line() + "\n").encode())
+            return mock.Mock(returncode=0, stderr="")
+
+        with (
+            mock.patch("subprocess.run", side_effect=query),
+            mock.patch("subprocess.Popen", side_effect=answered(run)),
+        ):
+            return Crew(self.roster).resume("x", input=input), started
+
+    def test_input_answers_a_live_entry_whose_attempt_ended_needs_input(self):
+        record, started = self.resume(alive=False, outcome="needs_input")
+        self.assertEqual(record, self.record)
+        self.assertEqual(started, [(*self.record.resume, "--input", "answer")])
+        self.assertIs(self.roster.entries()["x"].state, State.LIVE)
+
+    def test_input_still_refuses_a_live_entry_mid_attempt(self):
+        before = self.roster.entries()
+        with self.assertRaisesRegex(ValueError, r"--input requires waiting \(state live\)"):
+            self.resume(alive=True, outcome=None)
+        self.assertEqual(self.roster.entries(), before)
+
+    def test_without_input_a_live_entry_whose_attempt_ended_needs_input_is_waiting(self):
+        with self.assertRaisesRegex(RuntimeError, "waiting: give --input to answer"):
+            self.resume(alive=False, outcome="needs_input", input=None)
+        self.assertIs(self.roster.entries()["x"].state, State.WAITING)
 
 
 class ReplyContent(RosterCase):
