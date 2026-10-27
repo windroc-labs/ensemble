@@ -2,7 +2,8 @@
 claim or a tick prints the run's one pipeline Record and its sessions and attach command
 (FR-28); its drive (a local process, no session, so not in MANAGER's `ensemble-session ls
 --here`) and TUI live, the TUI in MANAGER's grid; written back as a headless run is; the events file
-gets the TUI's turn ends, one outcome and the drive's exit; an idle tick prints nothing. A SIGKILL
+gets the TUI's turn ends, one outcome and the drive's exit; input Claude joins mid-turn (a manager
+send, a background task's notice) fails nothing; an idle tick prints nothing. A SIGKILL
 of the drive's process group and a kill of the TUI session, or `ensemble-orchestrator close ID`,
 ends the run and leaves the issue In Progress for the
 next router.py --issue to resume. `ensemble-orchestrator resume ID` brings a closed TUI's run back attended
@@ -11,6 +12,7 @@ exit 2 before any Linear request, starting nothing.
 """
 
 import functools
+import glob
 import os
 import signal
 import subprocess
@@ -87,6 +89,57 @@ class Attended(Segment):
         lines = self.event_lines()
         self.assertEqual([line for line in lines if line.startswith(f"{harness} ")], list(ended))
         self.assertEqual(set(lines) - set(ended), {f"{tui} done"})
+
+    def tool_runs(self, sid):
+        transcripts = os.path.join(self.root, "claude-config", "projects", "*", f"{sid}.jsonl")
+        for path in glob.glob(transcripts):
+            with open(path, encoding="utf-8") as f:
+                if '"tool_use"' in f.read():
+                    return True
+        return False
+
+    def joined_mid_turn(self, joined, send=None):
+        """An attended run whose turn takes input Claude joins to it with its UserPromptSubmit
+        (`joined`; `send`, the manager's text it waits for), then gives its done outcome: written
+        back as any done run; the events file gets the TUI's one turn end and any reply, outcome
+        done and the drive's exit 0 (WDRC-346: `turn failed: superseded`, outcome error, exited 1).
+        """
+        ident = self.pm_ready()
+        script = self.agent_script("pm", "done", ident)
+        start, report = script.steps
+        sid = self.claim(ident, "pm", script._replace(steps=[start, joined, report]), tui=True)
+        harness, tui = self.harness("pm", ident, sid), config.tui_name("pm", ident, sid)
+        if send is not None:
+            with self.step("manager: send mid-turn"):
+                with open(self.pending.gate, "w"):
+                    pass
+                live_tmux.wait(lambda: self.tool_runs(sid), TIMEOUT, "the turn's tool")
+                res = subprocess.run(
+                    [SESSION_CLI, "send", tui, send],
+                    cwd=self.root,
+                    env={**self.env(), **self.in_manager()},
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    text=True,
+                    timeout=TIMEOUT,
+                )
+                self.assertEqual((res.returncode, res.stdout), (0, ""), res.stderr)
+        self.agent_run()
+        ended = (f"{harness} outcome done", f"{harness} exited 0")
+        live_tmux.wait(lambda: ended[1] in self.event_lines(), TIMEOUT, f"`{ended[1]}`")
+        lines = self.event_lines()
+        self.assertEqual([line for line in lines if line.startswith(f"{harness} ")], list(ended))
+        turns = [line for line in lines if line.startswith(f"{tui} ")]
+        self.assertEqual([line for line in turns if " reply " not in line], [f"{tui} done"])
+        self.assertNotIn("turn_failed", [record["kind"] for record in self.records(ident)])
+
+    def test_a_send_mid_turn_is_no_failure(self):
+        joined = {"kind": "queued", "answer": "Noted.", "prompted": True}
+        self.joined_mid_turn(joined, send="Also cover the registry's CLI.")
+
+    def test_a_background_notice_mid_turn_is_no_failure(self):
+        notice = "<task-notification>sleep 30 completed</task-notification>"
+        self.joined_mid_turn({"kind": "notice", "text": notice})
 
     def test_a_tick_from_the_manager_starts_its_run_attended_and_an_idle_one_prints_nothing(self):
         ident = self.pm_ready()
