@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -64,7 +65,7 @@ from ensemble.session.harness.channel import running as channel_running
 from ensemble.session.harness.dispatch import load_handlers
 from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedSession, fold
-from ensemble.session.hosts.base import Host, host_resume
+from ensemble.session.hosts.base import SIGNALS, Host, host_resume
 from ensemble.session.modes import headless, in_process, tui
 from ensemble.session.modes.base import BaseMode, child_env
 from ensemble.session.viewer import display as displays
@@ -479,12 +480,15 @@ class HostedSession(Session):
         host: str | None,
         idle_timeout: float | None,
     ) -> Session:
-        """Its view once a new harness runs it; else the start error, nothing left."""
+        """Its view once a new harness runs it; else the start error or stop, nothing left;
+        SIGNALS held across Popen, so a stop never loses its child.
+        """
         assert spec.client is not None and spec.sid is not None
         roots = cls._roots(spec.client)
         request = cls.harness_request(spec, display=display, host=host, roots=roots)
         channel = Channel.create()
         tie = None
+        held = signal.pthread_sigmask(signal.SIG_BLOCK, SIGNALS)
         try:
             tie = None if mode in (Mode.TUI, Mode.IN_PROCESS) else Tie()  # these outlive it
             caller = () if tie is None else ("--caller", str(tie.far))
@@ -509,15 +513,19 @@ class HostedSession(Session):
                     pass_fds=() if tie is None else (tie.far,),
                 )
         except BaseException as error:
-            if tie is not None:
-                tie.close()
-            shutil.rmtree(channel.directory, ignore_errors=True)  # request.json holds spec.env
+            try:
+                if tie is not None:
+                    tie.close()
+                shutil.rmtree(channel.directory, ignore_errors=True)  # request.json holds spec.env
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, held)  # a held stop is raised here
             if isinstance(error, TypeError | ValueError):
                 raise ConfigError(f"session harness request: not JSON: {error}") from None
             if isinstance(error, OSError):
                 raise SessionError(f"session harness: {error.strerror or error}") from None
             raise
         try:  # an interrupt too: no view would close it
+            signal.pthread_sigmask(signal.SIG_SETMASK, held)  # a stop held across Popen lands here
             if tie is not None:
                 tie.handed()
             deadline = time.monotonic() + START_WAIT

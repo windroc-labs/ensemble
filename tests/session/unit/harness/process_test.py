@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import os
+import signal
 import threading
 import time
 from types import SimpleNamespace
@@ -31,6 +32,7 @@ from ensemble.session.harness import process
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.process import Harness, Turns
 from ensemble.session.harness.types import Op
+from ensemble.session.hosts.base import SIGNALS
 from tests.session.case import Case
 
 GEN = "g1"
@@ -406,6 +408,23 @@ class CallerTest(Base):
             self.assertEqual(process.main(["process", "--caller", str(fd), channel.directory]), 1)
         self.assertIn(f"session harness {channel.directory}: ", stderr.getvalue())
         channel.hold()  # free: SessionError were it still held
+
+    def test_main_unblocks_the_signals_its_caller_held(self):
+        self.addCleanup(
+            signal.pthread_sigmask,
+            signal.SIG_SETMASK,
+            signal.pthread_sigmask(signal.SIG_BLOCK, SIGNALS),
+        )
+        channel = Channel.create()
+        self.addCleanup(channel.release)
+        masks = []
+        harness = mock.Mock()
+        harness.return_value.run.side_effect = lambda _begin: (
+            masks.append(signal.pthread_sigmask(signal.SIG_BLOCK, ())) or 0
+        )
+        with mock.patch.object(process, "Harness", harness), mock.patch("signal.signal"):
+            self.assertEqual(process.main(["process", channel.directory]), 0)
+        self.assertEqual(set(SIGNALS) & masks[0], set())
 
     def is_open(self, fd) -> bool:
         try:
