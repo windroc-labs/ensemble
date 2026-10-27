@@ -263,6 +263,8 @@ class HarnessDelegate(Delegate):
         mutex. The agent dir is made last, just before the run record.
         """
         fresh = not os.path.lexists(self.layout.run)
+        if not fresh:
+            self._settle()
         try:
             if fresh:
                 self._preflight()
@@ -327,6 +329,22 @@ class HarnessDelegate(Delegate):
             except SessionError as error:
                 raise ConfigError(str(error)) from None
         return previous.attempt + 1 if previous.plan.sid == self._state.plan.sid else 1
+
+    def _settle(self) -> None:
+        """A gone owned worker closed outside the mutex: returns once its harness drained the
+        handler, before the sweep."""
+        try:
+            state = self._read()
+        except (ConfigError, OSError):
+            return
+        if not owned(state.plan):
+            return
+        agent = self._answered_agent(state)
+        try:
+            if agent is not None and not agent.alive():
+                agent.close()
+        except SessionError as error:
+            say(f"delegate: {error}")
 
     def _sweep(self) -> None:
         try:
@@ -1172,6 +1190,7 @@ class HarnessDelegate(Delegate):
         """Continues in `mode` (headless or tui), else the recorded one; the new mode is recorded."""
         if mode not in (None, Mode.HEADLESS, Mode.TUI):
             raise ConfigError(f"resume: mode must be headless or tui, got {mode!r}")
+        self._settle()
         with self.store.mutex():
             state = self._read()
             if state.plan.sid != self._state.plan.sid:
