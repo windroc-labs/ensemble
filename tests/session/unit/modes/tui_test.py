@@ -2985,6 +2985,31 @@ class OwnedBase(Base):
         return self.start()
 
 
+class SettleRepliesTest(OwnedBase):
+    """B2: the owner's pump settles its run's mid-turn replies, at most every SETTLE_EVERY s, with
+    the workdir and sid its hooks get; a view's TuiMode never does.
+    """
+
+    def test_the_owner_pump_settles_its_runs_replies_once_a_second(self):
+        mode = self.owned_start()
+        clock = iter([100.0, 100.5, 101.0, 101.2])
+        with (
+            mock.patch.object(mode.run, "_settle_replies") as settle,
+            mock.patch.object(tui.time, "monotonic", side_effect=lambda: next(clock)),
+        ):
+            for _ in range(4):
+                mode._read()
+        spec = mode.prepared
+        self.assertEqual(settle.call_args_list, [mock.call(spec.spec.workdir, spec.info.sid)] * 2)
+
+    def test_a_views_read_settles_nothing(self):
+        mode = self.owned_start()
+        mode._owned = False
+        with mock.patch.object(mode.run, "_settle_replies") as settle:
+            mode._read()
+        settle.assert_not_called()
+
+
 class ManagedStartTest(OwnedBase):
     """An owned start (inside a session harness) launches its client under the guard; its TuiMode
     drives that owner handle and only the handle ends it.

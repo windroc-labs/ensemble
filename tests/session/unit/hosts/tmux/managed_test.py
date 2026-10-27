@@ -183,6 +183,26 @@ class ManagedTest(Case):
         self.assertEqual(managed.liveness("tmux", "worker", generation), Liveness.ABSENT)
         self.assertEqual(managed.liveness("tmux", "worker", "b" * 32), Liveness.UNKNOWN)
 
+    def test_a_concurrent_probe_is_no_live_guard(self):
+        """Probes take the lease shared: one probing (as ls or a tmux hook does) while another asks
+        makes no ended worker LIVE; only its guard's exclusive lease does.
+        """
+        generation = "a" * 32
+        directory = managed.location("tmux", "worker")
+        managed.private_directory(directory + "/" + generation)
+        managed.save_json(directory + "/current.json", {"generation": generation})
+        managed.save_json(
+            directory + "/" + generation + "/state.json",
+            {"generation": generation, "state": "exited"},
+        )
+        lease = managed.lease_file(directory + "/" + generation + "/lease")
+        try:
+            managed.fcntl.flock(lease, managed.fcntl.LOCK_SH)
+            self.assertEqual(managed.liveness("tmux", "worker", generation), Liveness.ABSENT)
+            self.assertFalse(managed.held(directory + "/" + generation + "/lease"))
+        finally:
+            os.close(lease)
+
     def test_display_teardown_kills_only_its_generation(self):
         tmux = mock.Mock()
         channel = managed.TmuxManagedProcess(

@@ -2,10 +2,10 @@
 enqueue record) and, once the running tool returns, joins it to that turn as a `queued_command`
 attachment; no hook runs for it. A message one (commandMode prompt, not a background task's
 notification) after the turn's first assistant record is an interjection;
-the first assistant text after it is its answer, stored and announced as `reply <id>` by a detached
-watcher (watch.py) or the turn's Stop hook, whichever finds it first. UserPromptSubmit opens the
-turn, PostToolUse scans it and starts the watcher while a message waits, Stop scans with its text
-and closes it. Only main-thread records count.
+the first assistant text after it is its answer, stored and announced as `reply <id>` by the owning
+harness's pump (settle_pending) or the turn's Stop hook, whichever finds it first. UserPromptSubmit
+opens the turn, PostToolUse scans it, Stop scans with its text and closes it. Only main-thread
+records count.
 """
 
 import hashlib
@@ -24,7 +24,6 @@ SCAN_MAX = 4 << 20  # bytes of the transcript one scan reads
 STEERS_MAX = 16
 DEADLINE = 5.0  # seconds from the hook's start
 LABELS = ("SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "StopFailure")
-WATCH = f"{__package__}.watch"  # run as python -P -s -m on this layer's source roots
 
 
 def state_path(store: str, workdir: str, sid: str) -> str:
@@ -167,16 +166,15 @@ def settle(
         return current["turn"]["queued"] + len(current["turn"]["steers"])
 
 
-def watch(path: str, *, clock: Clock | None = None, sleep: Sleep | None = None) -> int:
-    """The watcher (shared.watch) of `path`'s open turn and its transcript."""
-    clock, sleep = clock or time.monotonic, sleep or time.sleep
-    return shared.watch(
+def settle_pending(store: str, workdir: str, sid: str) -> None:
+    """The run's open turn settled by its owning harness's pump (shared.pumped): an answer no hook
+    follows is still announced.
+    """
+    path = state_path(store, workdir, sid)
+    shared.pumped(
         path,
-        lambda deadline: settle(path, deadline=deadline, clock=clock, sleep=sleep),
-        lambda: size(_load(path)["transcript"]),
-        clock=clock,
-        sleep=sleep,
-        label="claude reply",
+        lambda deadline: settle(path, deadline=deadline, clock=time.monotonic, sleep=time.sleep),
+        "claude reply",
     )
 
 
@@ -204,9 +202,7 @@ def _on_hook(call: HookCall, deadline: float) -> None:
         final = call.payload.get("last_assistant_message") if call.label == "Stop" else ""
         close = call.label != "PostToolUse"
         final = final if isinstance(final, str) else ""
-        args = {"deadline": deadline, "clock": clock, "sleep": sleep}
-        if settle(path, **args, final=final, close=close) and not close:
-            shared.ensure_watcher(path, WATCH)
+        settle(path, deadline=deadline, clock=clock, sleep=sleep, final=final, close=close)
         return
     with locked(path, deadline, clock, sleep):
         current = _load(path)
@@ -219,5 +215,3 @@ def _on_hook(call: HookCall, deadline: float) -> None:
             start = size(transcript)
             current["turn"] = _turn(open_=True, since=now, start=start)
         save(path, json.dumps(current))
-    if call.label == "UserPromptSubmit" and kept:
-        shared.ensure_watcher(path, WATCH)

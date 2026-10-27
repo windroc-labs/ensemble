@@ -207,6 +207,8 @@ def execute(
             emit(Finished(result))
             return result
         raise ConfigError("instruction driver returned a Session")
+    if p.spec.mode == Mode.TUI:
+        raise ConfigError("tui: its session harness runs it")
     attempts = Attempts(p, emit, driver)
     try:
         result = attempts.result()
@@ -527,7 +529,7 @@ class Attempts:
 
     def release(self) -> None:
         """Closes a locked headless run's ended session once, then claims its lock released;
-        prints a SessionError. (An unowned tui is never locked.)"""
+        prints a SessionError."""
         if self.lock is None or self.handle is None or self.released:
             return
         self.released = True

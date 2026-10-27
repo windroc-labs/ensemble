@@ -255,6 +255,9 @@ class CodexTui(Tui):
             raise ConfigError(str(exc)) from exc
         self.native = "" if self.state is None else self.state.native_id or ""
 
+    def _settle_replies(self, workdir, sid):
+        replies.settle_pending(self.store, workdir, sid)
+
     def observe(self):
         if not self.transcript and self.native and self.state is not None:
             now = time.monotonic()

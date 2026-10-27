@@ -20,13 +20,14 @@ from ensemble.delegate.engine.runner import (
     POLICIES,
     STOP_LIMIT,
     Attempt,
+    Attempts,
     closing,
     execute,
     report,
     say,
     stopped,
 )
-from ensemble.delegate.engine.types import Begun, Finished, Layout, Limit, Result
+from ensemble.delegate.engine.types import Begun, Finished, Layout, Limit, Plan, Result
 from ensemble.delegate.event.reply import marks
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import (
@@ -36,11 +37,12 @@ from ensemble.session import (
     LimitHit,
     Mode,
     Reply,
+    Session,
     SessionBusy,
     SessionError,
     TurnFailed,
 )
-from ensemble.session.engine.types import Activity, Blocked
+from ensemble.session.engine.types import Activity
 from ensemble.utils import Stopped
 from tests.delegate.case import Case
 from tests.delegate.replies import bare, block
@@ -248,8 +250,10 @@ class InProcess(Base):
         )
 
 
-class TuiPolicy(Base):
-    """The tui policy over a FakeHandle (start patched as delegate.engine.runner sees it)."""
+class Handles(Base):
+    """Runs over a FakeHandle (start patched as delegate.engine.runner sees it), headless unless
+    a test says tui.
+    """
 
     def setUp(self):
         super().setUp()
@@ -257,19 +261,41 @@ class TuiPolicy(Base):
         self.enterContext(mock.patch.dict(os.environ))
         os.environ.pop("TUI_ATTACH_PREFIX", None)
 
-    def faked(
-        self, *events, fail=None, stop_fail=None, show_fail=None, hidden=False, mode="tui", **kw
-    ) -> Result:
+    def faked(self, *events, fail=None, stop_fail=None, **kw) -> Result:
         self.handle = FakeHandle(events, fail, stop_fail)
-        self.handle.show_fail, self.handle.hidden = show_fail, hidden
         with mock.patch.object(self.driver, "start", side_effect=self.handle.start) as self.started:
-            return self.go(mode=mode, **kw)
+            return self.go(**kw)
+
+    def planned(self, **kw) -> Plan:
+        """dummy-tester's echo planned with Spec fields `kw`, its agent and run dirs made."""
+        os.makedirs(Layout(self.work).agent, exist_ok=True)
+        composition = Composer()
+        accepted = plan(
+            composition.resolve("dummy-tester"),
+            Spec("Echo me.", self.work, task="echo", client="fake", out=self.out, **kw),
+            driver=self.driver,
+            composition=composition,
+        )
+        os.makedirs(accepted.session.workdir, exist_ok=True)
+        return accepted
+
+
+class HandleRun(Handles):
+    def test_execute_refuses_a_tui_plan(self):
+        with (
+            mock.patch.object(self.driver, "start") as start,
+            self.assertRaises(ConfigError) as refused,
+        ):
+            self.go(mode="tui")
+        self.assertEqual(str(refused.exception), "tui: its session harness runs it")
+        start.assert_not_called()
+        self.assertFalse(os.path.exists(self.channel))
 
     def test_a_named_headless_session_reaches_the_driver_with_its_name(self):
         for name in (None, "dummy-tester-0f8fad5b"):
             with self.subTest(name=name):
                 self.fresh()
-                self.faked(turn(START, block(DONE)), Exited(0), mode="headless", session_name=name)
+                self.faked(turn(START, block(DONE)), Exited(0), session_name=name)
                 session = self.started.call_args.args[0].session
                 self.assertEqual(
                     (session.mode, session.name, session.events), ("headless", name, None)
@@ -286,7 +312,6 @@ class TuiPolicy(Base):
         seen = []
         with mock.patch.object(self.driver, "start", side_effect=start):
             self.go(
-                mode="headless",
                 on_event=lambda e: (
                     seen.append(self.read(self.out)) if isinstance(e, Begun) else None
                 ),
@@ -300,133 +325,15 @@ class TuiPolicy(Base):
             mock.patch.object(self.driver, "start", side_effect=Stopped(143)),
             self.assertRaises(Stopped),
         ):
-            self.go(mode="headless")
+            self.go()
         self.assertEqual(self.read(self.out), "# Earlier\n")
         self.assertEqual(os.listdir(os.path.dirname(self.out)).count(".out.md.stale"), 0)
 
-    def test_a_tui_handle_without_a_name_reports_a_driver_error(self):
-        os.makedirs(self.work)
-        handle = FakeHandle([])
-        handle.name = None
-        with mock.patch.object(self.driver, "start", return_value=handle):
-            result = self.go(mode="tui")
-        self.assertEqual((result.returncode, result.error), (1, "tui: tui session has no name"))
-
-    def test_start_hands_the_plan_to_the_driver_and_prints_the_attach_command(self):
-        events = os.path.join(self.tmp, "events.log")
-        for kw, want, name in (
-            ({}, ({"resume": None, "events": None}, None), NAME),
-            (
-                {"sid": SID, "resume": True, "name": "mine", "events": events},
-                ({"resume": SID, "events": events}, "mine"),
-                "mine",
-            ),
-        ):
-            with self.subTest(kw=kw):
-                self.fresh()
-                r = self.faked(turn(START, block(DONE)), **kw)
-                args, given = self.started.call_args
-                self.assertEqual(
-                    ((args[0].session.client, args[0].session.mode), r.outcome.status),
-                    (("fake", "tui"), "done"),
-                )
-                self.assertEqual(
-                    (
-                        given,
-                        args[0].session.sid,
-                        args[0].session.name,
-                        args[0].session.resume,
-                        args[0].session.events,
-                    ),
-                    (
-                        {"idle_timeout": 7200},
-                        self.events[0].sid,
-                        want[1],
-                        want[0]["resume"] is not None,
-                        want[0]["events"],
-                    ),
-                )
-                self.assertIn(f"delegate: tui session {name}: tmux attach -t '={name}'\n", self.err)
-
-    def test_a_showable_session_is_shown_as_the_configured_show_says(self):
-        command = "open -a Terminal {{session}}"
-        for local, shown in (
-            ("", [None]),
-            ('[delegate]\nshow = "none"\n', [None]),
-            (f'[delegate]\nshow = "{command}"\n', [command]),
-            ('[delegate]\nshow = "none"\n[delegate.roles.dummy-tester]\nshow = ""\n', [None]),
-            ('[delegate.roles.dummy-tester]\nshow = "none"\n', [None]),
-        ):
-            with self.subTest(local=local):
-                self.fresh()
-                self.write(os.path.join(self.ensemble, "config.local.toml"), local)
-                self.driver.display = "mgr"
-                r = self.faked(turn(START, block(DONE)))
-                self.assertEqual((r.outcome.status, self.handle.shown), ("done", shown))
-                self.assertIn(f"delegate: tui session {NAME}: tmux attach -t '={NAME}'\n", self.err)
-
-    def test_a_hidden_session_is_not_shown_at_start(self):
-        for local in ("", '[delegate]\nshow = "none"\n', '[delegate]\nshow = "open {{session}}"\n'):
-            with self.subTest(local=local):
-                self.fresh()
-                self.write(os.path.join(self.ensemble, "config.local.toml"), local)
-                self.driver.display = "mgr"
-                r = self.faked(turn(START, block(DONE)), hidden=True)
-                self.assertEqual((r.outcome.status, self.handle.shown), ("done", []))
-                self.assertIn(f"delegate: tui session {NAME}: tmux attach -t '={NAME}'\n", self.err)
-
-    def test_a_session_started_without_a_display_is_not_shown(self):
-        r = self.faked(turn(START, block(DONE)))
-        self.assertEqual((r.outcome.status, self.handle.shown), ("done", []))
-        self.assertIn(f"delegate: tui session {NAME}: tmux attach -t '={NAME}'\n", self.err)
-
-    def test_a_failed_show_is_printed_and_the_run_goes_on(self):
-        for failure in (SessionError(f"no tmux session {NAME}"), SessionConfigError("bad split")):
-            with self.subTest(failure=failure):
-                self.fresh()
-                self.driver.display = "mgr"
-                r = self.faked(turn(START, block(DONE)), show_fail=failure)
-                self.assertEqual(r.outcome.status, "done")
-                self.assertIn(f"delegate: show {NAME}: {failure}\n", self.err)
-
-    def test_a_stop_during_the_tui_show_stops_its_session(self):
-        self.driver.display = "mgr"
-        with self.assertRaises(Stopped):
-            self.faked(turn(START, block(DONE)), show_fail=Stopped(129))
-        self.assertEqual(self.handle.calls, [("stop",)])
-        self.assertEqual(self.last("result")["error"], "stopped: Stopped: 129")
-
-    def test_a_valid_outcome_at_a_turn_end_is_done_and_leaves_the_session_even_with_work_pending(
-        self,
-    ):
-        for pending in (0, 2):
-            with self.subTest(pending=pending):
-                self.fresh()
-                r = self.faked(turn(START, block(DONE), pending=pending))
-                self.assertEqual(
-                    (r.returncode, r.outcome.status, r.error, self.handle.calls),
-                    (0, "done", "", []),
-                )
-                self.assertEqual(
-                    self.events, [Begun(self.events[0].sid), Progress("start", "go"), Finished(r)]
-                )
-                self.assertEqual((self.read(self.out), self.last("end")["rc"]), ("# Doc\n", 0))
-                self.assertEqual(self.kinds(), ["input", "progress", "result", "end"])
-
-    def test_the_first_turn_end_without_an_outcome_nudges_once(self):
-        r = self.faked(turn(START), STOP, turn(block(DONE)))
-        nudge = (
-            "Finish your task, then end your last reply with your outcome block "
-            "(`ensemble-outcome`), as your instructions' Return says. If you are waiting for "
-            "background work, wait for it first."
-        )
-        self.assertEqual((r.outcome.status, self.handle.calls), ("done", [("send", nudge)]))
-        self.assertEqual(self.kinds(), ["input", "progress", "nudge", "result", "end"])
-        self.assertEqual(bare(self.last("nudge")), {"kind": "nudge"})
-
     def test_intermediate_reply_progress_is_recorded_and_final_reply_is_not_repeated(self):
         final = "[ensemble-progress:step] finished\n" + block(DONE)
-        result = self.faked(Reply(START), Reply("intermediate prose"), Reply(final), turn(final))
+        result = self.faked(
+            Reply(START), Reply("intermediate prose"), Reply(final), turn(final), Exited(0)
+        )
         self.assertEqual(result.outcome.status, "done")
         self.assertEqual(
             [event for event in self.events if isinstance(event, Progress)],
@@ -437,162 +344,25 @@ class TuiPolicy(Base):
         self.assertEqual(self.err.count("Progress (step): finished"), 1)
         self.assertNotIn("missing progress mark", self.err)
 
-    def test_it_gives_up_after_stop_limit_counted_turn_ends_and_leaves_the_session(self):
-        r = self.faked(turn(START), *[STOP] * STOP_LIMIT)
-        self.assertEqual((r, self.handle.calls), (GAVE_UP, [("send", NUDGE)]))
-        self.assertIn(f"delegate: no outcome after 3 turn ends; {LEFT_OPEN}", self.err)
-        self.assertEqual(self.kinds(), ["input", "progress", "nudge", "give_up", "result", "end"])
-        self.assertEqual(
-            bare(self.last("give_up")),
-            {"kind": "give_up", "reason": "no outcome after 3 turn ends"},
-        )
-        self.assertEqual(
-            (self.last("end")["rc"], [type(e) for e in self.events]),
-            (0, [Begun, Progress, Finished]),
-        )
-
-    def test_a_mark_resets_the_count_before_its_turn_end_counts_and_never_the_nudge(self):
-        mark = turn("[ensemble-progress:round] half way")
-        for name, steps in (("once", [mark]), ("repeated on the next turn", [mark, mark])):
-            with self.subTest(name):
-                self.fresh()
-                r = self.faked(
-                    turn(START),
-                    *[STOP] * (STOP_LIMIT - 1),
-                    *steps,
-                    *[STOP] * (STOP_LIMIT - 2),
-                    turn(block(DONE)),
-                )
-                self.assertEqual((r.outcome.status, self.handle.calls), ("done", [("send", NUDGE)]))
-                self.assertEqual(self.err.count("Progress (round): half way"), len(steps))
-
-    def test_turn_ends_with_work_pending_neither_nudge_nor_count_however_many(self):
-        r = self.faked(*[PENDING] * (2 + STOP_LIMIT), turn(START, block(DONE)))
-        self.assertEqual((r.outcome.status, self.handle.calls), ("done", []))
-        r = self.faked(PENDING, PENDING, STOP, *[PENDING, STOP] * STOP_LIMIT)
-        self.assertEqual((r, self.handle.calls), (GAVE_UP, [("send", NUDGE)]))
-
-    def test_an_invalid_block_is_fixed_by_one_send_that_is_neither_the_nudge_nor_counted(self):
-        fix = ("send", FIX.format(error=INVALID_ERROR))
-        for later, sends in (([], [fix]), ([STOP] * STOP_LIMIT, [fix, ("send", NUDGE)])):
-            with self.subTest(later=len(later)):
-                self.fresh()
-                r = self.faked(turn(START, block(INVALID)), *later, turn(block(DONE)))
-                self.assertEqual(
-                    (r.returncode, r.outcome.status, self.handle.calls), (0, "done", sends)
-                )
-                self.assertEqual(
-                    (self.started.call_count, self.kinds()[:3]),
-                    (1, ["input", "progress", "invalid"]),
-                )
-                self.assertIn(
-                    f"delegate: invalid outcome: {INVALID_ERROR}; resuming once\n", self.err
-                )
-
-    def test_an_invalid_block_twice_or_a_failed_fix_send_is_the_error(self):
-        r = self.faked(turn(START, block(INVALID)), turn(block(INVALID)))
-        self.assertEqual(r, Result(0, None, f"invalid outcome: {INVALID_ERROR}"))
-        self.assertEqual(self.handle.calls, [("send", FIX.format(error=INVALID_ERROR))])
-        r = self.faked(turn(START, block(INVALID)), fail=SessionError("gone"))
-        self.assertEqual(
-            r, Result(1, None, f"invalid outcome: {INVALID_ERROR}; resume failed: gone")
-        )
-
-    def test_an_idle_timeout_gives_up_and_leaves_the_session(self):
-        r = self.faked(turn(START), IdleTimeout(7200))
-        self.assertEqual((r, self.handle.calls), (GAVE_UP, [("send", NUDGE)]))
-        self.assertIn(f"delegate: no event for 2 h; {LEFT_OPEN}", self.err)
-        self.assertEqual(
-            self.kinds(), ["input", "progress", "nudge", "idle", "give_up", "result", "end"]
-        )
-        self.assertEqual(
-            (self.last("idle")["seconds"], self.last("give_up")["reason"]),
-            (7200, "no event for 2 h"),
-        )
-
-    def test_the_give_up_reason_shows_the_timeout_in_seconds_minutes_or_hours(self):
-        for seconds, shown in ((30, "30 s"), (90, "1.5 min"), (600, "10 min"), (5400, "1.5 h")):
-            with self.subTest(seconds=seconds):
-                self.fresh()
-                self.faked(turn(START), IdleTimeout(seconds))
-                self.assertEqual(self.last("give_up")["reason"], f"no event for {shown}")
-
-    def test_hours_of_activity_or_blocked_without_an_idle_timeout_never_give_up(self):
-        now = [0.0]
-
-        def hours_apart(*events):
-            for event in events:
-                now[0] += 3 * 60 * 60
-                yield event
-
-        handle = FakeHandle(
-            hours_apart(
-                Activity("Bash"),
-                Blocked("permission"),
-                Activity(""),
-                Blocked("question"),
-                turn(START, block(DONE)),
-            )
-        )
-        with (
-            mock.patch("time.monotonic", lambda: now[0]),
-            mock.patch.object(self.driver, "start", side_effect=handle.start),
-        ):
-            r = self.go(mode="tui")
-        self.assertEqual((r.outcome.status, handle.calls, now[0]), ("done", [], 15 * 60 * 60))
-        self.assertEqual(self.kinds(), ["input", "progress", "result", "end"])
-
-    def test_a_failed_nudge_is_printed_and_counts_as_the_nudge(self):
-        r = self.faked(*[STOP] * (1 + STOP_LIMIT), fail=SessionError("no pane"))
-        self.assertEqual((r, self.handle.calls), (GAVE_UP, [("send", NUDGE)]))
-        self.assertIn("delegate: tui: no pane\n", self.err)
-        self.assertIn("nudge", self.kinds())
-
-    def test_a_usage_limit_ends_the_run_leaving_a_tui_and_stopping_a_headless_client(self):
+    def test_a_usage_limit_ends_the_run_stopping_its_client(self):
         at = 1767225600.0
         when = datetime.fromtimestamp(at).astimezone().isoformat(timespec="seconds")
-        r = self.faked(LimitHit(at), STOP, Exited(-signal.SIGHUP))
-        self.assertEqual(r, Result(0, None, f"usage limit; resets at {when}", Limit(at)))
-        self.assertEqual(
-            (self.handle.calls, self.kinds()), ([], ["input", "limit", "result", "end"])
-        )
-        self.fresh()
-        r = self.faked(LimitHit(at), Exited(-signal.SIGHUP), mode="headless")
+        r = self.faked(LimitHit(at), Exited(-signal.SIGHUP))
         self.assertEqual(
             r, Result(-signal.SIGHUP, None, f"usage limit; resets at {when}", Limit(at))
         )
-        self.assertEqual(self.handle.calls, [("stop",)])
-
-    def test_a_failed_turn_ends_the_run_without_a_nudge_and_leaves_the_session(self):
-        for failed, error in (
-            (TurnFailed("overloaded", "529"), "the client's turn failed: overloaded (529)"),
-            (
-                TurnFailed("authentication_failed"),
-                "the client's turn failed: authentication_failed",
-            ),
-            (TurnFailed("billing_error", "low"), "the client's turn failed: billing_error (low)"),
-        ):
-            with self.subTest(failed=failed):
-                self.fresh()
-                r = self.faked(Reply(START), failed, STOP)
-                self.assertEqual((r, self.handle.calls), (Result(0, None, error), []))
-                self.assertEqual(
-                    self.kinds(), ["input", "progress", "turn_failed", "result", "end"]
-                )
-                self.assertEqual(
-                    bare(self.last("turn_failed")),
-                    {"kind": "turn_failed", "error": failed.error, "detail": failed.detail},
-                )
-                self.assertEqual([type(e) for e in self.events], [Begun, Progress, Finished])
+        self.assertEqual(
+            (self.handle.calls, self.kinds()), ([("stop",)], ["input", "limit", "result", "end"])
+        )
 
     def test_a_failed_headless_turn_stops_its_session(self):
-        r = self.faked(Reply(START), TurnFailed("overloaded"), Exited(0), mode="headless")
+        r = self.faked(Reply(START), TurnFailed("overloaded"), Exited(0))
         self.assertEqual(
             (r.error, self.handle.calls), ("the client's turn failed: overloaded", [("stop",)])
         )
 
     def test_headless_failure_retains_the_actual_exit_status(self):
-        result = self.faked(TurnFailed("server_overloaded"), Exited(3), mode="headless")
+        result = self.faked(TurnFailed("server_overloaded"), Exited(3))
         self.assertEqual(
             (result.returncode, result.outcome, result.error),
             (3, None, "the client's turn failed: server_overloaded"),
@@ -634,15 +404,16 @@ class TuiPolicy(Base):
                     self.faked(turn(START), on_event=raise_, stop_fail=SessionError("gone"))
                 self.assertIs(cm.exception, error)
                 self.assertEqual(
-                    (self.handle.calls, self.err.count("delegate: tui: gone\n")), ([("stop",)], 1)
+                    (self.handle.calls, self.err.count("delegate: headless: gone\n")),
+                    ([("stop",)], 1),
                 )
                 self.assertTrue(
                     self.last("result")["error"].startswith(f"stopped: {type(error).__name__}")
                 )
 
     def killed(self, **kw):
-        """A tui run whose harness pane is killed at its first progress mark: stderr hung up,
-        then SIGHUP's Stopped(129); the error it raised.
+        """A run whose terminal is hung up at its first progress mark: stderr gone, then
+        SIGHUP's Stopped(129); the error it raised.
         """
 
         def hangup(event):
@@ -660,8 +431,8 @@ class TuiPolicy(Base):
             (self.last("result")["error"], self.last("end")["rc"]), ("stopped: Stopped: 129", 129)
         )
 
-    def test_a_killed_harness_with_its_stderr_gone_stops_the_tui_and_closes_the_run(self):
-        for stop_fail in (None, SessionError("tmux sessions unknown: tmux failed")):
+    def test_a_hung_up_run_with_its_stderr_gone_stops_its_session_and_closes_the_run(self):
+        for stop_fail in (None, SessionError("worker unknown")):
             with self.subTest(stop_fail=stop_fail):
                 self.fresh()
                 error = self.killed(stop_fail=stop_fail)
@@ -669,7 +440,7 @@ class TuiPolicy(Base):
                 self.assertEqual(self.handle.calls, [("stop",)])
                 self.assert_closed_as_stopped()
 
-    def test_a_killed_harness_whose_own_stop_fails_has_its_tui_stopped_by_the_retry(self):
+    def test_a_hung_up_run_whose_sessions_own_stop_fails_has_it_stopped_by_the_retry(self):
         def hangup():
             yield turn(START)
             sys.stderr = DeadStream()
@@ -680,14 +451,12 @@ class TuiPolicy(Base):
                 self.handle.stop_fail = None
             raise Stopped(128 + signal.SIGHUP)
 
-        self.handle = FakeHandle(
-            hangup(), stop_fail=SessionError("tmux sessions unknown: tmux failed")
-        )
+        self.handle = FakeHandle(hangup(), stop_fail=SessionError("worker unknown"))
         with (
             mock.patch.object(self.driver, "start", side_effect=self.handle.start),
             self.assertRaises(Stopped) as raised,
         ):
-            self.go(mode="tui")
+            self.go()
         self.assertEqual(raised.exception.code, 129)
         self.assertEqual(self.handle.calls[-2:], [("stop",), ("stop",)])
         self.assertIsNone(self.handle.stop_fail)
@@ -708,11 +477,11 @@ class TuiPolicy(Base):
         with self.assertRaises(Stopped) as raised:
             self.faked(turn(START), on_event=terminated, stop_fail=crash)
         self.assertEqual(raised.exception.code, 143)
-        self.assertIn("delegate: tui: stop failed: RuntimeError: stop crashed\n", self.err)
+        self.assertIn("delegate: headless: stop failed: RuntimeError: stop crashed\n", self.err)
 
     def test_a_failed_stop_is_printed_and_never_replaces_the_limit_or_stale_out_result(self):
         gone = SessionError("gone")
-        r = self.faked(LimitHit(None), stop_fail=gone, mode="headless")
+        r = self.faked(LimitHit(None), stop_fail=gone)
         self.assertEqual(r, Result(0, None, "usage limit; reset time unknown", Limit(None)))
         self.assertEqual(
             (self.handle.calls, self.err.count("delegate: headless: gone\n")), ([("stop",)], 1)
@@ -729,45 +498,36 @@ class TuiPolicy(Base):
             (1, None, [Finished(r)], [("stop",)]),
         )
         self.assertRegex(r.error, r"^cannot remove the stale out: ")
-        self.assertEqual(self.err.count("delegate: tui: gone\n"), 1)
+        self.assertEqual(self.err.count("delegate: headless: gone\n"), 1)
 
-    def test_a_driver_failure_at_start_is_the_result_and_a_client_without_tui_a_config_error(self):
+    def test_a_driver_failure_at_start_is_the_result(self):
         os.makedirs(self.work)
-        with mock.patch.object(self.driver, "start", side_effect=SessionError("no tmux")):
-            self.assertEqual(self.go(mode="tui"), Result(1, None, "tui: no tmux"))
+        with mock.patch.object(self.driver, "start", side_effect=SessionError("no worker")):
+            self.assertEqual(self.go(), Result(1, None, "headless: no worker"))
         self.assertEqual(self.kinds(), ["input", "result", "end"])
-        self.fresh()
-        self.configure_fake()
-        with self.assertRaises(ConfigError) as cm:
-            self.go(mode="tui")
-        self.assertEqual(str(cm.exception), "client 'fake' does not support tui mode")
 
     def test_a_busy_start_is_a_busy_result(self):
         os.makedirs(self.work)
         busy = SessionBusy("dummy-lock", "ensemble-x-1 (owner x)")
-        for mode in ("tui", "headless"):
-            with self.subTest(mode=mode):
-                self.fresh()
-                os.makedirs(self.work, exist_ok=True)
-                with mock.patch.object(self.driver, "start", side_effect=busy):
-                    r = self.go(mode=mode)
-                self.assertEqual(
-                    r, Result(75, None, "busy: lock dummy-lock is held by ensemble-x-1 (owner x)")
-                )
-                self.assertEqual(self.events, [Finished(r)])
-                self.assertEqual(self.kinds(), ["input", "result", "end"])
-                self.assertEqual(self.last("end")["rc"], 75)
+        with mock.patch.object(self.driver, "start", side_effect=busy):
+            r = self.go()
+        self.assertEqual(
+            r, Result(75, None, "busy: lock dummy-lock is held by ensemble-x-1 (owner x)")
+        )
+        self.assertEqual(self.events, [Finished(r)])
+        self.assertEqual(self.kinds(), ["input", "result", "end"])
+        self.assertEqual(self.last("end")["rc"], 75)
 
     def test_the_runner_records_into_an_existing_run_dir_only(self):
         composition = Composer()
         accepted = plan(
             composition.resolve("dummy-tester"),
-            Spec("Echo me.", self.work, task="echo", client="fake", mode="tui"),
+            Spec("Echo me.", self.work, task="echo", client="fake"),
             driver=self.driver,
             composition=composition,
         )
         with (
-            mock.patch.object(self.driver, "start", side_effect=SessionError("no tmux")),
+            mock.patch.object(self.driver, "start", side_effect=SessionError("no worker")),
             redirect_stderr(io.StringIO()),
             self.assertRaises(FileNotFoundError),
         ):
@@ -780,7 +540,6 @@ class TuiPolicy(Base):
             IdleTimeout(7200),
             turn(START, block(DONE)),
             Exited(0),
-            mode="headless",
         )
         self.assertEqual((r.outcome.status, self.handle.calls), ("done", []))
         self.assertEqual(self.kinds(), ["input", "idle", "progress", "result", "end"])
@@ -791,10 +550,136 @@ class TuiPolicy(Base):
         )
 
 
+class TuiStart(Handles):
+    """Attempts.begin of a tui plan, as an owned run's drive starts its session."""
+
+    def began(self, handle=None, *, start=None, **kw) -> Session | Result:
+        """Over `handle` (else a new FakeHandle), the driver's start `start` (else the handle's);
+        self.events gets each event, self.err the stderr.
+        """
+        self.handle = FakeHandle([]) if handle is None else handle
+        accepted = self.planned(mode="tui", **kw)
+        self.events, err = [], io.StringIO()
+        self.attempts = Attempts(accepted, self.events.append, self.driver)
+        try:
+            with (
+                redirect_stderr(err),
+                mock.patch.object(
+                    self.driver, "start", side_effect=start or self.handle.start
+                ) as self.started,
+            ):
+                return self.attempts.begin()
+        finally:
+            self.err = err.getvalue()
+
+    def test_a_tui_handle_without_a_name_reports_a_driver_error(self):
+        handle = FakeHandle([])
+        handle.name = None
+        self.assertEqual(
+            self.began(handle, start=lambda *_a, **_kw: handle),
+            Result(1, None, "tui: tui session has no name"),
+        )
+
+    def test_start_hands_the_plan_to_the_driver_and_prints_the_attach_command(self):
+        events = os.path.join(self.tmp, "events.log")
+        for kw, want, name in (
+            ({}, ({"resume": None, "events": None}, None), NAME),
+            (
+                {"sid": SID, "resume": True, "name": "mine", "events": events},
+                ({"resume": SID, "events": events}, "mine"),
+                "mine",
+            ),
+        ):
+            with self.subTest(kw=kw):
+                self.fresh()
+                self.assertIs(self.began(**kw), self.handle)
+                args, given = self.started.call_args
+                self.assertEqual((args[0].session.client, args[0].session.mode), ("fake", "tui"))
+                self.assertEqual(
+                    (
+                        given,
+                        args[0].session.sid,
+                        args[0].session.name,
+                        args[0].session.resume,
+                        args[0].session.events,
+                    ),
+                    (
+                        {"idle_timeout": 7200},
+                        self.events[0].sid,
+                        want[1],
+                        want[0]["resume"] is not None,
+                        want[0]["events"],
+                    ),
+                )
+                self.assertIn(f"delegate: tui session {name}: tmux attach -t '={name}'\n", self.err)
+
+    def test_a_showable_session_is_shown_as_the_configured_show_says(self):
+        command = "open -a Terminal {{session}}"
+        for local, shown in (
+            ("", [None]),
+            ('[delegate]\nshow = "none"\n', [None]),
+            (f'[delegate]\nshow = "{command}"\n', [command]),
+            ('[delegate]\nshow = "none"\n[delegate.roles.dummy-tester]\nshow = ""\n', [None]),
+            ('[delegate.roles.dummy-tester]\nshow = "none"\n', [None]),
+        ):
+            with self.subTest(local=local):
+                self.fresh()
+                self.write(os.path.join(self.ensemble, "config.local.toml"), local)
+                self.driver.display = "mgr"
+                self.began()
+                self.assertEqual(self.handle.shown, shown)
+                self.assertIn(f"delegate: tui session {NAME}: tmux attach -t '={NAME}'\n", self.err)
+
+    def test_a_hidden_session_is_not_shown_at_start(self):
+        for local in ("", '[delegate]\nshow = "none"\n', '[delegate]\nshow = "open {{session}}"\n'):
+            with self.subTest(local=local):
+                self.fresh()
+                self.write(os.path.join(self.ensemble, "config.local.toml"), local)
+                self.driver.display = "mgr"
+                handle = FakeHandle([])
+                handle.hidden = True
+                self.began(handle)
+                self.assertEqual(self.handle.shown, [])
+                self.assertIn(f"delegate: tui session {NAME}: tmux attach -t '={NAME}'\n", self.err)
+
+    def test_a_session_started_without_a_display_is_not_shown(self):
+        self.began()
+        self.assertEqual(self.handle.shown, [])
+        self.assertIn(f"delegate: tui session {NAME}: tmux attach -t '={NAME}'\n", self.err)
+
+    def test_a_failed_show_is_printed_and_the_start_goes_on(self):
+        for failure in (SessionError(f"no tmux session {NAME}"), SessionConfigError("bad split")):
+            with self.subTest(failure=failure):
+                self.fresh()
+                self.driver.display = "mgr"
+                handle = FakeHandle([])
+                handle.show_fail = failure
+                self.assertIs(self.began(handle), handle)
+                self.assertIn(f"delegate: show {NAME}: {failure}\n", self.err)
+                self.assertEqual(self.events, [Begun(self.events[0].sid)])
+
+    def test_a_stop_during_the_show_leaves_the_started_session_to_its_drive(self):
+        self.driver.display = "mgr"
+        handle = FakeHandle([])
+        handle.show_fail = Stopped(129)
+        with self.assertRaises(Stopped):
+            self.began(handle)
+        self.assertEqual((self.attempts.handle, self.attempts.begun), (handle, False))
+
+    def test_a_driver_failure_at_start_is_the_result_and_a_client_without_tui_a_config_error(self):
+        self.assertEqual(self.began(start=SessionError("no tmux")), Result(1, None, "tui: no tmux"))
+        self.assertEqual(self.kinds(), ["input"])
+        self.fresh()
+        self.configure_fake()
+        with self.assertRaises(ConfigError) as cm:
+            Attempts(self.planned(mode="tui"), lambda _event: None, self.driver).begin()
+        self.assertEqual(str(cm.exception), "client 'fake' does not support tui mode")
+
+
 LOCKED = EnvironmentSpec(image="dummy-env:test", gateway="workers", lock="dummy-lock")
 
 
-class LockCloseTest(TuiPolicy):
+class LockCloseTest(Handles):
     """A locked headless run's worker, ended with its client or stopped, is closed before its
     Finished and only then claimed released (a locked tui is always owned: handler_test).
     """
@@ -812,14 +697,14 @@ class LockCloseTest(TuiPolicy):
         return self.faked(*events, environment=environment, on_event=on, **kw)
 
     def test_every_run_end_closes_before_finished(self):
-        for name, events, mode in (
-            ("outcome", (turn(START, block(DONE)), Exited(0)), "headless"),
-            ("no outcome", (turn(START), Exited(0)), "headless"),
-            ("failed turn", (turn(START), TurnFailed("overloaded"), Exited(1)), "headless"),
-            ("usage limit", (turn(START), LimitHit(None), Exited(0)), "headless"),
+        for name, events in (
+            ("outcome", (turn(START, block(DONE)), Exited(0))),
+            ("no outcome", (turn(START), Exited(0))),
+            ("failed turn", (turn(START), TurnFailed("overloaded"), Exited(1))),
+            ("usage limit", (turn(START), LimitHit(None), Exited(0))),
         ):
             with self.subTest(name):
-                self.locked(*events, mode=mode)
+                self.locked(*events)
                 self.assertEqual(self.handle.calls.count(("close",)), 1, self.handle.calls)
                 self.assertIn(("close",), self.at_finish)
                 self.assertIn(f"session {NAME} closed (lock dummy-lock)", self.err)
@@ -828,13 +713,11 @@ class LockCloseTest(TuiPolicy):
 
     def test_a_raised_error_closes_after_stopping(self):
         with self.assertRaises(AssertionError):
-            self.locked(turn(START), mode="headless")
+            self.locked(turn(START))
         self.assertEqual(self.handle.calls[-2:], [("stop",), ("close",)])
 
     def test_a_failed_close_is_printed_not_raised(self):
-        r = self.locked(
-            turn(START, block(DONE)), Exited(0), mode="headless", close_fail=SessionError("gone")
-        )
+        r = self.locked(turn(START, block(DONE)), Exited(0), close_fail=SessionError("gone"))
         self.assertEqual(r.outcome.status, "done")
         self.assertIn("gone", self.err)
         self.assertNotIn("closed (lock", self.err)
@@ -843,9 +726,10 @@ class LockCloseTest(TuiPolicy):
         unlocked = EnvironmentSpec(image="dummy-env:test", gateway="workers")
         for environment in (None, unlocked):
             with self.subTest(environment=environment):
-                self.locked(turn(START), *[STOP] * STOP_LIMIT, environment=environment)
+                self.locked(turn(START, block(DONE)), Exited(0), environment=environment)
                 self.assertNotIn(("close",), self.handle.calls)
-                self.assertIn(LEFT_OPEN, self.err)
+                self.assertNotIn("closed (lock", self.err)
+                self.assertNotIn("release", self.kinds())
 
 
 class InstructionRuns(InstructionCase):
@@ -943,25 +827,18 @@ class Stopping(Case):
                 self.assertEqual(stopped(error), want)
 
 
-class AttemptCore(TuiPolicy):
-    """Attempt, the event-driven core: each event fed, a Result ends it; closing's fields."""
+class AttemptCore(Handles):
+    """Attempt, the event-driven core, under the tui policy as the delegation handler feeds it:
+    each event fed, a Result ends it; closing's fields.
+    """
 
-    def attempt(self, *, first=True, mode="tui", sent=None) -> Attempt:
-        os.makedirs(Layout(self.work).agent, exist_ok=True)
-        composition = Composer()
-        accepted = plan(
-            composition.resolve("dummy-tester"),
-            Spec("Echo me.", self.work, task="echo", client="fake", mode=mode, out=self.out),
-            driver=self.driver,
-            composition=composition,
-        )
-        os.makedirs(accepted.session.workdir, exist_ok=True)
+    def attempt(self, *, first=True, sent=None) -> Attempt:
+        accepted = self.planned(mode="tui")
         self.handle = FakeHandle([], fail=sent)
         self.events, self.notes = [], []
-        policy = POLICIES[Mode(mode)](self.note, None)
         return Attempt(
             accepted,
-            policy,
+            POLICIES[Mode.TUI](self.note, None),
             self.handle,
             note=self.note,
             on_event=self.events.append,
@@ -986,13 +863,36 @@ class AttemptCore(TuiPolicy):
         self.assertEqual(self.events, [Progress("start", "go")])
         self.assertNotIn("missing", self.notes)
 
-    def test_an_invalid_outcome_is_fixed_in_the_same_session_once(self):
-        attempt = self.attempt()
-        found = self.fed(attempt, turn(START, block(INVALID)), turn(block(DONE)))
-        self.assertIsNone(found[0])
+    def test_a_valid_outcome_at_a_turn_end_is_its_result_even_with_work_pending(self):
+        for pending in (0, 2):
+            with self.subTest(pending=pending):
+                found = self.fed(self.attempt(), turn(START, block(DONE), pending=pending))
+                self.assertEqual(
+                    (found[0].returncode, found[0].outcome.status, self.handle.calls),
+                    (0, "done", []),
+                )
+
+    def test_an_invalid_outcome_is_fixed_by_one_send_that_is_neither_the_nudge_nor_counted(self):
+        fix = ("send", FIX.format(error=INVALID_ERROR))
+        for later, sends in (([], [fix]), ([STOP] * STOP_LIMIT, [fix, ("send", NUDGE)])):
+            with self.subTest(later=len(later)):
+                attempt = self.attempt()
+                found = self.fed(attempt, turn(START, block(INVALID)), *later, turn(block(DONE)))
+                self.assertEqual(found[:-1], [None] * (1 + len(later)))
+                self.assertEqual((found[-1].outcome.status, self.handle.calls), ("done", sends))
+                self.assertIn("invalid", self.notes)
+                self.assertIn(
+                    f"delegate: invalid outcome: {INVALID_ERROR}; resuming once\n", self.err
+                )
+
+    def test_an_invalid_outcome_twice_or_a_failed_fix_send_is_the_error(self):
+        found = self.fed(self.attempt(), turn(START, block(INVALID)), turn(block(INVALID)))
+        self.assertEqual(found[-1], Result(0, None, f"invalid outcome: {INVALID_ERROR}"))
         self.assertEqual(self.handle.calls, [("send", FIX.format(error=INVALID_ERROR))])
-        self.assertEqual(found[1].outcome.status, "done")
-        self.assertIn("invalid", self.notes)
+        found = self.fed(self.attempt(sent=SessionError("gone")), turn(START, block(INVALID)))
+        self.assertEqual(
+            found, [Result(1, None, f"invalid outcome: {INVALID_ERROR}; resume failed: gone")]
+        )
 
     def test_a_failed_turn_and_a_limit_end_it(self):
         found = self.fed(self.attempt(), TurnFailed("server_overloaded", "busy"))
@@ -1010,15 +910,47 @@ class AttemptCore(TuiPolicy):
         self.assertEqual(found[:-1], [None] * STOP_LIMIT)
         self.assertEqual(found[-1], GAVE_UP)
         self.assertEqual(self.handle.calls, [("send", NUDGE)])
-        self.assertEqual(self.notes.count("give_up"), 1)
+        self.assertEqual(self.notes, ["nudge", "give_up"])
+        self.assertIn(f"delegate: no outcome after {STOP_LIMIT} turn ends; {LEFT_OPEN}", self.err)
 
-    def test_idle_gives_a_tui_attempt_up(self):
-        attempt = self.attempt()
-        err = io.StringIO()
-        with redirect_stderr(err):
-            self.assertEqual(attempt.idle(1800), GAVE_UP)
-        self.assertIn("no event for 30 min", err.getvalue())
-        self.assertEqual(self.notes, ["idle", "give_up"])
+    def test_a_mark_resets_the_count_before_its_turn_end_counts_and_never_the_nudge(self):
+        mark = turn("[ensemble-progress:round] half way")
+        for name, steps in (("once", [mark]), ("repeated on the next turn", [mark, mark])):
+            with self.subTest(name):
+                found = self.fed(
+                    self.attempt(),
+                    turn(START),
+                    *[STOP] * (STOP_LIMIT - 1),
+                    *steps,
+                    *[STOP] * (STOP_LIMIT - 2),
+                    turn(block(DONE)),
+                )
+                self.assertEqual(
+                    (found[-1].outcome.status, self.handle.calls), ("done", [("send", NUDGE)])
+                )
+                self.assertEqual(self.err.count("Progress (round): half way"), len(steps))
+
+    def test_turn_ends_with_work_pending_neither_nudge_nor_count_however_many(self):
+        found = self.fed(self.attempt(), *[PENDING] * (2 + STOP_LIMIT), turn(START, block(DONE)))
+        self.assertEqual((found[-1].outcome.status, self.handle.calls), ("done", []))
+        found = self.fed(self.attempt(), PENDING, PENDING, STOP, *[PENDING, STOP] * STOP_LIMIT)
+        self.assertEqual((found[-1], self.handle.calls), (GAVE_UP, [("send", NUDGE)]))
+
+    def test_a_failed_nudge_is_printed_and_counts_as_the_nudge(self):
+        found = self.fed(self.attempt(sent=SessionError("no pane")), *[STOP] * (1 + STOP_LIMIT))
+        self.assertEqual((found[-1], self.handle.calls), (GAVE_UP, [("send", NUDGE)]))
+        self.assertIn("delegate: tui: no pane\n", self.err)
+        self.assertIn("nudge", self.notes)
+
+    def test_idle_gives_a_tui_attempt_up_its_reason_in_seconds_minutes_or_hours(self):
+        for seconds, shown in ((30, "30 s"), (90, "1.5 min"), (1800, "30 min"), (5400, "1.5 h")):
+            with self.subTest(seconds=seconds):
+                attempt = self.attempt()
+                err = io.StringIO()
+                with redirect_stderr(err):
+                    self.assertEqual(attempt.idle(seconds), GAVE_UP)
+                self.assertIn(f"delegate: no event for {shown}; {LEFT_OPEN}", err.getvalue())
+                self.assertEqual(self.notes, ["idle", "give_up"])
 
     def test_only_a_first_attempt_logs_a_missing_start_mark(self):
         for first, want in ((True, ["missing"]), (False, [])):

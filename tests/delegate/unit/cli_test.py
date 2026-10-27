@@ -16,7 +16,6 @@ from unittest import mock
 from ensemble.delegate import ConfigError, Outcome, cli
 from ensemble.delegate.composer import Composer, RunParams
 from ensemble.delegate.composer.base import TEAM
-from ensemble.delegate.engine.runner import STOP_LIMIT
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import Layout, Result
 from ensemble.session import ConfigError as SessionConfigError
@@ -41,8 +40,7 @@ from tests.delegate.fakes.harness_session import (
 )
 from tests.delegate.harness import SID as HARNESS_SID
 from tests.delegate.harness import HarnessCase
-from tests.delegate.replies import block
-from tests.delegate.unit.runs import DONE, START, STOP, FakeHandle, no_child, turn
+from tests.delegate.unit.runs import DONE, no_child
 from tests.session import fake_client
 from tests.session.modules import client_loader
 from tests.utils.case import local_section
@@ -859,25 +857,16 @@ class Tui(Base):
         super().setUp()
         self.configure_fake(tui=True)
 
-    def test_tui_mode_runs_the_tui_policy_in_its_named_session_a_give_up_exiting_1(self):
-        for events, want, last in (
-            ([turn(START, block(DONE))], 0, "delegate: status done"),
-            ([STOP] * (1 + STOP_LIMIT), 1, "delegate: the agent run returned no outcome"),
+    def test_a_tui_run_whose_handler_preflight_refuses_exits_2_and_starts_nothing(self):
+        with (
+            mock.patch.object(self.driver, "preflight", side_effect=unowned),
+            mock.patch.object(self.driver, "start") as start,
         ):
-            with self.subTest(want=want):
-                self.work = os.path.join(self.home, f"run-{want}")
-                handle = FakeHandle(events)
-                with (
-                    mock.patch.object(self.driver, "preflight", side_effect=unowned),
-                    mock.patch.object(self.driver, "start", side_effect=handle.start) as start,
-                ):
-                    code, out, err = self.runs("--mode", "tui")
-                self.assertEqual((code, out, err.splitlines()[-1]), (want, "", last))
-                spec = start.call_args.args[0].session
-                self.assertEqual(
-                    ((spec.client, spec.mode), spec.name, spec.events),
-                    (("fake", "tui"), f"dummy-tester-{spec.sid[:8]}", None),
-                )
+            code, out, err = self.runs("--mode", "tui")
+        self.assertEqual(
+            (code, out, err.splitlines()[-1]), (2, "", "delegate: handlers: no session harness")
+        )
+        start.assert_not_called()
 
     def test_a_client_without_tui_exits_2_and_a_dry_run_plans_it(self):
         self.configure_fake()
