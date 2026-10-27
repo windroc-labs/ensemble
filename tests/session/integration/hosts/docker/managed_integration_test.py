@@ -190,7 +190,9 @@ class GuardedDockerTest(Case):
             record=lambda _line: None,
             host=Host(),
         )
-        client = int(Path(self.home, "client.pid").read_text())
+        pid = Path(self.home, "client.pid")
+        live_tmux.wait(lambda: pid.exists() and pid.read_text(), what="guarded client start")
+        client = int(pid.read_text())
         with self.assertRaisesRegex(SessionError, "daemon busy"):
             mode.stop()
         self.assertEqual(removals, [0])
