@@ -210,6 +210,7 @@ class TmuxHost(Host):
     """settings: [hosts.<name>]'s status_line."""
 
     attachable = True
+    _harnessed = True
 
     def __init__(
         self, name: str, settings: Mapping | None = None, *, tmux: TmuxCli | None = None

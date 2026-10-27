@@ -74,7 +74,7 @@ class ClaudeTui(Tui):
             "PermissionRequest": HookKind.BLOCKED,
             "Notification": HookKind.BLOCKED,
             "PostToolUse": HookKind.ACTIVITY,
-            "UserPromptSubmit": HookKind.ACTIVITY,
+            "UserPromptSubmit": HookKind.TURN_STARTED,
         }
     )
     MATCHER = (
@@ -84,6 +84,7 @@ class ClaudeTui(Tui):
     START, START_MATCHER = "SessionStart", "^(startup|resume)$"
     dialogs = ("Quick safety check",)
     opening = (START, "/color")
+    _owned = True
 
     def __init__(self, common: ClaudeCommon):
         self.common = common

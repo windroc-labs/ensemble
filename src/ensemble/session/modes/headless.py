@@ -104,7 +104,9 @@ class HeadlessMode(BaseMode):
         host: Host,
         display: Display = None,
         check_name: Callable[[str], None] | None = None,
+        owner: str | None = None,
     ) -> Self:
+        cls._unowned(owner)
         prepared, run, metadata, prompt_file = cls._prepare(
             spec, client, registry=registry, host=host, display=display
         )

@@ -65,9 +65,30 @@ Admission checks all configured Hosts; an unavailable inventory fails closed. Sh
 
 The orchestrator's [role limits](board.md#run-limits) and usage gate remain separate. Direct client commands outside `Session.start`, including `client-resume`'s native client handoff, do not create ensemble sessions.
 
+## Session harness
+
+A Claude tui session started on the `tmux` Host runs under a session harness of its own, when the session class is configured with its default callables (a test that injects a class loader, probe, Host factory or viewer factory keeps the earlier path). Every other client, Host and mode starts as before, and refuses non-empty `Spec.handlers`. `Session.preflight` finds each handler module without importing it.
+
+`Session.start` writes the start to `~/.ensemble/harness/<32 hex>/request.json` (mode 0600; it holds `Spec.env`, and the harness deletes it once read), runs `python3 -P -s -m ensemble.session.harness.process <dir>` detached (the caller's interpreter), and returns a control view once the harness runs the worker. A start error in the harness is raised in the caller with its class and message, and its dir is removed. The tui session's `session.json` names the dir as `owner`.
+
+```mermaid
+flowchart LR
+  E[Session.start] -->|request.json| H[session harness]
+  H -->|holds harness.lock| W[tui worker]
+  H -->|events.jsonl, harness.json| V[control views]
+  V -->|requests/| H
+  H -->|on_event| D[handlers]
+```
+
+The harness holds `harness.lock` for life. It records each event in `events.jsonl` before calling each handler's `on_event`; ids are `<generation>:<seq>` and turns `<generation>:t<n>`. A turn started while one is open fails that one (`TurnFailed("superseded")`); an exit mid-turn fails it (`TurnFailed("exited")`) before the one `Exited`. A handler that raises is retried with the same ids after 1 s, doubling to 30 s, while the others go on; `deliveries.jsonl` keeps failed attempts 1, 2, 4, … and the delivered one. `Stderr` and `ClientBound` stay in the log. After the worker's exit the harness waits up to 30 s for its handlers, then exits; `harness.json` says `starting`, `running`, `exited` (with `returncode` and `pending`) or `failed` (with the start `error`), and `opening` while the client's opening line is unsent. SIGTERM and SIGHUP close the worker.
+
+The control view never owns the worker: its caller exiting, its `events()` iterator closing or a display detaching leaves the harness supervising. `events()` reads `events.jsonl`, accepting only the worker's generation in order. `stop`, `close` and `Session.retire` write a request to `requests/` and return once the harness confirms the worker ended and logged `Exited`, else raise `SessionError` (`Unanswered` when it cannot tell). `send`, `press`, `screen`, `show` and `status` still reach the tmux session directly. `Session.attach` gives a control view only while the `owner` harness holds its lock and its `harness.json` names that session, sid and generation; any other `owner` is ignored, and a worker whose harness exited or died is attached and closed the earlier way.
+
+Any process of the user that can write the 0700 harness dir can stop or close its worker, the same trust as the user's tmux socket: the harness serves every well-formed request and authenticates none.
+
 ## Session harness interfaces
 
-Frozen for WDRC-199 (WDRC-226): a session harness will own each worker from start to close and call the handlers its caller registers. `TmuxHost.worker` now implements the managed transport below; production session-owner routing and event dispatch remain WDRC-204's integration work. The legacy mode launch paths remain during that migration. The tickets that implement each part change none of these signatures.
+Frozen for WDRC-199 (WDRC-226): a session harness will own each worker from start to close and call the handlers its caller registers. [Session harness](#session-harness) runs it for Claude tui sessions on tmux: Claude yields `TurnStarted`, and their handlers are called. `TmuxHost.worker` implements the managed transport below, but that harness still launches its worker on the legacy tui path, as every other start does. No other client, Host or mode reads `Spec.handlers` yet. The tickets that implement each part change none of these signatures.
 
 **Handlers.** `Spec.handlers` is an ordered tuple of `HookCallback(module, state, roots)`, default `()`. The harness records each event before it calls each handler module's `on_event(EventCall)` in event order; a failure is retried with the same ids and never stops supervision. `EventCall` carries `session` (an `ensemble.session.Session` to send, stop or close through), `event`, `sid`, `generation` (the worker's start), `event_id`, `turn` (`None` outside a turn) and the handler's `state`. `on_event` returns `None`; returning or failing never closes the worker, only a close request through `session` does. Every event field (reply text, Blocked reason, TurnFailed detail) is untrusted worker output.
 

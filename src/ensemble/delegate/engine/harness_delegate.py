@@ -43,6 +43,7 @@ from ensemble.session import (
     SIGNALS,
     Access,
     EnvironmentSpec,
+    HookCallback,
     Host,
     Launch,
     Mode,
@@ -423,8 +424,10 @@ class HarnessDelegate(Delegate):
             session["reply_tags"] = tuple(session["reply_tags"])
             if session.get("environment") is not None:
                 session["environment"] = EnvironmentSpec.from_fields(session["environment"])
-            if "handlers" in session:  # Spec takes a tuple; a run sets none yet (FR-28)
-                session["handlers"] = tuple(session["handlers"])
+            session["handlers"] = tuple(
+                HookCallback(h["module"], h["state"], tuple(h["roots"]))
+                for h in session.get("handlers", ())
+            )
             accepted = Plan(
                 spec,
                 SessionSpec(**session),
