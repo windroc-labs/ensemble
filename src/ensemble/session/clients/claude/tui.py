@@ -96,6 +96,7 @@ class ClaudeTui(Tui):
         self.last = self.unseen = ""  # the turn's newest text; its turn end's text not yet read
         self.limited = False  # this turn's LimitHit given
         self._limit_seen = False  # a transcript limit since the last turn-ending hook
+        self._limit_hooked = False  # the newest turn ended on StopFailure's limit
         self._origin = self._config_dir = self._native = ""
         self._ids: set[str] = set()
         self._visited: set[str] = set()
@@ -214,7 +215,9 @@ class ClaudeTui(Tui):
             if not self._limit_seen:
                 return False
             self._limit_seen = False
-        return super()._accept_turn(identifier)
+        accepted = super()._accept_turn(identifier)
+        self._limit_hooked = self._limit_hooked and not accepted
+        return accepted
 
     def _settle_turn(self, identifier, *, native=False):
         self._limit_seen = False
@@ -268,8 +271,7 @@ class ClaudeTui(Tui):
             resets = number(quota.get("resetsAt")) if quota.get("status") == "rejected" else None
             if resets is None:
                 resets = _resets_in("\n".join(texts(content)))
-            # its turn's first only: one read after its StopFailure finds the turn settled
-            self._limit_seen = self._limit_seen or not self.limited
+            self._limit_seen = self._limit_seen or not self._limit_hooked
             return self._limit(resets)
         text = "\n".join(texts(content))
         if not text.strip():
@@ -311,6 +313,7 @@ class ClaudeTui(Tui):
         """StopFailure's typed error: rate_limit is the usage limit, any other a failed turn."""
         error = _first(payload, "error") or "unknown"
         if error == "rate_limit":
+            self._limit_hooked = True
             return self._limit(_resets_in(_first(payload, "last_assistant_message")))
         return [TurnFailed(error, _first(payload, "error_details", "last_assistant_message"))]
 

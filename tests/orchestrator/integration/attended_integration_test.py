@@ -109,21 +109,20 @@ class Attended(Segment):
         start, report = script.steps
         sid = self.claim(ident, "pm", script._replace(steps=[start, joined, report]), tui=True)
         harness, tui = self.harness("pm", ident, sid), config.tui_name("pm", ident, sid)
-        if send is not None:
-            with self.step("manager: send mid-turn"):
-                with open(self.pending.gate, "w"):
-                    pass
-                live_tmux.wait(lambda: self.tool_runs(sid), TIMEOUT, "the turn's tool")
-                res = subprocess.run(
-                    [SESSION_CLI, "send", tui, send],
-                    cwd=self.root,
-                    env={**self.env(), **self.in_manager()},
-                    stdin=subprocess.DEVNULL,
-                    capture_output=True,
-                    text=True,
-                    timeout=TIMEOUT,
-                )
-                self.assertEqual((res.returncode, res.stdout), (0, ""), res.stderr)
+        if send is not None:  # its start mark's write-back runs meanwhile: agent_run checks it
+            with open(self.pending.gate, "w"):
+                pass
+            live_tmux.wait(lambda: self.tool_runs(sid), TIMEOUT, "the turn's tool")
+            res = subprocess.run(
+                [SESSION_CLI, "send", tui, send],
+                cwd=self.root,
+                env={**self.env(), **self.in_manager()},
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=TIMEOUT,
+            )
+            self.assertEqual((res.returncode, res.stdout), (0, ""), res.stderr)
         self.agent_run()
         ended = (f"{harness} outcome done", f"{harness} exited 0")
         live_tmux.wait(lambda: ended[1] in self.event_lines(), TIMEOUT, f"`{ended[1]}`")
