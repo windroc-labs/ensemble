@@ -8,6 +8,7 @@ from contextlib import redirect_stderr
 from unittest import mock
 
 from ensemble.session import Viewer
+from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.engine.types import Launch
 from ensemble.session.hosts.tmux import TmuxHost
 from tests.session import live_tmux
@@ -22,7 +23,7 @@ class ShowTest(Case):
         self.server.attach("mgr")
         self.enterContext(mock.patch.dict(os.environ, self.server.env(), clear=True))
         self.host = TmuxHost("tmux")
-        self.host.terminal(
+        TmuxCli().start(
             "worker",
             Launch(
                 (sys.executable, "-I", "-c", "import time; time.sleep(300)"),

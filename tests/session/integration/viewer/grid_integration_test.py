@@ -14,7 +14,6 @@ from ensemble.session import Viewer
 from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.engine.types import Launch, SessionError
 from ensemble.session.hosts.tmux import TmuxHost
-from ensemble.session.modes import tui
 from ensemble.session.viewer import grid as tmux_model
 from ensemble.session.viewer import layout
 from ensemble.session.viewer.viewer import fold
@@ -84,9 +83,13 @@ class Live(Case):
         return err.getvalue()
 
     def started(self, name: str, inside: str | None = MANAGER, **kwargs) -> str:
-        """Session `name` started with no pane, then show()n; show's stderr."""
-        self.host.terminal(name, Launch(live_tmux.IDLE, self.server.env(), cwd=self.cwd))
+        """tmux session `name` started with no pane, then show()n; show's stderr."""
+        TmuxCli().start(name, Launch(live_tmux.IDLE, self.server.env(), cwd=self.cwd))
         return self.show(name, inside, **kwargs)
+
+    def close(self, name: str) -> None:
+        """tmux session `name` gone, its viewer client with it."""
+        TmuxCli().kill(name)
 
     def tmux(self, *args: str) -> str:
         res = self.server.tmux(*args)
@@ -190,7 +193,7 @@ class GridTest(Live):
         self.grid([["w1", "w2"]], width)
         self.started("w3")
         self.grid([["w1", "w2"], ["w3"]], width)
-        tui.TuiStore.attach("w2", host=self.session_cls.host()).close()
+        self.close("w2")
         self.grid([["w1", "w3"]], width)
 
     def test_name_order(self):
@@ -215,12 +218,12 @@ class GridTest(Live):
         self.grid([["m1", ("m2", ["z1"]), "m3"]])
         self.started("z2", inside="m2")
         self.grid([["m1", ("m2", ["z1", "z2"]), "m3"]])
-        tui.TuiStore.attach("z1", host=self.session_cls.host()).close()
-        tui.TuiStore.attach("z2", host=self.session_cls.host()).close()
+        self.close("z1")
+        self.close("z2")
         self.grid([["m1", "m2", "m3"]])
         self.started("z3", inside="m2")
         self.grid([["m1", ("m2", ["z3"]), "m3"]])
-        tui.TuiStore.attach("m2", host=self.session_cls.host()).close()
+        self.close("m2")
         self.grid([["m1", ["z3"], "m3"]])
 
     def test_an_unshown_session_reopens_in_the_grid(self):
@@ -361,10 +364,10 @@ class RetileTest(Live):
         # window's pane-exited hook, so window-layout-changed (a new pane set) re-tiles
         self.viewer_settled("w1")
         self.server.attach("w1")
-        tui.TuiStore.attach("w2", host=self.session_cls.host()).close()
+        self.close("w2")
         self.grid([["w1", "w3"]], width)
         self.open_close_hooks(MANAGER)
-        tui.TuiStore.attach("w3", host=self.session_cls.host()).close()
+        self.close("w3")
         self.grid([["w1"]], width)
         live_tmux.wait(
             lambda: (
@@ -434,10 +437,10 @@ class BoundaryTest(Live):
         self.assertEqual(len(leaves), len(actual))
 
     def test_manual_and_retained_dead_terminals_keep_one_grid_cell_each(self):
-        terminal = self.host.terminal(
+        TmuxCli().start(
             "dead", Launch(("/bin/sh", "-c", "exit 7"), self.server.env(), cwd=self.cwd)
         )
-        live_tmux.wait(lambda: not terminal.alive(), what="retained terminal exit")
+        live_tmux.wait(lambda: TmuxCli().status("dead") == 7, what="retained terminal exit")
         self.assertIsNone(Viewer().show("dead", self.host, display=MANAGER))
         manual = self.tmux(
             "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", self.window, *live_tmux.IDLE
