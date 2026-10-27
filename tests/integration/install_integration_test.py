@@ -57,6 +57,7 @@ REAL = (
     "ln",
     "ls",
     "install",
+    "readlink",
 )
 FAKED = ("uname", "id", "sudo", "curl", "security", "open", "launchctl", "shasum")
 FAKED += ("xcode-select", "ps", "sw_vers", "lipo", "pgrep", "pkill", "defaults")
@@ -99,6 +100,8 @@ LEAVE_Q = r"Press Enter to leave this screen:"
 SCREEN_ON, SCREEN_OFF = "\x1b[?1049h\x1b[H\x1b[2J", "\x1b[H\x1b[2J\x1b[?1049l"
 PEM_Q = r"private key \(\.pem; [^)]*\), empty to skip:"
 DOCKER_LOGINS = ((TOKEN_Q, TOKEN), (PEM_Q, ""))
+# Docker's context store directory for context desktop-linux.
+DESKTOP_CONTEXT = hashlib.sha256(b"desktop-linux").hexdigest()
 DOCKER_PRESETS = {"UseVirtualizationFrameworkRosetta": False, "DisplayedOnboarding": True}
 PRESETS_NOT_WRITTEN = "    Docker Desktop presets not written (Rosetta off, onboarding done): "
 NOT_TOLD = "    not recorded for cleanup: "
@@ -4995,6 +4998,8 @@ exec /bin/rm "$@"
                 f"dir\t{h}/.claude",
                 f"file\t{h}/.claude.json",
                 f"dir\t{h}/.codex",
+                f"dir\t{h}/.codex/plugins",
+                f"file\t{h}/.codex/config.toml",
                 "cask\tclaude-code",
                 "cask\tcodex",
                 "login\tgh",
@@ -5050,6 +5055,9 @@ exec /bin/rm "$@"
             f"dir\t{h}/.ensemble/opencode",
             f"dir\t{h}/.local/share/opencode",
             f"dir\t{h}/.docker",
+            f"file\t{h}/.docker/config.json",
+            f"dir\t{h}/.docker/cli-plugins",
+            f"dir\t{h}/.docker/contexts/meta/{DESKTOP_CONTEXT}",
             f"dir\t{h}/Library/Group Containers/group.com.docker",
             "formula\tnode",
             "cask\tdocker-desktop",
@@ -5161,12 +5169,13 @@ exec /bin/rm "$@"
             *args, answers=answers, stdin=stdin, script=CLEANUP, ctty=ctty, interrupt=interrupt
         )
 
-    def codex_kept(self, before):
-        """Asserts the files are `before`'s plus the config Codex itself leaves in ~/.codex (a parent
-        other tools also write, so cleanup keeps it), then removes ~/.codex, as before install."""
-        codex = Path(self.home, ".codex")
-        self.assertEqual(self.snapshot(), {**before, codex / "config.toml": b"\n"})
-        shutil.rmtree(codex)
+    def restored(self, before):
+        """Asserts the files are `before`'s and the shared parents ~/.codex and ~/.docker are gone
+        unless they held files before."""
+        self.assertEqual(self.snapshot(), before)
+        for parent in (Path(self.home, ".codex"), Path(self.home, ".docker")):
+            if not any(parent in path.parents for path in before):
+                self.assertFalse(parent.exists(), sorted(parent.rglob("*")))
 
     def snapshot(self):
         skip = {"fakes", "bin"}
@@ -5258,7 +5267,7 @@ exec /bin/rm "$@"
         self.assert_ok(result)
         self.assertNotIn("docker-uninstall", self.calls())
         self.assertIn("brew uninstall --cask docker-desktop", self.calls())
-        self.codex_kept(before)
+        self.restored(before)
         self.assertEqual(list((self.fakes / "keychain").iterdir()), [])
         self.assertEqual(list((self.fakes / "login").iterdir()), [])
         self.assertFalse(self.broker_path().parent.exists())
@@ -5466,6 +5475,10 @@ exec /bin/rm "$@"
         self.assertIn("install-cleanup.sh will remove what install.sh added:", result.tty)
         self.assertIn(f"  dir {container}", result.tty)
         self.assertIn("  cask docker-desktop", result.tty)
+        self.assertIn(
+            "  edits ~/.docker: drops Docker Desktop's credential helper, context and CLI plugin links",
+            result.tty,
+        )
         self.assertNotIn("nothing removed", result.stderr + result.tty)
         self.assertNotRegex(result.tty, REMOVE_Q)
         self.assertIn(f"Full Disk Access remove {container}", result.stderr)
@@ -5499,6 +5512,156 @@ exec /bin/rm "$@"
             self.assertFalse(path.parent.exists(), path.parent)
         self.assertIn(f"    kept {config}: not empty", result.stderr)
         self.assertFalse(Path(self.ensemble, "install").exists())
+
+    def test_cleanup_removes_docker_desktop_home_files(self):
+        """What Docker Desktop's first start wrote under ~/.docker goes with it, and so does ~/.docker."""
+        self.assert_ok(self.fresh("--docker", logins=list(DOCKER_LOGINS)))
+        docker = Path(self.home, ".docker")
+        self.assertEqual(json.loads((docker / "config.json").read_text())["credsStore"], "desktop")
+        self.assertTrue((docker / "cli-plugins/docker-buildx").is_symlink())
+        self.assertTrue((docker / "contexts/meta" / DESKTOP_CONTEXT / "meta.json").exists())
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
+        self.assert_ok(result)
+        self.assertFalse(os.path.lexists(docker), sorted(docker.rglob("*")))
+        self.assertNotIn(f"kept {docker}", result.stderr)
+
+    def test_cleanup_removes_codex_home_files(self):
+        """The config.toml and plugins Codex wrote in a ~/.codex install.sh created go, and so does ~/.codex."""
+        self.assert_ok(self.fresh("--no-docker", clients="codex"))
+        codex = Path(self.home, ".codex")
+        self.assertTrue((codex / "config.toml").exists())
+        self.assertIn(f"file\t{codex}/config.toml", self.ledger())
+        result = self.cleanup("--yes")
+        self.assert_ok(result)
+        self.assertFalse(codex.exists(), sorted(codex.rglob("*")))
+        self.assertNotIn(f"kept {codex}", result.stderr)
+
+    def test_cleanup_keeps_preexisting_docker_home(self):
+        """A ~/.docker there before install keeps its own files: config.json loses only Docker Desktop's
+        pointers, another context and the user's plugins stay; what Docker Desktop added goes."""
+        docker = Path(self.home, ".docker")
+        other, mine = docker / "contexts/meta/0123/meta.json", docker / "cli-plugins/docker-mine"
+        for path, text in ((other, '{"Name":"remote"}'), (mine, "#!/bin/sh\n")):
+            path.parent.mkdir(parents=True)
+            path.write_text(text)
+        foreign = docker / "cli-plugins/docker-foreign"
+        foreign.symlink_to(Path(self.home, "elsewhere/docker-foreign"))
+        (docker / "config.json").write_text('{"auths": {"r.example": {}}}')
+        self.assert_ok(self.fresh("--docker", logins=list(DOCKER_LOGINS)))
+        self.assertTrue((docker / "cli-plugins/docker-buildx").is_symlink())
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
+        self.assert_ok(result)
+        config = json.loads((docker / "config.json").read_text())
+        self.assertEqual(config, {"auths": {"r.example": {}}})
+        self.assertEqual(other.read_text(), '{"Name":"remote"}')
+        self.assertEqual(mine.read_text(), "#!/bin/sh\n")
+        self.assertTrue(foreign.is_symlink())
+        for gone in (
+            "cli-plugins/docker-buildx",
+            "cli-plugins/docker-compose",
+            f"contexts/meta/{DESKTOP_CONTEXT}",
+            "features.json",
+        ):
+            self.assertFalse(os.path.lexists(docker / gone), gone)
+        self.assertNotIn(f"kept {docker}", result.stderr)
+
+    def test_cleanup_drops_stale_desktop_creds_store(self):
+        """A config.json that named the desktop helper before install loses it with Docker Desktop;
+        its other keys stay, in order."""
+        config = Path(self.home, ".docker/config.json")
+        config.parent.mkdir()
+        helpers = {"gcr.io": "gcloud", "r.example": "desktop"}
+        config.write_text(
+            json.dumps({"auths": {}, "credsStore": "desktop", "credHelpers": helpers})
+        )
+        self.assert_ok(self.fresh("--docker", logins=list(DOCKER_LOGINS)))
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
+        self.assert_ok(result)
+        data = json.loads(config.read_text())
+        self.assertEqual(data, {"auths": {}, "credHelpers": {"gcr.io": "gcloud"}})
+        self.assertEqual(list(data), ["auths", "credHelpers"])
+        self.assertRegex(
+            result.stderr, f"    dropped Docker Desktop's .*credsStore.* from {config}"
+        )
+
+    def test_ledger_skips_tool_children_when_preinstalled(self):
+        """Docker Desktop and the Codex CLI there before install.sh: nothing they write is recorded,
+        and cleanup leaves it."""
+        self.preinstalled_homebrew()
+        askpass = self.tmp / "askpass"
+        executable(askpass, f"#!/bin/sh\necho '{PASSWORD}'\n")
+        env = {**self.env, "SUDO_ASKPASS": str(askpass)}
+        for cask in ("docker-desktop", "codex"):
+            brew = [Path(self.root, "opt/homebrew/bin/brew"), "install", "--cask", cask]
+            subprocess.run(brew, env=env, check=True, capture_output=True)
+        # Docker Desktop's privileged setup, done then: its license and the packaged CLI link.
+        (self.fakes / "docker_license").touch()
+        cli = Path(self.root, "usr/local/bin/docker")
+        cli.parent.mkdir(parents=True)
+        cli.symlink_to(Path(self.root, "opt/homebrew/bin/docker"))
+        self.assert_ok(self.fresh("--docker", logins=list(DOCKER_LOGINS)))
+        h = self.home
+        children = [r for r in self.ledger() if f"{h}/.docker/" in r or f"{h}/.codex/" in r]
+        self.assertEqual(children, [])
+        self.assertNotIn("cask\tdocker-desktop", self.ledger())
+        config = Path(h, ".docker/config.json")
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
+        self.assert_ok(result)
+        self.assertEqual(json.loads(config.read_text())["credsStore"], "desktop")
+        self.assertTrue(Path(h, ".codex/config.toml").exists())
+
+    def test_cleanup_keeps_unreadable_docker_config(self):
+        """A config.json that is not a JSON object stays as it is, named; cleanup goes on."""
+        config = Path(self.home, ".docker/config.json")
+        config.parent.mkdir()
+        config.write_text('{"auths": {}}')
+        self.assert_ok(self.fresh("--docker", logins=list(DOCKER_LOGINS)))
+        config.write_text("not json")
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
+        self.assert_ok(result)
+        self.assertEqual(config.read_text(), "not json")
+        self.assertIn(f"    kept {config}: not a JSON object; check its credsStore", result.stderr)
+
+    def test_cleanup_rerun_after_docker_desktop_removed(self):
+        """A config edit that fails once Docker Desktop is gone keeps its cask record; the rerun
+        finishes the edit."""
+        docker = Path(self.home, ".docker")
+        docker.mkdir()
+        (docker / "config.json").write_text('{"auths": {}}')
+        self.assert_ok(self.fresh("--docker", logins=list(DOCKER_LOGINS)))
+        docker.chmod(0o555)
+        self.addCleanup(docker.chmod, 0o755)
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
+        self.assertEqual(result.code, 1, result.stderr)
+        self.assertIn("its record stays for a rerun", result.stderr)
+        self.assertIn("brew uninstall --cask docker-desktop", self.calls())
+        self.assertIn("cask\tdocker-desktop", self.ledger())
+        docker.chmod(0o755)
+        self.assert_ok(self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n"))
+        self.assertEqual(json.loads((docker / "config.json").read_text()), {"auths": {}})
+        self.assertNotIn("cask\tdocker-desktop", self.ledger())
+
+    def test_cleanup_keeps_docker_content_added_after_install(self):
+        """A context and a plugin the user added after install stay, and so does ~/.docker; the rest
+        of what Docker Desktop wrote goes."""
+        self.assert_ok(self.fresh("--docker", logins=list(DOCKER_LOGINS)))
+        docker = Path(self.home, ".docker")
+        other, mine = docker / "contexts/meta/0123/meta.json", docker / "cli-plugins/docker-mine"
+        other.parent.mkdir(parents=True)
+        other.write_text('{"Name":"remote"}')
+        mine.write_text("#!/bin/sh\n")
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
+        self.assert_ok(result)
+        self.assertEqual(other.read_text(), '{"Name":"remote"}')
+        self.assertEqual(mine.read_text(), "#!/bin/sh\n")
+        for gone in (
+            "config.json",
+            "features.json",
+            f"contexts/meta/{DESKTOP_CONTEXT}",
+            "cli-plugins/docker-buildx",
+        ):
+            self.assertFalse(os.path.lexists(docker / gone), gone)
+        self.assertIn(f"    kept {docker}: not empty", result.stderr)
 
     def test_cl3_sigint_during_cleanup_names_rerun(self):
         """Ctrl-C during a cleanup step names the step and the rerun; the rerun completes."""
@@ -5683,7 +5846,7 @@ exec /bin/rm "$@"
         )
         result = self.cleanup("--yes")
         self.assert_ok(result)
-        self.codex_kept(before)
+        self.restored(before)
         self.assertTrue((self.fakes / "brew/gh").exists())
         self.assertTrue((self.fakes / "keychain/ensemble-broker-claude").exists())
         self.assertNotIn("brew uninstall gh", self.calls())
@@ -5739,7 +5902,7 @@ exec /bin/rm "$@"
         self.assert_ok(result)
         uid_calls = [c for c in self.calls() if c.startswith("launchctl bootout")]
         self.assertEqual(len(uid_calls), 2)
-        self.codex_kept(before)
+        self.restored(before)
         self.assertEqual(list((self.fakes / "keychain").iterdir()), [])
         self.assertEqual(self.board_install(), calls)
         self.assertEqual(self.snapshot(), files)

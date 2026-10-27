@@ -1,16 +1,18 @@
-# Fix Root Causes Method
 
-How to fix a failure: a bug, a failing or intermittent test, a review blocker. Fix it at its root cause, never its symptom.
+# Fix Root Causes
 
-## Steps
+When debugging, do not fix symptoms. Trace every problem to its root cause and fix it there.
 
-1. **Reproduce** it first.
-2. **Trace**: ask why until you reach the cause; stuck → instrument and read the actual error instead of guessing.
-3. **Fix** it at the cause.
-4. **Pattern**: search for the same pattern and fix every occurrence.
+**Why:** Symptom fixes accumulate. Each workaround makes the system harder to reason about, and the real bug remains. Root-cause fixes are slower upfront but reduce total debugging time.
 
-## Rules
+**Pattern:**
+- Reproduce first
+- Ask "why" until you hit the root cause
+- Do not add guards (adding a nil check to silence a crash is a symptom fix)
+- If a workaround needs a paragraph-long comment to justify it, the code is wrong (fix the code, not the comment)
+- Check for the pattern, not just the instance (grep for the same pattern, fix all instances)
+- When stuck, instrument. Don't guess (add logging, read the actual error)
 
-- **No silencing**: no guard that silences the failure: a nil check, a broad except, a retry, a sleep or a loosened assertion. A workaround that needs a paragraph-long comment to justify it means the code is wrong.
-- **After a restart**: a failure after a restart → suspect stale persistent state (config, caches, lock files, serialized state) before code.
-- **Intermittent CI**: an intermittent failure is never rerun or committed around (no empty commits, no "base flake" label without a cause); find why it can fail (concurrent writers, an unawaited exit) and fix that. One another ticket owns → name that ticket and rerun.
+**Restart bugs: suspect state before code**
+
+When something "fails after restart," suspect stale persistent state first: config files, caches, lock files, serialized state. If clearing a state file restores behavior, prioritize state validation as the fix.

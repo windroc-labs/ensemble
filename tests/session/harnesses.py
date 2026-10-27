@@ -7,7 +7,9 @@ import signal
 import threading
 import time
 
+from ensemble.session.engine.hosted_session import HARNESS
 from ensemble.session.engine.types import SessionError
+from ensemble.session.harness import process
 from ensemble.session.harness.channel import HEX, Channel
 from ensemble.session.harness.types import Op
 
@@ -79,3 +81,31 @@ def _signal(channel: Channel) -> None:
             return
         if _let_go(channel, KILL_WAIT):
             return
+
+
+def spawned(argv) -> bool:
+    return HARNESS in argv
+
+
+class Inline:
+    """A spawned harness run here, so fakes answer: a failing start."""
+
+    def __init__(self, argv) -> None:
+        channel = Channel(argv[-1])
+        channel.hold()
+        try:
+            self.returncode = process.Harness(channel).run(process._begin(channel.directory))
+        finally:
+            channel.release()
+        self.pid = os.getpid()
+
+    def poll(self) -> int:
+        return self.returncode
+
+    def wait(self, timeout: float | None = None) -> int:
+        return self.returncode
+
+    def terminate(self) -> None:
+        pass
+
+    kill = terminate

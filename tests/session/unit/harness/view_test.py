@@ -25,7 +25,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.harness.channel import Channel, encode
 from ensemble.session.harness.types import Op
-from ensemble.session.harness.view import OwnedSession, fold
+from ensemble.session.harness.view import OwnedSession, dialog, fold
 from tests.session.case import Case
 
 GEN = "g1"
@@ -82,6 +82,22 @@ class FoldTest(Case):
         self.assertEqual(fold("a", Reply("c"), blocked=True, replayed=False), ("c", True))
         self.assertEqual(fold("a", TurnStarted(), blocked=True, replayed=False), ("a", False))
         self.assertEqual(fold("a", ClientBound("c"), blocked=True, replayed=False), ("a", True))
+
+
+class DialogFoldTest(Case):
+    def test_the_first_blocked_reason_until_anything_but_stderr_reply_or_client_bound(self):
+        for current, event, want in (
+            (None, Blocked("a"), "a"),
+            ("a", Blocked("b"), "a"),
+            ("a", Stderr("x"), "a"),
+            ("a", Reply("r"), "a"),
+            ("a", ClientBound("c1"), "a"),
+            ("a", TurnStarted(), None),
+            ("a", TurnEnd("t"), None),
+            (None, Reply("r"), None),
+        ):
+            with self.subTest(current=current, event=event):
+                self.assertEqual(dialog(current, event), want)
 
 
 class EventsTest(Base):
@@ -273,6 +289,11 @@ class DelegationTest(Base):
         self.assertFalse(view.client_up)
         self.channel.write_status({"state": "running", "up": True})
         self.assertTrue(view.client_up)
+        self.assertIsNone(view.dialog)
+        self.channel.write_status({"state": "running", "dialog": "Edit"})
+        self.assertEqual(view.dialog, "Edit")
+        self.channel.write_status({"state": "running", "dialog": 3})
+        self.assertIsNone(view.dialog)
         for name in ("alive", "status", "content", "info", "session_status", "record", "hide"):
             getattr(view, name)()
             getattr(self.attached, name).assert_called_once_with()

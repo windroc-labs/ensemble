@@ -203,9 +203,10 @@ class Manage(Case):
     def test_a_shared_flakes_owner_fixes_its_root_cause_by_the_method(self):
         flake = rule("A flake or bug that several PRs hit has one owner")
         self.assertIn(
-            "fixes its root cause (`src/ensemble/delegate/team/methods/fix-root-causes.md` › Rules)",
+            "fixes its root cause (`src/ensemble/delegate/team/methods/fix-root-causes.md`); ",
             flake,
         )
+        self.assertNotIn("› Rules", flake)
 
     def test_docker_host_workers_start_no_sessions_or_containers(self):
         [docker] = re.findall(r"^On the Docker Host .*$", body("manage"), re.M)

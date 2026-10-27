@@ -667,9 +667,32 @@ def docker(args):
     return 0 if args == ["info"] and (FAKES / "docker_running").exists() else 1
 
 
+# Docker's context store directory for context desktop-linux: the sha256 of its name.
+DESKTOP_CONTEXT = "fe9c6bd7a66301f49ca9b6a70b217107cd1284598bfc254700c989b916da791e"
+
+
+def docker_home(home):
+    """What Docker Desktop's first start writes under ~/.docker: its credential helper and context set in
+    config.json (other keys kept), the desktop-linux context, features.json and CLI plugin links into Docker.app."""
+    docker = home / ".docker"
+    config = docker / "config.json"
+    data = json.loads(config.read_text()) if config.exists() else {}
+    data.update(credsStore="desktop", currentContext="desktop-linux")
+    mark(config, json.dumps(data, indent="\t"))
+    mark(docker / "contexts/meta" / DESKTOP_CONTEXT / "meta.json", '{"Name":"desktop-linux"}')
+    mark(docker / "features.json", "{}")
+    plugins = docker / "cli-plugins"
+    plugins.mkdir(exist_ok=True)
+    for name in ("docker-buildx", "docker-compose"):
+        if not os.path.lexists(plugins / name):
+            (plugins / name).symlink_to(
+                ROOT / "Applications/Docker.app/Contents/Resources/cli-plugins" / name
+            )
+
+
 def open_(args):
     """Docker Desktop's first start also adds its block to ~/.zprofile, ~/.zshrc and ~/.bashrc and writes its own
-    files under ~/Library. Installed by the cask, it asks for its
+    files under ~/Library and ~/.docker. Installed by the cask, it asks for its
     license unless its install command accepted it."""
     cask = (FAKES / "brew/docker-desktop").exists()
     if cask and not (FAKES / "docker_license").exists():
@@ -684,6 +707,7 @@ def open_(args):
                         profile.write(DOCKER_BLOCK.format(home=home))
             mark(home / "Library/Application Support/Docker Desktop/state.json", "{}")
             mark(home / "Library/Preferences/com.docker.docker.plist", "prefs")
+            docker_home(home)
             agent = ROOT / "Applications/Docker.app/Contents/Resources/cli-plugins/docker-agent"
             mark(
                 FAKES / "processes",

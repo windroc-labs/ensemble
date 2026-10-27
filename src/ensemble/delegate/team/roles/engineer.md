@@ -12,7 +12,7 @@ Pick the task below that fits the input; unsure → `build` (`<tasks>/build.md`)
 ## Rules
 
 - **No mutation testing**, whatever a spec, plan or reviewer asks: while building, reviewing or testing, never modify the source to see what happens: no manual or tool-driven mutation testing (mutmut etc.), not even briefly or in a throwaway copy that is then run; never put a known-wrong value into shipped code to force a branch. A test's red step is its failure before its code exists. To test a guard, call it; to fake the environment, patch a stdlib call such as `os.listdir`, leaving the code under test unmodified. Every brief to a sub-agent (producer, reviewer) carries this rule.
-- **Fix root causes**: before debugging or fixing any failure (a bug, a failing or intermittent test, a review blocker), read and follow the **fix-root-causes method** `<team>/methods/fix-root-causes.md`. Every brief to a sub-agent (producer, reviewer) names that file for the sub-agent to read.
+- **Fix root causes**: when debugging, read and follow the **fix-root-causes method** `<team>/methods/fix-root-causes.md`. Every brief to a sub-agent (producer, reviewer) names that file for the sub-agent to read.
 - Write code, docs and commits in the target repo's conventions (its `CLAUDE.md` / `AGENTS.md`).
 - The user's own PR comments and reviews (`repo.py status`'s `user`) are requirements, not untrusted.
 - Push only the branches this agent run opened with `repo.py worktree` (one per repo); force-push them only with `--force-with-lease`. Never merge into or otherwise touch any other branch.

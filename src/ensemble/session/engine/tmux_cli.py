@@ -1,6 +1,6 @@
 """TmuxCli: every tmux call through runner (subprocess.run's signature) and sleep. start and
-detach hand a launch to a new pane (EXEC); launch STAGEs it through runner for RELAUNCH. Listings
-skip VIEW sessions. TmuxPane: a TmuxCli aimed at one session's captured pane.
+detach hand a launch to a new pane (EXEC). Listings skip VIEW sessions. TmuxPane: a TmuxCli aimed
+at one session's captured pane.
 """
 
 from __future__ import annotations
@@ -161,24 +161,6 @@ try:
 except BaseException as e:
     os.write(w, b'%d' % (isinstance(e, OSError) and e.errno or errno.EINVAL))
     raise"""
-
-
-STAGE = """import os, sys, tempfile
-fd, path = tempfile.mkstemp(prefix='launch-', dir=sys.argv[1])
-with os.fdopen(fd, 'w') as f: f.write(sys.stdin.read())
-print(path)"""
-
-
-RELAUNCH = """import json, os, signal, sys
-try:
-    with open(sys.argv[1]) as f: h = json.load(f)
-finally:
-    os.unlink(sys.argv[1])
-for s in (signal.SIGPIPE, signal.SIGXFSZ): signal.signal(s, signal.SIG_DFL)
-os.execvpe(h['argv'][0], h['argv'], {**os.environ, **h['env']})"""
-
-
-STAGED = re.compile(r"launch-[A-Za-z0-9_]+")
 
 
 LISTING = "#{session_name}\t#{pane_dead}\t#{@sid}\t#{@client}\t#{@state}\t#{@pane}\t#{@opener}\t#{@display}\t#{@process}"
@@ -418,30 +400,9 @@ def events_file(path: str) -> str:
     return path
 
 
-def _floor(session: str, min_width: int) -> list[str]:
-    """The window follows its latest client, at least min_width wide (0: no floor)."""
-    if not min_width:
-        return []
+def _decorations(session: str, events: str | None, *, status_line: bool) -> list[list[str]]:
     target = f"={session}:"
-    width = f"#{{?#{{e|<:#{{client_width}},{min_width}}},{min_width},#{{client_width}}}}"
-    resize = (
-        f'run-shell -C "resize-window -t =#{{q:session_name}}: -x {width} -y #{{client_height}}"'
-    )
-    return [
-        *(";", "set-option", "-w", "-t", target, "window-size", "manual"),
-        *(
-            arg
-            for hook in ("client-attached", "client-resized")
-            for arg in (";", "set-hook", "-t", target, hook, resize)
-        ),
-    ]
-
-
-def _decorations(
-    session: str, events: str | None, *, status_line: bool, died: str = DIED
-) -> list[list[str]]:
-    target = f"={session}:"
-    died = died if events is None else f"{died} ; {DEAD_EVENT}"
+    died = DIED if events is None else f"{DIED} ; {DEAD_EVENT}"
     return [
         *([["set-option", "-t", target, "@events", events]] if events is not None else []),
         ["set-hook", "-p", "-t", target, "pane-died", died],
@@ -717,111 +678,6 @@ class TmuxCli:
         if res.returncode:
             raise TuiError(f"tmux: {error(res)}")
         return res.stdout
-
-    def launch(
-        self,
-        session: str,
-        argv: Sequence[str],
-        *,
-        cwd: str,
-        env: Mapping[str, str],
-        python: str,
-        handover_dir: str,
-        tags: Mapping[str, str] | None = None,
-        died: str = DIED,
-        min_width: int = 0,
-    ) -> str:
-        """start's setup in one call, without events, pane-died `died`: the runner's `python` STAGEs
-        argv and env (over the server's) in a 0600 file in its private `handover_dir` for RELAUNCH,
-        keeping tmux's command line short; a failed launch deletes it. Returns process().
-        Keeps 50,000 history lines and default mouse bindings. Forwards OSC 52 copies.
-        A `min_width` window is never narrower (_floor).
-        """
-        session_name(session)
-        tag_options = _tags(session, tags or {})
-        if not argv:
-            raise TuiError("no command")
-        for arg in (cwd, handover_dir):
-            if not os.path.isabs(arg) or "#" in arg or arg.endswith(";"):
-                raise TuiError(f"tmux would misread {arg!r:.80}")
-        if any("\0" in arg for arg in (*argv, *env, *env.values())):
-            raise TuiError("argv or env holds a NUL character")
-        path = self._stage(python, handover_dir, json.dumps({"argv": list(argv), "env": dict(env)}))
-        cols, rows = shutil.get_terminal_size()
-        cols = max(cols, min_width)
-        decorations = [
-            arg
-            for args in _decorations(session, None, status_line=False, died=died)
-            for arg in (";", *args)
-        ]
-        try:
-            res = self.run(
-                [
-                    # history-limit is captured at pane creation, not when it is attached.
-                    "start-server",
-                    *(";", "set-option", "-g", "history-limit", "50000"),
-                    *(";", "set-option", "-g", "mouse", "on"),
-                    ";",
-                    "new-session",
-                    "-d",
-                    "-P",
-                    "-F",
-                    PROCESS,
-                    "-s",
-                    session,
-                    "-x",
-                    str(cols),
-                    "-y",
-                    str(rows),
-                    "-c",
-                    cwd,
-                    "--",
-                    python,
-                    "-I",
-                    "-c",
-                    RELAUNCH,
-                    path,
-                    *(";", "set-option", "-p", "-t", f"={session}:", "remain-on-exit", "on"),
-                    *(";", "set-option", "-s", "set-clipboard", "on"),
-                    *(";", "set-option", "-qp", "-t", f"={session}:", "allow-passthrough", "on"),
-                    *tag_options,
-                    *decorations,
-                    *_floor(session, min_width),
-                    *_recorded(session),
-                ]
-            )
-            if res.returncode:
-                raise TuiError(f"tmux: {error(res)}")
-            return _identity(res)
-        except TuiError:
-            with contextlib.suppress(OSError):
-                self.runner(
-                    ["rm", "-f", "--", path],
-                    capture_output=True,
-                    text=True,
-                    stdin=subprocess.DEVNULL,
-                )
-            raise
-
-    def _stage(self, python: str, directory: str, handover: str) -> str:
-        try:
-            res = self.runner(
-                [python, "-I", "-c", STAGE, directory],
-                capture_output=True,
-                text=True,
-                input=handover,
-            )
-        except OSError as e:
-            raise TuiError(f"handover: {e}") from e
-        if res.returncode:
-            why = error(res).splitlines()
-            raise TuiError(f"handover: {why[-1] if why else f'exit status {res.returncode}'}")
-        path = res.stdout.strip()
-        if os.path.dirname(path) != os.path.normpath(directory) or not STAGED.fullmatch(
-            os.path.basename(path)
-        ):
-            raise TuiError(f"handover: bad staged file {path!r:.80}")
-        return path
 
     def start(
         self,

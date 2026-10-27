@@ -11,7 +11,7 @@ import threading
 
 from ensemble.delegate.engine.callback import EventCallback
 from ensemble.delegate.engine.record import CLOSED, RunRecord, worker
-from ensemble.delegate.engine.runner import POLICIES, Attempt, closing, say, stopped
+from ensemble.delegate.engine.runner import POLICIES, PROCESS_EXIT, Attempt, closing, say, stopped
 from ensemble.delegate.engine.types import (
     Begun,
     Close,
@@ -137,17 +137,19 @@ class _Run:
                 if rc < 0
                 else Result(rc, None, f"the client exited {rc}")
             )
+        exit_turn = isinstance(event, TurnFailed) and event.error in (PROCESS_EXIT, "exited")
         if (
             result is not None
             and result.outcome is None
             and result.limit is None
-            and (
-                isinstance(event, Exited)
-                or (isinstance(event, TurnFailed) and event.error == "exited")
-            )
-            and self.record.store.closing()
+            and (isinstance(event, Exited) or exit_turn)
         ):
-            result = CLOSED
+            if self.record.store.closing():
+                result = CLOSED
+            elif exit_turn:  # its Exited decides
+                self.flush()
+                self.stop_timer()
+                return
         if result is not None:
             self.end(result)
             return

@@ -189,7 +189,7 @@ class ClientHome:
     """What a container Host needs to run a client: its per-session state dir (`field`, its name in
     the Host's records; `dir`, its last path part; `env`, the variable naming it), `credential`,
     the kind the Host injects, `files`, (name, text) for a fresh dir, `providers`, whose keys the
-    broker adds, `min_width`, its window's least width (0: any).
+    broker adds.
     """
 
     field: str
@@ -199,7 +199,6 @@ class ClientHome:
     files: tuple[tuple[str, str], ...] = ()
     persistent: tuple[str, ...] | None = None
     providers: tuple[str, ...] = ()
-    min_width: int = 0
 
 
 class Container(NamedTuple):

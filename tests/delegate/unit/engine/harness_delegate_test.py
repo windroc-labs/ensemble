@@ -59,6 +59,7 @@ from tests.delegate.fakes.harness_session import (
 from tests.delegate.harness import SID, HarnessCase
 from tests.delegate.replies import block
 from tests.delegate.unit.engine.orphans import Clock, Orphan
+from tests.session import harnesses
 from tests.session.case import PLUGIN_BIN
 from tests.session.unit.hosts.docker import support
 
@@ -277,7 +278,8 @@ class VerifierClientTest(HarnessCase):
 
 class VerifierDockerTest(HarnessCase):
     """verifier on the packaged Docker Host, its broker faked: a missing mini-op:env or keychain
-    item fails before any container starts (WDRC-110 FR-50); no keychain, Docker or network.
+    item fails before any container starts (WDRC-110 FR-50); no keychain, Docker or network. Its
+    session harness's start runs in this process (harnesses.Inline), so the faked broker answers.
     """
 
     def setUp(self):
@@ -294,6 +296,8 @@ class VerifierDockerTest(HarnessCase):
             self.addCleanup(patcher.stop)
 
     def broker(self, argv, **kw):
+        if harnesses.spawned(argv):
+            return harnesses.Inline(argv)
         program = os.path.basename(argv[0])
         self.programs.append(program)
         if program == "tmux":  # the packaged tmux Host's listing: no server, no session

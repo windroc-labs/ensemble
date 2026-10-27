@@ -562,11 +562,13 @@ is refused before anything is written: `<client> <mode> on host docker: runs onl
   generation and removes an ended one.
 - **Listing**: the Host lists (`ensemble-session ls`) and attaches only guarded workers of their `host.json`'s
   generation; a headless run is not listed.
-- **Sweep**: each start (TUI or headless) first closes every container that is neither a guarded nor a piped worker
-  of its `host.json`'s generation (debris, such as one an older release started), a guarded one whose owner lock is
-  free and a piped one whose pipe lock is free; it never execs into a container. A start whose sweep could not remove
-  a debris container of its name refuses: `docker session <name>: container <c> of an earlier start is still up (its
-  removal failed; see the log); the next start retries it`.
+- **Sweep**: each start (TUI or headless) first closes every container it names `ensemble-<name>-<generation>` that is
+  neither a guarded nor a piped worker of its `host.json`'s generation (debris, such as one an older release
+  started), a guarded one whose owner lock is free and a piped one whose pipe lock is free; it never execs into a
+  container. A start whose sweep could not remove a debris container of its name refuses: `docker session <name>:
+  container <c> of an earlier start is still up (its removal failed; see the log); the next start retries it`. A
+  container labelled for the name but not named that way is never swept; the start refuses: `docker session <name>:
+  container <c> is labelled for it but not named as this Host names one; remove it: docker rm -f <c>`.
 
 The harness alone enforces a guarded worker's deadline. If it dies and Docker does not pass EOF to the exec
 (unverified until the mini acceptance, WDRC-212), the client can outlive the deadline until a sweep removes its
@@ -894,7 +896,7 @@ An `http://` `base_url` sends the key in plaintext on the permitted path ([Risks
 3. Pull every `ollama/` model of the tiers and `model`, `ollama pull qwen3.6:35b-mlx` by default
    (`[session.clients.opencode.tiers]`; `ollama_port`, default 11434, is its port).
 
-The image supplies OpenCode 1.x and its provider config; none of the Mac's OpenCode install, config or plugins goes into the container. The cwd's own `opencode.json` and `.opencode/` still load: OpenCode has no project trust. An existing `~/.ensemble/docker/worker/Dockerfile` needs no edit. Session state stays in `~/.ensemble/docker-state/<name>/opencode/`. Start a worker with `ensemble-crew worker NAME --client opencode`; board setup: [Board › OpenCode](board.md#opencode). Keep its display at least 40 columns wide: OpenCode 1.19.3's OpenTUI crashes its home screen in a window under 38 columns.
+The image supplies OpenCode 1.x and its provider config; none of the Mac's OpenCode install, config or plugins goes into the container. The cwd's own `opencode.json` and `.opencode/` still load: OpenCode has no project trust. An existing `~/.ensemble/docker/worker/Dockerfile` needs no edit. Session state stays in `~/.ensemble/docker-state/<name>/opencode/`. Start a worker with `ensemble-crew worker NAME --client opencode`; board setup: [Board › OpenCode](board.md#opencode). Its guard's terminal is a fixed 120 columns, above the 38 columns under which OpenCode 1.19.3's OpenTUI crashes its home screen.
 
 ### Lifecycle
 

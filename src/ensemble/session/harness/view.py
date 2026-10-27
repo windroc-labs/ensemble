@@ -55,6 +55,13 @@ def fold(
     return reply, isinstance(event, Blocked) or blocked and isinstance(event, Stderr | Reply)
 
 
+def dialog(current: str | None, event: SessionEvent | Stderr | ClientBound) -> str | None:
+    """The dialog its client waits on: the first Blocked's reason, kept as `fold` keeps blocked."""
+    if isinstance(event, Blocked):
+        return event.reason if current is None else current
+    return current if isinstance(event, Stderr | Reply | ClientBound) else None
+
+
 class _Reader:
     """The log's records of `generation` with increasing seq, folded."""
 
@@ -236,6 +243,12 @@ class OwnedSession(Session):
     def client_up(self) -> bool:
         """Its harness says its guard reported its client up (harness.json `up`)."""
         return self._channel.status().get("up") is True
+
+    @property
+    def dialog(self) -> str | None:
+        """The dialog its client waits on, by its harness's latest pump (harness.json `dialog`)."""
+        found = self._channel.status().get("dialog")
+        return found if isinstance(found, str) else None
 
     def _remote(self) -> bool:
         return self._channel.status().get("remote") is True

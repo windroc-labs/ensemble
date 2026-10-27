@@ -19,6 +19,7 @@ import threading
 import time
 import tomllib
 from dataclasses import fields, replace
+from datetime import datetime
 from types import SimpleNamespace
 from unittest import mock
 
@@ -1144,6 +1145,7 @@ class StartTest(StartBase):
                     found = json.load(f)
                 began, ended = found.pop("started_at"), found.pop("ended_at")
                 self.assertLessEqual(parse_time(began), parse_time(ended))
+                self.assertLessEqual(parse_time(ended), parse_time(found.pop("launched_at")))
                 found.pop("phases")
                 self.assertEqual(
                     found,
@@ -1181,8 +1183,11 @@ class StartTest(StartBase):
                 "started_at",
                 "ended_at",
                 "phases",
+                "launched_at",
             },
         )
+        launched = datetime.fromisoformat(result["launched_at"])
+        self.assertGreaterEqual(launched, datetime.fromisoformat(result["ended_at"]))
 
     def test_each_start_records_and_reports_its_phase_times(self):
         result = os.path.join(self.state, f"{GEN}.result.json")
@@ -1309,6 +1314,16 @@ class StartTest(StartBase):
         ):
             self.start()
         self.broker.close.assert_called_once_with(f"ensemble-w-{old}")
+
+    def test_an_unrecognised_container_of_the_name_refuses_start_naming_it(self):
+        self.docker.ps = [f"ensemble-w-{GEN.upper()}\tw\t{GEN.upper()}\trunning"]
+        with self.assertRaisesRegex(
+            SessionError,
+            f"^docker session w: container ensemble-w-{GEN.upper()} is labelled for it but not"
+            f" named as this Host names one; remove it: docker rm -f ensemble-w-{GEN.upper()}$",
+        ):
+            self.start()
+        self.assertEqual(self.broker.closed, [])
 
     def test_a_role_runs_cwd_starts_as_any_other(self):
         cwd = os.path.join(self.account, ".ensemble", "adhoc", "x", "agent")
@@ -1448,7 +1463,7 @@ class StartTest(StartBase):
             self.start(home_dir="")
 
     def test_detach_is_refused(self):
-        with self.assertRaisesRegex(SessionError, "only terminal sessions"):
+        with self.assertRaisesRegex(SessionError, "^detach w: runs only under a session harness$"):
             self.host.detach("w", self.launch)
 
 
@@ -1752,7 +1767,8 @@ class PipeTest(Base):
         self.assertEqual((self.popen_record, self.host_record()), (record, record))
         self.assertTrue(self.lock_held)
         self.assertFalse(_free(os.path.join(self.state, "pipe.lock")))
-        self.assertTrue(os.path.exists(os.path.join(self.state, f"{GEN}.result.json")))
+        with open(os.path.join(self.state, f"{GEN}.result.json")) as source:
+            self.assertIn("launched_at", json.load(source))
         self.assertFalse(os.path.lexists(os.path.join(self.home, ".ensemble", "tui", "w.lock")))
         with piped.stdout as out:
             self.assertEqual(list(out), ["out\n"])
@@ -2544,14 +2560,13 @@ class ListTest(Base):
                     self.host.attach_target("w")
         self.assertEqual(self.docker.execs(), [])
 
-    def test_hook_callback_is_the_guards_and_runs_only_under_a_harness(self):
-        callback = self.host.hook_callback("w", {"generation": GEN, "owner": "/h"})
-        self.assertEqual(callback.module, "ensemble.session.hosts.docker.guard_hook")
-        self.assertEqual(dict(callback.state), {"target": "w", "generation": GEN})
-        with self.assertRaisesRegex(
-            SessionError, "^docker session w: hook_callback: runs only under a session harness$"
-        ):
-            self.host.hook_callback("w", {"generation": GEN})
+    def test_hook_callback_is_the_guards_with_or_without_an_owner(self):
+        """A tui preflight builds it before any owner exists."""
+        for metadata in ({"generation": GEN, "owner": "/h"}, {"generation": GEN}):
+            with self.subTest(metadata=metadata):
+                callback = self.host.hook_callback("w", metadata)
+                self.assertEqual(callback.module, "ensemble.session.hosts.docker.guard_hook")
+                self.assertEqual(dict(callback.state), {"target": "w", "generation": GEN})
 
 
 class AttachTargetTest(Base):
