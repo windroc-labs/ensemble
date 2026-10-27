@@ -472,6 +472,17 @@ class Close(Entries):
             },
         )
 
+    def test_a_long_ctl_stderr_is_whole_in_the_error_and_cut_in_its_line(self):
+        self.answers["a"] = mock.Mock(returncode=1, stdout="", stderr="x" * 600 + "\n")
+        with self.assertRaises(RuntimeError) as caught:
+            self.close("a")
+        reason = "ensemble-session close: " + "x" * 600
+        path = os.path.join(self.directory, "close-failures.jsonl")
+        self.assertEqual(str(caught.exception), f"{reason}; logged to {path}")
+        self.assertIn("a", self.roster.entries())
+        (line,) = self.failures()
+        self.assertEqual(line["reason"], reason[:500])
+
     def test_a_trace_that_cannot_be_written_never_hides_the_close_failure(self):
         self.answers["a"] = mock.Mock(returncode=1, stdout="", stderr="boom\n")
         os.mkfifo(os.path.join(self.directory, "close-failures.jsonl"))
