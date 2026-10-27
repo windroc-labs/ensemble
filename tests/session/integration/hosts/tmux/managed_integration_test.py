@@ -150,7 +150,7 @@ class ManagedIntegrationTest(Case):
             self.host.worker_liveness(worker.name, worker.generation), Liveness.UNKNOWN
         )
         with self.assertRaises(SessionBusy):
-            self.worker()
+            self.worker(terminal=True)
 
     def test_both_sigkill_close_pty_but_unconfirmed_generation_stays_unknown(self):
         proc, value, pids = self.crash_harness(terminal=True)
