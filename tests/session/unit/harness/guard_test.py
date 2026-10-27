@@ -34,37 +34,29 @@ class GuardTest(Case):
         with self.assertRaises(argparse.ArgumentTypeError):
             guard.size("65536x24")
 
-    def test_main_passes_size_to_the_guard_default_80x24(self):
-        for argv, want in (([], (24, 80)), (["--size", "100x30"], (30, 100))):
-            with (
-                self.subTest(argv=argv),
-                mock.patch.object(guard, "Guard") as runtime,
-                mock.patch.object(guard.signal, "signal"),
-                mock.patch.object(guard.signal, "pthread_sigmask"),
-            ):
-                runtime.return_value.run.return_value = 0
-                self.assertEqual(
-                    guard.main([*argv, "--hook-socket", self.home + "/hook", "--", "true"]), 0
-                )
-                self.assertEqual(runtime.call_args.args[0].size, want)
+    def test_size_defaults_to_80x24_and_parses_the_given_one(self):
+        command = ["--hook-socket", self.home + "/hook", "--", "true"]
+        self.assertEqual(guard.arguments().parse_args(command).size, (24, 80))
+        self.assertEqual(
+            guard.arguments().parse_args(["--size", "100x30", *command]).size, (30, 100)
+        )
 
     def test_an_invalid_size_is_a_usage_error(self):
         with (
             mock.patch.object(sys, "stderr", io.StringIO()) as stderr,
-            mock.patch.object(guard, "Guard") as runtime,
             self.assertRaises(SystemExit) as raised,
         ):
             guard.main(["--size", "0x24", "--hook-socket", self.home + "/hook", "--", "true"])
         self.assertEqual(raised.exception.code, 2)
         self.assertIn("--size", stderr.getvalue())
-        runtime.assert_not_called()
 
     def test_the_pty_and_screen_start_at_the_given_size(self):
         runtime = self.runtime(terminal=True, size=(30, 100))
         self.assertEqual((runtime.screen.rows, runtime.screen.columns), (30, 100))
         with (
-            mock.patch.object(guard, "subreaper"),
-            mock.patch.object(guard, "listener"),
+            mock.patch.object(guard.ctypes, "CDLL") as library,
+            mock.patch.object(guard.socket, "socket"),
+            mock.patch.object(os, "chmod"),
             mock.patch.object(os, "openpty", return_value=(20, 21)),
             mock.patch.object(guard.fcntl, "ioctl") as ioctl,
             mock.patch.object(os, "close"),
@@ -72,6 +64,7 @@ class GuardTest(Case):
             mock.patch.object(os, "listdir", return_value=[]),
             mock.patch.object(guard.subprocess, "Popen", return_value=mock.Mock(pid=100)),
         ):
+            library.return_value.prctl.return_value = 0
             runtime.start()
         sized = [c for c in ioctl.call_args_list if c.args[1] == termios.TIOCSWINSZ]
         self.assertEqual([struct.unpack("HHHH", c.args[2]) for c in sized], [(30, 100, 0, 0)])

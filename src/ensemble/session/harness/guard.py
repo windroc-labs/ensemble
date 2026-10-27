@@ -858,7 +858,7 @@ def probe(directory: str) -> str:
         os.close(descriptor)
 
 
-def main(argv: list[str] | None = None) -> int:
+def arguments() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--attach")
     parser.add_argument("--terminal", action="store_true")
@@ -869,6 +869,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lease")
     parser.add_argument("--probe")
     parser.add_argument("command", nargs=argparse.REMAINDER)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = arguments()
     args = parser.parse_args(argv)
     if args.attach:
         return attach(args.attach)
