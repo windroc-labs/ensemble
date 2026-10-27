@@ -43,10 +43,12 @@ from ensemble.session.engine.types import (
     Hosts,
     KeyPress,
     NotShowable,
+    OwnerRefused,
     SessionBusy,
     SessionError,
     SessionInfo,
     SessionRow,
+    Unanswered,
 )
 from ensemble.session.engine.worker import Worker
 from ensemble.session.hosts.base import Host, check_sid
@@ -572,15 +574,32 @@ def _carried(
     if record is None:
         return sessions
     for session in sessions:
-        host = Session.host(_host_of(session, hosts))
-        process = host.attach(session) if session in host.list() else None
         try:
-            check_sid(session, process, record.sid)
+            _check_held(session, record.sid, hosts)
+        except Unanswered:
+            raise  # no proof it is stale
         except SessionError:
             if stale_ok:
                 return ()
             raise
     return sessions
+
+
+def _check_held(session: str, sid: str | None, hosts: Hosts) -> None:
+    """SessionError unless its Host lists `session` holding `sid`."""
+    host = Session.host(_host_of(session, hosts))
+    check_sid(session, host.attach(session) if session in host.list() else None, sid)
+
+
+def _holds(session: str, sid: str | None, hosts: Hosts) -> bool:
+    """Unanswered when its Host cannot tell."""
+    try:
+        _check_held(session, sid, hosts)
+    except Unanswered:
+        raise
+    except SessionError:
+        return False
+    return True
 
 
 def _show(name: str, record: Record | None, hosts: Hosts) -> None:
@@ -602,16 +621,34 @@ def _attach_command(name: str, record: Record | None, hosts: Hosts) -> str:
     return hosted_viewer().attach_command(session, _shown(session, hosts))
 
 
+def _owned(session: str, sid: str | None) -> bool:
+    """Its session.json names a session harness, and `sid` when given."""
+    try:
+        state = TuiMode.snapshot(session)
+    except SessionError:
+        return False
+    return state.get("owner") is not None and sid in (None, state.get("sid"))
+
+
 def _close(name: str, record: Record | None, hosts: Hosts) -> None:
-    for session in _carried(name, record, hosts, stale_ok=True):
+    """An owner's refusal or unconfirmed end always fails; any other failure fails only while the
+    session still holds the Record's sid. A Record stale on its Host is done unless an owner of its
+    sid still answers for it.
+    """
+    sid = None if record is None else record.sid
+    carried = _carried(name, record, hosts, stale_ok=True)
+    for session in carried or [s for s in _sessions(name, record) if _owned(s, sid)]:
         try:
-            Session.retire(
-                session, sid=None if record is None else record.sid, host=_host_of(session, hosts)
-            )
-        except SessionError:
-            if record is None or _carried(name, record, hosts, stale_ok=True):
+            Session.retire(session, sid=sid, host=_host_of(session, hosts))
+        except (Unanswered, OwnerRefused):
+            raise
+        except SessionError as error:
+            try:
+                held = record is None or _holds(session, record.sid, hosts)
+            except Unanswered as unknown:
+                raise Unanswered(f"{error}; {unknown}") from error
+            if held:
                 raise
-            return
 
 
 def _content(name: str, record: Record | None, hosts: Hosts) -> str:

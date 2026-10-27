@@ -59,6 +59,7 @@ from ensemble.session.engine.types import (
     Stderr,
     TurnEnd,
     TurnFailed,
+    Unanswered,
     Usage,
     Window,
 )
@@ -3627,16 +3628,16 @@ class BoundOwnerTest(HostedTuiBase):
         self.state = tui.TuiMode.snapshot("w1")
         self.channel = Channel.create()
         self.state["owner"] = self.channel.directory
+        self.held = None
         with open(os.path.join(self.root, "w1", "session.json"), "w") as f:
             json.dump(self.state, f)
 
     def owner(self, **status) -> int | None:
-        """The lock fd it took, if not held already."""
-        fd = None
+        """The lock fd it holds."""
         if not self.channel.alive():
-            fd = os.open(self.channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            self.addCleanup(os.close, fd)
+            self.held = os.open(self.channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(self.held, fcntl.LOCK_EX)
+            self.addCleanup(self.let_go)
         self.channel.write_status(
             {
                 "state": "running",
@@ -3646,20 +3647,29 @@ class BoundOwnerTest(HostedTuiBase):
                 **status,
             }
         )
-        return fd
+        return self.held
 
-    def serve(self, let_go=None):
-        """let_go: the lock fd it then unlocks, as a harness does once it answered an end."""
+    def let_go(self):
+        """The harness exits: its lock released."""
+        if self.held is not None:
+            os.close(self.held)
+            self.held = None
+
+    def serve(self, let_go=None, **answer_with):
+        """Answers one request; after an ok one it lets go of its lock (`let_go`, the fd owner()
+        returned), as a harness does once it answered an end.
+        """
         self.served = []
+        answer_with = answer_with or {"ok": True}
 
         def answer():
             deadline = time.monotonic() + WAIT
             while time.monotonic() < deadline:
                 for ident, op in self.channel.requests():
                     self.served.append(op)
-                    self.channel.reply(ident, ok=True)
-                    if let_go is not None:
-                        fcntl.flock(let_go, fcntl.LOCK_UN)
+                    self.channel.reply(ident, **answer_with)
+                    if answer_with.get("ok"):
+                        self.let_go()
                     return
                 time.sleep(0.01)
 
@@ -3755,6 +3765,42 @@ class BoundOwnerTest(HostedTuiBase):
         self.session.retire("w1", sid=SID)
         self.assertEqual(self.served, [Op.CLOSE])
         terminal.calls.close.assert_not_called()
+
+    def test_retire_asks_the_owner_even_when_its_terminal_is_gone(self):
+        self.owner()
+        self.serve()
+        self.host.processes.pop("w1")
+        self.session.retire("w1", sid=SID)
+        self.assertEqual(self.served, [Op.CLOSE])
+
+    def test_an_owner_that_cannot_confirm_the_end_is_unanswered_and_nothing_is_closed(self):
+        self.owner()
+        self.serve(ok=False, error="w1: worker exit not confirmed", unanswered=True)
+        terminal = self.host.processes.pop("w1")
+        with self.assertRaisesRegex(Unanswered, "not confirmed") as caught:
+            self.session.retire("w1", sid=SID)
+        self.assertNotIsInstance(caught.exception, engine_types.OwnerRefused)
+        terminal.calls.close.assert_not_called()
+        self.assertTrue(os.path.exists(os.path.join(self.root, "w1", "session.json")))
+
+    def test_an_owner_that_refuses_the_close_raises_owner_refused(self):
+        self.owner()
+        self.serve(ok=False, error="cannot close w1")
+        terminal = self.host.processes["w1"]
+        with self.assertRaisesRegex(engine_types.OwnerRefused, "cannot close w1"):
+            self.session.retire("w1", sid=SID)
+        terminal.calls.close.assert_not_called()
+        self.assertTrue(os.path.exists(os.path.join(self.root, "w1", "session.json")))
+
+    def test_retire_of_another_sid_never_waits_on_a_starting_owner(self):
+        self.owner(state="starting")
+        started = time.monotonic()
+        with self.assertRaises(SessionError) as caught:
+            self.session.retire("w1", sid="other")
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertNotIsInstance(caught.exception, Unanswered)
+        self.assertIn("other", str(caught.exception))
+        self.assertTrue(self.host.processes["w1"].alive())
 
     def test_retire_fallback_takes_the_record_rule(self):
         terminal = self.host.processes["w1"]

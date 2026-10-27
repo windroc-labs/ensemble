@@ -4,6 +4,7 @@ Crew.attach shows each live entry but a hidden one, whose view column says so.
 
 import contextlib
 import io
+import json
 import os
 import uuid
 from dataclasses import replace
@@ -327,7 +328,9 @@ class Attach(RosterCase):
         self.assertIn(f"v\tcustom\t{shown.sid}\tworking\t-\t-\t", table[2])
 
 
-class View(RosterCase):
+class Entries(RosterCase):
+    """Live entries a, b and c; `answer` stands in for their ctl."""
+
     def setUp(self):
         super().setUp()
         self.records = {}
@@ -340,8 +343,12 @@ class View(RosterCase):
         self.alive = {"a": True, "b": True, "c": False}
         self.attach = {"a": "attach a", "b": None, "c": "attach c"}
         self.answers = {}
+        self.listed = []
 
     def answer(self, argv, **options):
+        if argv[1] == "ls":
+            listed = "".join(record.to_line() + "\n" for record in self.listed)
+            return mock.Mock(returncode=0, stdout=listed, stderr="")
         records = [Record.parse(line) for line in options["input"].splitlines()]
         if argv[-1] == "status":
             stdout = "".join(
@@ -360,6 +367,8 @@ class View(RosterCase):
         self.calls.append((argv, records))
         return self.answers.get(records[0].name, mock.Mock(returncode=0, stdout="", stderr=""))
 
+
+class View(Entries):
     def view(self, verb, names=()):
         stdout, stderr = io.StringIO(), io.StringIO()
         with (
@@ -422,6 +431,122 @@ class View(RosterCase):
         with self.assertRaisesRegex(ValueError, "not in roster: x, y"):
             self.view("hide", ("a", "y", "x"))
         self.assertEqual(self.calls, [])
+
+
+class Close(Entries):
+    def failures(self) -> list[dict]:
+        path = Path(self.directory, "close-failures.jsonl")
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def close(self, name):
+        with mock.patch("subprocess.run", side_effect=self.answer):
+            Crew(self.roster).close(name)
+
+    def close_all(self, *, dry_run=False):
+        with mock.patch("subprocess.run", side_effect=self.answer):
+            return Crew(self.roster).close_all(dry_run=dry_run)
+
+    def test_a_confirmed_close_removes_the_entry_and_logs_nothing(self):
+        self.close("a")
+        self.assertNotIn("a", self.roster.entries())
+        self.assertEqual(self.failures(), [])
+
+    def test_a_failed_close_keeps_the_entry_and_logs_one_line(self):
+        entry = self.roster.entries()["a"]
+        self.answers["a"] = mock.Mock(
+            returncode=1, stdout="", stderr="w1: worker exit not confirmed\n"
+        )
+        with self.assertRaises(RuntimeError) as caught:
+            self.close("a")
+        path = os.path.join(self.directory, "close-failures.jsonl")
+        self.assertEqual(
+            str(caught.exception),
+            f"ensemble-session close: w1: worker exit not confirmed; logged to {path}",
+        )
+        self.assertEqual(self.roster.entries()["a"], entry)
+        (line,) = self.failures()
+        self.assertEqual(
+            {k: v for k, v in line.items() if k != "at"},
+            {
+                "name": "a",
+                "sid": entry.sid,
+                "ctl": ["ensemble-session"],
+                "reason": "ensemble-session close: w1: worker exit not confirmed",
+            },
+        )
+
+    def test_a_long_ctl_stderr_is_whole_in_the_error_and_cut_in_its_line(self):
+        self.answers["a"] = mock.Mock(returncode=1, stdout="", stderr="x" * 600 + "\n")
+        with self.assertRaises(RuntimeError) as caught:
+            self.close("a")
+        reason = "ensemble-session close: " + "x" * 600
+        path = os.path.join(self.directory, "close-failures.jsonl")
+        self.assertEqual(str(caught.exception), f"{reason}; logged to {path}")
+        self.assertIn("a", self.roster.entries())
+        (line,) = self.failures()
+        self.assertEqual(line["reason"], reason[:500])
+
+    def test_a_trace_that_cannot_be_written_never_hides_the_close_failure(self):
+        self.answers["a"] = mock.Mock(returncode=1, stdout="", stderr="boom\n")
+        os.mkfifo(os.path.join(self.directory, "close-failures.jsonl"))
+        with self.assertRaisesRegex(RuntimeError, "ensemble-session close: boom") as caught:
+            self.close("a")
+        self.assertTrue(any("close-failures" in note for note in caught.exception.__notes__))
+        self.assertIn("a", self.roster.entries())
+
+    def delegated(self, name):
+        return replace(
+            self.records["a"],
+            name=name,
+            sessions=(name,),
+            sid=str(uuid.uuid4()),
+            ctl=("ensemble-delegate",),
+            resume=("ensemble-delegate", "resume", name),
+        )
+
+    def test_close_all_logs_each_failed_entry_once_and_removes_the_rest(self):
+        for name in ("d", "e"):
+            self.records[name] = self.delegated(name)
+            self.live(name, record=self.records[name])
+        orphan = self.delegated("orphan")
+        self.listed = [orphan]
+        self.answers["d"] = mock.Mock(returncode=1, stdout="", stderr="down\n")
+        with self.assertRaisesRegex(RuntimeError, "ensemble-delegate close: down"):
+            self.close_all()
+        delegated = [records for argv, records in self.calls if argv[0] == "ensemble-delegate"]
+        self.assertEqual(delegated, [[self.records["d"], self.records["e"], orphan]])
+        self.assertEqual(list(self.roster.entries()), ["d", "e"])
+        self.assertEqual(
+            [(line["name"], line["reason"]) for line in self.failures()],
+            [("d", "ensemble-delegate close: down"), ("e", "ensemble-delegate close: down")],
+        )
+
+    def test_close_all_names_a_listed_orphan_and_logs_no_line_for_it(self):
+        orphan = self.delegated("orphan")
+        self.listed = [orphan]
+        self.answers["orphan"] = mock.Mock(returncode=1, stdout="", stderr="down\n")
+        self.roster.remove("b")
+        self.roster.remove("c")
+        self.roster.remove("a")
+        with self.assertRaisesRegex(RuntimeError, "ensemble-delegate close: down"):
+            self.close_all()
+        self.assertEqual((self.roster.entries(), self.failures()), ({}, []))
+        self.assertIn(([orphan]), [records for _, records in self.calls])
+
+    def test_close_all_keeps_the_failure_when_its_trace_cannot_be_written(self):
+        self.records["d"] = self.delegated("d")
+        self.live("d", record=self.records["d"])
+        self.answers["d"] = mock.Mock(returncode=1, stdout="", stderr="down\n")
+        os.mkfifo(os.path.join(self.directory, "close-failures.jsonl"))
+        with self.assertRaisesRegex(RuntimeError, "ensemble-delegate close: down") as caught:
+            self.close_all()
+        self.assertTrue(any("d: close-failures" in note for note in caught.exception.__notes__))
+        self.assertEqual(list(self.roster.entries()), ["d"])
+
+    def test_a_dry_run_logs_nothing(self):
+        self.answers["a"] = mock.Mock(returncode=1, stdout="", stderr="boom\n")
+        self.close_all(dry_run=True)
+        self.assertEqual(self.failures(), [])
 
 
 class CloseAllCapacityTest(HostedTuiBase):

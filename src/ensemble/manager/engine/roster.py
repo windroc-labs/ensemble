@@ -26,10 +26,20 @@ from ensemble.manager.engine.types import (
     StaleHolder,
     State,
 )
-from ensemble.utils import Record, file_lock, printable, read_regular, save
+from ensemble.utils import (
+    Record,
+    append_line,
+    file_lock,
+    one_line,
+    printable,
+    read_regular,
+    save,
+)
 
 VERSION = 2
 NOTE_MAX = 500
+CLOSE_FAILURES = "close-failures.jsonl"
+REASON_MAX = 500
 ROSTER_MAX = 1 << 20
 LOCK_TIMEOUT = 30
 POLL = 0.1
@@ -604,6 +614,21 @@ class Roster:
                 return False
             del data["entries"][name]
             return True
+
+    def close_failed(self, name: str, *, sid: str | None, ctl: tuple[str, ...], reason: str) -> str:
+        """One close-failures.jsonl line for a failed close of entry `name`; its path."""
+        path = os.path.join(self.directory, CLOSE_FAILURES)
+        line = {
+            "at": int(time.time()),
+            "name": name,
+            "sid": sid,
+            "ctl": list(ctl),
+            "reason": printable(one_line(reason))[:REASON_MAX],
+        }
+        with self._locked() as data:
+            self._lease(data)
+            append_line(path, json.dumps(line, ensure_ascii=False) + "\n")
+        return path
 
     def note(self, name: str, text: str | None) -> None:
         _note(text)

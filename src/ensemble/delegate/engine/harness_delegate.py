@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import signal
 import stat
 import sys
 import time
@@ -24,7 +23,7 @@ from ensemble.delegate.engine.drivers import AgentDriver, Driver, InstructionDri
 from ensemble.delegate.engine.environment import resolve
 from ensemble.delegate.engine.handler import finish
 from ensemble.delegate.engine.plan import plan
-from ensemble.delegate.engine.record import HANDLER, RunRecord, owned
+from ensemble.delegate.engine.record import CLOSED, HANDLER, RunRecord, owned
 from ensemble.delegate.engine.runner import Attempts, execute, idle_reason, say, stopped
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import (
@@ -744,13 +743,16 @@ class HarnessDelegate(Delegate):
     def close(self) -> None:
         """Unanswered after closing the harness when the agent's Host could not tell."""
         state = self._read()
-        self._stop_owned(state)
-        try:
-            agent, unanswered = self._agent(state), None
-        except Unanswered as error:
-            agent, unanswered = None, error
-        if agent is not None:
-            agent.close()
+        claim = self.store.closing_claim() if owned(state.plan) else contextlib.nullcontext()
+        with claim:
+            try:
+                agent, unanswered = self._agent(state), None
+            except Unanswered as error:
+                agent, unanswered = None, error
+            if agent is not None:
+                agent.close()
+        if unanswered is None:
+            self._stop_owned(closed=agent is not None)
         unchecked = (
             None
             if unanswered is None
@@ -768,23 +770,31 @@ class HarnessDelegate(Delegate):
         if unchecked is not None:
             raise Unanswered(unchecked)
 
-    def _stop_owned(self, state: DelegateState) -> None:
-        """A close of an owned tui run ends its active attempt once, as a stop, with one Finished."""
-        p = state.plan
-        if p.spec.mode != Mode.TUI or not p.session.handlers:
-            return
-        result = stopped(Stopped(128 + signal.SIGTERM))
+    def _stop_owned(self, *, closed: bool) -> None:
+        """Once an owned run's worker is closed or gone: delegate.json `closing`, and its still
+        active attempt ended once as CLOSED, with one Finished."""
         try:
-            n = RunRecord(self.layout, self.store).stop(result, sid=p.sid)
+            state = self._read()
+            if not owned(state.plan):
+                return
+            n = RunRecord(self.layout, self.store).stop(CLOSED, sid=state.plan.sid)
         except (ConfigError, OSError) as error:
             say(f"delegate: {error}")
             return
         if n is None:
             return
         state = replace(state, attempt=n)
-        finish(state, result, None)
+        finish(state, CLOSED, None)
+        environment = state.plan.session.environment
+        if closed and environment is not None and environment.lock:
+            say(f"delegate: session {state.agent_name} closed (lock {environment.lock})")
+            RunLog(state.plan.session.workdir).note(
+                "release", lock=environment.lock, best_effort=True
+            )
         if state.callback is not None:
-            EventCallback(state.callback, self.store, sid=p.sid, attempt=n)(Finished(result))
+            EventCallback(state.callback, self.store, sid=state.plan.sid, attempt=n)(
+                Finished(CLOSED)
+            )
 
     def session_status(self) -> SessionStatus:
         """Its own live agent session's status, else the plan's: an attached one lacks its env;

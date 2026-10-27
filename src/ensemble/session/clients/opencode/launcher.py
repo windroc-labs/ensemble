@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import threading
+from collections.abc import Callable
 
 USAGE = "usage: launcher.py --timeout SECONDS --prompt TEXT -- COMMAND..."
 STDERR_WAIT = 2  # seconds to copy COMMAND's last stderr after it exits
@@ -91,7 +92,12 @@ class Watch:
         os._exit(124)
 
 
-def main(argv: list[str]) -> int:
+def main(
+    argv: list[str],
+    *,
+    thread: Callable[..., threading.Thread] = threading.Thread,
+    timer: Callable[..., threading.Timer] = threading.Timer,
+) -> int:
     try:
         seconds, text, command = _arguments(argv)
     except ValueError:
@@ -109,15 +115,11 @@ def main(argv: list[str]) -> int:
         return 127
     assert child.stdout is not None
     watch = Watch(child, argv[1])
-    timer = threading.Timer(seconds, watch.expire)
-    timer.daemon = True
-    copier = threading.Thread(target=_copy, args=(child.stderr,), daemon=True)
-    for thread in (
-        threading.Thread(target=_feed, args=(child.stdin, text), daemon=True),
-        copier,
-        timer,
-    ):
-        thread.start()
+    expiry = timer(seconds, watch.expire)
+    expiry.daemon = True
+    copier = thread(target=_copy, args=(child.stderr,), daemon=True)
+    for each in (thread(target=_feed, args=(child.stdin, text), daemon=True), copier, expiry):
+        each.start()
     try:
         for line in child.stdout:
             watch.line(line)
@@ -125,7 +127,7 @@ def main(argv: list[str]) -> int:
         child.kill()
     watch.end()
     code = child.wait()
-    timer.cancel()
+    expiry.cancel()
     copier.join(STDERR_WAIT)
     return code if code >= 0 else 128 - code
 

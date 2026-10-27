@@ -225,17 +225,14 @@ class Harness:
         try:
             final = worker.stop() if op == Op.STOP else worker.close()
         except SessionError as error:
-            self._answer(ident, ok=False, error=str(error))
+            self._refused(op, ident, str(error))
             return None
         self._log(final)
         code = worker.confirm_end(self._close_wait)
         if code is None:
-            self._answer(
-                ident,
-                ok=False,
-                error=f"{worker.name or worker.sid}: worker exit not confirmed",
-                unanswered=True,
-            )
+            where = f"session harness {self._channel.directory}"
+            error = f"{worker.name or worker.sid}: worker exit not confirmed ({where})"
+            self._refused(op, ident, error, unanswered=True)
             return None
         self._exited(code)
         self._answer_end(ident, ok=True)
@@ -289,9 +286,20 @@ class Harness:
                 else:
                     worker.close()
             except SessionError as error:
+                self._trace(op, str(error))
                 self._answer_end(ident, ok=False, error=str(error))
             else:
                 self._answer_end(ident, ok=True)
+
+    def _refused(self, op: Op, ident: str | None, error: str, *, unanswered=False) -> None:
+        self._trace(op, error)
+        self._answer(ident, ok=False, error=error, unanswered=unanswered)
+
+    def _trace(self, op: Op, error: str) -> None:
+        """harness.json's close_failed: the latest refused or unconfirmed stop or close."""
+        LOG.warning("session harness %s: %s failed: %s", self._channel.directory, op, error)
+        self._status["close_failed"] = {"op": str(op), "error": error, "at": int(time.time())}
+        self._write()
 
     def _abandon(self, worker: Worker) -> int:
         try:

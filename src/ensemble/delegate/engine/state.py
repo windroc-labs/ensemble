@@ -1,7 +1,8 @@
 """A Delegate run's state, in its run dir (Layout.run), outside the agent dir it may write.
 
 The run dir holds `delegate.json`, the run record (the run's only state); `delegate.lock`, the
-mutex; `delegate.run.lock`, the run lock a running Delegate holds; `delegate.callback.lock` and
+mutex; `delegate.run.lock`, the run lock a running Delegate holds; `delegate.close.lock`, shared
+by each closing Delegate; `delegate.callback.lock` and
 `delegate.callback.parent.lock`, the callback locks (their protocol: engine/callback.py). The
 Delegate makes the run dir before it takes any lock.
 """
@@ -23,6 +24,7 @@ class RunState:
         self.layout = layout
         self.record = os.path.join(layout.run, "delegate.json")
         self._lock = os.path.join(layout.run, "delegate")
+        self.close_lock = f"{self._lock}.close.lock"
         self.callback_lock = f"{self._lock}.callback.lock"
         self.callback_parent_lock = f"{self._lock}.callback.parent.lock"
 
@@ -42,6 +44,14 @@ class RunState:
         """wait=False: BlockingIOError while held."""
         with file_lock(f"{self._lock}.run", wait=wait):
             yield
+
+    @contextlib.contextmanager
+    def closing_claim(self) -> Iterator[None]:
+        with file_lock(f"{self._lock}.close", shared=True):
+            yield
+
+    def closing(self) -> bool:
+        return self.held(self.close_lock)
 
     def running(self) -> bool:
         """Whether a run holds the run lock."""

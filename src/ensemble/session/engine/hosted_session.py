@@ -44,6 +44,7 @@ from ensemble.session.engine.types import (
     Mode,
     NoRecordedSession,
     NotShowable,
+    OwnerRefused,
     Resumable,
     SessionBusy,
     SessionError,
@@ -54,6 +55,7 @@ from ensemble.session.engine.types import (
     Spec,
     StatusState,
     Stderr,
+    Unanswered,
     Usage,
 )
 from ensemble.session.harness.channel import SLICE, Channel, Tie
@@ -893,8 +895,8 @@ class HostedSession(Session):
 
     @classmethod
     def retire(cls, name: str, *, sid: str | None = None, host: str | None = None) -> None:
-        """A bound owner's confirmed close (its terminal gone too: sid from session.json), else
-        closed here.
+        """A bound owner's confirmed close (OwnerRefused, Unanswered), asked before any Host
+        probe, else closed here.
         """
         cls._retire(name, sid=sid, host=host)
 
@@ -919,14 +921,19 @@ class HostedSession(Session):
             state = None
         if generation is not None and (state is None or state.get("generation") != generation):
             return
+        if state is not None and sid not in (None, state.get("sid")):
+            raise SessionError(
+                f"session {name}: expected sid {sid!r}, found {state.get('sid')!r} in session.json"
+            )
         if state is not None and (channel := channel_bound(name, state)) is not None:
             store.check()
-            if sid is not None and state.get("sid") != sid:
-                raise SessionError(
-                    f"session {name}: expected sid {sid!r}, found {state.get('sid')!r}"
-                )
-            if channel.request(Op.CLOSE):
-                return
+            try:
+                if channel.request(Op.CLOSE):
+                    return
+            except Unanswered:
+                raise
+            except SessionError as error:
+                raise OwnerRefused(str(error)) from error
         try:
             clients = [store.read()["client"]]
         except SessionError:

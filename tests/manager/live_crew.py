@@ -3,6 +3,7 @@ with manager MANAGER attached, <repo>/bin and the fake clients on PATH, HOME out
 dirs (Codex's rule), and the crew run as a module with only utils and manager importable (FR-3).
 """
 
+import fcntl
 import json
 import os
 import signal
@@ -37,6 +38,29 @@ def logged(path: str) -> list[dict]:
             return [json.loads(line) for line in f]
     except FileNotFoundError:
         return []
+
+
+class Owner:
+    """A tui session's harness dir, read without importing the session harness."""
+
+    def __init__(self, ensemble: str, name: str):
+        with open(os.path.join(ensemble, "tui", name, "session.json"), encoding="utf-8") as f:
+            self.directory = json.load(f)["owner"]
+        self.events = os.path.join(self.directory, "events.jsonl")
+
+    def status(self) -> dict:
+        with open(os.path.join(self.directory, "harness.json"), encoding="utf-8") as f:
+            return json.load(f)
+
+    def alive(self) -> bool:
+        fd = os.open(os.path.join(self.directory, "harness.lock"), os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        finally:
+            os.close(fd)
+        return False
 
 
 def has_pair(argv: list[str], flag: str, value: str) -> bool:

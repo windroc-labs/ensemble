@@ -4,6 +4,7 @@ attempt (Result, notes, outcome line, a locked run's close, then Finished) once,
 that are not its worker's.
 """
 
+import contextlib
 import io
 import json
 import os
@@ -14,6 +15,7 @@ from unittest import mock
 from ensemble.delegate import Spec
 from ensemble.delegate.engine import handler
 from ensemble.delegate.engine.record import HANDLER, RunRecord
+from ensemble.delegate.engine.runner import stopped
 from ensemble.delegate.engine.types import Layout, Result
 from ensemble.session import (
     Activity,
@@ -28,6 +30,7 @@ from ensemble.session import (
     TurnEnd,
     TurnFailed,
     TurnStarted,
+    Unanswered,
 )
 from ensemble.utils import StatusState
 from tests.delegate.fakes.harness_session import HarnessSession
@@ -106,12 +109,48 @@ class Child:
         return "", ""
 
 
+class OwnerRefused(SessionError):
+    """As ensemble.session's internal one, which delegate tests may not import."""
+
+
+class Agent:
+    """The worker's session as Delegate.close attaches it; close runs `on_close`."""
+
+    mode = "tui"
+
+    def __init__(self, on_close):
+        self.on_close = on_close
+
+    def close(self):
+        self.on_close()
+
+
+class AgentSession(HarnessSession):
+    """attach: `attaching` called, then `refusal` raised, else `agent`, else HarnessSession's (no
+    session)."""
+
+    agent: Agent | None = None
+    refusal: Exception | None = None
+    attaching = None
+
+    @classmethod
+    def attach(cls, name, **kw):
+        if cls.attaching is not None:
+            cls.attaching()
+        if cls.refusal is not None:
+            raise cls.refusal
+        return cls.agent if cls.agent is not None else super().attach(name, **kw)
+
+
 class HandlerCase(HarnessCase):
     def setUp(self):
         super().setUp()
         self.events = os.path.join(self.home, "events.log")
         spec = Spec("input", self.work, task="echo", sid=SID, client="fake", mode="tui")
-        self.make(spec=replace(spec, events=self.events), callback=("callback",))
+        AgentSession.agent = AgentSession.refusal = AgentSession.attaching = None
+        self.delegate = self.make(
+            spec=replace(spec, events=self.events), callback=("callback",), session_cls=AgentSession
+        )
         self.record = RunRecord(Layout(self.work))
         self.register(1)
         self.view, self.sent, self.seq = View(), [], 0
@@ -248,6 +287,12 @@ class FollowUpTest(HandlerCase):
         self.assertEqual(self.lines(), [["outcome", "needs_input"], ["outcome", "done"]])
         self.assertNotIn("missing", self.kinds())
 
+    def test_input_after_a_stop_its_worker_survived_opens_the_next_attempt(self):
+        self.call(TurnStarted())
+        self.assertTrue(self.record.complete(1, stopped(OSError("disk full")), sid=SID))
+        self.call(TurnStarted())
+        self.assertEqual((self.state().attempt, self.state().completed), (2, False))
+
     def test_continue_after_a_failed_turn_opens_the_next_attempt(self):
         self.call(TurnStarted())
         self.call(TurnFailed("server_overloaded", "busy"))
@@ -313,6 +358,184 @@ class FollowUpTest(HandlerCase):
         self.call(Exited(0))
         self.assertEqual(self.state().result.outcome.status, "done")
         self.assertEqual(self.kinds_sent()[-1], ("finished", 1))
+
+
+class CloseTest(HandlerCase):
+    """FR-34: a close holds a claim that keeps its worker's input from opening a follow-up, and
+    ends the active attempt once, as a stop, only by the exit it causes.
+    """
+
+    STOP = Result(143, None, "stopped: Stopped: 143")
+
+    def closing(self, during, refusal=None):
+        def close():
+            during()
+            if refusal is not None:
+                raise refusal
+
+        AgentSession.agent = Agent(close)
+
+    def test_a_close_ends_the_active_attempt_as_a_stop_before_the_worker_exits(self):
+        for opening in (True, False):
+            with self.subTest(opening=opening):
+                if not opening:
+                    self.call(TurnStarted())
+                self.delegate.close()
+                state = self.state()
+                self.assertEqual(state.result, self.STOP)
+                self.assertEqual(self.kinds_sent()[-1], ("finished", state.attempt))
+                self.assertEqual(self.kinds()[-2:], ["result", "end"])
+                sent = len(self.sent)
+                self.call(Exited(0))
+                self.assertEqual(self.state().result, state.result)
+                self.assertEqual(len(self.sent), sent)
+                self.register(state.attempt + 1, attempt=state.attempt + 1, completed=False)
+                self.record.save(replace(self.state(), result=None, bound=False))
+
+    def test_its_claim_covers_the_attach_and_the_owners_close(self):
+        self.call(TurnStarted())
+        seen = []
+        AgentSession.attaching = lambda: seen.append(self.record.store.closing())
+        self.closing(lambda: seen.append((self.record.store.closing(), self.state().completed)))
+        self.delegate.close()
+        self.assertEqual(seen, [True, (True, False)])
+        self.assertFalse(self.record.store.closing())
+        self.assertEqual(self.state().result, self.STOP)
+        self.assertEqual(self.kinds_sent(), [("finished", 1)])
+
+    def test_the_exit_it_causes_ends_the_attempt_as_its_stop_once(self):
+        for events in (
+            (TurnFailed("exited", "worker exited mid-turn"), Exited(0)),
+            (Exited(1),),
+            (TurnStarted(), TurnFailed("exited", "worker exited -1 mid-turn"), Exited(-1)),
+        ):
+            with self.subTest(events=events):
+                n = self.state().attempt
+                self.call(TurnStarted(), token=n)
+                self.closing(lambda events=events, n=n: [self.call(e, token=n) for e in events])
+                self.delegate.close()
+                state = self.state()
+                self.assertEqual((state.attempt, state.result), (n, self.STOP))
+                self.assertEqual(self.kinds_sent()[-1], ("finished", n))
+                self.assertEqual([k for k in self.kinds_sent() if k[1] == n], [("finished", n)])
+                self.register(n + 1, attempt=n + 1, completed=False)
+                self.record.save(replace(self.state(), result=None, bound=False))
+                self.generation = uuid.uuid4().hex
+
+    def test_input_on_an_ended_attempt_while_closing_opens_no_follow_up(self):
+        self.finish(NEEDS)
+        sent = list(self.sent)
+        self.closing(lambda: [self.call(TurnStarted()), self.call(Exited(0))])
+        self.delegate.close()
+        state = self.state()
+        self.assertEqual((state.attempt, state.result.outcome.status), (1, "needs_input"))
+        self.assertEqual(self.sent, sent)
+
+    def test_a_follow_up_opened_before_the_claim_ends_as_its_stop(self):
+        self.finish(NEEDS)
+        self.call(TurnStarted())
+        self.assertEqual(self.state().attempt, 2)
+        self.closing(
+            lambda: [
+                self.call(TurnFailed("exited", "worker exited mid-turn")),
+                self.call(Exited(0)),
+            ]
+        )
+        self.delegate.close()
+        self.assertEqual((self.state().attempt, self.state().result), (2, self.STOP))
+        self.assertEqual(self.kinds_sent()[-2:], [("begun", 2), ("finished", 2)])
+
+    def test_a_follow_up_its_handler_left_active_ends_as_its_stop_under_its_own_number(self):
+        self.finish(NEEDS)
+        claim = self.record.store.closing_claim
+
+        @contextlib.contextmanager
+        def late():  # input lands before the claim; then its handler never ends it
+            self.call(TurnStarted())
+            with claim():
+                yield
+
+        with mock.patch.object(type(self.delegate.store), "closing_claim", lambda _store: late()):
+            self.delegate.close()
+        self.assertEqual((self.state().attempt, self.state().result), (2, self.STOP))
+        self.assertEqual(self.kinds_sent()[-2:], [("begun", 2), ("finished", 2)])
+
+    def test_endings_it_does_not_cause_keep_their_own_result(self):
+        self.call(TurnStarted())
+        self.closing(lambda: [self.call(TurnEnd(block(DONE), 0)), self.call(Exited(0))])
+        self.delegate.close()
+        self.assertEqual(self.state().result.outcome.status, "done")
+        self.assertEqual(self.kinds_sent(), [("finished", 1)])
+
+    def test_a_failed_turn_while_closing_keeps_its_failure(self):
+        self.call(TurnStarted())
+        self.closing(lambda: self.call(TurnFailed("server_overloaded", "busy")))
+        self.delegate.close()
+        self.assertEqual(
+            self.state().result.error, "the client's turn failed: server_overloaded (busy)"
+        )
+        self.assertEqual(self.kinds_sent(), [("finished", 1)])
+
+    def test_a_refused_close_drops_its_claim_and_loses_no_event(self):
+        for refusal in (
+            SessionError("cannot close"),
+            OwnerRefused("cannot close w1"),  # the owner's refusal, a SessionError
+            Unanswered("not confirmed"),
+        ):
+            with self.subTest(refusal=type(refusal).__name__):
+                n = self.state().attempt
+                self.call(TurnStarted(), token=n)
+                self.closing(lambda n=n: self.call(TurnEnd(block(NEEDS), 0), token=n), refusal)
+                with self.assertRaises(type(refusal)):
+                    self.delegate.close()
+                self.assertFalse(self.record.store.closing())
+                self.assertEqual(self.state().result.outcome.status, "needs_input")
+                self.call(TurnStarted(), token=n)
+                self.assertEqual((self.state().attempt, self.state().completed), (n + 1, False))
+                self.register(n + 1)
+
+    def test_an_idle_give_up_while_closing_keeps_its_own_result(self):
+        self.call(TurnStarted())
+        self.closing(lambda: Timer.made[-1].fire())
+        self.delegate.close()
+        self.assertEqual(self.state().result, GAVE_UP)
+        self.assertEqual(self.kinds_sent(), [("finished", 1)])
+
+    def test_a_refused_close_leaves_the_attempt_active_and_reports_nothing(self):
+        self.call(TurnStarted())
+        self.closing(lambda: None, SessionError("cannot close"))
+        with self.assertRaisesRegex(SessionError, "cannot close"):
+            self.delegate.close()
+        state = self.state()
+        self.assertEqual((state.completed, state.result), (False, None))
+        self.assertEqual(self.kinds_sent(), [])
+        self.assertNotIn("result", self.kinds())
+        self.call(TurnEnd(block(DONE), 0))  # its worker goes on, and its handler with it
+        self.assertEqual(self.state().result.outcome.status, "done")
+
+    def test_input_taken_on_an_ended_attempt_during_a_refused_close_is_not_a_follow_up(self):
+        self.finish(NEEDS)
+        self.closing(lambda: self.call(TurnStarted()), SessionError("cannot close"))
+        with self.assertRaises(SessionError):
+            self.delegate.close()
+        self.assertEqual(self.state().attempt, 1)
+        self.call(TurnStarted())
+        self.assertEqual((self.state().attempt, self.state().completed), (2, False))
+
+    def test_an_unanswered_agent_leaves_the_attempt_alone(self):
+        self.call(TurnStarted())
+        AgentSession.refusal = Unanswered("host down")
+        with self.assertRaises(Unanswered):
+            self.delegate.close()
+        self.assertFalse(self.state().completed)
+        self.assertFalse(self.record.store.closing())
+        self.assertEqual(self.kinds_sent(), [])
+
+    def test_a_close_after_the_attempt_ended_sends_no_second_finished(self):
+        self.finish()
+        before = (replace(self.state(), closing=True), list(self.sent))
+        self.delegate.close()
+        self.assertEqual((self.state(), self.sent), before)
 
 
 class IgnoredTest(HandlerCase):
@@ -381,6 +604,24 @@ class LockedTest(HandlerCase):
         self.assertIn("release", self.kinds())
         self.assertEqual(self.kinds_sent()[-1], ("finished", 1))
 
+    def test_a_gone_workers_close_ends_the_attempt_and_claims_no_release(self):
+        self.call(TurnStarted())
+        self.delegate.close()
+        self.assertEqual(self.state().result, Result(143, None, "stopped: Stopped: 143"))
+        self.assertEqual(self.kinds_sent()[-1], ("finished", 1))
+        self.assertNotIn("release", self.kinds())
+
+    def test_a_confirmed_close_claims_release_then_finishes(self):
+        self.call(TurnStarted())
+        seen = []
+        AgentSession.agent = Agent(
+            lambda: seen.append(("release" in self.kinds(), list(self.sent)))
+        )
+        self.delegate.close()
+        self.assertEqual(seen, [(False, [])])
+        self.assertEqual(self.kinds()[-3:], ["result", "end", "release"])
+        self.assertEqual(self.kinds_sent(), [("finished", 1)])
+
     def test_a_close_that_fails_claims_no_release(self):
         self.view.close_fail = SessionError("not confirmed")
         self.finish()
@@ -420,7 +661,7 @@ class EndingTest(HandlerCase):
         self.assertEqual(self.lines(), [])
 
 
-class CloseTest(HandlerCase):
+class OwnedCloseTest(HandlerCase):
     """FR-34: a close ends the owned run's active attempt once, as a stop; never an ended one."""
 
     STOPPED = Result(143, None, "stopped: Stopped: 143")

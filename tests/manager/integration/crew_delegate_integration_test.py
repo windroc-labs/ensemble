@@ -6,15 +6,26 @@ test_a_role_run_ended_on_needs_input_is_waiting_and_left_alone_by_attach_resume.
 
 import json
 import os
+import time
 
 from ensemble.manager import State
 from ensemble.utils import Record
 from tests.delegate.integration.cli import ASKING, DONE
 from tests.delegate.replies import block, mark
-from tests.manager.live_crew import MANAGER, ROLE, LiveCrew, has_pair, logged
+from tests.manager.live_crew import MANAGER, ROLE, LiveCrew, Owner, has_pair, logged
 from tests.session import live_tmux
 
 START = mark("start", "echoing")
+
+
+def _snapshot(directory: str) -> dict[str, bytes]:
+    found = {}
+    for top, _, names in os.walk(directory):
+        for name in names:
+            path = os.path.join(top, name)
+            with open(path, "rb") as f:
+                found[os.path.relpath(path, directory)] = f.read()
+    return found
 
 
 class RoleCase(LiveCrew):
@@ -114,6 +125,9 @@ class RoleTest(RoleCase):
         self.ok(self.crew("close", "TASK-9"))
         self.until(lambda: self.gone(harness, tui), f"{harness} and {tui} gone")
         self.assertEqual(self.roster(), {})
+        run_dir = os.path.join(work, "run")
+        before = _snapshot(run_dir)
+        self.assertIn("delegate.json", before)
         reopen = ("reopen", "--work-dir", board, "TASK-9", "--display", "none")
         reopened = self.record(self.crew(*reopen, **self.scene("TASK-9")))
         self.assertEqual((reopened.name, reopened.sid), (tui, record.sid))
@@ -121,6 +135,31 @@ class RoleTest(RoleCase):
         self.assertTrue(has_pair(logged(self.log("TASK-9"))[-1]["argv"], "--resume", record.sid))
         entry = self.roster()[tui]
         self.assertEqual((entry.state, entry.sid, entry.record), (State.LIVE, record.sid, reopened))
+        self.assertEqual((reopened.kind, reopened.ctl), ("worker", ("ensemble-session",)))
+        # under a session harness of its own, with no handlers: generic events only
+        channel = Owner(self.ensemble, tui)
+        status = channel.status()
+        self.assertEqual((status["name"], status["sid"]), (tui, record.sid))
+        self.assertTrue(channel.alive())
+        sent = [0.0]
+
+        def turned() -> bool:
+            if "TurnEnd" in [e["type"] for e in logged(channel.events)]:
+                return True
+            if time.monotonic() - sent[0] > 2:  # a resumed client drops input until it is ready
+                sent[0] = time.monotonic()
+                self.session("send", tui, "What was your input?")
+            return False
+
+        self.until(turned, "a turn of the reopened worker")
+        deliveries = os.path.join(channel.directory, "deliveries.jsonl")
+        self.assertFalse(os.path.exists(deliveries) and os.path.getsize(deliveries))
+        self.ok(self.crew("close", tui))
+        self.until(lambda: self.gone(tui), f"{tui} gone")
+        self.assertEqual(self.roster(), {})
+        self.assertEqual(logged(channel.events)[-1]["type"], "Exited")
+        # no outcome, Begun/Finished or write-back input for the board
+        self.assertEqual(_snapshot(run_dir), before)
 
     def test_a_role_run_ended_on_needs_input_is_waiting_and_left_alone(self):
         record = self.started("r", steps=[block(ASKING)], mode="headless")

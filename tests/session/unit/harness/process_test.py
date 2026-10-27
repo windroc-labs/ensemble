@@ -290,6 +290,43 @@ class CloseRequestTest(Base):
         thread.join(WAIT)
         self.assertEqual(self.code, 0)
 
+    def test_an_unconfirmed_close_is_traced_in_harness_json_and_names_the_harness(self):
+        owned = FakeOwned(code=None)
+        thread = self.run_in_thread(self.harness(owned))
+        before = int(time.time())
+        with self.assertRaises(SessionError) as caught:
+            self.request(Op.CLOSE)
+        self.assertEqual(
+            str(caught.exception),
+            f"w1: worker exit not confirmed (session harness {self.channel.directory})",
+        )
+        failed = self.channel.status()["close_failed"]
+        self.assertEqual((failed["op"], failed["error"]), ("close", str(caught.exception)))
+        self.assertIs(type(failed["at"]), int)
+        self.assertGreaterEqual(failed["at"], before)
+        owned.code = 0
+        self.assertTrue(self.request(Op.CLOSE))
+        thread.join(WAIT)
+        status = self.channel.status()
+        self.assertEqual((status["state"], status["close_failed"]), ("exited", failed))
+
+    def test_a_refused_stop_is_traced_with_its_error(self):
+        owned = FakeOwned(code=0)
+        owned.stop = mock.Mock(side_effect=SessionError("cannot stop w1"))
+        self.run_in_thread(self.harness(owned))
+        with self.assertRaisesRegex(SessionError, "cannot stop w1"):
+            self.request(Op.STOP)
+        failed = self.channel.status()["close_failed"]
+        self.assertEqual((failed["op"], failed["error"]), ("stop", "cannot stop w1"))
+        self.assertTrue(self.request(Op.CLOSE))
+
+    def test_a_close_that_is_never_refused_leaves_no_trace(self):
+        owned = FakeOwned(code=0)
+        thread = self.run_in_thread(self.harness(owned))
+        self.assertTrue(self.request(Op.CLOSE))
+        thread.join(WAIT)
+        self.assertNotIn("close_failed", self.channel.status())
+
     def test_close_is_served_while_a_handler_hangs(self):
         gate = threading.Event()
         self.addCleanup(gate.set)
@@ -487,6 +524,8 @@ class DrainTest(Base):
             time.sleep(0.01)
         with self.assertRaisesRegex(SessionError, "cannot close w1"):
             self.request(Op.CLOSE)
+        failed = self.channel.status()["close_failed"]
+        self.assertEqual((failed["op"], failed["error"]), ("close", "cannot close w1"))
         gate.set()
         thread.join(WAIT)
 
