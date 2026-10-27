@@ -1,5 +1,27 @@
 # Upgrading
 
+Broker protocol 30 renames every broker keychain item to start with `ensemble-broker-` (`ensemble-claude` →
+`ensemble-broker-claude`, `ensemble-bot` → `ensemble-broker-bot`, `ensemble-env/<name>` → `ensemble-broker-env/<name>`
+and so on: [Credentials › Keychain items](credentials.md#keychain-items)), and the static secret references with
+them: a manifest or `[[delegate.environments.<name>.secrets]]` item names `ensemble-broker-env/<name>`, and one naming
+`ensemble-env/<name>` is rejected (`manifest_rejected`). Upgrading from v0.4.1 or earlier, the maintainer gives you a
+one-time rename step; in this order:
+
+1. Close every running Docker session while the protocol 29 broker is still installed: it still reads the old names
+   and revokes the sessions' GitHub tokens.
+2. Run the one-time rename step: it renames the keychain items and the keys of `~/.ensemble/docker/static-secrets.json`.
+3. Run `scripts/install.sh --docker`: it installs the new broker and runs `ensemble-broker retrust`, which asks the
+   login keychain password once, then shows one macOS dialog per item an earlier broker wrote, once: click Allow.
+   Until step 2 is complete, every broker command refuses to run and names that step.
+4. Resume the sessions closed in step 1.
+
+Close first: after step 2 a protocol 29 broker no longer finds its items, so its session's renewal or close revokes
+nothing, and the protocol 30 broker rejects the old session's manifest. A session missed in step 1: close it with the
+new broker right after step 3; `close` revokes its GitHub tokens from the renamed record, and its audit log lacks the
+environment secrets' `Withdrawn` entries. Every later upgrade: `install.sh` runs `retrust` on each new broker, which
+asks the login keychain password once and shows no dialog ([Docker host › Re-trust after an
+upgrade](docker-host.md#re-trust-after-an-upgrade)).
+
 The built-in `verifier` now accepts every configured client, including Codex, OpenCode and Claude; board runs
 use their Agent label. Rebuild `mini-op:env` from mini-op's plain-skill version (WDRC-195) before starting one:
 it must contain `/opt/windroc/mini-op/skills/mini-op/SKILL.md`. Remove any local `fixed_client` role key and
@@ -151,7 +173,7 @@ repair the registry, selected app record, host grant and root trust. This repair
 to a prior broker code identity at the installed path; permissive or foreign-reader records stay refused. It asks
 for the login Keychain password once per enrollment, preserves reservations and cached tokens, and releases the
 registry transaction before interactive repair. Failed publication retains authoritative material; rerun maintenance. For a deliberate
-identity replacement, stop callers and remove only that identity's reservation from `ensemble-linear` / `registry`
+identity replacement, stop callers and remove only that identity's reservation from `ensemble-broker-linear` / `registry`
 and its `app/<token_service>` and host grant records through a controlled Keychain recovery; preserve every other
 identity and all GitHub recovery material. There is no automatic rebinding command.
 
@@ -173,8 +195,14 @@ change to your config or shell profile. Flags change the configuration (`--clien
 Each run refreshes the selected Claude Code/Codex marketplaces and updates their ensemble plugins to the served ref
 before reading installed files. An update or version check failure stops with the client's name and reason.
 For OpenCode, when `--ref` (default `<tag>`) names a newer commit than the one it last downloaded, it deletes
-OpenCode's copy and downloads it again. The `~/.ensemble/bin` commands follow [launcher precedence](../README.md#commands),
-so updating OpenCode's copy alone may not change the code they run. After plugin refresh, when
+OpenCode's copy and downloads it again. Each successful install selects its plugin for all `~/.ensemble/bin` commands,
+ignoring other clients’ caches and older OpenCode packages ([commands](../README.md#commands)).
+Rerun the installer once to refresh older launchers and record that selection, even if their files already exist.
+After a client plugin update removes the selected directory, the next command selects that same client's newest
+installed ensemble copy, records its path and reports it on stderr; no installer rerun is needed. It never selects
+another client's copy. If the selected client has no installed copy left, the command keeps the selected-plugin error.
+Equal versions use sorted paths to break ties. The installer also handles older refs whose launchers predate selection support.
+After plugin refresh, when
 the plugin's broker sources changed, or the installed broker speaks another protocol, it reinstalls the broker, reusing locally usable Claude and ready Codex
 credentials and requesting any missing logins ([Log in](docker-host.md#log-in)).
 It does not edit config keys a release renames.

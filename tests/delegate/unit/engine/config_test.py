@@ -197,7 +197,7 @@ plugins = ["dummy-plugin"]
 lock = "dummy-lock"
 
 [[delegate.environments.dummy.secrets]]
-item = "ensemble-env/dummy"
+item = "ensemble-broker-env/dummy"
 file = "dummy.txt"
 """
 
@@ -242,8 +242,8 @@ class EnvironmentCheckTest(Case):
                 "plugins": [],
                 "lock": "mini-op",
                 "secrets": [
-                    {"item": "ensemble-env/mini-op-password", "file": "mini-password"},
-                    {"item": "ensemble-env/mini-op-ssh-key", "file": "mini-ssh-key"},
+                    {"item": "ensemble-broker-env/mini-op-password", "file": "mini-password"},
+                    {"item": "ensemble-broker-env/mini-op-ssh-key", "file": "mini-ssh-key"},
                 ],
             },
         )
@@ -277,7 +277,7 @@ class EnvironmentCheckTest(Case):
                 "password",
             ),
             (
-                '[[delegate.environments.e.secrets]]\nitem = "ensemble-env/e"\nfile = "f"\n'
+                '[[delegate.environments.e.secrets]]\nitem = "ensemble-broker-env/e"\nfile = "f"\n'
                 'value = "v"\n',
                 "[environments.e] secrets 1",
                 "value",
@@ -326,7 +326,7 @@ class EnvironmentCheckTest(Case):
             ('[delegate.environments.e]\nlock = "A B"\n', "[environments.e]"),
             ('[delegate.environments.e]\nplugins = "x"\n', "[environments.e]"),
             (
-                '[[delegate.environments.e.secrets]]\nitem = "ensemble-bot"\nfile = "f"\n',
+                '[[delegate.environments.e.secrets]]\nitem = "ensemble-broker-bot"\nfile = "f"\n',
                 "[environments.e]",
             ),
             ('[delegate.environment.docker]\ngateway = "No Such"\n', "[environment.docker]"),

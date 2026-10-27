@@ -292,7 +292,7 @@ ledger_valid() {
     profile:3) under_home "$2" && case $3 in *$'\t'* | *$'\n'* | '') false ;; esac ;;
     docker-block:2) under_home "$2" && case ${2##*/} in .zshrc | .bashrc | .bash_profile | .zprofile) true ;; *) false ;; esac ;;
     homebrew:2) [ "$2" = "$root/opt/homebrew" ] ;;
-    clt:1 | broker:1) true ;;
+    clt:1 | broker:1 | plugin-root:1) true ;;
     agent-tree:2) [ "$2" = "$HOME/.ensemble" ] ;;
     config:2) case $2 in created | backup) true ;; *) false ;; esac ;;
     formula:2) case $2 in gh | tmux | git | python | go | node) true ;; *) false ;; esac ;;
@@ -1103,20 +1103,18 @@ version_of() { sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9]*\(\.[0-9][0-9]*\)
 spoken_protocol_of() { sed -n 's/.*"protocol_version": *"\([0-9][0-9]*\)".*/\1/p' | sed -n 1p; }
 
 # The ensemble plugin Claude Code ($1 claude) or Codex (codex) has installed, else empty;
-# Codex's newest version, as skills/manage/scripts/launcher looks.
+# Codex's version at the served ref, ignoring caches from other installs.
 installed_plugin() {
+  local version=${2:-}
   if [ "$1" = claude ]; then
     command -v claude >/dev/null || return 0
     claude plugin list --json </dev/null | python3 -I -c '
 import json, sys
 print(next((p.get("installPath", "") for p in json.load(sys.stdin) if p.get("id") == "ensemble@windroc"), ""))'
   else
-    python3 -I -c '
-import glob, os, sys
-def version(path):
-    return [int(part) if part.isdigit() else -1 for part in os.path.basename(path).split(".")]
-found = sorted(glob.glob(os.path.join(glob.escape(sys.argv[1]), "*")), key=version, reverse=True)
-print(found[0] if found else "")' "${CODEX_HOME:-$HOME/.codex}/plugins/cache/windroc/ensemble"
+    if [ -z "$version" ]; then version=$(ensemble_file "$ref" .claude-plugin/plugin.json | version_of); fi
+    [ -n "$version" ] || die "Codex: no ensemble version at $ref"
+    printf '%s/%s' "${CODEX_HOME:-$HOME/.codex}/plugins/cache/windroc/ensemble" "$version"
   fi
 }
 
@@ -1192,7 +1190,7 @@ ensemble_plugin_check() {
   case $ref in
     v[0-9]*) [ "$ref" = "v$expected" ] || die "$label: ensemble at $ref reports version $expected" ;;
   esac
-  source=$(installed_plugin "$client") || die "$label: cannot locate ensemble after updating to $ref"
+  source=$(installed_plugin "$client" "$expected") || die "$label: cannot locate ensemble after updating to $ref"
   [ -n "$source" ] && [ -d "$source" ] || die "$label: no installed ensemble directory after updating to $ref"
   got=$(version_of <"$source/.claude-plugin/plugin.json" 2>/dev/null) \
     || die "$label: cannot read ensemble version at $source after updating to $ref"
@@ -1282,7 +1280,7 @@ codex_plugins() {
 }
 
 # The installed plugin: the whole repo (at $ref for OpenCode), source of the broker, ctmux and jobs. Claude Code's
-# install first, else Codex's newest, else OpenCode's, as skills/manage/scripts/launcher looks.
+# install first, else Codex's served version, else OpenCode's. ctmux --install selects this source for launchers.
 plugin_dir() {
   step "plugin directory"
   if ! has claude && ! has codex; then
@@ -1680,7 +1678,7 @@ opencode_login() {
 }
 
 opencode_key() {
-  local sha later
+  local sha later saved
   step "OpenCode key"
   if ! has opencode; then
     skip "OpenCode not chosen"
@@ -1703,11 +1701,15 @@ opencode_key() {
   fi
   if [ "$docker" = yes ]; then
     sha=$(shasum -a 256 "$broker" | cut -d' ' -f1)
-    if [ "$(state_get login_opencode)" = "$sha $provider" ] \
-      && security find-generic-password -s ensemble-opencode -a "$provider" </dev/null >/dev/null 2>&1; then
+    saved=$(state_get login_opencode)
+    # This broker's retrust already made an earlier login's item trust it: no second keychain password. The broker's
+    # probe reads the key without a dialog, so an item it cannot read (another application's) is logged in again.
+    if { [ "$saved" = "$sha $provider" ] || { [ "$(state_get retrust)" = "$sha" ] && [ "${saved#* }" = "$provider" ]; }; } \
+      && "$broker" probe-provider --provider "$provider" --base-url "$url" </dev/null >/dev/null 2>&1; then
+      state_set login_opencode "$sha $provider"
       skip "$provider logged in to this broker"
     else
-      record_item ensemble-opencode "$provider"
+      record_item ensemble-broker-opencode "$provider"
       if key_login "$broker" login opencode "$provider" --auth-file "$(opencode_auth_file)"; then
         state_set login_opencode "$sha $provider"
       else
@@ -1721,13 +1723,112 @@ opencode_key() {
   fi
 }
 
+# Installer-owned adapters also support refs whose launchers predate source selection.
+command_source() {
+  if has claude; then
+    printf 'claude\n%s/plugins/installed_plugins.json\n' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  elif has codex; then
+    printf 'codex\n%s/plugins/cache/windroc/ensemble\n' "${CODEX_HOME:-$HOME/.codex}"
+  else
+    printf 'opencode\n%s/opencode/packages\n' "${XDG_CACHE_HOME:-$HOME/.cache}"
+  fi
+}
+
+command_selection() {
+  local client source
+  { read -r client; read -r source; } < <(command_source)
+  python3 -I -c 'import json, sys; print(json.dumps(dict(root=sys.argv[1], client=sys.argv[2], source=sys.argv[3])))' "$pkg" "$client" "$source"
+}
+
+command_launcher() {
+  printf '#!/bin/bash\ntarget=$(python3 -I - "${0##*/}" <<\x27PY\x27\n'
+  cat <<'EOF'
+import glob, json, os, sys, tempfile
+
+name = sys.argv[1]
+selection = os.path.expanduser("~/.ensemble/plugin-root")
+rel = "skills/manage/scripts/ctmux" if name == "ctmux" else "bin/" + name
+try:
+    with open(selection, encoding="utf-8") as f:
+        text = f.read().rstrip("\n")
+    data = json.loads(text)
+    if not isinstance(data, dict) or any(not isinstance(data.get(key), str) for key in ("root", "client", "source")):
+        raise ValueError("expected a selection object with root, client and source strings")
+    root, client, source = data["root"], data["client"], data["source"]
+except (OSError, ValueError, TypeError, KeyError) as e:
+    sys.exit(f"{name}: cannot read {selection}: {e}; rerun install.sh or the plugin's ctmux --install")
+path = os.path.join(root, rel)
+if os.path.isabs(root) and "\n" not in root and os.access(path, os.X_OK):
+    print(path)
+    sys.exit()
+
+def version(text):
+    return [int(part) if part.isdigit() else -1 for part in text.split(".")]
+
+def package_version(path):
+    manifest = ".claude-plugin/plugin.json" if client == "claude" else "package.json"
+    try:
+        with open(os.path.join(path, manifest), encoding="utf-8") as f:
+            return version(str(json.load(f).get("version")))
+    except (OSError, ValueError, AttributeError):
+        return version(os.path.basename(path)) if client == "claude" else []
+
+roots = []
+if os.path.isabs(root) and "\n" not in root and not os.path.exists(root):
+    if client == "claude":
+        try:
+            with open(source, encoding="utf-8") as f:
+                entries = json.load(f)["plugins"]["ensemble@windroc"]
+            roots = [e.get("installPath") for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
+        except (OSError, ValueError, LookupError, TypeError):
+            pass
+    elif client == "codex":
+        roots = glob.glob(os.path.join(glob.escape(source), "*"))
+    elif client == "opencode":
+        for top, dirs, _ in os.walk(source):
+            if "node_modules" in dirs:
+                dirs.remove("node_modules")
+                roots.append(os.path.join(top, "node_modules", "ensemble"))
+    roots = sorted(p for p in roots if isinstance(p, str) and os.path.isabs(p) and "\n" not in p)
+    key = (lambda p: version(os.path.basename(p))) if client == "codex" else package_version
+    for candidate in sorted(roots, key=key, reverse=True):
+        if os.access(path := os.path.join(candidate, rel), os.X_OK):
+            fd, temp = tempfile.mkstemp(prefix=".plugin-root.", dir=os.path.dirname(selection))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(dict(root=candidate, client=client, source=source), f)
+                    f.write("\n")
+                os.replace(temp, selection)
+            finally:
+                if os.path.exists(temp):
+                    os.unlink(temp)
+            print(f"{name}: re-selected plugin {candidate}", file=sys.stderr)
+            print(path)
+            sys.exit()
+sys.exit(f"{name}: selected plugin {root!r} has no executable {rel}; rerun install.sh or the plugin's ctmux --install")
+PY
+) || exit
+exec "$target" "$@"
+EOF
+}
+
 ctmux_install() {
   local name missing=
   step "ctmux --install"
+  [ "$(cat "$HOME/.ensemble/plugin-root" 2>/dev/null)" = "$(command_selection)" ] || missing=1
   for name in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
-    [ -x "$HOME/.ensemble/bin/$name" ] && cmp -s "$pkg/skills/manage/scripts/launcher" "$HOME/.ensemble/bin/$name" || missing=1
+    [ -x "$HOME/.ensemble/bin/$name" ] && cmp -s <(command_launcher "$name") "$HOME/.ensemble/bin/$name" || missing=1
   done
   if [ -n "$missing" ]; then
+    if ! recorded file "$HOME/.ensemble/plugin-root" && ! recorded plugin-root; then
+      if absent "$HOME/.ensemble/plugin-root"; then
+        record_file "$HOME/.ensemble/plugin-root"
+      else
+        cp -P "$HOME/.ensemble/plugin-root" "$state_dir/plugin-root.orig.tmp"
+        mv -f "$state_dir/plugin-root.orig.tmp" "$state_dir/plugin-root.orig"
+        ledger_add plugin-root
+      fi
+    fi
     if [ -d "$HOME/.ensemble/bin" ]; then
       for name in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
         record_file "$HOME/.ensemble/bin/$name"
@@ -1736,6 +1837,13 @@ ctmux_install() {
       record_dir "$HOME/.ensemble/bin"
     fi
     "$pkg/skills/manage/scripts/ctmux" --install </dev/null >&2
+    for name in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
+      command_launcher "$name" > "$state_dir/launcher.tmp"
+      install -m 755 "$state_dir/launcher.tmp" "$HOME/.ensemble/bin/$name"
+    done
+    rm -f "$state_dir/launcher.tmp"
+    command_selection > "$state_dir/plugin-root.tmp"
+    mv -f "$state_dir/plugin-root.tmp" "$HOME/.ensemble/plugin-root"
   else
     skip "launchers in ~/.ensemble/bin"
   fi
@@ -1871,7 +1979,7 @@ broker_install() {
   state_set broker_source "$source"
 }
 
-# Asks for the ensemble-bot App key's .pem and App ID into app_pem and app_id, for the broker to store; 1 when the
+# Asks for the ensemble-broker-bot App key's .pem and App ID into app_pem and app_id, for the broker to store; 1 when the
 # user skips it.
 store_app_key() {
   [ "$(state_get github_app_key)" != skipped ] || return 1
@@ -1887,7 +1995,7 @@ store_app_key() {
     if [[ $answer =~ ^[1-9][0-9]{0,19}$ ]]; then break; fi
   done
   app_id=$answer
-  ledger_add keychain ensemble-bot "$app_id"
+  ledger_add keychain ensemble-broker-bot "$app_id"
 }
 
 # Claude's default credential or pinned Codex: install, update, login, ready or busy.
@@ -1946,6 +2054,14 @@ token_screen_leave() {
 broker_logins() {
   local sha min need said slug
   sha=$(shasum -a 256 "$broker" | cut -d' ' -f1)
+  # Before any other broker call: a new broker's items from earlier builds trust it, with one keychain password.
+  step "broker re-trust"
+  if [ "$(state_get retrust)" = "$sha" ]; then
+    skip "done for this broker"
+  else
+    "$broker" retrust <&3 >&3 2>&3 || die "broker re-trust failed; rerun install.sh, or run $broker retrust"
+    state_set retrust "$sha"
+  fi
   step "broker login: Claude"
   if ! has claude; then
     skip "Claude Code not chosen"
@@ -1954,7 +2070,7 @@ broker_logins() {
     if [ "$(state_get login_claude)" != "$sha" ]; then state_set login_claude "$sha"; fi
   else
     say "Create a token with claude setup-token, then paste it at the broker's prompt; both run on a screen cleared afterwards"
-    record_item ensemble-claude default
+    record_item ensemble-broker-claude default
     token_screen_enter
     if ! { claude setup-token <&3 >&3 2>&3 && "$broker" login claude <&3 >&3 2>&3; }; then
       ask "Press Enter to leave this screen:"
@@ -1967,14 +2083,14 @@ broker_logins() {
   step "broker login: GitHub"
   if [ "$(state_get login_github)" = "$sha" ] && [ -n "$(state_get github_app)" ]; then
     skip "done for this broker"
-  elif ! security find-generic-password -s ensemble-bot </dev/null >/dev/null 2>&1 && ! store_app_key; then
+  elif ! security find-generic-password -s ensemble-broker-bot </dev/null >/dev/null 2>&1 && ! store_app_key; then
     skip "no GitHub App key: create the App by docs/docker-host.md#create-the-github-app, then rerun"
   else
-    record_item ensemble-github-users ensemble-bot
+    record_item ensemble-broker-github-users ensemble-broker-bot
     if [ -n "$app_id" ]; then
-      said=$("$broker" login github ensemble-bot --key-file "$app_pem" --app-id "$app_id" <&3 2>&3 | to_terminal)
+      said=$("$broker" login github ensemble-broker-bot --key-file "$app_pem" --app-id "$app_id" <&3 2>&3 | to_terminal)
     else
-      said=$("$broker" login github ensemble-bot <&3 2>&3 | to_terminal)
+      said=$("$broker" login github ensemble-broker-bot <&3 2>&3 | to_terminal)
     fi
     slug=$(sed -n 's/^GitHub App \([A-Za-z0-9-]*\) bot user .*/\1/p' <<<"$said")
     [ -n "$slug" ] || die "broker login github named no GitHub App"
@@ -1999,10 +2115,10 @@ broker_logins() {
     if [ "$(broker_need codex "$min")" = ready ]; then
       skip "logged in"
     else
-      record_item ensemble-codex auth
+      record_item ensemble-broker-codex auth
       if ! "$broker" login codex <&3 >&3 2>&3; then
-        if security find-generic-password -s ensemble-codex -a auth </dev/null >/dev/null 2>&1; then
-          say "ensemble-codex/auth is unavailable to this broker. If another process created it, delete this item from the login keychain in Keychain Access, then rerun install.sh."
+        if security find-generic-password -s ensemble-broker-codex -a auth </dev/null >/dev/null 2>&1; then
+          say "ensemble-broker-codex/auth is unavailable to this broker. If another process created it, delete this item from the login keychain in Keychain Access, then rerun install.sh."
         fi
         return 1
       fi
@@ -2076,8 +2192,8 @@ egress_install() {
 docker_steps() {
   local name
   if [ "$docker" != yes ]; then
-    for name in "Docker Desktop running" "egress proxy" broker "broker login: Claude" "broker login: GitHub" \
-      "broker Codex install" "broker login: Codex"; do
+    for name in "Docker Desktop running" "egress proxy" broker "broker re-trust" "broker login: Claude" \
+      "broker login: GitHub" "broker Codex install" "broker login: Codex"; do
       step "$name"
       skip "Docker not chosen"
     done

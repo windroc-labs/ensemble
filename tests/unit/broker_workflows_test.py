@@ -44,12 +44,17 @@ class BrokerJob(Case):
             found["Go build"],
         )
 
-    def test_macos_never_appears_in_pr_or_merge_group_workflows(self):
+    def test_only_installer_uses_macos_in_pr_or_merge_group_workflows(self):
         for path in sorted(WORKFLOWS.glob("*.yml")):
             text = path.read_text()
             if re.search(r"(?m)^  (pull_request|pull_request_target|merge_group):", text):
                 with self.subTest(workflow=path.name):
-                    self.assertNotIn("macos", text.lower())
+                    if path.name == "installer-macos.yml":
+                        self.assertNotIn("  broker:", text)
+                        self.assertIn("tests/integration/install_integration_test.py", text)
+                        self.assertIn("tests/manager/integration/ctmux_integration_test.py", text)
+                    else:
+                        self.assertNotIn("macos", text.lower())
         self.assertFalse((WORKFLOWS.parent / "ci_broker.py").exists())
         self.assertFalse((WORKFLOWS.parent / "ci_broker_test.py").exists())
 

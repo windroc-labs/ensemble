@@ -203,7 +203,7 @@ func TestPrefetchFailures(t *testing.T) {
 			w.prefetchErr = &docker.CommandError{Exit: 128, Stderr: "fatal: Remote branch main not found"}
 		}, protocol.StartFailed, "Prefetching acme/app at main failed."},
 		{"github refuses", func(_ *world, h Host) {
-			h.GitHub.(*fakeTokens).prefetch = protocol.New(protocol.GitHubFailed, "GitHub App ensemble-bot is not installed on acme/app")
+			h.GitHub.(*fakeTokens).prefetch = protocol.New(protocol.GitHubFailed, "GitHub App ensemble-broker-bot is not installed on acme/app")
 		}, protocol.GitHubFailed, "not installed on acme/app"},
 		{"no default image", func(_ *world, h Host) {
 			_ = os.Remove(h.recordPath(imageKey))
@@ -331,13 +331,13 @@ func TestEnvironmentWithoutPrefetchKeepsGitHub(t *testing.T) {
 	path := prefetchManifest(t, h, func(f map[string]any) {
 		delete(f, "prefetch")
 		f["gateway"] = "mini-op"
-		f["secrets"] = []any{map[string]any{"item": "ensemble-env/dummy", "file": "dummy.txt"}}
-		f["github"] = map[string]any{"app": "ensemble-bot", "permissions": fixtureSet}
+		f["secrets"] = []any{map[string]any{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}}
+		f["github"] = map[string]any{"app": "ensemble-broker-bot", "permissions": fixtureSet}
 	})
 	if _, err := h.Start(context.Background(), path); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(tokens.calls, "issue ensemble-bot "+container) || slices.ContainsFunc(tokens.calls, func(c string) bool { return strings.HasPrefix(c, "prefetch") }) {
+	if !slices.Contains(tokens.calls, "issue ensemble-broker-bot "+container) || slices.ContainsFunc(tokens.calls, func(c string) bool { return strings.HasPrefix(c, "prefetch") }) {
 		t.Fatalf("token calls %q", tokens.calls)
 	}
 	if run, _ := helperRun(d); run != nil {

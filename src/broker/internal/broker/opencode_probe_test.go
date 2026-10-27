@@ -31,7 +31,7 @@ func (b *probeBody) Close() error {
 
 func TestOpencodeProbe(t *testing.T) {
 	for _, status := range []int{200, 204, 301, 401, 500} {
-		k := &fakeSecrets{items: map[string][]byte{"ensemble-opencode/strata": []byte(apiKey)}}
+		k := &fakeSecrets{items: map[string][]byte{"ensemble-broker-opencode/strata": []byte(apiKey)}}
 		calls := 0
 		body := &probeBody{t: t}
 		transport := roundTrip(func(req *http.Request) (*http.Response, error) {
@@ -63,7 +63,7 @@ func TestOpencodeProbe(t *testing.T) {
 }
 
 func TestOpencodeProbeFailuresAreOpaque(t *testing.T) {
-	k := &fakeSecrets{items: map[string][]byte{"ensemble-opencode/strata": []byte(apiKey)}}
+	k := &fakeSecrets{items: map[string][]byte{"ensemble-broker-opencode/strata": []byte(apiKey)}}
 	transport := roundTrip(func(*http.Request) (*http.Response, error) { return nil, errors.New(apiKey) })
 	available, err := (OpencodeKeys{Keychain: k}).Probe(context.Background(), "strata", "http://strata.test/v1", transport)
 	if available || err != nil {
@@ -93,7 +93,7 @@ func TestOpencodeProbeClassifiesCredentialFailures(t *testing.T) {
 			k := providerKeys("strata")
 			k.readErr = tc.failure
 			if tc.invalid {
-				k.items["ensemble-opencode/strata"] = []byte("\n")
+				k.items["ensemble-broker-opencode/strata"] = []byte("\n")
 			}
 			transport := roundTrip(func(*http.Request) (*http.Response, error) {
 				t.Fatal("credential failure must not contact the provider")

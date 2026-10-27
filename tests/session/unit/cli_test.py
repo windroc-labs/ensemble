@@ -54,7 +54,7 @@ class WorkerEnvironment(Case):
             image="dummy-env:test",
             gateway="workers",
             lock="dummy-lock",
-            secrets=({"item": "ensemble-env/dummy", "file": "dummy.txt"},),
+            secrets=({"item": "ensemble-broker-env/dummy", "file": "dummy.txt"},),
         )
         self.addCleanup(setattr, HostedSession, "_setup", None)
         self.workers = mock.MagicMock()
