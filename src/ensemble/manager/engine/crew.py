@@ -273,8 +273,13 @@ class Crew:
             }:
                 raise ValueError(f"reopen sets {', '.join(sorted(fixed))} from the run record")
             _, client, sid, cwd, name, host, account = _closed_run(work_dir, key)
-            if live := self._live({key, name}, sid):
+            live, unknown = self._live({key, name}, sid)
+            if live:
                 raise ValueError(f"{key}: still live ({', '.join(live)}); close it before reopen")
+            if unknown:
+                raise ValueError(
+                    f"{key}: liveness unknown ({', '.join(unknown)}); close or forget it before reopen"
+                )
             command = (
                 "ensemble-session",
                 "start",
@@ -300,22 +305,25 @@ class Crew:
             raise ValueError(f"unknown launch kind: {kind}")
         return self._run(Spec(name, command, note), sid, shorthand=True, busy=kind == "role")
 
-    def _live(self, names: set[str], sid: str) -> list[str]:
+    def _live(self, names: set[str], sid: str) -> tuple[list[str], list[str]]:
         """Roster entries named in names or holding sid, and sessions listed here or below holding
-        sid, that answer alive; one whose status fails is reported on stderr, not refused.
+        sid: those that answer alive, and those whose liveness is unknown (status failed, reported
+        on stderr; `session listing` when the listing failed).
         """
         candidates = {
             name: entry
             for name, entry in self.roster.entries().items()
             if name in names or sid in (entry.sid, entry.record and entry.record.sid)
         }
-        for record in self._listing(DESCENDANTS) or ():
+        listed = self._listing(DESCENDANTS)
+        for record in listed or ():
             if record.sid == sid:
                 candidates[f"session {record.name}"] = Entry(record, State.LIVE, None, "")
         answers, failures = self._statuses(candidates)
         for name, reason in failures.items():
             print(f"crew: {name}: {reason}", file=sys.stderr)
-        return sorted(name for name, status in answers.items() if status.alive)
+        unknown = [*failures, *(["session listing"] if listed is None else [])]
+        return sorted(name for name, status in answers.items() if status.alive), sorted(unknown)
 
     def _run(self, spec: Spec, sid: str, *, shorthand: bool, busy=False) -> Record:
         self._listed = None
