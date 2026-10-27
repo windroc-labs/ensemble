@@ -1,6 +1,6 @@
 """A guarded Docker worker over a fake `docker exec -i` that relays to the real guard: SIGKILL of the
-harness or of the docker CLI ends the container-side client, and a container hook reaches the
-channel as one WorkerHook.
+harness or of the docker CLI ends the container-side client, a container hook reaches the channel as
+one WorkerHook, and hooks journal the same records and events as on tmux.
 """
 
 import contextlib
@@ -13,13 +13,23 @@ import sys
 from pathlib import Path
 from unittest import mock
 
-from ensemble.session.engine.types import WorkerHook
+from ensemble.session.engine.types import Activity, Blocked, TurnEnd, TurnStarted, WorkerHook
 from ensemble.session.harness import guard
 from ensemble.session.hosts.docker import stub
+from ensemble.session.hosts.docker.hooks import HookWorker
 from ensemble.session.hosts.docker.maintenance import Maintenance
 from ensemble.session.hosts.docker.worker import DockerWorker
 from tests.session import docker_exec_fixture, guard_fixture, live_tmux
 from tests.session.case import Case, child_env
+from tests.session.client_adapters_support import DetailedTui
+from tests.session.tui_hook_support import COMMAND, state, write_state
+
+STEPS = (
+    ("begin", {"session_id": "n1"}),
+    ("work", {"session_id": "n1", "doing": "edit"}),
+    ("wait", {"session_id": "n1", "why": "Bash"}),
+    ("end", {"session_id": "n1", "last": "Done.", "tasks": []}),
+)
 
 
 class Broker:
@@ -32,8 +42,8 @@ class Broker:
 
 class GuardedDockerTest(Case):
     def setUp(self):
-        self.run = os.path.join(self.home, "run")
-        self.env = {**child_env(), "ENSEMBLE_FAKE_RUN": self.run}
+        self.run_dir = os.path.join(self.home, "run")
+        self.env = {**child_env(), "ENSEMBLE_FAKE_RUN": self.run_dir}
         self.addCleanup(self.kill_tree)
 
     def kill_tree(self):
@@ -89,7 +99,7 @@ class GuardedDockerTest(Case):
         return proc, value, int(Path(self.home, "client.pid").read_text())
 
     def exited(self):
-        path = Path(self.run, "g1", "state.json")
+        path = Path(self.run_dir, "g1", "state.json")
         return path.exists() and json.loads(path.read_text()).get("state") == "exited"
 
     def test_sigkill_of_the_harness_ends_the_container_client(self):
@@ -134,16 +144,17 @@ class GuardedDockerTest(Case):
             hooks=None,
             remove=lambda: None,
             owner=os.open(os.path.join(self.home, "guard.lock"), os.O_RDWR | os.O_CREAT, 0o600),
-            maintenance=lambda close: Maintenance(
-                "w1", self.home, "g1", Broker(), report=lambda *_: None, root="/", close=close
+            maintenance=lambda close, report: Maintenance(
+                "w1", self.home, "g1", Broker(), report=report, root="/", close=close
             ),
+            report=lambda *_: None,
             load=lambda: record,
             store=record.update,
             terminal=False,
         )
         self.addCleanup(worker.close)
         worker.await_start()
-        socket_path = os.path.join(self.run, "g1", "hook")
+        socket_path = os.path.join(self.run_dir, "g1", "hook")
         with mock.patch.dict(os.environ, {"ENSEMBLE_GUARD_HOOK_SOCKET": socket_path}):
             payload = b'{"sid": "s1", "transcript_path": "/Users/x/secret"}'
             self.assertEqual(stub.main(["hook", "/tui/w1", "Stop"], io.BytesIO(payload)), 0)
@@ -157,3 +168,70 @@ class GuardedDockerTest(Case):
         [hook] = found
         self.assertEqual((hook.label, hook.payload), ("Stop", {"sid": "s1"}))
         self.assertRegex(hook.delivery_id, r"\A[0-9a-f]{32}\Z")
+
+
+class SameEventsTest(Case):
+    def folder(self, name):
+        folder = os.path.join(self.home, name)
+        os.mkdir(folder)
+        saved = state(self.home, None)
+        saved.pop("host_hook")
+        saved["words"] = {"begin": "working", "work": "working", "wait": "blocked", "end": "done"}
+        write_state(folder, saved)
+        return folder
+
+    def journal(self, folder):
+        with open(os.path.join(folder, "hooks.jsonl")) as f:
+            records = [json.loads(line) for line in f]
+        found = [(r["label"], r["payload"]) for r in records]
+        run = DetailedTui()
+        return found, [
+            event for label, payload in found for event in run.hook_events(label, payload)
+        ]
+
+    def test_guarded_and_tmux_hook_paths_journal_the_same_records_and_events(self):
+        local, guarded = self.folder("tmux"), self.folder("guarded")
+        for label, payload in STEPS:
+            subprocess.run(
+                [COMMAND, "hook", local, label],
+                input=json.dumps(payload).encode(),
+                env=child_env(),
+                check=True,
+                capture_output=True,
+            )
+        self.enterContext(mock.patch.dict(os.environ, child_env(), clear=True))
+        hooks = HookWorker([COMMAND, "hook", "--serve", guarded])
+        self.addCleanup(hooks.stop)
+        record = {"generation": "g1"}
+        worker = DockerWorker(
+            "w1",
+            "g1",
+            mock.Mock(),
+            state=self.home,
+            events=None,
+            hooks=hooks,
+            remove=lambda: None,
+            owner=os.open(os.path.join(self.home, "guard.lock"), os.O_RDWR | os.O_CREAT, 0o600),
+            maintenance=lambda close, report: Maintenance(
+                "w1", self.home, "g1", Broker(), report=report, root="/", close=close
+            ),
+            report=lambda *_: None,
+            load=lambda: record,
+            store=record.update,
+            start_reader=False,
+        )
+        worker.accept(b"s", b'{"pid": 1}')
+        frames = [
+            json.dumps({"label": label, "payload": payload, "delivery_id": f"{n:032x}"}).encode()
+            for n, (label, payload) in enumerate(STEPS)
+        ]
+        for frame in (*frames[:2], frames[1], *frames[2:]):
+            worker.accept(b"h", frame)
+        worker.begin()
+        with worker.condition:
+            self.assertTrue(worker.condition.wait_for(lambda: not worker._hooks_pending(), 30))
+        self.assertEqual(self.journal(guarded), self.journal(local))
+        self.assertEqual(
+            self.journal(guarded)[1],
+            [TurnStarted(), Activity("edit"), Blocked("Bash"), TurnEnd("Done.", 0)],
+        )

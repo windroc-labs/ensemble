@@ -50,6 +50,11 @@ class HookWorker:
             return f"hook exit {self._end(proc, deadline - time.monotonic())}"
         return None if reply == b'{"ok": true}\n' else "hook exit 1"
 
+    def stop(self) -> None:
+        """Ends its process, if one runs."""
+        if self.proc is not None:
+            self._end(self.proc, self.wait)
+
     def _end(self, proc: subprocess.Popen, wait: float = 0.0) -> int:
         """Its exit code, killed unless it exits within `wait` s."""
         self.proc = None

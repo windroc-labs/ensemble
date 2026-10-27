@@ -36,7 +36,10 @@ class Hooks:
     """The resident hook process: each call answers from `answers` (None: ok), else ok."""
 
     def __init__(self, *answers):
-        self.answers, self.calls = list(answers), []
+        self.answers, self.calls, self.stopped = list(answers), [], False
+
+    def stop(self):
+        self.stopped = True
 
     def call(self, label, body, event):
         self.calls.append((label, body, event))
@@ -72,13 +75,13 @@ class Base(Case):
             raise self.remove_errors.pop(0)
 
     def make(self, *, hooks=None, clock=None):
-        def factory(close):
+        def factory(close, report):
             return Maintenance(
                 "worker_1",
                 self.state,
                 GEN,
                 self.broker,
-                report=lambda word, text: self.reports.append((word, text)),
+                report=report,
                 root="/repo",
                 close=close,
                 clock=clock or (lambda: NOW),
@@ -97,6 +100,7 @@ class Base(Case):
             remove=self.remove,
             owner=self.owner,
             maintenance=factory,
+            report=lambda word, text: self.reports.append((word, text)),
             load=lambda: self.record,
             store=self.record.update,
             start_reader=False,
@@ -225,8 +229,10 @@ class HookTest(Base):
         self.assertIsNone(channel.returncode())
         gate.set()
         self.deliver(channel)
+        self.assertTrue(channel.wait_exit(5))
         self.assertEqual([label for label, _, _ in hooks.calls], ["H0", "H1", "H2"])
         self.assertEqual(channel.returncode(), 4)
+        self.assertTrue(hooks.stopped)
 
 
 class MaintenanceTest(Base):
@@ -284,6 +290,30 @@ class MaintenanceTest(Base):
 
 
 class EndTest(Base):
+    def test_the_exit_code_waits_for_the_containers_removal(self):
+        gate = threading.Event()
+        original = self.remove
+
+        def slow():
+            gate.wait(5)
+            original()
+
+        self.remove = slow
+        channel = self.make()
+        channel.accept(b"x", b'{"returncode":5}')
+        self.assertIsNone(channel.returncode())
+        self.assertEqual(channel.state(), Liveness.LIVE)
+        gate.set()
+        self.assertTrue(channel.wait_exit(5))
+        self.assertEqual((channel.state(), channel.returncode()), (Liveness.ABSENT, 5))
+
+    def test_a_report_after_removal_is_dropped(self):
+        channel = self.make()
+        channel.fail("broken")
+        self.assertTrue(channel.wait_exit(5))
+        channel._report("credential_maintenance_failed", "transport")
+        self.assertEqual(self.reports, [])
+
     def test_exit_frame_then_removal_then_absent(self):
         channel = self.make()
         channel.accept(b"x", b'{"returncode":3}')

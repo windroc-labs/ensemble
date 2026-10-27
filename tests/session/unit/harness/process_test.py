@@ -21,6 +21,7 @@ from ensemble.session.engine.types import (
     TurnEnd,
     TurnFailed,
     TurnStarted,
+    Unanswered,
 )
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.process import Harness, Turns
@@ -478,6 +479,9 @@ class RemoteTest(Base):
         ):
             with self.subTest(op=op, data=str(data)[:40]), self.assertRaises(SessionError):
                 self.ask(op, data)
+        owned.failure = Unanswered("worker w1: screen unanswered")
+        with self.assertRaises(Unanswered):
+            self.ask(Op.SCREEN, {"lines": 1})
         for failure in (ConfigError("lines: bad"), SessionError("tui session w1 is not running")):
             owned.failure = failure
             with self.subTest(failure=failure), self.assertRaisesRegex(SessionError, str(failure)):

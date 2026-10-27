@@ -53,7 +53,7 @@ class TickTest(Case):
     def setUp(self):
         self.state = os.path.join(self.home, "state")
         os.makedirs(self.state)
-        self.reports, self.closed = [], 0
+        self.reports, self.closed, self.now = [], 0, NOW
 
     def make(self, broker, *, close=None):
         def closing():
@@ -68,8 +68,12 @@ class TickTest(Case):
             report=lambda word, text: self.reports.append((word, text)),
             root="/repo",
             close=close or closing,
-            clock=lambda: NOW,
+            clock=lambda: self.now,
         )
+
+    def at(self, tick, when):
+        self.now = when
+        return tick.tick(when)
 
     def cache(self, value):
         with open(maintenance.deadline_file(self.state, GEN), "w") as stream:
@@ -100,9 +104,9 @@ class TickTest(Case):
         self.cache(deadline(150))
         broker = Broker(SessionError("down"), SessionError("still down"), found(at(9000)))
         tick = self.make(broker)
-        self.assertEqual(tick.tick(NOW), NOW + 60)
-        self.assertEqual(tick.tick(NOW + 60), NOW + 120)
-        self.assertEqual(tick.tick(NOW + 120), NOW + 150)
+        self.assertEqual(self.at(tick, NOW), NOW + 60)
+        self.assertEqual(self.at(tick, NOW + 60), NOW + 120)
+        self.assertEqual(self.at(tick, NOW + 120), NOW + 150)
         self.assertEqual(self.reports, [("credential_maintenance_failed", "transport")])
         with open(maintenance.deadline_file(self.state, GEN)) as stream:
             self.assertEqual(json.load(stream), deadline(150))
@@ -113,10 +117,10 @@ class TickTest(Case):
             SessionError("down"), SessionError("down"), closes=[SessionError("busy"), None]
         )
         tick = self.make(broker)
-        self.assertEqual(tick.tick(NOW), NOW + 60)
-        self.assertEqual(tick.tick(NOW + 60), NOW + 100)
-        self.assertEqual(tick.tick(NOW + 100), NOW + 160)
-        self.assertIsNone(tick.tick(NOW + 160))
+        self.assertEqual(self.at(tick, NOW), NOW + 60)
+        self.assertEqual(self.at(tick, NOW + 60), NOW + 100)
+        self.assertEqual(self.at(tick, NOW + 100), NOW + 160)
+        self.assertIsNone(self.at(tick, NOW + 160))
         self.assertIsNone(tick.due)
         self.assertEqual(self.closed, 2)
         self.assertEqual(
@@ -172,6 +176,26 @@ class TickTest(Case):
             ],
         )
         self.assertNotIn(secret, repr(self.reports))
+
+    def test_a_retry_counts_from_when_the_broker_call_returned(self):
+        clock = [NOW]
+
+        class Slow(Broker):
+            def maintain(self, container, manifest, delivered, *, root):
+                clock[0] += 1800
+                return super().maintain(container, manifest, delivered, root=root)
+
+        tick = maintenance.Maintenance(
+            "worker_1",
+            self.state,
+            GEN,
+            Slow(SessionError("broker: maintain timed out after 1800 s")),
+            report=lambda *_: None,
+            root="/repo",
+            close=lambda: None,
+            clock=lambda: clock[0],
+        )
+        self.assertEqual(tick.tick(NOW), NOW + 1800 + 60)
 
     def test_run_waits_for_each_due_time_and_stops_when_asked(self):
         clock = [NOW]

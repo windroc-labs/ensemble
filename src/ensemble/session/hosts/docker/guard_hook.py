@@ -5,8 +5,8 @@ done and blocked, its events line, on the host; no docker call.
 import re
 
 from ensemble.session.engine.types import HookCall, HookError
+from ensemble.session.hosts.docker.activity import write_activity
 from ensemble.session.hosts.docker.mounts import state_dir
-from ensemble.session.hosts.docker.worker import write_activity
 
 TARGET = re.compile(r"[A-Za-z0-9_-]+")
 

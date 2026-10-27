@@ -74,6 +74,7 @@ from ensemble.session.hosts.base import (
 from ensemble.session.hosts.docker import guard_hook, maintenance
 from ensemble.session.hosts.docker import hook as docker_hook
 from ensemble.session.hosts.docker import supervisor as run_supervisor
+from ensemble.session.hosts.docker.activity import activity
 from ensemble.session.hosts.docker.broker import (
     RELAY,
     Broker,
@@ -102,13 +103,7 @@ from ensemble.session.hosts.docker.mounts import (
 from ensemble.session.hosts.docker.pipe import DockerPiped
 from ensemble.session.hosts.docker.relay import GEN, SOCKET
 from ensemble.session.hosts.docker.types import Started
-from ensemble.session.hosts.docker.worker import (
-    GUARD,
-    RUN,
-    DockerWorker,
-    GuardedView,
-    activity,
-)
+from ensemble.session.hosts.docker.worker import GUARD, RUN, DockerWorker, GuardedView
 from ensemble.session.hosts.types import CommandView
 from ensemble.utils import (
     DOCKER_STATE,
@@ -1408,6 +1403,7 @@ class DockerHost(Host):
         owner = _take_owner(name)
         if owner is None:
             raise SessionBusy(name, BUSY)
+        made: list[DockerWorker] = []  # once built, the handle alone owns `owner`
         try:
             for row in self._rows():
                 if row.name == name and _guarded(name, row.generation):
@@ -1420,6 +1416,7 @@ class DockerHost(Host):
                     launch,
                     stops,
                     owner=owner,
+                    made=made,
                     terminal=terminal,
                     display=display,
                     events=events,
@@ -1427,7 +1424,7 @@ class DockerHost(Host):
                     environment=environment,
                 )
         except BaseException:
-            if name not in self._workers or self._workers[name].owner != owner:
+            if not made:
                 os.close(owner)
             raise
         return handle
@@ -1439,6 +1436,7 @@ class DockerHost(Host):
         stops: _Stops,
         *,
         owner: int,
+        made: list[DockerWorker],
         terminal: bool,
         display: Display,
         events: str | None,
@@ -1511,13 +1509,14 @@ class DockerHost(Host):
                     state_dir(name),
                     generation,
                     self.broker,
-                    report=self._reporter(name, events),
                     root=hook_root(hook),
                 ),
+                report=self._reporter(name, events),
                 load=lambda: _record(name),
                 store=lambda data: _save_record(name, data),
                 terminal=terminal,
             )
+            made.append(handle)
             handle.await_start()
             handle.begin()
             laps("client")
@@ -1852,7 +1851,9 @@ class DockerHost(Host):
     def _guarded_process(self, row: Row) -> InteractiveProcess:
         """The handle this process holds, else a view of the worker its owner holds."""
         handle = self._workers.get(row.name)
-        if handle is not None and handle.generation == row.generation and not handle.removed:
+        if handle is not None and handle.removed:
+            del self._workers[row.name]
+        elif handle is not None and handle.generation == row.generation:
             return handle
         name, generation = row.name, row.generation
 

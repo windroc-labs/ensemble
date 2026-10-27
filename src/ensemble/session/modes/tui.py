@@ -707,7 +707,7 @@ class TuiMode(BaseMode):
             state = self._terminal.state()
             if not self._replaced(state) and state != Liveness.UNKNOWN:
                 code = self._terminal.returncode()
-                if state == Liveness.ABSENT:
+                if state == Liveness.ABSENT and code is None:
                     code = -signal.SIGHUP
                 if code is not None:
                     self._code = code
@@ -827,7 +827,7 @@ class TuiMode(BaseMode):
         deadline = time.monotonic() + timeout
         while self._code is None:
             self._code = self._terminal.returncode()
-            if self._terminal.state() == Liveness.ABSENT:
+            if self._code is None and self._terminal.state() == Liveness.ABSENT:
                 self._code = -signal.SIGHUP
             if self._code is None:
                 if (left := deadline - time.monotonic()) <= 0:

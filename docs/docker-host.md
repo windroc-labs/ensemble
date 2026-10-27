@@ -493,10 +493,10 @@ Then `ensemble-crew worker NAME --client claude` starts NAME in its own containe
 the Viewer, `--display none`, `[session.viewer]` and `ls --descendants` work as on tmux. Every docker call goes to
 `unix://<account home>/.docker/run/docker.sock`, whatever `DOCKER_HOST`, `DOCKER_CONTEXT` or `DOCKER_CONFIG` say.
 
-In a Codex or OpenCode worker pane (the container's tmux), scroll up with the mouse wheel or trackpad, both in iTerm's tmux integration
-and in a regular terminal. New workers enable the container tmux's `mouse` option and keep 50,000
-history lines, matching `ctmux`. Clients that capture the mouse (Claude Code, for example) keep their
-own scrolling; otherwise tmux enters copy mode to show pane history. Scroll back to the bottom to
+In a Codex or OpenCode worker pane (the container's tmux), scroll up with the mouse wheel or trackpad,
+both in iTerm's tmux integration and in a regular terminal. New workers enable the container tmux's
+`mouse` option and keep 50,000 history lines, matching `ctmux`. Clients that capture the mouse keep
+their own scrolling; otherwise tmux enters copy mode to show pane history. Scroll back to the bottom to
 resume input, or press `q` to leave tmux copy mode. The history is inside the container; the host pane's
 scrollbar alone cannot show it. Restart an existing worker to apply these settings; no image rebuild is needed.
 
@@ -884,9 +884,9 @@ SIGTERM and, 60 s later, SIGKILL. From just before the broker's `start` until th
 SIGINT and SIGHUP back (an ignored one stays ignored); on one it removes its container, then the signal acts. Stopped
 later, it leaves its worker running.
 
-**Probes**: a [harness-owned worker](#harness-owned-workers) makes none: its liveness, exit, input and screen
-travel on its channel. For the others, each tmux call is one `docker exec`. A running session's handle (the delegate harness's, polling every
-0.5 s) shares one pane probe and one screen capture between its liveness, exit code and screen reads; while the probe
+**Probes**: a [harness-owned worker](#harness-owned-workers) makes none; its liveness, exit, input and
+screen travel on its channel. For the others, each tmux call is one `docker exec`. A running session's
+handle (the delegate harness's, polling every 0.5 s) shares one pane probe and one screen capture between its liveness, exit code and screen reads; while the probe
 and screen stay unchanged, the interval doubles from 0.5 s to 3 s, and a change, `send` or key press resets it.
 An idle session costs at most 1 exec per second (about 0.7), a busy one 2 per 0.5 s tick (5 before). A client
 exit or a dialog or usage limit on screen is seen within 3.5 s plus the exec time (0.5 s before); turn ends and other
@@ -1060,7 +1060,7 @@ These proxy checks have not yet been run on the mini; the earlier bridge results
 
 | Command | Checks |
 |---|---|
-| `python3 tests/session/live_docker.py worker --client claude\|codex\|opencode CWD [NAME]`, from a manager session | a second build reuses the image; with no `--host`, the worker runs in a container; its security flags (`--cap-drop ALL`, only the egress proxy's `workers` network, no extra hosts) and mounts match the plan, and the [unreachable](credentials.md#what-a-container-cannot-reach) resources stay so; a supervisor killed mid-turn delivers its event once; restart, close then resume, and `docker rm -f` then resume each answer a prompt; every close revokes the generation's GitHub tokens and withdraws its client credential; no revocation stays pending but the removed container's, whose tokens it reports; for OpenCode also: the first turn leaves `~/.ensemble/docker-state/<NAME>/opencode/opencode/opencode.db`, Ollama listens on `127.0.0.1` only (`lsof`), the container holds only GitHub secrets and each configured provider's key (`find /run/ensemble/secrets`), and each resume continues the same OpenCode session |
+| `python3 tests/session/live_docker.py worker --client claude\|codex\|opencode CWD [NAME]`, from a manager session | a second build reuses the image; with no `--host`, the worker runs in a container; its security flags (`--cap-drop ALL`, only the egress proxy's `workers` network, no extra hosts) and mounts match the plan, and the [unreachable](credentials.md#what-a-container-cannot-reach) resources stay so; for Codex or OpenCode a supervisor killed mid-turn delivers its event once, for Claude a harness killed mid-turn ends the container's client and `resume` continues it; restart, close then resume, and `docker rm -f` then resume each answer a prompt; every close revokes the generation's GitHub tokens and withdraws its client credential; no revocation stays pending but the removed container's, whose tokens it reports; for OpenCode also: the first turn leaves `~/.ensemble/docker-state/<NAME>/opencode/opencode/opencode.db`, Ollama listens on `127.0.0.1` only (`lsof`), the container holds only GitHub secrets and each configured provider's key (`find /run/ensemble/secrets`), and each resume continues the same OpenCode session |
 | `python3 tests/session/live_docker.py role --repo OWNER/NAME [--timeout S] [NAME]` | a headless engineer run on the test repo gets one forced token renewal (`maintain --renew`), opens a draft PR as `windroc-bot[bot]` after it, and its close reclaims its credentials |
 | `python3 tests/session/live_docker.py pr URL` | the PR, such as an unattended board run's, was opened as a draft by `windroc-bot[bot]` |
 

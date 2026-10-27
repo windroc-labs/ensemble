@@ -3692,6 +3692,27 @@ class GuardedStartTest(GuardedBase):
             with self.assertRaisesRegex(SessionError, "^docker session w: busy$"):
                 self.host.worker("w", self.launch, terminal=False, metadata=self.METADATA)
 
+    def test_a_start_failing_after_its_handle_closes_the_owner_lock_once(self):
+        class Broken(GuardExec):
+            def write(self, kind, value):
+                super().write(b"z" if kind == b"s" else kind, value)
+
+        def popen(argv, **_):
+            if "--hook-socket" in argv:
+                proc = Broken(argv)
+                self.addCleanup(proc.exit, 0)
+                return proc
+            return mock.Mock(pid=4321)
+
+        self.popen_mock.side_effect = popen
+        spare = os.open(os.devnull, os.O_RDONLY)
+        self.addCleanup(_close, spare)
+        with self.assertRaisesRegex(SessionError, "^docker session w: "):
+            self.owned()
+        self.assertIn(CONTAINER, self.broker.closed)
+        self.assertTrue(_free(os.path.join(self.state, "guard.lock")))
+        os.fstat(spare)
+
     def test_a_held_owner_lock_is_busy_before_any_container(self):
         self.owner_held()
         with self.assertRaises(SessionBusy):

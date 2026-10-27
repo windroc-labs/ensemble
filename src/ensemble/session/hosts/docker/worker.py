@@ -13,7 +13,6 @@ import time
 from collections import OrderedDict, deque
 from collections.abc import Callable, Mapping
 
-from ensemble.session.engine.status_log import SessionStatusLog
 from ensemble.session.engine.types import (
     Key,
     Liveness,
@@ -24,10 +23,11 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.harness import guard
 from ensemble.session.hosts.base import InteractiveProcess
+from ensemble.session.hosts.docker.activity import activity, write_activity
 from ensemble.session.hosts.docker.hooks import HookWorker
 from ensemble.session.hosts.docker.maintenance import RETRY, Maintenance, run
 from ensemble.session.hosts.managed import QUEUE_MAX, WAIT, ManagedProcess
-from ensemble.utils import Record, read_regular, save
+from ensemble.utils import Record
 
 GUARD = "/opt/ensemble/src/ensemble/session/harness/guard.py"
 RUN = "/run/ensemble/guard"
@@ -36,27 +36,6 @@ SEEN = 4096
 HOOK_PAUSE = 1.0
 HOOK_TRIES_FOR = 60.0
 LOG_MAX = 1 << 20
-MARKS = (StatusState.WORKING, StatusState.DONE, StatusState.BLOCKED)
-
-
-def activity_file(state: str, generation: str) -> str:
-    """The word its last hook marked, written by guard_hook."""
-    return os.path.join(state, f"{generation}.activity")
-
-
-def activity(state: str, generation: str) -> StatusState | None:
-    try:
-        word = (read_regular(activity_file(state, generation)) or b"").decode()
-    except (OSError, UnicodeError):
-        return None
-    return StatusState(word) if word in MARKS else None
-
-
-def write_activity(state: str, generation: str, word: str, events: str | None, name: str) -> None:
-    """Its activity file, then for done and blocked the events line."""
-    save(activity_file(state, generation), word)
-    if word in (StatusState.DONE, StatusState.BLOCKED) and events:
-        SessionStatusLog(events).write(name, word)
 
 
 def reject(state: str, generation: str, reason: str) -> None:
@@ -147,6 +126,7 @@ class DockerWorker(ManagedProcess):
         remove: Callable[[], None],
         owner: int,
         maintenance: Callable[..., Maintenance],
+        report: Callable[[str, str], None],
         load: Callable[[], dict],
         store: Callable[[Mapping], None],
         terminal: bool = True,
@@ -166,7 +146,8 @@ class DockerWorker(ManagedProcess):
         self.stopped = threading.Event()
         self.retry = threading.Event()
         self.ender: threading.Thread | None = None
-        self.maintenance = maintenance(close=self._expire)
+        self.report = report
+        self.maintenance = maintenance(close=self._expire, report=self._report)
         super().__init__(name, generation, proc, terminal=terminal, start_reader=start_reader)
 
     @property
@@ -223,6 +204,11 @@ class DockerWorker(ManagedProcess):
                 self.delivering = False
                 self.condition.notify_all()
 
+    def _report(self, word: str, text: str) -> None:
+        """Maintenance's report, dropped once the worker is gone."""
+        if not self.stopped.is_set():
+            self.report(word, text)
+
     def _hooks_pending(self) -> bool:
         return bool(self.hook_queue) or self.delivering
 
@@ -266,13 +252,18 @@ class DockerWorker(ManagedProcess):
                 self.retry.clear()
                 continue
             break
+        self.stopped.set()
+        with self.condition:
+            self.condition.notify_all()
+            self.condition.wait_for(lambda: not self.delivering, self.hook_window)
+        if self.hooks is not None:
+            self.hooks.stop()
+        with contextlib.suppress(OSError):
+            os.close(self.owner)
         with self.condition:
             self.removed = True
             self.attempts += 1
-            self.stopped.set()
             self.condition.notify_all()
-        with contextlib.suppress(OSError):
-            os.close(self.owner)
 
     def close(self) -> None:
         """Returns once its container's removal is confirmed; SessionError when it failed."""
@@ -296,9 +287,11 @@ class DockerWorker(ManagedProcess):
         return Liveness.LIVE
 
     def returncode(self) -> int | None:
-        """The guard's code once its hooks are journaled; None without one."""
+        """The guard's code once its container's removal is confirmed (its hooks journaled
+        first); None before, or without one.
+        """
         with self.condition:
-            return None if self._hooks_pending() else self.code
+            return self.code if self.removed else None
 
     def read(self, timeout: float):
         if self.removed:

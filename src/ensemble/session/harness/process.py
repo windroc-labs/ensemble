@@ -25,6 +25,7 @@ from ensemble.session.engine.types import (
     TurnEnd,
     TurnFailed,
     TurnStarted,
+    Unanswered,
 )
 from ensemble.session.harness.channel import SLICE, Channel, encode
 from ensemble.session.harness.dispatch import Dispatch, load_handlers
@@ -190,7 +191,9 @@ class Harness:
         try:
             found = _served(worker, op, data)
         except (ConfigError, SessionError, ValueError) as error:
-            self._answer(ident, ok=False, error=str(error))
+            self._answer(
+                ident, ok=False, error=str(error), unanswered=isinstance(error, Unanswered)
+            )
         else:
             self._answer(ident, ok=True, data=found)
 

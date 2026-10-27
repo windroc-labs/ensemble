@@ -60,6 +60,7 @@ def docker(args: list[str]) -> int:
         env=env,
         start_new_session=True,
     )
+    os.makedirs(os.environ["ENSEMBLE_FAKE_RUN"], exist_ok=True)
     Path(os.environ["ENSEMBLE_FAKE_RUN"], "docker.pid").write_text(str(os.getpid()))
     assert child.stdin is not None and child.stdout is not None
     threading.Thread(
@@ -110,9 +111,10 @@ def harness(directory: str, client: list[str]) -> None:
         hooks=None,
         remove=lambda: None,
         owner=owner,
-        maintenance=lambda close: Maintenance(
-            "w1", directory, "g1", _Broker(), report=lambda *_: None, root="/", close=close
+        maintenance=lambda close, report: Maintenance(
+            "w1", directory, "g1", _Broker(), report=report, root="/", close=close
         ),
+        report=lambda *_: None,
         load=lambda: record,
         store=record.update,
         terminal=False,

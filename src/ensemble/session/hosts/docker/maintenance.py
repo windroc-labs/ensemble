@@ -41,7 +41,7 @@ class Maintenance:
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.state, self.generation, self.broker = state, generation, broker
-        self.report, self.root, self.close = report, root, close
+        self.report, self.root, self.close, self.clock = report, root, close, clock
         self.container = f"ensemble-{name}-{generation}"
         self.manifest = os.path.join(state, f"{generation}.json")
         self.deadline = _cached(deadline_file(state, generation))
@@ -93,7 +93,7 @@ class Maintenance:
                 why = str(error) if isinstance(error, BrokerError) else "transport"
                 _tell(self.report, "credential_maintenance_failed", why)
             self.failing = True
-            return now + RETRY
+            return self.clock() + RETRY
         self.failing, self.delivered = False, []
         for result in found.results:
             if (failed := result["error"]) is not None:
@@ -117,7 +117,7 @@ class Maintenance:
                     json.dumps(self.deadline),
                     durable=True,
                 )
-        return now if self.delivered else _timestamp(found.next_check)
+        return self.clock() if self.delivered else _timestamp(found.next_check)
 
 
 def run(
