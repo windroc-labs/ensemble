@@ -677,24 +677,20 @@ class Real(RealConfig):
         with open(os.path.join(TEAM, "methods", "fix-root-causes.md")) as f:
             method = f.read()
         for phrase in (
-            "root cause",
-            "never its symptom",
-            "**Reproduce**",
-            "ask why",
-            "instrument",
-            "read the actual error",
-            "a nil check, a broad except, a retry, a sleep or a loosened assertion",
-            "paragraph-long comment",
-            "every occurrence",
-            "stale persistent state (config, caches, lock files, serialized state) before code",
-            "never rerun or committed around",
-            "no empty commits",
-            'no "base flake" label without a cause',
-            "concurrent writers, an unawaited exit",
-            "A failure another ticket owns → name that ticket and rerun.",
-            "a bug, a failing or intermittent test, a review blocker",
+            "# Fix Root Causes",
+            "When debugging, do not fix symptoms. Trace every problem to its root cause and fix it there.",
+            "- Reproduce first",
+            '- Ask "why" until you hit the root cause',
+            "adding a nil check to silence a crash is a symptom fix",
+            "If a workaround needs a paragraph-long comment to justify it, the code is wrong",
+            "grep for the same pattern, fix all instances",
+            "When stuck, instrument. Don't guess (add logging, read the actual error)",
+            "**Restart bugs: suspect state before code**",
+            "suspect stale persistent state first: config files, caches, lock files, serialized state",
         ):
             self.assertIn(phrase, method)
+        for phrase in ("never rerun or committed around", "base flake", "ticket owns"):
+            self.assertNotIn(phrase, method)
         for role, task in runs():
             if role != "engineer":
                 self.assertNotIn("fix-root-causes", composed(role, task)[0], (role, task))
