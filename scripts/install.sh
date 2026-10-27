@@ -97,7 +97,7 @@ usage: $synopsis
   --no-board                 skip board setup (first-run default)
   --launchd, --no-launchd     choose router/promote jobs (docs/board.md)
   --opencode-provider <name>  the OpenAI-compatible provider OpenCode runs on, e.g. a LAN model server
-  --opencode-url <url>        its base URL, ending /v1
+  --opencode-url <url>        its base URL, ending /v1; a provider other than the saved one needs it
   --opencode-model <model>    its model
   --opencode-context <tokens> its context window in tokens (default 65536)
   --opencode-key-stdin        read the provider's API key from stdin
@@ -227,8 +227,14 @@ opencode_flags() { [ -n "$provider_flag$url_flag$model_flag$context_flag$key_std
 
 # The flags' conflicts that flags and State already decide, before anything runs.
 early_checks() {
+  local saved
   if opencode_flags && [ -n "$clients_flag" ]; then
     case ",$clients_flag," in *,opencode,*) ;; *) usage_error "--opencode-*: opencode is not among the clients" ;; esac
+  fi
+  # A provider's fields come with its name (answers): another provider without its URL would get the saved one's.
+  saved=$(state_get opencode_provider)
+  if [ -n "$provider_flag" ] && [ -z "$url_flag" ] && [ -n "$saved" ] && [ "$provider_flag" != "$saved" ]; then
+    usage_error "--opencode-provider $provider_flag: a provider other than the saved $saved needs --opencode-url"
   fi
 }
 
@@ -763,9 +769,16 @@ answers() {
       fi
     fi
     provider=${provider_flag:-$prev_provider}
-    url=${url_flag:-$prev_url}
-    model=${model_flag:-$prev_model}
-    context=${context_flag:-$prev_context}
+    # Another provider takes none of the saved one's fields: its key would go to that provider's server.
+    if [ "$provider" = "$prev_provider" ]; then
+      url=${url_flag:-$prev_url}
+      model=${model_flag:-$prev_model}
+      context=${context_flag:-$prev_context}
+    else
+      url=$url_flag
+      model=$model_flag
+      context=$context_flag
+    fi
     if [ -z "$provider" ]; then
       ask_valid "OpenCode provider name:" valid_name
       provider=$answer

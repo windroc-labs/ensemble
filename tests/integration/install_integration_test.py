@@ -6117,6 +6117,41 @@ exec /bin/rm "$@"
         self.assertEqual(self.opencode_files()[1], providers)
         self.assertEqual(self.provider_state(), ("lan", "http://localhost:8080/v1", "m", "65536"))
 
+    def test_new_provider_takes_nothing_from_the_saved_one(self):
+        """A --opencode-provider other than the saved one never gets the saved provider's URL, model or context,
+        so its key never goes to that provider's server: without --opencode-url it is a usage error before sudo,
+        with it its model and context are asked. Naming the saved provider still reuses it."""
+        self.assert_ok(self.opencode_only())
+        saved = self.provider_state()
+        result = self.opencode_again("--opencode-provider", "lan")
+        self.assert_ok(result)
+        self.assert_not_asked(result)
+        self.assertEqual(self.provider_state(), saved)
+        result = self.opencode_again("--opencode-provider", "other", key=True)
+        self.assertEqual(result.code, 2, result.stderr)
+        self.assertIn(
+            "install.sh: --opencode-provider other: a provider other than the saved lan needs"
+            " --opencode-url\n",
+            result.stderr,
+        )
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(self.provider_state(), saved)
+        self.assert_secret_free(KEY, PASSWORD, result=result)
+        with self.subTest("with its own URL"):
+            result = self.opencode_again(
+                "--opencode-provider",
+                "other",
+                "--opencode-url",
+                "http://localhost:9090/v1",
+                answers=[(MODEL_Q, "m2"), (CONTEXT_Q, "4096"), (WRITE_Q, "n"), (WRITE_Q, "n")],
+                key=True,
+            )
+            self.assert_ok(result)
+            self.assertEqual(
+                self.provider_state(), ("other", "http://localhost:9090/v1", "m2", "4096")
+            )
+            self.assert_secret_free(KEY, PASSWORD, result=result)
+
     def logged_out(self, client, hang=""):
         """`client` logged out with no login record; its next login hangs (`stored`: after logging in)."""
         (self.fakes / "login" / client).unlink(missing_ok=True)
