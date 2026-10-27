@@ -5,6 +5,7 @@ import plistlib
 import re
 import select
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -56,6 +57,7 @@ REAL = (
     "ln",
     "ls",
     "install",
+    "readlink",
 )
 FAKED = ("uname", "id", "sudo", "curl", "security", "open", "launchctl", "shasum")
 FAKED += ("xcode-select", "ps", "sw_vers", "lipo", "pgrep", "pkill", "defaults")
@@ -98,6 +100,8 @@ LEAVE_Q = r"Press Enter to leave this screen:"
 SCREEN_ON, SCREEN_OFF = "\x1b[?1049h\x1b[H\x1b[2J", "\x1b[H\x1b[2J\x1b[?1049l"
 PEM_Q = r"private key \(\.pem; [^)]*\), empty to skip:"
 DOCKER_LOGINS = ((TOKEN_Q, TOKEN), (PEM_Q, ""))
+# Docker's context store directory for context desktop-linux.
+DESKTOP_CONTEXT = hashlib.sha256(b"desktop-linux").hexdigest()
 DOCKER_PRESETS = {"UseVirtualizationFrameworkRosetta": False, "DisplayedOnboarding": True}
 PRESETS_NOT_WRITTEN = "    Docker Desktop presets not written (Rosetta off, onboarding done): "
 NOT_TOLD = "    not recorded for cleanup: "
@@ -112,9 +116,21 @@ SHARED = (
     "under_home",
     "ledger_valid",
     "agent_tree_find",
+    "exit_traps",
     "sudo_once",
     "sudo_end",
     "terminal",
+    "egress_absent",
+    "opencode_config_edit",
+)
+LOADED = "com.windroc.ensemble.router com.windroc.ensemble.promote"
+UNLOAD = (
+    "; unload them as docs/architecture.md#board-setup says (launchctl bootout gui/<uid>/com.windroc.ensemble.<job>,"
+    " then remove its plist)"
+)
+REJECTED = (
+    "install.sh: Codex: the saved login was rejected (401 Unauthorized): run codex login,"
+    " then rerun install.sh"
 )
 RELOAD = (
     "install.sh: in this terminal, run source ~/.zprofile first (or open a new one): its PATH"
@@ -250,7 +266,7 @@ HAND_CONFIG = (
         for role, d in (("researcher", "Research/"), ("pm", "Product Design/"))
     )
 )
-Result = namedtuple("Result", "code stdout stderr tty")
+Result = namedtuple("Result", "code stdout stderr tty pid")
 ITEMS = ("claude", "codex", "opencode", "docker", "board")
 
 
@@ -258,6 +274,17 @@ def menu(want, have=("claude", "codex")):
     """The checklist keys that turn the ticked items `have` into `want`: space where they differ, down to the
     next item; the answer's newline confirms."""
     return "".join((" " if (i in want) != (i in have) else "") + "\x1b[B" for i in ITEMS)
+
+
+def ctrl_c(markers, proc, sig=signal.SIGINT):
+    """`sig` (SIGINT: a terminal's Ctrl-C) to `proc`'s process group once each of `markers`, in turn, exists."""
+    for marker in markers:
+        deadline = time.monotonic() + 30
+        while not marker.exists():
+            if proc.poll() is not None or time.monotonic() > deadline:
+                return
+            time.sleep(0.02)
+        os.killpg(proc.pid, sig)
 
 
 def executable(path, text):
@@ -424,8 +451,24 @@ class InstallTest(Case):
         self.assertEqual(self.plugin_calls(), [])
         return result
 
-    def run_install(self, *args, answers=(), stdin=None, tty=True, script=SCRIPT, ctty=None):
-        """`ctty`: what /dev/tty opens, else the terminal, which is also /dev/ttys001."""
+    def run_install(
+        self,
+        *args,
+        answers=(),
+        stdin=None,
+        tty=True,
+        script=SCRIPT,
+        ctty=None,
+        shell="bash",
+        interrupt=None,
+        sig=signal.SIGINT,
+        group=False,
+    ):
+        """`ctty`: what /dev/tty opens, else the terminal, which is also /dev/ttys001.
+        `shell`: what runs `script`, as `curl … | bash` does on a Mac: its /bin/bash.
+        `interrupt`: a path, or a tuple of them; once each exists, in turn, `sig` (Ctrl-C's SIGINT) to the script's
+        process group.
+        `group`: the script leads a process group of its own (Result.pid), as with `interrupt`."""
         self.log.unlink(missing_ok=True)
         terminal = Tty() if tty else None
         links = (self.root / "dev/tty", self.root / "dev/ttys001")
@@ -438,13 +481,17 @@ class InstallTest(Case):
         try:
             with out.open("w") as stdout, err.open("w") as stderr:
                 proc = subprocess.Popen(
-                    ["bash", str(script), *args],
+                    [shell, str(script), *args],
                     env=self.env,
                     stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
                     stdout=stdout,
                     stderr=stderr,
                     text=True,
+                    process_group=0 if interrupt or group else None,
                 )
+                if interrupt:
+                    markers = interrupt if isinstance(interrupt, tuple) else (interrupt,)
+                    threading.Thread(target=ctrl_c, args=(markers, proc, sig), daemon=True).start()
                 if stdin is not None:
                     proc.stdin.write(stdin)
                     proc.stdin.close()
@@ -459,7 +506,7 @@ class InstallTest(Case):
         finally:
             if terminal:
                 terminal.close()
-        result = Result(proc.returncode, out.read_text(), err.read_text(), text)
+        result = Result(proc.returncode, out.read_text(), err.read_text(), text, proc.pid)
         if missed:
             self.fail(f"{missed}\nstderr:\n{result.stderr}\nterminal:\n{result.tty}")
         return result
@@ -513,6 +560,7 @@ class InstallTest(Case):
         then=(),
         provider_write=True,
         egress_failure=False,
+        shell="bash",
     ):
         """A first run answering every question: brew profile line, clients, Docker, the
         OpenCode provider, the config, the Docker logins, the PATH line, then `then` (the board's).
@@ -544,7 +592,7 @@ class InstallTest(Case):
             *([(WRITE_Q, "y")] if "opencode" in (chosen or "") and not egress_failure else []),
             *then,
         ]
-        return self.run_install(*args, answers=answers, ctty=ctty)
+        return self.run_install(*args, answers=answers, ctty=ctty, shell=shell)
 
     def again(self, *args, answers=()):
         """Flags and saved choices pre-answer a rerun's checklist."""
@@ -625,6 +673,7 @@ class InstallTest(Case):
             ["--bogus"],
             ["--ref"],
             ["--ref", "-x"],
+            *(["--ref", ref] for ref in ("a..b", "x/", "/x", "x//y", ".x", "x/.y", "x.lock", "x.")),
             ["--docker", "--no-docker"],
             ["--clients", "claude,,codex"],
             ["--clients", "claude,vim"],
@@ -851,7 +900,7 @@ class InstallTest(Case):
         self.config().write_text(
             '[session.hosts]\ndefault = "docker"\n[delegate]\nclient = "codex"\n'
         )
-        result = self.again(answers=[(WRITE_Q, "y"), (PEM_Q, "")])
+        result = self.again(answers=[(PEM_Q, "")])
         self.assert_ok(result)
         self.assertIn("> [ ] Claude Code\r\n\r\x1b[K  [x] Codex", result.tty)
         self.assertEqual((self.state()["clients"], self.state()["docker"]), ("codex", "yes"))
@@ -924,21 +973,18 @@ class InstallTest(Case):
         self.assertEqual(
             self.config().read_text(),
             "# Written by install.sh. Keys and defaults: each layer's packaged config.toml "
-            "(its `# local:` lines);\n# the Linear board: docs/board.md#setup.\n"
-            '[session.hosts]\ndefault = "docker"\n\n[delegate]\nclient = "codex"\n\n'
-            '[delegate.delegates]\nharness_host = "tmux"\n',
+            "(its `# local:` lines);\n# the Linear board: docs/architecture.md#board-setup.\n"
+            '[session.hosts]\ndefault = "docker"\n\n[delegate]\nclient = "codex"\n',
         )
         cases = (
             (
                 '# mine\n[session.hosts]\ndefault = "tmux" # x\n\n[other]\nx = 1\n',
                 '# mine\n[session.hosts]\ndefault = "docker"\n\n[other]\nx = 1\n\n'
-                '[delegate]\nclient = "codex"\n\n'
-                '[delegate.delegates]\nharness_host = "tmux"\n',
+                '[delegate]\nclient = "codex"\n',
             ),
             (
-                '[delegate.delegates]\n\n[session.hosts]\ndefault = "docker"\n[delegate]\nclient = "codex"\n',
-                '[delegate.delegates]\nharness_host = "tmux"\n\n[session.hosts]\ndefault = "docker"\n'
-                '[delegate]\nclient = "codex"\n',
+                '[delegate]\n\n[session.hosts]\ndefault = "docker"\n',
+                '[delegate]\nclient = "codex"\n\n[session.hosts]\ndefault = "docker"\n',
             ),
         )
         for before, after in cases:
@@ -1044,6 +1090,8 @@ class InstallTest(Case):
             ({"ref": "../../x/y/main"}, "not a git ref: '../../x/y/main'"),
             ({"ref": "v1#x"}, "not a git ref: 'v1#x'"),
             ({"ref": "-x"}, "not a git ref: '-x'"),
+            ({"ref": "a..b"}, "not a git ref: 'a..b'"),
+            ({"ref": "x.lock"}, "not a git ref: 'x.lock'"),
             ({"ref": "v1\nx"}, "not a git ref: 'v1\\nx'"),
             ({"ref": 7}, "not a git ref: 7"),
             ({"sha": OLD}, "pinned by sha, not a release tag"),
@@ -1058,6 +1106,14 @@ class InstallTest(Case):
                     f" (.claude-plugin/marketplace.json): {reason}\n",
                     result.stderr,
                 )
+
+    def test_p2b_ref_with_dots_rejected_before_sudo(self):
+        self.assert_ok(self.fresh("--clients", "claude", "--no-docker"))
+        flags = ("--clients", "claude", "--no-docker", "--password-stdin")
+        result = self.run_install("--ref", "a..b", *flags, stdin=PASSWORD + "\n")
+        self.assertEqual(result.code, 2, result.stderr)
+        self.assertIn("install.sh: --ref: not a git ref: a..b\n", result.stderr)
+        self.assertFalse([c for c in self.calls() if c.startswith("sudo")])
 
     def test_unreadable_marketplace_stops(self):
         (self.fakes / "marketplace/.agents/plugins/marketplace.json").unlink()
@@ -1168,7 +1224,7 @@ class InstallTest(Case):
         )
         self.assertEqual((self.fakes / "src/broker/claude_token").read_text(), TOKEN)
         self.assertIn(
-            "skip: no GitHub App key: create the App by docs/docker-host.md#create-the-github-app",
+            "skip: no GitHub App key: create the App by docs/architecture.md#create-the-github-app",
             result.stderr,
         )
         state = self.state()
@@ -1209,7 +1265,7 @@ class InstallTest(Case):
         )
         before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in checkout.iterdir()}
         before[config] = (config.read_bytes(), config.stat().st_mtime_ns)
-        self.assertIn(f"gh api repos/windroc/egress-proxy/tarball/{sha}", self.calls())
+        self.assertIn(f"gh api repos/windroc-labs/egress-proxy/tarball/{sha}", self.calls())
         self.assertIn("docker egress-start", self.calls())
         self.assert_ok(self.again("--clients", "claude", "--docker"))
         self.assertEqual({p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before}, before)
@@ -1366,14 +1422,44 @@ class InstallTest(Case):
         self.assertFalse((egress / "current").exists())
 
     def test_egress_download_failure_is_retryable(self):
-        (self.fakes / "fail").write_text("gh api repos/windroc/egress-proxy/tarball/")
+        (self.fakes / "fail").write_text("gh api repos/windroc-labs/egress-proxy/tarball/")
         result = self.fresh("--clients", "claude", "--docker", egress_failure=True)
         self.assertEqual(result.code, 1)
-        self.assertIn("cannot fetch pinned windroc/egress-proxy", result.stderr)
+        self.assertIn("cannot fetch pinned windroc-labs/egress-proxy", result.stderr)
         versions = Path(self.home, ".egress/versions")
         self.assertEqual(list(versions.iterdir()), [])
         self.assert_ok(
             self.again("--clients", "claude", "--docker", answers=DOCKER_LOGINS + ((WRITE_Q, "y"),))
+        )
+
+    def test_u1a_failed_egress_fetch_leaves_nothing(self):
+        (self.fakes / "fail").write_text("gh api repos/windroc-labs/egress-proxy/tarball/")
+        result = self.fresh(
+            "--clients", "claude", "--docker", egress_failure=True, shell="/bin/bash"
+        )
+        self.assertEqual(result.code, 1)
+        self.assertIn("cannot fetch pinned windroc-labs/egress-proxy", result.stderr)
+        self.assertNotIn("unbound variable", result.stderr)
+        self.assertEqual(list(Path(self.home, ".egress/versions").iterdir()), [])
+
+    def test_u1a_failed_egress_fetch_removes_earlier_leftovers(self):
+        """A download directory an earlier failed run left (v0.5.0's U1a) goes on the next egress step."""
+        versions = Path(self.home, ".egress/versions")
+        (versions / ".download.stale").mkdir(parents=True)
+        (versions / ".download.stale/source.tar.gz").write_text("partial")
+        (self.fakes / "fail").write_text("gh api repos/windroc-labs/egress-proxy/tarball/")
+        result = self.fresh(
+            "--clients", "claude", "--docker", egress_failure=True, shell="/bin/bash"
+        )
+        self.assertEqual(result.code, 1)
+        self.assertIn("cannot fetch pinned windroc-labs/egress-proxy", result.stderr)
+        self.assertEqual(list(versions.iterdir()), [])
+        (versions / ".download.stale").mkdir()
+        self.assert_ok(
+            self.again("--clients", "claude", "--docker", answers=DOCKER_LOGINS + ((WRITE_Q, "y"),))
+        )
+        self.assertEqual(
+            [p.name for p in versions.iterdir()], ["122d7454d738db4a9b7e0c4a89d2cfa5ff564339"]
         )
 
     def test_egress_unusable_download_leaves_no_version_and_is_retryable(self):
@@ -1381,7 +1467,7 @@ class InstallTest(Case):
         (self.fakes / "egress_tarball").write_text("corrupt")
         result = self.fresh("--clients", "claude", "--docker", egress_failure=True)
         self.assertEqual(result.code, 1)
-        self.assertIn("cannot unpack pinned windroc/egress-proxy", result.stderr)
+        self.assertIn("cannot unpack pinned windroc-labs/egress-proxy", result.stderr)
         self.assertEqual(list(versions.iterdir()), [])
         (self.fakes / "egress_tarball").write_text("noexec")
         result = self.again("--clients", "claude", "--docker")
@@ -1694,6 +1780,69 @@ class InstallTest(Case):
         )
         self.assertIn("==> broker\n    skip: installed from this plugin\n", result.stderr)
 
+    def opencode_docker_at(self, protocol):
+        """An OpenCode-only Docker install whose broker speaks `protocol`, then a new commit at every
+        ref, so OpenCode's copy no longer stands for the next run's ref."""
+        self.assert_ok(
+            self.fresh(
+                clients="opencode",
+                docker="y",
+                opencode=PROVIDER_ANSWERS,
+                logins=[(PEM_Q, ""), (OPENCODE_LOGIN_Q, "lan"), (r"API key:", KEY)],
+            )
+        )
+        (self.fakes / "src/broker").mkdir(parents=True, exist_ok=True)
+        (self.fakes / "src/broker/protocol").write_text(protocol)
+        (self.fakes / "commit").write_text(NEW)
+
+    def test_c9_branch_broker_below_installed_protocol_refused(self):
+        """A branch broker below protocol 30 cannot read the keychain items renamed for 30."""
+        self.opencode_docker_at("30")
+        broker = self.broker_path().read_bytes()
+        self.protocol_at("wdrc-c9", "29")
+        result = self.refused("--ref", "wdrc-c9", rerun=True)
+        self.assertIn(
+            "install.sh: ensemble wdrc-c9's broker speaks protocol 29, below the installed broker's"
+            " protocol 30: it cannot read the broker keychain items renamed for protocol 30"
+            " (docs/upgrading.md#broker-protocol-30-keychain-rename)",
+            result.stderr,
+        )
+        self.assertNotIn("rerun the same command", result.stderr)
+        self.assertFalse([c for c in self.calls() if c.startswith("broker-install")])
+        self.assertEqual(self.broker_path().read_bytes(), broker)
+        self.protocol_at("wdrc-c9", "30")
+        result = self.again("--ref", "wdrc-c9", answers=[(WRITE_Q, "y")])
+        self.assert_ok(result)
+        self.assertNotIn("below the installed broker's protocol", result.stderr)
+        self.assertIn("==> broker\n", result.stderr)
+
+    def test_u5_downgrade_to_v041_refused(self):
+        """A release downgrade below protocol 30 keeps the broker and the egress proxy's version."""
+        self.opencode_docker_at("30")
+        broker = self.broker_path().read_bytes()
+        current = Path(self.home, ".egress/current")
+        target = os.readlink(current)
+        self.at_ref("v0.4.1", ".claude-plugin/plugin.json", '{"version": "0.4.1"}\n')
+        self.protocol_at("v0.4.1", "29")
+        result = self.refused("--ref", "v0.4.1", "--clients", "opencode", "--docker", rerun=True)
+        self.assertIn(
+            "install.sh: release v0.4.1's broker speaks protocol 29, below the installed broker's"
+            " protocol 30",
+            result.stderr,
+        )
+        self.assertNotIn("rerun the same command", result.stderr)
+        calls = self.calls()
+        self.assertFalse([c for c in calls if c.startswith("broker-install")])
+        self.assertNotIn("docker egress-start", calls)
+        self.assertEqual(self.broker_path().read_bytes(), broker)
+        self.assertEqual(os.readlink(current), target)
+        (self.fakes / "src/broker/protocol").write_text("29")
+        self.at_ref("v0.4.0", ".claude-plugin/plugin.json", '{"version": "0.4.0"}\n')
+        self.protocol_at("v0.4.0", "28")
+        result = self.again("--ref", "v0.4.0", answers=[(WRITE_Q, "y")])
+        self.assertNotIn("below the installed broker's protocol", result.stderr)
+        self.assertIn("broker-install ", self.calls())
+
     def test_mixed_run_remedy_updates_the_plugin(self):
         """With Claude Code chosen only the served ref installs, so OpenCode's copy names the plugin update."""
         self.assert_ok(
@@ -1765,6 +1914,7 @@ class InstallTest(Case):
             f" v9.8.7, speaks protocol {OTHER}: use --ref v9.8.7 or a branch other than main\n",
             result.stderr,
         )
+        self.assertNotIn("rerun the same command", result.stderr)
 
     def test_codex_plugin_uses_the_served_version_despite_a_newer_leftover(self):
         self.assert_ok(self.fresh(clients="codex", docker="y"))
@@ -2004,7 +2154,7 @@ class InstallTest(Case):
         self.assert_ok(result)
         self.assertNotRegex(result.tty, PEM_Q)
         self.assertIn(
-            "skip: no GitHub App key: create the App by docs/docker-host.md#create-the-github-app",
+            "skip: no GitHub App key: create the App by docs/architecture.md#create-the-github-app",
             result.stderr,
         )
         (self.fakes / "keychain").mkdir(exist_ok=True)
@@ -2285,6 +2435,24 @@ class InstallTest(Case):
         self.assertEqual(self.calls().count("ensemble-broker retrust"), 1)
         self.assertEqual(self.state()["retrust"], hashlib.sha256(binary.read_bytes()).hexdigest())
 
+    def test_u1b_old_name_items_name_the_rename_step(self):
+        """Old-name items make every broker command refuse: the remedy is the rename step, not retrust."""
+        (self.fakes / "src/broker").mkdir(parents=True, exist_ok=True)
+        (self.fakes / "src/broker/legacy").write_text("")
+        result = self.fresh("--clients", "claude", "--docker", egress_failure=True)
+        self.assertEqual(result.code, 1, result.stderr)
+        self.assertIn(
+            "install.sh: old-name broker keychain items remain: run the maintainer's one-time rename"
+            " step (docs/upgrading.md#broker-protocol-30-keychain-rename), then rerun install.sh\n",
+            result.stderr,
+        )
+        self.assertNotRegex(result.stderr, r"or run .*retrust")
+        self.assertNotIn("rerun the same command", result.stderr)
+        self.assertFalse([c for c in self.calls() if c.startswith("ensemble-broker login")])
+        self.assertNotIn("retrust", self.state())
+        doc = Path(REPO, "docs/upgrading.md").read_text()
+        self.assertIn("\n## Broker protocol 30: Keychain rename\n", doc)
+
     def test_broker_logins_use_the_terminal_device(self):
         result = self.fresh(clients="claude", docker="y", ctty=self.refused_tty())
         self.assert_ok(result)
@@ -2351,8 +2519,9 @@ class InstallTest(Case):
         self.assert_ok(result)
         self.assertIn("1.19.3", (self.fakes / "opencode_version").read_text())
 
-    def opencode_only(self, provider_answer="y", *, provider="lan", path_answer="y"):
-        flags = ("--clients", "opencode", "--no-docker", "--opencode-provider", provider)
+    def opencode_only(self, provider_answer="y", *, provider="lan", path_answer="y", ref=""):
+        flags = ("--ref", ref) if ref else ()
+        flags += ("--clients", "opencode", "--no-docker", "--opencode-provider", provider)
         flags += ("--opencode-url", "http://localhost:8080/v1", "--opencode-model", "m")
         flags += ("--opencode-context", "65536", "--opencode-key-stdin")
         provider_answers = [(WRITE_Q, provider_answer)] if provider_answer is not None else []
@@ -2568,7 +2737,7 @@ class InstallTest(Case):
         codex = Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.7")
         self.assertEqual(json.loads(selected.read_text())["root"], str(codex))
         self.assertIn("ctmux --install", self.calls())
-        self.assert_ok(self.again("--clients", "claude", "--no-docker"))
+        self.assert_ok(self.again("--clients", "claude", "--no-docker", answers=[(WRITE_Q, "y")]))
         self.assertEqual(json.loads(selected.read_text())["root"], self.claude_ensemble())
         self.assertIn("ctmux --install", self.calls())
         self.assertEqual(backup.read_text(), "previous selection\n")
@@ -2704,6 +2873,37 @@ class InstallTest(Case):
             json.loads(Path(self.ensemble, "plugin-root").read_text())["root"], str(newer)
         )
 
+    def test_x1_launcher_keeps_installed_ref(self):
+        commands = self.legacy_command_package()
+        self.assert_ok(self.opencode_only(ref="WDRC-241"))
+        packages = Path(self.home, ".cache/opencode/packages")
+        selected = packages / "ensemble@git+https:/github.com/windroc-labs/ensemble.git#WDRC-241"
+        selected /= "node_modules/ensemble"
+        main = self.opencode_package()
+        shutil.copytree(selected, main)
+        (main / "package.json").write_text(json.dumps({"version": "10.0.0"}))
+        shutil.rmtree(selected)
+        record = Path(self.ensemble, "plugin-root").read_bytes()
+        self.assertEqual(json.loads(record)["root"], str(selected))
+        for name in commands:
+            with self.subTest(name=name):
+                result = subprocess.run(
+                    [str(Path(self.ensemble, "bin", name))],
+                    env=self.env,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(
+                    result.stderr,
+                    f"{name}: selected plugin {str(selected)!r} has no executable bin/{name}; "
+                    "rerun install.sh or the plugin's ctmux --install\n",
+                )
+                self.assertEqual(Path(self.ensemble, "plugin-root").read_bytes(), record)
+
     def test_installer_adapters_refuse_other_clients_after_the_selected_path_disappears(self):
         commands = self.legacy_command_package()
         self.assert_ok(self.opencode_only())
@@ -2734,9 +2934,7 @@ class InstallTest(Case):
     def test_installer_codex_adapters_follow_an_update(self):
         commands = self.legacy_command_package()
         self.assert_ok(self.opencode_only())
-        self.assert_ok(
-            self.again("--clients", "codex,opencode", "--no-docker", answers=[(WRITE_Q, "y")])
-        )
+        self.assert_ok(self.again("--clients", "codex,opencode", "--no-docker"))
         self.assertEqual(
             json.loads(Path(self.ensemble, "plugin-root").read_text())["client"], "codex"
         )
@@ -2874,16 +3072,26 @@ class InstallTest(Case):
         flags = ("--ref", ref, "--clients", "opencode", "--no-docker", "--opencode-provider", "lan")
         flags += ("--opencode-url", "http://localhost:8080/v1", "--opencode-model", "m")
         flags += ("--opencode-context", "65536", "--opencode-key-stdin")
-        result = self.run_install(
-            *flags, stdin=KEY + "\n", answers=[(SUDO_Q, PASSWORD), *[(WRITE_Q, "y")] * 2]
-        )
-        self.assertEqual(result.code, 1)
-        spec = f"ensemble@git+https://github.com/windroc-labs/ensemble.git#{ref}"
-        self.assertIn(f"install.sh: {spec}: not an OpenCode package dir\n", result.stderr)
+        result = self.run_install(*flags, stdin=KEY + "\n")
+        self.assertEqual(result.code, 2)
+        self.assertIn(f"install.sh: --ref: not a git ref: {ref}\n", result.stderr)
         self.assertTrue(victim.is_dir())
-        calls = "\n".join(self.calls())
-        self.assertNotIn("opencode plugin", calls)
-        self.assertNotIn("api.github.com", calls)
+        self.assertEqual(self.calls(), [])
+
+    def test_p7_refused_ref_keeps_saved_clients(self):
+        self.assert_ok(self.opencode_only())
+        state = Path(self.ensemble, "install/state")
+        saved = state.read_bytes()
+        self.serve({"ref": "v0.5.0"})
+        result = self.refused("--clients", "claude", "--ref", "v0.4.1", rerun=True)
+        self.assertEqual(state.read_bytes(), saved)
+        self.assertIn("which serves ensemble at v0.5.0; use --ref v0.5.0", result.stderr)
+        self.assertNotIn("rerun the same command", result.stderr)
+        self.serve()
+        result = self.opencode_rerun()
+        self.assert_ok(result)
+        self.assertIn("    clients: opencode, Docker: no", result.stderr)
+        self.assertEqual(self.state()["clients"], "opencode")
 
     def test_codex_only_docker_keeps_default_image_plugins(self):
         result = self.fresh("--clients", "codex", "--docker", logins=[(PEM_Q, "")])
@@ -4019,7 +4227,9 @@ exec /bin/rm "$@"
         self.assertEqual(self.config().read_text(), before)
 
         self.assert_no_linear(result)
-        self.assertFalse([c for c in self.calls() if c.startswith("launchctl")])
+        launchctl = [c for c in self.calls() if c.startswith("launchctl")]
+        self.assertEqual([c for c in launchctl if not c.startswith("launchctl print ")], [])
+        self.assertIn(f"    still loaded: {LOADED};", result.stderr)
         for job in ("router", "promote"):
             self.assertTrue(
                 Path(self.home, f"Library/LaunchAgents/com.windroc.ensemble.{job}.plist").exists()
@@ -4397,6 +4607,16 @@ exec /bin/rm "$@"
                 self.assertFalse([c for c in self.calls() if c.startswith(("sudo", "brew"))])
                 self.assertNotIn("dependencies", result.stderr)
 
+    def test_p6_usage_error_gives_no_rerun_advice(self):
+        self.assert_ok(self.fresh("--board", "local", "--no-launchd", then=[(WRITE_Q, "y")] * 2))
+        result = self.run_install("--no-board", "--launchd")
+        self.assertEqual(result.code, 2, result.stderr)
+        self.assertIn(
+            "install.sh: --launchd/--no-launchd requires a board, and --no-board skips it\n",
+            result.stderr,
+        )
+        self.assertNotIn("rerun the same command to continue", result.stderr)
+
     def test_board_tracker_inference_handles_invalid_config(self):
         self.assert_ok(self.fresh("--clients", "claude", "--no-docker"))
         before = self.config().read_text()
@@ -4654,7 +4874,7 @@ exec /bin/rm "$@"
         self.linear(teams=[{**team, "states": states}])
         result = self.fresh("--board", "linear", "--launchd", then=self.secrets(*SLOTS))
         self.assert_board_stopped(
-            result, "Linear team ENG lacks states: Handoff (docs/credentials.md#linear-presets)"
+            result, "Linear team ENG lacks states: Handoff (docs/upgrading.md#linear-presets)"
         )
 
     def test_board_without_tasks_group_stops(self):
@@ -4662,7 +4882,7 @@ exec /bin/rm "$@"
         result = self.fresh("--board", "linear", "--launchd", then=self.secrets(*SLOTS))
         self.assert_board_stopped(
             result,
-            "Linear team ENG has no Tasks label group (docs/credentials.md#linear-presets)",
+            "Linear team ENG has no Tasks label group (docs/upgrading.md#linear-presets)",
         )
 
     def test_board_same_app_stops(self):
@@ -4775,6 +4995,8 @@ exec /bin/rm "$@"
                 f"dir\t{h}/.claude",
                 f"file\t{h}/.claude.json",
                 f"dir\t{h}/.codex",
+                f"dir\t{h}/.codex/plugins",
+                f"file\t{h}/.codex/config.toml",
                 "cask\tclaude-code",
                 "cask\tcodex",
                 "login\tgh",
@@ -4830,6 +5052,9 @@ exec /bin/rm "$@"
             f"dir\t{h}/.ensemble/opencode",
             f"dir\t{h}/.local/share/opencode",
             f"dir\t{h}/.docker",
+            f"file\t{h}/.docker/config.json",
+            f"dir\t{h}/.docker/cli-plugins",
+            f"dir\t{h}/.docker/contexts/meta/{DESKTOP_CONTEXT}",
             f"dir\t{h}/Library/Group Containers/group.com.docker",
             "formula\tnode",
             "cask\tdocker-desktop",
@@ -4933,11 +5158,21 @@ exec /bin/rm "$@"
         self.assertEqual(Path(self.ensemble, "install/config.local.toml.orig").read_text(), mine)
         self.assertEqual(self.ledger().count("config\tbackup"), 1)
 
-    def cleanup(self, *args, answers=(), stdin=None, ctty=None):
+    def cleanup(self, *args, answers=(), stdin=None, ctty=None, interrupt=None):
         """Without --password-stdin, --yes runs answer sudo's prompt."""
         if stdin is None and "--yes" in args:
             answers = [(SUDO_Q, PASSWORD), *answers]
-        return self.run_install(*args, answers=answers, stdin=stdin, script=CLEANUP, ctty=ctty)
+        return self.run_install(
+            *args, answers=answers, stdin=stdin, script=CLEANUP, ctty=ctty, interrupt=interrupt
+        )
+
+    def restored(self, before):
+        """Asserts the files are `before`'s and the shared parents ~/.codex and ~/.docker are gone
+        unless they held files before."""
+        self.assertEqual(self.snapshot(), before)
+        for parent in (Path(self.home, ".codex"), Path(self.home, ".docker")):
+            if not any(parent in path.parents for path in before):
+                self.assertFalse(parent.exists(), sorted(parent.rglob("*")))
 
     def snapshot(self):
         skip = {"fakes", "bin"}
@@ -5025,12 +5260,11 @@ exec /bin/rm "$@"
         first = self.full()
         self.assert_ok(first)
         calls, ledger, files = self.run_calls(), self.ledger(), self.snapshot()
-        shared = {p: b for p, b in files.items() if ".egress" in p.relative_to(self.home).parts}
         result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
         self.assert_ok(result)
         self.assertNotIn("docker-uninstall", self.calls())
         self.assertIn("brew uninstall --cask docker-desktop", self.calls())
-        self.assertEqual(self.snapshot(), before | shared)
+        self.restored(before)
         self.assertEqual(list((self.fakes / "keychain").iterdir()), [])
         self.assertEqual(list((self.fakes / "login").iterdir()), [])
         self.assertFalse(self.broker_path().parent.exists())
@@ -5038,8 +5272,7 @@ exec /bin/rm "$@"
         self.assert_secret_free(PASSWORD, KEY, TOKEN, result=result)
         second = self.full()
         self.assert_ok(second)
-        fetch = "gh api repos/windroc/egress-proxy/tarball/"
-        self.assertEqual(self.run_calls(), [c for c in calls if not c.startswith(fetch)])
+        self.assertEqual(self.run_calls(), calls)
         self.assertEqual(self.ledger(), ledger)
         self.assertEqual(second.tty, first.tty)
         self.assertEqual(self.snapshot(), files)
@@ -5072,6 +5305,412 @@ exec /bin/rm "$@"
         self.assertIn("defaults delete com.docker.docker", self.calls())
         self.assertIn("defaults delete com.googlecode.iterm2", self.calls())
 
+    def test_cl2_cleanup_removes_installed_egress(self):
+        """The egress proxy install.sh created goes; worker images and workspace volumes stay."""
+        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        egress = Path(self.home, ".egress")
+        ledger = self.ledger()
+        for record in (
+            f"dir\t{egress}",
+            "docker-container\tegress-proxy",
+            "docker-image\tegress-proxy",
+        ):
+            self.assertIn(record, ledger)
+        self.assertFalse([r for r in ledger if r.startswith(("dir", "file")) and f"{egress}/" in r])
+        images = "ensemble-worker:abc123\nensemble-worker:def456\nother:latest\n"
+        (self.fakes / "worker_images").write_text(images)
+        (self.fakes / "ws_volumes").write_text("ensemble-ws-worker_1\nunrelated\n")
+        declined = self.cleanup(answers=[(REMOVE_Q, "n")])
+        self.assertEqual(declined.code, 1)
+        self.assertIn("  docker-container egress-proxy", declined.tty)
+        self.assertIn("  docker-image egress-proxy", declined.tty)
+        self.assertIn(
+            "keeps worker images (ensemble-worker) and ensemble-ws-* volumes", declined.tty
+        )
+        result = self.cleanup("--yes")
+        self.assert_ok(result)
+        self.assertFalse(egress.exists())
+        calls = self.calls()
+        removed = calls.index("docker rm -f egress-proxy")
+        self.assertLess(removed, calls.index("docker image rm egress-proxy"))
+        self.assertLess(
+            calls.index("docker image rm egress-proxy"),
+            calls.index("brew uninstall --cask docker-desktop"),
+        )
+        for kept in ("ensemble-worker:abc123", "ensemble-worker:def456"):
+            self.assertIn(f"    kept {kept}: worker image", result.stderr)
+        self.assertIn("    kept ensemble-ws-worker_1: worker workspace volume", result.stderr)
+        self.assertIn("removing Docker Desktop below deletes it", result.stderr)
+        self.assertNotIn("other:latest", result.stderr)
+        self.assertNotIn("kept unrelated", result.stderr)
+        self.assertEqual(
+            [
+                c
+                for c in calls
+                if c.startswith(("docker rm", "docker image rm", "docker rmi", "docker volume rm"))
+            ],
+            ["docker rm -f egress-proxy", "docker image rm egress-proxy"],
+        )
+        self.assertFalse(
+            [r for r in self.ledger() if r.startswith(("docker-container", "docker-image"))]
+        )
+
+    def test_cl2_cleanup_keeps_preexisting_egress(self):
+        egress = Path(self.home, ".egress")
+        (egress / "versions").mkdir(parents=True)
+        config = egress / "config.local.yaml"
+        config.write_text("# mine\nversion: 1\nnetworks:\n  workers:\n    mode: denylist\n")
+        (egress / "notes.txt").write_text("mine")
+        theirs = {p: p.read_bytes() for p in (config, egress / "notes.txt")}
+        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        sha = "122d7454d738db4a9b7e0c4a89d2cfa5ff564339"
+        ledger = self.ledger()
+        for mine in (egress, config, egress / "notes.txt", egress / "versions"):
+            self.assertFalse([r for r in ledger if r.endswith(f"\t{mine}")], mine)
+        self.assertIn(f"dir\t{egress}/versions/{sha}", ledger)
+        self.assertIn(f"file\t{egress}/current", ledger)
+        self.assertIn(f"file\t{egress}/compose.networks.yaml", ledger)
+        self.assert_ok(self.again("--docker"))
+        self.assertEqual(self.ledger(), ledger)
+        # As if an earlier install had pinned an older commit: the link it made points there.
+        old = egress / "versions/0123456789abcdef0123456789abcdef01234567"
+        (egress / "versions" / sha).rename(old)
+        (egress / "current").unlink()
+        (egress / "current").symlink_to(old)
+        state = Path(self.ensemble, "install/added")
+        state.write_text(state.read_text().replace(sha, old.name))
+        self.assert_ok(self.again("--docker"))
+        self.assertEqual((egress / "current").resolve(), egress / "versions" / sha)
+        self.assertIn(f"dir\t{egress}/versions/{sha}", self.ledger())
+        self.assert_ok(self.cleanup("--yes"))
+        self.assertEqual({p: p.read_bytes() for p in theirs}, theirs)
+        self.assertEqual(list((egress / "versions").iterdir()), [])
+        self.assertFalse((egress / "current").is_symlink())
+        self.assertFalse((egress / "compose.networks.yaml").exists())
+
+    def test_cl2_cleanup_keeps_the_version_a_preexisting_current_needs(self):
+        egress = Path(self.home, ".egress")
+        old = egress / "versions/0123456789abcdef0123456789abcdef01234567"
+        old.mkdir(parents=True)
+        (egress / "current").symlink_to(old)
+        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        version = egress / "versions/122d7454d738db4a9b7e0c4a89d2cfa5ff564339"
+        self.assertEqual((egress / "current").resolve(), version)
+        self.assertFalse([r for r in self.ledger() if str(version) in r or r.endswith("/current")])
+        self.assertIn(f"file\t{egress}/config.local.yaml", self.ledger())
+        self.assert_ok(self.cleanup("--yes"))
+        self.assertFalse((egress / "config.local.yaml").exists())
+        self.assertEqual((egress / "current").resolve(), version)
+        self.assertTrue(version.is_dir())
+        self.assertTrue(old.is_dir())
+
+    def test_cl2_cleanup_keeps_preexisting_egress_container(self):
+        (self.fakes / "egress_container").write_text("")
+        (self.fakes / "egress_image").write_text("")
+        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        self.assertFalse(
+            [r for r in self.ledger() if r.startswith(("docker-container", "docker-image"))]
+        )
+        (self.fakes / "worker_images").write_text("ensemble-worker:abc123\n")
+        result = self.cleanup("--yes")
+        self.assert_ok(result)
+        removals = ("docker rm", "docker image rm", "docker info")
+        self.assertFalse([c for c in self.calls() if c.startswith(removals)])
+        self.assertIn("    kept ensemble-worker:abc123: worker image", result.stderr)
+        self.assertTrue((self.fakes / "egress_image").exists())
+        self.assertFalse(Path(self.home, ".egress").exists())
+
+    def test_cl2_install_records_only_what_docker_reports_missing(self):
+        """An inspect failing for another reason than a missing object records nothing."""
+        (self.fakes / "fail").write_text("docker container inspect egress-proxy")
+        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        self.assertNotIn("docker-container\tegress-proxy", self.ledger())
+        self.assertIn("docker-image\tegress-proxy", self.ledger())
+
+    def test_cl2_cleanup_keeps_a_failed_egress_removal(self):
+        """Docker Desktop quits after the preflight: its inspect failing proves nothing is gone."""
+        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        (self.fakes / "docker_stops_at").write_text("docker rm -f egress-proxy")
+        result = self.cleanup("--yes")
+        self.assertEqual(result.code, 1)
+        self.assertIn(
+            "cannot remove container egress-proxy; its record stays for a rerun", result.stderr
+        )
+        self.assertIn("docker-container\tegress-proxy", self.ledger())
+        self.assertIn("docker-image\tegress-proxy", self.ledger())
+        self.assertTrue((self.fakes / "egress_container").exists())
+        (self.fakes / "docker_running").write_text("")
+        self.assert_ok(self.cleanup("--yes"))
+        self.assertFalse((self.fakes / "egress_container").exists())
+        self.assertFalse((self.fakes / "egress_image").exists())
+
+    def test_cl2_cleanup_needs_docker_for_egress_records(self):
+        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        (self.fakes / "docker_running").unlink()
+        ledger, before = self.ledger(), self.snapshot()
+        result = self.run_install("--yes", script=CLEANUP)
+        self.assertEqual(result.code, 1)
+        self.assertIn(
+            "Docker is not running: start Docker Desktop, then rerun; nothing removed",
+            result.stderr,
+        )
+        self.assertEqual(self.ledger(), ledger)
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse([c for c in self.calls() if c.startswith("sudo")])
+
+    def test_cl1a_listing_without_fda_shows_list(self):
+        """Listing what cleanup would remove needs no Full Disk Access; only removing does."""
+        self.assert_ok(self.fresh("--docker", logins=list(DOCKER_LOGINS)))
+        self.tcc.unlink()
+        container = Path(self.home, "Library/Containers/com.docker.docker")
+        (container / "Data").mkdir(parents=True, exist_ok=True)
+        self.assertIn(f"dir\t{container}", self.ledger())
+        ledger = Path(self.ensemble, "install/added")
+        recorded = ledger.read_bytes()
+        result = self.cleanup()
+        self.assertEqual(result.code, 0, f"stderr:\n{result.stderr}\nterminal:\n{result.tty}")
+        self.assertIn("install-cleanup.sh will remove what install.sh added:", result.tty)
+        self.assertIn(f"  dir {container}", result.tty)
+        self.assertIn("  cask docker-desktop", result.tty)
+        self.assertIn(
+            "  edits ~/.docker: drops Docker Desktop's credential helper, context and CLI plugin links",
+            result.tty,
+        )
+        self.assertNotIn("nothing removed", result.stderr + result.tty)
+        self.assertNotRegex(result.tty, REMOVE_Q)
+        self.assertIn(f"Full Disk Access remove {container}", result.stderr)
+        self.assertEqual(ledger.read_bytes(), recorded)
+        self.assertTrue((container / "Data").exists())
+        self.assertFalse([c for c in self.calls() if c.startswith("sudo")])
+
+    def test_cl_gate_shared_parent_keeps_foreign_content(self):
+        """A parent other tools also write goes only when empty once the ledger's other records
+        are removed; trees only the installer writes go whole."""
+        self.assert_ok(self.fresh("--docker", logins=list(DOCKER_LOGINS)))
+        config, docker = Path(self.home, ".config"), Path(self.home, ".docker")
+        for recorded in (config, docker):
+            self.assertIn(f"dir\t{recorded}", self.ledger())
+        foreign = config / "foreign/settings.json"
+        foreign.parent.mkdir(parents=True)
+        foreign.write_text('{"mine": true}')
+        docker.mkdir(exist_ok=True)
+        owned = [
+            Path(self.home, "Library/Containers/com.docker.docker/Data/state"),
+            config / "gh/hosts.yml",
+        ]
+        for path in owned:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("installer's")
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
+        self.assert_ok(result)
+        self.assertEqual(foreign.read_text(), '{"mine": true}')
+        self.assertFalse(docker.exists())
+        for path in owned:
+            self.assertFalse(path.parent.exists(), path.parent)
+        self.assertIn(f"    kept {config}: not empty", result.stderr)
+        self.assertFalse(Path(self.ensemble, "install").exists())
+
+    def test_cleanup_removes_docker_desktop_home_files(self):
+        """What Docker Desktop's first start wrote under ~/.docker goes with it, and so does ~/.docker."""
+        self.assert_ok(self.fresh("--docker", logins=list(DOCKER_LOGINS)))
+        docker = Path(self.home, ".docker")
+        self.assertEqual(json.loads((docker / "config.json").read_text())["credsStore"], "desktop")
+        self.assertTrue((docker / "cli-plugins/docker-buildx").is_symlink())
+        self.assertTrue((docker / "contexts/meta" / DESKTOP_CONTEXT / "meta.json").exists())
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
+        self.assert_ok(result)
+        self.assertFalse(os.path.lexists(docker), sorted(docker.rglob("*")))
+        self.assertNotIn(f"kept {docker}", result.stderr)
+
+    def test_cleanup_removes_codex_home_files(self):
+        """The config.toml and plugins Codex wrote in a ~/.codex install.sh created go, and so does ~/.codex."""
+        self.assert_ok(self.fresh("--no-docker", clients="codex"))
+        codex = Path(self.home, ".codex")
+        self.assertTrue((codex / "config.toml").exists())
+        self.assertIn(f"file\t{codex}/config.toml", self.ledger())
+        result = self.cleanup("--yes")
+        self.assert_ok(result)
+        self.assertFalse(codex.exists(), sorted(codex.rglob("*")))
+        self.assertNotIn(f"kept {codex}", result.stderr)
+
+    def test_cleanup_keeps_preexisting_docker_home(self):
+        """A ~/.docker there before install keeps its own files: config.json loses only Docker Desktop's
+        pointers, another context and the user's plugins stay; what Docker Desktop added goes."""
+        docker = Path(self.home, ".docker")
+        other, mine = docker / "contexts/meta/0123/meta.json", docker / "cli-plugins/docker-mine"
+        for path, text in ((other, '{"Name":"remote"}'), (mine, "#!/bin/sh\n")):
+            path.parent.mkdir(parents=True)
+            path.write_text(text)
+        foreign = docker / "cli-plugins/docker-foreign"
+        foreign.symlink_to(Path(self.home, "elsewhere/docker-foreign"))
+        (docker / "config.json").write_text('{"auths": {"r.example": {}}}')
+        self.assert_ok(self.fresh("--docker", logins=list(DOCKER_LOGINS)))
+        self.assertTrue((docker / "cli-plugins/docker-buildx").is_symlink())
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
+        self.assert_ok(result)
+        config = json.loads((docker / "config.json").read_text())
+        self.assertEqual(config, {"auths": {"r.example": {}}})
+        self.assertEqual(other.read_text(), '{"Name":"remote"}')
+        self.assertEqual(mine.read_text(), "#!/bin/sh\n")
+        self.assertTrue(foreign.is_symlink())
+        for gone in (
+            "cli-plugins/docker-buildx",
+            "cli-plugins/docker-compose",
+            f"contexts/meta/{DESKTOP_CONTEXT}",
+            "features.json",
+        ):
+            self.assertFalse(os.path.lexists(docker / gone), gone)
+        self.assertNotIn(f"kept {docker}", result.stderr)
+
+    def test_cleanup_drops_stale_desktop_creds_store(self):
+        """A config.json that named the desktop helper before install loses it with Docker Desktop;
+        its other keys stay, in order."""
+        config = Path(self.home, ".docker/config.json")
+        config.parent.mkdir()
+        helpers = {"gcr.io": "gcloud", "r.example": "desktop"}
+        config.write_text(
+            json.dumps({"auths": {}, "credsStore": "desktop", "credHelpers": helpers})
+        )
+        self.assert_ok(self.fresh("--docker", logins=list(DOCKER_LOGINS)))
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
+        self.assert_ok(result)
+        data = json.loads(config.read_text())
+        self.assertEqual(data, {"auths": {}, "credHelpers": {"gcr.io": "gcloud"}})
+        self.assertEqual(list(data), ["auths", "credHelpers"])
+        self.assertRegex(
+            result.stderr, f"    dropped Docker Desktop's .*credsStore.* from {config}"
+        )
+
+    def test_ledger_skips_tool_children_when_preinstalled(self):
+        """Docker Desktop and the Codex CLI there before install.sh: nothing they write is recorded,
+        and cleanup leaves it."""
+        self.preinstalled_homebrew()
+        askpass = self.tmp / "askpass"
+        executable(askpass, f"#!/bin/sh\necho '{PASSWORD}'\n")
+        env = {**self.env, "SUDO_ASKPASS": str(askpass)}
+        for cask in ("docker-desktop", "codex"):
+            brew = [Path(self.root, "opt/homebrew/bin/brew"), "install", "--cask", cask]
+            subprocess.run(brew, env=env, check=True, capture_output=True)
+        # Docker Desktop's privileged setup, done then: its license and the packaged CLI link.
+        (self.fakes / "docker_license").touch()
+        cli = Path(self.root, "usr/local/bin/docker")
+        cli.parent.mkdir(parents=True)
+        cli.symlink_to(Path(self.root, "opt/homebrew/bin/docker"))
+        self.assert_ok(self.fresh("--docker", logins=list(DOCKER_LOGINS)))
+        h = self.home
+        children = [r for r in self.ledger() if f"{h}/.docker/" in r or f"{h}/.codex/" in r]
+        self.assertEqual(children, [])
+        self.assertNotIn("cask\tdocker-desktop", self.ledger())
+        config = Path(h, ".docker/config.json")
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
+        self.assert_ok(result)
+        self.assertEqual(json.loads(config.read_text())["credsStore"], "desktop")
+        self.assertTrue(Path(h, ".codex/config.toml").exists())
+
+    def test_cleanup_keeps_unreadable_docker_config(self):
+        """A config.json that is not a JSON object stays as it is, named; cleanup goes on."""
+        config = Path(self.home, ".docker/config.json")
+        config.parent.mkdir()
+        config.write_text('{"auths": {}}')
+        self.assert_ok(self.fresh("--docker", logins=list(DOCKER_LOGINS)))
+        config.write_text("not json")
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
+        self.assert_ok(result)
+        self.assertEqual(config.read_text(), "not json")
+        self.assertIn(f"    kept {config}: not a JSON object; check its credsStore", result.stderr)
+
+    def test_cleanup_rerun_after_docker_desktop_removed(self):
+        """A config edit that fails once Docker Desktop is gone keeps its cask record; the rerun
+        finishes the edit."""
+        docker = Path(self.home, ".docker")
+        docker.mkdir()
+        (docker / "config.json").write_text('{"auths": {}}')
+        self.assert_ok(self.fresh("--docker", logins=list(DOCKER_LOGINS)))
+        docker.chmod(0o555)
+        self.addCleanup(docker.chmod, 0o755)
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
+        self.assertEqual(result.code, 1, result.stderr)
+        self.assertIn("its record stays for a rerun", result.stderr)
+        self.assertIn("brew uninstall --cask docker-desktop", self.calls())
+        self.assertIn("cask\tdocker-desktop", self.ledger())
+        docker.chmod(0o755)
+        self.assert_ok(self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n"))
+        self.assertEqual(json.loads((docker / "config.json").read_text()), {"auths": {}})
+        self.assertNotIn("cask\tdocker-desktop", self.ledger())
+
+    def test_cleanup_keeps_docker_content_added_after_install(self):
+        """A context and a plugin the user added after install stay, and so does ~/.docker; the rest
+        of what Docker Desktop wrote goes."""
+        self.assert_ok(self.fresh("--docker", logins=list(DOCKER_LOGINS)))
+        docker = Path(self.home, ".docker")
+        other, mine = docker / "contexts/meta/0123/meta.json", docker / "cli-plugins/docker-mine"
+        other.parent.mkdir(parents=True)
+        other.write_text('{"Name":"remote"}')
+        mine.write_text("#!/bin/sh\n")
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
+        self.assert_ok(result)
+        self.assertEqual(other.read_text(), '{"Name":"remote"}')
+        self.assertEqual(mine.read_text(), "#!/bin/sh\n")
+        for gone in (
+            "config.json",
+            "features.json",
+            f"contexts/meta/{DESKTOP_CONTEXT}",
+            "cli-plugins/docker-buildx",
+        ):
+            self.assertFalse(os.path.lexists(docker / gone), gone)
+        self.assertIn(f"    kept {docker}: not empty", result.stderr)
+
+    def test_cl3_sigint_during_cleanup_names_rerun(self):
+        """Ctrl-C during a cleanup step names the step and the rerun; the rerun completes."""
+        self.assert_ok(self.opencode_only())
+        self.assertTrue([r for r in self.ledger() if r.startswith("opencode-auth\t")])
+        marker = self.fakes / "ctrl-c"
+        python = self.bin / "python3"
+        python.unlink()
+        executable(
+            python,
+            f'#!/bin/sh\ncase $* in *.auth.json.*) : >"{marker}"; exec sleep 30 ;; esac\n'
+            f'exec {sys.executable} "$@"\n',
+        )
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n", interrupt=marker)
+        self.assertTrue(marker.exists(), result.stderr)
+        self.assertNotEqual(result.code, 0)
+        self.assertIn(
+            "install-cleanup.sh: OpenCode keys failed; rerun the same command to continue",
+            result.stderr,
+        )
+        self.assertTrue([r for r in self.ledger() if r.startswith("opencode-auth\t")])
+        python.unlink()
+        python.symlink_to(sys.executable)
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
+        self.assert_ok(result)
+        self.assertTrue(result.stderr.endswith("Removed what install.sh added.\n"), result.stderr)
+        self.assertFalse(self.auth_json().exists())
+
+    def test_cleanup_second_signal_keeps_sudo_end(self):
+        """A second Ctrl-C while on_exit ends sudo cannot cut sudo_end short: its sudo -k still drops the ticket."""
+        self.assert_ok(self.opencode_only())
+        marker, hang = self.fakes / "ctrl-c", self.fakes / "hang/sudo-k"
+        hang.parent.mkdir(exist_ok=True)
+        python = self.bin / "python3"
+        python.unlink()
+        executable(
+            python,
+            f'#!/bin/sh\ncase $* in *.auth.json.*) : >"{hang}"; : >"{marker}"; exec sleep 30 ;; esac\n'
+            f'exec {sys.executable} "$@"\n',
+        )
+        result = self.cleanup(
+            "--yes",
+            "--password-stdin",
+            stdin=PASSWORD + "\n",
+            interrupt=(marker, self.fakes / "sudo-k-hung"),
+        )
+        self.assertTrue((self.fakes / "sudo-k-hung").exists(), result.stderr)
+        self.assertEqual(result.code, 130, result.stderr)
+        self.assertTrue((self.fakes / "sudo-k-done").exists(), result.stderr)
+        self.assertFalse((self.fakes / "sudo_ticket").exists())
+        self.assertEqual(list(self.tmp.glob("ensemble-sudo.*")), [])
+
     def test_cleanup_stops_docker_processes(self):
         """What still runs from Docker.app after its cask is gone ends; nothing else is signalled."""
         self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
@@ -5102,7 +5741,7 @@ exec /bin/rm "$@"
         self.assertIn("cask\tdocker-desktop", self.ledger())
 
     def test_cleanup_needs_full_disk_access_for_a_container(self):
-        """macOS lets only Full Disk Access remove an app container: without it nothing is removed."""
+        """macOS lets only Full Disk Access remove an app container: without it --yes removes nothing."""
         self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
         self.tcc.unlink()
         container = Path(self.home, "Library/Containers/com.docker.docker")
@@ -5111,7 +5750,7 @@ exec /bin/rm "$@"
         (container / "locked/data").write_text("")
         ledger = Path(self.ensemble, "install/added")
         recorded = ledger.read_bytes()
-        result = self.cleanup()
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
         self.assertEqual(result.code, 1, result.stderr)
         self.assertEqual(
             result.stderr,
@@ -5147,14 +5786,14 @@ exec /bin/rm "$@"
         self.assertFalse(Path(self.home, ".zprofile").exists())
 
     def test_cleanup_needs_full_disk_access_for_a_group_container(self):
-        """macOS 27 denies a terminal Docker's Group Container too: without the access nothing is removed."""
+        """macOS 27 denies a terminal Docker's Group Container too: without the access --yes removes nothing."""
         self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
         group = Path(self.home, "Library/Group Containers/group.com.docker")
         self.assertTrue((group / "settings-store.json").exists())
         self.tcc.unlink()
         ledger = Path(self.ensemble, "install/added")
         recorded = ledger.read_bytes()
-        result = self.cleanup()
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
         self.assertEqual(result.code, 1, result.stderr)
         self.assertIn(
             f"install-cleanup.sh: macOS lets only Full Disk Access remove {group}:", result.stderr
@@ -5164,7 +5803,7 @@ exec /bin/rm "$@"
         self.assertTrue((group / "settings-store.json").exists())
         group.parent.chmod(0o600)
         self.addCleanup(lambda: group.parent.exists() and group.parent.chmod(0o700))
-        result = self.cleanup()
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
         self.assertEqual(result.code, 1, result.stderr)
         self.assertIn(f"remove {group}:", result.stderr)
         self.assertEqual(ledger.read_bytes(), recorded)
@@ -5199,15 +5838,12 @@ exec /bin/rm "$@"
         )
         before = self.snapshot()
         self.assert_ok(self.fresh("--docker", logins=[(PEM_Q, "")]))
-        shared = {
-            p: b for p, b in self.snapshot().items() if ".egress" in p.relative_to(self.home).parts
-        }
         self.assertFalse(
             [r for r in self.ledger() if r.startswith(("homebrew", "clt", "formula\tgh"))]
         )
         result = self.cleanup("--yes")
         self.assert_ok(result)
-        self.assertEqual(self.snapshot(), before | shared)
+        self.restored(before)
         self.assertTrue((self.fakes / "brew/gh").exists())
         self.assertTrue((self.fakes / "keychain/ensemble-broker-claude").exists())
         self.assertNotIn("brew uninstall gh", self.calls())
@@ -5263,7 +5899,7 @@ exec /bin/rm "$@"
         self.assert_ok(result)
         uid_calls = [c for c in self.calls() if c.startswith("launchctl bootout")]
         self.assertEqual(len(uid_calls), 2)
-        self.assertEqual(self.snapshot(), before)
+        self.restored(before)
         self.assertEqual(list((self.fakes / "keychain").iterdir()), [])
         self.assertEqual(self.board_install(), calls)
         self.assertEqual(self.snapshot(), files)
@@ -5345,3 +5981,506 @@ exec /bin/rm "$@"
         self.assertTrue(lines[1].startswith("eval "), lines)
         self.assert_ok(self.again())
         self.assertEqual(len(profile.read_text().splitlines()), 3)
+
+    def summary(self, result):
+        return next(line for line in result.stderr.splitlines() if line.startswith("    clients: "))
+
+    def test_c1_no_board_summary(self):
+        """C1: without Board the summary says `board: no`, with no tracker or launchd choice."""
+        result = self.fresh("--clients", "claude", "--no-docker", "--no-board")
+        self.assert_ok(result)
+        line = self.summary(result)
+        self.assertIn("board: no", line)
+        self.assertNotIn("board: no (", line)
+        self.assertNotIn("launchd:", line)
+        result = self.again("--board", "local", "--no-launchd", answers=[(WRITE_Q, "y")] * 2)
+        self.assert_ok(result)
+        self.assertIn("board: yes (local), launchd: no", self.summary(result))
+
+    def board_with_jobs(self):
+        result = self.fresh(
+            "--clients",
+            "claude",
+            "--no-docker",
+            "--board",
+            "local",
+            "--launchd",
+            then=[(WRITE_Q, "y")] * 3,
+        )
+        self.assert_ok(result)
+        self.assert_jobs(installed=True)
+
+    def launchctl_calls(self):
+        return [c for c in self.calls() if c.startswith("launchctl")]
+
+    def test_c3_no_launchd_warns_jobs_stay_loaded(self):
+        """C3: a rerun without the jobs names those launchd still runs and how to unload them; it keeps them."""
+        self.board_with_jobs()
+        result = self.again("--no-launchd")
+        self.assert_ok(result)
+        self.assertIn(
+            "==> board launchd jobs\n    skip: launchd jobs not chosen\n"
+            f"    still loaded: {LOADED}{UNLOAD}\n",
+            result.stderr,
+        )
+        self.assertEqual(
+            [c for c in self.launchctl_calls() if not c.startswith("launchctl print ")], []
+        )
+        for job in ("router", "promote"):
+            self.assertTrue(
+                Path(self.home, f"Library/LaunchAgents/com.windroc.ensemble.{job}.plist").exists()
+            )
+
+    def test_c3_no_board_warns_jobs_stay_loaded(self):
+        """C3: skipping Board names the loaded jobs too; a job launchd does not run, or without a plist, is not named."""
+        self.board_with_jobs()
+        result = self.again("--no-board")
+        self.assert_ok(result)
+        self.assertIn(
+            f"==> board launchd jobs\n    skip: board not chosen\n    still loaded: {LOADED}{UNLOAD}\n",
+            result.stderr,
+        )
+        (self.fakes / "launchd/com.windroc.ensemble.router").unlink()
+        result = self.again("--no-board")
+        self.assert_ok(result)
+        self.assertIn("    still loaded: com.windroc.ensemble.promote;", result.stderr)
+        (self.fakes / "launchd/com.windroc.ensemble.promote").unlink()
+        result = self.again("--no-board")
+        self.assert_ok(result)
+        self.assertNotIn("still loaded", result.stderr)
+        self.assertEqual(len(self.launchctl_calls()), 2)
+        for job in ("router", "promote"):
+            Path(self.home, f"Library/LaunchAgents/com.windroc.ensemble.{job}.plist").unlink()
+        result = self.again("--no-board")
+        self.assert_ok(result)
+        self.assertEqual(self.launchctl_calls(), [])
+
+    def delegate_client(self):
+        return tomllib.loads(self.config().read_text())["delegate"]["client"]
+
+    def opencode_again(self, *args, answers=(), key=False):
+        """A rerun of opencode_only's install with `args`: the sudo password, then with `key` the OpenCode key, on stdin."""
+        flags = ("--password-stdin", *(("--opencode-key-stdin",) if key else ()))
+        stdin = PASSWORD + "\n" + (KEY + "\n" if key else "")
+        return self.run_install(*args, *flags, stdin=stdin, answers=answers)
+
+    def test_c5_delegate_client_follows_chosen_clients(self):
+        """C5, C7: [delegate] client changes only when the chosen clients lack it, to the first chosen."""
+        self.assert_ok(self.opencode_only())
+        self.assertEqual(self.delegate_client(), "opencode")
+        result = self.opencode_again("--clients", "claude", "--no-docker", answers=[(WRITE_Q, "y")])
+        self.assert_ok(result)
+        self.assertIn('[delegate] client = "claude"', result.tty)
+        self.assertEqual(self.delegate_client(), "claude")
+        for client, clients in (("codex", "claude,codex,opencode"), ("opencode", "codex,opencode")):
+            with self.subTest(client=client, clients=clients):
+                self.config().write_text(
+                    re.sub(
+                        r'(?m)^client = ".*"$', f'client = "{client}"', self.config().read_text()
+                    )
+                )
+                before = self.config().read_text()
+                result = self.opencode_again("--clients", clients, "--no-docker")
+                self.assert_ok(result)
+                self.assertEqual(self.config().read_text(), before)
+
+    def opencode_files(self):
+        """config.local.toml, and opencode.jsonc's providers: the plugin step a lost state repeats rewrites the rest."""
+        jsonc = json.loads(Path(self.home, ".config/opencode/opencode.jsonc").read_text())
+        return self.config().read_text(), jsonc["provider"]
+
+    def provider_state(self):
+        keys = ("opencode_provider", "opencode_url", "opencode_model", "opencode_context")
+        return tuple(self.state().get(key) for key in keys)
+
+    def assert_not_asked(self, result, *questions):
+        for question in questions or (PROVIDER_Q, URL_Q, MODEL_Q, CONTEXT_Q):
+            self.assertNotRegex(result.tty, question)
+
+    def drop_tables(self, prefix):
+        """config.local.toml without the tables whose names start with `prefix`."""
+        kept, dropping = [], False
+        for line in self.config().read_text().splitlines(keepends=True):
+            if line.startswith("["):
+                dropping = line.startswith(f"[{prefix}")
+            if not dropping:
+                kept.append(line)
+        self.config().write_text("".join(kept))
+
+    def test_c10_missing_state_reuses_configured_provider(self):
+        """C10: with the state gone, the OpenCode provider in config.local.toml is reused without a question;
+        a flag naming another provider, or a configured provider that is no candidate, is asked about."""
+        self.assert_ok(self.opencode_only())
+        files = self.opencode_files()
+        state = Path(self.ensemble, "install/state")
+        state.unlink()
+        result = self.opencode_again("--clients", "opencode", "--no-docker")
+        self.assert_ok(result)
+        self.assert_not_asked(result)
+        self.assertEqual(self.opencode_files(), files)
+        self.assertEqual(self.provider_state(), ("lan", "http://localhost:8080/v1", "m", "65536"))
+        with self.subTest("a flag naming another provider"):
+            state.unlink()
+            result = self.opencode_again(
+                "--clients",
+                "opencode",
+                "--no-docker",
+                "--opencode-provider",
+                "other",
+                answers=[
+                    (URL_Q, "http://localhost:9090/v1"),
+                    (MODEL_Q, "m2"),
+                    (CONTEXT_Q, ""),
+                    (WRITE_Q, "n"),
+                    (WRITE_Q, "n"),
+                ],
+                key=True,
+            )
+            self.assert_ok(result)
+            self.assertEqual(
+                self.provider_state(), ("other", "http://localhost:9090/v1", "m2", "65536")
+            )
+        with self.subTest("only ollama configured"):
+            state.unlink()
+            self.drop_tables("session.clients.opencode")
+            path = Path(self.home, ".config/opencode/opencode.jsonc")
+            conf = json.loads(path.read_text())
+            conf["provider"] = {
+                "ollama": {"options": {"baseURL": "http://localhost:11434/v1"}, "models": {"q": {}}}
+            }
+            path.write_text(json.dumps(conf))
+            result = self.opencode_again(
+                "--clients",
+                "opencode",
+                "--no-docker",
+                answers=[
+                    (PROVIDER_Q, "lan"),
+                    (URL_Q, "http://localhost:8080/v1"),
+                    (MODEL_Q, "m"),
+                    (CONTEXT_Q, ""),
+                    (WRITE_Q, "n"),
+                    (WRITE_Q, "n"),
+                ],
+            )
+            self.assert_ok(result)
+
+    def configured_provider(self, toml=None, jsonc=None, flag=""):
+        """install.sh's configured_provider for `flag` over config.local.toml `toml` and opencode.jsonc `jsonc`
+        (None: absent)."""
+        text = SCRIPT.read_text()
+        functions = [
+            re.search(rf"^{name}\(\) \{{\n.*?^\}}", text, re.S | re.M).group(0)
+            for name in ("opencode_config_edit", "configured_provider")
+        ]
+        patterns = re.findall(r"(?m)^(?:name|url|model|context)_pattern=.*$", text)
+        conf = Path(self.home, ".config/opencode/opencode.jsonc")
+        for path, content in ((self.config(), toml), (conf, jsonc)):
+            path.unlink(missing_ok=True)
+            if content is not None:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content)
+        program = "\n".join(
+            [*patterns, *functions, f"config={self.config()}", 'configured_provider "$1"']
+        )
+        proc = subprocess.run(
+            ["bash", "-euo", "pipefail", "-c", program, "bash", flag],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return proc.stdout
+
+    def test_c10_configured_provider_qualifies_one_entry(self):
+        """C10: only one provider with a valid name and URL is reused, all its fields from that entry; a named one
+        that does not qualify, or several that do, reuse nothing; an invalid model or context is left to ask."""
+        lan = 'base_url = "http://localhost:8080/v1"\nmodels = ["m"]\ncontext = 65536\n'
+        table = "[session.clients.opencode.providers.{}]\n"
+        model = '[session.clients.opencode]\nmodel = "{}"\n'
+        bad_url = 'base_url = "ftp://h/v1"\nmodels = ["m"]\n'
+        other = 'base_url = "http://localhost:9090/v1"\nmodels = ["n"]\n'
+        jsonc = json.dumps(
+            {
+                "provider": {
+                    "lab": {
+                        "options": {"baseURL": "http://localhost:7070/v1"},
+                        "models": {"q": {"limit": {"context": 4096}}},
+                    }
+                }
+            }
+        )
+        found = "lan\thttp://localhost:8080/v1\tm\t65536"
+        cases = (
+            (
+                "the model's table",
+                model.format("lan/m") + table.format("lan") + lan,
+                None,
+                "",
+                found,
+            ),
+            ("the only table", table.format("lan") + lan, jsonc, "", found),
+            (
+                "the flag's table",
+                table.format("lan") + lan + table.format("o") + other,
+                None,
+                "lan",
+                found,
+            ),
+            (
+                "a URL failing valid_url",
+                model.format("x/m") + table.format("x") + bad_url,
+                jsonc,
+                "",
+                "",
+            ),
+            (
+                "a model naming a non-candidate, another valid",
+                model.format("x/m") + table.format("x") + bad_url + table.format("o") + other,
+                jsonc,
+                "",
+                "",
+            ),
+            (
+                "two candidates",
+                table.format("lan") + lan + table.format("o") + other,
+                jsonc,
+                "",
+                "",
+            ),
+            (
+                "an invalid model and context",
+                table.format("lan")
+                + 'base_url = "http://localhost:8080/v1"\nmodels = ["a b"]\ncontext = 0\n',
+                None,
+                "",
+                "lan\thttp://localhost:8080/v1\t\t",
+            ),
+            ("no table: opencode.jsonc", "", jsonc, "", "lab\thttp://localhost:7070/v1\tq\t4096"),
+            ("a flag naming no provider", table.format("lan") + lan, jsonc, "other", ""),
+        )
+        for name, toml, conf, flag, want in cases:
+            with self.subTest(name):
+                self.assertEqual(self.configured_provider(toml, conf, flag), want)
+        two = json.loads(jsonc)
+        two["provider"]["o"] = {
+            "options": {"baseURL": "http://localhost:9090/v1"},
+            "models": {"n": {}},
+        }
+        bad = json.loads(jsonc)
+        bad["provider"]["x"] = {"options": {"baseURL": "ftp://h/v1"}, "models": {"m": {}}}
+        for name, conf, flag, want in (
+            ("opencode.jsonc: two candidates", json.dumps(two), "", ""),
+            (
+                "opencode.jsonc: one candidate beside a bad URL",
+                json.dumps(bad),
+                "",
+                "lab\thttp://localhost:7070/v1\tq\t4096",
+            ),
+            ("opencode.jsonc: the flag's provider with a bad URL", json.dumps(bad), "x", ""),
+            ("opencode.jsonc: a flag naming another provider", jsonc, "other", ""),
+        ):
+            with self.subTest(name):
+                self.assertEqual(self.configured_provider(None, conf, flag), want)
+
+    def test_c10_missing_state_reuses_opencode_jsonc_provider(self):
+        """C10: a provider only in opencode.jsonc is reused too, and goes back into config.local.toml."""
+        self.assert_ok(self.opencode_only())
+        providers = self.opencode_files()[1]
+        Path(self.ensemble, "install/state").unlink()
+        self.drop_tables("session.clients.opencode.providers.")
+        result = self.opencode_again(
+            "--clients", "opencode", "--no-docker", answers=[(WRITE_Q, "y")]
+        )
+        self.assert_ok(result)
+        self.assert_not_asked(result)
+        self.assertIn(
+            '[session.clients.opencode.providers.lan] base_url = "http://localhost:8080/v1"',
+            result.tty,
+        )
+        self.assertEqual(self.opencode_files()[1], providers)
+        self.assertEqual(self.provider_state(), ("lan", "http://localhost:8080/v1", "m", "65536"))
+
+    def test_new_provider_takes_nothing_from_the_saved_one(self):
+        """A --opencode-provider other than the saved one never gets the saved provider's URL, model or context,
+        so its key never goes to that provider's server: without --opencode-url it is a usage error before sudo,
+        with it its model and context are asked. Naming the saved provider still reuses it."""
+        self.assert_ok(self.opencode_only())
+        saved = self.provider_state()
+        result = self.opencode_again("--opencode-provider", "lan")
+        self.assert_ok(result)
+        self.assert_not_asked(result)
+        self.assertEqual(self.provider_state(), saved)
+        result = self.opencode_again("--opencode-provider", "other", key=True)
+        self.assertEqual(result.code, 2, result.stderr)
+        self.assertIn(
+            "install.sh: --opencode-provider other: a provider other than the saved lan needs"
+            " --opencode-url\n",
+            result.stderr,
+        )
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(self.provider_state(), saved)
+        self.assert_secret_free(KEY, PASSWORD, result=result)
+        with self.subTest("with its own URL"):
+            result = self.opencode_again(
+                "--opencode-provider",
+                "other",
+                "--opencode-url",
+                "http://localhost:9090/v1",
+                answers=[(MODEL_Q, "m2"), (CONTEXT_Q, "4096"), (WRITE_Q, "n"), (WRITE_Q, "n")],
+                key=True,
+            )
+            self.assert_ok(result)
+            self.assertEqual(
+                self.provider_state(), ("other", "http://localhost:9090/v1", "m2", "4096")
+            )
+            self.assert_secret_free(KEY, PASSWORD, result=result)
+
+    def logged_out(self, client, hang=""):
+        """`client` logged out with no login record; its next login hangs (`stored`: after logging in)."""
+        (self.fakes / "login" / client).unlink(missing_ok=True)
+        ledger = Path(self.ensemble, "install/added")
+        ledger.write_text("".join(f"{r}\n" for r in self.ledger() if not r.startswith("login\t")))
+        (self.fakes / "hang").mkdir(exist_ok=True)
+        (self.fakes / "hang" / client).write_text(hang)
+        (self.fakes / "hung").unlink(missing_ok=True)
+
+    def interrupted(self, sig=signal.SIGINT):
+        """A rerun that gets `sig` once a login hangs."""
+        result = self.run_install(
+            "--password-stdin", stdin=PASSWORD + "\n", interrupt=self.fakes / "hung", sig=sig
+        )
+        self.assertTrue((self.fakes / "hung").exists(), result.stderr)
+        self.assertNotEqual(result.code, 0, result.stderr)
+        return result
+
+    def test_i3a_interrupted_claude_login_not_recorded(self):
+        """I3a: Ctrl-C during a login leaves no login record, so the cleanup logs nobody out; a login that
+        stored its credential before the Ctrl-C is recorded."""
+        self.assert_ok(self.fresh("--clients", "claude,codex", "--no-docker", "--no-board"))
+        self.logged_out("claude")
+        self.interrupted()
+        self.assertNotIn("login\tclaude", self.ledger())
+        (self.fakes / "hang/claude").unlink()
+        self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
+        self.assertNotIn("claude auth logout", self.calls())
+        self.assert_ok(self.fresh("--clients", "claude,codex", "--no-docker", "--no-board"))
+        for client, hang, recorded in (
+            ("codex", "", False),
+            ("gh", "", False),
+            ("claude", "stored", True),
+        ):
+            with self.subTest(client=client, hang=hang):
+                self.logged_out(client, hang)
+                self.interrupted()
+                self.assertEqual(f"login\t{client}" in self.ledger(), recorded)
+                (self.fakes / "hang" / client).unlink()
+
+    def group_gone(self, pgid):
+        """Whether process group `pgid` has no process left within 5 s (orphans take a moment to be reaped)."""
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.killpg(pgid, 0)
+            except ProcessLookupError:
+                return True
+            time.sleep(0.05)
+        return False
+
+    def test_i3a_signal_names_rerun_and_cleans_up(self):
+        """I3a: SIGINT, SIGHUP or SIGTERM names the step to rerun, ends sudo and leaves no process or askpass
+        directory; so does a finished run."""
+        self.assert_ok(self.fresh("--clients", "claude", "--no-docker", "--no-board"))
+        for sig, code in ((signal.SIGINT, 130), (signal.SIGHUP, 129), (signal.SIGTERM, 143)):
+            with self.subTest(signal=sig.name):
+                self.logged_out("claude")
+                result = self.interrupted(sig)
+                self.assertEqual(result.code, code, result.stderr)
+                self.assertIn(
+                    "install.sh: Claude Code login failed; rerun the same command to continue",
+                    result.stderr,
+                )
+                calls = self.calls()
+                self.assertIn("sudo -k", calls[calls.index("claude auth login") :])
+                self.assertEqual(list(self.tmp.glob("ensemble-sudo.*")), [])
+                self.assertTrue(self.group_gone(result.pid))
+        with self.subTest("a finished run"):
+            (self.fakes / "hang/claude").unlink()
+            result = self.run_install("--password-stdin", stdin=PASSWORD + "\n", group=True)
+            self.assert_ok(result)
+            self.assertEqual(list(self.tmp.glob("ensemble-sudo.*")), [])
+            self.assertTrue(self.group_gone(result.pid))
+
+    def test_i3a_hung_login_probe_stops_on_ctrl_c(self):
+        """I3a: on_exit's login probe gets the default signals, so a second Ctrl-C stops a hung one."""
+        self.assert_ok(self.fresh("--clients", "claude", "--no-docker", "--no-board"))
+        self.logged_out("claude")
+        (self.fakes / "hang/claude-status").write_text("")
+        start = time.monotonic()
+        result = self.run_install(
+            "--password-stdin",
+            stdin=PASSWORD + "\n",
+            interrupt=(self.fakes / "hung", self.fakes / "status-hung"),
+        )
+        self.assertTrue((self.fakes / "status-hung").exists(), result.stderr)
+        self.assertLess(time.monotonic() - start, 20)
+        self.assertEqual(result.code, 130, result.stderr)
+        self.assertIn(
+            "install.sh: Claude Code login failed; rerun the same command to continue",
+            result.stderr,
+        )
+        self.assertNotIn("login\tclaude", self.ledger())
+
+    def codex_rejects(self, words=""):
+        """Codex logged in, its server rejecting the `codex plugin` sub-commands `words` (all when empty)."""
+        (self.fakes / "login").mkdir(exist_ok=True)
+        (self.fakes / "login/codex").write_text("")
+        (self.fakes / "codex").mkdir(exist_ok=True)
+        (self.fakes / "codex/unauthorized").write_text(words)
+        return self.run_install(
+            "--clients",
+            "codex",
+            "--no-docker",
+            "--no-board",
+            answers=[(SUDO_Q, PASSWORD), (WRITE_Q, "y"), (WRITE_Q, "y")],
+        )
+
+    def test_c6_dead_codex_login_noticed(self):
+        """C6: a saved Codex login its server rejects stops the run at the login step with the re-login command."""
+        result = self.codex_rejects()
+        self.assertNotEqual(result.code, 0)
+        self.assertIn(REJECTED, result.stderr)
+        login = result.stderr.split("==> Codex login\n", 1)[1].split("==> ", 1)[0]
+        self.assertNotIn("skip: logged in", login)
+        self.assertNotIn("==> Codex plugins", result.stderr)
+        self.assertNotIn("login\tcodex", self.ledger())
+
+    def test_c6_dead_codex_login_noticed_at_plugin_add(self):
+        """C6: a rejection first seen when adding the plugin stops there with the re-login command; another
+        plugin failure keeps its message."""
+        result = self.codex_rejects("add")
+        self.assertNotEqual(result.code, 0)
+        self.assertIn("==> Codex login\n    skip: logged in", result.stderr)
+        self.assertIn("==> Codex plugins", result.stderr)
+        self.assertIn(REJECTED, result.stderr)
+        for sub, setup in (("upgrade", None), ("add", Path(self.home, ".codex/config.toml"))):
+            with self.subTest(f"a 401 on codex plugin marketplace {sub}"):
+                (self.fakes / "codex/unauthorized").write_text("marketplace")
+                if setup:
+                    setup.unlink()
+                result = self.again()
+                self.assertNotEqual(result.code, 0)
+                self.assertIn("==> Codex plugins", result.stderr)
+                self.assertTrue(
+                    [c for c in self.calls() if c.startswith(f"codex plugin marketplace {sub} ")]
+                )
+                self.assertFalse([c for c in self.calls() if c.startswith("codex plugin add ")])
+                self.assertIn(REJECTED, result.stderr)
+        with self.subTest("a failure without 401"):
+            (self.fakes / "codex/unauthorized").unlink()
+            (self.fakes / "fail").write_text("codex plugin add")
+            result = self.again()
+            self.assertNotEqual(result.code, 0)
+            self.assertIn("install.sh: Codex: cannot install ensemble@windroc at ", result.stderr)
+            self.assertNotIn("run codex login", result.stderr)

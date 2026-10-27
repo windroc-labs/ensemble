@@ -16,6 +16,7 @@ yes=
 password_stdin=
 sudo_mine=
 keepalive=
+deferred=
 feeder=
 askpass_dir=
 current=
@@ -102,12 +103,21 @@ ledger_valid() {
     claude-marketplace:2 | codex-marketplace:2) case $2 in windroc) true ;; *) false ;; esac ;;
     claude-plugin:2 | codex-plugin:2) case $2 in ensemble@windroc | updraft@windroc) true ;; *) false ;; esac ;;
     login:2) case $2 in gh | claude | codex) true ;; *) false ;; esac ;;
+    docker-container:2 | docker-image:2) [ "$2" = egress-proxy ] ;;
     launchd:2) case $2 in router | promote) true ;; *) false ;; esac ;;
     keychain:3) [[ $2 =~ $plain ]] && [[ $3 =~ $plain ]] ;;
     opencode-auth:3 | opencode-provider:3) under_home "$2" && [[ $3 =~ $name_pattern ]] ;;
     opencode-config:2) under_home "$2" && case ${2##*/} in opencode.json | opencode.jsonc | package.json | package-lock.json | .gitignore) true ;; *) false ;; esac ;;
     *) false ;;
   esac
+}
+
+# On a signal bash runs the EXIT trap with the last command's status, often 0, and on HUP or TERM not at all: exit with
+# the signal's, so on_exit cleans up and names the rerun.
+exit_traps() {
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 }
 
 # Reads the sudo password once (stdin's first line, else the terminal) and checks it. A FIFO then
@@ -135,6 +145,11 @@ sudo_once() {
       printf 'Sorry, try again.\n' >&3
     done
   fi
+  # Until the feeder and keep-alive hold their PIDs a signal waits, so sudo_end has them and askpass_dir to clean up.
+  # Not trap '': a subshell forked while a signal is ignored keeps ignoring it, and sudo_end could not stop it.
+  trap 'deferred=129' HUP
+  trap 'deferred=130' INT
+  trap 'deferred=143' TERM
   askpass_dir=$(mktemp -d "${TMPDIR:-/tmp}/ensemble-sudo.XXXXXX")
   case $askpass_dir in *"'"* | *$'\n'*) die "unusable TMPDIR: $askpass_dir" ;; esac
   mkfifo -m 600 "$askpass_dir/fifo"
@@ -153,6 +168,7 @@ EOF
   unset password
   export SUDO_ASKPASS=$askpass_dir/askpass
   (
+    nap= # the TERM trap reads it under set -u
     trap 'kill "$nap" 2>/dev/null; exit 0' TERM
     while kill -0 $$ 2>/dev/null; do
       sudo -n -v || true
@@ -165,6 +181,8 @@ EOF
     rm -rf "$askpass_dir"
   ) </dev/null >/dev/null 2>&1 &
   keepalive=$!
+  exit_traps
+  if [ -n "$deferred" ]; then exit "$deferred"; fi
 }
 
 # Stops the keep-alive and the askpass feeder, and drops the ticket sudo_once made.
@@ -180,6 +198,7 @@ sudo_end() {
 
 on_exit() {
   local rc=$?
+  trap '' HUP INT TERM
   sudo_end
   if [ "$rc" -ne 0 ] && [ -n "$current" ]; then
     say "$me: $current failed; rerun the same command to continue"
@@ -191,13 +210,15 @@ usage() {
 usage: install-cleanup.sh [--yes] [--password-stdin]
 
 Internal, for test machines only: removes what install.sh recorded in ~/.ensemble/install/added,
-so the machine is as before install.sh ran. Lists it and asks first; --yes skips the question
-(automation only). An app or group container to remove (~/Library/Containers/<app>, ~/Library/Group
-Containers/<group>) needs the terminal's Full Disk Access: without it the cleanup stops before removing
-anything. Run by hand:
+so the machine is as before install.sh ran; a parent other tools also write (~/.config, ~/.codex,
+~/.docker, ~/Library/LaunchAgents) goes only when nothing else is left in it. Removing Docker Desktop
+also drops its credential helper and context from ~/.docker/config.json and its CLI plugin links. Lists it
+and asks first; --yes skips the question (automation only). An app or group container to remove
+(~/Library/Containers/<app>, ~/Library/Group Containers/<group>) needs the terminal's Full Disk Access: without it the cleanup lists what it would
+remove and stops before removing anything. Run by hand:
   curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install-cleanup.sh | bash
-With --password-stdin (sudo password on stdin), stdin cannot carry the script:
-  security find-generic-password -s <item> -w | bash -c "\$(curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install-cleanup.sh)" install-cleanup.sh --yes --password-stdin
+With --password-stdin (sudo password on stdin), stdin cannot carry the script; download it first:
+  (f=\$(mktemp) && trap 'rm -f "\$f"' EXIT && curl -fsSL -o "\$f" https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install-cleanup.sh && security find-generic-password -s <item> -w | bash "\$f" --yes --password-stdin)
 EOF
 }
 
@@ -260,9 +281,9 @@ absent() {
   [ "$rc" = 1 ]
 }
 
-# Stops before anything is removed while a recorded app or group container may be there and the terminal lacks Full
-# Disk Access: macOS lets only that remove ~/Library/Containers/<app> and ~/Library/Group Containers/<group>, and only
-# that reads TCC.db.
+# While a recorded app or group container may be there and the terminal lacks Full Disk Access (macOS lets only that
+# remove ~/Library/Containers/<app> and ~/Library/Group Containers/<group>, and only that reads TCC.db): with --yes,
+# stops before anything is removed; without, ends the listing there, as no answer could remove it.
 protected_dirs() {
   local path found=
   while IFS= read -r path; do
@@ -273,16 +294,34 @@ protected_dirs() {
     esac
   done <<<"$(of_kind dir | cut -f2)"
   if [ -z "$found" ] || head -c 1 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" >/dev/null 2>&1; then return 0; fi
-  die "macOS lets only Full Disk Access remove$found: give the terminal Full Disk Access (System Settings › Privacy & Security), reopen it, then rerun; nothing removed (take the access back once cleanup has finished)"
+  if [ -n "$yes" ]; then
+    die "macOS lets only Full Disk Access remove$found: give the terminal Full Disk Access (System Settings › Privacy & Security), reopen it, then rerun; nothing removed (take the access back once cleanup has finished)"
+  fi
+  say "$me: macOS lets only Full Disk Access remove$found: to remove this list, give the terminal Full Disk Access (System Settings › Privacy & Security), reopen it, then rerun (take the access back once cleanup has finished)"
+  exit 0
 }
 
 show() {
   local kind
   printf 'install-cleanup.sh will remove what install.sh added:\n' >&3
   for kind in launchd keychain broker codex-plugin codex-marketplace claude-plugin claude-marketplace \
-    login opencode-auth opencode-provider opencode-config plugin-root agent-tree docker-block profile profile-file config cask formula homebrew clt file board-dir dir; do
+    login opencode-auth opencode-provider opencode-config plugin-root docker-container docker-image agent-tree \
+    docker-block profile profile-file config cask formula homebrew clt file board-dir dir; do
     of_kind "$kind" | tr '\t' ' ' | sed 's/^/  /' >&3
   done
+  if [ -n "$(of_kind 'docker-(container|image)')" ]; then
+    printf '  keeps worker images (ensemble-worker) and ensemble-ws-* volumes\n' >&3
+  fi
+  if grep -qxF "cask"$'\t'"docker-desktop" "$ledger"; then
+    printf "  edits ~/.docker: drops Docker Desktop's credential helper, context and CLI plugin links\n" >&3
+  fi
+}
+
+# Stops before anything is removed when a recorded egress proxy resource needs Docker and Docker does not answer.
+docker_reachable() {
+  [ -n "$(of_kind 'docker-(container|image)')" ] || return 0
+  PATH="${HOMEBREW_PREFIX:-$root/opt/homebrew}/bin:$PATH" docker info </dev/null >/dev/null 2>&1 \
+    || die "Docker is not running: start Docker Desktop, then rerun; nothing removed"
 }
 
 # need <command>: fails the Step when the tool a record needs is not on PATH; the record stays.
@@ -406,7 +445,8 @@ logins() {
   done <<<"$(of_kind login)"
 }
 
-# Shared with install-cleanup.sh; edits JSONC values without rewriting unrelated text.
+# Shared with install-cleanup.sh; edits JSONC values without rewriting unrelated text, and shows a configured
+# provider (configured_provider).
 opencode_config_edit() {
   python3 -I -c '
 import json, os, re, sys
@@ -539,6 +579,31 @@ def run():
             path.unlink()
         else:
             write(path, new)
+    elif action == "show":
+        name, name_re, url_re, model_re, context_re = args
+        def ok(pattern, value):
+            return isinstance(value, str) and "\n" not in value and re.search(pattern, value) is not None
+        providers = {}
+        for file in (path / "opencode.json", path / "opencode.jsonc"):
+            found = parse(load(file))[0].get("provider", {})
+            providers.update(found if isinstance(found, dict) else {})
+        def candidate(key):
+            entry = providers.get(key)
+            options = entry.get("options") if isinstance(entry, dict) else None
+            # valid_name rejects ollama too
+            return (ok(name_re, key) and key != "ollama" and isinstance(options, dict)
+                    and ok(url_re, options.get("baseURL")))
+        names = [name] if name else [key for key in providers if candidate(key)]
+        if len(names) != 1 or not candidate(names[0]):
+            return
+        entry = providers[names[0]]
+        models = entry.get("models") if isinstance(entry.get("models"), dict) else {}
+        model = next(iter(models)) if len(models) == 1 else ""
+        limit = models[model].get("limit") if isinstance(models.get(model), dict) else None
+        context = limit.get("context") if isinstance(limit, dict) else None
+        context = str(context) if isinstance(context, int) and not isinstance(context, bool) else ""
+        print("\t".join((names[0], entry["options"]["baseURL"], model if ok(model_re, model) else "",
+                         context if ok(context_re, context) else "")))
     else:
         raise ValueError()
 
@@ -680,6 +745,65 @@ opencode_configs() {
   done <<<"$paths"
 }
 
+# Exit 0 when Docker reports no egress-proxy $1 (container or image): any other failure, Docker not answering
+# included, proves nothing.
+egress_absent() {
+  local err
+  if err=$(docker "$1" inspect egress-proxy </dev/null 2>&1 >/dev/null); then return 1; fi
+  case $err in *"No such $1"*) return 0 ;; esac
+  return 1
+}
+
+# Removes the egress proxy's container, then its image, when install.sh created them; a record goes only once Docker
+# reports what it names gone.
+egress_proxy() {
+  local kind
+  step "egress proxy"
+  if [ -z "$(of_kind 'docker-(container|image)')" ]; then
+    skip "not installed by install.sh"
+    return
+  fi
+  need docker
+  for kind in container image; do
+    grep -qxF "docker-$kind"$'\t'"egress-proxy" "$ledger" || continue
+    case $kind in
+      container) docker rm -f egress-proxy </dev/null >/dev/null 2>&1 || true ;;
+      image) docker image rm egress-proxy </dev/null >/dev/null 2>&1 || true ;;
+    esac
+    egress_absent "$kind" || die "cannot remove $kind egress-proxy; its record stays for a rerun"
+    drop "docker-$kind"$'\t'"egress-proxy"
+  done
+}
+
+# Lists the worker images and workspace volumes cleanup keeps, when install.sh set up Docker.
+worker_data() {
+  local list name note=
+  step "worker images and volumes"
+  if ! grep -qx docker=yes "$state_dir/state" 2>/dev/null && [ -z "$(of_kind 'docker-(container|image)')" ]; then
+    skip "Docker not chosen"
+    return
+  fi
+  if ! command -v docker >/dev/null; then
+    skip "docker not found on PATH; none listed"
+    return
+  fi
+  if grep -qxF "cask"$'\t'"docker-desktop" "$ledger"; then note="; removing Docker Desktop below deletes it with Docker's data"; fi
+  if list=$(docker image ls --format '{{.Repository}}:{{.Tag}}' ensemble-worker </dev/null); then
+    while IFS= read -r name; do
+      if [ -n "$name" ]; then say "    kept $name: worker image$note"; fi
+    done <<<"$list"
+  else
+    say "    cannot list worker images; kept them"
+  fi
+  if list=$(docker volume ls --format '{{.Name}}' --filter name=ensemble-ws- </dev/null); then
+    while IFS= read -r name; do
+      case $name in ensemble-ws-*) say "    kept $name: worker workspace volume$note" ;; esac
+    done <<<"$list"
+  else
+    say "    cannot list workspace volumes; kept them"
+  fi
+}
+
 # Ends what still runs from Docker.app once its cask is gone (its quit misses helpers such as docker-agent): TERM, up to
 # 10 seconds, then KILL; matched by the literal command-line prefix, so nothing else is signalled.
 docker_processes() {
@@ -693,6 +817,65 @@ docker_processes() {
   pkill -KILL -f "$pattern" </dev/null || true
   sleep 1
   if left=$(pgrep -f "$pattern" </dev/null); then die "Docker Desktop processes still running: ${left//$'\n'/ }"; fi
+}
+
+# Once Docker Desktop is gone: drops what names it in ~/.docker/config.json, keeping the rest, and its CLI plugin links.
+docker_config() {
+  local config=$HOME/.docker/config.json link target
+  if [ -f "$config" ]; then
+    python3 -I -c '
+import json, os, sys, tempfile
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+except ValueError:
+    data = None
+except OSError as err:
+    sys.exit("cannot read %s: %s" % (path, err.strerror))
+if not isinstance(data, dict):
+    print("    kept %s: not a JSON object; check its credsStore" % path, file=sys.stderr)
+    sys.exit()
+dropped = []
+if data.get("credsStore") == "desktop":
+    del data["credsStore"]
+    dropped.append("credsStore")
+helpers = data.get("credHelpers")
+if isinstance(helpers, dict) and "desktop" in helpers.values():
+    for host in [host for host, helper in helpers.items() if helper == "desktop"]:
+        del helpers[host]
+        dropped.append("credHelpers " + host)
+    if not helpers:
+        del data["credHelpers"]
+if data.get("currentContext") == "desktop-linux":
+    del data["currentContext"]
+    dropped.append("currentContext")
+if not dropped:
+    sys.exit()
+real = os.path.realpath(path)
+try:
+    mode = os.stat(real).st_mode & 0o7777
+    fd, temp = tempfile.mkstemp(dir=os.path.dirname(real), prefix=".config.json.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(data, indent="\t", ensure_ascii=False))
+        os.chmod(temp, mode)
+        os.replace(temp, real)
+    except BaseException:
+        os.unlink(temp)
+        raise
+except OSError as err:
+    sys.exit("cannot write %s: %s" % (real, err.strerror))
+print("    dropped Docker Desktop\x27s %s from %s" % (", ".join(dropped), path), file=sys.stderr)' "$config" \
+      || die "cannot edit $config; its record stays for a rerun"
+  fi
+  for link in "$HOME/.docker/cli-plugins/"*; do
+    [ -L "$link" ] || continue
+    target=$(readlink "$link") || die "cannot read link $link; its record stays for a rerun"
+    case $target in
+      "$root/Applications/Docker.app/"*) rm -f "$link" || die "cannot remove $link; its record stays for a rerun" ;;
+    esac
+  done
 }
 
 brew_packages() {
@@ -713,7 +896,10 @@ brew_packages() {
         fi
       fi
       if brew list --cask "$name" </dev/null >/dev/null 2>&1; then brew uninstall --cask "$name" </dev/null >&2; fi
-      if [ "$name" = docker-desktop ]; then docker_processes; fi
+      if [ "$name" = docker-desktop ]; then
+        docker_processes
+        docker_config
+      fi
     elif brew list --formula "$name" </dev/null >/dev/null 2>&1; then
       if ! reason=$(brew uninstall "$name" </dev/null 2>&1); then
         case $reason in
@@ -754,6 +940,16 @@ board_dirs() {
   done <<<"$(of_kind board-dir | cut -f2 | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)"
 }
 
+# Exit 0 when directory $1 is a parent other tools also write, so the cleanup removes it only once empty; the trees
+# only install.sh writes go whole.
+shared_dir() {
+  case $1 in
+    "$HOME/.config" | "$HOME/.codex" | "${CODEX_HOME:-$HOME/.codex}" | "$HOME/.docker" | "$HOME/Library/LaunchAgents") ;;
+    "$HOME/.docker/contexts" | "$HOME/.docker/contexts/meta" | "$HOME/.docker/cli-plugins") ;;
+    *) return 1 ;;
+  esac
+}
+
 files_and_dirs() {
   local path domain
   step "files and directories"
@@ -772,6 +968,11 @@ files_and_dirs() {
   while IFS= read -r path; do
     [ -n "$path" ] || continue
     [ "$path" = "$HOME/.ensemble" ] && continue
+    if shared_dir "$path"; then
+      if { [ -e "$path" ] || [ -L "$path" ]; } && ! rmdir "$path" 2>/dev/null; then say "    kept $path: not empty"; fi
+      drop "dir"$'\t'"$path"
+      continue
+    fi
     if ! rm -rf "$path" || [ -e "$path" ]; then die "cannot remove $path; its record stays for a rerun"; fi
     drop "dir"$'\t'"$path"
   done <<<"$(of_kind dir | cut -f2 | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)"
@@ -829,10 +1030,12 @@ main() {
   fi
   validate
   [ ! -f "$state_dir/agent-tree.pending" ] || die "path inventory is incomplete; rerun install.sh before cleanup; nothing removed"
-  protected_dirs
   show
+  protected_dirs
+  docker_reachable
   if [ -z "$yes" ] && ! ask_yn "Remove all of this?"; then die "nothing removed"; fi
   trap on_exit EXIT
+  exit_traps
   sudo_once
   if [ -x "$root/opt/homebrew/bin/brew" ]; then eval "$("$root/opt/homebrew/bin/brew" shellenv)"; fi
   if grep -qxF "dir"$'\t'"$HOME/.ensemble" "$ledger"; then agent_root=1; fi
@@ -847,6 +1050,8 @@ main() {
   config_file
   opencode_configs
   plugin_root
+  worker_data
+  egress_proxy
   keep_root=$(agent_tree)
   brew_packages
   homebrew_and_clt

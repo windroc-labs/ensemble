@@ -1,8 +1,32 @@
 # Upgrading
 
+## The delegate's drive: harness_host removed
+
+A detached run's drive (`<agent>-drive`) now runs as a local process the delegate starts itself
+([Core architecture](architecture.md)), never as a session on a harness Host, so
+`[delegate.delegates] harness_host` is gone and any key under `[delegate.delegates]` is refused
+(`[delegates] harness_host: the delegate takes no keys`). Delete that line, and the `[delegate.delegates]` table, from
+`~/.ensemble/config.local.toml`; `scripts/install.sh --docker` no longer writes it. Let detached runs end first: a run an
+older release detached reads as invalid; its other runs read as before.
+
+## Session harness: close every session first
+
+This release runs every Docker worker under its [session harness](architecture.md#session-harness) and drops the Docker
+relay and supervisor ([Docker host › Harness-owned workers](architecture.md#harness-owned-workers)). It keeps no
+compatibility with sessions an older release started, so before upgrading:
+
+1. List them: `ensemble-session ls`.
+2. Close each crew worker with `ensemble-crew close [--manager <manager>] NAME`, which also drops its roster entry,
+   and every other session with `ensemble-session close NAME`.
+
+Conversations stay: resume them after the upgrade. A session missed is not supported afterwards: on Docker it is not
+listed, and the next Docker start removes its container as debris.
+
+## Broker protocol 30: Keychain rename
+
 Broker protocol 30 renames every broker keychain item to start with `ensemble-broker-` (`ensemble-claude` →
 `ensemble-broker-claude`, `ensemble-bot` → `ensemble-broker-bot`, `ensemble-env/<name>` → `ensemble-broker-env/<name>`
-and so on: [Credentials › Keychain items](credentials.md#keychain-items)), and the static secret references with
+and so on: [Keychain items](architecture.md#keychain-items)), and the static secret references with
 them: a manifest or `[[delegate.environments.<name>.secrets]]` item names `ensemble-broker-env/<name>`, and one naming
 `ensemble-env/<name>` is rejected (`manifest_rejected`). Upgrading from v0.4.1 or earlier, the maintainer gives you a
 one-time rename step; in this order:
@@ -19,8 +43,13 @@ Close first: after step 2 a protocol 29 broker no longer finds its items, so its
 nothing, and the protocol 30 broker rejects the old session's manifest. A session missed in step 1: close it with the
 new broker right after step 3; `close` revokes its GitHub tokens from the renamed record, and its audit log lacks the
 environment secrets' `Withdrawn` entries. Every later upgrade: `install.sh` runs `retrust` on each new broker, which
-asks the login keychain password once and shows no dialog ([Docker host › Re-trust after an
-upgrade](docker-host.md#re-trust-after-an-upgrade)).
+asks the login keychain password once and shows no dialog ([Docker host › Docker install](architecture.md#docker-install)).
+
+A broker below protocol 30 cannot read the renamed items, so once a protocol 30 broker is installed,
+`scripts/install.sh` refuses a `--ref` (an older release or branch) whose broker speaks below 30, before it replaces
+the broker or `~/.egress/current`.
+
+## Release changes
 
 The built-in `verifier` now accepts every configured client, including Codex, OpenCode and Claude; board runs
 use their Agent label. Rebuild `mini-op:env` from mini-op's plain-skill version (WDRC-195) before starting one:
@@ -33,7 +62,7 @@ The broker release asset no longer has a GitHub provenance attestation: the main
 that sha256. Nothing to do: install or upgrade the broker as before (`gh` still downloads it).
 
 Broker protocol 29 replaces `refresh` and `notices` with `maintain`: the broker now decides when each session's
-credentials renew ([Docker host › Credential renewal](docker-host.md#credential-renewal)). Upgrade the broker with the
+credentials renew ([Docker host › Harness-owned workers](architecture.md#harness-owned-workers)). Upgrade the broker with the
 plugin, then restart (close and resume) every Docker session that was running: until then its old supervisor's
 renewals fail, each asking for that restart, its GitHub tokens lapse within the hour and a Codex session closes at its
 old deadline. The events `client_refresh_failed`, `github_refresh_failed` and `credential_notice_failed` become
@@ -42,26 +71,25 @@ broker, then close and resume every Docker session started under 29: a protocol 
 records. Pending GitHub revocations are kept either way.
 
 Broker protocol 28 adds `notices` and `status`'s `static`, and records each Claude token's, OpenCode key's and
-environment secret's expiry ([Docker host › Static secret expiry](docker-host.md#static-secret-expiry)). Upgrade the
+environment secret's expiry ([Docker host › Broker logins](architecture.md#broker-logins)). Upgrade the
 broker with the plugin. Existing items keep working with an unknown expiry; to record one, rerun the login with
 `--fresh-token` (Claude, after `claude setup-token`), `--issued` or `--expires`.
 
 Broker protocol 27 adds the start manifest's optional `gateway` (the caller network, default `workers`) and `prefetch`
-([Docker host › Prefetch](docker-host.md#prefetch)). Upgrade the broker with the plugin: sessions refuse a broker of
+([Docker host › Environments](architecture.md#environments)). Upgrade the broker with the plugin: sessions refuse a broker of
 another protocol.
 
 Broker protocol 26 drops `start`'s `client_update`: a start never updates Codex; the image carries Claude Code,
 Codex and OpenCode at their latest releases and `ensemble-broker check-clients` rebuilds it when one moves
-([Docker host › Client releases](docker-host.md#client-releases)). Upgrade the broker with the plugin. Drop
+([Docker host › Worker image](architecture.md#worker-image)). Upgrade the broker with the plugin. Drop
 `npm install -g @anthropic-ai/claude-code` (and `@openai/codex`) from `~/.ensemble/docker/worker/Dockerfile` to shrink
 the image: the ensemble layer installs its own, and a base image no longer needs `claude`.
 
-Broker protocol 25 makes `start` require the egress proxy ([Docker host › Egress
-proxy](docker-host.md#egress-proxy)): without it running and healthy, a start fails
+Broker protocol 25 makes `start` require the egress proxy ([Docker host › Egress proxy](architecture.md#egress-proxy)): without it running and healthy, a start fails
 `egress_unavailable` (exit 17) before any credential. Upgrade the broker with the plugin, then rerun
 `scripts/install.sh --docker` to start the proxy ([Egress proxy](#egress-proxy)).
 
-Broker protocol 24 adds the start manifest's optional `secrets` ([environment secrets](docker-host.md#environment-secrets)).
+Broker protocol 24 adds the start manifest's optional `secrets` ([environment secrets](architecture.md#environments)).
 Upgrade the broker with the plugin: sessions refuse a broker of another protocol.
 
 Broker protocol 23 makes `ensemble-broker status` read-only. Upgrade the broker with the
@@ -70,7 +98,7 @@ plugin, and change automation that relied on status retrying GitHub revocations 
 Protocol 23 also carries optional `audit_warning: "audit_write_failed"` metadata independently
 of success or failure; custom clients must display it while preserving the operation result.
 Its `build` adds `--base-image IMAGE` and `--image-plugin NAME` ([Docker host › Base
-images](docker-host.md#base-images)); a build without them is unchanged.
+images](architecture.md#base-images)); a build without them is unchanged.
 
 ## Client run limits
 
@@ -82,14 +110,14 @@ Move every entry in `[orchestrator.client_max_runs]` in `~/.ensemble/config.loca
 max_runs = 1
 ```
 
-Zero or an omitted `max_runs` means unlimited. The old local table is now an unknown key: orchestrator commands refuse the configuration until it is deleted (only write-back ignores it, with a warning), and it no longer limits launches. Stop and restart headless/in-process runs started by the previous version before relying on the new limit, because they have no session-layer leases. Existing TUI sessions on configured Hosts are counted immediately. The limit now covers ad-hoc role runs, crew workers and `router --issue` too; a refused board start is a normal failed attempt. See [Session run limits](sessions.md#run-limits) for counting and reconciliation.
+Zero or an omitted `max_runs` means unlimited. The old local table is now an unknown key: orchestrator commands refuse the configuration until it is deleted (only write-back ignores it, with a warning), and it no longer limits launches. Stop and restart headless/in-process runs started by the previous version before relying on the new limit, because they have no session-layer leases. Existing TUI sessions on configured Hosts are counted immediately. The limit now covers ad-hoc role runs, crew workers and `router --issue` too; a refused board start is a normal failed attempt. See [Session run limits](architecture.md#run-limits) for counting and reconciliation.
 
 ## Egress proxy
 
 After updating the plugin, rerun `scripts/install.sh --docker`: it installs the pinned private
-`windroc/egress-proxy` with your `gh` access, creates `~/.egress/config.local.yaml` only if absent, starts the
-proxy and waits for healthy. Existing configs are preserved, so one without `networks.workers` stops the installer: add it first ([Docker host › Egress proxy](docker-host.md#egress-proxy)). Add Ollama and local/LAN provider exceptions before starting their workers
-([Egress proxy operations](docker-host.md#egress-proxy)).
+`windroc-labs/egress-proxy` with your `gh` access, creates `~/.egress/config.local.yaml` only if absent, starts the
+proxy and waits for healthy. Existing configs are preserved, so one without `networks.workers` stops the installer: add it first ([Docker host › Egress proxy](architecture.md#egress-proxy)). Add Ollama and local/LAN provider exceptions before starting their workers
+([Egress proxy operations](architecture.md#egress-proxy)).
 
 The pinned proxy now builds the image as `egress-proxy`. After the installer succeeds, remove the
 old image it leaves behind:
@@ -120,13 +148,51 @@ all five launchers already exist. Python imports and user configuration stay the
 Docker-host users must rerun `scripts/install.sh` after the release containing this layout change
 to reinstall the broker. An older broker fails on the new layout with `session/src unreadable`.
 
+## Linear presets
+
+What a Linear board needs in its team. `scripts/install.sh --board linear` then fills each id ([Board ›
+Setup](architecture.md#board-setup)); by hand, put each in `~/.ensemble/config.local.toml` as a `linear.<key>` under
+`[orchestrator.linear]` (`linear.states.todo` is `todo` in `[orchestrator.linear.states]`, `linear.roles.pm.client_id`
+is `client_id` in `[orchestrator.linear.roles.pm]`).
+
+| Create in Linear | Config key |
+|---|---|
+| the team | `linear.team` |
+| workflow states Backlog, Todo, In Progress, In Review, Handoff, Done, Canceled | `linear.states.<state>`: `backlog`, `todo`, `in_progress`, `in_review`, `handoff`, `done`, `canceled` |
+| a `Tasks` label group, its id from `issueLabels { nodes { id name isGroup } }` | `linear.task_label_group` |
+| one label per task under `Tasks` (`build`, `light-build`, …), optional | `linear.task_labels` |
+| an `Agent` label group and one label per client, optional; both or neither | `linear.agent_label_group`, `linear.agent_labels` |
+| the harness's, the manager's and each role's OAuth app (below) | `client_id`, `secret_service`, `token_service`, `user_id` of `linear.harness`, `linear.manager` and `linear.roles.<role>` |
+| the humans subscribed on In Review | `linear.human_members` |
+| the Linear project of each product repo, optional | `linear.project_repos` |
+
+Each OAuth app:
+
+1. Linear › Settings › API › Applications › New: Client credentials on, Public and Webhooks off (the app page has no
+   team-access setting). Its Client ID → `client_id`.
+2. Store its client secret, then paste it (nothing echoes):
+
+   ```sh
+   security add-generic-password -s <secret_service> -a <secret_service> -w
+   ```
+
+3. Its Linear user id → `user_id`; runtime commands never fetch it. The first non-dry call as the app requests and
+   stores its token.
+
+The installer does steps 2 and 3 for each transport-owned app, with the services `linear-app-<slot>-secret` and
+`linear-app-<slot>-token` unless configured, reuses a token with over five days left, and leaves an enrolled app's
+token to the broker; cleanup removes only the items it created. A key the orchestrator does not know, in
+`[orchestrator.linear]` or an app table, stops it ([Linear apps](#linear-apps)). Once every app has a usable token,
+`bin/ensemble-orchestrator router --dry-run`, `bin/ensemble-orchestrator promote --dry-run` and
+`bin/ensemble-orchestrator issue list` report no configuration error.
+
 ## Linear apps
 
 The Linear board's harness, manager and roles are OAuth apps now; member accounts and personal API keys are gone.
 On a Linear board, switch once, in this order:
 
 1. Create the five apps (harness, manager, one per role) in Linear › Settings › API › Applications: Client
-   credentials on, Public and Webhooks off ([Linear presets](credentials.md#linear-presets)).
+   credentials on, Public and Webhooks off ([Linear presets](#linear-presets)).
 2. Stop the board's launchd jobs and start no router by hand; wait until no run is left.
 3. Write down the value of each old setting, `linear.harness_key`, `linear.manager_key` and each
    `[orchestrator.linear.roles.<role>]` `key`: it names the Keychain item holding that personal key. Unset, it
@@ -136,7 +202,7 @@ On a Linear board, switch once, in this order:
 5. Delegate every issue not Done, Canceled or Duplicate from a role's member account to that role's app, and
    from the harness's to the manager app: Linear's bulk edit, or `ensemble-orchestrator issue edit <ID> --role <role>`
    (`--role me` for the manager app).
-6. Start the jobs again and let each role run one round ([Live checks](credentials.md#live-checks)).
+6. Start the jobs again and let each role run one round ([Live checks](#live-checks)).
 7. Revoke the old personal keys in Linear › Settings › Account › Security & Access, run
    `security delete-generic-password -s <service>` for each item written down in step 3, deactivate the old member
    accounts and remove their emails from `linear.human_members`. If the manager's old key was your own account's,
@@ -158,12 +224,35 @@ flowchart LR
 Stop launchd router/promote jobs, manual host commands and active role write-back before enrollment so no old process
 holds a root secret in memory. Docker workers themselves receive no Linear material.
 
-Use that identity's public JSON, commands and terminal/dialog approval instructions from
-[Credentials › Linear broker renewal](credentials.md#linear-broker-renewal).
-After `login linear` succeeds, set `renewal = "broker"` in its `[orchestrator.linear.harness]`,
-`[orchestrator.linear.manager]` or `[orchestrator.linear.roles.<role>]` table in `~/.ensemble/config.local.toml`.
-Run `linear-maintain` while callers remain stopped; success contains version 1, `renewed` and `expires_at`, never a
-token. Then restart callers. Repeat for the next identity, including verifier when configured. An unconfigured
+Copy the identity's six public values from its config table into a local `linear-identity.json` (no secret):
+
+```json
+{
+  "name": "harness",
+  "kind": "harness",
+  "client_id": "<configured client_id>",
+  "user_id": "<configured user_id>",
+  "secret_service": "<configured secret_service>",
+  "token_service": "<configured token_service>"
+}
+```
+
+`kind` is `harness`, `manager` or `role` (verifier included). The name and services are 1–128 ASCII letters, digits
+or `._@+-`, not `.` or `..`; the client ID 1–256 printable ASCII characters without whitespace; the user ID a lowercase
+UUID. The secret and token services differ and are no broker service; enrollment rejects an alias of another identity
+before changing access. Enroll it:
+
+```sh
+/usr/local/libexec/ensemble/ensemble-broker login linear < linear-identity.json
+```
+
+It may ask the login Keychain password on the terminal, then open a macOS SecurityAgent dialog to change the client
+secret item's access: enter the login Keychain password and click **Allow**. It records a pending binding before
+changing access, so after a failure rerun the same enrollment.
+Then set `renewal = "broker"` in its `[orchestrator.linear.harness]`, `[orchestrator.linear.manager]` or
+`[orchestrator.linear.roles.<role>]` table in `~/.ensemble/config.local.toml` and, callers still stopped, run
+`/usr/local/libexec/ensemble/ensemble-broker linear-maintain < linear-identity.json`; success contains version 1,
+`renewed` and `expires_at`, never a token. Then restart callers. Repeat for the next identity, including verifier when configured. An unconfigured
 verifier is not an error. If enrollment/maintenance fails, complete recovery while that identity's callers stay
 stopped; do not change its writer back as an automatic fallback.
 
@@ -177,12 +266,41 @@ identity replacement, stop callers and remove only that identity's reservation f
 and its `app/<token_service>` and host grant records through a controlled Keychain recovery; preserve every other
 identity and all GitHub recovery material. There is no automatic rebinding command.
 
+To rotate an enrolled app's secret, stop its host callers, rotate it at Linear, replace only its root item in Keychain
+Access, and delete its published token, its `ensemble-broker-linear` / `app/<token_service>` and its
+`ensemble-broker-linear-grants` / `host/<token_service>`, keeping `registry` and every other identity's items. Store
+the new root at the configured service and account, rerun `login linear` and `linear-maintain`, then restart callers.
+Deleting only the published token would republish the broker's cached access token.
+
 Downgrade is explicit: stop the host callers, keep the broker's records, and remove `renewal` from each switched
 local app table before loading an older plugin (which rejects the new key). In Keychain Access restore only that
 identity's root item to its previous `/usr/bin/security` reader and partition settings, or recreate the root item
 with the same service/account using the old installer's hidden prompt. Do not resume the old writer until its root
 access is restored. Broker-only access never silently changes because a process selected the old writer. Re-enroll
 before selecting broker again. This does not delete or migrate pending GitHub revocations.
+
+## Live checks
+
+Manual, for the manager and the user, through mini-op on the test Mac mini with Docker Desktop, never on a developer's
+Mac; the `tests/session/live_docker.py` checks: [Docker host › Docker live acceptance](architecture.md#docker-live-acceptance).
+
+- [ ] Fresh `scripts/install.sh --docker` ends with `egress-proxy` healthy; rerunning keeps the proxy's ID and start
+  time, pinned checkout, and config bytes, mode and modification time. Repeat with an existing config.
+- [ ] After changing or recreating `~/.egress/config.local.yaml`, rerunning `scripts/install.sh --docker` makes the
+  proxy serve the new config; with no change, the proxy keeps its start time.
+- [ ] [Linear presets](#linear-presets) in a new Linear team, from only that section and the config: both dry-runs
+  report no configuration error. Deferred until there is a new Linear team.
+- [ ] [Linear apps](#linear-apps), before cutover: the harness app claims, moves, comments (the comment's `user` has
+  `isMe` true), creates an issue, a relation and an attachment, archives, and subscribes the user.
+- [ ] Before cutover: the manager app creates and edits issues, comments (`user` is the manager app user) and moves an
+  issue (the move's actor is recognisable by its app user id).
+- [ ] Before cutover: the harness and manager apps both fail to read or write another team's issue.
+- [ ] After cutover: each role app fails on another team's issue and runs one round: claim, write-back, Handoff, next
+  role's claim.
+- [ ] After cutover: [Linear apps](#linear-apps) step 7 is done: the old credentials revoked in Linear and every
+  Keychain item written down in its step 3 deleted.
+
+A failed before-cutover check stops the cutover; report it to the user.
 
 ## With scripts/install.sh
 
@@ -200,19 +318,39 @@ ignoring other clients’ caches and older OpenCode packages ([commands](../READ
 Rerun the installer once to refresh older launchers and record that selection, even if their files already exist.
 After a client plugin update removes the selected directory, the next command selects that same client's newest
 installed ensemble copy, records its path and reports it on stderr; no installer rerun is needed. It never selects
-another client's copy. If the selected client has no installed copy left, the command keeps the selected-plugin error.
+another client's copy, nor an OpenCode copy of another ref (its package's `#<ref>`, none meaning `main`). If no such
+copy is left, the command keeps the selected-plugin error and the selection: rerun the installer.
 Equal versions use sorted paths to break ties. The installer also handles older refs whose launchers predate selection support.
 After plugin refresh, when
 the plugin's broker sources changed, or the installed broker speaks another protocol, it reinstalls the broker, reusing locally usable Claude and ready Codex
-credentials and requesting any missing logins ([Log in](docker-host.md#log-in)).
+credentials and requesting any missing logins ([Broker logins](architecture.md#broker-logins)).
 It does not edit config keys a release renames.
 
 For OpenCode with `--docker`, rerunning the installer also ensures the local `auth.json` entry for a commander,
 then imports it into the broker without a second key entry. A broker-only install needs one local login;
 existing local API entries are reused, including after a broker reinstall. Both entries follow the install ledger's
-cleanup ownership ([Credentials](credentials.md#opencode-provider-api-keys)).
+cleanup ownership ([OpenCode sessions](customizing-roles-and-tasks.md#opencode-sessions)).
 
 With OpenCode selected, an existing stable 1.x executable on `PATH` at or above the minimum version is reused.
 Otherwise, the installer installs a private copy and offers a shell profile addition for `~/.ensemble/opencode/bin`;
 accept it, then open a new terminal to run `opencode` directly. Existing executable paths, the selected provider
 and credentials are kept on rerun.
+
+## OpenCode plugin by hand
+
+OpenCode installs the `#v<version>` tag of ensemble's `plugin` entry
+([OpenCode commander](architecture.md#opencode-commander)) once, into
+`${XDG_CACHE_HOME:-~/.cache}/opencode/packages/<spec>/node_modules/ensemble`, and never refreshes the same spec.
+Installed commands keep their selected plugin path ([Install](../README.md#install)). For a release upgrade:
+
+```mermaid
+flowchart LR
+    T[Set new #v&lt;version&gt;] --> R[Restart OpenCode]
+    R --> D[Delete old spec directory]
+    D --> C[Run an installed command]
+```
+
+When the old selected directory is gone, the next installed command selects and records the newest installed ensemble
+copy from OpenCode and reports its path on stderr; no installer rerun is needed. To select a different ref while the
+old directory remains, rerun the installer or the new plugin's `skills/manage/scripts/ctmux --install`; older refs
+require the installer ([With scripts/install.sh](#with-scriptsinstallsh)).

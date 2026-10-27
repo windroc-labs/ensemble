@@ -1,5 +1,5 @@
-"""router.py as a subprocess: it detaches the run's LinearRun, whose harness runs on a private tmux
-server and calls back ensemble-orchestrator writeback; fake_claude as client claude, FakeLinear over HTTP.
+"""router.py as a subprocess: it detaches the run's LinearRun, whose drive runs as a local process
+and calls back ensemble-orchestrator writeback; fake_claude as client claude, FakeLinear over HTTP.
 A claim runs to In Review; a crash resumes the same session; a Linear failure mid write-back fails
 its callback, and Recover then writes the outcome back in process, without an agent; a Linear outage stops a tick and --issue; a tick's usage gate; a long description reaches the run; a
 SIGTERM'd harness ends its run and its agent; the researcher's gate runs on a session's PYTHONPATH.
@@ -161,7 +161,9 @@ class Router(TmuxFlow):
         )
         self.assertEqual(self.attachments(ID), [ATTACHMENT])
         self.assertEqual(self.subscribers(ID), [HUMAN])
-        ledger = [*LEDGER[:2], *(["running:2"] if resumed else []), *LEDGER[2:]]
+        # a resumed run's outcome is attempt 2's: its steps are scoped to it
+        scoped = [s if s.startswith("attach:") else f"attempt:2:{s}" for s in LEDGER[2:]]
+        ledger = [*LEDGER[:2], "running:2", *scoped] if resumed else LEDGER
         self.assertEqual(self.ledger(ID), {sid: ledger})
         [running] = [v["b"] for v in self.sent("linear.M_COMMENT_ID", HARNESS_USER)]
         self.assertTrue(running.startswith(f"Run {sid} · running · "), running)
@@ -206,7 +208,6 @@ class Router(TmuxFlow):
         live_tmux.wait(
             lambda: "start" in self.ledger(ID).get(sid, []), TIMEOUT, "write-back's start step"
         )
-        harness = self.harness("engineer", ID, sid)
         [agent] = self.started()
         pid, command = agent["pid"], ""
         for _ in range(4):  # the agent's nearest harness ancestor
@@ -217,7 +218,7 @@ class Router(TmuxFlow):
         os.kill(pid, signal.SIGKILL)
         with contextlib.suppress(ProcessLookupError):
             os.kill(agent["pid"], signal.SIGKILL)
-        live_tmux.wait(lambda: not self.live(harness), TIMEOUT, f"{harness} to end")
+        live_tmux.wait(lambda: not self.drive_running(ID), TIMEOUT, "its drive to end")
         self.assertEqual(self.state(ID), "in_progress")
         [(author, session)] = [c for c in self.comments(ID) if c[1].startswith(f"Run {sid} · ")]
         self.assertEqual(author, HARNESS_USER)
@@ -360,10 +361,7 @@ class Router(TmuxFlow):
             lambda: "start" in self.ledger(ID).get(sid, []), TIMEOUT, "write-back's start step"
         )
         [agent] = self.started()
-        harness = self.harness("engineer", ID, sid)
-        pane = self.server.tmux("list-panes", "-t", f"={harness}", "-F", "#{pane_pid}")
-        self.assertEqual(pane.returncode, 0, pane.stderr)
-        os.kill(int(pane.stdout), signal.SIGTERM)
+        self.drive(ID).terminate()
         self.wait_end(sid, ID)
         [end] = [e for e in self.logged() if (e["src"], e["kind"]) == ("writeback", "end")]
         self.assertEqual((end["issue"], end["exit"]), (ID, 128 + signal.SIGTERM))

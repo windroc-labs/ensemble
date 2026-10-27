@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import json
 import os
+import signal
 import stat
+import subprocess
 import sys
+import threading
 import time
 import traceback
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, fields, is_dataclass, replace
+from dataclasses import replace
+from enum import Enum, auto
 
 import ensemble.utils as utils_package
 from ensemble.delegate import config
@@ -18,18 +23,26 @@ from ensemble.delegate.composer import Composer, DelegateConfig, RunConfig, Team
 from ensemble.delegate.engine.base import Delegate
 from ensemble.delegate.engine.callback import EventCallback, sweep
 from ensemble.delegate.engine.config import module_roots, packaged_environments, read_config
-from ensemble.delegate.engine.container import on_docker
 from ensemble.delegate.engine.drivers import AgentDriver, Driver, InstructionDriver
 from ensemble.delegate.engine.environment import resolve
+from ensemble.delegate.engine.handler import finish
 from ensemble.delegate.engine.plan import plan
-from ensemble.delegate.engine.runner import execute, say, stopped
+from ensemble.delegate.engine.record import CLOSED, HANDLER, RunRecord, owned
+from ensemble.delegate.engine.runner import (
+    Attempts,
+    claim_release,
+    execute,
+    idle_reason,
+    say,
+    stopped,
+)
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import (
     ConfigError,
+    DelegateState,
     Event,
     Finished,
     Layout,
-    Limit,
     Outer,
     Plan,
     Preview,
@@ -41,36 +54,32 @@ from ensemble.delegate.event.reply import outcome_only
 from ensemble.delegate.event.types import Outcome
 from ensemble.session import (
     SIGNALS,
-    Access,
-    EnvironmentSpec,
+    HookCallback,
     Host,
     Launch,
     Mode,
     NoRecordedSession,
     NotShowable,
-    Process,
     Resumable,
     RunLog,
     Session,
     SessionBusy,
     SessionError,
     SessionStatus,
-    SessionStatusLog,
     Unanswered,
     Usage,
     Viewer,
     get_viewer,
 )
 from ensemble.session import ConfigError as SessionConfigError
-from ensemble.session import (
-    Spec as SessionSpec,
-)
+from ensemble.session import Spec as SessionSpec
 from ensemble.utils import (
     EVENTS_ENV,
     LEASE_ENV,
     SID_ENV,
     Display,
     OutcomeStatus,
+    ProcessControl,
     Record,
     Status,
     StatusState,
@@ -81,6 +90,13 @@ from ensemble.utils import (
     thaw,
     under,
 )
+
+
+class _Ended(Enum):
+    """_drive_end's compare-and-set."""
+
+    LOST = auto()
+    STORED = auto()
 
 
 def _team(team: Team) -> Team:
@@ -95,47 +111,33 @@ def _loaded(payload: bytes) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _live(agent: Session) -> bool:
+    """Whether a close ends a running worker (unknown counts)."""
+    try:
+        return agent.alive() or agent.status().state == StatusState.UNKNOWN
+    except Unanswered:
+        return True
+
+
 def _unknown(error: Unanswered) -> Unanswered:
     return Unanswered(f"delegate agent session liveness unknown: {error}")
-
-
-def _encode(value: object) -> object:
-    if is_dataclass(value) and not isinstance(value, type):
-        return {field.name: _encode(getattr(value, field.name)) for field in fields(value)}
-    if isinstance(value, Mapping):
-        return {key: _encode(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_encode(item) for item in value]
-    return value
-
-
-@dataclass(frozen=True)
-class _State:
-    role: str
-    plan: Plan
-    session_cls: str | None
-    host: str
-    harness_host: str
-    display: Display
-    callback: tuple[str, ...] | None
-    agent_name: str
-    harness_name: str
-    attempt: int
-    outer: Outer
-    overlays: tuple[Mapping, ...]
-    detached: bool = False
-    completed: bool = False
-    result: Result | None = None
-    events: str | None = None
-    start_failure: str | None = None
 
 
 TUI_START_TIMEOUT = 30  # seconds: a tui run's agent session to go live, off Docker
 DOCKER_START_TIMEOUT = 120  # seconds, container start included
 TUI_POLL = 0.1  # seconds
+DRAIN_WAIT = (
+    35  # seconds a worker is gone before its drive ends the attempt: past the harness's drain
+)
+GONE_EVERY = 1.0  # seconds between the drive's worker checks
+WIND_DOWN_WAIT = 30.0  # seconds
+DRIVE_STOP_WAIT = 5.0  # seconds after SIGTERM, then SIGKILL
 
 
 class HarnessDelegate(Delegate):
+    _controls: type[ProcessControl] = ProcessControl  # the drive's
+    _stop_wait = DRIVE_STOP_WAIT
+
     def __init__(self, role: str, spec: Spec, **placement) -> None:
         self._accept(role, spec, **placement)
         self._persist_new()
@@ -161,9 +163,7 @@ class HarnessDelegate(Delegate):
         return Preview(
             state.plan,
             state.agent_name if view._named(state.plan.spec.mode) else None,
-            state.harness_name,
             state.host,
-            state.harness_host,
             state.callback,
         )
 
@@ -190,7 +190,6 @@ class HarnessDelegate(Delegate):
         *,
         host: str | None = None,
         display: Display = None,
-        harness_host: str | Host | None = None,
         callback: Sequence[str] | None = None,
         overlays: Sequence[Mapping] = (),
         session_cls: type[Session] = Session,
@@ -208,38 +207,20 @@ class HarnessDelegate(Delegate):
             self._settings = thaw(self.composer.config.values)
             self.session_cls = session_cls
             self._configure()
-            hosts = Host.parse_hosts(self._settings.get("hosts")).tables
+            config.delegates(self._settings)
             agent_host = session_cls.host(host)
             environment = resolve(
                 self._settings, role=role, host=agent_host.name, packaged=packaged_environments()
             )
-            self._harness_override = harness_host if isinstance(harness_host, Host) else None
-            harness = (
-                harness_host
-                if isinstance(harness_host, Host)
-                else session_cls.host(
-                    harness_host or config.harness_host(self._settings, hosts) or agent_host.name
-                )
-            )
             display = session_cls.display(
                 "none" if run.show == "none" else display, host=agent_host.name
             )
-            events = harness.events_path(spec.events)
+            events = agent_host.events_path(spec.events)
         except (OSError, ValueError, SessionConfigError, SessionError) as error:
             raise ConfigError(str(error)) from None
-        if harness.name not in hosts:
-            raise ConfigError(
-                f"harness_host {harness.name}: want one of {', '.join(sorted(hosts))}"
-            )
         self.driver = driver or AgentDriver(
             session_cls, settings=self._settings, display=display, host=agent_host.name
         )
-        if self.driver.docker and on_docker(self._settings, harness.name):
-            other = next((n for n in hosts if not on_docker(self._settings, n)), "<a host Host>")
-            raise ConfigError(
-                f"harness_host: an agent on the Docker Host needs its harness on another Host; "
-                f'set [delegate.delegates] harness_host = "{other}"'
-            )
         tui = spec.mode == Mode.TUI
         accepted = plan(
             run,
@@ -264,14 +245,13 @@ class HarnessDelegate(Delegate):
         self.workdir = accepted.spec.workdir
         self.layout = Layout(self.workdir)
         self.store = RunState(self.layout)
-        self._state = _State(
+        self._state = DelegateState(
             role,
             accepted,
             None
             if session_cls is Session
             else f"{session_cls.__module__}:{session_cls.__qualname__}",
             agent_host.name,
-            harness.name,
             display,
             None if callback is None else tuple(callback),
             name,
@@ -281,10 +261,7 @@ class HarnessDelegate(Delegate):
             tuple(thaw(overlay) for overlay in overlays),
             events=events,
         )
-        try:
-            harness.validate(self._state.harness_name, self._harness_launch(self._state))
-        except (SessionConfigError, SessionError) as error:
-            raise ConfigError(str(error)) from None
+        self._harness_launch(self._state)
 
     def _persist_new(self) -> None:
         """Every refusal precedes every write: a fresh workdir's session preflight runs before its
@@ -292,6 +269,8 @@ class HarnessDelegate(Delegate):
         mutex. The agent dir is made last, just before the run record.
         """
         fresh = not os.path.lexists(self.layout.run)
+        if not fresh:
+            self._settle()
         try:
             if fresh:
                 self._preflight()
@@ -309,8 +288,29 @@ class HarnessDelegate(Delegate):
             raise ConfigError(str(error)) from None
 
     def _preflight(self) -> None:
+        state = self._state
+        self._state = replace(state, plan=self._probed(state.plan, state.attempt))
+
+    def _probed(self, accepted: Plan, token: int, probe: SessionSpec | None = None) -> Plan:
+        """With the handler of worker `token` if its preflight (of `probe`) takes it (D3)."""
+        plain = replace(accepted, session=replace(accepted.session, handlers=()))
+        probe = replace(probe or plain.session, handlers=())
+        if plain.spec.mode == Mode.TUI:
+            handler = HookCallback(
+                HANDLER, {"workdir": self.workdir, "worker": token}, module_roots()
+            )
+            try:
+                self._checked(replace(probe, handlers=(handler,)))
+            except ConfigError:
+                pass
+            else:
+                return replace(plain, session=replace(plain.session, handlers=(handler,)))
+        self._checked(probe)
+        return plain
+
+    def _checked(self, spec: SessionSpec) -> None:
         try:
-            self.driver.preflight(self._state.plan.session)
+            self.driver.preflight(spec)
         except SessionBusy as error:
             raise SessionError(str(error)) from None
         except (SessionConfigError, SessionError) as error:
@@ -330,11 +330,47 @@ class HarnessDelegate(Delegate):
             return attempt + 1 if type(attempt) is int and attempt >= 1 else 1
         agent = self._known_agent(previous)
         if agent is not None:
+            live = _live(agent)
             try:
                 agent.close()
             except SessionError as error:
                 raise ConfigError(str(error)) from None
+            if live:
+                claim_release(previous.plan, previous.agent_name)
         return previous.attempt + 1 if previous.plan.sid == self._state.plan.sid else 1
+
+    def _settle(self) -> None:
+        """A gone owned worker retired outside the mutex, after its handler drained. Only under
+        the run lock, which every start takes, and only the attempt it checked there.
+        """
+        try:
+            state = self._read()
+            if not owned(state.plan) or not (state.completed or state.bound):
+                return
+            with self.store.run_lock(wait=False):
+                if self._read() != state:
+                    return
+                agent = self._agent(state)
+                if agent is None or not agent.alive():
+                    self.session_cls.retire(state.agent_name, sid=state.plan.sid, host=state.host)
+        except (BlockingIOError, ConfigError, OSError, SessionError, SessionConfigError):
+            return
+
+    def _input_agent(self, state: DelegateState) -> Session | None:
+        """Its live owned agent, for resume's input."""
+        agent = self._answered_agent(state) if owned(state.plan) else None
+        return agent if agent is not None and agent.alive() else None
+
+    def _wound_down(self) -> None:
+        """Up to WIND_DOWN_WAIT s for a completed run's drive to let the run lock go."""
+        deadline = time.monotonic() + WIND_DOWN_WAIT
+        while self.store.running() and time.monotonic() < deadline:
+            try:
+                if not self._read().completed:
+                    return
+            except ConfigError:
+                return
+            time.sleep(TUI_POLL)
 
     def _sweep(self) -> None:
         try:
@@ -343,27 +379,16 @@ class HarnessDelegate(Delegate):
             raise ConfigError(str(error)) from None
 
     def _live(self, payload: bytes | None) -> bool:
-        """Whether the run `payload` records is live: a readable record's per _alive; a corrupt
-        one's while its run lock is held or the harness it names lives; none: while the run lock
-        is held.
+        """Whether the run `payload` records is live: a readable record's per _alive; else while
+        its run lock is held or a corrupt one's drive runs.
         """
         if payload is None:
             return self.store.running()
         try:
             return self._alive(self._parse(payload))
         except ConfigError:
-            data = _loaded(payload)
-        host, name = data.get("harness_host"), data.get("harness_name")
-        return self.store.running() or (
-            isinstance(host, str)
-            and isinstance(name, str)
-            and (process := self._process(host, name)) is not None
-            and process.alive()
-        )
-
-    @property
-    def _harness_host(self) -> Host:
-        return self._harness_override or self.session_cls.host(self._state.harness_host)
+            drive = _loaded(payload).get("drive")
+        return self.store.running() or self._running(drive if isinstance(drive, str) else None)
 
     def _configure(self) -> None:
         try:
@@ -371,91 +396,14 @@ class HarnessDelegate(Delegate):
         except SessionConfigError as error:
             raise ConfigError(str(error)) from None
 
-    def _save(self, state: _State) -> None:
-        team = state.plan.spec.team
-        persisted = replace(
-            state, plan=replace(state.plan, spec=replace(state.plan.spec, team=None))
-        )
-        values = {
-            field.name: _encode(getattr(persisted, field.name)) for field in fields(persisted)
-        }
-        accepted = {
-            "session": _encode(state.plan.session),
-            "run": _encode(state.plan.run),
-            "repo": state.plan.repo,
-            "docker": state.plan.docker,
-        }
-        spec = {
-            field.name: _encode(getattr(state.plan.spec, field.name))
-            for field in fields(state.plan.spec)
-            if field.name != "team"
-        }
-        spec["team"] = None if team is None else {"root": team.root, "dirs": team.dirs}
-        values["plan"], values["spec"], values["version"] = accepted, spec, 1
-        self.store.write(json.dumps(values))
+    def _save(self, state: DelegateState) -> None:
+        RunRecord(self.layout, self.store).save(state)
 
-    def _read(self) -> _State:
+    def _read(self) -> DelegateState:
         return self._parse(self.store.read())
 
-    def _parse(self, payload: bytes | None) -> _State:
-        try:
-            if payload is None:
-                raise ValueError("missing metadata")
-            data = json.loads(payload)
-            if not isinstance(data, dict):
-                raise ValueError("metadata must be an object")
-            if data.pop("version") != 1:
-                raise ValueError("unsupported metadata version")
-            given = data.pop("spec")
-            team = given.pop("team")
-            spec = Spec(
-                **given, team=None if team is None else Team(team["root"], tuple(team["dirs"]))
-            )
-            if os.path.realpath(spec.workdir) != os.path.realpath(self.workdir):
-                raise ValueError("metadata workdir differs")
-            planned = data.pop("plan")
-            session = planned["session"]
-            access = session["access"]
-            for key in ("dirs", "reads", "commands"):
-                access[key] = tuple(access[key])
-            session["access"] = Access(**access)
-            session["flags"] = tuple(session["flags"])
-            session["reply_tags"] = tuple(session["reply_tags"])
-            if session.get("environment") is not None:
-                session["environment"] = EnvironmentSpec.from_fields(session["environment"])
-            accepted = Plan(
-                spec,
-                SessionSpec(**session),
-                RunConfig(**planned["run"]),
-                planned.get("repo"),
-                planned.get("docker", False),
-            )
-            result = data.pop("result")
-            if result is not None:
-                outcome = result.pop("outcome")
-                if outcome is not None:
-                    result["outcome"] = Outcome(**outcome)
-                else:
-                    result["outcome"] = None
-                from_limit = result.pop("limit")
-                if from_limit is not None:
-                    result["limit"] = Limit(**from_limit)
-                result = Result(**result)
-            callback = data.pop("callback")
-            overlays = tuple(data.pop("overlays"))
-            state = _State(
-                **data,
-                plan=accepted,
-                callback=None if callback is None else tuple(callback),
-                result=result,
-                overlays=overlays,
-            )
-            if type(state.attempt) is not int or state.attempt < 1:
-                raise ValueError("invalid attempt")
-        except (AttributeError, KeyError, TypeError, ValueError, SessionConfigError) as error:
-            raise ConfigError(f"invalid {self.store.record}: {error}") from None
-        else:
-            return state
+    def _parse(self, payload: bytes | None) -> DelegateState:
+        return RunRecord(self.layout, self.store).parse(payload)
 
     @classmethod
     def attach(
@@ -494,8 +442,6 @@ class HarnessDelegate(Delegate):
             )
             view._configure()
             view.session_cls.host(view._state.host)
-            view.session_cls.host(view._state.harness_host)
-            view._harness_override = None
         except (OSError, ValueError, SessionConfigError, SessionError) as error:
             raise ConfigError(str(error)) from None
         view.driver = AgentDriver(
@@ -525,7 +471,7 @@ class HarnessDelegate(Delegate):
         """A view of layout's run with no state loaded: enough for _live."""
         view = cls.__new__(cls)
         view.layout, view.workdir, view.store = layout, layout.workdir, RunState(layout)
-        view.session_cls, view._harness_override, view._viewer = Session, None, None
+        view.session_cls, view._viewer = Session, None
         return view
 
     @classmethod
@@ -569,15 +515,14 @@ class HarnessDelegate(Delegate):
         events: str | None = None,
         session_cls: type[Session] = Session,
     ) -> None:
-        """The display on the agent's Host, the events file on the harness's."""
+        """The display and the events file on the agent's Host."""
         settings = thaw(Composer().config.values)
         try:
             session_cls.configure_from(settings)
-            hosts = Host.parse_hosts(settings.get("hosts")).tables
+            config.delegates(settings)
             agent = session_cls.host()
             session_cls.layout(display=display)
-            harness = session_cls.host(config.harness_host(settings, hosts) or agent.name)
-            harness.events_path(events)
+            agent.events_path(events)
         except (OSError, ValueError, SessionConfigError, SessionError) as error:
             raise ConfigError(str(error)) from None
 
@@ -597,7 +542,7 @@ class HarnessDelegate(Delegate):
         except SessionConfigError as error:
             raise ConfigError(str(error)) from None
 
-    def _own(self, state: _State) -> Session | None:
+    def _own(self, state: DelegateState) -> Session | None:
         """The agent session this process started for `state`'s attempt."""
         agent = self.driver.session
         if (
@@ -608,7 +553,7 @@ class HarnessDelegate(Delegate):
             return agent
         return None
 
-    def _agent(self, state: _State) -> Session | None:
+    def _agent(self, state: DelegateState) -> Session | None:
         """None when no such session; Unanswered when its Host could not tell."""
         if (agent := self._own(state)) is not None and agent.mode != Mode.TUI:
             return agent
@@ -621,43 +566,28 @@ class HarnessDelegate(Delegate):
         except SessionConfigError as error:
             raise ConfigError(str(error)) from None
 
-    def _answered_agent(self, state: _State) -> Session | None:
+    def _answered_agent(self, state: DelegateState) -> Session | None:
         try:
             return self._agent(state)
         except Unanswered:
             return None
 
-    def _known_agent(self, state: _State) -> Session | None:
+    def _known_agent(self, state: DelegateState) -> Session | None:
         try:
             return self._agent(state)
         except Unanswered as error:
             raise ConfigError(f"{self.workdir}: agent session liveness unknown: {error}") from None
 
-    def _harness(self, state: _State) -> Process | None:
-        return (
-            self._process(state.harness_host, state.harness_name, sid=state.plan.sid)
-            if state.detached
-            else None
-        )
-
-    def _process(self, host_name: str, name: str, *, sid: str | None = None) -> Process | None:
-        try:
-            host = (
-                self._harness_override
-                if self._harness_override is not None and self._harness_override.name == host_name
-                else self.session_cls.host(host_name)
-            )
-            process = host.attach(name)
-            return process if sid is None or process.session_identity()[0] == sid else None
-        except SessionError:
-            return None
-        except SessionConfigError as error:
-            raise ConfigError(str(error)) from None
-
-    def _alive(self, state: _State) -> bool:
+    def _alive(self, state: DelegateState) -> bool:
+        if owned(state.plan):
+            if state.completed:
+                return False
+            if self.store.running():
+                return True
+            agent = self._answered_agent(state) if state.bound else None
+            return agent is not None and agent.alive()
         if state.detached:
-            process = self._harness(state)
-            return process is not None and process.alive()
+            return self._running(state.drive) or self.store.running()
         return not state.completed and self.store.running()
 
     def alive(self) -> bool:
@@ -670,10 +600,8 @@ class HarnessDelegate(Delegate):
     def _named(self, mode: str) -> bool:
         return mode == Mode.TUI or (self.driver.docker and mode == Mode.HEADLESS)
 
-    def _record(self, state: _State) -> Record:
-        sessions = (state.harness_name,) if state.detached else ()
-        if state.plan.spec.mode == "tui":
-            sessions += (state.agent_name,)
+    def _record(self, state: DelegateState) -> Record:
+        sessions = (state.agent_name,) if state.plan.spec.mode == "tui" else ()
         return Record(
             1,
             state.outer.get("kind", "role"),
@@ -704,9 +632,16 @@ class HarnessDelegate(Delegate):
             agent, unanswered = self._agent(state), False
         except Unanswered:
             agent, unanswered = None, True
-        found = None if agent is None else agent.status()
-        alive = self._alive(state) and (
-            state.plan.spec.mode != Mode.TUI or unanswered or found is not None
+        try:
+            found = None if agent is None else agent.status()
+        except Unanswered:
+            found, unanswered = None, True
+        except SessionError:  # its terminal gone
+            found = None
+        alive = (
+            self.store.running()
+            or self._alive(state)
+            and (state.plan.spec.mode != Mode.TUI or unanswered or found is not None)
         )
         if unanswered or found is not None and found.state == StatusState.UNKNOWN:
             word = StatusState.UNKNOWN
@@ -736,23 +671,18 @@ class HarnessDelegate(Delegate):
             raise _unknown(unanswered)
         return None
 
-    def _shown_agent(self, state: _State) -> Session | None:
+    def _shown_agent(self, state: DelegateState) -> Session | None:
         agent = self._agent(state)
         return agent if agent is not None and agent.alive() and agent.showable else None
 
-    def _views(self, state: _State) -> tuple[list[tuple[str, Host]], Unanswered | None]:
-        """Its live showable sessions and their Hosts, agent first; why its agent's Host could not
-        tell, if so.
-        """
+    def _views(self, state: DelegateState) -> tuple[list[tuple[str, Host]], Unanswered | None]:
+        """Its live showable agent session and Host; why its Host could not tell, if so."""
         views, unanswered = [], None
         try:
             if self._shown_agent(state) is not None:
                 views.append((state.agent_name, self._session_host(state.host)))
         except Unanswered as error:
             unanswered = error
-        process = self._harness(state)
-        if process is not None and process.alive() and self._harness_host.attachable:
-            views.append((state.harness_name, self._harness_host))
         return views, unanswered
 
     def _shown_by(self) -> Viewer:
@@ -792,30 +722,112 @@ class HarnessDelegate(Delegate):
             raise _unknown(unanswered)
 
     def close(self) -> None:
-        """Unanswered after closing the harness when the agent's Host could not tell."""
+        """Unanswered, once the drive stops, if the agent's Host could not tell."""
         state = self._read()
-        try:
-            agent, unanswered = self._agent(state), None
-        except Unanswered as error:
-            agent, unanswered = None, error
-        if agent is not None:
-            agent.close()
+        claim = self.store.closing_claim() if owned(state.plan) else contextlib.nullcontext()
+        with claim:
+            try:
+                agent, unanswered = self._agent(state), None
+            except Unanswered as error:
+                agent, unanswered = None, error
+            live = agent is not None and _live(agent)
+            if agent is not None:
+                agent.close()
+        if unanswered is None:
+            self._stop_owned(closed=live)
         unchecked = (
             None
             if unanswered is None
             else f"close {state.agent_name}: agent session not checked: {unanswered}"
         )
-        process = self._harness(state)
-        if process is not None:
-            try:
-                process.close()
-                if self._harness_host.attachable:
-                    self._shown_by().close(state.harness_name, self._harness_host)
-            except SessionError as error:
-                also = "" if unchecked is None else f"; {unchecked}"
-                raise SessionError(f"close {state.harness_name}: {error}{also}") from error
+        try:
+            self._stop_drive(state)
+        except SessionError as error:
+            also = "" if unchecked is None else f"; {unchecked}"
+            raise SessionError(f"{error}{also}") from error
         if unchecked is not None:
             raise Unanswered(unchecked)
+
+    def _control(self, path: str | None) -> ProcessControl | None:
+        if path is None:
+            return None
+        try:
+            return self._controls.attach(path)
+        except OSError:
+            return None
+
+    def _running(self, path: str | None) -> bool:
+        control = self._control(path)
+        try:
+            return control is not None and control.running()
+        except OSError:
+            return False
+
+    @staticmethod
+    def _spawn(control: ProcessControl, launch: Launch, log: str) -> None:
+        """`control`'s command in a new session, SIGNALS blocked, appending to regular file `log`."""
+        fd = os.open(
+            log, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600
+        )
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise OSError(errno.EINVAL, "not a regular file", log)
+            mask = signal.pthread_sigmask(signal.SIG_BLOCK, SIGNALS)
+            try:
+                process = subprocess.Popen(
+                    control.command(),
+                    cwd=launch.cwd,
+                    env=dict(launch.env),
+                    stdin=subprocess.DEVNULL,
+                    stdout=fd,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+        finally:
+            os.close(fd)
+        threading.Thread(target=process.wait, daemon=True).start()
+
+    def _stop_drive(self, state: DelegateState) -> None:
+        """SIGTERM to its drive's group, then SIGKILL; SessionError if it outlives both."""
+        control = self._control(state.drive) if state.detached else None
+        if control is None:
+            return
+        try:
+            for stop in (control.terminate, control.kill):
+                stop()
+                deadline = time.monotonic() + self._stop_wait
+                while control.live():
+                    if time.monotonic() >= deadline:
+                        break
+                    time.sleep(TUI_POLL)
+                else:
+                    return
+        except OSError as error:
+            raise SessionError(f"close {state.harness_name}: {error.strerror or error}") from error
+        raise SessionError(f"close {state.harness_name}: did not exit")
+
+    def _stop_owned(self, *, closed: bool) -> None:
+        """Once an owned run's worker is closed or gone: delegate.json `closing`, and its still
+        active attempt ended once as CLOSED, with one Finished; closed: a lock's release claimed."""
+        try:
+            state = self._read()
+            if not owned(state.plan):
+                return
+            n = RunRecord(self.layout, self.store).stop(CLOSED, sid=state.plan.sid)
+        except (ConfigError, OSError) as error:
+            say(f"delegate: {error}")
+            return
+        if n is not None:
+            state = replace(state, attempt=n)
+            finish(state, CLOSED, None)
+        if closed:
+            claim_release(state.plan, state.agent_name)
+        if n is not None and state.callback is not None:
+            EventCallback(state.callback, self.store, sid=state.plan.sid, attempt=n)(
+                Finished(CLOSED)
+            )
 
     def session_status(self) -> SessionStatus:
         """Its own live agent session's status, else the plan's: an attached one lacks its env;
@@ -844,7 +856,6 @@ class HarnessDelegate(Delegate):
             with self.store.mutex():
                 if self._current().completed:
                     raise ConfigError(f"{self.workdir}: delegate run already completed")
-            run_dir = self.layout.run
             callback = (
                 None
                 if self._state.callback is None
@@ -856,6 +867,11 @@ class HarnessDelegate(Delegate):
                 )
             )
 
+            if owned(self._state.plan):
+                try:
+                    return self._drive(callback, on_event)
+                finally:
+                    self._clear_tmp()
             finished = False
 
             def emit(event: Event) -> None:
@@ -880,23 +896,174 @@ class HarnessDelegate(Delegate):
                 )
             except BaseException as error:
                 if not finished:
-                    ended = self._start_failure_end(error)
-                    if isinstance(error, (Exception, SystemExit)):
-                        RunLog(run_dir).note(
-                            "run_error",
-                            error=ended.error,
-                            traceback="".join(traceback.format_exception(error)),
-                            best_effort=True,
-                        )
-                    try:
-                        self._complete(ended)
-                    except (ConfigError, OSError) as failure:
-                        say(f"delegate: {failure}")
-                    if callback is not None:
-                        callback(Finished(ended))
+                    self._crashed(error, callback)
                 raise
             finally:
                 self._clear_tmp()
+
+    def _crashed(
+        self,
+        error: BaseException,
+        callback: EventCallback | None,
+        *,
+        refused: bool | None = None,
+        handle: Session | None = None,
+    ) -> Result:
+        ended = self._start_failure_end(error)
+        if isinstance(error, (Exception, SystemExit)):
+            RunLog(self.layout.run).note(
+                "run_error",
+                error=ended.error,
+                traceback="".join(traceback.format_exception(error)),
+                best_effort=True,
+            )
+        if refused is None:
+            self._finished(ended, callback, None)
+        else:
+            self._drive_end(ended, handle, callback, None, notes=not refused, unbound=False)
+            if handle is not None:
+                live = _live(handle)
+                try:
+                    handle.close()
+                except SessionError as failure:
+                    say(f"delegate: tui: close: {failure}")
+                else:
+                    if live:
+                        claim_release(self._state.plan, self._state.agent_name)
+        return ended
+
+    def _finished(
+        self,
+        result: Result,
+        callback: EventCallback | None,
+        on_event: Callable[[Event], None] | None,
+        *,
+        store: bool = True,
+    ) -> None:
+        if store:
+            try:
+                self._complete(result)
+            except (ConfigError, OSError) as failure:
+                say(f"delegate: {failure}")
+        for each in (callback, on_event):
+            if each is not None:
+                each(Finished(result))
+
+    def _drive(
+        self, callback: EventCallback | None, on_event: Callable[[Event], None] | None
+    ) -> Result:
+        """An owned run: an exception after Begun leaves the attempt as it is."""
+
+        def begun(event: Event) -> None:
+            for each in (callback, on_event):
+                if each is not None:
+                    each(event)
+
+        attempts = Attempts(self._state.plan, begun, self.driver)
+        try:
+            opened = attempts.begin()
+        except BaseException as error:
+            if not attempts.begun:
+                handle = attempts.handle or self._own(self._state)
+                self._crashed(error, callback, refused=attempts.refused, handle=handle)
+            raise
+        if not isinstance(opened, Result):
+            return self._await(opened, callback, on_event)
+        if attempts.handle is None:
+            if self._drive_end(opened, None, callback, on_event, unbound=False) is _Ended.LOST:
+                return self._stored(self._read(), on_event)
+            return opened
+        if attempts.stale:  # stored before the stop
+            handle = attempts.handle
+            ended = self._drive_end(
+                opened,
+                handle,
+                callback,
+                on_event,
+                unbound=False,
+                closing=True,
+                then=lambda: attempts.stop(handle),
+            )
+            return self._stored(self._read(), on_event) if ended is _Ended.LOST else opened
+        if self._drive_end(opened, attempts.handle, callback, on_event) is not _Ended.LOST:
+            return opened
+        return self._await(attempts.handle, callback, on_event)
+
+    def _drive_end(
+        self,
+        result: Result,
+        handle: Session | None,
+        callback: EventCallback | None,
+        on_event: Callable[[Event], None] | None,
+        *,
+        unbound: bool = True,
+        give_up: str | None = None,
+        notes: bool = True,
+        closing: bool = False,
+        then: Callable[[], object] | None = None,
+    ) -> _Ended:
+        """Compare-and-set, then `then`."""
+        n, sid = self._state.attempt, self._state.plan.sid
+        try:
+            won = RunRecord(self.layout, self.store).complete(
+                n, result, sid=sid, unbound=unbound, closing=closing
+            )
+        finally:
+            if then is not None:
+                then()
+        if not won:
+            return _Ended.LOST
+        finish(self._read(), result, handle, give_up=give_up, notes=notes)
+        self._finished(result, callback, on_event, store=False)
+        return _Ended.STORED
+
+    def _stored(self, state: DelegateState, on_event: Callable[[Event], None] | None) -> Result:
+        """Attempt n's stored Result (a follow-up's `previous`), sent to on_event."""
+        p, n = self._state.plan, self._state.attempt
+        if state.plan.sid != p.sid or state.attempt not in (n, n + 1):
+            raise ConfigError(f"{self.workdir}: delegate attempt was replaced")
+        result = state.previous if state.attempt == n + 1 else state.result
+        if result is None:
+            raise ConfigError(f"{self.workdir}: delegate attempt {n} has no Result")
+        self._finished(result, None, on_event, store=False)
+        return result
+
+    def _await(
+        self,
+        handle: Session,
+        callback: EventCallback | None,
+        on_event: Callable[[Event], None] | None,
+    ) -> Result:
+        """Attempt n's Result (a follow-up's `previous`); ends it itself only while opening past
+        run.idle_timeout or once its worker was gone DRAIN_WAIT s (AC18).
+        """
+        p, n = self._state.plan, self._state.attempt
+        idle, start = p.run.idle_timeout, time.monotonic()
+        checked = gone = None
+        while True:
+            state = self._read()
+            if state.attempt != n or state.completed or state.plan.sid != p.sid:
+                return self._stored(state, on_event)
+            now = time.monotonic()
+            if checked is None or now - checked >= GONE_EVERY:
+                checked = now
+                with contextlib.suppress(Unanswered):
+                    gone = None if handle.alive() else gone or now
+            if not state.bound and idle and now - start >= idle:
+                ending = Result(0, None, "the agent run returned no outcome")
+                if (
+                    self._drive_end(ending, handle, callback, on_event, give_up=idle_reason(idle))
+                    is not _Ended.LOST
+                ):
+                    return ending
+            elif gone is not None and now - gone >= DRAIN_WAIT:
+                ending = Result(1, None, "stopped: session harness ended without a Result")
+                if (
+                    self._drive_end(ending, handle, callback, on_event, unbound=False)
+                    is not _Ended.LOST
+                ):
+                    return ending
+            time.sleep(TUI_POLL)
 
     def _start_failure_end(self, error: BaseException) -> Result:
         """A signal's stop ends as the saved start_failure, if any."""
@@ -947,27 +1114,19 @@ class HarnessDelegate(Delegate):
             self._save(self._state)
 
     def announce(self, result: Result | None) -> None:
-        """Appends the run's one events line, `outcome <status>` for its harness session (`error`
-        without a valid outcome); an OSError is printed, never raised.
-        """
-        events = self._state.events
-        if events is None:
-            return
-        outcome = None if result is None else result.outcome
-        try:
-            SessionStatusLog(events).write(
-                self._state.harness_name, "outcome", "error" if outcome is None else outcome.status
-            )
-        except OSError as error:
-            say(f"delegate: {error}")
+        if not owned(self._state.plan):
+            RunRecord.announce(self._state, result)
 
-    def _current(self) -> _State:
+    def _exited(self, rc: int) -> None:
+        RunRecord.exited(self._state, rc)
+
+    def _current(self) -> DelegateState:
         state = self._read()
         if (state.plan.sid, state.attempt) != (self._state.plan.sid, self._state.attempt):
             raise ConfigError(f"{self.workdir}: delegate attempt was replaced")
         return state
 
-    def _harness_launch(self, state: _State) -> Launch:
+    def _harness_launch(self, state: DelegateState) -> Launch:
         """The harness imports from the delegate, session and utils roots, then from its session
         class's and the classes that session loads by name for the run's client.
         """
@@ -992,24 +1151,27 @@ class HarnessDelegate(Delegate):
             blocked_signals=SIGNALS,
         )
 
-    def _launch(self, previous: _State, state: _State) -> Record:
-        """`state` saved detached before its harness starts; `previous` again when it cannot."""
-        state = replace(state, detached=True, start_failure=None)
-        record = self._record(state)
+    def _launch(self, previous: DelegateState, state: DelegateState) -> Record:
+        """`state` saved with its drive before it starts; `previous` if it cannot."""
         launch = self._harness_launch(state)
-        self._save(state)
         try:
-            self._harness_host.detach(
-                state.harness_name,
-                launch,
-                display=state.display,
-                events=state.events,
-                record=record,
+            control = self._controls.prepare(
+                launch.argv, launch.cwd, env=launch.env, blocked_signals=SIGNALS
             )
+        except OSError as error:
+            raise SessionError(f"detach {state.harness_name}: {_why(error)}") from None
+        state = replace(state, detached=True, start_failure=None, drive=control.path)
+        record = self._record(state)
+        try:
+            self._save(state)
+            self._spawn(control, launch, self.layout.drive_log)
+            control.wait_started()
         except BaseException as error:
+            with contextlib.suppress(OSError):
+                control.cancel()
             self._save(previous)
-            if isinstance(error, SessionConfigError):
-                raise ConfigError(str(error)) from None
+            if isinstance(error, OSError):
+                raise SessionError(f"detach {state.harness_name}: {_why(error)}") from None
             raise
         self._state = state
         return record
@@ -1040,29 +1202,27 @@ class HarnessDelegate(Delegate):
         self._started(self._state)
         return record
 
-    def _started(self, state: _State) -> None:
+    def _started(self, state: DelegateState) -> None:
         """Tui: waits, outside the mutex, until this run's agent session has its client running;
-        else SessionError naming why (a held lock names its holder), its harness and
-        agent session closed. A Host failure or the passed start limit is saved as the attempt's
-        start_failure before the close, and the harness then ends with it; a harness that ended
-        first is not. A same-named session of another sid is not this run's.
+        else SessionError naming why, its drive and agent closed; a Host failure or the start
+        limit is first saved as start_failure, unless the drive ended.
         """
         if state.plan.spec.mode != Mode.TUI:
             return
         limit = DOCKER_START_TIMEOUT if self.driver.docker else TUI_START_TIMEOUT
         deadline = time.monotonic() + limit
-        harness = agent = unanswered = None
+        agent = unanswered = None
         ended = False
         try:
             while True:
                 agent, unanswered = self._probed_agent(state)
                 try:
                     if agent is not None and agent.alive() and agent.status().alive:
+                        self._publish_record(state)
                         return
                 except Unanswered as error:
                     unanswered = error
-                harness = self._harness(state)
-                ended = harness is None or not harness.alive()
+                ended = not self._running(state.drive)
                 if ended:
                     why = f": its harness ended{self._ended()}"
                     break
@@ -1080,12 +1240,10 @@ class HarnessDelegate(Delegate):
         message = " ".join(message.split())
         if not ended:
             self._start_failed(message)
-        if harness is not None:
             try:
-                harness.close()
+                self._stop_drive(state)
             except SessionError:
-                if not ended:
-                    self._start_failed(None)
+                self._start_failed(None)
         if agent is not None:
             with contextlib.suppress(SessionError):
                 agent.close()
@@ -1093,7 +1251,13 @@ class HarnessDelegate(Delegate):
             raise SessionError(str(busy))
         raise SessionError(message)
 
-    def _probed_agent(self, state: _State) -> tuple[Session | None, Unanswered | None]:
+    def _publish_record(self, state: DelegateState) -> None:
+        try:
+            self.session_cls.host(state.host).attach(state.agent_name).publish(self._record(state))
+        except SessionError as error:
+            say(f"delegate: Record not published: {error}")
+
+    def _probed_agent(self, state: DelegateState) -> tuple[Session | None, Unanswered | None]:
         try:
             agent = self._agent(state)
         except Unanswered as error:
@@ -1109,7 +1273,7 @@ class HarnessDelegate(Delegate):
             return ""
         return f": exit {result.returncode}" + (f": {result.error}" if result.error else "")
 
-    def _tail(self, state: _State, agent: Session | None) -> str:
+    def _tail(self, state: DelegateState, agent: Session | None) -> str:
         """`; last lines: …` of the agent's client: its screen, else its Host row's."""
         try:
             text = "" if agent is None else agent.screen()
@@ -1137,7 +1301,7 @@ class HarnessDelegate(Delegate):
             if not state.completed:
                 self._save(replace(state, start_failure=cause))
 
-    def _busy(self, state: _State) -> SessionBusy | None:
+    def _busy(self, state: DelegateState) -> SessionBusy | None:
         environment = state.plan.session.environment
         try:
             result = self._read().result
@@ -1157,6 +1321,13 @@ class HarnessDelegate(Delegate):
         """Continues in `mode` (headless or tui), else the recorded one; the new mode is recorded."""
         if mode not in (None, Mode.HEADLESS, Mode.TUI):
             raise ConfigError(f"resume: mode must be headless or tui, got {mode!r}")
+        self._settle()
+        try:
+            takes = input is not None and self._input_agent(self._read()) is not None
+        except ConfigError:
+            takes = False
+        if not takes:
+            self._wound_down()
         with self.store.mutex():
             state = self._read()
             if state.plan.sid != self._state.plan.sid:
@@ -1171,6 +1342,13 @@ class HarnessDelegate(Delegate):
                 outcome = state.result.outcome if state.result is not None else None
                 if outcome is None or outcome.status != OutcomeStatus.NEEDS_INPUT:
                     raise ConfigError(f"{self.workdir}: --input requires a needs_input outcome")
+                if (agent := self._input_agent(state)) is not None:
+                    # its worker's TurnStarted opens the follow-up attempt (D9)
+                    if state.closing:
+                        RunRecord(self.layout, self.store).save(replace(state, closing=False))
+                    RunLog(state.plan.session.workdir).note("input", text=input)
+                    agent.send(input)
+                    return self._record(state)
             elif alive or state.result is not None and state.result.outcome is not None:
                 return self._record(state)
             self._sweep()
@@ -1218,14 +1396,21 @@ class HarnessDelegate(Delegate):
             if agent is not None and probe.name == state.agent_name:
                 # the tui preflight refuses a live same-named session: the one this closes
                 probe = replace(probe, name=f"{probe.name}-preflight")
-            try:
-                self.driver.preflight(probe)
-            except SessionConfigError as error:
-                raise ConfigError(str(error)) from None
+            accepted = self._probed(accepted, state.attempt + 1, probe)
             if agent is not None:
+                live = _live(agent)
                 agent.close()
+                if live:
+                    claim_release(state.plan, state.agent_name)
             state = replace(
-                state, plan=accepted, completed=False, result=None, attempt=state.attempt + 1
+                state,
+                plan=accepted,
+                completed=False,
+                result=None,
+                attempt=state.attempt + 1,
+                previous=None,
+                bound=False,
+                closing=False,
             )
             try:
                 os.makedirs(self.layout.agent, exist_ok=True)
@@ -1234,6 +1419,10 @@ class HarnessDelegate(Delegate):
             record = self._launch(previous, state)
         self._started(self._state)
         return record
+
+
+def _why(error: OSError) -> str:
+    return error.strerror or str(error)
 
 
 def _remove(path: str) -> None:

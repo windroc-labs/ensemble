@@ -29,6 +29,7 @@ from ensemble.session.engine.types import (
     Stderr,
     TurnEnd,
     TurnFailed,
+    TurnStarted,
     Usage,
     Window,
 )
@@ -60,10 +61,10 @@ class Refusals(Case):
 
 
 class EventsTest(Case):
-    def test_the_frozen_set_is_the_six_events(self):
+    def test_the_frozen_set_is_the_eight_events(self):
         self.assertEqual(
             typing.get_args(engine_types.SessionEvent),
-            (Activity, Reply, TurnEnd, TurnFailed, Blocked, LimitHit, Exited),
+            (TurnStarted, Activity, Reply, TurnEnd, TurnFailed, Blocked, LimitHit, Exited),
         )
         for other in (Stderr, ClientBound):
             self.assertNotIn(other, typing.get_args(engine_types.SessionEvent))

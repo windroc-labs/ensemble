@@ -259,6 +259,38 @@ class RosterTest(RosterCase):
         self.roster.note("x", None)
         self.assertIsNone(self.roster.entries()["x"].note)
 
+    def test_close_failed_appends_one_json_line_per_call(self):
+        self.live()
+        before = int(time.time())
+        path = self.roster.close_failed(
+            "x", sid=self.record.sid, ctl=("ensemble-session",), reason="ctl: boom\nmore\x1b[0m"
+        )
+        self.roster.close_failed("y", sid=None, ctl=("other", "ctl"), reason="x" * 600)
+        self.assertEqual(path, os.path.join(self.directory, "close-failures.jsonl"))
+        first, second = (json.loads(line) for line in Path(path).read_text().splitlines())
+        self.assertEqual(
+            {k: v for k, v in first.items() if k != "at"},
+            {
+                "name": "x",
+                "sid": self.record.sid,
+                "ctl": ["ensemble-session"],
+                "reason": "ctl: boom more[0m",
+            },
+        )
+        self.assertIs(type(first["at"]), int)
+        self.assertGreaterEqual(first["at"], before)
+        self.assertEqual(
+            (second["sid"], second["ctl"], second["reason"]), (None, ["other", "ctl"], "x" * 500)
+        )
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        self.assertEqual(self.roster.entries()["x"].record, self.record)
+
+    def test_close_failed_refuses_a_fifo_without_waiting(self):
+        self.live()
+        os.mkfifo(os.path.join(self.directory, "close-failures.jsonl"))
+        with self.assertRaisesRegex(RosterError, "close-failures.jsonl"):
+            self.roster.close_failed("x", sid=None, ctl=("c",), reason="r")
+
     def test_mark_if_applies_only_to_matching_snapshot(self):
         self.live(note="keep")
         expected = self.roster.entries()["x"]
@@ -358,6 +390,7 @@ class RosterTest(RosterCase):
                     lambda: self.roster.claim_resume("x"),
                     lambda: self.roster.remove("x"),
                     lambda: self.roster.note("x", "note"),
+                    lambda: self.roster.close_failed("x", sid=None, ctl=("c",), reason="r"),
                     lambda: self.roster.adopt(self.record),
                     lambda: self.roster.advance(0, 0),
                     lambda: self.roster.backlog(require_lease=True),

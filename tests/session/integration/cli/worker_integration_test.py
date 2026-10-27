@@ -1,7 +1,8 @@
 """ensemble-session's worker lifecycle through bin/ensemble-session on a private tmux server: the
 client's exact cwd, argv and env from start (Q03), reply from another process (Q09), a client
 that exits at once (Q10, D3), a start whose early watch ends on a dialog (a Claude hook, the
-Codex trust screen), and a Claude start's /color: quiet once sent, said when a dialog holds it.
+Codex trust screen), and a Claude start's /color: quiet once sent or behind its launch turn, said
+when a dialog holds it.
 """
 
 import json
@@ -9,7 +10,8 @@ import os
 import shutil
 import tempfile
 
-from tests.session import live_tmux
+from ensemble.session.harness.channel import Channel
+from tests.session import harnesses, live_tmux
 from tests.session.case import REPO
 from tests.session.cli_support import MANAGER, WorkerCase, logged
 from tests.session.integration.clients.codex import fake_tui
@@ -137,6 +139,7 @@ class DialogTest(WorkerCase):
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         self.addCleanup(self.server.kill)
         home, bin_dir = os.path.join(root, "home"), os.path.join(root, "bin")
+        self.addCleanup(harnesses.end, home)
         for path in (home, bin_dir):
             os.mkdir(path)
         shutil.copy2(self.server.program, bin_dir)
@@ -180,18 +183,20 @@ class ColorTest(WorkerCase):
             [(c["pid"], c["line"], c["dialog"]) for c in colored], [(call["pid"], "/color", False)]
         )
 
-    def test_exit_after_color_still_fails_start(self):
-        res = self.start("w1", steps=[{"kind": "sleep", "seconds": 3}, {"kind": "exit"}])
+    def test_exit_in_the_launch_turn_still_fails_start(self):
+        # exits in its launch prompt's turn, its /color still behind it: inside the early watch
+        res = self.start("w1", steps=[{"kind": "exit"}])
         self.assertEqual((res.returncode, res.stdout), (1, ""), res.stderr)
         lines = res.stderr.splitlines()
         head = "ensemble-session: w1: claude exited 0 at once; its last lines:"
         self.assertIn(head, lines, res.stderr)
         self.assertEqual(lines[: lines.index(head)], [ATTACH], res.stderr)
-        self.assertIn("/color", lines[lines.index(head) + 1 :])
+        self.assertNotIn("/color", lines[lines.index(head) + 1 :])
         self.assertEqual(self.ok(self.session("ls", "--records")).stdout, "")
 
     def test_dialog_start_says_color_not_set(self):
-        res = self.start("w1", steps=[{"kind": "dialog", "text": TRUST}, "Trusted."])
+        # before SessionStart, as Claude's: no opening is due before it shows
+        res = self.start("w1", steps=["Trusted."], dialog=TRUST)
         self.assertEqual(self.record(res).name, "w1")
         self.assertEqual(
             res.stderr.splitlines(),
@@ -200,5 +205,19 @@ class ColorTest(WorkerCase):
                 "session w1: waits on a dialog: Quick safety check",
                 "session w1: color not set: waits on a dialog; ensemble-session send w1 '/color'",
             ],
+            self.harness_files("w1"),
         )
         self.assertEqual(self.commands("w1"), [])
+
+
+class HarnessedWorkerTest(WorkerCase):
+    def test_a_claude_worker_runs_under_a_harness_and_closes_through_it(self):
+        record = self.record(self.start("w1"))
+        with open(os.path.join(self.ensemble, "tui", "w1", "session.json"), encoding="utf-8") as f:
+            channel = Channel(json.load(f)["owner"])
+        self.assertEqual(channel.status()["sid"], record.sid)
+        self.assertTrue(channel.alive())
+        self.ok(self.session("close", "w1"))
+        self.assertFalse(self.live("w1"))
+        self.assertEqual(logged(channel.events)[-1]["type"], "Exited")
+        live_tmux.wait(lambda: not channel.alive(), timeout=40, what="the harness to exit")

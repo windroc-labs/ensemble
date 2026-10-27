@@ -85,8 +85,9 @@ def holds(path: str | Path, text: str) -> bool:
 
 
 @contextlib.contextmanager
-def file_lock(path: str | Path, *, wait: bool = True) -> Iterator[None]:
-    """Exclusive stable <path>.lock, non-inheritable; held, `wait=False` raises BlockingIOError.
+def file_lock(path: str | Path, *, wait: bool = True, shared: bool = False) -> Iterator[None]:
+    """Exclusive (`shared`: shared) stable <path>.lock, non-inheritable; held, `wait=False` raises
+    BlockingIOError.
     Event writers acquire it before opening the event file and hold it through descriptor close,
     without acquiring a roster lock. Rotators hold it through physical changes and durable ledger
     save; never replace this lock.
@@ -97,7 +98,8 @@ def file_lock(path: str | Path, *, wait: bool = True) -> Iterator[None]:
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
             raise OSError(errno.EINVAL, "not a regular lock file", lock)
-        fcntl.flock(fd, fcntl.LOCK_EX if wait else fcntl.LOCK_EX | fcntl.LOCK_NB)
+        mode = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+        fcntl.flock(fd, mode if wait else mode | fcntl.LOCK_NB)
         yield
     finally:
         os.close(fd)

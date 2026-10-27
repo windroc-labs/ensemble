@@ -15,7 +15,7 @@ from ensemble.session.engine import types as engine_types
 from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.records import RunLog
 from ensemble.session.engine.tmux_cli import TmuxCli
-from ensemble.session.engine.types import Access, ConfigError, Exited, Launch, Spec
+from ensemble.session.engine.types import Access, ConfigError, Exited, Launch, Spec, TurnFailed
 from ensemble.session.modes.in_process import RUN_THREAD
 from tests.session import fake_client
 from tests.session.case import Case
@@ -296,7 +296,7 @@ class Base(Case):
     def run_once(self, **kwargs) -> tuple[Session, list[str]]:
         """A started session run to its end, and the argv its client logged."""
         session = self.start(**kwargs)
-        self.assertEqual(self.drain(session), [Exited(0)])
+        self.assertEqual(self.drain(session), [TurnFailed("incomplete_turn"), Exited(0)])
         with open(self.log, encoding="utf-8") as f:
             (entry,) = [json.loads(line) for line in f]
         return session, entry["argv"]

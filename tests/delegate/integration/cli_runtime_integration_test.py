@@ -36,10 +36,10 @@ class Exits(Base):
         when = datetime.fromtimestamp(at).astimezone().isoformat(timespec="seconds")
         cases = [
             (
-                "valid, the client exited 7",
+                "a report followed by exit 7",
                 [said(START, block(DONE)), {"exit": 7}],
-                0,
-                "delegate: status done",
+                1,
+                "delegate: the client exited 7",
             ),
             (
                 "needs_input",
@@ -87,7 +87,7 @@ class Exits(Base):
         ):
             code, out, err = self.runs()
         self.assertEqual((code, out), (1, ""))
-        self.assertRegex(err, r"(?m)^delegate: headless: cannot start ")
+        self.assertRegex(err, r"(?m)^delegate: headless: worker headless-\S+: cannot start guard: ")
 
     def test_agent_text_is_printed_printable(self):
         for result, want, line in (

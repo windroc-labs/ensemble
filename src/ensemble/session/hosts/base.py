@@ -6,12 +6,10 @@ from __future__ import annotations
 
 import os
 import signal
-import subprocess
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Mapping, Sequence
-from contextlib import AbstractContextManager
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from typing import ClassVar, Protocol
+from typing import ClassVar
 
 from ensemble.session.engine.types import (
     LOCAL_CONTEXT,
@@ -32,27 +30,40 @@ from ensemble.session.engine.types import (
     SessionRow,
     StatusState,
     TuiSettings,
+    WorkerMessage,
 )
 from ensemble.session.hosts.types import CommandView, SessionView
 from ensemble.utils import (
     CLASS_PATH,
     CONFIG_NAME,
     STATE,
-    STOP_WAIT,
     Display,
     Record,
     Status,
     append_line,
-    kill_group,
-    piped_popen,
     printable_abs,
+    read_regular,
     resume_command,
     thaw,
 )
 
 SIGNALS = (signal.SIGHUP, signal.SIGTERM, signal.SIGINT)
 TUI_DIR = f"{STATE}/tui"
+HARNESS_ROOT = f"{STATE}/harness"
+GUARD_LEASE_FD = "ENSEMBLE_GUARD_LEASE_FD"
+GUARD_HOOK_SOCKET = "ENSEMBLE_GUARD_HOOK_SOCKET"
+GUARD_WAIT = 10  # s for a guard's reply, or its exit after a close (it gives up 9 s after one)
 TUI_STATE = "session.json"
+PROMPTED = "prompted"  # "<generation> <begun> <submitted>" sends
+
+
+def sent(folder: str) -> str | None:
+    """Tui dir `folder`'s PROMPTED, read before the hook record it goes in."""
+    try:
+        data = read_regular(os.path.join(folder, PROMPTED))
+    except OSError:
+        return None
+    return None if data is None else data.decode(errors="replace").strip()
 
 
 def tui_lock(name: str) -> str:
@@ -60,9 +71,7 @@ def tui_lock(name: str) -> str:
 
 
 class Process(ABC):
-    """close: ends it and forgets it, absent is fine; kill: its process group; wait_exit: until that
-    group ends too.
-    """
+    """close: end/forget, absent is fine; kill: process group; wait_exit: await the whole group."""
 
     name: str
 
@@ -161,46 +170,20 @@ class Interactive(ABC):
     def press(self, keys: Sequence[KeyPress]) -> None: ...
 
 
-class InteractiveProcess(Process, Interactive): ...
+class InteractiveProcess(Process, Interactive):
+    """Managed contract: docs/architecture.md › Session harness interfaces; no Channel."""
 
+    generation: str
 
-class Lines(Iterable[str], AbstractContextManager[object], Protocol): ...
+    def read(self, timeout: float) -> list[WorkerMessage]:
+        raise NotImplementedError
 
+    def write(self, data: bytes) -> None:
+        """b"": headless EOF; refused after exit."""
+        raise NotImplementedError
 
-class Piped(ABC):
-    """wait: exit code or None, no side effect; stop (ended: pipes at EOF), then close: frees once
-    what its Host holds."""
-
-    stdout: Lines
-    stderr: Lines
-
-    @abstractmethod
-    def wait(self, timeout: float) -> int | None: ...
-
-    @abstractmethod
-    def stop(self, *, ended: bool) -> None: ...
-
-    def close(self) -> None:
+    def tick(self, now: float) -> float | None:
         return None
-
-
-class LocalPiped(Piped):
-    stop_wait = STOP_WAIT
-
-    def __init__(self, proc: subprocess.Popen) -> None:
-        out, err = proc.stdout, proc.stderr
-        assert out is not None and err is not None
-        self.proc, self.stdout, self.stderr = proc, out, err
-
-    def wait(self, timeout: float) -> int | None:
-        try:
-            return self.proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            return None
-
-    def stop(self, *, ended: bool) -> None:
-        kill_group(self.proc, ended=ended, wait=self.stop_wait)
-        self.close()
 
 
 def host_resume(host: Host, name: str | None, cwd: str) -> str | None:
@@ -216,14 +199,16 @@ def check_sid(name: str, process: Process | None, sid: str | None) -> None:
 
 
 class Host(ABC):
-    """settings: [hosts.<name>] minus implementation and isolated. Launch.env is passed verbatim;
-    on exit, events gets `exited <rc>` / `dead`.
-    attach: a Process, unknown → SessionError. list: its sessions' names, sorted. A display is kept
-    as given; the Viewer reads it.
+    """settings excludes implementation/isolated; Launch.env passes verbatim. Exit events:
+    `exited <rc>` / `dead`; unknown attach: SessionError; list: sorted names. Viewer reads display.
     """
 
     attachable: ClassVar[bool] = False
     _environments: ClassVar[bool] = False  # runs Spec.environment
+    _harnessed: ClassVar[bool] = False  # harnesses own its tui and headless sessions
+    _remote_tui: ClassVar[bool] = False  # its owned tui workers are reached only through a guard
+    _unowned: ClassVar[bool] = True  # runs unharnessed starts
+    _named_headless: ClassVar[bool] = False
 
     def _provider_usage(self, request: ProviderProbe) -> bool | None:
         """Probe with this Host's credentials, when supported."""
@@ -294,11 +279,21 @@ class Host(ABC):
         Host writes prompt to prompt_file."""
         ...
 
-    def pipe(
-        self, name: str | None, launch: Launch, *, metadata: Mapping[str, str] | None = None
-    ) -> Piped:
-        """A headless client on pipes, run here."""
-        return LocalPiped(piped_popen(launch.argv, env=dict(launch.env), cwd=launch.cwd))
+    def worker(
+        self,
+        name: str,
+        launch: Launch,
+        *,
+        terminal: bool,
+        display: Display = None,
+        events: str | None = None,
+        metadata: Mapping[str, str] | None = None,
+    ) -> InteractiveProcess:
+        """Managed worker `name` under the guard (WDRC-199 FR-13)."""
+        raise SessionError(f"host {self.name} runs no managed worker")
+
+    def worker_liveness(self, name: str, generation: str) -> Liveness:
+        raise SessionError(f"host {self.name} runs no managed worker")
 
     @abstractmethod
     def attach(self, name: str) -> Process: ...

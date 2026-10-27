@@ -48,7 +48,6 @@ RUN python3 -m venv --system-site-packages /opt/ensemble/venv && mkdir -p /opt/e
     && printf '%s\n' '#!/bin/sh' 'exec /opt/ensemble/venv/bin/python "$@"' > /opt/ensemble/bin/python3 \
     && ln -s /opt/ensemble/src/ensemble/delegate/team /opt/ensemble/team \
     && printf '%s\n' '#!/bin/sh' 'export PYTHONPATH=/opt/ensemble/src' 'exec /opt/ensemble/venv/bin/python -P -m ensemble.session.cli "$@"' > /opt/ensemble/bin/ensemble-session \
-    && printf '%s\n' '#!/bin/sh' 'exec /opt/ensemble/venv/bin/python -I /opt/ensemble/src/ensemble/session/hosts/docker/relay.py "$@"' > /opt/ensemble/bin/relay \
     && ln -s /opt/ensemble/lib/with-secrets /opt/ensemble/bin/with-secrets \
     && ln -s /opt/ensemble/clients/bin/claude /opt/ensemble/bin/claude \
     && ln -s /opt/ensemble/clients/bin/codex /opt/ensemble/bin/codex \
@@ -58,12 +57,12 @@ RUN python3 -m venv --system-site-packages /opt/ensemble/venv && mkdir -p /opt/e
     && printf '%s\n' '[credential]' 'helper = /opt/ensemble/bin/git-credential-ensemble' 'useHttpPath = true' >> /etc/gitconfig \
     && printf '%s\n' '[core]' 'hooksPath = .githooks' >> /etc/gitconfig \
     && printf '%s\n' 'PATH=/opt/ensemble/bin:$PATH' > /etc/profile.d/ensemble.sh \
-    && chmod 755 /opt/ensemble/bin/ensemble-session /opt/ensemble/bin/relay /opt/ensemble/bin/python3 /opt/ensemble/lib/with-secrets /opt/ensemble/lib/hook-stub /opt/ensemble/lib/workspace-check /opt/ensemble/lib/gh /opt/ensemble/lib/git-credential-ensemble \
+    && chmod 755 /opt/ensemble/bin/ensemble-session /opt/ensemble/bin/python3 /opt/ensemble/lib/with-secrets /opt/ensemble/lib/hook-stub /opt/ensemble/lib/workspace-check /opt/ensemble/lib/gh /opt/ensemble/lib/git-credential-ensemble \
     && chmod -R a+rX /opt/ensemble/codex-plugins \
     && chmod -R a+rX /opt/ensemble/claude-plugins \
     && chmod -R a+rX /opt/ensemble/plugins \
     && chown -R root:root /opt/ensemble && chmod -R go-w /opt/ensemble \
-    && install -d -o agent -g agent -m 0700 /run/ensemble /run/ensemble/relay-queue
+    && install -d -o agent -g agent -m 0700 /run/ensemble
 ARG ENSEMBLE_VERSION
 LABEL ensemble.version=${ENSEMBLE_VERSION} ensemble.agent-uid=${AGENT_UID} ensemble.agent-gid=${AGENT_GID}
 LABEL ensemble.claude-version=${CLAUDE_VERSION} ensemble.codex-version=${CODEX_VERSION} ensemble.opencode-version=${OPENCODE_VERSION}

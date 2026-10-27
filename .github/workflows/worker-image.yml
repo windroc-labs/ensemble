@@ -192,15 +192,6 @@ jobs:
             test "$(command -v python3)" = /opt/ensemble/bin/python3
             python3 -c "import ensemble.delegate"
             python3 -P /opt/ensemble/team/tools/repo.py --help
-            relay serve 0123456789abcdef0123456789abcdef &
-            relay_pid=$!
-            for attempt in $(seq 1 50); do
-              if test -S /run/ensemble/relay.sock; then break; fi
-              sleep 0.1
-            done
-            test -S /run/ensemble/relay.sock
-            kill "$relay_pid"
-            wait "$relay_pid" || test "$?" = 143
             plugin=/opt/ensemble/plugins/updraft
             test "$CLAUDE_CODE_PLUGIN_DIRS" = "$plugin"
             test "$(stat -c %u:%g "$plugin" "$plugin/skills/light-build/SKILL.md" | sort -u)" = 0:0

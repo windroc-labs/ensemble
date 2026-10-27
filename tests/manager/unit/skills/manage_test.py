@@ -181,7 +181,7 @@ class Manage(Case):
         for path in paths("manage"):
             self.assertTrue(os.path.isfile(path), path)
         cited = doc_sections("manage")
-        self.assertIn(("docs/board.md", ["Using the board", "Finish"]), cited)
+        self.assertIn(("docs/architecture.md", ["Board", "Using the board", "Finish"]), cited)
         for path, (top, *inner) in cited:
             with open(os.path.join(REPO, path), encoding="utf-8") as f:
                 doc = f.read()
@@ -203,9 +203,10 @@ class Manage(Case):
     def test_a_shared_flakes_owner_fixes_its_root_cause_by_the_method(self):
         flake = rule("A flake or bug that several PRs hit has one owner")
         self.assertIn(
-            "fixes its root cause (`src/ensemble/delegate/team/methods/fix-root-causes.md`);",
+            "fixes its root cause (`src/ensemble/delegate/team/methods/fix-root-causes.md`); ",
             flake,
         )
+        self.assertNotIn("› Rules", flake)
 
     def test_docker_host_workers_start_no_sessions_or_containers(self):
         [docker] = re.findall(r"^On the Docker Host .*$", body("manage"), re.M)
@@ -214,7 +215,7 @@ class Manage(Case):
             "can start no session and no container",
             "no Docker socket and no broker",
             "the same launch commands and client flags as on this machine",
-            "permission mode comes from its Host (`docs/sessions.md` › Client policy)",
+            "permission mode comes from its Host (`docs/architecture.md` › Client policy)",
         ):
             self.assertIn(phrase, docker)
         self.assertIn("so a worker or role run starts no sessions of its own", body("manage"))
@@ -274,17 +275,19 @@ class Manage(Case):
                 "transcript",
                 f"`{reader}`",
                 "`client_id` in `<work_dir>/work/<ID>/run/run.jsonl`",
-                "No harness watches it now",
+                "Its tui still sends",
                 "`blocked` and `done` events",
                 "per Events",
                 "for this one call only, never",
                 "Once it finishes",
-                "still show the old `needs_input`",
+                "shows the new outcome when its harness still owns the tui",
+                "write-back has posted that result and moved the issue",
+                "still shows the old `needs_input` (no harness)",
                 "its last outcome block",
                 "`deliverable` for a `local` or `orchestrator` destination",
                 "`<work_dir>/work/<ID>/agent/tmp/deliverable.md`",
                 "else its `url`",
-                "In Review (`docs/board.md` › Using the board)",
+                "In Review (`docs/architecture.md` › Board › Using the board)",
                 "`ensemble-orchestrator issue move <ID> review`",
             )
         ]

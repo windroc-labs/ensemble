@@ -15,7 +15,7 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-// The egress proxy's label contract, version 1 (windroc/egress-proxy docs/label-contract.md): the broker finds the
+// The egress proxy's label contract, version 1 (windroc-labs/egress-proxy docs/label-contract.md): the broker finds the
 // proxy and each caller network it serves only through these labels and Docker health, and never probes the proxy.
 const (
 	egressPrefix    = "windroc.egress."
@@ -25,7 +25,7 @@ const (
 	workersKey      = "workers"
 	proxyName       = "egress-proxy"
 	noProxy         = "localhost,127.0.0.1,::1"
-	egressHint      = " Start the egress proxy (~/.egress/current/start.sh, docs/docker-host.md#egress-proxy), then retry."
+	egressHint      = " Start the egress proxy (~/.egress/current/start.sh, docs/architecture.md#egress-proxy), then retry."
 )
 
 // networkPattern is a Docker network name; never a flag.

@@ -3,6 +3,7 @@ with manager MANAGER attached, <repo>/bin and the fake clients on PATH, HOME out
 dirs (Codex's rule), and the crew run as a module with only utils and manager importable (FR-3).
 """
 
+import fcntl
 import json
 import os
 import signal
@@ -16,7 +17,7 @@ from unittest import mock
 
 from ensemble.manager import Entry, Roster, State
 from ensemble.manager.engine.crew import RECOVERY_AGE
-from ensemble.utils import Record
+from ensemble.utils import ProcessControl, Record
 from tests.manager.case import PY, REPO, SRC, Case
 from tests.session import live_tmux
 from tests.session.integration.clients.claude import fake_claude
@@ -37,6 +38,29 @@ def logged(path: str) -> list[dict]:
             return [json.loads(line) for line in f]
     except FileNotFoundError:
         return []
+
+
+class Owner:
+    """A tui session's harness dir, read without importing the session harness."""
+
+    def __init__(self, ensemble: str, name: str):
+        with open(os.path.join(ensemble, "tui", name, "session.json"), encoding="utf-8") as f:
+            self.directory = json.load(f)["owner"]
+        self.events = os.path.join(self.directory, "events.jsonl")
+
+    def status(self) -> dict:
+        with open(os.path.join(self.directory, "harness.json"), encoding="utf-8") as f:
+            return json.load(f)
+
+    def alive(self) -> bool:
+        fd = os.open(os.path.join(self.directory, "harness.lock"), os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        finally:
+            os.close(fd)
+        return False
 
 
 def has_pair(argv: list[str], flag: str, value: str) -> bool:
@@ -215,28 +239,41 @@ class LiveCrew(Case):
             if line.split(" ")[1] == name
         ]
 
-    def killed(self, name: str, record: Record) -> None:
-        """Kills tui run `name`'s sessions after its first turn; attach then says gone."""
-        harness, tui = record.sessions
-        self.wait_event(tui, "done")
-        shown = self.server.tmux("display-message", "-p", "-t", f"={harness}:", "#{pane_pid}")
-        pid = int(shown.stdout)
-        self.kill(harness)
-        self.server.tmux(
-            "kill-session", "-t", f"={tui}"
-        )  # the harness, stopping, may close it first
-        self.until(  # kill-session: no exited hook
-            lambda: (
-                self.gone(tui)
-                and ["outcome", "error"] in self.words(harness)
-                and not live_tmux.alive(pid)
-            ),
-            f"{tui} gone, the harness's outcome and exit",
+    def drive(self, record: Record) -> ProcessControl:
+        with open(os.path.join(record.workdir, "run", "delegate.json"), encoding="utf-8") as f:
+            return ProcessControl.attach(json.load(f)["drive"])
+
+    def drive_running(self, record: Record) -> bool:
+        return self.drive(record).running()
+
+    def kill_drive(self, record: Record) -> None:
+        """SIGKILL to record's drive's group, never this test's, until its control saw it end."""
+        ps = self.ok(
+            subprocess.run(
+                ["ps", "-A", "-ww", "-o", "pid=,pgid=,args="], capture_output=True, text=True
+            )
         )
+        tail = f"-m ensemble.delegate.engine.harness {record.workdir}"
+        rows = [line.split(None, 2) for line in ps.stdout.splitlines()]
+        groups = [int(row[1]) for row in rows if row[2:] and row[2].endswith(tail)]
+        self.assertEqual(len(groups), 1, ps.stdout)
+        self.assertNotEqual(groups[0], os.getpgrp())
+        os.killpg(groups[0], signal.SIGKILL)
+        self.until(lambda: not self.drive_running(record), f"{record.name}'s drive ended")
+
+    def killed(self, name: str, record: Record) -> None:
+        """SIGKILLs tui run `name`'s drive group and client after its first turn; attach: gone."""
+        (tui,) = record.sessions
+        self.wait_event(tui, "done")
+        self.kill_drive(record)
+        os.kill(logged(self.log(name))[-1]["pid"], signal.SIGKILL)
+        self.server.tmux("kill-session", "-t", f"={tui}")
+        self.until(lambda: self.gone(tui), f"{tui} gone")
+        self.assertEqual(self.words(f"{tui}-drive"), [])
         out = self.ok(self.crew("attach")).stdout.splitlines()
         self.assertIn(f"resume: ensemble-crew resume --manager mgr {name}", out)
         self.assertEqual(self.roster()[name].state, State.GONE)
-        self.assertTrue(self.gone(harness, tui))
+        self.assertFalse(self.drive_running(record))
 
     def spy(self, command: str) -> str:
         """Puts a `command` before <repo>/bin that logs its argv, then runs the real one; its log."""
@@ -271,6 +308,7 @@ class LiveCrew(Case):
 
     def kill(self, *names: str) -> None:
         for name in names:
+            live_tmux.crash_owner(self.ensemble, name)
             self.ok(self.server.tmux("kill-session", "-t", f"={name}"))
         self.until(lambda: self.gone(*names), f"{names} gone")
 

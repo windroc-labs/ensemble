@@ -18,6 +18,7 @@ from ensemble.manager.engine.roster import LOCK_TIMEOUT, Roster
 from ensemble.manager.engine.types import (
     Entry,
     Lease,
+    Liveness,
     RosterError,
     Spec,
     StartBusy,
@@ -273,8 +274,16 @@ class Crew:
             }:
                 raise ValueError(f"reopen sets {', '.join(sorted(fixed))} from the run record")
             _, client, sid, cwd, name, host, account = _closed_run(work_dir, key)
-            if live := self._live({key, name}, sid):
-                raise ValueError(f"{key}: still live ({', '.join(live)}); close it before reopen")
+            found = self._live({key, name}, sid)
+            if found.live:
+                raise ValueError(
+                    f"{key}: still live ({', '.join(found.live)}); close it before reopen"
+                )
+            if found.unknown:
+                raise ValueError(
+                    f"{key}: liveness unknown ({', '.join(found.unknown)}); "
+                    "close or forget it before reopen"
+                )
             command = (
                 "ensemble-session",
                 "start",
@@ -300,22 +309,27 @@ class Crew:
             raise ValueError(f"unknown launch kind: {kind}")
         return self._run(Spec(name, command, note), sid, shorthand=True, busy=kind == "role")
 
-    def _live(self, names: set[str], sid: str) -> list[str]:
+    def _live(self, names: set[str], sid: str) -> Liveness:
         """Roster entries named in names or holding sid, and sessions listed here or below holding
-        sid, that answer alive; one whose status fails is reported on stderr, not refused.
+        sid: those that answer alive, and those whose liveness is unknown (status failed, reported
+        on stderr; `session listing` when the listing failed).
         """
         candidates = {
             name: entry
             for name, entry in self.roster.entries().items()
             if name in names or sid in (entry.sid, entry.record and entry.record.sid)
         }
-        for record in self._listing(DESCENDANTS) or ():
+        listed = self._listing(DESCENDANTS)
+        for record in listed or ():
             if record.sid == sid:
                 candidates[f"session {record.name}"] = Entry(record, State.LIVE, None, "")
         answers, failures = self._statuses(candidates)
         for name, reason in failures.items():
             print(f"crew: {name}: {reason}", file=sys.stderr)
-        return sorted(name for name, status in answers.items() if status.alive)
+        unknown = [*failures, *(["session listing"] if listed is None else [])]
+        return Liveness(
+            sorted(name for name, status in answers.items() if status.alive), sorted(unknown)
+        )
 
     def _run(self, spec: Spec, sid: str, *, shorthand: bool, busy=False) -> Record:
         self._listed = None
@@ -601,6 +615,11 @@ class Crew:
             reopen = ("ensemble-crew", "reopen", f"--manager={manager}", name)
             raise ValueError(f"{name}: not in roster; a closed issue run: {shlex.join(reopen)}")
         entry = entries[name]
+        status = None
+        if entry.state == State.LIVE and entry.record is not None:
+            # only attach marks the roster; an attempt that ended since still reads live (FR-22)
+            status = self.status((name,))[0]
+            entry = self._marked(name, entry, _reconciled(entry, status))
         if input is not None and entry.state != State.WAITING:
             raise ValueError(f"{name}: --input requires waiting (state {entry.state})")
         if input is None and entry.state == State.WAITING:
@@ -610,7 +629,7 @@ class Crew:
         if entry.record is None:
             raise RuntimeError(f"{name}: {entry.state}: no Record to resume")
         if input is None:
-            status = self.status((name,))[0]
+            status = status or self.status((name,))[0]
             if status.alive:
                 return entry.record
             if entry.state != State.GONE:
@@ -638,6 +657,17 @@ class Crew:
             raise
         return resumed
 
+    def _marked(self, name: str, entry: Entry, state: State) -> Entry:
+        """`entry` marked `state`; the roster's entry when another writer changed it first."""
+        if state == entry.state:
+            return entry
+        if self.roster.mark_if(name, entry, state):
+            return replace(entry, state=state)
+        current = self.roster.entries().get(name)
+        if current is None:
+            raise ValueError(f"{name}: not in roster")
+        return current
+
     def close(self, name: str) -> None:
         self._listed = None
         self.roster.check_lease()
@@ -649,8 +679,23 @@ class Crew:
         if record is not None:
             failures = self._control("close", (record,))
             if failures:
-                raise RuntimeError("\n".join(failures.values()))
+                reason = "\n".join(failures.values())
+                error = RuntimeError(reason)
+                if (path := self._traced(key, entries[key], reason, error)) is not None:
+                    error = RuntimeError(f"{reason}; logged to {path}")
+                raise error
         self.roster.remove(key)
+
+    def _traced(self, name: str, entry: Entry, reason: str, error: Exception) -> str | None:
+        """close-failures.jsonl's path once it holds this failed close; else None, why on `error`."""
+        assert entry.record is not None
+        try:
+            return self.roster.close_failed(
+                name, sid=entry.sid, ctl=entry.record.ctl, reason=reason
+            )
+        except (OSError, RosterError) as trace:
+            error.add_note(f"{name}: close-failures.jsonl not written: {trace}")
+            return None
 
     def close_all(self, *, dry_run: bool = False) -> list[str]:
         self._listed = None
@@ -662,11 +707,17 @@ class Crew:
         names = sorted(set(entries) | {record.name for record in records})
         if not dry_run:
             failures = self._control("close", records)
+            failed = []
             for name, entry in entries.items():
                 if entry.record is None or entry.record.ctl not in failures:
                     self.roster.remove(name)
+                else:
+                    failed.append((name, entry, entry.record.ctl))
             if failures:
-                raise RuntimeError("\n".join(failures.values()))
+                error = RuntimeError("\n".join(failures.values()))
+                for name, entry, ctl in failed:
+                    self._traced(name, entry, failures[ctl], error)
+                raise error
         if here is None:
             raise RuntimeError("close-all partial: unlisted work may still be running")
         return names

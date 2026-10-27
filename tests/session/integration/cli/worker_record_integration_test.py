@@ -57,7 +57,7 @@ class RecordTest(RecordCase):
             self.assertEqual(stat.S_IMODE(os.lstat(directory).st_mode), 0o700)
         with open(path, encoding="utf-8") as f:
             state = json.load(f)
-        self.assertIsInstance(state.pop("token"), str)
+        self.assertIsNone(state.pop("token"))  # its guard, not a process-group token, controls it
         self.assertEqual(
             state,
             {

@@ -12,6 +12,7 @@ from ensemble.session.engine.types import (
     Paste,
     Permission,
     TurnEnd,
+    TurnStarted,
 )
 from ensemble.session.modes.client_adapters import tui
 from ensemble.session.modes.client_adapters.tui import Tui
@@ -31,7 +32,7 @@ class TuiTest(Case):
 
     def test_defaults(self):
         run = StubTui()
-        self.assertEqual(Tui.hooks, {})
+        self.assertEqual((Tui.hooks, Tui._owned), ({}, False))
         self.assertEqual(run._context, ClientContext("127.0.0.1", Permission.AUTO))
         self.assertEqual(
             (run.pending(self.end), run.activity({"doing": "x"}), run.blocked_reason({"why": "y"})),
@@ -40,6 +41,9 @@ class TuiTest(Case):
         for screen in ("", "limit reached\n> "):
             with self.subTest(screen=screen):
                 self.assertIsNone(run.limit(screen))
+
+    def test_a_new_tui_has_seen_no_turn_ids(self):
+        self.assertEqual(StubTui()._turn_ids, frozenset())
 
     def test_submit_pastes_then_presses_enter(self):
         self.assertEqual(self.run.submit("x"), (Paste("x"), Key("Enter")))
@@ -83,6 +87,7 @@ class TuiTest(Case):
             ("end", TurnEnd("r", 1)),
             ("wait", Blocked("ask")),
             ("work", Activity("Bash")),
+            ("begin", TurnStarted()),
         ):
             with self.subTest(label=label):
                 self.assertEqual(self.run.hook_events(label, payload), [event])
@@ -94,6 +99,7 @@ class TuiTest(Case):
             ("end", TurnEnd("r", 0)),
             ("wait", Blocked("")),
             ("work", Activity("")),
+            ("begin", TurnStarted()),
         ):
             with self.subTest(label=label):
                 self.assertEqual(run.hook_events(label, payload), [event])

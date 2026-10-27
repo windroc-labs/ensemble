@@ -552,9 +552,8 @@ func TestWorkerImageHasItsScripts(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		`'exec /opt/ensemble/venv/bin/python -I /opt/ensemble/src/ensemble/session/hosts/docker/relay.py "$@"' > /opt/ensemble/bin/relay`,
-		"chmod 755 /opt/ensemble/bin/ensemble-session /opt/ensemble/bin/relay ",
-		"install -d -o agent -g agent -m 0700 /run/ensemble /run/ensemble/relay-queue",
+		"chmod 755 /opt/ensemble/bin/ensemble-session /opt/ensemble/bin/python3 ",
+		"install -d -o agent -g agent -m 0700 /run/ensemble\n",
 		"COPY bootstrap.py codex-probe.py opencode-install.py plugin-install.py hook-stub with-secrets workspace-check gh git-credential-ensemble /opt/ensemble/lib/",
 		`python3 -I /opt/ensemble/lib/opencode-install.py "$(dpkg --print-architecture)" /opt/ensemble/clients`,
 		"ln -s /opt/ensemble/clients/bin/opencode /opt/ensemble/bin/opencode",
@@ -579,7 +578,7 @@ func TestWorkerImageHasItsScripts(t *testing.T) {
 			t.Errorf("Dockerfile lacks %q", want)
 		}
 	}
-	for _, gone := range []string{"/opt/ensemble/runtime", "COPY codex ", "codex-update"} {
+	for _, gone := range []string{"/opt/ensemble/runtime", "COPY codex ", "codex-update", "relay"} {
 		if strings.Contains(string(data), gone) {
 			t.Errorf("Dockerfile still has %q", gone)
 		}
@@ -1082,7 +1081,7 @@ func TestBaseImageRequirements(t *testing.T) {
 	}
 	unexpected := "Checking base image dummy-env:test gave unexpected output."
 	lacks := func(items string) string {
-		return "Base image dummy-env:test lacks " + items + "; see docs/docker-host.md#base-images."
+		return "Base image dummy-env:test lacks " + items + "; see docs/architecture.md#base-images."
 	}
 	for name, tc := range map[string]struct {
 		agent, tools, message string

@@ -3,6 +3,7 @@
 import contextlib
 import dataclasses
 import glob
+import itertools
 import json
 import os
 import shlex
@@ -739,6 +740,37 @@ class Interactive(Case):
         parent.wait()
         live_tmux.wait(lambda: gone(line["pid"]), what="the orphaned fake to end")
 
+    def test_its_scenario_removed_it_ends(self):
+        self.scene()
+        proc = self.popen(*SESSION)
+        live_tmux.wait(self.logged, what="the fake's log line")
+        time.sleep(0.5)
+        self.assertIsNone(proc.poll())
+        os.remove(self.scenario)
+        live_tmux.wait(lambda: proc.poll() is not None, what="the fake to end")
+        self.assertEqual(proc.returncode, 1)
+
+    def test_idle_past_the_hang_cap_it_waits_on(self):
+        # WDRC-306: idle HANG_CAP s, it exited while a slow test still needed it
+        self.scene()
+        ticks = itertools.count(step=fake_claude.HANG_CAP + 1)
+        polls = []
+
+        def nothing(*_):
+            polls.append(None)
+            if len(polls) == 5:
+                os.remove(self.scenario)
+            return [], [], []
+
+        stdin = fake_claude.Stdin(os.getppid(), self.scenario)
+        with (
+            mock.patch("time.monotonic", side_effect=lambda: next(ticks)),
+            mock.patch("select.select", side_effect=nothing),
+            self.assertRaises(fake_claude.Stranded),
+        ):
+            stdin.raw()
+        self.assertEqual(len(polls), 5)
+
 
 class Gate(Case):
     def test_a_session_waits_for_its_gate_after_its_log_line(self):
@@ -780,6 +812,17 @@ class Readiness(Case):
     def write(self, proc: subprocess.Popen, text: str) -> None:
         proc.stdin.write(text)
         proc.stdin.flush()
+
+    def test_a_startup_dialog_shows_before_session_start_which_follows_its_answer(self):
+        self.scene(steps=["Hi."], dialog=TRUST)
+        events = ("SessionStart", "UserPromptSubmit", "Stop")
+        proc = self.popen(*SESSION, "--settings", self.settings(*events), "--", "hello")
+        self.assertEqual(proc.stdout.readline(), TRUST + "\n")
+        self.assertEqual(self.names(), [])
+        out, err = proc.communicate("yes\n", timeout=30)
+        self.assertEqual((proc.returncode, out), (0, "Hi.\n"), err)
+        self.assertEqual(self.names(), ["SessionStart", "UserPromptSubmit", "Stop"])
+        self.assertEqual(self.fired()[0]["source"], "startup")
 
     def test_session_start_and_local_commands(self):
         self.scene(

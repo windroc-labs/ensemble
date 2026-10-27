@@ -2,12 +2,17 @@
 
 Every call is logged to $LOG (argv) and $ENVLOG (environment values). State lives under
 $FAKES: brew/<name> (installed), processes (one running command line each; unkillable: those KILL misses), login/<client>, keychain/<service>, claude/ and codex/ (plugins),
-src/broker/ (the broker's Codex install, tokens and protocol: the one `version` reports, else the plugin's), fail (a call prefix that fails once), tty_name
+src/broker/ (the broker's Codex install, tokens and protocol: the one `version` reports, else the plugin's;
+legacy: old-name items left, so every command but `version` refuses), fail (a call prefix that fails once), tty_name
 (what `ps -o tty=` reports), kqueue_refuses (a terminal the Bun-built clients die on, as on /dev/tty),
 commit (the commit GitHub reports for every ensemble ref), marketplace/ (the windroc marketplace's
 manifests on main), refs/<ref>/ (ensemble files at a ref, over pkg-src/), linear.json (the Linear workspace: apps
 {client_id: {secret, access_token, user_id}}, teams [{id, key, name, states, members, projects}],
-labels).
+labels), launchd/<label> (a loaded launchd job), hang/<client> (its login waits 30 s after creating hung, for the
+test's signal; `stored`: logged in first), hang/sudo-k (`sudo -k` marks sudo-k-hung, waits 5 s, then drops the ticket
+and marks sudo-k-done), hang/<client>-status (once hung exists, its login status marks status-hung and waits 30 s),
+codex/unauthorized (the `codex plugin` sub-commands it names, all when
+empty, fail with a 401).
 """
 
 import hashlib
@@ -22,6 +27,7 @@ import subprocess
 import sys
 import tarfile
 import termios
+import time
 from pathlib import Path
 from urllib.parse import parse_qs
 
@@ -105,6 +111,10 @@ def sudo(args):
     ticket = FAKES / "sudo_ticket"
     password = (FAKES / "sudo_password").read_text()
     if args == ["-k"]:
+        if (FAKES / "hang/sudo-k").exists():
+            mark(FAKES / "sudo-k-hung")
+            time.sleep(5)
+            mark(FAKES / "sudo-k-done")
         ticket.unlink(missing_ok=True)
         return 0
     if args == ["-v"]:
@@ -374,11 +384,20 @@ def docker_uninstall(_args):
 def login(client, args, status, start, logout):
     flag = FAKES / "login" / client
     if args == status:
+        if (FAKES / "hang" / f"{client}-status").exists() and (FAKES / "hung").exists():
+            mark(FAKES / "status-hung")
+            time.sleep(30)
         return 0 if flag.exists() else 1
     if args == logout:
         flag.unlink(missing_ok=True)
         return 0
     if args == start:
+        hang = FAKES / "hang" / client
+        if hang.exists():
+            if hang.read_text() == "stored":
+                mark(flag)
+            mark(FAKES / "hung")
+            time.sleep(30)
         out(f"Log in to {client} in your browser.\n")
         mark(flag)
         return 0
@@ -386,7 +405,7 @@ def login(client, args, status, start, logout):
 
 
 def gh(args):
-    if args and args[0] == "api" and args[1].startswith("repos/windroc/egress-proxy/tarball/"):
+    if args and args[0] == "api" and args[1].startswith("repos/windroc-labs/egress-proxy/tarball/"):
         # egress_tarball, when present, says how to spoil it: corrupt or noexec.
         spoil = path.read_text() if (path := FAKES / "egress_tarball").exists() else ""
         if spoil == "corrupt":
@@ -490,6 +509,11 @@ def codex(args):
     done = login("codex", args, ["login", "status"], ["login"], ["logout"])
     if done is not None:
         return done
+    unauthorized = FAKES / "codex/unauthorized"
+    rejected = unauthorized.read_text().split() if unauthorized.exists() else None
+    if args[:1] == ["plugin"] and rejected is not None and (not rejected or args[1] in rejected):
+        out("Error: unexpected status 401 Unauthorized: token expired\n", sys.stderr)
+        return 1
     markets_file, plugins_file = FAKES / "codex/marketplaces.json", FAKES / "codex/plugins.json"
     markets, plugins = load(markets_file, {}), load(plugins_file, [])
     if args[:3] == ["plugin", "marketplace", "add"]:
@@ -582,13 +606,22 @@ def xcode_select(args):
 
 
 def docker(args):
+    # egress_container, egress_image: the proxy's container and image are there; worker_images,
+    # ws_volumes: what `docker image ls` and `docker volume ls` list; docker_stops_at: the call
+    # before which Docker Desktop quits.
+    container, image = FAKES / "egress_container", FAKES / "egress_image"
+    stops = FAKES / "docker_stops_at"
+    if stops.exists() and " ".join(["docker", *args]).startswith(stops.read_text()):
+        stops.unlink()
+        (FAKES / "docker_running").unlink(missing_ok=True)
     if args == ["egress-start"]:
         mark(FAKES / "egress_started")
-        # what start.sh would serve: the config the installer pointed it at
-        mark(
-            FAKES / "egress_served",
-            Path(os.environ["EGRESS_CONFIG_DIR"], "config.local.yaml").read_text(),
-        )
+        mark(container)
+        mark(image)
+        config_dir = Path(os.environ["EGRESS_CONFIG_DIR"])
+        # what start.sh would serve: the config the installer pointed it at; it renders its override beside it
+        mark(FAKES / "egress_served", (config_dir / "config.local.yaml").read_text())
+        mark(config_dir / "compose.networks.yaml", "services: {}\n")
         return 0
     if args[:2] == ["inspect", "--format"] and args[-1] == "egress-proxy":
         if not (FAKES / "egress_started").exists():
@@ -600,12 +633,66 @@ def docker(args):
         health = "unhealthy" if (FAKES / "egress_unhealthy").exists() else "healthy"
         out(f"true|{health}|1|egress-workers|http://egress-proxy-workers:4750|workers\n")
         return 0
+    if (
+        args[0] in ("container", "image", "volume", "rm")
+        and not (FAKES / "docker_running").exists()
+    ):
+        out("Cannot connect to the Docker daemon. Is the docker daemon running?\n", sys.stderr)
+        return 1
+    if args[1:] == ["inspect", "egress-proxy"] and args[0] in ("container", "image"):
+        if (container if args[0] == "container" else image).exists():
+            return 0
+        out(f"Error: No such {args[0]}: egress-proxy\n", sys.stderr)
+        return 1
+    if args == ["rm", "-f", "egress-proxy"]:
+        container.unlink(missing_ok=True)
+        (FAKES / "egress_started").unlink(missing_ok=True)
+        return 0
+    if args == ["image", "rm", "egress-proxy"]:
+        if container.exists():
+            out("Error response from daemon: conflict: image is in use\n", sys.stderr)
+            return 1
+        image.unlink(missing_ok=True)
+        return 0
+    if args[:2] == ["image", "ls"]:
+        repository = args[-1]
+        lines = load_text(FAKES / "worker_images").splitlines()
+        out("".join(f"{line}\n" for line in lines if line.split(":")[0] == repository))
+        return 0
+    if args[:2] == ["volume", "ls"]:
+        name = args[args.index("--filter") + 1].removeprefix("name=")
+        lines = load_text(FAKES / "ws_volumes").splitlines()
+        out("".join(f"{line}\n" for line in lines if name in line))
+        return 0
     return 0 if args == ["info"] and (FAKES / "docker_running").exists() else 1
+
+
+# Docker's context store directory for context desktop-linux: the sha256 of its name.
+DESKTOP_CONTEXT = "fe9c6bd7a66301f49ca9b6a70b217107cd1284598bfc254700c989b916da791e"
+
+
+def docker_home(home):
+    """What Docker Desktop's first start writes under ~/.docker: its credential helper and context set in
+    config.json (other keys kept), the desktop-linux context, features.json and CLI plugin links into Docker.app."""
+    docker = home / ".docker"
+    config = docker / "config.json"
+    data = json.loads(config.read_text()) if config.exists() else {}
+    data.update(credsStore="desktop", currentContext="desktop-linux")
+    mark(config, json.dumps(data, indent="\t"))
+    mark(docker / "contexts/meta" / DESKTOP_CONTEXT / "meta.json", '{"Name":"desktop-linux"}')
+    mark(docker / "features.json", "{}")
+    plugins = docker / "cli-plugins"
+    plugins.mkdir(exist_ok=True)
+    for name in ("docker-buildx", "docker-compose"):
+        if not os.path.lexists(plugins / name):
+            (plugins / name).symlink_to(
+                ROOT / "Applications/Docker.app/Contents/Resources/cli-plugins" / name
+            )
 
 
 def open_(args):
     """Docker Desktop's first start also adds its block to ~/.zprofile, ~/.zshrc and ~/.bashrc and writes its own
-    files under ~/Library. Installed by the cask, it asks for its
+    files under ~/Library and ~/.docker. Installed by the cask, it asks for its
     license unless its install command accepted it."""
     cask = (FAKES / "brew/docker-desktop").exists()
     if cask and not (FAKES / "docker_license").exists():
@@ -620,6 +707,7 @@ def open_(args):
                         profile.write(DOCKER_BLOCK.format(home=home))
             mark(home / "Library/Application Support/Docker Desktop/state.json", "{}")
             mark(home / "Library/Preferences/com.docker.docker.plist", "prefs")
+            docker_home(home)
             agent = ROOT / "Applications/Docker.app/Contents/Resources/cli-plugins/docker-agent"
             mark(
                 FAKES / "processes",
@@ -662,7 +750,16 @@ def defaults(_args):
 
 
 def launchctl(args):
-    return 3 if args[:1] == ["bootout"] else 0
+    loaded = FAKES / "launchd"
+    if args[:1] == ["bootstrap"]:
+        mark(loaded / Path(args[2]).stem)
+    elif args[:1] in (["bootout"], ["print"]):
+        label = loaded / args[1].rsplit("/", 1)[-1]
+        if not label.exists():
+            return 3 if args[0] == "bootout" else 113
+        if args[0] == "bootout":
+            label.unlink()
+    return 0
 
 
 def shasum(args):
@@ -674,9 +771,26 @@ def shasum(args):
     return 0
 
 
+LEGACY_REFUSAL = (
+    'old-name broker items found (8: "ensemble-bot 123456", "ensemble-claude default",'
+    ' "ensemble-codex auth"): run the maintainer\'s one-time rename step (docs/upgrading.md),'
+    " then rerun"
+)
+
+
 def broker(args):
     codex_file = BROKER.parent / "codex/state.json"
     state = load(codex_file, None)
+    if (FAKES / "src/broker/legacy").exists() and args != ["version"]:
+        if args[:1] == ["status"]:
+            error = {"command": "status", "code": "keychain_failed", "message": LEGACY_REFUSAL}
+            out(
+                json.dumps({"exit_code": 11, "error": {**error, "cleanup": "not_needed"}}) + "\n",
+                sys.stderr,
+            )
+            return 11
+        out(f"ensemble-broker: {LEGACY_REFUSAL}\n", sys.stderr)
+        return 1
     if args[:2] in (["login", "opencode"], ["login", "codex"]):
         service = "ensemble-broker-" + args[1]
         if (FAKES / "keychain" / ("foreign-" + service)).exists():

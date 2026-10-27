@@ -53,6 +53,7 @@ class OpenCodeTui(Homed, Tui):
     hooks = MappingProxyType(
         {
             "session.idle": HookKind.TURN_END,
+            "turn.started": HookKind.TURN_STARTED,
             "session.error": HookKind.TURN_FAILED,
             "permission.asked": HookKind.BLOCKED,
             "question.asked": HookKind.BLOCKED,
@@ -63,8 +64,11 @@ class OpenCodeTui(Homed, Tui):
             "tool": HookKind.ACTIVITY,
         }
     )
+    _owned = _remote_owned = True
+    _opening_prompt = True  # its opening is a resume's prompt: not deferred past a launch turn
 
     def __init__(self, common: OpenCodeCommon):
+        super().__init__()
         self.common = common
         self.cwd, self.sid, self.fresh = "", "", False
         self.opening = None
@@ -139,6 +143,15 @@ class OpenCodeTui(Homed, Tui):
         return _text(payload, "last_assistant_message")
 
     def hook_events(self, label, payload):
+        native = self.session_id(payload)
+        if not native or self.client and native != self.client:
+            return []
+        if (
+            label == "message.completed"
+            and self._turn_id
+            and payload.get("turn_id") != self._turn_id
+        ):
+            return []
         found = super().hook_events(label, payload)
         if label == "message.completed" and (text := _text(payload, "text")).strip():
             found.append(Reply(text))

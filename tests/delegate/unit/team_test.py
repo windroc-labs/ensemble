@@ -51,6 +51,26 @@ NO_COMMENTS = (
     "which write-back posts.\n"
 )
 
+PSTACK_FIX_ROOT_CAUSES = """
+# Fix Root Causes
+
+When debugging, do not fix symptoms. Trace every problem to its root cause and fix it there.
+
+**Why:** Symptom fixes accumulate. Each workaround makes the system harder to reason about, and the real bug remains. Root-cause fixes are slower upfront but reduce total debugging time.
+
+**Pattern:**
+- Reproduce first
+- Ask "why" until you hit the root cause
+- Do not add guards (adding a nil check to silence a crash is a symptom fix)
+- If a workaround needs a paragraph-long comment to justify it, the code is wrong (fix the code, not the comment)
+- Check for the pattern, not just the instance (grep for the same pattern, fix all instances)
+- When stuck, instrument. Don't guess (add logging, read the actual error)
+
+**Restart bugs: suspect state before code**
+
+When something "fails after restart," suspect stale persistent state first: config files, caches, lock files, serialized state. If clearing a state file restores behavior, prioritize state validation as the fix.
+"""
+
 
 def destined(role, output, *, docker=False):
     """The real core's prompt for `role` with `output`, rendered for Docker when `docker`."""
@@ -660,36 +680,18 @@ class Real(RealConfig):
         self.assertEqual(parameters(prompt)["<team>"], f"`{TEAM}`")
         rules = section(prompt, "Rules")
         fix = item(rules, "Fix root causes")
-        self.assertIn(
+        self.assertEqual(
+            fix,
             ": when debugging, read and follow the **fix-root-causes method** "
-            "`<team>/methods/fix-root-causes.md`.",
-            fix,
-        )
-        self.assertIn(
-            "Every brief to a sub-agent (producer, reviewer) names that file for the sub-agent to "
-            "read.",
-            fix,
+            "`<team>/methods/fix-root-causes.md`. Every brief to a sub-agent (producer, reviewer) "
+            "names that file for the sub-agent to read.\n",
         )
         self.assertLess(
             rules.index("- **No mutation testing**"), rules.index("- **Fix root causes**")
         )
-        with open(os.path.join(TEAM, "methods", "fix-root-causes.md")) as f:
+        with open(os.path.join(TEAM, "methods", "fix-root-causes.md"), encoding="utf-8") as f:
             method = f.read()
-        for phrase in (
-            "# Fix Root Causes",
-            "When debugging, do not fix symptoms. Trace every problem to its root cause and fix it there.",
-            "- Reproduce first",
-            '- Ask "why" until you hit the root cause',
-            "adding a nil check to silence a crash is a symptom fix",
-            "If a workaround needs a paragraph-long comment to justify it, the code is wrong",
-            "grep for the same pattern, fix all instances",
-            "When stuck, instrument. Don't guess (add logging, read the actual error)",
-            "**Restart bugs: suspect state before code**",
-            "suspect stale persistent state first: config files, caches, lock files, serialized state",
-        ):
-            self.assertIn(phrase, method)
-        for phrase in ("never rerun or committed around", "base flake", "ticket owns"):
-            self.assertNotIn(phrase, method)
+        self.assertEqual(method, PSTACK_FIX_ROOT_CAUSES)
         for role, task in runs():
             if role != "engineer":
                 self.assertNotIn("fix-root-causes", composed(role, task)[0], (role, task))

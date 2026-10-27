@@ -41,7 +41,7 @@ The component that turns a role, an optional task and free-text input into an ag
 The Delegate interface for starting a prompt: `AgentDriver` starts a Session through its configured class; `InstructionDriver` returns an Instruction file directly. In code: `src/ensemble/delegate/engine/drivers.py`.
 
 **Harness**:
-The process that runs one detached Delegate run to its end as session `<name>-drive` on its harness Host, the run's state kept in its run dir, `<workdir>/run/`. In code: `src/ensemble/delegate/engine/harness.py`; the run dir: `engine/state.py`.
+The process that runs one detached Delegate run to its end, `<name>-drive`: a local process the Delegate starts itself through `ProcessControl` (its control path in `delegate.json` `drive`, its output in `run/drive.log`), the run's state kept in its run dir, `<workdir>/run/`. In code: `src/ensemble/delegate/engine/harness.py`; the run dir: `engine/state.py`.
 
 **Composer**:
 The component that assembles principles, role and input into a prompt (no task text: the agent run reads its task file) and resolves the role's run config.
@@ -55,7 +55,7 @@ The agent program a session runs (Claude Code, Codex, OpenCode, a test fake), an
 _Avoid_: adapter, runtime (a Mode's class), agent (a role's run), backend, vehicle
 
 **Mode**:
-How the session layer hosts a client: headless (e.g. `claude -p`, on a pipe, ends when it exits), tui (its interactive command in a terminal on its Host, ends when its caller stops it) or in_process (the Client's run inside the caller's process, no process started, ends when the run returns). In code: `Mode` (`mode = headless/tui/in_process`), the Delegate CLI's `--mode`; its mode class runs it.
+How the session layer hosts a client: headless (e.g. `claude -p`, under the guard, ends when it exits), tui (its interactive command in a terminal on its Host, ends when its caller stops it) or in_process (the Client's run on a thread of its session harness, no client process started, ends when the run returns). In code: `Mode` (`mode = headless/tui/in_process`), the Delegate CLI's `--mode`; its mode class runs it.
 _Avoid_: runtime (the class that runs it)
 
 **Mode class**:
@@ -109,7 +109,7 @@ The interface the Linear orchestrator's engine reads and writes issues through, 
 _Avoid_: backend
 
 **Local board**:
-A directory of Markdown issue files, `$ENSEMBLE_BOARD_DIR` (default `~/.ensemble/board/`), each file's directory its assignee and state (`<assignee>/<state>/`, or flat `archive/`), its runtime state in `<board>/.state/`; one directory is one board, never synced. The router, `writeback`, `resume`, `promote`, `prune` and `issue` run on one. `scripts/install.sh --board local --launchd` optionally schedules router and promote (which also prunes); without jobs, run them on demand. Format: `docs/board.md` › Local board. In code: `src/ensemble/orchestrator/trackers/local/`.
+A directory of Markdown issue files, `$ENSEMBLE_BOARD_DIR` (default `~/.ensemble/board/`), each file's directory its assignee and state (`<assignee>/<state>/`, or flat `archive/`), its runtime state in `<board>/.state/`; one directory is one board, never synced. The router, `writeback`, `resume`, `promote`, `prune` and `issue` run on one. `scripts/install.sh --board local --launchd` optionally schedules router and promote (which also prunes); without jobs, run them on demand. Format: `docs/architecture.md` › Board › Local board. In code: `src/ensemble/orchestrator/trackers/local/`.
 
 **Workflow**:
 The board's stages, one per orchestrated role: its input layout, the role promote hands its Handoff issues to, whether a Handoff needs instructions, its title prefix and its write-back comment leads. In code: a file of `[[stage]]` tables, the packaged `src/ensemble/orchestrator/engine/flow/workflow.toml` unless `[orchestrator] workflow` names another, which `config.load()` reads into `config.TASKS` (`engine/flow/workflow.py`).

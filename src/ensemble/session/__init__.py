@@ -1,6 +1,7 @@
-"""The session layer: Session (engine/base.py), whose one concrete class is HostedSession
-(engine/hosted_session.py, modes/), runs agent sessions through each Client (clients/)
-on a Host (hosts/); the Viewer (viewer/) shows them. `__all__` is its API for Session users.
+"""The session layer: Session (engine/base.py), whose concrete classes are HostedSession
+(engine/hosted_session.py, modes/) and OwnedSession (harness/view.py), the control view of a
+worker its session harness owns, runs agent sessions through each Client (clients/) on a Host
+(hosts/); the Viewer (viewer/) shows them. `__all__` is its API for Session users.
 """
 
 from ensemble.session.engine.base import Session, hosted_viewer
@@ -11,10 +12,13 @@ from ensemble.session.engine.types import (
     SESSION_NAME,
     SESSION_NAME_RULE,
     Access,
+    Activity,
+    Blocked,
     ConfigError,
     Effort,
     EnvironmentSpec,
     Exited,
+    HookCallback,
     IdleTimeout,
     Launch,
     LimitHit,
@@ -25,15 +29,18 @@ from ensemble.session.engine.types import (
     Resumable,
     SessionBusy,
     SessionError,
+    SessionEvent,
     SessionStatus,
     Spec,
     Stderr,
     TurnEnd,
     TurnFailed,
+    TurnStarted,
     Unanswered,
     Usage,
     Window,
 )
+from ensemble.session.harness.types import EventCall
 from ensemble.session.hosts.base import SIGNALS, Host, Process
 from ensemble.session.viewer.viewer import Viewer
 
@@ -49,6 +56,8 @@ __all__ = [
     "Launch",
     "Effort",
     "EnvironmentSpec",
+    "HookCallback",
+    "EventCall",
     "Resumable",
     "RunLog",
     "Host",
@@ -61,6 +70,10 @@ __all__ = [
     "Usage",
     "Window",
     "SessionStatus",
+    "SessionEvent",
+    "TurnStarted",
+    "Activity",
+    "Blocked",
     "Exited",
     "IdleTimeout",
     "LimitHit",

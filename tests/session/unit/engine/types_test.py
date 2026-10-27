@@ -20,6 +20,7 @@ from ensemble.session import (
 from ensemble.session.engine import types as engine_types
 from ensemble.session.engine.types import (
     ClientBound,
+    HookCallback,
     HookError,
     HookKind,
     Hosts,
@@ -32,7 +33,9 @@ from ensemble.session.engine.types import (
     SessionInfo,
     SessionRow,
     Tier,
+    TurnStarted,
 )
+from ensemble.session.harness.types import EventCall
 from ensemble.utils import StatusState
 from tests.session.case import Case
 
@@ -162,8 +165,8 @@ class WhatToStart(Case):
     def test_the_start_fields_default_so_a_clients_partial_spec_stays_valid(self):
         spec = Spec(workdir="/w", access=Access(cwd="/w"))
         self.assertEqual(
-            (spec.client, spec.mode, spec.prompt, spec.resume, spec.events),
-            (None, None, "", False, None),
+            (spec.client, spec.mode, spec.prompt, spec.resume, spec.events, spec.handlers),
+            (None, None, "", False, None, ()),
         )
 
     def test_access_cwd_is_required(self):
@@ -208,10 +211,37 @@ class WhatToStart(Case):
             ({"prompt": None}, "prompt must be a string"),
             ({"events": 5}, "events must be a printable path, got 5"),
             ({"events": "/a\nb"}, r"events must be a printable path, got '/a\nb'"),
+            ({"handlers": [HookCallback("m")]}, "handlers must be a tuple of HookCallback"),
+            ({"handlers": ("m",)}, "handlers must be a tuple of HookCallback"),
         ):
             with self.subTest(fields=fields), self.assertRaises(ConfigError) as caught:
                 Spec(workdir="/w", access=Access(cwd="/w"), **fields)
             self.assertEqual(str(caught.exception), message)
+
+
+class Handlers(Case):
+    def test_a_spec_keeps_its_handlers_in_order(self):
+        first, second = HookCallback("a.first", {"k": 1}), HookCallback("b", roots=("/r",))
+        spec = Spec(workdir="/w", access=Access(cwd="/w"), handlers=(first, second))
+        self.assertEqual(spec.handlers, (first, second))
+
+    def test_an_event_call_carries_what_a_handler_needs(self):
+        call = EventCall(
+            session=None,
+            event=TurnStarted(),
+            sid="s1",
+            generation="g1",
+            event_id="g1:1",
+            turn="g1:t1",
+            state={"k": 1},
+        )
+        self.assertEqual(
+            (call.event, call.sid, call.generation, call.event_id, call.turn, call.state),
+            (TurnStarted(), "s1", "g1", "g1:1", "g1:t1", {"k": 1}),
+        )
+        for name in ("turn", "event_id"):
+            with self.subTest(name=name), self.assertRaises(dataclasses.FrozenInstanceError):
+                setattr(call, name, "x")
 
 
 class ReservedName(Case):
@@ -250,7 +280,7 @@ class OptionSets(Case):
 
     def test_hook_kinds_tiers_and_hook_words_are_session_internal_str_enums(self):
         for enum, values in (
-            (HookKind, ["turn_end", "turn_failed", "blocked", "activity"]),
+            (HookKind, ["turn_end", "turn_failed", "blocked", "activity", "turn_started"]),
             (Tier, ["1", "2", "3", "4"]),
         ):
             with self.subTest(enum=enum.__name__):

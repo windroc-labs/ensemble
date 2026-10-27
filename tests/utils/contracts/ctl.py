@@ -1,6 +1,7 @@
 """Shared ctl receipt, refusal, content and resume assertions. Adapters run their real entry,
 start(name, sid=None) returns its printed Record, end(name) stops that run, refuse() returns a
-rejected startup, and inventory() lists its sessions. NamedCtlContract additionally
+rejected startup, and inventory() lists its sessions; listed: whether a start's Record lists any
+(a headless delegate run lists none). NamedCtlContract additionally
 checks name-addressed missing sessions. AnswerCtlContract supplies waiting(record) and input_of.
 """
 
@@ -16,6 +17,7 @@ def lines(*records: Record) -> str:
 
 class CtlContract:
     command: str
+    listed = True
 
     def call(self, *argv: str, stdin: str = "", sid: str | None = None): ...
 
@@ -36,7 +38,7 @@ class CtlContract:
         sid = str(uuid.uuid4())
         started = self.start("w1", sid=sid)
         self.assertEqual(started.sid, sid)
-        self.assertTrue(started.sessions)
+        self.assertEqual(bool(started.sessions), self.listed)
         self.assertEqual(started.ctl, (self.command,))
         self.assertEqual(started.resume[:2], (self.command, "resume"))
         self.assertEqual(Record.parse(started.to_line()), started)

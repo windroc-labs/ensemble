@@ -1,7 +1,10 @@
 """Private parsed broker responses for the Docker Host."""
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+
+GEN = re.compile(r"[0-9a-f]{32}")
 
 
 @dataclass(frozen=True)

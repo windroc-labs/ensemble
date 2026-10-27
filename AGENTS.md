@@ -1,10 +1,11 @@
 # AGENTS.md
 
-Test boundaries and commands: `docs/tests.md`.
+Test boundaries and commands: `docs/architecture.md` › Tests.
 
 ## Gotchas
 
-- This file never loads in an agent run outside a trusted cwd (`docs/sessions.md` › Session settings). An agent run reaches only its cwd, `<work_dir>/work/<ID>/agent/` and the config's `read`/`write` dirs: give a task a new path there, or it stalls on a permission nobody can grant.
+- Every real-machine test (a real Keychain, real OS services, anything beyond fakes) is a mini-op runbook run on the test Mac mini (`.mini-op/runbooks/`), never on a developer's or user's Mac; `keychain_free_tests` (`tests/guard_checks/keychain.py`) fails a test file that calls a real credential store.
+- This file never loads in an agent run outside a trusted cwd (`docs/architecture.md` › Session settings). An agent run reaches only its cwd, `<work_dir>/work/<ID>/agent/` and the config's `read`/`write` dirs: give a task a new path there, or it stalls on a permission nobody can grant.
 - Input rendering and write-back changes: `tests/orchestrator/unit/engine/inputs_test.py` and `tests/orchestrator/unit/engine/writeback_test.py` pin input text and Linear calls.
 - Every task has exactly one `[ensemble-progress:start]` line and no `budget` one, which start replaced (`tests/delegate/unit/team_test.py` checks): without the start report the Delegate logs `missing progress mark: start`, write-back posts no start comment, and a build's `issues.build_cutoff` loses its `Build started` cutoff.
 - Never name Linear in the team text (`src/ensemble/delegate/team/`), in `/ensemble:act-as` and `/ensemble:manage`, or in `/ensemble:board` (`skills/board/SKILL.md`) outside its `## Linear` section: only that section, the Linear layer's, does.
@@ -13,9 +14,9 @@ Test boundaries and commands: `docs/tests.md`.
 - Identify Linear entities by id, never name; role app user ids come from configuration.
 - Linear's lists can lag a just-made state change: re-read an issue's state before acting on it (`src/ensemble/orchestrator/trackers/linear/ops.py:move` does).
 - Tmux implementation: `TmuxHost` runs sessions (`src/ensemble/session/hosts/tmux/host.py`); the `Viewer` shows every Host's sessions on the host tmux, holding the `Grid`, `Iterm` and `Placement` (`src/ensemble/session/viewer/`); the `TmuxCli` they share, and `TmuxPane`, a `TmuxCli` aimed at one pane: `src/ensemble/session/engine/tmux_cli.py`. `/ensemble:manage` (`skills/manage/SKILL.md`) reaches it only through `ensemble-session`.
-- Docker implementation: `src/ensemble/session/hosts/docker/` (`DockerHost`, driving the container's tmux through a `TmuxCli` over `docker exec`, and `DockerTerminal`, holding a `TmuxPane`: `host.py`; its hook callback: `hook.py`; the broker client, daemon, mounts, relay, stub and supervisor beside them; `docs/docker-host.md`).
+- Docker implementation: `src/ensemble/session/hosts/docker/` (`DockerHost`: `host.py`; a tui or headless worker's `DockerWorker`, the guard over one `docker exec -i`: `worker.py`, its hook callback `guard_hook.py`; maintenance, hooks, the broker client, daemon, mounts and stub beside them; `docs/architecture.md` › Docker host).
 - The session's and delegate's public interfaces are frozen: `tests/guard_checks/exports.py` `session_interface_snapshot` and `delegate_interface_snapshot` (who may change `tests/session_interface.json` and `tests/delegate_interface.json`: their docstrings).
-- Keep `<work_dir>/logs/runs.jsonl` (`docs/board.md` › Operating).
+- Keep `<work_dir>/logs/runs.jsonl` (`docs/architecture.md` › Board › Operating the board).
 - A `[local_clones]` clone must not move: that breaks its worktrees. Run `git -C <new path> worktree repair`, then update the entry.
 
 ## Merging
@@ -30,8 +31,8 @@ Queue groups run every CI project, including diff coverage against the group's b
 `CI` requires every applicable job and, when broker scope is selected, `Broker ubuntu-24.04`.
 The main CI workflow has no macOS job. Installer PRs run the separate `Installer macOS`
 workflow with fake credentials. The independent `Broker macOS` workflow
-(`.github/workflows/broker-macos.yml`) runs on pushes to `main` and manual dispatch,
-preserving macOS checks and the darwin/arm64 build artifact without blocking required CI.
+(`.github/workflows/broker-macos.yml`) runs on pushes to `main`, pull requests that change
+`src/broker/` or the workflow, and manual dispatch, preserving macOS checks and the darwin/arm64 build artifact without blocking required CI.
 Require `CI`, never `Broker macos-15` separately.
 
 ## Releasing
@@ -42,7 +43,7 @@ Require `CI`, never `Broker macos-15` separately.
 2. Create and publish Release `v<version>`: `gh release create vX.Y.Z --target <that commit's full sha> --title 'vX.Y.Z: <summary>' --notes-file <notes>`. Notes format: first line `Changes on top of v<previous> (ensemble X.Y.Z).`; one bullet per user-facing change with its PR numbers; internal PRs in one `Internal` bullet; last an **Upgrading** section with every step a user must take (config keys, CLI verbs, paths, data the release deletes), checked against each PR body, or "Nothing to do beyond v<previous>'s steps." Steps that stay needed also go into `docs/upgrading.md`.
 3. On a Mac with Apple silicon, Go and the Xcode command line tools, in a clone of this repo, run `sh scripts/release-broker.sh v<version>` (no workflow builds the broker): it fetches the tag, builds the broker from its commit with that commit's `src/broker/build.sh`, packs `ensemble-broker-darwin-arm64.tar.gz`, writes its sha256 to `ensemble-broker-darwin-arm64.tar.gz.sha256` and uploads both to the Release; `src/broker/install.sh` installs the asset only when it matches that sha256. Then confirm both: `gh release view v<version> --repo windroc-labs/ensemble --json assets` lists them.
 4. Only after step 3, the manager pins it in the `windroc` marketplace: in `windroc-labs/agent-plugins-marketplace`, replace ensemble's existing `source.ref` with `v<version>` in `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json` (a PR there, squash-merged; never in the release PR). Each source object must contain exactly one `ref`: duplicate keys make Codex skip ensemble. Keep `source.source` as `url` and `source.url` as `https://github.com/windroc-labs/ensemble.git`; [Codex's official marketplace format](https://developers.openai.com/plugins/build/plugins#marketplace-metadata) supports a git tag in `source.ref` for this source. Before merging the marketplace PR, register its checkout with `codex plugin marketplace add <checkout>` in an isolated home, confirm `codex plugin list` includes `ensemble@windroc`, run `codex plugin add ensemble@windroc`, and check the installed commit matches `v<version>` and the plugin manifest version is `<version>`. `scripts/install.sh` and the clients install the tag it pins, with that release's broker; a `sha` pin stops the installer.
-5. Only then update the installed plugin (`skills/manage/SKILL.md` › Git and reviews): `claude plugin marketplace update windroc`, then `claude plugin update ensemble@windroc` (a running Claude Code applies it after `/reload-plugins` or a restart); `codex plugin marketplace upgrade windroc`; OpenCode: its `plugin` entry's `#v<version>` (`docs/sessions.md` › OpenCode commander).
+5. Only then update the installed plugin (`skills/manage/SKILL.md` › Git and reviews): `claude plugin marketplace update windroc`, then `claude plugin update ensemble@windroc` (a running Claude Code applies it after `/reload-plugins` or a restart); `codex plugin marketplace upgrade windroc`; OpenCode: its `plugin` entry's `#v<version>` (`docs/upgrading.md` › OpenCode plugin by hand).
 
 ## Import rules
 

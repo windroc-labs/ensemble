@@ -25,6 +25,7 @@ from ensemble.session.engine.types import (
     Spec,
     TurnEnd,
     TurnFailed,
+    TurnStarted,
 )
 from tests.session.case import Case
 from tests.session.unit.clients.opencode.support import (
@@ -33,6 +34,7 @@ from tests.session.unit.clients.opencode.support import (
     SES,
     fake_run,
     packaged_table,
+    titled_session,
 )
 
 HOOK = ("/bin/ensemble-session", "hook", "/home/x/.ensemble/tui/w1")
@@ -63,6 +65,9 @@ class Base(Case):
 
 
 class LaunchTest(Base):
+    def test_an_opencode_tui_session_is_owned_by_a_session_harness(self):
+        self.assertTrue(tui.OpenCodeTui._owned)
+
     def test_a_fresh_start_submits_its_prompt(self):
         launch = self.launch(self.spec(tier=1))
         self.assertEqual(
@@ -89,10 +94,18 @@ class LaunchTest(Base):
         launch = run.launch(self.spec(resume=True, prompt="Fix it."), HOOK)
         self.assertEqual(launch.argv, ("opencode", "--session", SES, *MODEL))
         self.assertEqual(run.opening, (tui.START, "Fix it."))
+        self.assertTrue(run._opening_prompt)  # it is the prompt: not deferred past a launch turn
         self.assertEqual(launch.env["ENSEMBLE_OPENCODE_SESSION"], SES)
         bare = self.run_tui()
         bare.launch(self.spec(resume=True, prompt=""), HOOK)
         self.assertIsNone(bare.opening)
+
+    def test_a_resume_of_an_unbound_headless_run_takes_its_titled_session(self):
+        data = os.path.join(self.home, "data")
+        titled_session(os.path.join(data, "opencode", "opencode.db"), SES, "ensemble-run-1", 1)
+        launch = self.run_tui().launch(self.spec(resume=True, env={"XDG_DATA_HOME": data}), HOOK)
+        self.assertEqual(launch.argv[:3], ("opencode", "--session", SES))
+        self.assertEqual(launch.env["ENSEMBLE_OPENCODE_SESSION"], SES)
 
     def test_resume_without_a_binding_fails(self):
         with self.assertRaisesRegex(ConfigError, "no OpenCode session bound to run ID 'run-1'"):
@@ -182,7 +195,7 @@ class LaunchTest(Base):
                 self.assertEqual(permission["edit"][".opencode/*"], "deny")
 
     def test_both_modes_name_the_docker_home(self):
-        home = ClientHome("opencode_dir", "opencode", "XDG_DATA_HOME", "none", min_width=40)
+        home = ClientHome("opencode_dir", "opencode", "XDG_DATA_HOME", "none")
         self.assertEqual(self.run_tui()._home(), home)
         headless = self.client.headless()
         assert headless is not None
@@ -304,6 +317,37 @@ class OnHookTest(Base):
 
 
 class EventsTest(Base):
+    def test_user_message_starts_once_and_late_terminal_does_not_finish_new_turn(self):
+        run = self.run_tui()
+        run.hook_events(tui.START, {"session_id": SES})
+        for turn in ("msg-first", "msg-next"):
+            payload = {"session_id": SES, "turn_id": turn}
+            self.assertEqual(run.hook_events("turn.started", payload), [TurnStarted()])
+            self.assertEqual(run.hook_events("turn.started", payload), [])
+            self.assertEqual(run.hook_events("session.busy", payload), [Activity()])
+            self.assertEqual(
+                run.hook_events("session.error", {**payload, "error": "APIError"}),
+                [TurnFailed("APIError")],
+            )
+            self.assertEqual(run.hook_events("session.idle", payload), [])
+        self.assertEqual(
+            run.hook_events("turn.started", {"session_id": SES, "turn_id": "msg-third"}),
+            [TurnStarted()],
+        )
+        self.assertEqual(
+            run.hook_events("session.idle", {"session_id": SES, "turn_id": "msg-first"}), []
+        )
+        self.assertEqual(
+            run.hook_events(
+                "message.completed",
+                {"session_id": SES, "turn_id": "msg-first", "text": "late old reply"},
+            ),
+            [],
+        )
+        self.assertEqual(
+            run.hook_events("turn.started", {"session_id": "ses_foreign", "turn_id": "other"}), []
+        )
+
     def test_completed_replies_are_delivered_and_replayed_before_turn_end(self):
         records = [
             ("message.completed", {"session_id": SES, "text": text})
@@ -333,6 +377,7 @@ class EventsTest(Base):
             dict(tui.OpenCodeTui.hooks),
             {
                 "session.idle": HookKind.TURN_END,
+                "turn.started": HookKind.TURN_STARTED,
                 "session.error": HookKind.TURN_FAILED,
                 "permission.asked": HookKind.BLOCKED,
                 "question.asked": HookKind.BLOCKED,

@@ -132,6 +132,7 @@ def main():
     with path.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps({"type": "user", "text": prompt}) + "\n")
     print(json.dumps({"type": "thread.started", "thread_id": native}), flush=True)
+    print(json.dumps({"type": "turn.started"}), flush=True)
     steps = scenario.get(
         "resume" if resume and "resume" in scenario else "steps",
         [

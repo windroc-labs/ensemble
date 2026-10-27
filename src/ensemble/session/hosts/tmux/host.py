@@ -39,7 +39,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.hosts.base import Host, InteractiveProcess, Process
 from ensemble.session.hosts.reclaimed import ReclaimedGroup
-from ensemble.session.hosts.tmux import hook
+from ensemble.session.hosts.tmux import hook, managed
 from ensemble.session.hosts.types import SessionView
 from ensemble.utils import CONFIG_NAME, Display, ProcessControl, Record, sid_error
 
@@ -210,6 +210,7 @@ class TmuxHost(Host):
     """settings: [hosts.<name>]'s status_line."""
 
     attachable = True
+    _harnessed = True
 
     def __init__(
         self, name: str, settings: Mapping | None = None, *, tmux: TmuxCli | None = None
@@ -221,6 +222,23 @@ class TmuxHost(Host):
 
     def attach_target(self, name: str) -> SessionView:
         return SessionView(_session(name))
+
+    def worker(
+        self,
+        name: str,
+        launch: Launch,
+        *,
+        terminal: bool,
+        display: Display = None,
+        events: str | None = None,
+        metadata: Mapping[str, str] | None = None,
+    ) -> InteractiveProcess:
+        return managed.start(
+            self, name, launch, terminal=terminal, display=display, events=events, metadata=metadata
+        )
+
+    def worker_liveness(self, name: str, generation: str) -> Liveness:
+        return managed.liveness(self.name, _session(name), generation)
 
     def detach(
         self,
@@ -382,7 +400,7 @@ class TmuxHost(Host):
 
     def attach(self, name: str) -> TmuxProcess:
         """A session it launched is the pane its launch recorded (@process), whichever pane is
-        active; any other session is its active pane.
+        active; any other session is its active pane. A guard display is a terminal for keys only.
         """
         state = self.tmux.status(_session(name))
         if state is None:
@@ -391,7 +409,7 @@ class TmuxHost(Host):
             raise SessionError(f"tmux session {name}: tmux failed")
         try:
             kind = self.tmux.option(name, "@kind")
-            launched = kind in ("detach", "terminal")
+            launched = kind in ("detach", "terminal", "guard")
             process = self.tmux.option(name, "@process") if launched else self.tmux.process(name)
         except TuiError as e:
             raise SessionError(f"tmux session {name}: {e}") from None
@@ -403,7 +421,8 @@ class TmuxHost(Host):
             raise SessionError(f"tmux session {name}: bad @process {process!r:.80}")
         if process is None:
             raise SessionError(f"no tmux session {name}")
-        return (TmuxTerminal if kind == "terminal" else TmuxProcess)(name, process, tmux=self.tmux)
+        terminal = kind in ("terminal", "guard")
+        return (TmuxTerminal if terminal else TmuxProcess)(name, process, tmux=self.tmux)
 
     def list(self) -> list[str]:
         return sorted(row["name"] for row in self._listing())

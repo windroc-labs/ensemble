@@ -9,10 +9,11 @@ killed viewer marks it hidden.
 
 import os
 import shutil
+import signal
 import tempfile
 
 from ensemble.utils import Record
-from tests.session import live_tmux
+from tests.session import harnesses, live_tmux
 from tests.session.case import REPO
 from tests.session.cli_support import MANAGER, CliCase
 from tests.session.integration.clients.codex import fake_tui
@@ -52,6 +53,12 @@ class HiddenCase(CliCase):
     def kill_session(self, name: str = "w1") -> None:
         self.ok(self.server.tmux("kill-session", "-t", f"={name}"))
 
+    def crash(self, name: str = "w1") -> None:
+        """kill -9 of its session harness (its guard then ends the client)."""
+        channel = self.owner(name)
+        os.kill(channel.status()["pid"], signal.SIGKILL)
+        live_tmux.wait(lambda: not channel.alive(), what="the killed harness to let go")
+
 
 class HiddenStartTest(HiddenCase):
     def test_display_none_starts_without_a_pane_hidden_and_opened_by_the_caller(self):
@@ -88,6 +95,7 @@ class HiddenStartTest(HiddenCase):
         self.record(self.again("restart"))
         self.assertEqual((self.count(), self.viewer()), (before, ""))
         self.assertTrue(self.hidden())
+        self.crash()
         self.kill_session()
         self.record(self.again("resume"))
         self.assertEqual((self.count(), self.viewer()), (before, ""))
@@ -208,6 +216,7 @@ class CodexHiddenTest(HiddenCase):
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         self.addCleanup(self.server.kill)
         home, bin_dir = os.path.join(root, "home"), os.path.join(root, "bin")
+        self.addCleanup(harnesses.end, home)
         for path in (home, bin_dir):
             os.mkdir(path)
         shutil.copy2(self.server.program, bin_dir)

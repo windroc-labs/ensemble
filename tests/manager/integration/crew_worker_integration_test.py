@@ -14,7 +14,7 @@ import sys
 import time
 
 from ensemble.manager import State
-from tests.manager.live_crew import MANAGER, LiveCrew, has_pair, logged
+from tests.manager.live_crew import MANAGER, LiveCrew, Owner, has_pair, logged
 from tests.session import live_tmux
 from tests.session.integration.clients.claude import fake_claude
 from tests.session.integration.clients.codex import fake_tui
@@ -89,6 +89,43 @@ class WorkerTest(LiveCrew):
         self.assertTrue(self.live("w1"))
         self.assertTrue(has_pair(logged(self.log("w1"))[-1]["argv"], "--resume", record.sid))
         self.assertEqual(self.roster()["w1"].state, State.LIVE)
+
+
+def _running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+class OwnerCloseTest(LiveCrew):
+    def test_close_of_a_harnessed_worker_waits_for_its_owner(self):
+        record = self.record(self.worker("w1"))
+        channel = Owner(self.ensemble, "w1")
+        self.assertEqual((channel.status()["name"], channel.status()["sid"]), ("w1", record.sid))
+        self.assertTrue(channel.alive())
+        pid = logged(self.log("w1"))[-1]["pid"]
+        self.wait_event("w1", "done")
+        self.ok(self.crew("close", "w1"))
+        self.assertNotIn("w1", self.roster())
+        self.assertTrue(self.gone("w1"))
+        self.assertEqual(channel.status()["state"], "exited")
+        self.assertEqual(logged(channel.events)[-1]["type"], "Exited")
+        live_tmux.wait(lambda: not channel.alive(), timeout=40, what="the harness to exit")
+        self.until(lambda: not _running(pid), "the client to exit")
+        self.assertTrue(
+            os.path.isfile(os.path.join(self.ensemble, "workers", record.sid, "worker.json"))
+        )
+        transcripts = glob.glob(
+            os.path.join(self.root, "**", "projects", "*", f"{record.sid}.jsonl"),
+            recursive=True,
+            include_hidden=True,
+        )
+        self.assertEqual(len(transcripts), 1, transcripts)
+        self.assertFalse(
+            os.path.exists(os.path.join(self.ensemble, "managers", MANAGER, "close-failures.jsonl"))
+        )
 
 
 class ColorTest(LiveCrew):

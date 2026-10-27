@@ -30,18 +30,37 @@ type legacyKeychain interface {
 	Accounts(service string) ([]string, error)
 }
 
-// legacyState is what the one-time rename left under an old name: each old service (one of legacyServices, or an
-// ensemble-env/<name> one), the bot user item's old account ensemble-bot, and each static-secrets.json key with an
-// old prefix; none when the rename is complete.
+// legacyState is what the one-time rename left under an old name, one entry per item as that step counts them: each
+// item "<service> <account>" of an old service (one of legacyServices, or an ensemble-env/<name> one), the bot user
+// item's old account ensemble-bot, and each static-secrets.json key with an old prefix whose item is not among them
+// (the key is that item's record, renamed with it); none when the rename is complete.
 func legacyState(home string, k legacyKeychain) ([]string, error) {
 	services, err := k.Services("ensemble-")
 	if err != nil {
 		return nil, err
 	}
 	var found []string
+	items := map[string]bool{} // each found item's static reference: ensemble-env/<name>, else <service>/<account>
 	for _, s := range services {
-		if slices.Contains(legacyServices, s) || strings.HasPrefix(s, "ensemble-env/") {
+		if !slices.Contains(legacyServices, s) && !strings.HasPrefix(s, "ensemble-env/") {
+			continue
+		}
+		accounts, err := k.Accounts(s)
+		if err != nil {
+			return nil, err
+		}
+		if len(accounts) == 0 {
 			found = append(found, s)
+		}
+		for _, a := range accounts {
+			found = append(found, s+" "+a)
+		}
+		if strings.HasPrefix(s, "ensemble-env/") {
+			items[s] = true
+		} else {
+			for _, a := range accounts {
+				items[s+"/"+a] = true
+			}
 		}
 	}
 	accounts, err := k.Accounts("ensemble-broker-github-users")
@@ -67,7 +86,7 @@ func legacyState(home string, k legacyKeychain) ([]string, error) {
 	}
 	var refs []string
 	for ref := range static.Secrets {
-		if slices.ContainsFunc(legacyRefPrefixes, func(p string) bool { return strings.HasPrefix(ref, p) }) {
+		if !items[ref] && slices.ContainsFunc(legacyRefPrefixes, func(p string) bool { return strings.HasPrefix(ref, p) }) {
 			refs = append(refs, ref)
 		}
 	}
@@ -97,7 +116,7 @@ func (noKeychain) Services(string) ([]string, error) { return nil, nil }
 func (noKeychain) Accounts(string) ([]string, error) { return nil, nil }
 
 // legacyError refuses a command while the one-time rename is incomplete, naming the first old names found; nil when
-// it is complete.
+// it is complete. scripts/install.sh's broker_logins looks for "old-name broker items found" in status's error.
 func (a app) legacyError() error {
 	found, err := a.legacy()
 	if err != nil {

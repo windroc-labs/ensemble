@@ -33,7 +33,7 @@ PICK = "picked the task."
 RUNNING = r"running · #1 · \S+"
 DONE = r"done · #2 · \S+ → \S+ · exit 0"
 UNDONE = r"no outcome · #2 · \S+ → \S+ · exit 0"
-LIMITED = r"limit · #2 · \S+ → \S+ · exit -9"  # the Session kills a limit-hit session
+LIMITED = r"limit · #2 · \S+ → \S+ · exit -1"  # the Session's guard hangs up a limit-hit session
 KINDS = ["session", "input", "client_session", "progress", "result", "end"]
 RESEARCH = {
     "status": "done",
@@ -341,7 +341,7 @@ class Undone(Run):
                 end=LIMITED,
             ),
         )
-        self.assertEqual(self.said(), steps("running:1", "start", "limit", "limit-move:1", end=-9))
+        self.assertEqual(self.said(), steps("running:1", "start", "limit", "limit-move:1", end=-1))
         self.assertEqual(self.records(ID)[-3]["kind"], "limit")
         start = {
             "kind": "start",
@@ -379,22 +379,21 @@ class Undone(Run):
             ],
         )
 
-    def test_a_resume_after_a_lost_ledger_write_posts_no_second_comment(self):
+    def test_a_resume_after_a_lost_ledger_write_reposts_no_start_and_posts_its_own_result(self):
         self.seed("researcher")
         script = [mark("start", PICK), block(RESEARCH)]
         self.launch(script)
-        ledger = self.ledger(ID)
         os.remove(os.path.join(self.rd, "writeback.json"))
         n, said = len(self.requests()), len(self.said())
         self.launch(script, mode="resume", resume=script)
-        ledger[SID][0] = "running:2"
+        result = f"Three queues compared.\nRedis streams fit best.\n\n{DOC}"
         self.assertEqual(
             self.wrote(n),
             self.framed(
                 find("start"),
                 READ,
                 SUBSCRIBE,
-                find("comment"),
+                post("attempt:2:comment", result),
                 REREAD,
                 TO_REVIEW,
                 created=False,
@@ -402,13 +401,26 @@ class Undone(Run):
                 reactivate=True,
             ),
         )
-        self.assertEqual(self.said()[said:], steps(*ledger[SID], found=("start", "comment")))
-        self.assertEqual(self.ledger(ID), ledger)
+        ledger = [
+            "running:2",
+            "start",
+            "attempt:2:comment",
+            f"attach:{DOC}",
+            "attempt:2:move:in_review",
+            "attempt:2:outcome",
+        ]
+        self.assertEqual(self.said()[said:], steps(*ledger, found=("start",)))
+        self.assertEqual(self.ledger(ID), {SID: ledger})
         self.assertEqual([option(c, "--resume") for c in self.calls()], [None, SID])
         app = role_id("researcher")
         self.assertEqual(
             self.stored(),
-            [(HARNESS_USER, SESSION), (app, cid("start")), (app, cid("comment"))],
+            [
+                (HARNESS_USER, SESSION),
+                (app, cid("start")),
+                (app, cid("comment")),
+                (app, cid("attempt:2:comment")),
+            ],
         )
 
 

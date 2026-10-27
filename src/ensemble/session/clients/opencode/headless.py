@@ -1,22 +1,27 @@
 """OpenCode's headless Mode: `opencode run --format json` behind launcher.py, which feeds it the
 prompt on stdin (`run` quotes an argument holding a space). The first sessionID binds the run; text
 parts are Replies, tools Activity, an error the failed turn; the end is the turn's, its last text.
+opencode prints that sessionID only once its model streams, so a new run titles its session
+TITLE, by which a resume finds it if its harness died before then (common.py).
 """
 
-import json
 import os
 import sys
 
 from ensemble.session.clients.opencode import launcher
 from ensemble.session.clients.opencode.common import (
+    HEADLESS_RESERVED,
     NATIVE,
+    TITLE,
     UNSET,
     Homed,
     OpenCodeCommon,
     image_path,
+    refuse,
 )
 from ensemble.session.engine.types import (
     Activity,
+    Blocked,
     ClientBound,
     Launch,
     Reply,
@@ -24,21 +29,32 @@ from ensemble.session.engine.types import (
     Stderr,
     TurnEnd,
     TurnFailed,
+    TurnStarted,
 )
-from ensemble.session.modes.client_adapters.headless import Headless
+from ensemble.session.modes.client_adapters.headless import JsonHeadless
 
 SESSION_TIMEOUT = 120  # seconds a run may take to print its first sessionID
 
 
-class OpenCodeHeadless(Homed, Headless):
+class OpenCodeHeadless(Homed, JsonHeadless):
+    _invalid_output = "opencode: invalid JSON event"
+    _owned = True
+
     def __init__(self, common: OpenCodeCommon):
         self.common = common
         self.cwd, self.sid = "", ""
         self.bound, self.failed, self.last = False, False, ""
+        self.native, self.finished = "", False
 
     def launch(self, spec: Spec):
         context, common = self._context, self.common
-        selection = common.selection(spec, context)
+        selection = common.selection(spec, context, HEADLESS_RESERVED)
+        refuse(common.flags, HEADLESS_RESERVED, "[clients.opencode] flags")
+        refuse(
+            common.modes[context.permission],
+            HEADLESS_RESERVED,
+            f"[clients.opencode.modes] {context.permission}",
+        )
         found = context.container
         cwd, sid = spec.access.cwd, spec.sid or ""
         model, variant = common.model(spec.tier), common.variant(spec.effort)
@@ -48,7 +64,7 @@ class OpenCodeHeadless(Homed, Headless):
             "run",
             "--format",
             "json",
-            *selection,
+            *(selection or ("--title", TITLE.format(sid=sid))),
             "--model",
             model,
             *(("--variant", variant) if variant is not None else ()),
@@ -58,6 +74,7 @@ class OpenCodeHeadless(Homed, Headless):
         )
         self.cwd, self.sid = cwd, sid
         self.bound, self.failed, self.last = False, False, ""
+        self.native, self.finished = "", False
         return Launch(
             (
                 found.python if found else os.path.realpath(sys.executable),
@@ -78,29 +95,31 @@ class OpenCodeHeadless(Homed, Headless):
         )
 
     def events(self, lines):
-        for line in lines:
-            try:
-                record = json.loads(line)
-            except (ValueError, RecursionError):
-                yield Stderr("opencode: invalid JSON event")
-                continue
-            if isinstance(record, dict):
-                yield from self.parse(record)
+        yield from super().events(lines)
         if not self.bound:
             yield TurnFailed("no_session", "opencode ended before it started a session")
-        elif not self.failed:
-            yield TurnEnd(self.last)
+        elif not self.failed and not self.finished:
+            yield TurnFailed("incomplete_turn", "opencode ended without a final step")
 
     def parse(self, record: dict):
+        native = record.get("sessionID")
+        if self.bound and native != self.native:
+            return
         if not self.bound and isinstance(native := record.get("sessionID"), str):
             if NATIVE.fullmatch(native):
                 self.common.bind(self.cwd, self.sid, native)
                 self.bound = True
+                self.native = native
                 yield ClientBound(native)
+                yield TurnStarted()
             else:
                 yield Stderr(f"opencode: invalid sessionID {native!r:.80}")
         kind, part = record.get("type"), record.get("part")
         part = part if isinstance(part, dict) else {}
+        if not self.bound:
+            if isinstance(kind, str):
+                yield Activity(kind)
+            return
         if kind == "text":
             value = part.get("text")
             if isinstance(value, str) and value.strip():
@@ -113,7 +132,22 @@ class OpenCodeHeadless(Homed, Headless):
             yield Activity(tool if isinstance(tool, str) else kind)
             state = part.get("state")
             if isinstance(state, dict) and state.get("status") == "error":
-                yield Stderr(f"opencode: {tool}: {state.get('error')}")
+                error = state.get("error")
+                yield Stderr(f"opencode: {tool}: {error}")
+                if (
+                    isinstance(error, str)
+                    and "permission" in error.lower()
+                    and any(word in error.lower() for word in ("rejected", "denied", "required"))
+                ):
+                    self.failed = True
+                    yield TurnFailed("permission_required", error)
+        elif kind in ("permission.asked", "question.asked"):
+            self.failed = True
+            yield Blocked(kind)
+        elif kind == "step_finish" and part.get("reason") == "stop":
+            if not self.failed and not self.finished:
+                self.finished = True
+                yield TurnEnd(self.last)
         elif kind == "error":
             self.failed = True
             error = record.get("error")

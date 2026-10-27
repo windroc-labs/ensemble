@@ -453,10 +453,16 @@ class Reopen(CliCase):
         )
         return run
 
-    def reopen(self, *extra, crew=(), listed=(), alive=()):
+    def reopen(self, *extra, crew=(), listed=(), alive=(), unlisted=False, failing=False):
+        """failing: every status exits 2; unlisted: the listing exits 1."""
+
         def run(argv, **kwargs):
             if argv[1] == "ls":
+                if unlisted:
+                    return SimpleNamespace(returncode=1, stdout="", stderr="ls: down")
                 return SimpleNamespace(returncode=0, stdout=lines(listed), stderr="")
+            if failing:
+                return SimpleNamespace(returncode=2, stdout="", stderr="status: down")
             names = (Record.parse(line).name for line in kwargs["input"].splitlines())
             statuses = (
                 Status(
@@ -563,6 +569,35 @@ class Reopen(CliCase):
         result, _, stderr = self.reopen(listed=(session,))
         self.assertEqual(result, 0, stderr)
         self.assertIn("researcher-0f8fad5b", self.roster.entries())
+
+    def test_reopen_refuses_while_liveness_is_unknown(self):
+        self.record()
+        issue = self.fake_record("TASK-9")
+        self.roster.begin(Spec("TASK-9", ("start",)), sid=issue.sid)
+        self.roster.commit("TASK-9", issue)
+        session = self.fake_record("researcher-tui", sid=self.sid)
+        for kw, unknown in (
+            ({"failing": True}, "TASK-9"),
+            ({"failing": True, "listed": (session,)}, "TASK-9, session researcher-tui"),
+            ({"unlisted": True}, "session listing"),
+        ):
+            with self.subTest(unknown=unknown):
+                result, stdout, stderr = self.reopen(**kw)
+                self.assertEqual((result, stdout), (2, ""))
+                self.assertIn(
+                    f"TASK-9: liveness unknown ({unknown}); close or forget it before reopen",
+                    stderr,
+                )
+                self.assertEqual((self.calls, set(self.roster.entries())), ([], {"TASK-9"}))
+
+    def test_reopen_never_carries_the_runs_handlers(self):
+        handler = {"module": "ensemble.delegate.engine.handler", "state": {}, "roots": []}
+        self.record(handlers=[handler])
+        result, _, stderr = self.reopen("--display", "none")
+        self.assertEqual(result, 0, stderr)
+        command = self.calls[0][0]
+        self.assertEqual(command[:3], ("ensemble-session", "start", "researcher-0f8fad5b"))
+        self.assertFalse(any("handler" in word or "delegate" in word for word in command))
 
     def test_reopen_without_a_run_record_or_session_id_fails_clearly(self):
         for case, prepare, message in (
@@ -1097,7 +1132,7 @@ class Report(CliCase):
             1,
             "role",
             name,
-            (f"{name}-drive", name),
+            (name,),
             None,
             workdir,
             ("ensemble-delegate",),
@@ -1416,6 +1451,10 @@ class HelpContracts(Case):
         self.assertNotIn("--after", self.help("attach"))
         self.assertIn("does not acknowledge events", self.help("attach"))
         self.assertIn("monitor expired", self.help("next-event"))
+        self.assertIn(
+            "A locked run's environment lock goes only once its container is confirmed removed.",
+            " ".join(self.help("close").split()),
+        )
 
     def test_published_worker_example_keeps_session_and_client_tokens(self):
         parser = cli._parser()

@@ -19,12 +19,11 @@ from ensemble.session.engine.types import ConfigError, SessionError
 from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.utils import save
 
-# Installed by src/broker/install.sh and the worker image (src/broker/internal/launcher/assets/Dockerfile).
+# Installed by src/broker/install.sh.
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
-RELAY = "/opt/ensemble/bin/relay"
 PROTOCOL = "30"
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
-INSTALL = "install or upgrade it: see docs/docker-host.md#install"
+INSTALL = "install or upgrade it: see docs/architecture.md#docker-install"
 TIMEOUT = 1800
 GRACE = 5  # for a broker whose pipes closed by the deadline to be reaped
 

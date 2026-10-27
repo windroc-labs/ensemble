@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import NamedTuple
 
 from ensemble.utils import Record, Status
 
@@ -32,6 +33,13 @@ class Entry:
     argv: tuple[str, ...] = ()
     sid: str | None = None
     receipt: str | None = None
+
+
+class Liveness(NamedTuple):
+    """Names that answered alive, and those whose liveness is unknown."""
+
+    live: list[str]
+    unknown: list[str]
 
 
 @dataclass(frozen=True)

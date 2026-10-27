@@ -58,4 +58,4 @@ class CrashTest(LiveCrew):
 
     def test_a_role_run_whose_crew_died_before_the_commit_is_adopted_under_its_alias(self):
         record = self.crashed("r", self.role_argv("r"), **self.scene("r", [START]))
-        self.assertEqual((record.kind, len(record.sessions)), ("role", 2))
+        self.assertEqual((record.kind, len(record.sessions)), ("role", 1))

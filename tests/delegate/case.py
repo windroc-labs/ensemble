@@ -12,8 +12,9 @@ import ensemble
 from ensemble.delegate.engine.drivers import AgentDriver
 from ensemble.session import Session
 from ensemble.session.engine.config import read_config
+from tests.session import harnesses
 from tests.session.case import configured
-from tests.utils.sandbox import clean_env, project_roots
+from tests.utils.sandbox import CALLER_SESSION, clean_env, project_roots
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ROOTS = project_roots(REPO)
@@ -44,7 +45,7 @@ def packaged(**dependencies) -> type[Session]:
 class Case(unittest.TestCase):
     """Fails a test whose ensemble is not exactly this tree's, else runs it (whatever its setUp) in
     a fresh temp HOME, self.home (self.ensemble: its .ensemble), a fresh session class
-    (self.session_cls) and its FakeDriver.
+    (self.session_cls) and its FakeDriver, minus CALLER_SESSION.
     """
 
     def run(self, result=None):
@@ -58,12 +59,15 @@ class Case(unittest.TestCase):
             result.stopTest(self)
             return result
         with (
-            tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as self.home,
+            tempfile.TemporaryDirectory() as self.home,
             mock.patch.dict(os.environ, {"HOME": self.home, "ENSEMBLE_CONTROL_ROOT": self.home}),
         ):
+            for key in CALLER_SESSION:
+                os.environ.pop(key, None)
             self.ensemble = os.path.join(self.home, ".ensemble")
             os.mkdir(self.ensemble)
             self.configure_session({})
+            self.addCleanup(harnesses.end, self.home)
             return super().run(result)
 
     def configure_session(self, clients, tmux=None) -> None:

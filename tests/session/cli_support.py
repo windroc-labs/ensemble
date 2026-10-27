@@ -14,6 +14,7 @@ import tempfile
 import threading
 from contextlib import contextmanager
 
+from ensemble.session.harness.channel import Channel
 from ensemble.utils import Record, Status
 from tests.session import live_tmux
 from tests.session.case import REPO, ROOTS, Case
@@ -58,6 +59,23 @@ class CliCase(Case):
         self.server.start(MANAGER)
         if self.ATTACH:
             self.server.attach(MANAGER)
+
+    def owner(self, name: str) -> Channel:
+        """Worker `name`'s session harness, as its session.json names it."""
+        path = os.path.join(self.ensemble, "tui", name, "session.json")
+        with open(path, encoding="utf-8") as f:
+            return Channel(json.load(f)["owner"])
+
+    def settled(self, channel: Channel) -> dict:
+        """Its harness.json once it no longer runs a worker (draining, exited or failed)."""
+        return live_tmux.wait(
+            lambda: (
+                (found := channel.status()).get("state") in ("draining", "exited", "failed")
+                and found
+            ),
+            timeout=40,
+            what=f"harness {channel.directory} to leave running",
+        )
 
     def env(self, *, inside: str | None = MANAGER, **extra: str | None) -> dict[str, str]:
         """A caller's in session `inside` (None: outside tmux); an extra None drops its key."""
@@ -123,10 +141,18 @@ class CliCase(Case):
         return logged(self.log(name, "commands"))
 
     def start(
-        self, name: str, *args: str, steps=None, turns=(), prompt: str = "hi", **extra
+        self,
+        name: str,
+        *args: str,
+        steps=None,
+        turns=(),
+        prompt: str = "hi",
+        dialog: str | None = None,
+        **extra,
     ) -> subprocess.CompletedProcess:
         """A fake claude worker, its events self.events."""
-        env = {"ENSEMBLE_EVENTS": self.events, **self.scene(name, steps, turns), **extra}
+        scene = self.scene(name, steps, turns, **({} if dialog is None else {"dialog": dialog}))
+        env = {"ENSEMBLE_EVENTS": self.events, **scene, **extra}
         return self.session(
             "start",
             name,
@@ -234,6 +260,24 @@ class WorkerCase(CliCase):
         self.assertEqual(settings["enabledPlugins"], {"ensemble@windroc": False})
         self.assertEqual(set(settings["hooks"]), CLAUDE_HOOKS)
         self.assertFalse([word for word in argv if word.startswith(POLICY)], argv)
+
+    def harness_files(self, name: str) -> str:
+        """Its session harness's log, status and events, for a failure message."""
+        try:
+            with open(
+                os.path.join(self.ensemble, "tui", name, "session.json"), encoding="utf-8"
+            ) as f:
+                owner = json.load(f).get("owner")
+        except (OSError, ValueError):
+            return f"{name}: no session.json"
+        found = []
+        for file in ("harness.log", "harness.json", "events.jsonl"):
+            try:
+                with open(os.path.join(owner, file), encoding="utf-8", errors="replace") as f:
+                    found.append(f"--- {file}\n{f.read()[-4000:]}")
+            except (OSError, TypeError):
+                found.append(f"--- {file}: none")
+        return "\n".join(found)
 
     def live(self, name: str) -> bool:
         return self.server.tmux("has-session", "-t", f"={name}").returncode == 0

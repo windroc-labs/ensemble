@@ -402,6 +402,25 @@ class Start(Base):
         mode.stop()
         self.assertEqual((mode.state(), mode.returncode(0)), ("absent", -signal.SIGKILL))
 
+    def test_an_owned_start_runs_the_same_with_a_generation_of_its_own(self):
+        modes = [
+            InProcessMode.start(
+                SPEC,
+                StubClient(ended),
+                registry=self.session_cls._config().registry,
+                record=self.recorded.append,
+                host=MemoryHost(),
+                owner="/harness",
+            )
+            for _ in range(2)
+        ]
+        for mode in modes:
+            self.addCleanup(mode.stop)
+        generations = {mode.generation for mode in modes}
+        self.assertEqual(len(generations), 2)
+        self.assertTrue(all(isinstance(g, str) and g for g in generations))
+        self.assertEqual(modes[0].poll(WAIT), ([Reply("a")], False))
+
     def test_send_and_screen_raise_driver_error(self):
         self.start(StubClient(ended))
         for call, message in (

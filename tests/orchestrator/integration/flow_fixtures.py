@@ -1,8 +1,9 @@
 """The orchestrator's integration flows: the test's HOME with both local files ([linear.task_labels]
 included), FakeLinear over HTTP through test-only transport with the harness and role apps, the
 human and the task label group, fake_claude as `claude`, a launch (router.outer), promote and
-router as `python3 -P` subprocesses, and readers of Linear, the logs and a run's files. TmuxFlow adds a private tmux
-server for the runs' harness and agent sessions (a command run as from MANAGER's pane too),
+router as `python3 -P` subprocesses, and readers of Linear, the logs and a run's files (its drive, the local process
+delegate.json `drive` controls, included). TmuxFlow adds a private tmux server for the runs' agent sessions (a command
+run as from MANAGER's pane too),
 fake_gh as `gh` with REPO a bare repo, and `ensemble-orchestrator` as entry.py under the fake transport,
 the harness's write-back callback. BinFlow runs router and promote as bin/ensemble-orchestrator by
 absolute path, as launchd does (FR-25, FR-29).
@@ -19,7 +20,8 @@ import tempfile
 import tomllib
 from urllib.parse import quote
 
-from tests.delegate.workdir import run_log
+from ensemble.utils import ProcessControl
+from tests.delegate.workdir import input_first, run_log
 from tests.orchestrator.case import PY, Case, child_env
 from tests.orchestrator.case import REPO as WORKTREE
 from tests.orchestrator.integration import fake_gh, fake_linear
@@ -217,7 +219,23 @@ class Flow(Case):
         return jsonl(self.claude_log)
 
     def records(self, ident):
-        return jsonl(run_log(os.path.join(self.workdirs, ident)))
+        return input_first(jsonl(run_log(os.path.join(self.workdirs, ident))))
+
+    def drive(self, ident):
+        """ident's run's drive, delegate.json `drive`; None before a detach saved one."""
+        path = os.path.join(
+            os.path.dirname(run_log(os.path.join(self.workdirs, ident))), "delegate.json"
+        )
+        try:
+            with open(path, encoding="utf-8") as f:
+                drive = json.load(f).get("drive")
+        except FileNotFoundError:
+            return None
+        return None if drive is None else ProcessControl.attach(drive)
+
+    def drive_running(self, ident):
+        control = self.drive(ident)
+        return control is not None and control.running()
 
     def ledger(self, ident):
         """Each sid's write-back steps."""
@@ -322,6 +340,7 @@ class TmuxFlow(Flow):
 
     @staticmethod
     def harness(role, ident, sid):
+        """The run's drive name, its events lines' session."""
         return f"{role}-{ident}-{sid[:8]}-drive"
 
     def in_manager(self):
@@ -337,8 +356,8 @@ class TmuxFlow(Flow):
         return self.server.tmux("has-session", "-t", f"={session}").returncode == 0
 
     def wait_end(self, sid, ident, ends=1, role="engineer", timeout=TIMEOUT):
-        """Until orchestrator.jsonl holds `ends` write-back end lines of sid and the run's harness
-        session is gone; else fails with the tails of orchestrator.jsonl and the run's run.jsonl.
+        """Until orchestrator.jsonl holds `ends` write-back end lines of sid and the run's drive no
+        longer runs; else fails with the tails of orchestrator.jsonl and the run's run.jsonl.
         """
         harness = self.harness(role, ident, sid)
 
@@ -349,11 +368,11 @@ class TmuxFlow(Flow):
                 return False
             end = ("writeback", "end", sid)
             n = sum((e["src"], e["kind"], e.get("sid")) == end for e in events)
-            return n >= ends and not self.live(harness)
+            return n >= ends and not self.drive_running(ident)
 
         try:
             live_tmux.wait(
-                ended, timeout, f"the write-back end #{ends} of {sid} and {harness} gone"
+                ended, timeout, f"the write-back end #{ends} of {sid} and {harness} ended"
             )
         except AssertionError as e:
             timed_out = str(e)

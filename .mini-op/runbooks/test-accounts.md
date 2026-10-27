@@ -47,7 +47,7 @@ The test GitHub account and its App are the manager's to manage, deletions inclu
 
 ## 5. OAuth apps
 
-1. Create the five apps (harness, manager, researcher, pm, engineer) as docs/credentials.md › Linear presets says: Client credentials on, Public and Webhooks off.
+1. Create the five apps (harness, manager, researcher, pm, engineer) as docs/upgrading.md › Linear presets says: Client credentials on, Public and Webhooks off.
 2. Put each Client ID in the mini's `~/.ensemble/config.local.toml` (template: `install-ensemble/test-board.toml`). The install asks each app's client secret, stores it and the app's first token in the mini's keychain and fills each app's `user_id`.
 
 ## Restore the keychain items after a reset

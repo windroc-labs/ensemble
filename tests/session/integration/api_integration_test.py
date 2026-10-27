@@ -22,7 +22,6 @@ from ensemble.session.engine.records import RunLog
 from ensemble.session.engine.types import (
     Access,
     Activity,
-    Blocked,
     Exited,
     IdleTimeout,
     Launch,
@@ -32,6 +31,7 @@ from ensemble.session.engine.types import (
     Spec,
     Stderr,
     TurnEnd,
+    TurnFailed,
 )
 from tests.session import fake_client
 from tests.session.case import Case
@@ -215,7 +215,7 @@ class Base(Case):
 
 
 class AcceptanceTest(Base):
-    def test_streams_the_frozen_event_set_to_exited_and_records_the_session(self):
+    def test_streams_success_events_to_exited_and_records_the_session(self):
         marker = "[ensemble-progress:start] x"
         self.steps(
             out("session", id="native-1"),
@@ -223,7 +223,6 @@ class AcceptanceTest(Base):
             out("message", text="one"),
             out("message", text=marker),
             out("message", text="three"),
-            out("blocked", reason="approve"),
             out("result", text="done", pending=2),
             {"err": "warning: slow"},
             {"exit": 0},
@@ -243,7 +242,6 @@ class AcceptanceTest(Base):
                 Reply("one"),
                 Reply(marker),
                 Reply("three"),
-                Blocked("approve"),
                 TurnEnd("done", 2),
                 Exited(0),
             ],
@@ -294,25 +292,28 @@ class IdleTest(Base):
         self.assertEqual((found[0], found[-1]), (Activity("Read"), Exited(0)))
         idles = [(at, e) for at, e in marks if isinstance(e, IdleTimeout)]
         self.assertGreaterEqual(len(idles), 1)
-        self.assertEqual(len(found), len(idles) + 2)
+        self.assertEqual(found[-2], TurnFailed("incomplete_turn"))
+        self.assertEqual(len(found), len(idles) + 3)
         self.assertEqual({e for _, e in idles}, {IdleTimeout(IDLE)})
         self.assertEqual(alive, [True] * len(idles))
         times = [marks[0][0]] + [at for at, _ in idles]
         for before, after in zip(times, times[1:], strict=False):
             self.assertGreaterEqual(after - before, IDLE - 0.01)
 
-    def test_a_stderr_line_after_blocked_starts_no_timer(self):
+    def test_a_headless_permission_request_fails_without_waiting_for_an_answer(self):
         self.steps(
             out("blocked", reason="approve"),
-            {"sleep": 0.1},
-            {"err": "still waiting"},
-            {"sleep": SILENCE},
+            {"sleep": 60},
         )
+        began = time.monotonic()
         found = self.drain(self.start(idle_timeout=IDLE))
-        self.assertCountEqual(found[:-1], [Blocked("approve"), Stderr("still waiting")])
-        self.assertEqual(found[-1], Exited(0))
+        self.assertLess(time.monotonic() - began, WAIT)
+        self.assertEqual(found[0], TurnFailed("permission_required", "approve"))
+        self.assertIsInstance(found[-1], Exited)
+        self.assertLess(found[-1].returncode, 0)
+        self.assertFalse(any(isinstance(event, IdleTimeout | TurnEnd) for event in found))
 
-    def test_no_idle_timeout_after_blocked_without_one_or_while_stderr_restarts_it(self):
+    def test_no_idle_timeout_without_one_or_while_stderr_restarts_it(self):
         restarting = (
             {"err": "1"},
             {"sleep": GAP},
@@ -324,22 +325,23 @@ class IdleTest(Base):
         )
         for case, steps, idle, want in (
             (
-                "after blocked",
-                (out("blocked", reason="approve"), {"sleep": SILENCE}),
-                IDLE,
-                [Blocked("approve"), Exited(0)],
-            ),
-            (
                 "no idle timeout",
                 (out("activity", name="Read"), {"sleep": SILENCE}),
                 None,
-                [Activity("Read"), Exited(0)],
+                [Activity("Read"), TurnFailed("incomplete_turn"), Exited(0)],
             ),
             (
                 "stderr restarts",
                 restarting,
                 3 * GAP,
-                [Stderr("1"), Stderr("2"), Stderr("3"), Stderr("4"), Exited(0)],
+                [
+                    Stderr("1"),
+                    Stderr("2"),
+                    Stderr("3"),
+                    Stderr("4"),
+                    TurnFailed("incomplete_turn", "4"),
+                    Exited(0),
+                ],
             ),
         ):
             with self.subTest(case=case):
@@ -350,11 +352,15 @@ class IdleTest(Base):
 class ExitTest(Base):
     def test_exited_is_the_process_exit_a_clients_own_dropped(self):
         for case, steps, want in (
-            ("client's exited dropped", (out("exit"), {"exit": 0}), [Exited(0)]),
+            (
+                "client's exited dropped",
+                (out("exit"), {"exit": 0}),
+                [TurnFailed("incomplete_turn"), Exited(0)],
+            ),
             (
                 "non-zero exit",
                 (out("activity", name="Read"), {"exit": 3}),
-                [Activity("Read"), Exited(3)],
+                [Activity("Read"), TurnFailed("process_exit", "worker exited 3"), Exited(3)],
             ),
         ):
             with self.subTest(case=case):
@@ -367,10 +373,11 @@ class ExitTest(Base):
         found = self.drain(
             handle, lambda event: handle.stop() if isinstance(event, Activity) else None
         )
-        self.assertEqual(len(found), 2)
+        self.assertEqual(len(found), 3)
         self.assertEqual(found[0], Activity("Read"))
-        self.assertIsInstance(found[1], Exited)
-        self.assertLess(found[1].returncode, 0)
+        self.assertEqual(found[1], TurnFailed("interrupted"))
+        self.assertIsInstance(found[2], Exited)
+        self.assertLess(found[2].returncode, 0)
         handle.stop()
         self.assertFalse(handle.alive())
         self.assertEqual(list(handle.events()), [])
@@ -398,9 +405,9 @@ class ProcessGroupTest(Base):
                 handle.stop()
 
         found = self.drain(handle, on)
-        self.assertEqual(len(found), 2)
+        self.assertEqual(len(found), 3)
         self.assertIsInstance(found[0], Reply)
-        self.assertEqual(found[1], Exited(-signal.SIGKILL))
+        self.assertEqual(found[1:], [TurnFailed("interrupted"), Exited(-signal.SIGHUP)])
 
     def test_a_process_that_closed_its_pipes_and_lives_yields_idle_timeouts_until_stop_ends_it(
         self,
@@ -409,7 +416,15 @@ class ProcessGroupTest(Base):
         found = self.drain(
             handle, lambda event: handle.stop() if isinstance(event, IdleTimeout) else None
         )
-        self.assertEqual(found, [Activity("Read"), IdleTimeout(IDLE), Exited(-signal.SIGKILL)])
+        self.assertEqual(
+            found,
+            [
+                Activity("Read"),
+                IdleTimeout(IDLE),
+                TurnFailed("interrupted"),
+                Exited(-signal.SIGHUP),
+            ],
+        )
 
 
 class FailureTest(Base):
@@ -435,7 +450,10 @@ class FailureTest(Base):
         handle = self.start()
         self.unwritable()
         with mock.patch("sys.stderr", io.StringIO()) as printed:
-            self.assertEqual(self.drain(handle), [Stderr("lost"), Exited(0)])
+            self.assertEqual(
+                self.drain(handle),
+                [Stderr("lost"), TurnFailed("incomplete_turn", "lost"), Exited(0)],
+            )
         self.assertIn("records: ", printed.getvalue())
 
     def unwritable(self) -> None:
@@ -456,7 +474,9 @@ class LaunchEnvironmentTest(Base):
             with self.subTest(extra=extra), mock.patch.dict(os.environ, {"FAKE_ENV": "caller"}):
                 self.forget()
                 self.configure(**extra)
-                self.assertEqual(self.drain(self.start("launching")), [Exited(0)])
+                self.assertEqual(
+                    self.drain(self.start("launching")), [TurnFailed("incomplete_turn"), Exited(0)]
+                )
                 self.assertEqual(self.logged()[0]["env"]["FAKE_ENV"], shown)
 
     def test_the_child_runs_in_cwd_with_pwd_set(self):
@@ -475,7 +495,7 @@ class LaunchEnvironmentTest(Base):
                 self.forget()
                 self.configure(**extra)
                 handle = self.start(client, Spec(workdir=self.workdir, access=access))
-                self.assertEqual(self.drain(handle), [Exited(0)])
+                self.assertEqual(self.drain(handle), [TurnFailed("incomplete_turn"), Exited(0)])
                 (entry,) = self.logged()
                 self.assertEqual((entry["cwd"], entry["env"]["PWD"]), (want, want))
                 self.assertEqual(handle.info().cwd, want)
@@ -490,7 +510,8 @@ class FakeTest(Base):
     def test_a_limit_record_is_a_limit_hit(self):
         self.steps(out("limit", resets_at=1.5), out("limit", resets_at=None), out("limit"))
         self.assertEqual(
-            self.drain(self.start()), [LimitHit(1.5), LimitHit(None), LimitHit(None), Exited(0)]
+            self.drain(self.start()),
+            [LimitHit(1.5), LimitHit(None), LimitHit(None), TurnFailed("usage_limit"), Exited(0)],
         )
 
     def test_resume_steps_run_only_on_a_resume(self):
@@ -498,15 +519,21 @@ class FakeTest(Base):
             steps=[out("message", text="first")], resume=[out("message", text="again")]
         )
         first = self.start()
-        self.assertEqual(self.drain(first), [Reply("first"), Exited(0)])
         self.assertEqual(
-            self.drain(self.start(sid=first.sid, resume=True)), [Reply("again"), Exited(0)]
+            self.drain(first), [Reply("first"), TurnFailed("incomplete_turn"), Exited(0)]
+        )
+        self.assertEqual(
+            self.drain(self.start(sid=first.sid, resume=True)),
+            [Reply("again"), TurnFailed("incomplete_turn"), Exited(0)],
         )
         self.assertEqual(["--resume" in entry["argv"] for entry in self.logged()], [False, True])
 
     def test_an_object_without_resume_steps_runs_its_steps_on_a_resume(self):
         self.scenario_object(steps=[out("message", text="first")])
-        self.assertEqual(self.drain(self.start(sid="r1", resume=True)), [Reply("first"), Exited(0)])
+        self.assertEqual(
+            self.drain(self.start(sid="r1", resume=True)),
+            [Reply("first"), TurnFailed("incomplete_turn"), Exited(0)],
+        )
 
 
 if __name__ == "__main__":

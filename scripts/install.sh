@@ -33,6 +33,7 @@ board_tracker=
 board_stages=
 jobs_flag=
 board_jobs_choice=
+board_job_names=(router promote)
 local_board_ready=
 provider_flag=
 url_flag=
@@ -50,9 +51,11 @@ key_stdin=
 password_stdin=
 sudo_mine=
 keepalive=
+deferred=
 feeder=
 askpass_dir=
 current=
+login_pending=
 answer=
 token_screen=
 app_pem=
@@ -92,16 +95,16 @@ usage: $synopsis
   --no-docker                 run workers on the local tmux Host; no Docker
   --board <local|linear>      set up a local or Linear board
   --no-board                 skip board setup (first-run default)
-  --launchd, --no-launchd     choose router/promote jobs (docs/board.md)
+  --launchd, --no-launchd     choose router/promote jobs (docs/architecture.md#board-setup)
   --opencode-provider <name>  the OpenAI-compatible provider OpenCode runs on, e.g. a LAN model server
-  --opencode-url <url>        its base URL, ending /v1
+  --opencode-url <url>        its base URL, ending /v1; a provider other than the saved one needs it
   --opencode-model <model>    its model
   --opencode-context <tokens> its context window in tokens (default 65536)
   --opencode-key-stdin        read the provider's API key from stdin
   --password-stdin            read the sudo password from stdin (first line, before the key)
 
-With --password-stdin or --opencode-key-stdin, stdin cannot carry the script:
-  security find-generic-password -s <item> -w | bash -c "\$(curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh)" scripts/install.sh --password-stdin
+With --password-stdin or --opencode-key-stdin, stdin cannot carry the script; download it first:
+  (f=\$(mktemp) && trap 'rm -f "\$f"' EXIT && curl -fsSL -o "\$f" https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh && security find-generic-password -s <item> -w | bash "\$f" --password-stdin)
 
 It shows a checklist only when clients or Docker has no flag or saved answer. Flags pre-tick their choices;
 saved choices and existing config fill the other ticks. It installs the dependencies, asks what is still
@@ -111,7 +114,9 @@ them, and skips what is done.
 EOF
 }
 
+# Rerunning the same command repeats a usage error: no rerun advice (on_exit).
 usage_error() {
+  current=
   say "install.sh: $1"
   say "install.sh: usage: $synopsis"
   exit 2
@@ -130,6 +135,13 @@ clients_of() {
   printf '%s' "$out"
 }
 
+# Exit 0 when $1 can name a git branch or tag: git check-ref-format's rules within [A-Za-z0-9._/-].
+valid_ref() {
+  case $1 in
+    '' | -* | /* | */ | *. | *..* | *//* | .* | */.* | *.lock | *.lock/* | *[!A-Za-z0-9._/-]*) return 1 ;;
+  esac
+}
+
 valid_name() { [[ $1 =~ $name_pattern ]] && [ "$1" != ollama ]; }
 valid_url() { [[ $1 =~ $url_pattern ]]; }
 valid_model() { [[ $1 =~ $model_pattern ]]; }
@@ -144,9 +156,7 @@ parse_args() {
         ;;
       --ref)
         [ $# -ge 2 ] || usage_error "--ref needs a value"
-        case $2 in
-          '' | -* | *[!A-Za-z0-9._/-]*) usage_error "--ref: not a git ref: $2" ;;
-        esac
+        valid_ref "$2" || usage_error "--ref: not a git ref: $2"
         ref=$2
         shift
         ;;
@@ -217,8 +227,14 @@ opencode_flags() { [ -n "$provider_flag$url_flag$model_flag$context_flag$key_std
 
 # The flags' conflicts that flags and State already decide, before anything runs.
 early_checks() {
+  local saved
   if opencode_flags && [ -n "$clients_flag" ]; then
     case ",$clients_flag," in *,opencode,*) ;; *) usage_error "--opencode-*: opencode is not among the clients" ;; esac
+  fi
+  # A provider's fields come with its name (answers): another provider without its URL would get the saved one's.
+  saved=$(state_get opencode_provider)
+  if [ -n "$provider_flag" ] && [ -z "$url_flag" ] && [ -n "$saved" ] && [ "$provider_flag" != "$saved" ]; then
+    usage_error "--opencode-provider $provider_flag: a provider other than the saved $saved needs --opencode-url"
   fi
 }
 
@@ -293,6 +309,7 @@ ledger_valid() {
     claude-marketplace:2 | codex-marketplace:2) case $2 in windroc) true ;; *) false ;; esac ;;
     claude-plugin:2 | codex-plugin:2) case $2 in ensemble@windroc | updraft@windroc) true ;; *) false ;; esac ;;
     login:2) case $2 in gh | claude | codex) true ;; *) false ;; esac ;;
+    docker-container:2 | docker-image:2) [ "$2" = egress-proxy ] ;;
     launchd:2) case $2 in router | promote) true ;; *) false ;; esac ;;
     keychain:3) [[ $2 =~ $plain ]] && [[ $3 =~ $plain ]] ;;
     opencode-auth:3 | opencode-provider:3) under_home "$2" && [[ $3 =~ $name_pattern ]] ;;
@@ -373,13 +390,20 @@ iterm_dirs=("Application Support/iTerm2" "Application Support/iTerm" "Caches/com
   "Application Scripts/com.googlecode.iterm2.iTermFileProvider")
 iterm_files=("Preferences/com.googlecode.iterm2.plist" "Preferences/com.googlecode.iterm2.private.plist"
   "Cookies/com.googlecode.iterm2.binarycookies" "HTTPStorages/com.googlecode.iterm2.binarycookies")
+# What Docker Desktop and Codex write in the parents they share with other tools (~/.docker, CODEX_HOME), recorded
+# when install.sh installs them: directories parent first, then files. The context is desktop-linux's (sha256 of it).
+docker_home_dirs=(bin buildx cli-plugins contexts contexts/meta
+  contexts/meta/fe9c6bd7a66301f49ca9b6a70b217107cd1284598bfc254700c989b916da791e mutagen run scout)
+docker_home_files=(config.json daemon.json features.json .token_seed .token_seed.lock)
+codex_home_dirs=(plugins)
+codex_home_files=(config.toml)
 
-# Records each of the paths after $1 under ~/Library, $1 the kind: dir or file.
-record_library() {
-  local kind=$1 path
-  shift
+# Records each of the paths after $2 under directory $2, $1 the kind: dir or file.
+record_in() {
+  local kind=$1 parent=$2 path
+  shift 2
   for path in "$@"; do
-    if [ "$kind" = dir ]; then record_dir "$HOME/Library/$path"; else record_file "$HOME/Library/$path"; fi
+    if [ "$kind" = dir ]; then record_dir "$parent/$path"; else record_file "$parent/$path"; fi
   done
 }
 
@@ -413,8 +437,13 @@ state_set() {
 
 on_exit() {
   local rc=$?
+  trap '' HUP INT TERM
   token_screen_leave
   sudo_end
+  # A login that failed or was cut short after storing its credential is still the cleanup's to remove. Handled, not
+  # ignored, signals reach its probe with their default action: Ctrl-C stops a hung one.
+  trap : HUP INT TERM
+  if [ -n "$login_pending" ] && login_status "$login_pending"; then ledger_add login "$login_pending"; fi
   if [ "$rc" -ne 0 ] && [ -n "$current" ]; then
     say "$me: $current failed; rerun the same command to continue"
   fi
@@ -422,6 +451,14 @@ on_exit() {
     case $reload in "$HOME"/*) reload="~/${reload#"$HOME"/}" ;; esac
     say "$me: in this terminal, run source $reload first (or open a new one): its PATH lacks what install.sh added to $reload"
   fi
+}
+
+# On a signal bash runs the EXIT trap with the last command's status, often 0, and on HUP or TERM not at all: exit with
+# the signal's, so on_exit cleans up and names the rerun.
+exit_traps() {
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 }
 
 # Reads the sudo password once (stdin's first line, else the terminal) and checks it. A FIFO then
@@ -449,6 +486,11 @@ sudo_once() {
       printf 'Sorry, try again.\n' >&3
     done
   fi
+  # Until the feeder and keep-alive hold their PIDs a signal waits, so sudo_end has them and askpass_dir to clean up.
+  # Not trap '': a subshell forked while a signal is ignored keeps ignoring it, and sudo_end could not stop it.
+  trap 'deferred=129' HUP
+  trap 'deferred=130' INT
+  trap 'deferred=143' TERM
   askpass_dir=$(mktemp -d "${TMPDIR:-/tmp}/ensemble-sudo.XXXXXX")
   case $askpass_dir in *"'"* | *$'\n'*) die "unusable TMPDIR: $askpass_dir" ;; esac
   mkfifo -m 600 "$askpass_dir/fifo"
@@ -467,6 +509,7 @@ EOF
   unset password
   export SUDO_ASKPASS=$askpass_dir/askpass
   (
+    nap= # the TERM trap reads it under set -u
     trap 'kill "$nap" 2>/dev/null; exit 0' TERM
     while kill -0 $$ 2>/dev/null; do
       sudo -n -v || true
@@ -479,6 +522,8 @@ EOF
     rm -rf "$askpass_dir"
   ) </dev/null >/dev/null 2>&1 &
   keepalive=$!
+  exit_traps
+  if [ -n "$deferred" ]; then exit "$deferred"; fi
 }
 
 # Stops the keep-alive and the askpass feeder, and drops the ticket sudo_once made.
@@ -547,10 +592,14 @@ formula() {
   fi
 }
 
-# cask <name> <command or app path that proves it installed>
+# cask_present <name> <command or app path that proves it installed>: exit 0 when cask <name> is there.
+cask_present() {
+  { [ -n "$2" ] && command -v "$2" >/dev/null; } || [ -e "${3:-/nonexistent}" ] \
+    || brew list --cask "$1" </dev/null >/dev/null 2>&1
+}
+
 cask() {
-  if { [ -n "$2" ] && command -v "$2" >/dev/null; } || [ -e "${3:-/nonexistent}" ] \
-    || brew list --cask "$1" </dev/null >/dev/null 2>&1; then
+  if cask_present "$@"; then
     skip "$1 installed"
   else
     brew_install --cask "$1"
@@ -572,8 +621,8 @@ dependencies() {
   record_dir "$HOME/.config"
   if [ ! -e "$root/Applications/iTerm.app" ]; then
     record_dir "$HOME/.config/iterm2"
-    record_library dir "${iterm_dirs[@]}"
-    record_library file "${iterm_files[@]}"
+    record_in dir "$HOME/Library" "${iterm_dirs[@]}"
+    record_in file "$HOME/Library" "${iterm_files[@]}"
   fi
   cask iterm2 "" "$root/Applications/iTerm.app"
 }
@@ -644,9 +693,9 @@ checklist() {
 }
 
 # The configuration: each answer from its flag, else the last answer (State), else the config, else the default;
-# the checklist appears only when clients or Docker has no flag or saved answer.
+# the checklist appears only when clients or Docker has no flag or saved answer. save_answers keeps them.
 answers() {
-  local said default client item choose=
+  local said default client item found board_text choose=
   local -a labels ticks names=(claude codex opencode)
   step configuration
   said=$(config_says)
@@ -687,6 +736,7 @@ answers() {
     if [ "${ticks[4]}" = 1 ]; then board=yes; else board=no; fi
   fi
   if [ "$board" != yes ] && [ -n "$jobs_flag" ]; then
+    if [ "$board_flag" = no ]; then usage_error "--launchd/--no-launchd requires a board, and --no-board skips it"; fi
     usage_error "--launchd/--no-launchd requires a board"
   fi
   board_tracker=
@@ -704,17 +754,13 @@ answers() {
       done
     fi
     if [ -z "$board_jobs_choice" ]; then
-      if [ -f "$HOME/Library/LaunchAgents/com.windroc.ensemble.router.plist" ] \
-        || [ -f "$HOME/Library/LaunchAgents/com.windroc.ensemble.promote.plist" ]; then
-        board_jobs_choice=yes
-      elif ask_yn "Install board launchd jobs?"; then
-        board_jobs_choice=yes
-      else
-        board_jobs_choice=no
-      fi
+      for item in "${board_job_names[@]}"; do
+        if [ -f "$HOME/Library/LaunchAgents/com.windroc.ensemble.$item.plist" ]; then board_jobs_choice=yes; fi
+      done
     fi
-    state_set board_tracker "$board_tracker"
-    state_set board_jobs "$board_jobs_choice"
+    if [ -z "$board_jobs_choice" ]; then
+      if ask_yn "Install board launchd jobs?"; then board_jobs_choice=yes; else board_jobs_choice=no; fi
+    fi
   fi
   board_tracker=${board_tracker:-local}
   if opencode_flags && ! has opencode; then usage_error "--opencode-*: opencode is not among the clients"; fi
@@ -723,10 +769,29 @@ answers() {
   prev_model=$(state_get opencode_model)
   prev_context=$(state_get opencode_context)
   if has opencode; then
+    # Without a saved provider, reuse a configured one as if saved: config_plan then keeps or updates its tables.
+    if [ -z "$prev_provider" ]; then
+      found=$(configured_provider "$provider_flag")
+      if [ -n "$found" ]; then
+        prev_provider=${found%%$'\t'*}
+        found=${found#*$'\t'}
+        prev_url=${found%%$'\t'*}
+        found=${found#*$'\t'}
+        prev_model=${found%%$'\t'*}
+        prev_context=${found#*$'\t'}
+      fi
+    fi
     provider=${provider_flag:-$prev_provider}
-    url=${url_flag:-$prev_url}
-    model=${model_flag:-$prev_model}
-    context=${context_flag:-$prev_context}
+    # Another provider takes none of the saved one's fields: its key would go to that provider's server.
+    if [ "$provider" = "$prev_provider" ]; then
+      url=${url_flag:-$prev_url}
+      model=${model_flag:-$prev_model}
+      context=${context_flag:-$prev_context}
+    else
+      url=$url_flag
+      model=$model_flag
+      context=$context_flag
+    fi
     if [ -z "$provider" ]; then
       ask_valid "OpenCode provider name:" valid_name
       provider=$answer
@@ -743,6 +808,23 @@ answers() {
       ask "Its context window in tokens [65536]:"
       if valid_context "${answer:-65536}"; then context=${answer:-65536}; fi
     done
+  fi
+  if [ "$board" = yes ]; then
+    board_text="yes ($board_tracker), launchd: ${board_jobs_choice:-no}"
+  else
+    board_text=no
+  fi
+  say "    clients: $clients, Docker: $docker, board: $board_text${provider:+, OpenCode provider: $provider}"
+}
+
+# Saves answers' choices once the run's refusals (ref_check, broker_plan preflight) have passed: a refused run
+# keeps the last ones.
+save_answers() {
+  if [ "$board" = yes ]; then
+    state_set board_tracker "$board_tracker"
+    state_set board_jobs "$board_jobs_choice"
+  fi
+  if has opencode; then
     state_set opencode_provider "$provider"
     state_set opencode_url "$url"
     state_set opencode_model "$model"
@@ -751,7 +833,6 @@ answers() {
   state_set clients "$clients"
   state_set docker "$docker"
   state_set board "$board"
-  say "    clients: $clients, Docker: $docker, board: $board ($board_tracker), launchd: ${board_jobs_choice:-no}${provider:+, OpenCode provider: $provider}"
 }
 
 # Plans the edits that give config.local.toml (or a new one) the wanted settings; writes the result to
@@ -759,7 +840,7 @@ answers() {
 config_plan() {
   python3 -I -c '
 import json, os, re, sys, tomllib
-path, out, default, harness, client, exe, name, url, model, context, prev_name, prev_url, prev_model, prev_context, only, board = sys.argv[1:]
+path, out, default, clients, exe, name, url, model, context, prev_name, prev_url, prev_model, prev_context, only, board = sys.argv[1:]
 fresh = not os.path.exists(path)
 text = ""
 if not fresh:
@@ -789,10 +870,9 @@ elif only:
     want(*only)
 elif fresh or (get(data, "session.hosts", "default") or "tmux") != default:
     wanted.append(("session.hosts", "default", default))
-if not scoped and client and (get(data, "delegate", "client") or "claude") != client:
-    wanted.append(("delegate", "client", client))
-if not scoped and harness and get(data, "delegate.delegates", "harness_host") in (None, "", "docker"):
-    wanted.append(("delegate.delegates", "harness_host", harness))
+chosen = [name for name in ("claude", "codex", "opencode") if name in clients.split(",")]
+if not scoped and chosen and (get(data, "delegate", "client") or "claude") not in chosen:
+    wanted.append(("delegate", "client", chosen[0]))
 if name and not scoped:
     target, before = f"{name}/{model}", f"{prev_name}/{prev_model}" if prev_name else None
     if get(data, "session.clients.opencode", "executable") in (None, ""):
@@ -829,7 +909,7 @@ def line_key(line):
 lines = text.splitlines(keepends=True)
 if fresh:
     lines = ["# Written by install.sh. Keys and defaults: each layer\x27s packaged config.toml (its `# local:` lines);\n",
-             "# the Linear board: docs/board.md#setup.\n"]
+             "# the Linear board: docs/architecture.md#board-setup.\n"]
 if lines and not lines[-1].endswith("\n"):
     lines[-1] += "\n"
 added = set()
@@ -858,15 +938,67 @@ if any(get(edited, table, key) != value for table, key, value in wanted):
     sys.exit(4)
 with open(out, "w", encoding="utf-8") as f:
     f.write(result)
-sys.exit(3)' "$config" "$1" "$wanted_default" "$wanted_harness" "$wanted_client" \
+sys.exit(3)' "$config" "$1" "$wanted_default" "$clients" \
     "$opencode_executable" "$provider" "$url" "$model" "$context" \
     "$prev_provider" "$prev_url" "$prev_model" "$prev_context" "$only" "$board_file"
+}
+
+# The OpenCode provider already configured, for a run without a saved one: "name\turl\tmodel\tcontext" from one entry,
+# with model or context empty when missing or invalid; nothing when none qualifies. Given $1, only that provider.
+# config.local.toml first (config_plan owns the providers-table schema read here), then opencode.json(c). An entry
+# qualifies with a valid name and URL; a table its [session.clients.opencode] model names that does not, or several
+# that do, stop the search.
+configured_provider() {
+  local found rc=0
+  found=$(python3 -I -c '
+import re, sys, tomllib
+path, flag, name_re, url_re, model_re, context_re = sys.argv[1:]
+def ok(pattern, value):
+    return isinstance(value, str) and "\n" not in value and re.search(pattern, value) is not None
+def table(node, *keys):
+    for key in keys:
+        node = node.get(key) if isinstance(node, dict) else None
+    return node if isinstance(node, dict) else {}
+try:
+    with open(path, "rb") as f:
+        data = tomllib.load(f)
+except (OSError, tomllib.TOMLDecodeError):
+    sys.exit()
+opencode = table(data, "session", "clients", "opencode")
+providers = table(opencode, "providers")
+current = opencode.get("model")
+prefix, _, suffix = current.partition("/") if isinstance(current, str) else ("", "", "")
+def candidate(name):
+    entry = providers.get(name)
+    # valid_name rejects ollama too
+    return isinstance(entry, dict) and ok(name_re, name) and name != "ollama" and ok(url_re, entry.get("base_url"))
+if flag or prefix in providers:
+    names = [flag or prefix] if (flag or prefix) in providers else []
+else:
+    names = [name for name in providers if candidate(name)]
+if not names:
+    sys.exit()
+if len(names) > 1 or not candidate(names[0]):
+    sys.exit(3)
+name, entry = names[0], providers[names[0]]
+models = [m for m in entry.get("models", []) if isinstance(m, str)] if isinstance(entry.get("models"), list) else []
+model = suffix if prefix == name and suffix in models else models[0] if len(models) == 1 else ""
+context = entry.get("context")
+context = str(context) if isinstance(context, int) and not isinstance(context, bool) else ""
+print("\t".join((name, entry["base_url"], model if ok(model_re, model) else "", context if ok(context_re, context) else "")))' \
+    "$config" "$1" "$name_pattern" "$url_pattern" "$model_pattern" "$context_pattern") || rc=$?
+  [ "$rc" = 0 ] || return 0
+  if [ -z "$found" ]; then
+    found=$(opencode_config_edit show "${XDG_CONFIG_HOME:-$HOME/.config}/opencode" "$1" \
+      "$name_pattern" "$url_pattern" "$model_pattern" "$context_pattern" 2>/dev/null) || found=
+  fi
+  printf '%s' "$found"
 }
 
 # Writes the configuration's settings into config.local.toml with consent; given <table> <key> <value>, only that;
 # given board <file>, the settings board_plan wrote to <file>.
 config_file() {
-  local wanted_default=tmux wanted_harness= wanted_client= only= board_file= changes rc=0 plan
+  local wanted_default=tmux only= board_file= changes rc=0 plan
   if [ $# = 2 ] && [ "$1" = board ]; then
     board_file=$2
   elif [ $# = 3 ]; then
@@ -875,11 +1007,6 @@ config_file() {
   step "config.local.toml${only:+: [$1] $2}${board_file:+: Linear board}"
   if [ "$docker" = yes ]; then
     wanted_default=docker
-    wanted_harness=tmux
-  fi
-  if ! has claude; then
-    wanted_client=opencode
-    if has codex; then wanted_client=codex; fi
   fi
   mkdir -p "$state_dir"
   plan=$state_dir/config.local.toml.plan
@@ -915,21 +1042,32 @@ backup_config() {
 }
 
 apps() {
-  local rc
+  local rc codex_home=${CODEX_HOME:-$HOME/.codex}
+  local -a codex_cask=(codex codex) docker_cask=(docker-desktop "" "$root/Applications/Docker.app")
   step apps
   record_dir "$HOME/.config/gh"
   if has claude; then
     record_dir "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
     if [ -z "${CLAUDE_CONFIG_DIR:-}" ]; then record_file "$HOME/.claude.json"; fi
   fi
-  if has codex; then record_dir "${CODEX_HOME:-$HOME/.codex}"; fi
+  if has codex; then
+    record_dir "$codex_home"
+    if ! cask_present "${codex_cask[@]}"; then
+      record_in dir "$codex_home" "${codex_home_dirs[@]}"
+      record_in file "$codex_home" "${codex_home_files[@]}"
+    fi
+  fi
   if [ "$docker" = yes ]; then
     record_dir "$HOME/.docker"
+    if ! cask_present "${docker_cask[@]}"; then
+      record_in dir "$HOME/.docker" "${docker_home_dirs[@]}"
+      record_in file "$HOME/.docker" "${docker_home_files[@]}"
+    fi
     record_dir "$HOME/Library/Containers/com.docker.docker"
     record_dir "$HOME/Library/Group Containers/group.com.docker"
     record_dir "$HOME/.config/cagent"
-    record_library dir "${docker_dirs[@]}"
-    record_library file "${docker_files[@]}"
+    record_in dir "$HOME/Library" "${docker_dirs[@]}"
+    record_in file "$HOME/Library" "${docker_files[@]}"
     # Docker Desktop adds its CLI completion block to the shell's rc files, creating them if needed: the cleanup
     # removes the block where it was not before, and a file that was not there once empty.
     for rc in .zshrc .bashrc .bash_profile .zprofile; do
@@ -941,9 +1079,9 @@ apps() {
     done
   fi
   if has claude; then cask claude-code claude; else skip "Claude Code: not chosen"; fi
-  if has codex; then cask codex codex; else skip "Codex: not chosen"; fi
+  if has codex; then cask "${codex_cask[@]}"; else skip "Codex: not chosen"; fi
   if [ "$docker" = yes ]; then
-    cask docker-desktop "" "$root/Applications/Docker.app"
+    cask "${docker_cask[@]}"
     docker_build
     if [ "$broker_mode" = build ]; then formula go; else skip "go: the broker comes from release $release_tag"; fi
   else
@@ -951,31 +1089,50 @@ apps() {
   fi
 }
 
+# Exit 0 when client $1 (gh, claude or codex) has a saved login.
+login_status() {
+  case $1 in
+    gh) gh auth status ;;
+    claude) claude auth status ;;
+    codex) codex login status ;;
+  esac </dev/null >/dev/null 2>&1
+}
+
+# Logs client $1 in with the command $2…, recording the login for the cleanup only once it succeeded (on_exit records
+# one that stored its credential before failing).
+client_login() {
+  login_pending=$1
+  shift
+  "$@" <&3 >&3 2>&3
+  ledger_add login "$login_pending"
+  login_pending=
+}
+
 client_logins() {
+  local output
   step "GitHub CLI login"
-  if gh auth status </dev/null >/dev/null 2>&1; then
+  if login_status gh; then
     skip "logged in"
   else
-    ledger_add login gh
-    gh auth login --hostname github.com --git-protocol https --web <&3 >&3 2>&3
+    client_login gh gh auth login --hostname github.com --git-protocol https --web
   fi
   step "Claude Code login"
   if ! has claude; then
     skip "Claude Code not chosen"
-  elif claude auth status </dev/null >/dev/null 2>&1; then
+  elif login_status claude; then
     skip "logged in"
   else
-    ledger_add login claude
-    claude auth login <&3 >&3 2>&3
+    client_login claude claude auth login
   fi
   step "Codex login"
   if ! has codex; then
     skip "Codex not chosen"
-  elif codex login status </dev/null >/dev/null 2>&1; then
+  elif login_status codex; then
+    # codex login status reads only the saved login; the plugin step's first read asks the server.
+    if ! output=$(codex plugin list --json </dev/null 2>&1 >/dev/null); then codex_rejected "$output"; fi
     skip "logged in"
   else
-    ledger_add login codex
-    codex login <&3 >&3 2>&3
+    client_login codex codex login
   fi
 }
 
@@ -1022,7 +1179,7 @@ sys.exit(1 if not found else 0 if found[0].get("enabled") else 2)' "$1"
 }
 
 # The ref the windroc marketplace serves ensemble at, from its manifest $1 on main: the ensemble entry's source.ref,
-# else main (the default branch). A ref goes into URLs: --ref's characters and no .. segment.
+# else main (the default branch). A ref goes into URLs: --ref's characters, then valid_ref.
 marketplace_ref() {
   local text served
   text=$(curl -fsSL "https://raw.githubusercontent.com/windroc-labs/agent-plugins-marketplace/main/$1" </dev/null) \
@@ -1037,10 +1194,10 @@ except Exception:
     sys.exit("no ensemble entry")
 if ref is None:
     sys.exit("pinned by sha, not a release tag")
-if not isinstance(ref, str) or not re.fullmatch(r"[A-Za-z0-9._/-]+", ref) or ref.startswith("-") \
-        or ".." in ref.split("/"):
+if not isinstance(ref, str) or not re.fullmatch(r"[A-Za-z0-9._/-]+", ref):
     sys.exit(f"not a git ref: {ref!r}")
 print(ref)' 2>&1 <<<"$text") || die "cannot read ensemble's ref from the windroc marketplace ($1): $served"
+  valid_ref "$served" || die "cannot read ensemble's ref from the windroc marketplace ($1): not a git ref: '$served'"
   printf '%s' "$served"
 }
 
@@ -1052,12 +1209,14 @@ ref_check() {
   if has claude || ! has codex; then claude_ref=$(marketplace_ref .claude-plugin/marketplace.json); fi
   if has codex; then codex_ref=$(marketplace_ref .agents/plugins/marketplace.json); fi
   if [ -n "$claude_ref" ] && [ -n "$codex_ref" ] && [ "$claude_ref" != "$codex_ref" ]; then
+    current=
     die "the windroc marketplace serves ensemble at $claude_ref to Claude Code and $codex_ref to Codex: they must match"
   fi
   served_ref=${claude_ref:-$codex_ref}
   if [ -z "$ref" ]; then
     ref=$served_ref
   elif [ "$ref" != "$served_ref" ]; then
+    current=
     die "--ref $ref: Claude Code and Codex install ensemble@windroc from the windroc marketplace, which serves ensemble at $served_ref; use --ref $served_ref, or --clients opencode for another ref"
   fi
 }
@@ -1082,6 +1241,21 @@ protocol_of() { sed -n 's/^PROTOCOL = "\([0-9][0-9]*\)"$/\1/p' | sed -n 1p; }
 go_protocol_of() { sed -n 's/^const Version = "\([0-9][0-9]*\)"$/\1/p' | sed -n 1p; }
 version_of() { sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9]*\(\.[0-9][0-9]*\)*\)".*/\1/p' | sed -n 1p; }
 spoken_protocol_of() { sed -n 's/.*"protocol_version": *"\([0-9][0-9]*\)".*/\1/p' | sed -n 1p; }
+
+# Broker protocol 30 renamed the broker's keychain items: a broker below it cannot read them (rename_doc).
+renamed_protocol=30
+rename_doc=docs/upgrading.md#broker-protocol-30-keychain-rename
+
+# Stops before a broker of protocol $1 (from $2) replaces an installed broker at or above renamed_protocol it is
+# below: it could not read the renamed items.
+broker_downgrade_check() {
+  local installed=
+  [ -n "$1" ] && [ "$1" -lt "$renamed_protocol" ] || return 0
+  if [ -x "$broker" ]; then installed=$("$broker" version </dev/null 2>/dev/null | spoken_protocol_of) || installed=; fi
+  [ -n "$installed" ] && [ "$installed" -ge "$renamed_protocol" ] || return 0
+  current=
+  die "$2's broker speaks protocol $1, below the installed broker's protocol $installed: it cannot read the broker keychain items renamed for protocol $renamed_protocol ($rename_doc); use a ref whose broker speaks protocol $renamed_protocol or later"
+}
 
 # The ensemble plugin Claude Code ($1 claude) or Codex (codex) has installed, else empty;
 # Codex's version at the served ref, ignoring caches from other installs.
@@ -1129,6 +1303,9 @@ broker_plan() {
     broker_mode=release
   else
     broker_mode=build
+    got=$(plugin_file "${sources[0]}" src/broker/internal/protocol/protocol.go | go_protocol_of)
+    [ -n "$got" ] || die "no broker protocol in src/broker/internal/protocol/protocol.go at $where"
+    broker_downgrade_check "$got" "ensemble $ref"
     return
   fi
   if [ -n "${sources[0]}" ] && installed=$(broker_current "${sources[0]}"); then
@@ -1154,10 +1331,12 @@ broker_plan() {
       else
         remedy="the windroc marketplace serves ensemble at $ref, ahead of release $release_tag: wait until it serves a release, or use --clients opencode --ref $release_tag"
       fi
+      current=
       die "$label wants broker protocol $want, but its broker, $broker_label, speaks protocol $got: $remedy"
     fi
     agreed+="${agreed:+, }$label"
   done
+  broker_downgrade_check "$got" "$broker_label"
   say "    broker protocol $got: $agreed and $broker_label agree"
 }
 
@@ -1220,6 +1399,26 @@ claude_plugins() {
   ensemble_plugin_check claude "Claude Code"
 }
 
+# Dies with the re-login command when Codex's output $1 says its server rejected the saved login (401).
+codex_rejected() {
+  local text
+  text=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  if [[ $text =~ (^|[^[:alnum:]_])401([^[:alnum:]_]|$) || $text == *unauthori[sz]ed* ]]; then
+    die "Codex: the saved login was rejected (401 Unauthorized): run codex login, then rerun install.sh"
+  fi
+}
+
+# Runs codex $2…, its output on stderr; when it fails, dies with $1, or as codex_rejected says.
+codex_call() {
+  local message=$1 output rc=0
+  shift
+  output=$(codex "$@" </dev/null 4>&2 2>&1 1>&4 4>&-) || rc=$?
+  if [ -n "$output" ]; then say "$output"; fi
+  [ "$rc" != 0 ] || return 0
+  codex_rejected "$output"
+  die "$message"
+}
+
 codex_plugins() {
   local rc id ids=(ensemble@windroc)
   step "Codex plugins"
@@ -1231,11 +1430,10 @@ codex_plugins() {
   codex_market windroc https://github.com/windroc-labs/agent-plugins-marketplace.git || rc=$?
   if [ "$rc" = 1 ]; then
     ledger_add codex-marketplace windroc
-    codex plugin marketplace add windroc-labs/agent-plugins-marketplace </dev/null >&2 \
-      || die "Codex: cannot add marketplace windroc"
+    codex_call "Codex: cannot add marketplace windroc" plugin marketplace add windroc-labs/agent-plugins-marketplace
   else
     [ "$rc" = 0 ] || die "Codex: marketplace windroc has another source"
-    codex plugin marketplace upgrade windroc </dev/null >&2 || die "Codex: cannot refresh marketplace windroc"
+    codex_call "Codex: cannot refresh marketplace windroc" plugin marketplace upgrade windroc
   fi
   if [ "$docker" != yes ]; then ids+=(updraft@windroc); fi
   for id in "${ids[@]}"; do
@@ -1244,15 +1442,15 @@ codex_plugins() {
     case $rc in
       0)
         if [ "$id" = ensemble@windroc ]; then
-          codex plugin add "$id" </dev/null >&2 || die "Codex: cannot update $id to $ref"
+          codex_call "Codex: cannot update $id to $ref" plugin add "$id"
         else
           skip "$id installed"
         fi
         ;;
-      2) codex plugin add "$id" </dev/null >&2 || die "Codex: cannot enable/update $id to $ref" ;;
+      2) codex_call "Codex: cannot enable/update $id to $ref" plugin add "$id" ;;
       *)
         ledger_add codex-plugin "$id"
-        codex plugin add "$id" </dev/null >&2 || die "Codex: cannot install $id at $ref"
+        codex_call "Codex: cannot install $id at $ref" plugin add "$id"
         ;;
     esac
   done
@@ -1348,14 +1546,14 @@ opencode_install() {
   fi
   case $(python3 -I -c 'import sys, urllib.parse; print(urllib.parse.urlsplit(sys.argv[1]).hostname or "")' "$url") in
     localhost | 127.0.0.1) ;;
-    *) case $url in http://*) say "$url: http:// sends the API key in plaintext over the network (docs/docker-host.md › Risks)" ;; esac ;;
+    *) case $url in http://*) say "$url: http:// sends the API key in plaintext over the network (docs/architecture.md › Docker host › Docker risks)" ;; esac ;;
   esac
 }
 
 opencode_spec() { printf '%s' "ensemble@git+https://github.com/windroc-labs/ensemble.git#$ref"; }
 
 # The directory OpenCode downloads spec $1 into, else exit 1 when it would not lie under OpenCode's packages
-# (a --ref with .. segments).
+# (a ref with .. segments, which valid_ref refuses first).
 opencode_cache_dir() {
   python3 -I -c '
 import os, sys
@@ -1427,7 +1625,8 @@ opencode_plugin() {
   state_set opencode_plugin_commit "$commit"
 }
 
-# Shared with install-cleanup.sh; edits JSONC values without rewriting unrelated text.
+# Shared with install-cleanup.sh; edits JSONC values without rewriting unrelated text, and shows a configured
+# provider (configured_provider).
 opencode_config_edit() {
   python3 -I -c '
 import json, os, re, sys
@@ -1560,6 +1759,31 @@ def run():
             path.unlink()
         else:
             write(path, new)
+    elif action == "show":
+        name, name_re, url_re, model_re, context_re = args
+        def ok(pattern, value):
+            return isinstance(value, str) and "\n" not in value and re.search(pattern, value) is not None
+        providers = {}
+        for file in (path / "opencode.json", path / "opencode.jsonc"):
+            found = parse(load(file))[0].get("provider", {})
+            providers.update(found if isinstance(found, dict) else {})
+        def candidate(key):
+            entry = providers.get(key)
+            options = entry.get("options") if isinstance(entry, dict) else None
+            # valid_name rejects ollama too
+            return (ok(name_re, key) and key != "ollama" and isinstance(options, dict)
+                    and ok(url_re, options.get("baseURL")))
+        names = [name] if name else [key for key in providers if candidate(key)]
+        if len(names) != 1 or not candidate(names[0]):
+            return
+        entry = providers[names[0]]
+        models = entry.get("models") if isinstance(entry.get("models"), dict) else {}
+        model = next(iter(models)) if len(models) == 1 else ""
+        limit = models[model].get("limit") if isinstance(models.get(model), dict) else None
+        context = limit.get("context") if isinstance(limit, dict) else None
+        context = str(context) if isinstance(context, int) and not isinstance(context, bool) else ""
+        print("\t".join((names[0], entry["options"]["baseURL"], model if ok(model_re, model) else "",
+                         context if ok(context_re, context) else "")))
     else:
         raise ValueError()
 
@@ -1753,6 +1977,10 @@ def package_version(path):
     except (OSError, ValueError, AttributeError):
         return version(os.path.basename(path)) if client == "claude" else []
 
+def ref(path):
+    # An OpenCode copy's ref: its package spec's #fragment; a spec without one is the default branch.
+    return os.path.dirname(os.path.dirname(os.path.relpath(path, source))).partition("#")[2] or "main"
+
 roots = []
 if os.path.isabs(root) and "\n" not in root and not os.path.exists(root):
     if client == "claude":
@@ -1772,6 +2000,8 @@ if os.path.isabs(root) and "\n" not in root and not os.path.exists(root):
     roots = sorted(p for p in roots if isinstance(p, str) and os.path.isabs(p) and "\n" not in p)
     key = (lambda p: version(os.path.basename(p))) if client == "codex" else package_version
     for candidate in sorted(roots, key=key, reverse=True):
+        if client == "opencode" and ref(candidate) != ref(root):
+            continue
         if os.access(path := os.path.join(candidate, rel), os.X_OK):
             fd, temp = tempfile.mkstemp(prefix=".plugin-root.", dir=os.path.dirname(selection))
             try:
@@ -1963,7 +2193,7 @@ broker_install() {
 # user skips it.
 store_app_key() {
   [ "$(state_get github_app_key)" != skipped ] || return 1
-  ask "Path to your GitHub App's private key (.pem; docs/docker-host.md#create-the-github-app), empty to skip:"
+  ask "Path to your GitHub App's private key (.pem; docs/architecture.md#create-the-github-app), empty to skip:"
   if [ -z "$answer" ]; then
     state_set github_app_key skipped
     return 1
@@ -2032,14 +2262,24 @@ token_screen_leave() {
 }
 
 broker_logins() {
-  local sha min need said slug
+  local sha min need said slug refusal
   sha=$(shasum -a 256 "$broker" | cut -d' ' -f1)
   # Before any other broker call: a new broker's items from earlier builds trust it, with one keychain password.
   step "broker re-trust"
   if [ "$(state_get retrust)" = "$sha" ]; then
     skip "done for this broker"
   else
-    "$broker" retrust <&3 >&3 2>&3 || die "broker re-trust failed; rerun install.sh, or run $broker retrust"
+    # retrust's password prompt is on stderr: status, which asks nothing, tells whether old-name items refused it.
+    if ! "$broker" retrust <&3 >&3 2>&3; then
+      refusal=$("$broker" status </dev/null 2>&1 >/dev/null) || :
+      case $refusal in
+        *"old-name broker items found"*)
+          current=
+          die "old-name broker keychain items remain: run the maintainer's one-time rename step ($rename_doc), then rerun install.sh"
+          ;;
+      esac
+      die "broker re-trust failed; rerun install.sh, or run $broker retrust"
+    fi
     state_set retrust "$sha"
   fi
   step "broker login: Claude"
@@ -2064,7 +2304,7 @@ broker_logins() {
   if [ "$(state_get login_github)" = "$sha" ] && [ -n "$(state_get github_app)" ]; then
     skip "done for this broker"
   elif ! security find-generic-password -s ensemble-broker-bot </dev/null >/dev/null 2>&1 && ! store_app_key; then
-    skip "no GitHub App key: create the App by docs/docker-host.md#create-the-github-app, then rerun"
+    skip "no GitHub App key: create the App by docs/architecture.md#create-the-github-app, then rerun"
   else
     record_item ensemble-broker-github-users ensemble-broker-bot
     if [ -n "$app_id" ]; then
@@ -2117,16 +2357,26 @@ egress_ready() {
   case $proxy in '' | '<no value>') return 1 ;; esac
 }
 
-# Download to a sibling directory so a failed fetch never leaves a usable partial version.
+# Exit 0 when Docker reports no egress-proxy $1 (container or image): any other failure, Docker not answering
+# included, proves nothing.
+egress_absent() {
+  local err
+  if err=$(docker "$1" inspect egress-proxy </dev/null 2>&1 >/dev/null); then return 1; fi
+  case $err in *"No such $1"*) return 0 ;; esac
+  return 1
+}
+
+# Download to a sibling directory so a failed fetch never leaves a usable partial version. No locals: the trap names
+# the literal path, as a bash may have left the function's scope when it runs the subshell's EXIT trap (U1a).
 egress_download() (
-  local versions=$HOME/.egress/versions tmp
+  versions=$HOME/.egress/versions
   tmp=$(mktemp -d "$versions/.download.XXXXXX")
-  trap 'rm -rf "$tmp"' EXIT
-  gh api "repos/windroc/egress-proxy/tarball/$egress_commit" </dev/null >"$tmp/source.tar.gz" \
-    || die "cannot fetch pinned windroc/egress-proxy $egress_commit; check gh auth status and repository access, then rerun"
+  trap "rm -rf $(printf '%q' "$tmp")" EXIT
+  gh api "repos/windroc-labs/egress-proxy/tarball/$egress_commit" </dev/null >"$tmp/source.tar.gz" \
+    || die "cannot fetch pinned windroc-labs/egress-proxy $egress_commit; check gh auth status and repository access, then rerun"
   mkdir "$tmp/source"
   tar -xzf "$tmp/source.tar.gz" --strip-components=1 -C "$tmp/source" \
-    || die "cannot unpack pinned windroc/egress-proxy $egress_commit"
+    || die "cannot unpack pinned windroc-labs/egress-proxy $egress_commit"
   [ -x "$tmp/source/start.sh" ] || die "pinned egress version has no executable start.sh"
   printf '%s\n' "$egress_commit" >"$tmp/source/COMMIT"
   mv "$tmp/source" "$versions/$egress_commit"
@@ -2135,7 +2385,21 @@ egress_download() (
 egress_install() {
   local dir=$HOME/.egress version=$HOME/.egress/versions/$egress_commit tries=0 ready
   step "egress proxy"
+  # A ~/.egress from before keeps its own files; of it, only what this run creates is recorded. A current link from
+  # before keeps the version it points to now.
+  record_dir "$dir"
+  if ! recorded dir "$dir"; then
+    record_dir "$dir/versions"
+    record_file "$dir/config.local.yaml"
+    record_file "$dir/compose.networks.yaml"
+    if absent "$dir/current" || recorded file "$dir/current"; then
+      record_dir "$version"
+      record_file "$dir/current"
+    fi
+  fi
   mkdir -p "$dir/versions"
+  # An earlier run's failed download, left by an installer before this one.
+  rm -rf "$dir/versions"/.download.*
   [ ! -L "$dir/config.local.yaml" ] \
     || die "$dir/config.local.yaml symlink is unsupported by the proxy's directory mount; existing path was kept"
   if [ ! -e "$dir/config.local.yaml" ]; then
@@ -2147,6 +2411,9 @@ egress_install() {
   if [ ! -e "$version" ]; then egress_download; fi
   [ -x "$version/start.sh" ] && [ "$(cat "$version/COMMIT")" = "$egress_commit" ] \
     || die "incomplete egress checkout $version; keep your config and repair that version directory"
+  # start.sh creates what is missing.
+  if egress_absent container; then ledger_add docker-container egress-proxy; fi
+  if egress_absent image; then ledger_add docker-image egress-proxy; fi
   # Always run start.sh: it applies a new or changed config and leaves an unchanged proxy running.
   EGRESS_CONFIG_DIR="$dir" bash "$version/start.sh" </dev/null >&2 \
     || die "egress-proxy start failed: run $version/start.sh; inspect docker logs egress-proxy"
@@ -2449,7 +2716,7 @@ else:
         ident = uid(found.get("id"), "team id")
         teams.append((ident, name(found.get("key"), "team key", ident)))
     if not teams:
-        stop("the harness app sees no Linear team (docs/credentials.md#linear-presets)")
+        stop("the harness app sees no Linear team (docs/upgrading.md#linear-presets)")
     team = teams[0][0]
     if len(teams) > 1:
         keys = {key: ident for ident, key in teams}
@@ -2469,7 +2736,7 @@ STATES = {"backlog": "Backlog", "todo": "Todo", "in_progress": "In Progress", "i
           "handoff": "Handoff", "done": "Done", "canceled": "Canceled"}
 if missing := [title for title in STATES.values() if title not in states]:
     listed = ", ".join(missing)
-    stop(f"Linear team {team_key} lacks states: {listed} (docs/credentials.md#linear-presets)")
+    stop(f"Linear team {team_key} lacks states: {listed} (docs/upgrading.md#linear-presets)")
 labels = []
 for found in nodes(fetch("harness", "query($id: ID) { issueLabels(first: 250, filter: { or: [{ team: { id: { eq: $id } } }, "
                          "{ team: { null: true } }] }) { nodes { id name isGroup parent { id } } } }", {"id": team}),
@@ -2484,7 +2751,7 @@ def children(parent):
     return {label: ident for ident, label, _, of in labels if of == parent}
 tasks = linear_config.get("task_label_group") or group("Tasks")
 if not tasks:
-    stop(f"Linear team {team_key} has no Tasks label group (docs/credentials.md#linear-presets)")
+    stop(f"Linear team {team_key} has no Tasks label group (docs/upgrading.md#linear-presets)")
 humans = []
 for found in nodes(detail, "members"):
     if found.get("active") is True:
@@ -2650,12 +2917,30 @@ with open(out, "w", encoding="utf-8") as f:
     f.write(text)' "$pkg/launchd/com.windroc.ensemble.$1.plist" "$2" "$HOME" "$path"
 }
 
+# Says which installed board jobs launchd still runs: skipping Board or jobs leaves them in place (README).
+board_jobs_loaded() {
+  local job uid loaded=
+  uid=$(id -u)
+  for job in "${board_job_names[@]}"; do
+    [ -f "$HOME/Library/LaunchAgents/com.windroc.ensemble.$job.plist" ] || continue
+    if launchctl print "gui/$uid/com.windroc.ensemble.$job" </dev/null >/dev/null 2>&1; then
+      loaded="$loaded com.windroc.ensemble.$job"
+    fi
+  done
+  [ -n "$loaded" ] || return 0
+  say "    still loaded:$loaded; unload them as docs/architecture.md#board-setup says (launchctl bootout gui/<uid>/com.windroc.ensemble.<job>, then remove its plist)"
+}
+
 board_jobs() {
   local job target new offered= shown= uid
   step "board launchd jobs"
-  board_wanted || return 0
+  if ! board_wanted; then
+    board_jobs_loaded
+    return 0
+  fi
   if [ "$board_jobs_choice" != yes ]; then
     skip "launchd jobs not chosen"
+    board_jobs_loaded
     return 0
   fi
   if [ "$(configured_tracker "$(config_says)")" != "$board_tracker" ]; then
@@ -2671,7 +2956,7 @@ board_jobs() {
     return
   fi
   mkdir -p "$state_dir"
-  for job in router promote; do
+  for job in "${board_job_names[@]}"; do
     target=$HOME/Library/LaunchAgents/com.windroc.ensemble.$job.plist
     new=$state_dir/com.windroc.ensemble.$job.plist
     board_plist "$job" "$new"
@@ -2751,6 +3036,7 @@ main() {
   if [ ! -e "$root/dev/tty" ] || ! (: <>"$root/dev/tty") 2>/dev/null; then die "needs a terminal for its questions and logins"; fi
   exec 3<>"$(terminal)"
   trap on_exit EXIT
+  exit_traps
   [ -d "$HOME/.ensemble" ] || ledger_add dir "$HOME/.ensemble"
   if ! recorded agent-tree "$HOME/.ensemble" || [ ! -f "$state_dir/agent-tree.paths" ] \
     || [ -f "$state_dir/agent-tree.cleaned" ] || [ -f "$state_dir/agent-tree.pending" ]; then
@@ -2776,6 +3062,7 @@ main() {
   if [ -z "$answered" ]; then answers; fi
   ref_check
   broker_plan preflight
+  save_answers
   opencode_select
   config_file
   apps

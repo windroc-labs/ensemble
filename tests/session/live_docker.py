@@ -1,15 +1,13 @@
 """The Docker Host's live acceptance gate, run by hand on macOS with Docker Desktop
-(docs/docker-host.md › Live acceptance). Each command prints a PASS line per check and a timing
+(docs/architecture.md › Docker live acceptance). Each command prints a PASS line per check and a timing
 line per generation, and exits 1 at the first failed check:
 
   python3 tests/session/live_docker.py worker --client claude|codex|opencode CWD [NAME]
-      from a manager session: build once, then start a worker on the default Host, check its
-      container's security baseline and isolation, kill its hook supervisor mid-turn (the event
-      comes exactly once), restart, close and resume, `docker rm -f` and resume, each new
-      generation answering a prompt; every close reclaims the generation's credentials; for
-      opencode also its opencode.db in the Docker home, Ollama on 127.0.0.1 only, only GitHub
-      secrets and the listed providers' keys in the container, and each resume continuing the
-      same OpenCode session
+      from a manager session: build once, start a worker on the default Host, check its
+      container's security baseline and isolation, restart, close and resume, `docker rm -f` and
+      resume, each generation answering a prompt and its close reclaiming its credentials; for
+      opencode its opencode.db in the Docker home, Ollama on 127.0.0.1 only, only GitHub secrets
+      and the listed providers' keys in the container, each resume continuing one OpenCode session
   python3 tests/session/live_docker.py role --repo OWNER/NAME [--timeout S] [NAME]
       a headless engineer run on OWNER/NAME, an authorized test repo: one forced token refresh,
       then a draft PR by windroc-bot[bot], opened after it; the run's credentials reclaimed
@@ -17,12 +15,10 @@ line per generation, and exits 1 at the first failed check:
       the PR at URL was opened as a draft by windroc-bot[bot]
 """
 
-import fcntl
 import ipaddress
 import json
 import os
 import re
-import signal
 import subprocess
 import sys
 import tempfile
@@ -65,7 +61,7 @@ OLLAMA_PORT = 11434  # [session.clients.opencode] ollama_port's default
 SECRETS = "/run/ensemble/secrets"
 LISTENER = re.compile(r"\s(\S+):(\d+) \(LISTEN\)$")
 BOT = "app/windroc-bot"
-PHASES = ("checks", "image", "start", "relay", "tmux", "client")
+PHASES = ("checks", "image", "start", "client")
 BROKER_PHASES = frozenset(
     (
         "preflight",
@@ -80,7 +76,7 @@ BROKER_PHASES = frozenset(
     )
 )
 BROKER_LINE = re.compile(r"^ensemble-broker: start (\S+) ([0-9.]+) s$", re.MULTILINE)
-# Resource → the command docs/credentials.md › What a container cannot reach runs as `sh -c`.
+# Resource → the command docs/architecture.md › What a container cannot reach runs as `sh -c`.
 EGRESS = "windroc.egress."  # the egress proxy's label prefix
 UNREACHABLE = {
     "host keychain": r"find / \( -path /proc -o -path /sys \) -prune -o -path "
@@ -529,7 +525,7 @@ def docker_host() -> tuple[str, tuple[str, ...]]:
     table = hosts.tables.get(hosts.default, {})
     if table.get("implementation") != DOCKER_HOST:
         raise SystemExit(
-            f"default Host is {hosts.default}, not a Docker Host (docs/docker-host.md)"
+            f"default Host is {hosts.default}, not a Docker Host (docs/architecture.md#docker-host)"
         )
     return table["docker"], tuple(table.get("plugins", ()))
 
@@ -542,35 +538,6 @@ def containers(docker: str, *, running: bool = False, label: str = "") -> set[st
 
 def broker_status() -> dict:
     return json.loads(call([BROKER, "status"])[0])
-
-
-def supervisor_running(name: str) -> bool:
-    path = os.path.expanduser(f"~/.ensemble/docker-state/{name}/supervisor.lock")
-    fd = os.open(path, os.O_RDONLY)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        return True
-    finally:
-        os.close(fd)
-    return False
-
-
-def kill_supervisor(name: str) -> None:
-    with open(os.path.expanduser(f"~/.ensemble/docker-state/{name}/supervisor.pid")) as f:
-        os.kill(int(f.read()), signal.SIGKILL)
-    deadline = time.monotonic() + 10
-    while supervisor_running(name):
-        if time.monotonic() > deadline:
-            raise SystemExit("supervisor.lock still held after killing the supervisor")
-        time.sleep(0.2)
-
-
-def quiet(events: tuple[str, ...], after: str) -> str:
-    try:
-        return run(*events, "--after", after, timeout=QUIET)
-    except subprocess.TimeoutExpired:
-        return ""
 
 
 def drained(events: tuple[str, ...], after: str) -> str:
@@ -640,9 +607,7 @@ class Worker:
         self.open = False
 
     def cleanup(self) -> None:
-        """After a failure: the crew close, else the session close, then removes any container
-        left, keeping the failure the one reported.
-        """
+        """After a failure: the crew close, else the session close, then any container left."""
         for final in (True, False):
             if self.listed if final else self.open:
                 self._quietly(lambda final=final: self.shut(final=final))
@@ -860,17 +825,6 @@ def worker(args: Args) -> int:
         checks.after_start(first)
         checks.after_answer(first)
         w.isolation(first)
-        run("ensemble-session", "send", w.name, "Count from 1 to 200, one number per line.")
-        kill_supervisor(w.name)
-        if quiet(w.events, w.cursor):
-            raise SystemExit("an event arrived while the supervisor was gone")
-        run("ensemble-session", "read", w.name)
-        if not supervisor_running(w.name):
-            raise SystemExit("read did not restart the supervisor")
-        w.event("supervisor restart", w.cursor)
-        if extra := quiet(w.events, w.cursor):
-            raise SystemExit(f"a second event after the restart: {extra!r:.200}")
-        print("PASS a supervisor restart delivers the event exactly once", flush=True)
         session = os.path.join(BIN, "ensemble-session")
         w.launch("restart", [session, "restart", w.name])
         w.answer("restart")

@@ -105,7 +105,8 @@ Examples:
   unless --out changes it. Configured role destinations govern publication.
   Foreground waits and reports outcome status/deliverable path on stderr;
   a valid outcome (including failed/needs_input) exits 0, no outcome exits 1,
-  a held lock 75.
+  a held lock 75. A locked run's container, TUI and lock outlast its outcome
+  until its user closes it (ensemble-crew close) or its client exits.
   Detached mode starts agent/harness sessions and prints a Record when live.
   Modes: headless runs without a terminal; tui is a text user interface (TUI);
   in_process uses the configured in-process client runtime.
@@ -267,7 +268,7 @@ Recovery and next help:
   Resume its saved environment: ensemble-session resume dummy-1
   Placement and Record controls: ensemble-session --help
   Commands and exits: ensemble-delegate --help
-  Environment configuration and acceptance: docs/docker-host.md
+  Environment configuration: docs/architecture.md#environments
 """,
     )
     ap.add_argument(
@@ -522,8 +523,8 @@ def _shown(preview: Preview, a: argparse.Namespace) -> dict:
         "tier": preview.plan.session.tier,
         "effort": preview.plan.session.effort,
         "prompt": preview.plan.prompt,
-        "sessions": {"agent": preview.agent, "harness": preview.harness if a.detach else None},
-        "hosts": {"agent": preview.host, "harness": preview.harness_host},
+        "sessions": {"agent": preview.agent},
+        "hosts": {"agent": preview.host},
         "callback": preview.callback,
         "environment": None if environment is None else environment.persisted(),
     }

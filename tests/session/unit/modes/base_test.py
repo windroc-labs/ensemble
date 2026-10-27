@@ -12,12 +12,13 @@ from unittest import mock
 from ensemble.session.clients.base import Client
 from ensemble.session.clients.codex import CodexClient
 from ensemble.session.clients.registry import Registry
-from ensemble.session.engine.types import Access, ConfigError, Launch, Mode, Spec
+from ensemble.session.engine.types import Access, ConfigError, Launch, Liveness, Mode, Spec
 from ensemble.session.hosts.base import Host
 from ensemble.session.modes import base, headless, in_process, tui
 from ensemble.session.modes.base import BaseMode, child_env, identity_drop
 from ensemble.session.modes.client_adapters.headless import Headless
 from ensemble.utils import ACCOUNT_ENV as ACCOUNT
+from ensemble.utils import load_class
 from tests.session.case import HOSTS, Case
 from tests.session.fakes.terminal import MemoryHost
 
@@ -33,10 +34,12 @@ LEASE = {
     "ENSEMBLE_HOLDER_GENERATION",
     "ENSEMBLE_HOLDER_PID",
 }
+GUARD = {"ENSEMBLE_GUARD_LEASE_FD", "ENSEMBLE_GUARD_HOOK_SOCKET"}
 IDENTITIES = {
     "ENSEMBLE_SID",
     "ENSEMBLE_EVENTS",
     *LEASE,
+    *GUARD,
     "INNER_SESSION",
     "INNER_ID",
     "OTHER_SESSION",
@@ -146,6 +149,17 @@ class BaseModeTest(Case):
         for cls in (headless.HeadlessMode, in_process.InProcessMode):
             with self.subTest(cls=cls.__name__):
                 self.assertIsNone(object.__new__(cls).opening_pending)
+
+    def test_client_alive_is_its_state_live_unless_a_mode_overrides_it(self):
+        run = mock.Mock()
+        for state, alive in ((Liveness.LIVE, True), (Liveness.UNKNOWN, False)):
+            run.state.return_value = state
+            self.assertIs(BaseMode.client_alive(run), alive)
+
+    def test_only_a_tui_mode_may_report_its_client_up(self):
+        for cls in (headless.HeadlessMode, in_process.InProcessMode):
+            with self.subTest(cls=cls.__name__):
+                self.assertFalse(object.__new__(cls).client_up)
 
     def test_start_is_the_class_entry_and_no_session_is_built_without_its_prepared(self):
         for mode in (BaseMode, *KINDS):
@@ -333,8 +347,15 @@ class IdentityDropTest(ChildEnvTest):
         self.environ(INNER_ID="i", OTHER_SESSION="", OTHER_ID="o", KEEP="k")
         self.assertEqual(identity_drop(registry(inner=InnerClient, other=OtherClient)), IDENTITIES)
         self.assertEqual(
-            identity_drop(registry()), frozenset({"ENSEMBLE_SID", "ENSEMBLE_EVENTS", *LEASE})
+            identity_drop(registry()),
+            frozenset({"ENSEMBLE_SID", "ENSEMBLE_EVENTS", *LEASE, *GUARD}),
         )
+
+    def test_identity_drop_drops_guard_variables(self):
+        """A start from inside a managed worker never hands its guard's lease or socket on."""
+        self.environ(ENSEMBLE_GUARD_LEASE_FD="7", ENSEMBLE_GUARD_HOOK_SOCKET="/run/hook")
+        env = child_env(Launch(("x",)), "/cwd", identity_drop(registry()))
+        self.assertFalse(GUARD & set(env))
 
     def test_a_callers_start_token_roster_lease_and_events_file_never_reach_a_client(self):
         for environ in (
@@ -405,3 +426,18 @@ def params(function):
         (None if p.kind is inspect.Parameter.POSITIONAL_ONLY else p.name, p.kind, p.default)
         for p in inspect.signature(function).parameters.values()
     ]
+
+
+class OwnerTest(Case):
+    """A tui, headless or in_process start can be owned by a session harness."""
+
+    def test_tui_headless_and_in_process_modes_have_a_generation(self):
+        self.assertIsNone(BaseMode.generation.fget(mock.Mock(spec=BaseMode)))
+        for mode in (tui.TuiMode, headless.HeadlessMode, in_process.InProcessMode):
+            self.assertIsNot(mode.generation, BaseMode.generation)
+
+    def test_only_a_tmux_host_is_harnessed(self):
+        self.assertFalse(Host._harnessed)
+        self.assertFalse(MemoryHost._harnessed)
+        tmux = Host.parse_hosts({**HOSTS, "default": "tmux"}).tables["tmux"]["implementation"]
+        self.assertTrue(load_class(tmux, Host)._harnessed)

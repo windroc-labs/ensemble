@@ -19,13 +19,13 @@ import re
 import stat
 import sys
 import traceback
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import suppress
 from datetime import datetime
 from types import SimpleNamespace
 
 from ensemble.session.engine.types import MARKS, HookCall, HookError, StatusState
-from ensemble.session.hosts.base import TUI_STATE
+from ensemble.session.hosts.base import TUI_STATE, sent
 from ensemble.utils import read_regular
 
 PAYLOAD_MAX = 64 << 20  # bytes of stdin parsed
@@ -92,22 +92,30 @@ def _prepare(argv: Sequence[str], roots: Sequence[str]):
         dict.fromkeys([*roots, *(root for _, hook in hooks for root in hook["roots"]), *sys.path])
     )
     specs = {
-        hook["module"]: _check_module(hook["module"], search, kind + " hook", HookError)
+        hook["module"]: find_module(hook["module"], search, kind + " hook", HookError)
         for kind, hook in hooks
     }
     return folder, label, state, specs
 
 
-def main(argv: Sequence[str], stdin, *, roots: Sequence[str], event: str | None = None) -> None:
+def main(
+    argv: Sequence[str],
+    stdin,
+    *,
+    roots: Sequence[str],
+    event: str | None = None,
+    stamp: Callable[[str], str | None] = sent,
+) -> None:
     payload = read_payload(stdin)
     if event is not None and not LABEL.fullmatch(event):
         raise HookError("usage: relay event <[A-Za-z0-9_.-]{1,64}>")
     folder, label, state, specs = _prepare(argv, roots)
-    _dispatch(folder, label, payload, state, specs, event=event)
+    _dispatch(folder, label, payload, state, specs, event=event, stamp=stamp)
 
 
-def _dispatch(folder, label, payload, state, specs, *, event):
+def _dispatch(folder, label, payload, state, specs, *, event, stamp):
     _validate_state(state, os.path.join(folder, TUI_STATE), HookError)
+    marker = stamp(folder)  # as it begins
 
     def call(kind, given) -> HookCall:
         return HookCall(
@@ -118,7 +126,7 @@ def _dispatch(folder, label, payload, state, specs, *, event):
     if journaled is not None:  # a retry reruns only the Host
         payload = journaled
     elif client_hook := state.get("client_hook"):
-        client = _load_callback(client_hook["module"], "client hook", specs)
+        client = load_callback(client_hook["module"], "client hook", specs)
         payload = client.on_hook(call("client_hook", payload))
         if payload is None:
             return
@@ -129,12 +137,14 @@ def _dispatch(folder, label, payload, state, specs, *, event):
             )
     word = state["words"].get(label)
     host_hook = state.get("host_hook") if word else None
-    host = None if host_hook is None else _load_callback(host_hook["module"], "host hook", specs)
+    host = None if host_hook is None else load_callback(host_hook["module"], "host hook", specs)
     if journaled is None:
         if word != StatusState.DONE:
             payload = cut(payload)
         stamp = datetime.now().astimezone().isoformat(timespec="milliseconds")
         record = {"ts": stamp, "label": label, "payload": payload}
+        if marker is not None:
+            record["sent"] = marker
         append(os.path.join(folder, HOOKS), record if event is None else {**record, "event": event})
     if host is not None:
         host.on_hook(word, call("host_hook", payload))
@@ -240,7 +250,7 @@ def _check_callbacks(state, path, error):
             raise error(f"{path}: bad {hook}")
 
 
-def _check_module(name: str, search: list[str], kind: str, error):
+def find_module(name: str, search: list[str], kind: str, error):
     """What `name` and each package above it were found as over `search`, outermost first."""
     paths, specs = search, []
     parts = name.split(".")
@@ -261,9 +271,9 @@ def _check_module(name: str, search: list[str], kind: str, error):
     return specs
 
 
-def _load_callback(name: str, kind: str, specs):
-    """`name` from what _check_module found: each segment not yet loaded, from its file or, for a
-    namespace package, its directories.
+def load_callback(name: str, kind: str, specs, entry: str = "on_hook"):
+    """`name` from what find_module found: each segment not yet loaded, from its file or, for a
+    namespace package, its directories; its callable `entry` is required.
     """
     parts = name.split(".")
     for index, found in enumerate(specs[name]):
@@ -294,8 +304,8 @@ def _load_callback(name: str, kind: str, specs):
         if parent:
             setattr(sys.modules[parent], child, module)
     module = sys.modules[name]
-    if not callable(getattr(module, "on_hook", None)):
-        raise HookError(f"{kind} {name}: missing on_hook callback")
+    if not callable(getattr(module, entry, None)):
+        raise HookError(f"{kind} {name}: missing {entry} callback")
     return module
 
 
@@ -342,13 +352,20 @@ def append(path: str, record: dict) -> None:
         raise HookError(f"{path}: short write")
 
 
-def run(argv: Sequence[str], stdin, *, roots: Sequence[str], event: str | None = None) -> bool:
+def run(
+    argv: Sequence[str],
+    stdin,
+    *,
+    roots: Sequence[str],
+    event: str | None = None,
+    stamp: Callable[[str], str | None] = sent,
+) -> bool:
     """One hook call, as `ensemble-session hook DIR LABEL` runs it with its own source roots (`event`:
     serve's relay event), its payload stdin's bytes (stdin may be None): returns success, never
     raises or writes stdout; a failure keeps its traceback in DIR/hook.log and one stderr line.
     """
     try:
-        main(argv, stdin.buffer, roots=roots, event=event)
+        main(argv, stdin.buffer, roots=roots, event=event, stamp=stamp)
     except Exception as e:  # noqa: BLE001  # the hook must never fail the client
         if argv and _abs(argv[0]):
             with (
@@ -368,7 +385,9 @@ def run(argv: Sequence[str], stdin, *, roots: Sequence[str], event: str | None =
 
 
 def serve(argv: Sequence[str], requests, replies, *, roots: Sequence[str]) -> None:
-    """`hook --serve DIR`: per {label, event, payload} line, one run() and its {"ok"} line."""
+    """`hook --serve DIR`: per {label, event, payload[, sent]} line, one run() and its {"ok"}
+    line; its record gets the request's `sent`, else the count read as it begins.
+    """
     for line in requests:
         request = _request(line)
         ok = request is not None and run(
@@ -376,6 +395,7 @@ def serve(argv: Sequence[str], requests, replies, *, roots: Sequence[str]) -> No
             SimpleNamespace(buffer=io.BytesIO(json.dumps(request["payload"]).encode())),
             roots=roots,
             event=request["event"],
+            stamp=sent if "sent" not in request else lambda _folder, given=request["sent"]: given,
         )
         try:
             replies.write(json.dumps({"ok": ok}).encode() + b"\n")
@@ -391,10 +411,11 @@ def _request(line: bytes) -> dict | None:
         return None
     if (
         isinstance(request, dict)
-        and set(request) == {"label", "event", "payload"}
+        and set(request) - {"sent"} == {"label", "event", "payload"}
         and isinstance(request["label"], str)
         and (request["event"] is None or isinstance(request["event"], str))
         and isinstance(request["payload"], dict)
+        and (request.get("sent") is None or isinstance(request["sent"], str))
     ):
         return request
     return None

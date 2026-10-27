@@ -90,7 +90,16 @@ class HeadlessSessions(Case):
         self.assertIn(Exited(0), events)
         (call,) = self.calls()
         self.assertEqual(
-            call["argv"][:5], ["run", "--format", "json", "--model", "ollama/qwen3.6:35b-mlx"]
+            call["argv"][:7],
+            [
+                "run",
+                "--format",
+                "json",
+                "--title",
+                "ensemble-run-1",
+                "--model",
+                "ollama/qwen3.6:35b-mlx",
+            ],
         )
         self.assertEqual(call["prompt"], "Hi there\n- a list")
         self.assertEqual((call["cwd"], call["session"], call["auto"]), (str(self.cwd), None, False))
@@ -99,11 +108,12 @@ class HeadlessSessions(Case):
         self.assertEqual(call["config"]["permission"]["bash"], "ask")
         self.assertEqual(call["env"]["OPENCODE_DISABLE_AUTOUPDATE"], "1")
 
-    def test_rejected_bash_ends_the_turn(self):
+    def test_rejected_headless_permission_fails_the_turn(self):
         self.scene([{"bash": "rm -rf build"}, {"text": "I could not run it."}])
         events = self.run_session("Clean up.")
         self.assertIn(Activity("bash"), events)
-        self.assertIn(TurnEnd("I could not run it."), events)
+        self.assertIn(TurnFailed("permission_required", fake_opencode.REJECTED), events)
+        self.assertFalse(any(isinstance(event, TurnEnd) for event in events))
         self.assertEqual(self.calls()[0]["refused"], ["rm -rf build"])
 
     def test_a_resume_continues_the_same_session(self):

@@ -119,8 +119,10 @@ class Names(Case):
 
     def test_only_the_commander_has_it_as_the_session_config_turns_it_off(self):
         self.assertIn("so a worker or role run starts no sessions of its own", body("manage"))
-        self.assertIn("refuse inside them (`docs/sessions.md` › Session settings)", body("manage"))
-        with open(os.path.join(REPO, "docs", "sessions.md"), encoding="utf-8") as f:
+        self.assertIn(
+            "refuse inside them (`docs/architecture.md` › Session settings)", body("manage")
+        )
+        with open(os.path.join(REPO, "docs", "architecture.md"), encoding="utf-8") as f:
             self.assertIn("`ENSEMBLE_AGENT_SESSION=1`", f.read())
         [config] = {p for p in paths("manage") if p.endswith("config.toml")}
         with open(config, "rb") as f:
@@ -148,7 +150,7 @@ class Flows(Case):
         self.assertIn("before", launch)
         self.assertIn("exit 2", launch)
         self.assertIn("--mode headless", launch)
-        self.assertIn("the tui `<name>` and its harness `<name>-drive`", launch)
+        self.assertIn("the tui `<name>`; its harness `<name>-drive` is a local process", launch)
         self.assertIn("--display D", launch)
         self.assertIn("`--display none`", launch)
         self.assertIn("ensemble-session --help", launch)
@@ -184,7 +186,6 @@ class Flows(Case):
             "`ensemble-crew hide <name>…`",
             "`ensemble-crew show <name>…`",
             "`--all`",
-            "`ensemble-session show <name>-drive`",
             "`ensemble-crew note <name> '<text>'`",
             "`''` clears",
             "`ensemble-crew status [<name>…]`",

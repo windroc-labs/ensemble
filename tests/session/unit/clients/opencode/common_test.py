@@ -36,6 +36,7 @@ from tests.session.unit.clients.opencode.support import (
     SES,
     make_db,
     packaged_table,
+    titled_session,
 )
 
 STRATA = {"base_url": "http://10.0.0.5:8080/v1", "models": ["m"]}
@@ -274,6 +275,11 @@ class SessionStatusTest(Case):
         self.client.common.bind(self.cwd, "run-1", "ses_notInTheDb")
         self.assertEqual(self.status().resumable, Resumable.NO)
 
+    def test_an_unbound_runs_titled_session_is_resumable_and_bound(self):
+        titled_session(self.db, SES, "ensemble-run-1", 1_760_000_000_250)
+        self.assertEqual(self.status().resumable, Resumable.YES)
+        self.assertEqual(self.client.common.native(self.cwd, "run-1"), SES)
+
     def test_session_status_unknown_without_a_db(self):
         self.client.common.bind(self.cwd, "run-1", SES)
         self.assertEqual(self.status().resumable, Resumable.UNKNOWN)
@@ -424,7 +430,7 @@ class SelectionTest(Case):
     def test_the_home_is_xdg_data_home_with_no_credential(self):
         self.assertEqual(
             self.common.home(),
-            ClientHome("opencode_dir", "opencode", "XDG_DATA_HOME", "none", min_width=40),
+            ClientHome("opencode_dir", "opencode", "XDG_DATA_HOME", "none"),
         )
         host = DockerHost("docker", {"docker": "/usr/local/bin/docker", "isolated": True})
         data = os.path.join(self.home, ".ensemble", "docker-state", "w", "opencode")
@@ -452,15 +458,6 @@ class SelectionTest(Case):
             },
         )
         self.assertNotIn("home_providers", metadata)
-
-    def test_home_floors_the_container_window(self):
-        """Why: `HOME`'s comment in clients/opencode/common.py."""
-        host = DockerHost("docker", {"docker": "/usr/local/bin/docker", "isolated": True})
-        _, metadata = BaseMode._hosted(self.spec, self.common.home(), host, "w")
-        self.assertEqual(metadata["home_min_width"], "40")
-        unfloored = replace(self.common.home(), min_width=0)
-        _, metadata = BaseMode._hosted(self.spec, unfloored, host, "w")
-        self.assertNotIn("home_min_width", metadata)
 
     def test_extra_flags_are_refused_with_the_reserved_ones(self):
         for flags in (("-c",), ("--prompt=x",), ("--pure",)):

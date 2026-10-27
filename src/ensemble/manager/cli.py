@@ -432,8 +432,11 @@ back on the Docker Host and its account. No record or session id: exit 1.
 SESSION_OPTIONS naming --account, --client, --cwd, --host or --resume, abbreviated
 or not: exit 2. A run still alive
 (roster entry ISSUE or AGENT, or a session listed here or below with its
-session id): exit 2, so its conversation gets no second client. The worker is
-tracked like any other; the board is not touched.
+session id) or one whose liveness is unknown (its status or the session listing
+failed): exit 2, so its conversation gets no second client. Where its start is
+owned (every built-in client's tui on tmux or Docker), it runs under a session
+harness of its own with no handlers, tracked like any other worker; the board is
+not touched.
 
 Examples:
   With TASK-123's run closed:
@@ -627,7 +630,11 @@ command when placement fails. Placement: ensemble-session --help
             else "Remove a stopped entry's bookkeeping",
             (
                 "close calls the owning controller before removing the entry; a session\n"
-                "name owned by an entry also selects it. Requires lease access.\n"
+                "name owned by an entry also selects it. Requires lease access. Removes\n"
+                "the entry only once its owner confirmed the work ended; a failed close\n"
+                "keeps it, exits 1 and appends a line to the manager's\n"
+                "close-failures.jsonl. A locked run's environment lock goes only once\n"
+                "its container is confirmed removed.\n"
                 if name == "close"
                 else "By default refuses live work. --force skips controller checks and removes\n"
                 "bookkeeping only; work may remain alive. Requires lease access.\n"
@@ -649,8 +656,9 @@ command when placement fails. Placement: ensemble-session --help
         "Terminate roster entries and the caller's descendant work",
         """Requires lease access and ensemble-session listing. Also includes untracked
 descendants opened by this caller. Prints selected names or nothing to close.
-Without --dry-run closes work and removes successful entries; partial listing
-or controller failures exit 1 and may leave work running.
+Without --dry-run closes work and removes successful entries; a failed one is
+kept and logged to close-failures.jsonl. Partial listing or controller failures
+exit 1 and may leave work running.
 
 Examples:
   From the intended commander's terminal, preview first:

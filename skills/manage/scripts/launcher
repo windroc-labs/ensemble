@@ -49,6 +49,12 @@ def client_roots(client, source, newest=True):
     return sorted(sorted(roots), key=key, reverse=True) if newest else roots
 
 
+def ref(root, source):
+    """The ref an OpenCode copy holds: its package spec's #fragment; a spec without one is the default branch."""
+    spec = os.path.dirname(os.path.dirname(os.path.relpath(root, source)))
+    return spec.partition("#")[2] or "main"
+
+
 def identify(root):
     for client, source in (("claude", record), ("codex", cache), ("opencode", packages)):
         if root in client_roots(client, source) or (client != "claude" and root.startswith(source + os.sep)):
@@ -94,6 +100,8 @@ else:
             sys.exit()
         if not os.path.exists(root) and data.get("client") in ("claude", "codex", "opencode"):
             for candidate in client_roots(data["client"], data["source"]):
+                if data["client"] == "opencode" and ref(candidate, data["source"]) != ref(root, data["source"]):
+                    continue
                 if os.access(target := os.path.join(candidate, rel), os.X_OK):
                     data["root"] = candidate
                     save(data)

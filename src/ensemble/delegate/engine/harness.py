@@ -1,10 +1,10 @@
-"""The harness: `python3 -P -s -m ensemble.delegate.engine.harness <workdir>`, a detached run's own
-process on its harness Host. It attaches to the run by its workdir, drives it to its Result and
-appends the run's one events outcome line.
+"""The harness: `python3 -P -s -m ensemble.delegate.engine.harness <workdir>`, a detached run's drive
+(started through ProcessControl). It attaches to the run by its workdir, drives it to its Result
+and appends its events outcome line, then its exited line.
 
 Exits 0 on a valid outcome, 1 without one, 75 busy, 2 when the run is refused (usage, its state,
-config), 128 + n on signal n. Host.detach starts it with SIGNALS blocked; they are unblocked only
-while the run executes, so a late signal cannot drop the outcome line. The first stop signal ignores
+config), 128 + n on signal n. It starts with SIGNALS blocked; they are unblocked only while the run
+executes, so a late signal cannot drop either line. The first stop signal ignores
 later ones instead of blocking them, since a callback started afterwards would inherit a blocked
 mask.
 """
@@ -27,6 +27,15 @@ def main(argv: list[str], *, delegate_cls: type[HarnessDelegate] = HarnessDelega
     except ConfigError as error:
         say(f"delegate: {error}")
         return 2
+    rc = 1
+    try:
+        rc = _drive(owner)
+        return rc
+    finally:
+        owner._exited(rc)
+
+
+def _drive(owner: HarnessDelegate) -> int:
     try:
         result = _run(owner)
     except Stopped as stopped:

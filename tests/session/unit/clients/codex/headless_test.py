@@ -1,7 +1,6 @@
 """Codex headless launches, native events and usage limits."""
 
 import dataclasses
-import io
 import json
 import os
 import sys
@@ -22,10 +21,12 @@ from ensemble.session.engine.types import (
     Stderr,
     TurnEnd,
     TurnFailed,
+    TurnStarted,
 )
 from ensemble.session.modes.headless import HeadlessMode
 from tests.session.case import packaged_hosts
 from tests.session.fakes.terminal import MemoryHost
+from tests.session.fakes.worker import ScriptedWorker
 from tests.session.unit.clients.codex.support import (
     AUTO,
     BYPASS,
@@ -45,6 +46,29 @@ HOOK = (sys.executable, "-I", "/protected/driver_hook.py", "context")
 
 
 class HeadlessTest(Base):
+    def test_native_turn_started_is_acceptance_and_resets_the_reply(self):
+        run = self.client.headless()
+        run.last_reply = "old"
+        self.assertEqual(list(run.parse({"type": "turn.started"})), [TurnStarted()])
+        self.assertEqual(list(run.parse({"type": "turn.completed"})), [TurnEnd("")])
+
+    def test_failed_turn_preserves_native_error_kind(self):
+        run = self.client.headless()
+        self.assertEqual(
+            list(
+                run.parse(
+                    {
+                        "type": "turn.failed",
+                        "error": {
+                            "codex_error_info": "server_overloaded",
+                            "message": "retry later",
+                        },
+                    }
+                )
+            ),
+            [Stderr("retry later"), TurnFailed("server_overloaded", "retry later")],
+        )
+
     def run_instance(self):
         run = self.client.headless()
         run.launch(dataclasses.replace(self.spec, prompt="hello"))
@@ -78,7 +102,12 @@ class HeadlessTest(Base):
     def test_activity_and_invalid_record_diagnostics(self):
         run = self.client.headless()
         self.assertEqual(
-            list(run.events(["not json", "[]"])), [Stderr("codex: invalid JSON event")]
+            list(run.events(["not json", "[]"])),
+            [
+                Stderr("codex: invalid JSON event"),
+                TurnFailed("invalid_output", "codex: invalid JSON event"),
+            ]
+            * 2,
         )
         self.assertEqual(
             list(run.parse({"type": "thread.started", "thread_id": "not-a-uuid"})),
@@ -233,17 +262,18 @@ class ContainerLaunch(Base):
             ("codex_dir", "codex", "CODEX_HOME", "codex-access-token", ("sessions",)),
         )
 
-    def test_headless_mode_passes_the_image_runtime_and_home_to_its_host_pipe(self):
+    def test_headless_mode_passes_the_image_runtime_and_home_to_its_host_worker(self):
         host = MemoryHost()
         host._inherit_env = False
-        piped = mock.Mock(stdout=io.StringIO(), stderr=io.StringIO())
         spec = dataclasses.replace(self.spec, name="w", client="codex", prompt="hello")
         with (
             mock.patch.object(host, "_client_context", return_value=self.runtime),
             mock.patch.object(
                 host, "_client_env", return_value={"CODEX_HOME": str(self.codex_home)}
             ),
-            mock.patch.object(host, "pipe", return_value=piped) as pipe,
+            mock.patch.object(
+                host, "headless_worker", side_effect=lambda name, *_: ScriptedWorker(name)
+            ) as worker,
             mock.patch("shutil.which", return_value=None) as which,
             mock.patch.dict(os.environ, {"PERSONAL_CODEX_ENV": "private"}),
         ):
@@ -254,8 +284,7 @@ class ContainerLaunch(Base):
                 record=lambda _: None,
                 host=host,
             )
-        name, launch = pipe.call_args.args
-        metadata = pipe.call_args.kwargs["metadata"]
+        name, launch, metadata = worker.call_args.args
         self.assertEqual((name, launch.argv[:2]), ("w", ("/image/bin/codex", "exec")))
         self.assertEqual(launch.env["CODEX_HOME"], str(self.codex_home))
         self.assertNotIn("PERSONAL_CODEX_ENV", launch.env)
@@ -397,18 +426,18 @@ class PolicyReplay(Base):
                     resume=True,
                     env={"K": "changed", "ENSEMBLE_CLIENT": "wrong"},
                 )
-                with mock.patch(
-                    "subprocess.Popen",
-                    return_value=mock.Mock(stdout=io.StringIO(), stderr=io.StringIO()),
-                ) as popen:
+                host = MemoryHost()
+                with mock.patch.object(
+                    host, "headless_worker", side_effect=lambda name, *_: ScriptedWorker(name)
+                ) as worker:
                     HeadlessMode.start(
                         resumed,
                         self.client,
                         registry=self.session_cls._config().registry,
                         record=lambda _info: None,
-                        host=MemoryHost(),
+                        host=host,
                     )
-                env = popen.call_args.kwargs["env"]
+                env = worker.call_args.args[1].env
                 self.assertEqual(env["ENSEMBLE_CLIENT"], "codex")
                 self.assertEqual(env["K"], "saved")
                 self.assertEqual(

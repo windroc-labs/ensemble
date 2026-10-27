@@ -315,6 +315,17 @@ class FileLock(Base):
         with files.file_lock(self.path, wait=False):
             pass
 
+    def test_shared_holders_share_it_and_hold_off_an_exclusive_one(self):
+        with (
+            files.file_lock(self.path, shared=True),
+            files.file_lock(self.path, shared=True),
+            self.assertRaises(BlockingIOError),
+            files.file_lock(self.path, wait=False),
+        ):
+            self.fail("locked a shared lock exclusively")
+        with files.file_lock(self.path, wait=False):
+            pass
+
 
 class DropStale(Base):
     def entry(self, name: str, age_days: float) -> str:

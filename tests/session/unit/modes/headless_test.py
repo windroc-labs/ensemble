@@ -1,11 +1,11 @@
-"""modes/headless.py: its start from a Spec (checks, one session line, then the launch's command
-with the child env; start failures), send and screen refused, over a fake Popen that starts no
-process. Real children: tests/session/integration/modes/headless_integration_test.py.
+"""modes/headless.py: its start from a Spec (checks, one session line, then its Host's headless
+worker for the launch's command with the child env; start failures), send and screen refused, over
+a scripted worker that starts no process. Real children:
+tests/session/integration/modes/headless_integration_test.py.
 """
 
 import contextlib
 import errno
-import io
 import os
 import queue
 import stat
@@ -20,27 +20,34 @@ from ensemble.session import SESSION_NAME_RULE
 from ensemble.session.clients.base import Client
 from ensemble.session.engine.types import (
     Access,
+    Blocked,
     ClientContext,
     ClientHome,
     ConfigError,
     Container,
     Launch,
+    LimitHit,
     Liveness,
     Permission,
     Prepared,
+    Reply,
     SessionError,
     SessionInfo,
     Spec,
+    Stderr,
+    TurnEnd,
+    TurnFailed,
+    TurnStarted,
+    WorkerOutput,
 )
-from ensemble.session.hosts.base import Piped
 from ensemble.session.modes.base import POINTER
-from ensemble.session.modes.headless import PUT_WAIT, QUEUE_MAX, HeadlessMode
+from ensemble.session.modes.headless import LINE_MAX, PUT_WAIT, QUEUE_MAX, HeadlessMode
 from ensemble.utils import ACCOUNT_ENV as ACCOUNT
 from ensemble.utils import over_argv
 from tests.session.case import PLUGIN_BIN
 from tests.session.fakes.terminal import MemoryHost
+from tests.session.fakes.worker import ScriptedWorker
 from tests.session.headless_support import NOTHING, SID, HeadlessCase, StubClient, StubRun
-from tests.utils.process_fixtures import DEVNULL
 
 
 class NoHeadless(StubClient):
@@ -75,17 +82,19 @@ class UnstreamedRun(StubRun):
 
 class Base(HeadlessCase):
     @contextlib.contextmanager
-    def faked(self):
-        """subprocess.Popen faked, starting nothing: each call's (argv, kwargs, session lines by
-        then) in the list; its process's pipes empty.
+    def faked(self, error=None):
+        """Each headless worker its Host starts: its (launch, session lines by then) in the list;
+        a scripted worker that exits at once, or `error` raised.
         """
         calls = []
 
-        def popen(argv, **kwargs):
-            calls.append((argv, kwargs, len(self.recorded)))
-            return mock.Mock(stdout=io.StringIO(), stderr=io.StringIO())
+        def worker(_host, name, launch, metadata):
+            calls.append((launch, len(self.recorded)))
+            if error is not None:
+                raise error
+            return ScriptedWorker(name, metadata["generation"])
 
-        with mock.patch("subprocess.Popen", side_effect=popen):
+        with mock.patch.object(MemoryHost, "headless_worker", autospec=True, side_effect=worker):
             yield calls
 
 
@@ -148,10 +157,10 @@ class Start(Base):
             transcript="/t.jsonl",
             resume="stub --resume s1",
         )
-        ((argv, kwargs, lines),) = calls
+        ((launch, lines),) = calls
         self.assertEqual(self.recorded, [info])
         self.assertEqual(
-            (argv, kwargs["cwd"], kwargs["env"], lines),
+            (launch.argv, launch.cwd, dict(launch.env), lines),
             (
                 NOTHING,
                 self.dir,
@@ -165,9 +174,9 @@ class Start(Base):
                 1,
             ),
         )
-        self.assertEqual((kwargs["stdin"], kwargs["process_group"]), (DEVNULL, 0))
+        self.assertEqual(self.mode.worker.writes, [b""])
         (spec,) = StubRun.specs
-        self.assertEqual(prepared, Prepared(spec, info, NOTHING, kwargs["env"]))
+        self.assertEqual(prepared, Prepared(spec, info, NOTHING, launch.env))
         self.assertEqual((spec.prompt, spec.sid, spec.client), ("hi", SID, "stub"))
 
     def test_the_spec_client_replaces_the_ambient_and_launch_client(self):
@@ -178,7 +187,7 @@ class Start(Base):
                 self.faked() as calls,
             ):
                 self.start(StubClient(Launch(NOTHING, env=launch_env)))
-                self.assertEqual(calls[0][1]["env"]["ENSEMBLE_CLIENT"], "stub")
+                self.assertEqual(calls[0][0].env["ENSEMBLE_CLIENT"], "stub")
 
     def test_its_cwd_is_the_launch_cwd_else_the_access_cwd(self):
         given, access = (os.path.join(self.dir, d) for d in ("given", "access"))
@@ -191,7 +200,7 @@ class Start(Base):
                     StubClient(Launch(NOTHING, cwd=launched)), access=Access(cwd=cwd)
                 )
                 self.assertEqual(
-                    (prepared.info.cwd, calls[0][1]["cwd"], prepared.env["PWD"]), (want,) * 3
+                    (prepared.info.cwd, calls[0][0].cwd, prepared.env["PWD"]), (want,) * 3
                 )
 
     def test_the_client_note_follows_the_prompt_only_with_commands(self):
@@ -230,13 +239,10 @@ class Start(Base):
             (StubClient(run=FailingRun), {}, LookupError, "no binding"),
         ):
             with self.subTest(message=message):
-                with (
-                    mock.patch("subprocess.Popen", side_effect=AssertionError("started")) as popen,
-                    self.assertRaises(error) as caught,
-                ):
+                with self.faked() as calls, self.assertRaises(error) as caught:
                     self.start(client, **fields)
                 self.assertEqual(str(caught.exception), message)
-                popen.assert_not_called()
+                self.assertEqual(calls, [])
         self.assertEqual((self.recorded, self.mode), ([], None))
 
     def test_its_checks_in_order_tui_keys_selection_then_clients(self):
@@ -250,7 +256,7 @@ class Start(Base):
         ):
             with (
                 self.subTest(fields=fields),
-                mock.patch("subprocess.Popen", side_effect=AssertionError("started")),
+                self.faked(AssertionError("started")),
                 self.assertRaises(ConfigError) as caught,
             ):
                 self.start(**fields)
@@ -261,56 +267,120 @@ class Start(Base):
         for error in (OSError("no exec"), ValueError("bad argument")):
             with self.subTest(error=error):
                 self.recorded = []
-                with (
-                    mock.patch("subprocess.Popen", side_effect=error) as popen,
-                    self.assertRaises(SessionError) as caught,
-                ):
+                with self.faked(error) as calls, self.assertRaises(SessionError) as caught:
                     self.start()
                 self.assertEqual(str(caught.exception), f"cannot start {sys.executable}: {error}")
-                popen.assert_called_once()
+                self.assertEqual(len(calls), 1)
                 self.assertEqual((len(self.recorded), self.mode), (1, None))
 
-    def test_a_stream_setup_failure_is_a_driver_error_after_the_session_line_with_no_session(self):
+    def test_a_stream_setup_failure_closes_its_worker_after_the_session_line(self):
         for error in (OSError("no stream"), ValueError("bad stream")):
             with self.subTest(error=error):
                 self.recorded, client = [], StubClient(run=UnstreamedRun)
                 client.failure = error
-                proc = mock.Mock(stdout=io.StringIO(), stderr=io.StringIO())
+                worker = ScriptedWorker(code=None)
                 with (
-                    mock.patch("subprocess.Popen", return_value=proc) as popen,
+                    mock.patch.object(MemoryHost, "headless_worker", return_value=worker),
                     self.assertRaises(SessionError) as caught,
                 ):
                     self.start(client)
                 self.assertEqual(str(caught.exception), f"cannot start {sys.executable}: {error}")
                 self.assertIs(caught.exception.__cause__, error)
-                popen.assert_called_once()
+                self.assertEqual(worker.closes, 1)
                 self.assertEqual((len(self.recorded), self.mode), (1, None))
 
 
-class FakePiped(Piped):
-    def __init__(self, codes=()):
-        self.stdout, self.stderr = io.StringIO(), io.StringIO()
-        self.codes, self.waits, self.stops, self.closes = list(codes), [], [], 0
+class WorkerHost(MemoryHost):
+    """Its headless workers' (name, launch, metadata) in `starts`; each `worker`, else a scripted
+    one that exits 0 at once.
+    """
 
-    def wait(self, timeout):
-        self.waits.append(timeout)
-        return self.codes.pop(0) if self.codes else None
-
-    def stop(self, *, ended):
-        self.stops.append(ended)
-
-    def close(self):
-        self.closes += 1
-
-
-class PipingHost(MemoryHost):
-    def __init__(self, piped):
+    def __init__(self, worker=None):
         super().__init__()
-        self.piped, self.pipes = piped, []
+        self.scripted, self.starts = worker, []
 
-    def pipe(self, name, launch, *, metadata=None):
-        self.pipes.append((name, launch, metadata))
-        return self.piped
+    def headless_worker(self, name, launch, metadata):
+        self.starts.append((name, launch, metadata))
+        worker = self.scripted or ScriptedWorker(name)
+        worker.generation = metadata["generation"]
+        return worker
+
+
+class TerminalEvents(Base):
+    def mode_for(self, events, codes=(0,)):
+        spec = Spec(workdir=self.dir, access=Access(cwd=self.dir), sid=SID)
+        mode = HeadlessMode(
+            Prepared(
+                spec, SessionInfo(sid=SID, cwd=self.dir, project=False, transcript="", resume="")
+            ),
+            ScriptedWorker(code=codes[-1], codes=codes),
+            "g" * 32,
+        )
+        mode.worker.exit_read = True
+        mode.exited.set()
+        for event in (*events, None, None):
+            mode.items.put(event)
+        return mode
+
+    def drain(self, mode):
+        found = []
+        for _ in range(20):
+            batch, ended = mode.poll(0)
+            found.extend(batch)
+            if ended:
+                return found
+        self.fail("headless never ended")
+
+    def test_success_waits_for_both_streams_and_known_zero_exit(self):
+        mode = self.mode_for(
+            [TurnStarted(), Reply("whole\n\nreply"), TurnEnd("whole\n\nreply")], (None, 0)
+        )
+        self.assertEqual(mode.poll(0), ([TurnStarted()], False))
+        self.assertEqual(mode.poll(0), ([Reply("whole\n\nreply")], False))
+        self.assertEqual(mode.poll(0), ([], False))
+        self.assertEqual(mode.poll(0), ([], False))
+        self.assertEqual(mode.poll(0), ([], False))
+        self.assertEqual(mode.poll(0), ([TurnEnd("whole\n\nreply")], True))
+        self.assertEqual(mode.returncode(0), 0)
+        self.assertEqual(mode.poll(0), ([], True))
+
+    def test_a_failure_read_after_a_stop_is_the_interrupt(self):
+        mode = self.mode_for([TurnStarted(), TurnFailed("incomplete_turn")], (-15,))
+        mode.stop()
+        found = self.drain(mode)
+        self.assertEqual(
+            [e for e in found if isinstance(e, TurnFailed)], [TurnFailed("interrupted")]
+        )
+
+    def test_nonzero_exit_overrides_structured_success(self):
+        for code in (2, -9):
+            with self.subTest(code=code):
+                mode = self.mode_for([TurnEnd("partial")], (code,))
+                found = self.drain(mode)
+                self.assertEqual(len(found), 1)
+                self.assertIsInstance(found[0], TurnFailed)
+                self.assertEqual(found[0].error, "process_exit")
+                self.assertIn(str(code), found[0].detail)
+
+    def test_eof_or_text_without_native_completion_is_failure_even_at_zero_exit(self):
+        mode = self.mode_for([Reply("partial"), Stderr("truncated stream")])
+        found = self.drain(mode)
+        self.assertEqual(found[:-1], [Reply("partial"), Stderr("truncated stream")])
+        self.assertEqual(found[-1], TurnFailed("incomplete_turn", "truncated stream"))
+
+    def test_native_failure_wins_over_repeated_or_late_completion(self):
+        failure = TurnFailed("server_overloaded", "try again")
+        mode = self.mode_for([failure, failure, TurnEnd("false success")], (1,))
+        self.assertEqual(self.drain(mode), [failure])
+
+    def test_uninteractive_permission_stops_worker_and_never_succeeds(self):
+        mode = self.mode_for([Blocked("approve tool"), TurnEnd("false success")])
+        self.assertEqual(self.drain(mode), [TurnFailed("permission_required", "approve tool")])
+        self.assertEqual(mode.worker.closes, 1)
+
+    def test_usage_limit_is_observable_and_cannot_be_a_success(self):
+        mode = self.mode_for([LimitHit(5), TurnEnd("false success")])
+        self.assertEqual(self.drain(mode), [LimitHit(5), TurnFailed("usage_limit")])
 
 
 class HomedRun(StubRun):
@@ -323,7 +393,7 @@ class AccountsClient(StubClient):
         return frozenset({"default", "work"})
 
 
-class HomeHost(PipingHost):
+class HomeHost(WorkerHost):
     _inherit_env = False
 
     def _client_env(self, name, client, home, *, resume):
@@ -343,44 +413,175 @@ class ThroughItsHost(Base):
             record=self.recorded.append,
             host=host,
         )
+        self.addCleanup(self.stop_quietly, self.mode)
         return self.mode
 
-    def test_start_goes_through_its_host_pipe_never_popen(self):
-        host = PipingHost(FakePiped())
+    def stop_quietly(self, mode):
+        with contextlib.suppress(SessionError):
+            mode.stop()
+
+    def pumps(self, before):
+        """The pump threads started since `before`."""
+        return [t for t in threading.enumerate() if t.name.endswith("(_pump)") and t not in before]
+
+    def test_start_goes_through_its_host_worker_headless_never_popen(self):
+        host = WorkerHost()
         with mock.patch("subprocess.Popen", side_effect=AssertionError("popen")):
             mode = self.start_on(host)
-        ((name, launch, metadata),) = host.pipes
+        ((name, launch, metadata),) = host.starts
         prepared = mode.prepared
+        self.assertRegex(mode.generation, "^[0-9a-f]{32}$")
         self.assertEqual(
             (name, launch, metadata),
             (
-                None,
+                f"headless-{mode.generation}",
                 Launch(prepared.argv, env=prepared.env, cwd=self.dir, transcript="/t.jsonl"),
-                None,
+                {"generation": mode.generation},
             ),
         )
+        worker = host.calls.worker.call_args
+        self.assertEqual((worker.args[0], worker.kwargs["terminal"]), (name, False))
+        self.assertFalse(hasattr(host, "pipe"))
         self.assertEqual(len(self.recorded), 1)
 
-    def test_returncode_closes_the_piped_once_and_state_never(self):
-        piped = FakePiped(codes=[None, None, 0, 0])
-        mode = self.start_on(PipingHost(piped))
+    def test_a_client_that_exited_before_its_input_ended_still_reports_its_exit(self):
+        worker = ScriptedWorker(code=3)
+        worker.write = mock.Mock(side_effect=SessionError("worker w: exited"))
+        worker.state = mock.Mock(return_value=Liveness.ABSENT)
+        mode = self.start_on(WorkerHost(worker))
+        self.assertEqual(mode.returncode(5), 3)
+        live = ScriptedWorker(code=None)
+        live.write = mock.Mock(side_effect=SessionError("worker w: input ended"))
+        with self.assertRaisesRegex(SessionError, "^cannot start .*: worker w: input ended$"):
+            self.start_on(WorkerHost(live))
+        self.assertEqual(live.closes, 1)
+
+    def test_start_ends_the_workers_input(self):
+        worker = ScriptedWorker(code=None)
+        self.start_on(WorkerHost(worker))
+        self.assertEqual(worker.writes, [b""])
+
+    def test_a_named_runs_generation_is_its_hosts_and_a_nameless_ones_its_own(self):
+        host = WorkerHost()
+        named = self.start_on(host, name="r1")
+        self.assertEqual(named.generation, host.starts[0][2]["generation"])
+        self.assertEqual(host.starts[0][0], "r1")
+        nameless = self.start_on(WorkerHost())
+        self.assertRegex(nameless.generation, "^[0-9a-f]{32}$")
+        self.assertNotEqual(nameless.generation, named.generation)
+
+    def test_a_nameless_run_on_a_named_headless_host_is_refused_before_any_state(self):
+        class Committed(StubRun):
+            commits = []
+
+            def commit(self):
+                self.commits.append(True)
+
+        host = WorkerHost()
+        host._named_headless = True
+        message = "^a headless session on host memory needs a name$"
+        with (
+            mock.patch.object(host, "_client_context", side_effect=AssertionError("context")),
+            mock.patch.object(host, "_client_env", side_effect=AssertionError("env")),
+        ):
+            for call in ("preflight", "start"):
+                more = {"record": self.recorded.append} if call == "start" else {}
+                with self.subTest(call=call), self.assertRaisesRegex(ConfigError, message):
+                    getattr(HeadlessMode, call)(
+                        Spec(workdir=self.dir, access=Access(cwd=self.dir), sid=SID, client="stub"),
+                        StubClient(Launch(NOTHING), run=Committed),
+                        registry=self.session_cls._config().registry,
+                        host=host,
+                        **more,
+                    )
+        self.assertEqual((self.recorded, Committed.commits, host.starts), ([], [], []))
+        host.calls.validate.assert_not_called()
+        self.assertFalse(os.path.lexists(os.path.join(self.dir, "prompt")))
+
+    def test_an_owner_is_accepted_and_kept_nowhere(self):
+        host = WorkerHost()
+        spec = Spec(workdir=self.dir, access=Access(cwd=self.dir), sid=SID, client="stub")
+        mode = HeadlessMode.start(
+            spec,
+            StubClient(Launch(NOTHING, transcript="/t.jsonl"), run=StubRun),
+            registry=self.session_cls._config().registry,
+            record=self.recorded.append,
+            host=host,
+            owner="/h",
+        )
+        self.assertEqual(host.starts[0][2], {"generation": mode.generation})
+        self.assertEqual(mode.opening_pending, None)
+
+    def test_returncode_is_the_hosts_confirmed_code_then_closes_the_worker_once(self):
+        worker = ScriptedWorker(code=None, codes=[None, 3])
+        mode = self.start_on(WorkerHost(worker))
         self.assertEqual(mode.state(), Liveness.LIVE)
-        self.assertIsNone(mode.returncode(1))
-        self.assertEqual(piped.closes, 0)
-        self.assertEqual(mode.returncode(1), 0)
-        self.assertEqual(mode.returncode(1), 0)
-        self.assertEqual((piped.closes, piped.waits), (1, [0, 1, 1, 1]))
+        self.assertIsNone(mode.returncode(0.1))
+        self.assertEqual(worker.closes, 0)
+        with worker.condition:
+            worker.code = 3
+            worker.condition.notify_all()
+        self.assertEqual(mode.returncode(5), 3)
+        self.assertEqual(mode.state(), Liveness.ABSENT)
+        self.assertEqual(mode.returncode(0), 3)
         mode.stop()
-        self.assertEqual(piped.stops, [True])
+        self.assertEqual(worker.closes, 1)
+
+    def test_stop_closes_the_worker_once_and_a_refused_close_raises(self):
+        worker = ScriptedWorker(code=None)
+        mode = self.start_on(WorkerHost(worker))
+        mode.stop()
+        mode.stop()
+        self.assertEqual(worker.closes, 1)
+        refusing = ScriptedWorker(code=None)
+        refusing.close = mock.Mock(side_effect=SessionError("worker w: refused"))
+        mode = self.start_on(WorkerHost(refusing))
+        with self.assertRaisesRegex(SessionError, "^worker w: refused$"):
+            mode.stop()
+
+    def test_output_frames_become_lines_with_universal_newlines(self):
+        worker = ScriptedWorker(
+            batches=[
+                [WorkerOutput(b'{"text": "a"}\r\n{"te'), WorkerOutput(b"bad \xff\rnext", "stderr")],
+                [WorkerOutput(b'xt": "\xe9\x9b'), WorkerOutput(b'\xaa"}\n')],
+            ]
+        )
+        mode = self.start_on(WorkerHost(worker))
+        found, ended = [], False
+        for _ in range(50):
+            batch, ended = mode.poll(1)
+            found.extend(batch)
+            if ended:
+                break
+        self.assertTrue(ended)
+        self.assertEqual(
+            [event for event in found if isinstance(event, Reply)], [Reply("a"), Reply("雪")]
+        )
+        self.assertEqual(
+            [event for event in found if isinstance(event, Stderr)],
+            [Stderr("bad \ufffd"), Stderr("next")],
+        )
+
+    def test_a_line_over_line_max_fails_the_run_and_stops_the_worker(self):
+        chunk = b"x" * (1 << 20)
+        worker = ScriptedWorker(
+            batches=[[WorkerOutput(chunk)] for _ in range(LINE_MAX // len(chunk) + 1)], code=None
+        )
+        mode = self.start_on(WorkerHost(worker))
+        message = f"^headless session headless-{mode.generation}: a client output line over "
+        with self.assertRaisesRegex(SessionError, message + f"{LINE_MAX} bytes$"):
+            for _ in range(50):
+                mode.poll(1)
+        self.assertEqual(worker.closes, 1)
 
     def test_a_named_headless_spec_gets_the_hosts_client_env_and_metadata(self):
-        host = HomeHost(FakePiped())
+        host = HomeHost()
         with (
             mock.patch.object(uuid, "uuid4", return_value=uuid.UUID(int=7)),
             mock.patch.dict(os.environ, {"HM_AMBIENT": "1"}),
         ):
             mode = self.start_on(host, name="w1", resume=True, client_class=HomedRun)
-        ((name, launch, metadata),) = host.pipes
+        ((name, launch, metadata),) = host.starts
         self.assertEqual((name, StubRun.specs[-1].env), ("w1", {"HOME_DIR": "/state/w1/d"}))
         self.assertNotIn("HM_AMBIENT", launch.env)
         self.assertEqual(
@@ -402,7 +603,7 @@ class ThroughItsHost(Base):
     def test_a_selected_account_names_the_home_in_metadata_and_never_reaches_the_run(self):
         for env, account in (({}, None), ({ACCOUNT: "work"}, "work"), ({ACCOUNT: ""}, None)):
             with self.subTest(env=env), mock.patch.dict(os.environ, {ACCOUNT: "outer"}):
-                host = HomeHost(FakePiped())
+                host = HomeHost()
                 spec = Spec(
                     workdir=self.dir,
                     access=Access(cwd=self.dir),
@@ -421,7 +622,7 @@ class ThroughItsHost(Base):
                         host=host,
                         **more,
                     )
-                ((_, launch, metadata),) = host.pipes
+                ((_, launch, metadata),) = host.starts
                 self.assertEqual(metadata.get("home_account"), account)
                 self.assertEqual(
                     dict(StubRun.specs[-1].env), {"OTHER": "1", "HOME_DIR": "/state/w1/d"}
@@ -437,7 +638,7 @@ class ThroughItsHost(Base):
                 return super().launch(spec)
 
         for isolated in (False, True):
-            host = PipingHost(FakePiped())
+            host = WorkerHost()
             host._isolated = isolated
             self.start_on(host, client_class=Seen)
         self.assertEqual(seen, [Permission.AUTO, Permission.YOLO])
@@ -455,7 +656,7 @@ class ThroughItsHost(Base):
                 seen.append(self._context)
                 return super().launch(spec)
 
-        host = PipingHost(FakePiped())
+        host = WorkerHost()
         with mock.patch.object(host, "_client_context", return_value=context):
             self.start_on(host, client_class=Seen)
         self.assertEqual(len(seen), 1)
@@ -463,7 +664,7 @@ class ThroughItsHost(Base):
 
     def test_an_over_budget_prompt_becomes_a_pointer_to_a_file_in_the_workdir(self):
         big, path = "雪" * 40_000, os.path.join(self.dir, "prompt", "prompt.md")
-        host = PipingHost(FakePiped())
+        host = WorkerHost()
         self.start_on(host, prompt=big)
         (spec,) = StubRun.specs
         self.assertEqual(spec.prompt, POINTER.format(size=len(big.encode()), path=path))
@@ -472,7 +673,7 @@ class ThroughItsHost(Base):
             self.assertEqual(f.read(), big)
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(os.stat(os.path.dirname(path)).st_mode), 0o700)
-        self.assertIsNone(host.pipes[0][2])
+        self.assertNotIn("prompt_file", host.starts[0][2])
 
     def test_a_container_context_puts_the_prompt_in_metadata_not_on_disk(self):
         context = ClientContext(
@@ -481,10 +682,10 @@ class ThroughItsHost(Base):
             Container("/image/bin", "/image/python", "/image/modules", "/run/state"),
         )
         big, path = "雪" * 40_000, "/run/state/prompt/prompt.md"
-        host = PipingHost(FakePiped())
+        host = WorkerHost()
         with mock.patch.object(host, "_client_context", return_value=context):
             self.start_on(host, prompt=big, name="w")
-        metadata = host.pipes[0][2]
+        metadata = host.starts[0][2]
         self.assertEqual((metadata["prompt_file"], metadata["prompt"]), (path, big))
         self.assertEqual(StubRun.specs[0].prompt, POINTER.format(size=len(big.encode()), path=path))
         self.assertFalse(os.path.lexists(os.path.join(self.dir, "prompt")))
@@ -492,13 +693,13 @@ class ThroughItsHost(Base):
     def test_a_prompt_within_the_budget_stays_and_preflight_writes_nothing(self):
         at = "a" * 99_998
         self.assertTrue(over_argv(at + "a") and not over_argv(at))
-        self.start_on(PipingHost(FakePiped()), prompt=at)
+        self.start_on(WorkerHost(), prompt=at)
         self.assertEqual(StubRun.specs[0].prompt, at)
         HeadlessMode.preflight(
             Spec(workdir=self.dir, access=Access(cwd=self.dir), sid=SID, prompt="雪" * 40_000),
             StubClient(),
             registry=self.session_cls._config().registry,
-            host=PipingHost(FakePiped()),
+            host=WorkerHost(),
         )
         self.assertFalse(os.path.lexists(os.path.join(self.dir, "prompt")))
 
@@ -510,25 +711,28 @@ class ThroughItsHost(Base):
                 raise OSError(errno.EACCES, "Permission denied")
             return real(path, *args, **kwargs)
 
-        host = PipingHost(FakePiped())
+        host = WorkerHost()
         with (
             mock.patch("os.open", refusing),
             self.assertRaisesRegex(SessionError, "^prompt file .*prompt.md: Permission denied$"),
         ):
             self.start_on(host, prompt="雪" * 40_000)
-        self.assertEqual((host.pipes, self.recorded), ([], []))
+        self.assertEqual((host.starts, self.recorded), ([], []))
 
-    def test_a_nameless_spec_gets_no_host_env_metadata_or_resume(self):
-        host = HomeHost(FakePiped())
-        self.start_on(host, client_class=HomedRun)
-        ((name, launch, metadata),) = host.pipes
-        self.assertEqual((name, metadata, self.recorded[0].resume), (None, None, ""))
+    def test_a_nameless_spec_gets_no_host_env_or_resume_and_only_its_generation(self):
+        host = HomeHost()
+        mode = self.start_on(host, client_class=HomedRun)
+        ((name, _, metadata),) = host.starts
+        self.assertEqual(
+            (name, metadata, self.recorded[0].resume),
+            (f"headless-{mode.generation}", {"generation": mode.generation}, ""),
+        )
         self.assertEqual(StubRun.specs[-1].env, {})
 
     def test_preflight_validates_a_named_run_on_its_host(self):
         for name, validated in ((None, []), ("w1", ["w1"])):
             with self.subTest(name=name):
-                host = HomeHost(FakePiped())
+                host = HomeHost()
                 spec = Spec(
                     workdir=self.dir, access=Access(cwd=self.dir), sid=SID, client="stub", name=name
                 )
@@ -541,21 +745,23 @@ class ThroughItsHost(Base):
                 self.assertEqual([c.args[0] for c in host.calls.validate.call_args_list], validated)
 
     def test_after_stop_a_polling_caller_still_gets_the_end(self):
-        mode = self.start_on(PipingHost(FakePiped()))
+        mode = self.start_on(WorkerHost(ScriptedWorker(code=None)))
         mode.stop()
         ends = [mode.poll(5)[1] for _ in range(2)]
         self.assertEqual(ends, [False, True])
 
     def test_a_pump_that_drops_its_end_after_stop_still_ends_the_poll(self):
-        piped = FakePiped()
-        piped.stderr = io.StringIO("e\n" * (QUEUE_MAX + 2))
-        mode = self.start_on(PipingHost(piped))
+        worker = ScriptedWorker(
+            batches=[[WorkerOutput(b"e\n" * (QUEUE_MAX + 2), "stderr")]], code=None
+        )
+        before = set(threading.enumerate())
+        mode = self.start_on(WorkerHost(worker))
         deadline = time.monotonic() + 5
         while not mode.items.full() and time.monotonic() < deadline:
             time.sleep(0.01)
         mode.stop()
         time.sleep(PUT_WAIT * 6)  # its last lines and its end dropped
-        pumps = [t for t in threading.enumerate() if t.name.endswith("(_pump)")]
+        pumps = self.pumps(before)
         self.assertEqual((mode.items.full(), pumps), (True, []))
         ended = False
         for _ in range(QUEUE_MAX + 4):
@@ -564,7 +770,7 @@ class ThroughItsHost(Base):
         self.assertTrue(ended)
 
     def test_an_item_queued_as_a_stopped_poll_times_out_is_kept(self):
-        mode = self.start_on(PipingHost(FakePiped()))
+        mode = self.start_on(WorkerHost())
         for done in mode.done:
             self.assertTrue(done.wait(5))
         mode.stop()
@@ -587,16 +793,18 @@ class ThroughItsHost(Base):
         self.assertIs(caught.exception, late)
 
     def test_the_event_queue_is_bounded_and_a_stop_frees_a_pump_waiting_on_it(self):
-        piped = FakePiped()
-        piped.stderr = io.StringIO("e\n" * (QUEUE_MAX + 2))
-        mode = self.start_on(PipingHost(piped))
+        worker = ScriptedWorker(
+            batches=[[WorkerOutput(b"e\n" * (QUEUE_MAX + 2), "stderr")]], code=None
+        )
+        before = set(threading.enumerate())
+        mode = self.start_on(WorkerHost(worker))
         self.assertEqual(mode.items.maxsize, QUEUE_MAX)
         deadline = time.monotonic() + 5
         while not mode.items.full() and time.monotonic() < deadline:
             time.sleep(0.01)
         time.sleep(0.05)
-        pumps = [t for t in threading.enumerate() if t.name.endswith("(_pump)")]
-        self.assertEqual((mode.items.full(), len(pumps)), (True, 1))
+        pumps = self.pumps(before)  # stderr's waits on the queue, stdout's on its running worker
+        self.assertEqual((mode.items.full(), len(pumps)), (True, 2))
         mode.stop()
         for pump in pumps:
             pump.join(5)

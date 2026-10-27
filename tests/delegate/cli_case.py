@@ -12,7 +12,8 @@ from ensemble.delegate.engine.harness_delegate import HarnessDelegate
 from ensemble.delegate.engine.types import Layout
 from ensemble.session import ConfigError
 from tests.delegate.case import Case
-from tests.delegate.replies import block
+from tests.delegate.fakes.harness_session import DrivenDelegate
+from tests.delegate.replies import block, completed_steps
 from tests.delegate.unit.runs import DONE, START, said
 from tests.session import fake_client
 from tests.session.modules import client_loader
@@ -88,6 +89,7 @@ class Base(Case):
             os.environ.pop(key, None)
 
     def configure_fake(self, *, tui=False):
+        self._tui = tui
         self.configure_session(
             {
                 "fake": {
@@ -101,7 +103,7 @@ class Base(Case):
 
     def steps(self, *steps):
         with open(self.scenario, "w") as f:
-            json.dump(list(steps), f)
+            json.dump(list(steps) if self._tui else completed_steps(steps), f)
 
     def local(self, text):
         with open(os.path.join(self.ensemble, "config.local.toml"), "w") as f:
@@ -131,7 +133,7 @@ class Base(Case):
             {"class_roots": classmethod(lambda _cls, _client: ())},
         )
 
-        class Driven(HarnessDelegate):
+        class Driven(DrivenDelegate):
             def __init__(self, role, spec, **placement):
                 super().__init__(role, spec, driver=driver, session_cls=session_cls, **placement)
 

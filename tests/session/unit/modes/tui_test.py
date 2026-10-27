@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import stat
 import sys
@@ -33,6 +34,7 @@ from ensemble.session.engine.types import (
     HookCallback,
     HookKind,
     Key,
+    KeyPress,
     Launch,
     LimitHit,
     Liveness,
@@ -41,17 +43,25 @@ from ensemble.session.engine.types import (
     Permission,
     Prepared,
     Reply,
+    SessionBusy,
     SessionError,
     SessionInfo,
     Spec,
     TurnEnd,
+    TurnFailed,
+    TurnStarted,
+    Unanswered,
+    WorkerExit,
+    WorkerHook,
 )
 from ensemble.session.engine.worker import WorkerState
-from ensemble.session.hosts.base import InteractiveProcess, Process
+from ensemble.session.hosts import base as host_base
+from ensemble.session.hosts.base import GUARD_WAIT, InteractiveProcess, Process
+from ensemble.session.hosts.managed import ManagedProcess
 from ensemble.session.modes import tui, tui_hook
 from ensemble.session.modes.base import POINTER
 from ensemble.utils import ACCOUNT_ENV as ACCOUNT
-from ensemble.utils import StatusState, inode_lock, over_argv
+from ensemble.utils import STALE_AGE, StatusState, inode_lock, over_argv
 from tests.session import fake_client
 from tests.session.case import PLUGIN_BIN, Case
 from tests.session.fakes.terminal import MemoryHost, ScreenHost
@@ -217,9 +227,11 @@ class Base(Case):
         return mode
 
     def append(self, *lines) -> None:
-        """Each line to hooks.jsonl: bytes as given, else a JSON line."""
+        """Each line to hooks.jsonl: bytes as given, else a JSON line stamped as the hook does."""
         with open(self.hooks, "ab") as f:
             for line in lines:
+                if isinstance(line, dict) and (sent := host_base.sent(self.dir)) is not None:
+                    line = {"sent": sent, **line}
                 f.write(line if isinstance(line, bytes) else (json.dumps(line) + "\n").encode())
 
     def state(self, **changes) -> dict:
@@ -1027,6 +1039,12 @@ class StartTest(Base):
         with self.assertRaisesRegex(SessionError, f"^{re.escape(path)}: "), store._locked():
             self.fail("locked a directory")
 
+    def test_an_absent_terminal_keeps_the_exit_code_it_confirmed(self):
+        mode = self.start(events=None)
+        mode._terminal.calls.state.return_value = Liveness.ABSENT
+        mode._terminal.calls.returncode.return_value = 7
+        self.assertEqual((mode.poll(0), mode.returncode(0)), (([], True), 7))
+
     def test_start_returns_its_session_live_at_once_with_its_prepared(self):
         mode = self.start(events=None)
         self.assertIsInstance(mode, tui.TuiMode)
@@ -1666,6 +1684,15 @@ class CloseStopTest(Base):
 
 
 class PollTest(Base):
+    def test_accepted_turn_without_terminal_fails_before_exit(self):
+        mode = self.started()
+        self.run.hooks = {**self.run.hooks, "start": HookKind.TURN_STARTED}
+        self.append(record("start"))
+        self.assertEqual(mode.poll(0), ([TurnStarted()], False))
+        mode._terminal.calls.returncode.return_value = -9
+        self.assertEqual(mode.poll(0), ([TurnFailed("process_exit", "worker exited -9")], True))
+        self.assertEqual(mode.poll(0), ([], True))
+
     def test_records_become_the_runs_events_in_order_bound_once(self):
         mode = self.started()
         self.append(
@@ -1806,8 +1833,95 @@ class PollTest(Base):
         self.assertEqual(mode.poll(0.1), ([], False))
 
 
+class SendLockTest(Base):
+    """Two TuiModes of one session (the started one and an attach) share one terminal."""
+
+    def setUp(self):
+        super().setUp()
+        self.mode = self.started()
+        self.other = tui.TuiMode.attach(
+            NAME, tui.TuiMode.snapshot(NAME), self.client, host=self.host
+        )
+        self.calls = self.mode._terminal.calls
+        self.order = []
+        self.calls.send.side_effect = lambda action: self.order.append(action)
+        self.calls.press.side_effect = lambda keys: self.order.append(keys)
+
+    def racing(self, first, second, arrived) -> None:
+        """second runs on a thread started from first's Paste, which then waits up to 0.5 s for
+        arrived (set once second reaches the terminal: Paste("two") sets it).
+        """
+        threads = []
+
+        def send(action):
+            self.order.append(action)
+            if action == Paste("two"):
+                arrived.set()
+            if action == Paste("one") and not threads:
+                threads.append(threading.Thread(target=second))
+                threads[0].start()
+                arrived.wait(0.5)
+
+        self.calls.send.side_effect = send
+        first()
+        threads[0].join(5)
+
+    def test_two_concurrent_senders_never_interleave(self):
+        arrived = threading.Event()
+        self.racing(lambda: self.mode.send("one"), lambda: self.other.send("two"), arrived)
+        self.assertEqual(self.order, [Paste("one"), Key("Enter"), Paste("two"), Key("Enter")])
+
+    def test_a_press_waits_for_a_send_in_progress(self):
+        arrived = threading.Event()
+
+        def press(keys):
+            self.order.append(keys)
+            arrived.set()
+
+        self.calls.press.side_effect = press
+        escape = KeyPress.parse("Escape")
+        self.racing(lambda: self.mode.send("one"), lambda: self.other.press([escape]), arrived)
+        self.assertEqual(self.order, [Paste("one"), Key("Enter"), (escape,)])
+
+    def test_no_lock_dir_refuses_and_sends_nothing(self):
+        shutil.rmtree(self.dir)
+        for call in (lambda: self.mode.send("one"), lambda: self.mode.press([KeyPress.parse("a")])):
+            with self.assertRaisesRegex(SessionError, f"tui session {NAME} is not running"):
+                call()
+        self.assertEqual(self.order, [])
+
+    def test_a_failure_on_the_paste_is_a_session_error(self):
+        self.calls.send.side_effect = SessionError("gone")
+        with self.assertRaises(SessionError) as raised:
+            self.mode.send("one")
+        self.assertNotIsInstance(raised.exception, Unanswered)
+        store = tui.TuiStore.attach(NAME, host=self.host)
+        self.assertEqual(store.prompts(self.mode.generation), (0, 0))
+
+    def test_a_failure_after_the_paste_is_unanswered(self):
+        self.calls.send.side_effect = [None, SessionError("gone")]
+        with self.assertRaisesRegex(Unanswered, f"send to tui session {NAME}: partly sent: gone"):
+            self.mode.send("one")
+        store = tui.TuiStore.attach(NAME, host=self.host)
+        self.assertEqual(store.prompts(self.mode.generation), (1, 0))
+
+    def test_each_send_counts_a_prompt_of_its_generation(self):
+        store = tui.TuiStore.attach(NAME, host=self.host)
+        self.assertEqual(store.prompts(self.mode.generation), (0, 0))
+        self.other.send("one")
+        self.mode.send("two")
+        self.assertEqual(store.prompts(self.mode.generation), (2, 2))
+        self.assertEqual(store.prompts("another"), (0, 0))
+        self.mode.press([KeyPress.parse("a")])
+        self.assertEqual(self.order[-1], (KeyPress.parse("a"),))
+
+
 class Opening(ScanTui):
     opening = ("ready", "/color")
+
+
+class PromptOpening(Opening):
+    _opening_prompt = True
 
 
 class OpeningTest(Base):
@@ -1967,6 +2081,165 @@ class OpeningTest(Base):
         mode = self.opened()
         mode.stop()
         self.assertIsNone(mode.opening_pending)
+
+    def launched(self, run=None, **fields) -> tui.TuiMode:
+        """opened(), its Tui (default Opening) also reporting `start` as TurnStarted."""
+        self.client.run = run or Opening(self.client)
+        self.client.run.hooks = {**self.client.run.hooks, "start": HookKind.TURN_STARTED}
+        self.host.processes.clear()
+        mode = self.start(**fields)
+        mode._terminal.calls.reset_mock()
+        return mode
+
+    def other(self) -> tui.TuiMode:
+        return tui.TuiMode.attach(NAME, tui.TuiMode.snapshot(NAME), self.client, host=self.host)
+
+    def test_another_senders_prompt_defers_the_opening_past_its_turn(self):
+        mode = self.launched()
+        self.other().send("hi")
+        self.append(record("ready"))
+        mode.poll(0)
+        mode.poll(1.2)  # its turn not read yet: the opening would land in it
+        self.assertEqual(self.sends(mode), [Paste("hi"), Key("Enter")])
+        self.assertEqual(mode.opening_pending, "/color")
+        self.append(record("start"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(len(self.sends(mode)), 2)
+        self.append(record("stop"))
+        mode.poll(0)
+        mode.poll(0.6)
+        self.assertEqual(self.sends(mode)[2:], [Paste("/color"), Key("Enter")])
+        self.assertIsNone(mode.opening_pending)
+
+    def test_a_turn_defers_the_opening_until_it_ends(self):
+        mode = self.launched()
+        self.append(record("ready"), record("start"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [])
+        self.assertEqual(mode.opening_pending, "/color")
+        self.append(record("stop"))
+        mode.poll(0)
+        mode.poll(0.6)
+        self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
+
+    def test_a_prompted_start_ends_with_its_color_set(self):
+        mode = self.launched(prompt="go")
+        self.append(record("ready"))
+        mode.poll(0)
+        mode.poll(1.2)  # its launch turn runs, its TurnStarted not read yet
+        self.assertEqual(self.sends(mode), [])
+        self.append(record("start"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [])
+        self.append(record("stop"))
+        mode.poll(0)
+        mode.poll(0.6)
+        self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
+        self.assertIsNone(mode.opening_pending)
+
+    def test_a_send_joining_a_running_turn_does_not_hold_the_opening(self):
+        mode = self.launched(prompt="go")
+        self.append(record("ready"), record("start"))
+        mode.poll(0)
+        self.other().send("also")  # joins the running turn: no TurnStarted of its own
+        self.append(record("stop"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode)[2:], [Paste("/color"), Key("Enter")])
+        self.assertIsNone(mode.opening_pending)
+
+    def test_a_send_after_an_unread_turn_end_waits_for_its_own_turn(self):
+        mode = self.launched(prompt="go")
+        self.append(record("ready"), record("start"))
+        mode.poll(0)
+        self.append(record("stop"))
+        self.other().send("next")  # after the turn end was written, before it is read
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [Paste("next"), Key("Enter")])
+        self.assertEqual(mode.opening_pending, "/color")
+        self.append(record("start"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(len(self.sends(mode)), 2)
+        self.append(record("stop"))
+        mode.poll(0)
+        mode.poll(0.6)
+        self.assertEqual(self.sends(mode)[2:], [Paste("/color"), Key("Enter")])
+
+    def test_a_partly_sent_send_holds_the_opening(self):
+        mode = self.launched()
+        mode._terminal.calls.send.side_effect = [None, SessionError("gone")]
+        with self.assertRaises(Unanswered):
+            self.other().send("half")
+        mode._terminal.calls.send.side_effect = None
+        self.append(record("ready"), record("start"), record("stop"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [Paste("half"), Key("Enter")])  # the Enter failed
+        self.assertEqual(mode.opening_pending, "/color")
+        self.other().send("rest")  # its Enter submits the half too
+        self.append(record("start"), record("stop"))
+        mode.poll(0)
+        mode.poll(0.6)
+        self.assertEqual(self.sends(mode)[4:], [Paste("/color"), Key("Enter")])
+
+    def test_no_turn_yet_keeps_the_opening(self):
+        mode = self.launched()
+        self.append(record("ready"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
+
+    def test_an_older_generations_marker_keeps_the_opening(self):
+        mode = self.launched()
+        tui.TuiStore.attach(NAME, host=self.host).mark_prompted("an older generation")
+        self.append(record("ready"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
+
+    def test_a_prompt_opening_waits_for_no_launch_turn(self):
+        mode = self.launched(PromptOpening(self.client), prompt="go")
+        self.append(record("ready"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
+        self.assertFalse(Opening._opening_prompt)
+
+    def test_the_opening_holds_the_send_lock(self):
+        mode = self.launched()
+        other, arrived, threads, order = self.other(), threading.Event(), [], []
+
+        def send(action):
+            order.append(action)
+            if action == Paste("two"):
+                arrived.set()
+            elif action == Paste("/color"):
+                threads.append(threading.Thread(target=other.send, args=("two",)))
+                threads[0].start()
+                arrived.wait(0.5)
+
+        mode._terminal.calls.send.side_effect = send
+        self.append(record("ready"))
+        mode.poll(0)
+        mode.poll(1.2)
+        threads[0].join(5)
+        self.assertEqual(order, [Paste("/color"), Key("Enter"), Paste("two"), Key("Enter")])
+
+    def test_a_held_send_lock_defers_the_opening(self):
+        mode = self.launched()
+        self.append(record("ready"))
+        mode.poll(0)
+        with tui.TuiStore.attach(NAME, host=self.host).sending():
+            mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [])
+        self.assertEqual(mode.opening_pending, "/color")
+        mode.poll(0.6)
+        self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
 
 
 class ScanTest(Base):
@@ -2189,6 +2462,7 @@ class PrepareTest(Base):
                 "perm": HookKind.BLOCKED,
                 "note": HookKind.BLOCKED,
                 "use": HookKind.ACTIVITY,
+                "begin": HookKind.TURN_STARTED,
                 "odd": "other",
             }
 
@@ -2203,6 +2477,7 @@ class PrepareTest(Base):
                     "perm": "blocked",
                     "note": "blocked",
                     "use": "working",
+                    "begin": "working",
                 },
             ),
         )
@@ -2599,3 +2874,389 @@ class PromptFileTest(Base):
         ):
             self.start(run=self.seen, prompt=BIG)
         self.host.calls.terminal.assert_not_called()
+
+
+class OwnerTest(Base):
+    """A start a session harness performs names its harness dir in session.json."""
+
+    def owner(self, name: str = "a" * 32) -> str:
+        path = os.path.join(self.ensemble, "harness", name)
+        os.makedirs(path, 0o700, exist_ok=True)
+        return path
+
+    def test_an_owned_start_writes_its_owner(self):
+        owner = self.owner()
+        tui.TuiMode.start(
+            Spec(
+                workdir=self.tmp,
+                access=Access(cwd=self.tmp),
+                name=NAME,
+                client="fake",
+                sid=SID,
+                events=self.events,
+            ),
+            self.client,
+            registry=self.session_cls._config().registry,
+            record=self.recorded.append,
+            host=self.host,
+            owner=owner,
+        )
+        self.assertEqual(tui.TuiMode.snapshot(NAME)["owner"], owner)
+
+    def test_an_unowned_start_writes_no_owner(self):
+        self.start()
+        self.assertNotIn("owner", tui.TuiMode.snapshot(NAME))
+        self.assertNotIn("owner", self.host.calls.terminal.call_args.kwargs["metadata"])
+
+    def test_an_owned_start_tells_its_host_the_owner_and_follows_a_remote_or_up_terminal(self):
+        owner = self.owner()
+        running = tui.TuiMode.start(
+            Spec(
+                workdir=self.tmp,
+                access=Access(cwd=self.tmp),
+                name=NAME,
+                client="fake",
+                sid=SID,
+                events=self.events,
+            ),
+            self.client,
+            registry=self.session_cls._config().registry,
+            record=self.recorded.append,
+            host=self.host,
+            owner=owner,
+        )
+        self.assertEqual(self.host.calls.worker.call_args.kwargs["metadata"]["owner"], owner)
+        self.assertFalse(running.remote)
+        running._terminal.remote = True
+        self.assertTrue(running.remote)
+        self.assertFalse(running.client_up)
+        running._terminal.up = True
+        self.assertTrue(running.client_up)
+
+    def test_client_alive_probes_its_terminal_afresh_not_its_last_state(self):
+        mode = self.start()
+        mode._terminal.calls.state.return_value = Liveness.LIVE  # a reused probe, a kept terminal
+        mode._terminal.calls.alive.return_value = False
+        self.assertEqual((mode.client_alive(), mode.state()), (False, Liveness.LIVE))
+        mode._terminal.calls.alive.side_effect = Unanswered("its tmux did not tell")
+        self.assertFalse(mode.client_alive())
+
+    def test_an_owner_outside_the_harness_root_is_refused(self):
+        path = os.path.join(self.dir, "session.json")
+        outside = os.path.join(self.tmp, "a" * 32)
+        os.mkdir(outside)
+        link = os.path.join(self.ensemble, "harness", "b" * 32)
+        os.makedirs(os.path.dirname(link), exist_ok=True)
+        os.symlink(outside, link)
+        for owner in (
+            outside,
+            link,
+            self.owner("short"),
+            self.owner("A" * 32),
+            os.path.join(self.ensemble, "harness"),
+            "rel/" + "a" * 32,
+            5,
+        ):
+            with self.subTest(owner=owner):
+                self.write_state(self.state(owner=owner))
+                with self.assertRaises(SessionError) as caught:
+                    tui.TuiMode.snapshot(NAME)
+                self.assertEqual(str(caught.exception), f"no tui session w1: {path}: bad owner")
+        self.write_state(self.state(owner=self.owner()))
+        self.assertEqual(tui.TuiMode.snapshot(NAME)["owner"], self.owner())
+
+
+class RecordRuleTest(Base):
+    """An owned record (session.json with an owner) goes only with its own worker generation: the
+    owner closes by its handle; anyone else asks the generation's liveness (the gate, too).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.liveness = mock.Mock(return_value=Liveness.ABSENT)
+        self.host.worker_liveness = self.liveness
+        self.store = tui.TuiStore.attach(NAME, host=self.host)
+
+    def owned(self, generation: str = "g1", **changes) -> dict:
+        """An owned session.json of `generation` and its display."""
+        path = os.path.join(self.ensemble, "harness", "a" * 32)
+        os.makedirs(path, 0o700, exist_ok=True)
+        self.display = self.host.create(
+            NAME, identity=f"display-{generation}", metadata={"sid": SID, "generation": generation}
+        )
+        state = self.state(owner=path, generation=generation, **changes)
+        self.write_state(state)
+        return state
+
+    def handle(self, state: Liveness = Liveness.LIVE) -> mock.Mock:
+        handle = mock.create_autospec(InteractiveProcess, instance=True)
+        handle.state.return_value = state
+        return handle
+
+    def saved(self) -> dict:
+        with open(os.path.join(self.dir, "session.json"), encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_owned_stale_unknown_is_busy(self):
+        state = self.owned()
+        self.liveness.return_value = Liveness.UNKNOWN
+        with self.assertRaises(SessionBusy) as caught:
+            self.start()
+        self.assertEqual(caught.exception.holder, "previous worker generation (live or unknown)")
+        self.assertEqual(self.saved(), state)
+        self.assertIs(self.host.processes[NAME], self.display)
+        self.display.calls.close.assert_not_called()
+        self.liveness.assert_called_with(NAME, "g1")
+
+    def test_owned_stale_live_waits_then_goes_on(self):
+        self.owned()
+        self.liveness.side_effect = [Liveness.LIVE, Liveness.LIVE, Liveness.ABSENT]
+        self.start()
+        self.assertEqual(self.log.count(("sleep", tui.RECHECK)), 2)
+        self.display.calls.close.assert_called_once_with()
+        self.assertNotIn("owner", self.saved())
+
+    def test_owned_stale_live_refused_after_wait_untouched(self):
+        state = self.owned()
+        self.liveness.return_value = Liveness.LIVE
+        with self.assertRaisesRegex(SessionError, "^tui session w1 is running"):
+            self.start()
+        self.assertGreaterEqual(self.clock.now, GUARD_WAIT)
+        self.assertEqual(self.saved(), state)
+        self.display.calls.close.assert_not_called()
+
+    def test_owned_stale_absent_closes_the_display(self):
+        self.owned()
+        self.start()
+        self.display.calls.close.assert_called_once_with()
+        self.assertIsNot(self.host.processes[NAME], self.display)
+
+    def test_owned_stale_ignores_a_killed_display(self):
+        state = self.owned()
+        self.host.processes.clear()  # its display killed; the worker lives on
+        self.liveness.return_value = Liveness.LIVE
+        with self.assertRaisesRegex(SessionError, "is running"):
+            self.start()
+        self.assertEqual(self.saved(), state)
+
+    def test_owned_close_closes_its_display_the_handle_then_the_dir(self):
+        """Its display first: a requested close reports no pane death."""
+        self.owned()
+        order = mock.Mock()
+        handle = self.handle()
+        handle.close.side_effect = lambda: order("handle")
+        self.display.calls.close.side_effect = lambda: order("display")
+        self.assertTrue(self.store.close(handle, "g1"))
+        self.assertEqual(order.call_args_list, [mock.call("display"), mock.call("handle")])
+        self.assertNoSessionDir()
+        self.liveness.assert_not_called()
+
+    def test_owned_stop_closes_the_handle(self):
+        self.owned()
+        handle = self.handle()
+        self.store.stop(handle, SID, owned=True, generation="g1")
+        handle.close.assert_called_once_with()
+        self.assertNoSessionDir()
+
+    def test_owned_close_failed_handle_keeps_the_record(self):
+        for failure in ("unknown", "unanswered"):
+            with self.subTest(failure=failure):
+                state = self.owned()
+                handle = self.handle(Liveness.UNKNOWN if failure == "unknown" else Liveness.LIVE)
+                handle.close.side_effect = Unanswered("worker w1: guard exit unconfirmed")
+                with self.assertRaisesRegex(Unanswered, "^worker w1: exit unconfirmed$"):
+                    self.store.close(handle, "g1")
+                self.assertEqual(handle.close.call_count, 0 if failure == "unknown" else 1)
+                self.display.calls.close.assert_called_once_with()
+                self.assertEqual(self.saved(), state)
+
+    def test_owned_close_of_an_old_generation_keeps_the_new_record_and_display(self):
+        state = self.owned("g2")
+        handle = self.handle(Liveness.ABSENT)
+        self.assertFalse(self.store.close(handle, "g1"))
+        self.display.calls.close.assert_not_called()
+        self.assertEqual(self.saved(), state)
+        self.assertFalse(self.store.close(handle, "g1"))  # a drain-window repeat, still harmless
+        self.liveness.assert_not_called()
+
+    def test_non_owner_close_absent_cleans_up(self):
+        for generation in (None, "g1"):
+            with self.subTest(generation=generation):
+                self.owned()
+                self.assertTrue(self.store.close(None, generation))
+                self.display.calls.close.assert_called_once_with()
+                self.assertNoSessionDir()
+                self.liveness.assert_called_with(NAME, "g1")
+
+    def test_non_owner_close_live_or_unknown_is_busy_untouched(self):
+        for liveness in (Liveness.LIVE, Liveness.UNKNOWN):
+            with self.subTest(liveness=liveness):
+                state = self.owned()
+                self.liveness.return_value = liveness
+                with self.assertRaises(SessionBusy) as caught:
+                    self.store.close()
+                self.assertEqual(caught.exception.holder, "worker generation (live or unknown)")
+                self.assertEqual(
+                    str(caught.exception),
+                    "busy: lock w1 is held by worker generation (live or unknown)",
+                )
+                self.display.calls.close.assert_not_called()
+                self.assertEqual(self.saved(), state)
+
+    def test_non_owner_close_of_another_generation_touches_nothing(self):
+        state = self.owned("g2")
+        self.liveness.return_value = Liveness.LIVE
+        self.assertFalse(self.store.close(None, "g1"))
+        self.liveness.assert_not_called()
+        self.assertNotIn(("sleep", tui.RECHECK), self.log)
+        self.display.calls.close.assert_not_called()
+        self.assertEqual(self.saved(), state)
+
+    def test_owned_record_without_generation_is_unknown(self):
+        state = self.owned()
+        del state["generation"]
+        self.write_state(state)
+        with self.assertRaises(SessionBusy):
+            self.store.close()
+        with self.assertRaises(SessionBusy) as caught:
+            tui._stale(self.store)
+        self.assertEqual(caught.exception.holder, "previous worker generation (live or unknown)")
+        self.liveness.assert_not_called()
+
+    def test_non_owner_stop_takes_the_record_rule(self):
+        state = self.owned()
+        self.liveness.return_value = Liveness.UNKNOWN
+        with self.assertRaises(SessionBusy):
+            self.store.stop(self.display, SID, generation="g1")
+        self.store.stop(self.display, SID, generation="g0")  # another generation's: untouched
+        self.display.calls.close.assert_not_called()
+        self.assertEqual(self.saved(), state)
+        self.liveness.return_value = Liveness.ABSENT
+        self.store.stop(self.display, SID, generation="g1")
+        self.assertNoSessionDir()
+
+    def test_expire_keeps_a_live_owned_record(self):
+        self.owned()
+        self.host.processes.clear()
+        old = time.time() - STALE_AGE - 60
+        os.utime(self.dir, (old, old))  # idle, no hook log
+        for liveness in (Liveness.LIVE, Liveness.UNKNOWN):
+            self.liveness.return_value = liveness
+            self.store.expire(set())
+            self.assertTrue(os.path.isdir(self.dir))
+        self.liveness.return_value = Liveness.ABSENT
+        self.store.expire(set())
+        self.assertNoSessionDir()
+        self.assertNotIn(("sleep", tui.RECHECK), self.log)
+
+    def test_unowned_close_unchanged(self):
+        self.write_state(self.state())
+        display = self.host.create(NAME, metadata={"sid": SID, "generation": "fixture-generation"})
+        self.assertTrue(self.store.close())
+        display.calls.close.assert_called_once_with()
+        self.assertNoSessionDir()
+        self.liveness.assert_not_called()
+
+
+class ManagedStartTest(Base):
+    """An owned start (inside a session harness) launches its client under the guard; its TuiMode
+    drives that owner handle and only the handle ends it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.handle = mock.create_autospec(InteractiveProcess, instance=True)
+        self.handle.state.return_value = Liveness.LIVE
+        self.handle.returncode.return_value = None
+        self.handle.read.return_value = []
+        self.handle.activity.return_value = None
+        self.host.worker = mock.Mock(return_value=self.handle)
+
+    def owned_start(self) -> tui.TuiMode:
+        owner = os.path.join(self.ensemble, "harness", "a" * 32)
+        os.makedirs(owner, 0o700, exist_ok=True)
+        return tui.TuiMode.start(
+            Spec(
+                workdir=self.tmp,
+                access=Access(cwd=self.tmp),
+                name=NAME,
+                client="fake",
+                sid=SID,
+                events=self.events,
+            ),
+            self.client,
+            registry=self.session_cls._config().registry,
+            record=self.recorded.append,
+            host=self.host,
+            owner=owner,
+        )
+
+    def test_owned_start_launches_a_managed_worker(self):
+        mode = self.owned_start()
+        self.host.worker.assert_called_once()
+        args, kwargs = self.host.worker.call_args
+        self.assertEqual(args[0], NAME)
+        self.assertEqual(args[1].argv, mode.prepared.argv)
+        self.assertTrue(kwargs["terminal"])
+        self.assertEqual(kwargs["events"], self.events)
+        self.assertIsNone(kwargs["display"])
+        self.assertEqual(kwargs["metadata"]["generation"], tui.TuiMode.snapshot(NAME)["generation"])
+        self.host.calls.terminal.assert_not_called()
+        self.assertIs(mode._terminal, self.handle)
+
+    def test_owned_redisplay_asks_its_managed_handle(self):
+        managed = mock.create_autospec(ManagedProcess, instance=True)
+        managed.state.return_value = Liveness.LIVE
+        managed.read.return_value = []
+        managed.redisplay.return_value = True
+        self.host.worker.return_value = managed
+        self.assertTrue(self.owned_start().redisplay())
+        managed.redisplay.assert_called_once_with()
+
+    def test_redisplay_of_a_plain_terminal_opens_nothing(self):
+        self.assertFalse(self.owned_start().redisplay())
+
+    def test_unowned_start_launches_a_terminal(self):
+        self.start()
+        self.host.calls.terminal.assert_called_once()
+        self.host.worker.assert_not_called()
+
+    def test_owned_poll_takes_worker_exit_code(self):
+        mode = self.owned_start()
+        self.handle.read.return_value = [WorkerExit(3)]
+        self.handle.state.return_value = Liveness.ABSENT
+        self.handle.returncode.return_value = 3
+        self.host.processes.clear()  # its display went with the guard
+        self.assertEqual(mode.poll(0), ([], True))
+        self.assertEqual(mode.returncode(0), 3)
+
+    def test_owned_poll_ends_a_removed_handle_without_a_code(self):
+        """A handle gone without a confirmed code (a Docker worker removed after a failure)."""
+        mode = self.owned_start()
+        self.handle.state.return_value = Liveness.ABSENT
+        self.host.processes.clear()
+        self.assertEqual(mode.poll(0), ([], True))
+        self.assertEqual(mode.returncode(0), -signal.SIGHUP)
+
+    def test_owned_poll_raises_on_channel_failure(self):
+        mode = self.owned_start()
+        self.handle.read.side_effect = Unanswered("worker w1: guard channel ended")
+        with self.assertRaisesRegex(Unanswered, "guard channel ended"):
+            mode.poll(0)
+
+    def test_owned_poll_ignores_channel_hooks(self):
+        mode = self.owned_start()
+        self.handle.read.return_value = [WorkerHook("stop", {"x": 1}, "d1")]
+        with self.assertLogs("session", "WARNING") as logged:
+            self.assertEqual(mode.poll(0), ([], False))
+            self.assertEqual(mode.poll(0), ([], False))
+        self.assertEqual(len(logged.records), 1)
+        self.assertIn("'stop'", logged.output[0])
+
+    def test_owned_replaced_never_ends_the_owner(self):
+        mode = self.owned_start()
+        self.host.processes.clear()  # its display killed
+        state = tui.TuiMode.snapshot(NAME)
+        self.write_state({**state, "generation": "another"})
+        self.assertEqual(mode.poll(0), ([], False))
+        self.assertIsNone(mode.returncode(0))

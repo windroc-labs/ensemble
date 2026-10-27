@@ -364,12 +364,12 @@ class Segment(TmuxFlow):
         return line, call, logged
 
     def attended(self, ident, role, sid, res):
-        """res's one Record line, the run's pipeline Record shown at MANAGER; its attach command and
-        each session's attach-command line on stderr.
+        """res's one Record line, the run's pipeline Record shown at MANAGER, its one session the
+        TUI (the drive is none); its attach command and the TUI's attach-command line on stderr.
         """
         self.assertEqual(len(res.stdout.splitlines()), 1, res.stdout)
         record = Record.parse(res.stdout)
-        sessions = (self.harness(role, ident, sid), config.tui_name(role, ident, sid))
+        sessions = (config.tui_name(role, ident, sid),)
         self.assertEqual(
             (record.kind, record.name, record.sessions, record.sid, record.workdir, record.display),
             ("pipeline", ident, sessions, sid, os.path.join(self.workdirs, ident), MANAGER),
@@ -378,10 +378,11 @@ class Segment(TmuxFlow):
             (record.ctl, record.resume),
             (("ensemble-orchestrator",), ("ensemble-orchestrator", "resume", ident)),
         )
-        self.assertIn(f"router.py: {ident}: attach: tmux attach -t '={sessions[1]}'\n", res.stderr)
+        self.assertIn(f"router.py: {ident}: attach: tmux attach -t '={sessions[0]}'\n", res.stderr)
         for name in sessions:
             line = f"router.py: {ident}: {name}: ensemble-session attach-command {name}\n"
             self.assertIn(line, res.stderr)
+        self.assertNotIn(self.harness(role, ident, sid), res.stderr)
         return record
 
     def agent_run(self):
@@ -414,6 +415,8 @@ class Segment(TmuxFlow):
                 {},
             )
             if report:
+                attempt = sum(s.startswith("running:") for s in ledgered)
+                scope = "" if attempt <= 1 else f"attempt:{attempt}:"
                 outcome, url = report["status"], report.get("url")
                 state = (
                     "in_review"
@@ -421,20 +424,20 @@ class Segment(TmuxFlow):
                     else writeback.FIRST_FAILURE[task.first_failure]
                 )
                 if outcome == "done" and task.retitle:
-                    steps.append("retitle")
+                    steps.append(f"{scope}retitle")
                     changes["title"] = (
                         f"{task.title_prefix}: {report['title']}"
                         if task.title_prefix
                         else report["title"]
                     )
-                steps.append("comment")
+                steps.append(f"{scope}comment")
                 comments += [(app, k) for k in p.script.texts.values()]
                 if outcome == "done" and url:
                     steps.append(f"attach:{url}")
                     if all(a["url"] != url for a in want.attachments):
                         changes["attachments"] = [{"url": url, "title": report["title"]}]
-                steps.append(f"move:{state}")
-                steps.append("outcome")
+                steps.append(f"{scope}move:{state}")
+                steps.append(f"{scope}outcome")
                 if state == "in_review" and HUMAN not in want.subscribers:
                     changes["subscribers"] = [HUMAN]
                 changes.update(state=state, history=[("in_progress", state, app)])
@@ -456,17 +459,22 @@ class Segment(TmuxFlow):
             self.expect(p.ident, comments=comments, ledger={p.sid: steps}, **changes)
 
     def wait_written_back(self, p):
-        """Until p's outcome is written back (its ledger's last step) and its harness is gone: a
-        run after a stop, whose session's count of write-back ends is unknown.
+        """Until p's outcome is written back (its ledger's last step, then its session comment's
+        end) and its drive ended: a run after a stop, whose session's count of write-back ends
+        is unknown.
         """
         self.assertIsNotNone(p.script.report, "a run after a stop waits for its outcome")
-        harness = self.harness(p.role, p.ident, p.sid)
+        harness, status = self.harness(p.role, p.ident, p.sid), p.script.report["status"]
         live_tmux.wait(
             lambda: (
-                self.ledger(p.ident).get(p.sid, [])[-1:] == ["outcome"] and not self.live(harness)
+                re.fullmatch(
+                    r"(attempt:\d+:)?outcome", (self.ledger(p.ident).get(p.sid) or [""])[-1]
+                )
+                and self.session_status(p.ident, p.sid) == status
+                and not self.drive_running(p.ident)
             ),
             TIMEOUT,
-            f"{p.sid}'s outcome written back and {harness} gone",
+            f"{p.sid}'s outcome and session end written back and {harness} ended",
         )
 
     def backlog_issue(self, role, title, description, labels=()):

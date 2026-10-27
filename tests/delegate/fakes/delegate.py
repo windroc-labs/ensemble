@@ -60,7 +60,6 @@ class FakeDelegate(Delegate):
         composer=None,
         display=None,
         host=None,
-        harness_host=None,
         callback=None,
         overlays=(),
     ) -> None:

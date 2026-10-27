@@ -5,7 +5,6 @@ import http.client
 import io
 import json
 import os
-import re
 import runpy
 import shutil
 import stat
@@ -17,7 +16,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from ensemble.session.clients.opencode.common import HOME
 from tests.case import REPO, Case
 
 ASSETS = Path(REPO, "src/broker/internal/launcher/assets")
@@ -1573,17 +1571,6 @@ class OpencodeInstall(Case):
         ):
             with self.subTest(argv=argv), self.assertRaises(SystemExit):
                 self.ns["main"](argv)
-
-    def test_the_minimum_opencode_still_needs_the_window_floor(self):
-        versions = Path(REPO, "src/broker/internal/launcher/versions.go").read_text()
-        [minimum] = re.findall(r'^const opencodeMinVersion = "([0-9.]+)"$', versions, re.M)
-        self.assertEqual(
-            (minimum, HOME.min_width),
-            ("1.19.3", 40),
-            "see HOME in clients/opencode/common.py: keep min_width while the broker's "
-            "opencodeMinVersion (src/broker/internal/launcher/versions.go) bundles @opentui/core "
-            "older than 0.5.3, then update this pin",
-        )
 
 
 class ImageLayer(Case):

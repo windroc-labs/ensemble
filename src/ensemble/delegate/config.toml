@@ -106,12 +106,12 @@ host = ""
 #                 tui mode, but in the shipped auto mode goes to Claude's classifier; a broad dir such
 #                 as ~ pre-approves reads of its whole tree; a path with any of *?[]{}()\, refuses the run. Codex adds
 #                 nothing (no read-only grant usable with -s): its workspace-write sandbox reads the whole disk; the
-#                 session's default auto mode's danger-full-access, or yolo's, can write there too (docs/sessions.md › Client policy). A dir also in write,
+#                 session's default auto mode's danger-full-access, or yolo's, can write there too (docs/architecture.md › Client policy). A dir also in write,
 #                 or inside the cwd, <workdir>/agent or a write dir, stays writable; shell commands can write there
 #                 regardless
 #   write         extra dirs the agent run needs to write; <workdir>/agent is always reachable; [] → none.
 #                 On the Docker Host a run reads only the image's team and writes only <workdir>/agent: any other
-#                 read, a write, a role cwd, a trusted_dirs project cwd or a team_dirs role refuses it (docs/docker-host.md)
+#                 read, a write, a role cwd, a trusted_dirs project cwd or a team_dirs role refuses it (docs/architecture.md#docker-host)
 #   commands      requested shell commands (a trailing ` *` matches any arguments); the Client decides how
 #                 they are approved. {{workdir}} is <workdir>/agent, {{team}} core's team/ dir, {{role_team}}
 #                 as in read; a word holding one is shell-quoted once filled, and a prompt text writing the command
@@ -167,7 +167,7 @@ prefetch = true
 tier = 3
 effort = "low"
 
-# Environments (docs/docker-host.md › Environment config): the container a role run's agent starts in, on a Docker-kind
+# Environments (docs/architecture.md › Environments): the container a role run's agent starts in, on a Docker-kind
 # Host. Only this file and config.local.toml set them: a caller's overlay (the orchestrator's among them) holding
 # environment, environments or roles.<role>.environment is refused, and nothing in a run's input selects one.
 # A run on Host <host> resolves, each step replacing the keys it sets (a list whole):
@@ -179,12 +179,12 @@ effort = "low"
 # environments. An in_process run has no container: it drops the environment, refusing one with lock, secrets or
 # prefetch. Keys (a table refuses any other):
 #   image     a local base image's tag or ID, or "@worker": ensemble's worker base (~/.ensemble/docker/worker)
-#   gateway   the egress proxy's caller network the container joins (its label name, docs/docker-host.md › Egress proxy)
+#   gateway   the egress proxy's caller network the container joins (its label name, docs/architecture.md › Egress proxy)
 #   plugins   in-image plugin names or pinned sources, added to [hosts.docker] plugins; [] → none
 #   secrets   [[…secrets]] tables of item (an ensemble-broker-env/<name> keychain item) and file (its name under
 #             /run/ensemble/secrets/env/); references only, never a value; [] → none
-#   lock      a lock name ([a-z0-9][a-z0-9_.-]{0,62}): one running container per name; a locked run's session closes
-#             when the run ends; unset → none
+#   lock      a lock name ([a-z0-9][a-z0-9_.-]{0,62}): one running container per name; a locked run keeps its
+#             container and lock until its user closes it or its client exits; unset → none
 #   prefetch  true: clone the input's one Reference `Repo:` at its optional `Ref:` line into the new workspace
 [environment.docker]
 image = "@worker"
@@ -196,7 +196,7 @@ prefetch = false
 [environments]
 
 # mini-op: the test Mac mini through mini-op's image and plain skill, by the names mini-op publishes; its secrets are
-# `ensemble-broker login env` items (docs/docker-host.md › Environment secrets)
+# `ensemble-broker login env` items (docs/architecture.md › Environments)
 [environments.mini-op]
 image = "mini-op:env"
 gateway = "mini-op"
@@ -211,15 +211,12 @@ file = "mini-password"
 item = "ensemble-broker-env/mini-op-ssh-key"
 file = "mini-ssh-key"
 
-# [delegates]
-#   harness_host  the [hosts.<name>] (src/ensemble/session/config.toml) the harness runs on; "" → the agent's Host.
-#                 An agent on the Docker Host needs a harness on another one, e.g. "tmux"
+# [delegates]  takes no keys (src/ensemble/delegate/config.py refuses each one): the delegate spawns its own drive
 [delegates]
-harness_host = ""
 
 # [policy.<client>]   a role run's flags and env, the Delegate's, after the session's [clients.<client>] flags and
 #                     permission mode (src/ensemble/session/config.toml), which keep ensemble's own plugin off
-#                     and hold every permission flag (docs/sessions.md › Client policy); [] → none. The system-prompt
+#                     and hold every permission flag (docs/architecture.md › Client policy); [] → none. The system-prompt
 #                     flag keeps a final reply to its outcome block, and --strict-mcp-config (Claude) or
 #                     -c mcp_servers={} (Codex: the client turns off each server your Codex config names) loads no
 #                     MCP server: a local list replacing this one keeps them too

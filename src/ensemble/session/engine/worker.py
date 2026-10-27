@@ -1,6 +1,9 @@
 """Worker, a plain tui session started by name (FR-20): WorkerState in
 ~/.ensemble/workers/<sid>/worker.json (by-name/<name>: its latest sid); its Record on its Host once
-its early watch passes. restart and resume close the old session and wait for its group (FR-36).
+its early watch passes. A worker its session harness owns resumes through its running owner, which
+reopens its display if gone, else starts a new harness through the tui gate, closing nothing;
+restart closes it through that owner.
+Other workers' restart and resume close the old session and wait for its group (FR-36).
 Callers hold locked() around start, resume and restart.
 """
 
@@ -33,8 +36,13 @@ from ensemble.session.engine.types import (
     Mode,
     SessionError,
     Spec,
+    TurnStarted,
 )
+from ensemble.session.harness import channel
+from ensemble.session.harness.channel import Channel
+from ensemble.session.harness.types import Op
 from ensemble.session.hosts.base import Process
+from ensemble.session.modes.tui import TuiMode
 from ensemble.utils import (
     CONFIG_NAME,
     STALE_AGE,
@@ -66,6 +74,23 @@ KIND = "worker"
 class _Opens(Protocol):
     @property
     def opening_pending(self) -> str | None: ...
+
+
+@runtime_checkable
+class _Guarded(Protocol):
+    @property
+    def client_up(self) -> bool: ...
+
+
+@runtime_checkable
+class _Probed(Protocol):
+    def client_alive(self) -> bool: ...
+
+
+@runtime_checkable
+class _Dialogs(Protocol):
+    @property
+    def dialog(self) -> str | None: ...
 
 
 def _say(text: str) -> None:
@@ -191,6 +216,19 @@ def _pending(session: Session) -> str | None:
     return session.opening_pending if isinstance(session, _Opens) else None
 
 
+def _dialog(session: Session) -> str | None:
+    return session.dialog if isinstance(session, _Dialogs) else None
+
+
+def _up(session: Session, elapsed: float) -> bool:
+    """Its guard said so; with none, its client running EARLY s in."""
+    if isinstance(session, _Guarded):
+        return session.client_up
+    if elapsed < EARLY:
+        return False
+    return session.client_alive() if isinstance(session, _Probed) else session.alive()
+
+
 def _quoted(text: str) -> str:
     return "'" + text.replace("'", "'\\''") + "'"
 
@@ -276,10 +314,10 @@ class Worker:
         )
 
     def start(self, *, prompt: str, resume: bool, hidden: bool | None = None) -> Record:
-        """hidden: True hides, False shows, None keeps its Host's. Watches EARLY s (up to COLOR_CAP s
-        while its opening is pending), then publishes and returns its Record. A failed save or start
-        puts its files back; its client exiting in the watch: SessionError with its last lines, its
-        terminal kept, no Record.
+        """hidden: True hides, False shows, None keeps its Host's. Watches until its client is up
+        (and its opening sent, up to COLOR_CAP s), then publishes and returns its Record. A failed
+        save or start puts its files back; its client exiting first: SessionError with its last
+        lines, its terminal kept, no Record.
         """
         name = self.state.name
         self._drop_stale()
@@ -323,6 +361,9 @@ class Worker:
 
     def resume(self) -> Record:
         """Its Record, starting nothing, while its session lives; else a resumed start."""
+        owned, owner = self._owner()
+        if owned:
+            return self._resume_owned(owner)
         session = self._session()
         if session is not None and session.alive():
             record = session.record()
@@ -335,11 +376,58 @@ class Worker:
         return self._start_again()
 
     def restart(self) -> Record:
+        owned, owner = self._owner()
+        if owned:
+            if owner is None:
+                raise SessionError(f"{self.state.name}: no session to restart; resume starts it")
+            self.session_cls.retire(self.state.name, host=self.state.host)
+            return self._start_again()
         session = self._session()
         if session is None:
             raise SessionError(f"{self.state.name}: no session to restart; resume starts it")
         self.replace(session)
         return self._start_again()
+
+    def _owner(self) -> tuple[bool, Channel | None]:
+        """Whether its session harness owns it (session.json names one and its sid), and that
+        owner while it runs it.
+        """
+        try:
+            snapshot = TuiMode.snapshot(self.state.name)
+        except SessionError:
+            return False, None
+        if "owner" not in snapshot or snapshot.get("sid") != self.state.sid:
+            return False, None
+        return True, channel.running(self.state.name, snapshot)
+
+    def _resume_owned(self, owner: Channel | None) -> Record:
+        """Its running owner's: its Record, published on its display, which that owner reopens if
+        gone (shown then as a resumed start's); else a new harness through the gate (it waits out a
+        reaping guard, refuses a live or unknown one).
+        """
+        record = self.state.record()
+        if owner is None:
+            self.check(prompt="", resume=True)
+            return self.start(prompt="", resume=True)
+        name = self.state.name
+        try:
+            reopened = owner.ask(Op.DISPLAY, {}).get("reopened") is True
+        except SessionError as error:
+            self.say(f"session {name}: display not reopened: {error}")
+            reopened = False
+        with contextlib.suppress(SessionError):
+            handle = self.session_cls.host(self.state.host).attach(name)
+            if handle.session_identity()[0] == self.state.sid:
+                handle.publish(record)
+        if reopened:
+            try:
+                session = self.session_cls.attach(name, sid=self.state.sid, host=self.state.host)
+            except SessionError as error:
+                self.say(f"session {name}: not shown: {error}")
+            else:
+                if session.showable:
+                    self._show(session, hidden=None)
+        return record
 
     def _start_again(self) -> Record:
         try:
@@ -482,20 +570,30 @@ class Worker:
             self.say(f"session {name}: not {'hidden' if hidden else 'shown'}: {error}")
 
     def _watch(self, session: Session) -> None:
-        began = self.clock()
+        began, turned = self.clock(), False  # turned: its opening follows that turn
         for event in session.events():
             if isinstance(event, Exited):
                 raise SessionError(self._died(event.returncode))
+            turned = turned or isinstance(event, TurnStarted)
             if isinstance(event, Blocked):
-                self.say(f"session {self.state.name}: waits on a dialog: {event.reason}")
-                self._uncolored(session, "waits on a dialog")
+                self._waits(session, event.reason, turned=turned)
                 return
             elapsed = self.clock() - began
-            if elapsed >= COLOR_CAP:
+            if not _up(session, elapsed):
+                continue
+            if elapsed < COLOR_CAP and _pending(session) is not None:
+                continue
+            # after its state: a dialog found by then, its Blocked maybe unread
+            if (dialog := _dialog(session)) is not None:
+                self._waits(session, dialog, turned=turned)
+            elif elapsed >= COLOR_CAP and not turned:
                 self._uncolored(session, f"not ready within {COLOR_CAP} s")
-                return
-            if elapsed >= EARLY and _pending(session) is None:
-                return
+            return
+
+    def _waits(self, session: Session, dialog: str, *, turned: bool) -> None:
+        self.say(f"session {self.state.name}: waits on a dialog: {dialog}")
+        if not turned:
+            self._uncolored(session, "waits on a dialog")
 
     def _uncolored(self, session: Session, reason: str) -> None:
         text = _pending(session)

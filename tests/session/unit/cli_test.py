@@ -1,9 +1,12 @@
 import argparse
 import contextlib
+import fcntl
 import io
 import json
 import os
 import sys
+import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
@@ -11,7 +14,9 @@ from unittest import mock
 from ensemble.session import EnvironmentSpec, SessionBusy, cli
 from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.tmux_cli import attach_command
-from ensemble.session.engine.types import ConfigError, Hosts
+from ensemble.session.engine.types import ConfigError, Hosts, SessionError, Unanswered
+from ensemble.session.harness.channel import Channel
+from ensemble.session.harness.types import Op
 from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.session.viewer import display as displays
 from ensemble.utils import ACCOUNT_ENV, Record
@@ -147,6 +152,7 @@ class WorkerEnvironment(Case):
 class RecordControl(HostedTuiBase):
     def setUp(self):
         super().setUp()
+        self.locks = {}
         CliHost.current = self.host
         self.addCleanup(setattr, HostedSession, "_setup", None)
         Path(self.ensemble).mkdir(exist_ok=True)
@@ -256,6 +262,131 @@ class RecordControl(HostedTuiBase):
         self.assertIsNone(process.record())
         self.assertEqual(self.invoke("close", record=self.record)[:2], (0, ""))
         self.assertNotIn("w1", self.host.processes)
+
+    def owned(self, name="w1", *, sid=SID, gone=True, held=True) -> Channel:
+        """Tui session `name` of `sid` whose session.json names a running session harness."""
+        self.tui(name=name, sid=sid)
+        path = Path(self.root, name, "session.json")
+        state = json.loads(path.read_text())
+        channel = Channel.create()
+        path.write_text(json.dumps({**state, "owner": channel.directory}))
+        if held:
+            fd = os.open(channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            self.locks[channel.directory] = fd
+            self.addCleanup(lambda: self.locks.get(channel.directory) and self.let_go(channel))
+        channel.write_status(
+            {"state": "running", "name": name, "sid": sid, "generation": state["generation"]}
+        )
+        if gone:
+            self.host.processes.pop(name)
+        return channel
+
+    def let_go(self, channel):
+        """Its harness exits: its lock released."""
+        os.close(self.locks.pop(channel.directory))
+
+    def serve(self, channel, *replies, before=None) -> list:
+        """Answers one request per reply, in order, calling `before` first, and exits after an ok
+        one, like a harness; the ops it served.
+        """
+        served = []
+
+        def answer():
+            pending = list(replies)
+            deadline = time.monotonic() + 10
+            while pending and time.monotonic() < deadline:
+                for ident, op in channel.requests():
+                    served.append(op)
+                    if before is not None:
+                        before()
+                    reply = pending.pop(0)
+                    channel.reply(ident, **reply)
+                    if reply.get("ok"):
+                        self.let_go(channel)
+                time.sleep(0.01)
+
+        thread = threading.Thread(target=answer)
+        thread.start()
+        self.addCleanup(thread.join)
+        return served
+
+    def test_a_stale_record_still_asks_the_owner_its_session_json_names(self):
+        channel = self.owned()
+        unconfirmed = {"ok": False, "error": "w1: worker exit not confirmed", "unanswered": True}
+        refused = {"ok": False, "error": "cannot close w1"}
+        served = self.serve(channel, unconfirmed, refused, {"ok": True})
+        for reply in (unconfirmed, refused):
+            code, out, err = self.invoke("close", record=self.record)
+            self.assertEqual((code, out), (1, ""))
+            self.assertIn(reply["error"], err)
+        self.assertEqual(self.invoke("close", record=self.record)[:2], (0, ""))
+        self.assertEqual(served, [Op.CLOSE] * 3)
+
+    def test_a_stale_record_asks_each_owner_after_one_whose_harness_is_gone(self):
+        self.owned("w1", held=False)
+        channel = self.owned("w2")
+        served = self.serve(channel, {"ok": False, "error": "cannot close w2"})
+        record = replace(self.record, sessions=("w1", "w2"))
+        code, out, err = self.invoke("close", record=record)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("cannot close w2", err)
+        self.assertEqual(served, [Op.CLOSE])
+
+    def test_a_plain_close_error_is_done_only_once_the_record_looks_stale(self):
+        for stale in (True, False):
+            with self.subTest(stale=stale):
+                process = self.host.create("w1", sid=SID)
+
+                def fail(stale=stale):
+                    if stale:
+                        self.host.processes.pop("w1")
+                    raise SessionError("w1: cannot close")
+
+                process.calls.close.side_effect = fail
+                code, out, err = self.invoke("close", record=self.record)
+                self.assertEqual((code, out), (0, "") if stale else (1, ""), err)
+                self.host.processes.pop("w1", None)
+
+    def test_a_session_failing_its_close_fails_it_after_another_closed(self):
+        self.host.create("w1", sid=SID)
+        failing = self.host.create("w2", sid=SID)
+        failing.calls.close.side_effect = SessionError("w2: cannot close")
+        record = replace(self.record, sessions=("w1", "w2"))
+        code, out, err = self.invoke("close", record=record)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("w2: cannot close", err)
+        self.assertNotIn("w1", self.host.processes)
+
+    def test_a_host_that_cannot_tell_never_makes_a_record_stale(self):
+        process = self.host.create("w1", sid=SID)
+
+        def fail():
+            self.host.calls.attach.side_effect = Unanswered("docker ps: timed out")
+            raise SessionError("w1: cannot close")
+
+        process.calls.close.side_effect = fail
+        code, out, err = self.invoke("close", record=self.record)
+        self.assertEqual((code, out), (1, ""), err)
+        self.assertIn("w1: cannot close; docker ps: timed out", err)
+        self.host.calls.attach.side_effect = Unanswered("docker ps: timed out")
+        process.calls.close.side_effect = None
+        code, out, err = self.invoke("close", record=self.record)
+        self.assertEqual((code, out), (1, ""), err)
+        process.calls.close.assert_called_once_with()
+
+    def test_a_stale_record_skips_an_owner_of_another_sid(self):
+        channel = self.owned(sid="replacement")
+        self.assertEqual(self.invoke("close", record=self.record)[:2], (0, ""))
+        self.assertFalse(os.path.exists(os.path.join(channel.directory, "requests")))
+
+    def test_an_owner_refusal_is_a_failed_close_even_when_the_record_then_looks_stale(self):
+        channel = self.owned(gone=False)
+        refused = {"ok": False, "error": "cannot close w1"}
+        self.serve(channel, refused, before=lambda: self.host.processes.pop("w1"))
+        code, out, err = self.invoke("close", record=self.record)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("cannot close w1", err)
 
     def test_all_record_sessions_are_checked_before_effects(self):
         first = self.host.create("w1", sid=SID)

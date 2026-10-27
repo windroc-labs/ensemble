@@ -22,7 +22,7 @@ from ensemble.session.clients.common import (
     strings,
 )
 from ensemble.session.clients.opencode import probe
-from ensemble.session.clients.opencode.transcript import NATIVE, Refused, database
+from ensemble.session.clients.opencode.transcript import NATIVE, Refused, database, titled
 from ensemble.session.clients.opencode.transcript import updated as session_updated
 from ensemble.session.engine.types import (
     ClientContext,
@@ -51,16 +51,15 @@ from ensemble.utils import (
 
 TABLE = "[clients.opencode]"
 # A container Host's session state dir: OpenCode keeps opencode.db under $XDG_DATA_HOME/opencode.
-# min_width: OpenCode 1.19.3's OpenTUI 0.4.5 crashes its home screen under 38 columns on Linux;
-# fixed in OpenTUI 0.5.3 (anomalyco/opentui#1361).
-HOME = ClientHome("opencode_dir", "opencode", "XDG_DATA_HOME", "none", min_width=40)
+HOME = ClientHome("opencode_dir", "opencode", "XDG_DATA_HOME", "none")
 HERE = os.path.dirname(os.path.abspath(__file__))
 STORE = f"{STATE}/sessions/opencode"  # under HOME, resolved per call
 BINDING_KEYS = frozenset({"version", "cwd", "sid", "native"})
 BINDING_MAX = 4096
 OLLAMA_PORT = 11434
 OLLAMA_CONTEXT = 65536
-# Headroom below a window: OpenCode's OUTPUT_TOKEN_MAX and COMPACTION_BUFFER (docs/sessions.md).
+# Headroom below a window: OpenCode's OUTPUT_TOKEN_MAX and COMPACTION_BUFFER
+# (docs/customizing-roles-and-tasks.md › OpenCode sessions).
 REPLY, BUFFER = 32000, 20000
 # Set by OpenCode for its children (a nested start's are never its own).
 IDENTITY = ("OPENCODE", "OPENCODE_PID", "OPENCODE_TERMINAL")
@@ -76,6 +75,8 @@ SELECTORS = ("-s", "--session", "-c", "--continue", "--fork")
 RESERVED = (*SELECTORS, "--format", "--attach", "--dir", "-m", "--model")
 PERMISSIONS = ("--auto", "--yolo", "--dangerously-skip-permissions")
 TUI_RESERVED = ("--prompt", "--pure")  # the client's prompt; --pure would skip its plugin
+HEADLESS_RESERVED = ("--title",)  # TITLE's
+TITLE = "ensemble-{sid}"  # a new headless run's session title, which finds a session never bound
 VALUED = (
     "-m",
     "--model",
@@ -320,7 +321,7 @@ class OpenCodeCommon:
     def selection(
         self, spec: Spec, context: ClientContext, extra: tuple[str, ...] = ()
     ) -> tuple[str, ...]:
-        """A launch's checks and its session selection: on resume, (cwd, sid)'s bound session.
+        """A launch's checks and its session selection: on resume, (cwd, sid)'s session.
         OpenCode 1.x runs any cwd's .opencode plugins and opencode.json, so a cwd outside a
         container starts only when trusted; an isolated Host's context alone is yolo.
         """
@@ -334,7 +335,9 @@ class OpenCodeCommon:
         if not spec.resume:
             return ()
         sid = spec.sid or ""
-        native = self.native(spec.access.cwd, sid)
+        env = {**self.env, **spec.access.env, **spec.env}
+        db = database(env if context.container is not None else {**os.environ, **env})
+        native = self.session(spec.access.cwd, sid, db)
         if native is None:
             raise ConfigError(f"no OpenCode session bound to run ID {sid!r}")
         return self.selector(native, resume=True)
@@ -524,19 +527,33 @@ class OpenCodeCommon:
     def unbind(self, cwd: str, sid: str) -> None:
         Bindings(self.store).unbind(cwd, sid)
 
+    def session(self, cwd: str, sid: str, db: str) -> str | None:
+        """(cwd, sid)'s bound session, else its headless run's by TITLE in `db`, bound then: opencode
+        prints its session id only once its model streams, so a harness killed before then bound none.
+        """
+        native = self.native(cwd, sid)
+        if native is None and os.path.isfile(db):
+            try:
+                native = titled(db, TITLE.format(sid=sid))
+            except Refused as error:
+                raise ConfigError(f"opencode session lookup: {error}") from None
+            if native is not None:
+                self.bind(cwd, sid, native)
+        return native
+
     def session_status(
         self, cwd: str, sid: str, env: Mapping[str, str], *, transcript: str = ""
     ) -> SessionStatus:
         """From the bound session's row in opencode.db: the run's `transcript`, else the db the
         run's opencode would find.
         """
+        db = transcript or database({**os.environ, **self.env, **env})
         try:
-            native = self.native(cwd, sid)
+            native = self.session(cwd, sid, db)
         except ConfigError:
             return SessionStatus(Resumable.UNKNOWN, None, "")
         if native is None:
             return SessionStatus(Resumable.NO, None, "")
-        db = transcript or database({**os.environ, **self.env, **env})
         try:
             updated = session_updated(db, native)
         except Refused:

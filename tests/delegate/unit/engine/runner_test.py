@@ -7,6 +7,7 @@ import os
 import signal
 import sys
 from contextlib import redirect_stderr
+from dataclasses import asdict
 from datetime import datetime
 from unittest import mock
 
@@ -16,7 +17,10 @@ from ensemble.delegate.engine.plan import plan
 from ensemble.delegate.engine.runner import (
     FIX,
     NUDGE,
+    POLICIES,
     STOP_LIMIT,
+    Attempt,
+    closing,
     execute,
     report,
     say,
@@ -30,6 +34,7 @@ from ensemble.session import (
     Exited,
     IdleTimeout,
     LimitHit,
+    Mode,
     Reply,
     SessionBusy,
     SessionError,
@@ -270,6 +275,35 @@ class TuiPolicy(Base):
                     (session.mode, session.name, session.events), ("headless", name, None)
                 )
 
+    def test_a_draft_written_while_the_session_starts_outlives_the_stale_out(self):
+        self.write(self.out, "# Earlier\n")
+        self.handle = FakeHandle([turn(START, block(DONE)), Exited(0)])
+
+        def start(spec, **kw):
+            self.write(self.out, "# Draft\n")  # its client, already running when start returns
+            return self.handle.start(spec, **kw)
+
+        seen = []
+        with mock.patch.object(self.driver, "start", side_effect=start):
+            self.go(
+                mode="headless",
+                on_event=lambda e: (
+                    seen.append(self.read(self.out)) if isinstance(e, Begun) else None
+                ),
+            )
+        self.assertEqual(seen, ["# Draft\n"])
+        self.assertEqual(sorted(os.listdir(os.path.dirname(self.out))).count("out.md"), 1)
+
+    def test_a_start_ended_by_a_signal_puts_the_stale_out_back(self):
+        self.write(self.out, "# Earlier\n")
+        with (
+            mock.patch.object(self.driver, "start", side_effect=Stopped(143)),
+            self.assertRaises(Stopped),
+        ):
+            self.go(mode="headless")
+        self.assertEqual(self.read(self.out), "# Earlier\n")
+        self.assertEqual(os.listdir(os.path.dirname(self.out)).count(".out.md.stale"), 0)
+
     def test_a_tui_handle_without_a_name_reports_a_driver_error(self):
         os.makedirs(self.work)
         handle = FakeHandle([])
@@ -354,6 +388,13 @@ class TuiPolicy(Base):
                 r = self.faked(turn(START, block(DONE)), show_fail=failure)
                 self.assertEqual(r.outcome.status, "done")
                 self.assertIn(f"delegate: show {NAME}: {failure}\n", self.err)
+
+    def test_a_stop_during_the_tui_show_stops_its_session(self):
+        self.driver.display = "mgr"
+        with self.assertRaises(Stopped):
+            self.faked(turn(START, block(DONE)), show_fail=Stopped(129))
+        self.assertEqual(self.handle.calls, [("stop",)])
+        self.assertEqual(self.last("result")["error"], "stopped: Stopped: 129")
 
     def test_a_valid_outcome_at_a_turn_end_is_done_and_leaves_the_session_even_with_work_pending(
         self,
@@ -507,16 +548,20 @@ class TuiPolicy(Base):
         self.assertIn("delegate: tui: no pane\n", self.err)
         self.assertIn("nudge", self.kinds())
 
-    def test_a_usage_limit_stops_the_session_without_a_nudge(self):
+    def test_a_usage_limit_ends_the_run_leaving_a_tui_and_stopping_a_headless_client(self):
         at = 1767225600.0
-        r = self.faked(LimitHit(at), STOP, Exited(-signal.SIGHUP))
         when = datetime.fromtimestamp(at).astimezone().isoformat(timespec="seconds")
+        r = self.faked(LimitHit(at), STOP, Exited(-signal.SIGHUP))
+        self.assertEqual(r, Result(0, None, f"usage limit; resets at {when}", Limit(at)))
+        self.assertEqual(
+            (self.handle.calls, self.kinds()), ([], ["input", "limit", "result", "end"])
+        )
+        self.fresh()
+        r = self.faked(LimitHit(at), Exited(-signal.SIGHUP), mode="headless")
         self.assertEqual(
             r, Result(-signal.SIGHUP, None, f"usage limit; resets at {when}", Limit(at))
         )
-        self.assertEqual(
-            (self.handle.calls, self.kinds()), ([("stop",)], ["input", "limit", "result", "end"])
-        )
+        self.assertEqual(self.handle.calls, [("stop",)])
 
     def test_a_failed_turn_ends_the_run_without_a_nudge_and_leaves_the_session(self):
         for failed, error in (
@@ -541,9 +586,16 @@ class TuiPolicy(Base):
                 self.assertEqual([type(e) for e in self.events], [Begun, Progress, Finished])
 
     def test_a_failed_headless_turn_stops_its_session(self):
-        r = self.faked(Reply(START), TurnFailed("overloaded"), STOP, mode="headless")
+        r = self.faked(Reply(START), TurnFailed("overloaded"), Exited(0), mode="headless")
         self.assertEqual(
             (r.error, self.handle.calls), ("the client's turn failed: overloaded", [("stop",)])
+        )
+
+    def test_headless_failure_retains_the_actual_exit_status(self):
+        result = self.faked(TurnFailed("server_overloaded"), Exited(3), mode="headless")
+        self.assertEqual(
+            (result.returncode, result.outcome, result.error),
+            (3, None, "the client's turn failed: server_overloaded"),
         )
 
     def test_a_session_exiting_without_an_outcome_is_the_error(self):
@@ -660,10 +712,10 @@ class TuiPolicy(Base):
 
     def test_a_failed_stop_is_printed_and_never_replaces_the_limit_or_stale_out_result(self):
         gone = SessionError("gone")
-        r = self.faked(LimitHit(None), stop_fail=gone)
+        r = self.faked(LimitHit(None), stop_fail=gone, mode="headless")
         self.assertEqual(r, Result(0, None, "usage limit; reset time unknown", Limit(None)))
         self.assertEqual(
-            (self.handle.calls, self.err.count("delegate: tui: gone\n")), ([("stop",)], 1)
+            (self.handle.calls, self.err.count("delegate: headless: gone\n")), ([("stop",)], 1)
         )
         self.assertEqual(self.kinds(), ["input", "limit", "result", "end"])
         blocker = os.path.join(self.tmp, "file")
@@ -743,7 +795,9 @@ LOCKED = EnvironmentSpec(image="dummy-env:test", gateway="workers", lock="dummy-
 
 
 class LockCloseTest(TuiPolicy):
-    """A locked run's session closes as soon as the run ends, before its Finished (FR-61)."""
+    """A locked headless run's worker, ended with its client or stopped, is closed before its
+    Finished and only then claimed released (a locked tui is always owned: handler_test).
+    """
 
     def locked(self, *events, environment=LOCKED, close_fail=None, **kw):
         self.at_finish = None
@@ -759,12 +813,9 @@ class LockCloseTest(TuiPolicy):
 
     def test_every_run_end_closes_before_finished(self):
         for name, events, mode in (
-            ("outcome headless", (turn(START, block(DONE)), Exited(0)), "headless"),
-            ("outcome tui", (turn(START, block(DONE)),), "tui"),
+            ("outcome", (turn(START, block(DONE)), Exited(0)), "headless"),
             ("no outcome", (turn(START), Exited(0)), "headless"),
-            ("failed turn", (turn(START), TurnFailed("overloaded")), "tui"),
-            ("give-up", (turn(START), *[STOP] * STOP_LIMIT), "tui"),
-            ("idle", (turn(START), IdleTimeout(7200)), "tui"),
+            ("failed turn", (turn(START), TurnFailed("overloaded"), Exited(1)), "headless"),
             ("usage limit", (turn(START), LimitHit(None), Exited(0)), "headless"),
         ):
             with self.subTest(name):
@@ -772,6 +823,7 @@ class LockCloseTest(TuiPolicy):
                 self.assertEqual(self.handle.calls.count(("close",)), 1, self.handle.calls)
                 self.assertIn(("close",), self.at_finish)
                 self.assertIn(f"session {NAME} closed (lock dummy-lock)", self.err)
+                self.assertEqual(self.kinds()[-3:], ["release", "result", "end"])
                 self.assertNotIn("left open", self.err)
 
     def test_a_raised_error_closes_after_stopping(self):
@@ -889,3 +941,100 @@ class Stopping(Case):
         ):
             with self.subTest(error=error):
                 self.assertEqual(stopped(error), want)
+
+
+class AttemptCore(TuiPolicy):
+    """Attempt, the event-driven core: each event fed, a Result ends it; closing's fields."""
+
+    def attempt(self, *, first=True, mode="tui", sent=None) -> Attempt:
+        os.makedirs(Layout(self.work).agent, exist_ok=True)
+        composition = Composer()
+        accepted = plan(
+            composition.resolve("dummy-tester"),
+            Spec("Echo me.", self.work, task="echo", client="fake", mode=mode, out=self.out),
+            driver=self.driver,
+            composition=composition,
+        )
+        os.makedirs(accepted.session.workdir, exist_ok=True)
+        self.handle = FakeHandle([], fail=sent)
+        self.events, self.notes = [], []
+        policy = POLICIES[Mode(mode)](self.note, None)
+        return Attempt(
+            accepted,
+            policy,
+            self.handle,
+            note=self.note,
+            on_event=self.events.append,
+            first=first,
+        )
+
+    def note(self, kind: str, **_fields) -> None:
+        self.notes.append(kind)
+
+    def fed(self, attempt: Attempt, *events) -> list[Result | None]:
+        err = io.StringIO()
+        with redirect_stderr(err):
+            found = [attempt.feed(event) for event in events]
+        self.err = err.getvalue()
+        return found
+
+    def test_an_outcome_turn_end_is_the_attempts_result(self):
+        attempt = self.attempt()
+        found = self.fed(attempt, Activity("Read"), turn(START, block(DONE)))
+        self.assertIsNone(found[0])
+        self.assertEqual(found[1].outcome.status, "done")
+        self.assertEqual(self.events, [Progress("start", "go")])
+        self.assertNotIn("missing", self.notes)
+
+    def test_an_invalid_outcome_is_fixed_in_the_same_session_once(self):
+        attempt = self.attempt()
+        found = self.fed(attempt, turn(START, block(INVALID)), turn(block(DONE)))
+        self.assertIsNone(found[0])
+        self.assertEqual(self.handle.calls, [("send", FIX.format(error=INVALID_ERROR))])
+        self.assertEqual(found[1].outcome.status, "done")
+        self.assertIn("invalid", self.notes)
+
+    def test_a_failed_turn_and_a_limit_end_it(self):
+        found = self.fed(self.attempt(), TurnFailed("server_overloaded", "busy"))
+        self.assertEqual(
+            found, [Result(0, None, "the client's turn failed: server_overloaded (busy)")]
+        )
+        attempt = self.attempt()
+        found = self.fed(attempt, LimitHit(None))
+        self.assertEqual(found, [Result(0, None, "usage limit; reset time unknown", Limit(None))])
+        self.assertEqual(self.handle.calls, [])
+
+    def test_turn_ends_without_an_outcome_are_nudged_then_given_up(self):
+        attempt = self.attempt()
+        found = self.fed(attempt, *[turn("Working.")] * (STOP_LIMIT + 1))
+        self.assertEqual(found[:-1], [None] * STOP_LIMIT)
+        self.assertEqual(found[-1], GAVE_UP)
+        self.assertEqual(self.handle.calls, [("send", NUDGE)])
+        self.assertEqual(self.notes.count("give_up"), 1)
+
+    def test_idle_gives_a_tui_attempt_up(self):
+        attempt = self.attempt()
+        err = io.StringIO()
+        with redirect_stderr(err):
+            self.assertEqual(attempt.idle(1800), GAVE_UP)
+        self.assertIn("no event for 30 min", err.getvalue())
+        self.assertEqual(self.notes, ["idle", "give_up"])
+
+    def test_only_a_first_attempt_logs_a_missing_start_mark(self):
+        for first, want in ((True, ["missing"]), (False, [])):
+            with self.subTest(first=first):
+                self.fresh()
+                attempt = self.attempt(first=first)
+                self.fed(attempt, turn(block(DONE)))
+                self.assertEqual([n for n in self.notes if n == "missing"], want)
+
+    def test_closing_holds_the_result_note_fields(self):
+        outcome = Outcome("done", "T", "S", deliverable="# Doc\n")
+        self.assertEqual(closing(Result(1, None, "boom")), {"error": "boom"})
+        self.assertEqual(
+            closing(Result(0, outcome, "")),
+            {"outcome": {k: v for k, v in asdict(outcome).items() if k != "deliverable"}},
+        )
+        self.assertEqual(
+            closing(Result(2, outcome, "the client exited 2"))["error"], "the client exited 2"
+        )
