@@ -67,9 +67,12 @@ class CliCase(Case):
             return Channel(json.load(f)["owner"])
 
     def settled(self, channel: Channel) -> dict:
-        """Its harness.json once it no longer runs a worker (exited or failed)."""
+        """Its harness.json once it no longer runs a worker (draining, exited or failed)."""
         return live_tmux.wait(
-            lambda: (found := channel.status()).get("state") in ("exited", "failed") and found,
+            lambda: (
+                (found := channel.status()).get("state") in ("draining", "exited", "failed")
+                and found
+            ),
             timeout=40,
             what=f"harness {channel.directory} to leave running",
         )
