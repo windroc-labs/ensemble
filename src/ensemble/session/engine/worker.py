@@ -81,6 +81,11 @@ class _Guarded(Protocol):
     def client_up(self) -> bool: ...
 
 
+@runtime_checkable
+class _Probed(Protocol):
+    def client_alive(self) -> bool: ...
+
+
 def _say(text: str) -> None:
     print(text, file=sys.stderr)
 
@@ -205,10 +210,12 @@ def _pending(session: Session) -> str | None:
 
 
 def _up(session: Session, elapsed: float) -> bool:
-    """Its guard said so; with none, alive EARLY s in."""
+    """Its guard said so; with none, its client running EARLY s in."""
     if isinstance(session, _Guarded):
         return session.client_up
-    return elapsed >= EARLY and session.alive()
+    if elapsed < EARLY:
+        return False
+    return session.client_alive() if isinstance(session, _Probed) else session.alive()
 
 
 def _quoted(text: str) -> str:

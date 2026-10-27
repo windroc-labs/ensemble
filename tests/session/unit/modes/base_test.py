@@ -150,11 +150,11 @@ class BaseModeTest(Case):
             with self.subTest(cls=cls.__name__):
                 self.assertIsNone(object.__new__(cls).opening_pending)
 
-    def test_alive_is_its_state_live_unless_a_mode_overrides_it(self):
+    def test_client_alive_is_its_state_live_unless_a_mode_overrides_it(self):
         run = mock.Mock()
         for state, alive in ((Liveness.LIVE, True), (Liveness.UNKNOWN, False)):
             run.state.return_value = state
-            self.assertIs(BaseMode.alive(run), alive)
+            self.assertIs(BaseMode.client_alive(run), alive)
 
     def test_only_a_tui_mode_may_report_its_client_up(self):
         for cls in (headless.HeadlessMode, in_process.InProcessMode):

@@ -2682,13 +2682,13 @@ class OwnerTest(Base):
         running._terminal.up = True
         self.assertTrue(running.client_up)
 
-    def test_alive_probes_its_terminal_afresh_not_its_last_state(self):
+    def test_client_alive_probes_its_terminal_afresh_not_its_last_state(self):
         mode = self.start()
-        mode._terminal.calls.state.return_value = Liveness.LIVE  # a probe it may reuse
+        mode._terminal.calls.state.return_value = Liveness.LIVE  # a reused probe, a kept terminal
         mode._terminal.calls.alive.return_value = False
-        self.assertFalse(mode.alive())
+        self.assertEqual((mode.client_alive(), mode.state()), (False, Liveness.LIVE))
         mode._terminal.calls.alive.side_effect = Unanswered("its tmux did not tell")
-        self.assertFalse(mode.alive())
+        self.assertFalse(mode.client_alive())
 
     def test_an_owner_outside_the_harness_root_is_refused(self):
         path = os.path.join(self.dir, "session.json")

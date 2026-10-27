@@ -1141,7 +1141,10 @@ class HostedSession(Session):
         self._running.press(tuple(keys))
 
     def alive(self) -> bool:
-        return self._running.alive()
+        return self._running.state() == Liveness.LIVE
+
+    def client_alive(self) -> bool:
+        return self._running.client_alive()
 
     def status(self) -> Status:
         """Its run's; a live tui one's activity, attach and hidden from its terminal."""

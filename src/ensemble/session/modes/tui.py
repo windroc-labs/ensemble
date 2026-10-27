@@ -1012,8 +1012,10 @@ class TuiMode(BaseMode):
         self._store.check()
         return self._terminal.state()
 
-    def alive(self) -> bool:
-        """Its terminal probed afresh; state() may reuse a probe."""
+    def client_alive(self) -> bool:
+        """Its client runs, its terminal probed afresh: state() may reuse a probe and stays LIVE
+        while its ended client's terminal is kept.
+        """
         self._store.check()
         try:
             return self._terminal.alive()

@@ -589,16 +589,16 @@ class ColorWatchTest(Base):
         self.assertEqual(self.said, [])
         self.handle.publish.assert_not_called()
 
-    def plain(self, *events, alive: bool) -> Session:
-        """A session no guard reports up, alive as `alive` says."""
-        plain = mock.create_autospec(Session, instance=True)
-        plain.showable = False
-        plain.alive.return_value = alive
+    def plain(self, *events, alive: bool) -> mock.Mock:
+        """A session no guard reports up, its client running as `alive` says; its session alive."""
+        plain = mock.Mock(spec=["showable", "events", "alive", "client_alive"], showable=False)
+        plain.alive.return_value = True
+        plain.client_alive.return_value = alive
         plain.events.return_value = iter(events) if events else itertools.repeat(IdleTimeout(1))
         self.session_cls.start.return_value = plain
         return plain
 
-    def test_a_session_without_a_guard_returns_once_alive_at_the_early_deadline(self):
+    def test_a_session_without_a_guard_returns_once_its_client_runs_at_the_early_deadline(self):
         plain = self.plain(alive=True)
         ticks = itertools.count()
         Worker(
@@ -606,9 +606,10 @@ class ColorWatchTest(Base):
         ).start(prompt="", resume=False)
         self.assertEqual(next(ticks), worker.EARLY + 1)
         self.assertEqual(self.said, [])
-        plain.alive.assert_called_once_with()
+        plain.client_alive.assert_called_once_with()
 
-    def test_a_session_without_a_guard_not_alive_at_the_deadline_waits_for_its_exit(self):
+    def test_a_session_without_a_guard_whose_client_ended_waits_for_its_exit(self):
+        """Its session still alive (a kept dead pane), its exit not yet polled."""
         late = worker.COLOR_CAP * 2
         plain = self.plain(*[IdleTimeout(worker.TICK)] * late, Exited(2), alive=False)
         ticks = itertools.count()
@@ -616,8 +617,21 @@ class ColorWatchTest(Base):
             Worker(state(), session_cls=self.session_cls, clock=lambda: next(ticks)).start(
                 prompt="", resume=False
             )
-        self.assertEqual(plain.alive.call_count, late - worker.EARLY + 1)
+        self.assertEqual(plain.client_alive.call_count, late - worker.EARLY + 1)
+        plain.alive.assert_not_called()
         self.handle.publish.assert_not_called()
+
+    def test_a_plain_session_returns_once_alive_at_the_early_deadline(self):
+        plain = mock.create_autospec(Session, instance=True)
+        plain.showable = False
+        plain.alive.return_value = True
+        plain.events.return_value = itertools.repeat(IdleTimeout(worker.TICK))
+        self.session_cls.start.return_value = plain
+        ticks = itertools.count()
+        Worker(state(), session_cls=self.session_cls, clock=lambda: next(ticks)).start(
+            prompt="", resume=False
+        )
+        self.assertEqual(next(ticks), worker.EARLY + 1)
 
 
 class LoadTest(Base):
