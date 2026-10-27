@@ -1740,6 +1740,67 @@ class InstallTest(Case):
         )
         self.assertIn("==> broker\n    skip: installed from this plugin\n", result.stderr)
 
+    def opencode_docker_at(self, protocol):
+        """An OpenCode-only Docker install whose broker speaks `protocol`, then a new commit at every
+        ref, so OpenCode's copy no longer stands for the next run's ref."""
+        self.assert_ok(
+            self.fresh(
+                clients="opencode",
+                docker="y",
+                opencode=PROVIDER_ANSWERS,
+                logins=[(PEM_Q, ""), (OPENCODE_LOGIN_Q, "lan"), (r"API key:", KEY)],
+            )
+        )
+        (self.fakes / "src/broker").mkdir(parents=True, exist_ok=True)
+        (self.fakes / "src/broker/protocol").write_text(protocol)
+        (self.fakes / "commit").write_text(NEW)
+
+    def test_c9_branch_broker_below_installed_protocol_refused(self):
+        """A branch broker below protocol 30 cannot read the keychain items renamed for 30."""
+        self.opencode_docker_at("30")
+        broker = self.broker_path().read_bytes()
+        self.protocol_at("wdrc-c9", "29")
+        result = self.refused("--ref", "wdrc-c9", rerun=True)
+        self.assertIn(
+            "install.sh: ensemble wdrc-c9's broker speaks protocol 29, below the installed broker's"
+            " protocol 30: it cannot read the broker keychain items renamed for protocol 30"
+            " (docs/upgrading.md#broker-protocol-30-keychain-rename)",
+            result.stderr,
+        )
+        self.assertNotIn("rerun the same command", result.stderr)
+        self.assertFalse([c for c in self.calls() if c.startswith("broker-install")])
+        self.assertEqual(self.broker_path().read_bytes(), broker)
+        self.protocol_at("wdrc-c9", "30")
+        self.assert_ok(self.again("--ref", "wdrc-c9"))
+        self.assertIn("broker-install --build", self.calls())
+
+    def test_u5_downgrade_to_v041_refused(self):
+        """A release downgrade below protocol 30 keeps the broker and the egress proxy's version."""
+        self.opencode_docker_at("30")
+        broker = self.broker_path().read_bytes()
+        current = Path(self.home, ".egress/current")
+        target = os.readlink(current)
+        self.at_ref("v0.4.1", ".claude-plugin/plugin.json", '{"version": "0.4.1"}\n')
+        self.protocol_at("v0.4.1", "29")
+        result = self.refused("--ref", "v0.4.1", "--clients", "opencode", "--docker", rerun=True)
+        self.assertIn(
+            "install.sh: release v0.4.1's broker speaks protocol 29, below the installed broker's"
+            " protocol 30",
+            result.stderr,
+        )
+        self.assertNotIn("rerun the same command", result.stderr)
+        calls = self.calls()
+        self.assertFalse([c for c in calls if c.startswith("broker-install")])
+        self.assertNotIn("docker egress-start", calls)
+        self.assertEqual(self.broker_path().read_bytes(), broker)
+        self.assertEqual(os.readlink(current), target)
+        (self.fakes / "src/broker/protocol").write_text("29")
+        self.at_ref("v0.4.0", ".claude-plugin/plugin.json", '{"version": "0.4.0"}\n')
+        self.protocol_at("v0.4.0", "28")
+        result = self.again("--ref", "v0.4.0")
+        self.assertNotIn("below the installed broker's protocol", result.stderr)
+        self.assertIn("broker-install ", self.calls())
+
     def test_mixed_run_remedy_updates_the_plugin(self):
         """With Claude Code chosen only the served ref installs, so OpenCode's copy names the plugin update."""
         self.assert_ok(
@@ -2331,6 +2392,24 @@ class InstallTest(Case):
         self.assert_ok(self.again())
         self.assertEqual(self.calls().count("ensemble-broker retrust"), 1)
         self.assertEqual(self.state()["retrust"], hashlib.sha256(binary.read_bytes()).hexdigest())
+
+    def test_u1b_old_name_items_name_the_rename_step(self):
+        """Old-name items make every broker command refuse: the remedy is the rename step, not retrust."""
+        (self.fakes / "src/broker").mkdir(parents=True, exist_ok=True)
+        (self.fakes / "src/broker/legacy").write_text("")
+        result = self.fresh("--clients", "claude", "--docker", egress_failure=True)
+        self.assertEqual(result.code, 1, result.stderr)
+        self.assertIn(
+            "install.sh: old-name broker keychain items remain: run the maintainer's one-time rename"
+            " step (docs/upgrading.md#broker-protocol-30-keychain-rename), then rerun install.sh\n",
+            result.stderr,
+        )
+        self.assertNotRegex(result.stderr, r"or run .*retrust")
+        self.assertNotIn("rerun the same command", result.stderr)
+        self.assertFalse([c for c in self.calls() if c.startswith("ensemble-broker login")])
+        self.assertNotIn("retrust", self.state())
+        doc = Path(REPO, "docs/upgrading.md").read_text()
+        self.assertIn("\n## Broker protocol 30: Keychain rename\n", doc)
 
     def test_broker_logins_use_the_terminal_device(self):
         result = self.fresh(clients="claude", docker="y", ctty=self.refused_tty())

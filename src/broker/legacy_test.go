@@ -56,7 +56,7 @@ func TestLegacyState(t *testing.T) {
 				services[s] = a
 			}
 			found, err := legacyState(t.TempDir(), legacyKeys{services: services})
-			if err != nil || !slices.Equal(found, []string{old}) {
+			if err != nil || !slices.Equal(found, []string{old + " x"}) {
 				t.Fatalf("%q %v", found, err)
 			}
 		})
@@ -66,8 +66,26 @@ func TestLegacyState(t *testing.T) {
 		static   string
 		want     []string
 	}{
-		"none":            {renamed, "", nil},
-		"env service":     {map[string][]string{"ensemble-env/db": {"db"}}, "", []string{"ensemble-env/db"}},
+		"none":        {renamed, "", nil},
+		"env service": {map[string][]string{"ensemble-env/db": {"db"}}, "", []string{"ensemble-env/db db"}},
+		"items":       {map[string][]string{"ensemble-tokens": {"ensemble-ws-a", "ensemble-ws-b"}}, "", []string{"ensemble-tokens ensemble-ws-a", "ensemble-tokens ensemble-ws-b"}},
+		"static items": {
+			map[string][]string{"ensemble-claude": {"default"}, "ensemble-env/db": {"db"}},
+			`{"secrets":{"ensemble-claude/default":{},"ensemble-claude/work":{},"ensemble-opencode/lan":{},"ensemble-env/db":{}}}`,
+			[]string{"ensemble-claude default", "ensemble-env/db db", "ensemble-claude/work", "ensemble-opencode/lan"},
+		},
+		// mini-op's v0.4.1 install (U1b), reconstructed from v0.4.1's keychain services: eight items, one of them the
+		// Claude token whose static-secrets.json record names the same secret. The rename step renames 8.
+		"U1b": {
+			map[string][]string{
+				"ensemble-claude": {"default"}, "ensemble-bot": {"123456"}, "ensemble-github-users": {"ensemble-bot"},
+				"ensemble-tokens": {"ensemble-ws-w1"}, "ensemble-revocations": {"pending"}, "ensemble-codex": {"auth"},
+				"ensemble-codex-grants": {"ensemble-ws-w1"}, "ensemble-linear": {"harness"},
+			},
+			`{"secrets":{"ensemble-claude/default":{"version":1}}}`,
+			[]string{"ensemble-bot 123456", "ensemble-claude default", "ensemble-codex auth", "ensemble-codex-grants ensemble-ws-w1",
+				"ensemble-github-users ensemble-bot", "ensemble-linear harness", "ensemble-revocations pending", "ensemble-tokens ensemble-ws-w1"},
+		},
 		"bot account":     {map[string][]string{"ensemble-broker-github-users": {"ensemble-bot"}}, "", []string{"ensemble-broker-github-users ensemble-bot"}},
 		"orchestrator":    {map[string][]string{"linear-app-harness-secret": {"ensemble-claude"}}, "", nil},
 		"static keys":     {nil, `{"secrets":{"ensemble-claude/default":{},"ensemble-broker-env/db":{},"ensemble-opencode/strata":{},"ensemble-env/db":{}}}`, []string{"ensemble-claude/default", "ensemble-env/db", "ensemble-opencode/strata"}},
