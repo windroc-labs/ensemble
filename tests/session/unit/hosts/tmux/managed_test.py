@@ -115,8 +115,30 @@ class ManagedTest(Case):
         self.assertEqual(len(options["pass_fds"]), 1)
         self.assertEqual(options["env"]["ENSEMBLE_GUARD_LEASE_FD"], str(options["pass_fds"][0]))
         self.assertIn("--hook-socket", spawn.call_args.args[0])
+        self.assertNotIn("--display-grace", spawn.call_args.args[0])
         self.assertIsNone(channel.record())
         self.assertIsNone(channel.display())
+
+    def test_terminal_worker_guard_awaits_the_display_it_starts(self):
+        """tmux starts the guard's display at launch, so its guard keeps the display grace."""
+        proc = mock.Mock()
+        proc.stdout.read.side_effect = [
+            guard.json_frame(b"s", {"pid": 123}),
+            guard.json_frame(b"x", {"returncode": 0}),
+            b"",
+        ]
+        host = TmuxHost("tmux", tmux=mock.Mock())
+        with (
+            mock.patch.object(managed.subprocess, "Popen", return_value=proc) as spawn,
+            mock.patch.object(os, "set_blocking"),
+        ):
+            channel = host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=True)
+            channel.close()
+        argv = spawn.call_args.args[0]
+        start = argv.index("--terminal")
+        self.assertEqual(
+            argv[start : start + 3], ["--terminal", "--display-grace", "--display-socket"]
+        )
 
     def test_never_started_name_is_absent(self):
         self.assertEqual(managed.liveness("tmux", "worker", "a" * 32), Liveness.ABSENT)

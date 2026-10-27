@@ -206,7 +206,8 @@ def start(
                 os.path.join(run, "hook"),
             ]
             if terminal:
-                argv += ["--terminal", "--display-socket", os.path.join(run, "display")]
+                argv += ["--terminal", "--display-grace"]
+                argv += ["--display-socket", os.path.join(run, "display")]
             argv += ["--", *launch.argv]
             # Launch.env passes verbatim; the PTY is no tmux pane, the display relays its bytes.
             environment = {
