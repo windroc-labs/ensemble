@@ -782,7 +782,7 @@ save_answers() {
 config_plan() {
   python3 -I -c '
 import json, os, re, sys, tomllib
-path, out, default, harness, client, exe, name, url, model, context, prev_name, prev_url, prev_model, prev_context, only, board = sys.argv[1:]
+path, out, default, harness, clients, exe, name, url, model, context, prev_name, prev_url, prev_model, prev_context, only, board = sys.argv[1:]
 fresh = not os.path.exists(path)
 text = ""
 if not fresh:
@@ -812,8 +812,9 @@ elif only:
     want(*only)
 elif fresh or (get(data, "session.hosts", "default") or "tmux") != default:
     wanted.append(("session.hosts", "default", default))
-if not scoped and client and (get(data, "delegate", "client") or "claude") != client:
-    wanted.append(("delegate", "client", client))
+chosen = [name for name in ("claude", "codex", "opencode") if name in clients.split(",")]
+if not scoped and chosen and (get(data, "delegate", "client") or "claude") not in chosen:
+    wanted.append(("delegate", "client", chosen[0]))
 if not scoped and harness and get(data, "delegate.delegates", "harness_host") in (None, "", "docker"):
     wanted.append(("delegate.delegates", "harness_host", harness))
 if name and not scoped:
@@ -881,7 +882,7 @@ if any(get(edited, table, key) != value for table, key, value in wanted):
     sys.exit(4)
 with open(out, "w", encoding="utf-8") as f:
     f.write(result)
-sys.exit(3)' "$config" "$1" "$wanted_default" "$wanted_harness" "$wanted_client" \
+sys.exit(3)' "$config" "$1" "$wanted_default" "$wanted_harness" "$clients" \
     "$opencode_executable" "$provider" "$url" "$model" "$context" \
     "$prev_provider" "$prev_url" "$prev_model" "$prev_context" "$only" "$board_file"
 }
@@ -889,7 +890,7 @@ sys.exit(3)' "$config" "$1" "$wanted_default" "$wanted_harness" "$wanted_client"
 # Writes the configuration's settings into config.local.toml with consent; given <table> <key> <value>, only that;
 # given board <file>, the settings board_plan wrote to <file>.
 config_file() {
-  local wanted_default=tmux wanted_harness= wanted_client= only= board_file= changes rc=0 plan
+  local wanted_default=tmux wanted_harness= only= board_file= changes rc=0 plan
   if [ $# = 2 ] && [ "$1" = board ]; then
     board_file=$2
   elif [ $# = 3 ]; then
@@ -899,10 +900,6 @@ config_file() {
   if [ "$docker" = yes ]; then
     wanted_default=docker
     wanted_harness=tmux
-  fi
-  if ! has claude; then
-    wanted_client=opencode
-    if has codex; then wanted_client=codex; fi
   fi
   mkdir -p "$state_dir"
   plan=$state_dir/config.local.toml.plan
