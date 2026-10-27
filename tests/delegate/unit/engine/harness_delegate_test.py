@@ -25,7 +25,6 @@ from unittest import mock
 
 from ensemble.delegate import ConfigError, Outcome, Spec
 from ensemble.delegate.composer import Composer, RunParams
-from ensemble.delegate.engine import harness_delegate
 from ensemble.delegate.engine.config import module_roots
 from ensemble.delegate.engine.drivers import AgentDriver
 from ensemble.delegate.engine.harness_delegate import DRAIN_WAIT, HarnessDelegate
@@ -1001,16 +1000,12 @@ class CheckTuiTest(HarnessCase):
     def test_the_agents_host_places_the_display_and_the_events_file_is_checked_not_made(self):
         with (
             mock.patch.object(FakeViewer, "layout", autospec=True) as layout,
-            mock.patch.object(
-                harness_delegate, "validate_events", wraps=harness_delegate.validate_events
-            ) as checked,
         ):
             self.check(display="opener/right", events=self.events)
         [(_, host)] = [call.args for call in layout.call_args_list]
         self.assertEqual(
             (host.name, layout.call_args.kwargs), ("agent", {"display": "opener/right"})
         )
-        checked.assert_called_once_with(self.events)
         self.assertFalse(os.path.exists(self.events))
 
     def test_a_host_refusing_the_display_or_the_events_is_a_config_error(self):
@@ -1022,11 +1017,6 @@ class CheckTuiTest(HarnessCase):
                 "layout",
                 SessionConfigError("display 'a/sideways': not <opener>[/<split>]"),
             ),
-            (
-                harness_delegate,
-                "validate_events",
-                ValueError(f"events file {self.events}: Permission denied"),
-            ),
         ):
             with (
                 self.subTest(method=method, error=error),
@@ -1035,6 +1025,10 @@ class CheckTuiTest(HarnessCase):
             ):
                 self.check(display="d", events=self.events)
             self.assertEqual(str(caught.exception), str(error))
+        missing = os.path.join(self.home, "missing", "events")
+        with self.assertRaises(ConfigError) as caught:
+            self.check(display="d", events=missing)
+        self.assertEqual(str(caught.exception), f"events file {missing}: No such file or directory")
         self.assertEqual(RecordingHost.launches, [])
 
 

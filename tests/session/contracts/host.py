@@ -16,11 +16,10 @@ from dataclasses import replace
 from unittest import mock
 
 from ensemble.session import Access, Host, Mode, NotShowable, SessionError, Spec, Viewer
-from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.types import Key, KeyPress, Launch, Paste
 from ensemble.session.viewer import display as displays
 from ensemble.utils import Record
-from tests.session import fake_client
+from tests.session import fake_client, harnesses
 from tests.session.case import PY, REPO, child_env
 from tests.session.modules import client_loader
 
@@ -441,7 +440,7 @@ class HostContract:
         with open(scenario, "w", encoding="utf-8") as f:
             json.dump([{"out": {"type": "message", "text": "hi"}}], f)
         fake = "ensemble.session.clients.fake:InProcessFakeClient"
-        configured = HostedSession.configured(
+        configured = harnesses.Threaded.configured(
             clients={
                 "fake": {"implementation": fake, "scenario": scenario, "log": self.file("log")}
             },

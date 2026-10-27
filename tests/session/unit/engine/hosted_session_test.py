@@ -146,7 +146,7 @@ class ClientCapacityTest(HostedTuiBase):
     def _other_configuration(self):
         setup = self.session._config()
         other = ScreenHost("elsewhere")
-        return HostedSession.configured(
+        return harnesses.Threaded.configured(
             clients=setup.registry.settings.clients,
             hosts=parsed(
                 {"elsewhere": {"implementation": "tests.session.fakes.terminal:ScreenHost"}},
@@ -315,7 +315,7 @@ class AliasedClientCapacityTest(TuiBase):
                     "alias": AliasHost("alias", original),
                     "offline": offline,
                 }
-                self.session = HostedSession.configured(
+                self.session = harnesses.Threaded.configured(
                     clients=setup.registry.settings.clients,
                     hosts=parsed(
                         {
@@ -329,7 +329,7 @@ class AliasedClientCapacityTest(TuiBase):
                     viewer_factory=MemoryViewer,
                 )
                 other = ScreenHost("elsewhere")
-                disjoint = HostedSession.configured(
+                disjoint = harnesses.Threaded.configured(
                     clients=setup.registry.settings.clients,
                     hosts=parsed(
                         {
@@ -358,7 +358,7 @@ class AliasedClientCapacityTest(TuiBase):
         setup = self.session._config()
         self.host.checked.return_value = SimpleNamespace(stdout="/fake/server.sock\n")
         self.host.listing.return_value = [listed("existing", client="checked", sid="s1")]
-        self.session = HostedSession.configured(
+        self.session = harnesses.Threaded.configured(
             clients=setup.registry.settings.clients,
             hosts=parsed(
                 {"tmux": HOSTS["tmux"], "alias": {**HOSTS["tmux"], "status_line": False}},
@@ -416,8 +416,8 @@ class ConfiguredTest(Case):
         )
 
     def test_each_configured_class_has_its_own_setup_and_none_changes_hosted_session(self):
-        first = HostedSession.configured(clients={}, hosts=parsed(HOSTS, "tmux"))
-        second = HostedSession.configured(clients={}, hosts=parsed(FAKE_HOSTS, "fake"))
+        first = harnesses.Threaded.configured(clients={}, hosts=parsed(HOSTS, "tmux"))
+        second = harnesses.Threaded.configured(clients={}, hosts=parsed(FAKE_HOSTS, "fake"))
         self.assertTrue(issubclass(first, HostedSession))
         self.assertIsNot(first, second)
         self.assertIsInstance(first.host(), TmuxHost)
@@ -428,7 +428,7 @@ class ConfiguredTest(Case):
         self.assertEqual(str(caught.exception), UNCONFIGURED)
 
     def test_a_subclass_of_a_configured_class_starts_unconfigured(self):
-        configured = HostedSession.configured(clients={}, hosts=parsed(HOSTS, "tmux"))
+        configured = harnesses.Threaded.configured(clients={}, hosts=parsed(HOSTS, "tmux"))
         later = type("Later", (configured,), {})
         with self.assertRaises(ConfigError) as caught:
             later.host()
@@ -458,7 +458,7 @@ class ConfiguredTest(Case):
 
     def test_configure_takes_parsed_hosts_only(self):
         with self.assertRaises(ConfigError) as caught:
-            HostedSession.configured(clients={}, hosts={**HOSTS, "default": "tmux"})
+            harnesses.Threaded.configured(clients={}, hosts={**HOSTS, "default": "tmux"})
         self.assertEqual(str(caught.exception), "hosts: want parsed Hosts (Host.parse_hosts)")
 
 
@@ -673,7 +673,7 @@ class HostTest(Case):
             return cls(name, settings)
 
         tables = {"tmux": {**HOSTS["tmux"], "status_line": True}, **FAKE_HOSTS}
-        configured = HostedSession.configured(
+        configured = harnesses.Threaded.configured(
             clients={}, hosts=parsed(tables, "tmux"), host_factory=factory
         )
         default = configured.host()
@@ -685,7 +685,7 @@ class HostTest(Case):
             [(TmuxHost, "tmux", {"status_line": True}), (FakeHost, "fake", {})],
         )
         self.assertEqual((default.name, default.settings), ("tmux", {"status_line": True}))
-        other = HostedSession.configured(clients={}, hosts=parsed(tables, "tmux"))
+        other = harnesses.Threaded.configured(clients={}, hosts=parsed(tables, "tmux"))
         self.assertIsNot(other.host(), default)
 
     def test_the_viewer_built_once_per_class_from_its_viewer_table(self):
@@ -695,7 +695,7 @@ class HostTest(Case):
             built.append(settings)
             return mock.sentinel.viewer
 
-        configured = HostedSession.configured(
+        configured = harnesses.Threaded.configured(
             clients={},
             hosts=parsed(HOSTS, "tmux"),
             viewer={"grid_retile": "off"},
@@ -705,17 +705,19 @@ class HostTest(Case):
         self.assertIs(configured.viewer(), mock.sentinel.viewer)
         self.assertEqual(built, [{"grid_retile": "off"}])
         with self.assertRaisesRegex(ConfigError, r"^\[viewer\]: want a table$"):
-            HostedSession.configured(clients={}, hosts=parsed(HOSTS, "tmux"), viewer=[])
+            harnesses.Threaded.configured(clients={}, hosts=parsed(HOSTS, "tmux"), viewer=[])
 
     def test_each_built_host_gets_its_own_settings_copy(self):
         hosts = parsed({"fake": {**FAKE_HOSTS["fake"], "sizes": [1]}}, "fake")
-        first, second = (HostedSession.configured(clients={}, hosts=hosts).host() for _ in "ab")
+        first, second = (
+            harnesses.Threaded.configured(clients={}, hosts=hosts).host() for _ in "ab"
+        )
         first.settings["sizes"].append(2)
         self.assertEqual(second.settings, {"sizes": [1]})
         self.assertEqual(hosts.tables["fake"]["sizes"], (1,))
 
     def test_an_unknown_host_is_refused(self):
-        configured = HostedSession.configured(clients={}, hosts=parsed(HOSTS, "tmux"))
+        configured = harnesses.Threaded.configured(clients={}, hosts=parsed(HOSTS, "tmux"))
         for name in ("nope", 5):
             with self.subTest(name=name), self.assertRaises(ConfigError) as caught:
                 configured.host(name)
@@ -723,7 +725,7 @@ class HostTest(Case):
 
     def test_an_implementation_that_is_no_host_is_refused(self):
         tables = {"x": {"implementation": "ensemble.session.engine.types:Spec"}}
-        configured = HostedSession.configured(clients={}, hosts=parsed(tables, "x"))
+        configured = harnesses.Threaded.configured(clients={}, hosts=parsed(tables, "x"))
         with self.assertRaises(ConfigError) as caught:
             configured.host()
         self.assertEqual(
@@ -739,7 +741,7 @@ class HostTest(Case):
             loaded.append((path, base))
             return FakeHost
 
-        configured = HostedSession.configured(
+        configured = harnesses.Threaded.configured(
             clients={}, hosts=parsed(HOSTS, "tmux"), class_loader=loader
         )
         self.assertIsInstance(configured.host(), FakeHost)
@@ -755,7 +757,9 @@ class ClassRootsTest(Case):
 
     def configured(self, tables=None, **setup):
         tables = {**HOSTS, **FAKE_HOSTS} if tables is None else tables
-        return HostedSession.configured(clients=self.CLIENTS, hosts=parsed(tables, "tmux"), **setup)
+        return harnesses.Threaded.configured(
+            clients=self.CLIENTS, hosts=parsed(tables, "tmux"), **setup
+        )
 
     def test_the_client_root_then_each_configured_hosts_deduplicated(self):
         configured = self.configured()
@@ -844,7 +848,7 @@ class DisplayTest(HostedTuiBase):
         transport = fake_tmux(self)
         selected = TmuxHost("tmux", tmux=transport)
         given = self.session._config()
-        self.session = HostedSession.configured(
+        self.session = harnesses.Threaded.configured(
             clients=given.registry.settings.clients,
             hosts=given.hosts,
             class_loader=given.class_loader,
@@ -875,7 +879,7 @@ class DisplayTest(HostedTuiBase):
         self.assertEqual(self.host.calls.mock_calls, [])
 
     def test_layout_without_a_showable_default_host_is_none(self):
-        configured = HostedSession.configured(clients={}, hosts=parsed(FAKE_HOSTS, "fake"))
+        configured = harnesses.Threaded.configured(clients={}, hosts=parsed(FAKE_HOSTS, "fake"))
         self.assertIsNone(configured.layout(display="/below"))
 
     def test_a_positional_display_is_refused(self):
@@ -895,7 +899,7 @@ class DisplayTest(HostedTuiBase):
 class SessionTest(Base):
     def test_on_a_host_that_cannot_show_it_raises_not_showable(self):
         table = {"scenario": self.scenario, "log": self.log}
-        configured = HostedSession.configured(
+        configured = harnesses.Threaded.configured(
             clients={
                 "fake": {
                     "implementation": "ensemble.session.clients.fake:InProcessFakeClient",
@@ -1167,7 +1171,7 @@ class EventsOverAModeTest(Case):
         self.addCleanup(tmp.cleanup)
         self.dir = tmp.name
         self.clock = Clock()
-        self.configured = HostedSession.configured(
+        self.configured = harnesses.Threaded.configured(
             clients={}, hosts=parsed(HOSTS, "tmux"), clock=self.clock.monotonic
         )
 
@@ -1426,7 +1430,7 @@ class UsageTest(Base):
         with open(program, "w", encoding="utf-8") as file:
             file.write("data")
         os.chmod(program, 0o600)
-        session = HostedSession.configured(
+        session = harnesses.Threaded.configured(
             clients={
                 "opencode": {
                     "implementation": "ensemble.session.clients.opencode:OpenCodeClient",
@@ -1441,7 +1445,7 @@ class UsageTest(Base):
 
     def test_missing_builtin_executables_raise_configuration_errors_before_probing(self):
         probe = mock.Mock(return_value=None)
-        session = HostedSession.configured(
+        session = harnesses.Threaded.configured(
             clients={
                 "claude": {"implementation": "ensemble.session.clients.claude:ClaudeClient"},
                 "codex": {"implementation": "ensemble.session.clients.codex:CodexClient"},
@@ -1479,7 +1483,7 @@ class UsageTest(Base):
 
         host = ProviderHost("tmux")
         probe = mock.Mock(return_value='{"models": []}')
-        self.session = HostedSession.configured(
+        self.session = harnesses.Threaded.configured(
             clients={
                 "opencode": {
                     "implementation": "ensemble.session.clients.opencode:OpenCodeClient",
@@ -1515,7 +1519,7 @@ class UsageTest(Base):
                 raise AssertionError("the default Ollama model needs no provider request")
 
         probe = mock.Mock(return_value='{"models": []}')
-        self.session = HostedSession.configured(
+        self.session = harnesses.Threaded.configured(
             clients={
                 "opencode": {
                     "implementation": "ensemble.session.clients.opencode:OpenCodeClient",
@@ -3259,7 +3263,7 @@ class OwnedStartTest(Case):
     """
 
     def setUp(self):
-        self.session_cls = HostedSession.configured(
+        self.session_cls = harnesses.Threaded.configured(
             clients={"claude": {"implementation": "ensemble.session.clients.claude:ClaudeClient"}},
             hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"}),
         )
@@ -3537,7 +3541,7 @@ class OwnedStartTest(Case):
 
     def test_an_in_process_start_runs_in_a_harness_and_gives_its_view(self):
         self.harness_writes({"state": "running", "name": None, "sid": SID, "generation": "g7"})
-        session_cls = HostedSession.configured(
+        session_cls = harnesses.Threaded.configured(
             clients={"fake": {"implementation": "tests.session.fake_client:InProcessFakeClient"}},
             hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"}),
         )
@@ -3566,7 +3570,7 @@ class OwnedStartTest(Case):
         os.mkdir(root)
         with open(os.path.join(root, "never_imported_handler.py"), "w") as f:
             f.write("raise SystemExit('imported')\n")
-        session_cls = HostedSession.configured(
+        session_cls = harnesses.Threaded.configured(
             clients={"fake": {"implementation": "tests.session.fake_client:InProcessFakeClient"}},
             hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"}),
         )
@@ -3597,7 +3601,7 @@ class OwnedHeadlessStartTest(Case):
         return dataclasses.replace(OwnedStartTest.spec(self, **fields), mode="headless", name=None)
 
     def test_a_nameless_start_on_a_named_headless_host_makes_no_harness_dir(self):
-        session_cls = HostedSession.configured(
+        session_cls = harnesses.Threaded.configured(
             clients={"claude": {"implementation": "ensemble.session.clients.claude:ClaudeClient"}},
             hosts=Host.parse_hosts({"named": {"implementation": NAMED_HOST}, "default": "named"}),
         )
@@ -3727,7 +3731,7 @@ class OwnedStart(Case):
         """A class of the built-in clients, a tui fake and an in_process one on Host tables
         `hosts`, every Setup callable the default but `injected`.
         """
-        return HostedSession.configured(
+        return harnesses.Threaded.configured(
             clients={
                 **BUILT_IN,
                 "fake": {"implementation": "tests.session.fake_client:FakeClient", "tui": True},
@@ -3813,7 +3817,8 @@ class OwnedStart(Case):
         self.nothing_written()
 
     def test_injected_callables_refused(self):
-        """In _spawn itself (harnesses.threaded runs these classes' harnesses on a thread);
+        """In HostedSession._spawn itself (harnesses.Threaded runs these classes' harnesses on a
+        thread);
         preflight spawns nothing and does not check it.
         """
         tmux = {"tmux": HOSTS["tmux"], "default": "tmux"}
@@ -3833,7 +3838,7 @@ class OwnedStart(Case):
                 with self.subTest(injected=next(iter(injected)), mode=mode):
                     cls.preflight(spec)
                     with self.assertRaises(ConfigError) as caught:
-                        harnesses._SPAWN(
+                        HostedSession._spawn.__func__(
                             cls, spec, mode, display=None, host=None, idle_timeout=None
                         )
                     self.assertEqual(
@@ -4136,7 +4141,7 @@ class DockerOwnedTest(Case):
     """
 
     def setUp(self):
-        self.cls = HostedSession.configured(
+        self.cls = harnesses.Threaded.configured(
             clients={
                 "claude": {"implementation": "ensemble.session.clients.claude:ClaudeClient"},
                 "codex": {"implementation": "ensemble.session.clients.codex:CodexClient"},

@@ -63,7 +63,7 @@ def configured(clients, tmux=None, *, host=None, **dependencies) -> type[HostedS
         return kind(name, table, tmux=host) if issubclass(kind, TmuxHost) else kind(name, table)
 
     dependencies.setdefault("viewer_factory", lambda settings: Viewer(settings, tmux=host))
-    return HostedSession.configured(
+    return harnesses.Threaded.configured(
         clients=clients, hosts=hosts, host_factory=build, **dependencies
     )
 
@@ -72,7 +72,7 @@ class Case(unittest.TestCase):
     """Fails a test whose ensemble is not exactly this tree's, else runs it (whatever its setUp) in
     a fresh temp HOME, self.home (self.ensemble: its .ensemble), a fresh session class
     (self.session_cls) configured with self.session_dependencies, whose starts run their session
-    harness on a thread (harnesses.threaded).
+    harness on a thread (harnesses.Threaded), each joined at its end.
     """
 
     def run(self, result=None):
@@ -98,7 +98,7 @@ class Case(unittest.TestCase):
                 },
                 clear=True,
             ),
-            harnesses.threaded(),
+            harnesses.joined(),
         ):
             self.ensemble = os.path.join(self.home, ".ensemble")
             os.mkdir(self.ensemble)

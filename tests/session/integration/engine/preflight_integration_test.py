@@ -11,8 +11,8 @@ from unittest import mock
 
 from ensemble.session import Access, ConfigError, Effort, Host, Mode, SessionError, Spec
 from ensemble.session.engine.config import read_config
-from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.types import PaneStatus
+from tests.session import harnesses
 from tests.session.case import HOSTS, PY, REPO, SPAWNS, Case, child_env
 from tests.session.fakes.preflight import PreflightClient
 from tests.session.hosted_support import SID, fake_tmux, listed
@@ -27,7 +27,7 @@ class Preflight(Case):
 
     def configure(self, *, client=PreflightClient, tmux_settings=None, **settings):
         PreflightClient.prepared, PreflightClient.committed, PreflightClient.ran = [], [], []
-        self.session = HostedSession.configured(
+        self.session = harnesses.Threaded.configured(
             clients={
                 "fake": {
                     "implementation": f"{client.__module__}:{client.__qualname__}",
@@ -93,7 +93,7 @@ class Preflight(Case):
         self.assertEqual(diagnostics[0], diagnostics[1])
 
     def test_missing_claude_binary_is_config_error_for_preflight_and_driver_error_for_start(self):
-        self.session = HostedSession.configured(
+        self.session = harnesses.Threaded.configured(
             clients=read_config(local=os.devnull)["clients"],
             hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"}),
             host_factory=self._host_factory,
@@ -341,7 +341,7 @@ print(json.dumps(result))
         self.home = os.path.realpath(root.name)
         self.work = os.path.join(self.home, "absent-work")
         settings = read_config(local=os.devnull)
-        self.session = HostedSession.configured(
+        self.session = harnesses.Threaded.configured(
             clients=settings["clients"], hosts=Host.parse_hosts(settings["hosts"])
         )
         spec = Spec(

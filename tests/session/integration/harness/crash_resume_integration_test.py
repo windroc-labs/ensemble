@@ -16,14 +16,13 @@ import uuid
 from pathlib import Path
 from unittest import mock
 
-from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.types import Access, HookCallback, Liveness, Spec
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedSession
 from ensemble.session.hosts.base import Host
 from ensemble.session.hosts.tmux import managed
-from tests.session import live_tmux
+from tests.session import harnesses, live_tmux
 from tests.session.case import HOSTS, REPO
 from tests.session.cli_support import COMMAND, TIMEOUT, WorkerCase, logged
 
@@ -295,7 +294,7 @@ class ApiCase(CrashCase):
         self.pause = os.path.join(self.root, "release")
         env = {**self.env(), **self.scene("w1"), "ENSEMBLE_EVENTS": self.events}
         self.enterContext(mock.patch.dict(os.environ, env, clear=True))
-        self.cls = HostedSession.configured(
+        self.cls = harnesses.Threaded.configured(
             clients={"claude": {"implementation": "ensemble.session.clients.claude:ClaudeClient"}},
             hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"}),
         )

@@ -238,8 +238,8 @@ def append_line(
 
 def validate_events(path: str) -> str:
     """An events file's absolute path, checked; never opens it for writing or creates it
-    (events_file does). A guard display's pane-died line goes through tmux, which misreads # and a
-    trailing ;. ValueError names the path and why.
+    (events_file does). tmux, which may write a death line to it, misreads # and a trailing ;.
+    ValueError names the path and why.
     """
     path = os.path.abspath(path)
     if "#" in path or path.endswith(";"):

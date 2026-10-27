@@ -10,11 +10,10 @@ import time
 from pathlib import Path
 from unittest import mock
 
-from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.types import Access, Mode, Spec
 from ensemble.session.hosts.base import Host
 from ensemble.utils import file_lock, read_reply
-from tests.session import live_tmux
+from tests.session import harnesses, live_tmux
 from tests.session.case import HOSTS, REPO, Case
 from tests.session.integration.clients.claude import fake_claude
 
@@ -47,7 +46,7 @@ class RepliesTest(Case):
                 "default": "tmux",
             }
         )
-        self.session_cls = HostedSession.configured(clients=clients, hosts=hosts)
+        self.session_cls = harnesses.Threaded.configured(clients=clients, hosts=hosts)
         self.release = self.root / "release"
         steps = [{"kind": "queued", "answer": ANSWER}, {"kind": "pause", "file": str(self.release)}]
         scenario = {"steps": [*steps, "final"], "commands": str(self.commands)}

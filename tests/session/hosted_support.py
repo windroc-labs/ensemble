@@ -12,12 +12,11 @@ from unittest import mock
 
 from ensemble.session import Host, Session
 from ensemble.session.engine import types as engine_types
-from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.records import RunLog
 from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.engine.types import Access, ConfigError, Exited, Launch, Spec, TurnFailed
 from ensemble.session.modes.in_process import RUN_THREAD
-from tests.session import fake_client
+from tests.session import fake_client, harnesses
 from tests.session.case import Case
 from tests.session.fakes.terminal import MemoryViewer, ScreenHost
 from tests.session.modules import client_loader
@@ -417,7 +416,7 @@ class HostedTuiBase(TuiBase):
             }
         )
         chosen = self.host
-        self.session_cls = self.session = HostedSession.configured(
+        self.session_cls = self.session = harnesses.Threaded.configured(
             clients=clients,
             hosts=hosts,
             host_factory=lambda _kind, _name, _settings: chosen,

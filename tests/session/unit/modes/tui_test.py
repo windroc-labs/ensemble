@@ -3136,8 +3136,6 @@ class ActivityTest(OwnedBase):
     def test_a_failed_mark_still_yields_the_dialog(self):
         mode = self.owned_start()
         self.handle.screen.return_value = "Sign in"
-        with (
-            mock.patch.object(tui.TuiStore, "set_activity", side_effect=OSError("disk full")),
-            self.assertLogs("session", "WARNING"),
-        ):
+        os.mkdir(os.path.join(self.dir, "activity"))  # its mark cannot replace a directory
+        with self.assertLogs("session", "WARNING"):
             self.assertEqual(mode.poll(0), ([Blocked("Sign in")], False))

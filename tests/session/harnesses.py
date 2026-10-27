@@ -7,7 +7,6 @@ import shutil
 import signal
 import threading
 import time
-from unittest import mock
 
 from ensemble.session.engine import hosted_session
 from ensemble.session.engine.hosted_session import HARNESS, START_WAIT, HostedSession
@@ -112,9 +111,9 @@ class Inline:
 
 
 def threaded_spawn(cls, spec, mode, *, display, host, idle_timeout):
-    """HostedSession._spawn for a class with injected callables: its harness (the real loop) runs
-    on a thread here, so the class's fakes answer; a harness process rebuilds its class from
-    configuration alone, which `_spawn` refuses for these.
+    """Threaded._spawn for a class with injected callables: its harness (the real loop) runs on a
+    thread here, so the class's fakes answer; a harness process rebuilds its class from
+    configuration alone, which HostedSession._spawn refuses for these.
     """
     roots = cls._roots(spec.client)
     channel = Channel.create()
@@ -169,30 +168,32 @@ def threaded_spawn(cls, spec, mode, *, display, host, idle_timeout):
     )
 
 
-_SPAWN = HostedSession._spawn.__func__
+class Threaded(HostedSession):
+    """The test session class: a start of a class with injected callables runs its harness on a
+    thread (threaded_spawn); any other, a harness process.
+    """
 
-
-def _spawn(cls, spec, mode, **options):
-    if hosted_session._reconstructible(cls._config()):
-        return _SPAWN(cls, spec, mode, **options)
-    return threaded_spawn(cls, spec, mode, **options)
+    @classmethod
+    def _spawn(cls, spec, mode, **options):
+        if hosted_session._reconstructible(cls._config()):
+            return super()._spawn(spec, mode, **options)
+        return threaded_spawn(cls, spec, mode, **options)
 
 
 _RUNNING: list[tuple[Channel, threading.Thread]] = []
 
 
 @contextlib.contextmanager
-def threaded():
-    """Every start of a class with injected callables runs its harness on a thread; on exit each
-    such harness still running is closed and its thread joined, so none outlives its test.
+def joined():
+    """On exit each threaded harness still running is closed and its thread joined, so none
+    outlives its test.
     """
-    with mock.patch.object(HostedSession, "_spawn", classmethod(_spawn)):
-        try:
-            yield
-        finally:
-            running, _RUNNING[:] = list(_RUNNING), []
-            for channel, thread in running:
-                if thread.is_alive() and channel.alive():
-                    with contextlib.suppress(SessionError):
-                        channel.request(Op.CLOSE, timeout=WAIT)
-                thread.join(WAIT)
+    try:
+        yield
+    finally:
+        running, _RUNNING[:] = list(_RUNNING), []
+        for channel, thread in running:
+            if thread.is_alive() and channel.alive():
+                with contextlib.suppress(SessionError):
+                    channel.request(Op.CLOSE, timeout=WAIT)
+            thread.join(WAIT)

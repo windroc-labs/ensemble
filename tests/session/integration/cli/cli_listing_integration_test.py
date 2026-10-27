@@ -13,9 +13,9 @@ from unittest import mock
 from ensemble.session import Host
 from ensemble.session.clients.registry import settings
 from ensemble.session.engine.config import read_config
-from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.types import Launch
 from ensemble.utils import Record
+from tests.session import harnesses
 from tests.session.cli_support import MANAGER, CliCase
 from tests.session.fakes.host import FakeHost
 
@@ -47,7 +47,7 @@ class ListingCase(CliCase):
         """
         config = read_config()
         hosts = Host.parse_hosts(config.get("hosts"))
-        own = HostedSession.configured(**settings(config, hosts=hosts))
+        own = harnesses.Threaded.configured(**settings(config, hosts=hosts))
         with mock.patch.dict(os.environ, self.server.env()):
             rows = own.list(match)
         values = ((r.name, r.state, r.client, r.sid, r.display) for r in rows)

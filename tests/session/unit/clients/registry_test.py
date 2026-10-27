@@ -29,7 +29,7 @@ from ensemble.session.engine.config import read_config
 from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.types import ConfigError, Hosts, TuiSettings
 from ensemble.utils import load_class
-from tests.session import fake_client
+from tests.session import fake_client, harnesses
 from tests.session.case import HOSTS, Case, configured
 from tests.session.modules import client_loader
 
@@ -204,7 +204,7 @@ class ConfigureTest(Base):
             {"fake": {"implementation": FAKE_CLASS, "log": log}}, class_loader=loader
         )
         given = first._config()
-        again = HostedSession.configured(
+        again = harnesses.Threaded.configured(
             clients=given.registry.settings.clients, hosts=given.hosts, class_loader=loader
         )
         for cls in (first, again):
@@ -219,7 +219,7 @@ class ConfigureTest(Base):
         tables = "clients: want a mapping of [clients.<name>] tables"
 
         def build(clients: Any = None, hosts: Any = HOSTS, default_host: Any = "tmux"):
-            return HostedSession.configured(
+            return harnesses.Threaded.configured(
                 clients={} if clients is None else clients,
                 hosts=Host.parse_hosts({**hosts, "default": default_host}),
             )
@@ -326,7 +326,7 @@ class SettingsTest(Base):
         self.assertEqual(sorted(found["clients"]), ["claude", "codex", "opencode"])
         self.assertEqual(found["hosts"].default, "tmux")
         self.assertEqual(found["viewer"], {"workers_per_column": 3, "grid_retile": "open-close"})
-        self.session_cls = HostedSession.configured(**found)
+        self.session_cls = harnesses.Threaded.configured(**found)
         self.assertEqual(tui(self.session_cls), TuiSettings(status_line=True))
         self.assertEqual(registry_of(self.session_cls).max_runs("opencode"), 1)
 
@@ -342,7 +342,7 @@ class TuiTest(Base):
             TuiSettings(),
             TuiSettings(status_line=False),
         )
-        self.session_cls = HostedSession.configured(
+        self.session_cls = harnesses.Threaded.configured(
             clients={}, hosts=Host.parse_hosts({"other": HOSTS["tmux"], "default": "other"})
         )
         self.assertEqual(tui(self.session_cls), TuiSettings())

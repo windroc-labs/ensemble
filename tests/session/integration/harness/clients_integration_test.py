@@ -16,7 +16,7 @@ from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.types import Access, HookCallback, Mode, Spec
 from ensemble.session.harness.view import OwnedSession
 from ensemble.session.hosts.base import Host
-from tests.session import live_tmux
+from tests.session import harnesses, live_tmux
 from tests.session.case import HOSTS, REPO, Case
 from tests.session.cli_support import WorkerCase, logged
 from tests.session.integration.clients.codex import fake_tui
@@ -34,7 +34,7 @@ OPENCODE_TUI = os.path.join(
 
 def harnessed(clients: dict) -> type[HostedSession]:
     """A default-configured session class on tmux, so a session harness owns its tui starts."""
-    return HostedSession.configured(
+    return harnesses.Threaded.configured(
         clients=clients, hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"})
     )
 

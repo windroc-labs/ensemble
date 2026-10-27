@@ -11,9 +11,8 @@ import sys
 import unittest
 
 from ensemble.session import Access, Exited, Launch, Mode, Reply, Spec, TurnEnd
-from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.extension import ConfigError, Host, Record, SessionError
-from tests.session import outside
+from tests.session import harnesses, outside
 from tests.session.case import Case
 
 CLIENTS = {"outside": {"implementation": "tests.session.outside:OutsideClient"}}
@@ -24,7 +23,7 @@ WAIT = 20  # seconds
 
 class OutsideTest(Case):
     def setUp(self):
-        self.session = HostedSession.configured(clients=CLIENTS, hosts=Host.parse_hosts(HOSTS))
+        self.session = harnesses.Threaded.configured(clients=CLIENTS, hosts=Host.parse_hosts(HOSTS))
         self.workdir = os.path.join(self.home, "work")
 
     def started(self, mode: Mode):

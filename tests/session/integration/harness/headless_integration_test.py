@@ -61,7 +61,7 @@ def running(pid: int) -> bool:
 
 def harnessed(clients: dict) -> type[HostedSession]:
     """A default-configured session class on tmux, so a session harness owns its headless starts."""
-    return HostedSession.configured(
+    return harnesses.Threaded.configured(
         clients=clients, hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"})
     )
 
