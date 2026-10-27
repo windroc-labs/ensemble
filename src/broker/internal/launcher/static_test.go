@@ -56,13 +56,13 @@ var staticKinds = []struct {
 	edit  func(map[string]any)
 	setup func(*Host)
 }{
-	{"ensemble-claude/default", nil, func(*Host) {}},
-	{"ensemble-claude/work", withClaudeAccount("work"), func(*Host) {}},
-	{"ensemble-opencode/strata", func(f map[string]any) {
+	{"ensemble-broker-claude/default", nil, func(*Host) {}},
+	{"ensemble-broker-claude/work", withClaudeAccount("work"), func(*Host) {}},
+	{"ensemble-broker-opencode/strata", func(f map[string]any) {
 		f["client"], f["opencode_dir"], f["opencode_providers"] = "opencode", strings.TrimSuffix(f["claude_dir"].(string), "claude")+"opencode", []string{"strata"}
 		delete(f, "claude_dir")
 	}, func(h *Host) { h.Opencode = &fakeKeys{} }},
-	{"ensemble-env/dummy", withSecrets([]any{secret("ensemble-env/dummy", "dummy.txt")}), func(h *Host) { h.Env = &fakeEnv{} }},
+	{"ensemble-broker-env/dummy", withSecrets([]any{secret("ensemble-broker-env/dummy", "dummy.txt")}), func(h *Host) { h.Env = &fakeEnv{} }},
 }
 
 func TestStartRefusesExpiredStatic(t *testing.T) {
@@ -118,7 +118,7 @@ func staticStartHost(t *testing.T, static *fakeStatic) (Host, string, string, *f
 	}
 	path := editedManifest(t, func(f map[string]any) {
 		f["claude_dir"] = filepath.Join(parent, "claude")
-		f["secrets"] = []any{secret("ensemble-env/dummy", "dummy.txt"), secret("ensemble-env/ssh", "id_ed25519")}
+		f["secrets"] = []any{secret("ensemble-broker-env/dummy", "dummy.txt"), secret("ensemble-broker-env/ssh", "id_ed25519")}
 	})
 	return h, path, filepath.Join(parent, "0123456789abcdef0123456789abcdef.static.json"), d
 }
@@ -126,9 +126,9 @@ func staticStartHost(t *testing.T, static *fakeStatic) (Host, string, string, *f
 func TestStartRecordsInjectedVersions(t *testing.T) {
 	future := credential.Static{Version: 3, ExpiresAt: "2099-01-01T00:00:00Z", Provenance: credential.Assumed, Notified: []string{"30d"}}
 	static := &fakeStatic{loads: []map[string]credential.Static{
-		records("ensemble-claude/default", future),
-		records("ensemble-claude/default", future, "ensemble-env/dummy", credential.Static{Version: 2, Provenance: credential.Unknown},
-			"ensemble-env/ssh", credential.Static{Version: 5, Provenance: credential.Unknown, Pending: true}),
+		records("ensemble-broker-claude/default", future),
+		records("ensemble-broker-claude/default", future, "ensemble-broker-env/dummy", credential.Static{Version: 2, Provenance: credential.Unknown},
+			"ensemble-broker-env/ssh", credential.Static{Version: 5, Provenance: credential.Unknown, Pending: true}),
 	}}
 	h, path, record, _ := staticStartHost(t, static)
 	if _, err := h.Start(context.Background(), path); err != nil {
@@ -143,9 +143,9 @@ func TestStartRecordsInjectedVersions(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := injectedRecord{Injected: records(
-		"ensemble-claude/default", credential.Static{Version: 3, ExpiresAt: "2099-01-01T00:00:00Z", Provenance: credential.Assumed},
-		"ensemble-env/dummy", credential.Static{Version: 2, Provenance: credential.Unknown},
-		"ensemble-env/ssh", credential.Static{Version: 5, Provenance: credential.Unknown},
+		"ensemble-broker-claude/default", credential.Static{Version: 3, ExpiresAt: "2099-01-01T00:00:00Z", Provenance: credential.Assumed},
+		"ensemble-broker-env/dummy", credential.Static{Version: 2, Provenance: credential.Unknown},
+		"ensemble-broker-env/ssh", credential.Static{Version: 5, Provenance: credential.Unknown},
 	), Delivered: []string{}}
 	if static.calls != 2 || !reflect.DeepEqual(got, want) {
 		t.Fatalf("loads %d: %s", static.calls, raw)
@@ -161,7 +161,7 @@ func TestStartUnknownExpiryStarts(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(record)
-	if err != nil || !strings.Contains(string(raw), `"ensemble-claude/default":{"version":0,"provenance":"unknown"}`) {
+	if err != nil || !strings.Contains(string(raw), `"ensemble-broker-claude/default":{"version":0,"provenance":"unknown"}`) {
 		t.Fatalf("%s %v", raw, err)
 	}
 }
@@ -200,12 +200,12 @@ func TestStartInjectedRecordFails(t *testing.T) {
 }
 
 func TestStaticRefs(t *testing.T) {
-	m := Manifest{Client: "claude", ClaudeAccount: "work", Secrets: []Secret{{Item: "ensemble-env/a", File: "a"}}}
-	if got := staticRefs(m); !slices.Equal(got, []string{"ensemble-claude/work", "ensemble-env/a"}) {
+	m := Manifest{Client: "claude", ClaudeAccount: "work", Secrets: []Secret{{Item: "ensemble-broker-env/a", File: "a"}}}
+	if got := staticRefs(m); !slices.Equal(got, []string{"ensemble-broker-claude/work", "ensemble-broker-env/a"}) {
 		t.Fatalf("%q", got)
 	}
 	m = Manifest{Client: "opencode", OpencodeProviders: []string{"strata", "lab"}}
-	if got := staticRefs(m); !slices.Equal(got, []string{"ensemble-opencode/strata", "ensemble-opencode/lab"}) {
+	if got := staticRefs(m); !slices.Equal(got, []string{"ensemble-broker-opencode/strata", "ensemble-broker-opencode/lab"}) {
 		t.Fatalf("%q", got)
 	}
 	if got := staticRefs(Manifest{Client: "codex"}); len(got) != 0 {

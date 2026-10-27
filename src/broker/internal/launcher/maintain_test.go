@@ -71,7 +71,7 @@ func TestMaintainCodexFailureKeepsGitHubSuccess(t *testing.T) {
 	if got.Deadline == nil || *got.Deadline != (Deadline{At: soon(5 * time.Minute), Action: "close", Reason: codexReason}) {
 		t.Fatalf("deadline %+v", got.Deadline)
 	}
-	if got.NextCheck == nil || *got.NextCheck != soon(time.Minute) || !slices.Contains(tokens.calls, "refresh ensemble-bot "+container) {
+	if got.NextCheck == nil || *got.NextCheck != soon(time.Minute) || !slices.Contains(tokens.calls, "refresh ensemble-broker-bot "+container) {
 		t.Fatalf("%+v %q", got, tokens.calls)
 	}
 }
@@ -101,7 +101,7 @@ func TestMaintainGitHubFailureKeepsCodexSuccess(t *testing.T) {
 	// The immediate call that acknowledges a notice must not try GitHub again before its retry time.
 	tokens.calls = nil
 	again, err := h.Maintain(context.Background(), container, manifest, nil, false)
-	if err != nil || len(again.Results) != 0 || slices.Contains(tokens.calls, "refresh ensemble-bot "+container) {
+	if err != nil || len(again.Results) != 0 || slices.Contains(tokens.calls, "refresh ensemble-broker-bot "+container) {
 		t.Fatalf("%+v %v %q", again, err, tokens.calls)
 	}
 }
@@ -114,7 +114,7 @@ func TestMaintainRenewsOnlyDueProviders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if creds.injected != 0 || len(got.Results) != 1 || got.Results[0].Credential != "github" || !slices.Contains(tokens.calls, "refresh ensemble-bot "+container) {
+	if creds.injected != 0 || len(got.Results) != 1 || got.Results[0].Credential != "github" || !slices.Contains(tokens.calls, "refresh ensemble-broker-bot "+container) {
 		t.Fatalf("%+v %d", got, creds.injected)
 	}
 	// GitHub's new expiry 13:00 is due at 12:50, before Codex's at 11:50 the next day.
@@ -167,7 +167,7 @@ func TestMaintainWithoutTokenProvidersOrStaticSecretsNeverChecksAgain(t *testing
 func TestMaintainWithoutRecordRenewsAll(t *testing.T) {
 	h, manifest, tokens, creds := maintainHost(t, true, nil)
 	got, err := h.Maintain(context.Background(), container, manifest, nil, false)
-	if err != nil || len(got.Results) != 2 || creds.injected != 1 || !slices.Contains(tokens.calls, "refresh ensemble-bot "+container) {
+	if err != nil || len(got.Results) != 2 || creds.injected != 1 || !slices.Contains(tokens.calls, "refresh ensemble-broker-bot "+container) {
 		t.Fatalf("%+v %v", got, err)
 	}
 	record := h.Schedule.Read(tokensManifest)
@@ -180,7 +180,7 @@ func TestMaintainRenewFlag(t *testing.T) {
 	far := map[credential.Kind][]string{credential.Codex: {"2026-10-20T12:00:00Z"}, credential.GitHub: {"2026-10-20T12:00:00Z"}}
 	h, manifest, tokens, creds := maintainHost(t, true, far)
 	got, err := h.Maintain(context.Background(), container, manifest, nil, true)
-	if err != nil || len(got.Results) != 2 || creds.injected != 1 || !slices.Contains(tokens.calls, "refresh ensemble-bot "+container) {
+	if err != nil || len(got.Results) != 2 || creds.injected != 1 || !slices.Contains(tokens.calls, "refresh ensemble-broker-bot "+container) {
 		t.Fatalf("%+v %v", got, err)
 	}
 }
@@ -197,7 +197,7 @@ func TestMaintainWithoutRecordCodexFailureHasNoDeadline(t *testing.T) {
 func TestMaintainStaticOnly(t *testing.T) {
 	now := noticeNow
 	h, path, _, _ := noticeHost(t, &now, func(s credential.StaticStore) {
-		login(t, s, "ensemble-claude/default", credential.Registration{Expires: noticeNow.Add(20 * 24 * time.Hour)}, noticeNow)
+		login(t, s, "ensemble-broker-claude/default", credential.Registration{Expires: noticeNow.Add(20 * 24 * time.Hour)}, noticeNow)
 	})
 	tokens := &fakeTokens{}
 	h.GitHub = tokens
@@ -205,7 +205,7 @@ func TestMaintainStaticOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Results) != 0 || got.Deadline != nil || len(got.Notices) != 1 || got.Notices[0].Key != "ensemble-claude/default@1:30d" ||
+	if len(got.Results) != 0 || got.Deadline != nil || len(got.Notices) != 1 || got.Notices[0].Key != "ensemble-broker-claude/default@1:30d" ||
 		got.NextCheck == nil || *got.NextCheck != "2026-10-26T13:00:00Z" || len(tokens.calls) != 0 {
 		t.Fatalf("%+v %q", got, tokens.calls)
 	}
@@ -214,10 +214,10 @@ func TestMaintainStaticOnly(t *testing.T) {
 func TestMaintainDeliveredAcks(t *testing.T) {
 	now := noticeNow
 	h, path, _, record := noticeHost(t, &now, func(s credential.StaticStore) {
-		login(t, s, "ensemble-env/dummy", credential.Registration{Expires: noticeNow.Add(20 * 24 * time.Hour)}, noticeNow)
+		login(t, s, "ensemble-broker-env/dummy", credential.Registration{Expires: noticeNow.Add(20 * 24 * time.Hour)}, noticeNow)
 	})
 	_, logPath := audited(t, &h, "maintain", container)
-	got, err := h.Maintain(context.Background(), container, path, []string{"ensemble-env/dummy@1:30d"}, false)
+	got, err := h.Maintain(context.Background(), container, path, []string{"ensemble-broker-env/dummy@1:30d"}, false)
 	if err != nil || len(got.Notices) != 0 {
 		t.Fatalf("%+v %v", got, err)
 	}
@@ -226,7 +226,7 @@ func TestMaintainDeliveredAcks(t *testing.T) {
 	}
 	raw, _ := os.ReadFile(record)
 	lines := readLines(t, logPath)
-	if !strings.Contains(string(raw), "ensemble-env/dummy@1:30d") || len(lines) != 1 || lines[0].Event != "credential-notice" || lines[0].Command != "maintain" {
+	if !strings.Contains(string(raw), "ensemble-broker-env/dummy@1:30d") || len(lines) != 1 || lines[0].Event != "credential-notice" || lines[0].Command != "maintain" {
 		t.Fatalf("%s %+v", raw, lines)
 	}
 }

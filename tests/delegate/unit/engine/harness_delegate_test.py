@@ -343,9 +343,9 @@ class VerifierDockerTest(HarnessCase):
         self.refusals["start"] = (
             5,
             "login_required",
-            "No keychain item ensemble-env/mini-op-ssh-key: run ensemble-broker login env mini-op-ssh-key.",
+            "No keychain item ensemble-broker-env/mini-op-ssh-key: run ensemble-broker login env mini-op-ssh-key.",
         )
-        self.assertIn("ensemble-env/mini-op-ssh-key", self.failure())
+        self.assertIn("ensemble-broker-env/mini-op-ssh-key", self.failure())
         self.assertEqual(self.calls.count("start"), 1)
         self.assertNotIn("docker", self.programs)
 
@@ -2241,7 +2241,7 @@ plugins = ["dummy-plugin"]
 lock = "dummy-lock"
 
 [[delegate.environments.dummy.secrets]]
-item = "ensemble-env/dummy"
+item = "ensemble-broker-env/dummy"
 file = "dummy.txt"
 
 [delegate.roles.dummy-tester.environment]
@@ -2339,7 +2339,7 @@ class EnvironmentTest(HarnessCase):
             image="dummy-env:test",
             gateway="workers",
             plugins=("dummy-plugin",),
-            secrets=({"item": "ensemble-env/dummy", "file": "dummy.txt"},),
+            secrets=({"item": "ensemble-broker-env/dummy", "file": "dummy.txt"},),
             lock="dummy-lock",
             prefetch={"repo": "acme/app", "ref": "release/1"},
         )
@@ -2424,7 +2424,7 @@ class EnvironmentTest(HarnessCase):
                 image="dummy-env:test",
                 gateway="workers",
                 plugins=("dummy-plugin",),
-                secrets=({"item": "ensemble-env/dummy", "file": "dummy.txt"},),
+                secrets=({"item": "ensemble-broker-env/dummy", "file": "dummy.txt"},),
                 lock="dummy-lock",
                 prefetch={"repo": "acme/app", "ref": "release/1"},
             ),

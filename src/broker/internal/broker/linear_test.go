@@ -203,7 +203,7 @@ func linearRig(t *testing.T) (Linear, *linearKeysFake, *linearHostFake, *[]url.V
 	h := &linearHostFake{values: map[[2]string][]byte{}}
 	var calls []url.Values
 	var callsMu sync.Mutex
-	l := NewLinear(t.TempDir(), nil)
+	l := NewLinear(t.TempDir(), SystemKeychain{}, nil)
 	l.keys, l.host, l.now = k, h, func() time.Time { return linearNow }
 	l.http = &http.Client{Transport: linearRoundTrip(func(r *http.Request) (*http.Response, error) {
 		b, _ := io.ReadAll(r.Body)
@@ -242,7 +242,7 @@ func TestLinearIdentityInput(t *testing.T) {
 			t.Fatalf("accepted invalid input")
 		}
 	}
-	for _, s := range []string{"ensemble-codex", "ensemble-env/x", ".", "..", "bad\ncommand"} {
+	for _, s := range []string{"ensemble-broker-codex", "ensemble-broker-env/x", ".", "..", "bad\ncommand"} {
 		a.TokenService = s
 		if a.check() == nil {
 			t.Errorf("accepted service %q", s)
@@ -325,7 +325,7 @@ func TestLinearReconstructionRepairsPublicationWithoutRenewal(t *testing.T) {
 		t.Fatalf("failure %v", err)
 	}
 	h.fail = false
-	rebuilt := NewLinear(t.TempDir(), nil)
+	rebuilt := NewLinear(t.TempDir(), SystemKeychain{}, nil)
 	rebuilt.keys, rebuilt.host, rebuilt.http, rebuilt.now = k, h, l.http, l.now
 	if got, err := rebuilt.Maintain(context.Background(), a); err != nil || got.Renewed || len(*calls) != 1 {
 		t.Fatalf("repair %+v %v, requests %d", got, err, len(*calls))
@@ -363,7 +363,7 @@ func TestLinearRegistryUpdateFailureKeepsExistingReservations(t *testing.T) {
 	if err := l.read("registry", &registry); err != nil || len(registry) != 1 || registry[0] != a {
 		t.Fatalf("lost old reservation: %v %+v", err, registry)
 	}
-	rebuilt := NewLinear(t.TempDir(), nil)
+	rebuilt := NewLinear(t.TempDir(), SystemKeychain{}, nil)
 	rebuilt.keys = k
 	alias := a
 	alias.Name = "alias"
@@ -417,7 +417,7 @@ func TestLinearPendingEnrollmentReconstruction(t *testing.T) {
 		t.Fatal("pending enrollment active")
 	}
 	k.frozen = false
-	rebuilt := NewLinear(t.TempDir(), l.password)
+	rebuilt := NewLinear(t.TempDir(), SystemKeychain{}, l.password)
 	rebuilt.keys, rebuilt.host, rebuilt.http, rebuilt.now = k, h, l.http, l.now
 	if err := rebuilt.Enroll(a); err != nil {
 		t.Fatal(err)
@@ -533,7 +533,7 @@ func TestLinearIdentityPublicationsSurviveRenewalAndReconstruction(t *testing.T)
 	if !bytes.Equal(h.value(t, a), newA) || !bytes.Equal(h.value(t, b), oldB) || len(*calls) != 4 {
 		t.Fatal("failed publication changed either host entry or did not renew verifier")
 	}
-	rebuilt := NewLinear(t.TempDir(), nil)
+	rebuilt := NewLinear(t.TempDir(), SystemKeychain{}, nil)
 	rebuilt.keys, rebuilt.host, rebuilt.http, rebuilt.now = k, h, l.http, l.now
 	if got, err := rebuilt.Maintain(context.Background(), b); err != nil || got.Renewed || len(*calls) != 4 {
 		t.Fatalf("verifier repair: %+v %v, requests %d", got, err, len(*calls))
@@ -645,11 +645,11 @@ func TestLinearReenrollmentRepairsPreviousBrokerMetadata(t *testing.T) {
 		k.metadataAccess[key] = *reinstalled()
 	}
 	k.access = reinstalled()
-	if _, err := l.Maintain(context.Background(), a); err == nil {
-		t.Fatal("stale broker metadata accepted")
+	if _, err := l.Maintain(context.Background(), a); !errors.Is(err, ErrLinearStale) || !strings.Contains(err.Error(), "run "+RetrustCommand) {
+		t.Fatalf("stale broker metadata: %v", err)
 	}
 	passwordReads := 0
-	rebuilt := NewLinear(t.TempDir(), func() ([]byte, error) { passwordReads++; return []byte(keychainPass), nil })
+	rebuilt := NewLinear(t.TempDir(), SystemKeychain{}, func() ([]byte, error) { passwordReads++; return []byte(keychainPass), nil })
 	rebuilt.keys, rebuilt.host, rebuilt.http, rebuilt.now = k, h, l.http, l.now
 	k.frozen = true
 	if err := rebuilt.Enroll(a); err == nil {
@@ -675,32 +675,6 @@ func TestLinearReenrollmentRepairsPreviousBrokerMetadata(t *testing.T) {
 	}
 	if got, err := rebuilt.Maintain(context.Background(), a); err != nil || got.Renewed || len(*calls) != 1 {
 		t.Fatalf("cached material lost after recovery %+v %v", got, err)
-	}
-}
-
-func TestLinearMetadataRecoveryRequiresPriorBrokerOnly(t *testing.T) {
-	if !previousBrokerOnly(*reinstalled()) {
-		t.Fatal("prior broker identity rejected")
-	}
-	for _, variant := range []string{"any", "foreign", "mixed", "partition", "no decrypt"} {
-		t.Run(variant, func(t *testing.T) {
-			a := *reinstalled()
-			switch variant {
-			case "any":
-				a.Entries[1].Any = true
-			case "foreign":
-				a.Entries[1].Apps = []string{"/foreign (signature)"}
-			case "mixed":
-				a.Entries[1].Apps = append(a.Entries[1].Apps, security)
-			case "partition":
-				a.Entries[2].Partitions = []string{"apple-tool:"}
-			case "no decrypt":
-				a.Entries[1].Authorizations = []string{"encrypt"}
-			}
-			if previousBrokerOnly(a) {
-				t.Fatal("untrusted metadata accepted for repair")
-			}
-		})
 	}
 }
 

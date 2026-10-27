@@ -49,7 +49,7 @@ type ProviderKeys interface {
 }
 
 // EnvSecrets is the broker package's side of a start's environment secrets, which the launcher never sees: each item
-// is a reference, ensemble-env/<name>. Errors are as Credentials'.
+// is a reference, ensemble-broker-env/<name>. Errors are as Credentials'.
 type EnvSecrets interface {
 	Ready(items []string) error
 	// Inject writes one secret's value through exec, as Credentials.Inject does, to the file s.File.

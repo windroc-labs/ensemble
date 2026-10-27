@@ -35,7 +35,7 @@ func (e *fakeEnv) Inject(s Secret, exec func([]string, []byte) error) error {
 	return exec([]string{"inject-env", s.File}, []byte(envValue+"-"+s.Item))
 }
 
-var dummySecrets = []any{secret("ensemble-env/dummy", "dummy.txt"), secret("ensemble-env/ssh", "id_ed25519")}
+var dummySecrets = []any{secret("ensemble-broker-env/dummy", "dummy.txt"), secret("ensemble-broker-env/ssh", "id_ed25519")}
 
 // envHost is a Claude start host whose environment secrets are env.
 func envHost(w *world, env *fakeEnv) (Host, *fakeDocker, *fakeCreds) {
@@ -47,9 +47,9 @@ func envHost(w *world, env *fakeEnv) (Host, *fakeDocker, *fakeCreds) {
 
 func TestStartRejectsSecretManifest(t *testing.T) {
 	for name, secrets := range map[string]any{
-		"broker item": []any{secret("ensemble-bot", "key")},
-		"traversal":   []any{secret("ensemble-env/dummy", "../github/token")},
-		"repeated":    []any{secret("ensemble-env/a", "x"), secret("ensemble-env/b", "x")},
+		"broker item": []any{secret("ensemble-broker-bot", "key")},
+		"traversal":   []any{secret("ensemble-broker-env/dummy", "../github/token")},
+		"repeated":    []any{secret("ensemble-broker-env/a", "x"), secret("ensemble-broker-env/b", "x")},
 	} {
 		env := &fakeEnv{}
 		h, d, creds := envHost(&world{labels: goodLabels()}, env)
@@ -61,11 +61,11 @@ func TestStartRejectsSecretManifest(t *testing.T) {
 }
 
 func TestStartEnvNotReady(t *testing.T) {
-	missing := protocol.New(protocol.LoginRequired, "No keychain item ensemble-env/ssh: run ensemble-broker login env ssh.")
+	missing := protocol.New(protocol.LoginRequired, "No keychain item ensemble-broker-env/ssh: run ensemble-broker login env ssh.")
 	env := &fakeEnv{ready: missing}
 	h, d, _ := envHost(&world{labels: goodLabels()}, env)
 	_, err := h.Start(context.Background(), editedManifest(t, withSecrets(dummySecrets)))
-	if e := protoErr(t, err); e != missing || hasCall(d, "run") || !slices.Equal(env.calls, []string{"ready ensemble-env/dummy,ensemble-env/ssh"}) {
+	if e := protoErr(t, err); e != missing || hasCall(d, "run") || !slices.Equal(env.calls, []string{"ready ensemble-broker-env/dummy,ensemble-broker-env/ssh"}) {
 		t.Fatalf("%+v, created %v, env %q", e, hasCall(d, "run"), env.calls)
 	}
 }
@@ -90,7 +90,7 @@ func TestStartEnvSecrets(t *testing.T) {
 	if _, err := h.Start(context.Background(), editedManifest(t, withSecrets(dummySecrets))); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"ready ensemble-env/dummy,ensemble-env/ssh", "inject ensemble-env/dummy dummy.txt", "inject ensemble-env/ssh id_ed25519"}; !slices.Equal(env.calls, want) {
+	if want := []string{"ready ensemble-broker-env/dummy,ensemble-broker-env/ssh", "inject ensemble-broker-env/dummy dummy.txt", "inject ensemble-broker-env/ssh id_ed25519"}; !slices.Equal(env.calls, want) {
 		t.Fatalf("%q", env.calls)
 	}
 	created, claude, injected := -1, -1, []int{}
@@ -116,7 +116,7 @@ func TestStartEnvSecrets(t *testing.T) {
 	if len(injected) != 2 || created < 0 || claude < created || injected[0] < claude || !slices.Equal(creds.calls, []string{"ready default", "inject default"}) {
 		t.Fatalf("order: create %d, claude %d, env %v: %q", created, claude, injected, d.calls)
 	}
-	if run := detached(d); !slices.Contains(run, "ensemble.secrets=ensemble-env/dummy,ensemble-env/ssh") {
+	if run := detached(d); !slices.Contains(run, "ensemble.secrets=ensemble-broker-env/dummy,ensemble-broker-env/ssh") {
 		t.Fatalf("no secrets label: %q", run)
 	}
 	if got, want := secretsTmpfs(t, d), docker.SecretsDir+":rw,noexec,nosuid,nodev,size=102400,mode=0700,uid=1001,gid=1002"; got != want {
@@ -169,7 +169,7 @@ func TestStartEnvSecretsAudit(t *testing.T) {
 	_, err := h.Start(context.Background(), editedManifest(t, withSecrets(dummySecrets)))
 	rec.Flush(err)
 	got, leaked := envCredentials(t, path)
-	if err != nil || leaked || !slices.Equal(got, []string{"ensemble-env/dummy issued", "ensemble-env/ssh issued"}) {
+	if err != nil || leaked || !slices.Equal(got, []string{"ensemble-broker-env/dummy issued", "ensemble-broker-env/ssh issued"}) {
 		t.Fatalf("%v: %q leaked=%v", err, got, leaked)
 	}
 }
@@ -182,16 +182,16 @@ func TestStartEnvInjectFails(t *testing.T) {
 		cleanup  string
 		want     []string
 	}{
-		"protocol": {w: &world{labels: goodLabels()}, injectEr: protocol.New(protocol.StartFailed, "Writing ensemble-env/ssh into the container failed."),
-			code: protocol.StartFailed, cleanup: protocol.Removed, want: []string{"ensemble-env/dummy issued", "ensemble-env/dummy withdrawn"}},
+		"protocol": {w: &world{labels: goodLabels()}, injectEr: protocol.New(protocol.StartFailed, "Writing ensemble-broker-env/ssh into the container failed."),
+			code: protocol.StartFailed, cleanup: protocol.Removed, want: []string{"ensemble-broker-env/dummy issued", "ensemble-broker-env/dummy withdrawn"}},
 		"opaque": {w: &world{labels: goodLabels()}, injectEr: errors.New("exec failed"),
-			code: protocol.StartFailed, cleanup: protocol.Removed, want: []string{"ensemble-env/dummy issued", "ensemble-env/dummy withdrawn"}},
+			code: protocol.StartFailed, cleanup: protocol.Removed, want: []string{"ensemble-broker-env/dummy issued", "ensemble-broker-env/dummy withdrawn"}},
 		"rollback fails": {w: &world{labels: goodLabels(), rmErr: &docker.CommandError{Exit: 1, Stderr: "busy"}},
-			injectEr: protocol.New(protocol.KeychainFailed, "Keychain access to ensemble-env/ssh failed."),
-			code:     protocol.KeychainFailed, cleanup: protocol.Failed, want: []string{"ensemble-env/dummy issued"}},
+			injectEr: protocol.New(protocol.KeychainFailed, "Keychain access to ensemble-broker-env/ssh failed."),
+			code:     protocol.KeychainFailed, cleanup: protocol.Failed, want: []string{"ensemble-broker-env/dummy issued"}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			env := &fakeEnv{failOn: map[string]error{"ensemble-env/ssh": tc.injectEr}}
+			env := &fakeEnv{failOn: map[string]error{"ensemble-broker-env/ssh": tc.injectEr}}
 			h, d, _ := envHost(tc.w, env)
 			rec, path := audited(t, &h, "start", "")
 			_, err := h.Start(context.Background(), editedManifest(t, func(f map[string]any) { withGitHub(f); withSecrets(dummySecrets)(f) }))
@@ -200,7 +200,7 @@ func TestStartEnvInjectFails(t *testing.T) {
 			if e.Code != tc.code || e.Cleanup != tc.cleanup || !hasCall(d, "rm") {
 				t.Fatalf("%+v", e)
 			}
-			if name == "opaque" && e.Message != "Writing ensemble-env/ssh into the container failed." {
+			if name == "opaque" && e.Message != "Writing ensemble-broker-env/ssh into the container failed." {
 				t.Fatalf("message %q", e.Message)
 			}
 			got, leaked := envCredentials(t, path)

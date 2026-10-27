@@ -83,13 +83,13 @@ ensemble はレイヤーで構成され、各レイヤーは 1 つの役割だ�
 | `127.0.0.1` だけで待ち受け、コンテキスト長 65536 以上、tier のモデルを pull 済みの [Ollama](https://ollama.com)。`tmux` ではさらに OpenCode 1.x（`npm install -g opencode-ai@1.19.3`） | OpenCode のみ（[Docker host › OpenCode](../docker-host.md#opencode), [OpenCode sessions](../sessions.md#opencode-sessions)） |
 | `git`、ログイン済みの `gh` | コーディング（checkout、pull request）と GitHub の出力先。それ以外では不要。 |
 | 起動中の iTerm2 | デフォルトの iTerm2 分割 |
-| 起動中の Docker Desktop。broker `B`（`/usr/local/libexec/ensemble/ensemble-broker`）、`sh <plugin dir>/src/broker/install.sh` でインストール（`sudo` とログイン済みの `gh` が必要）。ログインはそれぞれ 1 回：`B login claude`（`claude setup-token` を貼り付け）、`B login github ensemble-bot`、Codex は `sudo B install-codex <version>` の後に `B login codex`。OpenCode は不要 | Docker Host のみ（[Docker host](../docker-host.md)）。ホストに Node は不要。各認証情報の権限、保存場所、取り消し方法：[Credentials](../credentials.md)。 |
+| 起動中の Docker Desktop。broker `B`（`/usr/local/libexec/ensemble/ensemble-broker`）、`sh <plugin dir>/src/broker/install.sh` でインストール（`sudo` とログイン済みの `gh` が必要）。ログインはそれぞれ 1 回：`B login claude`（`claude setup-token` を貼り付け）、`B login github ensemble-broker-bot`、Codex は `sudo B install-codex <version>` の後に `B login codex`。OpenCode は不要 | Docker Host のみ（[Docker host](../docker-host.md)）。ホストに Node は不要。各認証情報の権限、保存場所、取り消し方法：[Credentials](../credentials.md)。 |
 
 ensemble が起動する session があなたの設定をどう読み込むか、そしてその中で一部のコマンドが拒否される理由：[Session settings](../sessions.md#session-settings)。
 
 | コマンド | 内容 |
 |---|---|
-| `ctmux <name>` | commander の tmux session を開きます。iTerm2 ではネイティブウィンドウ、他のターミナルでは通常の tmux attach、tmux の中からは切り替えになります。`ctmux --install` は ctmux と 4 つのコマンド `ensemble-crew`、`ensemble-session`、`ensemble-delegate`、`ensemble-orchestrator` を `~/.ensemble/bin/` に置きます。そのパスで実行するか、`PATH` に追加してください。各コマンドは実行時にインストールされているプラグイン（Claude Code のものを優先し、次に Codex の最新版）から動くので、アップグレード後の再インストールは不要です。`--install` を再実行すると更新されます。 |
+| `ctmux <name>` | commander の tmux session を開きます。iTerm2 ではネイティブウィンドウ、他のターミナルでは通常の tmux attach、tmux の中からは切り替えになります。`ctmux --install` は ctmux と 4 つのコマンド `ensemble-crew`、`ensemble-session`、`ensemble-delegate`、`ensemble-orchestrator` を `~/.ensemble/bin/` に置きます。そのパスで実行するか、`PATH` に追加してください。各コマンドは今回のインストールで選択したプラグインを使い、他のクライアントの残存コピーには切り替わりません。更新で選択中のディレクトリが削除されると、次のコマンドは同じクライアントの最新のインストール済みコピーを選択・記録して実行し、そのパスを stderr に表示します。インストーラーの再実行は不要です。同じクライアントにコピーが残っていない場合は従来の選択エラーになります。古い ref にはインストーラーを使ってください。 |
 | `/ensemble:manage` | commander のガイドラインに沿って worker、role run、pipeline run を起動・指示します。 |
 | `/ensemble:act-as <role>[:<task>] <input>` | この会話の中でコア role を実行します。 |
 | `/ensemble:board` | 固定の `ensemble-orchestrator issue` コマンドでボードの issue を読み、探し、作成し、編集し、移動し、アーカイブします。 |

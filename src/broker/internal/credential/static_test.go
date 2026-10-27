@@ -77,10 +77,10 @@ func TestStaticRefAndLogin(t *testing.T) {
 		name, ref string
 		login     string
 	}{
-		{Claude, "default", "ensemble-claude/default", "ensemble-broker login claude"},
-		{Claude, "work", "ensemble-claude/work", "ensemble-broker login claude work"},
-		{Opencode, "strata", "ensemble-opencode/strata", "ensemble-broker login opencode strata"},
-		{Env, "db", "ensemble-env/db", "ensemble-broker login env db"},
+		{Claude, "default", "ensemble-broker-claude/default", "ensemble-broker login claude"},
+		{Claude, "work", "ensemble-broker-claude/work", "ensemble-broker login claude work"},
+		{Opencode, "strata", "ensemble-broker-opencode/strata", "ensemble-broker login opencode strata"},
+		{Env, "db", "ensemble-broker-env/db", "ensemble-broker login env db"},
 	} {
 		if ref := StaticRef(c.kind, c.name); ref != c.ref || LoginCommand(ref) != c.login {
 			t.Errorf("%s %s: %q %q", c.kind, c.name, ref, LoginCommand(ref))
@@ -109,7 +109,7 @@ func keys(notices []Notice) []string {
 func none(string) bool { return false }
 
 func TestDueThresholds(t *testing.T) {
-	const ref = "ensemble-claude/default"
+	const ref = "ensemble-broker-claude/default"
 	s := expiring(3, "2026-12-01T00:00:00Z")
 	for _, c := range []struct {
 		at   time.Time
@@ -162,11 +162,11 @@ func TestDueThresholds(t *testing.T) {
 }
 
 func TestDueRotated(t *testing.T) {
-	const ref = "ensemble-env/db"
+	const ref = "ensemble-broker-env/db"
 	injected := Static{Version: 1, Provenance: Unknown}
 	stored := Static{Version: 2, Provenance: Unknown}
 	got := Due(ref, injected, stored, none, staticNow)
-	if len(got) != 1 || got[0].Key != ref+"@2:rotated" || got[0].Text != "ensemble-env/db was replaced (version 2); this session holds version 1 until it restarts" {
+	if len(got) != 1 || got[0].Key != ref+"@2:rotated" || got[0].Text != "ensemble-broker-env/db was replaced (version 2); this session holds version 1 until it restarts" {
 		t.Fatalf("%+v", got)
 	}
 	if got := Due(ref, injected, stored, func(k string) bool { return k == ref+"@2:rotated" }, staticNow); len(got) != 0 {
@@ -194,15 +194,15 @@ func TestNextCheck(t *testing.T) {
 	if NextCheck(nil, staticNow) != nil {
 		t.Fatal("no records")
 	}
-	unknown := map[string]Static{"ensemble-env/a": {Version: 1, Provenance: Unknown}}
+	unknown := map[string]Static{"ensemble-broker-env/a": {Version: 1, Provenance: Unknown}}
 	if got := NextCheck(unknown, staticNow); got == nil || !got.Equal(staticNow.Add(time.Hour)) {
 		t.Fatalf("rotation poll: %v", got)
 	}
-	soon := map[string]Static{"ensemble-env/a": expiring(1, "2026-11-25T12:20:00Z"), "ensemble-env/b": {Version: 1, Provenance: Unknown}}
+	soon := map[string]Static{"ensemble-broker-env/a": expiring(1, "2026-11-25T12:20:00Z"), "ensemble-broker-env/b": {Version: 1, Provenance: Unknown}}
 	if got := NextCheck(soon, staticNow); got == nil || !got.Equal(time.Date(2026, 10, 26, 12, 20, 0, 0, time.UTC)) {
 		t.Fatalf("30d crossing: %v", got)
 	}
-	expired := map[string]Static{"ensemble-env/a": expiring(1, "2026-01-01T00:00:00Z")}
+	expired := map[string]Static{"ensemble-broker-env/a": expiring(1, "2026-01-01T00:00:00Z")}
 	if got := NextCheck(expired, staticNow); got == nil || !got.Equal(staticNow.Add(time.Hour)) {
 		t.Fatalf("all past: %v", got)
 	}
@@ -219,16 +219,16 @@ func TestText(t *testing.T) {
 		at             time.Time
 		want           string
 	}{
-		{"ensemble-claude/default", "30d", staticNow, "ensemble-claude/default expires 2026-11-15 (explicit), in 20 days: run claude setup-token, then ensemble-broker login claude --fresh-token; running sessions keep their copy until they restart"},
-		{"ensemble-claude/work", "1d", time.Date(2026, 11, 14, 13, 0, 0, 0, time.UTC), "ensemble-claude/work expires 2026-11-15 (explicit), in 1 day: run claude setup-token, then ensemble-broker login claude work --fresh-token; running sessions keep their copy until they restart"},
-		{"ensemble-opencode/strata", "expired", time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC), "ensemble-opencode/strata expired 2026-11-15 (explicit): issue a new key, then ensemble-broker login opencode strata --expires <date>; new starts are refused until then"},
-		{"ensemble-env/db", "7d", time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC), "ensemble-env/db expires 2026-11-15 (explicit), in 6 days: rotate it at its source, then ensemble-broker login env db [--expires <date>]; running sessions keep their copy until they restart"},
+		{"ensemble-broker-claude/default", "30d", staticNow, "ensemble-broker-claude/default expires 2026-11-15 (explicit), in 20 days: run claude setup-token, then ensemble-broker login claude --fresh-token; running sessions keep their copy until they restart"},
+		{"ensemble-broker-claude/work", "1d", time.Date(2026, 11, 14, 13, 0, 0, 0, time.UTC), "ensemble-broker-claude/work expires 2026-11-15 (explicit), in 1 day: run claude setup-token, then ensemble-broker login claude work --fresh-token; running sessions keep their copy until they restart"},
+		{"ensemble-broker-opencode/strata", "expired", time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC), "ensemble-broker-opencode/strata expired 2026-11-15 (explicit): issue a new key, then ensemble-broker login opencode strata --expires <date>; new starts are refused until then"},
+		{"ensemble-broker-env/db", "7d", time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC), "ensemble-broker-env/db expires 2026-11-15 (explicit), in 6 days: rotate it at its source, then ensemble-broker login env db [--expires <date>]; running sessions keep their copy until they restart"},
 	} {
 		if got := Text(c.ref, s, c.threshold, c.at); got != c.want {
 			t.Errorf("%s %s:\n%q\nwant\n%q", c.ref, c.threshold, got, c.want)
 		}
 	}
-	if got := UnknownText("ensemble-claude/work"); got != "ensemble-claude/work expiry unknown: a date is recorded only with the token; after claude setup-token, rerun ensemble-broker login claude work --fresh-token, or paste the current token with --expires or --issued" {
+	if got := UnknownText("ensemble-broker-claude/work"); got != "ensemble-broker-claude/work expiry unknown: a date is recorded only with the token; after claude setup-token, rerun ensemble-broker login claude work --fresh-token, or paste the current token with --expires or --issued" {
 		t.Errorf("unknown: %q", got)
 	}
 }
@@ -252,16 +252,16 @@ func TestStaticExpired(t *testing.T) {
 
 func TestNoticeAudit(t *testing.T) {
 	s := expiring(2, "2026-11-01T00:00:00Z")
-	expiry := Due("ensemble-claude/default", s, s, none, staticNow)[0].Audit()
-	if expiry.Kind != audit.ClaudeSetupToken || expiry.Item != "ensemble-claude/default" || expiry.Result != audit.Notified ||
+	expiry := Due("ensemble-broker-claude/default", s, s, none, staticNow)[0].Audit()
+	if expiry.Kind != audit.ClaudeSetupToken || expiry.Item != "ensemble-broker-claude/default" || expiry.Result != audit.Notified ||
 		expiry.Notice != "7d" || expiry.ExpiresAt == nil || *expiry.ExpiresAt != "2026-11-01T00:00:00Z" {
 		t.Fatalf("%+v", expiry)
 	}
-	rotated := Due("ensemble-opencode/strata", Static{Version: 1, Provenance: Unknown}, Static{Version: 2, Provenance: Unknown}, none, staticNow)[0].Audit()
+	rotated := Due("ensemble-broker-opencode/strata", Static{Version: 1, Provenance: Unknown}, Static{Version: 2, Provenance: Unknown}, none, staticNow)[0].Audit()
 	if rotated.Kind != audit.OpencodeAPIKey || rotated.Notice != "rotated" || rotated.ExpiresAt != nil {
 		t.Fatalf("%+v", rotated)
 	}
-	if env := (Notice{Reference: "ensemble-env/db", Label: "1d"}).Audit(); env.Kind != audit.EnvSecret {
+	if env := (Notice{Reference: "ensemble-broker-env/db", Label: "1d"}).Audit(); env.Kind != audit.EnvSecret {
 		t.Fatalf("%+v", env)
 	}
 }
@@ -271,13 +271,13 @@ func TestNoticeKeyPatternMatchesDue(t *testing.T) {
 	newer := Static{Version: 8, Provenance: Unknown}
 	for _, at := range []time.Time{time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC),
 		time.Date(2026, 11, 30, 0, 0, 0, 0, time.UTC), time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)} {
-		for _, n := range Due("ensemble-opencode/strata", s, newer, none, at) {
+		for _, n := range Due("ensemble-broker-opencode/strata", s, newer, none, at) {
 			if !NoticeKeyPattern.MatchString(n.Key) {
 				t.Errorf("%q", n.Key)
 			}
 		}
 	}
-	for _, bad := range []string{"ensemble-bot/x@1:30d", "ensemble-env/db@1:2d", "ensemble-env/db:30d", "ensemble-env/@1:30d"} {
+	for _, bad := range []string{"ensemble-broker-bot/x@1:30d", "ensemble-broker-env/db@1:2d", "ensemble-broker-env/db:30d", "ensemble-broker-env/@1:30d"} {
 		if NoticeKeyPattern.MatchString(bad) {
 			t.Errorf("%q matched", bad)
 		}

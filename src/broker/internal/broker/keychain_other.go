@@ -12,6 +12,8 @@ func ReadHiddenTTY() ([]byte, error) { return nil, errPlatform }
 
 type SystemKeychain struct{ Home string }
 
+func (k SystemKeychain) Interactive() SystemKeychain { return k }
+
 func (SystemKeychain) Get(string) ([]byte, error)                  { return nil, errPlatform }
 func (SystemKeychain) GetWithDialog(string) ([]byte, error)        { return nil, errPlatform }
 func (SystemKeychain) Put(string, []byte) error                    { return errPlatform }
@@ -27,3 +29,5 @@ func (SystemKeychain) UpdateSecret(string, string, []byte) error   { return errP
 func (SystemKeychain) DeleteSecret(string, string) error           { return errPlatform }
 func (SystemKeychain) CreateCodex() error                          { return errPlatform }
 func (SystemKeychain) WriteCodex([]byte) error                     { return errPlatform }
+func (SystemKeychain) Accounts(string) ([]string, error)           { return nil, errPlatform }
+func (SystemKeychain) Services(string) ([]string, error)           { return nil, errPlatform }

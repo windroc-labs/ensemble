@@ -83,13 +83,13 @@ ensemble 是分层构建的：每层只做一件事，只调用它下面的一�
 | [Ollama](https://ollama.com) 只听 `127.0.0.1`，上下文长度至少 65536，已拉取 tier 模型；在 `tmux` 上还要 OpenCode 1.x（`npm install -g opencode-ai@1.19.3`） | 只有 OpenCode 需要（[Docker host › OpenCode](../docker-host.md#opencode), [OpenCode sessions](../sessions.md#opencode-sessions)） |
 | `git`、已登录的 `gh` | 写代码（checkout、pull request）和 GitHub 目标。其他情况不需要。 |
 | 正在运行的 iTerm2 | 默认的 iTerm2 分屏 |
-| 正在运行的 Docker Desktop；broker `B`（`/usr/local/libexec/ensemble/ensemble-broker`），用 `sh <plugin dir>/src/broker/install.sh` 安装（需要 `sudo` 和已登录的 `gh`）；每项登录一次：`B login claude`（粘贴一个 `claude setup-token`）、`B login github ensemble-bot`，Codex 先 `sudo B install-codex <version>`，再 `B login codex`；OpenCode 不需要 | 只有 Docker Host 需要（[Docker host](../docker-host.md)）；宿主不需要 Node。每份凭据的权限、存放位置和吊销方式：[Credentials](../credentials.md)。 |
+| 正在运行的 Docker Desktop；broker `B`（`/usr/local/libexec/ensemble/ensemble-broker`），用 `sh <plugin dir>/src/broker/install.sh` 安装（需要 `sudo` 和已登录的 `gh`）；每项登录一次：`B login claude`（粘贴一个 `claude setup-token`）、`B login github ensemble-broker-bot`，Codex 先 `sudo B install-codex <version>`，再 `B login codex`；OpenCode 不需要 | 只有 Docker Host 需要（[Docker host](../docker-host.md)）；宿主不需要 Node。每份凭据的权限、存放位置和吊销方式：[Credentials](../credentials.md)。 |
 
 ensemble 启动的 session 如何加载你的设置，以及为什么有些命令在其中会拒绝执行：[Session settings](../sessions.md#session-settings)。
 
 | 命令 | 作用 |
 |---|---|
-| `ctmux <name>` | 打开 commander 的 tmux session：在 iTerm2 中是原生窗口，在其他终端中是普通的 tmux attach，在 tmux 内部则是切换。`ctmux --install` 把 ctmux 和四个命令 `ensemble-crew`、`ensemble-session`、`ensemble-delegate`、`ensemble-orchestrator` 放进 `~/.ensemble/bin/`：按该路径运行，或把它加到 `PATH`。每个命令运行时都从当时已安装的插件中执行（先找 Claude Code 的安装，再找 Codex 最新的），所以升级后无需重装；重新运行 `--install` 可刷新它们。 |
+| `ctmux <name>` | 打开 commander 的 tmux session：在 iTerm2 中是原生窗口，在其他终端中是普通的 tmux attach，在 tmux 内部则是切换。`ctmux --install` 把 ctmux 和四个命令 `ensemble-crew`、`ensemble-session`、`ensemble-delegate`、`ensemble-orchestrator` 放进 `~/.ensemble/bin/`：按该路径运行，或把它加到 `PATH`。命令使用本次安装选择的插件，不受其他客户端残留副本影响。更新删除所选目录后，下次命令自动选择、记录并运行同一客户端最新的已安装副本，在 stderr 显示路径，无需重跑安装器。同一客户端已无副本时保留原选择错误。安装旧 ref 时使用安装器。 |
 | `/ensemble:manage` | 按 commander 的准则启动并指挥 worker、role run 和 pipeline run。 |
 | `/ensemble:act-as <role>[:<task>] <input>` | 在当前对话中运行一个核心 role。 |
 | `/ensemble:board` | 用固定的 `ensemble-orchestrator issue` 命令读取、查找、创建、编辑、移动和归档看板上的 issue。 |
