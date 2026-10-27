@@ -633,7 +633,7 @@ class TurnFailed:
     detail: str = ""
 
 
-PROCESS_EXIT = "process_exit"  # TurnFailed.error of a turn its worker's nonzero exit ended
+PROCESS_EXIT = "process_exit"  # TurnFailed.error
 
 
 @dataclass(frozen=True)

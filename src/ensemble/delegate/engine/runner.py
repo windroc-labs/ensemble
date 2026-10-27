@@ -50,7 +50,7 @@ from ensemble.session import (
 from ensemble.utils import EXIT_BUSY, holds, printable, save
 
 STOP_LIMIT = 3
-PROCESS_EXIT = "process_exit"  # session TurnFailed.error of a nonzero exit
+PROCESS_EXIT = "process_exit"  # session TurnFailed.error
 FIX = (
     "The outcome block in your last reply is invalid: {error}. Fix it: end your reply with one corrected "
     f"{OUTCOME} block; change nothing else."

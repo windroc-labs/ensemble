@@ -280,9 +280,6 @@ def _owned(setup: _Setup, spec: Spec, mode: Mode, client: Client, on: Host) -> b
 
 
 def _terminal_less(mode: Mode) -> bool:
-    """A harnessed headless or in_process run: no terminal; its harness is its caller's child and
-    its view reads it to its end.
-    """
     return mode != Mode.TUI
 
 
