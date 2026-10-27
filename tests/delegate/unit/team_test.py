@@ -10,7 +10,6 @@ from ensemble.delegate.composer.base import TEAM, outline
 from ensemble.delegate.composer.teams import START
 from ensemble.delegate.engine.config import read_config
 from ensemble.utils import unfenced
-from tests.delegate.case import Case
 from tests.delegate.unit.composer.prompts import (
     RUN,
     composed,
@@ -25,6 +24,7 @@ from tests.delegate.unit.composer.shipped import (
     PICK,
     REPO_ARGS,
     TASKS,
+    Packaged,
     RealConfig,
     catalog,
     guide,
@@ -84,7 +84,7 @@ def output_rules(prompt):
     return prompt.split("\n# Output\n", 1)[1].split("\n## Destination\n", 1)[0]
 
 
-class Acceptance(Case):
+class Acceptance(Packaged):
     def test_each_requested_command_runs_a_team_tool(self):
         for role in roles():
             for command in composed(role)[1].commands:
@@ -229,7 +229,7 @@ class Acceptance(Case):
             self.assertIn("## Resume", [line.rstrip() for _, line in unfenced(text)], name)
 
 
-class Shipped(Case):
+class Shipped(Packaged):
     def test_text_holds_only_the_placeholders_render_fills(self):
         inline = {"role", "role_anchor", "task", "language", "deliverable"}
         for rel, text in team_texts().items():

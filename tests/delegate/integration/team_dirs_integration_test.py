@@ -14,7 +14,7 @@ import unittest
 
 from ensemble.delegate.composer.prompt import RESUME, RETURN
 from ensemble.delegate.engine.types import Layout
-from tests.delegate.case import REPO
+from tests.delegate.case import REPO, VERIFIER
 from tests.delegate.integration.cli import (
     ASKING,
     NATIVE,
@@ -25,6 +25,7 @@ from tests.delegate.integration.cli import (
 )
 from tests.delegate.integration.composer import child
 from tests.delegate.replies import block, mark
+from tests.utils.case import local_section
 from tests.utils.sandbox import owned_directory
 
 # the repo's gitignored work/
@@ -67,7 +68,10 @@ class ComposerTeamDirs(child.Case):
         super().setUp()
         self.team = make_team(self)
         self.tasks = os.path.join(self.team, "tasks")
-        self.local(f"[delegate]\nteam_dirs = {json.dumps([self.team])}\n")
+        self.local(
+            f"[delegate]\nteam_dirs = {json.dumps([self.team])}\n"
+            + local_section(VERIFIER, "delegate")
+        )
 
     def composed(self, **req) -> dict:
         got = self.compose("writer", "note", **req)
@@ -153,7 +157,10 @@ class TeamDirs(Integration):
         self.team = make_team(self)
         self.tasks = os.path.join(self.team, "tasks")
         with open(os.path.join(self.env["HOME"], ".ensemble", "config.local.toml"), "w") as f:
-            f.write(f"[delegate]\nteam_dirs = {json.dumps([self.team])}\n")
+            f.write(
+                f"[delegate]\nteam_dirs = {json.dumps([self.team])}\n"
+                + local_section(VERIFIER, "delegate")
+            )
 
     def test_a_dry_run(self):
         res = self.drive([], "--task", "note", "--dry-run")
@@ -203,7 +210,10 @@ class CodexTeamDirs(CodexIntegration):
         os.makedirs(os.path.join(self.home, ".ensemble"), exist_ok=True)
         self.toml = os.path.join(self.home, ".ensemble", "config.local.toml")
         with open(self.toml, "w") as f:
-            f.write(f"[delegate]\nteam_dirs = {json.dumps([self.team])}\n")
+            f.write(
+                f"[delegate]\nteam_dirs = {json.dumps([self.team])}\n"
+                + local_section(VERIFIER, "delegate")
+            )
 
     def role(self, key: str) -> None:
         with open(self.toml, "a") as f:

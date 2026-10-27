@@ -6,7 +6,8 @@ import tempfile
 from ensemble.delegate import Spec
 from ensemble.delegate.composer import Composer
 from ensemble.delegate.engine.drivers import InstructionDriver
-from tests.delegate.case import Case
+from tests.delegate.case import VERIFIER, Case
+from tests.utils.case import local_section
 
 SID = "11111111-2222-3333-4444-555555555555"
 ROLES = ("researcher", "pm", "engineer", "verifier", "dummy-tester")
@@ -25,6 +26,8 @@ class InstructionCase(Case):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.tmp = os.path.realpath(tmp.name)
+        with open(os.path.join(self.ensemble, "config.local.toml"), "w") as f:
+            f.write(local_section(VERIFIER, "delegate"))
 
     def given(self, role, **kw):
         """A configured role's request, sid SID, output prompt.md and cwd the agent dir."""

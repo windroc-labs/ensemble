@@ -21,7 +21,7 @@ from ensemble.delegate.engine.plan import place, plan
 from ensemble.delegate.engine.types import Layout, Resolved
 from ensemble.delegate.event.reply import OUTCOME, PROGRESS
 from ensemble.session import Access, EnvironmentSpec, RunLog
-from tests.delegate.case import REPO, SRC, packaged
+from tests.delegate.case import REPO, SRC, VERIFIER, packaged
 from tests.delegate.plans import SID, TASKS, Base, write_team
 from tests.delegate.repo import fail, ok
 from tests.delegate.unit.engine.instruction import CLIENTS, GITHUB, ROLES, InstructionCase
@@ -600,7 +600,7 @@ class InstructionPlans(InstructionCase):
     def test_each_roles_destination_and_prompt_are_the_same_under_any_client(self):
         for local in ("", GITHUB):
             with open(os.path.join(self.ensemble, "config.local.toml"), "w") as f:
-                f.write(local_section(local, "delegate"))
+                f.write(local_section(local + VERIFIER, "delegate"))
             for role in ROLES:
                 with self.subTest(github=bool(local), role=role):
                     clients = CLIENTS

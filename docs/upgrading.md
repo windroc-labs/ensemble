@@ -6,8 +6,8 @@ The `verifier` now publishes its report with the `github` destination, to `Verif
 and its outcome carries only the verdict (`Pass:` or `Fail:` and one line) and the report's `url`. Before the next
 verifier run:
 
-1. Name the repo in `~/.ensemble/config.local.toml`; without it every verifier run stops with a configuration error.
-   Install the ensemble bot GitHub App on that repo.
+1. Name the repo in `~/.ensemble/config.local.toml`; without it every verifier run and `ensemble-delegate run --list`
+   stop with a configuration error naming `output.repo`. Install the ensemble bot GitHub App on that repo.
 
    ```toml
    [delegate.roles.verifier.output]

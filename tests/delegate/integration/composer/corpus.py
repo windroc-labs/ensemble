@@ -23,6 +23,7 @@ INPUT = (
 
 def corpus():
     cfg = read_config(path=CONFIG, local=os.devnull)
+    cfg["roles"]["verifier"]["output"]["repo"] = "example/docs"  # as config.local.toml sets it
     files = {
         str(Path(ROOT) / path.relative_to(TEAM)): path.read_text(encoding="utf-8")
         for path in Path(TEAM).rglob("*.md")

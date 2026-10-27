@@ -11,7 +11,7 @@ from ensemble.delegate import cli
 from ensemble.delegate.engine.harness_delegate import HarnessDelegate
 from ensemble.delegate.engine.types import Layout
 from ensemble.session import ConfigError
-from tests.delegate.case import Case
+from tests.delegate.case import VERIFIER, Case
 from tests.delegate.fakes.harness_session import DrivenDelegate
 from tests.delegate.replies import block, completed_steps
 from tests.delegate.unit.runs import DONE, START, said
@@ -45,7 +45,7 @@ HEADS = [
     "researcher  local  built-in",
     "pm  local  built-in",
     "engineer  pull-request  built-in",
-    "verifier  orchestrator  built-in",
+    "verifier  github  built-in",
     "dummy-tester  local  built-in",
 ]
 
@@ -83,6 +83,7 @@ class Base(Case):
             "class_loader": client_loader({"ensemble.session.clients.fake": fake_client})
         }
         self.configure_fake()
+        self.local(VERIFIER)
         self.steps(said(START, block(DONE)))
         self.enterContext(mock.patch.dict(os.environ))
         for key in ("TMUX", "TMUX_PANE", "ENSEMBLE_SID", "ENSEMBLE_EVENTS"):
