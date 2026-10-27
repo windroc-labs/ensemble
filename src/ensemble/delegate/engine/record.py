@@ -35,6 +35,23 @@ def _encode(value: object) -> object:
     return value
 
 
+def _result(data: dict | None) -> Result | None:
+    if data is None:
+        return None
+    outcome, limit = data.pop("outcome"), data.pop("limit")
+    return Result(
+        **data,
+        outcome=None if outcome is None else Outcome(**outcome),
+        limit=None if limit is None else Limit(**limit),
+    )
+
+
+def worker(state: DelegateState) -> int | None:
+    handlers = state.plan.session.handlers
+    found = handlers[0].state.get("worker") if handlers else None
+    return found if type(found) is int else None
+
+
 class RunRecord:
     def __init__(self, layout: Layout, store: RunState | None = None) -> None:
         self.layout = layout
@@ -103,17 +120,7 @@ class RunRecord:
                 planned.get("repo"),
                 planned.get("docker", False),
             )
-            result = data.pop("result")
-            if result is not None:
-                outcome = result.pop("outcome")
-                if outcome is not None:
-                    result["outcome"] = Outcome(**outcome)
-                else:
-                    result["outcome"] = None
-                from_limit = result.pop("limit")
-                if from_limit is not None:
-                    result["limit"] = Limit(**from_limit)
-                result = Result(**result)
+            result, previous = _result(data.pop("result")), _result(data.pop("previous", None))
             callback = data.pop("callback")
             overlays = tuple(data.pop("overlays"))
             state = DelegateState(
@@ -121,6 +128,7 @@ class RunRecord:
                 plan=accepted,
                 callback=None if callback is None else tuple(callback),
                 result=result,
+                previous=previous,
                 overlays=overlays,
             )
             if type(state.attempt) is not int or state.attempt < 1:
@@ -144,3 +152,43 @@ class RunRecord:
             )
         except OSError as error:
             say(f"delegate: {error}")
+
+    def bind(self, n: int, token: int) -> bool:
+        with self.store.mutex():
+            state = self.read()
+            if state.attempt != n or state.completed or worker(state) != token:
+                return False
+            if not state.bound:
+                self.save(replace(state, bound=True))
+            return True
+
+    def follow_up(self, n: int, token: int) -> bool:
+        with self.store.mutex():
+            state = self.read()
+            if state.attempt != n or not state.completed or worker(state) != token:
+                return False
+            self.save(
+                replace(
+                    state,
+                    attempt=n + 1,
+                    completed=False,
+                    result=None,
+                    previous=state.result,
+                    bound=True,
+                )
+            )
+            return True
+
+    def complete(self, n: int, result: Result, *, sid: str, unbound: bool = False) -> bool:
+        """Compare-and-set; unbound: only while opening."""
+        with self.store.mutex():
+            state = self.read()
+            if (
+                (state.plan.sid, state.attempt) != (sid, n)
+                or state.completed
+                or unbound
+                and state.bound
+            ):
+                return False
+            self.save(replace(state, completed=True, result=result))
+            return True
