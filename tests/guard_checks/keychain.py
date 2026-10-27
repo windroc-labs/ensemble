@@ -40,16 +40,16 @@ GO = {
         r'"[^"\n]*(?:go-keychain|go-keyring|99designs/keyring)[^"\n]*"'
     ),
     "security-exec": re.compile(
-        r'exec\.(?:Command\(|CommandContext\([^,]*,)\s*"(?:/usr/bin/)?security"'
+        r'exec\.(?:Command\(|CommandContext\((?:[^(),]|\([^()]*\))*,)\s*"(?:/usr/bin/)?security"'
         r'|exec\.Command(?:Context)?\((?:[^()]|\([^()]*\))*"(?:find|add|delete)-(?:generic|internet)-password"'
     ),
     "file-keychain": re.compile(r"fileKeychain\{|\.login\(\)"),
 }
-# The program at a command's start: a line's (or a workflow run:'s), after a separator, or after a
-# shell keyword.
+# The program at command position: a line's start (or a workflow run:'s) or after a separator, then
+# any subshell parens and shell keywords.
 COMMAND = re.compile(
-    r"(?:^\s*(?:(?:-\s+)?run:\s*[\"']?)?|[;&|(`]\s*|\$\(\s*"
-    r"|(?<![\w-])(?:if|then|else|do|while|until|exec|command|time|!)\s+)"
+    r"(?:^\s*(?:(?:-\s+)?run:\s*[\"']?)?|(?:[;&|`]|\$\()\s*)"
+    r"(?:(?:\(|(?:if|then|else|elif|do|while|until|exec|command|time|!)\s)\s*)*"
     r"(?:/usr/bin/)?security\s+[A-Za-z]"
 )
 PROGRAMS = {"security", "/usr/bin/security"}
@@ -142,6 +142,8 @@ def _python(text):
 
 
 def _calls_security(arg):
+    if isinstance(arg, ast.JoinedStr):  # an f-string: its leading literal part
+        arg = arg.values[0] if arg.values else arg
     if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
         return (arg.value.split() or [""])[0] in PROGRAMS
     if not isinstance(arg, ast.List | ast.Tuple):
