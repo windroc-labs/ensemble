@@ -158,6 +158,7 @@ class Harness:
             name=worker.name,
             generation=worker.generation,
             remote=worker.remote,
+            opening=worker.opening_pending,
         )
         self._write()
         try:
@@ -189,10 +190,10 @@ class Harness:
                     return code
                 self._signal = None
             found, ended = worker.pump(self._poll)
-            self._log(found)
             if (opening := worker.opening_pending) != self._status.get("opening"):
                 self._status["opening"] = opening
-                self._write()
+                self._write()  # before the events it explains: a Blocked's reader reads it
+            self._log(found)
             self._write_pending()
             if ended:
                 code = worker.returncode()
