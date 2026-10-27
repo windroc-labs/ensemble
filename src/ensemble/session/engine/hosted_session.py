@@ -1278,6 +1278,11 @@ class Owned:
     def screen(self, lines: int | None = None) -> str:
         return self._session.screen(lines)
 
+    def redisplay(self) -> bool:
+        """Its worker's display opened again where gone; False: none to open."""
+        running = self._session._running
+        return isinstance(running, tui.TuiMode) and running.redisplay()
+
     def view(self, channel: Channel, idle_timeout: float | None = None) -> OwnedSession:
         return type(self._session)._view(
             channel,
