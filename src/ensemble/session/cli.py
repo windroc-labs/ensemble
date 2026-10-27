@@ -624,7 +624,8 @@ def _close(name: str, record: Record | None, hosts: Hosts) -> None:
         except SessionError:
             if record is None or _carried(name, record, hosts, stale_ok=True):
                 raise
-            return
+            if carried:
+                return  # gone meanwhile: nothing more of it to close
 
 
 def _content(name: str, record: Record | None, hosts: Hosts) -> str:

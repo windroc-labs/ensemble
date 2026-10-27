@@ -434,7 +434,7 @@ or not: exit 2. A run still alive
 (roster entry ISSUE or AGENT, or a session listed here or below with its
 session id) or one whose liveness is unknown (its status or the session listing
 failed): exit 2, so its conversation gets no second client. Where its start is
-owned (a Claude tui on tmux today), it runs under a session harness of its own
+owned (a Claude tui on tmux or Docker), it runs under a session harness of its own
 with no handlers, tracked like any other worker; the board is not touched.
 
 Examples:

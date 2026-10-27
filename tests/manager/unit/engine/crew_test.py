@@ -340,10 +340,12 @@ class Entries(RosterCase):
         self.alive = {"a": True, "b": True, "c": False}
         self.attach = {"a": "attach a", "b": None, "c": "attach c"}
         self.answers = {}
+        self.listed = []
 
     def answer(self, argv, **options):
         if argv[1] == "ls":
-            return mock.Mock(returncode=0, stdout="", stderr="")
+            listed = "".join(record.to_line() + "\n" for record in self.listed)
+            return mock.Mock(returncode=0, stdout=listed, stderr="")
         records = [Record.parse(line) for line in options["input"].splitlines()]
         if argv[-1] == "status":
             stdout = "".join(
@@ -478,23 +480,28 @@ class Close(Entries):
         self.assertTrue(any("close-failures" in note for note in caught.exception.__notes__))
         self.assertIn("a", self.roster.entries())
 
-    def test_close_all_logs_each_failed_entry_once_and_removes_the_rest(self):
-        self.records["d"] = replace(
+    def delegated(self, name):
+        return replace(
             self.records["a"],
-            name="d",
-            sessions=("d",),
+            name=name,
+            sessions=(name,),
             sid=str(uuid.uuid4()),
             ctl=("ensemble-delegate",),
-            resume=("ensemble-delegate", "resume", "d"),
+            resume=("ensemble-delegate", "resume", name),
         )
-        self.live("d", record=self.records["d"])
+
+    def test_close_all_logs_each_failed_entry_once_and_removes_the_rest(self):
+        for name in ("d", "e"):
+            self.records[name] = self.delegated(name)
+            self.live(name, record=self.records[name])
+        self.listed = [self.delegated("orphan")]
         self.answers["d"] = mock.Mock(returncode=1, stdout="", stderr="down\n")
         with self.assertRaisesRegex(RuntimeError, "ensemble-delegate close: down"):
             self.close_all()
-        self.assertEqual(list(self.roster.entries()), ["d"])
+        self.assertEqual(list(self.roster.entries()), ["d", "e"])
         self.assertEqual(
             [(line["name"], line["reason"]) for line in self.failures()],
-            [("d", "ensemble-delegate close: down")],
+            [("d", "ensemble-delegate close: down"), ("e", "ensemble-delegate close: down")],
         )
 
     def test_a_dry_run_logs_nothing(self):

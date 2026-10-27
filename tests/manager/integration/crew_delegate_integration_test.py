@@ -9,11 +9,10 @@ import os
 import time
 
 from ensemble.manager import State
-from ensemble.session.harness.channel import Channel
 from ensemble.utils import Record
 from tests.delegate.integration.cli import ASKING, DONE
 from tests.delegate.replies import block, mark
-from tests.manager.live_crew import MANAGER, ROLE, LiveCrew, has_pair, logged
+from tests.manager.live_crew import MANAGER, ROLE, LiveCrew, Owner, has_pair, logged
 from tests.session import live_tmux
 
 START = mark("start", "echoing")
@@ -139,8 +138,7 @@ class RoleTest(RoleCase):
         self.assertEqual((entry.state, entry.sid, entry.record), (State.LIVE, record.sid, reopened))
         self.assertEqual((reopened.kind, reopened.ctl), ("worker", ("ensemble-session",)))
         # under a session harness of its own, with no handlers: generic events only
-        with open(os.path.join(self.ensemble, "tui", tui, "session.json"), encoding="utf-8") as f:
-            channel = Channel(json.load(f)["owner"])
+        channel = Owner(self.ensemble, tui)
         status = channel.status()
         self.assertEqual((status["name"], status["sid"]), (tui, record.sid))
         self.assertTrue(channel.alive())

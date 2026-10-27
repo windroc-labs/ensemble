@@ -14,8 +14,7 @@ import sys
 import time
 
 from ensemble.manager import State
-from ensemble.session.harness.channel import Channel
-from tests.manager.live_crew import MANAGER, LiveCrew, has_pair, logged
+from tests.manager.live_crew import MANAGER, LiveCrew, Owner, has_pair, logged
 from tests.session import live_tmux
 from tests.session.integration.clients.claude import fake_claude
 from tests.session.integration.clients.codex import fake_tui
@@ -103,8 +102,7 @@ def _running(pid: int) -> bool:
 class OwnerCloseTest(LiveCrew):
     def test_close_of_a_harnessed_worker_waits_for_its_owner(self):
         record = self.record(self.worker("w1"))
-        with open(os.path.join(self.ensemble, "tui", "w1", "session.json"), encoding="utf-8") as f:
-            channel = Channel(json.load(f)["owner"])
+        channel = Owner(self.ensemble, "w1")
         self.assertEqual((channel.status()["name"], channel.status()["sid"]), ("w1", record.sid))
         self.assertTrue(channel.alive())
         pid = logged(self.log("w1"))[-1]["pid"]

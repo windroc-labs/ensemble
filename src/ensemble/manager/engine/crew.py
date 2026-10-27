@@ -685,13 +685,16 @@ class Crew:
         names = sorted(set(entries) | {record.name for record in records})
         if not dry_run:
             failures = self._control("close", records)
-            error = RuntimeError("\n".join(failures.values()))
+            failed = []
             for name, entry in entries.items():
                 if entry.record is None or entry.record.ctl not in failures:
                     self.roster.remove(name)
                 else:
-                    self._traced(name, entry, failures[entry.record.ctl], error)
+                    failed.append((name, entry, entry.record.ctl))
             if failures:
+                error = RuntimeError("\n".join(failures.values()))
+                for name, entry, ctl in failed:
+                    self._traced(name, entry, failures[ctl], error)
                 raise error
         if here is None:
             raise RuntimeError("close-all partial: unlisted work may still be running")
