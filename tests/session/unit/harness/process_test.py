@@ -32,7 +32,6 @@ from ensemble.session.engine.types import (
 from ensemble.session.engine.worker import Worker, WorkerState
 from ensemble.session.harness import process
 from ensemble.session.harness.channel import Channel
-from ensemble.session.harness.dispatch import Dispatch
 from ensemble.session.harness.process import Harness, Turns
 from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedSession
@@ -483,21 +482,23 @@ class ExitTest(Base):
         self.assertEqual(sorted(os.listdir(self.channel.directory)), listing)
         self.assertEqual(self.channel.status()["pending"], 2)
 
-    def test_a_handler_woken_once_stopped_stays_pending_in_exited(self):
+    def test_a_handler_woken_once_exited_is_written_records_nothing(self):
         gate = threading.Event()
         self.addCleanup(gate.set)
+        handler = Handler(hang=gate)
+        write_status = self.channel.write_status
 
-        class Waking(Dispatch):
-            def stop(self):
-                super().stop()
+        def written(status):
+            write_status(status)
+            if status["state"] == "exited":
                 gate.set()
-                for thread in self.threads:
-                    thread.join(WAIT)
+                deadline = time.monotonic() + WAIT
+                while len(handler.calls) < 2 and time.monotonic() < deadline:
+                    time.sleep(0.01)
 
+        self.channel.write_status = written
         owned = FakeOwned(([Reply("x")], True))
-        harness = self.harness(owned, Handler(hang=gate), drain=0.2)
-        with mock.patch.object(process, "Dispatch", Waking):
-            self.assertEqual(harness.run(self.begin), 0)
+        self.assertEqual(self.harness(owned, handler, drain=0.2).run(self.begin), 0)
         self.assertEqual(self.channel.status()["pending"], 2)
         self.assertFalse(os.path.exists(self.channel.deliveries))
 
