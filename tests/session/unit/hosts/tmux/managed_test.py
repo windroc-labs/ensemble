@@ -7,6 +7,7 @@ import threading
 import time
 from unittest import mock
 
+from ensemble.session.engine.tmux_cli import TuiError
 from ensemble.session.engine.types import (
     Key,
     KeyPress,
@@ -14,6 +15,7 @@ from ensemble.session.engine.types import (
     Liveness,
     Paste,
     SessionBusy,
+    StatusState,
     Unanswered,
     WorkerExit,
     WorkerHook,
@@ -503,6 +505,27 @@ class ManagedTest(Case):
         return managed.ManagedProcess(
             "worker", "a" * 32, mock.Mock(), terminal=terminal, tmux=mock.Mock(), start_reader=False
         )
+
+    def test_mark_and_activity_use_own_display(self):
+        """Status marks go to this generation's display pane; another generation's is left alone."""
+        channel = self.channel(terminal=True)
+        process = "4242 $3 %7 5555"
+        options = {"@generation": "a" * 32, "@process": process, "@state": "working"}
+        channel.tmux.option.side_effect = lambda _target, key: options.get(key)
+        channel.tmux.process.return_value = process
+        self.assertEqual(channel.activity(), StatusState.WORKING)
+        channel.mark(StatusState.DONE, "/events")
+        channel.tmux.mark.assert_called_once_with("done", "/events", pane="%7", session=None)
+        channel.tmux.mark.reset_mock()
+        options["@generation"] = "b" * 32
+        self.assertIsNone(channel.activity())
+        channel.mark(StatusState.DONE, "/events")
+        channel.tmux.mark.assert_not_called()
+        options["@generation"] = "a" * 32
+        channel.tmux.option.side_effect = TuiError("tmux: no server")
+        self.assertIsNone(channel.activity())
+        channel.mark(StatusState.DONE, "/events")
+        channel.tmux.mark.assert_not_called()
 
     def test_output_then_exit_once(self):
         channel = self.channel()

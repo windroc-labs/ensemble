@@ -16,8 +16,9 @@ import time
 import uuid
 from collections import deque
 
-from ensemble.session.engine.tmux_cli import TuiError
+from ensemble.session.engine.tmux_cli import PROCESS_ID, TmuxPane, TuiError
 from ensemble.session.engine.types import (
+    MARKS,
     ConfigError,
     Key,
     KeyPress,
@@ -27,6 +28,7 @@ from ensemble.session.engine.types import (
     Paste,
     SessionBusy,
     SessionError,
+    StatusState,
     Unanswered,
     WorkerExit,
     WorkerHook,
@@ -389,6 +391,32 @@ class ManagedProcess(InteractiveProcess):
     def returncode(self) -> int | None:
         self.checked()
         return self.code
+
+    def _display(self) -> TmuxPane | None:
+        """Its own generation's display pane, else None (another's, gone, or tmux failed)."""
+        try:
+            if self.tmux.option(self.name, "@generation") != self.generation:
+                return None
+            process = self.tmux.option(self.name, "@process")
+        except TuiError:
+            return None
+        return (
+            TmuxPane(self.name, process, self.tmux) if PROCESS_ID.fullmatch(process or "") else None
+        )
+
+    def activity(self) -> StatusState | None:
+        pane = self._display()
+        try:
+            value = None if pane is None else pane.option("@state")
+        except SessionError:
+            return None
+        return StatusState(value) if value in MARKS else None
+
+    def mark(self, word: StatusState, events: str | None) -> None:
+        pane = self._display()
+        if pane is not None:
+            with contextlib.suppress(SessionError):
+                pane.mark(word, events)
 
     def close_display(self) -> None:
         with contextlib.suppress(TuiError):
