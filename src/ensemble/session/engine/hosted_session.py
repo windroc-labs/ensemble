@@ -1,7 +1,6 @@
-"""HostedSession, the Session of a Client run in a Mode on a Host (a harness-owned worker's
-control view is harness/view.py's OwnedSession). events() yields its events, Stderr and
-IdleTimeout (none while Blocked) up to its Exited, recording `stderr` and each ClientBound as
-`client_session`, never yielded.
+"""HostedSession, the Session of a Client run in a Mode on a Host (an owned worker's view:
+harness/view.py's OwnedSession). events() yields its events, Stderr and IdleTimeout (none while
+Blocked) up to its Exited, recording `stderr` and each ClientBound as `client_session`.
 """
 
 from __future__ import annotations
@@ -97,7 +96,7 @@ def _request(spec: Spec, idle_timeout: float | None) -> tuple[str, Mode]:
 
 POLL = 0.5
 START_WAIT = 60
-CLOSE_WAIT = 10  # an owned headless worker's, or its failed harness's, end
+CLOSE_WAIT = 10  # an owned headless worker's end
 HARNESS = "ensemble.session.harness.process"
 LOG = logging.getLogger("session")
 PROBE_DIR = f"{STATE}/probe"
@@ -262,8 +261,8 @@ def _reconstructible(setup: _Setup) -> bool:
 
 
 def _owned(setup: _Setup, spec: Spec, mode: Mode, client: Client, on: Host) -> bool:
-    """An owned client's tui or headless start, with no environment, on a harnessed Host; a
-    remote tui only for a client owned there too.
+    """An owned client's tui or headless start, no environment, on a harnessed Host; a remote
+    tui only for a client owned there.
     """
     if spec.environment is not None or not on._harnessed or not _reconstructible(setup):
         return False
@@ -435,9 +434,8 @@ class HostedSession(Session):
         host: str | None = None,
         idle_timeout: float | None = None,
     ) -> Session:
-        """spec.sid: its id, else a new one; display: kept by its Host. An owned client's tui or
-        headless start on a harnessed Host runs under a session harness of its own and returns its
-        control view.
+        """spec.sid: its id, else a new one; display: kept by its Host. An owned start runs under a
+        session harness of its own and returns its control view.
         """
         setup = cls._config()
         client_name, mode = _request(spec, idle_timeout)
@@ -457,7 +455,7 @@ class HostedSession(Session):
             assert spec.name is not None
             _refuse_running(spec.name, on)
             _resume_check(spec, client, spec.name, on)
-        else:  # its refusals as an unowned start's, before any harness dir or process
+        else:  # an unowned start's refusals, before any harness
             cls.preflight(spec, display=display, host=host, idle_timeout=idle_timeout)
         return cls._spawn(spec, mode, display=display, host=host, idle_timeout=idle_timeout)
 
@@ -478,7 +476,7 @@ class HostedSession(Session):
         channel = Channel.create()
         tie = None
         try:
-            tie = None if mode == Mode.TUI else Tie()  # a tui worker outlives its caller
+            tie = None if mode == Mode.TUI else Tie()  # tui outlives its caller
             caller = () if tie is None else ("--caller", str(tie.far))
             channel.write_request(request)
             with open(channel.log, "ab") as log:
@@ -512,7 +510,7 @@ class HostedSession(Session):
         if tie is not None:
             tie.handed()
         deadline = time.monotonic() + START_WAIT
-        try:  # an interrupt too: no view, so nothing would ever close it
+        try:  # an interrupt too: no view would close it
             while True:
                 status = channel.status()
                 if status.get("state") in ("running", "exited"):  # exited: it ended at once
@@ -560,7 +558,7 @@ class HostedSession(Session):
         host: str | None,
         mode: Mode,
     ) -> None:
-        """A headless worker is the harness's child: SIGTERM has its harness close it first."""
+        """SIGTERM: its harness closes a headless worker, its child, first."""
         if mode != Mode.TUI and harness.poll() is None:
             harness.terminate()
             with contextlib.suppress(subprocess.TimeoutExpired):
@@ -586,8 +584,8 @@ class HostedSession(Session):
     def harness_request(
         cls, spec: Spec, *, display: Display, host: str | None, roots: Sequence[str]
     ) -> dict:
-        """A harness's JSON start request; secret-bearing (spec.env). pythonpath: the caller's
-        PYTHONPATH, its worker's (None: unset).
+        """A harness's JSON start request, secret-bearing (spec.env); pythonpath: the caller's,
+        its worker's (None: unset).
         """
         if spec.environment is not None:
             raise ConfigError("environment: a session harness runs none yet")
@@ -851,9 +849,7 @@ class HostedSession(Session):
         spec: Spec | None = None,
         tie: Tie | None = None,
     ) -> OwnedSession:
-        """The only way a view is built; a headless one's (`spec` its run's) has no terminal; a
-        headless start's holds its Tie.
-        """
+        """The only way a view is built; a headless one's (`spec` its run's) holds its start's Tie."""
         if mode == Mode.TUI:
             assert name is not None
 
@@ -1307,19 +1303,19 @@ class Owned:
         self._session._record(event)
 
     def stop(self, timeout: float = CLOSE_WAIT) -> list[SessionEvent | Stderr | ClientBound]:
-        """Its last read's events, then stopped; a headless one's after it, up to its end."""
+        """Its last read's events, then stopped; headless: up to its end."""
         final = self._final()
         self._session.stop()
         return final + self._ending(timeout)
 
     def close(self, timeout: float = CLOSE_WAIT) -> list[SessionEvent | Stderr | ClientBound]:
-        """Its last read's events, then closed; a headless one's after it, up to its end."""
+        """Its last read's events, then closed; headless: up to its end."""
         final = self._final()
         self._session.close()
         return final + self._ending(timeout)
 
     def _ending(self, timeout: float) -> list[SessionEvent | Stderr | ClientBound]:
-        """A headless run's reads up to its own terminal event, within `timeout`."""
+        """A headless run's reads up to its end, within `timeout`."""
         found: list[SessionEvent | Stderr | ClientBound] = []
         deadline = time.monotonic() + timeout
         while self._session.mode != Mode.TUI and (left := deadline - time.monotonic()) > 0:
@@ -1340,8 +1336,8 @@ class Owned:
         return self._session._running.returncode(0)
 
     def confirm_end(self, timeout: float) -> int | None:
-        """The exit code once its owner handle says its worker is gone (never its display;
-        headless: once known), else None: unconfirmed.
+        """The exit code once its owner handle says its worker is gone (headless: once known),
+        else None: unconfirmed.
         """
         running = self._session._running
         deadline = time.monotonic() + timeout
@@ -1388,9 +1384,8 @@ class Owned:
 
 
 class _Unhosted(Session):
-    """What a headless view reads beside its harness's log: that harness's state and the run's
-    RunLog record; no terminal, so send, press, screen and show refuse as a headless run does.
-    stop and close: nothing, reached only once no harness is left.
+    """A headless view's harness state and RunLog record; no terminal, so send, press, screen and
+    show refuse. stop and close: nothing (no harness is left).
     """
 
     def __init__(self, cls: type[HostedSession], channel: Channel, spec: Spec, mode: Mode):
