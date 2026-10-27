@@ -305,7 +305,7 @@ Prerequisites and effects:
   run/worker/reopen/issue/role give starters empty stdin; supply literal input.
   hold instead inherits the caller's input for its foreground command.
   Exit 0: success; 2: usage/invalid value; 1: operational/lease failure;
-  75: role run busy, a lock held.
+  75: run/role starter busy, before any stdout.
   hold instead propagates its child's status, signals as 128 + signal number.
   Scalar options use the last value; boolean flags may repeat.
 

@@ -6,7 +6,7 @@
   "cwd": "/Users/example/src/project",
   "workspace": "ensemble-ws-worker_1",
   "github": {
-    "app": "ensemble-bot",
+    "app": "ensemble-broker-bot",
     "permissions": {}
   },
   "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",

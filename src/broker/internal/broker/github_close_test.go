@@ -30,7 +30,7 @@ type closeSecrets struct {
 }
 
 func (s *closeSecrets) Secret(service, account string) ([]byte, error) {
-	if service == "ensemble-revocations" && s.fail == "read" {
+	if service == "ensemble-broker-revocations" && s.fail == "read" {
 		return nil, errors.New("fake backlog read failure")
 	}
 	if b, ok := s.items[service+"/"+account]; ok {
@@ -40,7 +40,7 @@ func (s *closeSecrets) Secret(service, account string) ([]byte, error) {
 }
 
 func (s *closeSecrets) PutSecret(service, account string, b []byte) error {
-	if service == "ensemble-revocations" && s.fail == "write" {
+	if service == "ensemble-broker-revocations" && s.fail == "write" {
 		return errors.New("fake backlog write failure")
 	}
 	s.items[service+"/"+account] = slices.Clone(b)
@@ -63,8 +63,8 @@ func TestCloseRetainsGitHubRecovery(t *testing.T) {
 			const record = `{"app":"ensemble-bot","tokens":[{"account":"acme","installation":1,"token":"ghs_close_fixture","expires_at":"2026-10-25T13:00:00Z"}]}`
 			const peer = `{"app":"ensemble-bot","tokens":[{"account":"acme","installation":1,"token":"ghs_peer_fixture","expires_at":"2026-10-25T13:00:00Z"}]}`
 			store := &closeSecrets{items: map[string][]byte{
-				"ensemble-tokens/" + container: []byte(record),
-				"ensemble-tokens/" + other:     []byte(peer),
+				"ensemble-broker-tokens/" + container: []byte(record),
+				"ensemble-broker-tokens/" + other:     []byte(peer),
 			}, fail: kind}
 			var revoked []string
 			remoteFailed := true
@@ -111,7 +111,7 @@ func TestCloseRetainsGitHubRecovery(t *testing.T) {
 			// Repeat with a fresh Host while the double failure still holds and Docker is absent.
 			_, err = newHost().Close(context.Background(), container)
 			wantCode(t, err, protocol.KeychainFailed)
-			if string(store.items["ensemble-tokens/"+container]) != record {
+			if string(store.items["ensemble-broker-tokens/"+container]) != record {
 				t.Fatal("repeated absent close lost its persistent recovery material")
 			}
 			store.fail, remoteFailed = "", false
@@ -119,13 +119,13 @@ func TestCloseRetainsGitHubRecovery(t *testing.T) {
 			if err != nil || got != (launcher.CloseResult{Container: container, Removed: false}) || len(revoked) != 1 {
 				t.Fatalf("reconstructed absent close did not recover: %+v, %v, revoked=%d", got, err, len(revoked))
 			}
-			if _, found := store.items["ensemble-tokens/"+container]; found {
+			if _, found := store.items["ensemble-broker-tokens/"+container]; found {
 				t.Fatal("successful recovery retained the retired record")
 			}
 			if got, err := newHost().Close(context.Background(), container); err != nil || got.Removed || len(revoked) != 1 {
 				t.Fatal("repeated completed close was not idempotent")
 			}
-			if string(store.items["ensemble-tokens/"+other]) != peer {
+			if string(store.items["ensemble-broker-tokens/"+other]) != peer {
 				t.Fatal("close changed another consumer's recovery record")
 			}
 			data, err := json.Marshal(got)

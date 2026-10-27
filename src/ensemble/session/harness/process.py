@@ -55,6 +55,8 @@ class Worker(Protocol):
     def opening_pending(self) -> str | None: ...
     @property
     def remote(self) -> bool: ...
+    @property
+    def up(self) -> bool: ...
 
     def pump(self, wait: float) -> tuple[list[Event], bool]: ...
     def record(self, event: Event) -> None: ...
@@ -190,9 +192,13 @@ class Harness:
                     return code
                 self._signal = None
             found, ended = worker.pump(self._poll)
+            # before its events: a view acting on one reads the status it came with
             if (opening := worker.opening_pending) != self._status.get("opening"):
                 self._status["opening"] = opening
-                self._write()  # before the events it explains: a Blocked's reader reads it
+                self._write()
+            if worker.up and "up" not in self._status:
+                self._status["up"] = True
+                self._write()
             self._log(found)
             self._write_pending()
             if ended:
@@ -256,14 +262,16 @@ class Harness:
         """Its last writes: harness.json's exited, then the deferred answers."""
         assert self._dispatch is not None
         deadline = time.monotonic() + self._drain
-        while self._dispatch.drain(SLICE) and time.monotonic() < deadline:
+        try:
+            while self._dispatch.drain(SLICE) and time.monotonic() < deadline:
+                self._serve_ended(worker)
             self._serve_ended(worker)
-        self._serve_ended(worker)
-        self._status["state"] = "exited"
-        self._write_pending(force=True)
-        for ident, ok, error in self._ending:
-            self._answer(ident, ok=ok, error=error)
-        self._dispatch.stop()
+            self._status["state"] = "exited"
+            self._write_pending(force=True)
+        finally:
+            for ident, ok, error in self._ending:
+                self._answer(ident, ok=ok, error=error)
+            self._dispatch.stop()
 
     def _serve_ended(self, worker: Worker) -> None:
         """After the exit a request ends what is left: terminal, tui dir, viewer."""

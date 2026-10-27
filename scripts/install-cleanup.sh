@@ -94,7 +94,7 @@ ledger_valid() {
     profile:3) under_home "$2" && case $3 in *$'\t'* | *$'\n'* | '') false ;; esac ;;
     docker-block:2) under_home "$2" && case ${2##*/} in .zshrc | .bashrc | .bash_profile | .zprofile) true ;; *) false ;; esac ;;
     homebrew:2) [ "$2" = "$root/opt/homebrew" ] ;;
-    clt:1 | broker:1) true ;;
+    clt:1 | broker:1 | plugin-root:1) true ;;
     agent-tree:2) [ "$2" = "$HOME/.ensemble" ] ;;
     config:2) case $2 in created | backup) true ;; *) false ;; esac ;;
     formula:2) case $2 in gh | tmux | git | python | go | node) true ;; *) false ;; esac ;;
@@ -102,6 +102,7 @@ ledger_valid() {
     claude-marketplace:2 | codex-marketplace:2) case $2 in windroc) true ;; *) false ;; esac ;;
     claude-plugin:2 | codex-plugin:2) case $2 in ensemble@windroc | updraft@windroc) true ;; *) false ;; esac ;;
     login:2) case $2 in gh | claude | codex) true ;; *) false ;; esac ;;
+    docker-container:2 | docker-image:2) [ "$2" = egress-proxy ] ;;
     launchd:2) case $2 in router | promote) true ;; *) false ;; esac ;;
     keychain:3) [[ $2 =~ $plain ]] && [[ $3 =~ $plain ]] ;;
     opencode-auth:3 | opencode-provider:3) under_home "$2" && [[ $3 =~ $name_pattern ]] ;;
@@ -153,6 +154,7 @@ EOF
   unset password
   export SUDO_ASKPASS=$askpass_dir/askpass
   (
+    nap= # the TERM trap reads it under set -u
     trap 'kill "$nap" 2>/dev/null; exit 0' TERM
     while kill -0 $$ 2>/dev/null; do
       sudo -n -v || true
@@ -280,9 +282,20 @@ show() {
   local kind
   printf 'install-cleanup.sh will remove what install.sh added:\n' >&3
   for kind in launchd keychain broker codex-plugin codex-marketplace claude-plugin claude-marketplace \
-    login opencode-auth opencode-provider opencode-config agent-tree docker-block profile profile-file config cask formula homebrew clt file board-dir dir; do
+    login opencode-auth opencode-provider opencode-config plugin-root docker-container docker-image agent-tree \
+    docker-block profile profile-file config cask formula homebrew clt file board-dir dir; do
     of_kind "$kind" | tr '\t' ' ' | sed 's/^/  /' >&3
   done
+  if [ -n "$(of_kind 'docker-(container|image)')" ]; then
+    printf '  keeps worker images (ensemble-worker) and ensemble-ws-* volumes\n' >&3
+  fi
+}
+
+# Stops before anything is removed when a recorded egress proxy resource needs Docker and Docker does not answer.
+docker_reachable() {
+  [ -n "$(of_kind 'docker-(container|image)')" ] || return 0
+  PATH="${HOMEBREW_PREFIX:-$root/opt/homebrew}/bin:$PATH" docker info </dev/null >/dev/null 2>&1 \
+    || die "Docker is not running: start Docker Desktop, then rerun; nothing removed"
 }
 
 # need <command>: fails the Step when the tool a record needs is not on PATH; the record stays.
@@ -327,7 +340,7 @@ broker_files() {
     return
   fi
   sudo -A rm -rf "$root/usr/local/libexec/ensemble"
-  for service in ensemble-tokens ensemble-revocations ensemble-codex-grants; do
+  for service in ensemble-broker-tokens ensemble-broker-revocations ensemble-broker-codex-grants; do
     count=0
     while delete_item "$service"; do
       count=$((count + 1))
@@ -621,6 +634,17 @@ profiles() {
   done <<<"$(of_kind profile-file)"
 }
 
+plugin_root() {
+  local backup=$state_dir/plugin-root.orig
+  step plugin-root
+  if grep -qxF plugin-root "$ledger"; then
+    [ -e "$backup" ] || [ -L "$backup" ] || die "no $backup to restore"
+    cp -P "$backup" "$state_dir/plugin-root.restore"
+    mv -f "$state_dir/plugin-root.restore" "$HOME/.ensemble/plugin-root"
+    drop plugin-root
+  fi
+}
+
 config_file() {
   local backup=$state_dir/config.local.toml.orig
   step config.local.toml
@@ -667,6 +691,65 @@ opencode_configs() {
       done
     done
   done <<<"$paths"
+}
+
+# Exit 0 when Docker reports no egress-proxy $1 (container or image): any other failure, Docker not answering
+# included, proves nothing.
+egress_absent() {
+  local err
+  if err=$(docker "$1" inspect egress-proxy </dev/null 2>&1 >/dev/null); then return 1; fi
+  case $err in *"No such $1"*) return 0 ;; esac
+  return 1
+}
+
+# Removes the egress proxy's container, then its image, when install.sh created them; a record goes only once Docker
+# reports what it names gone.
+egress_proxy() {
+  local kind
+  step "egress proxy"
+  if [ -z "$(of_kind 'docker-(container|image)')" ]; then
+    skip "not installed by install.sh"
+    return
+  fi
+  need docker
+  for kind in container image; do
+    grep -qxF "docker-$kind"$'\t'"egress-proxy" "$ledger" || continue
+    case $kind in
+      container) docker rm -f egress-proxy </dev/null >/dev/null 2>&1 || true ;;
+      image) docker image rm egress-proxy </dev/null >/dev/null 2>&1 || true ;;
+    esac
+    egress_absent "$kind" || die "cannot remove $kind egress-proxy; its record stays for a rerun"
+    drop "docker-$kind"$'\t'"egress-proxy"
+  done
+}
+
+# Lists the worker images and workspace volumes cleanup keeps, when install.sh set up Docker.
+worker_data() {
+  local list name note=
+  step "worker images and volumes"
+  if ! grep -qx docker=yes "$state_dir/state" 2>/dev/null && [ -z "$(of_kind 'docker-(container|image)')" ]; then
+    skip "Docker not chosen"
+    return
+  fi
+  if ! command -v docker >/dev/null; then
+    skip "docker not found on PATH; none listed"
+    return
+  fi
+  if grep -qxF "cask"$'\t'"docker-desktop" "$ledger"; then note="; removing Docker Desktop below deletes it with Docker's data"; fi
+  if list=$(docker image ls --format '{{.Repository}}:{{.Tag}}' ensemble-worker </dev/null); then
+    while IFS= read -r name; do
+      if [ -n "$name" ]; then say "    kept $name: worker image$note"; fi
+    done <<<"$list"
+  else
+    say "    cannot list worker images; kept them"
+  fi
+  if list=$(docker volume ls --format '{{.Name}}' --filter name=ensemble-ws- </dev/null); then
+    while IFS= read -r name; do
+      case $name in ensemble-ws-*) say "    kept $name: worker workspace volume$note" ;; esac
+    done <<<"$list"
+  else
+    say "    cannot list workspace volumes; kept them"
+  fi
 }
 
 # Ends what still runs from Docker.app once its cask is gone (its quit misses helpers such as docker-agent): TERM, up to
@@ -819,6 +902,7 @@ main() {
   validate
   [ ! -f "$state_dir/agent-tree.pending" ] || die "path inventory is incomplete; rerun install.sh before cleanup; nothing removed"
   protected_dirs
+  docker_reachable
   show
   if [ -z "$yes" ] && ! ask_yn "Remove all of this?"; then die "nothing removed"; fi
   trap on_exit EXIT
@@ -835,6 +919,9 @@ main() {
   profiles
   config_file
   opencode_configs
+  plugin_root
+  worker_data
+  egress_proxy
   keep_root=$(agent_tree)
   brew_packages
   homebrew_and_clt

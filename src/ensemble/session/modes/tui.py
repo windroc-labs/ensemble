@@ -828,6 +828,10 @@ class TuiMode(BaseMode):
         return getattr(self._terminal, "remote", False) is True
 
     @property
+    def client_up(self) -> bool:
+        return getattr(self._terminal, "up", False) is True
+
+    @property
     def replayed(self) -> tuple[SessionEvent | Stderr | ClientBound, ...]:
         """Attached: its client record's, then its hook log's events so far."""
         return self._replayed
@@ -1008,6 +1012,16 @@ class TuiMode(BaseMode):
     def state(self) -> Liveness:
         self._store.check()
         return self._terminal.state()
+
+    def client_alive(self) -> bool:
+        """Its client runs, its terminal probed afresh: state() may reuse a probe and stays LIVE
+        while its ended client's terminal is kept.
+        """
+        self._store.check()
+        try:
+            return self._terminal.alive()
+        except SessionError:  # it cannot tell
+            return False
 
     def send(self, text: str) -> None:
         self._running()

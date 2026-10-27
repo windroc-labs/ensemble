@@ -40,8 +40,9 @@ class RunState:
             yield
 
     @contextlib.contextmanager
-    def run_lock(self) -> Iterator[None]:
-        with file_lock(f"{self._lock}.run"):
+    def run_lock(self, *, wait: bool = True) -> Iterator[None]:
+        """wait=False: BlockingIOError while held."""
+        with file_lock(f"{self._lock}.run", wait=wait):
             yield
 
     @contextlib.contextmanager

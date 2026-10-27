@@ -404,7 +404,7 @@ plugins = ["dummy-plugin"]
 lock = "dummy-lock"
 
 [[delegate.environments.dummy.secrets]]
-item = "ensemble-env/dummy"
+item = "ensemble-broker-env/dummy"
 file = "dummy.txt"
 
 [delegate.roles.dummy-tester.environment]
@@ -434,7 +434,7 @@ class Environments(Harnessed):
             {
                 "image": "dummy-env:test",
                 "gateway": "workers",
-                "secrets": [{"item": "ensemble-env/dummy", "file": "dummy.txt"}],
+                "secrets": [{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}],
                 "plugins": ["dummy-plugin"],
                 "lock": "dummy-lock",
                 "prefetch": {"repo": "acme/app", "ref": "release/1"},
@@ -479,8 +479,8 @@ class Verifier(Harnessed):
                 "image": "mini-op:env",
                 "gateway": "mini-op",
                 "secrets": [
-                    {"item": "ensemble-env/mini-op-password", "file": "mini-password"},
-                    {"item": "ensemble-env/mini-op-ssh-key", "file": "mini-ssh-key"},
+                    {"item": "ensemble-broker-env/mini-op-password", "file": "mini-password"},
+                    {"item": "ensemble-broker-env/mini-op-ssh-key", "file": "mini-ssh-key"},
                 ],
                 "plugins": [],
                 "lock": "mini-op",

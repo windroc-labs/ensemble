@@ -18,7 +18,7 @@ PACKAGED = {
         "prefetch": False,
     }
 }
-SECRET = {"item": "ensemble-env/dummy", "file": "dummy.txt"}
+SECRET = {"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}
 
 
 def config(**layers) -> dict:
@@ -61,7 +61,7 @@ class ResolveTest(Case):
         self.assertEqual(engineer.spec, EnvironmentSpec(image="@worker", gateway="x"))
 
     def test_role_secrets_replace_whole_list(self):
-        other = {"item": "ensemble-env/other", "file": "other.txt"}
+        other = {"item": "ensemble-broker-env/other", "file": "other.txt"}
         cfg = config(
             environments={"dummy": {"image": "dummy-env:test", "secrets": [SECRET]}},
             roles={"dummy-tester": {"environment": {"name": "dummy", "secrets": [other]}}},

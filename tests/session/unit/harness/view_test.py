@@ -252,6 +252,9 @@ class DelegationTest(Base):
         self.assertIsNone(view.opening_pending)
         self.channel.write_status({"state": "running", "opening": "/color"})
         self.assertEqual(view.opening_pending, "/color")
+        self.assertFalse(view.client_up)
+        self.channel.write_status({"state": "running", "up": True})
+        self.assertTrue(view.client_up)
         for name in ("alive", "status", "content", "info", "session_status", "record", "hide"):
             getattr(view, name)()
             getattr(self.attached, name).assert_called_once_with()

@@ -134,7 +134,9 @@ class RunRecord:
                 planned.get("repo"),
                 planned.get("docker", False),
             )
-            result, previous = _result(data.pop("result")), _result(data.pop("previous", None))
+            result, previous = _result(data.pop("result")), _result(data.pop("previous"))
+            if type(bound := data.pop("bound")) is not bool:
+                raise ValueError("invalid bound")
             callback = data.pop("callback")
             overlays = tuple(data.pop("overlays"))
             state = DelegateState(
@@ -143,6 +145,7 @@ class RunRecord:
                 callback=None if callback is None else tuple(callback),
                 result=result,
                 previous=previous,
+                bound=bound,
                 overlays=overlays,
             )
             if type(state.attempt) is not int or state.attempt < 1:

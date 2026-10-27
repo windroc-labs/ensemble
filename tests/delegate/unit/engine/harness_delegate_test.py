@@ -343,9 +343,9 @@ class VerifierDockerTest(HarnessCase):
         self.refusals["start"] = (
             5,
             "login_required",
-            "No keychain item ensemble-env/mini-op-ssh-key: run ensemble-broker login env mini-op-ssh-key.",
+            "No keychain item ensemble-broker-env/mini-op-ssh-key: run ensemble-broker login env mini-op-ssh-key.",
         )
-        self.assertIn("ensemble-env/mini-op-ssh-key", self.failure())
+        self.assertIn("ensemble-broker-env/mini-op-ssh-key", self.failure())
         self.assertEqual(self.calls.count("start"), 1)
         self.assertNotIn("docker", self.programs)
 
@@ -1781,7 +1781,7 @@ class SweepTest(HarnessCase):
         self.seen = []
 
     def orphan(self) -> Orphan:
-        orphan = Orphan(self, RunState(Layout(self.work)).callback_lock, f"{ORPHAN}\n")
+        orphan = Orphan(self, RunState(Layout(self.work)).callback_lock, f"{ORPHAN} 5151\n")
 
         def killpg(pid, signum):
             if signum == signal.SIGKILL:
@@ -2241,7 +2241,7 @@ plugins = ["dummy-plugin"]
 lock = "dummy-lock"
 
 [[delegate.environments.dummy.secrets]]
-item = "ensemble-env/dummy"
+item = "ensemble-broker-env/dummy"
 file = "dummy.txt"
 
 [delegate.roles.dummy-tester.environment]
@@ -2339,7 +2339,7 @@ class EnvironmentTest(HarnessCase):
             image="dummy-env:test",
             gateway="workers",
             plugins=("dummy-plugin",),
-            secrets=({"item": "ensemble-env/dummy", "file": "dummy.txt"},),
+            secrets=({"item": "ensemble-broker-env/dummy", "file": "dummy.txt"},),
             lock="dummy-lock",
             prefetch={"repo": "acme/app", "ref": "release/1"},
         )
@@ -2424,7 +2424,7 @@ class EnvironmentTest(HarnessCase):
                 image="dummy-env:test",
                 gateway="workers",
                 plugins=("dummy-plugin",),
-                secrets=({"item": "ensemble-env/dummy", "file": "dummy.txt"},),
+                secrets=({"item": "ensemble-broker-env/dummy", "file": "dummy.txt"},),
                 lock="dummy-lock",
                 prefetch={"repo": "acme/app", "ref": "release/1"},
             ),
@@ -2735,3 +2735,47 @@ class OwnedRun(HarnessCase):
             HarnessDelegate.attach(self.work, session_cls=HarnessSession).resume()
         self.assertEqual(mutexed, [False])
         self.assertEqual(self.metadata()["attempt"], 2)
+
+    def test_settle_retires_nothing_while_a_run_holds_it_or_its_attempt_opens(self):
+        view = self.owned()
+        _seen, on = self.at_begun(lambda: (_ for _ in ()).throw(Stopped(129)))
+        with self.assertRaises(Stopped):
+            view.run(on)
+        view.driver.session.liveness = Liveness.ABSENT
+        again = HarnessDelegate.attach(self.work, session_cls=HarnessSession)
+        with mock.patch.object(HarnessSession, "retire") as retire:
+            again._settle()  # its attempt opening: a start may be on its way
+            with RunState(Layout(self.work)).run_lock():
+                self.record.bind(1, 1)
+                again._settle()  # a run holds it
+            retire.assert_not_called()
+            again._settle()
+        retire.assert_called_once_with(again._state.agent_name, sid=SID, host=again._state.host)
+
+    def test_settle_retires_under_the_run_lock_only_the_attempt_it_checked(self):
+        view = self.owned()
+        stopped = Result(129, None, "stopped: Stopped: 129")
+        _seen, on = self.at_begun(
+            lambda: (self.record.bind(1, 1), self.record.complete(1, stopped, sid=SID))
+        )
+        view.run(on)
+        view.driver.session.liveness = Liveness.ABSENT
+        again, store = HarnessDelegate.attach(self.work, session_cls=HarnessSession), self.record
+        held = []
+        with mock.patch.object(
+            HarnessSession,
+            "retire",
+            side_effect=lambda *_a, **_k: held.append(store.store.running()),
+        ):
+            again._settle()
+            self.assertEqual(held, [True])  # no start can begin a new generation meanwhile
+            read = again._read
+
+            def replaced():  # another attempt saved between its check and its lock
+                state = read()
+                again._read = read
+                return replace(state, attempt=state.attempt + 1)
+
+            again._read = replaced
+            again._settle()
+        self.assertEqual(held, [True])

@@ -1164,6 +1164,9 @@ class HostedSession(Session):
     def alive(self) -> bool:
         return self._running.state() == Liveness.LIVE
 
+    def client_alive(self) -> bool:
+        return self._running.client_alive()
+
     def status(self) -> Status:
         """Its run's; a live tui one's activity, attach and hidden from its terminal."""
         liveness, name = self._running.state(), self._tui()
@@ -1380,6 +1383,10 @@ class Owned:
     def remote(self) -> bool:
         """Its worker is reachable only through this harness."""
         return self._session._running.remote
+
+    @property
+    def up(self) -> bool:
+        return self._session._running.client_up
 
     def send(self, text: str) -> None:
         self._session.send(text)

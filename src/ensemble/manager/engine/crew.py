@@ -244,7 +244,7 @@ class Crew:
             ) from error
 
     def run(self, spec: Spec, *, resume: str | None = None) -> Record:
-        return self._run(spec, resume or str(uuid.uuid4()), shorthand=False)
+        return self._run(spec, resume or str(uuid.uuid4()), shorthand=False, busy=True)
 
     def launch(
         self,

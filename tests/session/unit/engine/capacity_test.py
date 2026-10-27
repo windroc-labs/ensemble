@@ -202,6 +202,13 @@ class AdmissionTest(Case):
         with self.assertRaises(SessionError), self.enter():
             pass
 
+    def test_admission_succeeds_when_a_listed_session_ends_before_attach(self):
+        ended = self.host.create("old", metadata={"client": "fake", "sid": "old"})
+        self.host.calls.attach.side_effect = lambda _name: ended.close()
+        with self.enter():
+            self.assertEqual(self.host.list(), [])
+        ended.calls.close.assert_called_once_with()
+
     def test_sessions_all_ending_before_the_namespace_read_leave_no_rows(self):
         self.host = EndingHost()
         self.host.create("old", metadata={"client": "fake", "sid": "old"})

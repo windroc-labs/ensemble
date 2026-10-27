@@ -194,8 +194,8 @@ class ColorTest(WorkerCase):
         self.assertEqual(self.ok(self.session("ls", "--records")).stdout, "")
 
     def test_dialog_start_says_color_not_set(self):
-        # a startup dialog, as Claude's: one in turn 1 races the opening due after SessionStart
-        res = self.start("w1", steps=["Trusted."], scene={"trust": TRUST})
+        # before SessionStart, as Claude's: no opening is due before it shows
+        res = self.start("w1", steps=["Trusted."], dialog=TRUST)
         self.assertEqual(self.record(res).name, "w1")
         self.assertEqual(
             res.stderr.splitlines(),

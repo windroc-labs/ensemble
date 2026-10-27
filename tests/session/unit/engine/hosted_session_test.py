@@ -1137,6 +1137,10 @@ class StubMode:
         self.calls.append(("state",))
         return "unknown"
 
+    def client_alive(self):
+        self.calls.append(("client_alive",))
+        return False
+
     def send(self, text):
         self.calls.append(("send", text))
 
@@ -1381,10 +1385,12 @@ class EventsOverAModeTest(Case):
         session = self.session()
         self.assertIsNone(session.name)
         self.assertEqual((session.alive(), session.status().state), (False, "unknown"))
+        self.assertFalse(session.client_alive())
         session.send("hi")
         session.stop()
         self.assertEqual(
-            [call for call in self.mode.calls if call != ("state",)], [("send", "hi"), ("stop",)]
+            [call for call in self.mode.calls if call != ("state",)],
+            [("client_alive",), ("send", "hi"), ("stop",)],
         )
         self.assertEqual(self.session(name="w1").name, "w1")
 
@@ -3907,3 +3913,9 @@ class DockerOwnedTest(Case):
             with self.subTest(remote=remote):
                 session = SimpleNamespace(_running=SimpleNamespace(remote=remote))
                 self.assertIs(hosted_session.Owned(session, "docker").remote, remote)
+
+    def test_owned_is_up_as_its_mode_says(self):
+        for up in (True, False):
+            with self.subTest(up=up):
+                session = SimpleNamespace(_running=SimpleNamespace(client_up=up))
+                self.assertIs(hosted_session.Owned(session, "docker").up, up)

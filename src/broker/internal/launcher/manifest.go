@@ -69,12 +69,12 @@ var (
 )
 
 // envItemPrefix starts every environment secret's keychain service; the broker package's envServicePrefix is the same.
-const envItemPrefix = "ensemble-env/"
+const envItemPrefix = "ensemble-broker-env/"
 
-// ValidEnvName is whether name can be an environment secret, item ensemble-env/<name>.
+// ValidEnvName is whether name can be an environment secret, item ensemble-broker-env/<name>.
 func ValidEnvName(name string) bool { return envNamePattern.MatchString(name) }
 
-// ValidEnvItem is whether item is an environment secret's reference, ensemble-env/<name>; no other keychain service is.
+// ValidEnvItem is whether item is an environment secret's reference, ensemble-broker-env/<name>; no other keychain service is.
 func ValidEnvItem(item string) bool {
 	name, ok := strings.CutPrefix(item, envItemPrefix)
 	return ok && ValidEnvName(name)

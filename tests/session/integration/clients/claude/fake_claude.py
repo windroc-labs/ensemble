@@ -2,9 +2,9 @@
 `-p /usage` (the usage probe) or neither (interactive); install() puts it on PATH. An option
 src/ensemble/session/clients/claude/ never emits exits 2. Interactive: PROMPT, else the first stdin
 line, is turn 1; each later line runs the next of [steps, *turns] between UserPromptSubmit and Stop
-hooks. Stdin's end exits `exit`;
-orphaned or HANG_CAP s idle, 1. Interactive readiness: SessionStart (source startup, or resume on
---resume; matched on source) fires before turn 1 and after each dialog's answer; input arriving from
+hooks. Stdin's end exits `exit`; stranded (orphaned, or its scenario file gone), 1. Interactive
+readiness: SessionStart (source startup, or resume on --resume; matched on source) fires before
+turn 1 and after each dialog's answer; input arriving from
 then until READY s after it is dropped, as Claude drops keys before its input box. A stdin line
 starting with / is a local command: logged to `commands`, never a prompt, an answer or a turn.
 
@@ -25,8 +25,8 @@ queues (an enqueue record) and joins to the turn once the tool returns (PostTool
 queued_command attachment), then answers A; {"kind": "pause", "file": F} waits for F to exist;
 {"kind": "input"} waits for any input to arrive (kept for the next line).
 - turns: interactive steps of turn 2 on.
-- trust: interactive: a dialog printed before SessionStart, as Claude's folder trust; the next line
-answers it, then SessionStart.
+- dialog: interactive text printed at startup, before the first SessionStart (as Claude's workspace
+trust dialog), awaiting its answer as a dialog step does.
 - background: interactive background_tasks per Stop.
 - resume: print steps run instead of `steps` on --resume.
 - rate_limit: print a rate_limit_info after init.
@@ -62,7 +62,7 @@ DEFAULTS = {
     "steps": [],
     "resume": None,
     "turns": [],
-    "trust": None,
+    "dialog": None,
     "background": 0,
     "rate_limit": None,
     "usage": "Current session: 0% used\n",
@@ -135,7 +135,7 @@ CHECKS = {
         v is None or isinstance(v, list) and all(_step(step, tui=False) for step in v)
     ),
     "turns": lambda v: isinstance(v, list) and all(isinstance(t, list) for t in v),
-    "trust": lambda v: v is None or _text(v),
+    "dialog": lambda v: v is None or _text(v),
     "background": lambda v: isinstance(v, int) and not isinstance(v, bool) and v >= 0,
     "rate_limit": lambda v: v is None or isinstance(v, dict),
     "usage": lambda v: (
@@ -263,15 +263,20 @@ def waited(done, parent: int) -> bool:
     return True
 
 
+def stranded(parent: int, scenario: str) -> bool:
+    """Orphaned, or its scenario file gone: the test that started it has ended."""
+    return os.getppid() != parent or not os.path.exists(scenario)
+
+
 class Stranded(Exception):
-    """Orphaned, or idle HANG_CAP s."""
+    """Orphaned, or its scenario file gone."""
 
 
 class Stdin:
     """By os.read: select can't see what a buffered reader holds."""
 
-    def __init__(self, parent: int, commands: str | None = None):
-        self.parent, self.buf, self.eof = parent, b"", False
+    def __init__(self, parent: int, scenario: str, commands: str | None = None):
+        self.parent, self.scenario, self.buf, self.eof = parent, scenario, b"", False
         self.commands, self.dialog = commands, False
 
     def read(self, wait: float) -> bytes | None:
@@ -316,9 +321,8 @@ class Stdin:
                     f.write(json.dumps(entry) + "\n")
 
     def raw(self) -> str:
-        until = time.monotonic() + HANG_CAP
         while b"\n" not in self.buf and not self.eof:
-            if os.getppid() != self.parent or time.monotonic() > until:
+            if stranded(self.parent, self.scenario):
                 raise Stranded
             self.buf += self.read(0.1) or b""
         if not self.buf:
@@ -443,11 +447,11 @@ class InteractiveSession:
 
     def run(self):
         try:
-            if (trust := self.request.scenario["trust"]) is not None:
-                print(trust, flush=True)
-                self.answer()
-            else:
+            if self.request.scenario["dialog"] is None:
                 self.ready()
+            else:
+                print(self.request.scenario["dialog"], flush=True)
+                self.answer()  # SessionStart follows its answer
             prompt = self.request.prompt or self.request.stdin.line()
             for k in itertools.count():
                 self.turn(prompt, self.request.turns[k] if k < len(self.request.turns) else [])
@@ -641,7 +645,7 @@ def main(argv: list[str]) -> int:
                 payload={"session_id": sid, "transcript_path": transcript, "cwd": cwd},
                 keep=journal.keep,
                 record=journal.record,
-                stdin=Stdin(parent, s["commands"]),
+                stdin=Stdin(parent, os.environ[ENV], s["commands"]),
                 prompt=a.prompt,
                 source="resume" if a.resume else "startup",
             )

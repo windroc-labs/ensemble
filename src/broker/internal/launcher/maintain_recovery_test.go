@@ -30,7 +30,7 @@ func refreshCodexHost(t *testing.T, github bool) (Host, string, string, *fakeTok
 	parent := filepath.Join(h.Home, ".ensemble/docker-state", "worker_1")
 	m["codex_dir"] = filepath.Join(parent, "codex")
 	if github {
-		m["github"] = map[string]any{"app": "ensemble-bot", "permissions": fixtureSet}
+		m["github"] = map[string]any{"app": "ensemble-broker-bot", "permissions": fixtureSet}
 	}
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		t.Fatal(err)
@@ -57,7 +57,7 @@ func TestMaintainRecordFailureIsEachProvidersResultAndRecovers(t *testing.T) {
 			t.Fatalf("%s: %+v", kind, e)
 		}
 	}
-	if creds.injected != 1 || !slices.Contains(tokens.calls, "refresh ensemble-bot "+container) || got.Deadline != nil {
+	if creds.injected != 1 || !slices.Contains(tokens.calls, "refresh ensemble-broker-bot "+container) || got.Deadline != nil {
 		t.Fatalf("%+v %d %q", got, creds.injected, tokens.calls)
 	}
 	if err := os.Remove(record); err != nil {
@@ -132,7 +132,7 @@ func TestMaintainKeepsCodexErrorAndRenewsGitHub(t *testing.T) {
 	if e := results(got)["codex"].Error; e == nil || e.Code != protocol.RefreshFailed || e.Message != failed.Message || e.Cause != failed.Cause {
 		t.Fatalf("%+v", e)
 	}
-	if !slices.Equal(tokens.calls, []string{"ready ensemble-bot", "refresh ensemble-bot " + container}) || results(got)["github"].Error != nil {
+	if !slices.Equal(tokens.calls, []string{"ready ensemble-broker-bot", "refresh ensemble-broker-bot " + container}) || results(got)["github"].Error != nil {
 		t.Fatalf("GitHub not renewed: %v", tokens.calls)
 	}
 }

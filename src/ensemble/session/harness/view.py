@@ -198,6 +198,11 @@ class OwnedSession(Session):
         opening = self._channel.status().get("opening")
         return opening if isinstance(opening, str) else None
 
+    @property
+    def client_up(self) -> bool:
+        """Its harness says its guard reported its client up (harness.json `up`)."""
+        return self._channel.status().get("up") is True
+
     def _remote(self) -> bool:
         return self._channel.status().get("remote") is True
 

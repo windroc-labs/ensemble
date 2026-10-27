@@ -188,7 +188,7 @@ max = "max"
 #   plugins           pinned sources: name@owner/repo#commit[::marketplace-owner/repo#commit]; []: none
 #                     Both commits are full 40-hex hashes (docs/docker-host.md › Plugins).
 #   github.app        the slug of the GitHub App whose installation tokens every Docker session gets, the one
-#                     `ensemble-broker login github ensemble-bot` saved (scripts/install.sh writes it); "": none
+#                     `ensemble-broker login github ensemble-broker-bot` saved (scripts/install.sh writes it); "": none
 [hosts]
 default = "tmux"
 

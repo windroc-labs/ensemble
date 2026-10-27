@@ -29,7 +29,7 @@ const (
 )
 
 // A Claude account's setup-token: service tokenService, account the account's name (launcher.ValidClaudeAccount).
-const tokenService = "ensemble-claude"
+const tokenService = "ensemble-broker-claude"
 
 // TokenReader is start's side of the setup-token items: an item's access (ItemTrust's AppAccess of tokenService and
 // the account) and Get, a read of the account's item that fails with ErrNeedsDialog rather than show a keychain dialog.
@@ -57,6 +57,10 @@ var (
 	ErrInvalidOwnerEdit = errors.New("keychain status -25244")
 	// errAccessUnread is secureItem's first access read failing, before it changed anything.
 	errAccessUnread = errors.New("reading its access failed")
+	// ErrNotBrokerItem is an in-place write refused because the item does not trust only the broker.
+	ErrNotBrokerItem = errors.New("keychain item does not trust only the broker")
+	// errNotEarlierBuild is secureGuarded's guard refusing the item's access, before it changed anything.
+	errNotEarlierBuild = errors.New("it trusts another application")
 )
 
 func ownershipError(service, account string, err error) error {
@@ -65,24 +69,24 @@ func ownershipError(service, account string, err error) error {
 
 // AppKeyService is the item of the one GitHub App's private key (account its App ID) and login github's argument;
 // the App's own slug, whatever it is, comes from GitHub at login.
-const AppKeyService = "ensemble-bot"
+const AppKeyService = "ensemble-broker-bot"
 
 // KeychainServices are every keychain service the broker reads or writes, one literal each: docs/credentials.md names
 // them all (tests/guard_checks/credentials.py reads this list). Declare each service as a package-level `...Service`
 // string constant, and each prefix item, an entry ending in "/" that stands for every service starting with it, as a
 // `...ServicePrefix` one: TestKeychainServices pins this list to exactly those.
 var KeychainServices = []string{
-	"ensemble-claude",
-	"ensemble-bot",
-	"ensemble-github-users",
-	"ensemble-tokens",
-	"ensemble-revocations",
-	"ensemble-codex",
-	"ensemble-codex-grants",
-	"ensemble-opencode",
-	"ensemble-env/", // prefix item: every ensemble-env/<name>
-	"ensemble-linear",
-	"ensemble-linear-grants",
+	"ensemble-broker-claude",
+	"ensemble-broker-bot",
+	"ensemble-broker-github-users",
+	"ensemble-broker-tokens",
+	"ensemble-broker-revocations",
+	"ensemble-broker-codex",
+	"ensemble-broker-codex-grants",
+	"ensemble-broker-opencode",
+	"ensemble-broker-env/", // prefix item: every ensemble-broker-env/<name>
+	"ensemble-broker-linear",
+	"ensemble-broker-linear-grants",
 }
 
 // SecretKeychain holds broker-only items: created trusting only the broker, read without a dialog.
@@ -100,14 +104,43 @@ type brokerOnlyStore interface {
 
 // trustedItem is start's controlled check of a broker-only item, without reading it: whether its access trusts only
 // the broker. err is the access read's, for the caller to map.
-func trustedItem(k interface {
+func trustedItem(k accessReader, service, account string) (trusted bool, err error) {
+	trusted, _, err = checkItem(k, service, account)
+	return trusted, err
+}
+
+type accessReader interface {
 	AppAccess(service, account string) (AppAccess, error)
-}, service, account string) (trusted bool, err error) {
+}
+
+// checkItem is trustedItem, and for an item not trusted, whether an earlier broker build's (earlierBuild), which
+// RetrustCommand repairs.
+func checkItem(k accessReader, service, account string) (trusted, earlier bool, err error) {
 	access, err := k.AppAccess(service, account)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	return onlyBroker(access) == nil, nil
+	if onlyBroker(access) == nil {
+		return true, false, nil
+	}
+	return false, earlierBuild(access), nil
+}
+
+// retrustRemedy ends a keychain error a stale item may cause.
+const retrustRemedy = ": unlock the login keychain, or run " + RetrustCommand + "."
+
+// writeOwned runs write, an in-place update of the item's data, only when the item trusts only the broker: macOS lets
+// any application update an item whose encrypt entry trusts any application, without UI, so the update itself never
+// refuses another's item.
+func writeOwned(k accessReader, service, account string, write func() error) error {
+	access, err := k.AppAccess(service, account)
+	if err != nil {
+		return err
+	}
+	if err := onlyBroker(access); err != nil {
+		return fmt.Errorf("keychain item %s/%s: %w: %w", service, account, ErrNotBrokerItem, err)
+	}
+	return write()
 }
 
 // readSecret is start's controlled read of a broker-only item, never with a dialog; it erases what a failed read
@@ -228,6 +261,37 @@ func appsOnlyBroker(a AppAccess) error {
 		return errors.New("no entry lets the broker read it")
 	}
 	return nil
+}
+
+// earlierBuild is whether the item trusts only one build of the broker at InstalledPath, this one or an earlier one:
+// every read or export entry trusts exactly that one application, recorded with its code requirement, and the one
+// partition list holds one cdhash ID. teamid IDs are refused: the broker was only ever signed ad hoc. A permissive or
+// foreign item is never one, so only such an item is re-trusted with the keychain password.
+func earlierBuild(a AppAccess) bool {
+	previous, partition := "", ""
+	for _, entry := range a.Entries {
+		if slices.ContainsFunc(entry.Authorizations, func(auth string) bool { return slices.Contains(readAuthorizations, auth) }) {
+			if entry.Any || len(entry.Apps) != 1 {
+				return false
+			}
+			app := entry.Apps[0]
+			if !strings.HasPrefix(app, InstalledPath+" (") || !strings.HasSuffix(app, ")") || previous != "" && previous != app {
+				return false
+			}
+			previous = app
+		}
+		if slices.Contains(entry.Authorizations, "partition_id") {
+			if partition != "" || len(entry.Partitions) != 1 {
+				return false
+			}
+			partition = entry.Partitions[0]
+		}
+	}
+	if previous == "" || !strings.HasPrefix(partition, "cdhash:") {
+		return false
+	}
+	a.Broker, a.Partition = previous, partition
+	return onlyBroker(a) == nil
 }
 
 // identity names an application by its path and, when it records one, its code requirement, so a rebuilt
@@ -431,9 +495,20 @@ func LoginGitHub(app string, k AppKeychain, password func() ([]byte, error), out
 // once with password, so no keychain dialog shows unless securityd refuses the second step with the password
 // (trust). Its error says what is done and not done, and ends with rerun.
 func secureItem(item, account, rerun string, k ItemTrust, password func() ([]byte, error)) error {
+	return secureGuarded(item, account, rerun, k, password, nil)
+}
+
+// secureGuarded is secureItem, changing an item that does not yet trust only the broker only when guard (nil: any)
+// holds for the access it read first; else it fails with errNotEarlierBuild, the item unchanged, no password read.
+// The guard reads the access right before the change, after the password; the change looks the item up again, so a
+// same-user process could still swap it in between (accepted: spec D9).
+func secureGuarded(item, account, rerun string, k ItemTrust, password func() ([]byte, error), guard func(AppAccess) bool) error {
 	before, err := k.AppAccess(item, account)
 	if err != nil {
 		return fmt.Errorf("keychain item %s unchanged: %w: %w", item, errAccessUnread, err)
+	}
+	if onlyBroker(before) != nil && guard != nil && !guard(before) {
+		return fmt.Errorf("keychain item %s unchanged: %w", item, errNotEarlierBuild)
 	}
 	if onlyBroker(before) != nil {
 		pw, err := password()
@@ -457,8 +532,8 @@ func secureItem(item, account, rerun string, k ItemTrust, password func() ([]byt
 
 // trust runs each step not in place before with the keychain password, stopping at the first that fails. The
 // partition step goes first: securityd takes it with the password, and it checks the password before the read
-// and export entries change. securityd has refused that second change with the password (ErrAuthFailed), so
-// then it goes through the keychain's dialog instead.
+// and export entries change. securityd has refused that second change with the password (ErrAuthFailed), or,
+// without UI, would have asked (ErrNeedsDialog), so then it goes through the keychain's dialog instead.
 func trust(item, account string, k ItemTrust, before AppAccess, password []byte) error {
 	if partitionOnlyBroker(before) != nil {
 		if err := k.TrustPartition(item, account, password); err != nil {
@@ -467,7 +542,7 @@ func trust(item, account string, k ItemTrust, before AppAccess, password []byte)
 	}
 	if appsOnlyBroker(before) != nil {
 		err := k.TrustApps(item, account, password)
-		if errors.Is(err, ErrAuthFailed) {
+		if errors.Is(err, ErrAuthFailed) || errors.Is(err, ErrNeedsDialog) {
 			if dialogErr := k.TrustAppsByDialog(item, account); dialogErr != nil {
 				err = fmt.Errorf("%w; through the keychain dialog: %w", err, dialogErr)
 			} else {
@@ -533,11 +608,13 @@ func keychainError(account string, err error) *protocol.Error {
 // Ready reads only account's item's access, so it never prompts: an item trusting another broker build would ask at
 // Inject.
 func (c Credentials) Ready(account string) error {
-	trusted, err := trustedItem(c.Keychain, tokenService, account)
-	if err != nil {
+	trusted, earlier, err := checkItem(c.Keychain, tokenService, account)
+	switch {
+	case err != nil:
 		return keychainError(account, err)
-	}
-	if !trusted {
+	case earlier:
+		return protocol.New(protocol.LoginRequired, "The Claude account "+account+" setup-token trusts an earlier broker build: run "+RetrustCommand+".")
+	case !trusted:
 		return protocol.New(protocol.LoginRequired, "The Claude account "+account+" setup-token trusts another broker build: run "+ClaudeLogin(account)+".")
 	}
 	return nil
