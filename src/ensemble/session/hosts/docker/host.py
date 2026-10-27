@@ -1094,12 +1094,15 @@ class DockerHost(Host):
         row = next((r for r in rows if r.name == name and r.generation == generation), None)
         if row is None or row.state != "running":
             return Liveness.ABSENT
-        if not _guarded(name, generation):
+        return self._guard_liveness(row)
+
+    def _guard_liveness(self, row: Row) -> Liveness:
+        if not _guarded(row.name, row.generation):
             return Liveness.UNKNOWN
         argv, env = docker_call(
             self.docker,
             *("exec", "-i", row.container, IMAGE_PYTHON, "-I", GUARD),
-            *("--probe", f"{RUN}/{generation}"),
+            *("--probe", f"{RUN}/{row.generation}"),
         )
         try:
             res = self.run(argv, env, timeout=RUN_TIMEOUT)
@@ -1214,7 +1217,7 @@ class DockerHost(Host):
 
     def _capacity_rows(self) -> list[SessionRow]:
         containers = self._containers(required=True)
-        return [self._row(row) for _, row in sorted(containers.items())]
+        return [self._row(row, probe=True) for _, row in sorted(containers.items())]
 
     def _capacity_namespace(self) -> str:
         return f"docker:{endpoint()}"
@@ -1230,14 +1233,17 @@ class DockerHost(Host):
             return []
         return [self._row(containers[name]) for name in sorted(containers)]
 
-    def _row(self, row: Row) -> SessionRow:
+    def _row(self, row: Row, *, probe: bool = False) -> SessionRow:
         name, generation = row.name, row.generation
         record = _record(name)
         record = record if record.get("generation") == generation else {}
         word = activity(state_dir(name), generation)
         state = StatusState.WORKING
         if _lock_free(_owner_path(name)):
-            state = StatusState.DEAD if row.state in STOPPED else StatusState.UNKNOWN
+            exited = (
+                probe and row.state == "running" and self._guard_liveness(row) == Liveness.ABSENT
+            )
+            state = StatusState.DEAD if row.state in STOPPED or exited else StatusState.UNKNOWN
         elif word is not None and word != StatusState.WORKING:
             state = word
         return SessionRow(
