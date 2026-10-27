@@ -458,20 +458,22 @@ class Segment(TmuxFlow):
             self.expect(p.ident, comments=comments, ledger={p.sid: steps}, **changes)
 
     def wait_written_back(self, p):
-        """Until p's outcome is written back (its ledger's last step) and its harness is gone: a
-        run after a stop, whose session's count of write-back ends is unknown.
+        """Until p's outcome is written back (its ledger's last step, then its session comment's
+        end) and its harness is gone: a run after a stop, whose session's count of write-back ends
+        is unknown.
         """
         self.assertIsNotNone(p.script.report, "a run after a stop waits for its outcome")
-        harness = self.harness(p.role, p.ident, p.sid)
+        harness, status = self.harness(p.role, p.ident, p.sid), p.script.report["status"]
         live_tmux.wait(
             lambda: (
                 re.fullmatch(
                     r"(attempt:\d+:)?outcome", (self.ledger(p.ident).get(p.sid) or [""])[-1]
                 )
+                and self.session_status(p.ident, p.sid) == status
                 and not self.live(harness)
             ),
             TIMEOUT,
-            f"{p.sid}'s outcome written back and {harness} gone",
+            f"{p.sid}'s outcome and session end written back and {harness} gone",
         )
 
     def backlog_issue(self, role, title, description, labels=()):
