@@ -5982,6 +5982,25 @@ exec /bin/rm "$@"
         self.assert_ok(self.again())
         self.assertEqual(len(profile.read_text().splitlines()), 3)
 
+    def test_brew_shellenv_with_a_shell_argument_is_in_the_profile(self):
+        """Homebrew's own installer writes `shellenv zsh`: a rerun skips it as it does ours."""
+        profile = Path(self.home, ".zprofile")
+        ours = f'eval "$({self.root}/opt/homebrew/bin/brew shellenv)"'
+        self.assert_ok(self.fresh("--no-docker"))
+        lines = profile.read_text().splitlines()
+        self.assertEqual(lines[0], ours)
+        self.assertEqual(lines.count(ours), 1)
+        for line in (ours, ours.replace("shellenv)", "shellenv zsh)")):
+            with self.subTest(line=line):
+                profile.write_text("\n".join([line, *lines[1:]]) + "\n")
+                before = profile.read_bytes()
+                result = self.again()
+                self.assert_ok(result)
+                self.assertIn(f"==> shell profile: {ours}\n    skip: in {profile}\n", result.stderr)
+                self.assertNotIn(f"install.sh will write to {profile}", result.tty)
+                self.assertEqual(profile.read_bytes(), before)
+        self.assertEqual(self.ledger().count(f"profile\t{profile}\t{ours}"), 1)
+
     def summary(self, result):
         return next(line for line in result.stderr.splitlines() if line.startswith("    clients: "))
 
