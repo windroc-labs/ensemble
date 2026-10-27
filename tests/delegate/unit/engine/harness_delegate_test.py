@@ -2751,3 +2751,31 @@ class OwnedRun(HarnessCase):
             retire.assert_not_called()
             again._settle()
         retire.assert_called_once_with(again._state.agent_name, sid=SID, host=again._state.host)
+
+    def test_settle_retires_under_the_run_lock_only_the_attempt_it_checked(self):
+        view = self.owned()
+        stopped = Result(129, None, "stopped: Stopped: 129")
+        _seen, on = self.at_begun(
+            lambda: (self.record.bind(1, 1), self.record.complete(1, stopped, sid=SID))
+        )
+        view.run(on)
+        view.driver.session.liveness = Liveness.ABSENT
+        again, store = HarnessDelegate.attach(self.work, session_cls=HarnessSession), self.record
+        held = []
+        with mock.patch.object(
+            HarnessSession,
+            "retire",
+            side_effect=lambda *_a, **_k: held.append(store.store.running()),
+        ):
+            again._settle()
+            self.assertEqual(held, [True])  # no start can begin a new generation meanwhile
+            read = again._read
+
+            def replaced():  # another attempt saved between its check and its lock
+                state = read()
+                again._read = read
+                return replace(state, attempt=state.attempt + 1)
+
+            again._read = replaced
+            again._settle()
+        self.assertEqual(held, [True])

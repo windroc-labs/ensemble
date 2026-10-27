@@ -331,22 +331,21 @@ class HarnessDelegate(Delegate):
         return previous.attempt + 1 if previous.plan.sid == self._state.plan.sid else 1
 
     def _settle(self) -> None:
-        """A gone owned worker retired outside the mutex, after its handler drained; not while a
-        start may be due."""
+        """A gone owned worker retired outside the mutex, after its handler drained. Only under
+        the run lock, which every start takes, and only the attempt it checked there.
+        """
         try:
             state = self._read()
-        except (ConfigError, OSError):
+            if not owned(state.plan) or not (state.completed or state.bound):
+                return
+            with self.store.run_lock(wait=False):
+                if self._read() != state:
+                    return
+                agent = self._agent(state)
+                if agent is None or not agent.alive():
+                    self.session_cls.retire(state.agent_name, sid=state.plan.sid, host=state.host)
+        except (BlockingIOError, ConfigError, OSError, SessionError, SessionConfigError):
             return
-        if not owned(state.plan) or not (state.completed or state.bound) or self.store.running():
-            return
-        try:
-            agent = self._agent(state)
-        except Unanswered:
-            return
-        if agent is not None and agent.alive():
-            return
-        with contextlib.suppress(SessionError, SessionConfigError):
-            self.session_cls.retire(state.agent_name, sid=state.plan.sid, host=state.host)
 
     def _sweep(self) -> None:
         try:
