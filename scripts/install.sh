@@ -2021,11 +2021,12 @@ egress_ready() {
   case $proxy in '' | '<no value>') return 1 ;; esac
 }
 
-# Download to a sibling directory so a failed fetch never leaves a usable partial version.
+# Download to a sibling directory so a failed fetch never leaves a usable partial version. No locals: the trap names
+# the literal path, as a bash may have left the function's scope when it runs the subshell's EXIT trap (U1a).
 egress_download() (
-  local versions=$HOME/.egress/versions tmp
+  versions=$HOME/.egress/versions
   tmp=$(mktemp -d "$versions/.download.XXXXXX")
-  trap 'rm -rf "$tmp"' EXIT
+  trap "rm -rf $(printf '%q' "$tmp")" EXIT
   gh api "repos/windroc/egress-proxy/tarball/$egress_commit" </dev/null >"$tmp/source.tar.gz" \
     || die "cannot fetch pinned windroc/egress-proxy $egress_commit; check gh auth status and repository access, then rerun"
   mkdir "$tmp/source"
@@ -2040,6 +2041,8 @@ egress_install() {
   local dir=$HOME/.egress version=$HOME/.egress/versions/$egress_commit tries=0 ready
   step "egress proxy"
   mkdir -p "$dir/versions"
+  # An earlier run's failed download, left by an installer before this one.
+  rm -rf "$dir/versions"/.download.*
   [ ! -L "$dir/config.local.yaml" ] \
     || die "$dir/config.local.yaml symlink is unsupported by the proxy's directory mount; existing path was kept"
   if [ ! -e "$dir/config.local.yaml" ]; then

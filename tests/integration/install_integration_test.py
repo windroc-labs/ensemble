@@ -421,8 +421,11 @@ class InstallTest(Case):
         self.assertEqual(self.plugin_calls(), [])
         return result
 
-    def run_install(self, *args, answers=(), stdin=None, tty=True, script=SCRIPT, ctty=None):
-        """`ctty`: what /dev/tty opens, else the terminal, which is also /dev/ttys001."""
+    def run_install(
+        self, *args, answers=(), stdin=None, tty=True, script=SCRIPT, ctty=None, shell="bash"
+    ):
+        """`ctty`: what /dev/tty opens, else the terminal, which is also /dev/ttys001.
+        `shell`: what runs `script`, as `curl … | bash` does on a Mac: its /bin/bash."""
         self.log.unlink(missing_ok=True)
         terminal = Tty() if tty else None
         links = (self.root / "dev/tty", self.root / "dev/ttys001")
@@ -435,7 +438,7 @@ class InstallTest(Case):
         try:
             with out.open("w") as stdout, err.open("w") as stderr:
                 proc = subprocess.Popen(
-                    ["bash", str(script), *args],
+                    [shell, str(script), *args],
                     env=self.env,
                     stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
                     stdout=stdout,
@@ -510,6 +513,7 @@ class InstallTest(Case):
         then=(),
         provider_write=True,
         egress_failure=False,
+        shell="bash",
     ):
         """A first run answering every question: brew profile line, clients, Docker, the
         OpenCode provider, the config, the Docker logins, the PATH line, then `then` (the board's).
@@ -541,7 +545,7 @@ class InstallTest(Case):
             *([(WRITE_Q, "y")] if "opencode" in (chosen or "") and not egress_failure else []),
             *then,
         ]
-        return self.run_install(*args, answers=answers, ctty=ctty)
+        return self.run_install(*args, answers=answers, ctty=ctty, shell=shell)
 
     def again(self, *args, answers=()):
         """Flags and saved choices pre-answer a rerun's checklist."""
@@ -1381,6 +1385,36 @@ class InstallTest(Case):
         self.assertEqual(list(versions.iterdir()), [])
         self.assert_ok(
             self.again("--clients", "claude", "--docker", answers=DOCKER_LOGINS + ((WRITE_Q, "y"),))
+        )
+
+    def test_u1a_failed_egress_fetch_leaves_nothing(self):
+        (self.fakes / "fail").write_text("gh api repos/windroc/egress-proxy/tarball/")
+        result = self.fresh(
+            "--clients", "claude", "--docker", egress_failure=True, shell="/bin/bash"
+        )
+        self.assertEqual(result.code, 1)
+        self.assertIn("cannot fetch pinned windroc/egress-proxy", result.stderr)
+        self.assertNotIn("unbound variable", result.stderr)
+        self.assertEqual(list(Path(self.home, ".egress/versions").iterdir()), [])
+
+    def test_u1a_failed_egress_fetch_removes_earlier_leftovers(self):
+        """A download directory an earlier failed run left (v0.5.0's U1a) goes on the next egress step."""
+        versions = Path(self.home, ".egress/versions")
+        (versions / ".download.stale").mkdir(parents=True)
+        (versions / ".download.stale/source.tar.gz").write_text("partial")
+        (self.fakes / "fail").write_text("gh api repos/windroc/egress-proxy/tarball/")
+        result = self.fresh(
+            "--clients", "claude", "--docker", egress_failure=True, shell="/bin/bash"
+        )
+        self.assertEqual(result.code, 1)
+        self.assertIn("cannot fetch pinned windroc/egress-proxy", result.stderr)
+        self.assertEqual(list(versions.iterdir()), [])
+        (versions / ".download.stale").mkdir()
+        self.assert_ok(
+            self.again("--clients", "claude", "--docker", answers=DOCKER_LOGINS + ((WRITE_Q, "y"),))
+        )
+        self.assertEqual(
+            [p.name for p in versions.iterdir()], ["122d7454d738db4a9b7e0c4a89d2cfa5ff564339"]
         )
 
     def test_egress_unusable_download_leaves_no_version_and_is_retryable(self):
