@@ -25,10 +25,16 @@ from ensemble.delegate.engine.environment import resolve
 from ensemble.delegate.engine.handler import finish
 from ensemble.delegate.engine.plan import plan
 from ensemble.delegate.engine.record import CLOSED, HANDLER, RunRecord, owned
-from ensemble.delegate.engine.runner import Attempts, execute, idle_reason, say, stopped
+from ensemble.delegate.engine.runner import (
+    Attempts,
+    claim_release,
+    execute,
+    idle_reason,
+    say,
+    stopped,
+)
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import (
-    Close,
     ConfigError,
     DelegateState,
     Event,
@@ -84,11 +90,10 @@ from ensemble.utils import (
 
 
 class _Ended(Enum):
-    """_drive_end's compare-and-set; closed: finish tried its locked close."""
+    """_drive_end's compare-and-set."""
 
     LOST = auto()
     STORED = auto()
-    CLOSED = auto()
 
 
 def _team(team: Team) -> Team:
@@ -101,6 +106,14 @@ def _loaded(payload: bytes) -> dict:
     except ValueError:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _live(agent: Session) -> bool:
+    """Whether a close ends a running worker (unknown counts)."""
+    try:
+        return agent.alive()
+    except Unanswered:
+        return True
 
 
 def _unknown(error: Unanswered) -> Unanswered:
@@ -335,10 +348,13 @@ class HarnessDelegate(Delegate):
             return attempt + 1 if type(attempt) is int and attempt >= 1 else 1
         agent = self._known_agent(previous)
         if agent is not None:
+            live = _live(agent)
             try:
                 agent.close()
             except SessionError as error:
                 raise ConfigError(str(error)) from None
+            if live:
+                claim_release(previous.plan, previous.agent_name)
         return previous.attempt + 1 if previous.plan.sid == self._state.plan.sid else 1
 
     def _settle(self) -> None:
@@ -775,10 +791,11 @@ class HarnessDelegate(Delegate):
                 agent, unanswered = self._agent(state), None
             except Unanswered as error:
                 agent, unanswered = None, error
+            live = agent is not None and _live(agent)
             if agent is not None:
                 agent.close()
         if unanswered is None:
-            self._stop_owned(closed=agent is not None)
+            self._stop_owned(closed=live)
         unchecked = (
             None
             if unanswered is None
@@ -798,7 +815,7 @@ class HarnessDelegate(Delegate):
 
     def _stop_owned(self, *, closed: bool) -> None:
         """Once an owned run's worker is closed or gone: delegate.json `closing`, and its still
-        active attempt ended once as CLOSED, with one Finished."""
+        active attempt ended once as CLOSED, with one Finished; closed: a lock's release claimed."""
         try:
             state = self._read()
             if not owned(state.plan):
@@ -807,17 +824,12 @@ class HarnessDelegate(Delegate):
         except (ConfigError, OSError) as error:
             say(f"delegate: {error}")
             return
-        if n is None:
-            return
-        state = replace(state, attempt=n)
-        finish(state, CLOSED, None)
-        environment = state.plan.session.environment
-        if closed and environment is not None and environment.lock:
-            say(f"delegate: session {state.agent_name} closed (lock {environment.lock})")
-            RunLog(state.plan.session.workdir).note(
-                "release", lock=environment.lock, best_effort=True
-            )
-        if state.callback is not None:
+        if n is not None:
+            state = replace(state, attempt=n)
+            finish(state, CLOSED, None)
+        if closed:
+            claim_release(state.plan, state.agent_name)
+        if n is not None and state.callback is not None:
             EventCallback(state.callback, self.store, sid=state.plan.sid, attempt=n)(
                 Finished(CLOSED)
             )
@@ -913,12 +925,16 @@ class HarnessDelegate(Delegate):
         if refused is None:
             self._finished(ended, callback, None)
         else:
-            end = self._drive_end(ended, handle, callback, None, notes=not refused, unbound=False)
-            if handle is not None and end is not _Ended.CLOSED:
+            self._drive_end(ended, handle, callback, None, notes=not refused, unbound=False)
+            if handle is not None:
+                live = _live(handle)
                 try:
                     handle.close()
                 except SessionError as failure:
                     say(f"delegate: tui: close: {failure}")
+                else:
+                    if live:
+                        claim_release(self._state.plan, self._state.agent_name)
         return ended
 
     def _finished(
@@ -1002,9 +1018,9 @@ class HarnessDelegate(Delegate):
                 then()
         if not won:
             return _Ended.LOST
-        closed = finish(self._read(), result, handle, give_up=give_up, notes=notes)
+        finish(self._read(), result, handle, give_up=give_up, notes=notes)
         self._finished(result, callback, on_event, store=False)
-        return _Ended.STORED if closed is Close.NONE else _Ended.CLOSED
+        return _Ended.STORED
 
     def _stored(self, state: DelegateState, on_event: Callable[[Event], None] | None) -> Result:
         """Attempt n's stored Result (a follow-up's `previous`), sent to on_event."""
@@ -1379,7 +1395,10 @@ class HarnessDelegate(Delegate):
                 probe = replace(probe, name=f"{probe.name}-preflight")
             accepted = self._probed(accepted, state.attempt + 1, probe)
             if agent is not None:
+                live = _live(agent)
                 agent.close()
+                if live:
+                    claim_release(state.plan, state.agent_name)
             state = replace(
                 state,
                 plan=accepted,
