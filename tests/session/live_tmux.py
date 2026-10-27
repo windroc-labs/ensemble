@@ -130,7 +130,7 @@ class Server:
         case.addCleanup(_SOCKETS.discard, self.socket)
         case.addCleanup(self._close_clients)
         case.addCleanup(self.kill)
-        case.addCleanup(harnesses.end, home)  # first: while their workers still run
+        case.addCleanup(harnesses.end, home)  # before kill
         if len(os.fsencode(self.socket)) > SOCKET_MAX:
             case.fail(f"tmux socket path over {SOCKET_MAX} bytes: {self.socket}")
 
