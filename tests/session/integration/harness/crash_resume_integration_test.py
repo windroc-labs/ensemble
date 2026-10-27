@@ -208,7 +208,8 @@ class ResumeTest(CrashCase):
         for name, kill in (("w1", "session"), ("w2", "attach")):
             with self.subTest(kill=kill):
                 fact = f"remember {uuid.uuid4().hex}"
-                found = self.launched(name, steps=RECALL, prompt=fact)
+                # only the live client's second turn can answer with the fact
+                found = self.launched(name, steps=["Noted."], turns=[RECALL], prompt=fact)
                 if kill == "session":
                     self.ok(self.server.tmux("kill-session", "-t", f"={name}"))
                 else:  # its guard.py --attach killed: the pane dies, the worker runs on

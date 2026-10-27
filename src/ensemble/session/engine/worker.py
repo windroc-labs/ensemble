@@ -297,9 +297,9 @@ class Worker:
 
     def start(self, *, prompt: str, resume: bool, hidden: bool | None = None) -> Record:
         """hidden: True hides, False shows, None keeps its Host's. Watches until its client is up
-        (then up to COLOR_CAP s from its start while its opening is pending), then publishes and
-        returns its Record. A failed save or start puts its files back; its client exiting before
-        it is up: SessionError with its last lines, its terminal kept, no Record.
+        (and its opening sent, up to COLOR_CAP s), then publishes and returns its Record. A failed
+        save or start puts its files back; its client exiting first: SessionError with its last
+        lines, its terminal kept, no Record.
         """
         name = self.state.name
         self._drop_stale()
@@ -562,7 +562,7 @@ class Worker:
                 return
             elapsed = self.clock() - began
             if not _up(session, elapsed):
-                continue  # an exit before it is up fails, however late
+                continue
             if elapsed >= COLOR_CAP:
                 self._uncolored(session, f"not ready within {COLOR_CAP} s")
                 return

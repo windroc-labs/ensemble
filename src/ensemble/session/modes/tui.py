@@ -1012,6 +1012,14 @@ class TuiMode(BaseMode):
         self._store.check()
         return self._terminal.state()
 
+    def alive(self) -> bool:
+        """Its terminal probed afresh; state() may reuse a probe."""
+        self._store.check()
+        try:
+            return self._terminal.alive()
+        except SessionError:  # it cannot tell
+            return False
+
     def send(self, text: str) -> None:
         self._running()
         for action in self.run.submit(text):

@@ -1136,6 +1136,10 @@ class StubMode:
         self.calls.append(("state",))
         return "unknown"
 
+    def alive(self):
+        self.calls.append(("alive",))
+        return False
+
     def send(self, text):
         self.calls.append(("send", text))
 
@@ -1383,7 +1387,8 @@ class EventsOverAModeTest(Case):
         session.send("hi")
         session.stop()
         self.assertEqual(
-            [call for call in self.mode.calls if call != ("state",)], [("send", "hi"), ("stop",)]
+            [call for call in self.mode.calls if call != ("state",)],
+            [("alive",), ("send", "hi"), ("stop",)],
         )
         self.assertEqual(self.session(name="w1").name, "w1")
 

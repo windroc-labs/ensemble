@@ -187,6 +187,9 @@ class BaseMode(ABC):
     @abstractmethod
     def state(self) -> Liveness: ...
 
+    def alive(self) -> bool:
+        return self.state() == Liveness.LIVE
+
     @abstractmethod
     def send(self, text: str) -> None: ...
 

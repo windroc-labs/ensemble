@@ -12,7 +12,7 @@ from unittest import mock
 from ensemble.session.clients.base import Client
 from ensemble.session.clients.codex import CodexClient
 from ensemble.session.clients.registry import Registry
-from ensemble.session.engine.types import Access, ConfigError, Launch, Mode, Spec
+from ensemble.session.engine.types import Access, ConfigError, Launch, Liveness, Mode, Spec
 from ensemble.session.hosts.base import Host
 from ensemble.session.modes import base, headless, in_process, tui
 from ensemble.session.modes.base import BaseMode, child_env, identity_drop
@@ -149,6 +149,12 @@ class BaseModeTest(Case):
         for cls in (headless.HeadlessMode, in_process.InProcessMode):
             with self.subTest(cls=cls.__name__):
                 self.assertIsNone(object.__new__(cls).opening_pending)
+
+    def test_alive_is_its_state_live_unless_a_mode_overrides_it(self):
+        run = mock.Mock()
+        for state, alive in ((Liveness.LIVE, True), (Liveness.UNKNOWN, False)):
+            run.state.return_value = state
+            self.assertIs(BaseMode.alive(run), alive)
 
     def test_only_a_tui_mode_may_report_its_client_up(self):
         for cls in (headless.HeadlessMode, in_process.InProcessMode):
