@@ -517,10 +517,10 @@ class HostedSession(Session):
             if isinstance(error, OSError):
                 raise SessionError(f"session harness: {error.strerror or error}") from None
             raise
-        if tie is not None:
-            tie.handed()
-        deadline = time.monotonic() + START_WAIT
         try:  # an interrupt too: no view would close it
+            if tie is not None:
+                tie.handed()
+            deadline = time.monotonic() + START_WAIT
             while True:
                 status = channel.status()
                 if status.get("state") in ("running", "draining", "exited"):  # its end at once
@@ -537,23 +537,24 @@ class HostedSession(Session):
                 generation, str
             ):
                 raise SessionError(f"session harness {channel.directory}: started another session")
+            view = cls._view(
+                channel,
+                name=spec.name,
+                client=spec.client,
+                sid=spec.sid,
+                generation=generation,
+                host=host,
+                idle_timeout=idle_timeout,
+                mode=mode,
+                spec=spec,
+                tie=tie,
+            )
         except BaseException:
             cls._unspawn(channel, harness, spec.name, host, mode)
             if tie is not None:
                 tie.close()
             raise
-        return cls._view(
-            channel,
-            name=spec.name,
-            client=spec.client,
-            sid=spec.sid,
-            generation=generation,
-            host=host,
-            idle_timeout=idle_timeout,
-            mode=mode,
-            spec=spec,
-            tie=tie,
-        )
+        return view
 
     @classmethod
     def _roots(cls, client: str) -> tuple[str, ...]:

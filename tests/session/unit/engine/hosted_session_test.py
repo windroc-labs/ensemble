@@ -3407,6 +3407,33 @@ class OwnedStartTest(Case):
         self.popen.return_value.kill.assert_called_once_with()
         self.assertFalse(os.path.exists(self.spawned[2].directory))
 
+    def test_a_stop_right_after_popen_kills_its_harness(self):
+        self.harness_writes({"state": "running", "name": "w1", "sid": SID, "generation": "g7"})
+        monotonic = time.monotonic
+
+        def clock():
+            if self.popen.called:
+                raise KeyboardInterrupt
+            return monotonic()
+
+        with (
+            mock.patch("time.monotonic", side_effect=clock),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            self.session_cls.start(self.spec())
+        self.popen.return_value.kill.assert_called_once_with()
+        self.assertFalse(os.path.exists(self.spawned[2].directory))
+
+    def test_a_stop_while_its_view_is_built_kills_its_harness(self):
+        self.harness_writes({"state": "running", "name": "w1", "sid": SID, "generation": "g7"})
+        with (
+            mock.patch.object(HostedSession, "_view", side_effect=KeyboardInterrupt),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            self.session_cls.start(self.spec())
+        self.popen.return_value.kill.assert_called_once_with()
+        self.assertFalse(os.path.exists(self.spawned[2].directory))
+
     def test_handler_state_json_cannot_hold_leaves_no_request(self):
         spec = self.spec(handlers=(engine_types.HookCallback("m", {"s": {1}}),))
         with self.assertRaisesRegex(ConfigError, "not JSON"):
