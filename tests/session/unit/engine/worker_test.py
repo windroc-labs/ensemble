@@ -565,11 +565,17 @@ class ColorWatchTest(Base):
                 self.assertEqual(self.said, said)
                 self.handle.publish.assert_called_once()
 
-    def test_a_started_turn_ends_the_watch_quietly_once_up(self):
-        events = itertools.chain([TurnStarted()], itertools.repeat(IdleTimeout(worker.TICK)))
-        self.assertEqual(self.watch(float("inf"), events=events), worker.EARLY + 1)
-        self.assertEqual(self.said, [])
-        self.handle.publish.assert_called_once()
+    def test_a_started_turn_keeps_the_watch_as_long_and_never_says_unset(self):
+        for sent, ticks in ((8, 9), (float("inf"), worker.COLOR_CAP + 1)):
+            with self.subTest(sent=sent):
+                self.said.clear()
+                self.handle.publish.reset_mock()
+                events = itertools.chain(
+                    [TurnStarted()], itertools.repeat(IdleTimeout(worker.TICK))
+                )
+                self.assertEqual(self.watch(sent, events=events), ticks)
+                self.assertEqual(self.said, [])  # its opening follows that turn
+                self.handle.publish.assert_called_once()
 
     def test_a_dialog_just_after_a_turn_started_once_up_is_said(self):
         idle = IdleTimeout(worker.TICK)

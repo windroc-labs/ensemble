@@ -61,7 +61,13 @@ class ManagedProcessTest(Case):
             + guard.json_frame(b"x", {"returncode": 7})
         )
         channel.proc.stdout.read.side_effect = [wire[:3], wire[3:], b""]
-        channel.pump()
+        with (
+            mock.patch.object(
+                managed.select, "select", return_value=([], [channel.proc.stdin], [])
+            ),
+            mock.patch.object(os, "write", side_effect=lambda _fd, data: len(data)),
+        ):
+            channel.pump()
         self.assertEqual(
             channel.read(0),
             [
@@ -73,6 +79,51 @@ class ManagedProcessTest(Case):
         self.assertEqual(channel.returncode(), 7)
         self.assertFalse(channel.alive())
         self.assertTrue(channel.wait_exit(0))
+
+    def test_each_hook_is_released_to_its_guard_only_after_it_was_taken(self):
+        channel = self.channel()
+        order = []
+        taken = channel.accept_hook
+        channel.accept_hook = lambda data: order.append("taken") or taken(data)
+        value = {"label": "Stop", "payload": {}, "delivery_id": "a" * 32}
+        channel.proc.stdout.read.side_effect = [
+            guard.json_frame(b"s", {"pid": 1})
+            + guard.json_frame(b"h", value)
+            + guard.json_frame(b"h", {**value, "delivery_id": "b" * 32}),
+            b"",
+        ]
+        with (
+            mock.patch.object(
+                managed.select, "select", return_value=([], [channel.proc.stdin], [])
+            ),
+            mock.patch.object(
+                os, "write", side_effect=lambda _fd, wire: order.append(bytes(wire)) or len(wire)
+            ),
+        ):
+            channel.pump()
+        release = guard.frame(b"k", b"{}")
+        self.assertEqual(order, ["taken", release, "taken", release])
+
+    def test_a_release_to_a_gone_guard_never_holds_the_reader(self):
+        channel = self.channel()
+        value = {"label": "Stop", "payload": {}, "delivery_id": "a" * 32}
+        channel.proc.stdout.read.side_effect = [
+            guard.json_frame(b"s", {"pid": 1}) + guard.json_frame(b"h", value),
+            guard.json_frame(b"x", {"returncode": 0}),
+            b"",
+        ]
+        with (
+            mock.patch.object(
+                managed.select, "select", return_value=([], [channel.proc.stdin], [])
+            ),
+            mock.patch.object(os, "write", side_effect=BrokenPipeError),
+            mock.patch.object(managed, "GUARD_WAIT", 30),
+        ):
+            began = time.monotonic()
+            channel.pump()
+        self.assertLess(time.monotonic() - began, 5)
+        self.assertEqual(channel.returncode(), 0)
+        self.assertIsNone(channel.failure)
 
     def test_transport_eof_without_exit_is_unknown(self):
         channel = self.channel()

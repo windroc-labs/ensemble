@@ -385,8 +385,8 @@ def run(
 
 
 def serve(argv: Sequence[str], requests, replies, *, roots: Sequence[str]) -> None:
-    """`hook --serve DIR`: per {label, event, payload, sent} line, one run() and its {"ok"} line;
-    its record gets the request's `sent`.
+    """`hook --serve DIR`: per {label, event, payload[, sent]} line, one run() and its {"ok"}
+    line; its record gets the request's `sent`, else the count read as it begins.
     """
     for line in requests:
         request = _request(line)
@@ -395,7 +395,7 @@ def serve(argv: Sequence[str], requests, replies, *, roots: Sequence[str]) -> No
             SimpleNamespace(buffer=io.BytesIO(json.dumps(request["payload"]).encode())),
             roots=roots,
             event=request["event"],
-            stamp=lambda _folder, given=request["sent"]: given,
+            stamp=sent if "sent" not in request else lambda _folder, given=request["sent"]: given,
         )
         try:
             replies.write(json.dumps({"ok": ok}).encode() + b"\n")
@@ -411,11 +411,11 @@ def _request(line: bytes) -> dict | None:
         return None
     if (
         isinstance(request, dict)
-        and set(request) == {"label", "event", "payload", "sent"}
+        and set(request) - {"sent"} == {"label", "event", "payload"}
         and isinstance(request["label"], str)
         and (request["event"] is None or isinstance(request["event"], str))
         and isinstance(request["payload"], dict)
-        and (request["sent"] is None or isinstance(request["sent"], str))
+        and (request.get("sent") is None or isinstance(request["sent"], str))
     ):
         return request
     return None

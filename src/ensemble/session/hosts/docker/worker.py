@@ -182,7 +182,7 @@ class DockerWorker(ManagedProcess):
         if self.hook_bytes + len(data) > QUEUE_MAX:
             self.fail("guard hook buffer exceeded 8 MiB; worker closed")
             return None
-        # its sends now, as its guard lets the client go on; never at delivery
+        # its sends now, before release_hook lets its client go on; never at delivery
         self.hook_queue.append((found, len(data), sent(self.hooks.folder)))
         self.hook_bytes += len(data)
         self.condition.notify_all()

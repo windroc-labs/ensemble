@@ -2,6 +2,7 @@
 screen queries and close out (docs/sessions.md › Guard protocol).
 """
 
+import contextlib
 import json
 import os
 import select
@@ -187,6 +188,8 @@ class ManagedProcess(InteractiveProcess):
                 try:
                     for kind, payload in decoder.feed(data):
                         self.accept(kind, payload)
+                        if kind == b"h":
+                            self.release_hook()
                 except (ValueError, UnicodeError, TypeError, RecursionError) as error:
                     self.fail(str(error))
             if self.code is None or decoder.pending:
@@ -228,7 +231,14 @@ class ManagedProcess(InteractiveProcess):
             self.size = 0
             return found
 
-    def send_frame(self, kind: bytes, data: bytes) -> None:
+    def release_hook(self) -> None:
+        """The h just taken: its guard acks its hook, so the client goes on only after
+        accept_hook. A gone guard is left to this reader's exit frame or EOF.
+        """
+        with contextlib.suppress(SessionError):
+            self.send_frame(b"k", b"{}", reader=True)
+
+    def send_frame(self, kind: bytes, data: bytes, *, reader: bool = False) -> None:
         self.checked()
         wire = memoryview(guard.frame(kind, data))
         with self.sending:
@@ -246,6 +256,8 @@ class ManagedProcess(InteractiveProcess):
                 except BlockingIOError:
                     continue
                 except BrokenPipeError as error:
+                    if reader:  # input_closed would wait for this very reader
+                        return
                     self.input_closed(error)
                 except (OSError, ValueError) as error:
                     self.fail(f"guard input: {error}")

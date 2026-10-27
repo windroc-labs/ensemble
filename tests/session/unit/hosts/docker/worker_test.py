@@ -2,6 +2,7 @@
 and end, with a fake channel, broker, hook process and removal.
 """
 
+import argparse
 import json
 import os
 import select
@@ -215,6 +216,61 @@ class HookTest(Base):
         with open(prompted, "w") as f:
             f.write(f"{GEN} 1 1")  # a send after the guard acked the Stop, before its delivery
         self.deliver(channel)
+        self.assertEqual(hooks.sents, [f"{GEN} 0 0"])
+
+    def test_a_send_once_the_guard_let_the_client_go_on_is_never_in_its_stamp(self):
+        hooks = Hooks()
+        channel = self.make(hooks=hooks)
+        prompted = os.path.join(self.state, "prompted")
+        with open(prompted, "w") as f:
+            f.write(f"{GEN} 0 0")
+        runtime = guard.Guard(
+            argparse.Namespace(
+                hook_socket=self.home + "/hook",
+                display_socket=None,
+                display_grace=False,
+                terminal=False,
+                command=["fake"],
+            )
+        )
+        wire, decoder = bytearray(), guard.Decoder()
+
+        def client_goes_on(_reply):  # its Stop hook acked: a send goes in at once
+            with open(prompted, "w") as f:
+                f.write(f"{GEN} 1 1")
+
+        peer = mock.Mock()
+        peer.recv.return_value = hook() + b"\n"
+        peer.sendall.side_effect = client_goes_on
+        runtime.peers[peer] = ("hook", bytearray())
+        runtime.peer_read(peer)
+
+        def to_harness(_fd, data):
+            wire.extend(data)
+            return len(data)
+
+        def to_guard(_fd, data):
+            for kind, payload in decoder.feed(bytes(data)):
+                runtime.command(kind, payload)
+            return len(data)
+
+        with mock.patch.object(os, "write", side_effect=to_harness):
+            runtime.flush()
+        reads = iter([bytes(wire)])
+
+        def read(_size):  # the channel's EOF only once its hook was delivered
+            for data in reads:
+                return data
+            peer.sendall.assert_called_once()
+            self.deliver(channel)
+            return b""
+
+        channel.proc.stdout.read.side_effect = read
+        with (
+            mock.patch.object(select, "select", return_value=([], [channel.proc.stdin], [])),
+            mock.patch.object(os, "write", side_effect=to_guard),
+        ):
+            channel.pump()
         self.assertEqual(hooks.sents, [f"{GEN} 0 0"])
 
     def test_a_failed_host_hook_retries_the_same_id_then_is_rejected(self):

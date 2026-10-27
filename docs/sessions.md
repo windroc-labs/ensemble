@@ -155,6 +155,7 @@ The channel is the guard's stdin (from its harness) and stdout (to it): frames o
 | harness | `i` input | raw bytes for the PTY, else the client's stdin |
 | harness | `q` screen | `{"lines": int or null}` |
 | harness | `c` close | `{}`: end the client, then `x` |
+| harness | `k` hook taken | `{}`: the oldest `h` not yet taken; the guard then acks that hook to its client |
 | guard | `s` started | `{"pid": int}`, once, after exec |
 | guard | `u` up | `{}`, once, when its client still runs 5 s after exec (checked right after reaping it), so never for a client that exited sooner |
 | guard | `h` hook | `{"label": str, "payload": object, "delivery_id": str}`, retry-stable identity |
@@ -166,7 +167,7 @@ EOF on its stdin is a close: its harness closed the channel or died. The guard t
 
 **macOS limitation (approved WDRC-203 decision, 2026-10-26).** Closing the guard's PTY hangs up the foreground client. There is no subreaper or PID namespace: own-process-group, HUP-ignoring and setsid descendants can survive a killed guard; a fast setsid daemon can escape even a live guard. The macOS display's `pane-died` hook runs `tmux kill-session`, best effort; a surviving harness also closes the matching display on channel failure. This does not guarantee removal of escapees. No uid-per-run scheme is used. Docker's final backstop is stopping its container (WDRC-207); the Linux guard alone cannot replace that containment after it is killed. These decisions use the WDRC-203 mini report; real-client crash/resume acceptance on the mini is WDRC-212's.
 
-A hook invocation creates one `delivery_id` (32 lowercase hex characters) before its first send and keeps it through retries; a different invocation has a fresh id even with identical label/payload. It connects to `--hook-socket`, writes one `{"label", "payload", "delivery_id"}` line and gets `{"ok": true, "delivery_id": str}` once the guard has written its `h` frame. A missing or mismatched acknowledgement retries the same request/id. The harness deduplicates by the trusted channel's generation and delivery_id; the Docker handle journals each id once, its first content winning. Identity is never inferred from label/payload equality. This replaces the relay's generation/sequence acknowledgement contract; it does not add dispatch behavior here.
+A hook invocation creates one `delivery_id` (32 lowercase hex characters) before its first send and keeps it through retries; a different invocation has a fresh id even with identical label/payload. It connects to `--hook-socket`, writes one `{"label", "payload", "delivery_id"}` line and gets `{"ok": true, "delivery_id": str}` once its harness took that `h` frame (`k`, sent right after the harness read it, so a Docker hook is stamped before its client goes on), or, while the guard closes, once the frame is written. A missing or mismatched acknowledgement retries the same request/id. The harness deduplicates by the trusted channel's generation and delivery_id; the Docker handle journals each id once, its first content winning. Identity is never inferred from label/payload equality. This replaces the relay's generation/sequence acknowledgement contract; it does not add dispatch behavior here.
 
 ## Recall a closed run
 

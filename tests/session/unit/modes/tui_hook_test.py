@@ -374,6 +374,14 @@ class Serve(Callbacks):
         self.serve(self.request(None), self.request(None, sent="g1 1 1"))
         self.assertEqual([r.get("sent") for r in self.records()], [None, "g1 1 1"])
 
+    def test_a_request_without_sent_stamps_the_count_read_as_it_begins(self):
+        with open(os.path.join(self.dir, PROMPTED), "w", encoding="utf-8") as f:
+            f.write("g1 2 2")
+        line = b'{"label": "stop", "event": null, "payload": {"n": 1}}\n'
+        first = self.request("g1.1")  # the Host's one failure
+        self.assertEqual(self.serve(first, line), [{"ok": False}, {"ok": True}])
+        self.assertEqual([r.get("sent") for r in self.records()], [None, "g1 2 2"])
+
     def test_each_request_gets_its_reply_in_order_and_a_retry_journals_once(self):
         replies = self.serve(self.request("g1.1"), self.request("g1.1"), self.request(None))
         self.assertEqual(replies, [{"ok": False}, {"ok": True}, {"ok": True}])
@@ -394,7 +402,6 @@ class Serve(Callbacks):
             b'{"label": "stop", "event": null, "payload": []}\n',
             b'{"label": "stop", "event": null, "payload": {}, "sent": null, "x": 1}\n',
             b'{"label": "stop", "event": null, "payload": {}, "sent": 1}\n',
-            b'{"label": "stop", "event": null, "payload": {}}\n',
         ):
             with self.subTest(line=line):
                 self.assertEqual(self.serve(line, good), [{"ok": False}, {"ok": True}])
