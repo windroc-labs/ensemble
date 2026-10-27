@@ -163,19 +163,25 @@ class GuardedDockerTest(Case):
         self.addCleanup(worker.close)
         worker.await_start()
         socket_path = os.path.join(self.run_dir, "g1", "hook")
+        payload = b'{"sid": "s1", "transcript_path": "/Users/x/secret"}'
         with mock.patch.dict(os.environ, {"ENSEMBLE_GUARD_HOOK_SOCKET": socket_path}):
-            payload = b'{"sid": "s1", "transcript_path": "/Users/x/secret"}'
-            self.assertEqual(stub.main(["hook", "/tui/w1", "Stop"], io.BytesIO(payload)), 0)
+            # a Codex tui's turn start, a forged label (FR-36), then its turn end
+            for label in ("UserPromptSubmit", "Stop/../x", "Stop"):
+                self.assertEqual(stub.main(["hook", "/tui/w1", label], io.BytesIO(payload)), 0)
         found = []
 
         def hooked():
             found.extend(m for m in worker.read(0.1) if isinstance(m, WorkerHook))
-            return found
+            return len(found) >= 2
 
-        live_tmux.wait(hooked, what="the hook on the channel")
-        [hook] = found
-        self.assertEqual((hook.label, hook.payload), ("Stop", {"sid": "s1"}))
-        self.assertRegex(hook.delivery_id, r"\A[0-9a-f]{32}\Z")
+        live_tmux.wait(hooked, what="the hooks on the channel")
+        self.assertEqual(
+            [(hook.label, hook.payload) for hook in found],
+            [("UserPromptSubmit", {"sid": "s1"}), ("Stop", {"sid": "s1"})],
+        )
+        self.assertRegex(found[0].delivery_id, r"\A[0-9a-f]{32}\Z")
+        with open(os.path.join(self.home, "rejected.jsonl")) as f:
+            self.assertEqual([json.loads(line)["reason"] for line in f], ["label"])
 
 
 class SameEventsTest(Case):

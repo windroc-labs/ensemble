@@ -3913,9 +3913,8 @@ class BoundOwnerTest(HostedTuiBase):
 
 
 class DockerOwnedTest(Case):
-    """On the Docker Host a Claude tui start and every headless one are harness-owned, a tui
-    worker remote there; Codex and OpenCode tui starts keep the legacy path until their hooks are
-    verified through the guard.
+    """On the Docker Host every built-in tui and headless start is harness-owned, a tui worker
+    remote there.
     """
 
     def setUp(self):
@@ -3960,13 +3959,13 @@ class DockerOwnedTest(Case):
         preflight.assert_called_once()
         popen.assert_called_once()
 
-    def test_on_docker_claude_tui_and_headless_are_owned_codex_and_opencode_tui_are_not(self):
+    def test_on_docker_every_built_in_tui_and_headless_start_is_owned(self):
         docker = DockerHost("docker", {"docker": "/usr/local/bin/docker"})
-        for name, tui_owned in (("claude", True), ("codex", False), ("opencode", False)):
+        for name in ("claude", "codex", "opencode"):
             client = self.setup.registry.client(name)
             with self.subTest(client=name):
-                owned = hosted_session._owned(self.setup, Mode.TUI, client, docker)
-                self.assertIs(owned, tui_owned)
+                self.assertTrue(type(client.tui())._remote_owned)
+                self.assertTrue(hosted_session._owned(self.setup, Mode.TUI, client, docker))
                 self.assertTrue(hosted_session._owned(self.setup, Mode.HEADLESS, client, docker))
 
     def test_a_remote_tui_host_has_remote_workers(self):
