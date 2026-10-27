@@ -22,6 +22,7 @@ const (
 	Withdrawn        = "withdrawn" // deleted with its container, nothing to revoke
 	Revoked          = "revoked"
 	Pending          = "pending"           // in the backlog, with a reason
+	Unrevoked        = "unrevoked"         // an in-command revocation that failed, with a reason; never retried
 	ExpiredUnrevoked = "expired-unrevoked" // dropped from the backlog at expiry
 	Notified         = "notified"          // a static secret notice delivered, with its threshold
 
@@ -63,7 +64,7 @@ type Repositories struct {
 type Credential struct {
 	Kind         string
 	Result       string
-	Reason       string // pending only
+	Reason       string // pending and unrevoked only
 	ExpiresAt    *string
 	Account      string // GitHub only
 	Item         string // environment secrets and notices: the reference, never the value
@@ -97,7 +98,7 @@ func (c Credential) MarshalJSON() ([]byte, error) {
 		Notice              string          `json:"notice,omitempty"`
 	}{Kind: c.Kind, Result: c.Result, ExpiresAt: c.ExpiresAt, Account: c.Account, Item: c.Item, Installation: c.Installation,
 		Notice: c.Notice}
-	if c.Result == Pending {
+	if c.Result == Pending || c.Result == Unrevoked {
 		reason := c.Reason
 		if reason == "" {
 			reason = "unknown"

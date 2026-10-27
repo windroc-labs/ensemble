@@ -115,15 +115,23 @@ func redactErr(err error, secrets ...string) error {
 	return err
 }
 
-// note gives the audit recorder m's outcome for consumer id, keyed by a hash of its token, its reason redacted.
-func (l Lifecycle) note(id, result, reason string, m Material, repos *audit.Repositories, secrets ...string) {
-	if l.Audit == nil {
+// Note gives rec m's outcome for consumer id under kind, keyed by a hash of its token, reason redacted; nil rec: none.
+func Note(rec *audit.Recorder, kind, id, result, reason string, m Material, repos *audit.Repositories) {
+	if rec == nil {
 		return
 	}
 	sum := sha256.Sum256([]byte(m.Token))
 	expires := m.ExpiresAt
-	l.Audit.Add(id, audit.Credential{Kind: l.Provider.AuditKind(), Result: result, Reason: Redact(reason, append(secrets, m.Token)...),
-		ExpiresAt: &expires, Account: m.Account, Installation: m.Target, Repos: repos}, hex.EncodeToString(sum[:]))
+	rec.Add(id, audit.Credential{Kind: kind, Result: result, Reason: Redact(reason, m.Token), ExpiresAt: &expires, Account: m.Account,
+		Installation: m.Target, Repos: repos}, hex.EncodeToString(sum[:]))
+}
+
+// note gives the audit recorder m's outcome for consumer id (Note).
+func (l Lifecycle) note(id, result, reason string, m Material, repos *audit.Repositories) {
+	if l.Audit == nil {
+		return
+	}
+	Note(l.Audit, l.Provider.AuditKind(), id, result, reason, m, repos)
 }
 
 // unlisted is a new token's description when it could not be recorded, so was never described.

@@ -60,10 +60,16 @@ type EnvSecrets interface {
 type Tokens interface {
 	Ready(app string) error              // manifest_rejected for another App; login_required or keychain_failed for its key
 	BotUserID(app string) (int64, error) // login_required or keychain_failed for the bot user ID login github saved
-	// Issue and Refresh with repo ("": none) hold a repo grant: one token, for that repository alone.
-	Issue(ctx context.Context, app, repo string, permissions map[string]string, container string, exec func(argv []string, stdin []byte) error) ([]protocol.Expiry, error)
+	// Issue writes one token per installation of app into container through exec, or with repo ("": none) a repo
+	// grant: one token, for that repository alone. On failure it has revoked every token it issued and revoke is nil.
+	// On success revoke (never nil) revokes every token it issued, once, for a start that fails afterwards.
+	Issue(ctx context.Context, app, repo string, permissions map[string]string, container string, exec func(argv []string, stdin []byte) error) (revoke func(), _ []protocol.Expiry, _ error)
+	// Refresh writes a new token per current installation of app (or repo's, as Issue) over container's; replaced
+	// tokens expire.
 	Refresh(ctx context.Context, app, repo string, permissions map[string]string, container string, exec func(argv []string, stdin []byte) error) ([]protocol.Expiry, error)
-	Release(ctx context.Context, container string) error // retires the container's grant; never shared credentials
+	// Revoke revokes the tokens read from container's token files through read, within its own deadlines; nothing
+	// read, nothing revoked. It never fails its caller.
+	Revoke(ctx context.Context, container string, read func(ctx context.Context, argv []string) ([]byte, error))
 	// Prefetch clones ref ("": the default branch) of repo into dir through run, which starts the helper container
 	// with argv and the token as stdin, and revokes the token once run returns.
 	Prefetch(ctx context.Context, repo, ref, dir, container string, run func(argv []string, stdin []byte) error) error

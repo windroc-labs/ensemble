@@ -18,15 +18,18 @@ import (
 
 var expiry = []protocol.Expiry{{Account: "acme", ExpiresAt: "2026-10-17T13:00:00Z"}}
 
-// fakeTokens records the launcher's Tokens calls; each err field fails its method.
+// fakeTokens records the launcher's Tokens calls; each err field fails its method. An issued set's revocation is the
+// call "revoke <container>"; close's Revoke is "read-revoke <container>", reading the token files when readFiles.
 type fakeTokens struct {
-	calls                               []string
-	ready, user, issue, refresh, revoke error
-	prefetch                            error
-	onRelease                           func()
-	revokeContexts                      []error
-	permissions                         []map[string]string // each Issue's and Refresh's set
-	repos                               []string            // each Issue's and Refresh's repo
+	calls                       []string
+	ready, user, issue, refresh error
+	prefetch                    error
+	onRevoke                    func()
+	readFiles                   bool
+	readOut                     []byte
+	readErr                     error
+	permissions                 []map[string]string // each Issue's and Refresh's set
+	repos                       []string            // each Issue's and Refresh's repo
 }
 
 // fixtureSet is manifest-github-app.json's permissions.
@@ -42,12 +45,20 @@ func (f *fakeTokens) BotUserID(app string) (int64, error) {
 	}
 	return botID, nil
 }
-func (f *fakeTokens) Issue(_ context.Context, app, repo string, permissions map[string]string, c string, exec func([]string, []byte) error) ([]protocol.Expiry, error) {
+func (f *fakeTokens) Issue(_ context.Context, app, repo string, permissions map[string]string, c string, exec func([]string, []byte) error) (func(), []protocol.Expiry, error) {
 	f.calls, f.permissions, f.repos = append(f.calls, "issue "+app+" "+c), append(f.permissions, permissions), append(f.repos, repo)
 	if f.issue != nil {
-		return nil, f.issue
+		return nil, nil, f.issue
 	}
-	return expiry, exec([]string{"write"}, []byte("ghs_token"))
+	if err := exec([]string{"write"}, []byte("ghs_token")); err != nil {
+		return nil, nil, err
+	}
+	return func() {
+		f.calls = append(f.calls, "revoke "+c)
+		if f.onRevoke != nil {
+			f.onRevoke()
+		}
+	}, expiry, nil
 }
 func (f *fakeTokens) Refresh(_ context.Context, app, repo string, permissions map[string]string, c string, exec func([]string, []byte) error) ([]protocol.Expiry, error) {
 	f.calls, f.permissions, f.repos = append(f.calls, "refresh "+app+" "+c), append(f.permissions, permissions), append(f.repos, repo)
@@ -56,13 +67,11 @@ func (f *fakeTokens) Refresh(_ context.Context, app, repo string, permissions ma
 	}
 	return expiry, exec([]string{"write"}, []byte("ghs_token"))
 }
-func (f *fakeTokens) Release(ctx context.Context, c string) error {
-	f.calls = append(f.calls, "revoke "+c)
-	f.revokeContexts = append(f.revokeContexts, ctx.Err())
-	if f.onRelease != nil {
-		f.onRelease()
+func (f *fakeTokens) Revoke(ctx context.Context, c string, read func(context.Context, []string) ([]byte, error)) {
+	f.calls = append(f.calls, "read-revoke "+c)
+	if f.readFiles {
+		f.readOut, f.readErr = read(ctx, []string{"/bin/sh", "-c", "tokens-script", "sh", "/run/ensemble/secrets/github"})
 	}
-	return f.revoke
 }
 func (f *fakeTokens) Prefetch(_ context.Context, repo, ref, dir, c string, run func([]string, []byte) error) error {
 	f.calls = append(f.calls, "prefetch "+repo+" "+ref+" "+dir+" "+c)
@@ -157,29 +166,10 @@ func TestStartGitHubFailureRollsBack(t *testing.T) {
 			if e.Code != tc.code || e.Cleanup != protocol.Removed || !hasCall(d, "rm") {
 				t.Fatalf("%+v", e)
 			}
+			if tokens := h.GitHub.(*fakeTokens); slices.ContainsFunc(tokens.calls, func(c string) bool { return strings.HasPrefix(c, "revoke") }) {
+				t.Fatalf("revoked a set Issue already rolled back: %q", tokens.calls)
+			}
 		})
-	}
-}
-
-func TestCloseRevokesFirst(t *testing.T) {
-	var order []string
-	d := &fakeDocker{respond: func(args []string) ([]byte, error) {
-		order = append(order, args[0])
-		return []byte(container + "\n"), nil
-	}}
-	tokens := &fakeTokens{onRelease: func() { order = append(order, "revoke") }}
-	got, err := Host{Docker: d, GitHub: tokens}.Close(context.Background(), container)
-	if err != nil || !got.Removed || !slices.Equal(order, []string{"revoke", "rm"}) {
-		t.Fatalf("%+v %v %v", got, err, order)
-	}
-}
-
-func TestCloseKeychainFails(t *testing.T) {
-	d := &fakeDocker{respond: func([]string) ([]byte, error) { return []byte(container + "\n"), nil }}
-	tokens := &fakeTokens{revoke: protocol.New(protocol.KeychainFailed, "The GitHub tokens could not be revoked; they expire within an hour.")}
-	_, err := Host{Docker: d, GitHub: tokens}.Close(context.Background(), container)
-	if protoErr(t, err).Code != protocol.KeychainFailed || !hasCall(d, "rm") {
-		t.Fatalf("%v %q", err, d.calls)
 	}
 }
 

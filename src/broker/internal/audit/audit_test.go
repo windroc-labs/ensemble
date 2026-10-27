@@ -84,7 +84,22 @@ func TestCredentialJSON(t *testing.T) {
 		t.Fatal("a pending entry always has a reason")
 	}
 	if _, ok := encode(t, Credential{Kind: GitHubToken, Result: Revoked, Reason: "x", Account: "acme"})["reason"]; ok {
-		t.Fatal("reason is only for pending")
+		t.Fatal("reason is only for pending and unrevoked")
+	}
+
+	unrevoked := encode(t, Credential{Kind: GitHubToken, Result: Unrevoked, Reason: "GitHub unreachable: DELETE /installation/token",
+		ExpiresAt: ptr("2026-10-17T13:00:00Z"), Account: "acme"})
+	sameKeys(t, unrevoked, "kind", "result", "expires_at", "account", "reason")
+	if unrevoked["result"] != "unrevoked" || unrevoked["reason"] != "GitHub unreachable: DELETE /installation/token" || unrevoked["expires_at"] != "2026-10-17T13:00:00Z" {
+		t.Fatal(unrevoked)
+	}
+	unreadable := encode(t, Credential{Kind: GitHubToken, Result: Unrevoked, Reason: "token files unreadable"})
+	sameKeys(t, unreadable, "kind", "result", "expires_at", "reason")
+	if unreadable["expires_at"] != nil || unreadable["reason"] != "token files unreadable" {
+		t.Fatal(unreadable)
+	}
+	if encode(t, Credential{Kind: GitHubToken, Result: Unrevoked})["reason"] != "unknown" {
+		t.Fatal("an unrevoked entry always has a reason")
 	}
 }
 

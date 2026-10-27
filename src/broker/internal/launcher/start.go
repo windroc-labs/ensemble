@@ -81,7 +81,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		return StartResult{}, err
 	}
 	c := "ensemble-" + m.Name + "-" + m.Generation
-	// Before the backlog retry and Issue, so this start's own tokens land on its line.
+	// Before Issue, so this start's own tokens land on its line.
 	facts := &audit.StartFacts{Image: m.Image}
 	h.Audit.Begin(c, facts)
 	if err := h.checkMounts(m); err != nil {
@@ -179,14 +179,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		defer func() {
 			if cleanup := h.releaseMutex(ctx, mutex); cleanup != nil {
 				if retErr == nil {
-					if m.GitHubApp != "" {
-						rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-						revoked := h.GitHub.Release(rctx, c)
-						cancel()
-						if revoked != nil {
-							cleanup.Message += " " + injected(revoked, protocol.KeychainFailed, "Revoking the GitHub tokens failed; retry their pending revocation.").Message
-						}
-					}
+					held.revokeGitHub()
 					h.rollback(ctx, c, cleanup)
 					h.dropTokens(m)
 					h.withdraw(c, m, held, cleanup)
@@ -222,6 +215,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		if !errors.As(err, &e) {
 			e = protocol.New(protocol.StartFailed, "Start failed.")
 		}
+		held.revokeGitHub()
 		h.rollback(ctx, c, e)
 		h.dropTokens(m)
 		if e.Code == protocol.Busy && e.Cleanup == protocol.Failed {
@@ -268,10 +262,19 @@ func mounts(m Manifest, labels map[string]string) ([]string, []audit.Mount) {
 	return flags, list
 }
 
-// holding is the credentials a container being started holds: its client's and the environment secrets written.
+// holding is the credentials a container being started holds: its client's, the environment secrets written, and
+// github, the revocation of the GitHub tokens issued (nil: none).
 type holding struct {
 	client  bool
 	secrets []string
+	github  func()
+}
+
+// revokeGitHub revokes the GitHub tokens this start issued, if any: the container's removal alone leaves them live.
+func (held holding) revokeGitHub() {
+	if held.github != nil {
+		held.github()
+	}
 }
 
 // withdraw records each credential held as withdrawn when e's rollback removed c.
@@ -432,12 +435,12 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	lap("credentials")
 	expiries := []protocol.Expiry{}
 	if m.GitHubApp != "" {
-		if expiries, err = h.GitHub.Issue(ctx, m.GitHubApp, m.GitHubRepo, m.GitHubPermissions, c, exec); err != nil {
+		if held.github, expiries, err = h.GitHub.Issue(ctx, m.GitHubApp, m.GitHubRepo, m.GitHubPermissions, c, exec); err != nil {
 			return StartResult{}, held, injected(err, protocol.StartFailed, "Injecting the GitHub tokens failed.")
 		}
 		lap("github")
 	}
-	if err := h.startTokens(ctx, c, m, codexExpiry, expiries); err != nil {
+	if err := h.startTokens(m, codexExpiry, expiries); err != nil {
 		return StartResult{}, held, err
 	}
 	delivered := TokenRecord{Expires: map[credential.Kind][]string{credential.GitHub: expiryTimes(expiries)}}
@@ -448,9 +451,8 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 		held, nil
 }
 
-// startTokens records the expiries a start delivered; on failure it retires the GitHub grant, which the container
-// rollback alone would leave live.
-func (h Host) startTokens(ctx context.Context, c string, m Manifest, codexExpiry *string, github []protocol.Expiry) error {
+// startTokens records the expiries a start delivered.
+func (h Host) startTokens(m Manifest, codexExpiry *string, github []protocol.Expiry) error {
 	var err error
 	if codexExpiry != nil {
 		err = h.recordTokens(m, credential.Codex, []string{*codexExpiry}, nil)
@@ -461,15 +463,7 @@ func (h Host) startTokens(ctx context.Context, c string, m Manifest, codexExpiry
 	if err == nil {
 		return nil
 	}
-	e := protocol.New(protocol.StartFailed, tokensFailed(m).Message)
-	if m.GitHubApp != "" {
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		defer cancel()
-		if revoked := h.GitHub.Release(rctx, c); revoked != nil {
-			e.Message += " " + injected(revoked, protocol.KeychainFailed, "Revoking the GitHub tokens failed; retry their pending revocation.").Message
-		}
-	}
-	return e
+	return protocol.New(protocol.StartFailed, tokensFailed(m).Message)
 }
 
 // injected classifies a Credentials or Tokens error: its protocol error, an unreachable daemon, else code.
@@ -489,6 +483,14 @@ func (h Host) agentExec(ctx context.Context, c string) func(argv []string, stdin
 	return func(argv []string, stdin []byte) error {
 		_, err := h.Docker.Run(ctx, append([]string{"exec", "--interactive", "--user", "agent", c}, argv...), stdin)
 		return err
+	}
+}
+
+// agentRead runs argv as agent in container c on the context it is given, returning its stdout: close's read of the
+// token files.
+func (h Host) agentRead(c string) func(ctx context.Context, argv []string) ([]byte, error) {
+	return func(ctx context.Context, argv []string) ([]byte, error) {
+		return h.Docker.Run(ctx, asAgent(c, argv...), nil)
 	}
 }
 

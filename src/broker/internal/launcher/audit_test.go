@@ -146,7 +146,7 @@ type reportingTokens struct {
 	rec *audit.Recorder
 }
 
-func (r *reportingTokens) Issue(ctx context.Context, app, repo string, permissions map[string]string, c string, exec func([]string, []byte) error) ([]protocol.Expiry, error) {
+func (r *reportingTokens) Issue(ctx context.Context, app, repo string, permissions map[string]string, c string, exec func([]string, []byte) error) (func(), []protocol.Expiry, error) {
 	r.rec.Add(c, audit.Credential{Kind: audit.GitHubToken, Result: audit.Issued, Account: "acme"}, "k")
 	return r.fakeTokens.Issue(ctx, app, repo, permissions, c, exec)
 }

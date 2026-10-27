@@ -425,8 +425,7 @@ func withHost(command, container string, k keys, progress io.Writer, f func(laun
 
 // tokens is the broker's GitHub App token store in k, the account's login keychain, reporting to rec (nil: none).
 func tokens(k keys, rec *audit.Recorder) broker.GitHub {
-	return broker.GitHub{Keychain: k, Apps: k, API: github.New(), Lock: broker.FileLock(filepath.Join(k.Home, ".ensemble/docker/tokens.lock")),
-		Audit: rec}
+	return broker.GitHub{Keychain: k, Apps: k, API: github.New(), Audit: rec}
 }
 
 func system() app {

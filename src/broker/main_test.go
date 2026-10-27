@@ -626,9 +626,10 @@ func (k *memKeychain) AppAccess(string, string) (broker.AppAccess, error) {
 func (k *memKeychain) Get(string) ([]byte, error) { return append([]byte(nil), k.token...), nil }
 
 type scripted struct {
-	calls [][]string
-	stdin [][]byte
-	fail  string
+	calls  [][]string
+	stdin  [][]byte
+	fail   string
+	tokens string // what a read of the token files answers
 }
 
 func (s *scripted) Run(_ context.Context, args []string, stdin []byte) ([]byte, error) {
@@ -640,6 +641,8 @@ func (s *scripted) Run(_ context.Context, args []string, stdin []byte) ([]byte, 
 	}
 	proxyID := strings.Repeat("e", 64)
 	switch {
+	case args[0] == "exec" && args[len(args)-1] == docker.SecretsDir+"/github":
+		return []byte(s.tokens), nil
 	case strings.HasPrefix(joined, "ps --all") && strings.Contains(joined, "--filter label=windroc.egress.contract "):
 		return []byte(proxyID + "\n"), nil
 	case joined == "container inspect "+proxyID:
@@ -684,7 +687,7 @@ func TestTokenNeverLeaves(t *testing.T) {
 			Safe:   func(string) error { return nil },
 			Docker: d,
 			Creds:  broker.Credentials{Keychain: &memKeychain{token: []byte(token)}},
-			GitHub: broker.GitHub{Keychain: noSecrets{}, API: github.Client{Now: time.Now}, Lock: broker.FileLock(filepath.Join(t.TempDir(), "tokens.lock"))},
+			GitHub: broker.GitHub{Keychain: noSecrets{}, API: github.Client{Now: time.Now}},
 		}
 		a := app{start: func(ctx context.Context, _ keys, m string, _ io.Writer) (any, error) { return h.Start(ctx, m) }}
 		_, out, errOut := invoke(a, "start", "--manifest", path)
@@ -791,7 +794,7 @@ func TestAuditHoldsNoSecret(t *testing.T) {
 		case r.Method == http.MethodPost:
 			issued++
 			w.WriteHeader(http.StatusCreated)
-			_, _ = fmt.Fprintf(w, `{"token":"ghs_AUDITTEST_%d","expires_at":"2099-01-01T00:00:00Z"}`, issued)
+			_, _ = fmt.Fprintf(w, `{"token":"ghs_AUDITTEST%d","expires_at":"2099-01-01T00:00:00Z"}`, issued)
 		case r.URL.Path == "/installation/repositories":
 			_, _ = io.WriteString(w, `{"total_count":1,"repository_selection":"selected","repositories":[{"full_name":"acme/ensemble"}]}`)
 		case r.Method == http.MethodDelete:
@@ -814,7 +817,6 @@ func TestAuditHoldsNoSecret(t *testing.T) {
 	c := "ensemble-" + m.Name + "-" + m.Generation
 	log := filepath.Join(t.TempDir(), "Library/Logs/ensemble/broker.jsonl")
 	keys := memSecrets{"ensemble-broker-github-users/ensemble-broker-bot": []byte(`{"slug":"ensemble-broker-bot","id":343764394}`)}
-	lock := broker.FileLock(filepath.Join(t.TempDir(), "tokens.lock"))
 	for _, command := range []string{"start", "maintain", "close"} {
 		rec := &audit.Recorder{Command: command, Now: time.Now, Log: audit.Log{Path: log}}
 		if command != "start" {
@@ -825,9 +827,9 @@ func TestAuditHoldsNoSecret(t *testing.T) {
 			Home: home, Endpoint: "unix://" + home + "/.docker/run/docker.sock",
 			IsDir:  func(string) bool { return true },
 			Safe:   func(string) error { return nil },
-			Docker: &scripted{},
+			Docker: &scripted{tokens: "acme 1700000000 ghs_AUDITTEST2\n"},
 			Creds:  broker.Credentials{Keychain: &memKeychain{token: []byte(claudeToken)}},
-			GitHub: broker.GitHub{Keychain: keys, Apps: appKey(pemKey), Lock: lock, Audit: rec,
+			GitHub: broker.GitHub{Keychain: keys, Apps: appKey(pemKey), Audit: rec,
 				API: github.Client{Base: srv.URL, HTTP: srv.Client(), Now: time.Now}},
 			Audit: rec,
 		}
@@ -867,7 +869,7 @@ func TestAuditHoldsNoSecret(t *testing.T) {
 		}
 	}
 	want := []string{"start claude-setup-token issued", "start github-installation-token issued",
-		"refresh github-installation-token renewed", "refresh github-installation-token revoked", "close github-installation-token revoked"}
+		"refresh github-installation-token renewed", "close github-installation-token revoked"}
 	if !slices.Equal(results, want) || !bytes.Contains(data, []byte(`"repositories":["acme/ensemble"]`)) {
 		t.Fatalf("%v\n%s", results, data)
 	}
