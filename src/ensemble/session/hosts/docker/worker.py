@@ -138,7 +138,7 @@ class DockerWorker(ManagedProcess):
         self.seen: OrderedDict[str, None] = OrderedDict()
         self.hook_queue: deque[tuple[WorkerHook, int]] = deque()
         self.hook_bytes = 0
-        self.delivering = False
+        self.delivering = self.deliver_started = False
         self.hook_pause, self.hook_window = HOOK_PAUSE, HOOK_TRIES_FOR
         self.removed = self.ending = False
         self.attempts = 0
@@ -160,6 +160,8 @@ class DockerWorker(ManagedProcess):
             target=run, args=(self.maintenance, self.stopped), name=f"{self.name}-tick", daemon=True
         ).start()
         if self.hooks is not None:
+            with self.condition:
+                self.deliver_started = True
             threading.Thread(target=self._deliver, name=f"{self.name}-hooks", daemon=True).start()
 
     def accept_hook(self, data: bytes) -> WorkerHook | None:
@@ -247,9 +249,17 @@ class DockerWorker(ManagedProcess):
             return self.ender
 
     def _end(self) -> None:
-        """Its hooks journaled, the guard told to close, then the container removed, retried."""
+        """Its hooks journaled, the guard told to close, then the container removed, retried.
+        Hooks no _deliver thread took (the channel failed before begin()) are rejected.
+        """
         with self.condition:
-            self.condition.wait_for(lambda: not self._hooks_pending(), HOOK_TRIES_FOR)
+            self.condition.wait_for(
+                lambda: (
+                    not self._hooks_pending()
+                    or (self.failure is not None and not self.deliver_started)
+                ),
+                HOOK_TRIES_FOR,
+            )
         if self.failure is None and self.code is None:
             with contextlib.suppress(SessionError):
                 self.send_frame(b"c", b"{}")
@@ -272,6 +282,8 @@ class DockerWorker(ManagedProcess):
             break
         with self.condition:
             self.stopped.set()
+            if not self.deliver_started:
+                self._drop_queued()
             self.condition.notify_all()
             self.condition.wait_for(lambda: not self.delivering, self.hook_window)
         if self.hooks is not None:

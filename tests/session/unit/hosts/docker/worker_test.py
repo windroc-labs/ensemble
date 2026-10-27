@@ -262,6 +262,30 @@ class HookTest(Base):
         self.assertEqual(self.rejected(), ["hook", "hook"])
         self.assertFalse(channel._hooks_pending())
 
+    def test_hooks_queued_before_begin_are_each_rejected_at_end(self):
+        hooks = Hooks()
+        channel = self.make(hooks=hooks)
+        channel.accept(b"h", hook(delivery="a" * 32))
+        channel.accept(b"h", hook(delivery="b" * 32))
+        channel.fail("guard channel ended without confirmed worker exit")
+        self.assertTrue(channel.wait_exit(5))
+        self.assertEqual(hooks.calls, [])
+        self.assertEqual(self.rejected(), ["hook", "hook"])
+        self.assertFalse(channel._hooks_pending())
+        self.assertEqual(channel.hook_bytes, 0)
+        channel.accept(b"h", hook(delivery="a" * 32))
+        self.assertEqual(self.rejected(), ["hook", "hook"])
+
+    def test_a_hook_before_an_exit_ahead_of_begin_is_still_journaled(self):
+        hooks = Hooks()
+        channel = self.make(hooks=hooks)
+        channel.accept(b"h", hook(delivery="a" * 32))
+        channel.accept(b"x", b'{"returncode":0}')
+        channel.begin()
+        self.assertTrue(channel.wait_exit(5))
+        self.assertEqual(hooks.calls, [("Stop", {"sid": "s"}, "a" * 32)])
+        self.assertEqual(self.rejected(), [])
+
     def test_a_hook_accepted_after_stop_is_rejected_not_queued(self):
         channel = self.make(hooks=Hooks())
         channel.stopped.set()
