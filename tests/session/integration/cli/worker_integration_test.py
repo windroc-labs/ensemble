@@ -188,8 +188,7 @@ class ColorTest(WorkerCase):
         head = "ensemble-session: w1: claude exited 0 at once; its last lines:"
         self.assertIn(head, lines, res.stderr)
         self.assertEqual(lines[: lines.index(head)], [ATTACH], res.stderr)
-        # The fake claude never turns on bracketed paste: its tty echoes a guard's paste markers.
-        self.assertTrue(any("/color" in line for line in lines[lines.index(head) + 1 :]), lines)
+        self.assertIn("/color", lines[lines.index(head) + 1 :])
         self.assertEqual(self.ok(self.session("ls", "--records")).stdout, "")
 
     def test_dialog_start_says_color_not_set(self):

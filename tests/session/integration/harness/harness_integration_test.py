@@ -3,7 +3,6 @@ worker started on tmux, keeps supervising it after the starting process exits, h
 registered handlers in order, and ends with a confirmed close.
 """
 
-import json
 import os
 from unittest import mock
 
@@ -22,11 +21,6 @@ DISPATCHED = ("TurnStarted", "Blocked", "TurnEnd", "Exited")
 
 
 class HarnessCase(WorkerCase):
-    def owner(self, name: str) -> Channel:
-        path = os.path.join(self.ensemble, "tui", name, "session.json")
-        with open(path, encoding="utf-8") as f:
-            return Channel(json.load(f)["owner"])
-
     def logged_events(self, channel: Channel) -> list[dict]:
         return logged(channel.events)
 

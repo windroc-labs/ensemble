@@ -18,6 +18,8 @@ with error "rate_limit". {"kind": "write", "path": P, "text": T} writes T to P (
 Interactive {"kind": "limit", "text": S} prints S, keeps it as a rate_limit API error and ends the
 turn with StopFailure; {"kind": "dialog", "text": S} prints S and reads another line. Other steps: {"kind": "hook", "event": E, ...}; {"kind": "sleep", "seconds": X};
 {"kind": "exit"} exits at once with `exit`.
+{"kind": "recall"} replies with the text of its transcript's first user prompt, so a resumed
+conversation can answer from the first generation's.
 {"kind": "queued", "answer": A} runs a tool while the next stdin line arrives, which Claude Code
 queues (an enqueue record) and joins to the turn once the tool returns (PostToolUse, then a
 queued_command attachment), then answers A; {"kind": "pause", "file": F} waits for F to exist.
@@ -44,6 +46,7 @@ import select
 import shlex
 import subprocess
 import sys
+import termios
 import time
 import uuid
 from dataclasses import dataclass
@@ -103,6 +106,7 @@ TUI = {
     "exit": {},
     "queued": {"answer": _text},
     "pause": {"file": lambda v: _text(v) and v != ""},
+    "recall": {},
 }
 
 
@@ -375,6 +379,10 @@ class InteractiveSession:
                     time.sleep(0.05)
             elif kind == "exit":
                 sys.exit(self.request.scenario["exit"])
+            elif kind == "recall":
+                last = first_prompt(self.request.payload["transcript_path"])
+                print(last, flush=True)
+                self.request.keep("assistant", [{"type": "text", "text": last}])
             else:
                 print(step["text"], flush=True)
                 if kind == "limit":
@@ -445,6 +453,25 @@ def invocation(argv: list[str]):
     if not all(_step(step, tui=not a.print) for steps in turns for step in steps):
         sys.exit("fake_claude.py: bad scenario steps")
     return (parent, s, a, turns)
+
+
+def quiet_controls() -> None:
+    """A terminal stdin echoes no ^[ for a paste's bracket, as Claude's input box shows none."""
+    if os.isatty(0):
+        attrs = termios.tcgetattr(0)
+        attrs[3] &= ~termios.ECHOCTL
+        termios.tcsetattr(0, termios.TCSANOW, attrs)
+
+
+def first_prompt(path: str) -> str:
+    """The text of the first user prompt `path` keeps, "" when none."""
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            record = json.loads(line)
+            content = record.get("message", {}).get("content")
+            if record.get("type") == "user" and isinstance(content, str):
+                return content
+    return ""
 
 
 @dataclass(frozen=True)
@@ -587,6 +614,7 @@ def main(argv: list[str]) -> int:
     os.makedirs(os.path.dirname(transcript), exist_ok=True)
     journal = Transcript(sid, cwd, transcript)
     if not a.print:
+        quiet_controls()
         return InteractiveSession(
             InteractiveRequest(
                 scenario=s,

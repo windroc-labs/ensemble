@@ -62,6 +62,20 @@ class CliCase(Case):
         if self.ATTACH:
             self.server.attach(MANAGER)
 
+    def owner(self, name: str) -> Channel:
+        """Worker `name`'s session harness, as its session.json names it."""
+        path = os.path.join(self.ensemble, "tui", name, "session.json")
+        with open(path, encoding="utf-8") as f:
+            return Channel(json.load(f)["owner"])
+
+    def settled(self, channel: Channel) -> dict:
+        """Its harness.json once it no longer runs a worker (exited or failed)."""
+        return live_tmux.wait(
+            lambda: (found := channel.status()).get("state") in ("exited", "failed") and found,
+            timeout=40,
+            what=f"harness {channel.directory} to leave running",
+        )
+
     def end_harnesses(self) -> None:
         """Each session harness still holding its dir closes its worker (SIGTERM), else is killed:
         its guard then ends the client.
