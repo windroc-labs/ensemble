@@ -111,7 +111,9 @@ them, and skips what is done.
 EOF
 }
 
+# Rerunning the same command repeats a usage error: no rerun advice (on_exit).
 usage_error() {
+  current=
   say "install.sh: $1"
   say "install.sh: usage: $synopsis"
   exit 2
@@ -692,6 +694,7 @@ answers() {
     if [ "${ticks[4]}" = 1 ]; then board=yes; else board=no; fi
   fi
   if [ "$board" != yes ] && [ -n "$jobs_flag" ]; then
+    if [ "$board_flag" = no ]; then usage_error "--launchd/--no-launchd requires a board, and --no-board skips it"; fi
     usage_error "--launchd/--no-launchd requires a board"
   fi
   board_tracker=
