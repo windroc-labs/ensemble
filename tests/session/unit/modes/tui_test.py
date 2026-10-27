@@ -1892,20 +1892,21 @@ class SendLockTest(Base):
         with self.assertRaises(SessionError) as raised:
             self.mode.send("one")
         self.assertNotIsInstance(raised.exception, Unanswered)
-        self.assertFalse(tui.TuiStore.attach(NAME, host=self.host).prompted(self.mode.generation))
+        self.assertEqual(tui.TuiStore.attach(NAME, host=self.host).prompts(self.mode.generation), 0)
 
     def test_a_failure_after_the_paste_is_unanswered(self):
         self.calls.send.side_effect = [None, SessionError("gone")]
         with self.assertRaisesRegex(Unanswered, f"send to tui session {NAME}: partly sent: gone"):
             self.mode.send("one")
-        self.assertTrue(tui.TuiStore.attach(NAME, host=self.host).prompted(self.mode.generation))
+        self.assertEqual(tui.TuiStore.attach(NAME, host=self.host).prompts(self.mode.generation), 1)
 
-    def test_a_send_marks_its_generation_prompted(self):
+    def test_each_send_counts_a_prompt_of_its_generation(self):
         store = tui.TuiStore.attach(NAME, host=self.host)
-        self.assertFalse(store.prompted(self.mode.generation))
+        self.assertEqual(store.prompts(self.mode.generation), 0)
         self.other.send("one")
-        self.assertTrue(store.prompted(self.mode.generation))
-        self.assertFalse(store.prompted("another"))
+        self.mode.send("two")
+        self.assertEqual(store.prompts(self.mode.generation), 2)
+        self.assertEqual(store.prompts("another"), 0)
         self.mode.press([KeyPress.parse("a")])
         self.assertEqual(self.order[-1], (KeyPress.parse("a"),))
 
@@ -2088,37 +2089,51 @@ class OpeningTest(Base):
     def other(self) -> tui.TuiMode:
         return tui.TuiMode.attach(NAME, tui.TuiMode.snapshot(NAME), self.client, host=self.host)
 
-    def test_another_senders_prompt_drops_the_opening(self):
+    def test_another_senders_prompt_defers_the_opening_past_its_turn(self):
         mode = self.launched()
         self.other().send("hi")
         self.append(record("ready"))
         mode.poll(0)
-        mode.poll(1.2)
+        mode.poll(1.2)  # its turn not read yet: the opening would land in it
         self.assertEqual(self.sends(mode), [Paste("hi"), Key("Enter")])
-        self.assertIsNone(mode.opening_pending)
-        mode.poll(2)
+        self.assertEqual(mode.opening_pending, "/color")
+        self.append(record("start"))
+        mode.poll(0)
+        mode.poll(1.2)
         self.assertEqual(len(self.sends(mode)), 2)
+        self.append(record("stop"))
+        mode.poll(0)
+        mode.poll(0.6)
+        self.assertEqual(self.sends(mode)[2:], [Paste("/color"), Key("Enter")])
+        self.assertIsNone(mode.opening_pending)
 
-    def test_a_started_turn_drops_the_opening(self):
-        cases = {
-            "no launch prompt": ({}, [[record("start")]]),
-            "the launch prompt's turn": ({"prompt": "go"}, [[record("start")]]),
-            "a turn read in an earlier poll": (
-                {"prompt": "go"},
-                [[record("start")], [record("stop")]],
-            ),
-        }
-        for case, (fields, batches) in cases.items():
-            with self.subTest(case=case):
-                mode = self.launched(**fields)
-                self.append(record("ready"))
-                for batch in batches:
-                    self.append(*batch)
-                    mode.poll(0)
-                mode.poll(1.2)
-                self.assertEqual(self.sends(mode), [])
-                self.assertIsNone(mode.opening_pending)
-                mode.stop()
+    def test_a_turn_defers_the_opening_until_it_ends(self):
+        mode = self.launched()
+        self.append(record("ready"), record("start"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [])
+        self.assertEqual(mode.opening_pending, "/color")
+        self.append(record("stop"))
+        mode.poll(0)
+        mode.poll(0.6)
+        self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
+
+    def test_a_prompted_start_ends_with_its_color_set(self):
+        mode = self.launched(prompt="go")
+        self.append(record("ready"))
+        mode.poll(0)
+        mode.poll(1.2)  # its launch turn runs, its TurnStarted not read yet
+        self.assertEqual(self.sends(mode), [])
+        self.append(record("start"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [])
+        self.append(record("stop"))
+        mode.poll(0)
+        mode.poll(0.6)
+        self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
+        self.assertIsNone(mode.opening_pending)
 
     def test_no_turn_yet_keeps_the_opening(self):
         mode = self.launched()
@@ -2126,14 +2141,6 @@ class OpeningTest(Base):
         mode.poll(0)
         mode.poll(1.2)
         self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
-
-    def test_a_launch_prompt_drops_the_opening_at_once(self):
-        mode = self.launched(prompt="go")  # its turn starts at launch, read or not
-        self.assertIsNone(mode.opening_pending)
-        self.append(record("ready"))
-        mode.poll(0)
-        mode.poll(1.2)
-        self.assertEqual(self.sends(mode), [])
 
     def test_an_older_generations_marker_keeps_the_opening(self):
         mode = self.launched()
@@ -2143,16 +2150,12 @@ class OpeningTest(Base):
         mode.poll(1.2)
         self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
 
-    def test_a_prompt_opening_is_never_dropped(self):
-        run = PromptOpening(self.client)
-        mode = self.launched(run, prompt="go")
-        self.other().send("hi")
-        self.append(record("ready"), record("start"), record("stop"), record("start"))
+    def test_a_prompt_opening_waits_for_no_launch_turn(self):
+        mode = self.launched(PromptOpening(self.client), prompt="go")
+        self.append(record("ready"))
         mode.poll(0)
         mode.poll(1.2)
-        self.assertEqual(
-            self.sends(mode), [Paste("hi"), Key("Enter"), Paste("/color"), Key("Enter")]
-        )
+        self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
         self.assertFalse(Opening._opening_prompt)
 
     def test_the_opening_holds_the_send_lock(self):

@@ -24,7 +24,7 @@ from ensemble.session import (
     SessionError,
 )
 from ensemble.session.engine import worker
-from ensemble.session.engine.types import Blocked, Exited, IdleTimeout, Reply
+from ensemble.session.engine.types import Blocked, Exited, IdleTimeout, Reply, TurnStarted
 from ensemble.session.engine.worker import Worker, WorkerState
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.types import Op
@@ -564,6 +564,12 @@ class ColorWatchTest(Base):
                 self.assertEqual(self.watch(sent), ticks)
                 self.assertEqual(self.said, said)
                 self.handle.publish.assert_called_once()
+
+    def test_a_started_turn_ends_the_watch_quietly_once_up(self):
+        events = itertools.chain([TurnStarted()], itertools.repeat(IdleTimeout(worker.TICK)))
+        self.assertEqual(self.watch(float("inf"), events=events), worker.EARLY + 1)
+        self.assertEqual(self.said, [])
+        self.handle.publish.assert_called_once()
 
     def test_a_dialog_while_pending_says_both(self):
         self.watch(float("inf"), events=iter([Blocked("Trust")]))

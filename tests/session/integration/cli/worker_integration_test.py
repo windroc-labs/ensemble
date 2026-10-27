@@ -1,8 +1,8 @@
 """ensemble-session's worker lifecycle through bin/ensemble-session on a private tmux server: the
 client's exact cwd, argv and env from start (Q03), reply from another process (Q09), a client
 that exits at once (Q10, D3), a start whose early watch ends on a dialog (a Claude hook, the
-Codex trust screen), and a Claude start's /color: quiet once sent, said when a dialog holds it, none
-once the launch prompt's turn started.
+Codex trust screen), and a Claude start's /color: quiet once sent or behind its launch turn, said
+when a dialog holds it.
 """
 
 import json
@@ -175,7 +175,7 @@ class DialogTest(WorkerCase):
 
 class ColorTest(WorkerCase):
     def test_start_colors_quietly(self):
-        res = self.start("w1", prompt="")
+        res = self.start("w1")
         self.assertEqual((self.record(res).name, res.stderr), ("w1", ATTACH + "\n"))
         (call,) = self.calls("w1")
         colored = live_tmux.wait(lambda: self.commands("w1"), what="w1's /color")
@@ -183,13 +183,8 @@ class ColorTest(WorkerCase):
             [(c["pid"], c["line"], c["dialog"]) for c in colored], [(call["pid"], "/color", False)]
         )
 
-    def test_a_prompted_start_types_no_color(self):
-        res = self.start("w1")  # the start returns once its guard said up, past /color's due
-        self.assertEqual((self.record(res).name, res.stderr), ("w1", ATTACH + "\n"))
-        self.assertEqual(self.commands("w1"), [])
-
     def test_exit_in_the_launch_turn_still_fails_start(self):
-        # exits in its launch prompt's turn: inside the start's early watch on any runner
+        # exits in its launch prompt's turn, its /color still behind it: inside the early watch
         res = self.start("w1", steps=[{"kind": "exit"}])
         self.assertEqual((res.returncode, res.stdout), (1, ""), res.stderr)
         lines = res.stderr.splitlines()
@@ -201,7 +196,7 @@ class ColorTest(WorkerCase):
 
     def test_dialog_start_says_color_not_set(self):
         # before SessionStart, as Claude's: no opening is due before it shows
-        res = self.start("w1", steps=["Trusted."], prompt="", dialog=TRUST)  # a prompt drops it
+        res = self.start("w1", steps=["Trusted."], dialog=TRUST)
         self.assertEqual(self.record(res).name, "w1")
         self.assertEqual(
             res.stderr.splitlines(),

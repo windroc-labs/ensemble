@@ -252,16 +252,19 @@ class TuiStore:
                 raise SessionError(f"{path}: {e.strerror or e}") from None
             yield held
 
-    def prompted(self, generation: str) -> bool:
-        """A send went to `generation`."""
-        return read_regular(os.path.join(self.dir, PROMPTED)) == generation.encode()
+    def prompts(self, generation: str) -> int:
+        """The sends to `generation` so far."""
+        found = (read_regular(os.path.join(self.dir, PROMPTED)) or b"").decode(errors="replace")
+        held, _, count = found.partition(" ")
+        return int(count) if held == generation and count.isdigit() else 0
 
     def mark_prompted(self, generation: str) -> None:
-        path = os.path.join(self.dir, PROMPTED)
+        """One more send to `generation`; under the send lock."""
+        path, count = os.path.join(self.dir, PROMPTED), self.prompts(generation) + 1
         try:
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
             with os.fdopen(fd, "wb") as f:
-                f.write(generation.encode())
+                f.write(f"{generation} {count}".encode())
         except OSError as e:
             LOG.warning("tui session %s: %s: %s", self.name, path, e.strerror or e)
 
@@ -653,14 +656,11 @@ class TuiMode(BaseMode):
         self._store, self._replayed, self._generation = store, replayed, generation
         self._cursor, self._dialogs, self._limit, self._code = cursor, frozenset(), None, None
         self._live, self._gone = True, False
-        if opening is not None and prepared.spec.prompt and not run._opening_prompt:
-            LOG.info("tui session %s: opening %r dropped: a launch prompt", self.name, opening[1])
-            opening = None
         self._opening = opening  # start's: sent once, OPEN_AFTER s after
         self._due: float | None = None  # its label's latest record
         self._held, self._checked = False, -POLL_SCREEN
         self._active_turn = run._turn_open is True
-        self._turned = False  # a TurnStarted read
+        self._started, self._launch = 0, int(bool(prepared.spec.prompt) and not run._opening_prompt)
         self._owned, self._hook_logged = owned, False
 
     @classmethod
@@ -928,13 +928,13 @@ class TuiMode(BaseMode):
                 )
 
     def _open(self) -> None:
-        """Submits the opening once it is due, unless a dialog shows, the client is blocked or
-        another sender holds the send lock.
+        """Submits the opening once due and past every prompt's turn (a launch's too), unless a
+        dialog shows, the client is blocked or the send lock is held.
         """
         now = time.monotonic()
         if self._opening is None or self._due is None or self._gone or now < self._due:
             return
-        if self._held or now < self._checked + POLL_SCREEN:
+        if self._held or self._active_turn or now < self._checked + POLL_SCREEN:
             return
         self._checked = now
         try:
@@ -948,29 +948,17 @@ class TuiMode(BaseMode):
         except SessionError:
             return
         with contextlib.suppress(SessionError), self._store.sending(wait=False) as held:
-            if not held:
+            if not held or self._started < self._launch + self._store.prompts(self._generation):
                 return
             text, self._opening = self._opening[1], None
-            if reason := self._preempted():
-                LOG.info("tui session %s: opening %r dropped: %s", self.name, text, reason)
-                return
             self._running()
             self._deliver(self.run.submit(text), prompted=False)
-
-    def _preempted(self) -> str | None:
-        """Why a cosmetic opening would trail a prompt: never inside or after one."""
-        if self.run._opening_prompt:
-            return None
-        if self._store.prompted(self._generation):
-            return "another sender's prompt went in"
-        if self._turned:
-            return "a turn has started"
-        return None
 
     def _track(self, events: list[SessionEvent | Stderr | ClientBound]) -> None:
         for event in events:
             if isinstance(event, TurnStarted):
-                self._active_turn = self._turned = True
+                self._active_turn = True
+                self._started += 1
             elif isinstance(event, TurnEnd | TurnFailed):
                 self._active_turn = False
             if isinstance(event, Blocked | Activity | TurnEnd | TurnFailed | TurnStarted):
