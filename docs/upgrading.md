@@ -115,7 +115,7 @@ Zero or an omitted `max_runs` means unlimited. The old local table is now an unk
 ## Egress proxy
 
 After updating the plugin, rerun `scripts/install.sh --docker`: it installs the pinned private
-`windroc/egress-proxy` with your `gh` access, creates `~/.egress/config.local.yaml` only if absent, starts the
+`windroc-labs/egress-proxy` with your `gh` access, creates `~/.egress/config.local.yaml` only if absent, starts the
 proxy and waits for healthy. Existing configs are preserved, so one without `networks.workers` stops the installer: add it first ([Docker host › Egress proxy](architecture.md#egress-proxy)). Add Ollama and local/LAN provider exceptions before starting their workers
 ([Egress proxy operations](architecture.md#egress-proxy)).
 
