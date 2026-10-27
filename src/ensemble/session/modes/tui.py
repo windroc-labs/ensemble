@@ -6,6 +6,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import signal
 import stat
 import tempfile
@@ -45,6 +46,7 @@ from ensemble.session.engine.types import (
     TurnStarted,
 )
 from ensemble.session.hosts.base import (
+    HARNESS_ROOT,
     TUI_DIR,
     TUI_STATE,
     Host,
@@ -80,6 +82,7 @@ OPEN_AFTER = 1.0  # keys sent before a client's input box shows are lost
 POLL_SCREEN = 0.5
 LOG = logging.getLogger("session")
 Cursor = tuple[int | None, int]  # inode, offset
+OWNER = re.compile(r"[0-9a-f]{32}")
 
 
 def checked_name(name) -> str:
@@ -88,7 +91,9 @@ def checked_name(name) -> str:
     return name
 
 
-def _state(prepared: Prepared, run: Tui, host: Host, metadata: Mapping[str, str]) -> dict:
+def _state(
+    prepared: Prepared, run: Tui, host: Host, metadata: Mapping[str, str], owner: str | None
+) -> dict:
     spec = prepared.spec
     return {
         "client": spec.client,
@@ -106,7 +111,17 @@ def _state(prepared: Prepared, run: Tui, host: Host, metadata: Mapping[str, str]
             )
             if callback is not None
         },
+        **({"owner": owner} if owner is not None else {}),
     }
+
+
+def _owner_ok(path) -> bool:
+    """<real HARNESS_ROOT>/<32 lowercase hex> only."""
+    if not isinstance(path, str) or not os.path.isabs(path) or not path.isprintable():
+        return False
+    name = os.path.basename(path)
+    root = os.path.realpath(os.path.expanduser(HARNESS_ROOT))
+    return bool(OWNER.fullmatch(name)) and os.path.realpath(path) == os.path.join(root, name)
 
 
 def _bad(state: Mapping) -> str | None:
@@ -124,6 +139,8 @@ def _bad(state: Mapping) -> str | None:
         SessionInfo.from_fields(state, strict=True)
     except ValueError as e:
         return str(e)
+    if "owner" in state and not _owner_ok(state["owner"]):
+        return "owner"
     return None
 
 
@@ -515,6 +532,7 @@ class TuiMode(BaseMode):
         registry: Registry,
         host: Host,
         display: Display,
+        owner: str | None = None,
     ) -> _Start:
         run = client.tui()
         if run is None:
@@ -540,7 +558,7 @@ class TuiMode(BaseMode):
         prepared = cls._host_resume(prepared, host, name)
         if run._runtime_files:
             metadata = {**metadata, "runtime_files": json.dumps(dict(run._runtime_files))}
-        state = _state(prepared, run, host, metadata)
+        state = _state(prepared, run, host, metadata, owner)
         if field := _bad(state):
             raise SessionError(f"tui session {name}: bad {field} {state.get(field)!r:.80}")
         return _Start(prepared, run, store, state, metadata, prompt_file)
@@ -556,9 +574,14 @@ class TuiMode(BaseMode):
         host: Host,
         display: Display = None,
         check_name: Callable[[str], None] | None = None,
+        owner: str | None = None,
     ) -> Self:
-        """Start the Client's terminal with its hook journal committed before execution."""
-        pending = cls._prepare(spec, client, registry=registry, host=host, display=display)
+        """Start the Client's terminal with its hook journal committed before execution; owner: its
+        session harness's dir, kept in session.json.
+        """
+        pending = cls._prepare(
+            spec, client, registry=registry, host=host, display=display, owner=owner
+        )
         prepared, run, store = pending.prepared, pending.run, pending.store
         try:
             pending.validate()
@@ -653,6 +676,10 @@ class TuiMode(BaseMode):
         )
 
     @property
+    def generation(self) -> str:
+        return self._generation
+
+    @property
     def replayed(self) -> tuple[SessionEvent | Stderr | ClientBound, ...]:
         """Attached: its client record's, then its hook log's events so far."""
         return self._replayed
@@ -718,7 +745,7 @@ class TuiMode(BaseMode):
 
     def _track(self, events: list[SessionEvent | Stderr | ClientBound]) -> None:
         for event in events:
-            if isinstance(event, Blocked | Activity | TurnEnd | TurnFailed | TurnStarted):
+            if isinstance(event, Blocked | Activity | TurnStarted | TurnEnd | TurnFailed):
                 self._held = isinstance(event, Blocked)
 
     def _end(self) -> None:

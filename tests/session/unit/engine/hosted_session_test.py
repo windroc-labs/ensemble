@@ -5,6 +5,7 @@ test on a configured class (self.session) with caller-owned dependencies.
 
 import contextlib
 import dataclasses
+import fcntl
 import io
 import itertools
 import json
@@ -15,6 +16,7 @@ import signal
 import stat
 import tempfile
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -55,6 +57,9 @@ from ensemble.session.engine.types import (
     Usage,
     Window,
 )
+from ensemble.session.harness.channel import Channel
+from ensemble.session.harness.types import Op
+from ensemble.session.harness.view import OwnedSession
 from ensemble.session.hosts.base import Piped
 from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.session.modes import tui
@@ -2909,3 +2914,421 @@ class EnvironmentHostTest(HostedTuiBase):
             with self.subTest(where), self.assertRaises(engine_types.SessionBusy) as raised:
                 call()
             self.assertIs(raised.exception, self.busy)
+
+
+class OwnedTest(HostedTuiBase):
+    """HostedSession.own: the owner handle a session harness drives its one worker through."""
+
+    def own(self, name="w1"):
+        self.channel = Channel.create()
+        spec = dataclasses.replace(
+            self.spec(), client="fake", mode="tui", prompt="hello", name=name, sid=SID
+        )
+        owned = self.session.own(spec, owner=self.channel.directory)
+        self.addCleanup(lambda: self.host.processes.pop(name, None))
+        return owned
+
+    def hook(self, label, payload, name="w1"):
+        with open(os.path.join(self.root, name, "hooks.jsonl"), "a") as f:
+            f.write(json.dumps({"ts": "", "label": label, "payload": payload}) + "\n")
+
+    def test_own_starts_the_worker_its_owner_dir_named(self):
+        owned = self.own()
+        state = tui.TuiMode.snapshot("w1")
+        self.assertEqual(state["owner"], self.channel.directory)
+        self.assertEqual(
+            (owned.name, owned.sid, owned.generation), ("w1", SID, state["generation"])
+        )
+        self.assertIn("w1", self.host.processes)
+
+    def test_pump_yields_events_never_exited_and_says_when_the_worker_ended(self):
+        owned = self.own()
+        self.hook("stop", {"last_message": "r1"})
+        found, ended = owned.pump(0.5)
+        self.assertEqual(
+            ([e for e in found if not isinstance(e, ClientBound)], ended),
+            ([TurnEnd("r1", 0)], False),
+        )
+        terminal = self.host.processes["w1"]
+        terminal.calls.state.return_value = Liveness.LIVE
+        terminal.calls.returncode.return_value = 3
+        found, ended = owned.pump(0.1)
+        self.assertTrue(ended)
+        self.assertNotIn(Exited(3), found)
+        self.assertEqual(owned.pump(0), ([], True))
+
+    def test_close_returns_what_it_read_before_ending_the_terminal(self):
+        owned = self.own()
+        terminal = self.host.processes["w1"]
+        self.hook("stop", {"last_message": "last"})
+        self.host.calls.close_view.reset_mock()
+        final = owned.close()
+        self.assertIn(TurnEnd("last", 0), final)
+        terminal.calls.close.assert_called_once_with()
+        self.host.calls.close_view.assert_called_once_with("w1")
+        self.assertFalse(os.path.lexists(os.path.join(self.root, "w1")))
+        self.assertEqual(owned.confirm_end(1), -signal.SIGHUP)
+
+    def test_stop_returns_its_final_read_and_leaves_the_viewer(self):
+        owned = self.own()
+        self.hook("stop", {"last_message": "last"})
+        self.host.calls.close_view.reset_mock()
+        self.assertIn(TurnEnd("last", 0), owned.stop())
+        self.host.calls.close_view.assert_not_called()
+        self.assertEqual(owned.confirm_end(1), -signal.SIGHUP)
+
+    def test_confirm_end_is_none_while_the_terminal_lives(self):
+        owned = self.own()
+        self.assertIsNone(owned.confirm_end(0.1))
+
+    def test_record_notes_client_sessions_and_stderr(self):
+        owned = self.own()
+        owned.record(ClientBound("n1"))
+        owned.record(Stderr("oops"))
+        kinds = [entry["kind"] for entry in self.written()]
+        self.assertIn("client_session", kinds)
+        self.assertIn("stderr", kinds)
+
+    def test_view_is_bound_to_this_worker(self):
+        owned = self.own()
+        view = owned.view(self.channel, idle_timeout=3)
+        self.assertIsInstance(view, OwnedSession)
+        self.assertEqual(
+            (view.name, view.client, view.sid, view.generation, view.mode),
+            ("w1", "fake", SID, owned.generation, Mode.TUI),
+        )
+        before = len(self.written())
+        self.assertTrue(view.alive())
+        view.info()
+        self.assertEqual(len(self.written()), before, "the view's attach writes no RunLog line")
+
+    def test_the_views_attach_refuses_another_generation(self):
+        owned = self.own()
+        view = owned.view(self.channel)
+        self.host.processes.pop("w1")
+        self.own()
+        with self.assertRaisesRegex(SessionError, "w1"):
+            view.screen()
+
+
+class HarnessRequestTest(HostedTuiBase):
+    """harness_request and from_harness_request: a start sent to a session harness and back."""
+
+    def test_a_spec_round_trips_and_configures_the_harness_class(self):
+        spec = self.spec(
+            access=Access(cwd=self.workdir, dirs=(self.dir,), commands=("git",), env={"A": "1"}),
+            client="fake",
+            mode="tui",
+            name="w1",
+            sid=SID,
+            prompt="hello",
+            env={"TOKEN": "t"},
+            flags=("--x",),
+            handlers=(engine_types.HookCallback("pkg.mod", {"k": [1]}, (self.dir,)),),
+        )
+        request = json.loads(
+            json.dumps(
+                self.session.harness_request(spec, display="d", host="tmux", roots=(self.dir,))
+            )
+        )
+        fresh = type("Fresh", (HostedSession,), {"__module__": __name__})
+        self.assertEqual(fresh.from_harness_request(request), (spec, "d", "tmux", (self.dir,)))
+        self.assertEqual(fresh._config().hosts, self.session._config().hosts)
+
+    def test_a_malformed_request_is_a_config_error(self):
+        good = self.session.harness_request(
+            self.spec(client="fake", mode="tui"), display=None, host=None, roots=()
+        )
+        fresh = type("Fresh", (HostedSession,), {"__module__": __name__})
+        for bad in (
+            {},
+            {**good, "spec": {**good["spec"], "nope": 1}},
+            {**good, "roots": ["relative"]},
+            {**good, "host": 5},
+        ):
+            with self.subTest(bad=bad), self.assertRaises(ConfigError):
+                fresh.from_harness_request(bad)
+
+
+class OwnedStartTest(Case):
+    """An owned start (a Claude tui start on tmux, every Setup callable the default) spawns a
+    session harness, here a stub Popen whose fake harness writes harness.json.
+    """
+
+    def setUp(self):
+        self.session_cls = HostedSession.configured(
+            clients={"claude": {"implementation": "ensemble.session.clients.claude:ClaudeClient"}},
+            hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"}),
+        )
+        self.workdir = os.path.join(self.home, "work")
+        os.mkdir(self.workdir)
+        self.popen = self.enterContext(mock.patch("subprocess.Popen"))
+        self.popen.return_value.poll.return_value = None
+
+    def spec(self, **fields):
+        return Spec(
+            workdir=self.workdir,
+            access=Access(cwd=self.workdir),
+            client="claude",
+            mode="tui",
+            prompt="hi",
+            sid=SID,
+            name="w1",
+            **fields,
+        )
+
+    def harness_writes(self, status, *, log=None, poll=None):
+        def spawn(argv, **kwargs):
+            channel = Channel(argv[-1])
+            if log is not None:
+                kwargs["stderr"].write(log)
+                kwargs["stderr"].flush()
+            if status is not None:
+                channel.write_status(status)
+            self.popen.return_value.poll.return_value = poll
+            self.spawned = (argv, kwargs, channel)
+            return self.popen.return_value
+
+        self.popen.side_effect = spawn
+
+    def test_it_returns_the_view_once_the_harness_runs(self):
+        self.harness_writes({"state": "running", "name": "w1", "sid": SID, "generation": "g7"})
+        session = self.session_cls.start(self.spec(), idle_timeout=5)
+        argv, kwargs, channel = self.spawned
+        self.assertIsInstance(session, OwnedSession)
+        self.assertEqual(
+            (session.name, session.sid, session.client, session.generation),
+            ("w1", SID, "claude", "g7"),
+        )
+        self.assertEqual(argv[1:], ["-P", "-s", "-m", hosted_session.HARNESS, channel.directory])
+        self.assertTrue(kwargs["start_new_session"])
+        self.assertEqual(kwargs["stdin"], kwargs["stdout"])
+        request = os.path.join(channel.directory, "request.json")
+        self.assertEqual(stat.S_IMODE(os.stat(request).st_mode), 0o600)
+        with open(request, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["spec"]["name"], "w1")
+        self.popen.return_value.kill.assert_not_called()
+
+    def test_a_start_error_in_the_harness_is_raised_here_and_its_dir_goes(self):
+        for error, kind, message in (
+            ({"type": "ConfigError", "message": "bad"}, ConfigError, "bad"),
+            ({"type": "SessionError", "message": "w1 exists"}, SessionError, "w1 exists"),
+            (
+                {"type": "SessionBusy", "message": "busy", "lock": "L", "holder": "c (owner o)"},
+                engine_types.SessionBusy,
+                "busy: lock L is held by c \\(owner o\\)",
+            ),
+        ):
+            with self.subTest(kind=kind.__name__):
+                self.harness_writes({"state": "failed", "error": error}, poll=1)
+                with self.assertRaisesRegex(kind, message) as caught:
+                    self.session_cls.start(self.spec())
+                self.assertIs(type(caught.exception), kind)
+                self.assertFalse(os.path.exists(self.spawned[2].directory))
+
+    def test_a_dead_harness_raises_its_last_log_line_and_a_live_one_is_killed(self):
+        self.harness_writes(None, log=b"starting\nTraceback: boom\n", poll=1)
+        with self.assertRaisesRegex(SessionError, "did not start: Traceback: boom"):
+            self.session_cls.start(self.spec())
+        self.popen.return_value.kill.assert_not_called()
+        self.harness_writes({"state": "failed"}, poll=None)
+        with self.assertRaises(SessionError):
+            self.session_cls.start(self.spec())
+        self.popen.return_value.kill.assert_called_once_with()
+        self.assertFalse(os.path.exists(self.spawned[2].directory))
+
+    def test_a_worker_that_exited_at_once_still_gives_its_view(self):
+        self.harness_writes(
+            {"state": "exited", "name": "w1", "sid": SID, "generation": "g7"}, poll=0
+        )
+        session = self.session_cls.start(self.spec())
+        self.assertIsInstance(session, OwnedSession)
+        self.assertTrue(os.path.isdir(self.spawned[2].directory))
+
+    def test_a_harness_that_never_runs_is_killed_at_the_deadline(self):
+        self.harness_writes({"state": "starting"})
+        clock = itertools.chain([0.0], itertools.repeat(hosted_session.START_WAIT + 1.0))
+        with (
+            mock.patch("time.monotonic", side_effect=lambda: next(clock)),
+            self.assertRaisesRegex(SessionError, "did not start"),
+        ):
+            self.session_cls.start(self.spec())
+        self.popen.return_value.kill.assert_called_once_with()
+        self.assertFalse(os.path.exists(self.spawned[2].directory))
+
+    def test_handler_state_json_cannot_hold_leaves_no_request(self):
+        spec = self.spec(handlers=(engine_types.HookCallback("m", {"s": {1}}),))
+        with self.assertRaisesRegex(ConfigError, "not JSON"):
+            self.session_cls.start(spec)
+        self.popen.assert_not_called()
+        root = os.path.join(self.ensemble, "harness")
+        self.assertEqual([d for d in os.listdir(root) if not d.startswith(".")], [])
+
+    def test_a_harness_running_another_session_is_refused(self):
+        self.harness_writes({"state": "running", "name": "w2", "sid": SID, "generation": "g"})
+        with self.assertRaisesRegex(SessionError, "started another session"):
+            self.session_cls.start(self.spec())
+        self.assertFalse(os.path.exists(self.spawned[2].directory))
+
+    def test_an_environment_is_refused_before_any_harness(self):
+        with self.assertRaises(ConfigError):
+            self.session_cls.harness_request(
+                self.spec(environment=mock.Mock(spec=engine_types.EnvironmentSpec)),
+                display=None,
+                host=None,
+                roots=(),
+            )
+        self.popen.assert_not_called()
+
+
+class LegacyHandlersTest(HostedTuiBase):
+    def test_handlers_on_a_start_no_harness_owns_are_refused(self):
+        handlers = (engine_types.HookCallback("pkg.handler"),)
+        with self.assertRaisesRegex(
+            ConfigError, "fake tui on host tmux has no session harness yet"
+        ):
+            self.tui(name="w1", handlers=handlers)
+        self.nothing_hosted()
+
+    def test_preflight_finds_handlers_without_importing_them(self):
+        root = os.path.join(self.dir, "handlers")
+        os.mkdir(root)
+        with open(os.path.join(root, "never_imported_handler.py"), "w") as f:
+            f.write("raise SystemExit('imported')\n")
+        good = engine_types.HookCallback("never_imported_handler", roots=(root,))
+        spec = self.spec(client="fake", mode="tui", name="w1", handlers=(good,))
+        self.session.preflight(spec)
+        missing = dataclasses.replace(spec, handlers=(engine_types.HookCallback("no_such_mod"),))
+        with self.assertRaisesRegex(ConfigError, "no_such_mod: cannot find"):
+            self.session.preflight(missing)
+
+
+class BoundOwnerTest(HostedTuiBase):
+    """attach and retire of a tui session whose session.json names a session harness."""
+
+    def setUp(self):
+        super().setUp()
+        self.tui(name="w1", sid=SID)
+        self.state = tui.TuiMode.snapshot("w1")
+        self.channel = Channel.create()
+        self.state["owner"] = self.channel.directory
+        with open(os.path.join(self.root, "w1", "session.json"), "w") as f:
+            json.dump(self.state, f)
+
+    def owner(self, **status):
+        if not self.channel.alive():
+            fd = os.open(self.channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            self.addCleanup(os.close, fd)
+        self.channel.write_status(
+            {
+                "state": "running",
+                "name": "w1",
+                "sid": SID,
+                "generation": self.state["generation"],
+                **status,
+            }
+        )
+
+    def serve(self):
+        self.served = []
+
+        def answer():
+            deadline = time.monotonic() + WAIT
+            while time.monotonic() < deadline:
+                for ident, op in self.channel.requests():
+                    self.served.append(op)
+                    self.channel.reply(ident, ok=True)
+                    return
+                time.sleep(0.01)
+
+        thread = threading.Thread(target=answer)
+        thread.start()
+        self.addCleanup(thread.join)
+
+    def test_attach_of_a_bound_owner_is_its_control_view(self):
+        self.owner()
+        self.channel.append(
+            {
+                "seq": 1,
+                "id": f"{self.state['generation']}:1",
+                "turn": None,
+                "type": "TurnEnd",
+                "fields": {"reply": "r1", "pending": 0},
+            }
+        )
+        view = self.session.attach("w1", sid=SID)
+        self.assertIsInstance(view, OwnedSession)
+        self.assertEqual((view.generation, view.reply), (self.state["generation"], "r1"))
+
+    def test_an_owner_bound_elsewhere_or_gone_is_ignored(self):
+        for status in (
+            {"name": "w2"},
+            {"sid": "other"},
+            {"generation": "other"},
+            {"state": "failed"},
+        ):
+            with self.subTest(status=status):
+                self.owner(**status)
+                with self.assertLogs("session", "WARNING"):
+                    found = self.session.attach("w1")
+                self.assertNotIsInstance(found, OwnedSession)
+        self.assertFalse(os.path.exists(os.path.join(self.channel.directory, "requests")))
+
+    def test_an_exited_owner_is_the_legacy_path_for_attach(self):
+        self.owner(state="exited")
+        self.assertNotIsInstance(self.session.attach("w1"), OwnedSession)
+
+    def test_attach_of_a_running_owner_whose_terminal_is_gone_raises_as_legacy(self):
+        self.owner()
+        self.host.processes.pop("w1")
+        with self.assertRaisesRegex(SessionError, "w1"):
+            self.session.attach("w1")
+
+    def test_a_failed_spawn_closes_the_worker_its_harness_launched(self):
+        terminal = self.host.processes["w1"]
+        harness = mock.Mock()
+        harness.poll.return_value = None
+        self.session._unspawn(self.channel, harness, "w1", None)
+        harness.kill.assert_called_once_with()
+        terminal.calls.close.assert_called_once_with()
+        self.assertFalse(os.path.exists(self.channel.directory))
+        self.assertFalse(os.path.lexists(os.path.join(self.root, "w1")))
+
+    def test_an_unheld_owner_is_the_legacy_path(self):
+        self.assertNotIsInstance(self.session.attach("w1"), OwnedSession)
+
+    def test_a_starting_owner_is_waited_for(self):
+        self.owner(state="starting")
+        threading.Timer(
+            0.2,
+            self.channel.write_status,
+            (
+                {
+                    "state": "running",
+                    "name": "w1",
+                    "sid": SID,
+                    "generation": self.state["generation"],
+                },
+            ),
+        ).start()
+        self.assertIsInstance(self.session.attach("w1"), OwnedSession)
+
+    def test_attach_with_another_sid_raises_before_the_owner(self):
+        self.owner()
+        with self.assertRaisesRegex(SessionError, "expected sid 'other'"):
+            self.session.attach("w1", sid="other")
+
+    def test_retire_asks_the_owner_and_closes_nothing_itself(self):
+        self.owner()
+        self.serve()
+        terminal = self.host.processes["w1"]
+        self.session.retire("w1", sid=SID)
+        self.assertEqual(self.served, [Op.CLOSE])
+        terminal.calls.close.assert_not_called()
+
+    def test_retire_with_another_sid_raises_before_any_request(self):
+        self.owner()
+        with self.assertRaisesRegex(SessionError, "expected sid 'other'"):
+            self.session.retire("w1", sid="other")
+        self.assertFalse(os.path.exists(os.path.join(self.channel.directory, "requests")))

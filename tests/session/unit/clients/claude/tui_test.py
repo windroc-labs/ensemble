@@ -567,6 +567,9 @@ class TuiPayloadTest(Base):
             with self.subTest(label=label):
                 self.assertEqual(self.run.hook_events(label, payload), events)
 
+    def test_a_claude_tui_session_is_owned_by_a_session_harness(self):
+        self.assertTrue(type(self.run)._owned)
+
     def test_it_binds_the_sid_it_launched_or_restored_once(self):
         launched = ClaudeClient({}).tui()
         launched.launch(Spec(workdir=self.work, access=Access(cwd=self.work), sid=SID), HOOK)

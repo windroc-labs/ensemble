@@ -40,6 +40,7 @@ TYPES = {
             "HookKind",
             "HookCallback",
             "HookCall",
+            "EventCall",
             "Paste",
             "Key",
             "KeyPress",

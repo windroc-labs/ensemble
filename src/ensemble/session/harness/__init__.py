@@ -1,1 +1,1 @@
-"""The session harness (WDRC-199): the process owning one worker, and its guard (guard.py)."""
+"""The session harness: the process owning one worker, its files, handlers, view and guard."""

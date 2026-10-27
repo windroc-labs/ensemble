@@ -235,6 +235,24 @@ class WorkerCase(CliCase):
         self.assertEqual(set(settings["hooks"]), CLAUDE_HOOKS)
         self.assertFalse([word for word in argv if word.startswith(POLICY)], argv)
 
+    def harness_files(self, name: str) -> str:
+        """Its session harness's log, status and events, for a failure message."""
+        try:
+            with open(
+                os.path.join(self.ensemble, "tui", name, "session.json"), encoding="utf-8"
+            ) as f:
+                owner = json.load(f).get("owner")
+        except (OSError, ValueError):
+            return f"{name}: no session.json"
+        found = []
+        for file in ("harness.log", "harness.json", "events.jsonl"):
+            try:
+                with open(os.path.join(owner, file), encoding="utf-8", errors="replace") as f:
+                    found.append(f"--- {file}\n{f.read()[-4000:]}")
+            except (OSError, TypeError):
+                found.append(f"--- {file}: none")
+        return "\n".join(found)
+
     def live(self, name: str) -> bool:
         return self.server.tmux("has-session", "-t", f"={name}").returncode == 0
 

@@ -29,6 +29,7 @@ from ensemble.session import (
     Access,
     EnvironmentSpec,
     Exited,
+    HookCallback,
     Launch,
     Mode,
     NotShowable,
@@ -2321,6 +2322,27 @@ class EnvironmentTest(HarnessCase):
             json.dump(data, file)
         view = HarnessDelegate.attach(self.work, session_cls=HarnessSession)
         self.assertIsNone(view._state.plan.session.environment)
+
+    def test_delegate_json_round_trips_handlers_and_reads_none_before_them(self):
+        self.make(
+            role="engineer", spec=self.spec(task="build"), host="docker", harness_host="harness"
+        ).close()
+        data = self.metadata()
+        self.assertEqual(data["plan"]["session"]["handlers"], [])
+        handler = {"module": "pkg.handler", "state": {"k": 1}, "roots": ["/r"]}
+        for stored, want in (
+            ([handler], (HookCallback("pkg.handler", {"k": 1}, ("/r",)),)),
+            (None, ()),
+        ):
+            with self.subTest(stored=stored):
+                if stored is None:
+                    del data["plan"]["session"]["handlers"]
+                else:
+                    data["plan"]["session"]["handlers"] = stored
+                with open(self.state_record(), "w", encoding="utf-8") as file:
+                    json.dump(data, file)
+                view = HarnessDelegate.attach(self.work, session_cls=HarnessSession)
+                self.assertEqual(view._state.plan.session.handlers, want)
 
     def answered(self, view, text="The answer."):
         view._complete(Result(0, Outcome("needs_input", "Q", "A", questions=["Which?"])))
