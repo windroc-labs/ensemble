@@ -1228,6 +1228,20 @@ class Owned:
             time.sleep(min(POLL, left))
         return None
 
+    @property
+    def remote(self) -> bool:
+        """Its worker is reachable only through this harness."""
+        return self._session._running.remote
+
+    def send(self, text: str) -> None:
+        self._session.send(text)
+
+    def press(self, keys: Sequence[KeyPress]) -> None:
+        self._session.press(keys)
+
+    def screen(self, lines: int | None = None) -> str:
+        return self._session.screen(lines)
+
     def view(self, channel: Channel, idle_timeout: float | None = None) -> OwnedSession:
         return type(self._session)._view(
             channel,

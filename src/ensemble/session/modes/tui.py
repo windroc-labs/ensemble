@@ -680,6 +680,10 @@ class TuiMode(BaseMode):
         return self._generation
 
     @property
+    def remote(self) -> bool:
+        return getattr(self._terminal, "remote", False) is True
+
+    @property
     def replayed(self) -> tuple[SessionEvent | Stderr | ClientBound, ...]:
         """Attached: its client record's, then its hook log's events so far."""
         return self._replayed

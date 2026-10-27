@@ -123,6 +123,10 @@ class BaseMode(ABC):
     def generation(self) -> str | None:
         return None
 
+    @property
+    def remote(self) -> bool:
+        return False
+
     @classmethod
     def preflight(
         cls,
