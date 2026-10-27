@@ -682,7 +682,9 @@ func (k fileKeychain) WriteSecret(service, account string, data []byte) error {
 	}
 	p, free := cStrings(k.path, service, account)
 	defer free()
-	return call(k.ui, func() C.OSStatus { return C.codex_write(p[0], p[1], p[2], unsafe.Pointer(&data[0]), C.long(len(data))) })
+	return writeOwned(k, service, account, func() error {
+		return call(k.ui, func() C.OSStatus { return C.codex_write(p[0], p[1], p[2], unsafe.Pointer(&data[0]), C.long(len(data))) })
+	})
 }
 
 func (k fileKeychain) DeleteSecret(service, account string) error {
@@ -706,8 +708,10 @@ func (k fileKeychain) WriteCodex(data []byte) error {
 	}
 	p, free := cStrings(k.path, codexService, codexAccount)
 	defer free()
-	return call(k.ui, func() C.OSStatus {
-		return C.codex_write(p[0], p[1], p[2], unsafe.Pointer(&data[0]), C.long(len(data)))
+	return writeOwned(k, codexService, codexAccount, func() error {
+		return call(k.ui, func() C.OSStatus {
+			return C.codex_write(p[0], p[1], p[2], unsafe.Pointer(&data[0]), C.long(len(data)))
+		})
 	})
 }
 

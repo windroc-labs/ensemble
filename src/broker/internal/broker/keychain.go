@@ -57,6 +57,8 @@ var (
 	ErrInvalidOwnerEdit = errors.New("keychain status -25244")
 	// errAccessUnread is secureItem's first access read failing, before it changed anything.
 	errAccessUnread = errors.New("reading its access failed")
+	// ErrNotBrokerItem is an in-place write refused because the item does not trust only the broker.
+	ErrNotBrokerItem = errors.New("keychain item does not trust only the broker")
 	// errNotEarlierBuild is secureGuarded's guard refusing the item's access, before it changed anything.
 	errNotEarlierBuild = errors.New("it trusts another application")
 )
@@ -126,6 +128,20 @@ func checkItem(k accessReader, service, account string) (trusted, earlier bool, 
 
 // retrustRemedy ends a keychain error a stale item may cause.
 const retrustRemedy = ": unlock the login keychain, or run " + RetrustCommand + "."
+
+// writeOwned runs write, an in-place update of the item's data, only when the item trusts only the broker: macOS lets
+// any application update an item whose encrypt entry trusts any application, without UI, so the update itself never
+// refuses another's item.
+func writeOwned(k accessReader, service, account string, write func() error) error {
+	access, err := k.AppAccess(service, account)
+	if err != nil {
+		return err
+	}
+	if err := onlyBroker(access); err != nil {
+		return fmt.Errorf("keychain item %s/%s: %w: %w", service, account, ErrNotBrokerItem, err)
+	}
+	return write()
+}
 
 // readSecret is start's controlled read of a broker-only item, never with a dialog; it erases what a failed read
 // returned. The caller erases the value.

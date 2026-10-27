@@ -89,16 +89,17 @@ func TestNoUIAgainstForeignItem(t *testing.T) {
 	if err := within(t, "PutSecret", func() error { return k.PutSecret(noUIService, noUIAccount, []byte("replaced")) }); err == nil {
 		t.Error("PutSecret replaced a foreign item")
 	}
-	// macOS lets any application update the data of an item whose encrypt entry trusts any application, as
-	// add-generic-password leaves it: the broker's in-place write checks the item's access first and refuses it.
-	if err := within(t, "writeRetainedSecret", func() error { return writeRetainedSecret(k, noUIService, noUIAccount, []byte("rewritten")) }); err == nil {
-		t.Error("writeRetainedSecret rewrote a foreign item")
+	// macOS itself lets any application update an item whose encrypt entry trusts any application, as
+	// add-generic-password leaves it: WriteSecret must refuse it.
+	if err := within(t, "WriteSecret", func() error { return k.WriteSecret(noUIService, noUIAccount, []byte("rewritten")) }); !errors.Is(err, ErrNotBrokerItem) {
+		t.Errorf("WriteSecret: %v, want ErrNotBrokerItem", err)
+	}
+	if err := within(t, "WriteCodex", func() error { return k.WriteCodex([]byte("rewritten")) }); err == nil {
+		t.Error("WriteCodex wrote")
 	}
 	if got := runSecurity(t, "find-generic-password", "-s", noUIService, "-a", noUIAccount, "-w", path); strings.TrimSpace(got) != noUIValue {
 		t.Errorf("the item holds %q, want it unchanged", got)
 	}
-	// The raw write must still return without UI, whatever macOS's ACL allows.
-	_ = within(t, "WriteSecret", func() error { return k.WriteSecret(noUIService, noUIAccount, []byte(noUIValue)) })
 
 	accounts, err := k.Accounts(noUIService)
 	if err != nil || !slices.Equal(accounts, []string{noUIAccount}) {

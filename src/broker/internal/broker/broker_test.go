@@ -1193,3 +1193,27 @@ func TestSecureGuardedRefusesSwappedItem(t *testing.T) {
 		t.Fatalf("earlier build's item not re-trusted: %v %q", err, k.steps)
 	}
 }
+
+// An in-place write never changes an item that does not trust only the broker: macOS allows it without UI when the
+// item's encrypt entry trusts any application.
+func TestWriteOwnedRefusesForeignItem(t *testing.T) {
+	for name, tc := range map[string]struct {
+		access *AppAccess
+		err    error
+		want   error
+	}{
+		"broker's":      {access: current()},
+		"foreign":       {access: added(), want: ErrNotBrokerItem},
+		"earlier build": {access: reinstalled(), want: ErrNotBrokerItem},
+		"missing":       {err: ErrNotFound, want: ErrNotFound},
+	} {
+		t.Run(name, func(t *testing.T) {
+			k := &fakeApps{access: tc.access, accessErr: tc.err}
+			wrote := false
+			err := writeOwned(k, "ensemble-broker-test", "a", func() error { wrote = true; return nil })
+			if !errors.Is(err, tc.want) || err == nil && tc.want != nil || wrote != (tc.want == nil) {
+				t.Fatalf("%v, wrote %v", err, wrote)
+			}
+		})
+	}
+}
