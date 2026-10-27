@@ -115,6 +115,7 @@ SHARED = (
     "sudo_once",
     "sudo_end",
     "terminal",
+    "egress_absent",
 )
 RELOAD = (
     "install.sh: in this terminal, run source ~/.zprofile first (or open a new one): its PATH"
@@ -424,8 +425,11 @@ class InstallTest(Case):
         self.assertEqual(self.plugin_calls(), [])
         return result
 
-    def run_install(self, *args, answers=(), stdin=None, tty=True, script=SCRIPT, ctty=None):
-        """`ctty`: what /dev/tty opens, else the terminal, which is also /dev/ttys001."""
+    def run_install(
+        self, *args, answers=(), stdin=None, tty=True, script=SCRIPT, ctty=None, shell="bash"
+    ):
+        """`ctty`: what /dev/tty opens, else the terminal, which is also /dev/ttys001.
+        `shell`: what runs `script`, as `curl … | bash` does on a Mac: its /bin/bash."""
         self.log.unlink(missing_ok=True)
         terminal = Tty() if tty else None
         links = (self.root / "dev/tty", self.root / "dev/ttys001")
@@ -438,7 +442,7 @@ class InstallTest(Case):
         try:
             with out.open("w") as stdout, err.open("w") as stderr:
                 proc = subprocess.Popen(
-                    ["bash", str(script), *args],
+                    [shell, str(script), *args],
                     env=self.env,
                     stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
                     stdout=stdout,
@@ -513,6 +517,7 @@ class InstallTest(Case):
         then=(),
         provider_write=True,
         egress_failure=False,
+        shell="bash",
     ):
         """A first run answering every question: brew profile line, clients, Docker, the
         OpenCode provider, the config, the Docker logins, the PATH line, then `then` (the board's).
@@ -544,7 +549,7 @@ class InstallTest(Case):
             *([(WRITE_Q, "y")] if "opencode" in (chosen or "") and not egress_failure else []),
             *then,
         ]
-        return self.run_install(*args, answers=answers, ctty=ctty)
+        return self.run_install(*args, answers=answers, ctty=ctty, shell=shell)
 
     def again(self, *args, answers=()):
         """Flags and saved choices pre-answer a rerun's checklist."""
@@ -1385,6 +1390,36 @@ class InstallTest(Case):
         self.assertEqual(list(versions.iterdir()), [])
         self.assert_ok(
             self.again("--clients", "claude", "--docker", answers=DOCKER_LOGINS + ((WRITE_Q, "y"),))
+        )
+
+    def test_u1a_failed_egress_fetch_leaves_nothing(self):
+        (self.fakes / "fail").write_text("gh api repos/windroc/egress-proxy/tarball/")
+        result = self.fresh(
+            "--clients", "claude", "--docker", egress_failure=True, shell="/bin/bash"
+        )
+        self.assertEqual(result.code, 1)
+        self.assertIn("cannot fetch pinned windroc/egress-proxy", result.stderr)
+        self.assertNotIn("unbound variable", result.stderr)
+        self.assertEqual(list(Path(self.home, ".egress/versions").iterdir()), [])
+
+    def test_u1a_failed_egress_fetch_removes_earlier_leftovers(self):
+        """A download directory an earlier failed run left (v0.5.0's U1a) goes on the next egress step."""
+        versions = Path(self.home, ".egress/versions")
+        (versions / ".download.stale").mkdir(parents=True)
+        (versions / ".download.stale/source.tar.gz").write_text("partial")
+        (self.fakes / "fail").write_text("gh api repos/windroc/egress-proxy/tarball/")
+        result = self.fresh(
+            "--clients", "claude", "--docker", egress_failure=True, shell="/bin/bash"
+        )
+        self.assertEqual(result.code, 1)
+        self.assertIn("cannot fetch pinned windroc/egress-proxy", result.stderr)
+        self.assertEqual(list(versions.iterdir()), [])
+        (versions / ".download.stale").mkdir()
+        self.assert_ok(
+            self.again("--clients", "claude", "--docker", answers=DOCKER_LOGINS + ((WRITE_Q, "y"),))
+        )
+        self.assertEqual(
+            [p.name for p in versions.iterdir()], ["122d7454d738db4a9b7e0c4a89d2cfa5ff564339"]
         )
 
     def test_egress_unusable_download_leaves_no_version_and_is_retryable(self):
@@ -5057,12 +5092,11 @@ exec /bin/rm "$@"
         first = self.full()
         self.assert_ok(first)
         calls, ledger, files = self.run_calls(), self.ledger(), self.snapshot()
-        shared = {p: b for p, b in files.items() if ".egress" in p.relative_to(self.home).parts}
         result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
         self.assert_ok(result)
         self.assertNotIn("docker-uninstall", self.calls())
         self.assertIn("brew uninstall --cask docker-desktop", self.calls())
-        self.assertEqual(self.snapshot(), before | shared)
+        self.assertEqual(self.snapshot(), before)
         self.assertEqual(list((self.fakes / "keychain").iterdir()), [])
         self.assertEqual(list((self.fakes / "login").iterdir()), [])
         self.assertFalse(self.broker_path().parent.exists())
@@ -5070,8 +5104,7 @@ exec /bin/rm "$@"
         self.assert_secret_free(PASSWORD, KEY, TOKEN, result=result)
         second = self.full()
         self.assert_ok(second)
-        fetch = "gh api repos/windroc/egress-proxy/tarball/"
-        self.assertEqual(self.run_calls(), [c for c in calls if not c.startswith(fetch)])
+        self.assertEqual(self.run_calls(), calls)
         self.assertEqual(self.ledger(), ledger)
         self.assertEqual(second.tty, first.tty)
         self.assertEqual(self.snapshot(), files)
@@ -5103,6 +5136,159 @@ exec /bin/rm "$@"
         self.assertEqual(bashrc.read_text(), "export EDITOR=vim\n")
         self.assertIn("defaults delete com.docker.docker", self.calls())
         self.assertIn("defaults delete com.googlecode.iterm2", self.calls())
+
+    def test_cl2_cleanup_removes_installed_egress(self):
+        """The egress proxy install.sh created goes; worker images and workspace volumes stay."""
+        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        egress = Path(self.home, ".egress")
+        ledger = self.ledger()
+        for record in (
+            f"dir\t{egress}",
+            "docker-container\tegress-proxy",
+            "docker-image\tegress-proxy",
+        ):
+            self.assertIn(record, ledger)
+        self.assertFalse([r for r in ledger if r.startswith(("dir", "file")) and f"{egress}/" in r])
+        images = "ensemble-worker:abc123\nensemble-worker:def456\nother:latest\n"
+        (self.fakes / "worker_images").write_text(images)
+        (self.fakes / "ws_volumes").write_text("ensemble-ws-worker_1\nunrelated\n")
+        declined = self.cleanup(answers=[(REMOVE_Q, "n")])
+        self.assertEqual(declined.code, 1)
+        self.assertIn("  docker-container egress-proxy", declined.tty)
+        self.assertIn("  docker-image egress-proxy", declined.tty)
+        self.assertIn(
+            "keeps worker images (ensemble-worker) and ensemble-ws-* volumes", declined.tty
+        )
+        result = self.cleanup("--yes")
+        self.assert_ok(result)
+        self.assertFalse(egress.exists())
+        calls = self.calls()
+        removed = calls.index("docker rm -f egress-proxy")
+        self.assertLess(removed, calls.index("docker image rm egress-proxy"))
+        self.assertLess(
+            calls.index("docker image rm egress-proxy"),
+            calls.index("brew uninstall --cask docker-desktop"),
+        )
+        for kept in ("ensemble-worker:abc123", "ensemble-worker:def456"):
+            self.assertIn(f"    kept {kept}: worker image", result.stderr)
+        self.assertIn("    kept ensemble-ws-worker_1: worker workspace volume", result.stderr)
+        self.assertIn("removing Docker Desktop below deletes it", result.stderr)
+        self.assertNotIn("other:latest", result.stderr)
+        self.assertNotIn("kept unrelated", result.stderr)
+        self.assertEqual(
+            [
+                c
+                for c in calls
+                if c.startswith(("docker rm", "docker image rm", "docker rmi", "docker volume rm"))
+            ],
+            ["docker rm -f egress-proxy", "docker image rm egress-proxy"],
+        )
+        self.assertFalse(
+            [r for r in self.ledger() if r.startswith(("docker-container", "docker-image"))]
+        )
+
+    def test_cl2_cleanup_keeps_preexisting_egress(self):
+        egress = Path(self.home, ".egress")
+        (egress / "versions").mkdir(parents=True)
+        config = egress / "config.local.yaml"
+        config.write_text("# mine\nversion: 1\nnetworks:\n  workers:\n    mode: denylist\n")
+        (egress / "notes.txt").write_text("mine")
+        theirs = {p: p.read_bytes() for p in (config, egress / "notes.txt")}
+        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        sha = "122d7454d738db4a9b7e0c4a89d2cfa5ff564339"
+        ledger = self.ledger()
+        for mine in (egress, config, egress / "notes.txt", egress / "versions"):
+            self.assertFalse([r for r in ledger if r.endswith(f"\t{mine}")], mine)
+        self.assertIn(f"dir\t{egress}/versions/{sha}", ledger)
+        self.assertIn(f"file\t{egress}/current", ledger)
+        self.assertIn(f"file\t{egress}/compose.networks.yaml", ledger)
+        self.assert_ok(self.again("--docker"))
+        self.assertEqual(self.ledger(), ledger)
+        # As if an earlier install had pinned an older commit: the link it made points there.
+        old = egress / "versions/0123456789abcdef0123456789abcdef01234567"
+        (egress / "versions" / sha).rename(old)
+        (egress / "current").unlink()
+        (egress / "current").symlink_to(old)
+        state = Path(self.ensemble, "install/added")
+        state.write_text(state.read_text().replace(sha, old.name))
+        self.assert_ok(self.again("--docker"))
+        self.assertEqual((egress / "current").resolve(), egress / "versions" / sha)
+        self.assertIn(f"dir\t{egress}/versions/{sha}", self.ledger())
+        self.assert_ok(self.cleanup("--yes"))
+        self.assertEqual({p: p.read_bytes() for p in theirs}, theirs)
+        self.assertEqual(list((egress / "versions").iterdir()), [])
+        self.assertFalse((egress / "current").is_symlink())
+        self.assertFalse((egress / "compose.networks.yaml").exists())
+
+    def test_cl2_cleanup_keeps_the_version_a_preexisting_current_needs(self):
+        egress = Path(self.home, ".egress")
+        old = egress / "versions/0123456789abcdef0123456789abcdef01234567"
+        old.mkdir(parents=True)
+        (egress / "current").symlink_to(old)
+        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        version = egress / "versions/122d7454d738db4a9b7e0c4a89d2cfa5ff564339"
+        self.assertEqual((egress / "current").resolve(), version)
+        self.assertFalse([r for r in self.ledger() if str(version) in r or r.endswith("/current")])
+        self.assertIn(f"file\t{egress}/config.local.yaml", self.ledger())
+        self.assert_ok(self.cleanup("--yes"))
+        self.assertFalse((egress / "config.local.yaml").exists())
+        self.assertEqual((egress / "current").resolve(), version)
+        self.assertTrue(version.is_dir())
+        self.assertTrue(old.is_dir())
+
+    def test_cl2_cleanup_keeps_preexisting_egress_container(self):
+        (self.fakes / "egress_container").write_text("")
+        (self.fakes / "egress_image").write_text("")
+        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        self.assertFalse(
+            [r for r in self.ledger() if r.startswith(("docker-container", "docker-image"))]
+        )
+        (self.fakes / "worker_images").write_text("ensemble-worker:abc123\n")
+        result = self.cleanup("--yes")
+        self.assert_ok(result)
+        removals = ("docker rm", "docker image rm", "docker info")
+        self.assertFalse([c for c in self.calls() if c.startswith(removals)])
+        self.assertIn("    kept ensemble-worker:abc123: worker image", result.stderr)
+        self.assertTrue((self.fakes / "egress_image").exists())
+        self.assertFalse(Path(self.home, ".egress").exists())
+
+    def test_cl2_install_records_only_what_docker_reports_missing(self):
+        """An inspect failing for another reason than a missing object records nothing."""
+        (self.fakes / "fail").write_text("docker container inspect egress-proxy")
+        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        self.assertNotIn("docker-container\tegress-proxy", self.ledger())
+        self.assertIn("docker-image\tegress-proxy", self.ledger())
+
+    def test_cl2_cleanup_keeps_a_failed_egress_removal(self):
+        """Docker Desktop quits after the preflight: its inspect failing proves nothing is gone."""
+        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        (self.fakes / "docker_stops_at").write_text("docker rm -f egress-proxy")
+        result = self.cleanup("--yes")
+        self.assertEqual(result.code, 1)
+        self.assertIn(
+            "cannot remove container egress-proxy; its record stays for a rerun", result.stderr
+        )
+        self.assertIn("docker-container\tegress-proxy", self.ledger())
+        self.assertIn("docker-image\tegress-proxy", self.ledger())
+        self.assertTrue((self.fakes / "egress_container").exists())
+        (self.fakes / "docker_running").write_text("")
+        self.assert_ok(self.cleanup("--yes"))
+        self.assertFalse((self.fakes / "egress_container").exists())
+        self.assertFalse((self.fakes / "egress_image").exists())
+
+    def test_cl2_cleanup_needs_docker_for_egress_records(self):
+        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        (self.fakes / "docker_running").unlink()
+        ledger, before = self.ledger(), self.snapshot()
+        result = self.run_install("--yes", script=CLEANUP)
+        self.assertEqual(result.code, 1)
+        self.assertIn(
+            "Docker is not running: start Docker Desktop, then rerun; nothing removed",
+            result.stderr,
+        )
+        self.assertEqual(self.ledger(), ledger)
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse([c for c in self.calls() if c.startswith("sudo")])
 
     def test_cleanup_stops_docker_processes(self):
         """What still runs from Docker.app after its cask is gone ends; nothing else is signalled."""
@@ -5231,15 +5417,12 @@ exec /bin/rm "$@"
         )
         before = self.snapshot()
         self.assert_ok(self.fresh("--docker", logins=[(PEM_Q, "")]))
-        shared = {
-            p: b for p, b in self.snapshot().items() if ".egress" in p.relative_to(self.home).parts
-        }
         self.assertFalse(
             [r for r in self.ledger() if r.startswith(("homebrew", "clt", "formula\tgh"))]
         )
         result = self.cleanup("--yes")
         self.assert_ok(result)
-        self.assertEqual(self.snapshot(), before | shared)
+        self.assertEqual(self.snapshot(), before)
         self.assertTrue((self.fakes / "brew/gh").exists())
         self.assertTrue((self.fakes / "keychain/ensemble-broker-claude").exists())
         self.assertNotIn("brew uninstall gh", self.calls())

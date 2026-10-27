@@ -65,8 +65,10 @@ The installer creates `~/.egress/config.local.yaml` only when absent, with just 
 an existing config is kept byte for byte, so one without a `networks.workers` section (for example a config written only for another caller) leaves the proxy healthy with no `workers` network, and the installer stops with an error naming the file. Add `networks.workers` (see `config.example.yaml` in the installed version), with any Ollama or LAN provider `host:port` under `networks.workers.exceptions` ([OpenCode sessions](#opencode)), then rerun `scripts/install.sh --docker`. A config symlink is preserved and rejected: the proxy mounts
 its containing directory, so host symlink targets may not resolve inside the container. Use a regular file. Every rerun runs the pinned `start.sh` again, which applies a new or changed config and
 leaves the proxy running when nothing changed; the checkout and config are kept.
-The proxy is shared with other caller networks: ensemble cleanup keeps `~/.egress`. If cleanup also removes
-Docker Desktop, the proxy stops and its Docker state may be removed; reinstall Docker before using it again.
+`scripts/install-cleanup.sh` removes what the installer created of the proxy: `~/.egress` (or, when it was there
+before, only the files and versions the installer added), the `egress-proxy` container and its image. It keeps
+whatever was there before, the `egress-*` networks, worker images and `ensemble-ws-*` volumes. If cleanup also
+removes Docker Desktop, its Docker state may be removed with it; reinstall Docker before using it again.
 The pinned [egress-proxy README](https://github.com/windroc/egress-proxy/blob/122d7454d738db4a9b7e0c4a89d2cfa5ff564339/README.md)
 and `config.example.yaml` in the installed version define the config.
 
