@@ -148,18 +148,14 @@ class Dispatch:
                         return
                     attempt, delay = attempt + 1, min(delay * 2, BACKOFF_MAX)
                     continue
-                if returned is None:
-                    self._note(index, logged, attempt)
-                else:
-                    self._note(
-                        index, logged, attempt, f"on_event returned {type(returned).__name__}"
-                    )
+                error = None if returned is None else f"on_event returned {type(returned).__name__}"
+                self._note(index, logged, attempt, error, done=True)
                 break
-            with self._settled:
-                self._pending -= 1
-                self._settled.notify_all()
 
-    def _note(self, index: int, logged: Logged, attempt: int, error: str | None = None) -> None:
+    def _note(
+        self, index: int, logged: Logged, attempt: int, error: str | None = None, *, done=False
+    ) -> None:
+        """done: the delivery's last record, no longer pending; once stopped, still pending."""
         record = {
             "handler": index,
             "id": logged.id,
@@ -174,3 +170,7 @@ class Dispatch:
                 self._channel.note(record)
             except OSError as failure:
                 LOG.warning("session harness: deliveries.jsonl: %s", failure)
+            if done:
+                with self._settled:
+                    self._pending -= 1
+                    self._settled.notify_all()
