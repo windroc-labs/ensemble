@@ -527,13 +527,15 @@ the Viewer, `--display none`, `[session.viewer]` and `ls --descendants` work as 
 ### Harness-owned workers
 
 Every session runs under its [session harness](sessions.md#session-harness), as on tmux, with or without an
-[environment](#environments). A TUI worker (Claude, Codex or OpenCode) is the [guard](sessions.md#guard-protocol)
-inside the container, the client's direct parent, reached through one
-`docker exec -i <container> /opt/ensemble/venv/bin/python -I <guard> --terminal … --lease <run>/lease -- with-secrets …`
-whose stdin and stdout carry the guard channel. A headless run's client stays on its own `docker exec -i` pipe, the
-harness's child, until WDRC-312 moves it onto the guard. A start no harness can own (an extension client whose
-`Tui` or `Headless` keeps `_owned` false, a `Tui` that keeps `_remote_owned` false, or injected session callables)
-is refused before anything is written: `<client> <mode> on host docker: runs only under a session harness`.
+[environment](#environments). A TUI or headless worker (Claude, Codex or OpenCode) is the
+[guard](sessions.md#guard-protocol) inside the container, the client's direct parent, reached through one
+`docker exec -i <container> /opt/ensemble/venv/bin/python -I <guard> [--terminal …] --lease <run>/lease -- with-secrets …`
+whose stdin and stdout carry the guard channel; `host.json` `kind` says `tui` or `headless`. A headless run needs a
+name: a nameless one is refused before anything is written (`a headless session on host docker needs a name`). One
+owner lock per name: a live worker of a name, of either kind, refuses another start of it (busy). A start no harness
+can own (an extension client whose `Tui` or `Headless` keeps `_owned` false, a `Tui` that keeps `_remote_owned`
+false, or injected session callables) is refused before anything is written: `<client> <mode> on host docker: runs
+only under a session harness`.
 
 | Path | Holds |
 |---|---|
@@ -560,11 +562,11 @@ is refused before anything is written: `<client> <mode> on host docker: runs onl
 - **Liveness**: a held owner lock is a live worker, with no docker call. A free one: the container's guard
   (`guard.py --probe`) answers `live`, `exited`, `dead` or `absent`. A start refuses a live or unknown earlier
   generation and removes an ended one.
-- **Listing**: the Host lists (`ensemble-session ls`) and attaches only guarded workers of their `host.json`'s
-  generation; a headless run is not listed.
+- **Listing**: the Host lists (`ensemble-session ls`) and attaches only workers whose `host.json` names their
+  generation and `kind` `tui`; a headless run is not listed.
 - **Sweep**: each start (TUI or headless) first closes every container it names `ensemble-<name>-<generation>` that is
-  neither a guarded nor a piped worker of its `host.json`'s generation (debris, such as one an older release
-  started), a guarded one whose owner lock is free and a piped one whose pipe lock is free; it never execs into a
+  not a guarded worker (of either `kind`) of its `host.json`'s generation (debris, such as one an older release
+  started) and a guarded one whose owner lock is free; it never execs into a
   container. A start whose sweep could not remove a debris container of its name refuses: `docker session <name>:
   container <c> of an earlier start is still up (its removal failed; see the log); the next start retries it`. A
   container labelled for the name but not named that way is never swept; the start refuses: `docker session <name>:
@@ -576,8 +578,8 @@ ownerless container.
 
 ### Credential renewal
 
-One credential tick runs for every session, on a thread of its session harness: a TUI worker's Docker handle's
-maintenance thread (`hosts/docker/maintenance.py`), a headless run's `DockerPiped` thread. It calls `ensemble-broker maintain` at once, then whenever the broker says. The broker decides what is due:
+One credential tick runs for every session, on a thread of its session harness: its worker's Docker handle's
+maintenance thread (`hosts/docker/maintenance.py`). It calls `ensemble-broker maintain` at once, then whenever the broker says. The broker decides what is due:
 it renews each GitHub or Codex credential 10 minutes before its earliest expiry, works out the [static secret
 notices](#static-secret-expiry), and returns when to call again and the session's deadline. Its events go to the
 session's events, or the harness's log:
@@ -920,8 +922,8 @@ SIGTERM and, 60 s later, SIGKILL. From just before the broker's `start` until th
 SIGINT and SIGHUP back (an ignored one stays ignored); on one it removes its container, then the signal acts. Stopped
 later, it leaves its worker running.
 
-**Probes**: a running worker makes none: a TUI worker's liveness, exit, input and screen travel on its channel
-([Harness-owned workers](#harness-owned-workers)), a headless run's output and exit on its pipe.
+**Probes**: a running worker makes none: its liveness, exit, input, screen and a headless run's output travel on its
+channel ([Harness-owned workers](#harness-owned-workers)).
 
 **Claude settings**: a new start copies the host's model and effort settings, plus its web-search limit. No other host setting, credential, hook, plugin, status line or permission reaches it. `--model`/`--effort` and role config still win; a resume keeps the session's settings.
 
@@ -1113,7 +1115,8 @@ the first failed check. The keychain, Linear preset and board-run checks stay ma
 - A headless run's output comes from its container, where client and tools share uid `agent`: a forged rate-limit line
   can end that run and trigger its usage-limit notification and move to review, as can a forged transcript record
   for a TUI run.
-- A harness killed with `kill -9` leaves its headless client running, with its token, until the next Docker start or
+- A harness killed with `kill -9` ends its client, TUI or headless, only if Docker passes the closed stdin on to the
+  exec (unverified until WDRC-212); else the client keeps running, with its token, until the next Docker start or
   close.
 - A worker reaches the Mac's services, `127.0.0.1`-only ones included, and the LAN only through the egress proxy's
   `workers` exceptions, and each exception holds for every worker, an injected agent included: keep the list narrow.
