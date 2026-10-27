@@ -5,6 +5,7 @@ test on a configured class (self.session) with caller-owned dependencies.
 
 import contextlib
 import dataclasses
+import errno
 import fcntl
 import gc
 import io
@@ -3322,6 +3323,17 @@ class OwnedHeadlessStartTest(Case):
             self.session_cls.start(self.spec())
         self.popen.return_value.terminate.assert_called_once_with()
         self.assertFalse(os.path.exists(self.spawned[2].directory))
+
+    def test_a_caller_pipe_it_cannot_make_is_a_session_error_leaving_no_dir(self):
+        error = OSError(errno.EMFILE, "Too many open files")
+        with (
+            mock.patch("os.pipe", side_effect=error),
+            self.assertRaisesRegex(SessionError, "Too many open files"),
+        ):
+            self.session_cls.start(self.spec())
+        self.popen.assert_not_called()
+        root = os.path.join(self.ensemble, "harness")
+        self.assertEqual([d for d in os.listdir(root) if not d.startswith(".")], [])
 
     def test_its_harness_reads_a_pipe_that_ends_with_its_view(self):
         held = []

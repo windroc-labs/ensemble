@@ -110,6 +110,8 @@ class Harness:
         """caller: the far end of its caller's pipe, if any."""
         self._channel, self._poll, self._close_wait, self._drain = channel, poll, close_wait, drain
         self._caller = caller
+        if caller is not None:
+            os.set_blocking(caller, False)
         self._status: dict[str, Any] = {"state": "starting", "pid": os.getpid(), "pending": 0}
         self._seq, self._written = 0, 0.0
         self._signal: int | None = None

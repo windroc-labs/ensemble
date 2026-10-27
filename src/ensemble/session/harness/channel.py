@@ -11,7 +11,6 @@ import json
 import logging
 import os
 import re
-import select
 import shutil
 import stat
 import time
@@ -133,6 +132,7 @@ class Tie:
     """
 
     def __init__(self) -> None:
+        self.far = self._near = -1  # for __del__ when os.pipe fails
         self.far, self._near = os.pipe()  # neither inheritable
 
     def handed(self) -> None:
@@ -153,9 +153,11 @@ def _closed(fd: int) -> int:
 
 
 def hung_up(fd: int) -> bool:
-    """`far`'s EOF; its caller writes nothing, so readable is EOF and anything read is ignored."""
+    """EOF on non-blocking `far`; its caller writes nothing, so anything read is ignored."""
     try:
-        return bool(select.select([fd], [], [], 0)[0]) and os.read(fd, 1 << 10) == b""
+        return os.read(fd, 1 << 10) == b""
+    except BlockingIOError:
+        return False
     except OSError:
         return True
 

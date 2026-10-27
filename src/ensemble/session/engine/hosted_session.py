@@ -454,9 +454,10 @@ class HostedSession(Session):
         roots = cls._roots(spec.client)
         request = cls.harness_request(spec, display=display, host=host, roots=roots)
         channel = Channel.create()
-        tie = None if mode == Mode.TUI else Tie()  # a tui worker outlives its caller
-        caller = () if tie is None else ("--caller", str(tie.far))
+        tie = None
         try:
+            tie = None if mode == Mode.TUI else Tie()  # a tui worker outlives its caller
+            caller = () if tie is None else ("--caller", str(tie.far))
             channel.write_request(request)
             with open(channel.log, "ab") as log:
                 harness = subprocess.Popen(
