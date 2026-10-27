@@ -164,11 +164,8 @@ func TestRetrustAsksPasswordOnce(t *testing.T) {
 		tokenService + "/default":          earlier(),
 		tokenService + "/work":             earlier(),
 		codexService + "/auth":             earlier(),
-		tokensService + "/ensemble-w-0123": earlier(),
-		revocationsService + "/pending":    earlier(),
 		AppKeyService + "/1234567":         earlier(),
 		usersService + "/" + AppKeyService: current(),
-		codexGrantsService + "/backlog":    earlier(),
 	})
 	p := &countingPassword{}
 	notice, out, err := retrust(k, p)
@@ -183,7 +180,7 @@ func TestRetrustAsksPasswordOnce(t *testing.T) {
 	if slices.ContainsFunc(k.steps, func(s string) bool { return !strings.HasPrefix(s, "partition ") }) {
 		t.Errorf("an earlier build with the broker's identity needs only its partition list: %q", k.steps)
 	}
-	if !strings.HasSuffix(out, "re-trusted 7 broker keychain item(s)\n") || !strings.Contains(out, `"ensemble-broker-claude" "work" now trusts this broker`) {
+	if !strings.HasSuffix(out, "re-trusted 4 broker keychain item(s)\n") || !strings.Contains(out, `"ensemble-broker-claude" "work" now trusts this broker`) {
 		t.Errorf("out %q", out)
 	}
 	if strings.Contains(notice+out, keychainPass) {
@@ -264,9 +261,6 @@ func TestRetrustCoversEveryBrokerItem(t *testing.T) {
 		codexService + "/auth":                                 earlier(),
 		AppKeyService + "/1234567":                             earlier(),
 		usersService + "/" + AppKeyService:                     earlier(),
-		tokensService + "/ensemble-w-0123":                     earlier(),
-		revocationsService + "/pending":                        earlier(),
-		codexGrantsService + "/backlog":                        earlier(),
 		opencodeService + "/strata":                            earlier(),
 		envServicePrefix + "mini-op-password/mini-op-password": earlier(),
 		envServicePrefix + "mini-op-ssh-key/mini-op-ssh-key":   earlier(),
@@ -278,12 +272,31 @@ func TestRetrustCoversEveryBrokerItem(t *testing.T) {
 	})
 	p := &countingPassword{}
 	_, out, err := retrust(k, p)
-	if err != nil || p.calls != 1 || !strings.HasSuffix(out, "re-trusted 12 broker keychain item(s)\n") {
+	if err != nil || p.calls != 1 || !strings.HasSuffix(out, "re-trusted 9 broker keychain item(s)\n") {
 		t.Fatalf("%v asked %d out %q", err, p.calls, out)
 	}
 	for _, skipped := range []string{envServicePrefix + "Bad/Bad", envServicePrefix + "db/other", orchestrator + "/harness"} {
 		if onlyBroker(*k.items[skipped]) == nil {
 			t.Errorf("%s re-trusted", skipped)
+		}
+	}
+}
+
+// The retired per-container services are no broker items: retrust lists and changes none of theirs.
+func TestRetrustSkipsRetiredServices(t *testing.T) {
+	retired := []string{"ensemble-broker-tokens/ensemble-w-0123", "ensemble-broker-revocations/pending", "ensemble-broker-codex-grants/ensemble-w-0123"}
+	items := map[string]*AppAccess{tokenService + "/default": earlier()}
+	for _, key := range retired {
+		items[key] = earlier()
+	}
+	k := newRetrustKeychain(items)
+	notice, out, err := retrust(k, &countingPassword{})
+	if err != nil || !slices.Equal(k.steps, []string{"partition " + tokenService + "/default"}) || out != "\"ensemble-broker-claude\" \"default\" now trusts this broker\nre-trusted 1 broker keychain item(s)\n" {
+		t.Fatalf("%v steps %q out %q", err, k.steps, out)
+	}
+	for _, key := range retired {
+		if strings.Contains(notice, strings.SplitN(key, "/", 2)[0]) || onlyBroker(*k.items[key]) == nil {
+			t.Errorf("%s listed or re-trusted: %q", key, notice)
 		}
 	}
 }
@@ -312,9 +325,9 @@ func TestRetrustLeavesForeignItems(t *testing.T) {
 		AppKeyService + "/1":               added(),
 		opencodeService + "/strata":        added(),
 		envServicePrefix + "db/db":         added(),
-		tokensService + "/ensemble-w-0123": added(),
+		usersService + "/" + AppKeyService: added(),
 		linearService + "/registry":        added(),
-		revocationsService + "/pending":    earlier(),
+		linearGrantsService + "/harness":   earlier(),
 	})
 	p := &countingPassword{}
 	notice, out, err := retrust(k, p)
@@ -327,14 +340,14 @@ func TestRetrustLeavesForeignItems(t *testing.T) {
 		`"ensemble-broker-bot" "1" left unchanged: it trusts another application; run ensemble-broker login github ensemble-broker-bot` + "\n",
 		`"ensemble-broker-opencode" "strata" left unchanged: it trusts another application; run ensemble-broker login opencode strata` + "\n",
 		`"ensemble-broker-env/db" "db" left unchanged: it trusts another application; run ensemble-broker login env db` + "\n",
-		`"ensemble-broker-tokens" "ensemble-w-0123" left unchanged: it trusts another application; delete it in Keychain Access` + "\n",
+		`"ensemble-broker-github-users" "ensemble-broker-bot" left unchanged: it trusts another application; delete it in Keychain Access` + "\n",
 		`"ensemble-broker-linear" "registry" left unchanged: it trusts another application; run ensemble-broker login linear` + "\n",
 	} {
 		if !strings.Contains(notice, want) {
 			t.Errorf("notice lacks %q:\n%s", want, notice)
 		}
 	}
-	if slices.ContainsFunc(k.steps, func(s string) bool { return !strings.HasSuffix(s, revocationsService+"/pending") }) || out != "\"ensemble-broker-revocations\" \"pending\" now trusts this broker\nre-trusted 1 broker keychain item(s)\n" {
+	if slices.ContainsFunc(k.steps, func(s string) bool { return !strings.HasSuffix(s, linearGrantsService+"/harness") }) || out != "\"ensemble-broker-linear-grants\" \"harness\" now trusts this broker\nre-trusted 1 broker keychain item(s)\n" {
 		t.Fatalf("steps %q out %q", k.steps, out)
 	}
 }
