@@ -770,7 +770,7 @@ class HarnessDelegate(Delegate):
             raise Unanswered(unchecked)
 
     def _interrupt(self, state: DelegateState) -> Result | None:
-        """None: no active attempt, or another ended it first."""
+        """None: none active, or another ended it first."""
         if not owned(state.plan) or state.completed:
             return None
         result = stopped(Stopped(128 + signal.SIGHUP))
