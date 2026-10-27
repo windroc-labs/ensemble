@@ -338,11 +338,11 @@ def _scope(attempt: int) -> str:
     return "" if attempt == 1 else f"attempt:{attempt}:"
 
 
-def finish(ctx, outcome: Outcome, *, steps="") -> bool:
+def finish(ctx, outcome: Outcome, *, steps="", move=True) -> bool:
     # never raises: Stopped stops the steps and returns False, so the session comment's end is
     # still written; `steps` prefixes each step's name
     try:
-        return _finish(ctx, outcome, steps)
+        return _finish(ctx, outcome, steps, move=move)
     except (Exception, Stopped) as e:  # noqa: BLE001  # Report the session after failed steps.
         _error(ctx, "finish", e)
         return False
@@ -426,7 +426,7 @@ def _attach(ctx, url, title, attached):
         ctx.tracker.link(ctx.issue_id, url, title)
 
 
-def _finish(ctx, o, steps=""):
+def _finish(ctx, o, steps="", *, move=True):
     task, issue = TASKS[ctx.role], ctx.issue_id
     body, state, url = _completion_body(ctx, o)
 
@@ -469,7 +469,7 @@ def _finish(ctx, o, steps=""):
     ):
         return False
 
-    if _step(
+    if move and _step(
         ctx,
         f"{steps}move:{state}",
         lambda: _guarded_move(ctx, issue, ctx.ident, state, "in_progress"),
@@ -525,11 +525,11 @@ def _session(ctx, cfg, client, attempt, *, now, end=None) -> bool:
     return error is None
 
 
-def _limited(ctx, attempt, resets_at) -> bool:
+def _limited(ctx, attempt, resets_at, *, move=True) -> bool:
     """A usage limit: its comment once per sid and guarded move to In Review per attempt."""
     at = local_time(resets_at)
-    move = f"limit-move:{attempt}"
-    moved = move in _done(ctx) or (
+    step = f"limit-move:{attempt}"
+    moved = step in _done(ctx) or (
         _post(
             ctx,
             "limit",
@@ -537,12 +537,15 @@ def _limited(ctx, attempt, resets_at) -> bool:
             + ctx.tracker.notify(ctx.issue_id, ctx.humans),
         )
         is None
-        and _step(
-            ctx,
-            move,
-            lambda: _guarded_move(ctx, ctx.issue_id, ctx.ident, "in_review", "in_progress"),
+        and (
+            not move
+            or _step(
+                ctx,
+                step,
+                lambda: _guarded_move(ctx, ctx.issue_id, ctx.ident, "in_review", "in_progress"),
+            )
+            is None
         )
-        is None
     )
     return moved
 
@@ -635,8 +638,9 @@ def _deliver(ctx, cfg, claim, event, *, now) -> bool:
         return _running(ctx, attempt) and progress(
             ctx, Progress(event.name or "", event.text or "")
         )
-    # Finished: the outcome (once ledgered, never again), the limit, then the session's end
-    outcome = event.outcome
+    # Finished: the outcome (once ledgered, never again), the limit, then the session's end; a
+    # later attempt owns the issue's state
+    outcome, move = event.outcome, not _stale(ctx, attempt)
     if (
         outcome is None
         and event.limit is None
@@ -645,12 +649,16 @@ def _deliver(ctx, cfg, claim, event, *, now) -> bool:
     ):
         failed = Outcome(OutcomeStatus.FAILED, "The agent run failed", event.error)
         steps = f"{NO_OUTCOME}{attempt}:"
-        ok = f"{steps}outcome" in _done(ctx) or finish(ctx, failed, steps=steps)
+        ok = f"{steps}outcome" in _done(ctx) or finish(ctx, failed, steps=steps, move=move)
     else:
-        scope = _scope(attempt)
-        ok = outcome is None or f"{scope}outcome" in _done(ctx) or finish(ctx, outcome, steps=scope)
+        steps = _scope(attempt)
+        ok = (
+            outcome is None
+            or f"{steps}outcome" in _done(ctx)
+            or finish(ctx, outcome, steps=steps, move=move)
+        )
     if event.limit is not None:
-        ok = _limited(ctx, attempt, event.limit["resets_at"]) and ok
+        ok = _limited(ctx, attempt, event.limit["resets_at"], move=move) and ok
     elif outcome is None:
         log("writeback", "no-outcome", ctx.ident, sid=ctx.sid, error=event.error or "no result")
     ended = session(end=(event.returncode, outcome, event.limit is not None))
@@ -658,9 +666,13 @@ def _deliver(ctx, cfg, claim, event, *, now) -> bool:
     return ended and ok
 
 
+def _stale(ctx, attempt) -> bool:
+    return any(int(n) > attempt for n in _ledger(ctx).get(ctx.sid, {}).get("attempts", {}))
+
+
 def _running(ctx, attempt) -> bool:
-    attempts = _ledger(ctx).get(ctx.sid, {}).get("attempts", {})
-    if any(int(n) > attempt or int(n) == attempt and "ended_at" in r for n, r in attempts.items()):
+    ended = _ledger(ctx).get(ctx.sid, {}).get("attempts", {}).get(str(attempt), {})
+    if _stale(ctx, attempt) or "ended_at" in ended:
         return True
 
     def activate():

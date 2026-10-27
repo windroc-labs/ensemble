@@ -2561,6 +2561,42 @@ class FollowUpAttempts(Events):
         self.assertEqual(self.linear.state, self.cfg.linear.states["in_review"])
         self.assertEqual(self.ledger()[RUN_SID]["steps"][-1], "attempt:2:outcome")
 
+    def test_a_user_moved_issue_keeps_its_state_at_the_next_outcome(self):
+        self.asked()
+        self.linear.state = self.cfg.linear.states["done"]
+        self.assertTrue(self.deliver(self.finished(outcome=outcome_data(), attempt=2)))
+        self.assertEqual(
+            self.linear.comments[self.cid("attempt:2:comment")]["body"], self.DONE_BODY
+        )
+        self.assertEqual(self.linear.state, self.cfg.linear.states["done"])
+
+    def test_a_stale_finished_writes_its_comment_but_moves_nothing(self):
+        self.assertTrue(self.deliver(delegate_event("begun")))
+        self.linear.fail = lambda op, _v: (
+            LinearError("linear api error: down") if op == "state" else None
+        )
+        self.assertFalse(self.deliver(self.finished(outcome=self.NEEDS)))
+        self.linear.fail = lambda _op, _v: None
+        self.assertTrue(self.deliver(delegate_event("begun", 2)))
+        n = len(self.linear.writes("state"))
+        self.assertTrue(self.deliver(self.finished(outcome=self.NEEDS)))
+        self.assertEqual(len(self.linear.writes("state")), n)
+        self.assertEqual(self.linear.state, self.cfg.linear.states["in_progress"])
+        steps = self.ledger()[RUN_SID]["steps"]
+        self.assertIn("outcome", steps)
+        self.assertNotIn("move:in_review", steps)
+        self.assertEqual(len(self.posts("comment")), 1)
+
+    def test_a_stale_limit_moves_nothing(self):
+        self.assertTrue(self.deliver(delegate_event("begun")))
+        self.assertTrue(self.deliver(delegate_event("begun", 2)))
+        n = len(self.linear.writes("state"))
+        self.assertTrue(self.deliver(self.finished(-9, limit={"resets_at": None})))
+        self.assertEqual(len(self.linear.writes("state")), n)
+        self.assertEqual(self.linear.state, self.cfg.linear.states["in_progress"])
+        self.assertIn(self.cid("limit"), self.linear.comments)
+        self.assertNotIn("limit-move:1", self.ledger()[RUN_SID]["steps"])
+
 
 class LimitEvents(Events):
     def setUp(self):
