@@ -3137,6 +3137,33 @@ class OwnedStartTest(Case):
         self.popen.return_value.kill.assert_called_once_with()
         self.assertFalse(os.path.exists(self.spawned[2].directory))
 
+    def test_a_worker_that_exited_at_once_still_gives_its_view(self):
+        self.harness_writes(
+            {"state": "exited", "name": "w1", "sid": SID, "generation": "g7"}, poll=0
+        )
+        session = self.session_cls.start(self.spec())
+        self.assertIsInstance(session, OwnedSession)
+        self.assertTrue(os.path.isdir(self.spawned[2].directory))
+
+    def test_a_harness_that_never_runs_is_killed_at_the_deadline(self):
+        self.harness_writes({"state": "starting"})
+        clock = itertools.chain([0.0], itertools.repeat(hosted_session.START_WAIT + 1.0))
+        with (
+            mock.patch("time.monotonic", side_effect=lambda: next(clock)),
+            self.assertRaisesRegex(SessionError, "did not start"),
+        ):
+            self.session_cls.start(self.spec())
+        self.popen.return_value.kill.assert_called_once_with()
+        self.assertFalse(os.path.exists(self.spawned[2].directory))
+
+    def test_handler_state_json_cannot_hold_leaves_no_request(self):
+        spec = self.spec(handlers=(engine_types.HookCallback("m", {"s": {1}}),))
+        with self.assertRaisesRegex(ConfigError, "not JSON"):
+            self.session_cls.start(spec)
+        self.popen.assert_not_called()
+        root = os.path.join(self.ensemble, "harness")
+        self.assertEqual([d for d in os.listdir(root) if not d.startswith(".")], [])
+
     def test_a_harness_running_another_session_is_refused(self):
         self.harness_writes({"state": "running", "name": "w2", "sid": SID, "generation": "g"})
         with self.assertRaisesRegex(SessionError, "started another session"):
@@ -3257,6 +3284,16 @@ class BoundOwnerTest(HostedTuiBase):
         self.host.processes.pop("w1")
         with self.assertRaisesRegex(SessionError, "w1"):
             self.session.attach("w1")
+
+    def test_a_failed_spawn_closes_the_worker_its_harness_launched(self):
+        terminal = self.host.processes["w1"]
+        harness = mock.Mock()
+        harness.poll.return_value = None
+        self.session._unspawn(self.channel, harness, "w1", None)
+        harness.kill.assert_called_once_with()
+        terminal.calls.close.assert_called_once_with()
+        self.assertFalse(os.path.exists(self.channel.directory))
+        self.assertFalse(os.path.lexists(os.path.join(self.root, "w1")))
 
     def test_an_unheld_owner_is_the_legacy_path(self):
         self.assertNotIsInstance(self.session.attach("w1"), OwnedSession)

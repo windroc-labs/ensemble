@@ -153,10 +153,11 @@ class Channel:
 
     def write_request(self, request: Mapping) -> None:
         """0600, never over a file or through a link."""
+        data = json.dumps(request)  # before the file: a value JSON cannot hold writes nothing
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
         fd = os.open(self._request, flags, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(request, stream)
+            stream.write(data)
 
     def take_request(self) -> dict:
         found = _json(self._request)
@@ -248,6 +249,8 @@ class Channel:
                 raise (Unanswered if answer.get("unanswered") is True else SessionError)(text)
             if not self.alive():
                 _remove(os.path.join(self._requests, ident + ".json"))
+                if isinstance(_json(reply), dict):  # answered just before it let go
+                    continue
                 return False
             if time.monotonic() >= deadline:
                 _remove(os.path.join(self._requests, ident + ".json"))

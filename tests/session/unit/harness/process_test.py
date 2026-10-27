@@ -388,3 +388,20 @@ class OpeningTest(Base):
         owned.ended = True
         thread.join(WAIT)
         self.assertEqual(self.code, 0)
+
+
+class BatchTest(Base):
+    def test_requests_taken_with_the_one_that_ends_the_worker_are_still_answered(self):
+        folder = os.path.join(self.channel.directory, "requests")
+        os.makedirs(folder)
+        idents = ["a" * 32, "b" * 32]
+        for ident, op in zip(idents, ("stop", "close"), strict=True):
+            with open(os.path.join(folder, ident + ".json"), "w") as f:
+                f.write(json.dumps({"op": op}))
+        owned = FakeOwned()
+        self.assertEqual(self.harness(owned).run(self.begin), 0)
+        self.assertEqual(owned.calls, ["stop", "confirm_end", "close"])
+        for ident in idents:
+            with open(os.path.join(self.channel.directory, "replies", ident + ".json")) as f:
+                self.assertEqual(json.load(f), {"ok": True})
+        self.assertEqual(self.types(), ["Exited"])

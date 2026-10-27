@@ -201,6 +201,7 @@ class ColorTest(WorkerCase):
                 "session w1: waits on a dialog: Quick safety check",
                 "session w1: color not set: waits on a dialog; ensemble-session send w1 '/color'",
             ],
+            self.harness_files("w1"),
         )
         self.assertEqual(self.commands("w1"), [])
 

@@ -103,6 +103,11 @@ class DirTest(Base):
         self.channel.discard_request()
         self.assertFalse(os.path.exists(path))
 
+    def test_a_request_json_cannot_hold_writes_nothing(self):
+        with self.assertRaises(TypeError):
+            self.channel.write_request({"spec": {"env": {"K": "secret"}}, "state": {1, 2}})
+        self.assertFalse(os.path.exists(os.path.join(self.channel.directory, "request.json")))
+
     def test_a_request_that_is_no_object_is_refused(self):
         with open(os.path.join(self.channel.directory, "request.json"), "w") as f:
             f.write("[]")
@@ -157,6 +162,16 @@ class LockTest(Base):
             Channel(self.channel.directory).hold()
         self.channel.release()
         self.assertFalse(self.channel.alive())
+
+    def test_a_second_hold_is_refused(self):
+        self.channel.hold()
+        self.addCleanup(self.channel.release)
+        other = Channel(self.channel.directory)
+        with self.assertRaises(SessionError) as caught:
+            other.hold()
+        self.assertEqual(
+            str(caught.exception), f"session harness {self.channel.directory} is already held"
+        )
 
     def test_a_missing_dir_is_dead(self):
         self.assertFalse(Channel(os.path.join(self.root, "f" * 32)).alive())

@@ -28,7 +28,7 @@ from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.types import Logged, Op
 from ensemble.utils import Display, Record, Status
 
-POLL = 0.5
+POLL = 0.1
 
 
 def fold(

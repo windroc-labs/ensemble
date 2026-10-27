@@ -112,6 +112,7 @@ class Harness:
         self._worker: Worker | None = None
         self._dispatch: Dispatch | None = None
         self._turns = Turns("")
+        self._leftover: list[tuple[str, Op]] = []
 
     def signalled(self, number: int, _frame: object) -> None:
         self._signal = number
@@ -149,9 +150,11 @@ class Harness:
 
     def _supervise(self, worker: Worker) -> int:
         while True:
-            for ident, op in self._channel.requests():
+            batch = self._channel.requests()
+            for index, (ident, op) in enumerate(batch):
                 code = self._end(worker, op, ident)
                 if code is not None:
+                    self._leftover = batch[index + 1 :]  # taken already: served after the exit
                     return code
             if self._signal is not None:
                 code = self._end(worker, Op.CLOSE, None)
@@ -206,7 +209,8 @@ class Harness:
 
     def _serve_ended(self, worker: Worker) -> None:
         """After the exit a request ends what is left: terminal, tui dir, viewer."""
-        for ident, op in self._channel.requests():
+        batch, self._leftover = [*self._leftover, *self._channel.requests()], []
+        for ident, op in batch:
             try:
                 if op == Op.STOP:
                     worker.stop()

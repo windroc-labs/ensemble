@@ -133,6 +133,31 @@ class DispatchTest(Base):
         )
         self.assertIn("handler broke", records[0]["error"])
 
+    def test_only_attempts_1_2_4_and_so_on_are_noted(self):
+        self.enterContext(self.assertLogs("session", "WARNING"))
+        found = self.start(Recorder(fail=6))
+        found.put(Logged(1, "g:1", None, Reply("x")))
+        self.assertEqual(found.drain(WAIT), 0)
+        self.assertEqual(
+            [(d["attempt"], d["state"]) for d in self.deliveries()],
+            [(1, "failed"), (2, "failed"), (4, "failed"), (7, "ok")],
+        )
+
+    def test_a_handler_that_exits_is_retried_like_any_failure(self):
+        class Exits(Recorder):
+            def on_event(self, call):
+                self.calls.append(call)
+                if len(self.calls) == 1:
+                    raise SystemExit(3)
+
+        self.enterContext(self.assertLogs("session", "WARNING"))
+        handler = Exits()
+        found = self.start(handler)
+        found.put(Logged(1, "g:1", None, Reply("x")))
+        found.put(Logged(2, "g:2", None, Reply("y")))
+        self.assertEqual(found.drain(WAIT), 0)
+        self.assertEqual([c.event_id for c in handler.calls], ["g:1", "g:1", "g:2"])
+
     def test_backoff_doubles_up_to_thirty_seconds(self):
         self.enterContext(self.assertLogs("session", "WARNING"))
         handler = Recorder(fail=7)

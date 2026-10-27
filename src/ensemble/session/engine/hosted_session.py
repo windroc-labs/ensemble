@@ -242,7 +242,6 @@ def _reconstructible(setup: _Setup) -> bool:
     return (
         setup.class_loader is load_class
         and setup.probe is probe
-        and setup.clock is time.monotonic
         and setup.host_factory is _built
         and setup.viewer_factory is Viewer
     )
@@ -403,11 +402,7 @@ class HostedSession(Session):
             host=on,
             display=display,
         )
-        roots = (
-            *module_roots(sys.modules[__name__], ensemble.utils),
-            *cls.class_roots(client_name),
-        )
-        load_handlers(spec.handlers, roots, load=False)
+        load_handlers(spec.handlers, cls._roots(client_name), load=False)
 
     @classmethod
     def start(
@@ -424,6 +419,7 @@ class HostedSession(Session):
         setup = cls._config()
         client_name, mode = _request(spec, idle_timeout)
         on, client = cls.host(host), setup.registry.client(client_name)
+        _environment_check(spec, on, mode)
         if not _owned(setup, mode, client, on):
             if spec.handlers:
                 raise ConfigError(
@@ -442,10 +438,7 @@ class HostedSession(Session):
     ) -> Session:
         """Its view once a new harness runs it; else the start error, nothing left."""
         assert spec.client is not None and spec.name is not None and spec.sid is not None
-        roots = (
-            *module_roots(sys.modules[__name__], ensemble.utils),
-            *cls.class_roots(spec.client),
-        )
+        roots = cls._roots(spec.client)
         request = cls.harness_request(spec, display=display, host=host, roots=roots)
         channel = Channel.create()
         try:
@@ -467,13 +460,17 @@ class HostedSession(Session):
                     stderr=log,
                     start_new_session=True,
                 )
-        except OSError as error:
-            shutil.rmtree(channel.directory, ignore_errors=True)
-            raise SessionError(f"session harness: {error.strerror or error}") from None
+        except BaseException as error:
+            shutil.rmtree(channel.directory, ignore_errors=True)  # request.json holds spec.env
+            if isinstance(error, TypeError | ValueError):
+                raise ConfigError(f"session harness request: not JSON: {error}") from None
+            if isinstance(error, OSError):
+                raise SessionError(f"session harness: {error.strerror or error}") from None
+            raise
         deadline = time.monotonic() + START_WAIT
         while True:
             status = channel.status()
-            if status.get("state") == "running":
+            if status.get("state") in ("running", "exited"):  # exited: its worker ended at once
                 break
             if (
                 status.get("state") == "failed"
@@ -499,6 +496,10 @@ class HostedSession(Session):
             host=host,
             idle_timeout=idle_timeout,
         )
+
+    @classmethod
+    def _roots(cls, client: str) -> tuple[str, ...]:
+        return (*module_roots(sys.modules[__name__], ensemble.utils), *cls.class_roots(client))
 
     @classmethod
     def _unspawn(

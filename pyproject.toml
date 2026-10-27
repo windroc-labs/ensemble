@@ -193,7 +193,7 @@ forbidden_modules = ["ensemble.session.engine.base", "ensemble.session.engine.ho
 name = "Session units follow the main import rules"
 type = "units"
 container = "ensemble.session"
-units = ["ensemble.session.engine.accounts", "ensemble.session.engine.capacity", "ensemble.session.engine.base", "ensemble.session.engine.config", "ensemble.session.engine.hosted_session", "ensemble.session.engine.worker", "ensemble.session.cli", "ensemble.session.engine.types", "ensemble.session.engine.records", "ensemble.session.engine.status_log", "ensemble.session.engine.tmux_cli", "ensemble.session.modes", "ensemble.session.modes.client_adapters", "ensemble.session.clients", "ensemble.session.hosts", "ensemble.session.hosts.base", "ensemble.session.hosts.types", "ensemble.session.viewer", "ensemble.session.extension", "ensemble.session.harness", "ensemble.session.harness.process"]
+units = ["ensemble.session.engine.accounts", "ensemble.session.engine.capacity", "ensemble.session.engine.base", "ensemble.session.engine.config", "ensemble.session.engine.hosted_session", "ensemble.session.engine.worker", "ensemble.session.cli", "ensemble.session.engine.types", "ensemble.session.engine.records", "ensemble.session.engine.status_log", "ensemble.session.engine.tmux_cli", "ensemble.session.modes", "ensemble.session.modes.client_adapters", "ensemble.session.clients", "ensemble.session.hosts", "ensemble.session.hosts.base", "ensemble.session.hosts.types", "ensemble.session.viewer", "ensemble.session.extension", "ensemble.session.harness", "ensemble.session.harness.guard", "ensemble.session.harness.process"]
 dependencies = [
     "ensemble.session.engine.capacity -> ensemble.session.engine.types ensemble.session.hosts.base ensemble.utils",
     "ensemble.session.engine.accounts -> ensemble.session.engine.types ensemble.utils",
@@ -210,10 +210,11 @@ dependencies = [
     "ensemble.session.engine.records -> ensemble.session.engine.types ensemble.utils",
     "ensemble.session.engine.status_log -> ensemble.utils",
     "ensemble.session.engine.tmux_cli -> ensemble.session.engine.status_log ensemble.session.engine.types ensemble.utils",
-    "ensemble.session.hosts -> ensemble.session.harness ensemble.session.hosts.base ensemble.session.hosts.types ensemble.session.engine.status_log ensemble.session.engine.tmux_cli ensemble.session.engine.types ensemble.utils",
+    "ensemble.session.hosts -> ensemble.session.harness.guard ensemble.session.hosts.base ensemble.session.hosts.types ensemble.session.engine.status_log ensemble.session.engine.tmux_cli ensemble.session.engine.types ensemble.utils",
     "ensemble.session.hosts.base -> ensemble.session.hosts.types ensemble.session.engine.types ensemble.utils",
     "ensemble.session.hosts.types -> ",
     "ensemble.session.harness -> ensemble.session.engine.base ensemble.session.engine.types ensemble.session.hosts.base ensemble.session.modes ensemble.utils",
+    "ensemble.session.harness.guard -> ",
     "ensemble.session.harness.process -> ensemble.session.harness ensemble.session.engine.hosted_session ensemble.session.engine.types",
     "ensemble.session.viewer -> ensemble.session.engine.tmux_cli ensemble.session.hosts.base ensemble.session.hosts.types ensemble.session.engine.types ensemble.utils",
     "ensemble.session.extension -> ensemble.session.clients ensemble.session.modes.client_adapters ensemble.session.harness ensemble.session.engine.types ensemble.session.hosts.base ensemble.session.hosts.types ensemble.utils",

@@ -136,11 +136,10 @@ class Dispatch:
             while True:
                 try:
                     returned = handler.on_event(call)
-                except (SystemExit, KeyboardInterrupt):
-                    raise
-                except BaseException as error:  # retried
-                    LOG.warning("%s %d: %s failed", KIND, index, logged.id, exc_info=True)
-                    self._note(index, logged, attempt, repr(error)[:ERROR_MAX])
+                except BaseException as error:  # retried, SystemExit too
+                    if attempt & (attempt - 1) == 0:  # attempts 1, 2, 4, …: a bounded record
+                        LOG.warning("%s %d: %s failed", KIND, index, logged.id, exc_info=True)
+                        self._note(index, logged, attempt, repr(error)[:ERROR_MAX])
                     self._sleep(delay)
                     if self._stopped.is_set():
                         return
