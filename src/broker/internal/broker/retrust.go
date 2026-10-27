@@ -43,7 +43,11 @@ func Retrust(k RetrustKeychain, password func() ([]byte, error), notice, out io.
 			fmt.Fprintf(notice, "%q: %v; rerun %s\n", item.service, err, RetrustCommand)
 			return
 		}
-		fmt.Fprintf(notice, "%q %q: %v\n", item.service, item.account, err)
+		line := err.Error()
+		if !strings.HasSuffix(line, "rerun "+RetrustCommand) && !errors.Is(err, ErrInvalidOwnerEdit) {
+			line += "; rerun " + RetrustCommand
+		}
+		fmt.Fprintf(notice, "%q %q: %s\n", item.service, item.account, line)
 	}
 	foreign := 0
 	leave := func(item retrustItem) {
@@ -67,6 +71,11 @@ func Retrust(k RetrustKeychain, password func() ([]byte, error), notice, out io.
 	}
 	pw := &onePassword{read: password}
 	defer pw.erase()
+	if len(listed) > 0 {
+		// The prompt comes first, so every guard read below follows it: an item swapped meanwhile stays unchanged.
+		value, _ := pw.get()
+		erase(value)
+	}
 	changed := 0
 	for _, item := range listed {
 		if a, err := k.AppAccess(item.service, item.account); err == nil && earlierBuild(a) && appsOnlyBroker(a) != nil {
@@ -74,6 +83,7 @@ func Retrust(k RetrustKeychain, password func() ([]byte, error), notice, out io.
 		}
 		err := secureGuarded(item.service, item.account, "rerun "+RetrustCommand, k, pw.get, earlierBuild)
 		switch {
+		case errors.Is(err, ErrNotFound): // deleted since the listing, as a missing item is skipped there
 		case errors.Is(err, errNotEarlierBuild):
 			leave(item)
 		case err != nil:

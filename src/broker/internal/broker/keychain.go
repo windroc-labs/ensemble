@@ -484,7 +484,8 @@ func secureItem(item, account, rerun string, k ItemTrust, password func() ([]byt
 
 // secureGuarded is secureItem, changing an item that does not yet trust only the broker only when guard (nil: any)
 // holds for the access it read first; else it fails with errNotEarlierBuild, the item unchanged, no password read.
-// The access checked is the one changed, so nothing can swap the item between the check and the change.
+// The guard reads the access right before the change, after the password; the change looks the item up again, so a
+// same-user process could still swap it in between (accepted: spec D9).
 func secureGuarded(item, account, rerun string, k ItemTrust, password func() ([]byte, error), guard func(AppAccess) bool) error {
 	before, err := k.AppAccess(item, account)
 	if err != nil {

@@ -315,7 +315,6 @@ func TestUsageErrors(t *testing.T) {
 		{"unknown", []string{"login", "env", "Dummy"}},
 		{"unknown", []string{"login", "env", "a/b"}},
 		{"unknown", []string{"login", "env", "dummy", "value"}},
-		{"unknown", []string{"retrust", "--all"}},
 		{"unknown", []string{"retrust", "x"}},
 	} {
 		code, out, errOut := invoke(a, tc.args...)
@@ -1345,7 +1344,7 @@ func TestRetrustCommand(t *testing.T) {
 	if code, out, errOut := invoke(a, "retrust"); code != 0 || out != "re-trusted 1 broker keychain item(s)\n" || errOut != "" || len(got) != 1 {
 		t.Fatalf("%d %q %q %v", code, out, errOut, got)
 	}
-	for _, args := range [][]string{{"retrust", "--all"}, {"retrust", "x"}} {
+	for _, args := range [][]string{{"retrust", "x"}, {"retrust", "x", "y"}} {
 		if code, _, errOut := invoke(a, args...); code != 2 || !strings.Contains(errOut, "| retrust") {
 			t.Fatalf("%q: %d %q", args, code, errOut)
 		}

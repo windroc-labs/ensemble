@@ -31,6 +31,9 @@ var linearName = regexp.MustCompile(`^[A-Za-z0-9._@+-]{1,128}$`)
 var linearUser = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 var errLinear = errors.New("Linear broker maintenance failed; check enrollment and broker installation, then rerun")
 
+// ErrLinearStale is linear-maintain meeting a broker Linear item an earlier broker build wrote, which retrust repairs.
+var ErrLinearStale = errors.New("a broker Linear keychain item trusts an earlier broker build: run " + RetrustCommand)
+
 // LinearIdentity is public enrollment metadata, never a credential. Kind fixes the requested scopes.
 type LinearIdentity struct {
 	Name          string `json:"name"`
@@ -301,6 +304,11 @@ func (l Linear) Maintain(ctx context.Context, a LinearIdentity) (LinearResult, e
 		return LinearResult{}, errLinear
 	}
 	defer unlock()
+	for _, item := range [][2]string{{linearService, "registry"}, {linearService, "app/" + a.TokenService}, {linearGrantsService, "host/" + a.TokenService}} {
+		if _, earlier, err := checkItem(l.keys, item[0], item[1]); err == nil && earlier {
+			return LinearResult{}, ErrLinearStale
+		}
+	}
 	var registry []LinearIdentity
 	if l.read("registry", &registry) != nil || !slices.Contains(registry, a) {
 		return LinearResult{}, errLinear

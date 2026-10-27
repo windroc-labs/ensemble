@@ -645,8 +645,8 @@ func TestLinearReenrollmentRepairsPreviousBrokerMetadata(t *testing.T) {
 		k.metadataAccess[key] = *reinstalled()
 	}
 	k.access = reinstalled()
-	if _, err := l.Maintain(context.Background(), a); err == nil {
-		t.Fatal("stale broker metadata accepted")
+	if _, err := l.Maintain(context.Background(), a); !errors.Is(err, ErrLinearStale) || !strings.Contains(err.Error(), "run "+RetrustCommand) {
+		t.Fatalf("stale broker metadata: %v", err)
 	}
 	passwordReads := 0
 	rebuilt := NewLinear(t.TempDir(), SystemKeychain{}, func() ([]byte, error) { passwordReads++; return []byte(keychainPass), nil })

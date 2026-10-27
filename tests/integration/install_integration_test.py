@@ -3317,7 +3317,7 @@ exec /bin/rm "$@"
         )
         state = Path(self.ensemble, "install/state")
         state.write_text(re.sub(r"(?m)^login_opencode=.*\n", "", state.read_text()))
-        (self.fakes / "keychain/foreign-ensemble-opencode").touch()
+        (self.fakes / "keychain/foreign-ensemble-broker-opencode").touch()
         for client, account, code in (("opencode", "lan", 0), ("codex", "auth", 1)):
             with self.subTest(client=client):
                 if client == "codex":
@@ -3326,7 +3326,7 @@ exec /bin/rm "$@"
                     codex.write_text(
                         json.dumps({**saved, "state": "login_unavailable", "repair": "login"})
                     )
-                    (self.fakes / "keychain/foreign-ensemble-codex").touch()
+                    (self.fakes / "keychain/foreign-ensemble-broker-codex").touch()
                 result = self.again()
                 self.assertEqual(result.code, code, result.stderr)
                 for text in (

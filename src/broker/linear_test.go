@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -38,5 +39,16 @@ func TestLinearHostCommands(t *testing.T) {
 		if code != 1 || out != "" || strings.Contains(errOut, "SENTINEL") || !strings.Contains(errOut, "Linear") {
 			t.Fatalf("%d %q %q", code, out, errOut)
 		}
+	}
+}
+
+// A broker Linear item an earlier broker build wrote names its repair, retrust.
+func TestLinearStaleItemNamesRetrust(t *testing.T) {
+	a := app{linear: func(context.Context, keys, bool) (any, error) {
+		return nil, fmt.Errorf("maintenance: %w", broker.ErrLinearStale)
+	}}
+	code, out, errOut := invoke(a, "linear-maintain")
+	if code != 1 || out != "" || errOut != "ensemble-broker: "+broker.ErrLinearStale.Error()+"\n" || !strings.Contains(errOut, broker.RetrustCommand) {
+		t.Fatalf("%d %q %q", code, out, errOut)
 	}
 }

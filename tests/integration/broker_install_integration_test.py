@@ -275,8 +275,8 @@ class Install(Case):
         self.assertIn(
             "v9.8.7's ensemble-broker speaks protocol 6, this plugin wants 7: install the plugin"
             " at v9.8.7 (docs/upgrading.md), or build the broker from this plugin with"
-            f" sh {self.plugin.resolve()}/src/broker/install.sh --build, which needs Go and"
-            " resets every broker login; nothing installed",
+            f" sh {self.plugin.resolve()}/src/broker/install.sh --build, which needs Go,"
+            " then run its retrust; nothing installed",
             result.stderr,
         )
 
@@ -343,7 +343,7 @@ class Install(Case):
         self.assertEqual(seeded.read_text(), (BROKER / "worker/Dockerfile").read_text())
         self.assertTrue(self.seeded.exists())
         calls = self.calls()
-        self.assertEqual([c.split()[0] for c in calls], ["go"] + ["codesign"] * 4 + ["sudo"] * 2)
+        self.assertEqual([c.split()[0] for c in calls], ["go"] + ["codesign"] * 5 + ["sudo"] * 2)
         out = calls[0].split()[4]
         self.assertEqual(calls[0], f"go build -trimpath -o {out} .")
         self.assertEqual(calls[1], f"{SIGN}{out}")

@@ -150,17 +150,6 @@ func main() {
 	os.Exit(code)
 }
 
-// noKeychain is a keychain without items.
-type noKeychain struct{}
-
-func (noKeychain) Services(string) ([]string, error) { return nil, nil }
-func (noKeychain) Accounts(string) ([]string, error) { return nil, nil }
-
-func exists(path string) bool {
-	_, err := os.Lstat(path)
-	return err == nil
-}
-
 func accountHome() (string, error) {
 	u, err := user.Current()
 	if err != nil || !strings.HasPrefix(u.HomeDir, "/") {
@@ -184,7 +173,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 		if err == nil {
 			result, err = a.linear(ctx, k, args[0] == "login")
 		}
-		if err != nil {
+		switch {
+		case errors.Is(err, broker.ErrLinearStale):
+			fmt.Fprintln(stderr, "ensemble-broker:", broker.ErrLinearStale)
+			return 1
+		case err != nil:
 			fmt.Fprintln(stderr, "ensemble-broker: Linear command failed; check enrollment and broker installation, then rerun")
 			return 1
 		}
@@ -449,19 +442,7 @@ func system() app {
 			}
 			return k, nil
 		},
-		legacy: func() ([]string, error) {
-			home, err := accountHome()
-			if err != nil {
-				return nil, err
-			}
-			var k legacyKeychain = keys{Home: home}
-			// Not the installed broker (credential access refuses it anyway), or root's install-codex without a
-			// login keychain: only the static secrets' keys to check.
-			if broker.CheckInstalled() != nil || !exists(filepath.Join(home, "Library/Keychains/login.keychain-db")) {
-				k = noKeychain{}
-			}
-			return legacyState(home, k)
-		},
+		legacy: systemLegacy,
 		linear: linearSystem,
 		lockQuery: func(ctx context.Context, k keys, lock string) (any, error) {
 			return withHost("lock-query", "", k, nil, func(h launcher.Host) (any, error) { return h.LockQuery(ctx, lock) })

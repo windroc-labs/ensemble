@@ -352,6 +352,35 @@ func TestRetrustRechecksAfterPassword(t *testing.T) {
 	}
 }
 
+// The first listed item too is checked after the password: the guard's read comes after the prompt for every item.
+func TestRetrustRechecksFirstItemAfterPassword(t *testing.T) {
+	k := newRetrustKeychain(map[string]*AppAccess{tokenService + "/default": earlier(), codexService + "/auth": earlier()})
+	p := &countingPassword{before: func() { *k.items[tokenService+"/default"] = *added() }}
+	notice, out, err := retrust(k, p)
+	if err != nil || slices.ContainsFunc(k.steps, func(s string) bool { return strings.Contains(s, tokenService) }) {
+		t.Fatalf("%v steps %q", err, k.steps)
+	}
+	if !strings.Contains(notice, `"ensemble-broker-claude" "default" left unchanged: it trusts another application`) || !strings.HasSuffix(out, "re-trusted 1 broker keychain item(s)\n") {
+		t.Fatalf("notice %q out %q", notice, out)
+	}
+}
+
+// An item deleted after the listing is skipped as pass 1 skips a missing one; an unreadable one names the rerun.
+func TestRetrustPassTwoMissingAndUnreadable(t *testing.T) {
+	k := newRetrustKeychain(map[string]*AppAccess{tokenService + "/default": earlier(), codexService + "/auth": earlier()})
+	p := &countingPassword{before: func() {
+		delete(k.items, tokenService+"/default")
+		k.failAccess[codexService+"/auth"] = errors.New("keychain status -25299")
+	}}
+	notice, _, err := retrust(k, p)
+	if err == nil || strings.Contains(notice, `"default"`+":") {
+		t.Fatalf("%v\n%s", err, notice)
+	}
+	if !strings.Contains(notice, `"ensemble-broker-codex" "auth": keychain item ensemble-broker-codex unchanged: reading its access failed: keychain status -25299; rerun `+RetrustCommand+"\n") {
+		t.Fatalf("notice %q", notice)
+	}
+}
+
 func TestRetrustContinuesAfterFailure(t *testing.T) {
 	k := newRetrustKeychain(map[string]*AppAccess{
 		tokenService + "/default": earlier(),

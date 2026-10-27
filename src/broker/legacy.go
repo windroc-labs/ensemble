@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
+
+	"ensemble/broker/internal/broker"
 )
 
 // Migration code (spec D13): remove legacyState, legacyServices and legacyRefPrefixes at the next broker protocol bump
@@ -71,6 +74,27 @@ func legacyState(home string, k legacyKeychain) ([]string, error) {
 	slices.Sort(refs)
 	return append(found, refs...), nil
 }
+
+// systemLegacy is legacyState of the account's home and login keychain.
+func systemLegacy() ([]string, error) {
+	home, err := accountHome()
+	if err != nil {
+		return nil, err
+	}
+	var k legacyKeychain = keys{Home: home}
+	// Not the installed broker (credential access refuses it anyway), or root's install-codex without a login
+	// keychain: only the static secrets' keys to check.
+	if _, err := os.Lstat(filepath.Join(home, "Library/Keychains/login.keychain-db")); err != nil || broker.CheckInstalled() != nil {
+		k = noKeychain{}
+	}
+	return legacyState(home, k)
+}
+
+// noKeychain is a keychain without items.
+type noKeychain struct{}
+
+func (noKeychain) Services(string) ([]string, error) { return nil, nil }
+func (noKeychain) Accounts(string) ([]string, error) { return nil, nil }
 
 // legacyError refuses a command while the one-time rename is incomplete, naming the first old names found; nil when
 // it is complete.
