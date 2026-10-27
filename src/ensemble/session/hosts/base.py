@@ -47,6 +47,7 @@ from ensemble.utils import (
     kill_group,
     piped_popen,
     printable_abs,
+    read_regular,
     resume_command,
     thaw,
 )
@@ -58,6 +59,16 @@ GUARD_LEASE_FD = "ENSEMBLE_GUARD_LEASE_FD"
 GUARD_HOOK_SOCKET = "ENSEMBLE_GUARD_HOOK_SOCKET"
 GUARD_WAIT = 10  # s for a guard's reply, or its exit after a close (it gives up 9 s after one)
 TUI_STATE = "session.json"
+PROMPTED = "prompted"  # "<generation> <begun> <submitted>" sends
+
+
+def sent(folder: str) -> str | None:
+    """Tui dir `folder`'s PROMPTED, read before the hook record it goes in."""
+    try:
+        data = read_regular(os.path.join(folder, PROMPTED))
+    except OSError:
+        return None
+    return None if data is None else data.decode(errors="replace").strip()
 
 
 def tui_lock(name: str) -> str:

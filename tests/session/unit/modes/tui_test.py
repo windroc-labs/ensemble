@@ -55,6 +55,7 @@ from ensemble.session.engine.types import (
     WorkerHook,
 )
 from ensemble.session.engine.worker import WorkerState
+from ensemble.session.hosts import base as host_base
 from ensemble.session.hosts.base import GUARD_WAIT, InteractiveProcess, Process
 from ensemble.session.hosts.managed import ManagedProcess
 from ensemble.session.modes import tui, tui_hook
@@ -229,7 +230,7 @@ class Base(Case):
         """Each line to hooks.jsonl: bytes as given, else a JSON line stamped as the hook does."""
         with open(self.hooks, "ab") as f:
             for line in lines:
-                if isinstance(line, dict) and (sent := tui_hook.sent(self.dir)) is not None:
+                if isinstance(line, dict) and (sent := host_base.sent(self.dir)) is not None:
                     line = {"sent": sent, **line}
                 f.write(line if isinstance(line, bytes) else (json.dumps(line) + "\n").encode())
 

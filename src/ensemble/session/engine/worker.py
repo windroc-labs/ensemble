@@ -64,6 +64,7 @@ VERSION = 1
 EARLY = 5
 TICK = 1
 COLOR_CAP = 15
+TURN_DIALOG = 2  # s to wait for a started turn's dialog
 WAIT = 10
 REPORT_LINES = 20
 SCREEN_LINES = 2000
@@ -560,20 +561,25 @@ class Worker:
             self.say(f"session {name}: not {'hidden' if hidden else 'shown'}: {error}")
 
     def _watch(self, session: Session) -> None:
-        began, turned = self.clock(), False  # its opening follows a turn
+        began, turned = self.clock(), None
         for event in session.events():
             if isinstance(event, Exited):
                 raise SessionError(self._died(event.returncode))
-            turned = turned or isinstance(event, TurnStarted)
             if isinstance(event, Blocked):
                 self.say(f"session {self.state.name}: waits on a dialog: {event.reason}")
-                if not turned:
+                if turned is None:
                     self._uncolored(session, "waits on a dialog")
                 return
             elapsed = self.clock() - began
+            if turned is None and isinstance(event, TurnStarted):
+                turned = elapsed
             if not _up(session, elapsed):
                 continue
-            if turned or _pending(session) is None:
+            if turned is not None:
+                if elapsed >= turned + TURN_DIALOG:
+                    return
+                continue
+            if _pending(session) is None:
                 return
             if elapsed >= COLOR_CAP:
                 self._uncolored(session, f"not ready within {COLOR_CAP} s")

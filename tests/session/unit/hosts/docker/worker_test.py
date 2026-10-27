@@ -34,16 +34,20 @@ def hook(label="Stop", payload: object = None, delivery="a" * 32) -> bytes:
 
 
 class Hooks:
-    """The resident hook process: each call answers from `answers` (None: ok), else ok."""
+    """The resident hook process over `folder`: each call answers from `answers` (None: ok), else
+    ok; each call's send count in `sents`.
+    """
 
     def __init__(self, *answers):
-        self.answers, self.calls, self.stopped = list(answers), [], False
+        self.answers, self.calls, self.sents, self.stopped = list(answers), [], [], False
+        self.folder = None
 
     def stop(self):
         self.stopped = True
 
-    def call(self, label, body, event):
+    def call(self, label, body, event, sent=None):
         self.calls.append((label, body, event))
+        self.sents.append(sent)
         return self.answers.pop(0) if self.answers else None
 
 
@@ -88,6 +92,8 @@ class Base(Case):
                 clock=clock or (lambda: NOW),
             )
 
+        if hooks is not None:
+            hooks.folder = self.state
         self.owner = os.open(os.path.join(self.state, "guard.lock"), os.O_RDWR | os.O_CREAT)
         proc = mock.Mock()
         proc.stdin.fileno.return_value = 99
@@ -199,10 +205,22 @@ class HookTest(Base):
         self.assertEqual(hooks.calls, [("Stop", {"sid": "s"}, "a" * 32)])
         self.assertEqual(channel.read(0), [])
 
+    def test_a_hook_carries_the_send_count_seen_as_it_was_accepted(self):
+        hooks = Hooks()
+        channel = self.make(hooks=hooks)
+        prompted = os.path.join(self.state, "prompted")
+        with open(prompted, "w") as f:
+            f.write(f"{GEN} 0 0")
+        channel.accept(b"h", hook())
+        with open(prompted, "w") as f:
+            f.write(f"{GEN} 1 1")  # a send after the guard acked the Stop, before its delivery
+        self.deliver(channel)
+        self.assertEqual(hooks.sents, [f"{GEN} 0 0"])
+
     def test_a_failed_host_hook_retries_the_same_id_then_is_rejected(self):
         class Failing(Hooks):
-            def call(self, label, body, event):
-                super().call(label, body, event)
+            def call(self, label, body, event, sent=None):
+                super().call(label, body, event, sent)
                 return "hook exit 1" if event == "a" * 32 else None
 
         hooks = Failing()
@@ -243,10 +261,10 @@ class HookTest(Base):
         calling, release = threading.Event(), threading.Event()
 
         class Slow(Hooks):
-            def call(self, label, body, event):
+            def call(self, label, body, event, sent=None):
                 calling.set()
                 release.wait(5)
-                return super().call(label, body, event)
+                return super().call(label, body, event, sent)
 
         hooks = Slow()
         channel = self.make(hooks=hooks)
@@ -314,9 +332,9 @@ class HookTest(Base):
         gate = threading.Event()
 
         class Slow(Hooks):
-            def call(self, label, body, event):
+            def call(self, label, body, event, sent=None):
                 gate.wait(5)
-                return super().call(label, body, event)
+                return super().call(label, body, event, sent)
 
         hooks = Slow()
         channel = self.make(hooks=hooks)

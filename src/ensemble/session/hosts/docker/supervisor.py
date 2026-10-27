@@ -21,6 +21,7 @@ import threading
 import time
 
 from ensemble.session.engine.status_log import SessionStatusLog
+from ensemble.session.hosts.base import sent
 from ensemble.session.hosts.docker.broker import Broker, hook_root
 from ensemble.session.hosts.docker.hooks import HookWorker
 from ensemble.session.hosts.docker.maintenance import Maintenance, run
@@ -84,7 +85,7 @@ class Supervisor:
             why = "directory"
         elif seq > self._seen():
             body.pop("transcript_path", None)
-            why = self.worker.call(request["argv"][2], body, f"{gen}.{seq}")
+            why = self.worker.call(request["argv"][2], body, f"{gen}.{seq}", sent(self.tui_dir))
             if why:
                 self.reject(gen, seq, why)
                 return {"gen": gen, "seq": seq, "ok": False, "retry": True}

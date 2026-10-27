@@ -19,13 +19,13 @@ import re
 import stat
 import sys
 import traceback
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import suppress
 from datetime import datetime
 from types import SimpleNamespace
 
 from ensemble.session.engine.types import MARKS, HookCall, HookError, StatusState
-from ensemble.session.hosts.base import TUI_STATE
+from ensemble.session.hosts.base import TUI_STATE, sent
 from ensemble.utils import read_regular
 
 PAYLOAD_MAX = 64 << 20  # bytes of stdin parsed
@@ -44,8 +44,6 @@ HOOKS = "hooks.jsonl"
 ROTATED = HOOKS + ".1"
 
 HOOKS_MAX = 1 << 20  # bytes
-
-PROMPTED = "prompted"  # "<generation> <begun> <submitted>" sends
 
 
 def _abs(value) -> bool:
@@ -100,17 +98,24 @@ def _prepare(argv: Sequence[str], roots: Sequence[str]):
     return folder, label, state, specs
 
 
-def main(argv: Sequence[str], stdin, *, roots: Sequence[str], event: str | None = None) -> None:
+def main(
+    argv: Sequence[str],
+    stdin,
+    *,
+    roots: Sequence[str],
+    event: str | None = None,
+    stamp: Callable[[str], str | None] = sent,
+) -> None:
     payload = read_payload(stdin)
     if event is not None and not LABEL.fullmatch(event):
         raise HookError("usage: relay event <[A-Za-z0-9_.-]{1,64}>")
     folder, label, state, specs = _prepare(argv, roots)
-    _dispatch(folder, label, payload, state, specs, event=event)
+    _dispatch(folder, label, payload, state, specs, event=event, stamp=stamp)
 
 
-def _dispatch(folder, label, payload, state, specs, *, event):
+def _dispatch(folder, label, payload, state, specs, *, event, stamp):
     _validate_state(state, os.path.join(folder, TUI_STATE), HookError)
-    marker = sent(folder)
+    marker = stamp(folder)  # as it begins
 
     def call(kind, given) -> HookCall:
         return HookCall(
@@ -143,14 +148,6 @@ def _dispatch(folder, label, payload, state, specs, *, event):
         append(os.path.join(folder, HOOKS), record if event is None else {**record, "event": event})
     if host is not None:
         host.on_hook(word, call("host_hook", payload))
-
-
-def sent(folder: str) -> str | None:
-    """PROMPTED, read as a hook begins."""
-    with suppress(OSError):
-        data = read_regular(os.path.join(folder, PROMPTED))
-        return None if data is None else data.decode(errors="replace").strip()
-    return None
 
 
 def _journaled(path: str, event: str, label: str) -> dict | None:
@@ -355,13 +352,20 @@ def append(path: str, record: dict) -> None:
         raise HookError(f"{path}: short write")
 
 
-def run(argv: Sequence[str], stdin, *, roots: Sequence[str], event: str | None = None) -> bool:
+def run(
+    argv: Sequence[str],
+    stdin,
+    *,
+    roots: Sequence[str],
+    event: str | None = None,
+    stamp: Callable[[str], str | None] = sent,
+) -> bool:
     """One hook call, as `ensemble-session hook DIR LABEL` runs it with its own source roots (`event`:
     serve's relay event), its payload stdin's bytes (stdin may be None): returns success, never
     raises or writes stdout; a failure keeps its traceback in DIR/hook.log and one stderr line.
     """
     try:
-        main(argv, stdin.buffer, roots=roots, event=event)
+        main(argv, stdin.buffer, roots=roots, event=event, stamp=stamp)
     except Exception as e:  # noqa: BLE001  # the hook must never fail the client
         if argv and _abs(argv[0]):
             with (
@@ -381,7 +385,9 @@ def run(argv: Sequence[str], stdin, *, roots: Sequence[str], event: str | None =
 
 
 def serve(argv: Sequence[str], requests, replies, *, roots: Sequence[str]) -> None:
-    """`hook --serve DIR`: per {label, event, payload} line, one run() and its {"ok"} line."""
+    """`hook --serve DIR`: per {label, event, payload, sent} line, one run() and its {"ok"} line;
+    its record gets the request's `sent`.
+    """
     for line in requests:
         request = _request(line)
         ok = request is not None and run(
@@ -389,6 +395,7 @@ def serve(argv: Sequence[str], requests, replies, *, roots: Sequence[str]) -> No
             SimpleNamespace(buffer=io.BytesIO(json.dumps(request["payload"]).encode())),
             roots=roots,
             event=request["event"],
+            stamp=lambda _folder, given=request["sent"]: given,
         )
         try:
             replies.write(json.dumps({"ok": ok}).encode() + b"\n")
@@ -404,10 +411,11 @@ def _request(line: bytes) -> dict | None:
         return None
     if (
         isinstance(request, dict)
-        and set(request) == {"label", "event", "payload"}
+        and set(request) == {"label", "event", "payload", "sent"}
         and isinstance(request["label"], str)
         and (request["event"] is None or isinstance(request["event"], str))
         and isinstance(request["payload"], dict)
+        and (request["sent"] is None or isinstance(request["sent"], str))
     ):
         return request
     return None

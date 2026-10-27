@@ -16,6 +16,7 @@ import uuid
 from contextlib import redirect_stderr
 
 from ensemble.session.engine import types as engine_types
+from ensemble.session.hosts.base import PROMPTED
 from ensemble.session.modes import tui_hook
 from ensemble.utils import StatusState
 from tests.session.case import SRC, Case
@@ -336,7 +337,7 @@ class RelayEvent(Callbacks):
 
     def test_a_record_carries_the_send_marker_read_before_it(self):
         self.run_hook(None)
-        with open(os.path.join(self.dir, tui_hook.PROMPTED), "w", encoding="utf-8") as f:
+        with open(os.path.join(self.dir, PROMPTED), "w", encoding="utf-8") as f:
             f.write("g1 2 1")
         self.run_hook(None)
         self.assertEqual([r.get("sent") for r in self.records()], [None, "g1 2 1"])
@@ -358,13 +359,20 @@ class Serve(Callbacks):
             tui_hook.serve([self.dir], io.BytesIO(b"".join(lines)), replies, roots=ROOTS)
         return [json.loads(line) for line in replies.getvalue().splitlines()]
 
-    def request(self, event, label="stop", payload=None):
+    def request(self, event, label="stop", payload=None, sent=None):
         found = {
             "label": label,
             "event": event,
             "payload": {"n": 1} if payload is None else payload,
+            "sent": sent,
         }
         return json.dumps(found).encode() + b"\n"
+
+    def test_a_record_carries_the_requests_send_count_not_the_files(self):
+        with open(os.path.join(self.dir, PROMPTED), "w", encoding="utf-8") as f:
+            f.write("g1 2 2")
+        self.serve(self.request(None), self.request(None, sent="g1 1 1"))
+        self.assertEqual([r.get("sent") for r in self.records()], [None, "g1 1 1"])
 
     def test_each_request_gets_its_reply_in_order_and_a_retry_journals_once(self):
         replies = self.serve(self.request("g1.1"), self.request("g1.1"), self.request(None))
@@ -384,7 +392,9 @@ class Serve(Callbacks):
             b'{"label": 1, "event": null, "payload": {}}\n',
             b'{"label": "stop", "event": 2, "payload": {}}\n',
             b'{"label": "stop", "event": null, "payload": []}\n',
-            b'{"label": "stop", "event": null, "payload": {}, "x": 1}\n',
+            b'{"label": "stop", "event": null, "payload": {}, "sent": null, "x": 1}\n',
+            b'{"label": "stop", "event": null, "payload": {}, "sent": 1}\n',
+            b'{"label": "stop", "event": null, "payload": {}}\n',
         ):
             with self.subTest(line=line):
                 self.assertEqual(self.serve(line, good), [{"ok": False}, {"ok": True}])

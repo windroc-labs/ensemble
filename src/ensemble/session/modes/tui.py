@@ -52,12 +52,14 @@ from ensemble.session.engine.types import (
 from ensemble.session.hosts.base import (
     GUARD_WAIT,
     HARNESS_ROOT,
+    PROMPTED,
     TUI_DIR,
     TUI_STATE,
     Host,
     InteractiveProcess,
     Process,
     check_sid,
+    sent,
     tui_lock,
 )
 from ensemble.session.hosts.managed import ManagedProcess
@@ -260,11 +262,11 @@ class TuiStore:
 
     def prompts(self, generation: str) -> tuple[int, int]:
         """Sends to `generation` begun, submitted."""
-        return _sends(tui_hook.sent(self.dir), generation)
+        return _sends(sent(self.dir), generation)
 
     def mark_prompted(self, generation: str, *, submitted: bool = False) -> None:
         """Under the send lock: one more begun, or all begun submitted."""
-        path, (begun, done) = os.path.join(self.dir, tui_hook.PROMPTED), self.prompts(generation)
+        path, (begun, done) = os.path.join(self.dir, PROMPTED), self.prompts(generation)
         begun, done = (begun, begun) if submitted else (begun + 1, done)
         try:
             fd = os.open(
@@ -989,10 +991,10 @@ class TuiMode(BaseMode):
         if self._opening is not None and any(label == self._opening[0] for label, *_ in records):
             self._due = time.monotonic() + OPEN_AFTER
         found: list[SessionEvent | Stderr | ClientBound] = [*observed]
-        for label, payload, sent in records:
+        for label, payload, marker in records:
             events = self.run.hook_events(label, payload)
             if any(isinstance(e, TurnStarted | TurnEnd | TurnFailed) for e in events):
-                self._absorbed = max(self._absorbed, _sends(sent, self._generation)[1])
+                self._absorbed = max(self._absorbed, _sends(marker, self._generation)[1])
             found += events
         self._track(found)
         return found

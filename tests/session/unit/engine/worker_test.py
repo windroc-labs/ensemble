@@ -571,6 +571,15 @@ class ColorWatchTest(Base):
         self.assertEqual(self.said, [])
         self.handle.publish.assert_called_once()
 
+    def test_a_dialog_just_after_a_turn_started_once_up_is_said(self):
+        idle = IdleTimeout(worker.TICK)
+        events = itertools.chain(
+            [idle] * (worker.EARLY + 1), [TurnStarted(), Blocked("Edit")], itertools.repeat(idle)
+        )
+        self.watch(float("inf"), events=events)
+        self.assertEqual(self.said, ["session w1: waits on a dialog: Edit"])
+        self.handle.publish.assert_called_once()
+
     def test_a_dialog_while_pending_says_both(self):
         self.watch(float("inf"), events=iter([Blocked("Trust")]))
         self.assertEqual(
