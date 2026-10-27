@@ -3,6 +3,7 @@ handlers get it, serving close and stop, and draining its handlers after the wor
 """
 
 import contextlib
+import io
 import json
 import os
 import threading
@@ -11,6 +12,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest import mock
 
+from ensemble.session.engine.hosted_session import HarnessStart
 from ensemble.session.engine.types import (
     Blocked,
     ClientBound,
@@ -349,6 +351,22 @@ class CallerTest(Base):
             with self.subTest(argv=argv):
                 self.assertEqual(process.main(["process", *argv]), 2)
 
+    def test_main_with_a_closed_caller_fd_frees_its_lock(self):
+        fd = next(fd for fd in range(1000, 2000) if not self.is_open(fd))  # hold() cannot reuse it
+        channel = Channel.create()
+        self.addCleanup(channel.release)
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            self.assertEqual(process.main(["process", "--caller", str(fd), channel.directory]), 1)
+        self.assertIn(f"session harness {channel.directory}: ", stderr.getvalue())
+        channel.hold()  # free: SessionError were it still held
+
+    def is_open(self, fd) -> bool:
+        try:
+            os.fstat(fd)
+        except OSError:
+            return False
+        return True
+
 
 class ExitTest(Base):
     def test_an_exit_mid_turn_fails_the_turn_then_exits_once(self):
@@ -490,7 +508,9 @@ class BeginTest(Case):
         class Session:
             @classmethod
             def from_harness_request(cls, _request):
-                return SimpleNamespace(handlers=()), None, None, (), pythonpath
+                return HarnessStart(
+                    cast(Any, SimpleNamespace(handlers=())), None, None, (), pythonpath
+                )
 
             @classmethod
             def own(cls, *_args, **_kw):

@@ -22,7 +22,7 @@ from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from dataclasses import fields as dataclass_fields
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, NamedTuple, cast
 
 import ensemble.utils
 from ensemble.session.clients.base import Client
@@ -122,6 +122,16 @@ def _environment_check(spec: Spec, on: Host, mode: Mode) -> None:
 
 def _built(cls: type[Host], name: str, settings: Mapping) -> Host:
     return cls(name, settings)
+
+
+class HarnessStart(NamedTuple):
+    """A session harness's start, from its request."""
+
+    spec: Spec
+    display: Display
+    host: str | None
+    roots: tuple[str, ...]
+    pythonpath: str | None  # the caller's, for its worker
 
 
 @dataclass(frozen=True)
@@ -596,9 +606,7 @@ class HostedSession(Session):
         }
 
     @classmethod
-    def from_harness_request(
-        cls, request: Mapping
-    ) -> tuple[Spec, Display, str | None, tuple[str, ...], str | None]:
+    def from_harness_request(cls, request: Mapping) -> HarnessStart:
         """harness_request's inverse, configuring this class; ConfigError when malformed."""
         try:
             config, fields = request["config"], dict(request["spec"])
@@ -632,7 +640,7 @@ class HostedSession(Session):
             raise ConfigError("session harness request: bad roots")
         if not (pythonpath is None or isinstance(pythonpath, str) and pythonpath.isprintable()):
             raise ConfigError("session harness request: bad pythonpath")
-        return spec, display, host, tuple(roots), pythonpath
+        return HarnessStart(spec, display, host, tuple(roots), pythonpath)
 
     @classmethod
     def own(

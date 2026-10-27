@@ -3108,9 +3108,9 @@ class HarnessRequestTest(HostedTuiBase):
                 )
             )
         fresh = type("Fresh", (HostedSession,), {"__module__": __name__})
-        self.assertEqual(
-            fresh.from_harness_request(request), (spec, "d", "tmux", (self.dir,), "lib:/abs/src")
-        )
+        start = fresh.from_harness_request(request)
+        self.assertEqual(start, (spec, "d", "tmux", (self.dir,), "lib:/abs/src"))
+        self.assertEqual((start.spec, start.pythonpath), (spec, "lib:/abs/src"))
         self.assertEqual(fresh._config().hosts, self.session._config().hosts)
 
     def test_a_caller_without_pythonpath_sends_none(self):
@@ -3120,7 +3120,7 @@ class HarnessRequestTest(HostedTuiBase):
                 self.spec(client="fake", mode="tui"), display=None, host=None, roots=()
             )
         fresh = type("Fresh", (HostedSession,), {"__module__": __name__})
-        self.assertIsNone(fresh.from_harness_request(request)[4])
+        self.assertIsNone(fresh.from_harness_request(request).pythonpath)
 
     def test_a_malformed_request_is_a_config_error(self):
         good = self.session.harness_request(

@@ -353,14 +353,14 @@ def _served(worker: Worker, op: Op, data: dict) -> dict:
 
 def _begin(directory: str, session: type[HostedSession] = HostedSession) -> Begin:
     def begin(request: dict):
-        spec, display, host, roots, pythonpath = session.from_harness_request(request)
-        modules = load_handlers(spec.handlers, roots, load=True)
-        if pythonpath is None:  # the worker's, as the caller's; its own imports are done
+        start = session.from_harness_request(request)
+        modules = load_handlers(start.spec.handlers, start.roots, load=True)
+        if start.pythonpath is None:  # the worker's, as the caller's; its own imports are done
             os.environ.pop("PYTHONPATH", None)
         else:
-            os.environ["PYTHONPATH"] = pythonpath
-        worker = session.own(spec, display=display, host=host, owner=directory)
-        return worker, modules, [handler.state for handler in spec.handlers]
+            os.environ["PYTHONPATH"] = start.pythonpath
+        worker = session.own(start.spec, display=start.display, host=start.host, owner=directory)
+        return worker, modules, [handler.state for handler in start.spec.handlers]
 
     return begin
 
@@ -380,10 +380,14 @@ def main(argv: Sequence[str]) -> int:
     except (OSError, SessionError) as error:
         print(f"session harness {argv[-1]}: {error}", file=sys.stderr)
         return 1
-    harness = Harness(channel, caller=caller)
-    for number in (signal.SIGTERM, signal.SIGHUP):
-        signal.signal(number, harness.signalled)
     try:
+        try:
+            harness = Harness(channel, caller=caller)
+        except OSError as error:  # a closed or bad --caller FD
+            print(f"session harness {argv[-1]}: {error}", file=sys.stderr)
+            return 1
+        for number in (signal.SIGTERM, signal.SIGHUP):
+            signal.signal(number, harness.signalled)
         return harness.run(_begin(channel.directory))
     finally:
         channel.release()
