@@ -1056,6 +1056,14 @@ class InstallTest(Case):
                     result.stderr,
                 )
 
+    def test_p2b_ref_with_dots_rejected_before_sudo(self):
+        self.assert_ok(self.fresh("--clients", "claude", "--no-docker"))
+        flags = ("--clients", "claude", "--no-docker", "--password-stdin")
+        result = self.run_install("--ref", "a..b", *flags, stdin=PASSWORD + "\n")
+        self.assertEqual(result.code, 2, result.stderr)
+        self.assertIn("install.sh: --ref: not a git ref: a..b\n", result.stderr)
+        self.assertFalse([c for c in self.calls() if c.startswith("sudo")])
+
     def test_unreadable_marketplace_stops(self):
         (self.fakes / "marketplace/.agents/plugins/marketplace.json").unlink()
         result = self.refused("--clients", "codex", "--no-docker")
@@ -2612,6 +2620,21 @@ class InstallTest(Case):
         self.assertNotIn("opencode plugin", calls)
         self.assertNotIn("api.github.com", calls)
 
+    def test_p7_refused_ref_keeps_saved_clients(self):
+        self.assert_ok(self.opencode_only())
+        state = Path(self.ensemble, "install/state")
+        saved = state.read_bytes()
+        self.serve({"ref": "v0.5.0"})
+        result = self.refused("--clients", "claude", "--ref", "v0.4.1", rerun=True)
+        self.assertEqual(state.read_bytes(), saved)
+        self.assertIn("which serves ensemble at v0.5.0; use --ref v0.5.0", result.stderr)
+        self.assertNotIn("rerun the same command", result.stderr)
+        self.serve()
+        result = self.opencode_rerun()
+        self.assert_ok(result)
+        self.assertIn("    clients: opencode, Docker: no", result.stderr)
+        self.assertEqual(self.state()["clients"], "opencode")
+
     def test_codex_only_docker_keeps_default_image_plugins(self):
         result = self.fresh("--clients", "codex", "--docker", logins=[(PEM_Q, "")])
         self.assert_ok(result)
@@ -4069,6 +4092,16 @@ exec /bin/rm "$@"
                 self.assertEqual(self.snapshot(), before)
                 self.assertFalse([c for c in self.calls() if c.startswith(("sudo", "brew"))])
                 self.assertNotIn("dependencies", result.stderr)
+
+    def test_p6_usage_error_gives_no_rerun_advice(self):
+        self.assert_ok(self.fresh("--board", "local", "--no-launchd", then=[(WRITE_Q, "y")] * 2))
+        result = self.run_install("--no-board", "--launchd")
+        self.assertEqual(result.code, 2, result.stderr)
+        self.assertIn(
+            "install.sh: --launchd/--no-launchd requires a board, and --no-board skips it\n",
+            result.stderr,
+        )
+        self.assertNotIn("rerun the same command to continue", result.stderr)
 
     def test_board_tracker_inference_handles_invalid_config(self):
         self.assert_ok(self.fresh("--clients", "claude", "--no-docker"))
