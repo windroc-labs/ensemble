@@ -1,6 +1,7 @@
 """Pure guard protocol and process-tree checks; no processes or credentials."""
 
 import argparse
+import contextlib
 import errno
 import io
 import json
@@ -550,3 +551,96 @@ class GuardTest(Case):
         self.assertEqual(
             json.loads(peer.sendall.call_args.args[0]), {"ok": True, "delivery_id": "a" * 32}
         )
+
+
+class LeaseTest(Case):
+    def setUp(self):
+        super().setUp()
+        self.run = os.path.join(self.home, "run", "a" * 32)
+        self.lease = os.path.join(self.run, "lease")
+
+    def main(self):
+        return guard.main(
+            ["--hook-socket", self.run + "/hook", "--lease", self.lease, "--", "true"]
+        )
+
+    def test_creates_its_private_dir_and_holds_the_lease_for_life(self):
+        lease = guard.hold_lease(self.lease)
+        assert lease is not None
+        self.addCleanup(os.close, lease)
+        self.assertEqual(os.stat(self.run).st_mode & 0o777, 0o700)
+        self.assertEqual(os.stat(self.lease).st_mode & 0o777, 0o600)
+        self.assertFalse(os.get_inheritable(lease))
+        self.assertIsNone(guard.hold_lease(self.lease))
+        args = argparse.Namespace(hook_socket=self.run + "/hook", lease=self.lease)
+        runtime = guard.Guard(args, lease)
+        self.assertEqual(runtime.directory, self.run)
+        runtime.state("exited")
+        with open(self.run + "/state.json") as stream:
+            self.assertEqual(json.load(stream), {"generation": "a" * 32, "state": "exited"})
+
+    def test_a_held_lease_exits_1(self):
+        os.makedirs(self.run, 0o700)
+        held = os.open(self.lease, os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, held)
+        guard.fcntl.flock(held, guard.fcntl.LOCK_EX)
+        stderr = io.StringIO()
+        with mock.patch.object(sys, "stderr", stderr):
+            self.assertEqual(self.main(), 1)
+        self.assertEqual(stderr.getvalue(), "guard: lease held\n")
+
+    def test_a_symlinked_lease_is_refused(self):
+        os.makedirs(self.run, 0o700)
+        os.symlink(os.path.join(self.home, "elsewhere"), self.lease)
+        with mock.patch.object(sys, "stderr", io.StringIO()):
+            self.assertEqual(self.main(), 1)
+        self.assertFalse(os.path.exists(os.path.join(self.home, "elsewhere")))
+
+
+class ProbeTest(Case):
+    def setUp(self):
+        super().setUp()
+        self.run = os.path.join(self.home, "a" * 32)
+
+    def probe(self):
+        out = io.StringIO()
+        with mock.patch.object(sys, "stdout", out):
+            self.assertEqual(guard.main(["--probe", self.run]), 0)
+        return out.getvalue()
+
+    def write(self, state=None, *, lease=True):
+        os.makedirs(self.run, 0o700, exist_ok=True)
+        if lease:
+            os.close(os.open(self.run + "/lease", os.O_RDWR | os.O_CREAT, 0o600))
+        if state is not None:
+            with open(self.run + "/state.json", "w") as stream:
+                stream.write(state)
+
+    def test_absent_dir(self):
+        self.assertEqual(self.probe(), "absent\n")
+
+    def test_held_lease_is_live(self):
+        self.write('{"generation": "x", "state": "running"}')
+        held = os.open(self.run + "/lease", os.O_RDWR)
+        self.addCleanup(os.close, held)
+        guard.fcntl.flock(held, guard.fcntl.LOCK_EX)
+        self.assertEqual(self.probe(), "live\n")
+
+    def test_free_lease_with_its_exited_state_is_exited(self):
+        self.write(json.dumps({"generation": "a" * 32, "state": "exited"}))
+        self.assertEqual(self.probe(), "exited\n")
+
+    def test_anything_else_is_dead(self):
+        for state, lease in (
+            (json.dumps({"generation": "a" * 32, "state": "running"}), True),
+            (json.dumps({"generation": "b" * 32, "state": "exited"}), True),
+            ("{", True),
+            (None, True),
+            (json.dumps({"generation": "a" * 32, "state": "exited"}), False),
+        ):
+            with self.subTest(state=state, lease=lease):
+                for name in ("lease", "state.json"):
+                    with contextlib.suppress(FileNotFoundError):
+                        os.unlink(os.path.join(self.run, name))
+                self.write(state, lease=lease)
+                self.assertEqual(self.probe(), "dead\n")

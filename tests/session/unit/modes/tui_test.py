@@ -1027,6 +1027,12 @@ class StartTest(Base):
         with self.assertRaisesRegex(SessionError, f"^{re.escape(path)}: "), store._locked():
             self.fail("locked a directory")
 
+    def test_an_absent_terminal_keeps_the_exit_code_it_confirmed(self):
+        mode = self.start(events=None)
+        mode._terminal.calls.state.return_value = Liveness.ABSENT
+        mode._terminal.calls.returncode.return_value = 7
+        self.assertEqual((mode.poll(0), mode.returncode(0)), (([], True), 7))
+
     def test_start_returns_its_session_live_at_once_with_its_prepared(self):
         mode = self.start(events=None)
         self.assertIsInstance(mode, tui.TuiMode)
@@ -2633,6 +2639,29 @@ class OwnerTest(Base):
     def test_an_unowned_start_writes_no_owner(self):
         self.start()
         self.assertNotIn("owner", tui.TuiMode.snapshot(NAME))
+        self.assertNotIn("owner", self.host.calls.terminal.call_args.kwargs["metadata"])
+
+    def test_an_owned_start_tells_its_host_the_owner_and_follows_a_remote_terminal(self):
+        owner = self.owner()
+        running = tui.TuiMode.start(
+            Spec(
+                workdir=self.tmp,
+                access=Access(cwd=self.tmp),
+                name=NAME,
+                client="fake",
+                sid=SID,
+                events=self.events,
+            ),
+            self.client,
+            registry=self.session_cls._config().registry,
+            record=self.recorded.append,
+            host=self.host,
+            owner=owner,
+        )
+        self.assertEqual(self.host.calls.terminal.call_args.kwargs["metadata"]["owner"], owner)
+        self.assertFalse(running.remote)
+        running._terminal.remote = True
+        self.assertTrue(running.remote)
 
     def test_an_owner_outside_the_harness_root_is_refused(self):
         path = os.path.join(self.dir, "session.json")
