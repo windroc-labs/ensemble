@@ -14,7 +14,7 @@ from unittest import mock
 from ensemble.session import EnvironmentSpec, SessionBusy, cli
 from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.tmux_cli import attach_command
-from ensemble.session.engine.types import ConfigError, Hosts
+from ensemble.session.engine.types import ConfigError, Hosts, SessionError
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.types import Op
 from ensemble.session.hosts.tmux import TmuxHost
@@ -262,21 +262,22 @@ class RecordControl(HostedTuiBase):
         self.assertEqual(self.invoke("close", record=self.record)[:2], (0, ""))
         self.assertNotIn("w1", self.host.processes)
 
-    def owned(self, *, sid=SID, gone=True) -> Channel:
-        """Tui session w1 of `sid` whose session.json names a running, held session harness."""
-        self.tui(name="w1", sid=sid)
-        path = Path(self.root, "w1", "session.json")
+    def owned(self, name="w1", *, sid=SID, gone=True, held=True) -> Channel:
+        """Tui session `name` of `sid` whose session.json names a running session harness."""
+        self.tui(name=name, sid=sid)
+        path = Path(self.root, name, "session.json")
         state = json.loads(path.read_text())
         channel = Channel.create()
         path.write_text(json.dumps({**state, "owner": channel.directory}))
-        fd = os.open(channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        self.addCleanup(os.close, fd)
+        if held:
+            fd = os.open(channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            self.addCleanup(os.close, fd)
         channel.write_status(
-            {"state": "running", "name": "w1", "sid": sid, "generation": state["generation"]}
+            {"state": "running", "name": name, "sid": sid, "generation": state["generation"]}
         )
         if gone:
-            self.host.processes.pop("w1")
+            self.host.processes.pop(name)
         return channel
 
     def serve(self, channel, *replies, before=None) -> list:
@@ -310,6 +311,31 @@ class RecordControl(HostedTuiBase):
             self.assertIn(reply["error"], err)
         self.assertEqual(self.invoke("close", record=self.record)[:2], (0, ""))
         self.assertEqual(served, [Op.CLOSE] * 3)
+
+    def test_a_stale_record_asks_each_owner_after_one_whose_harness_is_gone(self):
+        self.owned("w1", held=False)
+        channel = self.owned("w2")
+        served = self.serve(channel, {"ok": False, "error": "cannot close w2"})
+        record = replace(self.record, sessions=("w1", "w2"))
+        code, out, err = self.invoke("close", record=record)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("cannot close w2", err)
+        self.assertEqual(served, [Op.CLOSE])
+
+    def test_a_plain_close_error_is_done_only_once_the_record_looks_stale(self):
+        for stale in (True, False):
+            with self.subTest(stale=stale):
+                process = self.host.create("w1", sid=SID)
+
+                def fail(stale=stale):
+                    if stale:
+                        self.host.processes.pop("w1")
+                    raise SessionError("w1: cannot close")
+
+                process.calls.close.side_effect = fail
+                code, out, err = self.invoke("close", record=self.record)
+                self.assertEqual((code, out), (0, "") if stale else (1, ""), err)
+                self.host.processes.pop("w1", None)
 
     def test_a_stale_record_skips_an_owner_of_another_sid(self):
         channel = self.owned(sid="replacement")

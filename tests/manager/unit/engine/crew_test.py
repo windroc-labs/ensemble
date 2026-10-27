@@ -494,15 +494,40 @@ class Close(Entries):
         for name in ("d", "e"):
             self.records[name] = self.delegated(name)
             self.live(name, record=self.records[name])
-        self.listed = [self.delegated("orphan")]
+        orphan = self.delegated("orphan")
+        self.listed = [orphan]
         self.answers["d"] = mock.Mock(returncode=1, stdout="", stderr="down\n")
         with self.assertRaisesRegex(RuntimeError, "ensemble-delegate close: down"):
             self.close_all()
+        delegated = [records for argv, records in self.calls if argv[0] == "ensemble-delegate"]
+        self.assertEqual(delegated, [[self.records["d"], self.records["e"], orphan]])
         self.assertEqual(list(self.roster.entries()), ["d", "e"])
         self.assertEqual(
             [(line["name"], line["reason"]) for line in self.failures()],
             [("d", "ensemble-delegate close: down"), ("e", "ensemble-delegate close: down")],
         )
+
+    def test_close_all_names_a_listed_orphan_and_logs_no_line_for_it(self):
+        orphan = self.delegated("orphan")
+        self.listed = [orphan]
+        self.answers["orphan"] = mock.Mock(returncode=1, stdout="", stderr="down\n")
+        self.roster.remove("b")
+        self.roster.remove("c")
+        self.roster.remove("a")
+        with self.assertRaisesRegex(RuntimeError, "ensemble-delegate close: down"):
+            self.close_all()
+        self.assertEqual((self.roster.entries(), self.failures()), ({}, []))
+        self.assertIn(([orphan]), [records for _, records in self.calls])
+
+    def test_close_all_keeps_the_failure_when_its_trace_cannot_be_written(self):
+        self.records["d"] = self.delegated("d")
+        self.live("d", record=self.records["d"])
+        self.answers["d"] = mock.Mock(returncode=1, stdout="", stderr="down\n")
+        os.mkfifo(os.path.join(self.directory, "close-failures.jsonl"))
+        with self.assertRaisesRegex(RuntimeError, "ensemble-delegate close: down") as caught:
+            self.close_all()
+        self.assertTrue(any("d: close-failures" in note for note in caught.exception.__notes__))
+        self.assertEqual(list(self.roster.entries()), ["d"])
 
     def test_a_dry_run_logs_nothing(self):
         self.answers["a"] = mock.Mock(returncode=1, stdout="", stderr="boom\n")

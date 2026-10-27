@@ -19,7 +19,6 @@ START = mark("start", "echoing")
 
 
 def _snapshot(directory: str) -> dict[str, bytes]:
-    """Every file under `directory` by relative path, with its bytes."""
     found = {}
     for top, _, names in os.walk(directory):
         for name in names:

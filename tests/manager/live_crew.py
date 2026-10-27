@@ -41,9 +41,7 @@ def logged(path: str) -> list[dict]:
 
 
 class Owner:
-    """A tui session's session harness dir, read from outside (docs/sessions.md › Session harness):
-    manager tests may not import the session harness.
-    """
+    """A tui session's harness dir, read without importing the session harness."""
 
     def __init__(self, ensemble: str, name: str):
         with open(os.path.join(ensemble, "tui", name, "session.json"), encoding="utf-8") as f:
@@ -55,7 +53,6 @@ class Owner:
             return json.load(f)
 
     def alive(self) -> bool:
-        """Its harness holds harness.lock."""
         fd = os.open(os.path.join(self.directory, "harness.lock"), os.O_RDONLY)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
