@@ -36,6 +36,8 @@ queued_command attachment), then answers A; {"kind": "pause", "file": F} waits f
 - gate: a file a --session-id or --resume run waits for after its log line, as hang does.
 - commands: a file each local command appends {"pid", "line", "time", "dialog"} to; dialog: read
 while a dialog step waited.
+- trust: a dialog S printed and answered by a line before its first SessionStart (Claude's trust
+prompt).
 """
 
 import argparse
@@ -68,6 +70,7 @@ DEFAULTS = {
     "log": None,
     "gate": None,
     "commands": None,
+    "trust": None,
 }
 LIMIT = "You've hit your usage limit."
 
@@ -144,6 +147,7 @@ CHECKS = {
     "log": lambda v: v is None or isinstance(v, str),
     "gate": lambda v: v is None or isinstance(v, str),
     "commands": lambda v: v is None or isinstance(v, str),
+    "trust": lambda v: v is None or isinstance(v, str),
 }
 
 
@@ -439,7 +443,11 @@ class InteractiveSession:
 
     def run(self):
         try:
-            self.ready()
+            if (trust := self.request.scenario["trust"]) is None:
+                self.ready()
+            else:
+                print(trust, flush=True)
+                self.answer()
             prompt = self.request.prompt or self.request.stdin.line()
             for k in itertools.count():
                 self.turn(prompt, self.request.turns[k] if k < len(self.request.turns) else [])
