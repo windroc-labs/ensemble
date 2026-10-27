@@ -117,6 +117,16 @@ SHARED = (
     "sudo_end",
     "terminal",
     "egress_absent",
+    "opencode_config_edit",
+)
+LOADED = "com.windroc.ensemble.router com.windroc.ensemble.promote"
+UNLOAD = (
+    "; unload them as docs/board.md#setup says (launchctl bootout gui/<uid>/com.windroc.ensemble.<job>,"
+    " then remove its plist)"
+)
+REJECTED = (
+    "install.sh: Codex: the saved login was rejected (401 Unauthorized): run codex login,"
+    " then rerun install.sh"
 )
 RELOAD = (
     "install.sh: in this terminal, run source ~/.zprofile first (or open a new one): its PATH"
@@ -252,7 +262,7 @@ HAND_CONFIG = (
         for role, d in (("researcher", "Research/"), ("pm", "Product Design/"))
     )
 )
-Result = namedtuple("Result", "code stdout stderr tty")
+Result = namedtuple("Result", "code stdout stderr tty pid")
 ITEMS = ("claude", "codex", "opencode", "docker", "board")
 
 
@@ -262,14 +272,14 @@ def menu(want, have=("claude", "codex")):
     return "".join((" " if (i in want) != (i in have) else "") + "\x1b[B" for i in ITEMS)
 
 
-def ctrl_c(marker, proc):
-    """SIGINT to `proc`'s process group, as a terminal's Ctrl-C, once `marker` exists."""
+def ctrl_c(marker, proc, sig=signal.SIGINT):
+    """`sig` (SIGINT: a terminal's Ctrl-C) to `proc`'s process group once `marker` exists."""
     deadline = time.monotonic() + 30
     while not marker.exists():
         if proc.poll() is not None or time.monotonic() > deadline:
             return
         time.sleep(0.02)
-    os.killpg(proc.pid, signal.SIGINT)
+    os.killpg(proc.pid, sig)
 
 
 def executable(path, text):
@@ -446,10 +456,13 @@ class InstallTest(Case):
         ctty=None,
         shell="bash",
         interrupt=None,
+        sig=signal.SIGINT,
+        group=False,
     ):
         """`ctty`: what /dev/tty opens, else the terminal, which is also /dev/ttys001.
         `shell`: what runs `script`, as `curl … | bash` does on a Mac: its /bin/bash.
-        `interrupt`: a path; once it exists, Ctrl-C: SIGINT to the script's process group."""
+        `interrupt`: a path; once it exists, `sig` (Ctrl-C's SIGINT) to the script's process group.
+        `group`: the script leads a process group of its own (Result.pid), as with `interrupt`."""
         self.log.unlink(missing_ok=True)
         terminal = Tty() if tty else None
         links = (self.root / "dev/tty", self.root / "dev/ttys001")
@@ -468,10 +481,12 @@ class InstallTest(Case):
                     stdout=stdout,
                     stderr=stderr,
                     text=True,
-                    process_group=0 if interrupt else None,
+                    process_group=0 if interrupt or group else None,
                 )
                 if interrupt:
-                    threading.Thread(target=ctrl_c, args=(interrupt, proc), daemon=True).start()
+                    threading.Thread(
+                        target=ctrl_c, args=(interrupt, proc, sig), daemon=True
+                    ).start()
                 if stdin is not None:
                     proc.stdin.write(stdin)
                     proc.stdin.close()
@@ -486,7 +501,7 @@ class InstallTest(Case):
         finally:
             if terminal:
                 terminal.close()
-        result = Result(proc.returncode, out.read_text(), err.read_text(), text)
+        result = Result(proc.returncode, out.read_text(), err.read_text(), text, proc.pid)
         if missed:
             self.fail(f"{missed}\nstderr:\n{result.stderr}\nterminal:\n{result.tty}")
         return result
@@ -4180,7 +4195,9 @@ exec /bin/rm "$@"
         self.assertEqual(self.config().read_text(), before)
 
         self.assert_no_linear(result)
-        self.assertFalse([c for c in self.calls() if c.startswith("launchctl")])
+        launchctl = [c for c in self.calls() if c.startswith("launchctl")]
+        self.assertEqual([c for c in launchctl if not c.startswith("launchctl print ")], [])
+        self.assertIn(f"    still loaded: {LOADED};", result.stderr)
         for job in ("router", "promote"):
             self.assertTrue(
                 Path(self.home, f"Library/LaunchAgents/com.windroc.ensemble.{job}.plist").exists()
@@ -5748,3 +5765,318 @@ exec /bin/rm "$@"
         self.assertTrue(lines[1].startswith("eval "), lines)
         self.assert_ok(self.again())
         self.assertEqual(len(profile.read_text().splitlines()), 3)
+
+    def summary(self, result):
+        return next(line for line in result.stderr.splitlines() if line.startswith("    clients: "))
+
+    def test_c1_no_board_summary(self):
+        """C1: without Board the summary says `board: no`, with no tracker or launchd choice."""
+        result = self.fresh("--clients", "claude", "--no-docker", "--no-board")
+        self.assert_ok(result)
+        line = self.summary(result)
+        self.assertIn("board: no", line)
+        self.assertNotIn("board: no (", line)
+        self.assertNotIn("launchd:", line)
+        result = self.again("--board", "local", "--no-launchd", answers=[(WRITE_Q, "y")] * 2)
+        self.assert_ok(result)
+        self.assertIn("board: yes (local), launchd: no", self.summary(result))
+
+    def board_with_jobs(self):
+        result = self.fresh(
+            "--clients",
+            "claude",
+            "--no-docker",
+            "--board",
+            "local",
+            "--launchd",
+            then=[(WRITE_Q, "y")] * 3,
+        )
+        self.assert_ok(result)
+        self.assert_jobs(installed=True)
+
+    def launchctl_calls(self):
+        return [c for c in self.calls() if c.startswith("launchctl")]
+
+    def test_c3_no_launchd_warns_jobs_stay_loaded(self):
+        """C3: a rerun without the jobs names those launchd still runs and how to unload them; it keeps them."""
+        self.board_with_jobs()
+        result = self.again("--no-launchd")
+        self.assert_ok(result)
+        self.assertIn(
+            "==> board launchd jobs\n    skip: launchd jobs not chosen\n"
+            f"    still loaded: {LOADED}{UNLOAD}\n",
+            result.stderr,
+        )
+        self.assertEqual(
+            [c for c in self.launchctl_calls() if not c.startswith("launchctl print ")], []
+        )
+        for job in ("router", "promote"):
+            self.assertTrue(
+                Path(self.home, f"Library/LaunchAgents/com.windroc.ensemble.{job}.plist").exists()
+            )
+
+    def test_c3_no_board_warns_jobs_stay_loaded(self):
+        """C3: skipping Board names the loaded jobs too; a job launchd does not run, or without a plist, is not named."""
+        self.board_with_jobs()
+        result = self.again("--no-board")
+        self.assert_ok(result)
+        self.assertIn(
+            f"==> board launchd jobs\n    skip: board not chosen\n    still loaded: {LOADED}{UNLOAD}\n",
+            result.stderr,
+        )
+        (self.fakes / "launchd/com.windroc.ensemble.router").unlink()
+        result = self.again("--no-board")
+        self.assert_ok(result)
+        self.assertIn("    still loaded: com.windroc.ensemble.promote;", result.stderr)
+        (self.fakes / "launchd/com.windroc.ensemble.promote").unlink()
+        result = self.again("--no-board")
+        self.assert_ok(result)
+        self.assertNotIn("still loaded", result.stderr)
+        self.assertEqual(len(self.launchctl_calls()), 2)
+        for job in ("router", "promote"):
+            Path(self.home, f"Library/LaunchAgents/com.windroc.ensemble.{job}.plist").unlink()
+        result = self.again("--no-board")
+        self.assert_ok(result)
+        self.assertEqual(self.launchctl_calls(), [])
+
+    def delegate_client(self):
+        return tomllib.loads(self.config().read_text())["delegate"]["client"]
+
+    def opencode_again(self, *args, answers=(), key=False):
+        """A rerun of opencode_only's install with `args`: the sudo password, then with `key` the OpenCode key, on stdin."""
+        flags = ("--password-stdin", *(("--opencode-key-stdin",) if key else ()))
+        stdin = PASSWORD + "\n" + (KEY + "\n" if key else "")
+        return self.run_install(*args, *flags, stdin=stdin, answers=answers)
+
+    def test_c5_delegate_client_follows_chosen_clients(self):
+        """C5, C7: [delegate] client changes only when the chosen clients lack it, to the first chosen."""
+        self.assert_ok(self.opencode_only())
+        self.assertEqual(self.delegate_client(), "opencode")
+        result = self.opencode_again("--clients", "claude", "--no-docker", answers=[(WRITE_Q, "y")])
+        self.assert_ok(result)
+        self.assertIn('[delegate] client = "claude"', result.tty)
+        self.assertEqual(self.delegate_client(), "claude")
+        for client, clients in (("codex", "claude,codex,opencode"), ("opencode", "codex,opencode")):
+            with self.subTest(client=client, clients=clients):
+                self.config().write_text(
+                    re.sub(
+                        r'(?m)^client = ".*"$', f'client = "{client}"', self.config().read_text()
+                    )
+                )
+                before = self.config().read_text()
+                result = self.opencode_again("--clients", clients, "--no-docker")
+                self.assert_ok(result)
+                self.assertEqual(self.config().read_text(), before)
+
+    def opencode_files(self):
+        conf = Path(self.home, ".config/opencode")
+        paths = (self.config(), conf / "opencode.json", conf / "opencode.jsonc")
+        return {path.name: path.read_text() for path in paths if path.exists()}
+
+    def provider_state(self):
+        keys = ("opencode_provider", "opencode_url", "opencode_model", "opencode_context")
+        return tuple(self.state().get(key) for key in keys)
+
+    def assert_not_asked(self, result, *questions):
+        for question in questions or (PROVIDER_Q, URL_Q, MODEL_Q, CONTEXT_Q):
+            self.assertNotRegex(result.tty, question)
+
+    def drop_tables(self, prefix):
+        """config.local.toml without the tables whose names start with `prefix`."""
+        kept, dropping = [], False
+        for line in self.config().read_text().splitlines(keepends=True):
+            if line.startswith("["):
+                dropping = line.startswith(f"[{prefix}")
+            if not dropping:
+                kept.append(line)
+        self.config().write_text("".join(kept))
+
+    def test_c10_missing_state_reuses_configured_provider(self):
+        """C10: with the state gone, the OpenCode provider in config.local.toml is reused without a question;
+        a flag naming another provider, or a configured provider that is no candidate, is asked about."""
+        self.assert_ok(self.opencode_only())
+        files = self.opencode_files()
+        state = Path(self.ensemble, "install/state")
+        state.unlink()
+        result = self.opencode_again("--clients", "opencode", "--no-docker")
+        self.assert_ok(result)
+        self.assert_not_asked(result)
+        self.assertEqual(self.opencode_files(), files)
+        self.assertEqual(self.provider_state(), ("lan", "http://localhost:8080/v1", "m", "65536"))
+        with self.subTest("a flag naming another provider"):
+            state.unlink()
+            result = self.opencode_again(
+                "--clients",
+                "opencode",
+                "--no-docker",
+                "--opencode-provider",
+                "other",
+                answers=[
+                    (URL_Q, "http://localhost:9090/v1"),
+                    (MODEL_Q, "m2"),
+                    (CONTEXT_Q, ""),
+                    (WRITE_Q, "n"),
+                    (WRITE_Q, "n"),
+                ],
+                key=True,
+            )
+            self.assert_ok(result)
+            self.assertEqual(
+                self.provider_state(), ("other", "http://localhost:9090/v1", "m2", "65536")
+            )
+        with self.subTest("only ollama configured"):
+            state.unlink()
+            self.drop_tables("session.clients.opencode")
+            path = Path(self.home, ".config/opencode/opencode.jsonc")
+            conf = json.loads(path.read_text())
+            conf["provider"] = {
+                "ollama": {"options": {"baseURL": "http://localhost:11434/v1"}, "models": {"q": {}}}
+            }
+            path.write_text(json.dumps(conf))
+            result = self.opencode_again(
+                "--clients",
+                "opencode",
+                "--no-docker",
+                answers=[
+                    (PROVIDER_Q, "lan"),
+                    (URL_Q, "http://localhost:8080/v1"),
+                    (MODEL_Q, "m"),
+                    (CONTEXT_Q, ""),
+                    (WRITE_Q, "n"),
+                    (WRITE_Q, "n"),
+                ],
+            )
+            self.assert_ok(result)
+
+    def test_c10_missing_state_reuses_opencode_jsonc_provider(self):
+        """C10: a provider only in opencode.jsonc is reused too, and goes back into config.local.toml."""
+        self.assert_ok(self.opencode_only())
+        jsonc = Path(self.home, ".config/opencode/opencode.jsonc").read_text()
+        Path(self.ensemble, "install/state").unlink()
+        self.drop_tables("session.clients.opencode.providers.")
+        result = self.opencode_again(
+            "--clients", "opencode", "--no-docker", answers=[(WRITE_Q, "y")]
+        )
+        self.assert_ok(result)
+        self.assert_not_asked(result)
+        self.assertIn(
+            '[session.clients.opencode.providers.lan] base_url = "http://localhost:8080/v1"',
+            result.tty,
+        )
+        self.assertEqual(Path(self.home, ".config/opencode/opencode.jsonc").read_text(), jsonc)
+        self.assertEqual(self.provider_state(), ("lan", "http://localhost:8080/v1", "m", "65536"))
+
+    def logged_out(self, client, hang=""):
+        """`client` logged out with no login record; its next login hangs (`stored`: after logging in)."""
+        (self.fakes / "login" / client).unlink(missing_ok=True)
+        ledger = Path(self.ensemble, "install/added")
+        ledger.write_text("".join(f"{r}\n" for r in self.ledger() if not r.startswith("login\t")))
+        (self.fakes / "hang").mkdir(exist_ok=True)
+        (self.fakes / "hang" / client).write_text(hang)
+        (self.fakes / "hung").unlink(missing_ok=True)
+
+    def interrupted(self, sig=signal.SIGINT):
+        """A rerun that gets `sig` once a login hangs."""
+        result = self.run_install(
+            "--password-stdin", stdin=PASSWORD + "\n", interrupt=self.fakes / "hung", sig=sig
+        )
+        self.assertTrue((self.fakes / "hung").exists(), result.stderr)
+        self.assertNotEqual(result.code, 0, result.stderr)
+        return result
+
+    def test_i3a_interrupted_claude_login_not_recorded(self):
+        """I3a: Ctrl-C during a login leaves no login record, so the cleanup logs nobody out; a login that
+        stored its credential before the Ctrl-C is recorded."""
+        self.assert_ok(self.fresh("--clients", "claude,codex", "--no-docker", "--no-board"))
+        self.logged_out("claude")
+        self.interrupted()
+        self.assertNotIn("login\tclaude", self.ledger())
+        (self.fakes / "hang/claude").unlink()
+        self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
+        self.assertNotIn("claude auth logout", self.calls())
+        self.assert_ok(self.fresh("--clients", "claude,codex", "--no-docker", "--no-board"))
+        for client, hang, recorded in (
+            ("codex", "", False),
+            ("gh", "", False),
+            ("claude", "stored", True),
+        ):
+            with self.subTest(client=client, hang=hang):
+                self.logged_out(client, hang)
+                self.interrupted()
+                self.assertEqual(f"login\t{client}" in self.ledger(), recorded)
+                (self.fakes / "hang" / client).unlink()
+
+    def group_gone(self, pgid):
+        """Whether process group `pgid` has no process left within 5 s (orphans take a moment to be reaped)."""
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.killpg(pgid, 0)
+            except ProcessLookupError:
+                return True
+            time.sleep(0.05)
+        return False
+
+    def test_i3a_signal_names_rerun_and_cleans_up(self):
+        """I3a: SIGINT, SIGHUP or SIGTERM names the step to rerun, ends sudo and leaves no process or askpass
+        directory; so does a finished run."""
+        self.assert_ok(self.fresh("--clients", "claude", "--no-docker", "--no-board"))
+        for sig, code in ((signal.SIGINT, 130), (signal.SIGHUP, 129), (signal.SIGTERM, 143)):
+            with self.subTest(signal=sig.name):
+                self.logged_out("claude")
+                result = self.interrupted(sig)
+                self.assertEqual(result.code, code, result.stderr)
+                self.assertIn(
+                    "install.sh: Claude Code login failed; rerun the same command to continue",
+                    result.stderr,
+                )
+                calls = self.calls()
+                self.assertIn("sudo -k", calls[calls.index("claude auth login") :])
+                self.assertEqual(list(self.tmp.glob("ensemble-sudo.*")), [])
+                self.assertTrue(self.group_gone(result.pid))
+        with self.subTest("a finished run"):
+            (self.fakes / "hang/claude").unlink()
+            result = self.run_install("--password-stdin", stdin=PASSWORD + "\n", group=True)
+            self.assert_ok(result)
+            self.assertEqual(list(self.tmp.glob("ensemble-sudo.*")), [])
+            self.assertTrue(self.group_gone(result.pid))
+
+    def codex_rejects(self, words=""):
+        """Codex logged in, its server rejecting the `codex plugin` sub-commands `words` (all when empty)."""
+        (self.fakes / "login").mkdir(exist_ok=True)
+        (self.fakes / "login/codex").write_text("")
+        (self.fakes / "codex").mkdir(exist_ok=True)
+        (self.fakes / "codex/unauthorized").write_text(words)
+        return self.run_install(
+            "--clients",
+            "codex",
+            "--no-docker",
+            "--no-board",
+            answers=[(SUDO_Q, PASSWORD), (WRITE_Q, "y"), (WRITE_Q, "y")],
+        )
+
+    def test_c6_dead_codex_login_noticed(self):
+        """C6: a saved Codex login its server rejects stops the run at the login step with the re-login command."""
+        result = self.codex_rejects()
+        self.assertNotEqual(result.code, 0)
+        self.assertIn(REJECTED, result.stderr)
+        login = result.stderr.split("==> Codex login\n", 1)[1].split("==> ", 1)[0]
+        self.assertNotIn("skip: logged in", login)
+        self.assertNotIn("==> Codex plugins", result.stderr)
+        self.assertNotIn("login\tcodex", self.ledger())
+
+    def test_c6_dead_codex_login_noticed_at_plugin_add(self):
+        """C6: a rejection first seen when adding the plugin stops there with the re-login command; another
+        plugin failure keeps its message."""
+        result = self.codex_rejects("add")
+        self.assertNotEqual(result.code, 0)
+        self.assertIn("==> Codex login\n    skip: logged in", result.stderr)
+        self.assertIn("==> Codex plugins", result.stderr)
+        self.assertIn(REJECTED, result.stderr)
+        with self.subTest("a failure without 401"):
+            (self.fakes / "codex/unauthorized").unlink()
+            (self.fakes / "fail").write_text("codex plugin add")
+            result = self.again()
+            self.assertNotEqual(result.code, 0)
+            self.assertIn("install.sh: Codex: cannot install ensemble@windroc at ", result.stderr)
+            self.assertNotIn("run codex login", result.stderr)
