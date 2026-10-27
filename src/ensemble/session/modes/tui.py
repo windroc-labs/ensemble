@@ -997,7 +997,8 @@ class TuiMode(BaseMode):
             self._due = time.monotonic() + OPEN_AFTER
         found: list[SessionEvent | Stderr | ClientBound] = [*observed]
         for label, payload, marker in records:
-            if (word := WORDS.get(self.run.hooks.get(label))) is not None:
+            kind = self.run.hooks.get(label)
+            if kind is not None and (word := WORDS.get(kind)) is not None:
                 self._mark(word)
             events = self.run.hook_events(label, payload)
             if any(isinstance(e, TurnStarted | TurnEnd | TurnFailed) for e in events):

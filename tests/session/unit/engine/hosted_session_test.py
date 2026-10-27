@@ -3711,6 +3711,14 @@ class OwnedStart(Case):
     def setUp(self):
         OwnedStartTest.setUp(self)
         self.harness_writes(None)
+        bin_dir = os.path.join(self.home, "bin")  # a claude on PATH for the tui preflight
+        os.mkdir(bin_dir)
+        claude = os.path.join(bin_dir, "claude")
+        with open(claude, "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\n")
+        os.chmod(claude, 0o755)
+        path = os.pathsep.join((bin_dir, os.environ.get("PATH", os.defpath)))
+        self.enterContext(mock.patch.dict(os.environ, {"PATH": path}))
 
     def harness_writes(self, status):
         OwnedStartTest.harness_writes(self, status)
