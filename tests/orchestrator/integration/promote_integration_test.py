@@ -14,7 +14,7 @@ from ensemble.delegate.engine.config import read_config
 from ensemble.orchestrator.engine import runs
 from ensemble.orchestrator.trackers.linear import ops
 from ensemble.session import Session
-from ensemble.utils.environment import SID_ENV
+from ensemble.utils import SID_ENV
 from tests.delegate.fakes.delegate import FakeDelegate
 from tests.delegate.workdir import checkout_path
 from tests.orchestrator.case import REPO
