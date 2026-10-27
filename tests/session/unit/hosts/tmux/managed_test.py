@@ -14,6 +14,7 @@ from ensemble.session.engine.types import (
     Unanswered,
 )
 from ensemble.session.harness import guard
+from ensemble.session.hosts.base import GUARD_WAIT
 from ensemble.session.hosts.tmux import managed
 from ensemble.session.hosts.tmux.host import TmuxHost
 from tests.session.case import Case
@@ -57,7 +58,7 @@ class ManagedTest(Case):
             host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=False)
         proc.stdin.close.assert_called_once()
         proc.stdout.close.assert_called_once()
-        proc.wait.assert_called_once_with(timeout=managed.WAIT)
+        proc.wait.assert_called_once_with(timeout=GUARD_WAIT)
 
     def test_live_lease_and_unclean_guard_death_refuse_second_owner(self):
         generation = "a" * 32
