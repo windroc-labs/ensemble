@@ -488,7 +488,7 @@ class Verifier(Harnessed):
                 "plugins": [],
                 "lock": "mini-op",
                 "prefetch": {"repo": "windroc-labs/ensemble", "ref": "main"},
-                "github_repo": None,
+                "github_repo": "windroc/team-docs",
             },
         )
         self.assertIn("`mini-op` skill", shown["prompt"])

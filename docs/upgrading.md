@@ -22,9 +22,9 @@ verifier run:
        - api.github.com
    ```
 
-3. Upgrade the broker with the plugin and rerun `scripts/install.sh --docker`. A broker with WDRC-338 gives the
-   verifier's container a GitHub token for that repo beside its prefetched checkout; without it the verifier cannot
-   push its report.
+3. Upgrade the broker as in [Broker protocol 31](#broker-protocol-31-output-repo-token-beside-prefetch): it gives the
+   verifier's container a GitHub token for that repo beside its prefetched checkout, through
+   `[session.hosts.docker.github] app`; without it the verifier cannot push its report.
 4. Remove `deliverable = true` from a local `verifier` stage: the outcome has no deliverable, so write-back reports
    it cannot post one.
 
@@ -325,7 +325,7 @@ before selecting broker again. This does not delete or migrate pending GitHub re
 Manual, for the manager and the user, through mini-op on the test Mac mini with Docker Desktop, never on a developer's
 Mac; the `tests/session/live_docker.py` checks: [Docker host › Docker live acceptance](architecture.md#docker-live-acceptance).
 
-- [ ] After WDRC-338, set up as in
+- [ ] Set up as in
   [Verifier reports on GitHub](#verifier-reports-on-github-orchestrator-destination-removed), one
   verifier run publishes its report under `Verification/` and returns only `status`, `title`, `summary` and `url`;
   its target checkout's `HEAD` and `git diff HEAD` are unchanged.

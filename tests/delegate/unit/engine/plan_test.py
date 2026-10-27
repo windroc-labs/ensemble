@@ -839,7 +839,7 @@ class PrefetchTest(Docker):
         self.assertIsNone(got.session.environment.github_repo)
 
     def test_any_other_output_gets_no_github_repo(self):
-        for output in ({"type": "orchestrator"}, {"type": "local"}, {"type": "pull-request"}):
+        for output in ({"type": "local"}, {"type": "pull-request"}):
             with self.subTest(output=output):
                 got, _ = self.planned(
                     input="Reference: T\nRepo: acme/app\n\nB",
