@@ -273,14 +273,15 @@ def menu(want, have=("claude", "codex")):
     return "".join((" " if (i in want) != (i in have) else "") + "\x1b[B" for i in ITEMS)
 
 
-def ctrl_c(marker, proc, sig=signal.SIGINT):
-    """`sig` (SIGINT: a terminal's Ctrl-C) to `proc`'s process group once `marker` exists."""
-    deadline = time.monotonic() + 30
-    while not marker.exists():
-        if proc.poll() is not None or time.monotonic() > deadline:
-            return
-        time.sleep(0.02)
-    os.killpg(proc.pid, sig)
+def ctrl_c(markers, proc, sig=signal.SIGINT):
+    """`sig` (SIGINT: a terminal's Ctrl-C) to `proc`'s process group once each of `markers`, in turn, exists."""
+    for marker in markers:
+        deadline = time.monotonic() + 30
+        while not marker.exists():
+            if proc.poll() is not None or time.monotonic() > deadline:
+                return
+            time.sleep(0.02)
+        os.killpg(proc.pid, sig)
 
 
 def executable(path, text):
@@ -462,7 +463,8 @@ class InstallTest(Case):
     ):
         """`ctty`: what /dev/tty opens, else the terminal, which is also /dev/ttys001.
         `shell`: what runs `script`, as `curl … | bash` does on a Mac: its /bin/bash.
-        `interrupt`: a path; once it exists, `sig` (Ctrl-C's SIGINT) to the script's process group.
+        `interrupt`: a path, or a tuple of them; once each exists, in turn, `sig` (Ctrl-C's SIGINT) to the script's
+        process group.
         `group`: the script leads a process group of its own (Result.pid), as with `interrupt`."""
         self.log.unlink(missing_ok=True)
         terminal = Tty() if tty else None
@@ -485,9 +487,8 @@ class InstallTest(Case):
                     process_group=0 if interrupt or group else None,
                 )
                 if interrupt:
-                    threading.Thread(
-                        target=ctrl_c, args=(interrupt, proc, sig), daemon=True
-                    ).start()
+                    markers = interrupt if isinstance(interrupt, tuple) else (interrupt,)
+                    threading.Thread(target=ctrl_c, args=(markers, proc, sig), daemon=True).start()
                 if stdin is not None:
                     proc.stdin.write(stdin)
                     proc.stdin.close()
@@ -5525,6 +5526,30 @@ exec /bin/rm "$@"
         self.assert_ok(result)
         self.assertTrue(result.stderr.endswith("Removed what install.sh added.\n"), result.stderr)
         self.assertFalse(self.auth_json().exists())
+
+    def test_cleanup_second_signal_keeps_sudo_end(self):
+        """A second Ctrl-C while on_exit ends sudo cannot cut sudo_end short: its sudo -k still drops the ticket."""
+        self.assert_ok(self.opencode_only())
+        marker, hang = self.fakes / "ctrl-c", self.fakes / "hang/sudo-k"
+        hang.parent.mkdir(exist_ok=True)
+        python = self.bin / "python3"
+        python.unlink()
+        executable(
+            python,
+            f'#!/bin/sh\ncase $* in *.auth.json.*) : >"{hang}"; : >"{marker}"; exec sleep 30 ;; esac\n'
+            f'exec {sys.executable} "$@"\n',
+        )
+        result = self.cleanup(
+            "--yes",
+            "--password-stdin",
+            stdin=PASSWORD + "\n",
+            interrupt=(marker, self.fakes / "sudo-k-hung"),
+        )
+        self.assertTrue((self.fakes / "sudo-k-hung").exists(), result.stderr)
+        self.assertEqual(result.code, 130, result.stderr)
+        self.assertTrue((self.fakes / "sudo-k-done").exists(), result.stderr)
+        self.assertFalse((self.fakes / "sudo_ticket").exists())
+        self.assertEqual(list(self.tmp.glob("ensemble-sudo.*")), [])
 
     def test_cleanup_stops_docker_processes(self):
         """What still runs from Docker.app after its cask is gone ends; nothing else is signalled."""

@@ -198,6 +198,7 @@ sudo_end() {
 
 on_exit() {
   local rc=$?
+  trap '' HUP INT TERM
   sudo_end
   if [ "$rc" -ne 0 ] && [ -n "$current" ]; then
     say "$me: $current failed; rerun the same command to continue"

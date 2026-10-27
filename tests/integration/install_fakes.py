@@ -9,7 +9,8 @@ commit (the commit GitHub reports for every ensemble ref), marketplace/ (the win
 manifests on main), refs/<ref>/ (ensemble files at a ref, over pkg-src/), linear.json (the Linear workspace: apps
 {client_id: {secret, access_token, user_id}}, teams [{id, key, name, states, members, projects}],
 labels), launchd/<label> (a loaded launchd job), hang/<client> (its login waits 30 s after creating hung, for the
-test's signal; `stored`: logged in first), codex/unauthorized (the `codex plugin` sub-commands it names, all when
+test's signal; `stored`: logged in first), hang/sudo-k (`sudo -k` marks sudo-k-hung, waits 5 s, then drops the ticket
+and marks sudo-k-done), codex/unauthorized (the `codex plugin` sub-commands it names, all when
 empty, fail with a 401).
 """
 
@@ -109,6 +110,10 @@ def sudo(args):
     ticket = FAKES / "sudo_ticket"
     password = (FAKES / "sudo_password").read_text()
     if args == ["-k"]:
+        if (FAKES / "hang/sudo-k").exists():
+            mark(FAKES / "sudo-k-hung")
+            time.sleep(5)
+            mark(FAKES / "sudo-k-done")
         ticket.unlink(missing_ok=True)
         return 0
     if args == ["-v"]:
