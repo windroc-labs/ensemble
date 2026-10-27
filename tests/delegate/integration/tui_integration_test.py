@@ -4,7 +4,7 @@ tests/session/integration/clients/claude/fake_claude.py interactively (a Stop ho
 with no prompt before it). The tui policy end to end
 (FR-21, FR-23, FR-24): the nudge, the give-up, pending turn ends, a mark's reset, the idle give-up
 on a clock ahead (the session's clock only), the fix send; the session left open; the launch's
-/color held while the trust dialog shows, sent once it is answered. Main's
+/color held while the trust dialog shows, sent once its launch turn ended. Main's
 tests/integration/core/drive_tui_integration_test.py, its tui run.
 """
 
@@ -239,10 +239,11 @@ class Trust(TuiRun):
         answer.join(WAIT)
         self.assertEqual((result.returncode, result.outcome.status), (0, "done"), self.err)
         self.assertEqual(self.users(), [NUDGE])
-        self.assertEqual(
-            [(c["line"], c["dialog"]) for c in map(json.loads, live_tmux.events(commands))],
-            [("/color", False)],
+        colored = live_tmux.wait(  # after a turn's end: maybe past the run's
+            lambda: [(c["line"], c["dialog"]) for c in map(json.loads, live_tmux.events(commands))],
+            what="the launch's /color",
         )
+        self.assertEqual(colored, [("/color", False)])
 
 
 class Idle(TuiRun):

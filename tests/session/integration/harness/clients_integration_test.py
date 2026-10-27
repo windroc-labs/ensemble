@@ -67,7 +67,7 @@ class Conversation(unittest.TestCase):
         return session
 
     def send(self, session: OwnedSession, text: str) -> None:
-        """Once the harness has typed the client's opening line, which a send would interleave."""
+        """Once the harness has typed the client's opening line, so this prompt does not defer it."""
         live_tmux.wait(lambda: session.opening_pending is None, WAIT, what="the opening sent")
         session.send(text)
 

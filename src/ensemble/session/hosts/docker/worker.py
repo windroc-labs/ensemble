@@ -22,7 +22,7 @@ from ensemble.session.engine.types import (
     WorkerHook,
 )
 from ensemble.session.harness import guard
-from ensemble.session.hosts.base import GUARD_WAIT, InteractiveProcess
+from ensemble.session.hosts.base import GUARD_WAIT, InteractiveProcess, sent
 from ensemble.session.hosts.docker.activity import activity, write_activity
 from ensemble.session.hosts.docker.hooks import HookWorker
 from ensemble.session.hosts.docker.maintenance import RETRY, Maintenance, run
@@ -136,7 +136,7 @@ class DockerWorker(ManagedProcess):
         self.remove, self.owner = remove, owner
         self.host_record = _Record(name, generation, load, store)
         self.seen: OrderedDict[str, None] = OrderedDict()
-        self.hook_queue: deque[tuple[WorkerHook, int]] = deque()
+        self.hook_queue: deque[tuple[WorkerHook, int, str | None]] = deque()  # hook, size, sent
         self.hook_bytes = 0
         self.delivering = self.deliver_started = False
         self.hook_pause, self.hook_window = HOOK_PAUSE, HOOK_TRIES_FOR
@@ -172,7 +172,7 @@ class DockerWorker(ManagedProcess):
         if self.hooks is None:
             return found
         if found.delivery_id in self.seen or any(
-            queued.delivery_id == found.delivery_id for queued, _ in self.hook_queue
+            queued.delivery_id == found.delivery_id for queued, *_ in self.hook_queue
         ):
             return None
         if self.stopped.is_set():
@@ -182,7 +182,8 @@ class DockerWorker(ManagedProcess):
         if self.hook_bytes + len(data) > QUEUE_MAX:
             self.fail("guard hook buffer exceeded 8 MiB; worker closed")
             return None
-        self.hook_queue.append((found, len(data)))
+        # its sends now, before release_hook lets its client go on; never at delivery
+        self.hook_queue.append((found, len(data), sent(self.hooks.folder)))
         self.hook_bytes += len(data)
         self.condition.notify_all()
         return None
@@ -195,10 +196,13 @@ class DockerWorker(ManagedProcess):
                 if self.stopped.is_set():
                     self._drop_queued()
                     return
-                hook, size = self.hook_queue[0]
+                hook, size, marker = self.hook_queue[0]
                 self.delivering = True
             deadline = time.monotonic() + self.hook_window
-            while self.hooks.call(hook.label, dict(hook.payload), hook.delivery_id) is not None:
+            while (
+                self.hooks.call(hook.label, dict(hook.payload), hook.delivery_id, marker)
+                is not None
+            ):
                 if time.monotonic() >= deadline or self.stopped.wait(self.hook_pause):
                     reject(self.state_dir, self.generation, "hook")
                     break
@@ -211,7 +215,7 @@ class DockerWorker(ManagedProcess):
 
     def _drop_queued(self) -> None:
         """Stopped: each hook still queued is rejected, not lost; under its condition."""
-        for hook, _ in self.hook_queue:
+        for hook, *_ in self.hook_queue:
             reject(self.state_dir, self.generation, "hook")
             self._remember(hook.delivery_id)
         self.hook_queue.clear()
@@ -267,6 +271,8 @@ class DockerWorker(ManagedProcess):
                 self.condition.wait_for(
                     lambda: self.code is not None or self.failure is not None, GUARD_WAIT
                 )
+        with contextlib.suppress(SessionError):
+            self.end_releases()
         with contextlib.suppress(OSError, ValueError):
             self.proc.stdin.close()
         while True:

@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import stat
 import sys
@@ -33,6 +34,7 @@ from ensemble.session.engine.types import (
     HookCallback,
     HookKind,
     Key,
+    KeyPress,
     Launch,
     LimitHit,
     Liveness,
@@ -53,6 +55,7 @@ from ensemble.session.engine.types import (
     WorkerHook,
 )
 from ensemble.session.engine.worker import WorkerState
+from ensemble.session.hosts import base as host_base
 from ensemble.session.hosts.base import GUARD_WAIT, InteractiveProcess, Process
 from ensemble.session.hosts.managed import ManagedProcess
 from ensemble.session.modes import tui, tui_hook
@@ -224,9 +227,11 @@ class Base(Case):
         return mode
 
     def append(self, *lines) -> None:
-        """Each line to hooks.jsonl: bytes as given, else a JSON line."""
+        """Each line to hooks.jsonl: bytes as given, else a JSON line stamped as the hook does."""
         with open(self.hooks, "ab") as f:
             for line in lines:
+                if isinstance(line, dict) and (sent := host_base.sent(self.dir)) is not None:
+                    line = {"sent": sent, **line}
                 f.write(line if isinstance(line, bytes) else (json.dumps(line) + "\n").encode())
 
     def state(self, **changes) -> dict:
@@ -1828,8 +1833,95 @@ class PollTest(Base):
         self.assertEqual(mode.poll(0.1), ([], False))
 
 
+class SendLockTest(Base):
+    """Two TuiModes of one session (the started one and an attach) share one terminal."""
+
+    def setUp(self):
+        super().setUp()
+        self.mode = self.started()
+        self.other = tui.TuiMode.attach(
+            NAME, tui.TuiMode.snapshot(NAME), self.client, host=self.host
+        )
+        self.calls = self.mode._terminal.calls
+        self.order = []
+        self.calls.send.side_effect = lambda action: self.order.append(action)
+        self.calls.press.side_effect = lambda keys: self.order.append(keys)
+
+    def racing(self, first, second, arrived) -> None:
+        """second runs on a thread started from first's Paste, which then waits up to 0.5 s for
+        arrived (set once second reaches the terminal: Paste("two") sets it).
+        """
+        threads = []
+
+        def send(action):
+            self.order.append(action)
+            if action == Paste("two"):
+                arrived.set()
+            if action == Paste("one") and not threads:
+                threads.append(threading.Thread(target=second))
+                threads[0].start()
+                arrived.wait(0.5)
+
+        self.calls.send.side_effect = send
+        first()
+        threads[0].join(5)
+
+    def test_two_concurrent_senders_never_interleave(self):
+        arrived = threading.Event()
+        self.racing(lambda: self.mode.send("one"), lambda: self.other.send("two"), arrived)
+        self.assertEqual(self.order, [Paste("one"), Key("Enter"), Paste("two"), Key("Enter")])
+
+    def test_a_press_waits_for_a_send_in_progress(self):
+        arrived = threading.Event()
+
+        def press(keys):
+            self.order.append(keys)
+            arrived.set()
+
+        self.calls.press.side_effect = press
+        escape = KeyPress.parse("Escape")
+        self.racing(lambda: self.mode.send("one"), lambda: self.other.press([escape]), arrived)
+        self.assertEqual(self.order, [Paste("one"), Key("Enter"), (escape,)])
+
+    def test_no_lock_dir_refuses_and_sends_nothing(self):
+        shutil.rmtree(self.dir)
+        for call in (lambda: self.mode.send("one"), lambda: self.mode.press([KeyPress.parse("a")])):
+            with self.assertRaisesRegex(SessionError, f"tui session {NAME} is not running"):
+                call()
+        self.assertEqual(self.order, [])
+
+    def test_a_failure_on_the_paste_is_a_session_error(self):
+        self.calls.send.side_effect = SessionError("gone")
+        with self.assertRaises(SessionError) as raised:
+            self.mode.send("one")
+        self.assertNotIsInstance(raised.exception, Unanswered)
+        store = tui.TuiStore.attach(NAME, host=self.host)
+        self.assertEqual(store.prompts(self.mode.generation), (0, 0))
+
+    def test_a_failure_after_the_paste_is_unanswered(self):
+        self.calls.send.side_effect = [None, SessionError("gone")]
+        with self.assertRaisesRegex(Unanswered, f"send to tui session {NAME}: partly sent: gone"):
+            self.mode.send("one")
+        store = tui.TuiStore.attach(NAME, host=self.host)
+        self.assertEqual(store.prompts(self.mode.generation), (1, 0))
+
+    def test_each_send_counts_a_prompt_of_its_generation(self):
+        store = tui.TuiStore.attach(NAME, host=self.host)
+        self.assertEqual(store.prompts(self.mode.generation), (0, 0))
+        self.other.send("one")
+        self.mode.send("two")
+        self.assertEqual(store.prompts(self.mode.generation), (2, 2))
+        self.assertEqual(store.prompts("another"), (0, 0))
+        self.mode.press([KeyPress.parse("a")])
+        self.assertEqual(self.order[-1], (KeyPress.parse("a"),))
+
+
 class Opening(ScanTui):
     opening = ("ready", "/color")
+
+
+class PromptOpening(Opening):
+    _opening_prompt = True
 
 
 class OpeningTest(Base):
@@ -1989,6 +2081,165 @@ class OpeningTest(Base):
         mode = self.opened()
         mode.stop()
         self.assertIsNone(mode.opening_pending)
+
+    def launched(self, run=None, **fields) -> tui.TuiMode:
+        """opened(), its Tui (default Opening) also reporting `start` as TurnStarted."""
+        self.client.run = run or Opening(self.client)
+        self.client.run.hooks = {**self.client.run.hooks, "start": HookKind.TURN_STARTED}
+        self.host.processes.clear()
+        mode = self.start(**fields)
+        mode._terminal.calls.reset_mock()
+        return mode
+
+    def other(self) -> tui.TuiMode:
+        return tui.TuiMode.attach(NAME, tui.TuiMode.snapshot(NAME), self.client, host=self.host)
+
+    def test_another_senders_prompt_defers_the_opening_past_its_turn(self):
+        mode = self.launched()
+        self.other().send("hi")
+        self.append(record("ready"))
+        mode.poll(0)
+        mode.poll(1.2)  # its turn not read yet: the opening would land in it
+        self.assertEqual(self.sends(mode), [Paste("hi"), Key("Enter")])
+        self.assertEqual(mode.opening_pending, "/color")
+        self.append(record("start"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(len(self.sends(mode)), 2)
+        self.append(record("stop"))
+        mode.poll(0)
+        mode.poll(0.6)
+        self.assertEqual(self.sends(mode)[2:], [Paste("/color"), Key("Enter")])
+        self.assertIsNone(mode.opening_pending)
+
+    def test_a_turn_defers_the_opening_until_it_ends(self):
+        mode = self.launched()
+        self.append(record("ready"), record("start"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [])
+        self.assertEqual(mode.opening_pending, "/color")
+        self.append(record("stop"))
+        mode.poll(0)
+        mode.poll(0.6)
+        self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
+
+    def test_a_prompted_start_ends_with_its_color_set(self):
+        mode = self.launched(prompt="go")
+        self.append(record("ready"))
+        mode.poll(0)
+        mode.poll(1.2)  # its launch turn runs, its TurnStarted not read yet
+        self.assertEqual(self.sends(mode), [])
+        self.append(record("start"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [])
+        self.append(record("stop"))
+        mode.poll(0)
+        mode.poll(0.6)
+        self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
+        self.assertIsNone(mode.opening_pending)
+
+    def test_a_send_joining_a_running_turn_does_not_hold_the_opening(self):
+        mode = self.launched(prompt="go")
+        self.append(record("ready"), record("start"))
+        mode.poll(0)
+        self.other().send("also")  # joins the running turn: no TurnStarted of its own
+        self.append(record("stop"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode)[2:], [Paste("/color"), Key("Enter")])
+        self.assertIsNone(mode.opening_pending)
+
+    def test_a_send_after_an_unread_turn_end_waits_for_its_own_turn(self):
+        mode = self.launched(prompt="go")
+        self.append(record("ready"), record("start"))
+        mode.poll(0)
+        self.append(record("stop"))
+        self.other().send("next")  # after the turn end was written, before it is read
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [Paste("next"), Key("Enter")])
+        self.assertEqual(mode.opening_pending, "/color")
+        self.append(record("start"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(len(self.sends(mode)), 2)
+        self.append(record("stop"))
+        mode.poll(0)
+        mode.poll(0.6)
+        self.assertEqual(self.sends(mode)[2:], [Paste("/color"), Key("Enter")])
+
+    def test_a_partly_sent_send_holds_the_opening(self):
+        mode = self.launched()
+        mode._terminal.calls.send.side_effect = [None, SessionError("gone")]
+        with self.assertRaises(Unanswered):
+            self.other().send("half")
+        mode._terminal.calls.send.side_effect = None
+        self.append(record("ready"), record("start"), record("stop"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [Paste("half"), Key("Enter")])  # the Enter failed
+        self.assertEqual(mode.opening_pending, "/color")
+        self.other().send("rest")  # its Enter submits the half too
+        self.append(record("start"), record("stop"))
+        mode.poll(0)
+        mode.poll(0.6)
+        self.assertEqual(self.sends(mode)[4:], [Paste("/color"), Key("Enter")])
+
+    def test_no_turn_yet_keeps_the_opening(self):
+        mode = self.launched()
+        self.append(record("ready"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
+
+    def test_an_older_generations_marker_keeps_the_opening(self):
+        mode = self.launched()
+        tui.TuiStore.attach(NAME, host=self.host).mark_prompted("an older generation")
+        self.append(record("ready"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
+
+    def test_a_prompt_opening_waits_for_no_launch_turn(self):
+        mode = self.launched(PromptOpening(self.client), prompt="go")
+        self.append(record("ready"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
+        self.assertFalse(Opening._opening_prompt)
+
+    def test_the_opening_holds_the_send_lock(self):
+        mode = self.launched()
+        other, arrived, threads, order = self.other(), threading.Event(), [], []
+
+        def send(action):
+            order.append(action)
+            if action == Paste("two"):
+                arrived.set()
+            elif action == Paste("/color"):
+                threads.append(threading.Thread(target=other.send, args=("two",)))
+                threads[0].start()
+                arrived.wait(0.5)
+
+        mode._terminal.calls.send.side_effect = send
+        self.append(record("ready"))
+        mode.poll(0)
+        mode.poll(1.2)
+        threads[0].join(5)
+        self.assertEqual(order, [Paste("/color"), Key("Enter"), Paste("two"), Key("Enter")])
+
+    def test_a_held_send_lock_defers_the_opening(self):
+        mode = self.launched()
+        self.append(record("ready"))
+        mode.poll(0)
+        with tui.TuiStore.attach(NAME, host=self.host).sending():
+            mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [])
+        self.assertEqual(mode.opening_pending, "/color")
+        mode.poll(0.6)
+        self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
 
 
 class ScanTest(Base):

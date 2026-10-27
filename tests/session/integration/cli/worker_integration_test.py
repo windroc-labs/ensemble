@@ -1,7 +1,8 @@
 """ensemble-session's worker lifecycle through bin/ensemble-session on a private tmux server: the
 client's exact cwd, argv and env from start (Q03), reply from another process (Q09), a client
 that exits at once (Q10, D3), a start whose early watch ends on a dialog (a Claude hook, the
-Codex trust screen), and a Claude start's /color: quiet once sent, said when a dialog holds it.
+Codex trust screen), and a Claude start's /color: quiet once sent or behind its launch turn, said
+when a dialog holds it.
 """
 
 import json
@@ -182,15 +183,15 @@ class ColorTest(WorkerCase):
             [(c["pid"], c["line"], c["dialog"]) for c in colored], [(call["pid"], "/color", False)]
         )
 
-    def test_exit_after_color_still_fails_start(self):
-        # exits once its opening (/color) arrived: inside the start's early watch on any runner
-        res = self.start("w1", steps=[{"kind": "input"}, {"kind": "exit"}])
+    def test_exit_in_the_launch_turn_still_fails_start(self):
+        # exits in its launch prompt's turn, its /color still behind it: inside the early watch
+        res = self.start("w1", steps=[{"kind": "exit"}])
         self.assertEqual((res.returncode, res.stdout), (1, ""), res.stderr)
         lines = res.stderr.splitlines()
         head = "ensemble-session: w1: claude exited 0 at once; its last lines:"
         self.assertIn(head, lines, res.stderr)
         self.assertEqual(lines[: lines.index(head)], [ATTACH], res.stderr)
-        self.assertIn("/color", lines[lines.index(head) + 1 :])
+        self.assertNotIn("/color", lines[lines.index(head) + 1 :])
         self.assertEqual(self.ok(self.session("ls", "--records")).stdout, "")
 
     def test_dialog_start_says_color_not_set(self):

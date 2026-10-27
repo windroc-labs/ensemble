@@ -98,6 +98,9 @@ class ManagedProcess(InteractiveProcess):
         self.view_pending = False
         self.reader = None
         self.exit_thread: threading.Thread | None = None
+        self.releases = 0
+        self.releaser: threading.Thread | None = None
+        self.closing = False  # its stdin about to close: the releaser stops
         if start_reader:
             self.reader = threading.Thread(target=self.pump, name=f"guard-{name}", daemon=True)
             self.reader.start()
@@ -187,6 +190,8 @@ class ManagedProcess(InteractiveProcess):
                 try:
                     for kind, payload in decoder.feed(data):
                         self.accept(kind, payload)
+                        if kind == b"h":
+                            self.release_hook()
                 except (ValueError, UnicodeError, TypeError, RecursionError) as error:
                     self.fail(str(error))
             if self.code is None or decoder.pending:
@@ -227,6 +232,43 @@ class ManagedProcess(InteractiveProcess):
             self.messages.clear()
             self.size = 0
             return found
+
+    def release_hook(self) -> None:
+        """The h just taken: its guard may ack its hook, so the client goes on only after
+        accept_hook. Its k is written on a thread of its own: this reader never waits on `sending`.
+        """
+        with self.condition:
+            self.releases += 1
+            if self.releaser is None:
+                self.releaser = threading.Thread(
+                    target=self._release, name=f"guard-{self.name}-release", daemon=True
+                )
+                self.releaser.start()
+            self.condition.notify_all()
+
+    def _release(self) -> None:
+        """Until its exit frame, a failure or closing: then the guard acks hooks itself."""
+        while True:
+            with self.condition:
+                self.condition.wait_for(lambda: self.releases or self._released())
+                if self._released():
+                    return
+                count, self.releases = self.releases, 0
+            try:
+                for _ in range(count):
+                    self.send_frame(b"k", b"{}")
+            except SessionError:
+                return
+
+    def _released(self) -> bool:
+        return self.closing or self.failure is not None or self.code is not None
+
+    def end_releases(self) -> None:
+        """Before its stdin closes: the releaser's last k written, none after."""
+        with self.condition:
+            self.closing = True
+            self.condition.notify_all()
+        self._join(self.releaser)
 
     def send_frame(self, kind: bytes, data: bytes) -> None:
         self.checked()
@@ -347,13 +389,17 @@ class ManagedProcess(InteractiveProcess):
             self.proc.wait(timeout=GUARD_WAIT)
         except subprocess.TimeoutExpired as error:
             raise Unanswered(f"worker {self.name}: guard exit unconfirmed") from error
-        if self.reader is not None:
-            self.reader.join(timeout=GUARD_WAIT)
-            if self.reader.is_alive():
-                raise Unanswered(f"worker {self.name}: channel still open")
+        self._join(self.reader)
+        self.end_releases()  # once the reader is done: it starts the releaser
         self.checked()
         self.proc.stdin.close()
         self.close_display()
+
+    def _join(self, thread: threading.Thread | None) -> None:
+        if thread is not None:
+            thread.join(timeout=GUARD_WAIT)
+            if thread.is_alive():
+                raise Unanswered(f"worker {self.name}: channel still open")
 
     # These legacy members disappear in WDRC-211 after all callers migrate.
     def alive(self) -> bool:
