@@ -5501,7 +5501,7 @@ exec /bin/rm "$@"
         self.assertIn("cask\tdocker-desktop", self.ledger())
 
     def test_cleanup_needs_full_disk_access_for_a_container(self):
-        """macOS lets only Full Disk Access remove an app container: without it nothing is removed."""
+        """macOS lets only Full Disk Access remove an app container: without it --yes removes nothing."""
         self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
         self.tcc.unlink()
         container = Path(self.home, "Library/Containers/com.docker.docker")
@@ -5510,7 +5510,7 @@ exec /bin/rm "$@"
         (container / "locked/data").write_text("")
         ledger = Path(self.ensemble, "install/added")
         recorded = ledger.read_bytes()
-        result = self.cleanup()
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
         self.assertEqual(result.code, 1, result.stderr)
         self.assertEqual(
             result.stderr,
@@ -5546,14 +5546,14 @@ exec /bin/rm "$@"
         self.assertFalse(Path(self.home, ".zprofile").exists())
 
     def test_cleanup_needs_full_disk_access_for_a_group_container(self):
-        """macOS 27 denies a terminal Docker's Group Container too: without the access nothing is removed."""
+        """macOS 27 denies a terminal Docker's Group Container too: without the access --yes removes nothing."""
         self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
         group = Path(self.home, "Library/Group Containers/group.com.docker")
         self.assertTrue((group / "settings-store.json").exists())
         self.tcc.unlink()
         ledger = Path(self.ensemble, "install/added")
         recorded = ledger.read_bytes()
-        result = self.cleanup()
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
         self.assertEqual(result.code, 1, result.stderr)
         self.assertIn(
             f"install-cleanup.sh: macOS lets only Full Disk Access remove {group}:", result.stderr
@@ -5563,7 +5563,7 @@ exec /bin/rm "$@"
         self.assertTrue((group / "settings-store.json").exists())
         group.parent.chmod(0o600)
         self.addCleanup(lambda: group.parent.exists() and group.parent.chmod(0o700))
-        result = self.cleanup()
+        result = self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
         self.assertEqual(result.code, 1, result.stderr)
         self.assertIn(f"remove {group}:", result.stderr)
         self.assertEqual(ledger.read_bytes(), recorded)
