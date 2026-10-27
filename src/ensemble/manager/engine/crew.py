@@ -649,8 +649,23 @@ class Crew:
         if record is not None:
             failures = self._control("close", (record,))
             if failures:
-                raise RuntimeError("\n".join(failures.values()))
+                reason = "\n".join(failures.values())
+                error = RuntimeError(reason)
+                if (path := self._traced(key, entries[key], reason, error)) is not None:
+                    error = RuntimeError(f"{reason}; logged to {path}")
+                raise error
         self.roster.remove(key)
+
+    def _traced(self, name: str, entry: Entry, reason: str, error: Exception) -> str | None:
+        """close-failures.jsonl's path once it holds this failed close; else None, why on `error`."""
+        assert entry.record is not None
+        try:
+            return self.roster.close_failed(
+                name, sid=entry.sid, ctl=entry.record.ctl, reason=reason
+            )
+        except (OSError, RosterError) as trace:
+            error.add_note(f"{name}: close-failures.jsonl not written: {trace}")
+            return None
 
     def close_all(self, *, dry_run: bool = False) -> list[str]:
         self._listed = None
@@ -662,11 +677,14 @@ class Crew:
         names = sorted(set(entries) | {record.name for record in records})
         if not dry_run:
             failures = self._control("close", records)
+            error = RuntimeError("\n".join(failures.values()))
             for name, entry in entries.items():
                 if entry.record is None or entry.record.ctl not in failures:
                     self.roster.remove(name)
+                else:
+                    self._traced(name, entry, failures[entry.record.ctl], error)
             if failures:
-                raise RuntimeError("\n".join(failures.values()))
+                raise error
         if here is None:
             raise RuntimeError("close-all partial: unlisted work may still be running")
         return names
