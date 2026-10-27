@@ -143,7 +143,7 @@ class CliCase(Case):
     def start(
         self, name: str, *args: str, steps=None, turns=(), prompt: str = "hi", scene=None, **extra
     ) -> subprocess.CompletedProcess:
-        """A fake claude worker, its events self.events; scene: more keys."""
+        """A fake claude worker, its events self.events."""
         found = self.scene(name, steps, turns, **(scene or {}))
         env = {"ENSEMBLE_EVENTS": self.events, **found, **extra}
         return self.session(

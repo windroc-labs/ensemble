@@ -747,9 +747,10 @@ class HarnessDelegate(Delegate):
                 agent, unanswered = None, error
             if agent is not None:
                 agent.close()
-        stop = None if unanswered is not None else self._interrupt(self._read())
+        current = self._read()
+        stop = None if unanswered is not None else self._interrupt(current)
         if stop is not None:
-            self._stopped(state, stop, closed=agent is not None)
+            self._stopped(current, stop, closed=agent is not None)
         unchecked = (
             None
             if unanswered is None

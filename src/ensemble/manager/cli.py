@@ -654,8 +654,9 @@ command when placement fails. Placement: ensemble-session --help
         "Terminate roster entries and the caller's descendant work",
         """Requires lease access and ensemble-session listing. Also includes untracked
 descendants opened by this caller. Prints selected names or nothing to close.
-Without --dry-run closes work and removes successful entries; partial listing
-or controller failures exit 1 and may leave work running.
+Without --dry-run closes work and removes successful entries; a failed one is
+kept and logged to close-failures.jsonl. Partial listing or controller failures
+exit 1 and may leave work running.
 
 Examples:
   From the intended commander's terminal, preview first:

@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import threading
+from collections.abc import Callable
 
 USAGE = "usage: launcher.py --timeout SECONDS --prompt TEXT -- COMMAND..."
 STDERR_WAIT = 2  # seconds to copy COMMAND's last stderr after it exits
@@ -91,7 +92,12 @@ class Watch:
         os._exit(124)
 
 
-def main(argv: list[str], *, thread=threading.Thread, timer=threading.Timer) -> int:
+def main(
+    argv: list[str],
+    *,
+    thread: Callable[..., threading.Thread] = threading.Thread,
+    timer: Callable[..., threading.Timer] = threading.Timer,
+) -> int:
     try:
         seconds, text, command = _arguments(argv)
     except ValueError:

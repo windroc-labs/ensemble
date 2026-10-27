@@ -4,6 +4,7 @@ attempt (Result, notes, outcome line, a locked run's close, then Finished) once,
 that are not its worker's.
 """
 
+import contextlib
 import io
 import json
 import os
@@ -31,6 +32,7 @@ from ensemble.session import (
     TurnStarted,
     Unanswered,
 )
+from ensemble.session.engine.types import OwnerRefused
 from tests.delegate.fakes.harness_session import HarnessSession
 from tests.delegate.harness import SID, HarnessCase
 from tests.delegate.replies import block
@@ -381,6 +383,21 @@ class CloseTest(HandlerCase):
         self.assertEqual((self.state().attempt, self.state().result), (2, self.STOP))
         self.assertEqual(self.kinds_sent()[-2:], [("begun", 2), ("finished", 2)])
 
+    def test_a_follow_up_its_handler_left_active_ends_as_its_stop_under_its_own_number(self):
+        self.finish(NEEDS)
+        claim = self.record.store.closing_claim
+
+        @contextlib.contextmanager
+        def late():  # input lands before the claim; then its handler never ends it
+            self.call(TurnStarted())
+            with claim():
+                yield
+
+        with mock.patch.object(type(self.delegate.store), "closing_claim", lambda _store: late()):
+            self.delegate.close()
+        self.assertEqual((self.state().attempt, self.state().result), (2, self.STOP))
+        self.assertEqual(self.kinds_sent()[-2:], [("begun", 2), ("finished", 2)])
+
     def test_endings_it_does_not_cause_keep_their_own_result(self):
         self.call(TurnStarted())
         self.closing(lambda: [self.call(TurnEnd(block(DONE), 0)), self.call(Exited(0))])
@@ -398,7 +415,11 @@ class CloseTest(HandlerCase):
         self.assertEqual(self.kinds_sent(), [("finished", 1)])
 
     def test_a_refused_close_drops_its_claim_and_loses_no_event(self):
-        for refusal in (SessionError("cannot close"), Unanswered("not confirmed")):
+        for refusal in (
+            SessionError("cannot close"),
+            OwnerRefused("cannot close w1"),
+            Unanswered("not confirmed"),
+        ):
             with self.subTest(refusal=type(refusal).__name__):
                 n = self.state().attempt
                 self.call(TurnStarted(), token=n)
@@ -410,6 +431,13 @@ class CloseTest(HandlerCase):
                 self.call(TurnStarted(), token=n)
                 self.assertEqual((self.state().attempt, self.state().completed), (n + 1, False))
                 self.register(n + 1)
+
+    def test_an_idle_give_up_while_closing_keeps_its_own_result(self):
+        self.call(TurnStarted())
+        self.closing(lambda: Timer.made[-1].fire())
+        self.delegate.close()
+        self.assertEqual(self.state().result, GAVE_UP)
+        self.assertEqual(self.kinds_sent(), [("finished", 1)])
 
     def test_a_refused_close_leaves_the_attempt_active_and_reports_nothing(self):
         self.call(TurnStarted())

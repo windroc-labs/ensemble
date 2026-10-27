@@ -121,8 +121,7 @@ class _Run:
             and result.limit is None
             and (
                 isinstance(event, Exited)
-                or isinstance(event, TurnFailed)
-                and event.error == "exited"
+                or (isinstance(event, TurnFailed) and event.error == "exited")
             )
             and self.record.store.closing()
         ):
