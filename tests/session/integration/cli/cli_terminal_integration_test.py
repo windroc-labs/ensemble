@@ -89,10 +89,19 @@ class SendReadTest(Base):
     def test_read_prints_the_screen_or_its_last_lines(self):
         self.record(self.start("w1", steps=["one", "two", "three", "four"]))
         self.wait_event("w1", "done")
-        screen = "one\ntwo\nthree\nfour\n/color\n"  # the tty echoes the launch's /color
-        self.assertEqual(self.ok(self.session("read", "w1")).stdout, screen)
+
+        def echoed() -> str:
+            """The tty echoes the launch's /color, typed once due, wherever the fake's lines are."""
+            out = self.ok(self.session("read", "w1")).stdout
+            return out if "/color" in out else ""
+
+        screen = live_tmux.wait(echoed, what="the /color echo")
+        self.assertEqual(screen.count("/color"), 1)
+        self.assertEqual(screen.replace("/color", "").split(), ["one", "two", "three", "four"])
         res = self.ok(self.session("read", "w1", "--lines", "3"))
-        self.assertEqual((res.stdout, res.stderr), ("three\nfour\n/color\n", ""))
+        self.assertEqual(
+            (res.stdout, res.stderr), ("".join(screen.splitlines(keepends=True)[-3:]), "")
+        )
 
     def test_bad_operands_exit_2_and_an_absent_session_1(self):
         self.record(self.start("w1"))
