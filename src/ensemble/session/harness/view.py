@@ -108,8 +108,10 @@ class OwnedSession(Session):
         mode: Mode = Mode.TUI,
         tie: Tie | None = None,
     ) -> None:
-        if mode == Mode.TUI and retire is None:
-            raise ValueError("retire: required for a tui view")
+        if (mode == Mode.TUI) != (retire is not None):
+            raise ValueError(
+                "retire: required for a tui view" if retire is None else "retire: a tui view's only"
+            )
         self.sid, self.client, self.mode, self.name = sid, client, mode, name
         self._tie = tie
         self.generation = generation
@@ -179,7 +181,7 @@ class OwnedSession(Session):
         """
         if self._channel.request(op):
             return
-        if self._retire is not None and self.mode == Mode.TUI:
+        if self._retire is not None:
             self._retire()
             return
         try:
