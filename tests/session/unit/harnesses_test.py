@@ -150,6 +150,24 @@ class EndTest(Case):
         self.assertIn((4242, signal.SIGTERM), self.signals)
         self.assertFalse(harness.channel.alive())
 
+    def test_no_lock_wait_outlives_end(self):
+        held = threading.Event()
+        self.addCleanup(held.set)
+        flock = fcntl.flock
+
+        def holding(fd, operation):
+            flock(fd, operation)
+            if not operation & fcntl.LOCK_NB:
+                held.wait(5)
+
+        harness = self.stuck(4242)
+        with (
+            mock.patch.object(harnesses.fcntl, "flock", side_effect=holding),
+            mock.patch.object(harnesses, "KILL_WAIT", 0.3),
+        ):
+            self.end(wait=0.3)
+        self.assertFalse(harness.channel.alive())
+
     def test_a_harness_that_let_go_is_not_named_with_no_time_left(self):
         harness = self.harness()
         harness.halt.set()
@@ -189,7 +207,6 @@ class LetGoTest(Case):
 
 
 def _after_first(flock, then):
-    """flock that runs `then` after its first call fails, so a holder releases mid-wait."""
     calls = []
 
     def call(fd, operation):
