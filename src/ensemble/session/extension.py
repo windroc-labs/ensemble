@@ -52,9 +52,7 @@ from ensemble.session.engine.types import (
 from ensemble.session.harness.types import EventCall
 from ensemble.session.hosts.base import (
     Host,
-    Interactive,
     InteractiveProcess,
-    Process,
 )
 from ensemble.session.hosts.types import CommandView, SessionView
 from ensemble.session.modes.client_adapters.headless import Headless, JsonHeadless
@@ -71,12 +69,10 @@ __all__ = [
     "Host",
     "SessionView",
     "CommandView",
-    "Process",
     "WorkerMessage",
     "WorkerHook",
     "WorkerOutput",
     "WorkerExit",
-    "Interactive",
     "InteractiveProcess",
     "Spec",
     "Access",

@@ -410,23 +410,3 @@ class ManagedProcess(InteractiveProcess):
             thread.join(timeout=GUARD_WAIT)
             if thread.is_alive():
                 raise Unanswered(f"worker {self.name}: channel still open")
-
-    # These legacy members disappear in WDRC-211 after all callers migrate.
-    def alive(self) -> bool:
-        return self.state() == Liveness.LIVE
-
-    def wait_exit(self, timeout: float) -> bool:
-        with self.condition:
-            self.condition.wait_for(
-                lambda: self.code is not None or self.failure is not None, timeout
-            )
-            return self.state() == Liveness.ABSENT
-
-    def kill(self) -> None:
-        self.close()
-
-    def record(self):
-        return None
-
-    def display(self):
-        return None

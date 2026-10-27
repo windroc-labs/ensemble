@@ -38,7 +38,6 @@ def fake_tmux(runner: FakeTmux) -> mock.Mock:
     tmux.checked.side_effect = TmuxCli(runner).checked
     tmux.sessions.side_effect = TmuxCli(runner).sessions
     tmux.status.return_value = PaneStatus.RUNNING
-    tmux.process_status.side_effect = lambda target: (tmux.process(target), tmux.status(target))
     tmux.listing.return_value = []
     tmux.option.return_value = None
     tmux.detach.return_value = tmux.process.return_value = PROCESS

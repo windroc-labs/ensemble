@@ -16,6 +16,7 @@ import traceback
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from enum import Enum, auto
+from typing import Protocol, runtime_checkable
 
 import ensemble.utils as utils_package
 from ensemble.delegate import config
@@ -91,6 +92,11 @@ from ensemble.utils import (
     under,
     validate_events,
 )
+
+
+@runtime_checkable
+class _Publishes(Protocol):
+    def publish(self, record: Record) -> None: ...
 
 
 class _Ended(Enum):
@@ -1254,8 +1260,12 @@ class HarnessDelegate(Delegate):
         raise SessionError(message)
 
     def _publish_record(self, state: DelegateState) -> None:
+        """Its Record in its agent session's worker dir, through that session's view."""
         try:
-            self.session_cls.host(state.host).attach(state.agent_name).publish(self._record(state))
+            agent = self.session_cls.attach(state.agent_name, sid=state.plan.sid, host=state.host)
+            if not isinstance(agent, _Publishes):
+                raise SessionError(f"session {state.agent_name}: stores no Record")
+            agent.publish(self._record(state))
         except SessionError as error:
             say(f"delegate: Record not published: {error}")
 

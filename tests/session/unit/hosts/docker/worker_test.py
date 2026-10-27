@@ -107,8 +107,6 @@ class Base(Case):
             owner=self.owner,
             maintenance=factory,
             report=lambda word, text: self.reports.append((word, text)),
-            load=lambda: self.record,
-            store=self.record.update,
             start_reader=False,
         )
         found.accept(b"s", b'{"pid":1}')

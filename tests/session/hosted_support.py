@@ -322,7 +322,6 @@ def fake_tmux(case=None) -> mock.Mock:
     host.PAUSE = 0
     host.runner = mock.Mock(side_effect=AssertionError("a direct runner call"))
     host.status.return_value = None
-    host.process_status.side_effect = lambda target: (host.process(target), host.status(target))
     host.listing.return_value = []
     tags = {}
     host.option.side_effect = lambda _target, key: tags.get(key)

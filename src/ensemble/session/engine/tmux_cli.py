@@ -1,6 +1,5 @@
 """TmuxCli: every tmux call through runner (subprocess.run's signature) and sleep. start and
-detach hand a launch to a new pane (EXEC). Listings skip VIEW sessions. TmuxPane: a TmuxCli aimed
-at one session's captured pane.
+detach hand a launch to a new pane (EXEC). Listings skip VIEW sessions.
 """
 
 from __future__ import annotations
@@ -11,25 +10,18 @@ import os
 import re
 import shutil
 import signal
-import stat
 import subprocess
 import sys
 import tempfile
 import time
-import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from ensemble.session.engine.status_log import SessionStatusLog
 from ensemble.session.engine.types import (
-    ConfigError,
-    Key,
-    KeyPress,
     Launch,
     Liveness,
-    NamedKey,
     PaneStatus,
-    Paste,
     SessionError,
 )
 from ensemble.utils import events_file
@@ -80,10 +72,8 @@ USER_OPTION = re.compile(r"@[A-Za-z0-9_-]+")
 PAUSE = 0.5
 
 
-TMUX_KEYS = {NamedKey.PAGE_UP: "PPage", NamedKey.PAGE_DOWN: "NPage", " ": "Space", ";": "\\;"}
 # tmux 3.4 (CI) and 3.5+ both send these as the same C0 or DEL byte; other punctuation and digits
 # lose Ctrl, send nothing or differ between them
-CTRL_PUNCTUATION = frozenset(" /?@[\\]^_")
 
 
 PROCESS = "#{pid} #{session_id} #{pane_id} #{pane_pid}"
@@ -116,15 +106,6 @@ CLOCK = f'"$(date +{SessionStatusLog.CLOCK})"'
 DEAD_EVENT = (
     "run-shell -b 'echo "
     + SessionStatusLog.line("#{q:session_name}", "dead", at=CLOCK)
-    + " >> #{q:@events}'"
-)
-EXIT_STATUS = (
-    "#{?pane_dead_signal,-#{?#{m:*[!0-9]*,#{pane_dead_signal}},$(kill -l #{q:pane_dead_signal}),"
-    "#{pane_dead_signal}},#{pane_dead_status}}"
-)
-EXITED_EVENT = (
-    "run-shell 'echo "
-    + SessionStatusLog.line("#{q:session_name}", "exited", EXIT_STATUS, at=CLOCK)
     + " >> #{q:@events}'"
 )
 
@@ -173,9 +154,6 @@ LISTED_PANES = "#{pane_dead}\t#{pane_tty}\t#{session_name}\t#{pane_id}"
 
 
 LAST_LINES = 2000
-
-
-MARK_TIMEOUT = 5
 
 
 def _own_pane(name: str, dead: str, process: str, panes: dict[str, str]) -> tuple[str | None, str]:
@@ -417,17 +395,6 @@ class TmuxCli:
             return None if absent(res) else PaneStatus.UNKNOWN
         return self._dead_status(res.stdout.rstrip("\n"))
 
-    def process_status(self, target: str):
-        """(process(), status()) in one tmux call; (None, None) when absent."""
-        res = self.run(["display-message", "-p", "-t", address(target), f"{PROCESS}\t{DEAD}"])
-        if res.returncode:
-            if absent(res):
-                return None, None
-            raise TuiError(f"tmux: {error(res)}")
-        identity, _, dead = res.stdout.rstrip("\n").partition("\t")
-        found = _process_id(identity)
-        return found, None if found is None else self._dead_status(dead)
-
     def _dead_status(self, text: str):
         fields = text.split(" ")
         if fields == ["", "", ""]:  # tmux (3.7) exits 0 with empty fields for a missing session
@@ -457,21 +424,6 @@ class TmuxCli:
         else:
             self.checked(["kill-session", "-t", address(target, "")])
 
-    def paste(self, target: str, text: str) -> None:
-        buffer = f"tui-{target}-{uuid.uuid4().hex}"
-        target = address(target)
-        # load-buffer from stdin keeps text exact: send-keys -l lost long text's head, set-buffer a
-        # trailing ';'
-        self.checked(["load-buffer", "-b", buffer, "-"], text)
-        try:
-            self.checked(
-                _out_of_mode(target, "paste-buffer", "-p", "-r", "-d", "-b", buffer, "-t", target)
-            )
-        except TuiError:
-            with contextlib.suppress(TuiError):
-                self.run(["delete-buffer", "-b", buffer])
-            raise
-
     def keys(self, target: str, *names: str) -> None:
         """Presses tmux keys (Enter, Escape, C-c); a name tmux would misread raises TuiError first."""
         target = address(target)
@@ -487,14 +439,6 @@ class TmuxCli:
             if not name or name.endswith(";") and not name.endswith("\\;"):
                 raise TuiError(f"tmux would misread {name!r}")
         self.checked(_out_of_mode(target, "send-keys", "-t", target, "--", *names))
-
-    def set_option(self, target: str, name: str, value: str) -> None:
-        target = address(target)
-        if not USER_OPTION.fullmatch(name):
-            raise TuiError(f"option {name!r}: want {USER_OPTION.pattern}")
-        if value.endswith(";") or "\n" in value:
-            raise TuiError(f"tmux would misread {value!r:.80}")
-        self.checked(["set-option", "-t", target, name, value])
 
     def option(self, target: str, name: str) -> str | None:
         """None when unset or the target absent."""
@@ -585,59 +529,6 @@ class TmuxCli:
             return self.read(target, LAST_LINES) or None
         except TuiError:
             return None
-
-    def mark(
-        self,
-        word: str,
-        events: str | None,
-        *,
-        pane: str | None = None,
-        tmux: str = "tmux",
-        session: str | None = None,
-    ) -> None:
-        """Hook protocol: pane ($TMUX_PANE when None) @state = word; done and blocked also append
-        `HH:MM:SS <session> <word>` (session: the pane's unless given) to events (None: no line).
-        """
-        pane = os.environ.get("TMUX_PANE", "") if pane is None else pane
-        if not pane:
-            return
-        if not PANE.fullmatch(pane):
-            raise TuiError(f"bad tmux pane {pane!r}")
-        self._mark_tmux([tmux, "set-option", "-t", pane, "@state", word])
-        if word not in ("done", "blocked") or events is None:
-            return
-        if session is None:
-            session = self._mark_tmux([tmux, "display-message", "-p", "-t", pane, "#S"]).strip()
-        if not NAME.fullmatch(session):
-            raise TuiError(f"tmux session {session!r}: want [A-Za-z0-9_-]+")
-        try:
-            # O_NONBLOCK: a FIFO without a reader fails instead of hanging the hook
-            fd = os.open(events, os.O_WRONLY | os.O_APPEND | os.O_NONBLOCK)
-            try:
-                if not stat.S_ISREG(os.fstat(fd).st_mode):
-                    raise TuiError(f"events file {events}: not a regular file")
-                os.write(fd, (SessionStatusLog.line(session, word) + "\n").encode())
-            finally:
-                os.close(fd)
-        except OSError as e:
-            raise TuiError(f"events file {events}: {e.strerror}") from e
-
-    def _mark_tmux(self, argv: list[str]) -> str:
-        try:
-            res = self.runner(
-                argv,
-                capture_output=True,
-                text=True,
-                stdin=subprocess.DEVNULL,
-                timeout=MARK_TIMEOUT,
-            )
-        except subprocess.TimeoutExpired:
-            raise TuiError(f"tmux: timed out after {MARK_TIMEOUT} s") from None
-        except OSError as e:
-            raise TuiError(f"tmux: {e}") from e
-        if res.returncode:
-            raise TuiError(f"tmux: {error(res)}")
-        return res.stdout
 
     def start(
         self,
@@ -730,111 +621,6 @@ class TmuxCli:
                 with contextlib.suppress(TuiError):
                     self.kill(session)
 
-    def detach(
-        self,
-        session: str,
-        launch: Launch,
-        *,
-        display: str | None = None,
-        events: str | None = None,
-        record: str | None = None,
-        sid: str | None = None,
-        control: str | None = None,
-    ) -> str:
-        """As start, keeping env's iTerm2 $ITERM_SESSION_ID; display, record (a line) become
-        @display, @record. No decoration; events: a kept pane whose pane-died hook appends
-        `HH:MM:SS <session> exited <rc>` (signal n: -n) to them, then kills it.
-        """
-        argv, cwd, env = launch.argv, launch.cwd, launch.env
-        session_name(session)
-        named = {
-            "@kind": "detach",
-            "@display": display,
-            "@record": record,
-            "@sid": sid,
-            "@control": control,
-        }
-        tag_options = _tags(session, {k: v for k, v in named.items() if v is not None})
-        exited = []
-        if events is not None:
-            target = f"={session}:"
-            # -F stores the launched pane's id (## keeps the event's formats for the hook): a bare
-            # kill-pane, its pane closed during run-shell, kills another session's pane
-            on_exit = EXITED_EVENT.replace("#", "##") + " ; kill-pane -t #{pane_id}"
-            exited = [
-                *(";", "set-option", "-p", "-t", target, "remain-on-exit", "on"),
-                *(";", "set-option", "-t", target, "@events", _events(events)),
-                *(";", "set-option", "-p", "-F", "-t", target, "pane-died", on_exit),
-            ]
-        for arg in argv:
-            if "\0" in arg:
-                raise TuiError("an argv item holds a NUL character")
-            try:
-                os.fsencode(arg)
-            except UnicodeEncodeError:
-                raise TuiError("an argv item cannot be encoded") from None
-        argv = _command(argv, env)
-        iterm = env.get("ITERM_SESSION_ID", "")
-        terminal = ["-e", f"ITERM_SESSION_ID={iterm}"] if ITERM_OPENER.fullmatch(iterm) else []
-        tmp = pipe = None
-        may_run = False
-        try:
-            tmp = tempfile.mkdtemp()
-            path, wrapper = _wrapper(tmp)
-            pipe = _handover(path, argv, cwd, env)
-            may_run = True
-            res = self.run(
-                [
-                    "new-session",
-                    "-d",
-                    "-P",
-                    "-F",
-                    PROCESS,
-                    *terminal,
-                    "-s",
-                    session,
-                    *wrapper,
-                    *exited,
-                    *tag_options,
-                    *_recorded(session),
-                ],
-            )
-            if res.returncode:
-                if error(res).startswith("duplicate session:"):
-                    may_run = False
-                    raise TuiError(f"session {session} exists")
-                raise TuiError(f"tmux: {error(res)}")
-            found = _identity(res)
-            if not _started(path, pipe, argv[0], self.sleep):
-                raise TuiError(f"session {session} did not start")
-            may_run = False
-        except OSError as e:
-            raise TuiError(f"handover: {e}") from e
-        else:
-            return found
-        finally:
-            if tmp:
-                shutil.rmtree(
-                    tmp, ignore_errors=True
-                )  # first, so a late wrapper finds no file to run
-            if pipe is not None:
-                os.close(pipe)
-            if may_run:
-                with contextlib.suppress(TuiError):
-                    self.kill(session)
-
-
-def _tmux_key(key) -> str:
-    """KeyPress → tmux's key name: modifiers as C-, M-, S-; PageUp, PageDown, space and ; renamed."""
-    if not isinstance(key, KeyPress):
-        raise ConfigError(f"key {key!r:.80}: want a KeyPress")
-    char = len(key.key) == 1
-    letter = key.key.isascii() and key.key.isalpha()
-    if char and (key.shift or key.ctrl and not (letter or key.key in CTRL_PUNCTUATION)):
-        raise ConfigError(f"key {key}: tmux cannot send it")  # it would lose its modifier
-    prefixes = ("C-" * key.ctrl, "M-" * key.meta, "S-" * key.shift)
-    return "".join(prefixes) + TMUX_KEYS.get(key.key, key.key)
-
 
 @dataclass(frozen=True)
 class NoAnswer:
@@ -873,92 +659,3 @@ def running(found: Probe, name: str) -> bool:
     if value == PaneStatus.UNKNOWN:
         raise SessionError(f"tmux session {name}: tmux failed")
     return value == PaneStatus.RUNNING
-
-
-class TmuxPane:
-    """Session name's captured pane (id), owned while it still runs process (its PROCESS)."""
-
-    def __init__(self, name: str, process: str, tmux: TmuxCli) -> None:
-        self.name, self.process, self.tmux = name, process, tmux
-        _, _, self.id, _ = process.split(" ")
-        self._pasted = False
-
-    def own(self) -> bool:
-        try:
-            return self.tmux.process(self.id) == self.process
-        except TuiError as e:
-            raise SessionError(f"tmux session {self.name}: {e}") from None
-
-    def probe(self) -> Probe:
-        """Whether it is still owned, and the pane's status(): one call."""
-        try:
-            found, value = self.tmux.process_status(self.id)
-        except TuiError as e:
-            return NoAnswer(f"tmux session {self.name}: {e}")
-        return found == self.process, value
-
-    def state(self) -> Liveness:
-        return liveness(self.probe())
-
-    def returncode(self) -> int | None:
-        return exit_code(self.probe())
-
-    def alive(self) -> bool:
-        return running(self.probe(), self.name)
-
-    def option(self, key: str) -> str | None:
-        if not self.own():
-            return None
-        try:
-            return self.tmux.option(self.id, key)
-        except TuiError as e:
-            raise SessionError(f"tmux session {self.name}: {e}") from None
-
-    def send(self, action: Paste | Key, alive: Callable[[], bool]) -> None:
-        """alive: its Process's, checked first."""
-        self._running(alive)
-        try:
-            if isinstance(action, Paste):
-                self.tmux.paste(self.id, action.text)
-                self._pasted = True
-            else:
-                if self._pasted:
-                    time.sleep(self.tmux.PAUSE)
-                self.tmux.keys(self.id, action.name)
-                self._pasted = False
-        except TuiError as error:
-            raise SessionError(f"send to tui session {self.name}: {error}") from error
-
-    def press(self, keys: Sequence[KeyPress], alive: Callable[[], bool]) -> None:
-        names = [_tmux_key(key) for key in keys]
-        self._running(alive)
-        try:
-            if self._pasted:
-                time.sleep(self.tmux.PAUSE)
-            self.tmux.press(self.id, *names)
-            self._pasted = False
-        except TuiError as error:
-            raise SessionError(f"send to tui session {self.name}: {error}") from error
-
-    def _running(self, alive: Callable[[], bool]) -> None:
-        if not alive():
-            raise SessionError(f"tui session {self.name} is not running")
-
-    def read(self, lines: int | None = None) -> str:
-        return self.tmux.read(self.id, lines)
-
-    def mark(self, word: str, events: str | None, *, session: str | None = None) -> None:
-        if self.own():
-            try:
-                self.tmux.mark(word, events, pane=self.id, session=session)
-            except TuiError as error:
-                raise SessionError(str(error)) from error
-
-    def kill(self) -> None:
-        if not self.own():
-            return
-        try:
-            self.tmux.kill(self.id)
-        except TuiError as e:
-            if self.own():
-                raise SessionError(str(e)) from None

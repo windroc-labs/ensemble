@@ -11,6 +11,7 @@ from ensemble.manager import Crew, Spec, State
 from ensemble.manager.engine.crew import DESCENDANTS
 from ensemble.manager.engine.roster import Roster
 from tests.manager.cli_case import CliCase
+from tests.manager.roster_case import mark
 from tests.manager.starters import answered
 from tests.utils.fakes import ctl
 
@@ -78,7 +79,7 @@ class CliTest(CliCase):
         command = self.setup_ctl()
         Crew(self.roster).run(Spec("worker", (command, "start", "worker")))
         ctl.set_session(self.ctl_dir, "worker", alive=False, state="gone")
-        self.roster.mark("worker", State.GONE)
+        mark(self.roster, "worker", State.GONE)
         real_run = subprocess.run
         with self.roster.hold("old holder") as lease, contextlib.ExitStack() as takeover:
 

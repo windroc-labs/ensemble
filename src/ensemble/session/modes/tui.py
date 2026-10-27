@@ -182,6 +182,32 @@ def _read_state(name: str, path: str) -> dict:
     return state
 
 
+def store_record(name: str, generation: str, record: ControlRecord) -> None:
+    """Worker `name`'s Record, for `generation` while session.json names it; else SessionError.
+    Only the process owning that Record (a crew Worker, a delegate) calls it.
+    """
+    found = worker_state(name)
+    if found is None or found.generation != generation:
+        raise SessionError(f"session {name} is gone")
+    folder = os.path.join(os.path.expanduser(TUI_DIR), name)
+    path = os.path.join(folder, RECORD)
+    try:
+        fd, temporary = tempfile.mkstemp(dir=folder, prefix=f".{RECORD}-")  # 0600, O_NOFOLLOW
+    except FileNotFoundError:
+        raise SessionError(f"session {name} is gone") from None
+    except OSError as e:
+        raise SessionError(f"{path}: {e.strerror or e}") from None
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(f"{generation}\t{record.to_line()}\n".encode())
+        os.replace(temporary, path)
+    except OSError as e:
+        raise SessionError(f"{path}: {e.strerror or e}") from None
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temporary)  # left only when not replaced
+
+
 class TuiStore:
     """Tui session `name`'s dir and lock under TUI_DIR; what changes them takes the lock.
     attach(name, host=...) takes by name whatever is there: a tui session, a half-gone one (its dir
@@ -220,28 +246,8 @@ class TuiStore:
             SessionStatusLog(events).write(self.name, word)
 
     def store_record(self, generation: str, record: ControlRecord) -> None:
-        """Its crew Record, for `generation` while session.json names it; else SessionError. Only
-        the crew Worker owning that Record calls it.
-        """
-        found = worker_state(self.name)
-        if found is None or found.generation != generation:
-            raise SessionError(f"session {self.name} is gone")
-        path = os.path.join(self.dir, RECORD)
-        try:
-            fd, temporary = tempfile.mkstemp(dir=self.dir, prefix=f".{RECORD}-")  # 0600, O_NOFOLLOW
-        except FileNotFoundError:
-            raise SessionError(f"session {self.name} is gone") from None
-        except OSError as e:
-            raise SessionError(f"{path}: {e.strerror or e}") from None
-        try:
-            with os.fdopen(fd, "wb") as f:
-                f.write(f"{generation}\t{record.to_line()}\n".encode())
-            os.replace(temporary, path)
-        except OSError as e:
-            raise SessionError(f"{path}: {e.strerror or e}") from None
-        finally:
-            with contextlib.suppress(FileNotFoundError):
-                os.unlink(temporary)  # left only when not replaced
+        """Its crew Record, for `generation` while session.json names it; else SessionError."""
+        store_record(self.name, generation, record)
 
     def read(self) -> dict:
         return _read_state(self.name, self.state_file)

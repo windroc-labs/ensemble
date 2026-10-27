@@ -41,7 +41,7 @@ from ensemble.session.engine.types import (
     Window,
 )
 from ensemble.session.harness.types import EventCall
-from ensemble.session.hosts.base import SIGNALS, Host, Process
+from ensemble.session.hosts.base import SIGNALS, Host
 from ensemble.session.viewer.viewer import Viewer
 
 __all__ = [
@@ -61,7 +61,6 @@ __all__ = [
     "Resumable",
     "RunLog",
     "Host",
-    "Process",
     "Viewer",
     "get_viewer",
     "NotShowable",

@@ -14,6 +14,7 @@ from ensemble.manager import Crew, Roster, Spec, State
 from ensemble.utils import Record, Status
 from tests.manager import fake_session
 from tests.manager.case import Case, child_env, with_ctl
+from tests.manager.roster_case import mark
 from tests.utils.fakes import ctl
 
 
@@ -204,10 +205,10 @@ class Commands(Case):
         ctl.set_session(self.ctl_dir, "a", alive=False, sid=first.sid)
         roster.begin(Spec("a", (self.command, "start", "a")), sid=first.sid)
         roster.commit("a", first)
-        roster.mark("a", State.GONE)
+        mark(roster, "a", State.GONE)
         second = Crew(roster).run(Spec("b", (self.command, "start", "b")))
         ctl.set_session(self.ctl_dir, "b", alive=False)
-        roster.mark("b", State.GONE)
+        mark(roster, "b", State.GONE)
         with mock.patch.dict(os.environ, _without_manager_identity(), clear=True):
             result = self.invoke("resume", "a", "b", "--manager", "mgr")
         self.assertEqual(result.returncode, 1, result.stderr)
@@ -250,7 +251,7 @@ class Commands(Case):
         fake_session.set_records(self.sessions, [orphan])
         original = Roster(self.directory)
         original.begin(Spec("orphan", (self.command, "start", "orphan")), sid=orphan.sid)
-        original.mark("orphan", State.LOST)
+        mark(original, "orphan", State.LOST)
         with original.hold("first") as first:
             result = self.invoke("attach", "--manager", "mgr")
             self.assertEqual(result.returncode, 1)

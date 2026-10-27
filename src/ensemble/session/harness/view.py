@@ -31,6 +31,7 @@ from ensemble.session.engine.types import (
 from ensemble.session.harness.channel import Channel, Tie
 from ensemble.session.harness.types import Logged, Op
 from ensemble.session.hosts.base import stored_record
+from ensemble.session.modes.tui import store_record
 from ensemble.utils import Display, Record, Status
 
 POLL = 0.1
@@ -303,6 +304,12 @@ class OwnedSession(Session):
 
     def session_status(self) -> SessionStatus:
         return self._call(lambda session: session.session_status())
+
+    def publish(self, record: Record) -> None:
+        """Its Record, stored in its worker dir for its generation (a tui worker's)."""
+        if self.mode != Mode.TUI or self.name is None:
+            raise SessionError(f"session {self.name or self.sid}: no worker dir for a Record")
+        store_record(self.name, self.generation, record)
 
     def record(self) -> Record | None:
         """Its crew Record, stored in its worker dir for its generation."""

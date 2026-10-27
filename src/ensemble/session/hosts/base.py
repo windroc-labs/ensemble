@@ -20,7 +20,6 @@ from ensemble.session.engine.types import (
     ClientContext,
     ClientHome,
     ConfigError,
-    HookCallback,
     Hosts,
     Key,
     KeyPress,
@@ -43,8 +42,6 @@ from ensemble.utils import (
     STATE,
     Display,
     Record,
-    Status,
-    append_line,
     events_file,
     printable_abs,
     read_regular,
@@ -175,98 +172,13 @@ def tui_lock(name: str) -> str:
     return os.path.join(os.path.expanduser(TUI_DIR), f"{name}.lock")
 
 
-class Process(ABC):
-    """close: end/forget, absent is fine; kill: process group; wait_exit: await the whole group."""
+class InteractiveProcess(ABC):
+    """A managed worker's handle (docs/architecture.md › Session harness interfaces): send and
+    press into its input (Key names: the Client's), its screen, liveness and confirmed close.
+    """
 
     name: str
-
-    @abstractmethod
-    def alive(self) -> bool: ...
-
-    @abstractmethod
-    def close(self) -> None: ...
-
-    @abstractmethod
-    def wait_exit(self, timeout: float) -> bool: ...
-
-    @abstractmethod
-    def kill(self) -> None: ...
-
-    @property
-    def identity(self) -> str:
-        return self.name
-
-    @property
-    def token(self) -> str | None:
-        return None
-
-    def publish(self, record: Record) -> None:
-        raise SessionError(f"session {self.name}: its host cannot store a Record after launch")
-
-    def session_identity(self) -> tuple[str | None, str | None]:
-        """Private sid and generation, independent of Record; None never matches a supplied sid."""
-        return None, None
-
-    def state(self) -> Liveness:
-        return Liveness.LIVE if self.alive() else Liveness.ABSENT
-
-    def returncode(self) -> int | None:
-        return None if self.alive() else -signal.SIGHUP
-
-    def activity(self) -> StatusState | None:
-        return None
-
-    def screen(self, lines: int | None = None) -> str:
-        raise NotShowable(f"session {self.name}: its host cannot show")
-
-    def status(self) -> Status:
-        """unknown, too, when its host fails after telling its liveness."""
-        unknown = Status(
-            name=self.name,
-            alive=False,
-            state=StatusState.UNKNOWN,
-            outcome=None,
-            attach=None,
-            hidden=False,
-        )
-        liveness = self.state()
-        if liveness == Liveness.UNKNOWN:
-            return unknown
-        try:
-            alive = liveness == Liveness.LIVE and self.alive()
-            state = (self.activity() or StatusState.WORKING) if alive else StatusState.DEAD
-        except SessionError:
-            return unknown
-        return Status(
-            name=self.name, alive=alive, state=state, outcome=None, attach=None, hidden=False
-        )
-
-    def mark(self, word: StatusState, events: str | None) -> None:
-        """Optional activity metadata for a terminal's status display."""
-        return None
-
-    def row(self) -> SessionRow:
-        receipt = self.record()
-        return SessionRow(
-            self.name,
-            None if receipt is None else receipt.sid,
-            None if receipt is None else receipt.kind,
-            StatusState.WORKING if self.alive() else StatusState.DEAD,
-            self.display(),
-            None,
-            None,
-            own=False,
-        )
-
-    @abstractmethod
-    def record(self) -> Record | None: ...
-
-    @abstractmethod
-    def display(self) -> Display: ...
-
-
-class Interactive(ABC):
-    """send: into its input (Key names: the Client's)."""
+    generation: str
 
     @abstractmethod
     def send(self, action: Paste | Key) -> None: ...
@@ -274,11 +186,17 @@ class Interactive(ABC):
     @abstractmethod
     def press(self, keys: Sequence[KeyPress]) -> None: ...
 
+    def screen(self, lines: int | None = None) -> str:
+        raise NotShowable(f"session {self.name}: its host cannot show")
 
-class InteractiveProcess(Process, Interactive):
-    """Managed contract: docs/architecture.md › Session harness interfaces; no Channel."""
+    @abstractmethod
+    def state(self) -> Liveness: ...
 
-    generation: str
+    @abstractmethod
+    def close(self) -> None: ...
+
+    @abstractmethod
+    def returncode(self) -> int | None: ...
 
     def read(self, timeout: float) -> list[WorkerMessage]:
         raise NotImplementedError
@@ -349,32 +267,6 @@ class Host(ABC):
             raise ConfigError(f"[hosts] default: want one of {names}")
         return Hosts(default, tables)
 
-    @abstractmethod
-    def detach(
-        self,
-        name: str,
-        launch: Launch,
-        *,
-        display: Display = None,
-        events: str | None = None,
-        record: Record | None = None,
-    ) -> Process: ...
-
-    @abstractmethod
-    def terminal(
-        self,
-        name: str,
-        launch: Launch,
-        *,
-        display: Display = None,
-        events: str | None = None,
-        record: Record | None = None,
-        metadata: Mapping[str, str] | None = None,
-    ) -> InteractiveProcess:
-        """metadata: private sid/client/generation, apart from the published Record; a container
-        Host writes prompt to prompt_file."""
-        ...
-
     def worker(
         self,
         name: str,
@@ -396,9 +288,6 @@ class Host(ABC):
         is ABSENT; a Host that overrides worker overrides this too.
         """
         return None
-
-    @abstractmethod
-    def attach(self, name: str) -> Process: ...
 
     @abstractmethod
     def list(self) -> list[str]: ...
@@ -442,24 +331,6 @@ class Host(ABC):
 
     def attach_target(self, name: str) -> SessionView | CommandView | None:
         """What the Viewer shows session `name` through; None unless attachable."""
-        return None
-
-    def reclaim(self, token: str) -> Process | None:
-        """An untrusted token's live process group, else None."""
-        return None
-
-    def events_path(self, events: str | None) -> str | None:
-        return None if events is None else os.path.abspath(events)
-
-    def prepare_events(self, events: str | None) -> str | None:
-        if events is not None:
-            try:
-                append_line(events, "")
-            except OSError as error:
-                raise SessionError(f"events file {events}: {error.strerror}") from error
-        return events
-
-    def hook_callback(self, name: str, metadata: Mapping[str, str]) -> HookCallback | None:
         return None
 
     _inherit_env = True

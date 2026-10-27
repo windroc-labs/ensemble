@@ -48,8 +48,6 @@ from ensemble.session.hosts.base import (
     TUI_DIR,
     TUI_STATE,
     Host,
-    InteractiveProcess,
-    Process,
     created_events,
     tui_lock,
 )
@@ -79,12 +77,11 @@ from ensemble.session.hosts.docker.mounts import (
     workspace_volume,
 )
 from ensemble.session.hosts.docker.types import GEN, Started
-from ensemble.session.hosts.docker.worker import GUARD, RUN, DockerWorker, GuardedView
+from ensemble.session.hosts.docker.worker import GUARD, RUN, DockerWorker
 from ensemble.session.hosts.types import CommandView
 from ensemble.utils import (
     DOCKER_STATE,
     Display,
-    Record,
     command_path,
     docker_home,
     inode_lock,
@@ -527,7 +524,7 @@ class DockerHost(Host):
         except OSError as error:
             LOG.warning("docker reclaim: %s", error)
 
-    def reclaim(self) -> None:
+    def reclaim_volumes(self) -> None:
         """Background close pass: removes all run workspace volumes whose workdir is gone, after
         the broker's check. One with unsaved work is kept for good, one whose check
         failed for KEPT_RETRY; each is warned about once and marked. Listed before the lock, so no
@@ -723,21 +720,6 @@ class DockerHost(Host):
                     f"docker session {name}: {error.message}; or start it in {anchor} again"
                 ) from error
             raise
-
-    def detach(self, name, launch, *, display=None, events=None, record=None) -> Process:
-        raise SessionError(f"detach {name}: runs only under a session harness")
-
-    def terminal(
-        self,
-        name: str,
-        launch: Launch,
-        *,
-        display: Display = None,
-        events: str | None = None,
-        record: Record | None = None,
-        metadata: Mapping[str, str] | None = None,
-    ) -> InteractiveProcess:
-        raise SessionError(f"docker session {name}: terminal: runs only under a session harness")
 
     def _container(
         self,
@@ -1032,8 +1014,6 @@ class DockerHost(Host):
                     root=hook_root(hook),
                 ),
                 report=self._reporter(name, events),
-                load=lambda: _record(name),
-                store=lambda data: _save_record(name, data),
                 terminal=terminal,
             )
             made.append(handle)
@@ -1184,29 +1164,6 @@ class DockerHost(Host):
             return f"; close {container}: {error}"
         return ""
 
-    def attach(self, name: str) -> InteractiveProcess:
-        found = self._containers().get(name)
-        if found is None:
-            raise SessionError(f"no docker session {name}")
-        return self._guarded_process(found)
-
-    def _guarded_process(self, row: Row) -> InteractiveProcess:
-        """The handle this process holds, else a view of the worker its owner holds."""
-        handle = self._workers.get(row.name)
-        if handle is not None and handle.removed:
-            del self._workers[row.name]
-        elif handle is not None and handle.generation == row.generation:
-            return handle
-        name, generation = row.name, row.generation
-        return GuardedView(
-            name,
-            generation,
-            state=state_dir(name),
-            load=lambda: _record(name),
-            liveness=lambda: self.worker_liveness(name, generation),
-            remove=lambda: self._release(name, generation),
-        )
-
     def list(self) -> list[str]:
         return sorted(self._containers())
 
@@ -1268,4 +1225,4 @@ class DockerHost(Host):
 
 
 if __name__ == "__main__":
-    DockerHost("docker", {"docker": sys.argv[1]}).reclaim()
+    DockerHost("docker", {"docker": sys.argv[1]}).reclaim_volumes()

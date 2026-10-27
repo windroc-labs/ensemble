@@ -16,7 +16,7 @@ from ensemble.manager.engine.crew import GRACE, HEADER, START_TIMEOUT, Crew, _ru
 from ensemble.manager.engine.roster import Roster
 from ensemble.manager.engine.types import RosterError, Spec, State
 from ensemble.utils import Record, Status, save_reply
-from tests.manager.roster_case import RosterCase
+from tests.manager.roster_case import RosterCase, mark
 from tests.manager.starters import answered, finished
 from tests.session.hosted_support import HostedTuiBase
 from tests.utils.process_fixtures import DEVNULL, TimeoutExpired
@@ -144,7 +144,7 @@ class ResumeInput(RosterCase):
     def setUp(self):
         super().setUp()
         self.live()
-        self.roster.mark("x", State.WAITING)
+        mark(self.roster, "x", State.WAITING)
 
     def resume(self, *, code=0, output=None, input="answer", during=None):
         def run(argv, **options):
@@ -166,7 +166,7 @@ class ResumeInput(RosterCase):
             with self.subTest(text=text):
                 self.assertEqual(self.resume(input=text), self.record)
                 self.assertIs(self.roster.entries()["x"].state, State.LIVE)
-                self.roster.mark("x", State.WAITING)
+                mark(self.roster, "x", State.WAITING)
 
     def test_only_an_empty_exit_two_restores_waiting(self):
         with self.assertRaisesRegex(ValueError, "refused"):
@@ -177,7 +177,7 @@ class ResumeInput(RosterCase):
                 with self.assertRaises((RosterError, RuntimeError)):
                     self.resume(code=code, output=output)
                 self.assertIs(self.roster.entries()["x"].state, State.GONE)
-                self.roster.mark("x", State.WAITING)
+                mark(self.roster, "x", State.WAITING)
 
     def test_cached_adoption_cannot_promote_the_current_input_attempt(self):
         def adopt():
@@ -223,7 +223,7 @@ class ResumeInput(RosterCase):
             with self.subTest(state=state):
                 self.roster.remove("x")
                 self.live()
-                self.roster.mark("x", State.GONE if state == State.RESUMING else state)
+                mark(self.roster, "x", State.GONE if state == State.RESUMING else state)
                 if state == State.RESUMING:
                     self.roster.claim_resume("x")
                 before = self.roster.entries()
