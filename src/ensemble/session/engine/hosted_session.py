@@ -737,7 +737,10 @@ class HostedSession(Session):
         channel = _bound_owner(name, state)
         if channel is None or channel.status().get("state") != "running":
             return cls._attached(name, sid=sid, host=host, idle_timeout=idle_timeout)
-        attached = cls._attached(name, sid=sid, host=host, generation=state["generation"])
+        try:
+            attached = cls._attached(name, sid=sid, host=host, generation=state["generation"])
+        except SessionError:
+            attached = None  # its terminal is gone: its owner, draining, still answers a close
         return cls._view(
             channel,
             name=name,

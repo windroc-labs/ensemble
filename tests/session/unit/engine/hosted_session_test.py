@@ -3284,7 +3284,9 @@ class BoundOwnerTest(HostedTuiBase):
         with open(os.path.join(self.root, "w1", "session.json"), "w") as f:
             json.dump(self.state, f)
 
-    def owner(self, **status):
+    def owner(self, **status) -> int | None:
+        """The lock fd it took, if not held already."""
+        fd = None
         if not self.channel.alive():
             fd = os.open(self.channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
             fcntl.flock(fd, fcntl.LOCK_EX)
@@ -3298,8 +3300,10 @@ class BoundOwnerTest(HostedTuiBase):
                 **status,
             }
         )
+        return fd
 
-    def serve(self):
+    def serve(self, let_go=None):
+        """let_go: the lock fd it then unlocks, as a harness does once it answered an end."""
         self.served = []
 
         def answer():
@@ -3308,6 +3312,8 @@ class BoundOwnerTest(HostedTuiBase):
                 for ident, op in self.channel.requests():
                     self.served.append(op)
                     self.channel.reply(ident, ok=True)
+                    if let_go is not None:
+                        fcntl.flock(let_go, fcntl.LOCK_UN)
                     return
                 time.sleep(0.01)
 
@@ -3348,11 +3354,17 @@ class BoundOwnerTest(HostedTuiBase):
         self.owner(state="exited")
         self.assertNotIsInstance(self.session.attach("w1"), OwnedSession)
 
-    def test_attach_of_a_running_owner_whose_terminal_is_gone_raises_as_legacy(self):
-        self.owner()
+    def test_attach_of_a_running_owner_whose_terminal_is_gone_is_its_view_not_alive(self):
+        held = self.owner()
         self.host.processes.pop("w1")
+        view = self.session.attach("w1", sid=SID)
+        self.assertIsInstance(view, OwnedSession)
+        self.assertFalse(view.alive())
         with self.assertRaisesRegex(SessionError, "w1"):
-            self.session.attach("w1")
+            view.status()
+        self.serve(let_go=held)
+        view.close()
+        self.assertEqual(self.served, [Op.CLOSE])
 
     def test_a_failed_spawn_closes_the_worker_its_harness_launched(self):
         terminal = self.host.processes["w1"]
@@ -3389,8 +3401,7 @@ class BoundOwnerTest(HostedTuiBase):
             self.session.attach("w1", sid="other")
 
     def test_retire_asks_the_owner_and_closes_nothing_itself(self):
-        self.owner()
-        self.serve()
+        self.serve(let_go=self.owner())
         terminal = self.host.processes["w1"]
         self.session.retire("w1", sid=SID)
         self.assertEqual(self.served, [Op.CLOSE])
