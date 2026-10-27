@@ -549,11 +549,14 @@ class DisplayTest(Base):
         self.assertTrue(self.request(Op.CLOSE))
 
     def test_after_the_exit_display_is_refused(self):
+        gate = threading.Event()
+        self.addCleanup(gate.set)
         owned = DisplayOwned(([Reply("x")], True))
-        thread = self.run_in_thread(self.harness(owned, drain=0.5))
+        thread = self.run_in_thread(self.harness(owned, Handler(hang=gate), drain=2.0))
         while self.channel.status().get("state") != "exited":
             time.sleep(0.01)
         with self.assertRaisesRegex(SessionError, "w1: worker exited"):
             self.ask(Op.DISPLAY, {})
+        gate.set()
         thread.join(WAIT)
         self.assertEqual(owned.asked, 0)
