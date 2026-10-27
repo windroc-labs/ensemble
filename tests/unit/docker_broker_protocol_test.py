@@ -81,7 +81,7 @@ class DockerBrokerProtocol(Case):
         Draft202012Validator.check_schema(schema)
         index = json.loads((PROTOCOL / "fixtures/index.json").read_text())
         self.assertTrue(index["cases"])
-        self.assertEqual(index["protocol_version"], "31")
+        self.assertEqual(index["protocol_version"], "33")
         self.assertEqual(
             index["protocol_version"],
             schema["$defs"]["version_output"]["properties"]["protocol_version"]["const"],
@@ -105,6 +105,7 @@ class DockerBrokerProtocol(Case):
                 covered.add((definition, case["valid"]))
         for definition in (
             "manifest",
+            "credential_request",
             "version_input",
             "version_output",
             "build_input",
@@ -129,6 +130,27 @@ class DockerBrokerProtocol(Case):
         ):
             for valid in (True, False):
                 self.assertIn((definition, valid), covered)
+
+    def test_credential_dirs_match_request_kinds(self):
+        schema = json.loads((PROTOCOL / "protocol.schema.json").read_text())
+        dirs = json.loads((PROTOCOL / "fixtures/credential-dirs.json").read_text())
+        kinds = list(schema["$defs"]["credential_request"]["properties"])
+        self.assertEqual(list(dirs), kinds)
+        self.assertEqual(list(schema["$defs"]["credentials"]["properties"]), kinds)
+        self.assertEqual(
+            {
+                kind: d["const"]
+                for kind, d in schema["$defs"]["credential_dirs"]["properties"].items()
+            },
+            dirs,
+        )
+        for kind, path in dirs.items():
+            with self.subTest(kind=kind):
+                self.assertEqual(path, f"/run/ensemble/secrets/{kind}")
+                for other in set(dirs.values()) - {path}:
+                    self.assertFalse(
+                        Path(path).is_relative_to(other) or Path(other).is_relative_to(path)
+                    )
 
     def test_manifest_required_fields_and_rejected_unknown_fields_are_exercised(self):
         index = json.loads((PROTOCOL / "fixtures/index.json").read_text())

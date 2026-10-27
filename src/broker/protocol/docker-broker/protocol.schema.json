@@ -172,6 +172,128 @@
         "pattern": "/\\.\\.?$"
       }
     },
+    "github_grant": {
+      "$comment": "One GitHub installation token's scope, a credential request's grant: its permissions, and repo, the one repository it reaches; no repo: every repository of every installation.",
+      "type": "object",
+      "properties": {
+        "permissions": {
+          "$ref": "#/$defs/github/oneOf/1/properties/permissions"
+        },
+        "repo": {
+          "$ref": "#/$defs/github_repo"
+        }
+      },
+      "required": [
+        "permissions"
+      ],
+      "additionalProperties": false
+    },
+    "github_grants": {
+      "$comment": "A credential request's github: at most 16 grants, one without repo standing alone; Python and the broker also refuse a repo repeated.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "contains": {
+        "type": "object",
+        "not": {
+          "required": [
+            "repo"
+          ]
+        }
+      },
+      "minContains": 0,
+      "maxContains": 1,
+      "if": {
+        "contains": {
+          "type": "object",
+          "not": {
+            "required": [
+              "repo"
+            ]
+          }
+        }
+      },
+      "then": {
+        "maxItems": 1
+      }
+    },
+    "credential_request": {
+      "$comment": "A run's credential request, the session's CredentialRequest.persisted(): references only, never a value; a kind absent: none of it.",
+      "type": "object",
+      "properties": {
+        "github": {
+          "$comment": "One installation token per grant, of the session host's GitHub App.",
+          "$ref": "#/$defs/github_grants",
+          "items": {
+            "$ref": "#/$defs/github_grant"
+          }
+        },
+        "linear": {
+          "$comment": "The role whose Linear app token the container gets.",
+          "type": "object",
+          "properties": {
+            "role": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]{0,62}$"
+            }
+          },
+          "required": [
+            "role"
+          ],
+          "additionalProperties": false
+        },
+        "env": {
+          "$comment": "Environment secrets by keychain reference, as the manifest's secrets; Python and the broker also refuse a file repeated.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/manifest/properties/secrets/items"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "credentials": {
+      "$comment": "A start manifest's credential request: a credential_request whose every grant names the App its token comes from.",
+      "type": "object",
+      "properties": {
+        "github": {
+          "$ref": "#/$defs/github_grants",
+          "items": {
+            "$ref": "#/$defs/github/oneOf/1"
+          }
+        },
+        "linear": {
+          "$ref": "#/$defs/credential_request/properties/linear"
+        },
+        "env": {
+          "$ref": "#/$defs/credential_request/properties/env"
+        }
+      },
+      "additionalProperties": false
+    },
+    "credential_dirs": {
+      "$comment": "Each credential request kind's directory in the container, under the secrets tmpfs /run/ensemble/secrets.",
+      "type": "object",
+      "properties": {
+        "github": {
+          "const": "/run/ensemble/secrets/github"
+        },
+        "linear": {
+          "const": "/run/ensemble/secrets/linear"
+        },
+        "env": {
+          "const": "/run/ensemble/secrets/env"
+        }
+      },
+      "required": [
+        "github",
+        "linear",
+        "env"
+      ],
+      "additionalProperties": false
+    },
     "volume": {
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$"
@@ -330,6 +452,10 @@
           },
           "required": ["repo"],
           "additionalProperties": false
+        },
+        "credentials": {
+          "$comment": "Not served yet by this protocol: a broker refuses a start naming any kind.",
+          "$ref": "#/$defs/credentials"
         }
       },
       "required": [
@@ -437,6 +563,75 @@
           }
         }
       ],
+      "allOf": [
+        {
+          "$comment": "One source per kind: credentials.github needs github null.",
+          "if": {
+            "required": [
+              "credentials"
+            ],
+            "properties": {
+              "credentials": {
+                "required": [
+                  "github"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "github": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "$comment": "One source per kind: credentials.env needs no secrets.",
+          "if": {
+            "required": [
+              "credentials"
+            ],
+            "properties": {
+              "credentials": {
+                "required": [
+                  "env"
+                ]
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "secrets"
+              ]
+            }
+          }
+        },
+        {
+          "$comment": "A prefetching container gets only repo grants' tokens, each reaching one repository.",
+          "if": {
+            "required": [
+              "prefetch"
+            ]
+          },
+          "then": {
+            "properties": {
+              "credentials": {
+                "properties": {
+                  "github": {
+                    "items": {
+                      "required": [
+                        "repo"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
       "dependentRequired": {
         "lock": [
           "lock_owner"
@@ -489,7 +684,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "31"
+          "const": "33"
         }
       },
       "required": [

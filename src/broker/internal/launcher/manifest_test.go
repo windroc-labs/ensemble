@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -465,5 +466,129 @@ func TestManifestPrefetch(t *testing.T) {
 	m, err = ParseManifest(withFields(t, map[string]any{"prefetch": map[string]any{"repo": "o/r"}, "github": github}))
 	if err != nil || m.Prefetch == nil || m.GitHubApp != "ensemble-broker-bot" || m.GitHubRepo != "acme/out" {
 		t.Fatalf("prefetch with a repo grant: %+v %v", m, err)
+	}
+}
+
+func TestCredentialsParse(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(fixtures.Dir(), "manifest-credentials.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := ParseManifest(data)
+	want := &CredentialRequest{
+		GitHub: []Grant{
+			{App: "ensemble-broker-bot", Permissions: map[string]string{"contents": "write", "pull_requests": "write"}, Repo: "windroc-labs/ensemble"},
+			{App: "ensemble-broker-bot", Permissions: map[string]string{"contents": "write"}, Repo: "windroc/private_docs"},
+		},
+		Linear: &Linear{Role: "engineer"},
+		Env:    []Secret{{"ensemble-broker-env/mini-ssh", "id_ed25519"}, {"ensemble-broker-env/mini-password", "mini-password"}},
+	}
+	if err != nil || !reflect.DeepEqual(m.Credentials, want) || !slices.Equal(m.Credentials.Kinds(), []string{"github", "linear", "env"}) {
+		t.Fatalf("%+v %v", m.Credentials, err)
+	}
+	if m, err := ParseManifest(withFields(t, nil)); err != nil || m.Credentials != nil {
+		t.Fatalf("absent: %+v %v", m.Credentials, err)
+	}
+	if m, err := ParseManifest(withFields(t, map[string]any{"credentials": map[string]any{}})); err != nil || m.Credentials == nil || len(m.Credentials.Kinds()) != 0 {
+		t.Fatalf("empty: %+v %v", m.Credentials, err)
+	}
+
+	// Every rejected value or key below holds leak; no message may repeat it.
+	const leak = "lin_api_leak"
+	grant := func(fields map[string]any) map[string]any {
+		g := map[string]any{"app": "ensemble-broker-bot", "permissions": map[string]any{"contents": "write"}, "repo": "acme/x"}
+		for k, v := range fields {
+			if v == nil {
+				delete(g, k)
+				continue
+			}
+			g[k] = v
+		}
+		return g
+	}
+	grants := func(n int) []any {
+		var list []any
+		for i := range n {
+			list = append(list, grant(map[string]any{"repo": "acme/r" + strconv.Itoa(i)}))
+		}
+		return list
+	}
+	env := func(n int) []any {
+		var list []any
+		for i := range n {
+			list = append(list, secret("ensemble-broker-env/s"+strconv.Itoa(i), "f"+strconv.Itoa(i)))
+		}
+		return list
+	}
+	if m, err := ParseManifest(withFields(t, map[string]any{"credentials": map[string]any{"github": grants(16), "env": env(16)}})); err != nil || len(m.Credentials.GitHub) != 16 || len(m.Credentials.Env) != 16 {
+		t.Fatalf("16: %v", err)
+	}
+	if m, err := ParseManifest(withFields(t, map[string]any{"credentials": map[string]any{"github": []any{grant(map[string]any{"repo": nil})}}})); err != nil || m.Credentials.GitHub[0].Repo != "" {
+		t.Fatalf("one grant without repo: %+v %v", m.Credentials, err)
+	}
+	legacy := map[string]any{"app": "ensemble-broker-bot", "permissions": map[string]any{"contents": "write"}}
+	linear := map[string]any{"linear": map[string]any{"role": "engineer"}}
+	for name, fields := range map[string]map[string]any{
+		"linear beside legacy github": {"credentials": linear, "github": legacy},
+		"linear beside prefetch":      {"credentials": linear, "prefetch": map[string]any{"repo": "o/r"}},
+		"repo grant beside prefetch":  {"credentials": map[string]any{"github": grants(1)}, "prefetch": map[string]any{"repo": "o/r"}},
+		"env beside no secrets":       {"credentials": map[string]any{"env": env(1)}, "secrets": nil},
+	} {
+		if _, err := ParseManifest(withFields(t, fields)); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+
+	for _, c := range []struct {
+		fields map[string]any
+		want   string
+	}{
+		{map[string]any{"credentials": leak}, "credentials: want an object"},
+		{map[string]any{"credentials": []any{leak}}, "credentials: want an object"},
+		{map[string]any{"credentials": map[string]any{leak: map[string]any{}}}, "credentials: an unknown kind"},
+		{map[string]any{"credentials": map[string]any{"github": leak}}, "credentials.github: want 1 to 16 grants"},
+		{map[string]any{"credentials": map[string]any{"github": []any{}}}, "credentials.github: want 1 to 16 grants"},
+		{map[string]any{"credentials": map[string]any{"github": grants(17)}}, "credentials.github: want 1 to 16 grants"},
+		{map[string]any{"credentials": map[string]any{"github": []any{leak}}}, "credentials.github[0]: want an object"},
+		{map[string]any{"credentials": map[string]any{"github": []any{grant(map[string]any{leak: "x"})}}}, "credentials.github[0]: an unknown key"},
+		{map[string]any{"credentials": map[string]any{"github": []any{grant(map[string]any{"app": nil})}}}, "credentials.github[0]: app missing"},
+		{map[string]any{"credentials": map[string]any{"github": []any{grant(map[string]any{"app": leak})}}}, "credentials.github[0]: app not valid"},
+		{map[string]any{"credentials": map[string]any{"github": []any{grant(map[string]any{"permissions": nil})}}}, "credentials.github[0]: permissions missing"},
+		{map[string]any{"credentials": map[string]any{"github": []any{grant(map[string]any{"permissions": leak})}}}, "credentials.github[0]: permissions not valid"},
+		{map[string]any{"credentials": map[string]any{"github": []any{grant(map[string]any{"permissions": map[string]any{}})}}}, "credentials.github[0]: permissions not valid"},
+		{map[string]any{"credentials": map[string]any{"github": []any{grant(map[string]any{"permissions": map[string]any{"contents": 1}})}}}, "credentials.github[0]: permissions not valid"},
+		{map[string]any{"credentials": map[string]any{"github": []any{grant(map[string]any{"permissions": map[string]any{leak: "read"}})}}}, "credentials.github[0]: an unknown key"},
+		{map[string]any{"credentials": map[string]any{"github": []any{grant(map[string]any{"permissions": map[string]any{"contents": leak}})}}}, "credentials.github[0]: contents not valid"},
+		{map[string]any{"credentials": map[string]any{"github": []any{grant(map[string]any{"permissions": map[string]any{"metadata": "write"}})}}}, "credentials.github[0]: metadata not valid"},
+		{map[string]any{"credentials": map[string]any{"github": []any{grant(map[string]any{"permissions": map[string]any{"workflows": "read"}})}}}, "credentials.github[0]: workflows not valid"},
+		{map[string]any{"credentials": map[string]any{"github": []any{grant(map[string]any{"repo": leak})}}}, "credentials.github[0]: repo not valid"},
+		{map[string]any{"credentials": map[string]any{"github": []any{grant(map[string]any{"repo": "acme/.."})}}}, "credentials.github[0]: repo not valid"},
+		{map[string]any{"credentials": map[string]any{"github": []any{grant(map[string]any{"repo": 1})}}}, "credentials.github[0]: repo not valid"},
+		{map[string]any{"credentials": map[string]any{"github": []any{grant(map[string]any{"repo": nil}), grant(map[string]any{"repo": nil})}}}, "credentials.github[0]: repo missing beside another grant"},
+		{map[string]any{"credentials": map[string]any{"github": []any{grant(nil), grant(map[string]any{"repo": nil})}}}, "credentials.github[1]: repo missing beside another grant"},
+		{map[string]any{"credentials": map[string]any{"github": []any{grant(nil), grant(map[string]any{"permissions": map[string]any{"issues": "read"}})}}}, "credentials.github[1]: repo repeated"},
+		{map[string]any{"credentials": map[string]any{"linear": leak}}, "credentials.linear: want an object"},
+		{map[string]any{"credentials": map[string]any{"linear": map[string]any{"role": "engineer", "token": leak}}}, "credentials.linear: an unknown key"},
+		{map[string]any{"credentials": map[string]any{"linear": map[string]any{}}}, "credentials.linear: role missing"},
+		{map[string]any{"credentials": map[string]any{"linear": map[string]any{"role": leak}}}, "credentials.linear: role not valid"},
+		{map[string]any{"credentials": map[string]any{"linear": map[string]any{"role": "9" + strings.Repeat("a", 10)}}}, "credentials.linear: role not valid"},
+		{map[string]any{"credentials": map[string]any{"env": leak}}, "credentials.env: want 1 to 16 secrets"},
+		{map[string]any{"credentials": map[string]any{"env": []any{}}}, "credentials.env: want 1 to 16 secrets"},
+		{map[string]any{"credentials": map[string]any{"env": env(17)}}, "credentials.env: want 1 to 16 secrets"},
+		{map[string]any{"credentials": map[string]any{"env": []any{leak}}}, "credentials.env[0]: want an object"},
+		{map[string]any{"credentials": map[string]any{"env": []any{map[string]any{"item": "ensemble-broker-env/a", "file": "a", leak: "x"}}}}, "credentials.env[0]: an unknown key"},
+		{map[string]any{"credentials": map[string]any{"env": []any{map[string]any{"file": "a"}}}}, "credentials.env[0]: item missing"},
+		{map[string]any{"credentials": map[string]any{"env": []any{map[string]any{"item": "ensemble-broker-env/a"}}}}, "credentials.env[0]: file missing"},
+		{map[string]any{"credentials": map[string]any{"env": []any{secret(leak, "a")}}}, "credentials.env[0]: item not valid"},
+		{map[string]any{"credentials": map[string]any{"env": []any{secret("ensemble-broker-env/a", leak+"/a")}}}, "credentials.env[0]: file not valid"},
+		{map[string]any{"credentials": map[string]any{"env": []any{secret("ensemble-broker-env/a", leak), secret("ensemble-broker-env/b", leak)}}}, "credentials.env[1]: file repeated"},
+		{map[string]any{"credentials": map[string]any{"github": grants(1)}, "github": legacy}, "credentials.github: needs github null"},
+		{map[string]any{"credentials": map[string]any{"env": env(1)}, "secrets": []any{}}, "credentials.env: needs no secrets"},
+		{map[string]any{"credentials": map[string]any{"github": []any{grant(map[string]any{"repo": nil})}}, "prefetch": map[string]any{"repo": "o/r"}}, "credentials.github[0]: repo missing beside prefetch"},
+	} {
+		_, err := ParseManifest(withFields(t, c.fields))
+		if code(t, err) != protocol.ManifestRejected || err.(*protocol.Error).Message != "Manifest rejected: "+c.want || strings.Contains(err.Error(), leak) {
+			t.Errorf("%v: %v, want %q", c.fields, err, c.want)
+		}
 	}
 }

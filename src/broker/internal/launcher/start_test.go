@@ -829,3 +829,28 @@ func TestStartKeepsSecretsOutOfArgvAndEnv(t *testing.T) {
 		})
 	}
 }
+
+// Protocol 33 parses a credential request but serves no kind yet: a start naming one fails before any docker call.
+func TestStartRefusesCredentialRequest(t *testing.T) {
+	grant := map[string]any{"app": "ensemble-broker-bot", "permissions": map[string]any{"contents": "write"}, "repo": "acme/x"}
+	linear := map[string]any{"role": "engineer"}
+	env := []any{map[string]any{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}}
+	for kinds, credentials := range map[string]map[string]any{
+		"github":              {"github": []any{grant}},
+		"linear":              {"linear": linear},
+		"env":                 {"env": env},
+		"github, linear, env": {"env": env, "linear": linear, "github": []any{grant}},
+	} {
+		w := &world{labels: goodLabels()}
+		h, d := startHost(w, &fakeCreds{})
+		_, err := h.Start(context.Background(), editedManifest(t, func(f map[string]any) { f["credentials"] = credentials }))
+		e := protoErr(t, err)
+		if e.Code != protocol.ManifestRejected || protocol.Exit(e.Code) != 3 || e.Message != "credentials: "+kinds+" not served by this broker" || len(d.calls) != 0 {
+			t.Errorf("%s: %+v %q", kinds, e, d.verbs())
+		}
+	}
+	h, _ := startHost(&world{labels: goodLabels()}, &fakeCreds{})
+	if _, err := h.Start(context.Background(), editedManifest(t, func(f map[string]any) { f["credentials"] = map[string]any{} })); err != nil {
+		t.Fatalf("credentials {}: %v", err)
+	}
+}

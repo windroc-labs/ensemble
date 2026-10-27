@@ -80,6 +80,10 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	if err != nil {
 		return StartResult{}, err
 	}
+	// Protocol 33 parses a credential request but serves no kind yet (WDRC-278).
+	if m.Credentials != nil && len(m.Credentials.Kinds()) > 0 {
+		return StartResult{}, protocol.New(protocol.ManifestRejected, "credentials: "+strings.Join(m.Credentials.Kinds(), ", ")+" not served by this broker")
+	}
 	c := "ensemble-" + m.Name + "-" + m.Generation
 	// Before the backlog retry and Issue, so this start's own tokens land on its line.
 	facts := &audit.StartFacts{Image: m.Image}
