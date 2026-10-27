@@ -300,6 +300,7 @@ ledger_valid() {
     claude-marketplace:2 | codex-marketplace:2) case $2 in windroc) true ;; *) false ;; esac ;;
     claude-plugin:2 | codex-plugin:2) case $2 in ensemble@windroc | updraft@windroc) true ;; *) false ;; esac ;;
     login:2) case $2 in gh | claude | codex) true ;; *) false ;; esac ;;
+    docker-container:2 | docker-image:2) [ "$2" = egress-proxy ] ;;
     launchd:2) case $2 in router | promote) true ;; *) false ;; esac ;;
     keychain:3) [[ $2 =~ $plain ]] && [[ $3 =~ $plain ]] ;;
     opencode-auth:3 | opencode-provider:3) under_home "$2" && [[ $3 =~ $name_pattern ]] ;;
@@ -474,6 +475,7 @@ EOF
   unset password
   export SUDO_ASKPASS=$askpass_dir/askpass
   (
+    nap= # the TERM trap reads it under set -u
     trap 'kill "$nap" 2>/dev/null; exit 0' TERM
     while kill -0 $$ 2>/dev/null; do
       sudo -n -v || true
@@ -2137,11 +2139,21 @@ egress_ready() {
   case $proxy in '' | '<no value>') return 1 ;; esac
 }
 
-# Download to a sibling directory so a failed fetch never leaves a usable partial version.
+# Exit 0 when Docker reports no egress-proxy $1 (container or image): any other failure, Docker not answering
+# included, proves nothing.
+egress_absent() {
+  local err
+  if err=$(docker "$1" inspect egress-proxy </dev/null 2>&1 >/dev/null); then return 1; fi
+  case $err in *"No such $1"*) return 0 ;; esac
+  return 1
+}
+
+# Download to a sibling directory so a failed fetch never leaves a usable partial version. No locals: the trap names
+# the literal path, as a bash may have left the function's scope when it runs the subshell's EXIT trap (U1a).
 egress_download() (
-  local versions=$HOME/.egress/versions tmp
+  versions=$HOME/.egress/versions
   tmp=$(mktemp -d "$versions/.download.XXXXXX")
-  trap 'rm -rf "$tmp"' EXIT
+  trap "rm -rf $(printf '%q' "$tmp")" EXIT
   gh api "repos/windroc/egress-proxy/tarball/$egress_commit" </dev/null >"$tmp/source.tar.gz" \
     || die "cannot fetch pinned windroc/egress-proxy $egress_commit; check gh auth status and repository access, then rerun"
   mkdir "$tmp/source"
@@ -2155,7 +2167,21 @@ egress_download() (
 egress_install() {
   local dir=$HOME/.egress version=$HOME/.egress/versions/$egress_commit tries=0 ready
   step "egress proxy"
+  # A ~/.egress from before keeps its own files; of it, only what this run creates is recorded. A current link from
+  # before keeps the version it points to now.
+  record_dir "$dir"
+  if ! recorded dir "$dir"; then
+    record_dir "$dir/versions"
+    record_file "$dir/config.local.yaml"
+    record_file "$dir/compose.networks.yaml"
+    if absent "$dir/current" || recorded file "$dir/current"; then
+      record_dir "$version"
+      record_file "$dir/current"
+    fi
+  fi
   mkdir -p "$dir/versions"
+  # An earlier run's failed download, left by an installer before this one.
+  rm -rf "$dir/versions"/.download.*
   [ ! -L "$dir/config.local.yaml" ] \
     || die "$dir/config.local.yaml symlink is unsupported by the proxy's directory mount; existing path was kept"
   if [ ! -e "$dir/config.local.yaml" ]; then
@@ -2167,6 +2193,9 @@ egress_install() {
   if [ ! -e "$version" ]; then egress_download; fi
   [ -x "$version/start.sh" ] && [ "$(cat "$version/COMMIT")" = "$egress_commit" ] \
     || die "incomplete egress checkout $version; keep your config and repair that version directory"
+  # start.sh creates what is missing.
+  if egress_absent container; then ledger_add docker-container egress-proxy; fi
+  if egress_absent image; then ledger_add docker-image egress-proxy; fi
   # Always run start.sh: it applies a new or changed config and leaves an unchanged proxy running.
   EGRESS_CONFIG_DIR="$dir" bash "$version/start.sh" </dev/null >&2 \
     || die "egress-proxy start failed: run $version/start.sh; inspect docker logs egress-proxy"
