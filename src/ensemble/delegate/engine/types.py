@@ -254,7 +254,8 @@ class Resolved:
 @dataclass(frozen=True)
 class DelegateState:
     """delegate.json's run state (engine/record.py); previous: attempt - 1's Result once a
-    follow-up opened attempt; bound: an owned attempt's worker took it (its owner phase).
+    follow-up opened attempt; bound: an owned attempt's worker took it (its owner phase);
+    closing: a close stopped its worker (no follow-up).
     """
 
     role: str
@@ -276,3 +277,4 @@ class DelegateState:
     start_failure: str | None = None
     previous: Result | None = None
     bound: bool = False
+    closing: bool = False

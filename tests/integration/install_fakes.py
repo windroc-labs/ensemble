@@ -2,7 +2,8 @@
 
 Every call is logged to $LOG (argv) and $ENVLOG (environment values). State lives under
 $FAKES: brew/<name> (installed), processes (one running command line each; unkillable: those KILL misses), login/<client>, keychain/<service>, claude/ and codex/ (plugins),
-src/broker/ (the broker's Codex install, tokens and protocol: the one `version` reports, else the plugin's), fail (a call prefix that fails once), tty_name
+src/broker/ (the broker's Codex install, tokens and protocol: the one `version` reports, else the plugin's;
+legacy: old-name items left, so every command but `version` refuses), fail (a call prefix that fails once), tty_name
 (what `ps -o tty=` reports), kqueue_refuses (a terminal the Bun-built clients die on, as on /dev/tty),
 commit (the commit GitHub reports for every ensemble ref), marketplace/ (the windroc marketplace's
 manifests on main), refs/<ref>/ (ensemble files at a ref, over pkg-src/), linear.json (the Linear workspace: apps
@@ -714,9 +715,26 @@ def shasum(args):
     return 0
 
 
+LEGACY_REFUSAL = (
+    'old-name broker items found (8: "ensemble-bot 123456", "ensemble-claude default",'
+    ' "ensemble-codex auth"): run the maintainer\'s one-time rename step (docs/upgrading.md),'
+    " then rerun"
+)
+
+
 def broker(args):
     codex_file = BROKER.parent / "codex/state.json"
     state = load(codex_file, None)
+    if (FAKES / "src/broker/legacy").exists() and args != ["version"]:
+        if args[:1] == ["status"]:
+            error = {"command": "status", "code": "keychain_failed", "message": LEGACY_REFUSAL}
+            out(
+                json.dumps({"exit_code": 11, "error": {**error, "cleanup": "not_needed"}}) + "\n",
+                sys.stderr,
+            )
+            return 11
+        out(f"ensemble-broker: {LEGACY_REFUSAL}\n", sys.stderr)
+        return 1
     if args[:2] in (["login", "opencode"], ["login", "codex"]):
         service = "ensemble-broker-" + args[1]
         if (FAKES / "keychain" / ("foreign-" + service)).exists():

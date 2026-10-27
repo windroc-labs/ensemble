@@ -51,7 +51,7 @@ def _result(data: dict | None) -> Result | None:
 HANDLER = "ensemble.delegate.engine.handler"
 
 
-CLOSED = stopped(Stopped(128 + signal.SIGHUP))
+CLOSED = stopped(Stopped(128 + signal.SIGTERM))
 
 
 def owned(plan: Plan) -> bool:
@@ -137,6 +137,8 @@ class RunRecord:
             result, previous = _result(data.pop("result")), _result(data.pop("previous"))
             if type(bound := data.pop("bound")) is not bool:
                 raise ValueError("invalid bound")
+            if type(closing := data.pop("closing")) is not bool:
+                raise ValueError("invalid closing")
             callback = data.pop("callback")
             overlays = tuple(data.pop("overlays"))
             state = DelegateState(
@@ -146,6 +148,7 @@ class RunRecord:
                 result=result,
                 previous=previous,
                 bound=bound,
+                closing=closing,
                 overlays=overlays,
             )
             if type(state.attempt) is not int or state.attempt < 1:
@@ -180,10 +183,10 @@ class RunRecord:
             return True
 
     def follow_up(self, n: int, token: int) -> bool:
-        """Not while a close holds its claim."""
+        """Not while a close holds its claim, nor once one closed the worker."""
         with self.store.mutex():
             state = self.read()
-            if state.attempt != n or not state.completed or worker(state) != token:
+            if state.attempt != n or not state.completed or state.closing or worker(state) != token:
                 return False
             if self.store.closing():
                 return False
@@ -198,6 +201,23 @@ class RunRecord:
                 )
             )
             return True
+
+    def stop(self, result: Result, *, sid: str) -> int | None:
+        """A close: the attempt it ended, if any."""
+        with self.store.mutex():
+            state = self.read()
+            if state.plan.sid != sid:
+                return None
+            active = not state.completed
+            self.save(
+                replace(
+                    state,
+                    closing=True,
+                    completed=True,
+                    result=result if active else state.result,
+                )
+            )
+            return state.attempt if active else None
 
     def complete(self, n: int, result: Result, *, sid: str, unbound: bool = False) -> bool:
         """Compare-and-set; unbound: only while opening."""

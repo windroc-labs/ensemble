@@ -173,7 +173,9 @@ class Attended(Segment):
         self.assertEqual((option(call, "--resume"), option(call, "--output-format")), (sid, None))
         self.wait_end(sid, ident, ends=2, role="pm")
         self.assertTrue(self.live(tui))
-        self.assertEqual((self.state(ident), self.ledger(ident)[sid][-1]), ("in_review", "outcome"))
+        self.assertEqual(
+            (self.state(ident), self.ledger(ident)[sid][-1]), ("in_review", "attempt:2:outcome")
+        )
 
 
 class Refused(TmuxFlow):

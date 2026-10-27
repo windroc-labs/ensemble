@@ -1104,6 +1104,21 @@ go_protocol_of() { sed -n 's/^const Version = "\([0-9][0-9]*\)"$/\1/p' | sed -n 
 version_of() { sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9]*\(\.[0-9][0-9]*\)*\)".*/\1/p' | sed -n 1p; }
 spoken_protocol_of() { sed -n 's/.*"protocol_version": *"\([0-9][0-9]*\)".*/\1/p' | sed -n 1p; }
 
+# Broker protocol 30 renamed the broker's keychain items: a broker below it cannot read them (rename_doc).
+renamed_protocol=30
+rename_doc=docs/upgrading.md#broker-protocol-30-keychain-rename
+
+# Stops before a broker of protocol $1 (from $2) replaces an installed broker at or above renamed_protocol it is
+# below: it could not read the renamed items.
+broker_downgrade_check() {
+  local installed=
+  [ -n "$1" ] && [ "$1" -lt "$renamed_protocol" ] || return 0
+  if [ -x "$broker" ]; then installed=$("$broker" version </dev/null 2>/dev/null | spoken_protocol_of) || installed=; fi
+  [ -n "$installed" ] && [ "$installed" -ge "$renamed_protocol" ] || return 0
+  current=
+  die "$2's broker speaks protocol $1, below the installed broker's protocol $installed: it cannot read the broker keychain items renamed for protocol $renamed_protocol ($rename_doc); use a ref whose broker speaks protocol $renamed_protocol or later"
+}
+
 # The ensemble plugin Claude Code ($1 claude) or Codex (codex) has installed, else empty;
 # Codex's version at the served ref, ignoring caches from other installs.
 installed_plugin() {
@@ -1150,6 +1165,9 @@ broker_plan() {
     broker_mode=release
   else
     broker_mode=build
+    got=$(plugin_file "${sources[0]}" src/broker/internal/protocol/protocol.go | go_protocol_of)
+    [ -n "$got" ] || die "no broker protocol in src/broker/internal/protocol/protocol.go at $where"
+    broker_downgrade_check "$got" "ensemble $ref"
     return
   fi
   if [ -n "${sources[0]}" ] && installed=$(broker_current "${sources[0]}"); then
@@ -1180,6 +1198,7 @@ broker_plan() {
     fi
     agreed+="${agreed:+, }$label"
   done
+  broker_downgrade_check "$got" "$broker_label"
   say "    broker protocol $got: $agreed and $broker_label agree"
 }
 
@@ -2054,14 +2073,24 @@ token_screen_leave() {
 }
 
 broker_logins() {
-  local sha min need said slug
+  local sha min need said slug refusal
   sha=$(shasum -a 256 "$broker" | cut -d' ' -f1)
   # Before any other broker call: a new broker's items from earlier builds trust it, with one keychain password.
   step "broker re-trust"
   if [ "$(state_get retrust)" = "$sha" ]; then
     skip "done for this broker"
   else
-    "$broker" retrust <&3 >&3 2>&3 || die "broker re-trust failed; rerun install.sh, or run $broker retrust"
+    # retrust's password prompt is on stderr: status, which asks nothing, tells whether old-name items refused it.
+    if ! "$broker" retrust <&3 >&3 2>&3; then
+      refusal=$("$broker" status </dev/null 2>&1 >/dev/null) || :
+      case $refusal in
+        *"old-name broker items found"*)
+          current=
+          die "old-name broker keychain items remain: run the maintainer's one-time rename step ($rename_doc), then rerun install.sh"
+          ;;
+      esac
+      die "broker re-trust failed; rerun install.sh, or run $broker retrust"
+    fi
     state_set retrust "$sha"
   fi
   step "broker login: Claude"

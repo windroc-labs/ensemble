@@ -4,10 +4,13 @@ on:
   pull_request:
     paths:
       - .github/workflows/installer-macos.yml
+      - docs/upgrading.md
       - scripts/install.sh
       - scripts/install-cleanup.sh
       - skills/manage/scripts/ctmux
       - skills/manage/scripts/launcher
+      - src/broker/internal/protocol/protocol.go
+      - src/ensemble/session/hosts/docker/broker.py
       - tests/integration/install_fakes.py
       - tests/integration/install_integration_test.py
       - tests/integration/fixtures/legacy-*

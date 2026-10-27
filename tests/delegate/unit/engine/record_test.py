@@ -35,6 +35,7 @@ class RunRecordTest(HarnessCase):
             result=Result(2, outcome, "the client exited 2", Limit(12.5)),
             previous=Result(1, None, "stopped: Stopped"),
             bound=True,
+            closing=True,
         )
         record.save(full)
         self.assertEqual(record.read(), full)
@@ -85,6 +86,22 @@ class PhaseTest(HarnessCase):
                 with open(self.state_record(), "w", encoding="utf-8") as file:
                     json.dump(data, file)
                 with self.assertRaisesRegex(ConfigError, "^invalid .*delegate.json: "):
+                    self.record.read()
+
+    def test_a_record_without_closing_or_a_bad_closing_is_invalid(self):
+        data = self.metadata()
+        del data["closing"]
+        with open(self.state_record(), "w", encoding="utf-8") as file:
+            json.dump(data, file)
+        with self.assertRaisesRegex(ConfigError, "^invalid .*delegate.json: "):
+            self.record.read()
+        for value in (1, "false", None):
+            with self.subTest(value=value):
+                with open(self.state_record(), "w", encoding="utf-8") as file:
+                    json.dump({**data, "closing": value}, file)
+                with self.assertRaisesRegex(
+                    ConfigError, "^invalid .*delegate.json: invalid closing$"
+                ):
                     self.record.read()
 
     def test_the_worker_token_comes_from_the_registration(self):

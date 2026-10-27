@@ -645,7 +645,12 @@ class HarnessDelegate(Delegate):
             agent, unanswered = self._agent(state), False
         except Unanswered:
             agent, unanswered = None, True
-        found = None if agent is None else agent.status()
+        try:
+            found = None if agent is None else agent.status()
+        except Unanswered:
+            found, unanswered = None, True
+        except SessionError:  # its terminal gone
+            found = None
         alive = self._alive(state) and (
             state.plan.spec.mode != Mode.TUI
             or unanswered
@@ -736,8 +741,7 @@ class HarnessDelegate(Delegate):
             raise _unknown(unanswered)
 
     def close(self) -> None:
-        """Unanswered after closing the harness when the agent's Host could not tell. An owned
-        run's attempt still active after it ends as CLOSED."""
+        """Unanswered after closing the harness when the agent's Host could not tell."""
         state = self._read()
         claim = self.store.closing_claim() if owned(state.plan) else contextlib.nullcontext()
         with claim:
@@ -747,10 +751,8 @@ class HarnessDelegate(Delegate):
                 agent, unanswered = None, error
             if agent is not None:
                 agent.close()
-        current = self._read()
-        stop = None if unanswered is not None else self._interrupt(current)
-        if stop is not None:
-            self._stopped(current, stop, closed=agent is not None)
+        if unanswered is None:
+            self._stop_owned(closed=agent is not None)
         unchecked = (
             None
             if unanswered is None
@@ -768,17 +770,21 @@ class HarnessDelegate(Delegate):
         if unchecked is not None:
             raise Unanswered(unchecked)
 
-    def _interrupt(self, state: DelegateState) -> Result | None:
-        """None: none active, or another ended it first."""
-        if not owned(state.plan) or state.completed:
-            return None
-        p = state.plan
-        if not RunRecord(self.layout, self.store).complete(state.attempt, CLOSED, sid=p.sid):
-            return None
-        return CLOSED
-
-    def _stopped(self, state: DelegateState, result: Result, *, closed: bool) -> None:
-        finish(state, result, None)
+    def _stop_owned(self, *, closed: bool) -> None:
+        """Once an owned run's worker is closed or gone: delegate.json `closing`, and its still
+        active attempt ended once as CLOSED, with one Finished."""
+        try:
+            state = self._read()
+            if not owned(state.plan):
+                return
+            n = RunRecord(self.layout, self.store).stop(CLOSED, sid=state.plan.sid)
+        except (ConfigError, OSError) as error:
+            say(f"delegate: {error}")
+            return
+        if n is None:
+            return
+        state = replace(state, attempt=n)
+        finish(state, CLOSED, None)
         environment = state.plan.session.environment
         if closed and environment is not None and environment.lock:
             say(f"delegate: session {state.agent_name} closed (lock {environment.lock})")
@@ -786,9 +792,8 @@ class HarnessDelegate(Delegate):
                 "release", lock=environment.lock, best_effort=True
             )
         if state.callback is not None:
-            p = state.plan
-            EventCallback(state.callback, self.store, sid=p.sid, attempt=state.attempt)(
-                Finished(result)
+            EventCallback(state.callback, self.store, sid=state.plan.sid, attempt=n)(
+                Finished(CLOSED)
             )
 
     def session_status(self) -> SessionStatus:
@@ -1242,6 +1247,8 @@ class HarnessDelegate(Delegate):
                 agent = self._answered_agent(state) if owned(state.plan) else None
                 if agent is not None and agent.alive():
                     # its worker's TurnStarted opens the follow-up attempt (D9)
+                    if state.closing:
+                        RunRecord(self.layout, self.store).save(replace(state, closing=False))
                     RunLog(state.plan.session.workdir).note("input", text=input)
                     agent.send(input)
                     return self._record(state)
@@ -1303,6 +1310,7 @@ class HarnessDelegate(Delegate):
                 attempt=state.attempt + 1,
                 previous=None,
                 bound=False,
+                closing=False,
             )
             try:
                 os.makedirs(self.layout.agent, exist_ok=True)
