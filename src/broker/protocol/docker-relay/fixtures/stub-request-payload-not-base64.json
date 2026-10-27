@@ -1,9 +1,0 @@
-{
-  "id": 7,
-  "argv": [
-    "hook",
-    "/Users/example/.ensemble/tui/worker_1",
-    "Stop"
-  ],
-  "payload": "abc"
-}

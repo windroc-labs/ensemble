@@ -163,19 +163,35 @@ class GuardedDockerTest(Case):
         self.addCleanup(worker.close)
         worker.await_start()
         socket_path = os.path.join(self.run_dir, "g1", "hook")
-        with mock.patch.dict(os.environ, {"ENSEMBLE_GUARD_HOOK_SOCKET": socket_path}):
-            payload = b'{"sid": "s1", "transcript_path": "/Users/x/secret"}'
-            self.assertEqual(stub.main(["hook", "/tui/w1", "Stop"], io.BytesIO(payload)), 0)
+        payload = b'{"sid": "s1", "transcript_path": "/Users/x/secret"}'
+        oversize = json.dumps({"sid": "s1", "x": "y" * guard.HOOK_MAX}).encode()
+        with (
+            mock.patch.dict(os.environ, {"ENSEMBLE_GUARD_HOOK_SOCKET": socket_path}),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            # a Codex tui's turn start, a forged label and an oversize payload (FR-36, its stub
+            # retrying for stub.WAIT until it gives up), then its turn end
+            for label, body in (
+                ("UserPromptSubmit", payload),
+                ("Stop/../x", payload),
+                ("Stop", oversize),
+                ("Stop", payload),
+            ):
+                self.assertEqual(stub.main(["hook", "/tui/w1", label], io.BytesIO(body)), 0)
         found = []
 
         def hooked():
             found.extend(m for m in worker.read(0.1) if isinstance(m, WorkerHook))
-            return found
+            return len(found) >= 2
 
-        live_tmux.wait(hooked, what="the hook on the channel")
-        [hook] = found
-        self.assertEqual((hook.label, hook.payload), ("Stop", {"sid": "s1"}))
-        self.assertRegex(hook.delivery_id, r"\A[0-9a-f]{32}\Z")
+        live_tmux.wait(hooked, what="the hooks on the channel")
+        self.assertEqual(
+            [(hook.label, hook.payload) for hook in found],
+            [("UserPromptSubmit", {"sid": "s1"}), ("Stop", {"sid": "s1"})],
+        )
+        self.assertRegex(found[0].delivery_id, r"\A[0-9a-f]{32}\Z")
+        with open(os.path.join(self.home, "rejected.jsonl")) as f:
+            self.assertEqual([json.loads(line)["reason"] for line in f], ["label"])
 
 
 class SameEventsTest(Case):

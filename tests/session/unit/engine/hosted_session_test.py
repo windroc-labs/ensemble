@@ -7,6 +7,7 @@ import contextlib
 import dataclasses
 import errno
 import fcntl
+import functools
 import gc
 import io
 import itertools
@@ -23,7 +24,6 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
 from unittest import mock
 
 from ensemble.session import Host, NoRecordedSession, NotShowable, Viewer
@@ -281,10 +281,6 @@ class ClientCapacityTest(HostedTuiBase):
             release.set()
             self.assertTrue(first._capacity.finished.wait(5))
             self.start(client="checked", mode="in_process", sid="c").close()
-
-
-PLAIN = cast(Spec, SimpleNamespace(environment=None))  # all _owned reads of a spec
-ENVIRONED = cast(Spec, SimpleNamespace(environment=mock.Mock(spec=engine_types.EnvironmentSpec)))
 
 
 def parsed(tables, default) -> Hosts:
@@ -3172,6 +3168,52 @@ class OwnedHeadlessTest(HostedTuiBase):
                 call()
 
 
+class HarnessOnlyHost(MemoryHost):
+    """A Host that runs no start a session harness does not own, as the Docker Host."""
+
+    _unowned = False
+
+
+class HarnessOnlyHostTest(HostedTuiBase):
+    """An unowned start (here injected callables) on a harness-only Host is refused before it
+    writes anything; on the tmux Host it starts the earlier way.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.only = HarnessOnlyHost("d3")
+        self.hosts = {"tmux": self.host, "d3": self.only}
+        tables = {
+            name: {"implementation": "tests.session.fakes.terminal:MemoryHost"}
+            for name in self.hosts
+        }
+        self.session.configure(
+            clients=self.session._config().registry.settings.clients,
+            hosts=parsed(tables, "tmux"),
+            class_loader=self.session_dependencies["class_loader"],
+            host_factory=lambda _kind, name, _settings: self.hosts[name],
+            viewer_factory=MemoryViewer,
+        )
+
+    def test_an_unowned_start_on_a_harness_only_host_is_refused_writing_nothing(self):
+        for mode in (Mode.TUI, Mode.HEADLESS):
+            spec = self.spec(client="fake", mode=mode, name="w1", sid=SID)
+            for call in (self.session.preflight, self.session.start):
+                with self.subTest(mode=mode, call=call.__name__):
+                    self.refused(
+                        ConfigError,
+                        f"fake {mode} on host d3: runs only under a session harness",
+                        functools.partial(call, spec, host="d3"),
+                    )
+        self.assertEqual(self.only.calls.mock_calls, [])
+        self.assertFalse(os.path.exists(os.path.join(self.root, "w1")))
+
+    def test_the_same_start_on_the_tmux_host_runs_the_earlier_way(self):
+        session = self.session.start(self.spec(client="fake", mode=Mode.TUI, name="w1", sid=SID))
+        self.addCleanup(session.stop)
+        self.assertEqual(self.host.calls.terminal.call_count, 1)
+
+
 class HarnessRequestTest(HostedTuiBase):
     """harness_request and from_harness_request: a start sent to a session harness and back."""
 
@@ -3199,6 +3241,15 @@ class HarnessRequestTest(HostedTuiBase):
         self.assertEqual((start.spec, start.pythonpath), (spec, "lib:/abs/src"))
         self.assertEqual(fresh._config().hosts, self.session._config().hosts)
 
+    def test_an_environment_round_trips(self):
+        spec = self.spec(client="fake", mode="tui", name="w1", sid=SID, environment=ENVIRONMENT)
+        request = json.loads(
+            json.dumps(self.session.harness_request(spec, display=None, host="d2", roots=()))
+        )
+        self.assertEqual(request["spec"]["environment"], ENVIRONMENT.persisted())
+        fresh = type("Fresh", (HostedSession,), {"__module__": __name__})
+        self.assertEqual(fresh.from_harness_request(request).spec, spec)
+
     def test_a_caller_without_pythonpath_sends_none(self):
         env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
         with mock.patch.dict(os.environ, env, clear=True):
@@ -3221,6 +3272,9 @@ class HarnessRequestTest(HostedTuiBase):
             {**good, "pythonpath": ["/a"]},
             {**good, "pythonpath": 5},
             {**good, "pythonpath": "/a\n/b"},
+            {**good, "spec": {**good["spec"], "environment": "dummy-env:test"}},
+            {**good, "spec": {**good["spec"], "environment": {"image": "dummy-env:test"}}},
+            {**good, "spec": {**good["spec"], "environment": {"image": 5, "gateway": "w"}}},
         ):
             with self.subTest(bad=bad), self.assertRaises(ConfigError):
                 fresh.from_harness_request(bad)
@@ -3559,16 +3613,6 @@ class OwnedStartTest(Case):
             session_cls.preflight(missing)
         self.popen.assert_not_called()
 
-    def test_an_environment_is_refused_before_any_harness(self):
-        with self.assertRaises(ConfigError):
-            self.session_cls.harness_request(
-                self.spec(environment=mock.Mock(spec=engine_types.EnvironmentSpec)),
-                display=None,
-                host=None,
-                roots=(),
-            )
-        self.popen.assert_not_called()
-
 
 class OwnedHeadlessStartTest(Case):
     """A built-in client's headless start on tmux spawns a session harness too, nameless."""
@@ -3662,25 +3706,8 @@ class OwnedGateTest(Case):
             client = setup.registry.client(name)
             for mode in (Mode.TUI, Mode.HEADLESS):
                 with self.subTest(client=name, mode=mode):
-                    self.assertTrue(hosted_session._owned(setup, PLAIN, mode, client, on))
-            self.assertFalse(hosted_session._owned(setup, PLAIN, Mode.IN_PROCESS, client, on))
-
-    def test_a_start_with_an_environment_is_never_owned(self):
-        cls = HostedSession.configured(
-            clients={
-                "claude": {"implementation": "ensemble.session.clients.claude:ClaudeClient"},
-                "codex": {"implementation": "ensemble.session.clients.codex:CodexClient"},
-                "opencode": {"implementation": "ensemble.session.clients.opencode:OpenCodeClient"},
-            },
-            hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"}),
-        )
-        setup, docker = cls._config(), DockerHost("docker", {"docker": "/usr/local/bin/docker"})
-        for on in (cls.host(), docker):
-            for name in ("claude", "codex", "opencode"):
-                for mode in (Mode.TUI, Mode.HEADLESS):
-                    with self.subTest(host=on.name, client=name, mode=mode):
-                        client = setup.registry.client(name)
-                        self.assertFalse(hosted_session._owned(setup, ENVIRONED, mode, client, on))
+                    self.assertTrue(hosted_session._owned(setup, mode, client, on))
+            self.assertFalse(hosted_session._owned(setup, Mode.IN_PROCESS, client, on))
 
 
 class LegacyHandlersTest(HostedTuiBase):
@@ -3949,9 +3976,8 @@ class BoundOwnerTest(HostedTuiBase):
 
 
 class DockerOwnedTest(Case):
-    """On the Docker Host a Claude tui start and every headless one are harness-owned, a tui
-    worker remote there; Codex and OpenCode tui starts keep the legacy path until their hooks are
-    verified through the guard.
+    """On the Docker Host every built-in tui and headless start is harness-owned, a tui worker
+    remote there.
     """
 
     def setUp(self):
@@ -3973,7 +3999,7 @@ class DockerOwnedTest(Case):
         )
         self.setup = self.cls._config()
 
-    def test_handlers_with_an_environment_are_refused_before_any_harness(self):
+    def test_handlers_with_an_environment_run_under_a_harness(self):
         workdir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, workdir)
         spec = Spec(
@@ -3986,24 +4012,24 @@ class DockerOwnedTest(Case):
             handlers=(engine_types.HookCallback("pkg.handler"),),
         )
         with (
-            mock.patch.object(hosted_session.subprocess, "Popen") as popen,
-            self.assertRaisesRegex(
-                ConfigError, "claude headless on host docker has no session harness yet"
-            ),
+            mock.patch.object(self.cls, "preflight") as preflight,
+            mock.patch.object(
+                hosted_session.subprocess, "Popen", side_effect=RuntimeError("spawned")
+            ) as popen,
+            self.assertRaisesRegex(RuntimeError, "spawned"),
         ):
             self.cls.start(spec)
-        popen.assert_not_called()
+        preflight.assert_called_once()
+        popen.assert_called_once()
 
-    def test_on_docker_claude_tui_and_headless_are_owned_codex_and_opencode_tui_are_not(self):
+    def test_on_docker_every_built_in_tui_and_headless_start_is_owned(self):
         docker = DockerHost("docker", {"docker": "/usr/local/bin/docker"})
-        for name, tui_owned in (("claude", True), ("codex", False), ("opencode", False)):
+        for name in ("claude", "codex", "opencode"):
             client = self.setup.registry.client(name)
             with self.subTest(client=name):
-                owned = hosted_session._owned(self.setup, PLAIN, Mode.TUI, client, docker)
-                self.assertIs(owned, tui_owned)
-                self.assertTrue(
-                    hosted_session._owned(self.setup, PLAIN, Mode.HEADLESS, client, docker)
-                )
+                self.assertTrue(type(client.tui())._remote_owned)
+                self.assertTrue(hosted_session._owned(self.setup, Mode.TUI, client, docker))
+                self.assertTrue(hosted_session._owned(self.setup, Mode.HEADLESS, client, docker))
 
     def test_a_remote_tui_host_has_remote_workers(self):
         self.assertTrue(DockerHost._remote_tui)

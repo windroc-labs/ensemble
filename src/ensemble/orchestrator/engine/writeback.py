@@ -334,7 +334,7 @@ def _url(ctx, url):
 
 
 def _scope(attempt: int) -> str:
-    """Outcome steps' prefix, none at attempt 1; no-outcome failures': NO_OUTCOME{n}:."""
+    """Outcome steps' prefix `attempt:<n>:`; none at attempt 1, so older ledgers stay valid."""
     return "" if attempt == 1 else f"attempt:{attempt}:"
 
 

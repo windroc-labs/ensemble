@@ -349,8 +349,14 @@ class HookTest(Base):
         self.assertEqual(self.rejected(), ["hook", "hook"])
         self.assertFalse(channel._hooks_pending())
         self.assertEqual(channel.hook_bytes, 0)
-        channel.accept(b"h", hook(delivery="a" * 32))
-        self.assertEqual(self.rejected(), ["hook", "hook"])
+        # accept() drops every frame of a failed channel; its hook handling itself must too
+        with channel.condition:
+            self.assertIsNone(channel.accept_hook(hook(delivery="a" * 32)))  # a resend
+            self.assertIsNone(channel.accept_hook(hook(delivery="c" * 32)))  # new, after the end
+            self.assertIsNone(channel.accept_hook(hook(delivery="c" * 32)))  # its resend
+        self.assertEqual(hooks.calls, [])
+        self.assertEqual(self.rejected(), ["hook", "hook", "hook"])
+        self.assertFalse(channel._hooks_pending())
 
     def test_a_hook_before_an_exit_ahead_of_begin_is_still_journaled(self):
         hooks = Hooks()

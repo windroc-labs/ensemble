@@ -16,7 +16,7 @@ from unittest import mock
 from ensemble.delegate import Spec
 from ensemble.delegate.engine import handler
 from ensemble.delegate.engine.record import HANDLER, RunRecord
-from ensemble.delegate.engine.runner import stopped
+from ensemble.delegate.engine.runner import PROCESS_EXIT, stopped
 from ensemble.delegate.engine.types import Layout, Result
 from ensemble.session import (
     Activity,
@@ -34,7 +34,7 @@ from ensemble.session import (
     Unanswered,
 )
 from ensemble.utils import StatusState
-from tests.delegate.fakes.harness_session import HarnessSession
+from tests.delegate.fakes.harness_session import HarnessSession, RecordingHost
 from tests.delegate.harness import SID, HarnessCase, ViewedHarnessDelegate
 from tests.delegate.replies import block
 from tests.delegate.unit.runs import DONE, GAVE_UP, START
@@ -266,6 +266,35 @@ class BindTest(HandlerCase):
         self.call(Exited(-1))
         self.assertEqual(self.state().result, Result(129, None, "stopped: Stopped: 129"))
 
+    def test_a_worker_killed_mid_turn_is_an_interrupted_attempt(self):
+        """A kill with a turn open (the nudge's, say) and no close claimed: its turn's exit
+        failure waits for the exit, whose signal makes the attempt interrupted, not failed.
+        """
+        for failed in (
+            TurnFailed(PROCESS_EXIT, "worker exited -9"),
+            TurnFailed("exited", "worker exited -9 mid-turn"),
+        ):
+            with self.subTest(failed=failed):
+                n = self.state().attempt
+                self.call(TurnStarted(), token=n)
+                self.call(failed, token=n)
+                self.assertFalse(self.state().completed)
+                self.assertNotIn(("finished", n), self.kinds_sent())
+                self.call(Exited(-9), token=n)
+                state = self.state()
+                self.assertEqual(state.result, Result(137, None, "stopped: Stopped: 137"))
+                self.assertEqual([k for k in self.kinds_sent() if k[1] == n], [("finished", n)])
+                self.register(n + 1, attempt=n + 1, completed=False)
+                self.record.save(replace(self.state(), result=None, bound=False))
+                self.generation = uuid.uuid4().hex
+
+    def test_a_worker_exiting_nonzero_mid_turn_is_a_failed_attempt_with_its_code(self):
+        self.call(TurnStarted())
+        self.call(TurnFailed(PROCESS_EXIT, "worker exited 1"))
+        self.call(Exited(1))
+        self.assertEqual(self.state().result, Result(1, None, "the client exited 1"))
+        self.assertEqual(self.kinds_sent()[-1], ("finished", 1))
+
     def test_a_limit_stops_the_worker_and_its_exit_ends_the_attempt(self):
         self.call(TurnStarted())
         self.call(LimitHit(None))
@@ -425,6 +454,7 @@ class CloseTest(HandlerCase):
             (TurnFailed("exited", "worker exited mid-turn"), Exited(0)),
             (Exited(1),),
             (TurnStarted(), TurnFailed("exited", "worker exited -1 mid-turn"), Exited(-1)),
+            (TurnStarted(), TurnFailed(PROCESS_EXIT, "worker exited -15"), Exited(-15)),
         ):
             with self.subTest(events=events):
                 n = self.state().attempt
@@ -763,6 +793,7 @@ class OwnedCloseTest(HandlerCase):
         self.assertIn("delegate: disk full", self.err.getvalue())
         self.assertFalse(self.state().completed)
         self.assertFalse(agent.alive())
+        self.assertEqual(RecordingHost.processes[state.host or "agent", spec.name].closed, 1)
 
     def test_close_of_an_ended_owned_attempt_sends_nothing(self):
         self.finish(NEEDS)

@@ -245,11 +245,6 @@ class BaseMode(ABC):
                         else {}
                     ),
                     **(
-                        {"home_min_width": str(client_home.min_width)}
-                        if client_home.min_width
-                        else {}
-                    ),
-                    **(
                         {"home_persistent": json.dumps(client_home.persistent)}
                         if client_home.persistent is not None
                         else {}

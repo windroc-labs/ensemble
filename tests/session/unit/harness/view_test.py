@@ -65,7 +65,7 @@ class Base(Case):
             generation=GEN,
             idle_timeout=idle,
             attach=self.attach,
-            retire=self.retire,
+            retire=self.retire if mode == Mode.TUI else None,
             replay=replay,
             mode=mode,
         )
@@ -241,6 +241,24 @@ class CloseTest(Base):
         self.retire.side_effect = SessionError("busy: lock w1 is held by worker generation")
         with self.assertRaisesRegex(SessionError, "busy"):
             self.view().close()
+
+    def test_only_a_tui_view_retires(self):
+        for mode in (Mode.HEADLESS, Mode.IN_PROCESS):
+            with (
+                self.subTest(mode=mode),
+                self.assertRaisesRegex(ValueError, "retire: a tui view's only"),
+            ):
+                OwnedSession(
+                    self.channel,
+                    None,
+                    client="claude",
+                    sid="s1",
+                    generation=GEN,
+                    idle_timeout=None,
+                    attach=self.attach,
+                    retire=self.retire,
+                    mode=mode,
+                )
 
     def test_a_tui_view_without_retire_is_refused(self):
         with self.assertRaisesRegex(ValueError, "retire: required for a tui view"):

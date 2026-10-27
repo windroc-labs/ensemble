@@ -64,7 +64,7 @@ class OpenCodeTui(Homed, Tui):
             "tool": HookKind.ACTIVITY,
         }
     )
-    _owned = True
+    _owned = _remote_owned = True
     _opening_prompt = True  # its opening is a resume's prompt: not deferred past a launch turn
 
     def __init__(self, common: OpenCodeCommon):

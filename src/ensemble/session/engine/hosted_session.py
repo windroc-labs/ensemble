@@ -35,6 +35,7 @@ from ensemble.session.engine.types import (
     Access,
     ClientBound,
     ConfigError,
+    EnvironmentSpec,
     Exited,
     HookCallback,
     Hosts,
@@ -263,11 +264,11 @@ def _reconstructible(setup: _Setup) -> bool:
     )
 
 
-def _owned(setup: _Setup, spec: Spec, mode: Mode, client: Client, on: Host) -> bool:
-    """An in_process start, or an owned client's tui or headless start, no environment, on a
-    harnessed Host; a remote tui only for a client owned there.
+def _owned(setup: _Setup, mode: Mode, client: Client, on: Host) -> bool:
+    """An in_process start, or an owned client's tui or headless start on a harnessed Host; a
+    remote tui only for a client owned there.
     """
-    if spec.environment is not None or not _reconstructible(setup):
+    if not _reconstructible(setup):
         return False
     if mode == Mode.IN_PROCESS:
         return client.in_process() is not None
@@ -277,6 +278,14 @@ def _owned(setup: _Setup, spec: Spec, mode: Mode, client: Client, on: Host) -> b
     if run is None or not run._owned:
         return False
     return mode != Mode.TUI or not on._remote_tui or run._remote_owned
+
+
+def _terminal_less(mode: Mode) -> bool:
+    return mode != Mode.TUI
+
+
+def _harness_only(client: str, mode: Mode, on: Host) -> ConfigError:
+    return ConfigError(f"{client} {mode} on host {on.name}: runs only under a session harness")
 
 
 def _unharnessed(client: str, mode: Mode, on: Host) -> ConfigError:
@@ -422,11 +431,14 @@ class HostedSession(Session):
         spec = replace(spec, sid=spec.sid or str(uuid.uuid4()))
         on = cls.host(host)
         _environment_check(spec, on, mode)
-        if spec.handlers and not _owned(setup, spec, mode, client, on):
+        owned = _owned(setup, mode, client, on)
+        if not owned and not on._unowned:
+            raise _harness_only(client_name, mode, on)
+        if spec.handlers and not owned:
             raise _unharnessed(client_name, mode, on)
         cls.viewer()
         displays.validate_display(display, on)
-        if mode == Mode.TUI and _owned(setup, spec, mode, client, on):
+        if mode == Mode.TUI and owned:
             name = tui.TuiMode.resolve_name(spec)
             _refuse_running(name, on)
             _resume_check(spec, client, name, on)
@@ -455,7 +467,9 @@ class HostedSession(Session):
         client_name, mode = _request(spec, idle_timeout)
         on, client = cls.host(host), setup.registry.client(client_name)
         _environment_check(spec, on, mode)
-        if not _owned(setup, spec, mode, client, on):
+        if not _owned(setup, mode, client, on):
+            if not on._unowned:
+                raise _harness_only(client_name, mode, on)
             if spec.handlers:
                 raise _unharnessed(client_name, mode, on)
             return cls._begin(
@@ -577,14 +591,14 @@ class HostedSession(Session):
         mode: Mode,
     ) -> None:
         """SIGTERM: its harness closes a headless worker, its child, first."""
-        if mode != Mode.TUI and harness.poll() is None:
+        if _terminal_less(mode) and harness.poll() is None:
             harness.terminate()
             with contextlib.suppress(subprocess.TimeoutExpired):
                 harness.wait(CLOSE_WAIT)
         if harness.poll() is None:
             harness.kill()
         harness.wait()
-        if name is None or mode != Mode.TUI:
+        if name is None or _terminal_less(mode):
             shutil.rmtree(channel.directory, ignore_errors=True)
             return
         try:
@@ -605,8 +619,6 @@ class HostedSession(Session):
         """A harness's JSON start request, secret-bearing (spec.env); pythonpath: the caller's,
         its worker's (None: unset).
         """
-        if spec.environment is not None:
-            raise ConfigError("environment: a session harness runs none yet")
         setup = cls._config()
         fields = {f.name: getattr(spec, f.name) for f in dataclass_fields(spec)}
         fields.update(
@@ -618,7 +630,7 @@ class HostedSession(Session):
                 {"module": h.module, "state": thaw(h.state), "roots": list(h.roots)}
                 for h in spec.handlers
             ],
-            environment=None,
+            environment=None if spec.environment is None else spec.environment.persisted(),
         )
         return {
             "spec": thaw(fields),
@@ -654,6 +666,9 @@ class HostedSession(Session):
                     HookCallback(h["module"], h["state"], tuple(h["roots"]))
                     for h in fields["handlers"]
                 ),
+                environment=None
+                if fields["environment"] is None
+                else EnvironmentSpec.from_fields(fields["environment"]),
             )
             spec = Spec(**fields)
             display, host, roots = request["display"], request["host"], request["roots"]
@@ -868,7 +883,15 @@ class HostedSession(Session):
         tie: Tie | None = None,
     ) -> OwnedSession:
         """The only way a view is built; a headless one's (`spec` its run's) holds its start's Tie."""
-        if mode == Mode.TUI:
+        retiring: Callable[[], None] | None = None
+        if _terminal_less(mode):
+            assert spec is not None
+            unhosted = _Unhosted(cls, channel, replace(spec, sid=sid), mode)
+
+            def attach() -> Session:
+                return unhosted
+
+        else:
             assert name is not None
 
             def attach() -> Session:
@@ -877,15 +900,7 @@ class HostedSession(Session):
             def retire() -> None:
                 cls._retire(name, sid=sid, host=host, generation=generation)
 
-            retiring: Callable[[], None] | None = retire
-        else:
-            assert spec is not None
-            unhosted = _Unhosted(cls, channel, replace(spec, sid=sid), mode)
-
-            def attach() -> Session:
-                return unhosted
-
-            retiring = None
+            retiring = retire
 
         return OwnedSession(
             channel,
@@ -1360,7 +1375,7 @@ class Owned:
         """A headless run's reads up to its end, within `timeout`."""
         found: list[SessionEvent | Stderr | ClientBound] = []
         deadline = time.monotonic() + timeout
-        while self._session.mode != Mode.TUI and (left := deadline - time.monotonic()) > 0:
+        while _terminal_less(self._session.mode) and (left := deadline - time.monotonic()) > 0:
             batch, ended = self._session._step(min(POLL, left))
             found += batch
             if ended:
@@ -1385,7 +1400,7 @@ class Owned:
             return running.returncode(timeout)
         try:
             code = running.returncode(timeout)
-            if self._session.mode != Mode.TUI:
+            if _terminal_less(self._session.mode):
                 return code
             while code is not None:
                 if running.state() == Liveness.ABSENT:

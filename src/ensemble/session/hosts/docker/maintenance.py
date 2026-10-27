@@ -1,5 +1,5 @@
-"""A Docker session's broker credential maintenance as a tick its owner drives, keeping the
-supervisor's policy (docs/docker-host.md › Credential renewal).
+"""A Docker session's broker credential maintenance as a tick its owner drives
+(docs/docker-host.md › Credential renewal).
 """
 
 import contextlib

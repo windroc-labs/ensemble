@@ -59,6 +59,7 @@ from tests.delegate.fakes.harness_session import (
 from tests.delegate.harness import SID, HarnessCase
 from tests.delegate.replies import block
 from tests.delegate.unit.engine.orphans import Clock, Orphan
+from tests.session import harnesses
 from tests.session.case import PLUGIN_BIN
 from tests.session.unit.hosts.docker import support
 
@@ -277,7 +278,8 @@ class VerifierClientTest(HarnessCase):
 
 class VerifierDockerTest(HarnessCase):
     """verifier on the packaged Docker Host, its broker faked: a missing mini-op:env or keychain
-    item fails before any container starts (WDRC-110 FR-50); no keychain, Docker or network.
+    item fails before any container starts (WDRC-110 FR-50); no keychain, Docker or network. Its
+    session harness's start runs in this process (harnesses.Inline), so the faked broker answers.
     """
 
     def setUp(self):
@@ -294,6 +296,8 @@ class VerifierDockerTest(HarnessCase):
             self.addCleanup(patcher.stop)
 
     def broker(self, argv, **kw):
+        if harnesses.spawned(argv):
+            return harnesses.Inline(argv)
         program = os.path.basename(argv[0])
         self.programs.append(program)
         if program == "tmux":  # the packaged tmux Host's listing: no server, no session
@@ -2799,12 +2803,14 @@ class OwnedRun(HarnessCase):
             HarnessDelegate.attach(self.work, session_cls=HarnessSession).resume(input="the answer")
         self.assertEqual(agent.sent, ["the answer"])
 
-    def stopped_run_whose_drive_holds_the_run_lock(self) -> int:
-        """A completed owned run, its worker gone, its run lock held here: the descriptor."""
+    def stopped_run_whose_drive_holds_the_run_lock(self, result: Result | None = None) -> int:
+        """A completed owned run (default: stopped), its worker gone, its run lock held here: the
+        descriptor.
+        """
         view = self.owned()
-        stopped = Result(129, None, "stopped: Stopped: 129")
+        result = result or Result(129, None, "stopped: Stopped: 129")
         _seen, on = self.at_begun(
-            lambda: (self.record.bind(1, 1), self.record.complete(1, stopped, sid=SID))
+            lambda: (self.record.bind(1, 1), self.record.complete(1, result, sid=SID))
         )
         view.run(on)
         view.driver.session.liveness = Liveness.ABSENT
@@ -2836,8 +2842,8 @@ class OwnedRun(HarnessCase):
         data = self.metadata()
         self.assertEqual((data["attempt"], data["spec"]["input"]), (2, "the answer"))
 
-    def test_status_and_resume_agree_on_a_drive_that_never_returns(self):
-        fd = self.stopped_run_whose_drive_holds_the_run_lock()
+    def assert_resume_refused_on_a_drive_that_never_returns(self, result=None, **kwargs):
+        fd = self.stopped_run_whose_drive_holds_the_run_lock(result)
         self.addCleanup(os.close, fd)
         again = HarnessDelegate.attach(self.work, session_cls=HarnessSession)
         clock = itertools.count(0.0, 100.0)
@@ -2845,10 +2851,20 @@ class OwnedRun(HarnessCase):
             mock.patch("time.monotonic", side_effect=lambda: next(clock)),
             self.assertRaisesRegex(ConfigError, "delegate is still alive"),
         ):
-            again.resume()
+            again.resume(**kwargs)
         status = again.status()
         self.assertEqual((status.alive, status.state), (True, StatusState.WORKING))
-        self.assertEqual(self.metadata()["attempt"], 1)
+        return self.metadata()
+
+    def test_status_and_resume_agree_on_a_drive_that_never_returns(self):
+        self.assertEqual(self.assert_resume_refused_on_a_drive_that_never_returns()["attempt"], 1)
+
+    def test_status_and_resume_input_agree_on_a_drive_that_never_returns(self):
+        data = self.assert_resume_refused_on_a_drive_that_never_returns(
+            self.NEEDS, input="the answer"
+        )
+        self.assertEqual(data["attempt"], 1)
+        self.assertNotEqual(data["spec"]["input"], "the answer")
 
     def test_a_detached_owned_run_reads_the_run_lock(self):
         fd = self.stopped_run_whose_drive_holds_the_run_lock()
