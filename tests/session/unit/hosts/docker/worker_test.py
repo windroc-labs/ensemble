@@ -229,6 +229,7 @@ class HookTest(Base):
                 display_socket=None,
                 display_grace=False,
                 terminal=False,
+                size=guard.SIZE,
                 command=["fake"],
             )
         )
