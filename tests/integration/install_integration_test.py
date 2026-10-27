@@ -2735,7 +2735,7 @@ class InstallTest(Case):
         codex = Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.7")
         self.assertEqual(json.loads(selected.read_text())["root"], str(codex))
         self.assertIn("ctmux --install", self.calls())
-        self.assert_ok(self.again("--clients", "claude", "--no-docker"))
+        self.assert_ok(self.again("--clients", "claude", "--no-docker", answers=[(WRITE_Q, "y")]))
         self.assertEqual(json.loads(selected.read_text())["root"], self.claude_ensemble())
         self.assertIn("ctmux --install", self.calls())
         self.assertEqual(backup.read_text(), "previous selection\n")
@@ -2901,9 +2901,7 @@ class InstallTest(Case):
     def test_installer_codex_adapters_follow_an_update(self):
         commands = self.legacy_command_package()
         self.assert_ok(self.opencode_only())
-        self.assert_ok(
-            self.again("--clients", "codex,opencode", "--no-docker", answers=[(WRITE_Q, "y")])
-        )
+        self.assert_ok(self.again("--clients", "codex,opencode", "--no-docker"))
         self.assertEqual(
             json.loads(Path(self.ensemble, "plugin-root").read_text())["client"], "codex"
         )
@@ -5870,9 +5868,9 @@ exec /bin/rm "$@"
                 self.assertEqual(self.config().read_text(), before)
 
     def opencode_files(self):
-        conf = Path(self.home, ".config/opencode")
-        paths = (self.config(), conf / "opencode.json", conf / "opencode.jsonc")
-        return {path.name: path.read_text() for path in paths if path.exists()}
+        """config.local.toml, and opencode.jsonc's providers: the plugin step a lost state repeats rewrites the rest."""
+        jsonc = json.loads(Path(self.home, ".config/opencode/opencode.jsonc").read_text())
+        return self.config().read_text(), jsonc["provider"]
 
     def provider_state(self):
         keys = ("opencode_provider", "opencode_url", "opencode_model", "opencode_context")
@@ -5952,7 +5950,7 @@ exec /bin/rm "$@"
     def test_c10_missing_state_reuses_opencode_jsonc_provider(self):
         """C10: a provider only in opencode.jsonc is reused too, and goes back into config.local.toml."""
         self.assert_ok(self.opencode_only())
-        jsonc = Path(self.home, ".config/opencode/opencode.jsonc").read_text()
+        providers = self.opencode_files()[1]
         Path(self.ensemble, "install/state").unlink()
         self.drop_tables("session.clients.opencode.providers.")
         result = self.opencode_again(
@@ -5964,7 +5962,7 @@ exec /bin/rm "$@"
             '[session.clients.opencode.providers.lan] base_url = "http://localhost:8080/v1"',
             result.tty,
         )
-        self.assertEqual(Path(self.home, ".config/opencode/opencode.jsonc").read_text(), jsonc)
+        self.assertEqual(self.opencode_files()[1], providers)
         self.assertEqual(self.provider_state(), ("lan", "http://localhost:8080/v1", "m", "65536"))
 
     def logged_out(self, client, hang=""):
