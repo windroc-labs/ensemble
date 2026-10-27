@@ -1452,7 +1452,7 @@ class HelpContracts(Case):
         self.assertIn("does not acknowledge events", self.help("attach"))
         self.assertIn("monitor expired", self.help("next-event"))
         self.assertIn(
-            "A locked run's environment lock goes only once its container is confirmed stopped.",
+            "A locked run's environment lock goes only once its container is confirmed removed.",
             " ".join(self.help("close").split()),
         )
 

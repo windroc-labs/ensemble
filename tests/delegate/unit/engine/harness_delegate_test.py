@@ -2748,7 +2748,10 @@ class OwnedRun(HarnessCase):
             first.driver.session.liveness = Liveness.ABSENT
 
         self.busy_until(exits)
+        first = HarnessDelegate.attach(self.work, session_cls=LockingSession)
+        first.close()  # its exited worker: the third run holds the lock now
         self.assertNotIn("release", self.kinds())
+        self.assertNotIn(f"session {first._state.agent_name} closed (lock", self.err.getvalue())
 
     def test_a_closed_locked_run_resumes_by_taking_its_lock_again(self):
         first = self.waiting(self.work, SID)

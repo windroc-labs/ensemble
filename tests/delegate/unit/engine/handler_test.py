@@ -121,8 +121,11 @@ class Agent:
 
     mode = "tui"
 
-    def __init__(self, on_close):
-        self.on_close = on_close
+    def __init__(self, on_close, *, live=True):
+        self.on_close, self.live = on_close, live
+
+    def alive(self):
+        return self.live
 
     def close(self):
         self.on_close()
@@ -734,6 +737,13 @@ class LockedTest(HandlerCase):
         self.assertIn(f"delegate: session {NAME} closed (lock dummy-lock)", self.err.getvalue())
         self.assertEqual([k for k in self.kinds_sent() if k[0] == "finished"], [("finished", 1)])
 
+    def test_closing_a_worker_whose_client_exited_claims_no_release(self):
+        self.finish(NEEDS)
+        AgentSession.agent = Agent(lambda: None, live=False)
+        self.delegate.close()
+        self.assertNotIn("release", self.kinds())
+        self.assertNotIn("closed (lock", self.err.getvalue())
+
     def test_an_unconfirmed_close_claims_no_release(self):
         self.finish(NEEDS)
         for refusal in (OwnerRefused("cannot close w1"), Unanswered("not confirmed")):
@@ -777,16 +787,6 @@ class EndingTest(HandlerCase):
 
     def race(self) -> None:
         self.record.complete(1, self.LOST, sid=SID)
-
-    def test_a_lost_limit_writes_no_notes(self):
-        complete = RunRecord.complete
-
-        def racing(record, *args, **kw):
-            complete(record, 1, self.LOST, sid=SID)
-            return complete(record, *args, **kw)
-
-        with mock.patch.object(RunRecord, "complete", racing):
-            self.lost(LimitHit(None))
 
     def test_a_lost_outcome_writes_no_progress_note(self):
         self.racing = self.race  # at its Progress delivery

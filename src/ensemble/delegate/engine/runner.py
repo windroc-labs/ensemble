@@ -136,7 +136,7 @@ class Tui(Headless):
 
 
 def claim_release(p: Plan, name: str) -> None:
-    """Once a locked run's worker close is confirmed."""
+    """Notes a locked run's release, after a confirmed close."""
     environment = p.session.environment
     lock = None if environment is None else environment.lock
     if not lock:

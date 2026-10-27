@@ -108,6 +108,14 @@ def _loaded(payload: bytes) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _live(agent: Session) -> bool:
+    """Whether a close ends a running worker (unknown counts)."""
+    try:
+        return agent.alive()
+    except Unanswered:
+        return True
+
+
 def _unknown(error: Unanswered) -> Unanswered:
     return Unanswered(f"delegate agent session liveness unknown: {error}")
 
@@ -340,11 +348,13 @@ class HarnessDelegate(Delegate):
             return attempt + 1 if type(attempt) is int and attempt >= 1 else 1
         agent = self._known_agent(previous)
         if agent is not None:
+            live = _live(agent)
             try:
                 agent.close()
             except SessionError as error:
                 raise ConfigError(str(error)) from None
-            claim_release(previous.plan, previous.agent_name)
+            if live:
+                claim_release(previous.plan, previous.agent_name)
         return previous.attempt + 1 if previous.plan.sid == self._state.plan.sid else 1
 
     def _settle(self) -> None:
@@ -781,10 +791,11 @@ class HarnessDelegate(Delegate):
                 agent, unanswered = self._agent(state), None
             except Unanswered as error:
                 agent, unanswered = None, error
+            live = agent is not None and _live(agent)
             if agent is not None:
                 agent.close()
         if unanswered is None:
-            self._stop_owned(closed=agent is not None)
+            self._stop_owned(closed=live)
         unchecked = (
             None
             if unanswered is None
@@ -916,12 +927,14 @@ class HarnessDelegate(Delegate):
         else:
             self._drive_end(ended, handle, callback, None, notes=not refused, unbound=False)
             if handle is not None:
+                live = _live(handle)
                 try:
                     handle.close()
                 except SessionError as failure:
                     say(f"delegate: tui: close: {failure}")
                 else:
-                    claim_release(self._state.plan, self._state.agent_name)
+                    if live:
+                        claim_release(self._state.plan, self._state.agent_name)
         return ended
 
     def _finished(
@@ -1382,8 +1395,10 @@ class HarnessDelegate(Delegate):
                 probe = replace(probe, name=f"{probe.name}-preflight")
             accepted = self._probed(accepted, state.attempt + 1, probe)
             if agent is not None:
+                live = _live(agent)
                 agent.close()
-                claim_release(state.plan, state.agent_name)
+                if live:
+                    claim_release(state.plan, state.agent_name)
             state = replace(
                 state,
                 plan=accepted,

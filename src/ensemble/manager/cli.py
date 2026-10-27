@@ -634,7 +634,7 @@ command when placement fails. Placement: ensemble-session --help
                 "the entry only once its owner confirmed the work ended; a failed close\n"
                 "keeps it, exits 1 and appends a line to the manager's\n"
                 "close-failures.jsonl. A locked run's environment lock goes only once\n"
-                "its container is confirmed stopped.\n"
+                "its container is confirmed removed.\n"
                 if name == "close"
                 else "By default refuses live work. --force skips controller checks and removes\n"
                 "bookkeeping only; work may remain alive. Requires lease access.\n"
