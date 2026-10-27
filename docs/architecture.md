@@ -2,7 +2,8 @@
 
 Five layers in one source tree (`src/ensemble/`): utils < session < delegate < orchestrator < manager. Import rules: `AGENTS.md` › Import rules. The code, by package; terms in `CONTEXT.md`.
 
-The session harness's Claude tui workers are managed local workers: `hosts/tmux/managed.py` and the standalone `harness/guard.py`.
+The session harness's tui workers run under the standalone `harness/guard.py`: as managed local workers on tmux
+(`hosts/tmux/managed.py`), over one `docker exec -i` per container on Docker (`hosts/docker/worker.py`).
 The harness owns the lifecycle pipe; the guard directly parents the client and owns its PTY;
 tmux runs only the display attachment. Handle readers drain the framed channel continuously.
 Reclamation limits and the migration from legacy mode launchers are in
@@ -45,7 +46,7 @@ flowchart TB
   end
   subgraph SE[ensemble.session]
     SC["cli.py<br>ensemble-session"]
-    DR["engine/: base · hosted_session · worker · types · records · tmux_cli<br>modes/: headless · tui · in_process<br>modes/client_adapters: Headless · JsonHeadless · Tui · InProcess<br>viewer/: viewer · display · placement · grid · iterm · hidden<br>hosts/base: Host · Process · Interactive · InteractiveProcess · Piped<br>hosts/types: SessionView · CommandView<br>hosts/reclaimed: ReclaimedGroup<br>hosts/tmux/: host · hook<br>hosts/docker/: host · worker · activity · guard_hook · hook · hooks · maintenance · broker · daemon · mounts · pipe · relay · stub · supervisor · types"]
+    DR["engine/: base · hosted_session · worker · types · records · tmux_cli<br>modes/: headless · tui · in_process<br>modes/client_adapters: Headless · JsonHeadless · Tui · InProcess<br>viewer/: viewer · display · placement · grid · iterm · hidden<br>hosts/base: Host · Process · Interactive · InteractiveProcess · Piped<br>hosts/types: SessionView · CommandView<br>hosts/reclaimed: ReclaimedGroup<br>hosts/tmux/: host · hook<br>hosts/docker/: host · worker · activity · guard_hook · hooks · maintenance · broker · daemon · mounts · pipe · stub · types"]
     subgraph AD[clients/]
       CL[claude]
       CX[codex]
@@ -102,9 +103,9 @@ Each Host implementation supplies its process capabilities.
 | `src/ensemble/orchestrator/` | Board scheduling, state and write-back | delegate, utils | Keep | Public delegate API; tracker contract in `engine/flow/tracker.py` |
 | `src/ensemble/delegate/` | Prompts, run plans, harness and result protocol | session, utils | Keep | Public session API and `event/` progress and outcome formats |
 | `src/ensemble/session/engine/`, `modes/`, `clients/` | Session lifecycle, run modes and client adapters | Host, utils, client commands | Keep session and client logic | Host, Process, Interactive and Piped capabilities in `hosts/base.py` and data types in `engine/types.py`; tmux operations remain in `engine/tmux_cli.py` and `viewer/` |
-| `src/ensemble/session/harness/` | The session harness process that owns a built-in client's tui or headless worker with no environment on tmux, and on Docker a Claude tui or headless one, or an in_process adapter, its dir, handler dispatch and control view | session engine, utils | Keep | `Spec.handlers`, `EventCall` and the files in [Session harness](sessions.md#session-harness) |
+| `src/ensemble/session/harness/` | The session harness process that owns a built-in client's tui or headless worker on tmux or Docker, or an in_process adapter, its dir, handler dispatch and control view | session engine, utils | Keep | `Spec.handlers`, `EventCall` and the files in [Session harness](sessions.md#session-harness) |
 | `src/ensemble/session/hosts/tmux/` | Local processes and tmux sessions through `TmuxHost` | Host, `engine/tmux_cli.py`, utils, local tmux | Replace as a unit if local tmux is unavailable | Host start, enumeration, status, input and close semantics; display boundary shown above |
-| `src/ensemble/session/hosts/docker/`, `src/broker/`, `src/broker/protocol/` | Docker adaptation, the guarded worker and hook relay, worker image, containers and credential injection | Host, Docker Desktop, broker; broker uses macOS Keychain | Replace as a unit | Preserve Host for callers; retaining the broker also requires its protocol JSON schemas, versions, exit codes and shared fixtures |
+| `src/ensemble/session/hosts/docker/`, `src/broker/`, `src/broker/protocol/` | Docker adaptation, the guarded worker, worker image, containers and credential injection | Host, Docker Desktop, broker; broker uses macOS Keychain | Replace as a unit | Preserve Host for callers; retaining the broker also requires its protocol JSON schemas, versions, exit codes and shared fixtures |
 | `src/ensemble/manager/`, `skills/manage/`, `hooks/` | Crew, Roster, event cursors and commander sessions | utils; commands to other layers | Keep scheduling logic; adapt local display and client hooks | Record ctl and resume commands, CLI output; import relationships shown above |
 | `src/ensemble/utils/` | Configuration overlays, shared types, paths and process control | Python standard library | Keep, with the required OS process capabilities | Public exports and shared data formats |
 | External `windroc/egress-proxy` | Egress service, outside this repository | Docker labels and health, read by broker start ([`launcher/egress.go`](../src/broker/internal/launcher/egress.go)); `scripts/install.sh` fetches a pinned commit and starts the egress proxy | Replace the independent service as a unit | Versions, label meanings and health semantics in [docs/label-contract.md](https://github.com/windroc/egress-proxy/blob/122d7454d738db4a9b7e0c4a89d2cfa5ff564339/docs/label-contract.md) |

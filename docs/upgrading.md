@@ -1,5 +1,18 @@
 # Upgrading
 
+## Session harness: close every session first
+
+This release runs every Docker worker under its [session harness](sessions.md#session-harness) and drops the Docker
+relay and supervisor ([Docker host › Harness-owned workers](docker-host.md#harness-owned-workers)). It keeps no
+compatibility with sessions an older release started, so before upgrading:
+
+1. List them: `ensemble-session ls`.
+2. Close each crew worker with `ensemble-crew close [--manager <manager>] NAME`, which also drops its roster entry,
+   and every other session with `ensemble-session close NAME`.
+
+Conversations stay: resume them after the upgrade. A session missed is not supported afterwards: on Docker it is not
+listed, and the next Docker start removes its container as debris.
+
 ## Broker protocol 30: Keychain rename
 
 Broker protocol 30 renames every broker keychain item to start with `ensemble-broker-` (`ensemble-claude` →

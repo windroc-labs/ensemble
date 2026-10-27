@@ -524,26 +524,16 @@ Then `ensemble-crew worker NAME --client claude` starts NAME in its own containe
 the Viewer, `--display none`, `[session.viewer]` and `ls --descendants` work as on tmux. Every docker call goes to
 `unix://<account home>/.docker/run/docker.sock`, whatever `DOCKER_HOST`, `DOCKER_CONTEXT` or `DOCKER_CONFIG` say.
 
-In a Codex or OpenCode worker pane (the container's tmux), scroll up with the mouse wheel or trackpad,
-both in iTerm's tmux integration and in a regular terminal. New workers enable the container tmux's
-`mouse` option and keep 50,000 history lines, matching `ctmux`. Clients that capture the mouse keep
-their own scrolling; otherwise tmux enters copy mode to show pane history. Scroll back to the bottom to
-resume input, or press `q` to leave tmux copy mode. The history is inside the container; the host pane's
-scrollbar alone cannot show it. Restart an existing worker to apply these settings; no image rebuild is needed.
-
-Text a client copies in a container's pane (Claude Code's mouse selection, for one) reaches your clipboard by OSC 52:
-the container's tmux sets `set-clipboard on` and `allow-passthrough on`. Your terminal must support OSC 52 (Ghostty
-does), and a host tmux showing the pane needs `set -g set-clipboard on` in `~/.tmux.conf`.
-
 ### Harness-owned workers
 
-A Claude TUI session runs under its [session harness](sessions.md#session-harness), as on tmux. Its worker is the
-[guard](sessions.md#guard-protocol) inside the container, the client's direct parent, reached through one
+Every session runs under its [session harness](sessions.md#session-harness), as on tmux, with or without an
+[environment](#environments). A TUI worker (Claude, Codex or OpenCode) is the [guard](sessions.md#guard-protocol)
+inside the container, the client's direct parent, reached through one
 `docker exec -i <container> /opt/ensemble/venv/bin/python -I <guard> --terminal … --lease <run>/lease -- with-secrets …`
-whose stdin and stdout carry the guard channel. No relay daemon, supervisor or container tmux runs for it. Codex and
-OpenCode TUI sessions keep the container tmux, relay and supervisor until their hooks are verified through the guard.
-A headless run is harness-owned too, its client still on its `docker exec -i` pipe, now the harness's child. A start
-with an environment runs the earlier way: no session harness runs one yet.
+whose stdin and stdout carry the guard channel. A headless run's client stays on its own `docker exec -i` pipe, the
+harness's child, until WDRC-312 moves it onto the guard. A start no harness can own (an extension client whose
+`Tui` or `Headless` keeps `_owned` false, a `Tui` that keeps `_remote_owned` false, or injected session callables)
+is refused before anything is written: `<client> <mode> on host docker: runs only under a session harness`.
 
 | Path | Holds |
 |---|---|
@@ -553,10 +543,13 @@ with an environment runs the earlier way: no session harness runs one yet.
 | `<state dir>/<generation>.activity` | the last hook's `working`, `done` or `blocked` |
 | `<state dir>/rejected.jsonl` | dropped hook frames, `{"generation", "reason"}` (`label`, `size`, `shape`, `hook`), up to 1 MiB |
 
-- **Hooks**: the container's hook command sends each hook to the guard's socket, resending the same `delivery_id`
-  until acknowledged. The harness drops a frame with a label outside `[A-Za-z0-9_.-]{1,64}`, over 1 MiB or not strict
+- **Hooks**: the container's hook command (`hook-stub`, running `stub.py`) sends each hook to the guard's socket
+  (`ENSEMBLE_GUARD_HOOK_SOCKET`), resending the same `delivery_id` until acknowledged, for up to 10 s; it always exits
+  0, printing one stderr line on failure (`ensemble hook: guard hook socket unavailable` without the socket). The
+  harness drops a frame with a label outside `[A-Za-z0-9_.-]{1,64}`, over 1 MiB or not strict
   JSON of the guard's shape, removes `transcript_path`, journals each `delivery_id` once, in order, through one
-  resident `ensemble-session hook --serve`, and retries a failed host hook with the same id each second for 60 s.
+  resident `ensemble-session hook --serve`, and retries a failed host hook with the same id each second for 60 s,
+  later hooks waiting, then logs it in `rejected.jsonl` as `hook`.
 - **Display**: `show` runs `docker exec -it <container> … guard.py --attach <run>/display`; hiding or closing it never
   ends the worker.
 - **Input and screen**: only its harness reaches the worker. Other `ensemble-session` commands' `send`, `press` and
@@ -566,7 +559,14 @@ with an environment runs the earlier way: no session harness runs one yet.
   removal keeps the owner lock and is retried each minute.
 - **Liveness**: a held owner lock is a live worker, with no docker call. A free one: the container's guard
   (`guard.py --probe`) answers `live`, `exited`, `dead` or `absent`. A start refuses a live or unknown earlier
-  generation and removes an ended one; a sweep removes a guarded container only once its owner lock is free.
+  generation and removes an ended one.
+- **Listing**: the Host lists (`ensemble-session ls`) and attaches only guarded workers of their `host.json`'s
+  generation; a headless run is not listed.
+- **Sweep**: each start (TUI or headless) first closes every container that is neither a guarded nor a piped worker
+  of its `host.json`'s generation (debris, such as one an older release started), a guarded one whose owner lock is
+  free and a piped one whose pipe lock is free; it never execs into a container. A start whose sweep could not remove
+  a debris container of its name refuses: `docker session <name>: container <c> of an earlier start is still up (its
+  removal failed; see the log); the next start retries it`.
 
 The harness alone enforces a guarded worker's deadline. If it dies and Docker does not pass EOF to the exec
 (unverified until the mini acceptance, WDRC-212), the client can outlive the deadline until a sweep removes its
@@ -574,8 +574,8 @@ ownerless container.
 
 ### Credential renewal
 
-One credential tick runs for every session: on its own thread in the session harness of a harness-owned
-worker, in a Codex or OpenCode TUI session's host run supervisor, or in the headless run's harness. It calls `ensemble-broker maintain` at once, then whenever the broker says. The broker decides what is due:
+One credential tick runs for every session, on a thread of its session harness: a TUI worker's Docker handle's
+maintenance thread (`hosts/docker/maintenance.py`), a headless run's `DockerPiped` thread. It calls `ensemble-broker maintain` at once, then whenever the broker says. The broker decides what is due:
 it renews each GitHub or Codex credential 10 minutes before its earliest expiry, works out the [static secret
 notices](#static-secret-expiry), and returns when to call again and the session's deadline. Its events go to the
 session's events, or the harness's log:
@@ -894,7 +894,7 @@ An `http://` `base_url` sends the key in plaintext on the permitted path ([Risks
 3. Pull every `ollama/` model of the tiers and `model`, `ollama pull qwen3.6:35b-mlx` by default
    (`[session.clients.opencode.tiers]`; `ollama_port`, default 11434, is its port).
 
-The image supplies OpenCode 1.x and its provider config; none of the Mac's OpenCode install, config or plugins goes into the container. The cwd's own `opencode.json` and `.opencode/` still load: OpenCode has no project trust. An existing `~/.ensemble/docker/worker/Dockerfile` needs no edit. Session state stays in `~/.ensemble/docker-state/<name>/opencode/`. Start a worker with `ensemble-crew worker NAME --client opencode`; board setup: [Board › OpenCode](board.md#opencode). Its window stays at least 40 columns wide because OpenCode 1.19.3's OpenTUI crashes its home screen in a window under 38 columns.
+The image supplies OpenCode 1.x and its provider config; none of the Mac's OpenCode install, config or plugins goes into the container. The cwd's own `opencode.json` and `.opencode/` still load: OpenCode has no project trust. An existing `~/.ensemble/docker/worker/Dockerfile` needs no edit. Session state stays in `~/.ensemble/docker-state/<name>/opencode/`. Start a worker with `ensemble-crew worker NAME --client opencode`; board setup: [Board › OpenCode](board.md#opencode). Keep its display at least 40 columns wide: OpenCode 1.19.3's OpenTUI crashes its home screen in a window under 38 columns.
 
 ### Lifecycle
 
@@ -904,7 +904,8 @@ keep the client history and [workspace volume](#workspace-volumes) and continue 
 clears client history, emptying the client state dir in place, while workspace retention follows [Workspace volumes](#workspace-volumes). A resume whose conversation file is missing or a symlink fails before any container with
 `no native history to resume`. Resume with `ensemble-session resume <name>`, never `client-resume`, which runs the
 client on the host. Claude, Codex and [OpenCode](#opencode) terminals and headless runs are supported;
-other clients, detached sessions and a start while a container of that name exists fail before creation.
+a start no harness can own ([Harness-owned workers](#harness-owned-workers)), a detached session and a start while a
+container of that name exists fail before creation.
 
 **Preflight**, before every start: client and mode supported; the cwd exists; the broker's `version` matches (else it points to
 [Install](#install)); `build` succeeds, rebuilding an image 7 or more days old, its progress on stderr. `resume` runs it
@@ -917,44 +918,26 @@ SIGTERM and, 60 s later, SIGKILL. From just before the broker's `start` until th
 SIGINT and SIGHUP back (an ignored one stays ignored); on one it removes its container, then the signal acts. Stopped
 later, it leaves its worker running.
 
-**Probes**: a [harness-owned worker](#harness-owned-workers) makes none; its liveness, exit, input and
-screen travel on its channel. For the others, each tmux call is one `docker exec`. A running session's
-handle (the delegate harness's, polling every 0.5 s) shares one pane probe and one screen capture between its liveness, exit code and screen reads; while the probe
-and screen stay unchanged, the interval doubles from 0.5 s to 3 s, and a change, `send` or key press resets it.
-An idle session costs at most 1 exec per second (about 0.7), a busy one 2 per 0.5 s tick (5 before). A client
-exit or a dialog or usage limit on screen is seen within 3.5 s plus the exec time (0.5 s before); turn ends and other
-hook events arrive through the hook journal, unaffected. That handle's status, liveness and unsized screen may be up
-to 3 s old, but the opening is sent only after a fresh capture shows no dialog; a new handle (another
-`ensemble-session` command) probes at once. Waiting for a killed client checks every 0.1 s, backing off to 1 s.
+**Probes**: a running worker makes none: a TUI worker's liveness, exit, input and screen travel on its channel
+([Harness-owned workers](#harness-owned-workers)), a headless run's output and exit on its pipe.
 
 **Claude settings**: a new start copies the host's model and effort settings, plus its web-search limit. No other host setting, credential, hook, plugin, status line or permission reaches it. `--model`/`--effort` and role config still win; a resume keeps the session's settings.
 
 ### Recovery
 
-- **Host hook failed** (timeout, could not start, callback failure or non-zero exit): for a Codex or OpenCode
-  TUI session the supervisor
-  sends each event, with its ID `<gen>.<seq>`, as one line to a resident `ensemble-session hook --serve DIR`,
-  one process per supervisor, started by its first hook and again by the first after it exits; a
-  callback failure replies `{"ok": false}` (`hook exit 1`), and a call past 60 s kills the process
-  (`hook timeout`). Ordinary client hook calls retain their default exit 0. The `hooks.jsonl` record carries
-  the event; a retry whose event is that file's last record skips the client callback and the journal
-  and reruns only the Host callback with the journaled payload. The supervisor logs the failure in
-  `rejected.jsonl` without advancing the successful sequence. Its `ok: false, retry: true` reply keeps the
-  event at the relay queue's head and retries on the same connection every 10 s until success or session
-  end; later events wait behind it. Success records the sequence, so acknowledged replays do not rerun
-  the hook. Malformed requests, wrong generations and wrong directories remain terminal rejections.
+- **Host hook failed** (timeout, could not start, callback failure or non-zero exit): the resident
+  `ensemble-session hook --serve DIR`, one per worker, started by its first hook and again by the first after it
+  exits, replies `{"ok": false}` to a callback failure (`hook exit 1`) and is killed by a call past 60 s
+  (`hook timeout`). The harness retries the same `delivery_id` ([Hooks](#harness-owned-workers)); a retry whose
+  event is `hooks.jsonl`'s last record skips the client callback and the journal and reruns only the Host callback
+  with the journaled payload.
 - **Harness gone** (a harness-owned worker's, killed): its `docker exec` stdin closes, and the guard ends the
   client; a later sweep removes the container once its owner lock is free. `ensemble-session resume NAME`
   removes an ended earlier generation and continues the conversation.
-- **Supervisor or daemon gone** (Codex or OpenCode TUI; killed, not a host reboot): the worker's next `attach`, `read`, `send`, `status`,
-  `restart` or `close` starts both and replays the queue; an event arrives once, or twice if its hook ran just before
-  the kill, never lost. `next-event` restarts nothing: it reads only the events file. Until the daemon is restarted,
-  the hook stub gives up on an event after 10 s and it is lost; `status` still shows the worker running, replies still come from
-  the transcript.
 - **Older image** after an upgrade (a new image key): the command warns `restart it to upgrade`; restart the worker. A
   [client release](#client-releases) rebuild keeps the key and never warns.
 - **Container gone** (Docker Desktop restart, `docker rm`): the worker shows `dead`; `ensemble-session resume NAME`
-  continues the conversation in a new container. Events queued in the old one are lost.
+  continues the conversation in a new container. A hook not yet acknowledged is lost.
 - **Egress proxy not ready** (`egress_unavailable`): run `~/.egress/current/start.sh`, as the error says (before
   a first successful install, rerun `scripts/install.sh --docker`), wait for
   `docker ps --filter name=egress-proxy` to show `(healthy)`, then start, restart or resume again ([Egress proxy](#egress-proxy)).
@@ -1090,10 +1073,11 @@ the mini's loopback and private LAN IPv4 address, proves each is reachable on th
 407 denial and failed direct access from the worker. It prints no response body. A NAS already refusing the
 mini is not an isolation control. Allow a local-network/firewall prompt for these temporary listeners if needed.
 These proxy checks have not yet been run on the mini; the earlier bridge results do not validate them.
+Nor have guarded Codex and OpenCode TUI workers and environment starts been run live: WDRC-212 runs them on the mini.
 
 | Command | Checks |
 |---|---|
-| `python3 tests/session/live_docker.py worker --client claude\|codex\|opencode CWD [NAME]`, from a manager session | a second build reuses the image; with no `--host`, the worker runs in a container; its security flags (`--cap-drop ALL`, only the egress proxy's `workers` network, no extra hosts) and mounts match the plan, and the [unreachable](credentials.md#what-a-container-cannot-reach) resources stay so; for Codex or OpenCode a supervisor killed mid-turn delivers its event once, for Claude a harness killed mid-turn ends the container's client and `resume` continues it; restart, close then resume, and `docker rm -f` then resume each answer a prompt; every close revokes the generation's GitHub tokens and withdraws its client credential; no revocation stays pending but the removed container's, whose tokens it reports; for OpenCode also: the first turn leaves `~/.ensemble/docker-state/<NAME>/opencode/opencode/opencode.db`, Ollama listens on `127.0.0.1` only (`lsof`), the container holds only GitHub secrets and each configured provider's key (`find /run/ensemble/secrets`), and each resume continues the same OpenCode session |
+| `python3 tests/session/live_docker.py worker --client claude\|codex\|opencode CWD [NAME]`, from a manager session | a second build reuses the image; with no `--host`, the worker runs in a container; its security flags (`--cap-drop ALL`, only the egress proxy's `workers` network, no extra hosts) and mounts match the plan, and the [unreachable](credentials.md#what-a-container-cannot-reach) resources stay so; restart, close then resume, and `docker rm -f` then resume each answer a prompt; every close revokes the generation's GitHub tokens and withdraws its client credential; no revocation stays pending but the removed container's, whose tokens it reports; for OpenCode also: the first turn leaves `~/.ensemble/docker-state/<NAME>/opencode/opencode/opencode.db`, Ollama listens on `127.0.0.1` only (`lsof`), the container holds only GitHub secrets and each configured provider's key (`find /run/ensemble/secrets`), and each resume continues the same OpenCode session |
 | `python3 tests/session/live_docker.py role --repo OWNER/NAME [--timeout S] [NAME]` | a headless engineer run on the test repo gets one forced token renewal (`maintain --renew`), opens a draft PR as `windroc-bot[bot]` after it, and its close reclaims its credentials |
 | `python3 tests/session/live_docker.py pr URL` | the PR, such as an unattended board run's, was opened as a draft by `windroc-bot[bot]` |
 
