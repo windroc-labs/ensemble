@@ -8,6 +8,7 @@ import stat
 import tempfile
 from unittest import mock
 
+from ensemble import session
 from ensemble.session.engine.types import ConfigError, SessionError
 from ensemble.session.hosts.docker import broker
 from ensemble.session.hosts.docker.broker import BROKER, Broker, BrokerError
@@ -729,6 +730,90 @@ class ManifestTest(Case):
         with open(path) as f:
             manifest = json.load(f)
         self.assertFalse({"gateway", "secrets", "lock", "lock_owner", "prefetch"} & set(manifest))
+
+
+class ManifestCredentialsTest(Case):
+    def setUp(self):
+        super().setUp()
+        self.path = os.path.join(self.home, "state", "g.json")
+        fixture = data("manifest-credentials.json")
+        self.base = {
+            "name": fixture["name"],
+            "generation": fixture["generation"],
+            "image": fixture["image"],
+            "cwd": fixture["cwd"],
+            "workspace": fixture["workspace"],
+            "home": ("claude_dir", fixture["claude_dir"]),
+            "hook_path": fixture["hook_path"],
+            "github": "ensemble-broker-bot",
+        }
+
+    def written(self, **kw):
+        broker.write_manifest(self.path, **{**self.base, **kw})
+        with open(self.path) as f:
+            return json.load(f)
+
+    def test_the_request_is_written_in_the_manifest_form(self):
+        request = session.CredentialRequest.from_fields(data("credential-request-all.json"))
+        fixture = data("manifest-credentials.json")
+        found = self.written(credentials=request)
+        self.assertEqual(found["credentials"], fixture["credentials"])
+        self.assertEqual(found, {**fixture, "labels": {}})
+        self.assertEqual(
+            broker.manifest_credentials(request, "ensemble-broker-bot"), fixture["credentials"]
+        )
+        self.assertEqual(broker.manifest_credentials(session.CredentialRequest(), ""), {})
+
+    def test_github_grants_need_the_app(self):
+        request = session.CredentialRequest.from_fields(
+            data("credential-request-github-default.json")
+        )
+        with self.assertRaisesRegex(
+            ConfigError, r"\Acredentials github: needs \[hosts.docker.github\] app\Z"
+        ):
+            self.written(github="", credentials=request)
+        with self.assertRaisesRegex(ConfigError, "credentials github"):
+            broker.manifest_credentials(request, "")
+        self.assertFalse(os.path.exists(self.path))
+
+    def test_a_linear_request_keeps_the_legacy_github(self):
+        request = session.CredentialRequest(linear={"role": "engineer"})
+        found = self.written(credentials=request, permissions={"contents": "read"})
+        self.assertEqual(found["credentials"], {"linear": {"role": "engineer"}})
+        self.assertEqual(
+            found["github"], {"app": "ensemble-broker-bot", "permissions": {"contents": "read"}}
+        )
+        found = self.written(github="", credentials=request)
+        self.assertIsNone(found["github"])
+
+    def test_one_source_per_kind(self):
+        github = session.CredentialRequest.from_fields(
+            data("credential-request-github-default.json")
+        )
+        env = session.CredentialRequest(
+            env=({"item": "ensemble-broker-env/dummy", "file": "dummy.txt"},)
+        )
+        secret = {"item": "ensemble-broker-env/other", "file": "other.txt"}
+        for kw in (
+            {"credentials": github, "permissions": {"contents": "read"}},
+            {"credentials": github, "permissions": {}},
+            {"credentials": github, "repo": "o/r"},
+            {"credentials": env, "secrets": (secret,)},
+        ):
+            with self.subTest(kw), self.assertRaises(ConfigError):
+                self.written(**kw)
+        self.assertFalse(os.path.exists(self.path))
+        self.assertEqual(self.written(credentials=env)["credentials"], env.persisted())
+        self.assertEqual(
+            self.written(
+                credentials=session.CredentialRequest(linear={"role": "pm"}), secrets=(secret,)
+            )["secrets"],
+            [secret],
+        )
+
+    def test_no_request_writes_no_credentials(self):
+        self.assertNotIn("credentials", self.written())
+        self.assertEqual(self.written(credentials=session.CredentialRequest())["credentials"], {})
 
 
 class StreamTest(Case):

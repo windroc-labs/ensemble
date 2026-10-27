@@ -32,6 +32,7 @@ __all__ = [
     "ClientBound",
     "ClientHome",
     "ConfigError",
+    "CredentialRequest",
     "SessionError",
     "SessionBusy",
     "Effort",
@@ -280,6 +281,35 @@ SECRET_ITEM = re.compile(r"ensemble-broker-env/[a-z0-9][a-z0-9._-]{0,63}")
 SECRET_FILE = re.compile(r"[^/\x00-\x1f\x7f-\x9f]{1,255}")
 SECRETS_MAX = 16
 REPO = re.compile(r"[A-Za-z0-9-]+/(?!\.\.?\Z)[A-Za-z0-9._-]+")
+ROLE = re.compile(r"[a-z][a-z0-9-]{0,62}")  # a team role's name, a credential request's linear
+GRANTS_MAX = 16
+GITHUB_PERMISSIONS = frozenset(
+    {
+        "actions",
+        "administration",
+        "checks",
+        "codespaces",
+        "contents",
+        "dependabot_secrets",
+        "deployments",
+        "environments",
+        "issues",
+        "metadata",
+        "packages",
+        "pages",
+        "pull_requests",
+        "repository_custom_properties",
+        "repository_hooks",
+        "secret_scanning_alerts",
+        "secrets",
+        "security_events",
+        "single_file",
+        "statuses",
+        "vulnerability_alerts",
+        "workflows",
+    }
+)
+GITHUB_LEVELS = {"metadata": ("read",), "workflows": ("write",)}  # else read or write
 
 
 def _string_tuple(value) -> bool:
@@ -309,16 +339,25 @@ class Access:
         object.__setattr__(self, "env", MappingProxyType(dict(self.env)))
 
 
+def _secret_item(value) -> bool:
+    return isinstance(value, str) and SECRET_ITEM.fullmatch(value) is not None
+
+
+def _secret_file(value) -> bool:
+    return (
+        isinstance(value, str)
+        and SECRET_FILE.fullmatch(value) is not None
+        and value not in (".", "..")
+        and len(value.encode("utf-8")) <= 255
+    )
+
+
 def _secret(value) -> bool:
     return (
         isinstance(value, Mapping)
         and set(value) == {"item", "file"}
-        and isinstance(value["item"], str)
-        and SECRET_ITEM.fullmatch(value["item"]) is not None
-        and isinstance(value["file"], str)
-        and SECRET_FILE.fullmatch(value["file"]) is not None
-        and value["file"] not in (".", "..")
-        and len(value["file"].encode("utf-8")) <= 255
+        and _secret_item(value["item"])
+        and _secret_file(value["file"])
     )
 
 
@@ -416,6 +455,144 @@ class EnvironmentSpec:
         return cls(**found)
 
 
+def _rejected(key) -> str:
+    """A rejected key's problem, naming it only when a credential request knows the name: a key
+    may be a pasted value.
+    """
+    kinds = (kind.name for kind in dataclass_fields(CredentialRequest))
+    known = {*kinds, "role", "permissions", "repo", "item", "file", *GITHUB_PERMISSIONS}
+    return f"{key} not valid" if key in known else "an unknown key"
+
+
+def _grant_problem(grant) -> str:
+    """What is wrong with a grant, "" for nothing, naming only a known key."""
+    if not isinstance(grant, Mapping):
+        return "not valid"
+    if unknown := [key for key in grant if key not in ("permissions", "repo")]:
+        return _rejected(unknown[0])
+    if "permissions" not in grant:
+        return "permissions missing"
+    permissions = grant["permissions"]
+    if not isinstance(permissions, Mapping) or not permissions:
+        return "permissions not valid"
+    for name in sorted(permissions, key=str):
+        if name not in GITHUB_PERMISSIONS:
+            return "an unknown key"
+        if permissions[name] not in GITHUB_LEVELS.get(name, ("read", "write")):
+            return f"{name} not valid"
+    if "repo" in grant and not (isinstance(grant["repo"], str) and REPO.fullmatch(grant["repo"])):
+        return "repo not valid"
+    return ""
+
+
+def _entry_problem(entry) -> str:
+    """What is wrong with an env entry, "" for nothing, naming only a known key."""
+    if not isinstance(entry, Mapping):
+        return "not valid"
+    if unknown := [key for key in entry if key not in ("item", "file")]:
+        return _rejected(unknown[0])
+    if missing := [key for key in ("item", "file") if key not in entry]:
+        return f"{missing[0]} missing"
+    if not _secret_item(entry["item"]):
+        return "item not valid"
+    return "" if _secret_file(entry["file"]) else "file not valid"
+
+
+@dataclass(frozen=True, kw_only=True)
+class CredentialRequest:
+    """A run's credential request (WDRC-268 FR-32): every credential the broker puts in its
+    container, by reference only, never a value; a kind absent (github (), linear None, env ())
+    is none of it. github: grants {"permissions", "repo"?}, one installation token each of the
+    Docker Host's App, reaching repo alone, or without one every repository of every installation
+    (that grant then alone); linear: {"role"}, whose Linear app token; env: environment secrets
+    {"item", "file"}, as EnvironmentSpec.secrets.
+
+    The seam: the orchestrator resolves the run's part, github and linear, on the delegate Spec;
+    the delegate adds env from the environment for the session Spec. Errors name kind, index and
+    a known key only: a rejected key or value may be a pasted secret.
+    """
+
+    github: tuple[Mapping, ...] = ()
+    linear: Mapping[str, str] | None = None
+    env: tuple[Mapping[str, str], ...] = ()
+
+    def __post_init__(self):
+        github, linear, env = self.github, self.linear, self.env
+        if not isinstance(github, tuple) or len(github) > GRANTS_MAX:
+            raise ConfigError("credentials github: not valid")
+        repos: list[str] = []
+        for index, grant in enumerate(github):
+            problem = _grant_problem(grant)
+            repo = "" if problem else grant.get("repo", "").lower()  # GitHub's names: any case
+            if not problem and not repo and len(github) > 1:
+                problem = "repo missing beside another grant"
+            elif not problem and repo in repos:
+                problem = "repo repeated"
+            if problem:
+                raise ConfigError(f"credentials github[{index}]: {problem}")
+            repos.append(repo)
+        if linear is not None:
+            if not isinstance(linear, Mapping):
+                raise ConfigError("credentials linear: not valid")
+            if unknown := [key for key in linear if key != "role"]:
+                raise ConfigError(f"credentials linear: {_rejected(unknown[0])}")
+            if "role" not in linear:
+                raise ConfigError("credentials linear: role missing")
+            if not (isinstance(linear["role"], str) and ROLE.fullmatch(linear["role"])):
+                raise ConfigError("credentials linear: role not valid")
+        if not isinstance(env, tuple) or len(env) > SECRETS_MAX:
+            raise ConfigError("credentials env: not valid")
+        files: list[str] = []
+        for index, entry in enumerate(env):
+            problem = _entry_problem(entry) or ("file repeated" if entry["file"] in files else "")
+            if problem:
+                raise ConfigError(f"credentials env[{index}]: {problem}")
+            files.append(entry["file"])
+        object.__setattr__(
+            self,
+            "github",
+            tuple(
+                MappingProxyType(
+                    {**grant, "permissions": MappingProxyType(dict(grant["permissions"]))}
+                )
+                for grant in github
+            ),
+        )
+        if linear is not None:
+            object.__setattr__(self, "linear", MappingProxyType(dict(linear)))
+        object.__setattr__(self, "env", tuple(MappingProxyType(dict(entry)) for entry in env))
+
+    def persisted(self) -> dict:
+        """The request form (protocol $defs.credential_request): only the kinds named."""
+        found: dict = {}
+        if self.github:
+            found["github"] = [
+                {**grant, "permissions": dict(grant["permissions"])} for grant in self.github
+            ]
+        if self.linear is not None:
+            found["linear"] = dict(self.linear)
+        if self.env:
+            found["env"] = [dict(entry) for entry in self.env]
+        return found
+
+    @classmethod
+    def from_fields(cls, fields: Mapping) -> Self:
+        """persisted()'s fields, lists for its tuples; ConfigError for anything else."""
+        if not isinstance(fields, Mapping):
+            raise ConfigError(f"credentials: want a table, got {type(fields).__name__}")
+        if any(key not in [kind.name for kind in dataclass_fields(cls)] for key in fields):
+            raise ConfigError("credentials: an unknown kind")
+        found = dict(fields)
+        for kind in ("github", "env"):
+            if kind in found:
+                if not isinstance(found[kind], list | tuple) or not found[kind]:
+                    raise ConfigError(f"credentials {kind}: not valid")
+                found[kind] = tuple(found[kind])
+        if "linear" in found and found["linear"] is None:
+            raise ConfigError("credentials linear: not valid")
+        return cls(**found)
+
+
 @dataclass(frozen=True, kw_only=True)
 class ProcessOptions:
     flags: tuple[str, ...] = ()
@@ -444,6 +621,7 @@ class Spec(ProcessOptions):
     resume: bool = False  # resume session sid
     events: str | None = None
     environment: EnvironmentSpec | None = None
+    credentials: CredentialRequest | None = None  # no Host serves it yet
     handlers: tuple[HookCallback, ...] = ()  # ordered on_event modules (FR-5)
 
     def __post_init__(self):
@@ -492,10 +670,26 @@ class Spec(ProcessOptions):
             raise ConfigError(f"events must be a printable path, got {self.events!r:.80}")
         if self.environment is not None and not isinstance(self.environment, EnvironmentSpec):
             raise ConfigError("environment must be None or an EnvironmentSpec")
+        if self.credentials is not None:
+            self._check_credentials(self.credentials)
         if not isinstance(self.handlers, tuple) or not all(
             isinstance(handler, HookCallback) for handler in self.handlers
         ):
             raise ConfigError("handlers must be a tuple of HookCallback")
+
+    def _check_credentials(self, credentials) -> None:
+        """A CredentialRequest, one source per kind beside the environment (as the manifest)."""
+        if not isinstance(credentials, CredentialRequest):
+            raise ConfigError("credentials must be None or a CredentialRequest")
+        environment = self.environment
+        if environment is None:
+            return
+        if credentials.env and environment.secrets:
+            raise ConfigError("credentials env: the environment names secrets; one source per kind")
+        if credentials.github and environment.github_repo is not None:
+            raise ConfigError(
+                "credentials github: the environment names github_repo; one source per kind"
+            )
 
 
 @dataclass(frozen=True)

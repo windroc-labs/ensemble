@@ -1,6 +1,8 @@
 import dataclasses
 import inspect
+import json
 import operator
+import os
 import signal
 import typing
 from types import MappingProxyType
@@ -37,7 +39,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.harness.types import EventCall
 from ensemble.utils import StatusState
-from tests.session.case import Case
+from tests.session.case import REPO, Case
 
 
 class EnvironmentSources(Case):
@@ -664,6 +666,290 @@ class SpecEnvironmentTest(Case):
         self.assertIs(Spec(workdir="/tmp", access=access, environment=found).environment, found)
         with self.assertRaisesRegex(ConfigError, "environment"):
             Spec(workdir="/tmp", access=access, environment=ENVIRONMENT)
+
+
+PROTOCOL = os.path.join(REPO, "src", "broker", "protocol", "docker-broker")
+TOKEN = "lin_api_fixture-not-a-real-token"  # credential-request-linear-token.json's
+SECRET = "s3cret-value"
+GRANT = {"permissions": {"contents": "write"}, "repo": "o/r"}
+SECRET_ENTRY = {"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}
+
+
+def protocol(name):
+    with open(os.path.join(PROTOCOL, name)) as f:
+        return json.load(f)
+
+
+def strings(value):
+    """Every string in a JSON value, its keys included."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield key
+            yield from strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from strings(item)
+
+
+class CredentialRequestTest(Case):
+    def known(self):
+        return {"github", "linear", "env", "role", "permissions", "repo", "item", "file"} | set(
+            engine_types.GITHUB_PERMISSIONS
+        )
+
+    def assertRefused(self, fields, message):
+        with self.assertRaises(ConfigError) as caught:
+            session.CredentialRequest.from_fields(fields)
+        text = str(caught.exception)
+        self.assertRegex(text, message)
+        for value in set(strings(fields)) - self.known():
+            self.assertNotIn(value, text)
+        return text
+
+    def test_both_entry_modules_export_it(self):
+        from ensemble.session import extension
+
+        for module in (session, extension):
+            self.assertIs(module.CredentialRequest, engine_types.CredentialRequest)
+
+    def test_each_request_fixture_round_trips_or_is_refused_without_its_values(self):
+        found = [
+            c
+            for c in protocol("fixtures/index.json")["cases"]
+            if c["definition"] == "credential_request"
+        ]
+        self.assertGreaterEqual(len(found), 13)
+        for case in found:
+            fields = protocol(f"fixtures/{case['file']}")
+            with self.subTest(case["file"]):
+                if case["valid"]:
+                    request = session.CredentialRequest.from_fields(fields)
+                    self.assertEqual(request.persisted(), fields)
+                    self.assertEqual(
+                        session.CredentialRequest.from_fields(request.persisted()), request
+                    )
+                else:
+                    text = self.assertRefused(fields, r"\Acredentials")
+                    self.assertNotIn(TOKEN, text)
+
+    def test_the_token_fixture_is_refused_by_its_key_not_its_value(self):
+        fields = protocol("fixtures/credential-request-linear-token.json")
+        self.assertEqual(fields["linear"]["token"], TOKEN)
+        self.assertRefused(fields, r"\Acredentials linear: an unknown key\Z")
+
+    def test_it_holds_only_the_kinds_named(self):
+        request = session.CredentialRequest
+        self.assertEqual(request().persisted(), {})
+        self.assertEqual(request.from_fields({}), request())
+        self.assertEqual(
+            request(linear={"role": "engineer"}).persisted(), {"linear": {"role": "engineer"}}
+        )
+        both = request(
+            github=(GRANT, {"permissions": {"issues": "read"}, "repo": "o/s"}), env=(SECRET_ENTRY,)
+        )
+        self.assertEqual(
+            both.persisted(),
+            {
+                "github": [GRANT, {"permissions": {"issues": "read"}, "repo": "o/s"}],
+                "env": [SECRET_ENTRY],
+            },
+        )
+        self.assertEqual(request.from_fields(both.persisted()), both)
+        self.assertEqual(
+            request(github=({"permissions": {"contents": "read"}},)).persisted(),
+            {"github": [{"permissions": {"contents": "read"}}]},
+        )
+
+    def test_bad_requests_are_refused_naming_kind_index_and_known_key_only(self):
+        grant = {"permissions": {"contents": "write"}}
+        for fields, message in (
+            (["github"], r"\Acredentials: want a table, got list\Z"),
+            ({SECRET: {}}, r"\Acredentials: an unknown kind\Z"),
+            ({"github": {"permissions": {}}}, r"\Acredentials github: not valid\Z"),
+            ({"github": []}, r"\Acredentials github: not valid\Z"),
+            ({"github": None}, r"\Acredentials github: not valid\Z"),
+            (
+                {"github": [{**grant, "repo": f"o/r{i}"} for i in range(17)]},
+                r"\Acredentials github: not valid\Z",
+            ),
+            ({"github": [SECRET]}, r"\Acredentials github\[0\]: not valid\Z"),
+            ({"github": [{**grant, SECRET: "x"}]}, r"\Acredentials github\[0\]: an unknown key\Z"),
+            (
+                {"github": [{**grant, "app": SECRET}]},
+                r"\Acredentials github\[0\]: an unknown key\Z",
+            ),
+            ({"github": [{"repo": "o/r"}]}, r"\Acredentials github\[0\]: permissions missing\Z"),
+            (
+                {"github": [{"permissions": {}}]},
+                r"\Acredentials github\[0\]: permissions not valid\Z",
+            ),
+            (
+                {"github": [{"permissions": SECRET}]},
+                r"\Acredentials github\[0\]: permissions not valid\Z",
+            ),
+            (
+                {"github": [{"permissions": {"contents": SECRET}}]},
+                r"\Acredentials github\[0\]: contents not valid\Z",
+            ),
+            (
+                {"github": [{"permissions": {"contents": 1}}]},
+                r"\Acredentials github\[0\]: contents not valid\Z",
+            ),
+            (
+                {"github": [{"permissions": {SECRET: "read"}}]},
+                r"\Acredentials github\[0\]: an unknown key\Z",
+            ),
+            (
+                {"github": [{"permissions": {"metadata": "write"}}]},
+                r"\Acredentials github\[0\]: metadata not valid\Z",
+            ),
+            (
+                {"github": [{"permissions": {"workflows": "read"}}]},
+                r"\Acredentials github\[0\]: workflows not valid\Z",
+            ),
+            (
+                {"github": [{**grant, "repo": "o/.."}]},
+                r"\Acredentials github\[0\]: repo not valid\Z",
+            ),
+            (
+                {"github": [{**grant, "repo": f"o/{SECRET}/x"}]},
+                r"\Acredentials github\[0\]: repo not valid\Z",
+            ),
+            ({"github": [{**grant, "repo": 3}]}, r"\Acredentials github\[0\]: repo not valid\Z"),
+            (
+                {"github": [GRANT, grant]},
+                r"\Acredentials github\[1\]: repo missing beside another grant\Z",
+            ),
+            (
+                {"github": [{**grant, "repo": "Windroc/Repo"}, {**grant, "repo": "windroc/repo"}]},
+                r"\Acredentials github\[1\]: repo repeated\Z",
+            ),
+            ({"linear": None}, r"\Acredentials linear: not valid\Z"),
+            ({"linear": SECRET}, r"\Acredentials linear: not valid\Z"),
+            ({"linear": {}}, r"\Acredentials linear: role missing\Z"),
+            ({"linear": {"role": f"{SECRET}!"}}, r"\Acredentials linear: role not valid\Z"),
+            ({"linear": {"role": 3}}, r"\Acredentials linear: role not valid\Z"),
+            ({"linear": {"role": "a" * 64}}, r"\Acredentials linear: role not valid\Z"),
+            ({"env": []}, r"\Acredentials env: not valid\Z"),
+            ({"env": SECRET_ENTRY}, r"\Acredentials env: not valid\Z"),
+            (
+                {
+                    "env": [
+                        {"item": f"ensemble-broker-env/s{i}", "file": f"f{i}"} for i in range(17)
+                    ]
+                },
+                r"\Acredentials env: not valid\Z",
+            ),
+            ({"env": [SECRET]}, r"\Acredentials env\[0\]: not valid\Z"),
+            (
+                {"env": [{**SECRET_ENTRY, "value": SECRET}]},
+                r"\Acredentials env\[0\]: an unknown key\Z",
+            ),
+            ({"env": [{"file": "f"}]}, r"\Acredentials env\[0\]: item missing\Z"),
+            (
+                {"env": [{"item": "ensemble-broker-env/x"}]},
+                r"\Acredentials env\[0\]: file missing\Z",
+            ),
+            (
+                {"env": [{**SECRET_ENTRY, "item": SECRET}]},
+                r"\Acredentials env\[0\]: item not valid\Z",
+            ),
+            (
+                {"env": [{**SECRET_ENTRY, "file": f"../{SECRET}"}]},
+                r"\Acredentials env\[0\]: file not valid\Z",
+            ),
+            (
+                {"env": [{**SECRET_ENTRY, "file": ".."}]},
+                r"\Acredentials env\[0\]: file not valid\Z",
+            ),
+            (
+                {"env": [{**SECRET_ENTRY, "file": "x" * 256}]},
+                r"\Acredentials env\[0\]: file not valid\Z",
+            ),
+            (
+                {"env": [SECRET_ENTRY, {"item": "ensemble-broker-env/other", "file": "dummy.txt"}]},
+                r"\Acredentials env\[1\]: file repeated\Z",
+            ),
+        ):
+            with self.subTest(fields=fields):
+                self.assertRefused(fields, message)
+
+    def test_sixteen_grants_and_secrets_are_allowed(self):
+        session.CredentialRequest.from_fields(
+            {
+                "github": [
+                    {"permissions": {"contents": "read"}, "repo": f"o/r{i}"} for i in range(16)
+                ],
+                "env": [{"item": f"ensemble-broker-env/s{i}", "file": f"f{i}"} for i in range(16)],
+            }
+        )
+
+    def test_the_constructor_wants_tuples_and_freezes_mappings(self):
+        request = session.CredentialRequest
+        for kind in ("github", "env"):
+            with (
+                self.subTest(kind),
+                self.assertRaisesRegex(ConfigError, rf"credentials {kind}: not valid"),
+            ):
+                request(**{kind: [GRANT if kind == "github" else SECRET_ENTRY]})
+        grant = {"permissions": {"contents": "write"}, "repo": "o/r"}
+        linear = {"role": "engineer"}
+        secret = dict(SECRET_ENTRY)
+        found = request(github=(grant,), linear=linear, env=(secret,))
+        grant["permissions"]["contents"], grant["repo"] = "read", "o/other"
+        linear["role"], secret["file"] = "pm", "other"
+        self.assertEqual(found.persisted()["github"], [GRANT])
+        self.assertEqual(found.linear["role"], "engineer")
+        self.assertEqual(found.env[0]["file"], "dummy.txt")
+        for frozen in (found.github[0], found.github[0]["permissions"], found.linear, found.env[0]):
+            self.assertIsInstance(frozen, MappingProxyType)
+
+    def test_its_rules_are_the_schemas(self):
+        schema = protocol("protocol.schema.json")["$defs"]
+        permissions = schema["github"]["oneOf"][1]["properties"]["permissions"]
+        self.assertEqual(
+            engine_types.GITHUB_PERMISSIONS, frozenset(permissions["propertyNames"]["enum"])
+        )
+        self.assertEqual(engine_types.GRANTS_MAX, schema["github_grants"]["maxItems"])
+        role = schema["credential_request"]["properties"]["linear"]["properties"]["role"]
+        self.assertEqual(f"^{engine_types.ROLE.pattern}$", role["pattern"])
+        self.assertEqual(
+            [f.name for f in dataclasses.fields(session.CredentialRequest)],
+            list(schema["credential_request"]["properties"]),
+        )
+
+
+class SpecCredentialsTest(Case):
+    def spec(self, **kw):
+        return Spec(workdir="/tmp", access=Access(cwd="/tmp"), **kw)
+
+    def test_spec_keeps_or_refuses_a_request(self):
+        self.assertIsNone(self.spec().credentials)
+        found = session.CredentialRequest(linear={"role": "engineer"})
+        self.assertIs(self.spec(credentials=found).credentials, found)
+        for bad in ({"linear": {"role": "engineer"}}, found.persisted(), "github"):
+            with (
+                self.subTest(bad),
+                self.assertRaisesRegex(
+                    ConfigError, r"\Acredentials must be None or a CredentialRequest\Z"
+                ),
+            ):
+                self.spec(credentials=bad)
+
+    def test_one_source_per_kind_beside_the_environment(self):
+        request = session.CredentialRequest
+        env = request(env=(SECRET_ENTRY,))
+        github = request(github=(GRANT,))
+        with self.assertRaisesRegex(ConfigError, "credentials env"):
+            self.spec(environment=environment(), credentials=env)
+        with self.assertRaisesRegex(ConfigError, "credentials github"):
+            self.spec(environment=environment(), credentials=github)
+        self.spec(environment=environment(secrets=[]), credentials=env)
+        self.spec(environment=environment(github_repo=None), credentials=github)
+        self.spec(environment=environment(), credentials=request(linear={"role": "engineer"}))
+        self.spec(credentials=request(github=(GRANT,), env=(SECRET_ENTRY,)))
 
 
 class SessionBusyTest(Case):

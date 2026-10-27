@@ -1,8 +1,13 @@
+import dataclasses
 import json
+import os
+import tempfile
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
 
+from ensemble import session
+from ensemble.session.hosts.docker import broker
 from tests.case import REPO, Case
 
 PROTOCOL = Path(REPO, "src/broker/protocol/docker-broker")
@@ -137,6 +142,7 @@ class DockerBrokerProtocol(Case):
         kinds = list(schema["$defs"]["credential_request"]["properties"])
         self.assertEqual(list(dirs), kinds)
         self.assertEqual(list(schema["$defs"]["credentials"]["properties"]), kinds)
+        self.assertEqual([f.name for f in dataclasses.fields(session.CredentialRequest)], kinds)
         self.assertEqual(
             {
                 kind: d["const"]
@@ -151,6 +157,28 @@ class DockerBrokerProtocol(Case):
                     self.assertFalse(
                         Path(path).is_relative_to(other) or Path(other).is_relative_to(path)
                     )
+
+    def test_the_sessions_credentials_manifest_is_schema_valid(self):
+        schema = json.loads((PROTOCOL / "protocol.schema.json").read_text())
+        validator = Draft202012Validator({**schema, "$ref": "#/$defs/manifest"})
+        request = json.loads((PROTOCOL / "fixtures/credential-request-all.json").read_text())
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "g.json")
+            broker.write_manifest(
+                path,
+                name="worker_1",
+                generation="0" * 32,
+                image="ensemble-worker:" + "a" * 64,
+                cwd="/work",
+                workspace="ensemble-ws-worker_1",
+                home=("claude_dir", "/home/claude"),
+                hook_path="/usr/local/bin/ensemble-session",
+                github="ensemble-broker-bot",
+                credentials=session.CredentialRequest.from_fields(request),
+            )
+            manifest = json.loads(Path(path).read_text())
+        self.assertEqual(list(validator.iter_errors(manifest)), [])
+        self.assertIsNone(manifest["github"])
 
     def test_manifest_required_fields_and_rejected_unknown_fields_are_exercised(self):
         index = json.loads((PROTOCOL / "fixtures/index.json").read_text())
