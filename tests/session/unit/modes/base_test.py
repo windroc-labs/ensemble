@@ -34,10 +34,12 @@ LEASE = {
     "ENSEMBLE_HOLDER_GENERATION",
     "ENSEMBLE_HOLDER_PID",
 }
+GUARD = {"ENSEMBLE_GUARD_LEASE_FD", "ENSEMBLE_GUARD_HOOK_SOCKET"}
 IDENTITIES = {
     "ENSEMBLE_SID",
     "ENSEMBLE_EVENTS",
     *LEASE,
+    *GUARD,
     "INNER_SESSION",
     "INNER_ID",
     "OTHER_SESSION",
@@ -334,8 +336,15 @@ class IdentityDropTest(ChildEnvTest):
         self.environ(INNER_ID="i", OTHER_SESSION="", OTHER_ID="o", KEEP="k")
         self.assertEqual(identity_drop(registry(inner=InnerClient, other=OtherClient)), IDENTITIES)
         self.assertEqual(
-            identity_drop(registry()), frozenset({"ENSEMBLE_SID", "ENSEMBLE_EVENTS", *LEASE})
+            identity_drop(registry()),
+            frozenset({"ENSEMBLE_SID", "ENSEMBLE_EVENTS", *LEASE, *GUARD}),
         )
+
+    def test_identity_drop_drops_guard_variables(self):
+        """A start from inside a managed worker never hands its guard's lease or socket on."""
+        self.environ(ENSEMBLE_GUARD_LEASE_FD="7", ENSEMBLE_GUARD_HOOK_SOCKET="/run/hook")
+        env = child_env(Launch(("x",)), "/cwd", identity_drop(registry()))
+        self.assertFalse(GUARD & set(env))
 
     def test_a_callers_start_token_roster_lease_and_events_file_never_reach_a_client(self):
         for environ in (

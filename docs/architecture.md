@@ -2,7 +2,7 @@
 
 Five layers in one source tree (`src/ensemble/`): utils < session < delegate < orchestrator < manager. Import rules: `AGENTS.md` › Import rules. The code, by package; terms in `CONTEXT.md`.
 
-Managed local workers use `hosts/tmux/managed.py` and the standalone `harness/guard.py`.
+The session harness's Claude tui workers are managed local workers: `hosts/tmux/managed.py` and the standalone `harness/guard.py`.
 The harness owns the lifecycle pipe; the guard directly parents the client and owns its PTY;
 tmux runs only the display attachment. Handle readers drain the framed channel continuously.
 Reclamation limits and the migration from legacy mode launchers are in

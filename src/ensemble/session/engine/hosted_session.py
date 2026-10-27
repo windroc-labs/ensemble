@@ -57,7 +57,9 @@ from ensemble.session.engine.types import (
     Unanswered,
     Usage,
 )
-from ensemble.session.harness.channel import REQUEST_WAIT, SLICE, Channel
+from ensemble.session.harness.channel import SLICE, Channel
+from ensemble.session.harness.channel import bound as channel_bound
+from ensemble.session.harness.channel import running as channel_running
 from ensemble.session.harness.dispatch import load_handlers
 from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedInProcess, OwnedSession, fold
@@ -264,27 +266,27 @@ def _unharnessed(client: str, mode: Mode, on: Host) -> ConfigError:
     return ConfigError(f"handlers: {client} {mode} on host {on.name} has no session harness yet")
 
 
-def _bound_owner(name: str, state: Mapping) -> Channel | None:
-    """Its owner, once that harness.json binds it to `name`, sid and generation."""
-    owner = state.get("owner")
-    if owner is None:
-        return None
-    channel = Channel(owner)
-    deadline = time.monotonic() + REQUEST_WAIT
-    while channel.alive() and (found := channel.status()).get("state") in (None, "starting"):
-        if time.monotonic() > deadline:
-            raise Unanswered(f"session harness {owner}: still starting {name}")
-        time.sleep(SLICE)
-    if not channel.alive():
-        return None
-    if found.get("state") in ("running", "exited") and (
-        found.get("name"),
-        found.get("sid"),
-        found.get("generation"),
-    ) == (name, state.get("sid"), state.get("generation")):
-        return channel
-    LOG.warning("session %s: owner %s does not own it; ignored", name, owner)
-    return None
+def _refuse_running(name: str, on: Host) -> None:
+    """A second start of tui session `name` while its owner runs it: refused at once, before the
+    gate (a running owner is the only one asked; the gate only waits out a reaping guard).
+    """
+    try:
+        state = tui.TuiMode.snapshot(name)
+    except SessionError:
+        return
+    if channel_running(name, state) is not None:
+        tui.TuiMode.running(name, host=on)
+
+
+def _resume_check(spec: Spec, client: Client, name: str, on: Host) -> None:
+    """An owned resume of a conversation its client keeps no transcript of is refused, never
+    started as a new empty one (FR-18); unknown goes on. A container Host checks its own.
+    """
+    if not spec.resume or spec.sid is None or on._client_context().container:
+        return
+    info = SessionInfo(spec.sid, spec.access.cwd, spec.access.project, "", "")
+    if _resumable(lambda: client, info, spec).resumable == Resumable.NO:
+        raise ConfigError(f"session {name}: conversation {spec.sid} has no transcript to resume")
 
 
 def _start_error(channel: Channel, status: Mapping) -> SessionError | ConfigError:
@@ -406,6 +408,10 @@ class HostedSession(Session):
             raise _unharnessed(client_name, mode, on)
         cls.viewer()
         displays.validate_display(display, on)
+        if mode == Mode.TUI and _owned(setup, mode, client, on):
+            name = tui.TuiMode.resolve_name(spec)
+            _refuse_running(name, on)
+            _resume_check(spec, client, name, on)
         MODES[mode].preflight(
             spec,
             client,
@@ -440,6 +446,9 @@ class HostedSession(Session):
         spec = replace(spec, sid=spec.sid or str(uuid.uuid4()))
         if mode == Mode.TUI:
             spec = replace(spec, name=tui.TuiMode.resolve_name(spec))
+            assert spec.name is not None
+            _refuse_running(spec.name, on)
+            _resume_check(spec, client, spec.name, on)
         return cls._spawn(spec, display=display, host=host, idle_timeout=idle_timeout)
 
     @classmethod
@@ -480,7 +489,7 @@ class HostedSession(Session):
         deadline = time.monotonic() + START_WAIT
         while True:
             status = channel.status()
-            if status.get("state") in ("running", "exited"):  # exited: its worker ended at once
+            if status.get("state") in ("running", "draining", "exited"):  # its worker ended at once
                 break
             if (
                 status.get("state") == "failed"
@@ -735,8 +744,8 @@ class HostedSession(Session):
             raise SessionError(
                 f"session {name}: expected sid {sid!r}, found {state.get('sid')!r} in session.json"
             )
-        channel = _bound_owner(name, state)
-        if channel is None or channel.status().get("state") != "running":
+        channel = channel_running(name, state)
+        if channel is None:
             return cls._attached(name, sid=sid, host=host, idle_timeout=idle_timeout)
         attached = cls._attached(name, sid=sid, host=host, generation=state["generation"])
         return cls._view(
@@ -818,6 +827,7 @@ class HostedSession(Session):
             attach=lambda: (
                 attached or cls._attached(name, sid=sid, host=host, generation=generation)
             ),
+            retire=lambda: cls._retire(name, sid=sid, host=host, generation=generation),
             replay=replay,
         )
 
@@ -825,8 +835,22 @@ class HostedSession(Session):
     def retire(cls, name: str, *, sid: str | None = None, host: str | None = None) -> None:
         """A bound owner's confirmed close, asked before any Host probe but a listed terminal of
         another sid (its terminal gone too: sid from session.json): OwnerRefused when it refuses,
-        Unanswered when it cannot tell; else closed here. Another sid's session.json skips its
-        owner, so the close here raises on the sid.
+        Unanswered when it cannot tell; else closed here. Another sid's session.json raises before
+        any owner is asked or anything closed.
+        """
+        cls._retire(name, sid=sid, host=host)
+
+    @classmethod
+    def _retire(
+        cls,
+        name: str,
+        *,
+        sid: str | None = None,
+        host: str | None = None,
+        generation: str | None = None,
+    ) -> None:
+        """generation: the caller's (a view's); while session.json is another's, or gone, nothing
+        is asked or closed. Without an owner, an owned record goes by the record rule.
         """
         setup = cls._config()
         on = cls.host(host)
@@ -835,11 +859,13 @@ class HostedSession(Session):
             state = store.read()
         except SessionError:
             state = None
-        if (
-            state is not None
-            and sid in (None, state.get("sid"))
-            and (channel := _bound_owner(name, state)) is not None
-        ):
+        if generation is not None and (state is None or state.get("generation") != generation):
+            return
+        if state is not None and sid not in (None, state.get("sid")):
+            raise SessionError(
+                f"session {name}: expected sid {sid!r}, found {state.get('sid')!r} in session.json"
+            )
+        if state is not None and (channel := channel_bound(name, state)) is not None:
             store.check()
             try:
                 if channel.request(Op.CLOSE):
@@ -852,9 +878,10 @@ class HostedSession(Session):
             clients = [store.read()["client"]]
         except SessionError:
             clients = setup.registry.configured()
-        store.close()
+        removed = store.close(generation=generation)
         try:
-            cls.viewer().close(name, on)
+            if removed:
+                cls.viewer().close(name, on)
         finally:
             for client in clients:
                 cls._reconcile_capacity(client, {_host_key(setup, host or setup.hosts.default): on})
@@ -1145,9 +1172,9 @@ class HostedSession(Session):
 
     def close(self) -> None:
         name = self._tui()
-        self._running.close()
+        kept = self._running.close() is False  # a tui record of another generation stays
         try:
-            if name is not None:
+            if name is not None and not kept:
                 self._viewer.close(name, self._host)
         finally:
             self._release_capacity()
@@ -1239,34 +1266,44 @@ class Owned:
 
     def stop(self) -> list[SessionEvent | Stderr | ClientBound]:
         """Its last read's events, then stopped."""
-        final = self._session._step(0)[0]
+        final = self._final()
         self._session.stop()
         return final
 
     def close(self) -> list[SessionEvent | Stderr | ClientBound]:
         """Its last read's events, then closed."""
-        final = self._session._step(0)[0]
+        final = self._final()
         self._session.close()
         return final
+
+    def _final(self) -> list[SessionEvent | Stderr | ClientBound]:
+        """Its last read; none once its channel failed, so the close still runs."""
+        try:
+            return self._session._step(0)[0]
+        except SessionError:
+            return []
 
     def returncode(self) -> int | None:
         return self._session._running.returncode(0)
 
     def confirm_end(self, timeout: float) -> int | None:
-        """The exit code once its terminal is gone, else None."""
+        """The exit code once its owner handle says its worker is gone (never its display), else
+        None: unconfirmed.
+        """
+        running = self._session._running
         deadline = time.monotonic() + timeout
-        code = self._session._running.returncode(timeout)
         if self._session.mode == Mode.IN_PROCESS:
-            return code
-        while code is not None:
-            try:
-                if self.name not in self._session._host.list():
+            return running.returncode(timeout)
+        try:
+            code = running.returncode(timeout)
+            while code is not None:
+                if running.state() == Liveness.ABSENT:
                     return code
-            except SessionError:
-                pass
-            if (left := deadline - time.monotonic()) <= 0:
-                return None
-            time.sleep(min(POLL, left))
+                if (left := deadline - time.monotonic()) <= 0:
+                    return None
+                time.sleep(min(POLL, left))
+        except SessionError:
+            pass
         return None
 
     @property

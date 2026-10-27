@@ -949,4 +949,4 @@ class Real(RealConfig):
             if "<team>/methods/" in text:
                 named.append(role)
                 self.assertIn("{{team}}", resolve(role).read, role)
-        self.assertEqual(named, ["researcher"])
+        self.assertEqual(named, ["researcher", "engineer"])

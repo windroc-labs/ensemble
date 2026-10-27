@@ -9,9 +9,10 @@ agent session ensemble started (ENSEMBLE_AGENT_SESSION), start, restart, resume 
 refuse.
 
 stdout holds only machine output: Records, Status lines, ls rows, read and reply text, attach
-commands. Exit 0 done, 2 a usage or config error, 75 a held environment lock on start, restart or
-resume, 1 a failed key or other failure. A batch answers its keys in order; a failed key gets one
-stderr line and no stdout line, and the exit is 1.
+commands. Exit 0 done, 2 a usage or config error, 75 busy on start, restart or resume (a held
+environment lock, or a worker generation live or unknown), 1 a failed key or other failure. A
+batch answers its keys in order; a failed key gets one stderr line and no stdout line, and the
+exit is 1.
 """
 
 from __future__ import annotations
@@ -143,7 +144,8 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
             "  Host is [session.hosts].default. Help needs no running tools/services.\n"
             "  Query commands print stdout; failures print stderr. Exit 0: success;\n"
             "  1: session/Host operation failed; 2: usage/configuration or nested start.\n"
-            "  75: environment lock held on start, restart or resume; stderr names its holder.\n"
+            "  75: busy on start, restart or resume: an environment lock held, or a worker\n"
+            "  generation live or unknown; stderr names its holder.\n"
             "  A Record is a serialized JSON control/identity line: name, session ids,\n"
             "  display and control/resume commands. Pass original Records unchanged,\n"
             "  one per stdin line, only to commands whose help permits them. Explicit\n"
@@ -280,7 +282,8 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
             "content": "Exactly one key; prints content from its first carried session.",
             "show": "Uses saved display; no new --display option. Work already exists.",
             "hide": "Closes only the view while work continues; requires a showable Host.",
-            "close": "Terminates sessions; absent or replaced Record targets are harmless.",
+            "close": "Terminates sessions; absent or replaced Record targets are harmless. A "
+            "crashed worker's record stays while its generation is live or unknown (busy).",
             "attach-command": "Prints an attachment command for the first session of each key.",
         }
         p = sub.add_parser(

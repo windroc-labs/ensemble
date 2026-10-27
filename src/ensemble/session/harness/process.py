@@ -227,13 +227,15 @@ class Harness:
             self._answer(ident, ok=ok, error=error)
 
     def _exited(self, code: int) -> None:
-        """Exited logged for the handlers; harness.json says exited only once they drained."""
+        """Exited logged for the handlers; harness.json says draining, exited once they drained."""
         if self._code is not None:
             return
+        self._code = code
+        self._status.update(state="draining", returncode=code)
+        self._write_pending(force=True)
         for turn, event in self._turns.exited(code):
             self._append(turn, event)
         self._append(None, Exited(code))
-        self._code = code
 
     def _drain_handlers(self, worker: Worker) -> None:
         """Its last writes: harness.json's exited, then the deferred answers."""
@@ -242,7 +244,7 @@ class Harness:
         while self._dispatch.drain(SLICE) and time.monotonic() < deadline:
             self._serve_ended(worker)
         self._serve_ended(worker)
-        self._status.update(state="exited", returncode=self._code)
+        self._status["state"] = "exited"
         self._write_pending(force=True)
         for ident, ok, error in self._ending:
             self._answer(ident, ok=ok, error=error)
@@ -285,7 +287,6 @@ class Harness:
             code = None
         if code is not None:
             self._exited(code)
-            self._status["returncode"] = code
         self._status["state"] = "failed"
         self._write_pending(force=True)
         if self._dispatch is not None:

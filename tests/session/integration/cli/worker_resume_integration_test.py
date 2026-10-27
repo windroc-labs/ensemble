@@ -4,9 +4,10 @@ prints its Record and starts nothing; a gone worker's resume, from another calle
 worker's restart replay its saved sid, cwd, flags, env and display without its prompt; concurrent
 resumes start it once; a start killed right after its launch resumes by name; bad saved state or a
 saved Host no longer configured starts and closes nothing. A client that ignores SIGHUP and SIGTERM
-and has a child: a restart, and a resume after its session is killed, start the new generation only
-once the old one and its child are gone. Each Claude launch (start, restart, resume) gets one
-/color, at least 1 s after its SessionStart; send, reply and read add none.
+and has a child: a restart, and a resume after its session harness is killed, start the new
+generation only once the old one and its child are gone. Each Claude launch (start, restart, resume)
+gets one /color, at least 1 s after its SessionStart; send, reply and read add none. A kill -9 of
+the harness itself: crash_resume_integration_test.py.
 """
 
 import contextlib
@@ -67,22 +68,29 @@ subprocess.call([sys.executable, "-I", fake, *args])
 time.sleep(max(0, start + CAP - time.time()))
 """
 
-# A tmux for one start: it runs the fixture's, and that start's first call after new-session (its
-# client let run, nothing saved since) SIGKILLs the start instead; other callers pass through
-KILLER = """import os, signal, subprocess, sys
-try:
-    with open(LAUNCHED) as f:
-        starter = int(f.read())
-except FileNotFoundError:
-    starter = None
-if os.getppid() == starter:
-    os.kill(starter, signal.SIGKILL)
-    sys.exit(1)
-code = subprocess.call([REAL, *sys.argv[1:]])
-if "new-session" in sys.argv[1:] and starter is None:
-    with open(LAUNCHED, "w") as f:
-        f.write(str(os.getppid()))
-sys.exit(code)
+
+# Once, beside the first client: kill -9 of w1's session harness once it runs it and the client
+# kept its transcript, so during the start's watch
+KILLER = """import glob, json, os, signal, sys, time
+if os.path.exists(sys.argv[1]):
+    sys.exit(0)
+open(sys.argv[1], "w").close()
+home = os.environ["HOME"]
+config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(home, ".claude")
+until = time.monotonic() + 30
+while time.monotonic() < until:
+    try:
+        with open(os.path.join(home, ".ensemble", "tui", "w1", "session.json")) as f:
+            owner = json.load(f)["owner"]
+        with open(os.path.join(owner, "harness.json")) as f:
+            status = json.load(f)
+        kept = glob.glob(os.path.join(config, "projects", "*", "*.jsonl"))
+        if status.get("state") == "running" and kept:
+            os.kill(status["pid"], signal.SIGKILL)
+            break
+    except (OSError, ValueError, KeyError):
+        pass
+    time.sleep(0.05)
 """
 
 
@@ -134,9 +142,13 @@ class Base(CliCase):
         self.ok(self.server.tmux("kill-session", "-t", f"={name}"))
 
     def dead(self, name: str) -> None:
-        """Kill worker `name`'s client and wait for its pane to show it dead."""
+        """Kill worker `name`'s client and wait for its pane to show it dead and its session harness
+        to take its exit.
+        """
+        channel = self.owner(name)
         os.kill(self.calls(name)[-1]["pid"], signal.SIGTERM)
         self.wait_event(name, "dead")
+        self.settled(channel)
 
 
 class ResumeTest(Base):
@@ -181,23 +193,25 @@ class ResumeTest(Base):
         self.assertIn(self.server.pane_of("w1"), self.server.panes(f"={MANAGER}:"))
 
     def test_a_start_killed_right_after_its_launch_is_resumed_by_name(self):
-        directory = os.path.join(self.root, "killer")
-        os.mkdir(directory)
-        tmux = os.path.join(directory, "tmux")
-        names = f"REAL, LAUNCHED = {self.server.program!r}, {os.path.join(directory, 'launched')!r}"
-        with open(tmux, "w", encoding="utf-8") as f:
-            f.write(f"#!{sys.executable} -I\n{names}\n{KILLER}")
-        os.chmod(tmux, 0o700)
-        killed = self.start("w1", PATH=os.pathsep.join((directory, self.env()["PATH"])))
-        # the process that launched it, killed here, is its session harness, not the start
+        killer = os.path.join(self.root, "killer.py")
+        with open(killer, "w", encoding="utf-8") as f:
+            f.write(KILLER)
+        q = shlex.quote
+        path = self.first_on_path(
+            f"#!/bin/sh\n{q(sys.executable)} -I {q(killer)} {q(killer + '.done')} "
+            "</dev/null >/dev/null 2>&1 &\n"
+            f'exec {q(sys.executable)} -I {q(fake_claude.__file__)} "$@"\n'
+        )
+        killed = self.start("w1", PATH=path)
+        # the process killed is its session harness, not the start
         self.assertEqual((killed.returncode, killed.stdout), (1, ""), killed.stderr)
         self.assertIn("session harness", killed.stderr)
-        record = self.record(self.again("resume", "w1", inside=None, cwd=self.root))
+        record = self.record(self.again("resume", "w1", inside=None, cwd=self.root, PATH=path))
         self.assertEqual(record.resume, ("ensemble-session", "resume", "w1"))
         self.assertTrue(os.path.isfile(self.state_file(record.sid)))
         self.assertEqual(self.server.option("w1", "@record"), record.to_line())
-        calls = live_tmux.wait(lambda: self.calls("w1") or None, what="w1's client")
-        self.assertIn(record.sid, calls[-1]["argv"])
+        calls = live_tmux.wait(lambda: self.calls("w1")[1:] or None, what="w1's resumed client")
+        self.assertTrue(has_pair(calls[-1]["argv"], "--resume", record.sid), calls[-1]["argv"])
         dead = self.server.tmux("display-message", "-p", "-t", "=w1:", "#{pane_dead}")
         self.assertEqual(self.ok(dead).stdout, "0\n")
 
@@ -356,14 +370,11 @@ class OldGenerationTest(Base):
         old, new = logged(self.generations)
         self.assert_replaced(old, new, record.sid)
 
-    def test_a_resume_after_the_session_is_killed_first_ends_its_surviving_group(self):
+    def test_a_resume_after_its_harness_is_killed_first_ends_its_surviving_group(self):
         record = self.record(self.start("w1", PATH=self.path))
         self.wait_event("w1", "done")
         (old,) = logged(self.generations)
-        self.kill_session("w1")
-        (call,) = self.calls("w1")
-        live_tmux.wait(lambda: not running(call["pid"]), what="the fake claude's exit on hangup")
-        self.assertTrue(running(old["pid"]) and running(old["child"]), old)
+        os.kill(self.owner("w1").status()["pid"], signal.SIGKILL)
         res = self.again("resume", "w1", inside=None, PATH=self.path)
         self.assertEqual(self.record(res), record)
         old, new = logged(self.generations)
