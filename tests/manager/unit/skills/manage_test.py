@@ -200,6 +200,13 @@ class Manage(Case):
         wait = "once Release `v<version>` has its broker asset and sha256 file (`AGENTS.md` › Releasing)"
         self.assertLess(update.index(wait), update.index("update the installed plugin"))
 
+    def test_a_shared_flakes_owner_fixes_its_root_cause_by_the_method(self):
+        flake = rule("A flake or bug that several PRs hit has one owner")
+        self.assertIn(
+            "fixes its root cause (`src/ensemble/delegate/team/methods/fix-root-causes.md`);",
+            flake,
+        )
+
     def test_docker_host_workers_start_no_sessions_or_containers(self):
         [docker] = re.findall(r"^On the Docker Host .*$", body("manage"), re.M)
         for phrase in (

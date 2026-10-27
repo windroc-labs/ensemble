@@ -655,6 +655,45 @@ class Real(RealConfig):
         ):
             self.assertIn(phrase, task_text("deep-research"))
 
+    def test_engineers_fix_root_causes_by_the_method_file(self):
+        prompt, _ = composed("engineer")
+        self.assertEqual(parameters(prompt)["<team>"], f"`{TEAM}`")
+        rules = section(prompt, "Rules")
+        fix = item(rules, "Fix root causes")
+        self.assertIn(
+            ": when debugging, read and follow the **fix-root-causes method** "
+            "`<team>/methods/fix-root-causes.md`.",
+            fix,
+        )
+        self.assertIn(
+            "Every brief to a sub-agent (producer, reviewer) names that file for the sub-agent to "
+            "read.",
+            fix,
+        )
+        self.assertLess(
+            rules.index("- **No mutation testing**"), rules.index("- **Fix root causes**")
+        )
+        with open(os.path.join(TEAM, "methods", "fix-root-causes.md")) as f:
+            method = f.read()
+        for phrase in (
+            "# Fix Root Causes",
+            "When debugging, do not fix symptoms. Trace every problem to its root cause and fix it there.",
+            "- Reproduce first",
+            '- Ask "why" until you hit the root cause',
+            "adding a nil check to silence a crash is a symptom fix",
+            "If a workaround needs a paragraph-long comment to justify it, the code is wrong",
+            "grep for the same pattern, fix all instances",
+            "When stuck, instrument. Don't guess (add logging, read the actual error)",
+            "**Restart bugs: suspect state before code**",
+            "suspect stale persistent state first: config files, caches, lock files, serialized state",
+        ):
+            self.assertIn(phrase, method)
+        for phrase in ("never rerun or committed around", "base flake", "ticket owns"):
+            self.assertNotIn(phrase, method)
+        for role, task in runs():
+            if role != "engineer":
+                self.assertNotIn("fix-root-causes", composed(role, task)[0], (role, task))
+
     def test_the_summary_is_short_and_details_go_in_the_deliverable(self):
         for role, task in runs():
             with self.subTest(role=role, task=task):
