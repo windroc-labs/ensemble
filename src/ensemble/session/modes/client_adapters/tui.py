@@ -79,6 +79,9 @@ class Tui(ABC):
     def observe(self) -> list[SessionEvent]:  # its client's own record, since the last call
         return []
 
+    def _settle_replies(self, workdir: str, sid: str) -> None:  # by its owner's pump
+        return None
+
     def replay(self, records: Iterable[tuple[str, dict]]) -> list[SessionEvent | ClientBound]:
         """On attach: observe(), then the hook log `records`' events."""
         found: list[SessionEvent | ClientBound] = [*self.observe()]

@@ -1,10 +1,11 @@
 """close-all on the real commands (FR-35; tests/manager/live_crew.py): main's
 test_close_all_closes_what_mgr_opened_and_only_that with crew run. What mgr opened, what a manager
-it opened opened, and a matching orphan close; another manager's work stays.
+it opened opened, and a matching orphan close; another manager's work stays. A worker whose
+display was killed is still closed (A5).
 """
 
 from tests.delegate.replies import mark
-from tests.manager.live_crew import OTHER, LiveCrew
+from tests.manager.live_crew import OTHER, LiveCrew, Owner
 from tests.session import live_tmux
 
 START = mark("start", "echoing")
@@ -35,3 +36,12 @@ class CloseAllTest(LiveCrew):
         self.assertTrue(self.live("mgr", OTHER, "o1"))
         self.assertEqual(self.roster(), {})
         self.assertEqual(self.ok(self.crew("close-all")).stdout, "nothing to close\n")
+
+    def test_close_all_closes_a_worker_whose_display_was_killed(self):
+        self.record(self.worker("w1"))
+        owner = Owner(self.ensemble, "w1")
+        self.ok(self.server.tmux("kill-session", "-t", "=w1"))
+        self.assertTrue(owner.alive())
+        self.assertEqual(self.ok(self.crew("close-all")).stdout.splitlines(), ["w1"])
+        self.until(lambda: not owner.alive(), "w1's harness gone")
+        self.assertEqual(self.roster(), {})

@@ -1,7 +1,7 @@
 """Codex steer replies: a UserPromptSubmit while the session's turn is open is a steer; the first
 assistant message after its user record in the session file is its answer, stored with save_reply
-and announced as `reply <id>` in the events file, by a detached watcher (watch.py) or by the turn's
-Stop or Interrupt hook, whichever finds it first. Each run's turn and pending steers are a state
+and announced as `reply <id>` in the events file, by the owning harness's pump (settle_pending) or
+by the turn's Stop or Interrupt hook, whichever finds it first. Each run's turn and pending steers are a state
 file under the recovery store's replies/, read and written under its lock, never during a session
 file read; the session file is client data (on the Docker Host, the container's), read only as a
 regular file beneath / without following links. Scans start where the turn began, not where a
@@ -33,7 +33,6 @@ HOOK_SCAN_MAX = 4 << 20  # bytes of the session file one scan reads for all stee
 DEADLINES = {"Interrupt": 1.5}  # seconds from the hook's start; its budget is 3 s, bind's 1 s
 DEADLINE = 5.0  # other hooks', within their 10 s
 LABELS = ("SessionStart", "UserPromptSubmit", "Stop", "Interrupt")
-WATCH = f"{__package__}.watch"  # run as python -P -s -m on this layer's source roots
 
 
 def state_path(store: str, workdir: str, sid: str) -> str:
@@ -288,23 +287,17 @@ def settle(
         return len(current["steers"]) if current["turn"]["open"] else 0
 
 
-def ensure_watcher(path: str) -> None:
-    """Starts a detached watcher of `path` unless one holds its watch lock."""
-    shared.ensure_watcher(path, WATCH)
-
-
-def watch(path: str, *, clock: Clock | None = None, sleep: Sleep | None = None) -> int:
-    """The watcher (shared.watch) of `path`'s pending steers and its session file."""
-    clock, sleep = clock or time.monotonic, sleep or time.sleep
-    return shared.watch(
+def settle_pending(store: str, workdir: str, sid: str) -> None:
+    """The run's pending steers settled by its owning harness's pump (shared.pumped): an answer no
+    hook follows is still announced.
+    """
+    path = state_path(store, workdir, sid)
+    shared.pumped(
         path,
         lambda deadline: settle(
-            path, deadline=deadline, budget=HOOK_SCAN_MAX, clock=clock, sleep=sleep
+            path, deadline=deadline, budget=HOOK_SCAN_MAX, clock=time.monotonic, sleep=time.sleep
         ),
-        lambda: _size(_load(path)["rollout"]),
-        clock=clock,
-        sleep=sleep,
-        label="codex reply",
+        "codex reply",
     )
 
 
@@ -367,5 +360,3 @@ def _on_hook(call: HookCall, deadline: float) -> None:
             )
             current["steers"] = []
         save(path, json.dumps(current))
-    if steered:
-        ensure_watcher(path)

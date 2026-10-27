@@ -88,14 +88,14 @@ class Refusals(HarnessCase):
 
     def test_a_start_driver_error_is_the_result_with_one_finished(self):
         events = []
-        spec = Spec("input", self.work, task="echo", mode="tui", name="agent")
+        spec = Spec("input", self.work, task="echo")
         result = executed(
             Composer().resolve("dummy-tester", "echo"),
             spec,
             driver=AgentDriver(MissingTmuxSession),
             on_event=events.append,
         )
-        self.assertEqual(result, Result(1, None, "tui: tmux not found"))
+        self.assertEqual(result, Result(1, None, "headless: tmux not found"))
         self.assertEqual(events, [Finished(result)])
 
     def test_prompt_rerun_after_output_failure_replaces_the_incomplete_attempt(self):

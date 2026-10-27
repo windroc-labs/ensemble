@@ -3,6 +3,7 @@ whose stored text is the answer, on the tmux Host, with fake Codex and a live ho
 """
 
 import dataclasses
+import glob
 import json
 import os
 import tempfile
@@ -10,11 +11,9 @@ import time
 from pathlib import Path
 from unittest import mock
 
-from ensemble.session.clients.codex.common import SessionStore
-from ensemble.session.clients.codex.tui import replies
 from ensemble.session.engine.types import Access, Mode, Spec
 from ensemble.session.hosts.base import Host
-from ensemble.utils import file_lock, read_reply
+from ensemble.utils import read_reply
 from tests.session import harnesses, live_tmux
 from tests.session.case import HOSTS, REPO, Case
 from tests.session.integration.clients.codex import fake_tui
@@ -94,21 +93,7 @@ class RepliesTest(Case):
             what="the turn's first prompt hook",
         )
         handle.send("status?")
-        self.addCleanup(self.watcher_gone)
         return time.monotonic()
-
-    def watcher_gone(self):
-        """Waits out the steer's watcher, which ends IDLE_EXIT s after its last answer."""
-        path = replies.state_path(SessionStore().root, str(self.work), "caller-id")
-
-        def free():
-            try:
-                with file_lock(path + ".watch", wait=False):
-                    return True
-            except BlockingIOError:
-                return False
-
-        live_tmux.wait(free, WAIT, what="the watcher's exit")
 
     def test_steer_writes_reply_before_done(self):
         self.steered()
@@ -128,3 +113,7 @@ class RepliesTest(Case):
         self.assertLessEqual(time.monotonic() - sent, 10)
         self.assertNotIn("done", [w[1] for w in self.words()])
         self.release.touch()
+        no_process = glob.glob(
+            str(self.home / "**" / "*.watch.lock"), recursive=True, include_hidden=True
+        )
+        self.assertEqual(no_process, [])  # no reply watcher ran (FR-38)

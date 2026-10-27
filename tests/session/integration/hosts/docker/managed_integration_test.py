@@ -1,8 +1,8 @@
 """A guarded Docker worker whose guard is its fake container's main process, over a fake `docker
 attach` that, like Docker's, never closes the guard's stdin: SIGKILL of the harness, the attach, the
 guard or harness and guard ends the container and its client within 10 s; an idle worker outlives
-the heartbeat limit; a container hook reaches the channel as one WorkerHook, and hooks journal the
-same records and events as on tmux.
+the heartbeat limit; a container hook reaches the channel as one WorkerHook; a headless worker whose
+removal failed is removed by its next close; hooks journal the same records and events as on tmux.
 """
 
 import contextlib
@@ -18,9 +18,12 @@ from types import SimpleNamespace
 from unittest import mock
 
 from ensemble.session.engine.types import (
+    Access,
     Activity,
     Blocked,
     ClientBound,
+    SessionError,
+    Spec,
     TurnEnd,
     TurnStarted,
     WorkerHook,
@@ -30,9 +33,12 @@ from ensemble.session.hosts.docker import stub
 from ensemble.session.hosts.docker.hooks import HookWorker
 from ensemble.session.hosts.docker.maintenance import Maintenance
 from ensemble.session.hosts.docker.worker import DockerWorker
+from ensemble.session.modes.headless import HeadlessMode
 from tests.session import docker_attach_fixture, guard_fixture, live_tmux
 from tests.session.case import Case, child_env
 from tests.session.client_adapters_support import DetailedTui
+from tests.session.fakes.terminal import MemoryHost
+from tests.session.headless_support import SID, StubClient
 from tests.session.tui_hook_support import COMMAND, state, write_state
 
 STEPS = (
@@ -152,14 +158,50 @@ class GuardedDockerTest(Case):
         time.sleep(guard.HEARTBEAT + 2)
         self.assertTrue(self.alive(client) and self.alive(value["guard"]))
 
-    def test_a_container_hook_reaches_the_channel_as_one_worker_hook(self):
+    def worker(self, remove=lambda: None) -> DockerWorker:
+        """A started DockerWorker over a fake container and attach, its guard running self.client()."""
         with mock.patch.dict(os.environ, self.env):
             container, _ = docker_attach_fixture.start_container()
             self.addCleanup(self.end, container)
             proc = docker_attach_fixture.attach()
             self.addCleanup(self.end, proc)
-            worker = docker_attach_fixture.worker(self.home, proc, self.client())
+            worker = docker_attach_fixture.worker(self.home, proc, self.client(), remove=remove)
         self.addCleanup(worker.close)
+        return worker
+
+    def test_a_headless_worker_whose_removal_fails_is_removed_by_the_next_close(self):
+        removals = []
+
+        def remove():
+            removals.append(len(removals))
+            if len(removals) == 1:
+                raise SessionError("docker rm: daemon busy")
+
+        test = self
+
+        class Host(MemoryHost):
+            def headless_worker(self, name, launch, metadata):
+                return test.worker(remove)
+
+        mode = HeadlessMode.start(
+            Spec(workdir=self.home, access=Access(cwd=self.home), sid=SID, client="stub"),
+            StubClient(),
+            registry=self.session_cls._config().registry,
+            record=lambda _line: None,
+            host=Host(),
+        )
+        pid = Path(self.home, "client.pid")
+        live_tmux.wait(lambda: pid.exists() and pid.read_text(), what="guarded client start")
+        client = int(pid.read_text())
+        with self.assertRaisesRegex(SessionError, "daemon busy"):
+            mode.stop()
+        self.assertEqual(removals, [0])
+        mode.stop()
+        self.assertEqual(removals, [0, 1])
+        live_tmux.wait(lambda: not self.alive(client), what="container client ended")
+
+    def test_a_container_hook_reaches_the_channel_as_one_worker_hook(self):
+        worker = self.worker()
         socket_path = os.path.join(self.run_dir, docker_attach_fixture.GEN, "hook")
         payload = b'{"sid": "s1", "transcript_path": "/Users/x/secret"}'
         oversize = json.dumps({"sid": "s1", "x": "y" * guard.HOOK_MAX}).encode()

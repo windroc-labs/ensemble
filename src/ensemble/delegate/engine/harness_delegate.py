@@ -299,19 +299,15 @@ class HarnessDelegate(Delegate):
         self._state = replace(state, plan=self._probed(state.plan, state.attempt))
 
     def _probed(self, accepted: Plan, token: int, probe: SessionSpec | None = None) -> Plan:
-        """With the handler of worker `token` if its preflight (of `probe`) takes it (D3)."""
+        """A tui run with the handler of worker `token`, its preflight (of `probe`) taking it."""
         plain = replace(accepted, session=replace(accepted.session, handlers=()))
         probe = replace(probe or plain.session, handlers=())
         if plain.spec.mode == Mode.TUI:
             handler = HookCallback(
                 HANDLER, {"workdir": self.workdir, "worker": token}, module_roots()
             )
-            try:
-                self._checked(replace(probe, handlers=(handler,)))
-            except ConfigError:
-                pass
-            else:
-                return replace(plain, session=replace(plain.session, handlers=(handler,)))
+            self._checked(replace(probe, handlers=(handler,)))
+            return replace(plain, session=replace(plain.session, handlers=(handler,)))
         self._checked(probe)
         return plain
 

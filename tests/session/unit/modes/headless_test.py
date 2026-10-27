@@ -539,6 +539,17 @@ class ThroughItsHost(Base):
         with self.assertRaisesRegex(SessionError, "^worker w: refused$"):
             mode.stop()
 
+    def test_a_failed_close_is_retried_by_the_next_stop(self):
+        worker = ScriptedWorker(code=None)
+        closes = [SessionError("worker w: removal failed"), None]
+        worker.close = mock.Mock(side_effect=closes)
+        mode = self.start_on(WorkerHost(worker))
+        with self.assertRaisesRegex(SessionError, "^worker w: removal failed$"):
+            mode.stop()
+        mode.stop()
+        mode.stop()
+        self.assertEqual(worker.close.call_count, 2)
+
     def test_output_frames_become_lines_with_universal_newlines(self):
         worker = ScriptedWorker(
             batches=[
