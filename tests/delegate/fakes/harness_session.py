@@ -11,6 +11,7 @@ import tempfile
 from dataclasses import replace
 
 from ensemble.delegate.engine.harness_delegate import HarnessDelegate
+from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import Layout
 from ensemble.session import (
     Access,
@@ -98,8 +99,8 @@ class FakeControl:
     """ProcessControl's drive surface, on disk under HOME so other processes see it: each control
     a ~/.ensemble/control-fake/apm-group-* dir holding state.json, {"alive", "launch", ...}. spawn
     stands in for HarnessDelegate._spawn: it records the launch (spawn_error raises instead) and
-    starts the drive (ends_at_start: one that ends as it starts, after calling `ending`). stubborn: "term" outlives SIGTERM,
-    "kill" SIGKILL too.
+    starts the drive (ends_at_start: one that ends as it starts, after calling `ending`); a tui drive
+    holds the run lock until it ends. stubborn: "term" outlives SIGTERM, "kill" SIGKILL too.
     """
 
     harness_starts_agent = True
@@ -107,6 +108,7 @@ class FakeControl:
     ending = None
     spawn_error: BaseException | None = None
     stubborn: str | None = None
+    held: dict[str, contextlib.ExitStack] = {}
 
     def __init__(self, path):
         self.path = path
@@ -117,6 +119,8 @@ class FakeControl:
 
     @classmethod
     def reset(cls):
+        for path in list(cls.held):
+            cls(path).let_go()
         shutil.rmtree(cls.root(), ignore_errors=True)
         cls.harness_starts_agent, cls.spawn_error, cls.stubborn = True, None, None
         cls.ends_at_start, cls.ending = False, None
@@ -151,8 +155,15 @@ class FakeControl:
             },
         )
         append_line(os.path.join(cls.root(), "launches.jsonl"), json.dumps(control.path) + "\n")
-        if cls.harness_starts_agent and state["spec"]["mode"] == Mode.TUI:
-            _start_agent(workdir, state)
+        if state["spec"]["mode"] == Mode.TUI:
+            lock = cls.held[control.path] = contextlib.ExitStack()
+            lock.enter_context(RunState(Layout(workdir)).run_lock(wait=False))
+            if cls.harness_starts_agent:
+                try:
+                    _start_agent(workdir, state)
+                except BaseException:
+                    control.let_go()
+                    raise
         if cls.ends_at_start:
             if cls.ending is not None:
                 cls.ending()
@@ -192,6 +203,7 @@ class FakeControl:
     def cancel(self):
         if os.path.isdir(self.path):
             self._save(alive=False, cancelled=True)
+        self.let_go()
 
     def running(self):
         return self.data().get("alive", False)
@@ -209,11 +221,19 @@ class FakeControl:
         if os.path.isdir(self.path):
             data = self.data()
             self._save(signals=[*data.get("signals", []), word], alive=data["alive"] and not ends)
+        if ends:
+            self.let_go()
 
     def close(self):
         """The drive ending."""
         if os.path.isdir(self.path):
             self._save(alive=False)
+        self.let_go()
+
+    def let_go(self):
+        lock = self.held.pop(self.path, None)
+        if lock is not None:
+            lock.close()
 
 
 class DrivenDelegate(HarnessDelegate):
@@ -288,7 +308,7 @@ class HarnessSession(SessionClass):
     @classmethod
     def reset(cls, *, showable=False):
         cls.started, cls.live, cls.attached, cls.inspected = [], {}, [], []
-        cls.preflights, cls.preflight_error, cls.owns = [], None, True
+        cls.preflights, cls.preflight_error, cls.owns, cls.lingers = [], None, True, False
         cls.host_names = {}
         RecordingHost.processes, RecordingHost.launches = {}, []
         FakeViewer.shown, FakeViewer.hidden, FakeViewer.closed = [], [], []
