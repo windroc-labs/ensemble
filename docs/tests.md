@@ -109,7 +109,10 @@ The required `CI` aggregate depends on that job and validates its result against
 darwin/arm64 binary and uploads its artifact on pushes to `main`, pull requests that change
 `src/broker/` or the workflow, and manual dispatch. It reports no merge-group checks and does not
 block required CI. Broker tests use
-fakes for credentials; they never call the real macOS keychain or Security API.
+fakes for credentials; no test calls a real credential store: `keychain_free_tests`
+(`tests/guard_checks/keychain.py`, run by `python3 -m tests.checks`) fails on a test file that does. A check
+that needs a real Keychain is a mini-op runbook run on the test Mac mini
+(`.mini-op/runbooks/broker-keychain.md`), never on a developer's Mac.
 Installer and launcher changes also run the separate `Installer macOS` PR workflow:
 `python3 .github/run_tests.py 'Installer macOS' tests/integration/install_integration_test.py tests/manager/integration/ctmux_integration_test.py --parallel 4 --shard 1/1`.
 It uses fake clients and credential storage in isolated homes, plus a private tmux server.
