@@ -475,7 +475,7 @@ EOF
   unset password
   export SUDO_ASKPASS=$askpass_dir/askpass
   (
-    nap=
+    nap= # the TERM trap reads it under set -u
     trap 'kill "$nap" 2>/dev/null; exit 0' TERM
     while kill -0 $$ 2>/dev/null; do
       sudo -n -v || true
@@ -2023,6 +2023,15 @@ egress_ready() {
   case $proxy in '' | '<no value>') return 1 ;; esac
 }
 
+# Exit 0 when Docker reports no egress-proxy $1 (container or image): any other failure, Docker not answering
+# included, proves nothing.
+egress_absent() {
+  local err
+  if err=$(docker "$1" inspect egress-proxy </dev/null 2>&1 >/dev/null); then return 1; fi
+  case $err in *"No such $1"*) return 0 ;; esac
+  return 1
+}
+
 # Download to a sibling directory so a failed fetch never leaves a usable partial version. No locals: the trap names
 # the literal path, as a bash may have left the function's scope when it runs the subshell's EXIT trap (U1a).
 egress_download() (
@@ -2068,9 +2077,9 @@ egress_install() {
   if [ ! -e "$version" ]; then egress_download; fi
   [ -x "$version/start.sh" ] && [ "$(cat "$version/COMMIT")" = "$egress_commit" ] \
     || die "incomplete egress checkout $version; keep your config and repair that version directory"
-  # start.sh creates them when missing; docker_running has just checked Docker answers.
-  docker container inspect egress-proxy </dev/null >/dev/null 2>&1 || ledger_add docker-container egress-proxy
-  docker image inspect egress-proxy </dev/null >/dev/null 2>&1 || ledger_add docker-image egress-proxy
+  # start.sh creates what is missing.
+  if egress_absent container; then ledger_add docker-container egress-proxy; fi
+  if egress_absent image; then ledger_add docker-image egress-proxy; fi
   # Always run start.sh: it applies a new or changed config and leaves an unchanged proxy running.
   EGRESS_CONFIG_DIR="$dir" bash "$version/start.sh" </dev/null >&2 \
     || die "egress-proxy start failed: run $version/start.sh; inspect docker logs egress-proxy"

@@ -589,11 +589,10 @@ def docker(args):
         mark(FAKES / "egress_started")
         mark(container)
         mark(image)
-        # what start.sh would serve: the config the installer pointed it at
-        mark(
-            FAKES / "egress_served",
-            Path(os.environ["EGRESS_CONFIG_DIR"], "config.local.yaml").read_text(),
-        )
+        config_dir = Path(os.environ["EGRESS_CONFIG_DIR"])
+        # what start.sh would serve: the config the installer pointed it at; it renders its override beside it
+        mark(FAKES / "egress_served", (config_dir / "config.local.yaml").read_text())
+        mark(config_dir / "compose.networks.yaml", "services: {}\n")
         return 0
     if args[:2] == ["inspect", "--format"] and args[-1] == "egress-proxy":
         if not (FAKES / "egress_started").exists():
@@ -605,10 +604,17 @@ def docker(args):
         health = "unhealthy" if (FAKES / "egress_unhealthy").exists() else "healthy"
         out(f"true|{health}|1|egress-workers|http://egress-proxy-workers:4750|workers\n")
         return 0
-    if args == ["container", "inspect", "egress-proxy"]:
-        return 0 if container.exists() else 1
-    if args == ["image", "inspect", "egress-proxy"]:
-        return 0 if image.exists() else 1
+    if (
+        args[0] in ("container", "image", "volume", "rm")
+        and not (FAKES / "docker_running").exists()
+    ):
+        out("Cannot connect to the Docker daemon. Is the docker daemon running?\n", sys.stderr)
+        return 1
+    if args[1:] == ["inspect", "egress-proxy"] and args[0] in ("container", "image"):
+        if (container if args[0] == "container" else image).exists():
+            return 0
+        out(f"Error: No such {args[0]}: egress-proxy\n", sys.stderr)
+        return 1
     if args == ["rm", "-f", "egress-proxy"]:
         container.unlink(missing_ok=True)
         (FAKES / "egress_started").unlink(missing_ok=True)
@@ -620,10 +626,14 @@ def docker(args):
         image.unlink(missing_ok=True)
         return 0
     if args[:2] == ["image", "ls"]:
-        out(load_text(FAKES / "worker_images"))
+        repository = args[-1]
+        lines = load_text(FAKES / "worker_images").splitlines()
+        out("".join(f"{line}\n" for line in lines if line.split(":")[0] == repository))
         return 0
     if args[:2] == ["volume", "ls"]:
-        out(load_text(FAKES / "ws_volumes"))
+        name = args[args.index("--filter") + 1].removeprefix("name=")
+        lines = load_text(FAKES / "ws_volumes").splitlines()
+        out("".join(f"{line}\n" for line in lines if name in line))
         return 0
     return 0 if args == ["info"] and (FAKES / "docker_running").exists() else 1
 

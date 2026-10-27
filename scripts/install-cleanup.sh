@@ -154,7 +154,7 @@ EOF
   unset password
   export SUDO_ASKPASS=$askpass_dir/askpass
   (
-    nap=
+    nap= # the TERM trap reads it under set -u
     trap 'kill "$nap" 2>/dev/null; exit 0' TERM
     while kill -0 $$ 2>/dev/null; do
       sudo -n -v || true
@@ -682,36 +682,59 @@ opencode_configs() {
   done <<<"$paths"
 }
 
-# Removes the egress proxy's container and image install.sh created; lists worker images and workspace volumes, kept.
+# Exit 0 when Docker reports no egress-proxy $1 (container or image): any other failure, Docker not answering
+# included, proves nothing.
+egress_absent() {
+  local err
+  if err=$(docker "$1" inspect egress-proxy </dev/null 2>&1 >/dev/null); then return 1; fi
+  case $err in *"No such $1"*) return 0 ;; esac
+  return 1
+}
+
+# Removes the egress proxy's container, then its image, when install.sh created them; a record goes only once Docker
+# reports what it names gone.
 egress_proxy() {
-  local kind ref list note=
+  local kind
   step "egress proxy"
   if [ -z "$(of_kind 'docker-(container|image)')" ]; then
     skip "not installed by install.sh"
     return
   fi
+  need docker
   for kind in container image; do
     grep -qxF "docker-$kind"$'\t'"egress-proxy" "$ledger" || continue
-    if [ "$kind" = container ]; then
-      docker rm -f egress-proxy </dev/null >/dev/null || ! docker container inspect egress-proxy </dev/null >/dev/null 2>&1 \
-        || die "cannot remove container egress-proxy; its record stays for a rerun"
-    else
-      docker image rm egress-proxy </dev/null >/dev/null || ! docker image inspect egress-proxy </dev/null >/dev/null 2>&1 \
-        || die "cannot remove image egress-proxy; its record stays for a rerun"
-    fi
+    case $kind in
+      container) docker rm -f egress-proxy </dev/null >/dev/null 2>&1 || true ;;
+      image) docker image rm egress-proxy </dev/null >/dev/null 2>&1 || true ;;
+    esac
+    egress_absent "$kind" || die "cannot remove $kind egress-proxy; its record stays for a rerun"
     drop "docker-$kind"$'\t'"egress-proxy"
   done
+}
+
+# Lists the worker images and workspace volumes cleanup keeps, when install.sh set up Docker.
+worker_data() {
+  local list name note=
+  step "worker images and volumes"
+  if ! grep -qx docker=yes "$state_dir/state" 2>/dev/null && [ -z "$(of_kind 'docker-(container|image)')" ]; then
+    skip "Docker not chosen"
+    return
+  fi
+  if ! command -v docker >/dev/null; then
+    skip "docker not found on PATH; none listed"
+    return
+  fi
   if grep -qxF "cask"$'\t'"docker-desktop" "$ledger"; then note="; removing Docker Desktop below deletes it with Docker's data"; fi
   if list=$(docker image ls --format '{{.Repository}}:{{.Tag}}' ensemble-worker </dev/null); then
-    while IFS= read -r ref; do
-      if [ -n "$ref" ]; then say "    kept $ref: worker image$note"; fi
+    while IFS= read -r name; do
+      if [ -n "$name" ]; then say "    kept $name: worker image$note"; fi
     done <<<"$list"
   else
     say "    cannot list worker images; kept them"
   fi
   if list=$(docker volume ls --format '{{.Name}}' --filter name=ensemble-ws- </dev/null); then
-    while IFS= read -r ref; do
-      case $ref in ensemble-ws-*) say "    kept $ref: worker workspace volume$note" ;; esac
+    while IFS= read -r name; do
+      case $name in ensemble-ws-*) say "    kept $name: worker workspace volume$note" ;; esac
     done <<<"$list"
   else
     say "    cannot list workspace volumes; kept them"
@@ -885,6 +908,7 @@ main() {
   profiles
   config_file
   opencode_configs
+  worker_data
   egress_proxy
   keep_root=$(agent_tree)
   brew_packages
