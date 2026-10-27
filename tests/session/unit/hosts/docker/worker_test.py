@@ -518,6 +518,31 @@ class EndTest(Base):
         self.assertTrue(channel.wait_exit(5))
         self.assertEqual((channel.state(), channel.returncode()), (Liveness.ABSENT, None))
 
+    def test_a_release_still_writing_at_its_end_keeps_a_clean_exit(self):
+        """A k already counted before the exit frame: the end never shuts stdin under its write."""
+        channel = self.make()
+        writing, closed = threading.Event(), threading.Event()
+        channel.proc.stdin.close.side_effect = closed.set
+
+        def write(_fd, _wire):  # the gone guard's pipe, unless its stdin was shut first
+            writing.set()
+            if closed.wait(WAIT / 10):
+                raise ValueError("I/O operation on closed file")
+            raise BrokenPipeError
+
+        with (
+            mock.patch.object(select, "select", return_value=([], [99], [])),
+            mock.patch.object(os, "write", side_effect=write),
+        ):
+            channel.release_hook()
+            self.assertTrue(writing.wait(WAIT))
+            channel.accept(b"x", b'{"returncode":0}')
+            self.assertTrue(channel.wait_exit(WAIT))
+            assert channel.releaser is not None
+            channel.releaser.join(WAIT)
+        self.assertIsNone(channel.failure)
+        self.assertEqual((channel.state(), channel.returncode()), (Liveness.ABSENT, 0))
+
     def test_close_asks_the_guard_then_removes(self):
         channel = self.make()
 

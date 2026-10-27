@@ -271,6 +271,8 @@ class DockerWorker(ManagedProcess):
                 self.condition.wait_for(
                     lambda: self.code is not None or self.failure is not None, GUARD_WAIT
                 )
+        with contextlib.suppress(SessionError):
+            self.end_releases()
         with contextlib.suppress(OSError, ValueError):
             self.proc.stdin.close()
         while True:

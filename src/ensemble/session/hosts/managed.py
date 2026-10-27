@@ -100,6 +100,7 @@ class ManagedProcess(InteractiveProcess):
         self.exit_thread: threading.Thread | None = None
         self.releases = 0
         self.releaser: threading.Thread | None = None
+        self.closing = False  # its stdin about to close: the releaser stops
         if start_reader:
             self.reader = threading.Thread(target=self.pump, name=f"guard-{name}", daemon=True)
             self.reader.start()
@@ -246,13 +247,11 @@ class ManagedProcess(InteractiveProcess):
             self.condition.notify_all()
 
     def _release(self) -> None:
-        """Until its exit frame or a failure: once closing, the guard acks hooks itself."""
+        """Until its exit frame, a failure or closing: then the guard acks hooks itself."""
         while True:
             with self.condition:
-                self.condition.wait_for(
-                    lambda: self.releases or self.failure is not None or self.code is not None
-                )
-                if self.failure is not None or self.code is not None:
+                self.condition.wait_for(lambda: self.releases or self._released())
+                if self._released():
                     return
                 count, self.releases = self.releases, 0
             try:
@@ -260,6 +259,16 @@ class ManagedProcess(InteractiveProcess):
                     self.send_frame(b"k", b"{}")
             except SessionError:
                 return
+
+    def _released(self) -> bool:
+        return self.closing or self.failure is not None or self.code is not None
+
+    def end_releases(self) -> None:
+        """Before its stdin closes: the releaser's last k written, none after."""
+        with self.condition:
+            self.closing = True
+            self.condition.notify_all()
+        self._join(self.releaser)
 
     def send_frame(self, kind: bytes, data: bytes) -> None:
         self.checked()
@@ -380,13 +389,17 @@ class ManagedProcess(InteractiveProcess):
             self.proc.wait(timeout=GUARD_WAIT)
         except subprocess.TimeoutExpired as error:
             raise Unanswered(f"worker {self.name}: guard exit unconfirmed") from error
-        if self.reader is not None:
-            self.reader.join(timeout=GUARD_WAIT)
-            if self.reader.is_alive():
-                raise Unanswered(f"worker {self.name}: channel still open")
+        self._join(self.reader)
+        self.end_releases()  # once the reader is done: it starts the releaser
         self.checked()
         self.proc.stdin.close()
         self.close_display()
+
+    def _join(self, thread: threading.Thread | None) -> None:
+        if thread is not None:
+            thread.join(timeout=GUARD_WAIT)
+            if thread.is_alive():
+                raise Unanswered(f"worker {self.name}: channel still open")
 
     # These legacy members disappear in WDRC-211 after all callers migrate.
     def alive(self) -> bool:
