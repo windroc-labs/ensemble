@@ -370,6 +370,28 @@ class ManagedProcessTest(Case):
         with self.assertRaises(ValueError):
             channel.accept(b"o", b"late")
 
+    def test_up_marks_its_client_up_and_queues_nothing(self):
+        channel = self.channel()
+        channel.accept(b"s", b'{"pid":123}')
+        self.assertFalse(channel.up)
+        channel.accept(b"u", b"{}")
+        self.assertTrue(channel.up)
+        self.assertEqual(channel.read(0), [])
+        channel.accept(b"x", b'{"returncode":0}')
+        self.assertTrue(channel.up)
+
+    def test_an_up_before_start_twice_after_exit_or_with_a_payload_fails(self):
+        for frames in (
+            [(b"u", b"{}")],
+            [(b"s", b'{"pid":123}'), (b"u", b"{}"), (b"u", b"{}")],
+            [(b"s", b'{"pid":123}'), (b"x", b'{"returncode":0}'), (b"u", b"{}")],
+            [(b"s", b'{"pid":123}'), (b"u", b'{"after":5}')],
+        ):
+            with self.subTest(frames=frames), self.assertRaises(ValueError):
+                channel = self.channel()
+                for kind, payload in frames:
+                    channel.accept(kind, payload)
+
     def test_overflow_fails_and_closes_lifecycle(self):
         channel = self.channel()
         channel.accept(b"s", b'{"pid":123}')

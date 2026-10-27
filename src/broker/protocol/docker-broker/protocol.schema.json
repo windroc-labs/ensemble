@@ -271,7 +271,7 @@
             "properties": {
               "item": {
                 "type": "string",
-                "pattern": "^ensemble-env/[a-z0-9][a-z0-9._-]{0,63}$"
+                "pattern": "^ensemble-broker-env/[a-z0-9][a-z0-9._-]{0,63}$"
               },
               "file": {
                 "type": "string",
@@ -471,7 +471,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "29"
+          "const": "30"
         }
       },
       "required": [
@@ -739,7 +739,7 @@
     },
     "notice_key": {
       "type": "string",
-      "pattern": "^ensemble-(claude|opencode|env)/[A-Za-z0-9._-]{1,64}@[0-9]{1,9}:(30d|7d|1d|expired|rotated)$"
+      "pattern": "^ensemble-broker-(claude|opencode|env)/[A-Za-z0-9._-]{1,64}@[0-9]{1,9}:(30d|7d|1d|expired|rotated)$"
     },
     "deadline": {
       "type": "object",
@@ -1017,7 +1017,7 @@
             "properties": {
               "reference": {
                 "type": "string",
-                "pattern": "^ensemble-(claude|opencode|env)/[A-Za-z0-9._-]{1,64}$"
+                "pattern": "^ensemble-broker-(claude|opencode|env)/[A-Za-z0-9._-]{1,64}$"
               },
               "version": {
                 "type": "integer",

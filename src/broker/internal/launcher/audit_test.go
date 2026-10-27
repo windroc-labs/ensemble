@@ -260,13 +260,13 @@ func TestCloseLine(t *testing.T) {
 		"inspect fails":            {"", errors.New("inspect"), container, nil},
 		"older broker: no client":  {config(`["PATH=/usr/bin"]`, `null`), nil, container, nil},
 		"malformed inspect output": {`["PATH=/usr/bin"]`, nil, container, nil},
-		"env secrets": {config(claudeEnv, `{"ensemble.client":"claude","ensemble.secrets":"ensemble-env/dummy,ensemble-env/ssh"}`), nil, container,
-			[]string{"claude-setup-token withdrawn", "env-secret withdrawn ensemble-env/dummy", "env-secret withdrawn ensemble-env/ssh"}},
-		"env secrets, invalid entries": {config(`null`, `{"ensemble.client":"codex","ensemble.secrets":"ensemble-env/dummy,,ensemble-bot,ensemble-env/Bad"}`), nil, container,
-			[]string{"codex-access-token withdrawn", "env-secret withdrawn ensemble-env/dummy"}},
-		"env secrets, absent": {config(`null`, `{"ensemble.secrets":"ensemble-env/dummy"}`), nil, "", nil},
-		"env secrets, no client": {config(`null`, `{"ensemble.client":"opencode","ensemble.secrets":"ensemble-env/dummy"}`), nil, container,
-			[]string{"env-secret withdrawn ensemble-env/dummy"}},
+		"env secrets": {config(claudeEnv, `{"ensemble.client":"claude","ensemble.secrets":"ensemble-broker-env/dummy,ensemble-broker-env/ssh"}`), nil, container,
+			[]string{"claude-setup-token withdrawn", "env-secret withdrawn ensemble-broker-env/dummy", "env-secret withdrawn ensemble-broker-env/ssh"}},
+		"env secrets, invalid entries": {config(`null`, `{"ensemble.client":"codex","ensemble.secrets":"ensemble-broker-env/dummy,,ensemble-broker-bot,ensemble-broker-env/Bad"}`), nil, container,
+			[]string{"codex-access-token withdrawn", "env-secret withdrawn ensemble-broker-env/dummy"}},
+		"env secrets, absent": {config(`null`, `{"ensemble.secrets":"ensemble-broker-env/dummy"}`), nil, "", nil},
+		"env secrets, no client": {config(`null`, `{"ensemble.client":"opencode","ensemble.secrets":"ensemble-broker-env/dummy"}`), nil, container,
+			[]string{"env-secret withdrawn ensemble-broker-env/dummy"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := &fakeDocker{respond: func(args []string) ([]byte, error) {
@@ -303,7 +303,7 @@ func TestNoSecretsInLog(t *testing.T) {
 			raw, _ := os.ReadFile(codexManifest(t))
 			var m map[string]any
 			_ = json.Unmarshal(raw, &m)
-			m["github"] = map[string]any{"app": "ensemble-bot", "permissions": fixtureSet}
+			m["github"] = map[string]any{"app": "ensemble-broker-bot", "permissions": fixtureSet}
 			raw, _ = json.Marshal(m)
 			manifest = writeManifest(t, raw)
 		}

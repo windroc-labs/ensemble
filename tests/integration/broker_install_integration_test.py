@@ -35,13 +35,15 @@ RELEASED_BINARY = b"""#!/bin/sh
 [ "$*" = version ] && printf '{"protocol_version":"%s"}\\n' "$ASSET_PROTOCOL"
 """
 SIGN = (
-    "codesign --force --sign - --options runtime --identifier com.github.windroc.ensemble-broker "
+    "codesign --force --sign - --options runtime --identifier com.github.windroc.ensemble-broker"
+    ' --requirements =designated => identifier "com.github.windroc.ensemble-broker" '
 )
 FAKE = """#!/bin/sh
 printf '%s\\n' "$(basename "$0") $*" >> "$LOG"
 case "$(basename "$0") $*" in
   "go build"*) while [ "$#" -gt 0 ]; do [ "$1" = -o ] && : > "$2"; shift; done ;;
   "codesign -dv "*) echo "CodeDirectory v=20500 size=1 $FLAGS hashes=1" >&2 ;;
+  "codesign -d -r- "*) printf 'designated => identifier "%s"\\n' "${IDENTIFIER:-com.github.windroc.ensemble-broker}" >&2 ;;
   "codesign -d --entitlements"*) echo "$ENTITLEMENTS" ;;
   "sudo install -d"*) [ ! -e "$HOME/.ensemble/docker/worker/Dockerfile" ] || : > "$SEEDED" ;;
   "sudo install -o"*) cp "$8" "$INSTALLED" ;;
@@ -131,6 +133,7 @@ class Install(Case):
                 f"go build -trimpath -o {out} .",
                 f"{SIGN}{out}",
                 f"codesign --verify --strict {out}",
+                f"codesign -d -r- {out}",
                 f"codesign -dv {out}",
                 f"codesign -d --entitlements - {out}",
             ],
@@ -141,6 +144,12 @@ class Install(Case):
         result = self.run_script("build.sh", str(Path(self.home, "b")), FLAGS="flags=0x2(adhoc)")
         self.assertEqual(result.returncode, 1)
         self.assertIn("lacks the hardened runtime", result.stderr)
+
+    def test_build_script_rejects_a_binary_without_its_designated_requirement(self):
+        self.fake("go", "codesign")
+        result = self.run_script("build.sh", str(Path(self.home, "b")), IDENTIFIER="other")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("lacks its designated requirement", result.stderr)
 
     def test_build_script_rejects_get_task_allow(self):
         self.fake("go", "codesign")
@@ -266,8 +275,8 @@ class Install(Case):
         self.assertIn(
             "v9.8.7's ensemble-broker speaks protocol 6, this plugin wants 7: install the plugin"
             " at v9.8.7 (docs/upgrading.md), or build the broker from this plugin with"
-            f" sh {self.plugin.resolve()}/src/broker/install.sh --build, which needs Go and"
-            " resets every broker login; nothing installed",
+            f" sh {self.plugin.resolve()}/src/broker/install.sh --build, which needs Go,"
+            " then run its retrust; nothing installed",
             result.stderr,
         )
 
@@ -334,11 +343,11 @@ class Install(Case):
         self.assertEqual(seeded.read_text(), (BROKER / "worker/Dockerfile").read_text())
         self.assertTrue(self.seeded.exists())
         calls = self.calls()
-        self.assertEqual([c.split()[0] for c in calls], ["go"] + ["codesign"] * 4 + ["sudo"] * 2)
+        self.assertEqual([c.split()[0] for c in calls], ["go"] + ["codesign"] * 5 + ["sudo"] * 2)
         out = calls[0].split()[4]
         self.assertEqual(calls[0], f"go build -trimpath -o {out} .")
         self.assertEqual(calls[1], f"{SIGN}{out}")
-        self.assert_installed(calls[5:], out)
+        self.assert_installed(calls[6:], out)
 
     def test_existing_definition_is_never_overwritten(self):
         self.fake("gh", "go", "codesign", "sudo")

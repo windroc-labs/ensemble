@@ -183,8 +183,8 @@ func TestNoticeLines(t *testing.T) {
 			r.Begin(ctr, nil)
 		}
 		expires := "2026-11-20T00:00:00Z"
-		r.Notice(r.Container, Credential{Kind: EnvSecret, Item: "ensemble-env/db", Result: Notified, Notice: "30d", ExpiresAt: &expires})
-		r.Notice(r.Container, Credential{Kind: OpencodeAPIKey, Item: "ensemble-opencode/strata", Result: Notified, Notice: "rotated"})
+		r.Notice(r.Container, Credential{Kind: EnvSecret, Item: "ensemble-broker-env/db", Result: Notified, Notice: "30d", ExpiresAt: &expires})
+		r.Notice(r.Container, Credential{Kind: OpencodeAPIKey, Item: "ensemble-broker-opencode/strata", Result: Notified, Notice: "rotated"})
 		if err := r.Flush(nil); err != nil {
 			t.Fatal(err)
 		}
@@ -196,8 +196,8 @@ func TestNoticeLines(t *testing.T) {
 			t.Fatalf("%s: %v", command, lines)
 		}
 		for i, want := range []string{
-			`{"kind":"env-secret","result":"notified","expires_at":"2026-11-20T00:00:00Z","item":"ensemble-env/db","notice":"30d"}`,
-			`{"kind":"opencode-api-key","result":"notified","expires_at":null,"item":"ensemble-opencode/strata","notice":"rotated"}`,
+			`{"kind":"env-secret","result":"notified","expires_at":"2026-11-20T00:00:00Z","item":"ensemble-broker-env/db","notice":"30d"}`,
+			`{"kind":"opencode-api-key","result":"notified","expires_at":null,"item":"ensemble-broker-opencode/strata","notice":"rotated"}`,
 		} {
 			line := lines[i]
 			if line["event"] != "credential-notice" || line["command"] != command || !strings.Contains(string(s.lines[i]), `"credentials":[`+want+`]`) {

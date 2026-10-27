@@ -80,7 +80,7 @@ flowchart LR
   H -->|on_event| D[handlers]
 ```
 
-The harness holds `harness.lock` for life. It records each event in `events.jsonl` before calling each handler's `on_event`; ids are `<generation>:<seq>` and turns `<generation>:t<n>`. A turn started while one is open fails that one (`TurnFailed("superseded")`); an exit mid-turn fails it (`TurnFailed("exited")`) before the one `Exited`. A handler that raises is retried with the same ids after 1 s, doubling to 30 s, while the others go on; `deliveries.jsonl` keeps failed attempts 1, 2, 4, … and the delivered one. `Stderr` and `ClientBound` stay in the log. After the worker's exit the harness waits up to 30 s for its handlers, then exits; `harness.json` says `starting`, `running`, `exited` (with `returncode` and `pending`) or `failed` (with the start `error`), and `opening` while the client's opening line is unsent. SIGTERM and SIGHUP close the worker, as does EOF on a headless start's caller pipe (`--caller FD`).
+The harness holds `harness.lock` for life. It records each event in `events.jsonl` before calling each handler's `on_event`; ids are `<generation>:<seq>` and turns `<generation>:t<n>`. A turn started while one is open fails that one (`TurnFailed("superseded")`); an exit mid-turn fails it (`TurnFailed("exited")`) before the one `Exited`. A handler that raises is retried with the same ids after 1 s, doubling to 30 s, while the others go on; `deliveries.jsonl` keeps failed attempts 1, 2, 4, … and the delivered one. `Stderr` and `ClientBound` stay in the log. After the worker's exit the harness waits up to 30 s for its handlers, then exits; `harness.json` says `starting`, `running`, `exited` (with `returncode` and `pending`) or `failed` (with the start `error`), `opening` while the client's opening line is unsent, and `up` once its guard reported the client up ([Guard protocol](#guard-protocol)); each pump of the worker writes its status to `harness.json` before its events are logged, so a view acting on an event reads the status it came with. SIGTERM and SIGHUP close the worker, as does EOF on a headless start's caller pipe (`--caller FD`).
 
 The control view never owns the worker: for a tui session, its caller exiting, its `events()` iterator closing or a display detaching leaves the harness supervising. A headless run dies with its caller, as a piped client did: the starting view holds the write end of a pipe whose read end only the harness has, so once the view is dropped or its process ends, even by SIGKILL, the harness closes the worker. `events()` reads `events.jsonl`, accepting only the worker's generation in order. `stop`, `close` and `Session.retire` write a request to `requests/` and return once the harness confirms the worker ended and logged `Exited`, else raise `SessionError` (`Unanswered` when it cannot tell). `send`, `press`, `screen`, `show` and `status` still reach a tmux worker's display, the tmux session, directly; a `send` while `opening_pending` is set can interleave with the harness typing the opening line. A Docker tui worker is remote (`harness.json` `"remote": true`): only its harness reaches it, so `send` (`{"text"}`, up to 1 MiB), `press` (`{"keys"}`, 1 to 64 key names) and `screen` (`{"lines"}`, null or 1 to 10000) are requests in `requests/` the harness serves through the worker; a bad field or a failure is a refusal that leaves the worker up, and after the exit they are refused. `display` (any worker, no fields), served the same way, opens the worker's display again where it is gone, answering `{"reopened"}`; a session of its name it does not own is refused, left alone. A headless view has no terminal: `send` and `press` raise `SessionError`, `screen`, `show` and `content` raise `NotShowable`; `alive` and `status` come from `harness.json`, `info` and `session_status` from the run's record, and an exception in its `events()` (not closing the iterator) stops the worker, as an unharnessed headless run does. `Session.attach` gives a control view only while the `owner` harness holds its lock and its `harness.json` names that session, sid and generation; any other `owner` is ignored, and a worker whose harness exited or died is attached and closed the earlier way.
 
@@ -152,6 +152,7 @@ The channel is the guard's stdin (from its harness) and stdout (to it): frames o
 | harness | `q` screen | `{"lines": int or null}` |
 | harness | `c` close | `{}`: end the client, then `x` |
 | guard | `s` started | `{"pid": int}`, once, after exec |
+| guard | `u` up | `{}`, once, when its client still runs 5 s after exec (checked right after reaping it), so never for a client that exited sooner |
 | guard | `h` hook | `{"label": str, "payload": object, "delivery_id": str}`, retry-stable identity |
 | guard | `o`, `e` output | raw bytes a headless client wrote to stdout, stderr |
 | guard | `v` view | `{"text": str}`: the PTY's last `q` lines, control sequences removed |
@@ -293,7 +294,18 @@ A commander can run in OpenCode 1.x (checked against 1.19.3). Install ensemble i
 {"plugin": ["ensemble@git+https://github.com/windroc-labs/ensemble.git#v<version>"]}
 ```
 
-OpenCode installs that tag once, into `${XDG_CACHE_HOME:-~/.cache}/opencode/packages/<spec>/node_modules/ensemble`, and never refreshes the same spec: to update, set the new release's `#v<version>`, restart OpenCode, and delete the old spec's directory. A checkout instead: `"plugin": ["file://<checkout>/.opencode-plugin/ensemble.js"]`. `opencode plugin` installs npm packages only. `ctmux --install`'s commands find the installed copy ([Install](../README.md#install)); start `opencode` in the `ctmux` shell, then run `/ensemble:manage`.
+OpenCode installs that tag once, into `${XDG_CACHE_HOME:-~/.cache}/opencode/packages/<spec>/node_modules/ensemble`, and never refreshes the same spec. A checkout instead: `"plugin": ["file://<checkout>/.opencode-plugin/ensemble.js"]`. `opencode plugin` installs npm packages only. Installed commands keep their selected plugin path ([Install](../README.md#install)); start `opencode` in the `ctmux` shell, then run `/ensemble:manage`.
+
+For a manual release upgrade:
+
+```mermaid
+flowchart LR
+    T[Set new #v&lt;version&gt;] --> R[Restart OpenCode]
+    R --> D[Delete old spec directory]
+    D --> C[Run an installed command]
+```
+
+When the old selected directory is gone, the next installed command selects and records the newest installed ensemble copy from OpenCode and reports its path on stderr; no installer rerun is needed. To select a different ref while the old directory remains, rerun the installer or the new plugin's `skills/manage/scripts/ctmux --install`; older refs require the installer ([Upgrading](upgrading.md)).
 
 The plugin adds:
 

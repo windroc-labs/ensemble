@@ -1,0 +1,48 @@
+#!/bin/sh
+# ctmux --install copies this under each command's name into ~/.ensemble/bin: it runs that command
+# from the ensemble plugin installed now, Claude Code's install first, then Codex's newest, then
+# OpenCode's newest.
+target=$(python3 -I - "${0##*/}" <<'EOF'
+import glob, json, os, sys
+
+name = sys.argv[1]
+rel = os.path.join("skills", "manage", "scripts", name) if name == "ctmux" else os.path.join("bin", name)
+home = os.path.expanduser("~")
+record = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(home, ".claude"), "plugins", "installed_plugins.json")
+cache = os.path.join(os.environ.get("CODEX_HOME") or os.path.join(home, ".codex"), "plugins", "cache", "windroc", "ensemble")
+packages = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(home, ".cache"), "opencode", "packages")
+
+
+def version(text):
+    return [int(part) if part.isdigit() else -1 for part in text.split(".")]
+
+
+def opencode_version(root):
+    try:
+        with open(os.path.join(root, "package.json"), encoding="utf-8") as f:
+            return version(str(json.load(f).get("version")))
+    except (OSError, ValueError, AttributeError):
+        return []
+
+
+try:
+    with open(record, encoding="utf-8") as f:
+        entries = json.load(f)["plugins"]["ensemble@windroc"]
+except (OSError, ValueError, LookupError, TypeError):
+    entries = []
+roots = [entry.get("installPath") for entry in entries if isinstance(entry, dict)] if isinstance(entries, list) else []
+roots += sorted(glob.glob(os.path.join(glob.escape(cache), "*")), key=lambda p: version(os.path.basename(p)), reverse=True)
+found = []
+for top, dirs, _ in os.walk(packages):  # each spec's dir holds a node_modules; never walk into one
+    if "node_modules" in dirs:
+        dirs.remove("node_modules")
+        found.append(os.path.join(top, "node_modules", "ensemble"))
+roots += sorted(found, key=opencode_version, reverse=True)
+for root in roots:
+    if isinstance(root, str) and os.access(path := os.path.join(root, rel), os.X_OK):
+        print(path)
+        sys.exit()
+sys.exit(f"{name}: no installed ensemble plugin has {rel}; looked in {record}, {cache}/<version>/ and {packages}/")
+EOF
+) || exit
+exec "$target" "$@"

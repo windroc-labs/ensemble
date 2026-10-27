@@ -39,10 +39,10 @@ func TestStoreErrors(t *testing.T) {
 	}
 	for _, bad := range []string{
 		"not json " + storeSentinel,
-		`{"secrets": {"ensemble-claude/default": {"version": -1, "provenance": "unknown"}}}`,
-		`{"secrets": {"ensemble-claude/default": {"version": 1, "provenance": "guessed"}}}`,
-		`{"secrets": {"ensemble-claude/default": {"version": 1, "provenance": "explicit", "expires_at": "soon"}}}`,
-		`{"secrets": {"ensemble-claude/default": {"version": 1, "provenance": "explicit"}}}`,
+		`{"secrets": {"ensemble-broker-claude/default": {"version": -1, "provenance": "unknown"}}}`,
+		`{"secrets": {"ensemble-broker-claude/default": {"version": 1, "provenance": "guessed"}}}`,
+		`{"secrets": {"ensemble-broker-claude/default": {"version": 1, "provenance": "explicit", "expires_at": "soon"}}}`,
+		`{"secrets": {"ensemble-broker-claude/default": {"version": 1, "provenance": "explicit"}}}`,
 		`{"secrets": {"other/x": {"version": 1, "provenance": "unknown"}}}`,
 		`{"secrets": {}, "extra": 1}`,
 	} {
@@ -65,7 +65,7 @@ func TestStoreErrors(t *testing.T) {
 	}
 	locked := tempStore(t)
 	locked.Lock = func() (func(), error) { return nil, errors.New("flock " + storeSentinel) }
-	_, err := locked.Register("ensemble-env/db", Registration{}, staticNow, func() error { return nil })
+	_, err := locked.Register("ensemble-broker-env/db", Registration{}, staticNow, func() error { return nil })
 	if err == nil || err.Error() != locked.Path+": cannot lock" {
 		t.Errorf("lock: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestStoreErrors(t *testing.T) {
 func TestRegister(t *testing.T) {
 	s := tempStore(t)
 	var during map[string]Static
-	got, err := s.Register("ensemble-claude/default", Registration{Fresh: true}, staticNow, func() error {
+	got, err := s.Register("ensemble-broker-claude/default", Registration{Fresh: true}, staticNow, func() error {
 		during = loaded(t, s)
 		return nil
 	})
@@ -82,13 +82,13 @@ func TestRegister(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("%+v %v", got, err)
 	}
-	if p := during["ensemble-claude/default"]; !p.Pending || p.Version != 1 || p.Expired(staticNow.AddDate(5, 0, 0)) {
+	if p := during["ensemble-broker-claude/default"]; !p.Pending || p.Version != 1 || p.Expired(staticNow.AddDate(5, 0, 0)) {
 		t.Fatalf("during the login: %+v", p)
 	}
-	if m := loaded(t, s); !reflect.DeepEqual(m["ensemble-claude/default"], want) {
+	if m := loaded(t, s); !reflect.DeepEqual(m["ensemble-broker-claude/default"], want) {
 		t.Fatalf("%+v", m)
 	}
-	got, err = s.Register("ensemble-claude/default", Registration{}, staticNow, func() error { return nil })
+	got, err = s.Register("ensemble-broker-claude/default", Registration{}, staticNow, func() error { return nil })
 	if err != nil || !reflect.DeepEqual(got, Static{Version: 2, Provenance: Unknown}) {
 		t.Fatalf("second: %+v %v", got, err)
 	}
@@ -106,7 +106,7 @@ func TestRegister(t *testing.T) {
 func TestRegisterBadRegistrationStopsFirst(t *testing.T) {
 	s := tempStore(t)
 	called := false
-	_, err := s.Register("ensemble-env/db", Registration{Fresh: true}, staticNow, func() error { called = true; return nil })
+	_, err := s.Register("ensemble-broker-env/db", Registration{Fresh: true}, staticNow, func() error { called = true; return nil })
 	if err == nil || called {
 		t.Fatalf("%v %v", err, called)
 	}
@@ -117,42 +117,42 @@ func TestRegisterBadRegistrationStopsFirst(t *testing.T) {
 
 func TestRegisterStoreFailsRestores(t *testing.T) {
 	s := tempStore(t)
-	prior, err := s.Register("ensemble-env/db", Registration{Expires: date(t, "2027-01-01")}, staticNow, func() error { return nil })
+	prior, err := s.Register("ensemble-broker-env/db", Registration{Expires: date(t, "2027-01-01")}, staticNow, func() error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
 	keychain := errors.New("keychain status -25293")
-	_, err = s.Register("ensemble-env/db", Registration{}, staticNow, func() error { return keychain })
+	_, err = s.Register("ensemble-broker-env/db", Registration{}, staticNow, func() error { return keychain })
 	if !errors.Is(err, keychain) {
 		t.Fatalf("%v", err)
 	}
-	if m := loaded(t, s); !reflect.DeepEqual(m["ensemble-env/db"], prior) {
+	if m := loaded(t, s); !reflect.DeepEqual(m["ensemble-broker-env/db"], prior) {
 		t.Fatalf("not restored: %+v", m)
 	}
-	_, err = s.Register("ensemble-env/new", Registration{}, staticNow, func() error { return keychain })
+	_, err = s.Register("ensemble-broker-env/new", Registration{}, staticNow, func() error { return keychain })
 	if !errors.Is(err, keychain) {
 		t.Fatal(err)
 	}
-	if _, ok := loaded(t, s)["ensemble-env/new"]; ok {
+	if _, ok := loaded(t, s)["ensemble-broker-env/new"]; ok {
 		t.Fatal("a failed first login left a record")
 	}
 }
 
 func TestRegisterCommitFailsStaysPending(t *testing.T) {
 	s := tempStore(t)
-	_, err := s.Register("ensemble-env/db", Registration{Expires: date(t, "2027-01-01")}, staticNow, func() error {
+	_, err := s.Register("ensemble-broker-env/db", Registration{Expires: date(t, "2027-01-01")}, staticNow, func() error {
 		// The directory turns unwritable once the login began, so only the commit fails.
 		return os.Chmod(filepath.Dir(s.Path), 0o500)
 	})
 	defer os.Chmod(filepath.Dir(s.Path), 0o700)
-	want := "ensemble-env/db saved; recording its expiry in " + s.Path + " failed (cannot write); rerun the login"
+	want := "ensemble-broker-env/db saved; recording its expiry in " + s.Path + " failed (cannot write); rerun the login"
 	if err == nil || err.Error() != want {
 		t.Fatalf("%v", err)
 	}
 	if os.Getuid() == 0 {
 		t.Skip("root writes anyway")
 	}
-	if p := loaded(t, s)["ensemble-env/db"]; !p.Pending || p.Expired(staticNow.AddDate(5, 0, 0)) {
+	if p := loaded(t, s)["ensemble-broker-env/db"]; !p.Pending || p.Expired(staticNow.AddDate(5, 0, 0)) {
 		t.Fatalf("%+v", p)
 	}
 }
@@ -160,19 +160,19 @@ func TestRegisterCommitFailsStaysPending(t *testing.T) {
 func TestRegisterNewerLoginWins(t *testing.T) {
 	s := tempStore(t)
 	var inner Static
-	got, err := s.Register("ensemble-env/db", Registration{Expires: date(t, "2027-01-01")}, staticNow, func() error {
+	got, err := s.Register("ensemble-broker-env/db", Registration{Expires: date(t, "2027-01-01")}, staticNow, func() error {
 		var err error
-		inner, err = s.Register("ensemble-env/db", Registration{Expires: date(t, "2027-06-01")}, staticNow, func() error { return nil })
+		inner, err = s.Register("ensemble-broker-env/db", Registration{Expires: date(t, "2027-06-01")}, staticNow, func() error { return nil })
 		return err
 	})
 	if err != nil || inner.Version != 2 || !reflect.DeepEqual(got, inner) {
 		t.Fatalf("a superseded login returns the newer record: %+v %+v %v", got, inner, err)
 	}
-	if m := loaded(t, s); !reflect.DeepEqual(m["ensemble-env/db"], inner) {
+	if m := loaded(t, s); !reflect.DeepEqual(m["ensemble-broker-env/db"], inner) {
 		t.Fatalf("the older commit overwrote the newer login: %+v", m)
 	}
-	_, err = s.Register("ensemble-env/db", Registration{}, staticNow, func() error {
-		if _, err := s.Register("ensemble-env/db", Registration{}, staticNow, func() error { return nil }); err != nil {
+	_, err = s.Register("ensemble-broker-env/db", Registration{}, staticNow, func() error {
+		if _, err := s.Register("ensemble-broker-env/db", Registration{}, staticNow, func() error { return nil }); err != nil {
 			return err
 		}
 		return errors.New("keychain status -25293")
@@ -180,41 +180,41 @@ func TestRegisterNewerLoginWins(t *testing.T) {
 	if err == nil {
 		t.Fatal("no error")
 	}
-	if m := loaded(t, s); m["ensemble-env/db"].Version != 4 || m["ensemble-env/db"].Pending {
+	if m := loaded(t, s); m["ensemble-broker-env/db"].Version != 4 || m["ensemble-broker-env/db"].Pending {
 		t.Fatalf("the older restore undid the newer login: %+v", m)
 	}
 }
 
 func TestDeliverHost(t *testing.T) {
 	s := tempStore(t)
-	if _, err := s.Register("ensemble-env/db", Registration{Expires: date(t, "2026-11-20")}, staticNow, func() error { return nil }); err != nil {
+	if _, err := s.Register("ensemble-broker-env/db", Registration{Expires: date(t, "2026-11-20")}, staticNow, func() error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	var told []Notice
 	emit := func(n Notice) { told = append(told, n) }
 	for range 2 {
-		if err := s.DeliverHost("ensemble-env/db", staticNow, emit); err != nil {
+		if err := s.DeliverHost("ensemble-broker-env/db", staticNow, emit); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if len(told) != 1 || told[0].Key != "ensemble-env/db@1:30d" || !strings.HasPrefix(told[0].Text, "ensemble-env/db expires 2026-11-20") {
+	if len(told) != 1 || told[0].Key != "ensemble-broker-env/db@1:30d" || !strings.HasPrefix(told[0].Text, "ensemble-broker-env/db expires 2026-11-20") {
 		t.Fatalf("%+v", told)
 	}
-	if err := s.DeliverHost("ensemble-env/db", time.Date(2026, 11, 14, 0, 0, 0, 0, time.UTC), emit); err != nil || len(told) != 2 || told[1].Key != "ensemble-env/db@1:7d" {
+	if err := s.DeliverHost("ensemble-broker-env/db", time.Date(2026, 11, 14, 0, 0, 0, 0, time.UTC), emit); err != nil || len(told) != 2 || told[1].Key != "ensemble-broker-env/db@1:7d" {
 		t.Fatalf("%+v %v", told, err)
 	}
-	if err := s.DeliverHost("ensemble-env/absent", staticNow, emit); err != nil || len(told) != 2 {
+	if err := s.DeliverHost("ensemble-broker-env/absent", staticNow, emit); err != nil || len(told) != 2 {
 		t.Fatalf("absent: %v", err)
 	}
-	if got := loaded(t, s)["ensemble-env/db"].Notified; !reflect.DeepEqual(got, []string{"30d", "7d"}) {
+	if got := loaded(t, s)["ensemble-broker-env/db"].Notified; !reflect.DeepEqual(got, []string{"30d", "7d"}) {
 		t.Fatalf("%q", got)
 	}
 }
 
 func TestRegisterNeverRestoresAnotherLoginPending(t *testing.T) {
 	s := tempStore(t)
-	got, err := s.Register("ensemble-env/db", Registration{Expires: date(t, "2027-01-01")}, staticNow, func() error {
-		_, err := s.Register("ensemble-env/db", Registration{}, staticNow, func() error { return errors.New("keychain status -25293") })
+	got, err := s.Register("ensemble-broker-env/db", Registration{Expires: date(t, "2027-01-01")}, staticNow, func() error {
+		_, err := s.Register("ensemble-broker-env/db", Registration{}, staticNow, func() error { return errors.New("keychain status -25293") })
 		if err == nil {
 			t.Fatal("inner login did not fail")
 		}
@@ -224,7 +224,7 @@ func TestRegisterNeverRestoresAnotherLoginPending(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("%+v %v", got, err)
 	}
-	if r := loaded(t, s)["ensemble-env/db"]; !reflect.DeepEqual(r, want) {
+	if r := loaded(t, s)["ensemble-broker-env/db"]; !reflect.DeepEqual(r, want) {
 		t.Fatalf("stuck: %+v", r)
 	}
 }
