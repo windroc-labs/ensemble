@@ -160,7 +160,7 @@ npm install -g --prefix ~/.local/opencode-1 opencode-ai@1.19.3
 ```toml
 # ~/.ensemble/config.local.toml
 [session.clients.opencode]
-executable = "/Users/<you>/.local/opencode-1/bin/opencode"   # absolute: ~ is not expanded
+executable = "<home>/.local/opencode-1/bin/opencode"   # absolute: ~ is not expanded
 ```
 
 TUI runs deliver every completed main-thread assistant text to the Delegate, including intermediate progress reports; child sessions' replies are excluded. The final text also ends the turn, and the Delegate records it once.
