@@ -257,6 +257,42 @@ class TurnsTest(Live):
         )
 
 
+class MidTurnTest(Live):
+    """Input Claude joins to its running turn, its UserPromptSubmit run (Claude Code 2.1.312): a
+    send while the turn's tool runs, or a background task's notice. The turn goes on to its Stop.
+    """
+
+    def test_a_send_mid_turn_joins_it(self):
+        steps = [{"kind": "queued", "answer": "Noted.", "prompted": True}, "Done."]
+        handle = self.start("w1", scenario={"steps": steps})
+        stream = self.stream(handle)
+        self.assertEqual(stream.next(idle=False), TurnStarted())
+        transcript = handle.info().transcript
+
+        def tool_runs():
+            with open(transcript, encoding="utf-8") as f:
+                return '"tool_use"' in f.read()
+
+        live_tmux.wait(tool_runs, what="the turn's tool")
+        handle.send("also this")
+        self.assertEqual(
+            [stream.next(idle=False) for _ in range(2)], [Activity("Bash"), TurnEnd("Done.", 0)]
+        )
+        stream.quiet(1.0)
+        self.lines("w1 done")
+
+    def test_a_background_notice_mid_turn_joins_it(self):
+        notice = "<task-notification>sleep 30 completed</task-notification>"
+        steps = ["Waiting.", {"kind": "notice", "text": notice}, "Done."]
+        handle = self.start("w1", scenario={"steps": steps})
+        stream = self.stream(handle)
+        self.assertEqual(
+            [stream.next(idle=False) for _ in range(2)], [TurnStarted(), TurnEnd("Done.", 0)]
+        )
+        stream.quiet(1.0)
+        self.lines("w1 done")
+
+
 def delivered(events: list) -> list[str]:
     """The texts a turn's events deliver: each Reply, then its TurnEnd's unless that repeats the
     last Reply.

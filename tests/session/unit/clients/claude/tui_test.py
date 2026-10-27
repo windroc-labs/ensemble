@@ -959,6 +959,86 @@ class TranscriptTest(TranscriptCase):
         self.assertEqual(run.observe(), [])
 
 
+WEEKLY = "You've hit your weekly limit · resets Oct 15, 2027, 9am (UTC)"
+STOP = ("Stop", {"session_id": SID, "last_assistant_message": "Done."})
+RATE_LIMIT = (
+    "StopFailure",
+    {"session_id": SID, "error": "rate_limit", "last_assistant_message": WEEKLY},
+)
+
+
+class JoinedInputTest(TranscriptCase):
+    """Claude runs UserPromptSubmit for input it joins to its open turn (a send, a background
+    task's notice): no new turn, until the turn ends by a hook or on a usage limit.
+    """
+
+    def prompt(self, run=None):
+        return (run or self.run).hook_events("UserPromptSubmit", {"session_id": SID, "prompt": "x"})
+
+    def limit(self):
+        self.append(PROMPT, limited(WEEKLY))
+        self.assertEqual(self.run.observe(), [LimitHit(epoch("2027-10-15 09:00", "UTC"))])
+
+    def test_a_prompt_while_the_turn_is_open_joins_it(self):
+        self.assertEqual(self.prompt(), [TurnStarted()])
+        self.assertEqual(self.prompt(), [])
+        self.assertEqual(self.prompt(), [])
+        self.assertEqual(self.run.hook_events(*STOP), [TurnEnd("Done.", 0)])
+        self.assertEqual(self.prompt(), [TurnStarted()])
+        self.assertEqual(
+            self.run.hook_events(*RATE_LIMIT), [LimitHit(epoch("2027-10-15 09:00", "UTC"))]
+        )
+        self.assertEqual(self.prompt(), [TurnStarted()])
+
+    def test_a_first_prompt_binds_the_session_and_starts_its_turn(self):
+        run = self.launched()
+        self.assertEqual(self.prompt(run), [ClientBound(SID), TurnStarted()])
+        self.assertEqual(self.prompt(run), [])
+
+    def test_a_limit_only_the_transcript_shows_ends_the_open_turn(self):
+        self.assertEqual(self.prompt(), [TurnStarted()])
+        self.limit()
+        self.assertEqual(self.prompt(), [TurnStarted()])
+        self.assertEqual(self.prompt(), [])
+
+    def resumed_after_a_limit_read_before_its_prompt(self, *, user_first: bool) -> None:
+        """observe() runs before a batch's hooks: a limit can be read before its own prompt."""
+        self.assertEqual(self.prompt(), [TurnStarted()])
+        self.assertEqual(self.run.hook_events(*STOP), [TurnEnd("Done.", 0)])
+        self.limit()
+        self.assertEqual(self.prompt(), [TurnStarted()])
+        if user_first:
+            self.append(PROMPT)
+            self.assertEqual(self.run.observe(), [])
+        self.assertEqual(self.prompt(), [TurnStarted()])
+        self.assertEqual(self.prompt(), [])
+
+    def test_a_limit_read_before_its_prompt_ends_that_turn(self):
+        self.resumed_after_a_limit_read_before_its_prompt(user_first=False)
+
+    def test_a_limit_read_before_its_prompt_ends_that_turn_the_resume_record_first(self):
+        self.resumed_after_a_limit_read_before_its_prompt(user_first=True)
+
+    def test_a_limit_in_the_transcript_and_its_stop_failure_ends_the_turn_once(self):
+        self.assertEqual(self.prompt(), [TurnStarted()])
+        self.limit()
+        self.assertEqual(self.run.hook_events(*RATE_LIMIT), [])
+        self.assertEqual(self.prompt(), [TurnStarted()])
+        self.assertEqual(self.prompt(), [])
+
+    def test_a_replay_keeps_a_limit_of_its_newest_turn_only(self):
+        ups = ("UserPromptSubmit", {"session_id": SID})
+        self.append(PROMPT, limited(WEEKLY), PROMPT, said("m1", text("Done.")), PROMPT)
+        run = self.restored()
+        run.replay([ups, RATE_LIMIT, ups, STOP, ups])
+        self.assertEqual(self.prompt(run), [])
+        self.append(limited(WEEKLY))
+        run = self.restored()
+        run.replay([ups, RATE_LIMIT, ups, STOP, ups])
+        self.assertEqual(self.prompt(run), [TurnStarted()])
+        self.assertEqual(self.prompt(run), [])
+
+
 NEXT = "1f8fad5b-d9cb-469f-a165-70867728950e"
 LAST = "2f8fad5b-d9cb-469f-a165-70867728950e"
 CUT = "2026-10-15T12:00:00Z"
@@ -1145,6 +1225,8 @@ class ContinuationTest(TranscriptCase):
                 restored.hook_events("UserPromptSubmit", {"session_id": sid}),
                 ([ClientBound(SID), TurnStarted()] if sid == SID else [TurnStarted()]),
             )
+            stop = {"session_id": sid, "last_assistant_message": ""}
+            self.assertEqual(restored.hook_events("Stop", stop), [TurnEnd("", 0)])
 
     def test_foreign_hooks_have_no_replay_effect(self):
         self.append(said("m1", text("seen")))

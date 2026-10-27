@@ -95,6 +95,7 @@ class ClaudeTui(Tui):
         self.transcript, self.start, self.offset = "", 0, 0
         self.last = self.unseen = ""  # the turn's newest text; its turn end's text not yet read
         self.limited = False  # this turn's LimitHit given
+        self._limit_seen = False  # a transcript limit since the last turn-ending hook
         self._origin = self._config_dir = self._native = ""
         self._ids: set[str] = set()
         self._visited: set[str] = set()
@@ -205,6 +206,20 @@ class ClaudeTui(Tui):
             self._pending = None
             self.offset = 0
 
+    def _accept_turn(self, identifier):
+        """Claude's hooks carry no turn id: a prompt while its turn is open is input Claude joins
+        to that turn (a send, a background task's notice), unless a limit ended the turn unhooked.
+        """
+        if self._turn_open:
+            if not self._limit_seen:
+                return False
+            self._limit_seen = False
+        return super()._accept_turn(identifier)
+
+    def _settle_turn(self, identifier, *, native=False):
+        self._limit_seen = False
+        return super()._settle_turn(identifier, native=native)
+
     def hook_events(self, label, payload):
         native = payload.get("session_id")
         if not isinstance(native, str) or native not in self._ids:
@@ -213,11 +228,11 @@ class ClaudeTui(Tui):
 
     def replay(self, records):
         """Ends in the latest turn's state, not the oldest's: no LimitHit given live yet (the replay
-        gives none), and a Stop since the hook log's last prompt leaves its text unseen unless it is
-        the transcript's newest.
+        gives none), a Stop since the hook log's last prompt leaves its text unseen unless it is
+        the transcript's newest, and only the newest turn's transcript limit ends its open turn.
         """
         found: list[SessionEvent | ClientBound] = [*self.observe()]
-        newest, ended = self.last, None
+        newest, ended, limit = self.last, None, self.limited
         for label, payload in records:
             native = payload.get("session_id")
             if not isinstance(native, str) or native not in self._ids:
@@ -227,6 +242,7 @@ class ClaudeTui(Tui):
             if label == "UserPromptSubmit":
                 ended = None
             ended = next((e.reply for e in events if isinstance(e, TurnEnd)), ended)
+        self._limit_seen = self._turn_open is True and limit  # the hooks cleared an older one
         self.limited = False
         self.last = newest if ended is None else ""
         self.unseen = ended if ended and ended.strip() and ended != newest else ""
@@ -252,6 +268,7 @@ class ClaudeTui(Tui):
             resets = number(quota.get("resetsAt")) if quota.get("status") == "rejected" else None
             if resets is None:
                 resets = _resets_in("\n".join(texts(content)))
+            self._limit_seen = True  # read before or after its turn's hooks
             return self._limit(resets)
         text = "\n".join(texts(content))
         if not text.strip():
