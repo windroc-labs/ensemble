@@ -1,5 +1,5 @@
 """A Docker session's broker credential maintenance as a tick its owner drives
-(docs/docker-host.md › Credential renewal).
+(docs/architecture.md › Harness-owned workers).
 """
 
 import contextlib

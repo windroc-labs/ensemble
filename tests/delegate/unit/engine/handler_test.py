@@ -33,7 +33,7 @@ from ensemble.session import (
     TurnStarted,
     Unanswered,
 )
-from ensemble.utils import StatusState
+from ensemble.utils import Status, StatusState
 from tests.delegate.fakes.harness_session import HarnessSession, RecordingHost
 from tests.delegate.harness import SID, HarnessCase, ViewedHarnessDelegate
 from tests.delegate.replies import block
@@ -126,6 +126,12 @@ class Agent:
 
     def alive(self):
         return self.live
+
+    def status(self):
+        state = StatusState.WORKING if self.live else StatusState.GONE
+        return Status(
+            name="agent", alive=self.live, state=state, outcome=None, attach=None, hidden=False
+        )
 
     def close(self):
         self.on_close()

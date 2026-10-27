@@ -9,7 +9,7 @@
 #   tracker   local: where issues live: "local", a local board, the directory $ENSEMBLE_BOARD_DIR (default
 #             ~/.ensemble/board/), its runtime state in <board>/.state/; "linear", Linear ([linear] below)
 #   work_dir  local: the Linear tracker's runtime state: agent runs' workdirs <work_dir>/work/<ID>/
-#             (docs/board.md: State cleanup), router state and logs in <work_dir>/logs/; absolute or ~, neither in nor containing
+#             (docs/architecture.md › State cleanup), router state and logs in <work_dir>/logs/; absolute or ~, neither in nor containing
 #             a [local_clones] clone
 tracker = "local"
 work_dir = "~/.ensemble"
@@ -66,7 +66,7 @@ max_runs = 3
 # local: max_runs = 1
 
 # Local clones; optional, an unlisted repo gets a fresh clone.
-# Host-qualified keys and host defaults: docs/board.md's Document destinations and GitHub hosts.
+# Host-qualified keys and host defaults: docs/architecture.md › Board setup.
 #   "<owner>/<name>"  local: "<path>" (absolute or ~) of the repo's local clone. The input's Repo: line names the path,
 #                     so the agent run gets a git worktree of the clone; load() checks it is a clone of that
 #                     repo; empty table → none

@@ -1,5 +1,5 @@
 """The Docker Host's live acceptance gate, run by hand on macOS with Docker Desktop
-(docs/docker-host.md › Live acceptance). Each command prints a PASS line per check and a timing
+(docs/architecture.md › Docker live acceptance). Each command prints a PASS line per check and a timing
 line per generation, and exits 1 at the first failed check:
 
   python3 tests/session/live_docker.py worker --client claude|codex|opencode CWD [NAME]
@@ -525,7 +525,7 @@ def docker_host() -> tuple[str, tuple[str, ...]]:
     table = hosts.tables.get(hosts.default, {})
     if table.get("implementation") != DOCKER_HOST:
         raise SystemExit(
-            f"default Host is {hosts.default}, not a Docker Host (docs/docker-host.md)"
+            f"default Host is {hosts.default}, not a Docker Host (docs/architecture.md#docker-host)"
         )
     return table["docker"], tuple(table.get("plugins", ()))
 
