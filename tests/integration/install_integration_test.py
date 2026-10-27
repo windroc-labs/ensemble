@@ -5563,7 +5563,7 @@ exec /bin/rm "$@"
             "features.json",
         ):
             self.assertFalse(os.path.lexists(docker / gone), gone)
-        self.assertIn(f"    kept {docker}: not empty", result.stderr)
+        self.assertNotIn(f"kept {docker}", result.stderr)
 
     def test_cleanup_drops_stale_desktop_creds_store(self):
         """A config.json that named the desktop helper before install loses it with Docker Desktop;
