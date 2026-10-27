@@ -651,7 +651,7 @@ checklist() {
 }
 
 # The configuration: each answer from its flag, else the last answer (State), else the config, else the default;
-# the checklist appears only when clients or Docker has no flag or saved answer.
+# the checklist appears only when clients or Docker has no flag or saved answer. save_answers keeps them.
 answers() {
   local said default client item choose=
   local -a labels ticks names=(claude codex opencode)
@@ -721,8 +721,6 @@ answers() {
         board_jobs_choice=no
       fi
     fi
-    state_set board_tracker "$board_tracker"
-    state_set board_jobs "$board_jobs_choice"
   fi
   board_tracker=${board_tracker:-local}
   if opencode_flags && ! has opencode; then usage_error "--opencode-*: opencode is not among the clients"; fi
@@ -751,6 +749,18 @@ answers() {
       ask "Its context window in tokens [65536]:"
       if valid_context "${answer:-65536}"; then context=${answer:-65536}; fi
     done
+  fi
+  say "    clients: $clients, Docker: $docker, board: $board ($board_tracker), launchd: ${board_jobs_choice:-no}${provider:+, OpenCode provider: $provider}"
+}
+
+# Saves answers' choices once the run's refusals (ref_check, broker_plan preflight) have passed: a refused run
+# keeps the last ones.
+save_answers() {
+  if [ "$board" = yes ]; then
+    state_set board_tracker "$board_tracker"
+    state_set board_jobs "$board_jobs_choice"
+  fi
+  if has opencode; then
     state_set opencode_provider "$provider"
     state_set opencode_url "$url"
     state_set opencode_model "$model"
@@ -759,7 +769,6 @@ answers() {
   state_set clients "$clients"
   state_set docker "$docker"
   state_set board "$board"
-  say "    clients: $clients, Docker: $docker, board: $board ($board_tracker), launchd: ${board_jobs_choice:-no}${provider:+, OpenCode provider: $provider}"
 }
 
 # Plans the edits that give config.local.toml (or a new one) the wanted settings; writes the result to
@@ -1060,12 +1069,14 @@ ref_check() {
   if has claude || ! has codex; then claude_ref=$(marketplace_ref .claude-plugin/marketplace.json); fi
   if has codex; then codex_ref=$(marketplace_ref .agents/plugins/marketplace.json); fi
   if [ -n "$claude_ref" ] && [ -n "$codex_ref" ] && [ "$claude_ref" != "$codex_ref" ]; then
+    current=
     die "the windroc marketplace serves ensemble at $claude_ref to Claude Code and $codex_ref to Codex: they must match"
   fi
   served_ref=${claude_ref:-$codex_ref}
   if [ -z "$ref" ]; then
     ref=$served_ref
   elif [ "$ref" != "$served_ref" ]; then
+    current=
     die "--ref $ref: Claude Code and Codex install ensemble@windroc from the windroc marketplace, which serves ensemble at $served_ref; use --ref $served_ref, or --clients opencode for another ref"
   fi
 }
@@ -2668,6 +2679,7 @@ main() {
   if [ -z "$answered" ]; then answers; fi
   ref_check
   broker_plan preflight
+  save_answers
   opencode_select
   config_file
   apps
