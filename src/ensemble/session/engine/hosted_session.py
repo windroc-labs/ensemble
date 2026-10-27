@@ -524,7 +524,9 @@ class HostedSession(Session):
     def harness_request(
         cls, spec: Spec, *, display: Display, host: str | None, roots: Sequence[str]
     ) -> dict:
-        """A harness's JSON start request; secret-bearing (spec.env)."""
+        """A harness's JSON start request; secret-bearing (spec.env). pythonpath: the caller's
+        PYTHONPATH, its worker's (None: unset).
+        """
         if spec.environment is not None:
             raise ConfigError("environment: a session harness runs none yet")
         setup = cls._config()
@@ -550,12 +552,13 @@ class HostedSession(Session):
                 "viewer": thaw(setup.viewer),
             },
             "roots": list(roots),
+            "pythonpath": os.environ.get("PYTHONPATH"),
         }
 
     @classmethod
     def from_harness_request(
         cls, request: Mapping
-    ) -> tuple[Spec, Display, str | None, tuple[str, ...]]:
+    ) -> tuple[Spec, Display, str | None, tuple[str, ...], str | None]:
         """harness_request's inverse, configuring this class; ConfigError when malformed."""
         try:
             config, fields = request["config"], dict(request["spec"])
@@ -578,6 +581,7 @@ class HostedSession(Session):
             )
             spec = Spec(**fields)
             display, host, roots = request["display"], request["host"], request["roots"]
+            pythonpath = request["pythonpath"]
         except (KeyError, TypeError, AttributeError) as error:
             raise ConfigError(f"session harness request: {error!r:.200}") from None
         if not (display is None or isinstance(display, str)) or not (
@@ -586,7 +590,9 @@ class HostedSession(Session):
             raise ConfigError("session harness request: bad display or host")
         if not isinstance(roots, list) or not all(map(printable_abs, roots)):
             raise ConfigError("session harness request: bad roots")
-        return spec, display, host, tuple(roots)
+        if not (pythonpath is None or isinstance(pythonpath, str) and pythonpath.isprintable()):
+            raise ConfigError("session harness request: bad pythonpath")
+        return spec, display, host, tuple(roots), pythonpath
 
     @classmethod
     def own(

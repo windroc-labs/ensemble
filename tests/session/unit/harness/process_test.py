@@ -7,6 +7,7 @@ import os
 import threading
 import time
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest import mock
 
 from ensemble.session.engine.types import (
@@ -22,6 +23,7 @@ from ensemble.session.engine.types import (
     TurnFailed,
     TurnStarted,
 )
+from ensemble.session.harness import process
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.process import Harness, Turns
 from ensemble.session.harness.types import Op
@@ -405,3 +407,30 @@ class BatchTest(Base):
             with open(os.path.join(self.channel.directory, "replies", ident + ".json")) as f:
                 self.assertEqual(json.load(f), {"ok": True})
         self.assertEqual(self.types(), ["Exited"])
+
+
+class BeginTest(Case):
+    """process._begin: the request's spec, handlers and the caller's PYTHONPATH for the worker."""
+
+    def begin(self, pythonpath):
+        seen = {}
+
+        class Session:
+            @classmethod
+            def from_harness_request(cls, _request):
+                return SimpleNamespace(handlers=()), None, None, (), pythonpath
+
+            @classmethod
+            def own(cls, *_args, **_kw):
+                seen["PYTHONPATH"] = os.environ.get("PYTHONPATH")
+                return "worker"
+
+        with mock.patch.dict(os.environ, {"PYTHONPATH": "/harness/roots"}):
+            self.assertEqual(process._begin("dir", cast(Any, Session))({})[0], "worker")
+        return seen["PYTHONPATH"]
+
+    def test_the_worker_gets_the_callers_pythonpath(self):
+        self.assertEqual(self.begin("lib:/abs"), "lib:/abs")
+
+    def test_a_caller_without_one_leaves_the_worker_without_one(self):
+        self.assertIsNone(self.begin(None))

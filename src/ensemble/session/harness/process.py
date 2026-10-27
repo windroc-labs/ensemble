@@ -278,11 +278,15 @@ class Harness:
             LOG.warning("session harness %s: harness.json: %s", self._channel.directory, error)
 
 
-def _begin(directory: str) -> Begin:
+def _begin(directory: str, session: type[HostedSession] = HostedSession) -> Begin:
     def begin(request: dict):
-        spec, display, host, roots = HostedSession.from_harness_request(request)
+        spec, display, host, roots, pythonpath = session.from_harness_request(request)
         modules = load_handlers(spec.handlers, roots, load=True)
-        worker = HostedSession.own(spec, display=display, host=host, owner=directory)
+        if pythonpath is None:  # the worker's, as the caller's; its own imports are done
+            os.environ.pop("PYTHONPATH", None)
+        else:
+            os.environ["PYTHONPATH"] = pythonpath
+        worker = session.own(spec, display=display, host=host, owner=directory)
         return worker, modules, [handler.state for handler in spec.handlers]
 
     return begin

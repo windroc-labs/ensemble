@@ -3026,14 +3026,26 @@ class HarnessRequestTest(HostedTuiBase):
             flags=("--x",),
             handlers=(engine_types.HookCallback("pkg.mod", {"k": [1]}, (self.dir,)),),
         )
-        request = json.loads(
-            json.dumps(
-                self.session.harness_request(spec, display="d", host="tmux", roots=(self.dir,))
+        with mock.patch.dict(os.environ, {"PYTHONPATH": "lib:/abs/src"}):
+            request = json.loads(
+                json.dumps(
+                    self.session.harness_request(spec, display="d", host="tmux", roots=(self.dir,))
+                )
             )
-        )
         fresh = type("Fresh", (HostedSession,), {"__module__": __name__})
-        self.assertEqual(fresh.from_harness_request(request), (spec, "d", "tmux", (self.dir,)))
+        self.assertEqual(
+            fresh.from_harness_request(request), (spec, "d", "tmux", (self.dir,), "lib:/abs/src")
+        )
         self.assertEqual(fresh._config().hosts, self.session._config().hosts)
+
+    def test_a_caller_without_pythonpath_sends_none(self):
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            request = self.session.harness_request(
+                self.spec(client="fake", mode="tui"), display=None, host=None, roots=()
+            )
+        fresh = type("Fresh", (HostedSession,), {"__module__": __name__})
+        self.assertIsNone(fresh.from_harness_request(request)[4])
 
     def test_a_malformed_request_is_a_config_error(self):
         good = self.session.harness_request(
@@ -3045,6 +3057,9 @@ class HarnessRequestTest(HostedTuiBase):
             {**good, "spec": {**good["spec"], "nope": 1}},
             {**good, "roots": ["relative"]},
             {**good, "host": 5},
+            {**good, "pythonpath": ["/a"]},
+            {**good, "pythonpath": 5},
+            {**good, "pythonpath": "/a\n/b"},
         ):
             with self.subTest(bad=bad), self.assertRaises(ConfigError):
                 fresh.from_harness_request(bad)
