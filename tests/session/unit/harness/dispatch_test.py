@@ -234,6 +234,59 @@ class DispatchTest(Base):
         self.assertLess(time.monotonic() - started, WAIT)
         self.assertTrue(all(thread.daemon for thread in found.threads))
 
+    def woken_after_stop(self, hung: Recorder, gate: threading.Event) -> None:
+        found = self.start(hung)
+        found.put(Logged(1, "g:1", None, Reply("a")))
+        until(lambda: len(hung.calls) == 1)
+        found.stop()
+        gate.set()
+        for thread in found.threads:
+            thread.join(WAIT)
+
+    def test_a_hung_handler_woken_after_stop_records_nothing(self):
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        self.woken_after_stop(Recorder(hang=gate), gate)
+        self.assertEqual(self.deliveries(), [])
+
+    def test_a_hung_handler_failing_after_stop_records_nothing(self):
+        self.enterContext(self.assertLogs("session", "WARNING"))
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        self.woken_after_stop(Recorder(fail=1, hang=gate), gate)
+        self.assertEqual(self.deliveries(), [])
+
+    def test_a_note_being_written_ends_before_stop_returns(self):
+        entered, release, stopping = threading.Event(), threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        note = self.channel.note
+
+        def blocked(record):
+            entered.set()
+            release.wait(WAIT)
+            note(record)
+
+        self.channel.note = blocked
+        found = self.start(Recorder())
+        found.put(Logged(1, "g:1", None, Reply("a")))
+        self.assertTrue(entered.wait(WAIT))
+        seen = []
+
+        def stop():
+            stopping.set()
+            found.stop()
+            seen.append(self.deliveries())
+
+        stopper = threading.Thread(target=stop)
+        stopper.start()
+        self.assertTrue(stopping.wait(WAIT))
+        release.set()
+        stopper.join(WAIT)
+        for thread in found.threads:
+            thread.join(WAIT)
+        self.assertEqual(seen, [self.deliveries()])
+        self.assertEqual(len(seen[0]), 1)
+
     def test_a_non_none_return_is_noted_once(self):
         handler = Recorder(returns="done")
         found = self.start(handler)
