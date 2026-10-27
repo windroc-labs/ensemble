@@ -532,11 +532,11 @@ class Guard:
         assert self.proc is not None
         rows = processes(self.known)
         self.known = descendants(rows, self.known, os.getpid())
+        now = time.monotonic()  # before the reap: an exit before UP s can never be reported up
         self.reap()
         if self.proc.returncode is not None:
             self.close()
-        elif not self.up_sent and self.channel and time.monotonic() - self.spawned >= UP:
-            # reaped just above: an exit before UP s can never be reported up
+        elif not self.up_sent and self.channel and now - self.spawned >= UP:
             self.emit(json_frame(b"u", {}))
             self.up_sent = True
         if self.closing is None:

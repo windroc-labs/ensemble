@@ -565,6 +565,27 @@ class GuardTest(Case):
     def test_a_client_that_exited_before_up_never_gets_up_however_late_its_guard_looks(self):
         self.assertEqual(self.up_frames(2, 100 + guard.UP + 60), [])
 
+    def test_up_is_timed_by_the_clock_read_before_its_reap(self):
+        """Running when reaped just under UP: it may die before a later clock read says UP."""
+        runtime = self.runtime()
+        runtime.proc = mock.Mock(pid=10, returncode=None)
+        runtime.spawned = 100.0
+        reaped = []
+
+        def waitpid(*_):
+            reaped.append(True)
+            return (0, 0)
+
+        with (
+            mock.patch.object(os, "listdir", return_value=[]),
+            mock.patch.object(os, "waitpid", side_effect=waitpid),
+            mock.patch.object(
+                guard.time, "monotonic", side_effect=lambda: 100 + guard.UP - (not reaped) * 0.001
+            ),
+        ):
+            runtime.tick()
+        self.assertEqual([wire for wire, _, _ in runtime.output if wire[:1] == b"u"], [])
+
     def test_stopped_child_requires_escalation_and_no_false_confirmation(self):
         runtime = self.runtime()
         runtime.proc = mock.Mock(returncode=None)
