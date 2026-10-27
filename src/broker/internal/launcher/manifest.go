@@ -20,6 +20,7 @@ type Manifest struct {
 	Labels                                                                                      map[string]string
 	GitHubApp                                                                                   string            // the App whose tokens the session gets; "": github null
 	GitHubPermissions                                                                           map[string]string // the repository permissions each of its tokens is limited to; nil: github null
+	GitHubRepo                                                                                  string            // the one repository its tokens reach (owner/name); "": every repository of every installation
 	OpencodeProviders                                                                           []string          // the providers whose API keys an opencode container gets
 	ClaudeAccount                                                                               string            // the account whose setup-token a claude container gets; "" for other clients
 	Secrets                                                                                     []Secret          // the environment secrets the container gets; nil without the field
@@ -247,19 +248,26 @@ func ParseManifest(data []byte) (Manifest, error) {
 		return reject("invalid gateway")
 	}
 	if raw := fields["github"]; string(raw) != "null" {
+		const shape = "github must be null or {\"app\": <name>, \"permissions\": {<permission>: <level>}, \"repo\"?: <owner/name>}"
 		var github map[string]json.RawMessage
-		if len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &github) != nil || len(github) != 2 {
-			return reject("github must be null or {\"app\": <name>, \"permissions\": {<permission>: <level>}}")
+		if len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &github) != nil {
+			return reject(shape)
 		}
 		app, ok := str(github["app"])
+		rawRepo, hasRepo := github["repo"]
+		repo, okRepo := str(rawRepo)
 		var permissions map[string]string
-		if raw := github["permissions"]; !ok || !appPattern.MatchString(app) || len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &permissions) != nil {
-			return reject("github must be null or {\"app\": <name>, \"permissions\": {<permission>: <level>}}")
+		if raw := github["permissions"]; !ok || len(github) != 2 && !(len(github) == 3 && hasRepo) || hasRepo && !okRepo ||
+			!appPattern.MatchString(app) || len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &permissions) != nil {
+			return reject(shape)
+		}
+		if hasRepo && !githubapi.ValidRepo(repo) {
+			return reject("invalid github repo %q", repo)
 		}
 		if err := githubapi.CheckPermissions(permissions); err != nil {
 			return reject("%s", err)
 		}
-		m.GitHubApp, m.GitHubPermissions = app, permissions
+		m.GitHubApp, m.GitHubPermissions, m.GitHubRepo = app, permissions, repo
 	}
 
 	if raw, ok := fields["opencode_providers"]; ok {
@@ -331,8 +339,8 @@ func ParseManifest(data []byte) (Manifest, error) {
 			return reject("invalid prefetch repo %q", repo)
 		case hasRef && !ValidRef(ref):
 			return reject("invalid prefetch ref %q", ref)
-		case m.GitHubApp != "":
-			return reject("prefetch requires github null")
+		case m.GitHubApp != "" && m.GitHubRepo == "":
+			return reject("prefetch requires github null or a github repo")
 		}
 		m.Prefetch = &Prefetch{Repo: repo, Ref: ref}
 	}

@@ -61,7 +61,7 @@ func TestGitHubContractReconstruction(t *testing.T) {
 	t.Run("issue", func(t *testing.T) {
 		r := newRig(t, "acme", "Other-Org")
 		w := &written{}
-		if _, err := r.g.Issue(ctx, "ensemble-bot", perms, ctr, w.exec); err != nil {
+		if _, err := r.g.Issue(ctx, "ensemble-bot", "", perms, ctr, w.exec); err != nil {
 			t.Fatal(err)
 		}
 		if got := r.states(t); len(got) != 2 || got["ghs_1_1"] != delivered || got["ghs_2_2"] != delivered {
@@ -76,11 +76,11 @@ func TestGitHubContractReconstruction(t *testing.T) {
 	})
 	t.Run("refresh", func(t *testing.T) {
 		r := newRig(t, "acme")
-		if _, err := r.g.Issue(ctx, "ensemble-bot", perms, ctr, (&written{}).exec); err != nil {
+		if _, err := r.g.Issue(ctx, "ensemble-bot", "", perms, ctr, (&written{}).exec); err != nil {
 			t.Fatal(err)
 		}
 		w := &written{}
-		got, err := r.rebuilt().Refresh(ctx, "ensemble-bot", nil, ctr, w.exec)
+		got, err := r.rebuilt().Refresh(ctx, "ensemble-bot", "", nil, ctr, w.exec)
 		if err != nil || len(got) != 1 || w.files["acme"] != "ghs_1_2" {
 			t.Fatalf("%v %v %v", got, err, w.files)
 		}
@@ -93,7 +93,7 @@ func TestGitHubContractReconstruction(t *testing.T) {
 	})
 	t.Run("release", func(t *testing.T) {
 		r := newRig(t, "acme")
-		if _, err := r.g.Issue(ctx, "ensemble-bot", perms, ctr, (&written{}).exec); err != nil {
+		if _, err := r.g.Issue(ctx, "ensemble-bot", "", perms, ctr, (&written{}).exec); err != nil {
 			t.Fatal(err)
 		}
 		r.api.revokeErr = func(string) int { return http.StatusServiceUnavailable }
@@ -112,7 +112,7 @@ func TestGitHubContractReconstruction(t *testing.T) {
 		r := newRig(t, "acme", "Other-Org")
 		r.api.revokeErr = func(string) int { return http.StatusServiceUnavailable }
 		r.keys.unreadable[revocationsService] = true
-		if _, err := r.g.Issue(ctx, "ensemble-bot", perms, ctr, (&written{failAt: 2}).exec); err == nil {
+		if _, err := r.g.Issue(ctx, "ensemble-bot", "", perms, ctr, (&written{failAt: 2}).exec); err == nil {
 			t.Fatal("issue succeeded")
 		}
 		if got := r.states(t); len(got) != 2 || got["ghs_1_1"] == delivered || got["ghs_2_2"] == delivered {
@@ -128,12 +128,12 @@ func TestGitHubContractReconstruction(t *testing.T) {
 	})
 	t.Run("refresh rollback", func(t *testing.T) {
 		r := newRig(t, "acme")
-		if _, err := r.g.Issue(ctx, "ensemble-bot", perms, ctr, (&written{}).exec); err != nil {
+		if _, err := r.g.Issue(ctx, "ensemble-bot", "", perms, ctr, (&written{}).exec); err != nil {
 			t.Fatal(err)
 		}
 		r.api.revokeErr = func(string) int { return http.StatusServiceUnavailable }
 		r.keys.unreadable[revocationsService] = true
-		if _, err := r.g.Refresh(ctx, "ensemble-bot", perms, ctr, (&written{failAt: 1}).exec); err == nil {
+		if _, err := r.g.Refresh(ctx, "ensemble-bot", "", perms, ctr, (&written{failAt: 1}).exec); err == nil {
 			t.Fatal("refresh succeeded")
 		}
 		if got := r.states(t); got["ghs_1_1"] != delivered || got["ghs_1_2"] == delivered {
@@ -141,7 +141,7 @@ func TestGitHubContractReconstruction(t *testing.T) {
 		}
 		r.api.revokeErr, r.keys.unreadable = nil, map[string]bool{}
 		w := &written{}
-		if _, err := r.rebuilt().Refresh(ctx, "ensemble-bot", perms, ctr, w.exec); err != nil {
+		if _, err := r.rebuilt().Refresh(ctx, "ensemble-bot", "", perms, ctr, w.exec); err != nil {
 			t.Fatal(err)
 		}
 		if got := r.states(t); len(got) != 1 || got["ghs_1_3"] != delivered || w.files["acme"] != "ghs_1_3" {
@@ -157,10 +157,10 @@ func TestGitHubContractReconstruction(t *testing.T) {
 
 func TestRefreshInjectionFailureKeepsOldToken(t *testing.T) {
 	r := newRig(t, "acme")
-	if _, err := r.g.Issue(context.Background(), "ensemble-bot", perms, ctr, (&written{}).exec); err != nil {
+	if _, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, (&written{}).exec); err != nil {
 		t.Fatal(err)
 	}
-	_, err := r.g.Refresh(context.Background(), "ensemble-bot", perms, ctr, (&written{failAt: 1}).exec)
+	_, err := r.g.Refresh(context.Background(), "ensemble-bot", "", perms, ctr, (&written{failAt: 1}).exec)
 	if err == nil || strings.Contains(err.Error(), "ghs_") {
 		t.Fatalf("%v", err)
 	}
@@ -198,7 +198,7 @@ func TestGitHubSentinelRedacted(t *testing.T) {
 	ctx := context.Background()
 	r := newRig(t, "acme")
 	rec, sink := r.audited("close", ctr)
-	if _, err := r.g.Issue(ctx, "ensemble-bot", perms, ctr, (&written{}).exec); err != nil {
+	if _, err := r.g.Issue(ctx, "ensemble-bot", "", perms, ctr, (&written{}).exec); err != nil {
 		t.Fatal(err)
 	}
 	r.api.revokeErr = func(string) int { return http.StatusInternalServerError }
@@ -211,7 +211,7 @@ func TestGitHubSentinelRedacted(t *testing.T) {
 		var errs []error
 		_, err := g.Pending()
 		errs = append(errs, err, g.Release(ctx, ctr))
-		_, err = g.Refresh(ctx, "ensemble-bot", perms, ctr, (&written{}).exec)
+		_, err = g.Refresh(ctx, "ensemble-bot", "", perms, ctr, (&written{}).exec)
 		errs = append(errs, err)
 		_, err = g.Retry(ctx)
 		errs = append(errs, err)

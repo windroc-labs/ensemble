@@ -96,6 +96,7 @@ class Direct(Case):
                 "plugins": ["dummy-plugin"],
                 "secrets": [{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}],
                 "prefetch": None,
+                "github_repo": None,
             },
         )
         self.assertFalse({"--prompt", "--role", "--task", "--input", "--out"} & set(argv))

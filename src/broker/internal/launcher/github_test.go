@@ -27,6 +27,7 @@ type fakeTokens struct {
 	onRelease                                  func()
 	revokeContexts                             []error
 	permissions                                []map[string]string // each Issue's and Refresh's set
+	repos                                      []string            // each Issue's and Refresh's repo
 }
 
 // fixtureSet is manifest-github-app.json's permissions.
@@ -42,15 +43,15 @@ func (f *fakeTokens) BotUserID(app string) (int64, error) {
 	}
 	return botID, nil
 }
-func (f *fakeTokens) Issue(_ context.Context, app string, permissions map[string]string, c string, exec func([]string, []byte) error) ([]protocol.Expiry, error) {
-	f.calls, f.permissions = append(f.calls, "issue "+app+" "+c), append(f.permissions, permissions)
+func (f *fakeTokens) Issue(_ context.Context, app, repo string, permissions map[string]string, c string, exec func([]string, []byte) error) ([]protocol.Expiry, error) {
+	f.calls, f.permissions, f.repos = append(f.calls, "issue "+app+" "+c), append(f.permissions, permissions), append(f.repos, repo)
 	if f.issue != nil {
 		return nil, f.issue
 	}
 	return expiry, exec([]string{"write"}, []byte("ghs_token"))
 }
-func (f *fakeTokens) Refresh(_ context.Context, app string, permissions map[string]string, c string, exec func([]string, []byte) error) ([]protocol.Expiry, error) {
-	f.calls, f.permissions = append(f.calls, "refresh "+app+" "+c), append(f.permissions, permissions)
+func (f *fakeTokens) Refresh(_ context.Context, app, repo string, permissions map[string]string, c string, exec func([]string, []byte) error) ([]protocol.Expiry, error) {
+	f.calls, f.permissions, f.repos = append(f.calls, "refresh "+app+" "+c), append(f.permissions, permissions), append(f.repos, repo)
 	if f.refresh != nil {
 		return nil, f.refresh
 	}
@@ -208,6 +209,24 @@ func TestCloseKeychainFails(t *testing.T) {
 	_, err := Host{Docker: d, GitHub: tokens}.Close(context.Background(), container)
 	if protoErr(t, err).Code != protocol.KeychainFailed || !hasCall(d, "rm") {
 		t.Fatalf("%v %q", err, d.calls)
+	}
+}
+
+// A repo grant's renewal names the manifest's repo, so the broker renews that repository's slot alone.
+func TestMaintainRepoGrant(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(fixtures.Dir(), "manifest-github-app.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = []byte(strings.Replace(string(data), `"app": "ensemble-broker-bot",`, `"app": "ensemble-broker-bot", "repo": "acme/out",`, 1))
+	tokens := &fakeTokens{}
+	h := mountHost()
+	h.Docker, h.GitHub = &fakeDocker{}, tokens
+	if _, err := h.Maintain(context.Background(), container, writeManifest(t, data), nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(tokens.calls, "refresh ensemble-broker-bot "+container) || !slices.Equal(tokens.repos, []string{"acme/out"}) {
+		t.Fatalf("token calls %q repos %q", tokens.calls, tokens.repos)
 	}
 }
 
