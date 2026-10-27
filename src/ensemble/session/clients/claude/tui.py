@@ -36,6 +36,7 @@ from ensemble.session.engine.types import (
     Spec,
     TurnEnd,
     TurnFailed,
+    TurnStarted,
 )
 from ensemble.session.modes.client_adapters.tui import Tui
 from ensemble.utils import number
@@ -84,9 +85,10 @@ class ClaudeTui(Tui):
     START, START_MATCHER = "SessionStart", "^(startup|resume)$"
     dialogs = ("Quick safety check",)
     opening = (START, "/color")
-    _owned = True
+    _owned = _remote_owned = True
 
     def __init__(self, common: ClaudeCommon):
+        super().__init__()
         self.common = common
         self.sid = self.name = ""  # name: its session's, for its reply lines
         self.spec: Spec | None = None
@@ -228,7 +230,7 @@ class ClaudeTui(Tui):
         self.limited = False
         self.last = newest if ended is None else ""
         self.unseen = ended if ended and ended.strip() and ended != newest else ""
-        return found
+        return [event for event in found if not isinstance(event, TurnStarted)]
 
     def _record(self, record: dict) -> Sequence[Reply | LimitHit]:
         if record.get("isSidechain") is True:

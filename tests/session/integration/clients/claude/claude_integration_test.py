@@ -38,6 +38,8 @@ from ensemble.session.engine.types import (
     Spec,
     Stderr,
     TurnEnd,
+    TurnFailed,
+    TurnStarted,
     Window,
 )
 from ensemble.utils import exhausted
@@ -235,6 +237,7 @@ class RunTest(Base):
         self.assertEqual(
             self.drain(handle),
             [
+                TurnStarted(),
                 Reply("one"),
                 Activity("Read"),
                 Reply("two"),
@@ -278,7 +281,7 @@ class RunTest(Base):
         self.assertEqual(again.sid, first.sid)
         self.assertEqual(
             self.drain(again),
-            [Reply("second"), TurnEnd("second", 0), Exited(0)],
+            [TurnStarted(), Reply("second"), TurnEnd("second", 0), Exited(0)],
         )
         self.assertEqual(self.logged()[1]["argv"][:3], ["-p", "--resume", first.sid])
         self.assertNotIn("--session-id", self.logged()[1]["argv"])
@@ -336,17 +339,27 @@ class RunTest(Base):
             if isinstance(event, Reply):
                 os.kill(self.logged()[0]["pid"], signal.SIGKILL)
 
-        self.assertEqual(self.drain(first, on), [Reply("first"), Exited(-signal.SIGKILL)])
+        self.assertEqual(
+            self.drain(first, on),
+            [
+                TurnStarted(),
+                Reply("first"),
+                TurnFailed("process_exit", "worker exited -9"),
+                Exited(-signal.SIGKILL),
+            ],
+        )
         self.assertEqual(self.inspect(sid).resumable, "yes")
         self.scenario(steps=["second"])
         again = self.start("more", sid=sid, resume=True)
-        self.assertEqual(self.drain(again), [Reply("second"), TurnEnd("second", 0), Exited(0)])
+        self.assertEqual(
+            self.drain(again), [TurnStarted(), Reply("second"), TurnEnd("second", 0), Exited(0)]
+        )
         self.assertEqual(self.logged()[1]["argv"][:3], ["-p", "--resume", sid])
 
     def test_a_caller_sid_names_the_session(self):
         handle = self.start(sid=SID)
         self.assertEqual(handle.sid, SID)
-        self.assertEqual(self.drain(handle), [TurnEnd("", 0), Exited(0)])
+        self.assertEqual(self.drain(handle), [TurnStarted(), TurnEnd("", 0), Exited(0)])
         self.assertEqual(self.logged()[0]["argv"][:3], ["-p", "--session-id", SID])
         self.assertEqual(os.path.basename(handle.info().transcript), f"{SID}.jsonl")
         self.assertTrue(os.path.isfile(handle.info().transcript))
@@ -365,10 +378,11 @@ class RunTest(Base):
                 self.assertEqual(
                     self.drain(handle),
                     [
+                        TurnStarted(),
                         Reply("working"),
                         want,
                         Reply(fake_claude.LIMIT),
-                        TurnEnd("", 0),
+                        TurnFailed("usage_limit"),
                         Exited(1),
                     ],
                 )
@@ -378,12 +392,15 @@ class RunTest(Base):
         handle = self.start()
         self.assertEqual(
             self.drain(handle),
-            [Reply("partial"), TurnEnd("", 0), Exited(3)],
+            [TurnStarted(), Reply("partial"), TurnFailed("error_during_execution"), Exited(3)],
         )
 
     def test_resuming_a_session_without_a_transcript_exits_1_and_its_stderr_is_recorded(self):
         said = f"No conversation found with session ID: {SID}"
-        self.assertEqual(self.drain(self.start(sid=SID, resume=True)), [Stderr(said), Exited(1)])
+        self.assertEqual(
+            self.drain(self.start(sid=SID, resume=True)),
+            [Stderr(said), TurnFailed("process_exit", f"worker exited 1: {said}"), Exited(1)],
+        )
         self.assertEqual([e["kind"] for e in self.written()], ["session", "stderr"])
         self.assertEqual(self.written()[1]["text"], said)
 
@@ -401,9 +418,9 @@ class RunTest(Base):
         found = self.drain(handle, on)
         self.assertEqual(
             [e for e in found if not isinstance(e, IdleTimeout)],
-            [Reply("working"), Exited(-signal.SIGKILL)],
+            [TurnStarted(), Reply("working"), TurnFailed("interrupted"), Exited(-signal.SIGKILL)],
         )
-        self.assertEqual(found[-2], IdleTimeout(IDLE))
+        self.assertEqual(found[-3], IdleTimeout(IDLE))
 
 
 class InterruptTest(Base):
@@ -444,7 +461,7 @@ class InterruptTest(Base):
         self.until(
             caller, lambda: "KeyboardInterrupt" in self.printed(), "caught the KeyboardInterrupt"
         )
-        self.assertEqual(self.printed(), ["Reply", "KeyboardInterrupt"])
+        self.assertEqual(self.printed(), ["TurnStarted", "Reply", "KeyboardInterrupt"])
         self.assertFalse(running(entry["pid"]))
 
 

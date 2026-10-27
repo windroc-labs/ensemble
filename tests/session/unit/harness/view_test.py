@@ -56,10 +56,10 @@ class Base(Case):
                 {"seq": self.seq, "id": f"{generation}:{self.seq}", "turn": turn, **encode(event)}
             )
 
-    def view(self, *, idle=None, replay=False) -> OwnedSession:
+    def view(self, *, idle=None, replay=False, mode=Mode.TUI) -> OwnedSession:
         return OwnedSession(
             self.channel,
-            "w1",
+            "w1" if mode == Mode.TUI else None,
             client="claude",
             sid="s1",
             generation=GEN,
@@ -67,6 +67,7 @@ class Base(Case):
             attach=self.attach,
             retire=self.retire,
             replay=replay,
+            mode=mode,
         )
 
 
@@ -223,6 +224,18 @@ class CloseTest(Base):
         with self.assertRaisesRegex(SessionError, "busy"):
             self.view().close()
 
+    def test_a_tui_view_without_retire_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "retire: required for a tui view"):
+            OwnedSession(
+                self.channel,
+                "w1",
+                client="claude",
+                sid="s1",
+                generation=GEN,
+                idle_timeout=None,
+                attach=self.attach,
+            )
+
 
 class DelegationTest(Base):
     def test_other_members_use_one_lazy_attach(self):
@@ -262,6 +275,41 @@ class DelegationTest(Base):
             retire=mock.Mock(),
         )
         self.assertFalse(view.alive())
+
+
+class HeadlessViewTest(Base):
+    def test_a_headless_view_has_its_mode_and_no_name(self):
+        view = self.view(mode=Mode.HEADLESS)
+        self.assertEqual((view.mode, view.name), (Mode.HEADLESS, None))
+
+    def interrupted(self, mode) -> BaseException:
+        """events() of a view whose harness is gone, interrupted after its first event."""
+        self.attached.alive.return_value = False
+        self.log(Reply("x"))
+        events = self.view(mode=mode).events()
+        self.assertEqual(next(events), Reply("x"))
+        with self.assertRaises(KeyboardInterrupt) as caught:
+            events.throw(KeyboardInterrupt())
+        return caught.exception
+
+    def test_an_interrupt_in_a_headless_views_events_stops_its_worker(self):
+        self.interrupted(Mode.HEADLESS)
+        self.attached.stop.assert_called_once_with()
+
+    def test_a_failed_stop_is_noted_on_the_interrupt(self):
+        self.attached.stop.side_effect = SessionError("refused")
+        self.assertIn("stop: refused", self.interrupted(Mode.HEADLESS).__notes__)
+
+    def test_an_interrupt_in_a_tui_views_events_leaves_its_worker(self):
+        self.interrupted(Mode.TUI)
+        self.assertEqual(self.attaches, 0)
+
+    def test_closing_a_headless_views_iterator_leaves_its_worker(self):
+        self.log(Reply("x"))
+        events = self.view(mode=Mode.HEADLESS).events()
+        next(events)
+        events.close()
+        self.assertEqual(self.attaches, 0)
 
 
 class RemoteTest(Base):

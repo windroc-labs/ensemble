@@ -539,7 +539,9 @@ A Claude TUI session runs under its [session harness](sessions.md#session-harnes
 [guard](sessions.md#guard-protocol) inside the container, the client's direct parent, reached through one
 `docker exec -i <container> /opt/ensemble/venv/bin/python -I <guard> --terminal … --lease <run>/lease -- with-secrets …`
 whose stdin and stdout carry the guard channel. No relay daemon, supervisor or container tmux runs for it. Codex and
-OpenCode TUI sessions keep the container tmux, relay and supervisor until their harness owns them (WDRC-205).
+OpenCode TUI sessions keep the container tmux, relay and supervisor until their hooks are verified through the guard.
+A headless run is harness-owned too, its client still on its `docker exec -i` pipe, now the harness's child. A start
+with an environment runs the earlier way: no session harness runs one yet.
 
 | Path | Holds |
 |---|---|

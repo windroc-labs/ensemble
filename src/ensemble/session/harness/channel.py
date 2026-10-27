@@ -124,6 +124,44 @@ def _remove(path: str) -> None:
             os.unlink(path)
 
 
+class Tie:
+    """A headless start's caller pipe: its harness gets `far`, the caller's view keeps the other
+    end. Every copy of that end closed (the view dropped or its process ended, however) is EOF on
+    `far`, and the harness closes its worker: a headless run dies with its caller, as a piped
+    client did.
+    """
+
+    def __init__(self) -> None:
+        self.far = self._near = -1  # for __del__ when os.pipe fails
+        self.far, self._near = os.pipe()  # neither inheritable
+
+    def handed(self) -> None:
+        """The harness has its copy of `far`."""
+        self.far = _closed(self.far)
+
+    def close(self) -> None:
+        self.far, self._near = _closed(self.far), _closed(self._near)
+
+    __del__ = close
+
+
+def _closed(fd: int) -> int:
+    if fd >= 0:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+    return -1
+
+
+def hung_up(fd: int) -> bool:
+    """EOF on non-blocking `far`; its caller writes nothing, so anything read is ignored."""
+    try:
+        return os.read(fd, 1 << 10) == b""
+    except BlockingIOError:
+        return False
+    except OSError:
+        return True
+
+
 class Channel:
     """One harness dir: its harness holds its lock; views read its log and send requests."""
 
@@ -234,8 +272,8 @@ class Channel:
         return self._exchange({"op": op}, timeout) is not None
 
     def ask(self, op: Op, data: Mapping, timeout: float = REQUEST_WAIT) -> dict:
-        """A remote worker's SEND, PRESS or SCREEN, its answer's data; SessionError refused or with
-        no harness, Unanswered unanswered.
+        """A remote worker's SEND, PRESS or SCREEN, or any worker's DISPLAY, its answer's data;
+        SessionError refused or with no harness, Unanswered unanswered.
         """
         if op not in SERVED:
             raise ValueError(f"ask {op!r}: want one of {', '.join(SERVED)}")

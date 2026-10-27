@@ -2,13 +2,17 @@
 handlers get it, serving close and stop, and draining its handlers after the worker's exit.
 """
 
+import contextlib
+import io
 import json
 import os
 import threading
 import time
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest import mock
 
+from ensemble.session.engine.hosted_session import HarnessStart
 from ensemble.session.engine.types import (
     Blocked,
     ClientBound,
@@ -23,6 +27,7 @@ from ensemble.session.engine.types import (
     TurnStarted,
     Unanswered,
 )
+from ensemble.session.harness import process
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.process import Harness, Turns
 from ensemble.session.harness.types import Op
@@ -110,6 +115,15 @@ class Base(Case):
         thread = threading.Thread(target=run, daemon=True)
         thread.start()
         self.addCleanup(thread.join, WAIT)
+        return thread
+
+    def ask(self, op, data):
+        return self.channel.ask(op, data, timeout=WAIT)
+
+    def running(self, owned, *handlers, **kw):
+        thread = self.run_in_thread(self.harness(owned, *handlers, **kw))
+        while self.channel.status().get("state") != "running":
+            time.sleep(0.01)
         return thread
 
     def logged(self) -> list[dict]:
@@ -298,6 +312,71 @@ class CloseRequestTest(Base):
         self.assertEqual((self.code, owned.calls[0], self.types()), (0, "close", ["Exited"]))
 
 
+class CallerTest(Base):
+    """A headless start's harness reads the far end of its caller's pipe."""
+
+    def setUp(self):
+        super().setUp()
+        self.far, self.near = os.pipe()
+        self.addCleanup(self.closed, self.far)
+        self.addCleanup(self.closed, self.near)
+
+    def closed(self, fd):
+        with contextlib.suppress(OSError):
+            os.close(fd)
+
+    def caller_harness(self, owned) -> Harness:
+        self.begin = mock.Mock(return_value=(owned, [], []))
+        return Harness(self.channel, poll=0.01, drain=1.0, close_wait=0.1, caller=self.far)
+
+    def test_a_gone_caller_closes_its_worker(self):
+        owned = FakeOwned(([TurnStarted()], False), code=-1)
+        thread = self.run_in_thread(self.caller_harness(owned))
+        while "TurnStarted" not in self.types():
+            time.sleep(0.01)
+        os.close(self.near)
+        thread.join(WAIT)
+        self.assertEqual((self.code, owned.calls), (0, ["close", "confirm_end"]))
+        self.assertEqual(self.types(), ["TurnStarted", "TurnFailed", "Exited"])
+
+    def test_a_live_caller_leaves_it_running(self):
+        owned = FakeOwned(([TurnStarted()], False), code=0)
+        thread = self.run_in_thread(self.caller_harness(owned))
+        while "TurnStarted" not in self.types():
+            time.sleep(0.01)
+        time.sleep(0.1)
+        self.assertEqual((owned.calls, self.channel.status()["state"]), ([], "running"))
+        self.assertTrue(self.request(Op.CLOSE))
+        thread.join(WAIT)
+
+    def test_its_option_is_the_caller_fd_before_its_dir(self):
+        self.assertEqual(
+            [process._caller(option) for option in ([], ["--caller", "7"], ["--caller", "-1"])],
+            [None, 7, -1],
+        )
+
+    def test_main_refuses_a_bad_caller_fd(self):
+        for argv in (["--caller", "x", "d"], ["--caller", "-1", "d"], ["--other", "3", "d"]):
+            with self.subTest(argv=argv):
+                self.assertEqual(process.main(["process", *argv]), 2)
+
+    def test_main_with_a_closed_caller_fd_frees_its_lock(self):
+        fd = next(fd for fd in range(1000, 2000) if not self.is_open(fd))  # hold() cannot reuse it
+        channel = Channel.create()
+        self.addCleanup(channel.release)
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            self.assertEqual(process.main(["process", "--caller", str(fd), channel.directory]), 1)
+        self.assertIn(f"session harness {channel.directory}: ", stderr.getvalue())
+        channel.hold()  # free: SessionError were it still held
+
+    def is_open(self, fd) -> bool:
+        try:
+            os.fstat(fd)
+        except OSError:
+            return False
+        return True
+
+
 class ExitTest(Base):
     def test_an_exit_mid_turn_fails_the_turn_then_exits_once(self):
         owned = FakeOwned(([TurnStarted()], False), ([Reply("partial")], True), code=3)
@@ -326,6 +405,24 @@ class ExitTest(Base):
         self.assertLess(time.monotonic() - started, WAIT)
         status = self.channel.status()
         self.assertEqual((status["state"], status["pending"]), ("exited", 2))
+
+
+class HeadlessExitTest(Base):
+    def test_an_end_with_its_code_not_yet_known_waits_for_the_confirmed_code(self):
+        owned = FakeOwned(([TurnFailed("interrupted")], True), code=None)
+        owned.confirm_end = lambda _timeout: 7
+        self.assertEqual(self.harness(owned).run(self.begin), 0)
+        self.assertEqual(self.logged()[-1]["fields"], {"returncode": 7})
+
+    def test_a_nameless_workers_unconfirmed_close_names_its_sid(self):
+        owned = FakeOwned(code=None)
+        owned.name = None
+        thread = self.run_in_thread(self.harness(owned))
+        with self.assertRaisesRegex(SessionError, "^s1: worker exit not confirmed"):
+            self.request(Op.CLOSE)
+        owned.code = 0
+        self.assertTrue(self.request(Op.CLOSE))
+        thread.join(WAIT)
 
 
 class DrainTest(Base):
@@ -411,6 +508,35 @@ class BatchTest(Base):
         self.assertEqual(self.types(), ["Exited"])
 
 
+class BeginTest(Case):
+    """process._begin: the request's spec, handlers and the caller's PYTHONPATH for the worker."""
+
+    def begin(self, pythonpath):
+        seen = {}
+
+        class Session:
+            @classmethod
+            def from_harness_request(cls, _request):
+                return HarnessStart(
+                    cast(Any, SimpleNamespace(handlers=())), None, None, (), pythonpath
+                )
+
+            @classmethod
+            def own(cls, *_args, **_kw):
+                seen["PYTHONPATH"] = os.environ.get("PYTHONPATH")
+                return "worker"
+
+        with mock.patch.dict(os.environ, {"PYTHONPATH": "/harness/roots"}):
+            self.assertEqual(process._begin("dir", cast(Any, Session))({})[0], "worker")
+        return seen["PYTHONPATH"]
+
+    def test_the_worker_gets_the_callers_pythonpath(self):
+        self.assertEqual(self.begin("lib:/abs"), "lib:/abs")
+
+    def test_a_caller_without_one_leaves_the_worker_without_one(self):
+        self.assertIsNone(self.begin(None))
+
+
 class RemoteOwned(FakeOwned):
     remote = True
 
@@ -435,16 +561,21 @@ class RemoteOwned(FakeOwned):
         self.inputs.append(call)
 
 
+class DisplayOwned(FakeOwned):
+    """A local worker whose display redisplay opens again: `reopened`, else raises `failure`."""
+
+    def __init__(self, *steps, **kw):
+        super().__init__(*steps, **kw)
+        self.reopened, self.failure, self.asked = True, None, 0
+
+    def redisplay(self):
+        self.asked += 1
+        if self.failure is not None:
+            raise self.failure
+        return self.reopened
+
+
 class RemoteTest(Base):
-    def ask(self, op, data):
-        return self.channel.ask(op, data, timeout=WAIT)
-
-    def running(self, owned, *handlers, **kw):
-        thread = self.run_in_thread(self.harness(owned, *handlers, **kw))
-        while self.channel.status().get("state") != "running":
-            time.sleep(0.01)
-        return thread
-
     def test_send_press_and_screen_are_served_and_the_worker_stays_up(self):
         owned = RemoteOwned()
         self.running(owned)
@@ -507,3 +638,42 @@ class RemoteTest(Base):
         thread.join(WAIT)
         self.assertEqual(owned.inputs, [])
         self.assertNotIn("close", owned.calls)
+
+
+class DisplayTest(Base):
+    def test_display_is_served_and_the_worker_stays_up(self):
+        owned = DisplayOwned()
+        self.running(owned)
+        self.assertEqual(self.ask(Op.DISPLAY, {}), {"reopened": True})
+        owned.reopened = False
+        self.assertEqual(self.ask(Op.DISPLAY, {}), {"reopened": False})
+        self.assertEqual(owned.asked, 2)
+        self.assertEqual(owned.calls, [])
+        self.assertEqual(self.channel.status()["state"], "running")
+        self.assertTrue(self.request(Op.CLOSE))
+
+    def test_a_display_failure_is_refused_and_the_worker_stays_up(self):
+        owned = DisplayOwned()
+        self.running(owned)
+        owned.failure = SessionError("worker w1: its name shows another display")
+        with self.assertRaisesRegex(SessionError, "^worker w1: its name shows another display$"):
+            self.ask(Op.DISPLAY, {})
+        owned.failure = Unanswered("worker w1: its display unknown")
+        with self.assertRaises(Unanswered):
+            self.ask(Op.DISPLAY, {})
+        self.assertEqual(owned.calls, [])
+        self.assertEqual(self.channel.status()["state"], "running")
+        self.assertTrue(self.request(Op.CLOSE))
+
+    def test_after_the_exit_display_is_refused(self):
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        owned = DisplayOwned(([Reply("x")], True))
+        thread = self.run_in_thread(self.harness(owned, Handler(hang=gate), drain=2.0))
+        while self.channel.status().get("state") != "exited":
+            time.sleep(0.01)
+        with self.assertRaisesRegex(SessionError, "w1: worker exited"):
+            self.ask(Op.DISPLAY, {})
+        gate.set()
+        thread.join(WAIT)
+        self.assertEqual(owned.asked, 0)

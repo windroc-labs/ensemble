@@ -1,6 +1,14 @@
 """Headless and JsonHeadless contract tests."""
 
-from ensemble.session.engine.types import ClientContext, Launch, Permission, Reply, Spec
+from ensemble.session.engine.types import (
+    ClientContext,
+    Launch,
+    Permission,
+    Reply,
+    Spec,
+    Stderr,
+    TurnFailed,
+)
 from ensemble.session.modes.client_adapters.headless import Headless, JsonHeadless
 from tests.session.case import Case
 from tests.session.client_adapters_support import StubHeadless
@@ -18,6 +26,9 @@ class StreamHeadless(Headless):
 
 
 class HeadlessTest(Case):
+    def test_a_headless_is_unowned_unless_its_client_says_so(self):
+        self.assertFalse(Headless._owned)
+
     def test_the_stream_is_required_and_parse_is_not(self):
         self.assertEqual(list(StreamHeadless().events(["a\n", "b"])), [Reply("a"), Reply("b")])
         for interface, method in ((Headless, "events"), (JsonHeadless, "parse")):
@@ -28,7 +39,7 @@ class HeadlessTest(Case):
     def test_a_run_given_no_context_is_on_the_loopback_in_auto_mode(self):
         self.assertEqual(StreamHeadless()._context, ClientContext("127.0.0.1", Permission.AUTO))
 
-    def test_events_parses_each_json_object_line_in_order_and_skips_the_rest(self):
+    def test_events_parse_objects_and_fail_malformed_or_non_object_output(self):
         lines = [
             '{"texts": ["a"]}\n',
             "not json\n",
@@ -41,4 +52,18 @@ class HeadlessTest(Case):
             "{}\n",
             '{"texts": ["b", "c"]}',
         ]
-        self.assertEqual(list(StubHeadless().events(lines)), [Reply("a"), Reply("b"), Reply("c")])
+        self.assertEqual(
+            list(StubHeadless().events(lines)),
+            [
+                Reply("a"),
+                *(
+                    [
+                        Stderr("invalid JSON event"),
+                        TurnFailed("invalid_output", "invalid JSON event"),
+                    ]
+                    * 5
+                ),
+                Reply("b"),
+                Reply("c"),
+            ],
+        )

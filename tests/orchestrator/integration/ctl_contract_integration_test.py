@@ -90,6 +90,16 @@ class LinearCtlContract(CtlContract, TmuxFlow):
         return self.call("router", "--issue", "TASK-9999")
 
     def end(self, name):
-        # The tmux sessions are views: killing them leaves the run winding down past resume.
-        result = self.call("close", stdin=self.started_records[name].to_line())
-        self.assertEqual(result.returncode, 0, result.stderr)
+        record = self.started_records[name]
+        for session in record.sessions:
+            self.server.tmux("kill-session", "-t", f"={session}")
+        events, harness = Path(self.root, "events"), record.sessions[0]
+
+        def ended():
+            # its harness ends the run after its session is gone, then logs its outcome line
+            lines = events.read_text(encoding="utf-8").splitlines() if events.exists() else []
+            return not any(self.live(session) for session in record.sessions) and any(
+                line.split()[1:3] == [harness, "outcome"] for line in lines
+            )
+
+        live_tmux.wait(ended, what="the contract's run to stop")

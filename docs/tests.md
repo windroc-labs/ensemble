@@ -58,6 +58,13 @@ has none, and CI's Ruff step still catches it.
 
 Run tests only through these supervised, sandboxed entries; they retain diagnostics and cleanup.
 
+A session harness outlives the start that made it (a lockless tui's until its worker ends) and
+writes its dir, the workdir's run log and its handlers' records after its close reply.
+`tests/session/harnesses.py`'s `end(home)` closes the harnesses under a HOME and waits for each to
+exit. The tmux `Server` fixture (before it kills the server), each project's `Case` (before its HOME
+goes) and each fixture with a HOME or workdir of its own register it, so no cleanup removes what a
+harness still writes.
+
 Single-test and file selection need the same repository-root `PYTHONPATH` above and the
 selected test's dependencies (tmux for live tmux tests; `node` for the OpenCode TUI tests, which run its plugin and skip without it). Copy the complete ID from the
 failure annotation or summary; no shard number is needed. Files must be repository test
