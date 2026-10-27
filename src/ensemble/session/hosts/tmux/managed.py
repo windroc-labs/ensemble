@@ -33,7 +33,7 @@ from ensemble.session.engine.types import (
     WorkerOutput,
 )
 from ensemble.session.harness import guard
-from ensemble.session.hosts.base import InteractiveProcess
+from ensemble.session.hosts.base import GUARD_HOOK_SOCKET, GUARD_LEASE_FD, InteractiveProcess
 
 QUEUE_MAX = 8 << 20
 WAIT = 10
@@ -478,14 +478,15 @@ def start(
             if terminal:
                 argv += ["--terminal", "--display-socket", os.path.join(run, "display")]
             argv += ["--", *launch.argv]
+            # Launch.env passes verbatim; the PTY is no tmux pane, the display relays its bytes.
             environment = {
-                **os.environ,
                 **launch.env,
-                "ENSEMBLE_GUARD_LEASE_FD": str(lease),
-                "ENSEMBLE_GUARD_HOOK_SOCKET": os.path.join(run, "hook"),
+                GUARD_LEASE_FD: str(lease),
+                GUARD_HOOK_SOCKET: os.path.join(run, "hook"),
             }
             for key in ("TMUX", "TMUX_PANE"):
                 environment.pop(key, None)
+            environment.setdefault("TERM", "xterm-256color")
             try:
                 proc = subprocess.Popen(
                     argv,

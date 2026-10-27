@@ -263,6 +263,46 @@ class ManagedTest(Case):
         self.assertIsNone(channel.record())
         self.assertIsNone(channel.display())
 
+    def spawned_env(self, launch: Launch, **environ) -> dict:
+        """The guard's environment for `launch`, the harness's environment holding `environ`."""
+        proc = mock.Mock()
+        proc.stdout.read.side_effect = [
+            guard.json_frame(b"s", {"pid": 123}),
+            guard.json_frame(b"x", {"returncode": 0}),
+            b"",
+        ]
+        host = TmuxHost("tmux", tmux=mock.Mock())
+        with (
+            mock.patch.dict(os.environ, environ),
+            mock.patch.object(managed.subprocess, "Popen", return_value=proc) as spawn,
+            mock.patch.object(os, "set_blocking"),
+        ):
+            host.worker("worker", launch, terminal=False).close()
+        return spawn.call_args.kwargs["env"]
+
+    def test_launch_env_verbatim_without_tmux(self):
+        env = self.spawned_env(
+            Launch(
+                (sys.executable,),
+                env={"KEEP": "1", "TMUX": "/tmp/t,1,0", "TMUX_PANE": "%1", "TERM": "screen"},
+                cwd=self.home,
+            ),
+            HARNESS_ONLY="secret",
+        )
+        self.assertNotIn("HARNESS_ONLY", env)
+        self.assertNotIn("TMUX", env)
+        self.assertNotIn("TMUX_PANE", env)
+        self.assertEqual(env["KEEP"], "1")
+        self.assertEqual(env["TERM"], "screen")
+        self.assertEqual(
+            set(env) - {"KEEP", "TERM"},
+            {"ENSEMBLE_GUARD_LEASE_FD", "ENSEMBLE_GUARD_HOOK_SOCKET"},
+        )
+
+    def test_term_default_only_when_absent(self):
+        env = self.spawned_env(Launch((sys.executable,), env={}, cwd=self.home), TERM="dumb")
+        self.assertEqual(env["TERM"], "xterm-256color")
+
     def test_start_confirmation_timeout_closes_pipe(self):
         channel = self.channel()
         with (

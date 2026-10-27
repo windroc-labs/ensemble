@@ -31,7 +31,7 @@ from ensemble.session.engine.types import (
     Spec,
     Stderr,
 )
-from ensemble.session.hosts.base import Host, host_resume
+from ensemble.session.hosts.base import GUARD_HOOK_SOCKET, GUARD_LEASE_FD, Host, host_resume
 from ensemble.utils import (
     ACCOUNT_ENV,
     AGENT_SESSION_ENV,
@@ -81,11 +81,19 @@ def child_env(
 
 def identity_drop(registry: Registry) -> frozenset[str]:
     """SID_ENV and EVENTS_ENV (a caller's start token and events file, never a nested start's),
-    LEASE_ENV (a manager's roster lease), each configured Client class's identity_env, and its
-    child_defaults at their value inside it; builds no Client.
+    LEASE_ENV (a manager's roster lease), a managed worker's guard lease and hook socket, each
+    configured Client class's identity_env, and its child_defaults at their value inside it;
+    builds no Client.
     """
     kinds = [registry.client_class(name) for name in registry.configured()]
-    drop = {SID_ENV, EVENTS_ENV, *LEASE_ENV, *(key for kind in kinds for key in kind.identity_env)}
+    drop = {
+        SID_ENV,
+        EVENTS_ENV,
+        *LEASE_ENV,
+        GUARD_LEASE_FD,
+        GUARD_HOOK_SOCKET,
+        *(key for kind in kinds for key in kind.identity_env),
+    }
     for kind in kinds:
         if kind.session_env and kind.session_env in os.environ:
             drop.update(k for k, v in kind.child_defaults.items() if os.environ.get(k) == v)
