@@ -18,7 +18,7 @@ import time
 from ensemble.utils import SID_ENV, Record, Status
 from tests.delegate.case import PY, REPO, Case, child_env
 from tests.delegate.workdir import input_first
-from tests.session import live_tmux
+from tests.session import harnesses, live_tmux
 from tests.session.integration.clients.claude import fake_claude
 from tests.session.integration.clients.codex import fake_codex
 from tests.session.integration.clients.opencode import fake_opencode
@@ -113,6 +113,7 @@ class Integration(Runs):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
+        self.addCleanup(harnesses.end, self.home)
         self.root = os.path.realpath(tmp.name)
         self.proj, self.work, bin_dir = (
             os.path.join(self.root, d) for d in ("proj", "work", "bin")
@@ -235,6 +236,7 @@ class CodexIntegration(Runs):
         for d in (home, tmp):
             self.addCleanup(d.cleanup)
         self.home, root = os.path.realpath(home.name), os.path.realpath(tmp.name)
+        self.addCleanup(harnesses.end, self.home)
         self.root = root
         self.work, bin_dir = os.path.join(root, "work"), os.path.join(root, "bin")
         self.proj = self.work

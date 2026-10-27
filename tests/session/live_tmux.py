@@ -13,6 +13,7 @@ import time
 from typing import NamedTuple
 from unittest import mock
 
+from tests.session import harnesses
 from tests.session.case import PLUGIN_BIN, child_env
 from tests.session.grid import GridCheck
 from tests.session.integration.clients.claude import fake_claude
@@ -129,6 +130,7 @@ class Server:
         case.addCleanup(_SOCKETS.discard, self.socket)
         case.addCleanup(self._close_clients)
         case.addCleanup(self.kill)
+        case.addCleanup(harnesses.end, home)  # first: while their workers still run
         if len(os.fsencode(self.socket)) > SOCKET_MAX:
             case.fail(f"tmux socket path over {SOCKET_MAX} bytes: {self.socket}")
 

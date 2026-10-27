@@ -29,7 +29,7 @@ from ensemble.session.engine.types import (
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.view import OwnedSession
 from ensemble.session.hosts.base import HARNESS_ROOT, Host
-from tests.session import live_tmux
+from tests.session import harnesses, live_tmux
 from tests.session.case import HOSTS, REPO, Case
 from tests.session.cli_support import logged
 from tests.session.integration.clients.claude import fake_claude
@@ -74,6 +74,7 @@ class Headless(Case):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(dir=os.environ.get("ENSEMBLE_TEST_TMP", REPO))
         self.addCleanup(tmp.cleanup)
+        self.addCleanup(harnesses.end, self.home)
         self.root = Path(tmp.name).resolve()
         self.bin, self.work = self.root / "bin", self.root / "work"
         self.cwd = self.work / "project"
@@ -253,6 +254,7 @@ class CodexSuccessTest(Headless):
         home = self.root / "home"
         codex_home = home / ".codex"
         codex_home.mkdir(parents=True)
+        self.addCleanup(harnesses.end, str(home))
         shim(self.bin, "codex", fake_codex.__file__)
         scenario = self.root / "scenario.json"
         scenario.write_text("{}")
