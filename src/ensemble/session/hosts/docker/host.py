@@ -777,7 +777,11 @@ class DockerHost(Host):
                     raise SessionError(
                         f"docker session {name}: a container for it exists; close {name} first"
                     )
-                if any(found.container == row[0] for found in self._rows()):
+                if (
+                    len(row) == len(Row._fields)
+                    and GEN.fullmatch(row[2])
+                    and row[0] == container_name(name, row[2])
+                ):
                     raise SessionError(
                         f"docker session {name}: container {row[0]} of an earlier start is still"
                         " up (its removal failed; see the log); the next start retries it"

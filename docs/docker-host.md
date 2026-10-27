@@ -562,11 +562,13 @@ is refused before anything is written: `<client> <mode> on host docker: runs onl
   generation and removes an ended one.
 - **Listing**: the Host lists (`ensemble-session ls`) and attaches only guarded workers of their `host.json`'s
   generation; a headless run is not listed.
-- **Sweep**: each start (TUI or headless) first closes every container that is neither a guarded nor a piped worker
-  of its `host.json`'s generation (debris, such as one an older release started), a guarded one whose owner lock is
-  free and a piped one whose pipe lock is free; it never execs into a container. A start whose sweep could not remove
-  a debris container of its name refuses: `docker session <name>: container <c> of an earlier start is still up (its
-  removal failed; see the log); the next start retries it`.
+- **Sweep**: each start (TUI or headless) first closes every container it names `ensemble-<name>-<generation>` that is
+  neither a guarded nor a piped worker of its `host.json`'s generation (debris, such as one an older release
+  started), a guarded one whose owner lock is free and a piped one whose pipe lock is free; it never execs into a
+  container. A start whose sweep could not remove a debris container of its name refuses: `docker session <name>:
+  container <c> of an earlier start is still up (its removal failed; see the log); the next start retries it`. A
+  container labelled for the name but not named that way is never swept; the start refuses: `docker session <name>:
+  container <c> is labelled for it but not named as this Host names one; remove it: docker rm -f <c>`.
 
 The harness alone enforces a guarded worker's deadline. If it dies and Docker does not pass EOF to the exec
 (unverified until the mini acceptance, WDRC-212), the client can outlive the deadline until a sweep removes its

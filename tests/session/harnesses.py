@@ -84,15 +84,11 @@ def _signal(channel: Channel) -> None:
 
 
 def spawned(argv) -> bool:
-    """argv is HostedSession's spawn of a session harness."""
     return HARNESS in argv
 
 
 class Inline:
-    """A spawned harness's start run in this process instead, so the test's fakes (a faked broker)
-    answer it as they would the harness's: only for a start that fails, as a running worker's
-    harness never returns.
-    """
+    """A spawned harness run here, so fakes answer: a failing start."""
 
     def __init__(self, argv) -> None:
         channel = Channel(argv[-1])
