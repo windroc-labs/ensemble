@@ -388,8 +388,8 @@ class DeadTest(Live):
         self.assertEqual(stream.next(poke=self.poke), Exited(-signal.SIGTERM))
         self.lines("w1 done", "w1 dead")
         self.assertEqual(self.server.option("w1", "@state"), "dead")
-        self.assertEqual(
-            (handle.alive(), [r.state for r in self.session_cls.list("w1")]), (True, ["dead"])
+        self.assertEqual(  # not alive: its worker ended, its display kept till close
+            (handle.alive(), [r.state for r in self.session_cls.list("w1")]), (False, ["dead"])
         )
         for call in (lambda: handle.send("more"), handle.screen):
             with self.assertRaises(SessionError):

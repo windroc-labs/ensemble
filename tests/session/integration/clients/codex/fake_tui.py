@@ -26,6 +26,12 @@ def _sibling(name):
 
 fake_codex = _sibling("fake_codex")
 
+
+def unbracket(line):
+    """A managed worker's guard sends a paste bracketed, as Codex reads it."""
+    return line.replace("\x1b[200~", "").replace("\x1b[201~", "")
+
+
 EVENTS = (
     "SessionStart",
     "UserPromptSubmit",
@@ -340,7 +346,7 @@ class InteractiveSession:
         elif step["kind"] == "screen":
             print("\x1b[2J\x1b[H" + step["text"], flush=True)
         elif step["kind"] == "steer":  # the next input line joins this turn; its answer follows
-            text = sys.stdin.readline().rstrip("\n")
+            text = unbracket(sys.stdin.readline().rstrip("\n"))
             self.fire("UserPromptSubmit", {"prompt": text, "turn_id": ident})
             with self.path.open("a") as stream:
                 for role, kind, said in (
@@ -389,7 +395,7 @@ class InteractiveSession:
             self.turn(self.parsed.prompt, turns[index] if index < len(turns) else [])
             index += 1
         for line in sys.stdin:
-            self.turn(line.rstrip("\n"), turns[index] if index < len(turns) else [])
+            self.turn(unbracket(line.rstrip("\n")), turns[index] if index < len(turns) else [])
             index += 1
         return 0
 

@@ -143,14 +143,14 @@ class TuiTest(Live):
         for start in starts:
             start.assert_not_called()
 
-    def test_a_client_exit_ends_with_its_code_the_session_live_until_close(self):
+    def test_a_client_exit_ends_with_its_code_the_session_listed_dead_until_close(self):
         handle = self.start("w2", {"hook": "stop", "payload": {"last_message": "bye"}}, {"exit": 3})
         stream = Stream(self, handle)
         self.assertEqual(stream.next(), TurnEnd("bye", 0))
         self.assertEqual(stream.next(poke=self.poke), Exited(3))
         self.lines("w2 done", "w2 dead")
-        self.assertEqual(
-            (handle.alive(), [r.state for r in self.session_cls.list("w2")]), (True, ["dead"])
+        self.assertEqual(  # not alive: its worker ended, its display kept till close
+            (handle.alive(), [r.state for r in self.session_cls.list("w2")]), (False, ["dead"])
         )
         tui.TuiStore.attach("w2", host=self.session_cls.host()).close()
         self.assertEqual((handle.alive(), self.session_cls.list("w2")), (False, []))

@@ -86,7 +86,12 @@ async function emit(type, properties) {
 const lines = [];
 const waiting = [];
 const input = createInterface({ input: process.stdin, terminal: false });
-input.on("line", (line) => (waiting.length ? waiting.shift()(line) : lines.push(line)));
+// A managed worker's guard sends a paste bracketed, as OpenCode reads it.
+const unbracket = (line) => line.replaceAll("\x1b[200~", "").replaceAll("\x1b[201~", "");
+input.on("line", (raw) => {
+  const line = unbracket(raw);
+  waiting.length ? waiting.shift()(line) : lines.push(line);
+});
 input.on("close", () => waiting.splice(0).forEach((resolve) => resolve(null)));
 
 function next() {
