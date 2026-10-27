@@ -286,12 +286,13 @@ class CallerSessionTest(HarnessCase):
         suite = unittest.TestSuite(
             loader.loadTestsFromTestCase(case) for case in (DockerPreflightTest, VerifierDockerTest)
         )
-        result = unittest.TestResult()
+        cases, result = suite.countTestCases(), unittest.TestResult()
         with mock.patch.dict(os.environ, caller):
             suite.run(result)
         failed = [f"{t.id()}: {tb.splitlines()[-1]}" for t, tb in result.failures + result.errors]
         self.assertEqual(failed, [])
-        self.assertEqual(result.testsRun, 6)
+        self.assertGreater(cases, 0)
+        self.assertEqual((result.testsRun, result.skipped), (cases, []))
 
 
 class VerifierClientTest(HarnessCase):
