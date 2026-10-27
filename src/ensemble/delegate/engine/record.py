@@ -188,6 +188,13 @@ class RunRecord:
             )
             return True
 
+    def reopen(self, n: int, result: Result) -> None:
+        """Attempt n active again while `result` still ends it."""
+        with self.store.mutex():
+            state = self.read()
+            if state.attempt == n and state.completed and state.result == result:
+                self.save(replace(state, completed=False, result=None))
+
     def complete(self, n: int, result: Result, *, sid: str, unbound: bool = False) -> bool:
         """Compare-and-set; unbound: only while opening."""
         with self.store.mutex():

@@ -573,6 +573,8 @@ def _carried(
     for session in sessions:
         try:
             _check_held(session, record.sid, hosts)
+        except Unanswered:
+            raise  # no proof it is stale
         except SessionError:
             if stale_ok:
                 return ()
@@ -587,8 +589,11 @@ def _check_held(session: str, sid: str | None, hosts: Hosts) -> None:
 
 
 def _holds(session: str, sid: str | None, hosts: Hosts) -> bool:
+    """Unanswered when its Host cannot tell."""
     try:
         _check_held(session, sid, hosts)
+    except Unanswered:
+        raise
     except SessionError:
         return False
     return True

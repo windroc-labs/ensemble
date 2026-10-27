@@ -28,7 +28,9 @@ from ensemble.session import (
     TurnEnd,
     TurnFailed,
     TurnStarted,
+    Unanswered,
 )
+from tests.delegate.fakes.harness_session import HarnessSession
 from tests.delegate.harness import SID, HarnessCase
 from tests.delegate.replies import block
 from tests.delegate.unit.runs import DONE, GAVE_UP, START
@@ -101,12 +103,40 @@ class Child:
         return "", ""
 
 
+class Agent:
+    """The worker's session as Delegate.close attaches it; close runs `on_close`."""
+
+    mode = "tui"
+
+    def __init__(self, on_close):
+        self.on_close = on_close
+
+    def close(self):
+        self.on_close()
+
+
+class AgentSession(HarnessSession):
+    """attach: `refusal` raised, else `agent`, else HarnessSession's (no session)."""
+
+    agent: Agent | None = None
+    refusal: Exception | None = None
+
+    @classmethod
+    def attach(cls, name, **kw):
+        if cls.refusal is not None:
+            raise cls.refusal
+        return cls.agent if cls.agent is not None else super().attach(name, **kw)
+
+
 class HandlerCase(HarnessCase):
     def setUp(self):
         super().setUp()
         self.events = os.path.join(self.home, "events.log")
         spec = Spec("input", self.work, task="echo", sid=SID, client="fake", mode="tui")
-        self.delegate = self.make(spec=replace(spec, events=self.events), callback=("callback",))
+        AgentSession.agent = AgentSession.refusal = None
+        self.delegate = self.make(
+            spec=replace(spec, events=self.events), callback=("callback",), session_cls=AgentSession
+        )
         self.record = RunRecord(Layout(self.work))
         self.register(1)
         self.view, self.sent, self.seq = View(), [], 0
@@ -275,6 +305,43 @@ class CloseTest(HandlerCase):
                 self.register(state.attempt + 1, attempt=state.attempt + 1, completed=False)
                 self.record.save(replace(self.state(), result=None, bound=False))
 
+    def test_its_stop_is_reported_only_once_the_owner_confirmed_the_close(self):
+        self.call(TurnStarted())
+        seen = []
+        AgentSession.agent = Agent(
+            lambda: seen.append(
+                (self.state().completed, self.kinds_sent(), "result" in self.kinds())
+            )
+        )
+        self.delegate.close()
+        self.assertEqual(seen, [(True, [], False)])
+        self.assertEqual(self.kinds_sent(), [("finished", 1)])
+        self.assertEqual(self.kinds()[-2:], ["result", "end"])
+
+    def test_a_refused_close_reopens_the_attempt_and_reports_nothing(self):
+        self.call(TurnStarted())
+
+        def refuse():
+            raise SessionError("cannot close")
+
+        AgentSession.agent = Agent(refuse)
+        with self.assertRaisesRegex(SessionError, "cannot close"):
+            self.delegate.close()
+        state = self.state()
+        self.assertEqual((state.completed, state.result), (False, None))
+        self.assertEqual(self.kinds_sent(), [])
+        self.assertNotIn("result", self.kinds())
+        self.call(TurnEnd(block(DONE), 0))  # its worker goes on, and its handler with it
+        self.assertEqual(self.state().result.outcome.status, "done")
+
+    def test_an_unanswered_agent_leaves_the_attempt_alone(self):
+        self.call(TurnStarted())
+        AgentSession.refusal = Unanswered("host down")
+        with self.assertRaises(Unanswered):
+            self.delegate.close()
+        self.assertFalse(self.state().completed)
+        self.assertEqual(self.kinds_sent(), [])
+
     def test_a_close_after_the_attempt_ended_sends_no_second_finished(self):
         self.finish()
         before = (self.state(), list(self.sent))
@@ -348,12 +415,23 @@ class LockedTest(HandlerCase):
         self.assertIn("release", self.kinds())
         self.assertEqual(self.kinds_sent()[-1], ("finished", 1))
 
-    def test_a_close_ends_the_attempt_and_claims_no_release_without_a_confirmed_close(self):
+    def test_a_gone_workers_close_ends_the_attempt_and_claims_no_release(self):
         self.call(TurnStarted())
         self.delegate.close()
         self.assertEqual(self.state().result, Result(129, None, "stopped: Stopped: 129"))
         self.assertEqual(self.kinds_sent()[-1], ("finished", 1))
         self.assertNotIn("release", self.kinds())
+
+    def test_a_confirmed_close_claims_release_then_finishes(self):
+        self.call(TurnStarted())
+        seen = []
+        AgentSession.agent = Agent(
+            lambda: seen.append(("release" in self.kinds(), list(self.sent)))
+        )
+        self.delegate.close()
+        self.assertEqual(seen, [(False, [])])
+        self.assertEqual(self.kinds()[-3:], ["result", "end", "release"])
+        self.assertEqual(self.kinds_sent(), [("finished", 1)])
 
     def test_a_close_that_fails_claims_no_release(self):
         self.view.close_fail = SessionError("not confirmed")

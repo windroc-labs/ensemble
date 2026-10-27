@@ -736,27 +736,22 @@ class HarnessDelegate(Delegate):
 
     def close(self) -> None:
         """Unanswered after closing the harness when the agent's Host could not tell. An owned
-        run's active attempt ends first, as a stop (its client may exit 0 on the hangup)."""
+        run's active attempt ends as a stop, reported once its close is confirmed."""
         state = self._read()
-        ending = self._interrupt(state)
-        lock = (
-            None if state.plan.session.environment is None else state.plan.session.environment.lock
-        )
-        if ending is not None and lock is None:
-            self._send_finished(state, ending)
         try:
             agent, unanswered = self._agent(state), None
         except Unanswered as error:
             agent, unanswered = None, error
+        stop = None if unanswered is not None else self._interrupt(state)
         try:
             if agent is not None:
                 agent.close()
-                if ending is not None and lock is not None:
-                    say(f"delegate: session {state.agent_name} closed (lock {lock})")
-                    RunLog(state.plan.session.workdir).note("release", lock=lock, best_effort=True)
-        finally:
-            if ending is not None and lock is not None:
-                self._send_finished(state, ending)
+        except BaseException:
+            if stop is not None:
+                RunRecord(self.layout, self.store).reopen(state.attempt, stop)
+            raise
+        if stop is not None:
+            self._stopped(state, stop, closed=agent is not None)
         unchecked = (
             None
             if unanswered is None
@@ -782,10 +777,16 @@ class HarnessDelegate(Delegate):
         p = state.plan
         if not RunRecord(self.layout, self.store).complete(state.attempt, result, sid=p.sid):
             return None
-        finish(state, result, None)
         return result
 
-    def _send_finished(self, state: DelegateState, result: Result) -> None:
+    def _stopped(self, state: DelegateState, result: Result, *, closed: bool) -> None:
+        finish(state, result, None)
+        environment = state.plan.session.environment
+        if closed and environment is not None and environment.lock:
+            say(f"delegate: session {state.agent_name} closed (lock {environment.lock})")
+            RunLog(state.plan.session.workdir).note(
+                "release", lock=environment.lock, best_effort=True
+            )
         if state.callback is not None:
             p = state.plan
             EventCallback(state.callback, self.store, sid=p.sid, attempt=state.attempt)(

@@ -14,7 +14,7 @@ from unittest import mock
 from ensemble.session import EnvironmentSpec, SessionBusy, cli
 from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.tmux_cli import attach_command
-from ensemble.session.engine.types import ConfigError, Hosts, SessionError
+from ensemble.session.engine.types import ConfigError, Hosts, SessionError, Unanswered
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.types import Op
 from ensemble.session.hosts.tmux import TmuxHost
@@ -357,6 +357,23 @@ class RecordControl(HostedTuiBase):
         self.assertEqual((code, out), (1, ""))
         self.assertIn("w2: cannot close", err)
         self.assertNotIn("w1", self.host.processes)
+
+    def test_a_host_that_cannot_tell_never_makes_a_record_stale(self):
+        process = self.host.create("w1", sid=SID)
+
+        def fail():
+            self.host.calls.attach.side_effect = Unanswered("docker ps: timed out")
+            raise SessionError("w1: cannot close")
+
+        process.calls.close.side_effect = fail
+        code, out, err = self.invoke("close", record=self.record)
+        self.assertEqual((code, out), (1, ""), err)
+        self.assertIn("docker ps: timed out", err)
+        self.host.calls.attach.side_effect = Unanswered("docker ps: timed out")
+        process.calls.close.side_effect = None
+        code, out, err = self.invoke("close", record=self.record)
+        self.assertEqual((code, out), (1, ""), err)
+        process.calls.close.assert_called_once_with()
 
     def test_a_stale_record_skips_an_owner_of_another_sid(self):
         channel = self.owned(sid="replacement")
