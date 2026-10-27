@@ -400,7 +400,8 @@ class TmuxHost(Host):
 
     def attach(self, name: str) -> TmuxProcess:
         """A session it launched is the pane its launch recorded (@process), whichever pane is
-        active; any other session is its active pane.
+        active; any other session is its active pane. A managed worker's display (@kind guard) is
+        a terminal for keys and screen only: no @control, and its pane says nothing of the worker.
         """
         state = self.tmux.status(_session(name))
         if state is None:
@@ -409,7 +410,7 @@ class TmuxHost(Host):
             raise SessionError(f"tmux session {name}: tmux failed")
         try:
             kind = self.tmux.option(name, "@kind")
-            launched = kind in ("detach", "terminal")
+            launched = kind in ("detach", "terminal", "guard")
             process = self.tmux.option(name, "@process") if launched else self.tmux.process(name)
         except TuiError as e:
             raise SessionError(f"tmux session {name}: {e}") from None
@@ -421,7 +422,8 @@ class TmuxHost(Host):
             raise SessionError(f"tmux session {name}: bad @process {process!r:.80}")
         if process is None:
             raise SessionError(f"no tmux session {name}")
-        return (TmuxTerminal if kind == "terminal" else TmuxProcess)(name, process, tmux=self.tmux)
+        terminal = kind in ("terminal", "guard")
+        return (TmuxTerminal if terminal else TmuxProcess)(name, process, tmux=self.tmux)
 
     def list(self) -> list[str]:
         return sorted(row["name"] for row in self._listing())
