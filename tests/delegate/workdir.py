@@ -22,13 +22,11 @@ def run_log(workdir: str) -> str:
     return os.path.join(Layout(workdir).run, "run.jsonl")
 
 
-RACED = ("client_session", "session_metadata", "stderr")  # noted by the session harness
+RACED = ("client_session", "session_metadata", "stderr")
 
 
 def input_first(records: list[dict]) -> list[dict]:
-    """A session harness notes its worker's RACED rows in its own process as the run notes its
-    input once the start returns; no reader orders them: the raced rows are put after that input.
-    """
+    """RACED rows, the session harness's, after the run's input they raced."""
     found: list[dict] = []
     for record in records:
         at = len(found)
