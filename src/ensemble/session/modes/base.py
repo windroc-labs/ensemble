@@ -168,7 +168,7 @@ class BaseMode(ABC):
     ) -> Self:
         """The session started; spec.sid set; registry: tui settings and identity_drop; host: the
         selected execution Host; display: a tui session's, kept as given (other modes refuse one);
-        owner: its session harness's dir (tui only).
+        owner: its session harness's dir (tui and headless; in_process refuses one).
         """
 
     @property

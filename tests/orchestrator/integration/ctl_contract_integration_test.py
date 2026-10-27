@@ -90,9 +90,16 @@ class LinearCtlContract(CtlContract, TmuxFlow):
         return self.call("router", "--issue", "TASK-9999")
 
     def end(self, name):
-        for session in self.started_records[name].sessions:
+        record = self.started_records[name]
+        for session in record.sessions:
             self.server.tmux("kill-session", "-t", f"={session}")
-        live_tmux.wait(
-            lambda: not any(self.live(session) for session in self.started_records[name].sessions),
-            what="the contract's run to stop",
-        )
+        events, harness = Path(self.root, "events"), record.sessions[0]
+
+        def ended():
+            # its harness ends the run after its session is gone, then logs its outcome line
+            lines = events.read_text(encoding="utf-8").splitlines() if events.exists() else []
+            return not any(self.live(session) for session in record.sessions) and any(
+                line.split()[1:3] == [harness, "outcome"] for line in lines
+            )
+
+        live_tmux.wait(ended, what="the contract's run to stop")

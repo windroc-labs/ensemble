@@ -1,7 +1,8 @@
 """Worker, a plain tui session started by name (FR-20): WorkerState in
 ~/.ensemble/workers/<sid>/worker.json (by-name/<name>: its latest sid); its Record on its Host once
-its early watch passes. A worker its session harness owns resumes through its running owner, else
-starts a new harness through the tui gate, closing nothing; restart closes it through that owner.
+its early watch passes. A worker its session harness owns resumes through its running owner, which
+reopens its display if gone, else starts a new harness through the tui gate, closing nothing;
+restart closes it through that owner.
 Other workers' restart and resume close the old session and wait for its group (FR-36).
 Callers hold locked() around start, resume and restart.
 """
@@ -38,6 +39,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.harness import channel
 from ensemble.session.harness.channel import Channel
+from ensemble.session.harness.types import Op
 from ensemble.session.hosts.base import Process
 from ensemble.session.modes.tui import TuiMode
 from ensemble.utils import (
@@ -381,17 +383,32 @@ class Worker:
         return True, channel.running(self.state.name, snapshot)
 
     def _resume_owned(self, owner: Channel | None) -> Record:
-        """Its running owner's: its Record, published on its display if one shows; else a new
-        harness through the gate (it waits out a reaping guard, refuses a live or unknown one).
+        """Its running owner's: its Record, published on its display, which that owner reopens if
+        gone (shown then as a resumed start's); else a new harness through the gate (it waits out a
+        reaping guard, refuses a live or unknown one).
         """
         record = self.state.record()
         if owner is None:
             self.check(prompt="", resume=True)
             return self.start(prompt="", resume=True)
+        name = self.state.name
+        try:
+            reopened = owner.ask(Op.DISPLAY, {}).get("reopened") is True
+        except SessionError as error:
+            self.say(f"session {name}: display not reopened: {error}")
+            reopened = False
         with contextlib.suppress(SessionError):
-            handle = self.session_cls.host(self.state.host).attach(self.state.name)
+            handle = self.session_cls.host(self.state.host).attach(name)
             if handle.session_identity()[0] == self.state.sid:
                 handle.publish(record)
+        if reopened:
+            try:
+                session = self.session_cls.attach(name, sid=self.state.sid, host=self.state.host)
+            except SessionError as error:
+                self.say(f"session {name}: not shown: {error}")
+            else:
+                if session.showable:
+                    self._show(session, hidden=None)
         return record
 
     def _start_again(self) -> Record:

@@ -189,20 +189,19 @@ class Outcomes(Integration):
         self.assertEqual([option(call, "--resume") for call in self.calls()], [None, SID])
         self.assertFalse(os.path.exists(self.out))
 
-    def test_nonzero_exit_preserves_report_for_recovery(self):
+    def test_nonzero_exit_never_reports_success_even_with_an_outcome_block(self):
         res = self.drive([mark("start", "echoing"), block(DONE)], exit=7)
-        self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertIn("delegate: status done", res.stderr)
-        self.assertEqual(self.read(self.out), DONE["deliverable"])
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertIn("delegate: the client's turn failed: error_during_execution", res.stderr)
+        self.assertFalse(os.path.exists(self.out))
         saved = self.last("result")
         self.assertEqual(
             (
-                saved["outcome"]["status"],
-                saved["outcome"]["url"],
+                saved.get("outcome"),
                 saved["error"],
                 self.last("end")["rc"],
             ),
-            ("done", self.out, "the client exited 7", 7),
+            (None, "the client's turn failed: error_during_execution", 7),
         )
         self.assertEqual(len(self.calls()), 1)
         self.assertEqual(self.kinds()[-2:], ["result", "end"])
@@ -213,10 +212,12 @@ class Outcomes(Integration):
                 before = len(self.calls())
                 res = self.drive(steps, exit=7)
                 self.assertEqual(res.returncode, 1, res.stderr)
-                self.assertIn("delegate: the client exited 7", res.stderr)
+                self.assertIn(
+                    "delegate: the client's turn failed: error_during_execution", res.stderr
+                )
                 self.assertEqual(
                     (self.last("result")["error"], self.last("end")["rc"]),
-                    ("the client exited 7", 7),
+                    ("the client's turn failed: error_during_execution", 7),
                 )
                 self.assertNotIn("outcome", self.last("result"))
                 self.assertFalse(os.path.exists(self.out))
@@ -232,7 +233,7 @@ class Stderr(Integration):
         self.assertEqual(res.returncode, 0, res.stderr)
         said = f"No conversation found with session ID: {SID}"
         self.assertEqual([e["text"] for e in self.records() if e["kind"] == "stderr"], [said])
-        self.assertEqual(self.kinds()[-3:], ["stderr", "result", "end"])
+        self.assertEqual(self.kinds()[-4:], ["stderr", "turn_failed", "result", "end"])
         self.assertEqual(
             (self.last("result")["error"], self.last("end")["rc"]), ("the client exited 1", 1)
         )

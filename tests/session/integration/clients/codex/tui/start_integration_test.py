@@ -182,7 +182,7 @@ class StartTest(Base):
     def test_shared_schema_preserves_hooks_in_isolated_scripts_and_client(self):
         expected = (
             ("SessionStart", "sessionStart", "activity"),
-            ("UserPromptSubmit", "userPromptSubmit", "activity"),
+            ("UserPromptSubmit", "userPromptSubmit", "turn_started"),
             ("PostToolUse", "postToolUse", "activity"),
             ("PermissionRequest", "permissionRequest", "blocked"),
             ("PreToolUse", "preToolUse", "blocked"),

@@ -662,7 +662,7 @@ class HarnessDelegate(Delegate):
     def _alive(self, state: _State) -> bool:
         if state.detached:
             process = self._harness(state)
-            return process is not None and process.alive()
+            return process is not None and process.alive() or self.store.running()
         return not state.completed and self.store.running()
 
     def alive(self) -> bool:
@@ -711,7 +711,10 @@ class HarnessDelegate(Delegate):
             agent, unanswered = None, True
         found = None if agent is None else agent.status()
         alive = self._alive(state) and (
-            state.plan.spec.mode != Mode.TUI or unanswered or found is not None
+            state.plan.spec.mode != Mode.TUI
+            or unanswered
+            or found is not None
+            or self.store.running()
         )
         if unanswered or found is not None and found.state == StatusState.UNKNOWN:
             word = StatusState.UNKNOWN

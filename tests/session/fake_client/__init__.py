@@ -161,6 +161,7 @@ class FakeTui(Tui):
     hooks = {"stop": HookKind.TURN_END, "ask": HookKind.BLOCKED, "tool": HookKind.ACTIVITY}
 
     def __init__(self, client: FakeClient):
+        super().__init__()
         self.owner = client
 
     def launch(self, spec: Spec, hook):

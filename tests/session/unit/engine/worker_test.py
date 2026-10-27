@@ -27,6 +27,7 @@ from ensemble.session.engine import worker
 from ensemble.session.engine.types import Blocked, Exited, IdleTimeout, Reply
 from ensemble.session.engine.worker import Worker, WorkerState
 from ensemble.session.harness.channel import Channel
+from ensemble.session.harness.types import Op
 from ensemble.session.modes.tui import TuiStore
 from ensemble.utils import Record, Status, StatusState, file_lock
 from tests.session.case import Case
@@ -795,9 +796,12 @@ class OwnedTest(Base):
     its running owner, else starts a new harness through the gate; it never closes or reclaims.
     """
 
-    def owned(self, status: str | None = "running", *, owner: bool = True) -> None:
+    def owned(
+        self, status: str | None = "running", *, owner: bool = True, answer: dict | None = None
+    ) -> None:
         """w1's session.json (with an owner unless `owner` is False); its harness held and in
-        `status` (None: no harness holds it).
+        `status` (None: no harness holds it); a running one answers each request with `answer`
+        (default: nothing reopened), its ops in self.asked.
         """
         channel = Channel.create()
         if status is not None:
@@ -805,6 +809,8 @@ class OwnedTest(Base):
             fcntl.flock(fd, fcntl.LOCK_EX)
             self.addCleanup(os.close, fd)
             channel.write_status({"state": status, "name": "w1", "sid": SID, "generation": "g1"})
+        if status == "running":
+            self.serve(channel, answer or {"ok": True, "data": {"reopened": False}})
         record = {
             "client": "claude",
             "workdir": state().workdir(),
@@ -822,6 +828,22 @@ class OwnedTest(Base):
         with open(os.path.join(self.tui, "session.json"), "w", encoding="utf-8") as f:
             json.dump(record, f)
 
+    def serve(self, channel: Channel, answer: dict) -> None:
+        self.asked: list[Op] = []
+        done = threading.Event()
+
+        def run():
+            while not done.is_set():
+                for ident, op, _ in channel.pending():
+                    self.asked.append(op)
+                    channel.reply(ident, **answer)
+                time.sleep(0.01)
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        self.addCleanup(done.set)
+
     def test_owned_resume_with_running_owner_starts_and_closes_nothing(self):
         self.owned()
         self.handle.alive.return_value = False  # its display says nothing of the worker
@@ -832,6 +854,56 @@ class OwnedTest(Base):
         self.host.attach.side_effect = SessionError("no tmux session w1")
         self.assertEqual(self.worker().resume(), state().record())
         self.assertEqual(self.calls(), ["publish"])
+        self.assertEqual(self.asked, [Op.DISPLAY, Op.DISPLAY])
+        self.session_cls.attach.assert_not_called()  # nothing reopened: nothing shown
+        self.assertEqual(self.said, [])
+
+    def test_owned_resume_reopens_its_killed_display_and_shows_it(self):
+        self.owned(answer={"ok": True, "data": {"reopened": True}})
+        view = self.session_cls.attach.return_value
+        view.showable = True
+        view.attach_command.return_value = "tmux attach -t '=w1'"
+        view.status.return_value = Status(
+            name="w1",
+            alive=True,
+            state=StatusState.WORKING,
+            outcome=None,
+            attach=None,
+            hidden=False,
+        )
+        self.assertEqual(self.worker().resume(), state().record())
+        self.assertEqual(self.asked, [Op.DISPLAY])
+        self.assertEqual(self.calls(), ["publish"])
+        self.session_cls.attach.assert_called_once_with("w1", sid=SID, host="tmux")
+        view.show.assert_called_once_with(display="mgr")
+        self.assertEqual(self.said, ["session w1: tmux attach -t '=w1'"])
+        self.session_cls.retire.assert_not_called()
+
+    def test_owned_resume_keeps_a_reopened_hidden_display_hidden(self):
+        self.owned(answer={"ok": True, "data": {"reopened": True}})
+        view = self.session_cls.attach.return_value
+        view.showable = True
+        view.status.return_value = Status(
+            name="w1", alive=True, state=StatusState.WORKING, outcome=None, attach=None, hidden=True
+        )
+        self.worker().resume()
+        view.show.assert_not_called()
+        view.hide.assert_not_called()
+
+    def test_owned_resume_says_a_display_refused_or_unshown_and_returns_its_record(self):
+        self.owned(answer={"ok": False, "error": "worker w1: its name shows another display"})
+        self.assertEqual(self.worker().resume(), state().record())
+        self.assertEqual(
+            self.said,
+            ["session w1: display not reopened: worker w1: its name shows another display"],
+        )
+        self.session_cls.attach.assert_not_called()
+        self.owned(answer={"ok": True, "data": {"reopened": True}})
+        self.said.clear()
+        self.session_cls.attach.side_effect = SessionError("no tui session w1")
+        self.assertEqual(self.worker().resume(), state().record())
+        self.assertEqual(self.said, ["session w1: not shown: no tui session w1"])
+        self.assertEqual(self.calls(), ["publish", "publish"])
 
     def test_owned_resume_without_owner_starts_and_closes_nothing(self):
         self.owned(None)
