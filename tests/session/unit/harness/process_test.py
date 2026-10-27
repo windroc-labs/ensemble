@@ -466,14 +466,16 @@ class DrainTest(Base):
         closer.start()
         while "Exited" not in self.types():
             time.sleep(0.01)
+        unanswered = []
         breaking = threading.Thread(  # served in the drain: its RuntimeError ends the harness
-            target=lambda: self.assertRaises(Unanswered, self.request, Op.CLOSE), daemon=True
+            target=lambda: unanswered.append(self.request(Op.CLOSE)), daemon=True
         )
         breaking.start()
         thread.join(WAIT)
-        self.channel.release()
+        self.channel.release()  # the harness gone: no answer, and no harness once let go
         closer.join(WAIT)
-        self.assertEqual((done, len(broke)), ([True], 1))
+        breaking.join(WAIT)
+        self.assertEqual((done, len(broke), unanswered), ([True], 1, [False]))
 
     def test_a_failed_close_during_the_drain_is_answered_with_its_error(self):
         owned = FakeOwned(([], True))
