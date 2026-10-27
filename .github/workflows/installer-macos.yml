@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/installer-macos.yml
       - docs/upgrading.md
+      - launchd/**
       - scripts/install.sh
       - scripts/install-cleanup.sh
       - skills/manage/scripts/ctmux

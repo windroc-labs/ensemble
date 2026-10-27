@@ -8,7 +8,9 @@ legacy: old-name items left, so every command but `version` refuses), fail (a ca
 commit (the commit GitHub reports for every ensemble ref), marketplace/ (the windroc marketplace's
 manifests on main), refs/<ref>/ (ensemble files at a ref, over pkg-src/), linear.json (the Linear workspace: apps
 {client_id: {secret, access_token, user_id}}, teams [{id, key, name, states, members, projects}],
-labels).
+labels), launchd/<label> (a loaded launchd job), hang/<client> (its login waits 30 s after creating hung, for the
+test's signal; `stored`: logged in first), codex/unauthorized (the `codex plugin` sub-commands it names, all when
+empty, fail with a 401).
 """
 
 import hashlib
@@ -23,6 +25,7 @@ import subprocess
 import sys
 import tarfile
 import termios
+import time
 from pathlib import Path
 from urllib.parse import parse_qs
 
@@ -380,6 +383,12 @@ def login(client, args, status, start, logout):
         flag.unlink(missing_ok=True)
         return 0
     if args == start:
+        hang = FAKES / "hang" / client
+        if hang.exists():
+            if hang.read_text() == "stored":
+                mark(flag)
+            mark(FAKES / "hung")
+            time.sleep(30)
         out(f"Log in to {client} in your browser.\n")
         mark(flag)
         return 0
@@ -491,6 +500,11 @@ def codex(args):
     done = login("codex", args, ["login", "status"], ["login"], ["logout"])
     if done is not None:
         return done
+    unauthorized = FAKES / "codex/unauthorized"
+    rejected = unauthorized.read_text().split() if unauthorized.exists() else None
+    if args[:1] == ["plugin"] and rejected is not None and (not rejected or args[1] in rejected):
+        out("Error: unexpected status 401 Unauthorized: token expired\n", sys.stderr)
+        return 1
     markets_file, plugins_file = FAKES / "codex/marketplaces.json", FAKES / "codex/plugins.json"
     markets, plugins = load(markets_file, {}), load(plugins_file, [])
     if args[:3] == ["plugin", "marketplace", "add"]:
@@ -703,7 +717,16 @@ def defaults(_args):
 
 
 def launchctl(args):
-    return 3 if args[:1] == ["bootout"] else 0
+    loaded = FAKES / "launchd"
+    if args[:1] == ["bootstrap"]:
+        mark(loaded / Path(args[2]).stem)
+    elif args[:1] in (["bootout"], ["print"]):
+        label = loaded / args[1].rsplit("/", 1)[-1]
+        if not label.exists():
+            return 3 if args[0] == "bootout" else 113
+        if args[0] == "bootout":
+            label.unlink()
+    return 0
 
 
 def shasum(args):
