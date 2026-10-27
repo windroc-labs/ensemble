@@ -7,7 +7,8 @@ and its outcome carries only the verdict (`Pass:` or `Fail:` and one line) and t
 verifier run:
 
 1. Name the repo in `~/.ensemble/config.local.toml`; without it every verifier run and `ensemble-delegate run --list`
-   stop with a configuration error naming `output.repo`. Install the ensemble bot GitHub App on that repo.
+   stop with a configuration error naming `output.repo`. Install the ensemble bot GitHub App on that repo. With a
+   `verifier` board stage, it must be the repo the other GitHub document roles publish to, on `main`.
 
    ```toml
    [delegate.roles.verifier.output]
