@@ -22,7 +22,8 @@ turn with StopFailure; {"kind": "dialog", "text": S} prints S and reads another 
 conversation can answer from the first generation's.
 {"kind": "queued", "answer": A} runs a tool while the next stdin line arrives, which Claude Code
 queues (an enqueue record) and joins to the turn once the tool returns (PostToolUse, then a
-queued_command attachment), then answers A; {"kind": "pause", "file": F} waits for F to exist.
+queued_command attachment), then answers A; {"kind": "pause", "file": F} waits for F to exist;
+{"kind": "input"} waits for any input to arrive (kept for the next line).
 - turns: interactive steps of turn 2 on.
 - background: interactive background_tasks per Stop.
 - resume: print steps run instead of `steps` on --resume.
@@ -106,6 +107,7 @@ TUI = {
     "exit": {},
     "queued": {"answer": _text},
     "pause": {"file": lambda v: _text(v) and v != ""},
+    "input": {},
     "recall": {},
 }
 
@@ -282,6 +284,12 @@ class Stdin:
         while not self.eof and (chunk := self.read(0)):
             self.buf += chunk
 
+    def arrival(self) -> None:
+        """Waits, at most HANG_CAP s, until something arrived; it stays buffered."""
+        until = time.monotonic() + HANG_CAP
+        while not self.buf and not self.eof and time.monotonic() < until:
+            self.buf += self.read(0.1) or b""
+
     def drop(self, until: float) -> None:
         """Discards what arrives before monotonic `until`."""
         while not self.eof and (left := until - time.monotonic()) > 0:
@@ -377,6 +385,8 @@ class InteractiveSession:
                 until = time.monotonic() + HANG_CAP
                 while not os.path.exists(step["file"]) and time.monotonic() < until:
                     time.sleep(0.05)
+            elif kind == "input":
+                self.request.stdin.arrival()
             elif kind == "exit":
                 sys.exit(self.request.scenario["exit"])
             elif kind == "recall":

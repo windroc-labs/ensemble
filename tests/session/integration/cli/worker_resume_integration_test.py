@@ -69,19 +69,27 @@ time.sleep(max(0, start + CAP - time.time()))
 """
 
 
-# A tmux for one start: it runs the fixture's, and that start's display (its first new-session)
-# then SIGKILLs the start's session harness once the client kept its transcript, so mid-launch
-KILLER = """import glob, os, signal, subprocess, sys, time
-code = subprocess.call([REAL, *sys.argv[1:]])
-if "new-session" in sys.argv[1:] and not os.path.exists(LAUNCHED):
-    open(LAUNCHED, "w").close()
-    kept = os.path.join(os.environ["HOME"], "**", "projects", "*", "*.jsonl")
-    until = time.monotonic() + 30
-    while not glob.glob(kept, recursive=True) and time.monotonic() < until:
-        time.sleep(0.05)
-    os.kill(os.getppid(), signal.SIGKILL)
-    sys.exit(1)
-sys.exit(code)
+# Once, beside the first client: kill -9 of w1's session harness once it runs it and the client
+# kept its transcript, so during the start's watch
+KILLER = """import glob, json, os, signal, sys, time
+if os.path.exists(sys.argv[1]):
+    sys.exit(0)
+open(sys.argv[1], "w").close()
+home = os.environ["HOME"]
+until = time.monotonic() + 30
+while time.monotonic() < until:
+    try:
+        with open(os.path.join(home, ".ensemble", "tui", "w1", "session.json")) as f:
+            owner = json.load(f)["owner"]
+        with open(os.path.join(owner, "harness.json")) as f:
+            status = json.load(f)
+        kept = glob.glob(os.path.join(home, "**", "projects", "*", "*.jsonl"), recursive=True)
+        if status.get("state") == "running" and kept:
+            os.kill(status["pid"], signal.SIGKILL)
+            break
+    except (OSError, ValueError, KeyError):
+        pass
+    time.sleep(0.05)
 """
 
 
@@ -184,18 +192,20 @@ class ResumeTest(Base):
         self.assertIn(self.server.pane_of("w1"), self.server.panes(f"={MANAGER}:"))
 
     def test_a_start_killed_right_after_its_launch_is_resumed_by_name(self):
-        directory = os.path.join(self.root, "killer")
-        os.mkdir(directory)
-        tmux = os.path.join(directory, "tmux")
-        names = f"REAL, LAUNCHED = {self.server.program!r}, {os.path.join(directory, 'launched')!r}"
-        with open(tmux, "w", encoding="utf-8") as f:
-            f.write(f"#!{sys.executable} -I\n{names}\n{KILLER}")
-        os.chmod(tmux, 0o700)
-        killed = self.start("w1", PATH=os.pathsep.join((directory, self.env()["PATH"])))
-        # the process that launched it, killed here, is its session harness, not the start
+        killer = os.path.join(self.root, "killer.py")
+        with open(killer, "w", encoding="utf-8") as f:
+            f.write(KILLER)
+        q = shlex.quote
+        path = self.first_on_path(
+            f"#!/bin/sh\n{q(sys.executable)} -I {q(killer)} {q(killer + '.done')} "
+            "</dev/null >/dev/null 2>&1 &\n"
+            f'exec {q(sys.executable)} -I {q(fake_claude.__file__)} "$@"\n'
+        )
+        killed = self.start("w1", PATH=path)
+        # the process killed is its session harness, not the start
         self.assertEqual((killed.returncode, killed.stdout), (1, ""), killed.stderr)
         self.assertIn("session harness", killed.stderr)
-        record = self.record(self.again("resume", "w1", inside=None, cwd=self.root))
+        record = self.record(self.again("resume", "w1", inside=None, cwd=self.root, PATH=path))
         self.assertEqual(record.resume, ("ensemble-session", "resume", "w1"))
         self.assertTrue(os.path.isfile(self.state_file(record.sid)))
         self.assertEqual(self.server.option("w1", "@record"), record.to_line())
