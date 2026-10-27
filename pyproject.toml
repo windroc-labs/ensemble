@@ -210,7 +210,7 @@ dependencies = [
     "ensemble.session.engine.records -> ensemble.session.engine.types ensemble.utils",
     "ensemble.session.engine.status_log -> ensemble.utils",
     "ensemble.session.engine.tmux_cli -> ensemble.session.engine.status_log ensemble.session.engine.types ensemble.utils",
-    "ensemble.session.hosts -> ensemble.session.hosts.base ensemble.session.hosts.types ensemble.session.engine.status_log ensemble.session.engine.tmux_cli ensemble.session.engine.types ensemble.utils",
+    "ensemble.session.hosts -> ensemble.session.harness ensemble.session.hosts.base ensemble.session.hosts.types ensemble.session.engine.status_log ensemble.session.engine.tmux_cli ensemble.session.engine.types ensemble.utils",
     "ensemble.session.hosts.base -> ensemble.session.hosts.types ensemble.session.engine.types ensemble.utils",
     "ensemble.session.hosts.types -> ",
     "ensemble.session.harness -> ensemble.session.engine.base ensemble.session.engine.types ensemble.session.hosts.base ensemble.session.modes ensemble.utils",
