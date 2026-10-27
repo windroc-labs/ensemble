@@ -368,7 +368,7 @@ class RecordControl(HostedTuiBase):
         process.calls.close.side_effect = fail
         code, out, err = self.invoke("close", record=self.record)
         self.assertEqual((code, out), (1, ""), err)
-        self.assertIn("docker ps: timed out", err)
+        self.assertIn("w1: cannot close; docker ps: timed out", err)
         self.host.calls.attach.side_effect = Unanswered("docker ps: timed out")
         process.calls.close.side_effect = None
         code, out, err = self.invoke("close", record=self.record)

@@ -642,8 +642,12 @@ def _close(name: str, record: Record | None, hosts: Hosts) -> None:
             Session.retire(session, sid=sid, host=_host_of(session, hosts))
         except (Unanswered, OwnerRefused):
             raise
-        except SessionError:
-            if record is None or _holds(session, record.sid, hosts):
+        except SessionError as error:
+            try:
+                held = record is None or _holds(session, record.sid, hosts)
+            except Unanswered as unknown:
+                raise Unanswered(f"{error}; {unknown}") from error
+            if held:
                 raise
 
 
