@@ -224,7 +224,11 @@ class HeadlessMode(BaseMode):
         except (OSError, ValueError) as e:
             raise SessionError(f"cannot start {prepared.argv[0]}: {e}") from e
         try:
-            worker.write(b"")
+            try:
+                worker.write(b"")
+            except SessionError:
+                if worker.state() != Liveness.ABSENT:
+                    raise
             mode = cls(prepared, worker, worker.generation)
             out, err = mode.feeds["stdout"], mode.feeds["stderr"]
             for feed, events, eof, done in (

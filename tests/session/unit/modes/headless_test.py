@@ -444,6 +444,18 @@ class ThroughItsHost(Base):
         self.assertFalse(hasattr(host, "pipe"))
         self.assertEqual(len(self.recorded), 1)
 
+    def test_a_client_that_exited_before_its_input_ended_still_reports_its_exit(self):
+        worker = ScriptedWorker(code=3)
+        worker.write = mock.Mock(side_effect=SessionError("worker w: exited"))
+        worker.state = mock.Mock(return_value=Liveness.ABSENT)
+        mode = self.start_on(WorkerHost(worker))
+        self.assertEqual(mode.returncode(5), 3)
+        live = ScriptedWorker(code=None)
+        live.write = mock.Mock(side_effect=SessionError("worker w: input ended"))
+        with self.assertRaisesRegex(SessionError, "^cannot start .*: worker w: input ended$"):
+            self.start_on(WorkerHost(live))
+        self.assertEqual(live.closes, 1)
+
     def test_start_ends_the_workers_input(self):
         worker = ScriptedWorker(code=None)
         self.start_on(WorkerHost(worker))

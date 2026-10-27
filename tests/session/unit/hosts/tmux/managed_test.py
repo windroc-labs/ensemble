@@ -480,6 +480,26 @@ class OneShotTest(Case):
         worker.close()
         self.assertFalse(os.path.lexists(directory))
         worker.close()
+        self.host.tmux.option.assert_not_called()  # a headless worker has no display
+
+    def test_a_headless_handle_without_tmux_has_no_display(self):
+        channel = managed.TmuxManagedProcess(
+            "x", "a" * 32, mock.Mock(), terminal=False, tmux=None, start_reader=False
+        )
+        channel.close_display()
+        channel.mark(StatusState.WORKING, None)
+        self.assertEqual((channel.activity(), channel.redisplay()), (None, False))
+
+    def test_a_failed_close_removes_the_dir_only_once_its_guard_is_gone(self):
+        for gone in (False, True):
+            with self.subTest(gone=gone):
+                worker = self.headless("x")
+                directory = managed.one_shot("tmux", worker.generation)
+                worker.proc.poll.return_value = 0 if gone else None
+                worker.fail("guard channel: boom")
+                with self.assertRaises(Unanswered):
+                    worker.close()
+                self.assertEqual(os.path.lexists(directory), not gone)
 
     def test_a_failed_headless_start_removes_its_one_shot_dir(self):
         with (

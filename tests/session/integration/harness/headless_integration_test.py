@@ -257,9 +257,11 @@ class ClaudeKillTest(ClaudeHeadless):
     """kill -9 of a headless run's harness: its guard ends the client; the next start sweeps."""
 
     def killed(self) -> int:
-        """A hung run's harness killed with SIGKILL; the fake's pid."""
+        """A hung run's harness killed with SIGKILL, its view held (a dropped view closes the
+        run); the fake's pid.
+        """
         self.scene(steps=["working"], hang=True)
-        self.session_cls.start(self.spec())
+        self.view = self.session_cls.start(self.spec())
         harness = self.harness_pid()
         pid = self.pid()
         self.wait_for("Reply")

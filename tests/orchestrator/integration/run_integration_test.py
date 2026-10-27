@@ -33,7 +33,7 @@ PICK = "picked the task."
 RUNNING = r"running · #1 · \S+"
 DONE = r"done · #2 · \S+ → \S+ · exit 0"
 UNDONE = r"no outcome · #2 · \S+ → \S+ · exit 0"
-LIMITED = r"limit · #2 · \S+ → \S+ · exit -9"  # the Session kills a limit-hit session
+LIMITED = r"limit · #2 · \S+ → \S+ · exit -1"  # the Session's guard hangs up a limit-hit session
 KINDS = ["session", "input", "client_session", "progress", "result", "end"]
 RESEARCH = {
     "status": "done",
@@ -341,7 +341,7 @@ class Undone(Run):
                 end=LIMITED,
             ),
         )
-        self.assertEqual(self.said(), steps("running:1", "start", "limit", "limit-move:1", end=-9))
+        self.assertEqual(self.said(), steps("running:1", "start", "limit", "limit-move:1", end=-1))
         self.assertEqual(self.records(ID)[-3]["kind"], "limit")
         start = {
             "kind": "start",

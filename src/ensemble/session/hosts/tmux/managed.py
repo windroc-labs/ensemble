@@ -60,7 +60,11 @@ class TmuxManagedProcess(ManagedProcess):
         super().__init__(name, generation, proc, terminal=terminal, start_reader=start_reader)
 
     def _display(self) -> TmuxPane | None:
-        """Its own generation's display pane, else None (another's, gone, or tmux failed)."""
+        """Its own generation's display pane, else None (headless, another's, gone, or tmux
+        failed).
+        """
+        if not self.terminal:
+            return None
         try:
             if self.tmux.option(self.name, "@generation") != self.generation:
                 return None
@@ -87,12 +91,17 @@ class TmuxManagedProcess(ManagedProcess):
                 pane.mark(word, events)
 
     def close(self) -> None:
-        super().close()
-        removal, self.removal = self.removal, None
-        if removal is not None:
-            removal()
+        try:
+            super().close()
+        finally:
+            if self.proc.poll() is not None:  # its guard gone: nothing holds the dir any more
+                removal, self.removal = self.removal, None
+                if removal is not None:
+                    removal()
 
     def close_display(self) -> None:
+        if not self.terminal:
+            return
         with contextlib.suppress(TuiError):
             if self.tmux.option(self.name, "@generation") == self.generation:
                 self.tmux.kill(self.name)
