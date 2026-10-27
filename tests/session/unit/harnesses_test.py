@@ -1,5 +1,6 @@
 """harnesses.end closes a test HOME's session harnesses and returns only once each has let go."""
 
+import fcntl
 import json
 import os
 import signal
@@ -154,3 +155,49 @@ class EndTest(Case):
         harness.halt.set()
         harness.join(5)
         self.assertTrue(harnesses._let_go(harness.channel, 0.0))
+
+
+class LetGoTest(Case):
+    def held(self) -> Channel:
+        directory = os.path.join(self.ensemble, "harness", uuid.uuid4().hex)
+        os.makedirs(directory, 0o700)
+        channel = Channel(directory)
+        channel.hold()
+        self.addCleanup(channel.release)
+        return channel
+
+    def test_a_wait_that_times_out_leaves_no_thread_behind(self):
+        channel = self.held()
+        before = set(threading.enumerate())
+        self.assertFalse(harnesses._let_go(channel, 0.0))
+        self.assertEqual({t for t in threading.enumerate() if t.is_alive()} - before, set())
+        channel.release()
+        self.assertTrue(harnesses._let_go(channel, 1))
+        self.assertFalse(channel.alive())
+
+    def test_a_holder_releasing_mid_wait_is_let_go(self):
+        channel = self.held()
+        asked = threading.Event()
+        holder = threading.Thread(target=lambda: (asked.wait(), channel.release()))
+        holder.start()
+        self.addCleanup(holder.join)
+        with mock.patch.object(
+            harnesses.fcntl, "flock", side_effect=_after_first(fcntl.flock, asked.set)
+        ):
+            self.assertTrue(harnesses._let_go(channel, harnesses.WAIT))
+        self.assertFalse(channel.alive())
+
+
+def _after_first(flock, then):
+    """flock that runs `then` after its first call fails, so a holder releases mid-wait."""
+    calls = []
+
+    def call(fd, operation):
+        calls.append(operation)
+        try:
+            return flock(fd, operation)
+        finally:
+            if len(calls) == 1:
+                then()
+
+    return call
