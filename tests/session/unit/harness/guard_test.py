@@ -190,7 +190,7 @@ class GuardTest(Case):
             self.assertEqual(guard.main(["--attach", self.home + "/display"]), 0)
         self.assertEqual(output.getvalue(), b"terminal output")
         peer.sendall.assert_called_once_with(b"typed")
-        raw.assert_called_once_with(0)
+        raw.assert_called_once_with(0, termios.TCSANOW)  # keeps what was typed before it
         restore.assert_called_once_with(0, termios.TCSADRAIN, ["saved"])
         peer.close.assert_called_once()
 
