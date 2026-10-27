@@ -5947,6 +5947,126 @@ exec /bin/rm "$@"
             )
             self.assert_ok(result)
 
+    def configured_provider(self, toml=None, jsonc=None, flag=""):
+        """install.sh's configured_provider for `flag` over config.local.toml `toml` and opencode.jsonc `jsonc`
+        (None: absent)."""
+        text = SCRIPT.read_text()
+        functions = [
+            re.search(rf"^{name}\(\) \{{\n.*?^\}}", text, re.S | re.M).group(0)
+            for name in ("opencode_config_edit", "configured_provider")
+        ]
+        patterns = re.findall(r"(?m)^(?:name|url|model|context)_pattern=.*$", text)
+        conf = Path(self.home, ".config/opencode/opencode.jsonc")
+        for path, content in ((self.config(), toml), (conf, jsonc)):
+            path.unlink(missing_ok=True)
+            if content is not None:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content)
+        program = "\n".join(
+            [*patterns, *functions, f"config={self.config()}", 'configured_provider "$1"']
+        )
+        proc = subprocess.run(
+            ["bash", "-euo", "pipefail", "-c", program, "bash", flag],
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return proc.stdout
+
+    def test_c10_configured_provider_qualifies_one_entry(self):
+        """C10: only one provider with a valid name and URL is reused, all its fields from that entry; a named one
+        that does not qualify, or several that do, reuse nothing; an invalid model or context is left to ask."""
+        lan = 'base_url = "http://localhost:8080/v1"\nmodels = ["m"]\ncontext = 65536\n'
+        table = "[session.clients.opencode.providers.{}]\n"
+        model = '[session.clients.opencode]\nmodel = "{}"\n'
+        bad_url = 'base_url = "ftp://h/v1"\nmodels = ["m"]\n'
+        other = 'base_url = "http://localhost:9090/v1"\nmodels = ["n"]\n'
+        jsonc = json.dumps(
+            {
+                "provider": {
+                    "lab": {
+                        "options": {"baseURL": "http://localhost:7070/v1"},
+                        "models": {"q": {"limit": {"context": 4096}}},
+                    }
+                }
+            }
+        )
+        found = "lan\thttp://localhost:8080/v1\tm\t65536"
+        cases = (
+            (
+                "the model's table",
+                model.format("lan/m") + table.format("lan") + lan,
+                None,
+                "",
+                found,
+            ),
+            ("the only table", table.format("lan") + lan, jsonc, "", found),
+            (
+                "the flag's table",
+                table.format("lan") + lan + table.format("o") + other,
+                None,
+                "lan",
+                found,
+            ),
+            (
+                "a URL failing valid_url",
+                model.format("x/m") + table.format("x") + bad_url,
+                jsonc,
+                "",
+                "",
+            ),
+            (
+                "a model naming a non-candidate, another valid",
+                model.format("x/m") + table.format("x") + bad_url + table.format("o") + other,
+                jsonc,
+                "",
+                "",
+            ),
+            (
+                "two candidates",
+                table.format("lan") + lan + table.format("o") + other,
+                jsonc,
+                "",
+                "",
+            ),
+            (
+                "an invalid model and context",
+                table.format("lan")
+                + 'base_url = "http://localhost:8080/v1"\nmodels = ["a b"]\ncontext = 0\n',
+                None,
+                "",
+                "lan\thttp://localhost:8080/v1\t\t",
+            ),
+            ("no table: opencode.jsonc", "", jsonc, "", "lab\thttp://localhost:7070/v1\tq\t4096"),
+            ("a flag naming no provider", table.format("lan") + lan, jsonc, "other", ""),
+        )
+        for name, toml, conf, flag, want in cases:
+            with self.subTest(name):
+                self.assertEqual(self.configured_provider(toml, conf, flag), want)
+        two = json.loads(jsonc)
+        two["provider"]["o"] = {
+            "options": {"baseURL": "http://localhost:9090/v1"},
+            "models": {"n": {}},
+        }
+        bad = json.loads(jsonc)
+        bad["provider"]["x"] = {"options": {"baseURL": "ftp://h/v1"}, "models": {"m": {}}}
+        for name, conf, flag, want in (
+            ("opencode.jsonc: two candidates", json.dumps(two), "", ""),
+            (
+                "opencode.jsonc: one candidate beside a bad URL",
+                json.dumps(bad),
+                "",
+                "lab\thttp://localhost:7070/v1\tq\t4096",
+            ),
+            ("opencode.jsonc: the flag's provider with a bad URL", json.dumps(bad), "x", ""),
+            ("opencode.jsonc: a flag naming another provider", jsonc, "other", ""),
+        ):
+            with self.subTest(name):
+                self.assertEqual(self.configured_provider(None, conf, flag), want)
+
     def test_c10_missing_state_reuses_opencode_jsonc_provider(self):
         """C10: a provider only in opencode.jsonc is reused too, and goes back into config.local.toml."""
         self.assert_ok(self.opencode_only())
@@ -6072,6 +6192,19 @@ exec /bin/rm "$@"
         self.assertIn("==> Codex login\n    skip: logged in", result.stderr)
         self.assertIn("==> Codex plugins", result.stderr)
         self.assertIn(REJECTED, result.stderr)
+        for sub, setup in (("upgrade", None), ("add", Path(self.home, ".codex/config.toml"))):
+            with self.subTest(f"a 401 on codex plugin marketplace {sub}"):
+                (self.fakes / "codex/unauthorized").write_text("marketplace")
+                if setup:
+                    setup.unlink()
+                result = self.again()
+                self.assertNotEqual(result.code, 0)
+                self.assertIn("==> Codex plugins", result.stderr)
+                self.assertTrue(
+                    [c for c in self.calls() if c.startswith(f"codex plugin marketplace {sub} ")]
+                )
+                self.assertFalse([c for c in self.calls() if c.startswith("codex plugin add ")])
+                self.assertIn(REJECTED, result.stderr)
         with self.subTest("a failure without 401"):
             (self.fakes / "codex/unauthorized").unlink()
             (self.fakes / "fail").write_text("codex plugin add")

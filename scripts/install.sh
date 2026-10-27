@@ -676,7 +676,7 @@ checklist() {
 # The configuration: each answer from its flag, else the last answer (State), else the config, else the default;
 # the checklist appears only when clients or Docker has no flag or saved answer. save_answers keeps them.
 answers() {
-  local said default client item found choose=
+  local said default client item found board_text choose=
   local -a labels ticks names=(claude codex opencode)
   step configuration
   said=$(config_says)
@@ -784,11 +784,11 @@ answers() {
     done
   fi
   if [ "$board" = yes ]; then
-    item="yes ($board_tracker), launchd: ${board_jobs_choice:-no}"
+    board_text="yes ($board_tracker), launchd: ${board_jobs_choice:-no}"
   else
-    item=no
+    board_text=no
   fi
-  say "    clients: $clients, Docker: $docker, board: $item${provider:+, OpenCode provider: $provider}"
+  say "    clients: $clients, Docker: $docker, board: $board_text${provider:+, OpenCode provider: $provider}"
 }
 
 # Saves answers' choices once the run's refusals (ref_check, broker_plan preflight) have passed: a refused run
@@ -1369,7 +1369,7 @@ claude_plugins() {
 codex_rejected() {
   local text
   text=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
-  if [[ $text =~ (^|[^0-9])401([^0-9]|$) || $text == *unauthori[sz]ed* ]]; then
+  if [[ $text =~ (^|[^[:alnum:]_])401([^[:alnum:]_]|$) || $text == *unauthori[sz]ed* ]]; then
     die "Codex: the saved login was rejected (401 Unauthorized): run codex login, then rerun install.sh"
   fi
 }
