@@ -2,7 +2,6 @@
 screen queries and close out (docs/sessions.md › Guard protocol).
 """
 
-import contextlib
 import json
 import os
 import select
@@ -99,6 +98,8 @@ class ManagedProcess(InteractiveProcess):
         self.view_pending = False
         self.reader = None
         self.exit_thread: threading.Thread | None = None
+        self.releases = 0
+        self.releaser: threading.Thread | None = None
         if start_reader:
             self.reader = threading.Thread(target=self.pump, name=f"guard-{name}", daemon=True)
             self.reader.start()
@@ -232,13 +233,35 @@ class ManagedProcess(InteractiveProcess):
             return found
 
     def release_hook(self) -> None:
-        """The h just taken: its guard acks its hook, so the client goes on only after
-        accept_hook. A gone guard is left to this reader's exit frame or EOF.
+        """The h just taken: its guard may ack its hook, so the client goes on only after
+        accept_hook. Its k is written on a thread of its own: this reader never waits on `sending`.
         """
-        with contextlib.suppress(SessionError):
-            self.send_frame(b"k", b"{}", reader=True)
+        with self.condition:
+            self.releases += 1
+            if self.releaser is None:
+                self.releaser = threading.Thread(
+                    target=self._release, name=f"guard-{self.name}-release", daemon=True
+                )
+                self.releaser.start()
+            self.condition.notify_all()
 
-    def send_frame(self, kind: bytes, data: bytes, *, reader: bool = False) -> None:
+    def _release(self) -> None:
+        """Until its exit frame or a failure: once closing, the guard acks hooks itself."""
+        while True:
+            with self.condition:
+                self.condition.wait_for(
+                    lambda: self.releases or self.failure is not None or self.code is not None
+                )
+                if self.failure is not None or self.code is not None:
+                    return
+                count, self.releases = self.releases, 0
+            try:
+                for _ in range(count):
+                    self.send_frame(b"k", b"{}")
+            except SessionError:
+                return
+
+    def send_frame(self, kind: bytes, data: bytes) -> None:
         self.checked()
         wire = memoryview(guard.frame(kind, data))
         with self.sending:
@@ -256,8 +279,6 @@ class ManagedProcess(InteractiveProcess):
                 except BlockingIOError:
                     continue
                 except BrokenPipeError as error:
-                    if reader:  # input_closed would wait for this very reader
-                        return
                     self.input_closed(error)
                 except (OSError, ValueError) as error:
                     self.fail(f"guard input: {error}")

@@ -23,6 +23,8 @@ from ensemble.session.hosts.base import GUARD_WAIT
 from tests.session.case import Case
 from tests.utils.process_fixtures import TimeoutExpired
 
+WAIT = 5  # seconds for a background thread's step
+
 
 class ManagedProcessTest(Case):
     def test_modified_control_keys_do_not_become_invalid_csi_sequences(self):
@@ -82,48 +84,96 @@ class ManagedProcessTest(Case):
 
     def test_each_hook_is_released_to_its_guard_only_after_it_was_taken(self):
         channel = self.channel()
-        order = []
+        order, released = [], threading.Event()
+        release = guard.frame(b"k", b"{}")
         taken = channel.accept_hook
         channel.accept_hook = lambda data: order.append("taken") or taken(data)
         value = {"label": "Stop", "payload": {}, "delivery_id": "a" * 32}
-        channel.proc.stdout.read.side_effect = [
-            guard.json_frame(b"s", {"pid": 1})
-            + guard.json_frame(b"h", value)
-            + guard.json_frame(b"h", {**value, "delivery_id": "b" * 32}),
-            b"",
-        ]
+        reads = iter(
+            [
+                guard.json_frame(b"s", {"pid": 1})
+                + guard.json_frame(b"h", value)
+                + guard.json_frame(b"h", {**value, "delivery_id": "b" * 32})
+            ]
+        )
+
+        def read(_size):  # EOF only once both were released
+            for data in reads:
+                return data
+            released.wait(WAIT)
+            return b""
+
+        def write(_fd, wire):
+            order.append(bytes(wire))
+            if order.count(release) == 2:
+                released.set()
+            return len(wire)
+
+        channel.proc.stdout.read.side_effect = read
         with (
             mock.patch.object(
                 managed.select, "select", return_value=([], [channel.proc.stdin], [])
             ),
-            mock.patch.object(
-                os, "write", side_effect=lambda _fd, wire: order.append(bytes(wire)) or len(wire)
-            ),
+            mock.patch.object(os, "write", side_effect=write),
         ):
             channel.pump()
-        release = guard.frame(b"k", b"{}")
-        self.assertEqual(order, ["taken", release, "taken", release])
+        self.assertTrue(released.is_set())
+        releases = [i for i, item in enumerate(order) if item == release]
+        takes = [i for i, item in enumerate(order) if item == "taken"]
+        self.assertEqual(len(takes), 2)
+        self.assertTrue(all(r > t for r, t in zip(releases, takes, strict=True)))
 
-    def test_a_release_to_a_gone_guard_never_holds_the_reader(self):
+    def test_a_writer_waiting_on_a_gone_guard_never_holds_the_reader(self):
+        """A final hook, then a write meeting the gone guard: the reader still takes its exit."""
         channel = self.channel()
+        entered = threading.Event()
+        closed = channel.input_closed
+
+        def input_closed(error):  # its send lock held, waiting for this reader's exit frame
+            entered.set()
+            return closed(error)
+
+        channel.input_closed = input_closed
         value = {"label": "Stop", "payload": {}, "delivery_id": "a" * 32}
-        channel.proc.stdout.read.side_effect = [
-            guard.json_frame(b"s", {"pid": 1}) + guard.json_frame(b"h", value),
-            guard.json_frame(b"x", {"returncode": 0}),
-            b"",
-        ]
+        reads = iter(
+            [
+                guard.json_frame(b"s", {"pid": 1}),
+                lambda: (
+                    entered.wait(WAIT)
+                    and guard.json_frame(b"h", value) + guard.json_frame(b"x", {"returncode": 0})
+                ),
+            ]
+        )
+
+        def read(_size):
+            for data in reads:
+                return data() if callable(data) else data
+            return b""
+
+        errors = []
+
+        def writer():
+            try:
+                channel.write(b"late")
+            except SessionError as error:
+                errors.append(error)
+
+        channel.proc.stdout.read.side_effect = read
+        thread = threading.Thread(target=writer)
         with (
             mock.patch.object(
                 managed.select, "select", return_value=([], [channel.proc.stdin], [])
             ),
             mock.patch.object(os, "write", side_effect=BrokenPipeError),
-            mock.patch.object(managed, "GUARD_WAIT", 30),
         ):
+            thread.start()
             began = time.monotonic()
             channel.pump()
-        self.assertLess(time.monotonic() - began, 5)
-        self.assertEqual(channel.returncode(), 0)
+            thread.join(WAIT)
+        self.assertLess(time.monotonic() - began, GUARD_WAIT / 2)
         self.assertIsNone(channel.failure)
+        self.assertEqual(channel.returncode(), 0)
+        self.assertEqual([type(error) for error in errors], [SessionError])
 
     def test_transport_eof_without_exit_is_unknown(self):
         channel = self.channel()

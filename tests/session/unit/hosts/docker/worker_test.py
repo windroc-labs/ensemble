@@ -239,9 +239,10 @@ class HookTest(Base):
             with open(prompted, "w") as f:
                 f.write(f"{GEN} 1 1")
 
+        acked = threading.Event()
         peer = mock.Mock()
         peer.recv.return_value = hook() + b"\n"
-        peer.sendall.side_effect = client_goes_on
+        peer.sendall.side_effect = lambda reply: (client_goes_on(reply), acked.set())
         runtime.peers[peer] = ("hook", bytearray())
         runtime.peer_read(peer)
 
@@ -261,7 +262,7 @@ class HookTest(Base):
         def read(_size):  # the channel's EOF only once its hook was delivered
             for data in reads:
                 return data
-            peer.sendall.assert_called_once()
+            self.assertTrue(acked.wait(WAIT))
             self.deliver(channel)
             return b""
 
