@@ -106,8 +106,9 @@ Go tool through `src/broker/with-go-state.sh` (state in `.cache/go/`). CI's requ
 The required `CI` aggregate depends on that job and validates its result against scope;
 `Worker image` retains its own scope check. The independent `Broker macOS` workflow
 (`.github/workflows/broker-macos.yml`) runs the same Go checks on `macos-15`, builds the
-darwin/arm64 binary and uploads its artifact on pushes to `main` and manual dispatch only.
-It reports no PR or merge-group checks and does not block required CI. Broker tests use
+darwin/arm64 binary and uploads its artifact on pushes to `main`, pull requests that change
+`src/broker/` or the workflow, and manual dispatch. It reports no merge-group checks and does not
+block required CI. Broker tests use
 fakes for credentials; they never call the real macOS keychain or Security API.
 Installer and launcher changes also run the separate `Installer macOS` PR workflow:
 `python3 .github/run_tests.py 'Installer macOS' tests/integration/install_integration_test.py tests/manager/integration/ctmux_integration_test.py --parallel 4 --shard 1/1`.

@@ -30,8 +30,8 @@ Queue groups run every CI project, including diff coverage against the group's b
 `CI` requires every applicable job and, when broker scope is selected, `Broker ubuntu-24.04`.
 The main CI workflow has no macOS job. Installer PRs run the separate `Installer macOS`
 workflow with fake credentials. The independent `Broker macOS` workflow
-(`.github/workflows/broker-macos.yml`) runs on pushes to `main` and manual dispatch,
-preserving macOS checks and the darwin/arm64 build artifact without blocking required CI.
+(`.github/workflows/broker-macos.yml`) runs on pushes to `main`, pull requests that change
+`src/broker/` or the workflow, and manual dispatch, preserving macOS checks and the darwin/arm64 build artifact without blocking required CI.
 Require `CI`, never `Broker macos-15` separately.
 
 ## Releasing
