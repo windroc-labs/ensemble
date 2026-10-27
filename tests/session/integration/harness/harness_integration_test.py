@@ -48,10 +48,11 @@ class OwnerTest(HarnessCase):
             (status["state"], status["name"], status["sid"]), ("running", "w1", record.sid)
         )
 
-    def test_the_worker_stays_supervised_after_its_entry_exits(self):
+    def test_the_worker_stays_supervised_after_its_entry_exits_and_its_display_hides(self):
         self.record(self.start("w1", turns=[["Second."]]))
         channel = self.owner("w1")
         self.wait_logged(channel, "TurnEnd")
+        self.ok(self.session("hide", "w1"))
         self.ok(self.session("send", "w1", "next"))
         records = self.wait_logged(channel, "TurnEnd", 2)
         ends = [r for r in records if r["type"] == "TurnEnd"]

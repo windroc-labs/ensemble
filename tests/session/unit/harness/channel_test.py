@@ -212,6 +212,35 @@ class RequestTest(Base):
         with self.assertRaisesRegex(Unanswered, "not confirmed"):
             self.channel.request(Op.CLOSE, timeout=5)
 
+    def test_a_reply_written_just_before_the_harness_lets_go_is_read(self):
+        flock = fcntl.flock
+        for ok, error, check in (
+            (True, None, lambda: self.assertTrue(self.channel.request(Op.CLOSE, timeout=5))),
+            (
+                False,
+                "cannot close",
+                lambda: self.assertRaisesRegex(
+                    SessionError, "cannot close", self.channel.request, Op.CLOSE, timeout=5
+                ),
+            ),
+        ):
+            with self.subTest(ok=ok):
+                held = self.hold_lock()
+                probes = []
+
+                def probe(fd, how, *, held=held, ok=ok, error=error, probes=probes):
+                    probes.append(how)
+                    if len(probes) == 2:  # the loop's liveness probe: answer, then let go
+                        [(ident, _)] = self.channel.requests()
+                        self.channel.reply(ident, ok=ok, error=error)
+                        flock(held, fcntl.LOCK_UN)
+                    return flock(fd, how)
+
+                with mock.patch.object(fcntl, "flock", side_effect=probe):
+                    check()
+                self.assertEqual(len(probes), 2)
+                self.assertEqual(os.listdir(os.path.join(self.channel.directory, "replies")), [])
+
     def test_no_harness_is_false(self):
         self.assertFalse(self.channel.request(Op.CLOSE, timeout=1))
         self.assertFalse(os.path.exists(os.path.join(self.channel.directory, "requests")))
