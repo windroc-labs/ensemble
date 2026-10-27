@@ -41,3 +41,9 @@ class Op(StrEnum):
 
     CLOSE = "close"
     STOP = "stop"
+    SEND = "send"  # these three: a remote worker's, with data; never end it
+    PRESS = "press"
+    SCREEN = "screen"
+
+
+SERVED = (Op.SEND, Op.PRESS, Op.SCREEN)

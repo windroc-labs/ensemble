@@ -44,8 +44,10 @@ from ensemble.session.engine.types import (
     Unanswered,
 )
 from ensemble.session.engine.worker import Worker, WorkerState
-from ensemble.session.hosts.base import Host
+from ensemble.session.harness import guard
+from ensemble.session.hosts.base import Host, tui_lock
 from ensemble.session.hosts.docker import host as docker_host
+from ensemble.session.hosts.docker import worker as worker_module
 from ensemble.session.hosts.docker.broker import (
     BROKER,
     RELAY,
@@ -64,7 +66,7 @@ from ensemble.session.hosts.docker.relay import SOCKET
 from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.session.hosts.types import CommandView
 from ensemble.session.viewer import display as displays
-from ensemble.utils import Record, parse_time
+from ensemble.utils import Record, inode_lock, parse_time
 from tests.session.case import REPO, Case
 from tests.session.unit.hosts.docker.support import FakeBroker as BrokerRunner
 from tests.session.unit.hosts.docker.support import data
@@ -3560,3 +3562,281 @@ class AttachTargetTest(Base):
 def _read(path):
     with open(path) as stream:
         return stream.read()
+
+
+class GuardExec:
+    """`docker exec -i` of the guard over real pipes: its start frame at once, its exit frame once
+    told to close (or by exit()).
+    """
+
+    def __init__(self, argv):
+        self.args, self.pid, self.returncode = argv, 7777, None
+        read_in, write_in = os.pipe()
+        read_out, self._out = os.pipe()
+        self.stdin = os.fdopen(write_in, "wb", buffering=0)
+        self.stdout = os.fdopen(read_out, "rb", buffering=0)
+        self._in = os.fdopen(read_in, "rb", buffering=0)
+        self.exited = threading.Event()
+        self.write(b"s", {"pid": 1})
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    def write(self, kind, value):
+        with contextlib.suppress(OSError):
+            os.write(self._out, guard.json_frame(kind, value))
+
+    def _serve(self):
+        decoder = guard.Decoder()
+        while data := self._in.read(65536):
+            for kind, _ in decoder.feed(data):
+                if kind == b"c":
+                    self.exit(0)
+        self._in.close()
+
+    def exit(self, code):
+        if not self.exited.is_set():
+            self.exited.set()
+            self.write(b"x", {"returncode": code})
+            os.close(self._out)
+
+    def wait(self, timeout=None):
+        return 0
+
+    def poll(self):
+        return 0 if self.exited.is_set() else None
+
+
+class GuardedBase(StartBase):
+    OWNER = "/Users/x/.ensemble/harness/" + "a" * 32
+
+    def setUp(self):
+        super().setUp()
+        self.execs = []
+        self.popen_mock.side_effect = self.guard_popen
+
+    def guard_popen(self, argv, **kw):
+        if "--hook-socket" in argv:
+            proc = GuardExec(argv)
+            self.execs.append((argv, kw, proc))
+            self.addCleanup(proc.exit, 0)
+            return proc
+        self.order.append(("popen", argv[:3]))
+        return mock.Mock(pid=4321)
+
+    def owned(self, **metadata):
+        handle = self.start(owner=self.OWNER, **metadata)
+        self.addCleanup(self.close_quietly, handle)
+        return handle
+
+    def close_quietly(self, handle):
+        with contextlib.suppress(SessionError):
+            handle.close()
+
+    def guarded_record(self, gen=GEN):
+        self.record(generation=gen, mode="guard")
+
+    def owner_held(self):
+        os.makedirs(self.state, exist_ok=True)
+        fd = os.open(os.path.join(self.state, "guard.lock"), os.O_RDWR | os.O_CREAT)
+        self.addCleanup(_close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return fd
+
+    def probe_says(self, word, rc=0):
+        self.docker.replies[(PYTHON, "-I", worker_module.GUARD, "--probe")] = (rc, word + "\n", "")
+
+
+class GuardedStartTest(GuardedBase):
+    def test_owned_terminal_execs_the_guard_without_tmux_relay_or_supervisor(self):
+        handle = self.owned()
+        self.assertIsInstance(handle, worker_module.DockerWorker)
+        self.assertTrue(handle.remote)
+        [(argv, kw, _)] = self.execs
+        run = f"/run/ensemble/guard/{GEN}"
+        self.assertEqual(
+            argv,
+            [
+                *(DOCKER, "--host", self.ep, "exec", "-i", "--workdir", self.cwd),
+                *("--env", "AGENT_HOME", "--env", "K", "--env", "ENSEMBLE_GUARD_HOOK_SOCKET"),
+                *(CONTAINER, PYTHON, "-I", worker_module.GUARD),
+                *("--terminal", "--display-socket", f"{run}/display"),
+                *("--hook-socket", f"{run}/hook", "--lease", f"{run}/lease", "--"),
+                *("with-secrets", "--client", "agent", "agent", "--flag"),
+            ],
+        )
+        self.assertEqual(kw["env"]["ENSEMBLE_GUARD_HOOK_SOCKET"], f"{run}/hook")
+        self.assertTrue(kw["close_fds"] and kw["start_new_session"])
+        self.assertNotIn("pass_fds", kw)
+        execs = self.docker.execs()
+        self.assertFalse(any("tmux" in call or RELAY in call for call in execs), execs)
+        self.assertFalse(any(isinstance(c, tuple) and c[0] == "popen" for c in self.order))
+        self.assertEqual(self.host_record()["mode"], "guard")
+        self.assertFalse(_free(os.path.join(self.state, "guard.lock")))
+        self.assertEqual(handle.session_identity(), ("s1", GEN))
+        handle.close()
+        self.assertIn(CONTAINER, self.broker.closed)
+        self.assertTrue(_free(os.path.join(self.state, "guard.lock")))
+        self.assertEqual(handle.state(), Liveness.ABSENT)
+
+    def test_unowned_terminal_keeps_the_legacy_path(self):
+        self.popen_mock.side_effect = self.popen
+        self.start()
+        self.assertIn([RELAY, "serve", GEN], self.docker.execs())
+        self.assertIn("supervisor", self.order)
+        self.assertEqual(self.execs, [])
+
+    def test_the_terminal_path_relies_on_the_tui_lock_its_store_holds(self):
+        lock = tui_lock("w")
+        os.makedirs(os.path.dirname(lock), exist_ok=True)
+        with inode_lock(lock):
+            self.owned()
+            with self.assertRaisesRegex(SessionError, "^docker session w: busy$"):
+                self.host.worker("w", self.launch, terminal=False, metadata=self.METADATA)
+
+    def test_a_start_failing_after_its_handle_closes_the_owner_lock_once(self):
+        class Broken(GuardExec):
+            def write(self, kind, value):
+                super().write(b"z" if kind == b"s" else kind, value)
+
+        def popen(argv, **_):
+            if "--hook-socket" in argv:
+                proc = Broken(argv)
+                self.addCleanup(proc.exit, 0)
+                return proc
+            return mock.Mock(pid=4321)
+
+        self.popen_mock.side_effect = popen
+        spare = os.open(os.devnull, os.O_RDONLY)
+        self.addCleanup(_close, spare)
+        with self.assertRaisesRegex(SessionError, "^docker session w: "):
+            self.owned()
+        self.assertIn(CONTAINER, self.broker.closed)
+        self.assertTrue(_free(os.path.join(self.state, "guard.lock")))
+        os.fstat(spare)
+
+    def test_a_held_owner_lock_is_busy_before_any_container(self):
+        self.owner_held()
+        with self.assertRaises(SessionBusy):
+            self.owned()
+        self.assertNotIn(("start", os.path.join(self.state, f"{GEN}.json"), ()), self.order)
+        self.assertEqual(self.execs, [])
+
+    def test_attach_target_of_a_guarded_row_attaches_the_guard_display(self):
+        self.listed("w")
+        self.guarded_record()
+        target = self.host.attach_target("w")
+        argv = [
+            *(DOCKER, "--host", self.ep, "exec", "-it", CONTAINER, PYTHON, "-I"),
+            *(worker_module.GUARD, "--attach", f"/run/ensemble/guard/{GEN}/display"),
+        ]
+        self.assertEqual(target.argv[-len(argv) :], tuple(argv))
+        self.assertEqual(target.argv[0], "/usr/bin/env")
+        self.assertEqual(target.printed, shlex.join(argv))
+
+
+class WorkerLivenessTest(GuardedBase):
+    def test_a_held_owner_lock_is_live_with_no_docker_call(self):
+        self.owner_held()
+        self.order.clear()
+        self.assertEqual(self.host.worker_liveness("w", GEN), Liveness.LIVE)
+        self.assertEqual(self.order, [])
+
+    def test_row_and_probe_answers(self):
+        self.assertEqual(self.host.worker_liveness("w", "../x"), Liveness.UNKNOWN)
+        self.assertEqual(self.host.worker_liveness("w", GEN), Liveness.ABSENT)
+        self.listed("w", state="exited")
+        self.assertEqual(self.host.worker_liveness("w", GEN), Liveness.ABSENT)
+        self.listed("w")
+        self.record()
+        self.assertEqual(self.host.worker_liveness("w", GEN), Liveness.UNKNOWN)
+        self.guarded_record()
+        for word, rc, want in (
+            ("live", 0, Liveness.LIVE),
+            ("exited", 0, Liveness.ABSENT),
+            ("absent", 0, Liveness.ABSENT),
+            ("dead", 0, Liveness.UNKNOWN),
+            ("live", 1, Liveness.UNKNOWN),
+        ):
+            with self.subTest(word=word, rc=rc):
+                self.probe_says(word, rc)
+                self.assertEqual(self.host.worker_liveness("w", GEN), want)
+        self.docker.replies[(PYTHON, "-I", worker_module.GUARD, "--probe")] = TimeoutExpired(
+            "docker", 10
+        )
+        self.assertEqual(self.host.worker_liveness("w", GEN), Liveness.UNKNOWN)
+
+    def test_worker_refuses_a_live_or_unknown_earlier_generation_and_reclaims_an_ended_one(self):
+        old = "e" * 32
+        self.listed("w", gen=old)
+        self.guarded_record(old)
+        for word in ("live", "dead"):
+            with self.subTest(word=word):
+                self.probe_says(word)
+                with self.assertRaises(SessionBusy):
+                    self.owned()
+                self.assertTrue(_free(os.path.join(self.state, "guard.lock")))
+        self.probe_says("exited")
+        self.docker.ps = []
+        self.listed("w", gen=old)
+
+        def close(container):
+            self.broker.closed.append(container)
+            self.docker.ps = []
+            return True
+
+        self.broker.close = close
+        self.owned()
+        self.assertEqual(self.broker.closed[0], f"ensemble-w-{old}")
+        self.assertEqual(len(self.execs), 1)
+
+    def test_legacy_and_piped_rows_are_left_to_the_container_refusal(self):
+        for mode in (None, "pipe"):
+            with self.subTest(mode=mode):
+                self.listed("w")
+                self.record(**({"mode": mode} if mode else {}))
+                with self.assertRaisesRegex(SessionError, "docker session w: a "):
+                    self.owned()
+                self.assertTrue(_free(os.path.join(self.state, "guard.lock")))
+                self.assertEqual(self.execs, [])
+
+
+class GuardedRowTest(GuardedBase):
+    def test_guarded_rows_are_listed_with_lock_and_activity_and_no_exec(self):
+        self.listed("w")
+        self.guarded_record()
+        self.order.clear()
+        [row] = self.host.rows()
+        self.assertEqual(row.state, StatusState.UNKNOWN)
+        self.owner_held()
+        os.makedirs(self.state, exist_ok=True)
+        with open(os.path.join(self.state, f"{GEN}.activity"), "w") as f:
+            f.write("blocked")
+        [row] = self.host.rows()
+        self.assertEqual((row.name, row.state, row.last_lines), ("w", StatusState.BLOCKED, None))
+        self.assertEqual(self.host.list(), ["w"])
+        self.assertEqual(self.docker.execs(), [])
+
+    def test_attach_is_the_held_handle_here_and_a_view_elsewhere(self):
+        handle = self.owned()
+        self.listed("w")
+        self.assertIs(self.host.attach("w"), handle)
+        other = DockerHost("docker", {"docker": DOCKER}, run=self.docker, broker=self.broker)
+        view = other.attach("w")
+        self.assertIsInstance(view, worker_module.GuardedView)
+        self.assertEqual(view.state(), Liveness.LIVE)
+        with self.assertRaisesRegex(SessionError, "owned by its harness"):
+            view.send(Paste("x"))
+        with self.assertRaisesRegex(SessionError, "owned by its harness"):
+            view.close()
+        self.assertFalse(any(isinstance(c, tuple) and c[0] == "popen" for c in self.order))
+
+    def test_sweep_reclaims_a_guarded_container_only_with_a_free_owner_lock(self):
+        self.listed("w")
+        self.guarded_record()
+        os.unlink(os.path.join(self.home, ".ensemble", "tui", "w", "session.json"))
+        fd = self.owner_held()
+        self.host.sweep("x")
+        self.assertEqual(self.broker.closed, [])
+        _close(fd)
+        self.host.sweep("x")
+        self.assertEqual(self.broker.closed, [CONTAINER])
+        self.assertEqual(self.docker.execs(), [])

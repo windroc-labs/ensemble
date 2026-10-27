@@ -23,9 +23,8 @@ from ensemble.delegate import ConfigError, Outcome, Spec
 from ensemble.delegate.composer import Composer, RunParams
 from ensemble.delegate.engine.config import module_roots
 from ensemble.delegate.engine.drivers import AgentDriver
-from ensemble.delegate.engine.handler import HANDLER
 from ensemble.delegate.engine.harness_delegate import DRAIN_WAIT, HarnessDelegate
-from ensemble.delegate.engine.record import RunRecord
+from ensemble.delegate.engine.record import HANDLER, RunRecord
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import Begun, Finished, Layout, Result
 from ensemble.session import (
@@ -47,6 +46,7 @@ from ensemble.session import Spec as SessionSpec
 from ensemble.session.engine.types import Liveness, SessionRow
 from ensemble.utils import ACCOUNT_ENV, OutcomeStatus, StatusState, Stopped
 from tests.delegate.fakes.harness_session import (
+    FailingSession,
     FakeViewer,
     HarnessSession,
     RecordingHost,
@@ -2493,7 +2493,7 @@ class OwnedRun(HarnessCase):
         seen, on = self.at_begun(handled)
         self.assertEqual(view.run(on), self.NEEDS)
         self.assertEqual(seen, ["Begun", "Finished"])
-        self.assertEqual(self.lines, [])
+        self.assertEqual(self.sent(), ["begun"])
         self.assertTrue(view.driver.session.alive())
         self.assertFalse(view.alive())
         self.assertFalse(view.status().alive)
@@ -2530,7 +2530,7 @@ class OwnedRun(HarnessCase):
         state = self.record.read()
         self.assertEqual((state.completed, state.result, state.bound), (False, None, True))
         self.assertTrue(view.driver.session.alive())
-        self.assertEqual(self.lines, [])
+        self.assertEqual(self.sent(), ["begun"])
         self.assertTrue(view.alive())
 
     def test_an_opening_attempt_past_its_idle_timeout_is_given_up(self):
@@ -2542,7 +2542,7 @@ class OwnedRun(HarnessCase):
         self.assertIn(
             f"no event for 5 s; session {view._state.agent_name} left open", self.err.getvalue()
         )
-        self.assertEqual(self.sent(), ["finished"])
+        self.assertEqual(self.sent(), ["begun", "finished"])
         with open(self.events_file, encoding="utf-8") as f:
             self.assertTrue(f.read().rstrip().endswith("outcome error"))
         self.assertTrue(view.driver.session.alive())
@@ -2575,7 +2575,7 @@ class OwnedRun(HarnessCase):
         self.assertEqual(result, Result(1, None, "stopped: session harness ended without a Result"))
         self.assertGreaterEqual(clock.now, DRAIN_WAIT)
         self.assertEqual(self.record.read().result, result)
-        self.assertEqual(self.sent(), ["finished"])
+        self.assertEqual(self.sent(), ["begun", "finished"])
 
     def locked_give_up(self, *, fails: bool) -> str:
         Clock(self)
@@ -2602,7 +2602,37 @@ class OwnedRun(HarnessCase):
         self.assertIn("delegate: tui: close: not confirmed", err)
         self.assertNotIn("closed (lock", err)
         self.assertNotIn("release", self.kinds())
+        self.assertEqual(self.sent(), ["begun", "finished"])
+
+    def test_a_start_failure_is_stored_announced_and_finished_once(self):
+        view = self.owned()
+        view.driver = AgentDriver(FailingSession, display=None)
+        result = view.run()
+        self.assertEqual(result, Result(1, None, "tui: fake spawn refused"))
+        self.assertEqual(self.record.read().result, result)
         self.assertEqual(self.sent(), ["finished"])
+        self.assertEqual(self.kinds()[-2:], ["result", "end"])
+        with open(self.events_file, encoding="utf-8") as f:
+            self.assertEqual([line.split()[-2:] for line in f], [["outcome", "error"]])
+
+    def test_a_stale_out_ending_loses_to_the_handlers_and_returns_it(self):
+        view = self.owned()
+        stop = HarnessSession.stop
+
+        def handled(session):
+            self.record.bind(1, 1)
+            self.record.complete(1, self.NEEDS, sid=SID)
+            stop(session)
+
+        with (
+            mock.patch("pathlib.Path.unlink", side_effect=OSError(13, "Permission denied")),
+            mock.patch.object(HarnessSession, "stop", handled),
+        ):
+            result = view.run()
+        self.assertEqual(result, self.NEEDS)
+        self.assertEqual(self.record.read().result, self.NEEDS)
+        self.assertNotIn("result", self.kinds())
+        self.assertEqual(self.sent(), [])
 
     def test_resume_input_on_a_live_worker_only_sends_it(self):
         view = self.owned()

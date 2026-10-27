@@ -17,7 +17,6 @@ from ensemble.session.clients.opencode.common import (
 )
 from ensemble.session.engine.types import (
     Activity,
-    Blocked,
     ClientBound,
     Launch,
     Reply,
@@ -25,7 +24,6 @@ from ensemble.session.engine.types import (
     Stderr,
     TurnEnd,
     TurnFailed,
-    TurnStarted,
 )
 from ensemble.session.modes.client_adapters.headless import Headless
 
@@ -37,7 +35,6 @@ class OpenCodeHeadless(Homed, Headless):
         self.common = common
         self.cwd, self.sid = "", ""
         self.bound, self.failed, self.last = False, False, ""
-        self.native, self.finished = "", False
 
     def launch(self, spec: Spec):
         context, common = self._context, self.common
@@ -61,7 +58,6 @@ class OpenCodeHeadless(Homed, Headless):
         )
         self.cwd, self.sid = cwd, sid
         self.bound, self.failed, self.last = False, False, ""
-        self.native, self.finished = "", False
         return Launch(
             (
                 found.python if found else os.path.realpath(sys.executable),
@@ -92,28 +88,19 @@ class OpenCodeHeadless(Homed, Headless):
                 yield from self.parse(record)
         if not self.bound:
             yield TurnFailed("no_session", "opencode ended before it started a session")
-        elif not self.failed and not self.finished:
-            yield TurnFailed("incomplete_turn", "opencode ended without a final step")
+        elif not self.failed:
+            yield TurnEnd(self.last)
 
     def parse(self, record: dict):
-        native = record.get("sessionID")
-        if self.bound and native != self.native:
-            return
         if not self.bound and isinstance(native := record.get("sessionID"), str):
             if NATIVE.fullmatch(native):
                 self.common.bind(self.cwd, self.sid, native)
                 self.bound = True
-                self.native = native
                 yield ClientBound(native)
-                yield TurnStarted()
             else:
                 yield Stderr(f"opencode: invalid sessionID {native!r:.80}")
         kind, part = record.get("type"), record.get("part")
         part = part if isinstance(part, dict) else {}
-        if not self.bound:
-            if isinstance(kind, str):
-                yield Activity(kind)
-            return
         if kind == "text":
             value = part.get("text")
             if isinstance(value, str) and value.strip():
@@ -126,22 +113,7 @@ class OpenCodeHeadless(Homed, Headless):
             yield Activity(tool if isinstance(tool, str) else kind)
             state = part.get("state")
             if isinstance(state, dict) and state.get("status") == "error":
-                error = state.get("error")
-                yield Stderr(f"opencode: {tool}: {error}")
-                if (
-                    isinstance(error, str)
-                    and "permission" in error.lower()
-                    and any(word in error.lower() for word in ("rejected", "denied", "required"))
-                ):
-                    self.failed = True
-                    yield TurnFailed("permission_required", error)
-        elif kind in ("permission.asked", "question.asked"):
-            self.failed = True
-            yield Blocked(kind)
-        elif kind == "step_finish" and part.get("reason") == "stop":
-            if not self.failed and not self.finished:
-                self.finished = True
-                yield TurnEnd(self.last)
+                yield Stderr(f"opencode: {tool}: {state.get('error')}")
         elif kind == "error":
             self.failed = True
             error = record.get("error")

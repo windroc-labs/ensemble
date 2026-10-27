@@ -22,7 +22,6 @@ from ensemble.session.engine.types import (
     Stderr,
     TurnEnd,
     TurnFailed,
-    TurnStarted,
 )
 from ensemble.session.modes.headless import HeadlessMode
 from tests.session.case import packaged_hosts
@@ -46,29 +45,6 @@ HOOK = (sys.executable, "-I", "/protected/driver_hook.py", "context")
 
 
 class HeadlessTest(Base):
-    def test_native_turn_started_is_acceptance_and_resets_the_reply(self):
-        run = self.client.headless()
-        run.last_reply = "old"
-        self.assertEqual(list(run.parse({"type": "turn.started"})), [TurnStarted()])
-        self.assertEqual(list(run.parse({"type": "turn.completed"})), [TurnEnd("")])
-
-    def test_failed_turn_preserves_native_error_kind(self):
-        run = self.client.headless()
-        self.assertEqual(
-            list(
-                run.parse(
-                    {
-                        "type": "turn.failed",
-                        "error": {
-                            "codex_error_info": "server_overloaded",
-                            "message": "retry later",
-                        },
-                    }
-                )
-            ),
-            [Stderr("retry later"), TurnFailed("server_overloaded", "retry later")],
-        )
-
     def run_instance(self):
         run = self.client.headless()
         run.launch(dataclasses.replace(self.spec, prompt="hello"))

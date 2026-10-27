@@ -123,6 +123,10 @@ class BaseMode(ABC):
     def generation(self) -> str | None:
         return None
 
+    @property
+    def remote(self) -> bool:
+        return False
+
     @classmethod
     def preflight(
         cls,
@@ -151,7 +155,7 @@ class BaseMode(ABC):
     ) -> Self:
         """The session started; spec.sid set; registry: tui settings and identity_drop; host: the
         selected execution Host; display: a tui session's, kept as given (other modes refuse one);
-        owner: its session harness's dir (tui and in_process only).
+        owner: its session harness's dir (tui, in_process).
         """
 
     @property
