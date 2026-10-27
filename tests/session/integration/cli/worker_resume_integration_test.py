@@ -76,6 +76,7 @@ if os.path.exists(sys.argv[1]):
     sys.exit(0)
 open(sys.argv[1], "w").close()
 home = os.environ["HOME"]
+config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(home, ".claude")
 until = time.monotonic() + 30
 while time.monotonic() < until:
     try:
@@ -83,7 +84,7 @@ while time.monotonic() < until:
             owner = json.load(f)["owner"]
         with open(os.path.join(owner, "harness.json")) as f:
             status = json.load(f)
-        kept = glob.glob(os.path.join(home, "**", "projects", "*", "*.jsonl"), recursive=True)
+        kept = glob.glob(os.path.join(config, "projects", "*", "*.jsonl"))
         if status.get("state") == "running" and kept:
             os.kill(status["pid"], signal.SIGKILL)
             break
