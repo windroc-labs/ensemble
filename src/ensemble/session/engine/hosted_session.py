@@ -93,7 +93,7 @@ def _request(spec: Spec, idle_timeout: float | None) -> tuple[str, Mode]:
 
 
 POLL = 0.5
-START_WAIT = 60  # s for a session harness to start its worker
+START_WAIT = 60
 HARNESS = "ensemble.session.harness.process"
 LOG = logging.getLogger("session")
 PROBE_DIR = f"{STATE}/probe"
@@ -238,7 +238,7 @@ def _class_root(kind: type, table: str) -> str:
 
 
 def _reconstructible(setup: _Setup) -> bool:
-    """A Setup a session harness rebuilds from its request: every callable the default."""
+    """Every callable the default, so a harness can rebuild it."""
     return (
         setup.class_loader is load_class
         and setup.probe is probe
@@ -249,7 +249,7 @@ def _reconstructible(setup: _Setup) -> bool:
 
 
 def _owned(setup: _Setup, mode: Mode, client: Client, on: Host) -> bool:
-    """A start a session harness owns: tui mode, a harnessed Host, a client whose Tui is owned."""
+    """An owned client's tui start on a harnessed Host."""
     if mode != Mode.TUI or not on._harnessed or not _reconstructible(setup):
         return False
     run = client.tui()
@@ -257,9 +257,7 @@ def _owned(setup: _Setup, mode: Mode, client: Client, on: Host) -> bool:
 
 
 def _bound_owner(name: str, state: Mapping) -> Channel | None:
-    """The session harness that owns tui session `name` (session.json `state`), once its own
-    harness.json binds it to this name, sid and generation; None for none or another's.
-    """
+    """Its owner, once that harness.json binds it to `name`, sid and generation."""
     owner = state.get("owner")
     if owner is None:
         return None
@@ -282,7 +280,7 @@ def _bound_owner(name: str, state: Mapping) -> Channel | None:
 
 
 def _start_error(channel: Channel, status: Mapping) -> SessionError | ConfigError:
-    """The error a session harness's start failed with, from its harness.json, else its log."""
+    """From harness.json, else its log's last line."""
     error = status.get("error")
     if isinstance(error, Mapping) and isinstance(message := error.get("message"), str):
         kind, lock, holder = error.get("type"), error.get("lock"), error.get("holder")
@@ -333,7 +331,7 @@ class HostedSession(Session):
         self._bound = False
         self._capacity: Admission | None = None
         self._capacity_hosts: Mapping[str, Host] = {}
-        self._read_only = False  # a view's attach: its owner writes the run records
+        self._read_only = False  # a view's attach: no run records
 
     @classmethod
     def configure(
@@ -425,13 +423,15 @@ class HostedSession(Session):
         """
         setup = cls._config()
         client_name, mode = _request(spec, idle_timeout)
-        on = cls.host(host)
-        if not _owned(setup, mode, setup.registry.client(client_name), on):
+        on, client = cls.host(host), setup.registry.client(client_name)
+        if not _owned(setup, mode, client, on):
             if spec.handlers:
                 raise ConfigError(
                     f"handlers: {client_name} {mode} on host {on.name} has no session harness yet"
                 )
-            return cls._begin(spec, display=display, host=host, idle_timeout=idle_timeout)
+            return cls._begin(
+                spec, display=display, host=host, idle_timeout=idle_timeout, client=client
+            )
         spec = replace(spec, sid=spec.sid or str(uuid.uuid4()))
         spec = replace(spec, name=tui.TuiMode.resolve_name(spec))
         return cls._spawn(spec, display=display, host=host, idle_timeout=idle_timeout)
@@ -440,9 +440,7 @@ class HostedSession(Session):
     def _spawn(
         cls, spec: Spec, *, display: Display, host: str | None, idle_timeout: float | None
     ) -> Session:
-        """`spec` started by a new session harness, once it runs the worker; its start error, else
-        SessionError, with no harness or worker left.
-        """
+        """Its view once a new harness runs it; else the start error, nothing left."""
         assert spec.client is not None and spec.name is not None and spec.sid is not None
         roots = (
             *module_roots(sys.modules[__name__], ensemble.utils),
@@ -506,7 +504,6 @@ class HostedSession(Session):
     def _unspawn(
         cls, channel: Channel, harness: subprocess.Popen, name: str, host: str | None
     ) -> None:
-        """A harness that failed or never ran its worker gone, with any worker it launched."""
         if harness.poll() is None:
             harness.kill()
         harness.wait()
@@ -525,9 +522,7 @@ class HostedSession(Session):
     def harness_request(
         cls, spec: Spec, *, display: Display, host: str | None, roots: Sequence[str]
     ) -> dict:
-        """What a session harness needs to start `spec` as this class would: its JSON request.
-        Secret-bearing (spec.env): the entry writes it 0600 and the harness deletes it once read.
-        """
+        """A harness's JSON start request; secret-bearing (spec.env)."""
         if spec.environment is not None:
             raise ConfigError("environment: a session harness runs none yet")
         setup = cls._config()
@@ -559,9 +554,7 @@ class HostedSession(Session):
     def from_harness_request(
         cls, request: Mapping
     ) -> tuple[Spec, Display, str | None, tuple[str, ...]]:
-        """harness_request's inverse, this class configured from it: its Spec, display, host and
-        import roots; ConfigError when it is not one.
-        """
+        """harness_request's inverse, configuring this class; ConfigError when malformed."""
         try:
             config, fields = request["config"], dict(request["spec"])
             cls.configure(
@@ -597,7 +590,6 @@ class HostedSession(Session):
     def own(
         cls, spec: Spec, *, display: Display = None, host: str | None = None, owner: str
     ) -> Owned:
-        """For the session harness at dir `owner`: its tui worker started, as start does."""
         return Owned(cls._begin(spec, display=display, host=host, owner=owner), host)
 
     @classmethod
@@ -609,10 +601,11 @@ class HostedSession(Session):
         host: str | None = None,
         idle_timeout: float | None = None,
         owner: str | None = None,
+        client: Client | None = None,
     ) -> HostedSession:
         setup = cls._config()
         client_name, mode = _request(spec, idle_timeout)
-        client = setup.registry.client(client_name)
+        client = client or setup.registry.client(client_name)
         spec = replace(spec, sid=spec.sid or str(uuid.uuid4()))
         on = cls.host(host)
         _environment_check(spec, on, mode)
@@ -716,8 +709,9 @@ class HostedSession(Session):
                 f"session {name}: expected sid {sid!r}, found {state.get('sid')!r} in session.json"
             )
         channel = _bound_owner(name, state)
-        if channel is None:
+        if channel is None or channel.status().get("state") != "running":
             return cls._attached(name, sid=sid, host=host, idle_timeout=idle_timeout)
+        attached = cls._attached(name, sid=sid, host=host, generation=state["generation"])
         return cls._view(
             channel,
             name=name,
@@ -727,6 +721,7 @@ class HostedSession(Session):
             host=host,
             idle_timeout=idle_timeout,
             replay=True,
+            attached=attached,
         )
 
     @classmethod
@@ -739,7 +734,7 @@ class HostedSession(Session):
         idle_timeout: float | None = None,
         generation: str | None = None,
     ) -> HostedSession:
-        """attach's session; with `generation` (a view's), read-only and only that generation's."""
+        """With `generation` (a view's): read-only, that generation only."""
         setup = cls._config()
         tui.checked_name(name)
         _idle(idle_timeout)
@@ -783,10 +778,9 @@ class HostedSession(Session):
         host: str | None = None,
         idle_timeout: float | None = None,
         replay: bool = False,
+        attached: Session | None = None,
     ) -> OwnedSession:
-        """The one way a control view is built: its attach read-only, bound to `sid` and
-        `generation`, so a same-name successor is never acted on.
-        """
+        """The only way a view is built."""
         return OwnedSession(
             channel,
             name,
@@ -794,13 +788,15 @@ class HostedSession(Session):
             sid=sid,
             generation=generation,
             idle_timeout=idle_timeout,
-            attach=lambda: cls._attached(name, sid=sid, host=host, generation=generation),
+            attach=lambda: (
+                attached or cls._attached(name, sid=sid, host=host, generation=generation)
+            ),
             replay=replay,
         )
 
     @classmethod
     def retire(cls, name: str, *, sid: str | None = None, host: str | None = None) -> None:
-        """Its owner's confirmed close, when a session harness owns it; else closed here."""
+        """A bound owner's confirmed close, else closed here."""
         setup = cls._config()
         on = cls.host(host)
         store = tui.TuiStore.attach(name, host=on, sid=sid)
@@ -995,9 +991,7 @@ class HostedSession(Session):
             raise
 
     def _step(self, wait: float) -> tuple[list[SessionEvent | Stderr | ClientBound], bool]:
-        """One poll of its mode, up to `wait` s: its new events, never Exited, and whether its worker
-        ended.
-        """
+        """One poll: new events (never Exited), and whether it ended."""
         if self._closed:
             return [], True
         found, self._closed = self._running.poll(wait)
@@ -1173,9 +1167,7 @@ class HostedSession(Session):
 
 
 class Owned:
-    """The owner handle of one worker HostedSession.own started: what its session harness drives
-    it through. When a Host's managed worker replaces the mode underneath, only this changes.
-    """
+    """The owner handle a session harness drives its worker through."""
 
     def __init__(self, session: HostedSession, host: str | None) -> None:
         self._session, self._host = session, host
@@ -1195,34 +1187,33 @@ class Owned:
         assert generation is not None
         return generation
 
+    @property
+    def opening_pending(self) -> str | None:
+        return self._session._running.opening_pending
+
     def pump(self, wait: float) -> tuple[list[SessionEvent | Stderr | ClientBound], bool]:
-        """Its new events, never Exited, waiting up to `wait` s; True once its worker ended."""
         return self._session._step(wait)
 
     def record(self, event: SessionEvent | Stderr | ClientBound) -> None:
-        """Its run records for `event`: client_session, stderr, session_metadata."""
         self._session._record(event)
 
     def stop(self) -> list[SessionEvent | Stderr | ClientBound]:
-        """The events its last read found, then its terminal stopped while it holds the name."""
+        """Its last read's events, then stopped."""
         final = self._session._step(0)[0]
         self._session.stop()
         return final
 
     def close(self) -> list[SessionEvent | Stderr | ClientBound]:
-        """The events its last read found, then its terminal, tui dir and viewer closed."""
+        """Its last read's events, then closed."""
         final = self._session._step(0)[0]
         self._session.close()
         return final
 
     def returncode(self) -> int | None:
-        """Its worker's exit code once pump said it ended."""
         return self._session._running.returncode(0)
 
     def confirm_end(self, timeout: float) -> int | None:
-        """Its worker's return code once its terminal is gone from its Host, else None after
-        `timeout` s.
-        """
+        """The exit code once its terminal is gone, else None."""
         deadline = time.monotonic() + timeout
         code = self._session._running.returncode(timeout)
         while code is not None:
@@ -1237,7 +1228,6 @@ class Owned:
         return None
 
     def view(self, channel: Channel, idle_timeout: float | None = None) -> OwnedSession:
-        """A control view of this worker, for its handlers' EventCall.session."""
         return type(self._session)._view(
             channel,
             name=self.name,

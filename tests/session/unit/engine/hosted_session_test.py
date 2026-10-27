@@ -3248,6 +3248,16 @@ class BoundOwnerTest(HostedTuiBase):
                 self.assertNotIsInstance(found, OwnedSession)
         self.assertFalse(os.path.exists(os.path.join(self.channel.directory, "requests")))
 
+    def test_an_exited_owner_is_the_legacy_path_for_attach(self):
+        self.owner(state="exited")
+        self.assertNotIsInstance(self.session.attach("w1"), OwnedSession)
+
+    def test_attach_of_a_running_owner_whose_terminal_is_gone_raises_as_legacy(self):
+        self.owner()
+        self.host.processes.pop("w1")
+        with self.assertRaisesRegex(SessionError, "w1"):
+            self.session.attach("w1")
+
     def test_an_unheld_owner_is_the_legacy_path(self):
         self.assertNotIsInstance(self.session.attach("w1"), OwnedSession)
 

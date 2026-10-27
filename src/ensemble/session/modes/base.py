@@ -121,7 +121,6 @@ class BaseMode(ABC):
 
     @property
     def generation(self) -> str | None:
-        """Its worker start's id; a tui session's only."""
         return None
 
     @classmethod
@@ -152,7 +151,7 @@ class BaseMode(ABC):
     ) -> Self:
         """The session started; spec.sid set; registry: tui settings and identity_drop; host: the
         selected execution Host; display: a tui session's, kept as given (other modes refuse one);
-        owner: the dir of the session harness starting it (only a tui start takes one).
+        owner: its session harness's dir (tui only).
         """
 
     @property

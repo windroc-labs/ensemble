@@ -31,7 +31,7 @@ class Tui(ABC):
     dialogs: tuple[str, ...] = ()
     opening: tuple[str, str] | None = None  # (hook label, text)
     client = ""  # last ClientBound's id
-    _owned: ClassVar[bool] = False  # a session harness owns its session on a harnessed Host
+    _owned: ClassVar[bool] = False  # a session harness owns it
 
     @abstractmethod
     def launch(self, spec: Spec, hook: tuple[str, ...]) -> Launch:

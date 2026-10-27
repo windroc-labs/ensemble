@@ -41,6 +41,7 @@ class FakeOwned:
         self.steps, self.final, self.code = list(steps), list(final), code
         self.calls, self.recorded = [], []
         self.ended = False
+        self.opening_pending = None
 
     def pump(self, wait):
         if self.steps:
@@ -335,7 +336,21 @@ class DrainTest(Base):
         self.assertTrue(self.request(Op.STOP))
         gate.set()
         thread.join(WAIT)
-        self.assertEqual(owned.calls, [])
+        self.assertEqual(owned.calls, ["close", "stop"])
+        self.assertEqual(self.types(), ["Reply", "Exited"])
+
+    def test_a_failed_close_during_the_drain_is_answered_with_its_error(self):
+        owned = FakeOwned(([], True))
+        owned.close = mock.Mock(side_effect=SessionError("cannot close w1"))
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        thread = self.run_in_thread(self.harness(owned, Handler(hang=gate), drain=WAIT))
+        while self.channel.status().get("state") != "exited":
+            time.sleep(0.01)
+        with self.assertRaisesRegex(SessionError, "cannot close w1"):
+            self.request(Op.CLOSE)
+        gate.set()
+        thread.join(WAIT)
 
     def test_a_handler_closing_on_exited_returns(self):
         results = []
@@ -358,3 +373,18 @@ class FailureTest(Base):
         self.assertEqual(owned.calls, ["close", "confirm_end"])
         self.assertEqual(self.types(), ["Exited"])
         self.assertEqual(self.channel.status()["state"], "failed")
+
+
+class OpeningTest(Base):
+    def test_its_pending_opening_is_in_its_status(self):
+        owned = FakeOwned(([], False), ([], False))
+        owned.opening_pending = "/color"
+        thread = self.run_in_thread(self.harness(owned))
+        while self.channel.status().get("opening") != "/color":
+            time.sleep(0.01)
+        owned.opening_pending = None
+        while self.channel.status().get("opening") is not None:
+            time.sleep(0.01)
+        owned.ended = True
+        thread.join(WAIT)
+        self.assertEqual(self.code, 0)

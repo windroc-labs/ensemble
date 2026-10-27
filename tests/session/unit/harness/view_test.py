@@ -241,11 +241,12 @@ class DelegationTest(Base):
         self.assertEqual(self.attaches, 0)
         self.attached.screen.return_value = "screen"
         self.attached.showable = True
-        self.attached.opening_pending = "/color"
         view.send("hi")
         view.press(())
         self.assertEqual(view.screen(3), "screen")
         self.assertTrue(view.showable)
+        self.assertIsNone(view.opening_pending)
+        self.channel.write_status({"state": "running", "opening": "/color"})
         self.assertEqual(view.opening_pending, "/color")
         for name in ("alive", "status", "content", "info", "session_status", "record", "hide"):
             getattr(view, name)()

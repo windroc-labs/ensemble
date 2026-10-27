@@ -53,7 +53,7 @@ from ensemble.utils import (
 
 SIGNALS = (signal.SIGHUP, signal.SIGTERM, signal.SIGINT)
 TUI_DIR = f"{STATE}/tui"
-HARNESS_ROOT = f"{STATE}/harness"  # each session harness's dir: <32 lowercase hex>
+HARNESS_ROOT = f"{STATE}/harness"
 TUI_STATE = "session.json"
 
 
@@ -234,7 +234,7 @@ class Host(ABC):
 
     attachable: ClassVar[bool] = False
     _environments: ClassVar[bool] = False  # runs Spec.environment
-    _harnessed: ClassVar[bool] = False  # a session harness owns its owned clients' tui sessions
+    _harnessed: ClassVar[bool] = False  # session harnesses own its tui sessions
 
     def _provider_usage(self, request: ProviderProbe) -> bool | None:
         """Probe with this Host's credentials, when supported."""

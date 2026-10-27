@@ -36,6 +36,7 @@ from ensemble.session.engine.types import (
     SessionError,
     Spec,
     TurnEnd,
+    TurnStarted,
 )
 from ensemble.session.modes import tui
 from tests.session import live_tmux
@@ -198,7 +199,7 @@ class TurnsTest(Live):
             },
         )
         stream = self.stream(handle)
-        self.assertEqual(stream.next(idle=False), Activity(""))
+        self.assertEqual(stream.next(idle=False), TurnStarted())
         self.assertEqual(stream.next(idle=False), TurnEnd("old reply", 0))
         self.colored()
         handle.send("continue")
@@ -240,7 +241,7 @@ class TurnsTest(Live):
         stream = self.stream(handle)
         self.assertEqual(
             [stream.next(idle=False) for _ in range(2)],
-            [Activity(""), TurnEnd("Hi from w1.", 2)],
+            [TurnStarted(), TurnEnd("Hi from w1.", 2)],
         )
         self.assertEqual(stream.next(), IdleTimeout(IDLE))
         argv = self.calls()[0]["argv"]
@@ -259,7 +260,7 @@ class TurnsTest(Live):
         self.colored()
         handle.send("more")
         self.assertEqual(
-            [stream.next(idle=False) for _ in range(2)], [Activity(""), TurnEnd("Second.", 2)]
+            [stream.next(idle=False) for _ in range(2)], [TurnStarted(), TurnEnd("Second.", 2)]
         )
         self.lines("w1 done", "w1 done")
         self.assertEqual((self.server.option("w1", "@state"), handle.reply), ("done", "Second."))
@@ -329,7 +330,7 @@ class BlockedTest(Live):
         stream = self.stream(handle)
         self.assertEqual(
             [stream.next(idle=False) for _ in range(2)],
-            [Activity(""), Blocked("Edit")],
+            [TurnStarted(), Blocked("Edit")],
         )
         self.lines("w1 blocked")
         self.assertEqual(self.server.option("w1", "@state"), "blocked")
@@ -349,7 +350,7 @@ class BlockedTest(Live):
         stream = self.stream(handle)
         self.assertEqual(
             [stream.next() for _ in range(2)],
-            [Activity(""), Blocked("Quick safety check")],
+            [TurnStarted(), Blocked("Quick safety check")],
         )
         self.lines("w1 blocked")
         self.assertEqual(self.server.option("w1", "@state"), "blocked")
@@ -365,13 +366,13 @@ class LimitTest(Live):
         )
         stream = self.stream(handle)
         # the limit record can be read with the prompt's hook record, and is put first
-        self.assertCountEqual([stream.next() for _ in range(2)], [Activity(""), LimitHit(RESETS)])
+        self.assertCountEqual([stream.next() for _ in range(2)], [TurnStarted(), LimitHit(RESETS)])
         stream.quiet(1.0)
         self.lines("w1 done")
         self.assertEqual((handle.alive(), self.server.option("w1", "@state")), (True, "done"))
         self.colored()
         handle.send("go on")
-        self.assertEqual([stream.next() for _ in range(2)], [Activity(""), TurnEnd("Back.", 0)])
+        self.assertEqual([stream.next() for _ in range(2)], [TurnStarted(), TurnEnd("Back.", 0)])
         self.lines("w1 done", "w1 done")
         self.assertIn("You've hit your weekly limit", handle.screen())
         stream.quiet(1.0)
@@ -381,7 +382,7 @@ class LimitTest(Live):
         stream = self.stream(handle)
         self.assertEqual(
             [stream.next() for _ in range(2)],
-            [Activity(""), TurnEnd(f"Docs example: {LIMIT}", 0)],
+            [TurnStarted(), TurnEnd(f"Docs example: {LIMIT}", 0)],
         )
         live_tmux.wait(lambda: LIMIT in " ".join(handle.screen().split()), what="the quote")
         stream.quiet(1.0)
@@ -393,7 +394,7 @@ class DeadTest(Live):
         stream = self.stream(handle)
         self.assertEqual(
             [stream.next() for _ in range(2)],
-            [Activity(""), TurnEnd("Hi.", 0)],
+            [TurnStarted(), TurnEnd("Hi.", 0)],
         )
         self.lines("w1 done")  # the Stop hook ended: the pane's death would hang it up
         os.kill(self.calls()[0]["pid"], signal.SIGTERM)
@@ -428,12 +429,12 @@ class ResumeTest(Live):
     def test_a_resume_continues_the_session_and_its_transcript(self):
         first = self.start("w1", scenario={"steps": ["One."]}, sid=SID)
         stream = self.stream(first)
-        self.assertEqual([stream.next() for _ in range(2)], [Activity(""), TurnEnd("One.", 0)])
+        self.assertEqual([stream.next() for _ in range(2)], [TurnStarted(), TurnEnd("One.", 0)])
         tui.TuiStore.attach("w1", host=self.session_cls.host()).close()
         self.assertEqual(stream.until_exited(), [Exited(-signal.SIGHUP)])
         again = self.start("w1", "again", scenario={"steps": ["Two."]}, sid=SID, resume=True)
         stream = self.stream(again)
-        self.assertEqual([stream.next() for _ in range(2)], [Activity(""), TurnEnd("Two.", 0)])
+        self.assertEqual([stream.next() for _ in range(2)], [TurnStarted(), TurnEnd("Two.", 0)])
         argv = self.calls()[1]["argv"]
         self.assertEqual((argv[argv.index("--resume") + 1], "--session-id" in argv), (SID, False))
         self.assertEqual(again.info().transcript, first.info().transcript)
@@ -444,7 +445,7 @@ class AttachTest(Live):
     def test_another_process_attaches_by_name_reads_the_reply_and_sends(self):
         handle = self.start("w1", scenario={"steps": ["One."], "turns": [["Two."]]}, sid=SID)
         stream = self.stream(handle)
-        self.assertEqual([stream.next() for _ in range(2)], [Activity(""), TurnEnd("One.", 0)])
+        self.assertEqual([stream.next() for _ in range(2)], [TurnStarted(), TurnEnd("One.", 0)])
         self.colored()
         res = subprocess.run(
             [*PY, "-c", ATTACH, json.dumps(TABLE), "w1", "more"],
@@ -458,7 +459,7 @@ class AttachTest(Live):
         self.assertEqual(
             json.loads(res.stdout), [SID, True, "One.", repr(TurnEnd("Two.", 0)), "Two."]
         )
-        self.assertEqual([stream.next() for _ in range(2)], [Activity(""), TurnEnd("Two.", 0)])
+        self.assertEqual([stream.next() for _ in range(2)], [TurnStarted(), TurnEnd("Two.", 0)])
         self.assertEqual(handle.reply, "Two.")
         self.lines("w1 done", "w1 done")
         log = RunLog(self.workdir).read()
@@ -512,7 +513,7 @@ class ShowTest(Live):
         stream = self.stream(handle)
         self.assertEqual(
             [stream.next() for _ in range(2)],
-            [Activity(""), TurnEnd("Hi.", 0)],
+            [TurnStarted(), TurnEnd("Hi.", 0)],
         )
         for where, env, why in (
             ("outside tmux", {}, "not in tmux"),

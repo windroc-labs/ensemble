@@ -1,8 +1,5 @@
-"""A session harness's dir, HARNESS_ROOT/<32 hex>, and the files its harness and views share:
-request.json (the entry's start request), harness.lock (held by the harness for life),
-events.jsonl (each event before its dispatch), deliveries.jsonl, harness.json (its status),
-requests/ and replies/ (close and stop). Every reader treats them as untrusted: a malformed line is
-skipped, a malformed file absent.
+"""A session harness's dir, HARNESS_ROOT/<32 hex>, and its files (docs/sessions.md). Readers
+treat them as untrusted: a malformed line is skipped, a malformed file absent.
 """
 
 from __future__ import annotations
@@ -43,8 +40,8 @@ HEX = re.compile(r"[0-9a-f]{32}")
 REQUEST_WAIT = 15
 SLICE = 0.05
 DAY = 24 * 60 * 60
-SAVING = ".tmp-"  # utils.save's temp file prefix
-FILE_MAX = 1 << 20  # bytes of request.json, harness.json or a request read
+SAVING = ".tmp-"  # utils.save's temp prefix
+FILE_MAX = 1 << 20
 LOG = logging.getLogger("session")
 
 
@@ -63,7 +60,7 @@ TYPES: dict[str, type] = {
         ClientBound,
     )
 }
-FIELDS = {  # each type's fields and the check of a decoded value
+FIELDS = {
     "detail": lambda v: isinstance(v, str),
     "text": lambda v: isinstance(v, str),
     "reply": lambda v: isinstance(v, str),
@@ -81,7 +78,7 @@ def encode(event: SessionEvent | Stderr | ClientBound) -> dict:
 
 
 def decode(record) -> SessionEvent | Stderr | ClientBound | None:
-    """`record`'s event, or None when its type or fields are not one of TYPES' exactly."""
+    """None unless exactly one of TYPES."""
     if not isinstance(record, Mapping):
         return None
     name, fields = record.get("type"), record.get("fields")
@@ -110,7 +107,6 @@ def _logged(record) -> Logged | None:
 
 
 def _json(path: str):
-    """`path`'s JSON value: a regular file of at most FILE_MAX bytes, else None."""
     data = read_regular(path, limit=FILE_MAX + 1)
     if data is None or len(data) > FILE_MAX:
         return None
@@ -129,7 +125,7 @@ def _remove(path: str) -> None:
 
 
 class Channel:
-    """One harness dir; its harness holds its lock, its views read its log and send requests."""
+    """One harness dir: its harness holds its lock; views read its log and send requests."""
 
     def __init__(self, directory: str) -> None:
         self.directory = directory
@@ -145,7 +141,6 @@ class Channel:
 
     @classmethod
     def create(cls) -> Channel:
-        """A new private dir under HARNESS_ROOT, after sweeping stale ones."""
         root = os.path.expanduser(HARNESS_ROOT)
         try:
             os.makedirs(root, 0o700, exist_ok=True)
@@ -157,7 +152,7 @@ class Channel:
         return cls(directory)
 
     def write_request(self, request: Mapping) -> None:
-        """request.json, 0600, never over an existing one or through a link."""
+        """0600, never over a file or through a link."""
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
         fd = os.open(self._request, flags, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
@@ -181,7 +176,7 @@ class Channel:
         append_line(self.deliveries, json.dumps(record, ensure_ascii=False) + "\n")
 
     def read(self, cursor: int) -> tuple[list[Logged], int]:
-        """The valid records of the complete lines past byte `cursor`, and the cursor past them."""
+        """The valid records of the complete lines past `cursor`, and the next cursor."""
         data = read_regular(self.events, offset=cursor) or b""
         end = data.rfind(b"\n") + 1
         found = []
@@ -195,7 +190,6 @@ class Channel:
         return found, cursor + end
 
     def alive(self) -> bool:
-        """Its harness holds its lock."""
         try:
             fd = os.open(self.lock, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         except OSError:
@@ -211,7 +205,7 @@ class Channel:
         return False
 
     def hold(self) -> None:
-        """Takes its lock for this process's life; SessionError when another holds it."""
+        """SessionError when another holds it."""
         fd = os.open(self.lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
         try:
             if not stat.S_ISREG(os.fstat(fd).st_mode):
@@ -231,8 +225,8 @@ class Channel:
             self._held = None
 
     def request(self, op: Op, timeout: float = REQUEST_WAIT) -> bool:
-        """`op` done by its harness: True; False when none holds its lock; Unanswered when it
-        could not confirm or did not answer within `timeout` s; SessionError when it refused.
+        """True once done; False with no harness; Unanswered unconfirmed or unanswered;
+        SessionError refused.
         """
         if op not in tuple(Op):
             raise ValueError(f"request {op!r}: want one of {', '.join(Op)}")
@@ -261,9 +255,7 @@ class Channel:
             time.sleep(SLICE)
 
     def requests(self) -> list[tuple[str, Op]]:
-        """Each well-formed pending request (id, op), oldest first, taken; any other entry of
-        requests/ is deleted and logged.
-        """
+        """Pending requests (id, op), oldest first, taken; malformed ones deleted."""
         try:
             entries = list(os.scandir(self._requests))
         except FileNotFoundError:
@@ -271,7 +263,7 @@ class Channel:
         found = []
         for entry in entries:
             if entry.name.startswith(SAVING):
-                continue  # a request being written: save renames it into place
+                continue  # still being saved
             ident, suffix = entry.name[:-5], entry.name[-5:]
             body = None
             if suffix == ".json" and HEX.fullmatch(ident) and entry.is_file(follow_symlinks=False):
@@ -308,8 +300,8 @@ class Channel:
 
 
 def sweep() -> None:
-    """Removes each HARNESS_ROOT/<32 hex> real dir its harness no longer holds whose harness.json
-    is over STALE_AGE old, or which has none and is over a day old; errors logged, never raised.
+    """Removes unheld HARNESS_ROOT/<32 hex> dirs whose harness.json is STALE_AGE old (none: a
+    day); errors logged.
     """
     root = os.path.expanduser(HARNESS_ROOT)
     now = time.time()

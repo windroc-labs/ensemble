@@ -1,8 +1,5 @@
-"""The session harness: `python3 -P -s -m ensemble.session.harness.process <harness dir>`, run
-detached by Session.start, owns one worker from start to close. It logs each normalized event to
-events.jsonl before its handlers get it, serves its views' close and stop requests, and after the
-worker's exit drains its handlers for up to DRAIN s, answering every request ok. harness.json says
-its state: starting, running, exited or failed. SIGTERM and SIGHUP act as a close.
+"""The session harness, `python3 -P -s -m ensemble.session.harness.process <dir>`: owns one
+worker from start to close (docs/sessions.md › Session harness). SIGTERM and SIGHUP close.
 """
 
 from __future__ import annotations
@@ -42,7 +39,7 @@ Event = SessionEvent | Stderr | ClientBound
 
 
 class Worker(Protocol):
-    """What the harness drives its worker through (hosted_session.Owned)."""
+    """hosted_session.Owned."""
 
     @property
     def name(self) -> str: ...
@@ -50,6 +47,8 @@ class Worker(Protocol):
     def sid(self) -> str: ...
     @property
     def generation(self) -> str: ...
+    @property
+    def opening_pending(self) -> str | None: ...
 
     def pump(self, wait: float) -> tuple[list[Event], bool]: ...
     def record(self, event: Event) -> None: ...
@@ -64,9 +63,7 @@ Begin = Callable[[dict], tuple[Worker, Sequence[Any], Sequence[Mapping[str, obje
 
 
 class Turns:
-    """Turn ids <generation>:t<n>: a TurnStarted opens the next, failing an open one as superseded
-    (a missed end); a TurnEnd or TurnFailed closes the open one, else one of its own.
-    """
+    """Turn ids <generation>:t<n>; a TurnStarted fails an open one as superseded."""
 
     def __init__(self, generation: str) -> None:
         self._generation, self._n = generation, 0
@@ -77,7 +74,6 @@ class Turns:
         return f"{self._generation}:t{self._n}"
 
     def assign(self, event: Event) -> list[tuple[str | None, Event]]:
-        """`event` with its turn, after any event its arrival implies."""
         if isinstance(event, TurnStarted):
             found = self._fail("superseded", "")
             self._open = self._next()
@@ -89,7 +85,6 @@ class Turns:
         return [(self._open, event)]
 
     def exited(self, code: int) -> list[tuple[str | None, Event]]:
-        """The open turn failed by its worker's exit, if one is open."""
         return self._fail("exited", f"worker exited {code} mid-turn")
 
     def _fail(self, error: str, detail: str) -> list[tuple[str | None, Event]]:
@@ -100,7 +95,7 @@ class Turns:
 
 
 class Harness:
-    """One harness dir's owner loop; its channel already held."""
+    """The owner loop; its channel already held."""
 
     def __init__(
         self,
@@ -119,13 +114,10 @@ class Harness:
         self._turns = Turns("")
 
     def signalled(self, number: int, _frame: object) -> None:
-        """SIGTERM or SIGHUP: close the worker as a request would."""
         self._signal = number
 
     def run(self, begin: Begin) -> int:
-        """0 once the worker ended and its handlers drained (or DRAIN passed); 1 when it could not
-        start or the loop failed.
-        """
+        """0 once the worker ended and handlers drained; 1 for a failed start or loop."""
         self._write()
         try:
             request = self._channel.take_request()
@@ -148,15 +140,14 @@ class Harness:
         self._write()
         try:
             code = self._supervise(worker)
-        except Exception:  # never leave the worker ownerless: end it, then fail
+        except Exception:  # end the worker, then fail
             LOG.exception("session harness %s: failed", self._channel.directory)
             return self._abandon(worker)
         self._exited(code)
-        self._drain_handlers()
+        self._drain_handlers(worker)
         return 0
 
     def _supervise(self, worker: Worker) -> int:
-        """Until its worker ended: its exit code."""
         while True:
             for ident, op in self._channel.requests():
                 code = self._end(worker, op, ident)
@@ -169,15 +160,16 @@ class Harness:
                 self._signal = None
             found, ended = worker.pump(self._poll)
             self._log(found)
+            if (opening := worker.opening_pending) != self._status.get("opening"):
+                self._status["opening"] = opening
+                self._write()
             self._write_pending()
             if ended:
                 code = worker.returncode()
                 return -signal.SIGHUP if code is None else code
 
     def _end(self, worker: Worker, op: Op, ident: str | None) -> int | None:
-        """`op` done and its end confirmed: the exit code, answered after Exited is logged by the
-        caller; else the request answered with why, and None.
-        """
+        """The exit code once confirmed (Exited logged, then answered); else None, answered."""
         try:
             final = worker.stop() if op == Op.STOP else worker.close()
         except SessionError as error:
@@ -203,25 +195,33 @@ class Harness:
         self._status.update(state="exited", returncode=code)
         self._write_pending(force=True)
 
-    def _drain_handlers(self) -> None:
+    def _drain_handlers(self, worker: Worker) -> None:
         assert self._dispatch is not None
         deadline = time.monotonic() + self._drain
         while self._dispatch.drain(SLICE) and time.monotonic() < deadline:
-            self._serve_ok()
-        self._serve_ok()
+            self._serve_ended(worker)
+        self._serve_ended(worker)
         self._write_pending(force=True)
         self._dispatch.stop()
 
-    def _serve_ok(self) -> None:
-        """After the worker's exit every request is done already."""
-        for ident, _ in self._channel.requests():
-            self._answer(ident, ok=True)
+    def _serve_ended(self, worker: Worker) -> None:
+        """After the exit a request ends what is left: terminal, tui dir, viewer."""
+        for ident, op in self._channel.requests():
+            try:
+                if op == Op.STOP:
+                    worker.stop()
+                else:
+                    worker.close()
+            except SessionError as error:
+                self._answer(ident, ok=False, error=str(error))
+            else:
+                self._answer(ident, ok=True)
 
     def _abandon(self, worker: Worker) -> int:
         try:
             self._log(worker.close())
             code = worker.confirm_end(self._close_wait)
-        except Exception:  # still fail the harness below
+        except Exception:  # still fail
             LOG.exception("session harness %s: close", self._channel.directory)
             code = None
         if code is not None:

@@ -116,7 +116,7 @@ def _state(
 
 
 def _owner_ok(path) -> bool:
-    """A session harness dir: <real HARNESS_ROOT>/<32 lowercase hex>, no other path."""
+    """<real HARNESS_ROOT>/<32 lowercase hex> only."""
     if not isinstance(path, str) or not os.path.isabs(path) or not path.isprintable():
         return False
     name = os.path.basename(path)

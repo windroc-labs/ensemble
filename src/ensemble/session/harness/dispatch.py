@@ -1,6 +1,5 @@
-"""A session harness's registered handlers: each module found over the session roots, its own and
-every other handler's roots, then sys.path, and loaded by its on_event entry; each logged event
-handed to every handler in log order on that handler's own daemon thread.
+"""A session harness's handlers: found over the session roots, every handler's roots, then
+sys.path; loaded by on_event; each called in log order on its own daemon thread.
 """
 
 from __future__ import annotations
@@ -35,9 +34,7 @@ LOG = logging.getLogger("session")
 def load_handlers(
     handlers: Sequence[HookCallback], roots: Sequence[str], *, load: bool
 ) -> list[ModuleType | None]:
-    """Each handler's module once found (load: imported, its on_event checked; else None, nothing
-    imported); ConfigError for any that cannot be.
-    """
+    """Each module (load False: None, nothing imported); ConfigError for one not found."""
     search = list(dict.fromkeys([*roots, *(root for h in handlers for root in h.roots), *sys.path]))
     found: list[ModuleType | None] = []
     for handler in handlers:
@@ -49,15 +46,14 @@ def load_handlers(
             found.append(load_callback(handler.module, KIND, specs, entry="on_event"))
         except HookError as error:
             raise ConfigError(str(error)) from None
-        except Exception as error:  # the module's own code failed while it loaded
+        except Exception as error:  # the module failed to load
             raise ConfigError(f"{KIND} {handler.module}: {error!r:.{ERROR_MAX}}") from error
     return found
 
 
 class Dispatch:
-    """One daemon thread and queue per handler: a handler's events wait behind its failed one,
-    retried with the same EventCall after BACKOFF s, doubling to BACKOFF_MAX; a hung handler holds
-    only its own thread.
+    """A failure is retried with the same EventCall after BACKOFF s, doubling to BACKOFF_MAX;
+    that handler's later events wait.
     """
 
     def __init__(
@@ -93,7 +89,7 @@ class Dispatch:
             thread.start()
 
     def put(self, logged: Logged) -> None:
-        """Hands a logged SessionEvent to every handler; Stderr and ClientBound stay in the log."""
+        """Stderr and ClientBound stay in the log."""
         if isinstance(logged.event, Stderr) or not isinstance(logged.event, SessionEvent):
             return
         with self._lock:
@@ -102,12 +98,11 @@ class Dispatch:
             waiting.put(logged)
 
     def pending(self) -> int:
-        """Deliveries not yet done."""
         with self._lock:
             return self._pending
 
     def drain(self, timeout: float) -> int:
-        """Waits up to `timeout` s for every delivery; the number still pending."""
+        """The number still pending after up to `timeout` s."""
         deadline = time.monotonic() + timeout
         with self._settled:
             while self._pending and (left := deadline - time.monotonic()) > 0:
@@ -115,7 +110,6 @@ class Dispatch:
             return self._pending
 
     def stop(self) -> None:
-        """Ends each handler's thread once its current call returns; nothing more is delivered."""
         self._stopped.set()
         for waiting in self._queues:
             waiting.put(None)
@@ -144,7 +138,7 @@ class Dispatch:
                     returned = handler.on_event(call)
                 except (SystemExit, KeyboardInterrupt):
                     raise
-                except BaseException as error:  # any handler failure is retried
+                except BaseException as error:  # retried
                     LOG.warning("%s %d: %s failed", KIND, index, logged.id, exc_info=True)
                     self._note(index, logged, attempt, repr(error)[:ERROR_MAX])
                     self._sleep(delay)

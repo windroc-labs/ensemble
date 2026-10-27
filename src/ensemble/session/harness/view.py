@@ -1,7 +1,5 @@
-"""OwnedSession, the control view of a worker its session harness owns: Session.start and attach
-return it in any process. It never owns: closing its events() iterator, dropping it or exiting its
-process leaves the worker supervised. Lifecycle (stop, close) goes to the owner as a request; the
-rest goes to a read-only attach of the tui session.
+"""OwnedSession, the control view of an owned worker: never its owner. stop and close are
+requests; the rest goes to a read-only attach.
 """
 
 from __future__ import annotations
@@ -40,8 +38,8 @@ def fold(
     blocked: bool,
     replayed: bool,
 ) -> tuple[str | None, bool]:
-    """What an event, live or replayed, changes: the latest Reply or non-empty TurnEnd text (a
-    replayed TurnEnd's even when ""), and blocked from a Blocked until anything but Stderr or Reply.
+    """reply: the latest Reply or non-empty TurnEnd text (replayed: even ""); blocked from a
+    Blocked until anything but Stderr or Reply.
     """
     if isinstance(event, ClientBound):
         return reply, blocked
@@ -49,12 +47,12 @@ def fold(
         reply = event.text
     elif isinstance(event, TurnEnd) and (event.reply or replayed):
         reply = event.reply
-    # a client record's Reply can land after the block it preceded
+    # a Reply can land after the block it preceded
     return reply, isinstance(event, Blocked) or blocked and isinstance(event, Stderr | Reply)
 
 
 class _Reader:
-    """One pass over the log: its records of `generation` with increasing seq, folded."""
+    """The log's records of `generation` with increasing seq, folded."""
 
     def __init__(self, channel: Channel, generation: str) -> None:
         self.channel, self.generation = channel, generation
@@ -67,7 +65,7 @@ class _Reader:
         taken = []
         for logged in found:
             if logged.id != f"{self.generation}:{logged.seq}" or logged.seq <= self.seq:
-                continue  # another generation's, or replayed out of order: never acted on
+                continue  # stale or forged
             self.seq = logged.seq
             self.reply, self.blocked = fold(
                 self.reply, logged.event, blocked=self.blocked, replayed=replayed
@@ -84,9 +82,7 @@ class _Reader:
 
 
 class OwnedSession(Session):
-    """attach: the read-only attach of this worker's tui session, bound to its sid and generation;
-    replay (attach): starts past the log read once, its records folded into reply.
-    """
+    """attach: the read-only attach, bound to sid and generation; replay: start past the log."""
 
     def __init__(
         self,
@@ -114,7 +110,7 @@ class OwnedSession(Session):
         while not reader.exited:
             taken = reader.read()
             if not taken and not self._channel.alive():
-                taken = reader.read()  # what it logged before it let go
+                taken = reader.read()  # logged before it let go
                 if not taken:
                     raise SessionError(
                         f"session harness {self._channel.directory} ended without the worker's exit"
@@ -146,13 +142,13 @@ class OwnedSession(Session):
         self._end(Op.CLOSE)
 
     def _end(self, op: Op) -> None:
-        """Its owner's confirmed `op`; with none, the legacy one through the attach, confirmed."""
+        """With no owner: closed through the attach, confirmed."""
         if self._channel.request(op):
             return
         try:
             session = self._attach()
         except SessionError:
-            return  # bound to this sid and generation: its worker is gone
+            return  # its worker is gone
         if op == Op.STOP:
             session.stop()
         else:
@@ -167,7 +163,8 @@ class OwnedSession(Session):
 
     @property
     def opening_pending(self) -> str | None:
-        return getattr(self._session(), "opening_pending", None)
+        opening = self._channel.status().get("opening")
+        return opening if isinstance(opening, str) else None
 
     def send(self, text: str) -> None:
         self._session().send(text)
