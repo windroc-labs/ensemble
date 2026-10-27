@@ -1,4 +1,4 @@
 #!/bin/sh
 /opt/ensemble/venv/bin/python -I /opt/ensemble/src/ensemble/session/hosts/docker/stub.py "$@" \
-    || echo "ensemble hook: event relay unavailable" >&2
+    || echo "ensemble hook: guard hook socket unavailable" >&2
 exit 0

@@ -95,7 +95,7 @@ Runner tool setup tries the existing apt index first, refreshing it only if inst
 fails. This retains zsh/tmux coverage without refreshing unrelated repositories on every job.
 
 Docker protocol fixtures need `python3 -m pip install jsonschema==4.26.0` (test only).
-Run `python3 .github/run_tests.py Protocol tests/unit/docker_broker_protocol_test.py tests/unit/docker_relay_protocol_test.py`.
+Run `python3 .github/run_tests.py Protocol tests/unit/docker_broker_protocol_test.py`.
 The Go broker (`src/broker/`, Go from `src/broker/go.mod`): `sh with-go-state.sh gofmt -l .`,
 `sh with-go-state.sh go vet ./...`, `sh with-go-state.sh go test ./...`,
 `sh with-go-state.sh go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...` in `src/broker/`; run every
@@ -230,8 +230,7 @@ Live tests run a real client by hand, outside CI: [Docker host › Live acceptan
 
 | Live test | Needs only a running agent | Depends on the reply protocol |
 |---|---|---|
-| Docker Host lifecycle: `tests/session/live_docker.py worker --client opencode` (start, send, read, status, restart, close, resume, `rm -f`, isolation baseline, killed supervisor) | ✅ a turn-end event after each prompt is enough | |
-| hook relay and supervisor recovery | ✅ | |
+| Docker Host lifecycle: `tests/session/live_docker.py worker --client opencode` (start, send, read, status, restart, close, resume, `rm -f`, isolation baseline) | ✅ a turn-end event after each prompt is enough | |
 | crew: `worker`, `send`, `read`, `next-event`, `close`; the Viewer | ✅ | |
 | board recovery (`session_status`), usage gate | ✅ | |
 | delegate harness: a missing outcome takes "no outcome" | ✅, though whether a weak model omits it is not controllable | |

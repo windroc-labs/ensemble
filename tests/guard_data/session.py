@@ -18,9 +18,8 @@ TMUX_HOME = (
     f"{SESSION_SRC}hosts/tmux/",
     f"{SESSION_SRC}viewer/",
     f"{SESSION_SRC}engine/tmux_cli.py",
-    # The Docker Host drives its container's tmux: its Host and hook callback are tmux code too.
+    # The Docker Host's sweep asks a container's tmux.
     f"{SESSION_SRC}hosts/docker/host.py",
-    f"{SESSION_SRC}hosts/docker/hook.py",
 )
 
 

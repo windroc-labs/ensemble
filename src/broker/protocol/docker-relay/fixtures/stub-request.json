@@ -1,9 +1,0 @@
-{
-  "id": 7,
-  "argv": [
-    "hook",
-    "/Users/example/.ensemble/tui/worker_1",
-    "Stop"
-  ],
-  "payload": "eyJob29rX2V2ZW50X25hbWUiOiJTdG9wIn0="
-}

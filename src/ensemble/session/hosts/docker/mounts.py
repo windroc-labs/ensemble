@@ -16,5 +16,5 @@ def workspace_volume(name: str) -> str:
 
 
 def state_dir(name: str) -> str:
-    """Session `name`'s dir under DOCKER_STATE: its client home, manifests and supervisor files."""
+    """Session `name`'s dir under DOCKER_STATE: its client home and manifests."""
     return os.path.normpath(docker_home(name, os.curdir))

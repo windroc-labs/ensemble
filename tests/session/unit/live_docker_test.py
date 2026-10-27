@@ -560,7 +560,7 @@ class ZeroCountsTest(Case):
 
 
 class TimingTest(Case):
-    PHASES = {"checks": 0.1, "image": 0.5, "start": 4.0, "relay": 0.3, "tmux": 0.2, "client": 1.0}
+    PHASES = {"checks": 0.1, "image": 0.5, "start": 4.0, "client": 1.0}
     STDERR = (
         "docker timing live: preflight 2.40 s\n"
         "ensemble-broker: start preflight 0.01 s\n"
@@ -579,7 +579,7 @@ class TimingTest(Case):
         hooks = self.hooks("2026-10-18T13:59:59.000+02:00", "2026-10-18T14:00:02.500+02:00")
         self.assertEqual(
             gate.timing(self.result(), hooks, self.STDERR, "live"),
-            "checks 0.1 s | image 0.5 s | start 4.0 s | relay 0.3 s | tmux 0.2 s | client 1.0 s"
+            "checks 0.1 s | image 0.5 s | start 4.0 s | client 1.0 s"
             " | client ready 2.5 s | preflight 2.4 s",
         )
 
@@ -618,7 +618,7 @@ class NewGenerationTest(Case):
 
 
 class InstallStepsTest(Case):
-    PHASES = {"checks": 0.1, "image": 0.5, "start": 4.0, "relay": 0.3, "tmux": 0.2, "client": 1.0}
+    PHASES = {"checks": 0.1, "image": 0.5, "start": 4.0, "client": 1.0}
     BROKER = "".join(
         f"ensemble-broker: start {p} 0.10 s\n"
         for p in (

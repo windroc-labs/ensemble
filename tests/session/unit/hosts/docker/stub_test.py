@@ -92,15 +92,10 @@ class GuardStubTest(Case):
                 self.assertEqual(len(err.splitlines()), 1)
         self.assertEqual(self.sent, [])
 
-    def test_unset_variable_keeps_the_relay_request(self):
+    def test_unset_variable_prints_one_line_and_exits_0_unconnected(self):
         del os.environ["ENSEMBLE_GUARD_HOOK_SOCKET"]
-        conn = mock.MagicMock()
-        conn.__enter__.return_value = conn
-        conn.makefile.return_value.__enter__.return_value = io.BytesIO(b"")
-        with (
-            mock.patch("socket.socket", return_value=conn),
-            mock.patch("sys.stderr", io.StringIO()),
-        ):
+        err = io.StringIO()
+        with mock.patch("socket.socket") as made, mock.patch("sys.stderr", err):
             self.assertEqual(stub.main(["hook", "/tui/w", "Stop"], io.BytesIO(b"{}")), 0)
-        conn.connect.assert_called_once_with(stub.SOCKET)
-        self.assertIn("argv", json.loads(conn.sendall.call_args.args[0]))
+        made.assert_not_called()
+        self.assertEqual(err.getvalue(), "ensemble hook: guard hook socket unavailable\n")
