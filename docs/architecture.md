@@ -772,7 +772,7 @@ A worker's workspace is a Docker volume, `ensemble-ws-<name>`, mounted at its cw
 ### Docker risks
 
 - Container credentials are readable by every process in the container and by any process running as you ([Credentials](#credentials)).
-- Every Docker session can push to any unprotected branch of every repo the App is installed on; a token the broker could not revoke stays valid up to an hour (`"$B" status`).
+- Every Docker session can push to any unprotected branch of every repo the App is installed on; a token the broker could not revoke stays valid up to an hour (logged `unrevoked` in `~/Library/Logs/ensemble/broker.jsonl`).
 - A worker's branch can carry files your tools run: review a bot PR on GitHub before `gh pr checkout`, then read every change to `Makefile` and `package.json` scripts, `.claude/`, `.vscode/`, `.envrc` and hooks config (`.githooks/`, `.husky/`, `.pre-commit-config.yaml`, `core.hooksPath`, `core.fsmonitor`). For an output repo runs push to directly, `git diff --stat HEAD @{upstream}` before `git pull`. Require approval for workflow runs on target repos.
 - Git in a container runs each checkout's `.githooks/` with the container's tokens in reach; image builds trust the client vendors' npm packages.
 - Claude's client state is a read-write bind a worker can plant files in; host readers must not follow its symlinks.

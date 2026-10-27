@@ -171,7 +171,7 @@ func TestFailedRevocationAuditedUnrevoked(t *testing.T) {
 		r.api.revokeErr = func(string) int { return 502 }
 		rec, sink := r.audited("close", ctr)
 		mtime := clock.Add(-10 * time.Minute)
-		r.g.Revoke(context.Background(), ctr, files(fmt.Sprintf("acme %d ghs_CLOSEdeadbeef\n", mtime.Unix())))
+		r.g.Revoke(context.Background(), ctr, files(fmt.Sprintf("acme %d ghs_ClosedTok1\n", mtime.Unix())))
 		unrevoked(t, flush(t, rec, sink)[0], `GitHub answered HTTP 502 to DELETE /installation/token: "Bad credentials for [redacted]"`,
 			mtime.Add(time.Hour).Format(time.RFC3339))
 		r.noKeychain(t)

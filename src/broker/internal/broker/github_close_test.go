@@ -46,7 +46,7 @@ func TestRevokeReadsTokenFiles(t *testing.T) {
 		"two files": {line("acme", "ghs_A1") + line("Other-Org", "ghs_B2"), nil, []string{"ghs_A1", "ghs_B2"},
 			[]string{"revoked  acme 2026-10-17T12:59:00Z", "revoked  Other-Org 2026-10-17T12:59:00Z"}},
 		"no token files": {"", nil, nil, nil},
-		"unparseable lines skipped": {"garbage\n" + line("bad/name", "ghs_X1") + "acme soon ghs_X2\nacme 12 \n" + line("acme", "ghs_X3 more") +
+		"unparsable lines skipped": {"garbage\n" + line("bad/name", "ghs_X1") + "acme soon ghs_X2\nacme 12 \n" + line("acme", "ghs_X3 more") +
 			line(".acme.new", "ghs_X4") + "acme -12 ghs_X5\n" + line("acme", "ghs_OK1"), nil, []string{"ghs_OK1"},
 			[]string{"revoked  acme 2026-10-17T12:59:00Z"}},
 		"duplicate and other shapes not sent": {line("acme", "ghs_D1") + line("other", "ghs_D1") + line("a", "ghp_PERSONAL1") +
