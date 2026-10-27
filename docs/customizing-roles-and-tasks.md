@@ -129,7 +129,7 @@ context = 204800                          # its context window in tokens; defaul
 1 = "strata/qwen3.8-flash-next"
 ```
 
-Its API key, on the tmux Host, stays OpenCode's: run `opencode auth login` once, pick Other and enter the provider's name (`strata`), and OpenCode keeps the key in its `auth.json`. The availability probe reads the selected provider's API entry and sends it only in the HTTP Authorization header; it returns no key or response body. On the Docker Host the broker keeps it: `ensemble-broker login opencode strata` once, for every configured provider ([Docker host › OpenCode](architecture.md#opencode-on-docker)). A name is up to 64 letters, digits, `.`, `_` or `-`.
+Its API key, on the tmux Host, stays OpenCode's: run `opencode auth login` once, pick Other and enter the provider's name (`strata`), and OpenCode keeps the key in its `auth.json`. The availability probe reads the selected provider's API entry and sends it only in the HTTP Authorization header; it returns no key or response body. On the Docker Host the broker keeps it: `ensemble-broker login opencode strata` once, for every configured provider ([Docker host › OpenCode on Docker](architecture.md#opencode-on-docker)). A name is up to 64 letters, digits, `.`, `_` or `-`.
 
 `scripts/install.sh --docker` with OpenCode selected configures both local OpenCode (including a commander) and
 the broker from one key entry; it imports the local API entry instead of asking for the key twice
@@ -150,7 +150,7 @@ Set each provider's `context` and `[clients.opencode] ollama_context` to the ser
 
 A crew worker's cwd is always trusted (you pick it), so `ensemble-crew worker NAME --client opencode --cwd DIR` starts on tmux in any `DIR`; a role run only under `trusted_dirs`; a board run never (its cwd is the workdir's `agent/`): run OpenCode board runs on the Docker Host ([Board › Agent label](architecture.md#agent-label)).
 
-On the tmux Host OpenCode needs the host's Ollama for `ollama/` models ([Docker host › OpenCode](architecture.md#opencode-on-docker) steps 1–3) and an OpenCode 1.x. With none on PATH, `npm install -g opencode-ai@1.19.3`; ignore npm's warning that its postinstall did not run. Beside a 2.x, install 1.x under its own prefix, leaving the 2.x as it is, and point `executable` at it:
+On the tmux Host OpenCode needs the host's Ollama for `ollama/` models ([Docker host › OpenCode on Docker](architecture.md#opencode-on-docker)) and an OpenCode 1.x. With none on PATH, `npm install -g opencode-ai@1.19.3`; ignore npm's warning that its postinstall did not run. Beside a 2.x, install 1.x under its own prefix, leaving the 2.x as it is, and point `executable` at it:
 
 ```bash
 npm install -g --prefix ~/.local/opencode-1 opencode-ai@1.19.3

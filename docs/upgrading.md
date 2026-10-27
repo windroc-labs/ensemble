@@ -34,8 +34,7 @@ Close first: after step 2 a protocol 29 broker no longer finds its items, so its
 nothing, and the protocol 30 broker rejects the old session's manifest. A session missed in step 1: close it with the
 new broker right after step 3; `close` revokes its GitHub tokens from the renamed record, and its audit log lacks the
 environment secrets' `Withdrawn` entries. Every later upgrade: `install.sh` runs `retrust` on each new broker, which
-asks the login keychain password once and shows no dialog ([Docker host › Re-trust after an
-upgrade](architecture.md#docker-install)).
+asks the login keychain password once and shows no dialog ([Docker host › Docker install](architecture.md#docker-install)).
 
 A broker below protocol 30 cannot read the renamed items, so once a protocol 30 broker is installed,
 `scripts/install.sh` refuses a `--ref` (an older release or branch) whose broker speaks below 30, before it replaces
@@ -54,7 +53,7 @@ The broker release asset no longer has a GitHub provenance attestation: the main
 that sha256. Nothing to do: install or upgrade the broker as before (`gh` still downloads it).
 
 Broker protocol 29 replaces `refresh` and `notices` with `maintain`: the broker now decides when each session's
-credentials renew ([Docker host › Credential renewal](architecture.md#harness-owned-workers)). Upgrade the broker with the
+credentials renew ([Docker host › Harness-owned workers](architecture.md#harness-owned-workers)). Upgrade the broker with the
 plugin, then restart (close and resume) every Docker session that was running: until then its old supervisor's
 renewals fail, each asking for that restart, its GitHub tokens lapse within the hour and a Codex session closes at its
 old deadline. The events `client_refresh_failed`, `github_refresh_failed` and `credential_notice_failed` become
@@ -63,22 +62,21 @@ broker, then close and resume every Docker session started under 29: a protocol 
 records. Pending GitHub revocations are kept either way.
 
 Broker protocol 28 adds `notices` and `status`'s `static`, and records each Claude token's, OpenCode key's and
-environment secret's expiry ([Docker host › Static secret expiry](architecture.md#broker-logins)). Upgrade the
+environment secret's expiry ([Docker host › Broker logins](architecture.md#broker-logins)). Upgrade the
 broker with the plugin. Existing items keep working with an unknown expiry; to record one, rerun the login with
 `--fresh-token` (Claude, after `claude setup-token`), `--issued` or `--expires`.
 
 Broker protocol 27 adds the start manifest's optional `gateway` (the caller network, default `workers`) and `prefetch`
-([Docker host › Prefetch](architecture.md#environments)). Upgrade the broker with the plugin: sessions refuse a broker of
+([Docker host › Environments](architecture.md#environments)). Upgrade the broker with the plugin: sessions refuse a broker of
 another protocol.
 
 Broker protocol 26 drops `start`'s `client_update`: a start never updates Codex; the image carries Claude Code,
 Codex and OpenCode at their latest releases and `ensemble-broker check-clients` rebuilds it when one moves
-([Docker host › Client releases](architecture.md#worker-image)). Upgrade the broker with the plugin. Drop
+([Docker host › Worker image](architecture.md#worker-image)). Upgrade the broker with the plugin. Drop
 `npm install -g @anthropic-ai/claude-code` (and `@openai/codex`) from `~/.ensemble/docker/worker/Dockerfile` to shrink
 the image: the ensemble layer installs its own, and a base image no longer needs `claude`.
 
-Broker protocol 25 makes `start` require the egress proxy ([Docker host › Egress
-proxy](architecture.md#egress-proxy)): without it running and healthy, a start fails
+Broker protocol 25 makes `start` require the egress proxy ([Docker host › Egress proxy](architecture.md#egress-proxy)): without it running and healthy, a start fails
 `egress_unavailable` (exit 17) before any credential. Upgrade the broker with the plugin, then rerun
 `scripts/install.sh --docker` to start the proxy ([Egress proxy](#egress-proxy)).
 
@@ -226,7 +224,7 @@ copy is left, the command keeps the selected-plugin error and the selection: rer
 Equal versions use sorted paths to break ties. The installer also handles older refs whose launchers predate selection support.
 After plugin refresh, when
 the plugin's broker sources changed, or the installed broker speaks another protocol, it reinstalls the broker, reusing locally usable Claude and ready Codex
-credentials and requesting any missing logins ([Log in](architecture.md#broker-logins)).
+credentials and requesting any missing logins ([Broker logins](architecture.md#broker-logins)).
 It does not edit config keys a release renames.
 
 For OpenCode with `--docker`, rerunning the installer also ensures the local `auth.json` entry for a commander,

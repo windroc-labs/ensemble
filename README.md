@@ -137,7 +137,7 @@ Set up by hand, nothing checks these: a missing one fails the agent run.
 | `claude` CLI, Python 3.11+ | every agent run |
 | the [`updraft`](https://github.com/windroc-labs/updraft) plugin for host workers: Claude Code `/plugin marketplace add windroc-labs/agent-plugins-marketplace`, then `/plugin install updraft@windroc`; Codex `codex plugin marketplace add windroc-labs/agent-plugins-marketplace`, then `codex plugin add updraft@windroc`. Docker workers install it in the image ([Plugins](docs/architecture.md#plugins)). | the engineer's build tasks (`/updraft:build`, `/updraft:light-build`) and the PM's PRD review (`/updraft:review`). Not needed otherwise. |
 | tmux 3.3–3.8 | tui runs on the `tmux` Host |
-| [Ollama](https://ollama.com) on `127.0.0.1` with its context length at least 65536 and the tier model pulled; on `tmux` also OpenCode 1.x (`npm install -g opencode-ai@1.19.3`) | OpenCode runs only ([Docker host › OpenCode](docs/architecture.md#opencode-on-docker), [OpenCode sessions](docs/customizing-roles-and-tasks.md#opencode-sessions)) |
+| [Ollama](https://ollama.com) on `127.0.0.1` with its context length at least 65536 and the tier model pulled; on `tmux` also OpenCode 1.x (`npm install -g opencode-ai@1.19.3`) | OpenCode runs only ([Docker host › OpenCode on Docker](docs/architecture.md#opencode-on-docker), [OpenCode sessions](docs/customizing-roles-and-tasks.md#opencode-sessions)) |
 | `git`, `gh` logged in | coding (checkouts, pull requests) and GitHub destinations. Not needed otherwise. |
 | iTerm2 running | the default iTerm2 split |
 | Docker Desktop running; the broker `B` (`/usr/local/libexec/ensemble/ensemble-broker`), installed by `sh <plugin dir>/src/broker/install.sh` (needs `sudo` and `gh` logged in); one login each: `B login claude` (paste a `claude setup-token`), `B login github ensemble-broker-bot`, and for Codex `sudo B install-codex <version>`, then `B login codex`; OpenCode needs none | the Docker Host only ([Docker host](docs/architecture.md#docker-host)); no Node on the host. What each credential grants, where it lives and how to revoke it: [Credentials](docs/credentials.md). |
@@ -179,5 +179,5 @@ Formats, rules and the board's limits: [Customizing roles and tasks](docs/custom
 | [Upgrading](docs/upgrading.md) | upgrade steps |
 | [Core architecture](docs/architecture.md) | layers and packages (developers); session settings, `ensemble-session`, run limits, the session harness, recalling a closed run, role runs' client flags, the OpenCode commander |
 | [Tests](docs/architecture.md#tests) | lint, test suites, coverage, live tests a local model can gate (developers) |
-| [Docker host](docs/architecture.md#docker-host) | install `ensemble-broker`, log in, build, start and close a worker container, run workers on the Docker Host, OpenCode on the host's Ollama, risks |
+| [Docker host](docs/architecture.md#docker-host) | install `ensemble-broker`, log in, the worker image, run workers on the Docker Host, OpenCode on the host's Ollama, risks |
 | [Credentials](docs/credentials.md) | every credential ensemble uses: purpose, least privilege, storage, readers, lifetime, revocation |
