@@ -13,6 +13,9 @@ import (
 // every upgrade, and a stale item's error names it.
 const RetrustCommand = InstalledPath + " retrust"
 
+// codexGrantsService held each Codex container's grant record; no command writes it any more.
+const codexGrantsService = "ensemble-broker-codex-grants"
+
 // retrustServices are the services retrust covers, every KeychainServices entry in its order; envServicePrefix
 // stands for each ensemble-broker-env/<name> service. Orchestrator-configured Linear services are not among them.
 var retrustServices = []string{tokenService, AppKeyService, usersService, tokensService, revocationsService, codexService,

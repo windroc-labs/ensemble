@@ -32,12 +32,11 @@ type Credentials interface {
 // CodexCredentials is the broker package's side of a Codex start; the launcher never sees the login.
 type CodexCredentials interface {
 	Ready(context.Context) error
-	// Inject writes the login into container through exec, as Credentials.Inject does, records the container's grant
-	// and returns its expiry (RFC 3339).
-	Inject(ctx context.Context, container string, exec func([]string, []byte) error) (string, error)
-	// Refresh writes the current login into container and records its expiry before returning it.
-	Refresh(ctx context.Context, container string, exec func([]string, []byte) error, publish func(string) error) (string, error)
-	Release(ctx context.Context, container string) error // withdraws the container's grant; never the login
+	// Inject writes the login into a container through exec, as Credentials.Inject does, and returns its expiry
+	// (RFC 3339).
+	Inject(ctx context.Context, exec func([]string, []byte) error) (string, error)
+	// Refresh writes the current login into a container through exec and publishes its expiry before returning it.
+	Refresh(ctx context.Context, exec func([]string, []byte) error, publish func(string) error) (string, error)
 }
 
 // ProviderKeys is the broker package's side of an OpenCode start: the listed providers' API keys, which the launcher
