@@ -62,7 +62,7 @@ Each session runs on a Host you pick: the local one (tmux), where the client run
 
 ![Flexible hosts: each session runs on a Host you pick, locally (tmux, not isolated) or in its own Docker container (isolated, so the client runs in yolo mode by default). The broker keeps the logins and gives each container only its own credentials: GitHub tokens valid an hour and revoked at close, a Codex access token without its refresh token, a Claude setup-token copy. The container cannot reach the host keychain, optional Linear app tokens, gh login or Docker socket, and reaches public destinations through the egress proxy; local/LAN services need explicit host:port exceptions; its work leaves only through GitHub](docs/images/system.svg)
 
-Details: [Docker host](docs/architecture.md#docker-host), [Credentials](docs/credentials.md).
+Details: [Docker host](docs/architecture.md#docker-host), [Credentials](docs/architecture.md#credentials).
 
 ## Demo: one manager, many workers
 
@@ -86,7 +86,7 @@ That release's installer installs that release's plugins and broker; another ins
 
 1. installs the dependencies: Homebrew with the Command Line Tools, `gh`, tmux, git, Python 3.11+, iTerm2;
 2. asks which clients you use (Claude Code, Codex, OpenCode) and whether workers run in Docker, and writes `~/.ensemble/config.local.toml`;
-3. installs and logs in only what that configuration needs: the clients with ensemble, [`updraft`](https://github.com/windroc-labs/updraft) for host Claude Code/Codex only without Docker ([host support and Docker plugins](docs/architecture.md#plugins)), OpenCode with its provider and its ensemble plugin (`opencode plugin -g`), Docker Desktop and the broker with the chosen clients' broker logins, `ctmux --install`, and the selected [board](docs/architecture.md#board-setup). A local board confirms `tracker = "local"` and creating missing board and `unassigned/` directories, without asking for Linear apps or contacting Linear. A Linear board sets up transport-owned harness, manager and role apps with Client IDs, hidden client secrets and Keychain tokens, then reads its config from Linear. Already-enrolled apps with [`renewal = "broker"`](docs/credentials.md#linear-broker-renewal) use the installed broker's maintenance and published access tokens without reading or asking for client secrets. Either board can optionally install the router and promote launchd jobs.
+3. installs and logs in only what that configuration needs: the clients with ensemble, [`updraft`](https://github.com/windroc-labs/updraft) for host Claude Code/Codex only without Docker ([host support and Docker plugins](docs/architecture.md#plugins)), OpenCode with its provider and its ensemble plugin (`opencode plugin -g`), Docker Desktop and the broker with the chosen clients' broker logins, `ctmux --install`, and the selected [board](docs/architecture.md#board-setup). A local board confirms `tracker = "local"` and creating missing board and `unassigned/` directories, without asking for Linear apps or contacting Linear. A Linear board sets up transport-owned harness, manager and role apps with Client IDs, hidden client secrets and Keychain tokens, then reads its config from Linear. Already-enrolled apps with [`renewal = "broker"`](docs/upgrading.md#linear-broker-renewal) use the installed broker's maintenance and published access tokens without reading or asking for client secrets. Either board can optionally install the router and promote launchd jobs.
 
 It asks the `sudo` password once per run and keeps it only in memory, for every `sudo` the run makes (Homebrew's included), runs each login on the spot (`gh`, Claude Code and Codex open your browser; the broker's `claude setup-token` and its paste run on the terminal's alternate screen, cleared once the broker has the token, so it stays out of the scrollback), and shows and asks before it writes your shell profile, the config or launchd jobs. A rerun keeps your last answers, skips what is done and finishes an interrupted install. Before upgrading, see [Upgrading](docs/upgrading.md).
 
@@ -140,7 +140,7 @@ Set up by hand, nothing checks these: a missing one fails the agent run.
 | [Ollama](https://ollama.com) on `127.0.0.1` with its context length at least 65536 and the tier model pulled; on `tmux` also OpenCode 1.x (`npm install -g opencode-ai@1.19.3`) | OpenCode runs only ([Docker host › OpenCode on Docker](docs/architecture.md#opencode-on-docker), [OpenCode sessions](docs/customizing-roles-and-tasks.md#opencode-sessions)) |
 | `git`, `gh` logged in | coding (checkouts, pull requests) and GitHub destinations. Not needed otherwise. |
 | iTerm2 running | the default iTerm2 split |
-| Docker Desktop running; the broker `B` (`/usr/local/libexec/ensemble/ensemble-broker`), installed by `sh <plugin dir>/src/broker/install.sh` (needs `sudo` and `gh` logged in); one login each: `B login claude` (paste a `claude setup-token`), `B login github ensemble-broker-bot`, and for Codex `sudo B install-codex <version>`, then `B login codex`; OpenCode needs none | the Docker Host only ([Docker host](docs/architecture.md#docker-host)); no Node on the host. What each credential grants, where it lives and how to revoke it: [Credentials](docs/credentials.md). |
+| Docker Desktop running; the broker `B` (`/usr/local/libexec/ensemble/ensemble-broker`), installed by `sh <plugin dir>/src/broker/install.sh` (needs `sudo` and `gh` logged in); one login each: `B login claude` (paste a `claude setup-token`), `B login github ensemble-broker-bot`, and for Codex `sudo B install-codex <version>`, then `B login codex`; OpenCode needs none | the Docker Host only ([Docker host](docs/architecture.md#docker-host)); no Node on the host. What each credential grants, where it lives and how to revoke it: [Credentials](docs/architecture.md#credentials). |
 
 How the sessions ensemble starts load your settings, and why some commands refuse inside them: [Session settings](docs/architecture.md#session-settings).
 
@@ -175,9 +175,7 @@ Formats, rules and the board's limits: [Customizing roles and tasks](docs/custom
 |---|---|
 | [Customizing roles and tasks](docs/customizing-roles-and-tasks.md) | run settings, team dirs, role and task files, checks, OpenCode sessions |
 | [Board](docs/architecture.md#board) | setup, issue states and task labels, operating the router, Agent labels (client per issue), the local board (`tracker`, `ENSEMBLE_BOARD_DIR`, layout, file format) |
-| [Credentials](docs/credentials.md) | every credential ensemble uses: who logs in, where it is stored, who can read it, lifetime, revocation; Linear presets |
-| [Upgrading](docs/upgrading.md) | upgrade steps |
-| [Core architecture](docs/architecture.md) | layers and packages (developers); session settings, `ensemble-session`, run limits, the session harness, recalling a closed run, role runs' client flags, the OpenCode commander |
+| [Upgrading](docs/upgrading.md) | upgrade steps; Linear presets, broker renewal and live checks |
+| [Core architecture](docs/architecture.md) | layers and packages (developers); session settings, `ensemble-session`, run limits, the session harness, recalling a closed run, role runs' client flags, every credential (storage, readers, lifetime, revocation), the OpenCode commander |
 | [Tests](docs/architecture.md#tests) | lint, test suites, coverage, live tests a local model can gate (developers) |
 | [Docker host](docs/architecture.md#docker-host) | install `ensemble-broker`, log in, the worker image, run workers on the Docker Host, OpenCode on the host's Ollama, risks |
-| [Credentials](docs/credentials.md) | every credential ensemble uses: purpose, least privilege, storage, readers, lifetime, revocation |

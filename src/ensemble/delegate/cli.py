@@ -105,7 +105,8 @@ Examples:
   unless --out changes it. Configured role destinations govern publication.
   Foreground waits and reports outcome status/deliverable path on stderr;
   a valid outcome (including failed/needs_input) exits 0, no outcome exits 1,
-  a held lock 75.
+  a held lock 75. A locked run's container, TUI and lock outlast its outcome
+  until its user closes it (ensemble-crew close) or its client exits.
   Detached mode starts agent/harness sessions and prints a Record when live.
   Modes: headless runs without a terminal; tui is a text user interface (TUI);
   in_process uses the configured in-process client runtime.

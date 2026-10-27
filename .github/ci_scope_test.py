@@ -129,8 +129,8 @@ class Repository(unittest.TestCase):
         for paths, event, full in (
             (["README.md", "src/ensemble/session/cli.py"], "pull_request", True),
             (["docs/upgrading.md", ".github/ci_scope.py"], "pull_request", True),
-            (["docs/credentials.md"], "pull_request", True),
-            (["README.md", "docs/credentials.md"], "pull_request", True),
+            (["docs/architecture.md"], "pull_request", True),
+            (["README.md", "docs/architecture.md"], "pull_request", True),
             (["skills/act-as/SKILL.md"], "pull_request", True),
             (["skills/manage/SKILL.md"], "pull_request", False),
             (["src/ensemble/delegate/team/roles/engineer.md"], "pull_request", True),

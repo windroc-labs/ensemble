@@ -4877,7 +4877,7 @@ exec /bin/rm "$@"
         self.linear(teams=[{**team, "states": states}])
         result = self.fresh("--board", "linear", "--launchd", then=self.secrets(*SLOTS))
         self.assert_board_stopped(
-            result, "Linear team ENG lacks states: Handoff (docs/credentials.md#linear-presets)"
+            result, "Linear team ENG lacks states: Handoff (docs/upgrading.md#linear-presets)"
         )
 
     def test_board_without_tasks_group_stops(self):
@@ -4885,7 +4885,7 @@ exec /bin/rm "$@"
         result = self.fresh("--board", "linear", "--launchd", then=self.secrets(*SLOTS))
         self.assert_board_stopped(
             result,
-            "Linear team ENG has no Tasks label group (docs/credentials.md#linear-presets)",
+            "Linear team ENG has no Tasks label group (docs/upgrading.md#linear-presets)",
         )
 
     def test_board_same_app_stops(self):

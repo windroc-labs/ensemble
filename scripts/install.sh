@@ -2719,7 +2719,7 @@ else:
         ident = uid(found.get("id"), "team id")
         teams.append((ident, name(found.get("key"), "team key", ident)))
     if not teams:
-        stop("the harness app sees no Linear team (docs/credentials.md#linear-presets)")
+        stop("the harness app sees no Linear team (docs/upgrading.md#linear-presets)")
     team = teams[0][0]
     if len(teams) > 1:
         keys = {key: ident for ident, key in teams}
@@ -2739,7 +2739,7 @@ STATES = {"backlog": "Backlog", "todo": "Todo", "in_progress": "In Progress", "i
           "handoff": "Handoff", "done": "Done", "canceled": "Canceled"}
 if missing := [title for title in STATES.values() if title not in states]:
     listed = ", ".join(missing)
-    stop(f"Linear team {team_key} lacks states: {listed} (docs/credentials.md#linear-presets)")
+    stop(f"Linear team {team_key} lacks states: {listed} (docs/upgrading.md#linear-presets)")
 labels = []
 for found in nodes(fetch("harness", "query($id: ID) { issueLabels(first: 250, filter: { or: [{ team: { id: { eq: $id } } }, "
                          "{ team: { null: true } }] }) { nodes { id name isGroup parent { id } } } }", {"id": team}),
@@ -2754,7 +2754,7 @@ def children(parent):
     return {label: ident for ident, label, _, of in labels if of == parent}
 tasks = linear_config.get("task_label_group") or group("Tasks")
 if not tasks:
-    stop(f"Linear team {team_key} has no Tasks label group (docs/credentials.md#linear-presets)")
+    stop(f"Linear team {team_key} has no Tasks label group (docs/upgrading.md#linear-presets)")
 humans = []
 for found in nodes(detail, "members"):
     if found.get("active") is True:

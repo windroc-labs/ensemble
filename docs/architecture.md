@@ -6,6 +6,9 @@ The session harness's tui and headless workers run under the standalone `harness
 (`hosts/tmux/managed.py`), over one `docker exec -i` per container on Docker (`hosts/docker/worker.py`).
 The harness owns the lifecycle pipe; the guard directly parents the client and owns a tui client's PTY;
 tmux runs only the display attachment. Handle readers drain the framed channel continuously.
+A task attempt's ending closes no worker, a locked one's included: the run's user (a person, or a manager acting
+for one) closes it, or its client exits; an environment lock goes with its container's confirmed removal
+([Docker host › Environment config](#environments)).
 Reclamation limits and the migration from legacy mode launchers are in
 [Session harness interfaces](#session-harness-interfaces).
 
@@ -109,7 +112,7 @@ Each Host implementation supplies its process capabilities.
 | `src/ensemble/manager/`, `skills/manage/`, `hooks/` | Crew, Roster, event cursors and commander sessions | utils; commands to other layers | Keep scheduling logic; adapt local display and client hooks | Record ctl and resume commands, CLI output; import relationships shown above |
 | `src/ensemble/utils/` | Configuration overlays, shared types, paths and process control | Python standard library | Keep, with the required OS process capabilities | Public exports and shared data formats |
 | External `windroc/egress-proxy` | Egress service, outside this repository | Docker labels and health, read by broker start ([`launcher/egress.go`](../src/broker/internal/launcher/egress.go)); `scripts/install.sh` fetches a pinned commit and starts the egress proxy | Replace the independent service as a unit | Versions, label meanings and health semantics in [docs/label-contract.md](https://github.com/windroc/egress-proxy/blob/122d7454d738db4a9b7e0c4a89d2cfa5ff564339/docs/label-contract.md) |
-| `src/broker/internal/broker/keychain_darwin.go` | Read credentials from macOS Keychain for broker injection into containers | macOS Security; storage interface in `keychain.go` | Replace the credential source as a unit | Credentials, CodexCredentials, ProviderKeys and Tokens in `launcher/host.go`; credential readers and lifecycle in [Credentials](credentials.md) |
+| `src/broker/internal/broker/keychain_darwin.go` | Read credentials from macOS Keychain for broker injection into containers | macOS Security; storage interface in `keychain.go` | Replace the credential source as a unit | Credentials, CodexCredentials, ProviderKeys and Tokens in `launcher/host.go`; credential readers and lifecycle in [Credentials](#credentials) |
 | `src/broker/internal/credential/` | Provider-neutral token lifecycle (records, renewal, release, revocation backlog) and the container delivery every credential shares | audit, docker, protocol; a Store and a Provider from its caller | Keep | The `Provider` contract and record JSON in `contract.go`; GitHub is its provider (`broker/github.go`), Codex its shared one (`broker/codex_grants.go`: each container's grant is withdrawn, never revoked) |
 
 The **Host boundary** is defined by [`hosts/base.py`](../src/ensemble/session/hosts/base.py).
@@ -280,11 +283,11 @@ These are approved-list candidates for deletion, not optional deprecations; each
 
 **Ownership.** `Session.start` will create the owner; `Session.attach` gets a control view, never a second owner; `events()` only observes, so closing its iterator, the caller exiting or a display detaching leaves a tui worker supervised (a headless run dies with its caller: [Session harness](#session-harness)); `stop`, `close` and `Session.retire` ask the owner and return only once it confirmed the worker ended, else raise `SessionError` (`Unanswered` when it cannot tell), so a caller releases a lock or removes a roster entry only after a confirmed end (FR-16, FR-23, FR-24).
 
-**Delegate.** `Delegate.run`, `alive`, `status`, `resume` and `close` keep their signatures and the `Result` and `Outcome` formats. `run()` returns once a task attempt has its Result while the session and its handler go on; `alive()` and `Status.alive` say whether an attempt is active, so a run waiting on `needs_input` is not alive. `resume(input=...)` (CLI `--input`) accepts an answer or continuation even while the unlocked TUI/harness lives; the active-attempt check must not reject it just because the owner lives. If the worker died, resume creates new processes from the original transcript and refuses a live/unknown old generation. A directly accepted input after a terminal attempt opens the next attempt through `TurnStarted`; resume has already counted its attempt, so the same event does not count twice. In-attempt nudges/repair and replay never open another attempt.
+**Delegate.** `Delegate.run`, `alive`, `status`, `resume` and `close` keep their signatures and the `Result` and `Outcome` formats. `run()` returns once a task attempt has its Result while the session and its handler go on; `alive()` and `Status.alive` say whether an attempt is active, so a run waiting on `needs_input` is not alive. `resume(input=...)` (CLI `--input`) accepts an answer or continuation even while the TUI/harness lives, a locked run's included; the active-attempt check must not reject it just because the owner lives. If the worker died, resume creates new processes from the original transcript and refuses a live/unknown old generation. A directly accepted input after a terminal attempt opens the next attempt through `TurnStarted`; resume has already counted its attempt, so the same event does not count twice. In-attempt nudges/repair and replay never open another attempt.
 
 Each attempt preserves `Begun`/`Progress`/one `Finished`, the existing Result/Outcome formats and Record `ctl`/`resume` control routing; subsequent attempts do not reuse the previous outcome or its completion marker. `close()` ends an active attempt once, never emits another failure for an ended attempt, and asks the session owner to close. Locks and roster entries remain until confirmed resource termination; close failures remain traceable. Delegate persisted `plan.session.handlers` lists are restored to tuples only when the key exists; old records default to `()`.
 
-Implemented (WDRC-208) for **owned runs**, the tui runs a session harness owns: the Delegate preflights the start with the handler `ensemble.delegate.engine.handler` registered as `{"workdir", "worker": n}` (`n`, the attempt whose call starts the worker); a refused preflight plans the run without it, and the run keeps the earlier caller loop (every other mode, and an unowned tui on the tmux Host: [Session harness](#session-harness); on Docker an unowned start is refused). Each attempt has one owner: the call that starts a worker owns it while opening, that worker's first handled call binds it to the handler, and the handler's `TurnStarted` after an ending opens the next attempt (`delegate.json` keeps the earlier one's Result as `previous`); calls of another sid or worker are ignored. An ending stores the Result, then writes its notes (the attempt's own and `result`/`end`) and the run's outcome line, then sends `Finished`; an ending another owner stored first writes and sends nothing; for a locked run, it first closes it through the owner's view and claims the release only once that close returns. `run()` (a detached run's `-drive`) starts the worker and waits for its attempt's Result; it ends the attempt itself only while opening past `idle_timeout` (a give-up) or once its worker has been gone 35 s. A signal before it sends `Begun` (its TUI start) stores the stopped ending, then closes the worker; a signal after leaves the attempt to the handler. A stale out it cannot set aside is stored as the attempt's Result, with `closing` set, before its worker is stopped. A completed run is not alive from its `Finished` on, though its drive holds the run lock until it returns; meanwhile `status` reports it `working`, and `resume()` (and `resume(input=...)` unless a live worker takes the input) waits up to 30 s for that lock before it sweeps and starts. `resume(input=...)` on a live owned worker only sends the input; `resume()` and a replacing `run` first retire a gone worker outside the run mutex, under the run lock (which every start takes) and only while `delegate.json` still names the attempt they checked, so they follow its harness's end (its handler's last write-back) before the callback sweep. `close()` holds a shared lock, `run/delegate.close.lock`, from before it attaches the worker until the owner's close returns: meanwhile a `TurnStarted` opens no follow-up, and the client's exit the close causes (`TurnFailed("exited")` or `TurnFailed("process_exit")`, `Exited`) ends an active attempt as a stop (`stopped: Stopped: 143`, its `Finished` sent once), never as a failure, while other endings keep their own Result. Without a close, such an exit failure of an open turn waits for its `Exited`: a client killed by signal n ends the attempt interrupted (`stopped: Stopped: <128+n>`, left In Progress: [Board](#board)), a nonzero exit as `the client exited <code>`. Once the close is confirmed, or its worker is gone, `delegate.json` `closing` is set (no follow-up of that worker until `resume(input=...)` or a new run clears it) and an attempt still active ends as that stop (a locked run's `release` first). A refused close drops the lock and leaves `closing` unset; input taken on an ended attempt during it opens no follow-up, the next does. `delegate.json` must hold `previous`, `bound` and the bool `closing`, and the callback lock both pids (`<child> <parent>`); anything else is invalid. Board write-back of each attempt: `docs/architecture.md` › Board › Using the board.
+Implemented (WDRC-208) for **owned runs**, the tui runs a session harness owns: the Delegate preflights the start with the handler `ensemble.delegate.engine.handler` registered as `{"workdir", "worker": n}` (`n`, the attempt whose call starts the worker); a refused preflight plans the run without it, and the run keeps the earlier caller loop (every other mode, and an unowned tui on the tmux Host: [Session harness](#session-harness); on Docker an unowned start is refused). Each attempt has one owner: the call that starts a worker owns it while opening, that worker's first handled call binds it to the handler, and the handler's `TurnStarted` after an ending opens the next attempt (`delegate.json` keeps the earlier one's Result as `previous`); calls of another sid or worker are ignored. An ending stores the Result, then writes its notes (the attempt's own and `result`/`end`) and the run's outcome line, then sends `Finished`; an ending another owner stored first writes and sends nothing. An ending closes no worker, a locked run's included: its user closes it or its client exits ([Docker host › Environment config](#environments) has the release claim). `run()` (a detached run's `-drive`) starts the worker and waits for its attempt's Result; it ends the attempt itself only while opening past `idle_timeout` (a give-up) or once its worker has been gone 35 s. A signal before it sends `Begun` (its TUI start) stores the stopped ending, then closes the worker; a signal after leaves the attempt to the handler. A stale out it cannot set aside is stored as the attempt's Result, with `closing` set, before its worker is stopped. A completed run is not alive from its `Finished` on, though its drive holds the run lock until it returns; meanwhile `status` reports it `working`, and `resume()` (and `resume(input=...)` unless a live worker takes the input) waits up to 30 s for that lock before it sweeps and starts. `resume(input=...)` on a live owned worker only sends the input; `resume()` and a replacing `run` first retire a gone worker outside the run mutex, under the run lock (which every start takes) and only while `delegate.json` still names the attempt they checked, so they follow its harness's end (its handler's last write-back) before the callback sweep. `close()` holds a shared lock, `run/delegate.close.lock`, from before it attaches the worker until the owner's close returns: meanwhile a `TurnStarted` opens no follow-up, and the client's exit the close causes (`TurnFailed("exited")` or `TurnFailed("process_exit")`, `Exited`) ends an active attempt as a stop (`stopped: Stopped: 143`, its `Finished` sent once), never as a failure, while other endings keep their own Result. Without a close, such an exit failure of an open turn waits for its `Exited`: a client killed by signal n ends the attempt interrupted (`stopped: Stopped: <128+n>`, left In Progress: [Board](#board)), a nonzero exit as `the client exited <code>`. Once the close is confirmed, or its worker is gone, `delegate.json` `closing` is set (no follow-up of that worker until `resume(input=...)` or a new run clears it) and an attempt still active ends as that stop (a locked run's `release` first). A refused close drops the lock and leaves `closing` unset; input taken on an ended attempt during it opens no follow-up, the next does. `delegate.json` must hold `previous`, `bound` and the bool `closing`, and the callback lock both pids (`<child> <parent>`); anything else is invalid. Board write-back of each attempt: `docs/architecture.md` › Board › Using the board.
 
 ### Guard protocol
 
@@ -365,6 +368,124 @@ OpenCode's pre-approved commands match a command's text without its redirections
 auto = ["-s", "workspace-write", "-c", 'approval_policy="on-request"', "-c", 'approvals_reviewer="auto_review"', "-c", "sandbox_workspace_write.network_access=false", "-c", "sandbox_workspace_write.writable_roots=[]"]
 ```
 
+## Credentials
+
+Every credential ensemble uses. `<B>` is `/usr/local/libexec/ensemble/ensemble-broker`; the logins and their dialogs:
+[Docker host › Log in](#broker-logins); what a container gets: [Docker host › What a container
+gets](#run-workers).
+
+**Three-way readers**: a credential the broker hands to a container (the Claude setup-token copy, GitHub installation
+tokens, the Codex access token, OpenCode provider API keys, environment secrets) can be read by the broker, by every
+process in that container, and by any process running as the user: `<B> start --manifest <file>` does not check its
+caller, and the Docker socket is the user's, so such a process can start a container or `docker exec` into one and
+read `/run/ensemble/secrets/`. The App private key, Codex refresh token and enrolled Linear client secrets stay with
+the broker; a provider API key or an environment secret is the same long-lived value in every container that lists
+it. Each container copy is 0400 on the container's tmpfs and goes with the container.
+
+| Credential | Host | Purpose | Stored at | Readers | Lifetime | Revoke |
+|---|---|---|---|---|---|---|
+| host `gh` login | `tmux`; the orchestrator and manager on either | target-repo check, docs fetch, duplicate search; the Delegate's ready gate (`gh pr ready`, `--undo`, Actions job and workflow-run reads); `repo.py`; the manager's PR reads. Push and PR rights on every target repo: a classic token needs `repo`, `read:org`, `gist`; a fine-grained one also Actions read | the system credential store, else a plain-text file (`gh auth status` says which) | any process running as the user; never a container | until revoked | github.com › Settings › Applications › GitHub CLI › Revoke access (every token gh made); `gh auth logout` is local only |
+| Claude Code login | `tmux` | the user's own Claude Code: `claude`, then `/login` | macOS Keychain; `~/.claude/.credentials.json` (0600) if the Keychain refuses the write | Claude Code and any process running as the user the Keychain lets read it | refreshed by Claude Code | `/logout` |
+| Claude setup-token | Docker | a container's Claude Code, model requests only: `claude setup-token` in each [account](#claude-accounts)'s subscription, pasted into `<B> login claude [<name>]` | `ensemble-broker-claude` / account name; copy `/run/ensemble/secrets/claude`, given to the client only as `CLAUDE_CODE_OAUTH_TOKEN` | item: the broker; copy: three-way | one year; starts refused past a known expiry ([Static secret expiry](#broker-logins)) | no documented route; on a leak, `claude setup-token` again and rerun `<B> login claude [<name>]` |
+| Codex login | `tmux` | the user's own Codex: `codex login` | `~/.codex/auth.json`, or the OS store per `cli_auth_credentials_store` | Codex and any process running as the user | refreshed by Codex | `codex logout`, locally |
+| Codex login | Docker | a container's Codex: the broker's own ChatGPT login, `<B> login codex` ([Codex](#broker-logins)) | full login, refresh token included: `ensemble-broker-codex` / `auth`; copy, access token only: `/run/ensemble/secrets/codex/auth.json` | refresh token: the broker, but during `login codex` and each renewal the full login sits in a 0700 temp dir under `/private/tmp` (a SIGKILL or host failure leaves it) that any process running as the user reads; copy: three-way | access token renewed 10 minutes before it expires; refresh token undocumented | no documented route; rerun `<B> login codex`, or delete the item |
+| OpenCode provider API key | `tmux` | OpenCode's requests to a `[session.clients.opencode.providers.<name>]` provider: `opencode auth login` ([OpenCode sessions](customizing-roles-and-tasks.md#opencode-sessions)) | OpenCode's `auth.json`; ensemble reads its selected API entry for availability probes and broker import | OpenCode and any process running as the user | until the provider revokes it | at the provider; `opencode auth logout` removes it locally |
+| OpenCode provider API key | Docker | the same, from a container | `ensemble-broker-opencode` / `<name>`; copy `/run/ensemble/secrets/opencode/<name>.key`, read through `{file:…}` in OpenCode's inline config, never env or argv | item: the broker; copy: three-way; on the network, anyone between the container and an `http://` `base_url` | until the provider revokes it, or its `--expires` date | at the provider, then `<B> login opencode <name>` with a new key; running containers keep the old copy until closed |
+| GitHub App private key | Docker | signs the 9-minute JWT that issues installation tokens; one private App, installed only on repos agents may push to ([Create the GitHub App](#create-the-github-app)) | `ensemble-broker-bot` / App ID, from `<B> login github ensemble-broker-bot --key-file <pem> --app-id <ID>`; then delete the `.pem` | the broker; an item made otherwise trusts `/usr/bin/security` until that login; a `.pem` left on disk: any process running as the user | until deleted in the App's settings | generate a new key and delete the old in the App's settings; `security delete-generic-password -s ensemble-broker-bot`, then the login with the new `.pem` |
+| GitHub installation tokens | Docker | git (credential helper) and `gh` (a wrapper setting `GH_TOKEN` for its own process) in a container: one per installation, covering every repo of it, with `[session.hosts.docker.github] permissions` | `ensemble-broker-tokens` (per container), `ensemble-broker-revocations` (backlog); copy `/run/ensemble/secrets/github/<owner>` | three-way | 1 hour; renewed 10 minutes before the first expires | `close` attempts revocation before removing the container; the backlog retries at the next start, close or `status --cleanup` until revoked or expired |
+| GitHub prefetch token | Docker | one [prefetch](#environments) clone, `contents: read` on that repo alone | `ensemble-broker-tokens` while in use; the helper's tmpfs `HOME` | the broker; the helper container's processes and any process that can `docker exec` into it, during the clone | until the helper exits, at most 1 hour | revoked when the helper exits; an unconfirmed revocation goes to the backlog |
+| environment secret | Docker | whatever a container's tools use it for ([Environment secrets](#environments)); issue one for ensemble alone | `ensemble-broker-env/<name>` / `<name>`; copy `/run/ensemble/secrets/env/<file>` | item: the broker; copy: three-way, and any process running as the user can start a container listing any `ensemble-broker-env/*` item | until replaced or deleted, or its `--expires` date | rotate it at its source, then `<B> login env <name>`; `security delete-generic-password -s ensemble-broker-env/<name>` deletes it; running containers keep the old copy until closed |
+| Linear harness app | host | router, promote, prune, a run's issue read and run comments; scopes `read,write` | client secret: `linear.harness.secret_service`; token and expiry (`{"access_token", "expires_at"}`): `linear.harness.token_service`; Client ID `linear.harness.client_id`, app user `linear.harness.user_id` | [Keychain items](#keychain-items) | token 30 days | transport: rotate the client secret in Linear › Settings › API › Applications (revoking every token of the app), `security add-generic-password -U -s <secret service> -a <secret service> -w` with the new one, then `security delete-generic-password -s <token service>`; broker: [Linear broker renewal](upgrading.md#linear-broker-renewal) |
+| Linear manager app | host | the `ensemble-orchestrator issue` commands; scopes `read,write,app:assignable` | as the harness's: `linear.manager.secret_service`, `linear.manager.token_service`, `linear.manager.client_id`, `linear.manager.user_id` | [Keychain items](#keychain-items) | token 30 days | as the harness app's |
+| Linear role apps | host | role write-back: comments, state moves, subscriptions, attachments, retitles; scopes `read,write,app:assignable,app:mentionable` | `linear.roles.<role>.secret_service`, `linear.roles.<role>.token_service`, with `client_id` and `user_id` | [Keychain items](#keychain-items) | token 30 days | as the harness app's |
+
+Each Linear call (router, promote, prune, write-back, `issue`; not `--dry-run`, which logs a `token` line with the days
+left) first requests its app a new `client_credentials` token when the stored one is missing, undated, expired or has
+under 5 days left. A failed request with the old token still valid logs `token-error` (the manager's:
+`token-error: manager: <reason>` on stderr) and uses it; with it expired the command exits 2 naming the fix, and a
+role's failure skips only that role's claims and resumes. The other `[orchestrator.linear]` ids grant nothing:
+`linear.team`, `linear.states.backlog`, `linear.states.todo`, `linear.states.in_progress`, `linear.states.in_review`,
+`linear.states.handoff`, `linear.states.done`, `linear.states.canceled`, `linear.task_label_group`,
+`linear.task_labels`, `linear.agent_label_group`, `linear.agent_labels` ([Upgrading › Linear
+presets](upgrading.md#linear-presets)).
+
+**Broker renewal** is opt-in per app: `linear.harness.renewal`, `linear.manager.renewal` or
+`linear.roles.<role>.renewal` set to `broker` (omitted or `transport`: the transport writer above). Once enrolled
+([Upgrading › Linear broker renewal](upgrading.md#linear-broker-renewal)), only the broker reads the client secret,
+Python never; the host transport runs one-shot `<B> linear-maintain` once per process per identity, then reads the
+published token item. The broker renews once under five days remain (past half the lifetime for a token under ten
+days), with the fixed scopes, under a per-identity cross-process lock; a failed publication retries the saved token
+without renewing again. On a maintenance failure the transport uses a still-valid or undated old token, reporting once
+per process; missing or expired material is a configuration error, never a fallback to the transport writer. Dry runs
+only read the published token. Host protocol 1 (`src/broker/protocol/linear-host/protocol.schema.json`) returns
+version, outcome and expiry, never a token; renewals audit as `linear-access-token`.
+
+`ensemble-broker-tokens` keeps each token prepared, delivered or retiring, so an interrupted renewal or close leaves
+it consistent and the next maintain or close finishes it. A record goes only on confirmed revocation, expiry or
+transfer to the backlog: when the backlog cannot be written and direct revocation fails, it stays and the broker
+reports pending cleanup; retry `<B> close --container <container>` with the original name, even after the container
+is gone (`status` does not list it).
+
+`<B> status` reports `claude.default` usable when the default Claude item trusts this broker, reads without a dialog
+and holds a well-formed token (Claude is not contacted); the installer checks it before asking for a `claude
+setup-token`, and skips `login codex` when Codex's status is `ready`. A broker login failing `keychain status -25244`
+(`errSecInvalidOwnerEdit`) means another process owns the item's access: delete only that service/account from the
+login keychain in Keychain Access, then rerun `scripts/install.sh` or the login; the installer names the item but
+never deletes it.
+
+### Keychain items
+
+All in the login keychain; every `ensemble-broker-` service is a broker item ([Re-trust after an
+upgrade](#docker-install)), the `linear.*` services are not.
+
+| Service | Account | Config key | Holds | Written by | Readers |
+|---|---|---|---|---|---|
+| `ensemble-broker-claude` | account name (`default` or `<name>`) | `[session.clients.claude.accounts.<name>]` | that Claude account's setup-token | `<B> login claude [<name>]` | the broker |
+| `ensemble-broker-bot` | App ID | `[session.hosts.docker.github] app` | App private key | the user; access set by `<B> login github ensemble-broker-bot` | the broker, once logged in |
+| `ensemble-broker-github-users` | `ensemble-broker-bot` | — | the App's slug and its bot user's ID, for git identity (not a secret) | `<B> login github ensemble-broker-bot` | the broker |
+| `ensemble-broker-tokens` | container name | — | that container's installation tokens and expiries, including retained recovery material | `<B> start`, `maintain`; `close` removes only safely retired entries | the broker |
+| `ensemble-broker-revocations` | `pending` | — | tokens awaiting revocation | `<B> close`, `maintain` failures | the broker |
+| `ensemble-broker-codex` | `auth` | — | the full Codex login | `<B> login codex`; renewals at `start`, `maintain` | the broker |
+| `ensemble-broker-codex-grants` | container name | — | that container's Codex grant: the login's fingerprint, expiry, revision and delivery state; no token | `<B> start`, `maintain`; `close` deletes it | the broker |
+| `ensemble-broker-linear` | `registry`, `app/<token_service>` | — | `registry`: enrolled identities, no client ID, user ID or root/token service shared; `app/<token_service>`: that identity's binding and authoritative access token; no client secret copy | `<B> login linear`, `linear-maintain` | the broker |
+| `ensemble-broker-linear-grants` | `host/<token_service>` | — | a host app's prepared/delivered access-token grant | `<B> linear-maintain` | the broker |
+| `ensemble-broker-opencode` | provider name | `[session.clients.opencode.providers.<name>]` | that OpenCode provider's API key | `<B> login opencode <name>` | the broker |
+| `ensemble-broker-env/<name>` | `<name>` | — | that environment secret | `<B> login env <name>` | the broker |
+| each `secret_service` value | any | `linear.harness.secret_service`, `linear.manager.secret_service`, `linear.roles.<role>.secret_service` | that app's client secret | the installer or the user ([Linear presets](upgrading.md#linear-presets)) | enrolled: the broker; transport: any process running as the user, through `/usr/bin/security` |
+| each `token_service` value | the existing item's, else the service | `linear.harness.token_service`, `linear.manager.token_service`, `linear.roles.<role>.token_service` | that app's token and expiry | transport: the commands and installer; enrolled: the broker | any process running as the user, through `/usr/bin/security` |
+| Claude Code's own | — | — | local Claude login | Claude Code `/login` | Claude Code; service name not documented |
+| `gh`'s own | — | — | host `gh` token | `gh auth login` | `gh`; see `gh auth status` |
+| Codex's own, keyring mode only | — | — | local Codex login | `codex login` | Codex; service name not documented |
+
+### What a container cannot reach
+
+`tests/session/live_docker.py worker` runs each command in its worker container `C`
+(`docker ps --filter label=ensemble.session --format '{{.Names}}'`); each prints counts only and passes when every
+count is `0`. Each search covers every mount (the workspace volume, the binds, the tmpfs), skipping only `/proc` and
+`/sys`; the container's own tmux socket is not Docker's, so the socket search names `docker`.
+
+| Resource | Command |
+|---|---|
+| host keychain | `docker exec "$C" sh -c 'find / \( -path /proc -o -path /sys \) -prune -o -path "*/Library/Keychains*" -print 2>/dev/null \| wc -l; command -v security \| wc -c'` |
+| Linear tokens | `docker exec "$C" sh -c 'env \| grep -ci linear; find / \( -path /proc -o -path /sys \) -prune -o -name config.local.toml -print 2>/dev/null \| wc -l'` |
+| host `gh` login | `docker exec "$C" sh -c 'find / \( -path /proc -o -path /sys \) -prune -o -path "*/gh/hosts.yml" -print 2>/dev/null \| wc -l; env \| grep -c "^GH_TOKEN="'` |
+| Docker socket | `docker exec "$C" sh -c 'find / \( -path /proc -o -path /sys \) -prune -o -type s -name "*docker*" -print 2>/dev/null \| wc -l; command -v docker \| wc -c; env \| grep -c "^DOCKER_HOST="'` |
+
+### Risks
+
+Beside [Docker host › Risks](#docker-risks):
+
+- **Three-way readers** of handed-out credentials: accepted by the user on 2026-10-18; the broker is unchanged.
+- Transport-owned Linear client secrets and every published Linear access token trust `/usr/bin/security`: any process
+  running as the user reads them without a dialog. Enrolled client secrets trust only the broker.
+- Config picks a Docker Claude session's account ([Claude accounts](#claude-accounts)); it is no access
+  control: any process running as the user can start a container with any logged-in account.
+- An environment secret reaches whoever can start a container: any process running as the user can list any
+  `ensemble-broker-env/*` item in a manifest and read the copy.
+- `<B> probe-provider --provider NAME --base-url URL` does not check its caller either: any process running as the
+  user can have the broker send a provider's stored API key to an endpoint it chooses.
+- Neither the setup-token nor the Codex login has a documented upstream revocation.
+
 ## OpenCode commander
 
 A commander can run in OpenCode 1.x (checked against 1.19.3), with ensemble's `plugin` entry in `~/.config/opencode/opencode.json` ([Install](../README.md#install); upgrading it: [Upgrading › OpenCode plugin by hand](upgrading.md#opencode-plugin-by-hand)), or a checkout's `"plugin": ["file://<checkout>/.opencode-plugin/ensemble.js"]`. `opencode plugin` installs npm packages only. Start `opencode` in the `ctmux` shell, then run `/ensemble:manage`.
@@ -413,7 +534,7 @@ By hand (macOS; the orchestrator runs this checkout's scripts; `<work_dir>` is `
    ```
 
    A role's board runs use the Claude account `[orchestrator.core.roles.<role>.accounts]` ([Claude accounts](#claude-accounts)).
-2. Create the Linear presets, apps and Keychain items the keys above name, and fill their configuration: [Linear presets](credentials.md#linear-presets).
+2. Create the Linear presets, apps and Keychain items the keys above name, and fill their configuration: [Linear presets](upgrading.md#linear-presets).
 3. Dry-run each job: `bin/ensemble-orchestrator router --dry-run`, `bin/ensemble-orchestrator promote --dry-run`.
 4. Install the launchd jobs (router at :00 and :30, promote every 5 min); the plists hard-code this checkout's path and `~/.ensemble`:
 
@@ -576,7 +697,7 @@ A start without a healthy proxy fails `egress_unavailable` (exit 17): run `start
 | `"$B" login opencode <name> [--auth-file <auth.json>]` | each `[session.clients.opencode.providers.<name>]` API key (Ollama needs none) |
 | `"$B" login env <name> [--expires <date>]` | an environment secret, 1–16384 bytes (pipe a long value) |
 
-Only a login or `retrust` shows a keychain dialog; a start that cannot read an item names the login or `retrust` to run. Claude tokens, OpenCode keys and environment secrets are static: the broker records their expiry, gives notices 30, 7 and 1 days before, and refuses a start with an expired one (`login_required`, exit 5). `"$B" status` lists credentials, static expiries and unrevoked GitHub tokens. Every `start` and `close` is logged to `~/Library/Logs/ensemble/broker.jsonl`, never a secret.
+What each login hands a container: [Credentials](#credentials). Only a login or `retrust` shows a keychain dialog; a start that cannot read an item names the login or `retrust` to run. Claude tokens, OpenCode keys and environment secrets are static: the broker records their expiry, gives notices 30, 7 and 1 days before, and refuses a start with an expired one (`login_required`, exit 5). `"$B" status` lists credentials, static expiries and unrevoked GitHub tokens. Every `start` and `close` is logged to `~/Library/Logs/ensemble/broker.jsonl`, never a secret.
 
 ### Create the GitHub App
 
@@ -638,7 +759,7 @@ Every Docker session runs under its [session harness](#session-harness): the [gu
 
 ### Environments
 
-A role's environment comes only from the trusted delegate config, never a run's input: `[delegate.environment.<host>]` (the Docker Host's default: `image`, `gateway`), `[delegate.environments.<name>]` (keys that differ), and `[delegate.roles.<role>.environment]` (`name` and overrides). Keys: `image` (a [base image](#base-images) or `"@worker"`), `gateway` (the egress caller network), `plugins`, `secrets` (`[[…secrets]]` of `item = "ensemble-broker-env/<name>"` and `file`, written 0400 to `/run/ensemble/secrets/env/<file>`), `lock` (one holder at a time: another start is busy, exit 75; a board run gets a normal failed attempt), and `prefetch` (`true`: clone the input's `Repo:` at its `Ref:` into a new workspace, with no GitHub token in the container). The packaged `[environments.mini-op]` is the `verifier`'s. Release a lock with `ensemble-session close <name>` or `docker stop <container>`. `ensemble-delegate run --dry-run` prints the resolved `environment`; `ensemble-delegate open <name> --environment <env>` opens one without a role.
+A role's environment comes only from the trusted delegate config, never a run's input: `[delegate.environment.<host>]` (the Docker Host's default: `image`, `gateway`), `[delegate.environments.<name>]` (keys that differ), and `[delegate.roles.<role>.environment]` (`name` and overrides). Keys: `image` (a [base image](#base-images) or `"@worker"`), `gateway` (the egress caller network), `plugins`, `secrets` (`[[…secrets]]` of `item = "ensemble-broker-env/<name>"` and `file`, written 0400 to `/run/ensemble/secrets/env/<file>`), `lock` (one holder at a time: another start is busy, exit 75; a board run gets a normal failed attempt; a locked run's container, TUI, harness and lock stay after its outcome, `needs_input` included, until the user closes it (`ensemble-crew close`, `ensemble-session close`) or the client exits, and `ensemble-crew resume --input` continues in that container; after rotating an environment secret, close the runs waiting on it), and `prefetch` (`true`: clone the input's `Repo:` at its `Ref:` into a new workspace, with no GitHub token in the container). The packaged `[environments.mini-op]` is the `verifier`'s. Release a lock with `ensemble-session close <name>` or `docker stop <container>`. `ensemble-delegate run --dry-run` prints the resolved `environment`; `ensemble-delegate open <name> --environment <env>` opens one without a role.
 
 ### Workspace volumes
 
@@ -654,7 +775,7 @@ A worker's workspace is a Docker volume, `ensemble-ws-<name>`, mounted at its cw
 
 ### Docker risks
 
-- Container credentials are readable by every process in the container and by any process running as you.
+- Container credentials are readable by every process in the container and by any process running as you ([Credentials](#credentials)).
 - Every Docker session can push to any unprotected branch of every repo the App is installed on; a token the broker could not revoke stays valid up to an hour (`"$B" status`).
 - A worker's branch can carry files your tools run: review a bot PR on GitHub before `gh pr checkout`, then read every change to `Makefile` and `package.json` scripts, `.claude/`, `.vscode/`, `.envrc` and hooks config (`.githooks/`, `.husky/`, `.pre-commit-config.yaml`, `core.hooksPath`, `core.fsmonitor`). For an output repo runs push to directly, `git diff --stat HEAD @{upstream}` before `git pull`. Require approval for workflow runs on target repos.
 - Git in a container runs each checkout's `.githooks/` with the container's tokens in reach; image builds trust the client vendors' npm packages.
@@ -675,6 +796,8 @@ Run `tests/session/live_docker.py` only through mini-op on the test Mac mini, fr
 | `python3 tests/session/live_docker.py worker --client claude\|codex\|opencode CWD [NAME]` | build reuse, container flags, egress isolation, restart, close then resume, `docker rm -f` then resume, credential revocation |
 | `python3 tests/session/live_docker.py role --repo OWNER/NAME [--timeout S] [NAME]` | a headless engineer run renews its token and opens a draft PR as the App's bot |
 | `python3 tests/session/live_docker.py pr URL` | the PR was opened as a draft by the App's bot |
+
+The installer's proxy, Linear preset and Linear app checks stay manual ([Upgrading › Live checks](upgrading.md#live-checks)).
 
 ## Tests
 
@@ -732,7 +855,7 @@ python3 .github/coverage_gate.py /tmp/coverage-data origin/main
 | Change/event | Unit and integration tests | Repository tests |
 |---|---|---|
 | PR touching only `src/ensemble/manager/`, `src/ensemble/orchestrator/`, their `tests/<layer>/`, `skills/manage/`, `skills/board/`, `hooks/` and `launchd/` | both upper layers | skipped |
-| PR touching only root `*.md` files and/or `docs/` | upper skill unit tests in `Lint style` only | skipped |
+| PR touching only root `*.md` files and/or `docs/` but `docs/architecture.md` (read by repository checks) | upper skill unit tests in `Lint style` only | skipped |
 | PR changing only the release `version` of the plugin manifests and `package.json` | skipped; every lint runs | skipped |
 | anything else, a push to `main` or `merge_group` | all layers | run |
 

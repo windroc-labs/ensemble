@@ -76,7 +76,7 @@ BROKER_PHASES = frozenset(
     )
 )
 BROKER_LINE = re.compile(r"^ensemble-broker: start (\S+) ([0-9.]+) s$", re.MULTILINE)
-# Resource → the command docs/credentials.md › What a container cannot reach runs as `sh -c`.
+# Resource → the command docs/architecture.md › What a container cannot reach runs as `sh -c`.
 EGRESS = "windroc.egress."  # the egress proxy's label prefix
 UNREACHABLE = {
     "host keychain": r"find / \( -path /proc -o -path /sys \) -prune -o -path "

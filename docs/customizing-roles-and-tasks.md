@@ -132,8 +132,14 @@ context = 204800                          # its context window in tokens; defaul
 Its API key, on the tmux Host, stays OpenCode's: run `opencode auth login` once, pick Other and enter the provider's name (`strata`), and OpenCode keeps the key in its `auth.json`. The availability probe reads the selected provider's API entry and sends it only in the HTTP Authorization header; it returns no key or response body. On the Docker Host the broker keeps it: `ensemble-broker login opencode strata` once, for every configured provider ([Docker host › OpenCode on Docker](architecture.md#opencode-on-docker)). A name is up to 64 letters, digits, `.`, `_` or `-`.
 
 `scripts/install.sh --docker` with OpenCode selected configures both local OpenCode (including a commander) and
-the broker from one key entry; it imports the local API entry instead of asking for the key twice
-([Credentials](credentials.md#opencode-provider-api-keys)).
+the broker from one key entry: paste it once at `opencode auth login`, or pass one line with `--opencode-key-stdin`;
+it stores it in `${XDG_DATA_HOME:-~/.local/share}/opencode/auth.json`, then imports that API entry into the broker.
+Reruns skip a usable local API entry and a broker item whose recorded broker binary fingerprint still matches; a
+missing broker item or a changed broker binary imports the local entry again without asking. An older broker-only
+install needs one local login: the broker's key is never exported. Existing entries are not compared or synchronized.
+The install ledger records each entry it adds, `opencode-auth` for the local provider and `keychain` for
+`ensemble-broker-opencode` / `<name>`; `scripts/install-cleanup.sh` removes only those, keeping preexisting
+credentials and other providers, and revokes nothing at the provider.
 
 With OpenCode selected, the installer also adds the provider's URL, model and context to the global
 `$XDG_CONFIG_HOME/opencode/opencode.jsonc` (default `~/.config/opencode/opencode.jsonc`), or the existing

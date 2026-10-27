@@ -16,6 +16,8 @@ import os
 import shutil
 import signal
 import threading
+import unittest
+import uuid
 from collections.abc import Callable
 from dataclasses import asdict, replace
 from types import SimpleNamespace
@@ -27,6 +29,7 @@ from ensemble.delegate.engine.config import module_roots
 from ensemble.delegate.engine.drivers import AgentDriver
 from ensemble.delegate.engine.harness_delegate import DRAIN_WAIT, HarnessDelegate
 from ensemble.delegate.engine.record import CLOSED, HANDLER, RunRecord
+from ensemble.delegate.engine.runner import report
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import Begun, Finished, Layout, Result
 from ensemble.session import (
@@ -51,6 +54,7 @@ from tests.delegate.fakes.harness_session import (
     FailingSession,
     FakeViewer,
     HarnessSession,
+    LockingSession,
     RecordingHost,
     RecordingProcess,
     ShowingHost,
@@ -197,6 +201,14 @@ class DockerHeadlessTest(HarnessCase):
         self.assertEqual(self.metadata()["plan"]["session"]["name"], name)
 
 
+def broker_command(argv) -> str:
+    """The faked broker's command; an AssertionError names any other process, which a patched
+    Popen would otherwise answer from a missing fixture as FileNotFoundError."""
+    if os.path.basename(argv[0]) != "ensemble-broker":
+        raise AssertionError(f"unmodelled process: {' '.join(argv[:4])}")
+    return argv[1]
+
+
 class DockerPreflightTest(HarnessCase):
     """The real Session's Docker Host, its broker process faked, no daemon socket in its account
     home and its hook command on PATH, preflights a fresh workdir's run.
@@ -222,7 +234,7 @@ class DockerPreflightTest(HarnessCase):
             self.addCleanup(patcher.stop)
 
     def broker(self, argv, **_):
-        command = argv[1]
+        command = broker_command(argv)
         self.calls.append(command)
         if self.failing and command == "build":
             return support.FakeProc(
@@ -245,12 +257,41 @@ class DockerPreflightTest(HarnessCase):
                 shutil.rmtree(self.work)
                 self.calls.clear()
 
+    def test_an_unmodelled_process_fails_naming_it(self):
+        with self.assertRaisesRegex(AssertionError, "unmodelled process: /bin/sh -c true"):
+            self.broker(["/bin/sh", "-c", "true"])
+
     def test_a_refused_docker_preflight_leaves_no_workdir(self):
         self.failing = True
         with self.assertRaisesRegex(ConfigError, "Example build_failed"):
             self.create("headless")
         self.assertEqual(self.calls, ["version", "build"])
         self.assertFalse(os.path.exists(self.work))
+
+
+class CallerSessionTest(HarnessCase):
+    """The Docker classes pass in a caller's tmux pane and agent session, as on CI: a plain
+    unittest run in an agent's shell once leaked TMUX (the viewer's placement then ran tmux through
+    their patched Popen) and ENSEMBLE_AGENT_SESSION (a nested run refused)."""
+
+    maxDiff = None
+
+    def test_the_docker_tests_ignore_the_callers_tmux_and_agent_session(self):
+        caller = {
+            "TMUX": "/tmp/tmux-1/default,1,0",
+            "TMUX_PANE": "%1",
+            "ENSEMBLE_AGENT_SESSION": "1",
+        }
+        loader = unittest.defaultTestLoader
+        suite = unittest.TestSuite(
+            loader.loadTestsFromTestCase(case) for case in (DockerPreflightTest, VerifierDockerTest)
+        )
+        result = unittest.TestResult()
+        with mock.patch.dict(os.environ, caller):
+            suite.run(result)
+        failed = [f"{t.id()}: {tb.splitlines()[-1]}" for t, tb in result.failures + result.errors]
+        self.assertEqual(failed, [])
+        self.assertEqual(result.testsRun, 6)
 
 
 class VerifierClientTest(HarnessCase):
@@ -309,7 +350,7 @@ class VerifierDockerTest(HarnessCase):
                 ("", gone) if kw.get("text") else (b"", gone.encode())
             )
             return process
-        command = argv[1]
+        command = broker_command(argv)
         self.calls.append(command)
         if command in self.refusals:
             code, name, message = self.refusals[command]
@@ -334,6 +375,10 @@ class VerifierDockerTest(HarnessCase):
             return str(error)
         self.assertNotEqual(result.returncode, 0)
         return result.error
+
+    def test_an_unmodelled_process_fails_naming_it(self):
+        with self.assertRaisesRegex(AssertionError, "unmodelled process: /usr/bin/docker ps"):
+            self.broker(["/usr/bin/docker", "ps"])
 
     def test_a_missing_image_fails_before_any_container(self):
         self.refusals["build"] = (
@@ -2456,6 +2501,8 @@ class OwnedRun(HarnessCase):
     def setUp(self):
         super().setUp()
         HarnessSession.owns = True
+        LockingSession.reset()
+        LockingSession.owns = True
         self.lines: list[str] = []
         self.enterContext(
             mock.patch("subprocess.Popen", side_effect=lambda _argv, **_kw: Child(self.lines))
@@ -2464,17 +2511,17 @@ class OwnedRun(HarnessCase):
         self.events_file = os.path.join(self.home, "events.log")
         self.record = RunRecord(Layout(self.work))
 
-    def owned(self, *, idle=600.0, lock=None):
+    def owned(self, *, idle=600.0, lock=None, work=None, sid=SID, session_cls=HarnessSession):
         spec = Spec(
             "input",
-            self.work,
+            work or self.work,
             task="echo",
-            sid=SID,
+            sid=sid,
             client="fake",
             mode="tui",
             events=self.events_file,
         )
-        view = self.make(spec=spec, callback=("callback",))
+        view = self.make(spec=spec, callback=("callback",), session_cls=session_cls)
         p = view._state.plan
         session = p.session
         if lock is not None:
@@ -2595,6 +2642,19 @@ class OwnedRun(HarnessCase):
             view.run()
         self.assert_stopped_start_left_nothing(view)
 
+    def test_a_locked_stop_during_the_tui_start_claims_release_once_it_closed(self):
+        view = self.owned(lock="dummy-lock")
+        with (
+            mock.patch.object(
+                HarnessSession, "showable", new_callable=mock.PropertyMock, side_effect=Stopped(129)
+            ),
+            self.assertRaises(Stopped),
+        ):
+            view.run()
+        self.assertFalse(view.driver.session.alive())
+        self.assertEqual(self.kinds().count("release"), 1)
+        self.assertEqual(self.err.getvalue().count("closed (lock dummy-lock)"), 1)
+
     def test_a_stop_before_the_start_returns_closes_the_drivers_session(self):
         view = self.owned()
 
@@ -2652,32 +2712,123 @@ class OwnedRun(HarnessCase):
         self.assertEqual(self.record.read().result, result)
         self.assertEqual(self.sent(), ["begun", "finished"])
 
-    def locked_give_up(self, *, fails: bool) -> str:
+    def test_a_locked_give_up_leaves_the_session_open(self):
         Clock(self)
         view = self.owned(idle=5, lock="dummy-lock")
-
-        def failing():
-            raise SessionError("not confirmed")
-
-        def break_close():
-            if fails:
-                view.driver.session.close = failing
-
-        _seen, on = self.at_begun(break_close)
-        view.run(on)
-        return self.err.getvalue()
-
-    def test_a_locked_give_up_claims_release_once_its_close_returns(self):
-        err = self.locked_give_up(fails=False)
-        self.assertIn("closed (lock dummy-lock)", err)
-        self.assertIn("release", self.kinds())
-
-    def test_a_locked_give_up_whose_close_fails_claims_no_release(self):
-        err = self.locked_give_up(fails=True)
-        self.assertIn("delegate: tui: close: not confirmed", err)
-        self.assertNotIn("closed (lock", err)
+        view.run()
+        self.assertTrue(view.driver.session.alive())
+        self.assertIn(f"session {view._state.agent_name} left open", self.err.getvalue())
+        self.assertNotIn("closed (lock", self.err.getvalue())
         self.assertNotIn("release", self.kinds())
         self.assertEqual(self.sent(), ["begun", "finished"])
+
+    def test_a_locked_needs_input_is_waiting_and_attachable(self):
+        """A crew entry is waiting on an outcome needs_input while not alive (crew._reconciled)."""
+        HarnessSession.reset(showable=True)
+        HarnessSession.owns = True
+        view = self.owned(lock="dummy-lock")
+        _seen, on = self.at_begun(
+            lambda: (self.record.bind(1, 1), self.record.complete(1, self.NEEDS, sid=SID))
+        )
+        self.assertEqual(view.run(on), self.NEEDS)
+        self.assertTrue(view.driver.session.alive())
+        again = HarnessDelegate.attach(self.work, session_cls=HarnessSession, viewer=FakeViewer())
+        self.assertFalse(again.alive())
+        status = again.status()
+        self.assertEqual((status.alive, status.outcome), (False, "needs_input"))
+        self.assertNotIn(status.state, (StatusState.GONE, StatusState.DEAD))
+        self.assertEqual(status.attach, f"agent attach {view._state.agent_name}")
+        self.assertNotIn("release", self.kinds())
+
+    def test_a_locked_runs_answer_goes_to_its_live_worker(self):
+        view = self.owned(lock="dummy-lock")
+        _seen, on = self.at_begun(
+            lambda: (self.record.bind(1, 1), self.record.complete(1, self.NEEDS, sid=SID))
+        )
+        view.run(on)
+        agent, launches = view.driver.session, len(harness_launches())
+        HarnessDelegate.attach(self.work, session_cls=HarnessSession).resume(input="the answer")
+        self.assertEqual(agent.sent, ["the answer"])
+        self.assertTrue(agent.alive())
+        self.assertEqual(len(harness_launches()), launches)
+        self.assertNotIn("release", self.kinds())
+
+    def waiting(self, work: str, sid: str) -> HarnessDelegate:
+        """A LockingSession run on dummy-lock, its attempt ended needs_input, its worker live."""
+        view = self.owned(lock="dummy-lock", work=work, sid=sid, session_cls=LockingSession)
+        record = RunRecord(Layout(work))
+        _seen, on = self.at_begun(
+            lambda: (record.bind(1, 1), record.complete(1, self.NEEDS, sid=sid))
+        )
+        self.assertEqual(view.run(on), self.NEEDS)
+        return view
+
+    def busy_until(self, end) -> None:
+        first = self.waiting(self.work, SID)
+        holder = first._state.agent_name
+        second = self.owned(
+            lock="dummy-lock",
+            work=os.path.join(self.home, "second"),
+            sid=str(uuid.uuid4()),
+            session_cls=LockingSession,
+        )
+        result = second.run()
+        self.assertEqual(
+            result,
+            Result(75, None, f"busy: lock dummy-lock is held by {holder} (owner {holder})"),
+        )
+        self.assertEqual(report(result, None), (75, None))
+        end(first)
+        self.waiting(os.path.join(self.home, "third"), str(uuid.uuid4()))
+
+    def test_a_second_run_on_a_waiting_runs_lock_is_busy_until_its_user_closes_it(self):
+        self.busy_until(lambda first: first.close())
+        self.assertEqual(self.kinds().count("release"), 1)
+
+    def test_a_second_run_on_a_waiting_runs_lock_is_busy_until_its_client_exits(self):
+        def exits(first):
+            first.driver.session.liveness = Liveness.ABSENT
+
+        self.busy_until(exits)
+        first = HarnessDelegate.attach(self.work, session_cls=LockingSession)
+        first.close()  # its exited worker: the third run holds the lock now
+        self.assertNotIn("release", self.kinds())
+        self.assertNotIn(f"session {first._state.agent_name} closed (lock", self.err.getvalue())
+
+    def test_a_closed_locked_run_resumes_by_taking_its_lock_again(self):
+        first = self.waiting(self.work, SID)
+        HarnessDelegate.attach(self.work, session_cls=LockingSession).close()
+        other = self.waiting(os.path.join(self.home, "other"), str(uuid.uuid4()))
+        holder = other._state.agent_name
+        again = HarnessDelegate.attach(self.work, session_cls=LockingSession)
+        with self.assertRaisesRegex(
+            SessionError, f"busy: lock dummy-lock is held by {holder} \\(owner {holder}\\)"
+        ):
+            again.resume(input="the answer")
+        self.assertEqual(self.metadata()["attempt"], 1)
+        other.driver.session.close()
+        HarnessDelegate.attach(self.work, session_cls=LockingSession).resume(input="the answer")
+        self.assertEqual(self.metadata()["attempt"], 2)
+        resumed = LockingSession.live[first._state.agent_name]
+        self.assertTrue(resumed.alive())
+        self.assertEqual(resumed.spec.environment.lock, "dummy-lock")
+
+    def test_resume_without_input_closes_a_live_locked_worker_and_claims_release(self):
+        view = self.owned(lock="dummy-lock", session_cls=LockingSession)
+        failed = Result(0, None, "the client's turn failed: server_overloaded (529)")
+        _seen, on = self.at_begun(
+            lambda: (self.record.bind(1, 1), self.record.complete(1, failed, sid=SID))
+        )
+        view.run(on)
+        old = view.driver.session
+        self.assertTrue(old.alive())
+        HarnessDelegate.attach(self.work, session_cls=LockingSession).resume()
+        self.assertFalse(old.alive())
+        self.assertEqual(self.kinds().count("release"), 1)
+        self.assertIn(
+            f"session {view._state.agent_name} closed (lock dummy-lock)", self.err.getvalue()
+        )
+        self.assertEqual(self.metadata()["attempt"], 2)
 
     def test_a_start_failure_is_stored_announced_and_finished_once(self):
         view = self.owned()

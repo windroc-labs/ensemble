@@ -548,16 +548,20 @@ class TuiPolicy(Base):
         self.assertIn("delegate: tui: no pane\n", self.err)
         self.assertIn("nudge", self.kinds())
 
-    def test_a_usage_limit_stops_the_session_without_a_nudge(self):
+    def test_a_usage_limit_ends_the_run_leaving_a_tui_and_stopping_a_headless_client(self):
         at = 1767225600.0
-        r = self.faked(LimitHit(at), STOP, Exited(-signal.SIGHUP))
         when = datetime.fromtimestamp(at).astimezone().isoformat(timespec="seconds")
+        r = self.faked(LimitHit(at), STOP, Exited(-signal.SIGHUP))
+        self.assertEqual(r, Result(0, None, f"usage limit; resets at {when}", Limit(at)))
+        self.assertEqual(
+            (self.handle.calls, self.kinds()), ([], ["input", "limit", "result", "end"])
+        )
+        self.fresh()
+        r = self.faked(LimitHit(at), Exited(-signal.SIGHUP), mode="headless")
         self.assertEqual(
             r, Result(-signal.SIGHUP, None, f"usage limit; resets at {when}", Limit(at))
         )
-        self.assertEqual(
-            (self.handle.calls, self.kinds()), ([("stop",)], ["input", "limit", "result", "end"])
-        )
+        self.assertEqual(self.handle.calls, [("stop",)])
 
     def test_a_failed_turn_ends_the_run_without_a_nudge_and_leaves_the_session(self):
         for failed, error in (
@@ -708,10 +712,10 @@ class TuiPolicy(Base):
 
     def test_a_failed_stop_is_printed_and_never_replaces_the_limit_or_stale_out_result(self):
         gone = SessionError("gone")
-        r = self.faked(LimitHit(None), stop_fail=gone)
+        r = self.faked(LimitHit(None), stop_fail=gone, mode="headless")
         self.assertEqual(r, Result(0, None, "usage limit; reset time unknown", Limit(None)))
         self.assertEqual(
-            (self.handle.calls, self.err.count("delegate: tui: gone\n")), ([("stop",)], 1)
+            (self.handle.calls, self.err.count("delegate: headless: gone\n")), ([("stop",)], 1)
         )
         self.assertEqual(self.kinds(), ["input", "limit", "result", "end"])
         blocker = os.path.join(self.tmp, "file")
@@ -791,7 +795,9 @@ LOCKED = EnvironmentSpec(image="dummy-env:test", gateway="workers", lock="dummy-
 
 
 class LockCloseTest(TuiPolicy):
-    """A locked run's session closes as soon as the run ends, before its Finished (FR-61)."""
+    """A locked headless run's worker, ended with its client or stopped, is closed before its
+    Finished and only then claimed released (a locked tui is always owned: handler_test).
+    """
 
     def locked(self, *events, environment=LOCKED, close_fail=None, **kw):
         self.at_finish = None
@@ -807,12 +813,9 @@ class LockCloseTest(TuiPolicy):
 
     def test_every_run_end_closes_before_finished(self):
         for name, events, mode in (
-            ("outcome headless", (turn(START, block(DONE)), Exited(0)), "headless"),
-            ("outcome tui", (turn(START, block(DONE)),), "tui"),
+            ("outcome", (turn(START, block(DONE)), Exited(0)), "headless"),
             ("no outcome", (turn(START), Exited(0)), "headless"),
-            ("failed turn", (turn(START), TurnFailed("overloaded")), "tui"),
-            ("give-up", (turn(START), *[STOP] * STOP_LIMIT), "tui"),
-            ("idle", (turn(START), IdleTimeout(7200)), "tui"),
+            ("failed turn", (turn(START), TurnFailed("overloaded"), Exited(1)), "headless"),
             ("usage limit", (turn(START), LimitHit(None), Exited(0)), "headless"),
         ):
             with self.subTest(name):
@@ -820,6 +823,7 @@ class LockCloseTest(TuiPolicy):
                 self.assertEqual(self.handle.calls.count(("close",)), 1, self.handle.calls)
                 self.assertIn(("close",), self.at_finish)
                 self.assertIn(f"session {NAME} closed (lock dummy-lock)", self.err)
+                self.assertEqual(self.kinds()[-3:], ["release", "result", "end"])
                 self.assertNotIn("left open", self.err)
 
     def test_a_raised_error_closes_after_stopping(self):
@@ -996,10 +1000,9 @@ class AttemptCore(TuiPolicy):
             found, [Result(0, None, "the client's turn failed: server_overloaded (busy)")]
         )
         attempt = self.attempt()
-        found = self.fed(attempt, LimitHit(None), Exited(0))
-        self.assertIsNone(found[0])
-        self.assertEqual(found[1], Result(0, None, "usage limit; reset time unknown", Limit(None)))
-        self.assertEqual(self.handle.calls, [("stop",)])
+        found = self.fed(attempt, LimitHit(None))
+        self.assertEqual(found, [Result(0, None, "usage limit; reset time unknown", Limit(None))])
+        self.assertEqual(self.handle.calls, [])
 
     def test_turn_ends_without_an_outcome_are_nudged_then_given_up(self):
         attempt = self.attempt()
