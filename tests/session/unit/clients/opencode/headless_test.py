@@ -576,34 +576,28 @@ class ResumeTest(Base):
         self.client.common.bind(self.cwd, "run-1", SES)
         self.assertNotIn("--title", self.command(self.launch(self.spec(resume=True))))
 
-    def test_an_unbound_resume_takes_the_runs_titled_session_bound_at_commit(self):
+    def test_an_unbound_resume_takes_and_binds_the_runs_titled_session(self):
         """A harness killed before opencode printed its first sessionID bound nothing."""
         data = os.path.join(self.home, "data")
         titled_session(os.path.join(data, "opencode", "opencode.db"), SES, "ensemble-run-1", 1)
-        spec = self.spec(resume=True, env={"XDG_DATA_HOME": data})
-        run = self.client.headless()
-        assert run is not None
-        command = self.command(run.launch(spec))
+        command = self.command(self.launch(self.spec(resume=True, env={"XDG_DATA_HOME": data})))
         self.assertEqual(command[4:6], ("--session", SES))
         self.assertNotIn("--title", command)
-        self.assertIsNone(self.client.common.native(self.cwd, "run-1"))  # a preflight writes none
-        run.commit()
         self.assertEqual(self.client.common.native(self.cwd, "run-1"), SES)
+
+    def test_an_unreadable_db_fails_an_unbound_resume_as_such(self):
+        data = os.path.join(self.home, "data")
+        os.makedirs(os.path.join(data, "opencode"))
+        with open(os.path.join(data, "opencode", "opencode.db"), "w", encoding="utf-8") as f:
+            f.write("not sqlite " * 200)
+        with self.assertRaisesRegex(ConfigError, "opencode session lookup"):
+            self.launch(self.spec(resume=True, env={"XDG_DATA_HOME": data}))
 
     def test_an_unbound_resume_takes_no_other_runs_session(self):
         data = os.path.join(self.home, "data")
         titled_session(os.path.join(data, "opencode", "opencode.db"), SES, "ensemble-run-2", 1)
         with self.assertRaisesRegex(ConfigError, "no OpenCode session bound to run ID 'run-1'"):
             self.launch(self.spec(resume=True, env={"XDG_DATA_HOME": data}))
-
-    def test_a_bound_resume_commits_no_binding(self):
-        self.client.common.bind(self.cwd, "run-1", SES)
-        run = self.client.headless()
-        assert run is not None
-        run.launch(self.spec(resume=True))
-        with mock.patch.object(self.client.common, "bind") as bind:
-            run.commit()
-        bind.assert_not_called()
 
     def test_unbound_resume_fails(self):
         with self.assertRaisesRegex(ConfigError, "no OpenCode session bound to run ID 'run-1'"):

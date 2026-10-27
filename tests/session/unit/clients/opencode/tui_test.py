@@ -34,6 +34,7 @@ from tests.session.unit.clients.opencode.support import (
     SES,
     fake_run,
     packaged_table,
+    titled_session,
 )
 
 HOOK = ("/bin/ensemble-session", "hook", "/home/x/.ensemble/tui/w1")
@@ -98,6 +99,13 @@ class LaunchTest(Base):
         bare = self.run_tui()
         bare.launch(self.spec(resume=True, prompt=""), HOOK)
         self.assertIsNone(bare.opening)
+
+    def test_a_resume_of_an_unbound_headless_run_takes_its_titled_session(self):
+        data = os.path.join(self.home, "data")
+        titled_session(os.path.join(data, "opencode", "opencode.db"), SES, "ensemble-run-1", 1)
+        launch = self.run_tui().launch(self.spec(resume=True, env={"XDG_DATA_HOME": data}), HOOK)
+        self.assertEqual(launch.argv[:3], ("opencode", "--session", SES))
+        self.assertEqual(launch.env["ENSEMBLE_OPENCODE_SESSION"], SES)
 
     def test_resume_without_a_binding_fails(self):
         with self.assertRaisesRegex(ConfigError, "no OpenCode session bound to run ID 'run-1'"):

@@ -36,6 +36,7 @@ from tests.session.unit.clients.opencode.support import (
     SES,
     make_db,
     packaged_table,
+    titled_session,
 )
 
 STRATA = {"base_url": "http://10.0.0.5:8080/v1", "models": ["m"]}
@@ -273,6 +274,11 @@ class SessionStatusTest(Case):
         self.assertEqual(self.status().resumable, Resumable.NO)
         self.client.common.bind(self.cwd, "run-1", "ses_notInTheDb")
         self.assertEqual(self.status().resumable, Resumable.NO)
+
+    def test_an_unbound_runs_titled_session_is_resumable_and_bound(self):
+        titled_session(self.db, SES, "ensemble-run-1", 1_760_000_000_250)
+        self.assertEqual(self.status().resumable, Resumable.YES)
+        self.assertEqual(self.client.common.native(self.cwd, "run-1"), SES)
 
     def test_session_status_unknown_without_a_db(self):
         self.client.common.bind(self.cwd, "run-1", SES)

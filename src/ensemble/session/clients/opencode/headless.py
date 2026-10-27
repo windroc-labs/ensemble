@@ -1,8 +1,8 @@
 """OpenCode's headless Mode: `opencode run --format json` behind launcher.py, which feeds it the
 prompt on stdin (`run` quotes an argument holding a space). The first sessionID binds the run; text
 parts are Replies, tools Activity, an error the failed turn; the end is the turn's, its last text.
-opencode prints that sessionID only once its model streams, so a new run titles its session by its
-sid: a resume of a run whose harness died before then finds it by that title, bound at commit.
+opencode prints that sessionID only once its model streams, so a new run titles its session
+TITLE: a resume of a run whose harness died before then finds it by that title (common.py).
 """
 
 import os
@@ -12,6 +12,7 @@ from ensemble.session.clients.opencode import launcher
 from ensemble.session.clients.opencode.common import (
     HEADLESS_RESERVED,
     NATIVE,
+    TITLE,
     UNSET,
     Homed,
     OpenCodeCommon,
@@ -33,7 +34,6 @@ from ensemble.session.engine.types import (
 from ensemble.session.modes.client_adapters.headless import JsonHeadless
 
 SESSION_TIMEOUT = 120  # seconds a run may take to print its first sessionID
-TITLE = "ensemble-{sid}"
 
 
 class OpenCodeHeadless(Homed, JsonHeadless):
@@ -44,19 +44,11 @@ class OpenCodeHeadless(Homed, JsonHeadless):
         self.common = common
         self.cwd, self.sid = "", ""
         self.bound, self.failed, self.last = False, False, ""
-        self.native, self.finished, self.unbound = "", False, ""
+        self.native, self.finished = "", False
 
     def launch(self, spec: Spec):
         context, common = self._context, self.common
-        cwd, sid = spec.access.cwd, spec.sid or ""
-        env, title, unbound = common.environment(spec, context), TITLE.format(sid=sid), ""
-
-        def titled() -> str | None:
-            nonlocal unbound
-            unbound = common.titled(env, context, title) or ""
-            return unbound or None
-
-        selection = common.selection(spec, context, HEADLESS_RESERVED, titled)
+        selection = common.selection(spec, context, HEADLESS_RESERVED)
         refuse(common.flags, HEADLESS_RESERVED, "[clients.opencode] flags")
         refuse(
             common.modes[context.permission],
@@ -64,13 +56,15 @@ class OpenCodeHeadless(Homed, JsonHeadless):
             f"[clients.opencode.modes] {context.permission}",
         )
         found = context.container
+        cwd, sid = spec.access.cwd, spec.sid or ""
         model, variant = common.model(spec.tier), common.variant(spec.effort)
+        env = common.environment(spec, context)
         command = (
             common.executable_for(env, cwd, context),
             "run",
             "--format",
             "json",
-            *(selection or ("--title", title)),
+            *(selection or ("--title", TITLE.format(sid=sid))),
             "--model",
             model,
             *(("--variant", variant) if variant is not None else ()),
@@ -80,7 +74,7 @@ class OpenCodeHeadless(Homed, JsonHeadless):
         )
         self.cwd, self.sid = cwd, sid
         self.bound, self.failed, self.last = False, False, ""
-        self.native, self.finished, self.unbound = "", False, unbound
+        self.native, self.finished = "", False
         return Launch(
             (
                 found.python if found else os.path.realpath(sys.executable),
@@ -99,10 +93,6 @@ class OpenCodeHeadless(Homed, JsonHeadless):
             transcript=common.transcript(env, context),
             project=spec.access.project,
         )
-
-    def commit(self) -> None:
-        if self.unbound:
-            self.common.bind(self.cwd, self.sid, self.unbound)
 
     def events(self, lines):
         yield from super().events(lines)

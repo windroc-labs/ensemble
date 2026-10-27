@@ -123,7 +123,8 @@ max = "max"
 #                    not trusted (Access.project) is refused before it starts
 #                    (docs/customizing-roles-and-tasks.md › OpenCode sessions)
 #   flags            opencode flags added to every launch; never a session selector, --model, --format, --attach,
-#                    --dir or a permission flag (modes'), nor for the TUI --prompt or --pure; empty → none
+#                    --dir or a permission flag (modes'), nor for the TUI --prompt or --pure, nor for headless
+#                    --title; empty → none
 #   executable       the OpenCode 1.x command both modes run (a name PATH finds, or an absolute path); empty → the
 #                    client's own name on PATH; a launch whose `<executable> --version` is not 1.x is refused
 #   ollama_port      the host's Ollama port
