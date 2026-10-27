@@ -19,6 +19,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.harness import guard
 from ensemble.session.hosts import managed
+from ensemble.session.hosts.base import GUARD_WAIT
 from tests.session.case import Case
 from tests.utils.process_fixtures import TimeoutExpired
 
@@ -77,7 +78,7 @@ class ManagedProcessTest(Case):
         channel = self.channel()
         channel.proc.stdout.read.side_effect = [guard.json_frame(b"s", {"pid": 123}), b""]
         channel.pump()
-        channel.proc.wait.assert_called_once_with(timeout=managed.WAIT)
+        channel.proc.wait.assert_called_once_with(timeout=GUARD_WAIT)
         self.assertEqual(channel.state(), Liveness.UNKNOWN)
         with self.assertRaises(Unanswered):
             channel.close()
@@ -187,7 +188,7 @@ class ManagedProcessTest(Case):
         channel.close()
         channel.close()
         self.assertEqual(channel.read(0), [WorkerOutput(b"last"), WorkerExit(0)])
-        channel.proc.wait.assert_called_with(timeout=managed.WAIT)
+        channel.proc.wait.assert_called_with(timeout=GUARD_WAIT)
 
     def test_confirmed_worker_but_live_guard_does_not_report_close_success(self):
         channel = self.channel()

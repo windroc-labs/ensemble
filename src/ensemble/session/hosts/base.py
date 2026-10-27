@@ -56,6 +56,7 @@ TUI_DIR = f"{STATE}/tui"
 HARNESS_ROOT = f"{STATE}/harness"
 GUARD_LEASE_FD = "ENSEMBLE_GUARD_LEASE_FD"
 GUARD_HOOK_SOCKET = "ENSEMBLE_GUARD_HOOK_SOCKET"
+GUARD_WAIT = 10  # s for a guard's reply, or its exit after a close (it gives up 9 s after one)
 TUI_STATE = "session.json"
 
 

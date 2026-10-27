@@ -51,7 +51,7 @@ from ensemble.session.engine.types import (
     WorkerHook,
 )
 from ensemble.session.engine.worker import WorkerState
-from ensemble.session.hosts.base import InteractiveProcess, Process
+from ensemble.session.hosts.base import GUARD_WAIT, InteractiveProcess, Process
 from ensemble.session.hosts.managed import ManagedProcess
 from ensemble.session.modes import tui, tui_hook
 from ensemble.session.modes.base import POINTER
@@ -2748,7 +2748,7 @@ class RecordRuleTest(Base):
         self.liveness.return_value = Liveness.LIVE
         with self.assertRaisesRegex(SessionError, "^tui session w1 is running"):
             self.start()
-        self.assertGreaterEqual(self.clock.now, tui.WAIT)
+        self.assertGreaterEqual(self.clock.now, GUARD_WAIT)
         self.assertEqual(self.saved(), state)
         self.display.calls.close.assert_not_called()
 

@@ -26,8 +26,8 @@ from ensemble.session.engine.types import (
     Unanswered,
 )
 from ensemble.session.harness import guard
-from ensemble.session.hosts.base import GUARD_HOOK_SOCKET, GUARD_LEASE_FD
-from ensemble.session.hosts.managed import WAIT, ManagedProcess
+from ensemble.session.hosts.base import GUARD_HOOK_SOCKET, GUARD_LEASE_FD, GUARD_WAIT
+from ensemble.session.hosts.managed import ManagedProcess
 
 GENERATION = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
@@ -246,7 +246,8 @@ def start(
                 os.path.join(run, "hook"),
             ]
             if terminal:
-                argv += ["--terminal", "--display-socket", os.path.join(run, "display")]
+                argv += ["--terminal", "--display-grace"]
+                argv += ["--display-socket", os.path.join(run, "display")]
             argv += ["--", *launch.argv]
             # Launch.env passes verbatim; the PTY is no tmux pane, the display relays its bytes.
             environment = {
@@ -333,7 +334,7 @@ def start(
                 proc.stdin.close()
                 proc.stdout.close()
                 with contextlib.suppress(subprocess.TimeoutExpired):
-                    proc.wait(timeout=WAIT)
+                    proc.wait(timeout=GUARD_WAIT)
             raise
         return handle
     finally:

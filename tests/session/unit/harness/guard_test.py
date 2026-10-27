@@ -209,12 +209,15 @@ class GuardTest(Case):
         peer.close.assert_called_once()
 
     def test_a_client_dead_before_any_display_lingers_for_its_first_one(self):
-        """A terminal guard waits DISPLAY_GRACE s after the exit for a display to show it."""
-        runtime = self.runtime(terminal=True)
+        """A --display-grace terminal guard waits DISPLAY_GRACE s after the exit for a display."""
+        runtime = self.runtime(terminal=True, display_grace=True)
         runtime.exit_at = 100.0
         self.assertFalse(runtime.lingers(100.5))  # headless: no PTY
         runtime.master = 20
         self.assertTrue(runtime.lingers(100.5))
+        runtime.args.display_grace = False
+        self.assertFalse(runtime.lingers(100.5))  # no display starts with it
+        runtime.args.display_grace = True
         self.assertFalse(runtime.lingers(100.0 + guard.DISPLAY_GRACE))
         server, peer = mock.Mock(), mock.Mock()
         server.accept.side_effect = BlockingIOError
@@ -226,6 +229,43 @@ class GuardTest(Case):
         runtime.take_display(server)
         self.assertIn(b"unrecognized arguments", peer.send.call_args.args[0])
         self.assertFalse(runtime.lingers(100.5))
+
+    def test_a_close_with_no_display_ever_connected_skips_the_grace(self):
+        """An owned Docker tui worker nobody viewed: no --display-grace, so a close ends at once."""
+        self.assertEqual(self.closed_without_display(display_grace=False), 0)
+        with self.assertRaisesRegex(AssertionError, "lingered"):
+            self.closed_without_display(display_grace=True)
+
+    def closed_without_display(self, *, display_grace):
+        """A terminal guard told to close before any display connected, the clock frozen."""
+        runtime = self.runtime(terminal=True, display_grace=display_grace)
+        runtime.args.display_socket = self.home + "/display"
+        hook_server, display_server = mock.Mock(), mock.Mock()
+        hook_server.accept.side_effect = BlockingIOError
+        display_server.accept.side_effect = BlockingIOError
+        proc = mock.Mock(returncode=None, pid=100)
+        with (
+            mock.patch.object(guard.ctypes, "CDLL") as library,
+            mock.patch.object(guard.socket, "socket", side_effect=[hook_server, display_server]),
+            mock.patch.object(os, "chmod"),
+            mock.patch.object(os, "openpty", return_value=(20, 21)),
+            mock.patch.object(guard.fcntl, "ioctl"),
+            mock.patch.object(os, "close"),
+            mock.patch.object(os, "listdir", return_value=[]),
+            mock.patch.object(os, "set_blocking"),
+            mock.patch.object(guard.subprocess, "Popen", return_value=proc),
+            mock.patch.object(os, "waitpid", side_effect=ChildProcessError),
+            mock.patch.object(guard.select, "select", side_effect=[([0], [], []), ([20], [], [])]),
+            mock.patch.object(os, "read", side_effect=[guard.frame(b"c", b"{}"), b""]),
+            mock.patch.object(os, "write", side_effect=lambda _fd, data: len(data)),
+            mock.patch.object(guard.time, "monotonic", return_value=100.0),
+            mock.patch.object(
+                guard.time, "sleep", side_effect=AssertionError("lingered for a display")
+            ),
+        ):
+            library.return_value.prctl.return_value = 0
+            proc.poll.side_effect = lambda: setattr(proc, "returncode", 0)
+            return runtime.run()
 
     def test_macos_kernel_process_identity_and_enumeration(self):
         library = mock.Mock()
@@ -295,11 +335,12 @@ class GuardTest(Case):
             runtime.emit(b"x" * (guard.BUFFER_MAX + 1))
         self.assertFalse(runtime.output)
 
-    def runtime(self, *, terminal=False):
+    def runtime(self, *, terminal=False, display_grace=False):
         return guard.Guard(
             argparse.Namespace(
                 hook_socket=self.home + "/hook",
                 display_socket=None,
+                display_grace=display_grace,
                 terminal=terminal,
                 command=["fake"],
             )
