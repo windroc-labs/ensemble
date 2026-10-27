@@ -2,9 +2,11 @@
 
 ## Session harness: close every session first
 
-This release runs every Docker worker under its [session harness](architecture.md#session-harness) and drops the Docker
-relay and supervisor ([Docker host › Harness-owned workers](architecture.md#harness-owned-workers)). It keeps no
-compatibility with sessions an older release started, so before upgrading:
+This release runs every tui and headless worker, on every Host, under its [session harness](architecture.md#session-harness)
+and drops the in-session tmux start and the Docker relay and supervisor ([Docker host › Harness-owned
+workers](architecture.md#harness-owned-workers)). An extension Host runs sessions only once it implements `Host.worker`
+([Session harness interfaces](architecture.md#session-harness-interfaces)). It keeps no compatibility with sessions an
+older release started, so before upgrading:
 
 1. List them: `ensemble-session ls`.
 2. Close each crew worker with `ensemble-crew close [--manager <manager>] NAME`, which also drops its roster entry,
