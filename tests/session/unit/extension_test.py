@@ -24,7 +24,6 @@ ABCS = {
     "InProcess": in_process,
     "Host": hosts_base,
     "Process": hosts_base,
-    "Piped": hosts_base,
     "Interactive": hosts_base,
     "InteractiveProcess": hosts_base,
 }
@@ -81,7 +80,6 @@ TYPES = {
     "SessionView": hosts_types,
     "EventCall": harness_types,
     "CommandView": hosts_types,
-    "Lines": hosts_base,
     "Record": utils,
     "Status": utils,
     "Display": utils,

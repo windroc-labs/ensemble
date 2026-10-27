@@ -441,6 +441,7 @@ class ThroughItsHost(Base):
         )
         worker = host.calls.worker.call_args
         self.assertEqual((worker.args[0], worker.kwargs["terminal"]), (name, False))
+        self.assertFalse(hasattr(host, "pipe"))
         self.assertEqual(len(self.recorded), 1)
 
     def test_start_ends_the_workers_input(self):

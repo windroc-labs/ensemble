@@ -1,5 +1,5 @@
-"""DockerHost runs each session in its own broker-made container (docs/docker-host.md): a tui
-one's guard (worker.py), a headless one's client (pipe), each through `docker exec -i`.
+"""DockerHost runs each session in its own broker-made container (docs/docker-host.md): its
+worker's guard (worker.py), tui or headless, through `docker exec -i`.
 """
 
 from __future__ import annotations
@@ -78,7 +78,6 @@ from ensemble.session.hosts.docker.mounts import (
     state_dir,
     workspace_volume,
 )
-from ensemble.session.hosts.docker.pipe import DockerPiped
 from ensemble.session.hosts.docker.types import GEN, Started
 from ensemble.session.hosts.docker.worker import GUARD, RUN, DockerWorker, GuardedView
 from ensemble.session.hosts.types import CommandView
@@ -91,7 +90,6 @@ from ensemble.utils import (
     inode_lock,
     kill_group,
     module_roots,
-    piped_popen,
     read_beneath,
     remove_tree,
     save,
@@ -100,8 +98,6 @@ from ensemble.utils import (
 )
 
 RECORD = "host.json"
-PIPE_LOCK = "pipe.lock"  # held by a headless run's harness while its client runs
-PIPED = "pipe"
 OWNER_LOCK = "guard.lock"
 BUSY = "previous worker generation (live or unknown)"
 IMAGE_PYTHON = "/opt/ensemble/venv/bin/python"
@@ -148,14 +144,7 @@ def _record(name: str) -> dict:
     return found if isinstance(found, dict) else {}
 
 
-def _piped(name: str, generation: str) -> bool:
-    found = _record(name)
-    return found.get("generation") == generation and found.get("mode") == PIPED
-
-
 class Kind(StrEnum):
-    """host.json `kind`: which guarded worker a generation's record is."""
-
     TUI = "tui"
     HEADLESS = "headless"
 
@@ -490,7 +479,7 @@ class DockerHost(Host):
         }
 
     def sweep(self, own: str) -> None:
-        """Closes debris and workers whose owner or pipe lock is free; other names only under
+        """Closes debris and workers whose owner lock is free; other names only under
         their tui lock taken without waiting (`own`'s caller holds its).
         """
         try:
@@ -587,13 +576,7 @@ class DockerHost(Host):
                         os.unlink(marker)
 
     def _sweep_row(self, row: Row) -> None:
-        if _guarded(row.name, row.generation):
-            lock = _owner_path(row.name)
-        elif _piped(row.name, row.generation):
-            lock = os.path.join(state_dir(row.name), PIPE_LOCK)
-        else:
-            lock = None
-        if lock is None or _lock_free(lock):
+        if not _guarded(row.name, row.generation) or _lock_free(_owner_path(row.name)):
             self.broker.close(row.container)
 
     def _client_context(self) -> ClientContext:
@@ -768,7 +751,7 @@ class DockerHost(Host):
         environment: EnvironmentSpec | None,
     ) -> _Container:
         """The checks, image, workspace, home and plan, then the broker's start, rolled back on a
-        transport failure: what worker and pipe share.
+        transport failure.
         """
         generation, field, home_dir, credential = (
             metadata.get(key) for key in ("generation", "home_field", "home_dir", "credential")
@@ -781,11 +764,6 @@ class DockerHost(Host):
         self.sweep(name)
         for row in self._ps():
             if row[1:2] == [name]:
-                if len(row) == len(Row._fields) and _piped(name, row[2]):
-                    raise SessionError(
-                        f"docker session {name}: a headless run holds it;"
-                        " wait for it to end or stop its run"
-                    )
                 if len(row) == len(Row._fields) and _guarded(name, row[2]):
                     raise SessionError(
                         f"docker session {name}: a container for it exists; close {name} first"
@@ -1131,100 +1109,6 @@ class DockerHost(Host):
             return Liveness.ABSENT
         return Liveness.LIVE if word == "live" else Liveness.UNKNOWN
 
-    def pipe(
-        self, name: str | None, launch: Launch, *, metadata: Mapping[str, str] | None = None
-    ) -> DockerPiped:
-        """`docker exec -i` of the client in its own container; it holds the tui lock while it
-        starts, then its pipe lock while the client runs.
-        """
-        if name is None:
-            raise ConfigError("a headless session on the Docker Host needs a name")
-        for key in launch.env:
-            if key in CLEARED or key.startswith("DOCKER_"):
-                raise ConfigError(
-                    f"docker session {name}: env {key} would reconfigure the docker CLI"
-                )
-        lock = tui_lock(name)
-        os.makedirs(os.path.dirname(lock), mode=0o700, exist_ok=True)
-        with _Stops() as stops, inode_lock(lock, wait=False) as held:
-            if not held:
-                raise SessionError(f"docker session {name}: busy")
-            try:
-                return self._pipe(name, launch, stops, metadata or {})
-            finally:
-                if not os.path.lexists(_state_file(name)):
-                    os.unlink(lock)
-
-    def _pipe(
-        self, name: str, launch: Launch, stops: _Stops, metadata: Mapping[str, str]
-    ) -> DockerPiped:
-        laps = _Laps()
-        self._check_cwd(name, launch)
-        environment = self._environment(name, metadata)
-        created = self._container(name, launch, stops, laps, metadata, environment=environment)
-        container, generation, _, _, cwd, _, _, _ = created
-        lock = proc = None
-        try:
-            stops.check()
-            self._stage_prompt(container, metadata)
-            lock = os.open(os.path.join(state_dir(name), PIPE_LOCK), os.O_RDWR | os.O_CREAT, 0o600)
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            _save_record(
-                name,
-                {
-                    "generation": generation,
-                    "sid": metadata.get("sid"),
-                    "client": metadata.get("client"),
-                    "mode": PIPED,
-                    "environment": None if environment is None else environment.persisted(),
-                },
-            )
-            env = self._exec_env(launch, created.started, self._app(environment))
-            argv, docker_env = docker_call(
-                self.docker,
-                *("exec", "-i", "--workdir", cwd),
-                *(arg for key in env for arg in ("--env", key)),
-                *(
-                    container,
-                    "with-secrets",
-                    "--client",
-                    metadata["home_field"].removesuffix("_dir"),
-                    *launch.argv,
-                ),
-            )
-            proc = piped_popen(argv, env={**docker_env, **env})
-            laps("client")
-            _save_result(name, created, laps.phases, _now())
-            stops.check()
-        except (SessionError, OSError, ValueError) as error:
-            if proc is not None:
-                kill_group(proc)
-            if lock is not None:
-                os.close(lock)
-            cleanup = self._roll_back(container)
-            raise SessionError(f"docker session {name}: {error}{cleanup}") from error
-        laps.report(f"docker timing {name} {generation}")
-        return DockerPiped(
-            name,
-            proc,
-            close=lambda: self._close_piped(name, container),
-            lock=lock,
-            maintain=lambda stopped: maintenance.run(
-                maintenance.Maintenance(
-                    name,
-                    state_dir(name),
-                    generation,
-                    self.broker,
-                    report=lambda word, text: LOG.warning(
-                        "docker session %s: %s %s", name, word, text
-                    ),
-                    root=hook_root(created.hook),
-                    close=lambda: self.broker.close(container),
-                ),
-                stopped,
-            ),
-        )
-
     def _stage_files(self, container: str, metadata: Mapping[str, str]) -> None:
         files = metadata.get("runtime_files")
         if not files or files == "{}":
@@ -1282,13 +1166,6 @@ class DockerHost(Host):
                 "GIT_COMMITTER_EMAIL": email,
             }
         return env
-
-    def _close_piped(self, name: str, container: str) -> None:
-        try:
-            self.broker.close(container)
-        except SessionError as error:
-            LOG.warning("docker session %s: %s", name, error)
-        self._spawn_reclaim()
 
     def _roll_back(self, container: str) -> str:
         try:

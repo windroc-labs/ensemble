@@ -54,8 +54,6 @@ from ensemble.session.hosts.base import (
     Host,
     Interactive,
     InteractiveProcess,
-    Lines,
-    Piped,
     Process,
 )
 from ensemble.session.hosts.types import CommandView, SessionView
@@ -74,8 +72,6 @@ __all__ = [
     "SessionView",
     "CommandView",
     "Process",
-    "Piped",
-    "Lines",
     "WorkerMessage",
     "WorkerHook",
     "WorkerOutput",
