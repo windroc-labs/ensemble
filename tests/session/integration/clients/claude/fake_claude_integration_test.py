@@ -374,6 +374,65 @@ class Steps(Case):
         self.assertGreaterEqual(time.monotonic() - start, 0.5)
         self.assertEqual((res.returncode, res.stdout), (0, "Hi.\n"), res.stderr)
 
+    def joined(self) -> list[tuple[str, str]]:
+        (path,) = self.transcripts()
+        with open(path, encoding="utf-8") as f:
+            records = [json.loads(line) for line in f]
+        return [
+            ("enqueue", r["content"])
+            if r["type"] == "queue-operation"
+            else (r["attachment"]["commandMode"], r["attachment"]["prompt"])
+            for r in records
+            if r["type"] in ("queue-operation", "attachment")
+        ]
+
+    def prompts(self) -> list[tuple[str, str | None]]:
+        return [(h["hook_event_name"], h.get("prompt")) for h in self.fired()]
+
+    def queued(self, **step) -> list[tuple[str, str | None]]:
+        """A queued step's hooks, its line `more`, once it ran and the fake ended."""
+        self.scene(steps=[{"kind": "queued", "answer": "Noted.", **step}, "Done."])
+        hooks = self.settings("UserPromptSubmit", "PostToolUse", "Stop")
+        res = self.run_fake(*SESSION, "--settings", hooks, "--", "hi", stdin="more\n")
+        self.assertEqual((res.returncode, res.stdout), (0, "Noted.\nDone.\n"), res.stderr)
+        self.assertEqual(self.joined(), [("enqueue", "more"), ("prompt", "more")])
+        return self.prompts()
+
+    def test_a_queued_line_joins_the_turn_with_no_hook(self):
+        self.assertEqual(
+            self.queued(prompted=False),
+            [("UserPromptSubmit", "hi"), ("PostToolUse", None), ("Stop", None)],
+        )
+
+    def test_a_prompted_queued_line_runs_user_prompt_submit_as_the_turn_joins_it(self):
+        self.assertEqual(
+            self.queued(prompted=True),
+            [
+                ("UserPromptSubmit", "hi"),
+                ("PostToolUse", None),
+                ("UserPromptSubmit", "more"),
+                ("Stop", None),
+            ],
+        )
+
+    def test_a_notice_joins_the_turn_with_its_hook_reading_no_input(self):
+        notice = "<task-notification>sleep 30 completed</task-notification>"
+        self.scene(steps=[{"kind": "notice", "text": notice}, "Done."], turns=[["Next."]])
+        hooks = self.settings("UserPromptSubmit", "Stop")
+        res = self.run_fake(*SESSION, "--settings", hooks, "--", "hi", stdin="again\n")
+        self.assertEqual((res.returncode, res.stdout), (0, "Done.\nNext.\n"), res.stderr)
+        self.assertEqual(
+            self.prompts(),
+            [
+                ("UserPromptSubmit", "hi"),
+                ("UserPromptSubmit", notice),
+                ("Stop", None),
+                ("UserPromptSubmit", "again"),
+                ("Stop", None),
+            ],
+        )
+        self.assertEqual(self.joined(), [("task-notification", notice)])
+
 
 class Pane(Case):
     def test_lines_typed_into_a_tmux_pane_are_turns(self):
@@ -521,6 +580,8 @@ class BadScenario(Case):
             {"kind": "dialog", "text": "x"},
             {"kind": "limit", "text": "x"},
             {"kind": "sleep", "seconds": 0},
+            {"kind": "queued", "answer": "x", "prompted": True},
+            {"kind": "notice", "text": "x"},
         ]
         rows = [
             *({"steps": [step]} for step in tui),
@@ -570,6 +631,11 @@ class BadScenario(Case):
             {"steps": [{"kind": "sleep", "seconds": "1"}]},
             {"steps": [{"kind": "sleep", "seconds": True}]},
             {"steps": [{"kind": "sleep"}]},
+            {"steps": [{"kind": "queued", "answer": "x", "prompted": 1}]},
+            {"steps": [{"kind": "queued", "prompted": True}]},
+            {"steps": [{"kind": "notice"}]},
+            {"steps": [{"kind": "notice", "text": 5}]},
+            {"steps": [{"kind": "notice", "text": "x", "prompted": True}]},
             {"steps": [{"kind": "write", "path": "a", "text": "x"}]},
             {"steps": [{"kind": "run", "argv": ["true"], "path": "a"}]},
         )
