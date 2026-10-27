@@ -15,6 +15,7 @@ from unittest import mock
 
 from ensemble.session.engine.hosted_session import HarnessStart
 from ensemble.session.engine.types import (
+    Activity,
     Blocked,
     ClientBound,
     ConfigError,
@@ -28,10 +29,12 @@ from ensemble.session.engine.types import (
     TurnStarted,
     Unanswered,
 )
+from ensemble.session.engine.worker import Worker, WorkerState
 from ensemble.session.harness import process
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.process import Harness, Turns
 from ensemble.session.harness.types import Op
+from ensemble.session.harness.view import OwnedSession
 from ensemble.session.hosts.base import SIGNALS
 from tests.session.case import Case
 
@@ -629,6 +632,86 @@ class StatusFirstTest(Base):
         thread = self.run_in_thread(self.harness(owned))
         thread.join(WAIT)
         self.assertEqual((self.code, seen[0]), (0, (Blocked("Trust"), "/color")))
+
+
+class DialogTest(Base):
+    def test_a_pumps_dialog_is_in_its_status_before_its_events_are_logged(self):
+        owned = FakeOwned(
+            ([Blocked("Trust")], False),
+            ([Stderr("x"), Reply("r"), ClientBound("c1")], False),
+            ([Blocked("Edit")], False),
+            ([Activity("")], False),
+            ([], True),
+        )
+        seen = []
+        owned.record = lambda event: seen.append((event, self.channel.status().get("dialog")))
+        self.run_in_thread(self.harness(owned)).join(WAIT)
+        self.assertEqual(self.code, 0)
+        self.assertEqual(
+            seen[:6],
+            [
+                (Blocked("Trust"), "Trust"),
+                (Stderr("x"), "Trust"),
+                (Reply("r"), "Trust"),
+                (ClientBound("c1"), "Trust"),
+                (Blocked("Edit"), "Trust"),
+                (Activity(""), None),
+            ],
+        )
+
+    def test_a_start_watch_reading_a_pumps_status_before_its_blocked_says_that_dialog(self):
+        """The CI miss: the pump that reports its client up (no opening) found a Blocked; a start's
+        watch acts on that status at the turn start logged before it, the Blocked not yet logged.
+        """
+        said = self.watched([Blocked("Edit")], up=True, at=0)
+        self.assertEqual((self.code, said), (0, ["session w1: waits on a dialog: Edit"]))
+
+    def test_a_start_watch_says_the_first_blocked_reason_by_its_events_or_its_status(self):
+        """Claude's PermissionRequest, then its Notification: read as events the watch stops at
+        the first; read from the status it must say the same.
+        """
+        found = [Blocked("Edit"), Blocked("Claude needs your permission to use Edit")]
+        for up, at in ((False, 1), (True, 0)):
+            with self.subTest(up=up):
+                self.setUp()  # a fresh harness channel
+                said = self.watched(found, up=up, at=at)
+                self.assertEqual((self.code, said), (0, ["session w1: waits on a dialog: Edit"]))
+
+    def watched(self, found, *, up, at):
+        """What a start's watch says, run as its harness records the Blocked `at` of `found`,
+        pumped after a turn start (that pump's status written, that Blocked not yet logged); up:
+        that pump reports its client up.
+        """
+        owned = FakeOwned(([TurnStarted()], False), (found, False), ([], True))
+        pump, record, said, blocks = owned.pump, owned.record, [], []
+        view = OwnedSession(
+            self.channel,
+            "w1",
+            client="claude",
+            sid=owned.sid,
+            generation=GEN,
+            idle_timeout=None,
+            attach=mock.Mock(),
+            retire=mock.Mock(),
+        )
+        state = WorkerState("w1", "0f8fad5b-d9cb-469f-a165-70867728950e", "claude", "/w", "tmux")
+        start = Worker(state, session_cls=mock.Mock(), say=said.append)
+
+        def pumped(wait):
+            taken, ended = pump(wait)
+            owned.up = owned.up or up and any(isinstance(event, Blocked) for event in taken)
+            return taken, ended
+
+        def recorded(event):
+            if isinstance(event, Blocked):
+                blocks.append(event)
+                if len(blocks) == at + 1:
+                    start._watch(view)
+            record(event)
+
+        owned.pump, owned.record = pumped, recorded
+        self.run_in_thread(self.harness(owned)).join(WAIT)
+        return said
 
 
 class UpTest(Base):

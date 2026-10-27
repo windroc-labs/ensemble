@@ -1199,6 +1199,22 @@ class EventsOverAModeTest(Case):
                 self.assertIsInstance(session, worker._Opens)
                 self.assertIs(session.opening_pending, pending)
 
+    def test_its_dialog_folds_the_events_it_yielded_then_those_it_queued(self):
+        session = self.session(
+            (0, [Reply("r"), Blocked("ask"), Stderr("x")], False),
+            (1, [Activity("")], False),
+            (2, [], True),
+        )
+        self.assertIsInstance(session, worker._Dialogs)
+        events = session.events()
+        self.assertIsNone(session.dialog)
+        self.assertEqual(next(events), Reply("r"))
+        self.assertEqual(session.dialog, "ask")  # its Blocked still queued
+        self.assertEqual([next(events), next(events)], [Blocked("ask"), Stderr("x")])
+        self.assertEqual(session.dialog, "ask")
+        self.assertEqual(next(events), Activity(""))
+        self.assertIsNone(session.dialog)
+
     def test_binding_and_late_metadata_preserve_completion(self):
         client = fake_client.FakeClient({})
         resolver = mock.Mock(side_effect=lambda info: dataclasses.replace(info, resume="resume n1"))
