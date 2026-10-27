@@ -157,10 +157,24 @@ func TestManifestGitHub(t *testing.T) {
 	const set = `"permissions":{"contents":"write"}`
 	for _, github := range []string{`[]`, `"ensemble-broker-bot"`, `{"app":null,` + set + `}`, `{"app":"a","app":"b",` + set + `}`, `{"app":"-a",` + set + `}`,
 		`{"app":"a"}`, `{"app":"a","permissions":null}`, `{"app":"a","permissions":[]}`, `{"app":"a","permissions":{"contents":1}}`,
-		`{"app":"a",` + set + `,"repo":"acme/x"}`} {
+		`{"app":"a",` + set + `,"owner":"acme"}`, `{"app":"a",` + set + `,"repo":"acme/x","ref":"main"}`, `{"app":"a",` + set + `,"repo":null}`} {
 		doc := strings.Replace(string(valid), `"github": null`, `"github": `+github, 1)
 		if _, err := ParseManifest([]byte(doc)); code(t, err) != protocol.ManifestRejected {
 			t.Errorf("%s accepted", github)
+		}
+	}
+	doc := strings.Replace(string(valid), `"github": null`, `"github": {"app":"a",`+set+`,"repo":"acme/x"}`, 1)
+	if m, err := ParseManifest([]byte(doc)); err != nil || m.GitHubApp != "a" || m.GitHubRepo != "acme/x" {
+		t.Fatalf("repo grant: %+v %v", m, err)
+	}
+	if m, err := ParseManifest(data); err != nil || m.GitHubRepo != "" {
+		t.Fatalf("no repo: %+v %v", m, err)
+	}
+	for _, repo := range []string{"acme", "acme/x/y", "acme/..", "./x", "acme/x y", ""} {
+		doc := strings.Replace(string(valid), `"github": null`, `"github": {"app":"a",`+set+`,"repo":"`+repo+`"}`, 1)
+		_, err := ParseManifest([]byte(doc))
+		if code(t, err) != protocol.ManifestRejected || err.(*protocol.Error).Message != `Manifest rejected: invalid github repo "`+repo+`"` {
+			t.Errorf("repo %q: %v", repo, err)
 		}
 	}
 	// The broker names the entry it rejects, so the start fails with a clear error.
@@ -443,7 +457,13 @@ func TestManifestPrefetch(t *testing.T) {
 	}
 	github := map[string]any{"app": "ensemble-broker-bot", "permissions": map[string]any{"contents": "write"}}
 	_, err = ParseManifest(withFields(t, map[string]any{"prefetch": map[string]any{"repo": "o/r"}, "github": github}))
-	if code(t, err) != protocol.ManifestRejected || !strings.Contains(err.Error(), "prefetch requires github null") {
+	if code(t, err) != protocol.ManifestRejected || err.(*protocol.Error).Message != "Manifest rejected: prefetch requires github null or a github repo" {
 		t.Fatalf("prefetch with github: %v", err)
+	}
+	// A repo grant, one repository's token, may sit beside prefetch.
+	github["repo"] = "acme/out"
+	m, err = ParseManifest(withFields(t, map[string]any{"prefetch": map[string]any{"repo": "o/r"}, "github": github}))
+	if err != nil || m.Prefetch == nil || m.GitHubApp != "ensemble-broker-bot" || m.GitHubRepo != "acme/out" {
+		t.Fatalf("prefetch with a repo grant: %+v %v", m, err)
 	}
 }

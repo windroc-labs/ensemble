@@ -651,9 +651,18 @@ class DockerHost(Host):
             )
         return stored
 
-    def _app(self, environment: EnvironmentSpec | None) -> str:
-        """The GitHub App a start's container gets: none with a prefetch (FR-52)."""
-        return "" if environment is not None and environment.prefetch else self.github
+    def _github(self, environment: EnvironmentSpec | None) -> tuple[str, Mapping[str, str], str]:
+        """A start's GitHub (App, permissions, repo): none with a bare prefetch (FR-52)."""
+        if environment is not None and environment.github_repo:
+            if not self.github:
+                raise ConfigError(
+                    f"environment github_repo {environment.github_repo}:"
+                    " needs [hosts.docker.github] app"
+                )
+            return self.github, {"contents": "write"}, environment.github_repo
+        if environment is not None and environment.prefetch:
+            return "", {}, ""
+        return self.github, self.github_permissions, ""
 
     def validate(self, name: str, launch: Launch, *, missing_ok: bool = False) -> None:
         """The preflight, before any container: the cwd (`missing_ok`: or none yet), the broker
@@ -727,10 +736,12 @@ class DockerHost(Host):
         metadata: Mapping[str, str],
         *,
         environment: EnvironmentSpec | None,
+        github: tuple[str, Mapping[str, str], str],
     ) -> _Container:
         """The checks, image, workspace, home and plan, then the broker's start, rolled back on a
         transport failure.
         """
+        app, permissions, repo = github
         generation, field, home_dir, credential = (
             metadata.get(key) for key in ("generation", "home_field", "home_dir", "credential")
         )
@@ -785,8 +796,9 @@ class DockerHost(Host):
             workspace=volume,
             home=(field, home),
             hook_path=hook,
-            github=self._app(environment),
-            permissions=self.github_permissions,
+            github=app,
+            permissions=permissions,
+            repo=repo,
             providers=tuple(json.loads(metadata.get("home_providers") or "[]")),
             account=metadata.get("home_account", ""),
             **(
@@ -823,7 +835,7 @@ class DockerHost(Host):
         began = timestamp()
         try:
             started = self.broker.start(manifest, clients=clients)
-            _accept_started(name, generation, started, container, self._app(environment))
+            _accept_started(name, generation, started, container, app)
             ended = timestamp()
             laps("start")
             created = _Container(container, generation, hook, image, cwd, started, began, ended)
@@ -943,7 +955,10 @@ class DockerHost(Host):
         environment: EnvironmentSpec | None,
     ) -> DockerWorker:
         laps = _Laps()
-        created = self._container(name, launch, stops, laps, metadata, environment=environment)
+        github = self._github(environment)
+        created = self._container(
+            name, launch, stops, laps, metadata, environment=environment, github=github
+        )
         container, generation, hook, _, _, _, _, _ = created
         handle = proc = None
         try:
@@ -968,7 +983,7 @@ class DockerHost(Host):
                     *("with-secrets", "--client", metadata["home_field"].removesuffix("_dir")),
                     *launch.argv,
                 ],
-                "env": self._exec_env(launch, created.started, self._app(environment)),
+                "env": self._exec_env(launch, created.started, github[0]),
                 "terminal": terminal,
                 "generation": generation,
             }

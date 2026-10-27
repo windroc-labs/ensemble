@@ -503,6 +503,7 @@ class ResponseTest(Case):
         for result in (
             (0, '{"protocol_version": "1"}\n', ""),
             (0, '{"protocol_version": "2"}\n', ""),
+            (0, '{"protocol_version": "30"}\n', ""),
             FileNotFoundError(2, "No such file", BROKER),
             PermissionError(13, "Permission denied", BROKER),
         ):
@@ -618,6 +619,28 @@ class ManifestTest(Case):
                 {
                     "app": "ensemble-broker-bot",
                     "permissions": {"contents": "write", "statuses": "read"},
+                },
+            )
+        broker.write_manifest(
+            path,
+            name="w",
+            generation="0" * 32,
+            image="ensemble-worker:" + "a" * 64,
+            cwd="/work",
+            workspace="ensemble-ws-w",
+            home=("x_dir", "/home/x"),
+            hook_path="/plugin/bin/ensemble-session",
+            github="ensemble-broker-bot",
+            permissions={"contents": "write"},
+            repo="o/out",
+        )
+        with open(path) as f:
+            self.assertEqual(
+                json.load(f)["github"],
+                {
+                    "app": "ensemble-broker-bot",
+                    "permissions": {"contents": "write"},
+                    "repo": "o/out",
                 },
             )
 

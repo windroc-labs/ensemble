@@ -10,7 +10,7 @@
     "permissions": {
       "contents": "write"
     },
-    "repo": "acme/ensemble"
+    "owner": "acme"
   },
   "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
   "hook_path": "/usr/local/bin/ensemble-session",
