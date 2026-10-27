@@ -115,10 +115,11 @@ Claude Code/Codex plugins, it checks their installed copies too. OpenCode's inst
 `--ref`'s commit; otherwise it checks `--ref` on GitHub. For installed copies it uses the installed broker when it came
 from that plugin and speaks its protocol, else the plugin's release (`v` + its version). A mismatch names both protocols.
 
-With a stdin flag, stdin cannot also carry the script:
+With a stdin flag, stdin cannot also carry the script: download it first, so its text is not a process argument
+other users can read:
 
 ```bash
-security find-generic-password -s <item> -w | bash -c "$(curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh)" scripts/install.sh --password-stdin
+f=$(mktemp) && curl -fsSL -o "$f" https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh && security find-generic-password -s <item> -w | bash "$f" --password-stdin; rm -f "$f"
 ```
 
 What it sets up, for reference or by hand:

@@ -215,8 +215,8 @@ so the machine is as before install.sh ran; a parent other tools also write (~/.
 Containers/<group>) needs the terminal's Full Disk Access: without it the cleanup lists what it would
 remove and stops before removing anything. Run by hand:
   curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install-cleanup.sh | bash
-With --password-stdin (sudo password on stdin), stdin cannot carry the script:
-  security find-generic-password -s <item> -w | bash -c "\$(curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install-cleanup.sh)" install-cleanup.sh --yes --password-stdin
+With --password-stdin (sudo password on stdin), stdin cannot carry the script; download it first:
+  f=\$(mktemp) && curl -fsSL -o "\$f" https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install-cleanup.sh && security find-generic-password -s <item> -w | bash "\$f" --yes --password-stdin; rm -f "\$f"
 EOF
 }
 
