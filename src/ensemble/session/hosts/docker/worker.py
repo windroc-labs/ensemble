@@ -169,12 +169,13 @@ class DockerWorker(ManagedProcess):
             return None
         if self.hooks is None:
             return found
-        if self.stopped.is_set():
-            reject(self.state_dir, self.generation, "hook")
-            return None
         if found.delivery_id in self.seen or any(
             queued.delivery_id == found.delivery_id for queued, _ in self.hook_queue
         ):
+            return None
+        if self.stopped.is_set():
+            reject(self.state_dir, self.generation, "hook")
+            self._remember(found.delivery_id)
             return None
         if self.hook_bytes + len(data) > QUEUE_MAX:
             self.fail("guard hook buffer exceeded 8 MiB; worker closed")
@@ -202,19 +203,24 @@ class DockerWorker(ManagedProcess):
             with self.condition:
                 self.hook_queue.popleft()
                 self.hook_bytes -= size
-                self.seen[hook.delivery_id] = None
-                while len(self.seen) > SEEN:
-                    self.seen.popitem(last=False)
+                self._remember(hook.delivery_id)
                 self.delivering = False
                 self.condition.notify_all()
 
     def _drop_queued(self) -> None:
         """Stopped: each hook still queued is rejected, not lost; under its condition."""
-        for _ in self.hook_queue:
+        for hook, _ in self.hook_queue:
             reject(self.state_dir, self.generation, "hook")
+            self._remember(hook.delivery_id)
         self.hook_queue.clear()
         self.hook_bytes = 0
         self.condition.notify_all()
+
+    def _remember(self, delivery_id: str) -> None:
+        """Journaled or rejected: a resend of it is dropped; the newest SEEN, under its condition."""
+        self.seen[delivery_id] = None
+        while len(self.seen) > SEEN:
+            self.seen.popitem(last=False)
 
     def _report(self, word: str, text: str) -> None:
         """Maintenance's report, dropped once the worker is gone."""

@@ -269,6 +269,22 @@ class HookTest(Base):
         self.assertEqual(self.rejected(), ["hook"])
         self.assertFalse(channel._hooks_pending())
 
+    def test_a_hook_resent_after_stop_is_rejected_at_most_once(self):
+        hooks = Hooks()
+        channel = self.make(hooks=hooks)
+        self.deliver(channel, hook(delivery="a" * 32))
+        channel.stopped.clear()
+        channel.accept(b"h", hook(delivery="b" * 32))
+        channel.stopped.set()
+        thread = threading.Thread(target=channel._deliver)
+        thread.start()
+        thread.join(5)
+        self.assertEqual(self.rejected(), ["hook"])
+        for delivery in "abcc":
+            channel.accept(b"h", hook(delivery=delivery * 32))
+        self.assertEqual([event for _, _, event in hooks.calls], ["a" * 32])
+        self.assertEqual(self.rejected(), ["hook", "hook"])
+
     def test_hooks_stay_in_order_and_hold_the_exit_code_until_journaled(self):
         gate = threading.Event()
 
