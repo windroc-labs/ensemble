@@ -414,6 +414,8 @@ class Segment(TmuxFlow):
                 {},
             )
             if report:
+                attempt = sum(s.startswith("running:") for s in ledgered)
+                scope = "" if attempt <= 1 else f"attempt:{attempt}:"
                 outcome, url = report["status"], report.get("url")
                 state = (
                     "in_review"
@@ -421,20 +423,20 @@ class Segment(TmuxFlow):
                     else writeback.FIRST_FAILURE[task.first_failure]
                 )
                 if outcome == "done" and task.retitle:
-                    steps.append("retitle")
+                    steps.append(f"{scope}retitle")
                     changes["title"] = (
                         f"{task.title_prefix}: {report['title']}"
                         if task.title_prefix
                         else report["title"]
                     )
-                steps.append("comment")
+                steps.append(f"{scope}comment")
                 comments += [(app, k) for k in p.script.texts.values()]
                 if outcome == "done" and url:
                     steps.append(f"attach:{url}")
                     if all(a["url"] != url for a in want.attachments):
                         changes["attachments"] = [{"url": url, "title": report["title"]}]
-                steps.append(f"move:{state}")
-                steps.append("outcome")
+                steps.append(f"{scope}move:{state}")
+                steps.append(f"{scope}outcome")
                 if state == "in_review" and HUMAN not in want.subscribers:
                     changes["subscribers"] = [HUMAN]
                 changes.update(state=state, history=[("in_progress", state, app)])
@@ -463,7 +465,10 @@ class Segment(TmuxFlow):
         harness = self.harness(p.role, p.ident, p.sid)
         live_tmux.wait(
             lambda: (
-                self.ledger(p.ident).get(p.sid, [])[-1:] == ["outcome"] and not self.live(harness)
+                re.fullmatch(
+                    r"(attempt:\d+:)?outcome", (self.ledger(p.ident).get(p.sid) or [""])[-1]
+                )
+                and not self.live(harness)
             ),
             TIMEOUT,
             f"{p.sid}'s outcome written back and {harness} gone",

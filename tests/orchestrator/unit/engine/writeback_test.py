@@ -836,6 +836,15 @@ class CompletionSteps(Base):
         )
         self.assertIn(f"attach:{PR}", self.steps(ctx)[SID])
 
+    def test_a_finish_without_its_move_neither_moves_nor_notifies(self):
+        gql = Gql(attachments=[PR])
+        ctx = self.ctx(gql=gql)
+        done = Outcome(status="done", title="ENG-7: x", summary="Ready.", url=PR)
+        self.assertTrue(writeback.finish(ctx, done, move=False))
+        body = "Build ready:\nAgent report before delivery:\n\n> Ready."
+        self.assertEqual(gql.calls, expect(body=body, state="in_review", subscribe=False)[:-2])
+        self.assertEqual(self.steps(ctx)[SID], ["comment", f"attach:{PR}", "outcome"])
+
     def test_already_linked_errors_count_as_attached(self):
         for text in (
             "url has already been linked to issue",
@@ -2578,9 +2587,10 @@ class FollowUpAttempts(Events):
         self.assertFalse(self.deliver(self.finished(outcome=self.NEEDS)))
         self.linear.fail = lambda _op, _v: None
         self.assertTrue(self.deliver(delegate_event("begun", 2)))
-        n = len(self.linear.writes("state"))
+        n, calls = len(self.linear.writes("state")), len(self.linear.calls)
         self.assertTrue(self.deliver(self.finished(outcome=self.NEEDS)))
         self.assertEqual(len(self.linear.writes("state")), n)
+        self.assertNotIn("subscribe", [op for _, op, _ in self.linear.calls[calls:]])
         self.assertEqual(self.linear.state, self.cfg.linear.states["in_progress"])
         steps = self.ledger()[RUN_SID]["steps"]
         self.assertIn("outcome", steps)

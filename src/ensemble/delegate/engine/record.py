@@ -174,7 +174,7 @@ class RunRecord:
     def follow_up(self, n: int, token: int) -> bool:
         with self.store.mutex():
             state = self.read()
-            if state.attempt != n or not state.completed or worker(state) != token:
+            if state.attempt != n or not state.completed or state.closing or worker(state) != token:
                 return False
             self.save(
                 replace(
@@ -187,6 +187,23 @@ class RunRecord:
                 )
             )
             return True
+
+    def stop(self, result: Result, *, sid: str) -> int | None:
+        """A close: the attempt it ended, if any."""
+        with self.store.mutex():
+            state = self.read()
+            if state.plan.sid != sid:
+                return None
+            active = not state.completed
+            self.save(
+                replace(
+                    state,
+                    closing=True,
+                    completed=True,
+                    result=result if active else state.result,
+                )
+            )
+            return state.attempt if active else None
 
     def complete(self, n: int, result: Result, *, sid: str, unbound: bool = False) -> bool:
         """Compare-and-set; unbound: only while opening."""

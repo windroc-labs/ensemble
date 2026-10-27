@@ -744,16 +744,20 @@ class HarnessDelegate(Delegate):
     def _stop_owned(self, state: DelegateState) -> None:
         """FR-34: an owned run's active attempt ends once as a stop, not as its worker's exit."""
         p = state.plan
-        if state.completed or p.spec.mode != Mode.TUI or not p.session.handlers:
+        if p.spec.mode != Mode.TUI or not p.session.handlers:
             return
         result = stopped(Stopped(128 + signal.SIGTERM))
-        if not RunRecord(self.layout, self.store).complete(state.attempt, result, sid=p.sid):
+        try:
+            n = RunRecord(self.layout, self.store).stop(result, sid=p.sid)
+        except (ConfigError, OSError) as error:
+            say(f"delegate: {error}")
             return
+        if n is None:
+            return
+        state = replace(state, attempt=n)
         finish(state, result, None)
         if state.callback is not None:
-            EventCallback(state.callback, self.store, sid=p.sid, attempt=state.attempt)(
-                Finished(result)
-            )
+            EventCallback(state.callback, self.store, sid=p.sid, attempt=n)(Finished(result))
 
     def session_status(self) -> SessionStatus:
         """Its own live agent session's status, else the plan's: an attached one lacks its env;
@@ -1266,6 +1270,7 @@ class HarnessDelegate(Delegate):
                 attempt=state.attempt + 1,
                 previous=None,
                 bound=False,
+                closing=False,
             )
             try:
                 os.makedirs(self.layout.agent, exist_ok=True)

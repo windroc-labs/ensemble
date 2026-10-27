@@ -454,7 +454,7 @@ def _finish(ctx, o, steps="", *, move=True):
         )
     ):
         return False
-    if state == "in_review":
+    if state == "in_review" and move:
         body += ctx.tracker.notify(issue, ctx.humans)
     if _post(ctx, f"{steps}comment", body):
         return False

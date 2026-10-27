@@ -429,9 +429,26 @@ class CloseTest(HandlerCase):
         self.assertEqual(self.state().result, self.STOPPED)
         self.assertEqual(self.kinds_sent(), [("finished", 1)])
 
+    def test_a_closed_workers_turn_opens_no_follow_up(self):
+        self.finish(NEEDS)
+        self.close()
+        sent = list(self.sent)
+        self.call(TurnStarted())
+        self.call(Exited(143))
+        state = self.state()
+        self.assertEqual((state.attempt, state.result.outcome.status), (1, "needs_input"))
+        self.assertEqual(self.sent, sent)
+
+    def test_a_close_whose_record_cannot_be_written_still_closes(self):
+        self.call(TurnStarted())
+        with mock.patch("os.replace", side_effect=OSError("disk full")):
+            self.close()
+        self.assertIn("delegate: disk full", self.err.getvalue())
+        self.assertFalse(self.state().completed)
+
     def test_close_of_an_ended_owned_attempt_sends_nothing(self):
         self.finish(NEEDS)
-        before = (self.state(), list(self.sent), self.kinds())
+        before = (replace(self.state(), closing=True), list(self.sent), self.kinds())
         self.close()
         self.call(Exited(0))
         self.assertEqual((self.state(), self.sent, self.kinds()), before)
