@@ -289,6 +289,16 @@ class TuiPolicy(Base):
         self.assertEqual(seen, ["# Draft\n"])
         self.assertEqual(sorted(os.listdir(os.path.dirname(self.out))).count("out.md"), 1)
 
+    def test_a_start_ended_by_a_signal_puts_the_stale_out_back(self):
+        self.write(self.out, "# Earlier\n")
+        with (
+            mock.patch.object(self.driver, "start", side_effect=Stopped(143)),
+            self.assertRaises(Stopped),
+        ):
+            self.go(mode="headless")
+        self.assertEqual(self.read(self.out), "# Earlier\n")
+        self.assertEqual(os.listdir(os.path.dirname(self.out)).count(".out.md.stale"), 0)
+
     def test_a_tui_handle_without_a_name_reports_a_driver_error(self):
         os.makedirs(self.work)
         handle = FakeHandle([])

@@ -312,6 +312,9 @@ class _Attempts:
             if isinstance(e, SessionBusy):
                 return Result(EXIT_BUSY, None, str(e))
             return Result(1, None, f"{p.spec.mode}: {e}")
+        except BaseException:  # a signal or a driver fault: as it was
+            self.settle_stale_out(aside, keep=True)
+            raise
         self.settle_stale_out(aside, keep=False)
         self.note("input", text=p.params.input)
         if stale:
