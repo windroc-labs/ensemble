@@ -869,8 +869,14 @@ class HarnessDelegate(Delegate):
                 self._clear_tmp()
 
     def _crashed(
-        self, error: BaseException, callback: EventCallback | None, *, refused: bool | None = None
+        self,
+        error: BaseException,
+        callback: EventCallback | None,
+        *,
+        refused: bool | None = None,
+        handle: Session | None = None,
     ) -> Result:
+        """refused not None: an owned start's, its `handle` then closed."""
         ended = self._start_failure_end(error)
         if isinstance(error, (Exception, SystemExit)):
             RunLog(self.layout.run).note(
@@ -882,7 +888,12 @@ class HarnessDelegate(Delegate):
         if refused is None:
             self._finished(ended, callback, None)
         else:
-            self._drive_end(ended, None, callback, None, notes=not refused)
+            tried = self._drive_end(ended, handle, callback, None, notes=not refused, unbound=False)
+            if handle is not None and not tried:
+                try:
+                    handle.close()
+                except SessionError as failure:
+                    say(f"delegate: tui: close: {failure}")
         return ended
 
     def _finished(
@@ -905,7 +916,7 @@ class HarnessDelegate(Delegate):
     def _drive(
         self, callback: EventCallback | None, on_event: Callable[[Event], None] | None
     ) -> Result:
-        """An owned run: an exception after the start leaves the attempt as it is."""
+        """An owned run: an exception after Begun leaves the attempt as it is."""
 
         def begun(event: Event) -> None:
             for each in (callback, on_event):
@@ -916,8 +927,9 @@ class HarnessDelegate(Delegate):
         try:
             opened = attempts.begin()
         except BaseException as error:
-            if attempts.handle is None:
-                self._crashed(error, callback, refused=attempts.refused)
+            if not attempts.begun:
+                handle = attempts.handle or self._own(self._state)
+                self._crashed(error, callback, refused=attempts.refused, handle=handle)
             raise
         if not isinstance(opened, Result):
             return self._await(opened, callback, on_event)

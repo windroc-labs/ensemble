@@ -2565,6 +2565,42 @@ class OwnedRun(HarnessCase):
         self.assertEqual(self.sent(), ["begun"])
         self.assertTrue(view.alive())
 
+    def assert_stopped_start_left_nothing(self, view: HarnessDelegate) -> None:
+        """Its stopped ending stored and sent once, its worker closed, a resume starts again."""
+        state = self.record.read()
+        stopped = Result(129, None, "stopped: Stopped: 129")
+        self.assertEqual((state.completed, state.result), (True, stopped))
+        self.assertEqual(self.sent(), ["finished"])
+        agent = view.driver.session
+        assert agent is not None
+        self.assertFalse(agent.alive())
+        self.assertFalse(view.alive())
+        HarnessDelegate.attach(self.work, session_cls=HarnessSession).resume()
+        self.assertEqual(self.metadata()["attempt"], 2)
+
+    def test_a_stop_during_the_tui_start_stores_it_and_closes_the_worker(self):
+        view = self.owned()
+        with (
+            mock.patch.object(
+                HarnessSession, "showable", new_callable=mock.PropertyMock, side_effect=Stopped(129)
+            ),
+            self.assertRaises(Stopped),
+        ):
+            view.run()
+        self.assert_stopped_start_left_nothing(view)
+
+    def test_a_stop_before_the_start_returns_closes_the_drivers_session(self):
+        view = self.owned()
+        start = AgentDriver.start
+
+        def stopped(driver, spec, **kw):
+            start(driver, spec, **kw)
+            raise Stopped(129)
+
+        with mock.patch.object(AgentDriver, "start", stopped), self.assertRaises(Stopped):
+            view.run()
+        self.assert_stopped_start_left_nothing(view)
+
     def test_an_opening_attempt_past_its_idle_timeout_is_given_up(self):
         Clock(self)
         view = self.owned(idle=5)

@@ -426,7 +426,7 @@ class Attempts:
         environment = p.session.environment
         self.lock = None if environment is None else environment.lock
         self.released = False
-        self.begun = self.stale = False  # stale: a stale out's session left running
+        self.begun = self.stale = False
 
     def note(self, kind: str, **fields) -> None:
         RunLog(self.run_dir).note(kind, **fields)
