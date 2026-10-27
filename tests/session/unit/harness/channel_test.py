@@ -341,3 +341,58 @@ class SweepTest(Base):
             self.assertLogs("session", "WARNING"),
         ):
             channel.sweep()
+
+
+class AskTest(Base):
+    def serve(self, answer):
+        self.served = []
+
+        def run():
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                for ident, op, data in self.channel.pending():
+                    self.served.append((op, data))
+                    answer(ident)
+                    return
+                time.sleep(0.01)
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        self.addCleanup(thread.join)
+
+    def test_data_round_trips_both_ways(self):
+        self.hold_lock()
+        self.serve(lambda ident: self.channel.reply(ident, ok=True, data={"text": "screen"}))
+        self.assertEqual(self.channel.ask(Op.SCREEN, {"lines": 3}, timeout=5), {"text": "screen"})
+        self.assertEqual(self.served, [(Op.SCREEN, {"lines": 3})])
+
+    def test_a_refusal_raises_its_error(self):
+        self.hold_lock()
+        self.serve(lambda ident: self.channel.reply(ident, ok=False, error="bad keys"))
+        with self.assertRaisesRegex(SessionError, "bad keys"):
+            self.channel.ask(Op.PRESS, {"keys": ["?"]}, timeout=5)
+
+    def test_no_harness_raises(self):
+        with self.assertRaisesRegex(SessionError, "harness .* is gone"):
+            self.channel.ask(Op.SEND, {"text": "x"}, timeout=1)
+
+    def test_only_input_and_screen_ops_carry_data(self):
+        with self.assertRaises(ValueError):
+            self.channel.ask(Op.CLOSE, {})
+
+    def test_a_request_with_non_dict_data_is_dropped(self):
+        folder = os.path.join(self.channel.directory, "requests")
+        os.makedirs(folder, exist_ok=True)
+        for name, body in (
+            ("a" * 32, '{"op": "send", "data": []}'),
+            ("b" * 32, '{"op": "send", "data": {"text": "x"}}'),
+            ("c" * 32, '{"op": "close"}'),
+        ):
+            with open(os.path.join(folder, name + ".json"), "w") as f:
+                f.write(body)
+            time.sleep(0.01)
+        with self.assertLogs("session", "WARNING"):
+            found = self.channel.pending()
+        self.assertEqual(
+            sorted(found), [("b" * 32, "send", {"text": "x"}), ("c" * 32, "close", {})]
+        )

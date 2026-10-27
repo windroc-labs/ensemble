@@ -1,11 +1,11 @@
 """OwnedSession, the control view of an owned worker: never its owner. stop and close are
-requests; the rest goes to a read-only attach.
+requests, and so are a remote worker's send, press and screen; the rest goes to a read-only attach.
 """
 
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 
 from ensemble.session.engine.base import Session
 from ensemble.session.engine.types import (
@@ -20,6 +20,7 @@ from ensemble.session.engine.types import (
     SessionEvent,
     SessionInfo,
     SessionStatus,
+    StatusState,
     Stderr,
     TurnEnd,
     Unanswered,
@@ -166,10 +167,29 @@ class OwnedSession(Session):
         opening = self._channel.status().get("opening")
         return opening if isinstance(opening, str) else None
 
+    def _remote(self) -> bool:
+        return self._channel.status().get("remote") is True
+
+    def _ask(self, op: Op, data: Mapping) -> dict:
+        if not self._channel.alive():
+            raise SessionError(f"session {self.name}: its harness is gone")
+        try:
+            return self._channel.ask(op, data)
+        except SessionError as error:
+            if not self._channel.alive() and not isinstance(error, Unanswered):
+                raise SessionError(f"session {self.name}: its harness is gone") from None
+            raise
+
     def send(self, text: str) -> None:
+        if self._remote():
+            self._ask(Op.SEND, {"text": text})
+            return
         self._session().send(text)
 
     def press(self, keys: Sequence[KeyPress]) -> None:
+        if self._remote():
+            self._ask(Op.PRESS, {"keys": [str(key) for key in keys]})
+            return
         self._session().press(keys)
 
     def alive(self) -> bool:
@@ -183,7 +203,11 @@ class OwnedSession(Session):
         return self._session().status()
 
     def content(self) -> str:
-        return self._session().content()
+        if not self._remote():
+            return self._session().content()
+        if self.status().state == StatusState.DONE and (reply := self.reply):
+            return reply
+        return self.screen()
 
     def info(self) -> SessionInfo:
         return self._session().info()
@@ -208,4 +232,9 @@ class OwnedSession(Session):
         return self._session().attach_command()
 
     def screen(self, lines: int | None = None) -> str:
+        if self._remote():
+            text = self._ask(Op.SCREEN, {"lines": lines}).get("text")
+            if not isinstance(text, str):
+                raise SessionError(f"session {self.name}: bad screen from its harness")
+            return text
         return self._session().screen(lines)
