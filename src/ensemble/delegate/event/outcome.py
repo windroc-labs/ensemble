@@ -22,7 +22,6 @@ from ensemble.delegate.event.types import (
 from ensemble.utils import ConfinedFileError, ConfinedReason, OutcomeStatus, read_confined
 
 SCHEMA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outcome.schema.json")
-SAVES_DELIVERABLE = ("local",)  # destinations whose deliverable comes back in the outcome
 DEFAULT_HOST = "github.com"
 PULL = re.compile(r"/[^/]+/[^/]+/pull/\d+")
 PR_PATH = re.compile(rf"{PULL.pattern}|/[^/]+/[^/]+/(compare|tree)/\S+")
@@ -94,7 +93,7 @@ def validate(data: dict, output: Mapping, workdir: str, hosts: frozenset[str]) -
         raise InvalidOutcome("questions and files must be lists")
     if status == "needs_input" and not 1 <= len(questions) <= 4:
         raise InvalidOutcome("needs_input must carry 1–4 questions")
-    if status == "done" and output["type"] in SAVES_DELIVERABLE and not deliverable.strip():
+    if status == "done" and output["type"] == "local" and not deliverable.strip():
         raise InvalidOutcome(f"done with a {output['type']} destination must carry the deliverable")
     outcome = Outcome(
         OutcomeStatus(status),
@@ -158,7 +157,7 @@ def _conform(value, schema: Mapping, where: str) -> None:
 
 
 def _url(url: str, out: Mapping, hosts: frozenset[str]) -> str:
-    if not url or out["type"] in SAVES_DELIVERABLE:
+    if not url or out["type"] == "local":
         return ""
     parts = urlsplit(url) if isinstance(url, str) else None
     if (

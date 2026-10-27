@@ -28,7 +28,7 @@ from ensemble.delegate.engine.types import (
     Result,
     Stopped,
 )
-from ensemble.delegate.event.outcome import SAVES_DELIVERABLE, drop_files
+from ensemble.delegate.event.outcome import drop_files
 from ensemble.delegate.event.outcome import read as read_outcome
 from ensemble.delegate.event.reply import OUTCOME, marks, outcome_block, outcome_only
 from ensemble.delegate.event.types import InvalidOutcome, Outcome, Updraft
@@ -405,7 +405,7 @@ class Attempt:
                 try:
                     save(s.out, outcome.deliverable)
                 except OSError as e:
-                    if kind in SAVES_DELIVERABLE:
+                    if kind == "local":
                         raise
                     say(f"delegate: cannot save the deliverable to {s.out}: {e}")
                     self.note("save_error", error=str(e))
