@@ -655,6 +655,50 @@ class Real(RealConfig):
         ):
             self.assertIn(phrase, task_text("deep-research"))
 
+    def test_engineers_fix_root_causes_by_the_method_file(self):
+        prompt, _ = composed("engineer")
+        self.assertEqual(parameters(prompt)["<team>"], f"`{TEAM}`")
+        rules = section(prompt, "Rules")
+        fix = item(rules, "Fix root causes")
+        self.assertIn(
+            ": before debugging or fixing any failure (a bug, a failing or intermittent test, a "
+            "review blocker), read and follow the **fix-root-causes method** "
+            "`<team>/methods/fix-root-causes.md`.",
+            fix,
+        )
+        self.assertIn(
+            "Every brief to a sub-agent (producer, reviewer) names that file for the sub-agent to "
+            "read.",
+            fix,
+        )
+        self.assertLess(
+            rules.index("- **No mutation testing**"), rules.index("- **Fix root causes**")
+        )
+        with open(os.path.join(TEAM, "methods", "fix-root-causes.md")) as f:
+            method = f.read()
+        for phrase in (
+            "root cause",
+            "never its symptom",
+            "**Reproduce**",
+            "ask why",
+            "instrument",
+            "read the actual error",
+            "a nil check, a broad except, a retry, a sleep or a loosened assertion",
+            "paragraph-long comment",
+            "every occurrence",
+            "stale persistent state (config, caches, lock files, serialized state) before code",
+            "never rerun or committed around",
+            "no empty commits",
+            'no "base flake" label without a cause',
+            "concurrent writers, an unawaited exit",
+            "One another ticket owns → name that ticket and rerun.",
+            "a bug, a failing or intermittent test, a review blocker",
+        ):
+            self.assertIn(phrase, method)
+        for role, task in runs():
+            if role != "engineer":
+                self.assertNotIn("fix-root-causes", composed(role, task)[0], (role, task))
+
     def test_the_summary_is_short_and_details_go_in_the_deliverable(self):
         for role, task in runs():
             with self.subTest(role=role, task=task):
