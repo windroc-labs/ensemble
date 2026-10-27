@@ -2,11 +2,12 @@
 bin/ensemble-session on a private tmux server (tests/session/cli_support.py): a live worker's resume
 prints its Record and starts nothing; a gone worker's resume, from another caller, and a live
 worker's restart replay its saved sid, cwd, flags, env and display without its prompt; concurrent
-resumes start it once; a start whose session harness is killed right after its launch resumes by
-name; bad saved state or a saved Host no longer configured starts and closes nothing. A client that ignores SIGHUP and SIGTERM and has a child: a restart, and a resume after its
-session harness is killed, start the new generation only once the old one and its child are gone.
-Each Claude launch (start, restart, resume) gets one /color, at least 1 s after its SessionStart;
-send, reply and read add none. A kill -9 of the harness itself: crash_resume_integration_test.py.
+resumes start it once; a start killed right after its launch resumes by name; bad saved state or a
+saved Host no longer configured starts and closes nothing. A client that ignores SIGHUP and SIGTERM
+and has a child: a restart, and a resume after its session harness is killed, start the new
+generation only once the old one and its child are gone. Each Claude launch (start, restart, resume)
+gets one /color, at least 1 s after its SessionStart; send, reply and read add none. A kill -9 of
+the harness itself: crash_resume_integration_test.py.
 """
 
 import contextlib
@@ -65,6 +66,22 @@ with open(log, "a", encoding="utf-8") as f:
     f.write(json.dumps({**entry, "argv": args}) + "\\n")
 subprocess.call([sys.executable, "-I", fake, *args])
 time.sleep(max(0, start + CAP - time.time()))
+"""
+
+
+# A tmux for one start: it runs the fixture's, and that start's display (its first new-session)
+# then SIGKILLs the start's session harness once the client kept its transcript, so mid-launch
+KILLER = """import glob, os, signal, subprocess, sys, time
+code = subprocess.call([REAL, *sys.argv[1:]])
+if "new-session" in sys.argv[1:] and not os.path.exists(LAUNCHED):
+    open(LAUNCHED, "w").close()
+    kept = os.path.join(os.environ["HOME"], "**", "projects", "*", "*.jsonl")
+    until = time.monotonic() + 30
+    while not glob.glob(kept, recursive=True) and time.monotonic() < until:
+        time.sleep(0.05)
+    os.kill(os.getppid(), signal.SIGKILL)
+    sys.exit(1)
+sys.exit(code)
 """
 
 
@@ -166,12 +183,20 @@ class ResumeTest(Base):
         self.assertEqual(self.server.option("w1", "@record"), record.to_line())
         self.assertIn(self.server.pane_of("w1"), self.server.panes(f"={MANAGER}:"))
 
-    def test_a_start_whose_harness_is_killed_right_after_its_launch_is_resumed_by_name(self):
-        record = self.record(self.start("w1"))
-        live_tmux.crash_owner(self.ensemble, "w1")
-        resumed = self.record(self.again("resume", "w1", inside=None, cwd=self.root))
-        self.assertEqual(resumed, record)
-        self.assertEqual(resumed.resume, ("ensemble-session", "resume", "w1"))
+    def test_a_start_killed_right_after_its_launch_is_resumed_by_name(self):
+        directory = os.path.join(self.root, "killer")
+        os.mkdir(directory)
+        tmux = os.path.join(directory, "tmux")
+        names = f"REAL, LAUNCHED = {self.server.program!r}, {os.path.join(directory, 'launched')!r}"
+        with open(tmux, "w", encoding="utf-8") as f:
+            f.write(f"#!{sys.executable} -I\n{names}\n{KILLER}")
+        os.chmod(tmux, 0o700)
+        killed = self.start("w1", PATH=os.pathsep.join((directory, self.env()["PATH"])))
+        # the process that launched it, killed here, is its session harness, not the start
+        self.assertEqual((killed.returncode, killed.stdout), (1, ""), killed.stderr)
+        self.assertIn("session harness", killed.stderr)
+        record = self.record(self.again("resume", "w1", inside=None, cwd=self.root))
+        self.assertEqual(record.resume, ("ensemble-session", "resume", "w1"))
         self.assertTrue(os.path.isfile(self.state_file(record.sid)))
         self.assertEqual(self.server.option("w1", "@record"), record.to_line())
         calls = live_tmux.wait(lambda: self.calls("w1")[1:] or None, what="w1's resumed client")

@@ -10,8 +10,9 @@ refuse.
 
 stdout holds only machine output: Records, Status lines, ls rows, read and reply text, attach
 commands. Exit 0 done, 2 a usage or config error, 75 busy on start, restart or resume (a held
-environment lock, or a worker generation live or unknown), 1 a failed key or other failure. A batch answers its keys in order; a failed key gets one
-stderr line and no stdout line, and the exit is 1.
+environment lock, or a worker generation live or unknown), 1 a failed key or other failure. A
+batch answers its keys in order; a failed key gets one stderr line and no stdout line, and the
+exit is 1.
 """
 
 from __future__ import annotations

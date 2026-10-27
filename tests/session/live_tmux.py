@@ -15,6 +15,7 @@ import time
 from typing import NamedTuple
 from unittest import mock
 
+from ensemble.session.harness.channel import Channel
 from tests.session.case import PLUGIN_BIN, child_env
 from tests.session.grid import GridCheck
 from tests.session.integration.clients.claude import fake_claude
@@ -131,6 +132,7 @@ class Server:
         case.addCleanup(_SOCKETS.discard, self.socket)
         case.addCleanup(self._close_clients)
         case.addCleanup(self.kill)
+        case.addCleanup(self.end_harnesses)  # first: a worker outlives its display
         if len(os.fsencode(self.socket)) > SOCKET_MAX:
             case.fail(f"tmux socket path over {SOCKET_MAX} bytes: {self.socket}")
 
@@ -290,6 +292,31 @@ class Server:
             lambda: not any(map(alive, pids)),
             what=f"the tmux server and its panes' processes {sorted(pids)} to end",
         )
+
+    def end_harnesses(self) -> None:
+        """Each session harness under its HOME still running closes its worker (SIGTERM), else is
+        killed: its guard then ends the client.
+        """
+        root = os.path.join(self.home, ".ensemble", "harness")
+        try:
+            names = os.listdir(root)
+        except FileNotFoundError:
+            return
+        for name in names:
+            channel = Channel(os.path.join(root, name))
+            pid = channel.status().get("pid")
+            if not channel.alive() or not isinstance(pid, int):
+                continue
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                try:
+                    os.kill(pid, sig)
+                except ProcessLookupError:
+                    break
+                try:
+                    wait(lambda c=channel: not c.alive(), 40, what=f"harness {pid}")
+                    break
+                except AssertionError:
+                    continue
 
     def _close_clients(self) -> None:
         for c in self.clients:
