@@ -19,11 +19,15 @@ func ValidOpencodeURL(base string) bool {
 		!strings.ContainsFunc(base, func(r rune) bool { return r < 0x20 || r == 0x7f })
 }
 
-// Probe performs the authenticated availability request without exporting a key or response body.
+// Probe performs the authenticated availability request without exporting a key or response body. It first checks
+// the key as start does (Ready), so a key start would refuse fails here too.
 // Transport is nil in production; tests provide a fake transport without sockets.
 func (o OpencodeKeys) Probe(ctx context.Context, provider, base string, transport http.RoundTripper) (bool, error) {
 	if !launcher.ValidProvider(provider) || !ValidOpencodeURL(base) {
 		return false, protocol.New(protocol.Usage, "Invalid OpenCode provider probe input.")
+	}
+	if err := o.Ready([]string{provider}); err != nil {
+		return false, err
 	}
 	key, err := o.Keychain.Secret(opencodeService, provider)
 	defer erase(key)
