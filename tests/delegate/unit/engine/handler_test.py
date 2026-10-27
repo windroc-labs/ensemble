@@ -29,6 +29,7 @@ from ensemble.session import (
     TurnFailed,
     TurnStarted,
 )
+from ensemble.utils import StatusState
 from tests.delegate.fakes.harness_session import HarnessSession
 from tests.delegate.harness import SID, HarnessCase, ViewedHarnessDelegate
 from tests.delegate.replies import block
@@ -495,6 +496,27 @@ class CloseTest(HandlerCase):
         self.close()
         self.assertFalse(self.state().completed)
         self.assertEqual(self.sent, [])
+
+
+class StatusTest(HandlerCase):
+    def test_a_draining_owners_view_whose_terminal_is_gone_reads_gone(self):
+        self.call(TurnStarted())
+
+        class Gone:
+            """A running owner's view whose terminal was killed: its status raises."""
+
+            def alive(self):
+                return False
+
+            def status(self):
+                raise SessionError(f"session {NAME}: expected sid {SID!r}, found None")
+
+        class Draining(ViewedHarnessDelegate):
+            def _agent(self, state):
+                return Gone()
+
+        found = Draining.attach(self.work, session_cls=HarnessSession).status()
+        self.assertEqual((found.alive, found.state), (False, StatusState.GONE))
 
 
 class IdleTest(HandlerCase):

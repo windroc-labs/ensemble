@@ -645,7 +645,12 @@ class HarnessDelegate(Delegate):
             agent, unanswered = self._agent(state), False
         except Unanswered:
             agent, unanswered = None, True
-        found = None if agent is None else agent.status()
+        try:
+            found = None if agent is None else agent.status()
+        except Unanswered:
+            found, unanswered = None, True
+        except SessionError:  # its terminal gone
+            found = None
         alive = self._alive(state) and (
             state.plan.spec.mode != Mode.TUI or unanswered or found is not None
         )
