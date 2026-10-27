@@ -241,7 +241,7 @@ class TuiStore:
 
     @contextlib.contextmanager
     def sending(self, *, wait: bool = True) -> Iterator[bool]:
-        """Every sender's, in any thread or process; wait False: False while another holds it."""
+        """Holds the send lock; wait False yields False while another holds it."""
         path = os.path.join(self.dir, SEND_LOCK)
         with contextlib.ExitStack() as stack:
             try:
@@ -657,10 +657,7 @@ class TuiMode(BaseMode):
         self._due: float | None = None  # its label's latest record
         self._held, self._checked = False, -POLL_SCREEN
         self._active_turn = run._turn_open is True
-        self._turns, self._launch_turns = (
-            0,
-            int(bool(prepared.spec.prompt) and not run._opening_prompt),
-        )
+        self._turned = False  # a TurnStarted read
         self._owned, self._hook_logged = owned, False
 
     @classmethod
@@ -963,15 +960,14 @@ class TuiMode(BaseMode):
             return None
         if self._store.prompted(self._generation):
             return "another sender's prompt went in"
-        if self._turns > self._launch_turns:
-            return "a turn the launch did not start began"
+        if self._turned:
+            return "a turn has started"
         return None
 
     def _track(self, events: list[SessionEvent | Stderr | ClientBound]) -> None:
         for event in events:
             if isinstance(event, TurnStarted):
-                self._active_turn = True
-                self._turns += 1
+                self._active_turn = self._turned = True
             elif isinstance(event, TurnEnd | TurnFailed):
                 self._active_turn = False
             if isinstance(event, Blocked | Activity | TurnEnd | TurnFailed | TurnStarted):

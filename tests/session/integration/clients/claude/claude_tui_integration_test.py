@@ -3,7 +3,7 @@ tui_integration_test sets it up: the real ClaudeClient runs
 tests/session/integration/clients/claude/fake_claude.py (on PATH as `claude`) interactively, its
 hooks from --settings. Turns, Blocked (a hook, the trust dialog), idle timeouts, the usage-limit
 screen, deaths, resume, attach from another process, show (beside a detached session), close by
-name and the launch's /color (tests that send wait for it: two senders' pastes could interleave).
+name and the launch's /color, dropped once the launch prompt's turn began.
 CLAUDE_CONFIG_DIR is a temp dir; the iTerm2 path fails the test.
 """
 
@@ -167,13 +167,6 @@ class Live(tui_live.Live):
         with open(self.log, encoding="utf-8") as f:
             return [json.loads(line) for line in f]
 
-    def colored(self) -> list[dict]:
-        """The local commands the fake read, once it read one."""
-        return live_tmux.wait(
-            lambda: [json.loads(line) for line in live_tmux.events(self.command_log)],
-            what="the launch's /color",
-        )
-
     def users(self, transcript: str) -> list[str]:
         with open(transcript, encoding="utf-8") as f:
             return [r["message"]["content"] for r in map(json.loads, f) if r["type"] == "user"]
@@ -201,7 +194,6 @@ class TurnsTest(Live):
         stream = self.stream(handle)
         self.assertEqual(stream.next(idle=False), TurnStarted())
         self.assertEqual(stream.next(idle=False), TurnEnd("old reply", 0))
-        self.colored()
         handle.send("continue")
         live_tmux.wait(
             lambda: "Waiting after prompt" in handle.screen(), what="second turn waiting"
@@ -257,7 +249,6 @@ class TurnsTest(Live):
             (self.server.option("w1", "@state"), handle.reply), ("done", "Hi from w1.")
         )
 
-        self.colored()
         handle.send("more")
         self.assertEqual(
             [stream.next(idle=False) for _ in range(2)], [TurnStarted(), TurnEnd("Second.", 2)]
@@ -305,17 +296,13 @@ class RepliesTest(Live):
         events = self.until_turn_end(self.stream(again, replies=True))
         self.assertEqual(delivered(events), ["Two."])
 
-    def test_prompted_launch_colors_without_extra_turn(self):
+    def test_prompted_launch_types_no_color(self):
         handle = self.start("w1", scenario={"steps": ["Hi."]})
         stream = self.stream(handle, replies=True)
         events = self.until_turn_end(stream)
         self.assertEqual((delivered(events), events[-1]), (["Hi."], TurnEnd("Hi.", 0)))
-        (call,) = self.calls()
-        self.assertEqual(
-            [(c["pid"], c["line"], c["dialog"]) for c in self.colored()],
-            [(call["pid"], "/color", False)],
-        )
-        stream.quiet(1.0)
+        stream.quiet(1.0)  # past its /color's due: dropped, the launch turn began first
+        self.assertEqual(live_tmux.events(self.command_log), [])
         self.assertEqual(self.users(handle.info().transcript), ["hello"])
 
 
@@ -370,7 +357,6 @@ class LimitTest(Live):
         stream.quiet(1.0)
         self.lines("w1 done")
         self.assertEqual((handle.alive(), self.server.option("w1", "@state")), (True, "done"))
-        self.colored()
         handle.send("go on")
         self.assertEqual([stream.next() for _ in range(2)], [TurnStarted(), TurnEnd("Back.", 0)])
         self.lines("w1 done", "w1 done")
@@ -446,7 +432,6 @@ class AttachTest(Live):
         handle = self.start("w1", scenario={"steps": ["One."], "turns": [["Two."]]}, sid=SID)
         stream = self.stream(handle)
         self.assertEqual([stream.next() for _ in range(2)], [TurnStarted(), TurnEnd("One.", 0)])
-        self.colored()
         res = subprocess.run(
             [*PY, "-c", ATTACH, json.dumps(TABLE), "w1", "more"],
             env=self.server.child_env(),

@@ -67,8 +67,8 @@ class Conversation(unittest.TestCase):
         return session
 
     def send(self, session: OwnedSession, text: str) -> None:
-        """Once the harness has typed the client's opening line, which a send would interleave."""
-        live_tmux.wait(lambda: session.opening_pending is None, WAIT, what="the opening sent")
+        """Once the harness has typed or dropped the client's opening line, so it is not dropped."""
+        live_tmux.wait(lambda: session.opening_pending is None, WAIT, what="the opening settled")
         session.send(text)
 
     def converse(self, session_cls: type[HostedSession], spec: Spec) -> list[str]:

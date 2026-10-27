@@ -5,8 +5,9 @@ worker's restart replay its saved sid, cwd, flags, env and display without its p
 resumes start it once; a start killed right after its launch resumes by name; bad saved state or a
 saved Host no longer configured starts and closes nothing. A client that ignores SIGHUP and SIGTERM
 and has a child: a restart, and a resume after its session harness is killed, start the new
-generation only once the old one and its child are gone. Each Claude launch (start, restart, resume)
-gets one /color, at least 1 s after its SessionStart; send, reply and read add none. A kill -9 of
+generation only once the old one and its child are gone. Each Claude launch without a prompt
+(restart, resume) gets one /color, at least 1 s after its SessionStart, the prompted start none; send,
+reply and read add none. A kill -9 of
 the harness itself: crash_resume_integration_test.py.
 """
 
@@ -307,7 +308,7 @@ class ColorTest(Base):
         (stamp,) = [hook["ts"] for hook in hooks if hook["label"] == "SessionStart"]
         return datetime.fromisoformat(stamp).timestamp()
 
-    def test_each_launch_gets_one_color(self):
+    def test_each_unprompted_launch_gets_one_color(self):
         self.record(self.start("w1"))
         starts = [self.session_start("w1")]
         self.record(self.again("restart", "w1"))
@@ -318,13 +319,13 @@ class ColorTest(Base):
         starts.append(self.session_start("w1"))
         pids = [call["pid"] for call in self.calls("w1")]
         colored = live_tmux.wait(
-            lambda: len(self.commands("w1")) == 3 and self.commands("w1"), what="3 /color lines"
+            lambda: len(self.commands("w1")) == 2 and self.commands("w1"), what="2 /color lines"
         )
-        self.assertEqual(
+        self.assertEqual(  # the start's prompt began a turn first: its /color was dropped
             [(c["pid"], c["line"], c["dialog"]) for c in colored],
-            [(pid, "/color", False) for pid in pids],
+            [(pid, "/color", False) for pid in pids[1:]],
         )
-        for command, start in zip(colored, starts, strict=True):
+        for command, start in zip(colored, starts[1:], strict=True):
             self.assertGreaterEqual(command["time"], start + 1.0)
         self.ok(self.session("send", "w1", "hi"))
         self.wait_event("w1", "done", 2)

@@ -2099,16 +2099,13 @@ class OpeningTest(Base):
         mode.poll(2)
         self.assertEqual(len(self.sends(mode)), 2)
 
-    def test_a_turn_the_launch_did_not_start_drops_the_opening(self):
+    def test_a_started_turn_drops_the_opening(self):
         cases = {
             "no launch prompt": ({}, [[record("start")]]),
-            "a launch prompt, two turns in one poll": (
+            "the launch prompt's turn": ({"prompt": "go"}, [[record("start")]]),
+            "a turn read in an earlier poll": (
                 {"prompt": "go"},
-                [[record("start"), record("stop"), record("start")]],
-            ),
-            "a launch prompt, two turns across polls": (
-                {"prompt": "go"},
-                [[record("start")], [record("stop")], [record("start")]],
+                [[record("start")], [record("stop")]],
             ),
         }
         for case, (fields, batches) in cases.items():
@@ -2123,9 +2120,9 @@ class OpeningTest(Base):
                 self.assertIsNone(mode.opening_pending)
                 mode.stop()
 
-    def test_the_launch_prompts_turn_keeps_the_opening(self):
+    def test_no_turn_yet_keeps_the_opening(self):
         mode = self.launched(prompt="go")
-        self.append(record("ready"), record("start"))
+        self.append(record("ready"))
         mode.poll(0)
         mode.poll(1.2)
         self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])

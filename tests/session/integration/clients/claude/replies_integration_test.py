@@ -84,7 +84,7 @@ class RepliesTest(Case):
         return Path(found[0]).read_text() if found else ""
 
     def interjected(self):
-        """Sends a message while the turn's tool runs (the fake reads the launch's /color first)."""
+        """Sends a message while the turn's tool runs."""
         handle = self.start()
         live_tmux.wait(lambda: '"tool_use"' in self.transcript(), WAIT, what="the turn's tool")
         handle.send("status?")

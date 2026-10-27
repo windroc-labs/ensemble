@@ -451,6 +451,26 @@ class ConcurrencyTest(Base):
         fresh.status.assert_called_once_with()
         self.assertEqual(self.attaches, 2)
 
+    def test_alive_keeps_an_attach_another_call_made_meanwhile(self):
+        stale, fresh = self.sessions
+        third = mock.Mock(name="third")
+        self.sessions.append(third)
+        view = self.view()
+        view.record()
+
+        def dead():  # another call replaces the stale attach before this one drops it
+            other = threading.Thread(target=view.status)
+            other.start()
+            other.join(5)
+            return False
+
+        stale.alive.side_effect = dead
+        stale.status.side_effect = SessionError("not running")
+        fresh.alive.return_value = True
+        self.assertTrue(view.alive())
+        self.assertEqual(self.attaches, 2)
+        third.alive.assert_not_called()
+
 
 class HeadlessViewTest(Base):
     def test_a_headless_view_has_its_mode_and_no_name(self):
