@@ -112,6 +112,24 @@ next = "pm"           # promote hands its Handoff issues to pm
 - At least one stage's role must still publish documents to GitHub (its `[output]`), as the packaged researcher and pm do.
 - A `[orchestrator.roles.<role>]` or `[orchestrator.linear.roles.<role>]` table must name a stage's role (one for a packaged stage your workflow leaves out is ignored), and a `[orchestrator.linear.task_labels]` or `[orchestrator.task_tiers]` entry a task of one. Board runs' run keys: `[orchestrator.core]`, above.
 
+### A standalone verifier stage
+
+To run `verifier` checks from the board, add a stage no other stage's `next` names, with its `[orchestrator.linear.roles.verifier]` app as above:
+
+```toml
+[[stage]]
+role = "verifier"
+input = "build"       # the target repo is checked as for engineer
+ref = true            # reads the description's optional Ref: line (a branch or tag)
+mapped_only = true    # Repo: must be the project's mapped repo
+start = "Verification started:"
+done = "Verification done:"
+failed = "Verification failed:"
+```
+
+- Leave `next` and `deliverable` unset: the verifier publishes its report itself ([Upgrading](upgrading.md#verifier-reports-on-github-orchestrator-destination-removed) has its setup), and write-back links the report's `url` on the issue.
+- Its issue, delegated to the verifier app: an optional `Repo:` line (the project's mapping), an optional `Ref:` line, then what to test or the steps to run.
+
 ## OpenCode sessions
 
 OpenCode sessions run on every Host, but outside an `isolated` Host (tmux, or `[hosts.docker] isolated = false`) only in a trusted cwd (a role run's: under `trusted_dirs`, so given by `--cwd`, as its default cwd, the workdir's `agent/`, never is): OpenCode 1.x has no project trust, so in any cwd it runs `.opencode/plugins/*.js` and installs the npm plugins `opencode.json` lists, and `OPENCODE_DISABLE_PROJECT_CONFIG` does not stop it. A start, TUI or headless, and a resume in an untrusted cwd there fail before OpenCode starts: run it on the Docker Host or in a trusted cwd. On the tmux Host both modes run `[clients.opencode] executable` (default `opencode`) and refuse to start when its `--version` is not 1.x: where PATH finds a 2.x (Homebrew's `opencode` is 2.x), set it to a 1.x install's absolute path in `~/.ensemble/config.local.toml`'s `[session.clients.opencode]`. On the Docker Host they run the image's `/opt/ensemble/bin/opencode` instead (`executable` is ignored; the broker checks its version), in yolo mode, with Ollama at `host.docker.internal`. A long message shows as `[Pasted ~N lines]` in the TUI but is sent in full.
