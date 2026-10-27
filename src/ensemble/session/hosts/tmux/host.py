@@ -23,7 +23,14 @@ from ensemble.session.engine.types import (
     StatusState,
     TuiSettings,
 )
-from ensemble.session.hosts.base import Host, InteractiveProcess, worker_state
+from ensemble.session.hosts.base import (
+    Host,
+    InteractiveProcess,
+    WorkerState,
+    worker_names,
+    worker_row,
+    worker_state,
+)
 from ensemble.session.hosts.base import activity as worker_activity
 from ensemble.session.hosts.tmux import managed
 from ensemble.session.hosts.types import SessionView
@@ -103,7 +110,24 @@ class TmuxHost(Host):
         return TuiSettings(line)
 
     def list(self) -> list[str]:
-        return sorted(row["name"] for row in self._listing())
+        """Its tmux sessions, and its live (or unknown) workers whose display is gone."""
+        names = {row["name"] for row in self._listing()}
+        return sorted(names | {name for name, _, _ in self._display_less(names)})
+
+    def _display_less(self, displayed: set[str]) -> list[tuple[str, WorkerState, Liveness]]:
+        """Its workers with no tmux session of their name, unless ABSENT: a dead one's dir is the
+        tui sweep's to expire.
+        """
+        found = []
+        for name in worker_names():
+            state = worker_state(name)
+            if name in displayed or state is None or state.host != self.name:
+                continue
+            if state.generation is None:
+                continue
+            if (live := self.worker_liveness(name, state.generation)) != Liveness.ABSENT:
+                found.append((name, state, live))
+        return found
 
     def _listing(self) -> list[dict]:
         try:
@@ -112,9 +136,21 @@ class TmuxHost(Host):
             raise SessionError(f"tmux sessions unknown: {error}") from error
 
     def rows(self) -> list[SessionRow]:
-        """A tui worker's state from its harness's mark, any other session's from its @state."""
+        """A tui worker's state from its harness's mark, any other session's from its @state; a
+        worker whose display is gone from its activity (unknown liveness: unknown).
+        """
         found = self._listing()
-        return [
+        gone = [
+            worker_row(
+                name,
+                state,
+                StatusState.UNKNOWN
+                if live == Liveness.UNKNOWN
+                else worker_activity(name, state.generation or "") or StatusState.WORKING,
+            )
+            for name, state, live in self._display_less({row["name"] for row in found})
+        ]
+        displayed = [
             SessionRow(
                 name=row["name"],
                 sid=None if sid_error(row["sid"]) else row["sid"],
@@ -133,6 +169,7 @@ class TmuxHost(Host):
             )
             for row in found
         ]
+        return displayed + gone
 
     def _capacity_namespace(self) -> str:
         try:

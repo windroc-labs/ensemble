@@ -1,7 +1,10 @@
 """TmuxHost over recorded tmux calls: its class and capacity namespace, attach targets, a dead
-generation's release and a failed listing (its managed workers: managed_test.py).
+generation's release, a failed listing and its workers whose display is gone (its managed
+workers: managed_test.py).
 """
 
+import json
+import os
 import time
 from types import SimpleNamespace
 from unittest import mock
@@ -13,11 +16,15 @@ from ensemble.session.engine.tmux_cli import (
 )
 from ensemble.session.engine.types import (
     ClientContext,
+    Liveness,
     Permission,
+    StatusState,
 )
+from ensemble.session.hosts.base import ACTIVITY, TUI_DIR, TUI_STATE
 from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.session.hosts.types import SessionView
-from ensemble.utils import load_class
+from ensemble.session.modes.tui import TuiStore
+from ensemble.utils import STALE_AGE, load_class
 from tests.session.case import Case
 from tests.session.tmux_host_support import Base
 
@@ -116,6 +123,76 @@ class Release(Base):
 
 
 class ListTest(Base):
+    def worker(self, name, *, host="tmux", generation="g" * 32, mark=None):
+        folder = os.path.join(os.path.expanduser(TUI_DIR), name)
+        os.makedirs(folder, exist_ok=True)
+        state = {"sid": f"sid-{name}", "generation": generation, "client": "claude"}
+        with open(os.path.join(folder, TUI_STATE), "w", encoding="utf-8") as file:
+            json.dump({**state, "display": "mgr", "host": host}, file)
+        if mark is not None:
+            with open(os.path.join(folder, ACTIVITY), "w", encoding="utf-8") as file:
+                file.write(f"{generation} {mark}\n")
+
+    def test_a_display_less_worker_is_listed_from_its_worker_dir(self):
+        """A5: a live worker whose tmux session was killed is still listed, its state from its
+        activity; an ABSENT one, another host's or a displayed one's dir adds no row.
+        """
+        self.worker("live", mark="done")
+        self.worker("busy")
+        self.worker("lost")
+        self.worker("dead")
+        self.worker("theirs", host="docker")
+        self.worker("shown")
+        self.tmux.listing.return_value = [
+            {
+                "name": "shown",
+                "sid": "sid-shown",
+                "client": "claude",
+                "dead": False,
+                "state": None,
+                "display": "mgr",
+                "last_lines": None,
+            }
+        ]
+        found = {
+            "live": Liveness.LIVE,
+            "busy": Liveness.LIVE,
+            "lost": Liveness.UNKNOWN,
+            "dead": Liveness.ABSENT,
+        }
+        with mock.patch(
+            "ensemble.session.hosts.tmux.managed.liveness",
+            side_effect=lambda _host, name, _generation: found[name],
+        ):
+            self.assertEqual(self.host.list(), ["busy", "live", "lost", "shown"])
+            rows = {row.name: row for row in self.host.rows()}
+        self.assertEqual(sorted(rows), ["busy", "live", "lost", "shown"])
+        self.assertEqual(
+            [
+                (rows[n].state, rows[n].sid, rows[n].client, rows[n].display)
+                for n in found
+                if n in rows
+            ],
+            [
+                (StatusState.DONE, "sid-live", "claude", "mgr"),
+                (StatusState.WORKING, "sid-busy", "claude", "mgr"),
+                (StatusState.UNKNOWN, "sid-lost", "claude", "mgr"),
+            ],
+        )
+        self.assertEqual((rows["live"].shown, rows["live"].last_lines), (None, None))
+
+    def test_the_sweep_still_expires_a_dead_display_less_worker_dir(self):
+        self.worker("dead")
+        folder = os.path.join(os.path.expanduser(TUI_DIR), "dead")
+        old = time.time() - STALE_AGE - 60
+        for path in (os.path.join(folder, TUI_STATE), folder):
+            os.utime(path, (old, old))
+        with mock.patch(
+            "ensemble.session.hosts.tmux.managed.liveness", return_value=Liveness.ABSENT
+        ):
+            TuiStore.attach("dead", host=self.host).expire(set(self.host.list()))
+        self.assertFalse(os.path.exists(folder))
+
     def test_a_failed_listing_names_why_in_list_and_rows(self):
         self.tmux.listing.side_effect = TuiError("tmux list-sessions exited 1: lost server")
         for verb in (self.host.list, self.host.rows):

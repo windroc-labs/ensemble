@@ -99,10 +99,38 @@ class WorkerState:
     client: str | None
     display: str | None
     owner: str | None
+    host: str | None = None
 
 
 def worker_dir(name: str) -> str:
     return os.path.join(os.path.expanduser(TUI_DIR), name)
+
+
+def worker_names() -> list[str]:
+    """The names of the worker dirs (no links), whatever their state."""
+    try:
+        with os.scandir(os.path.expanduser(TUI_DIR)) as entries:
+            return sorted(
+                e.name
+                for e in entries
+                if SESSION_NAME.fullmatch(e.name) and e.is_dir(follow_symlinks=False)
+            )
+    except OSError:
+        return []
+
+
+def worker_row(name: str, found: WorkerState | None, state: StatusState) -> SessionRow:
+    """Its row from its worker state (none: None fields)."""
+    return SessionRow(
+        name,
+        None if found is None else found.sid,
+        None if found is None else found.client,
+        state,
+        None if found is None else found.display,
+        None,
+        None,
+        own=False,
+    )
 
 
 def worker_file(name: str, file: str, limit: int) -> bytes | None:
@@ -143,7 +171,12 @@ def worker_state(name: str) -> WorkerState | None:
         return value if isinstance(value, str) else None
 
     return WorkerState(
-        text("sid"), text("generation"), text("client"), text("display"), text("owner")
+        text("sid"),
+        text("generation"),
+        text("client"),
+        text("display"),
+        text("owner"),
+        text("host"),
     )
 
 
@@ -300,18 +333,7 @@ class Host(ABC):
                 if found is None or found.generation is None
                 else activity(name, found.generation)
             )
-            rows.append(
-                SessionRow(
-                    name,
-                    None if found is None else found.sid,
-                    None if found is None else found.client,
-                    word or StatusState.WORKING,
-                    None if found is None else found.display,
-                    None,
-                    None,
-                    own=False,
-                )
-            )
+            rows.append(worker_row(name, found, word or StatusState.WORKING))
         return rows
 
     def _capacity_rows(self) -> list[SessionRow]:
