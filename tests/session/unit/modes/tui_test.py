@@ -2657,7 +2657,7 @@ class OwnerTest(Base):
         self.assertNotIn("owner", tui.TuiMode.snapshot(NAME))
         self.assertNotIn("owner", self.host.calls.terminal.call_args.kwargs["metadata"])
 
-    def test_an_owned_start_tells_its_host_the_owner_and_follows_a_remote_terminal(self):
+    def test_an_owned_start_tells_its_host_the_owner_and_follows_a_remote_or_up_terminal(self):
         owner = self.owner()
         running = tui.TuiMode.start(
             Spec(
@@ -2678,6 +2678,17 @@ class OwnerTest(Base):
         self.assertFalse(running.remote)
         running._terminal.remote = True
         self.assertTrue(running.remote)
+        self.assertFalse(running.client_up)
+        running._terminal.up = True
+        self.assertTrue(running.client_up)
+
+    def test_client_alive_probes_its_terminal_afresh_not_its_last_state(self):
+        mode = self.start()
+        mode._terminal.calls.state.return_value = Liveness.LIVE  # a reused probe, a kept terminal
+        mode._terminal.calls.alive.return_value = False
+        self.assertEqual((mode.client_alive(), mode.state()), (False, Liveness.LIVE))
+        mode._terminal.calls.alive.side_effect = Unanswered("its tmux did not tell")
+        self.assertFalse(mode.client_alive())
 
     def test_an_owner_outside_the_harness_root_is_refused(self):
         path = os.path.join(self.dir, "session.json")
