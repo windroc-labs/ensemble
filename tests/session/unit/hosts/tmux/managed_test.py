@@ -2,12 +2,14 @@
 
 import os
 import sys
+import tempfile
 import threading
 import time
 from unittest import mock
 
 from ensemble.session.engine.tmux_cli import TuiError
 from ensemble.session.engine.types import (
+    ConfigError,
     Launch,
     Liveness,
     PaneStatus,
@@ -560,3 +562,56 @@ class OneShotTest(Case):
         with self.assertLogs("session", "WARNING"):
             managed.sweep(self.root)
         self.assertTrue(os.path.isdir(dead))
+
+
+class SocketPathTest(Case):
+    """Every guard socket path fits macOS's 104-byte AF_UNIX sun_path: 103 bytes and its NUL."""
+
+    def socket(self, directory, name):
+        return os.path.join(directory, "a" * 32, name)
+
+    def sized_root(self, length, name):
+        """A root under self.home whose tui and one-shot `name` sockets are `length` bytes."""
+        pad = length - len(os.fsencode(self.socket(managed.location("tmux", "x"), name))) - 1
+        if pad < 1:
+            self.skipTest("temp HOME too long to size a root")
+        return os.path.join(self.home, "r" * pad)
+
+    def test_the_default_root_bounds_every_socket_under_a_long_temp_dir(self):
+        with (
+            mock.patch.dict(os.environ),
+            mock.patch.object(tempfile, "tempdir", "/var/folders/" + "x" * 80 + "/T"),
+            mock.patch.object(os, "getuid", return_value=2**32 - 1),
+        ):
+            del os.environ["ENSEMBLE_CONTROL_ROOT"]
+            for directory in (managed.location("tmux", "x"), managed.one_shot("tmux", "a" * 32)):
+                for name in ("hook", "display"):
+                    path = self.socket(directory, name)
+                    self.assertLessEqual(len(os.fsencode(path)), 103, path)
+
+    def test_a_worker_starts_at_the_limit_and_is_refused_one_byte_over_it(self):
+        host = TmuxHost("tmux", tmux=mock.Mock())
+        launch = Launch((sys.executable,), cwd=self.home)
+        for terminal, flag, name in (
+            (True, "--display-socket", "display"),
+            (False, "--hook-socket", "hook"),
+        ):
+            with self.subTest(terminal=terminal):
+                at = self.sized_root(103, name)
+                with (
+                    mock.patch.dict(os.environ, {"ENSEMBLE_CONTROL_ROOT": at}),
+                    mock.patch.object(managed.subprocess, "Popen", side_effect=OSError) as spawn,
+                    self.assertRaises(SessionError),
+                ):
+                    host.worker("worker", launch, terminal=terminal)
+                argv = spawn.call_args.args[0]
+                self.assertEqual(len(os.fsencode(argv[argv.index(flag) + 1])), 103)
+                over = self.sized_root(104, name)
+                with (
+                    mock.patch.dict(os.environ, {"ENSEMBLE_CONTROL_ROOT": over}),
+                    mock.patch.object(managed.subprocess, "Popen", side_effect=OSError) as spawn,
+                    self.assertRaisesRegex(ConfigError, r"104 bytes, over the 103-byte"),
+                ):
+                    host.worker("worker", launch, terminal=terminal)
+                spawn.assert_not_called()
+                self.assertFalse(os.path.lexists(over))
