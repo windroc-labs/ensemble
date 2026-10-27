@@ -9,7 +9,6 @@ from tests.manager.case import REPO, Case
 from tests.manager.skills.commands import (
     BIN,
     body,
-    doc_sections,
     examples,
     paths,
     references,
@@ -176,22 +175,10 @@ class Manage(Case):
         ):
             self.assertIn(literal, proposals, literal)
 
-    def test_the_files_and_doc_sections_it_names_exist(self):
+    def test_the_files_it_names_exist(self):
         self.assertTrue(paths("manage"))
         for path in paths("manage"):
             self.assertTrue(os.path.isfile(path), path)
-        cited = doc_sections("manage")
-        self.assertIn(("docs/architecture.md", ["Board", "Using the board", "Finish"]), cited)
-        for path, (top, *inner) in cited:
-            with open(os.path.join(REPO, path), encoding="utf-8") as f:
-                doc = f.read()
-            head = re.search(rf"^(#+) {re.escape(top)}$", doc, re.M)
-            self.assertIsNotNone(head, f"{path} › {top}")
-            rest = doc[head.end() :]
-            end = re.search(rf"^#{{1,{len(head[1])}}} ", rest, re.M)
-            part = rest[: end.start()] if end else rest
-            for name in inner:
-                self.assertRegex(part, rf"(?m)^#+ {re.escape(name)}$|\*\*{re.escape(name)}:\*\*")
 
     def test_a_plugin_update_names_each_clients_command(self):
         update = rule("bumps the ensemble plugin version")

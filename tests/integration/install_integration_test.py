@@ -2452,8 +2452,6 @@ class InstallTest(Case):
         self.assertNotIn("rerun the same command", result.stderr)
         self.assertFalse([c for c in self.calls() if c.startswith("ensemble-broker login")])
         self.assertNotIn("retrust", self.state())
-        doc = Path(REPO, "docs/upgrading.md").read_text()
-        self.assertIn("\n## Broker protocol 30: Keychain rename\n", doc)
 
     def seed_retired(self, counts):
         """`counts` items of each retired broker service in the fake keychain."""

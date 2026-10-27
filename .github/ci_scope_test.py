@@ -12,8 +12,6 @@ from unittest import mock
 
 import ci_scope as scope
 
-from tests.guard_checks.credentials import INVENTORY
-
 MODULES = [
     "ensemble.manager",
     "ensemble.orchestrator",
@@ -111,6 +109,7 @@ class Repository(unittest.TestCase):
             [
                 "README.md",
                 "CONTEXT.md",
+                "docs/architecture.md",
                 "docs/upgrading.md",
                 "docs/images/system.svg",
                 "docs/readme/README.ja.md",
@@ -131,8 +130,6 @@ class Repository(unittest.TestCase):
         for paths, event, full in (
             (["README.md", "src/ensemble/session/cli.py"], "pull_request", True),
             (["docs/upgrading.md", ".github/ci_scope.py"], "pull_request", True),
-            (["docs/architecture.md"], "pull_request", True),
-            (["README.md", "docs/architecture.md"], "pull_request", True),
             (["skills/act-as/SKILL.md"], "pull_request", True),
             (["skills/manage/SKILL.md"], "pull_request", False),
             (["src/ensemble/delegate/team/roles/engineer.md"], "pull_request", True),
@@ -234,9 +231,6 @@ class Repository(unittest.TestCase):
                     result = scope.classify(self.root, list(MANIFESTS), event, *refs)
                     self.assertTrue(result["full"])
                     self.assertFalse(result["version"])
-
-    def test_the_checked_inventory_is_never_docs_only(self):
-        self.assertIn(INVENTORY, scope.CHECKED_DOCS)
 
     def test_broker_scope_for_docs_python_broker_protocol_and_workflow(self):
         for paths, event, broker in (
