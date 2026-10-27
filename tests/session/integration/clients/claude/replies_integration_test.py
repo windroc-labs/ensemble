@@ -12,7 +12,7 @@ from unittest import mock
 
 from ensemble.session.engine.types import Access, Mode, Spec
 from ensemble.session.hosts.base import Host
-from ensemble.utils import file_lock, read_reply
+from ensemble.utils import read_reply
 from tests.session import harnesses, live_tmux
 from tests.session.case import HOSTS, REPO, Case
 from tests.session.integration.clients.claude import fake_claude
@@ -87,23 +87,7 @@ class RepliesTest(Case):
         handle = self.start()
         live_tmux.wait(lambda: '"tool_use"' in self.transcript(), WAIT, what="the turn's tool")
         handle.send("status?")
-        self.addCleanup(self.watcher_gone)
         return time.monotonic()
-
-    def watcher_gone(self):
-        """Waits out the watcher, which ends IDLE_EXIT s after its last answer."""
-
-        def free():
-            states = str(self.home / "**" / "replies" / "*.json")
-            for path in glob.glob(states, recursive=True, include_hidden=True):
-                try:
-                    with file_lock(path + ".watch", wait=False):
-                        pass
-                except BlockingIOError:
-                    return False
-            return True
-
-        live_tmux.wait(free, WAIT, what="the watcher's exit")
 
     def test_interjection_writes_reply_before_done(self):
         self.interjected()
@@ -122,3 +106,7 @@ class RepliesTest(Case):
         self.assertLessEqual(time.monotonic() - sent, 10)
         self.assertNotIn("done", [w[1] for w in self.words()])
         self.release.touch()
+        no_process = glob.glob(
+            str(self.home / "**" / "*.watch.lock"), recursive=True, include_hidden=True
+        )
+        self.assertEqual(no_process, [])  # no reply watcher ran (FR-38)

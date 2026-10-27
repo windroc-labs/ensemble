@@ -27,6 +27,7 @@ from ensemble.session import (
     Reply,
     SessionError,
     SessionStatus,
+    TurnEnd,
     Usage,
     Window,
 )
@@ -304,6 +305,7 @@ class Views(HarnessCase):
     def test_a_completed_foreground_tui_left_open_is_not_alive(self):
         spec = Spec("input", self.work, task="echo", sid=SID, client="fake", mode="tui")
         delegate = self.make(spec=spec)
+        HarnessSession.script, HarnessSession.lingers = (TurnEnd(block(DONE)),), True
         self.assertEqual(delegate.run().outcome.status, "done")
         agent = HarnessSession.attach(f"dummy-tester-{SID[:8]}")
         self.assertEqual(agent.alive(), True)
@@ -830,6 +832,7 @@ class Display(HarnessCase):
         self.assertEqual(harness_launches()[0]["display"], "completed:given")
         self.assertEqual(CountingDisplay.started[-1]["display"], "completed:given")
         CountingDisplay.live[record.sessions[0]].close()
+        FakeControl(self.metadata()["drive"]).close()  # run() plays its stand-in drive
         DrivenDelegate.attach(self.work, session_cls=CountingDisplay).run()
         self.assertEqual(CountingDisplay.started[-1]["display"], "completed:given")
         self.stop(record)

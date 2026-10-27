@@ -2,8 +2,9 @@
 header and Session.list's rows; --match fullmatches, a bad RE exits 2; --display D lists the
 sessions opened from D's opener whatever their placement, --here the caller's, nothing outside
 tmux; --records prints the Records stored in worker dirs alone; --descendants adds the workers
-opened from inside a listed one; a second, non-default Host's sessions are listed too (the module
-entry), a Record only its Host holds never.
+opened from inside a listed one; a live worker whose display was killed is still listed (A5); a
+second, non-default Host's sessions are listed too (the module entry), a Record only its Host holds
+never.
 """
 
 import os
@@ -110,6 +111,18 @@ class ListingTest(ListingCase):
         self.assertEqual(self.ls("--here", "--records"), lines(w1))
         self.assertEqual(self.ls("--here", "--records", "--descendants"), lines(w1, w2))
         self.assertEqual(self.ls("--here", "--records", inside="w1"), lines(w2))
+
+    def test_a_worker_whose_display_was_killed_is_still_listed(self):
+        w1 = self.done("w1")
+        w2 = self.done("w2", inside="w1")
+        self.ok(self.server.tmux("kill-session", "-t", "=w1"))
+        (found,) = self.status("w1")
+        self.assertTrue(found.alive)
+        manager = f"{MANAGER}\tworking\t-\t-\t-"
+        self.assertEqual(self.ls(), table(manager, row(w1), row(w2)))
+        self.assertEqual(self.ls(), self.session_list())
+        self.assertEqual(self.ls("--records"), lines(w1, w2))
+        self.assertEqual(self.ls("--here", "--records", "--descendants"), lines(w1, w2))
 
     def test_here_still_lists_the_tmux_sessions_once_another_host_is_the_default(self):
         w1 = self.done("w1")

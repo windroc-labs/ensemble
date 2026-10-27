@@ -76,8 +76,11 @@ class HarnessContract(DelegateContract, HarnessCase):
         self.stop(record)
 
     def finish(self, record):
+        """Its stand-in drive and worker end; run() then plays the drive, its worker's outcome."""
+        self.stop(record)
+        for name in record.sessions:
+            HarnessSession.live[name].close()
         view = ViewedHarnessDelegate.attach(record)
-        view.close()
         view.run()
         view.close()
 

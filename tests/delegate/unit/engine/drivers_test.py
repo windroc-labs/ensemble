@@ -9,7 +9,7 @@ from ensemble.delegate.composer import Composer
 from ensemble.delegate.engine.drivers import AgentDriver, Driver, InstructionDriver
 from ensemble.delegate.engine.plan import plan
 from ensemble.delegate.engine.types import DriverSpec, Finished, Instruction
-from ensemble.session import Access, IdleTimeout, Session
+from ensemble.session import Access, Session
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import Spec as StartSpec
 from tests.delegate.case import Case
@@ -24,7 +24,7 @@ class IdleTimeoutConfig(Case):
         with open(os.path.join(self.ensemble, "config.local.toml"), "w") as stream:
             stream.write(text)
 
-    def test_default_global_and_role_values_reach_the_session_in_every_mode(self):
+    def test_default_global_and_role_values_reach_an_executed_session(self):
         for text, expected in (
             ("", 7200),
             ("[delegate]\nidle_timeout = 14400\n", 14400),
@@ -33,7 +33,7 @@ class IdleTimeoutConfig(Case):
                 0.3,
             ),
         ):
-            for mode in ("tui", "headless", "in_process"):
+            for mode in ("headless", "in_process"):
                 with self.subTest(text=text, mode=mode), no_child():
                     self.local(text)
                     session_cls = SessionClass.scripted(turn(START, block(DONE)))
@@ -46,20 +46,6 @@ class IdleTimeoutConfig(Case):
                     self.assertEqual(
                         [call["idle_timeout"] for call in session_cls.started], [expected]
                     )
-
-    def test_configured_tui_idle_timeout_gives_up(self):
-        self.local("[delegate.roles.dummy-tester]\nidle_timeout = 30\n")
-        session_cls = SessionClass.scripted(IdleTimeout(30))
-        sid = "0f8fad5b-d9cb-469f-a165-70867728950e"
-        with no_child():
-            result = executed(
-                Composer().resolve("dummy-tester"),
-                Spec("input", self.home, mode="tui", sid=sid),
-                driver=AgentDriver(session_cls),
-            )
-        self.assertIsNone(result.outcome)
-        self.assertEqual(session_cls.started[0]["idle_timeout"], 30)
-        self.assertEqual(list(session_cls.live), ["claude-0f8fad5b"])
 
     def test_invalid_global_and_role_local_values_raise_delegate_config_error(self):
         for table in ("delegate", "delegate.roles.dummy-tester"):
