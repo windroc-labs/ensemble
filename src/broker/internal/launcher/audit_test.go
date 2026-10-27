@@ -152,9 +152,9 @@ func (r *reportingTokens) Retry(ctx context.Context) ([]protocol.Pending, error)
 	return r.fakeTokens.Retry(ctx)
 }
 
-func (r *reportingTokens) Issue(ctx context.Context, app string, permissions map[string]string, c string, exec func([]string, []byte) error) ([]protocol.Expiry, error) {
+func (r *reportingTokens) Issue(ctx context.Context, app, repo string, permissions map[string]string, c string, exec func([]string, []byte) error) ([]protocol.Expiry, error) {
 	r.rec.Add(c, audit.Credential{Kind: audit.GitHubToken, Result: audit.Issued, Account: "acme"}, "k")
-	return r.fakeTokens.Issue(ctx, app, permissions, c, exec)
+	return r.fakeTokens.Issue(ctx, app, repo, permissions, c, exec)
 }
 
 func TestStartLineHoldsItsOwnTokens(t *testing.T) {
