@@ -296,13 +296,6 @@ def host_resume(host: Host, name: str | None, cwd: str) -> str | None:
     return resume_command(cwd, {}, argv) if argv else None
 
 
-def check_sid(name: str, process: Process | None, sid: str | None) -> None:
-    if sid is not None:
-        actual = None if process is None else process.session_identity()[0]
-        if actual != sid:
-            raise SessionError(f"session {name}: expected sid {sid!r}, found {actual!r}")
-
-
 class Host(ABC):
     """settings excludes implementation/isolated; Launch.env passes verbatim. Exit events:
     `exited <rc>` / `dead`; unknown attach: SessionError; list: sorted names. Viewer reads display.
@@ -411,13 +404,29 @@ class Host(ABC):
     def list(self) -> list[str]: ...
 
     def rows(self) -> list[SessionRow]:
+        """One row per listed name: sid, client and display from its worker state (none: None),
+        state from its activity (none: working).
+        """
         rows = []
         for name in self.list():
-            try:
-                rows.append(self.attach(name).row())
-            except SessionError:
-                if name in self.list():
-                    raise
+            found = worker_state(name)
+            word = (
+                None
+                if found is None or found.generation is None
+                else activity(name, found.generation)
+            )
+            rows.append(
+                SessionRow(
+                    name,
+                    None if found is None else found.sid,
+                    None if found is None else found.client,
+                    word or StatusState.WORKING,
+                    None if found is None else found.display,
+                    None,
+                    None,
+                    own=False,
+                )
+            )
         return rows
 
     def _capacity_rows(self) -> list[SessionRow]:

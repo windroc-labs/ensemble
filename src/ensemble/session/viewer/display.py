@@ -9,7 +9,7 @@ from dataclasses import replace
 
 from ensemble.session.engine.tmux_cli import TuiError, display_error
 from ensemble.session.engine.types import NO_DISPLAY, ConfigError, SessionError, SessionRow
-from ensemble.session.hosts.base import Host, Process
+from ensemble.session.hosts.base import Host, worker_state
 from ensemble.session.viewer import hidden as hidden_store
 from ensemble.session.viewer.types import Split
 from ensemble.session.viewer.viewer import (
@@ -190,12 +190,13 @@ def _opener(row: SessionRow, live: dict | None) -> str | None:
 
 def started(viewer: Viewer, name: str, host: Host, display: Display) -> None:
     """A session started with NO_DISPLAY is hidden, unless its sid's entry exists (a restart or
-    resume keeps its view); one without a sid keeps none.
+    resume keeps its view); one without a sid in its worker state keeps none.
     """
     found = unfold(display) if host.attachable else None
     if found is None or not found[3]:
         return
-    sid = host.attach(name).session_identity()[0]
+    state = worker_state(name)
+    sid = None if state is None else state.sid
     if sid is None:
         return
     try:
@@ -206,17 +207,29 @@ def started(viewer: Viewer, name: str, host: Host, display: Display) -> None:
         ) from error
 
 
-def status(viewer: Viewer, host: Host, process: Process) -> Status:
-    """process's Status with hidden and attach; unknown when its Host fails."""
-    found = process.status()
-    if found.state == StatusState.UNKNOWN:
-        return found
+def status(
+    viewer: Viewer, host: Host, name: str, sid: str | None, word: StatusState | None
+) -> Status:
+    """Live session `name`'s Status: its activity `word` (None: working), hidden by its sid's
+    entry, attach from the Viewer; unknown when its Host fails.
+    """
     try:
-        sid = process.session_identity()[0]
-        hidden = sid is not None and hidden_store.read(process.name, sid)
-        attach = (
-            viewer.attach_command(process.name, host) if found.alive and host.attachable else None
-        )
+        hidden = sid is not None and hidden_store.read(name, sid)
+        attach = viewer.attach_command(name, host) if host.attachable else None
     except SessionError:
-        return replace(found, alive=False, state=StatusState.UNKNOWN, outcome=None)
-    return replace(found, hidden=hidden, attach=attach)
+        return Status(
+            name=name,
+            alive=False,
+            state=StatusState.UNKNOWN,
+            outcome=None,
+            attach=None,
+            hidden=False,
+        )
+    return Status(
+        name=name,
+        alive=True,
+        state=word or StatusState.WORKING,
+        outcome=None,
+        attach=attach,
+        hidden=hidden,
+    )

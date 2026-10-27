@@ -140,6 +140,7 @@ class Base(Case):
         self.session.opening_pending = None
         self.session.client_up = True
         self.session.dialog = None
+        self.session.screen.return_value = ""
         self.session.events.return_value = iter([IdleTimeout(worker.EARLY)])
         self.order.attach_mock(self.session_cls.start, "start")
         self.order.attach_mock(self.session_cls.preflight, "preflight")
@@ -318,7 +319,7 @@ class StartTest(Base):
     def test_an_early_exit_reports_the_last_lines_its_terminal_shows(self):
         self.session.events.return_value = iter([Exited(7)])
         shown = [f"line {n}" for n in range(worker.REPORT_LINES + 5)]
-        self.handle.screen.return_value = "\n \n".join(shown)
+        self.session.screen.return_value = "\n \n".join(shown)
         with self.assertRaises(SessionError) as caught:
             self.worker().start(prompt="", resume=False)
         self.assertEqual(
@@ -327,12 +328,11 @@ class StartTest(Base):
                 ["w1: claude exited 7 at once; its last lines:", *shown[-worker.REPORT_LINES :]]
             ),
         )
-        self.host.attach.assert_called_with("w1")
-        self.handle.screen.assert_called_once_with(worker.SCREEN_LINES)
+        self.session.screen.assert_called_once_with(worker.SCREEN_LINES)  # through its view
 
     def test_an_early_exit_on_a_terminal_that_cannot_show_reports_only_its_exit(self):
         self.session.events.return_value = iter([Exited(7)])
-        self.handle.screen.side_effect = NotShowable("session w1: its host cannot show")
+        self.session.screen.side_effect = NotShowable("session w1: its host cannot show")
         with self.assertRaises(SessionError) as caught:
             self.worker().start(prompt="", resume=False)
         self.assertEqual(str(caught.exception), "w1: claude exited 7 at once")
@@ -752,8 +752,11 @@ class ColorWatchTest(Base):
 
     def plain(self, *events, alive: bool) -> mock.Mock:
         """A session no guard reports up, its client running as `alive` says; its session alive."""
-        plain = mock.Mock(spec=["showable", "events", "alive", "client_alive"], showable=False)
+        plain = mock.Mock(
+            spec=["showable", "events", "alive", "client_alive", "screen"], showable=False
+        )
         plain.alive.return_value = True
+        plain.screen.side_effect = SessionError("session w1: its harness is gone")
         plain.client_alive.return_value = alive
         plain.events.return_value = iter(events) if events else itertools.repeat(IdleTimeout(1))
         self.session_cls.start.return_value = plain

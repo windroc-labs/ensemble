@@ -4,6 +4,7 @@ import fcntl
 import io
 import json
 import os
+import shutil
 import sys
 import threading
 import time
@@ -14,7 +15,7 @@ from unittest import mock
 from ensemble.session import EnvironmentSpec, SessionBusy, cli
 from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.tmux_cli import attach_command
-from ensemble.session.engine.types import ConfigError, Hosts, SessionError, Unanswered
+from ensemble.session.engine.types import ConfigError, Hosts, Liveness, SessionError
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.types import Op
 from ensemble.session.hosts.tmux import TmuxHost
@@ -150,7 +151,17 @@ class WorkerEnvironment(Case):
             self.assertIn("ensemble-other-1 (owner other)", err)
 
 
-class RecordControl(HostedTuiBase):
+class ElsewhereHost(ScreenHost):
+    """Another configured Host listing nothing, whose attach targets name it."""
+
+    def __init__(self, name, settings):
+        super().__init__(name)
+
+    def attach_target(self, name):
+        raise SessionError(f"no docker session {name}")
+
+
+class ControlBase(HostedTuiBase):
     def setUp(self):
         super().setUp()
         self.locks = {}
@@ -187,8 +198,59 @@ class RecordControl(HostedTuiBase):
             code = cli.main(list(argv))
         return code, out.getvalue(), err.getvalue()
 
+    def owned(self, name="w1", *, sid=SID, gone=True, held=True) -> Channel:
+        """Tui session `name` of `sid` whose session.json names a running session harness."""
+        self.tui(name=name, sid=sid)
+        path = Path(self.root, name, "session.json")
+        state = json.loads(path.read_text())
+        channel = Channel.create()
+        path.write_text(json.dumps({**state, "owner": channel.directory}))
+        if held:
+            fd = os.open(channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            self.locks[channel.directory] = fd
+            self.addCleanup(lambda: self.locks.get(channel.directory) and self.let_go(channel))
+        channel.write_status(
+            {"state": "running", "name": name, "sid": sid, "generation": state["generation"]}
+        )
+        if gone:
+            self.host.processes.pop(name)
+        return channel
+
+    def let_go(self, channel):
+        """Its harness exits: its lock released."""
+        os.close(self.locks.pop(channel.directory))
+
+    def serve(self, channel, *replies, before=None) -> list:
+        """Answers one request per reply, in order, calling `before` first, and exits after an ok
+        one, like a harness; the ops it served.
+        """
+        served = []
+
+        def answer():
+            pending = list(replies)
+            deadline = time.monotonic() + 10
+            while pending and time.monotonic() < deadline:
+                for ident, op in channel.requests():
+                    served.append(op)
+                    if before is not None:
+                        before()
+                    reply = pending.pop(0)
+                    channel.reply(ident, **reply)
+                    if reply.get("ok"):
+                        self.let_go(channel)
+                time.sleep(0.01)
+
+        thread = threading.Thread(target=answer)
+        thread.start()
+        self.addCleanup(thread.join)
+        return served
+
+
+class RecordControl(ControlBase):
     def test_record_sid_mismatch_command_results(self):
-        replacement = self.host.create("w1", sid="replacement")
+        self.tui(name="w1", sid="replacement")
+        replacement = self.host.processes["w1"]
         for command in ("status", "close", "show", "hide", "attach-command", "content"):
             with self.subTest(command=command):
                 code, out, err = self.invoke(command, record=self.record)
@@ -249,7 +311,7 @@ class RecordControl(HostedTuiBase):
         self.assertFalse(json.loads(out)["alive"])
 
     def test_usage_error_keeps_valid_keys(self):
-        self.host.create("w1", sid=SID)
+        self.tui(name="w1", sid=SID)
         invalid = replace(self.record, name="w9", sessions=())
         code, out, err = self.invoke(
             "close", stdin=self.record.to_line() + "\n" + invalid.to_line() + "\n"
@@ -258,59 +320,11 @@ class RecordControl(HostedTuiBase):
         self.assertNotIn("w1", self.host.processes)
         self.assertEqual(err, "ensemble-session: w9: names no session\n")
 
-    def test_matching_private_sid_allows_close_without_record_metadata(self):
-        process = self.host.create("w1", sid=SID)
-        self.assertIsNone(process.record())
+    def test_matching_worker_state_sid_allows_close_without_record_metadata(self):
+        self.tui(name="w1", sid=SID)
         self.assertEqual(self.invoke("close", record=self.record)[:2], (0, ""))
         self.assertNotIn("w1", self.host.processes)
-
-    def owned(self, name="w1", *, sid=SID, gone=True, held=True) -> Channel:
-        """Tui session `name` of `sid` whose session.json names a running session harness."""
-        self.tui(name=name, sid=sid)
-        path = Path(self.root, name, "session.json")
-        state = json.loads(path.read_text())
-        channel = Channel.create()
-        path.write_text(json.dumps({**state, "owner": channel.directory}))
-        if held:
-            fd = os.open(channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            self.locks[channel.directory] = fd
-            self.addCleanup(lambda: self.locks.get(channel.directory) and self.let_go(channel))
-        channel.write_status(
-            {"state": "running", "name": name, "sid": sid, "generation": state["generation"]}
-        )
-        if gone:
-            self.host.processes.pop(name)
-        return channel
-
-    def let_go(self, channel):
-        """Its harness exits: its lock released."""
-        os.close(self.locks.pop(channel.directory))
-
-    def serve(self, channel, *replies, before=None) -> list:
-        """Answers one request per reply, in order, calling `before` first, and exits after an ok
-        one, like a harness; the ops it served.
-        """
-        served = []
-
-        def answer():
-            pending = list(replies)
-            deadline = time.monotonic() + 10
-            while pending and time.monotonic() < deadline:
-                for ident, op in channel.requests():
-                    served.append(op)
-                    if before is not None:
-                        before()
-                    reply = pending.pop(0)
-                    channel.reply(ident, **reply)
-                    if reply.get("ok"):
-                        self.let_go(channel)
-                time.sleep(0.01)
-
-        thread = threading.Thread(target=answer)
-        thread.start()
-        self.addCleanup(thread.join)
-        return served
+        self.assertFalse(os.path.exists(os.path.join(self.root, "w1")))
 
     def test_a_stale_record_still_asks_the_owner_its_session_json_names(self):
         channel = self.owned()
@@ -335,46 +349,59 @@ class RecordControl(HostedTuiBase):
         self.assertEqual(served, [Op.CLOSE])
 
     def test_a_plain_close_error_is_done_only_once_the_record_looks_stale(self):
-        for stale in (True, False):
+        """Its harness gone and its worker ABSENT, its leftovers' release fails."""
+        for name, stale in (("w1", True), ("w2", False)):
             with self.subTest(stale=stale):
-                process = self.host.create("w1", sid=SID)
+                self.owned(name, held=False)
+                self.addCleanup(shutil.rmtree, Path(self.root, name), ignore_errors=True)
+                path = Path(self.root, name, "session.json")
 
-                def fail(stale=stale):
-                    if stale:
-                        self.host.processes.pop("w1")
-                    raise SessionError("w1: cannot close")
+                def fail(_name, _generation, stale=stale, path=path):
+                    if stale:  # started again meanwhile, under another sid
+                        path.write_text(json.dumps({**json.loads(path.read_text()), "sid": "x"}))
+                    raise SessionError(f"{_name}: cannot close")
 
-                process.calls.close.side_effect = fail
-                code, out, err = self.invoke("close", record=self.record)
+                self.host.calls.release.side_effect = fail
+                self.addCleanup(setattr, self.host.calls.release, "side_effect", None)
+                record = replace(self.record, name=name, sessions=(name,))
+                code, out, err = self.invoke("close", record=record)
                 self.assertEqual((code, out), (0, "") if stale else (1, ""), err)
-                self.host.processes.pop("w1", None)
 
     def test_a_session_failing_its_close_fails_it_after_another_closed(self):
-        self.host.create("w1", sid=SID)
-        failing = self.host.create("w2", sid=SID)
-        failing.calls.close.side_effect = SessionError("w2: cannot close")
+        self.tui(name="w1", sid=SID)
+        self.owned("w2", held=False)
+
+        def fail(name, _generation):
+            if name == "w2":
+                raise SessionError("w2: cannot close")
+
+        self.host.calls.release.side_effect = fail
+        self.addCleanup(setattr, self.host.calls.release, "side_effect", None)
         record = replace(self.record, sessions=("w1", "w2"))
         code, out, err = self.invoke("close", record=record)
         self.assertEqual((code, out), (1, ""))
         self.assertIn("w2: cannot close", err)
         self.assertNotIn("w1", self.host.processes)
 
-    def test_a_host_that_cannot_tell_never_makes_a_record_stale(self):
-        process = self.host.create("w1", sid=SID)
-
-        def fail():
-            self.host.calls.attach.side_effect = Unanswered("docker ps: timed out")
-            raise SessionError("w1: cannot close")
-
-        process.calls.close.side_effect = fail
-        code, out, err = self.invoke("close", record=self.record)
+    def test_a_close_refused_busy_exits_75_unless_another_key_failed_otherwise(self):
+        """Its harness gone, its worker generation live or unknown: SessionBusy (AC14)."""
+        self.owned("w1", held=False)
+        self.addCleanup(self.ended)
+        for liveness in (Liveness.LIVE, Liveness.UNKNOWN):
+            with self.subTest(liveness=liveness):
+                self.host.calls.worker_liveness.return_value = liveness
+                code, out, err = self.invoke("close", "w1")
+                self.assertEqual((code, out), (75, ""), err)
+                self.assertIn("busy", err)
+                self.assertTrue(os.path.isdir(os.path.join(self.root, "w1")))
+        self.tui(name="w2", sid=SID)
+        self.host.calls.release.side_effect = SessionError("w3: cannot close")
+        self.owned("w3", held=False)
+        self.host.calls.worker_liveness.side_effect = lambda name, _generation: (
+            Liveness.UNKNOWN if name == "w1" else Liveness.ABSENT
+        )
+        code, out, err = self.invoke("close", "w1", "w3")
         self.assertEqual((code, out), (1, ""), err)
-        self.assertIn("w1: cannot close; docker ps: timed out", err)
-        self.host.calls.attach.side_effect = Unanswered("docker ps: timed out")
-        process.calls.close.side_effect = None
-        code, out, err = self.invoke("close", record=self.record)
-        self.assertEqual((code, out), (1, ""), err)
-        process.calls.close.assert_called_once_with()
 
     def test_a_stale_record_skips_an_owner_of_another_sid(self):
         channel = self.owned(sid="replacement")
@@ -412,8 +439,8 @@ class RecordControl(HostedTuiBase):
         self.assertIn("exactly one", err)
 
     def test_sid_option_rejects_reused_names_without_effects(self):
-        self.tui(name="w1", sid=SID)
-        replacement = self.host.create("w1", sid="replacement")
+        self.tui(name="w1", sid="replacement")
+        replacement = self.host.processes["w1"]
         for argv in (
             ("send", "w1", "hello"),
             ("send", "w1", "--key", "Enter"),
@@ -427,13 +454,8 @@ class RecordControl(HostedTuiBase):
                 self.assertIn("replacement", err)
         replacement.calls.send.assert_not_called()
         replacement.calls.press.assert_not_called()
-        read = [call.args[0] for call in self.host.calls.screen.call_args_list]
-        self.assertNotIn(replacement, read)  # w1's harness reads only its own terminal
-
-    def test_read_keeps_name_only_host_terminals(self):
-        self.host.create("plain")
-        self.host.calls.screen.return_value = "host screen"
-        self.assertEqual(self.invoke("read", "plain")[:2], (0, "host screen\n"))
+        read = [call.args[1] for call in self.host.calls.screen.call_args_list]
+        self.assertNotIn(80, read)  # its harness's own scans only: no read of the caller's
 
     def test_matching_sid_allows_send_reply_read(self):
         self.tui(name="w1", sid=SID)
@@ -452,8 +474,8 @@ class RecordControl(HostedTuiBase):
         self.assertEqual(self.invoke("content", record=record)[:2], (0, "screen\n"))
 
     def test_batch_failure_keeps_other_keys(self):
-        self.host.create("w1", sid="replacement")
-        self.host.create("w2", sid=SID)
+        self.tui(name="w1", sid="replacement")
+        self.tui(name="w2", sid=SID)
         records = (
             self.record.to_line()
             + "\n"
@@ -464,6 +486,79 @@ class RecordControl(HostedTuiBase):
         self.assertEqual(code, 1)
         self.assertIn(SID, err)
         self.assertEqual(out, f"{attach_command('w2')}\n")
+
+    def ended(self):
+        """Its Host's fakes back to every worker ended, closing cleanly."""
+        self.host.calls.worker_liveness.side_effect = None
+        self.host.calls.worker_liveness.return_value = Liveness.ABSENT
+        self.host.calls.release.side_effect = None
+
+
+class Read(ControlBase):
+    def test_through_harness(self):
+        self.tui(name="w1", sid=SID)
+        owner = json.loads(Path(self.root, "w1", "session.json").read_text())["owner"]
+        self.host.calls.screen.side_effect = lambda _terminal, lines: f"screen {lines}"
+        self.assertEqual(self.invoke("read", "w1", "--lines", "5")[:2], (0, "screen 5\n"))
+        self.assertTrue(os.path.isdir(os.path.join(owner, "replies")))  # its harness answered
+
+    def test_other_sid(self):
+        self.tui(name="w1", sid="replacement")
+        code, out, err = self.invoke("read", "w1", "--sid", SID)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn(f"expected sid {SID!r}, found 'replacement'", err)
+
+    def test_harness_gone(self):
+        self.owned("w1", held=False, gone=False)
+        code, out, err = self.invoke("read", "w1")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("session w1: its harness is gone", err)
+
+
+class DisplayGone(ControlBase):
+    """A harness-owned tmux worker whose display is gone (its Host lists it no more) while the
+    default Host is another: every command reaches it on its own Host, through its harness.
+    """
+
+    def setUp(self):
+        super().setUp()
+        with open(Path(self.ensemble, "config.local.toml"), "a") as f:
+            f.write(
+                '[session.hosts]\ndefault = "other"\n[session.hosts.other]\n'
+                'implementation = "tests.session.unit.cli_test:ElsewhereHost"\n'
+            )
+        self.tui(name="w1", sid=SID)
+        state = json.loads(Path(self.root, "w1", "session.json").read_text())
+        self.owner, self.generation = state["owner"], state["generation"]
+        self.host.calls.list.return_value = []
+
+    def test_status_is_its_harnesss_with_its_activity(self):
+        Path(self.root, "w1", "activity").write_text(f"{self.generation} done\n")
+        code, out, err = self.invoke("status", "w1")
+        self.assertEqual(code, 0, err)
+        found = json.loads(out)
+        self.assertEqual((found["alive"], found["state"]), (True, "done"))
+
+    def no_tmux(self):
+        """The host tmux's calls fail (no pane to show it in)."""
+        return mock.patch("subprocess.Popen", side_effect=FileNotFoundError(2, "no tmux", "tmux"))
+
+    def test_show_reopens_through_its_harness_then_shows(self):
+        self.assertFalse(os.path.exists(os.path.join(self.owner, "replies")))
+        with self.no_tmux():
+            code, out, err = self.invoke("show", "w1")
+        self.assertTrue(os.path.isdir(os.path.join(self.owner, "replies")))  # Op.DISPLAY's
+        self.assertEqual((code, out), (0, ""), err)
+        # the Viewer shows its display on the tmux Host: with no pane to open, its attach command
+        self.assertIn("session w1: not shown; attach with tmux attach -t '=w1'", err)
+        self.assertNotIn("docker", err)
+
+    def test_hide_names_no_other_host(self):
+        with self.no_tmux():
+            code, out, err = self.invoke("hide", "w1")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("tmux: [Errno 2] no tmux", err)
+        self.assertNotIn("docker", err)
 
 
 class Ls(HostedTuiBase):

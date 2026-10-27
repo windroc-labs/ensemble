@@ -66,7 +66,7 @@ from ensemble.session.harness.channel import running as channel_running
 from ensemble.session.harness.dispatch import load_handlers
 from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedSession, dialog, fold
-from ensemble.session.hosts.base import SIGNALS, Host, host_resume, stored_record
+from ensemble.session.hosts.base import SIGNALS, Host, activity, host_resume, stored_record
 from ensemble.session.modes import headless, in_process, tui
 from ensemble.session.modes.base import BaseMode, child_env
 from ensemble.session.viewer import display as displays
@@ -279,6 +279,30 @@ def _check_owned(mode: Mode, client: Client, on: Host, client_name: str) -> None
 
 def _terminal_less(mode: Mode) -> bool:
     return mode != Mode.TUI
+
+
+def _liveness(name: str, generation: str, on: Host) -> Callable[[], Liveness]:
+    """A read-only attach's liveness source for tui worker `name`'s `generation`: LIVE while its
+    bound owner runs it; else (its harness gone or done) its Host's worker_liveness.
+    """
+
+    def liveness() -> Liveness:
+        try:
+            state = tui.TuiMode.snapshot(name)
+        except SessionError:
+            state = None
+        try:
+            if (
+                state is not None
+                and state.get("generation") == generation
+                and channel_running(name, state) is not None
+            ):
+                return Liveness.LIVE
+            return on.worker_liveness(name, generation)
+        except SessionError:
+            return Liveness.UNKNOWN
+
+    return liveness
 
 
 def _harness_only(client: str, mode: Mode, on: Host) -> ConfigError:
@@ -783,14 +807,16 @@ class HostedSession(Session):
         idle_timeout: float | None = None,
     ) -> Session:
         """Tui session `name`, from any process; its client record and hook log replayed into its
-        reply and blocked, blocked too while its terminal is marked so. A worker its session
-        harness owns: that owner's control view.
+        reply and blocked, blocked too while its activity says so. A worker its session harness
+        runs: that owner's control view; else the read-only attach of its worker state.
         """
         cls._config()
         tui.checked_name(name)
         _idle(idle_timeout)
-        cls.host(host)
+        on = cls.host(host)
         state = tui.TuiMode.snapshot(name)
+        if state.get("host") != on.name and name not in on.list():  # another table's, no alias
+            raise SessionError(f"no tui session {name} on host {on.name}")
         if sid is not None and state.get("sid") != sid:
             raise SessionError(
                 f"session {name}: expected sid {sid!r}, found {state.get('sid')!r} in session.json"
@@ -821,7 +847,9 @@ class HostedSession(Session):
         idle_timeout: float | None = None,
         generation: str | None = None,
     ) -> HostedSession:
-        """With `generation` (a view's): read-only, that generation only."""
+        """Holds no handle of its worker: its liveness from its owner, else its Host's
+        worker_liveness. With `generation` (a view's): read-only, that generation only.
+        """
         setup = cls._config()
         tui.checked_name(name)
         _idle(idle_timeout)
@@ -833,7 +861,14 @@ class HostedSession(Session):
             client = setup.registry.client(state["client"])
         except ConfigError as e:
             raise SessionError(f"no tui session {name}: {e}") from None
-        running = tui.TuiMode.attach(name, state, client, host=on, sid=sid)
+        running = tui.TuiMode.attach(
+            name,
+            state,
+            client,
+            host=on,
+            liveness=_liveness(name, state["generation"], on),
+            sid=sid,
+        )
         session = cls(
             state["client"],
             Mode.TUI,
@@ -1189,14 +1224,15 @@ class HostedSession(Session):
         return self._running.client_alive()
 
     def status(self) -> Status:
-        """Its run's; a live tui one's activity, attach and hidden from its terminal."""
+        """Its run's; a live tui one's state from its worker dir's activity, attach and hidden
+        from its Viewer.
+        """
         liveness, name = self._running.state(), self._tui()
         if liveness == Liveness.LIVE and name is not None:
-            try:
-                found = displays.status(self._viewer, self._host, self._host.attach(name))
-                return replace(found, cwd=self._info.cwd)
-            except SessionError:
-                liveness = Liveness.ABSENT
+            generation = self._running.generation
+            word = None if generation is None else activity(name, generation)
+            found = displays.status(self._viewer, self._host, name, self.sid, word)
+            return replace(found, cwd=self._info.cwd) if found.alive else found
         return Status(
             name=self.name or self.sid,
             alive=liveness == Liveness.LIVE,

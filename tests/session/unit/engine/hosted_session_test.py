@@ -218,7 +218,7 @@ class ClientCapacityTest(HostedTuiBase):
                     self.addCleanup(admitted.close)
                 self.host.calls.list.side_effect = None
                 self.host.calls.close_view.side_effect = None
-                self.host.processes["one"].calls.close.side_effect = None
+                self.host.processes.pop("one")  # its unowned leftover gone: no retire ends it
                 self.session.retire("one", sid="s1")
                 other.start(spec).close()
 
@@ -2039,7 +2039,7 @@ class TuiStartTest(HostedTuiBase):
         session = own(self, name="w1")
         terminal = self.host.processes["w1"]
         for code in (2, -15):
-            terminal.calls.alive.return_value = False
+            terminal.calls.state.return_value = Liveness.ABSENT
             terminal.calls.returncode.return_value = code
             for call in (lambda: session.send("more"), session.screen):
                 with self.subTest(code=code, call=call), self.assertRaises(SessionError) as caught:
@@ -2171,10 +2171,12 @@ class SessionEnvTest(HostedEnvBase):
 
 class AttachTest(HostedTuiBase):
     def started(self, *hooked, start=True) -> None:
-        """Tui session w1 owned (sid SID; start False: already), no harness running it, then a
-        hooks.jsonl record per (label, payload) in `hooked`; the host's calls cleared.
+        """Tui session w1 owned (sid SID; start False: already), no harness running it, its Host
+        saying its worker is live, then a hooks.jsonl record per (label, payload) in `hooked`; the
+        host's calls cleared.
         """
         if start:
+            self.host.calls.worker_liveness.return_value = Liveness.ABSENT  # an earlier one ended
             own(self, name="w1", sid=SID, events=self.events)
         with open(os.path.join(self.root, "w1", "hooks.jsonl"), "w") as f:
             f.writelines(
@@ -2182,6 +2184,8 @@ class AttachTest(HostedTuiBase):
                 for label, payload in hooked
             )
         self.host.calls.reset_mock()
+        self.host.calls.worker_liveness.return_value = Liveness.LIVE
+        self.addCleanup(setattr, self.host.calls.worker_liveness, "return_value", Liveness.ABSENT)
 
     def test_a_session_with_its_reply_and_next_records_events(self):
         self.started(("tool", {"session_id": "n1"}), ("stop", {"last_message": "r1"}))
@@ -2195,10 +2199,9 @@ class AttachTest(HostedTuiBase):
             session.info(),
             SessionInfo(sid=SID, cwd=self.workdir, project=False, transcript="", resume=""),
         )
-        self.assertEqual(
-            self.host.calls.mock_calls,
-            [mock.call.list(), mock.call.attach("w1")],
-        )
+        generation = tui.TuiMode.snapshot("w1")["generation"]
+        for call in self.host.calls.mock_calls:  # its liveness only: no handle of the worker
+            self.assertEqual(call, mock.call.worker_liveness("w1", generation))
         with open(os.path.join(self.root, "w1", "hooks.jsonl"), "a") as f:
             f.write(
                 json.dumps({"ts": "", "label": "stop", "payload": {"last_message": "r2"}}) + "\n"
@@ -2217,6 +2220,7 @@ class AttachTest(HostedTuiBase):
         ):
             with self.subTest(hooked=hooked):
                 self.host.processes.clear()
+                self.host.calls.worker_liveness.return_value = Liveness.ABSENT
                 live = own(self, name="w1", sid=SID, events=self.events)
                 self.started(*hooked, start=False)
                 if hooked:
@@ -2288,11 +2292,9 @@ class AttachTest(HostedTuiBase):
         self.assertEqual(RunLog(self.workdir).session(SID).resume, "resume n1")
         self.assertEqual(sum(e["kind"] == "session" for e in self.written()), 1)
 
-    def test_attached_while_its_terminal_cannot_tell_is_unknown(self):
+    def test_attached_while_its_host_cannot_tell_is_unknown(self):
         self.started()
-        process = self.host.processes["w1"]
-        process.calls.state.return_value = Liveness.UNKNOWN
-        self.addCleanup(setattr, process.calls.state, "return_value", Liveness.LIVE)  # its stop
+        self.host.calls.worker_liveness.return_value = Liveness.UNKNOWN
         session = self.session.attach("w1")
         self.assertEqual(
             (session.status().state, session.status().alive), (StatusState.UNKNOWN, False)
@@ -2366,15 +2368,12 @@ class AttachTest(HostedTuiBase):
         self.assertTrue(str(caught.exception).startswith("no tui session w1: "), caught.exception)
         self.nothing_hosted()
         self.started()
-        for found in ("other", None):
-            with self.subTest(found=found), self.assertRaises(SessionError) as caught:
-                terminal = self.host.processes["w1"]
-                terminal.calls.session_identity.return_value = (
-                    found,
-                    tui.TuiMode.snapshot("w1")["generation"],
-                )
-                self.session.attach("w1")
-            self.assertEqual(str(caught.exception), "no tui session w1")
+        with self.assertRaises(SessionError) as caught:
+            self.session.attach("w1", sid="other")
+        self.assertEqual(
+            str(caught.exception),
+            f"session w1: expected sid 'other', found {SID!r} in session.json",
+        )
 
     def test_a_session_json_without_a_valid_identity_is_no_tui_session(self):
         self.started()
@@ -2427,7 +2426,7 @@ class MultipleHostsTest(HostedTuiBase):
         attached = self.session.attach("w1", host="second")
         self.assertEqual((attached.sid, attached.name), (session.sid, session.name))
         self.assertFalse(attached.showable)
-        with self.assertRaises(SessionError):
+        with self.assertRaisesRegex(SessionError, "no tui session w1 on host tmux"):
             self.session.attach("w1")
 
     def test_list_combines_all_hosts_sorted_and_matches_the_display_on_each(self):
@@ -2743,34 +2742,21 @@ class SessionIdentityTest(HostedTuiBase):
             events = list(session.events())
         self.assertEqual(events[-1], Exited(-signal.SIGHUP))
 
-    def test_attach_rejects_mismatched_or_unknown_private_sid(self):
-        self.tui(name="w1", sid=SID)
-        terminal = self.host.processes["w1"]
-        for actual in (None, "replacement"):
-            with self.subTest(actual=actual):
-                terminal.calls.session_identity.return_value = (actual, None)
-                with self.assertRaises(SessionError) as caught:
-                    self.session.attach("w1", sid=SID)
-                self.assertIn(SID, str(caught.exception))
-                self.assertIn(str(actual), str(caught.exception))
-                terminal.calls.close.assert_not_called()
-
-    def test_retire_closes_the_viewers_view_after_the_session(self):
+    def test_retire_of_no_worker_closes_only_the_viewers_view(self):
+        """No worker state: no worker to end; a host session of its name is not its to close."""
         self.host.create("plain", sid=SID)
         self.host.calls.reset_mock()
         self.session.retire("plain", sid=SID)
-        self.assertNotIn("plain", self.host.processes)
+        self.assertIn("plain", self.host.processes)
         self.assertEqual(self.host.calls.mock_calls[-1], mock.call.close_view("plain"))
 
-    def test_retire_checks_private_identity_before_closing(self):
-        current = self.host.create("plain", sid="replacement")
+    def test_retire_checks_its_worker_states_sid_before_closing(self):
+        own(self, name="w1", sid="replacement")
         with self.assertRaises(SessionError) as caught:
-            self.session.retire("plain", sid=SID)
+            self.session.retire("w1", sid=SID)
         self.assertIn(SID, str(caught.exception))
         self.assertIn("replacement", str(caught.exception))
-        self.assertTrue(current.alive())
-        self.session.retire("plain", sid="replacement")
-        self.assertNotIn("plain", self.host.processes)
+        self.assertTrue(os.path.isdir(os.path.join(self.root, "w1")))
 
     def test_attached_operations_recheck_sid_after_same_name_replacement(self):
         own(self, name="w1", sid=SID)
@@ -2862,24 +2848,31 @@ class SessionIdentityTest(HostedTuiBase):
     def test_content_uses_current_activity(self):
         session = self.tui(name="w1", sid=SID)
         self.host.calls.screen.return_value = "current screen"
-        terminal = self.host.processes["w1"]
         path = Path(self.root) / "w1" / "hooks.jsonl"
         path.write_text(
             json.dumps({"label": "stop", "payload": {"last_message": "last reply"}}) + "\n"
         )
         session = self.session.attach("w1")
+        deadline = time.monotonic() + WAIT
+        while session.reply != "last reply" and time.monotonic() < deadline:
+            time.sleep(0.01)  # its harness logs the turn end it reads
         for activity, expected in (
             (StatusState.DONE, "last reply"),
             (StatusState.WORKING, "current screen"),
             (StatusState.BLOCKED, "current screen"),
         ):
             with self.subTest(activity=activity):
-                terminal.calls.activity.return_value = activity
+                self.marked("w1", activity)
                 self.assertEqual(session.content(), expected)
+
+    def marked(self, name, word) -> None:
+        """Worker `name`'s activity `word`, for its current generation."""
+        generation = tui.TuiMode.snapshot(name)["generation"]
+        (Path(self.root) / name / "activity").write_text(f"{generation} {word}\n")
 
     def test_content_falls_back_to_screen_without_reply(self):
         session = self.tui(name="w1", sid=SID)
-        self.host.processes["w1"].calls.activity.return_value = StatusState.DONE
+        self.marked("w1", StatusState.DONE)
         self.host.calls.screen.return_value = "screen fallback"
         self.assertEqual(session.content(), "screen fallback")
 
@@ -3119,6 +3112,7 @@ class OwnedTest(HostedTuiBase):
             ("w1", "fake", SID, owned.generation, Mode.TUI),
         )
         before = len(self.written())
+        self.host.calls.worker_liveness.return_value = Liveness.LIVE  # no harness holds it here
         self.assertTrue(view.alive())
         view.info()
         self.assertEqual(len(self.written()), before, "the view's attach writes no RunLog line")
@@ -3978,12 +3972,12 @@ class BoundOwnerTest(HostedTuiBase):
         """WDRC-304: its first attach, held from attach, is not handed out again."""
         self.owner()
         stale, fresh = mock.Mock(name="stale"), mock.Mock(name="fresh")
-        stale.send.side_effect = SessionError("tui session w1 is not running")
+        stale.info.side_effect = SessionError("its worker is gone")
         made = mock.Mock(side_effect=[stale, fresh])
         with mock.patch.object(self.session, "_attached", made):
             view = self.session.attach("w1", sid=SID)
-            view.send("hi")
-        fresh.send.assert_called_once_with("hi")
+            view.info()
+        fresh.info.assert_called_once_with()
         self.assertEqual(made.call_count, 2)
         self.assertEqual(
             made.call_args, mock.call("w1", sid=SID, host=None, generation=self.state["generation"])
@@ -4007,11 +4001,13 @@ class BoundOwnerTest(HostedTuiBase):
         self.owner(state="exited")
         self.assertNotIsInstance(self.session.attach("w1"), OwnedSession)
 
-    def test_attach_of_a_running_owner_whose_terminal_is_gone_raises_as_legacy(self):
+    def test_attach_of_a_running_owner_whose_display_is_gone_is_its_view(self):
+        """Its view holds no handle of the worker: its Host's sessions do not matter."""
         self.owner()
         self.host.processes.pop("w1")
-        with self.assertRaisesRegex(SessionError, "w1"):
-            self.session.attach("w1")
+        view = self.session.attach("w1")
+        self.assertIsInstance(view, OwnedSession)
+        self.assertTrue(view.alive())
 
     def test_retire_of_a_running_owner_whose_terminal_is_gone_asks_it(self):
         held = self.owner()

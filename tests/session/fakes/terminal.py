@@ -9,7 +9,7 @@ from unittest import mock
 from ensemble.session import Host, SessionError, Viewer
 from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.engine.types import Launch, Liveness, SessionRow, StatusState
-from ensemble.session.hosts.base import InteractiveProcess
+from ensemble.session.hosts.base import InteractiveProcess, worker_state
 from ensemble.session.hosts.tmux import managed
 from ensemble.session.hosts.types import SessionView
 from ensemble.session.viewer.placement import Placement
@@ -204,6 +204,19 @@ class MemoryHost(Host):
         listed = self.calls.list()
         return sorted(self.processes) if listed is None else listed
 
+    def rows(self):
+        """Its terminals' own rows, as a Host whose listing carries each session's identity; one
+        ending meanwhile is left out, one still listed fails.
+        """
+        rows = []
+        for name in self.list():
+            try:
+                rows.append(self.attach(name).row())
+            except SessionError:
+                if name in self.list():
+                    raise
+        return rows
+
 
 class ScreenHost(MemoryHost):
     """Attachable: MemoryViewer shows its sessions through its calls."""
@@ -234,8 +247,8 @@ class MemoryViewer(Viewer):
         self.placement = self._placement = mock.create_autospec(Placement, instance=True)
 
     def show(self, name, host, *, display=None, command=None):
-        if display is None:
-            display = host.attach(name).display()
+        if display is None and (state := worker_state(name)) is not None:
+            display = state.display
         return host.calls.show(name, display=display, command=command)
 
     def hide(self, name, host, *, if_closed=False):

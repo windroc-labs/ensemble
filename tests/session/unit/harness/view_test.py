@@ -14,6 +14,7 @@ from ensemble.session.engine.types import (
     Exited,
     IdleTimeout,
     KeyPress,
+    Liveness,
     Mode,
     Reply,
     SessionError,
@@ -28,6 +29,8 @@ from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedSession, dialog, fold
 from ensemble.utils import Record
 from tests.session.case import Case
+from tests.session.fakes.terminal import ScreenHost
+from tests.session.hosted_support import HostedTuiBase
 
 GEN = "g1"
 
@@ -278,11 +281,7 @@ class DelegationTest(Base):
     def test_other_members_use_one_lazy_attach(self):
         view = self.view()
         self.assertEqual(self.attaches, 0)
-        self.attached.screen.return_value = "screen"
         self.attached.showable = True
-        view.send("hi")
-        view.press(())
-        self.assertEqual(view.screen(3), "screen")
         self.assertTrue(view.showable)
         self.assertIsNone(view.opening_pending)
         self.channel.write_status({"state": "running", "opening": "/color"})
@@ -295,14 +294,11 @@ class DelegationTest(Base):
         self.assertEqual(view.dialog, "Edit")
         self.channel.write_status({"state": "running", "dialog": 3})
         self.assertIsNone(view.dialog)
-        for name in ("alive", "status", "content", "info", "session_status", "hide"):
+        for name in ("alive", "status", "info", "session_status", "hide", "attach_command"):
             getattr(view, name)()
             getattr(self.attached, name).assert_called_once_with()
         view.show(display="d")
         self.attached.show.assert_called_once_with(display="d", command=None)
-        view.attach_command()
-        self.attached.send.assert_called_once_with("hi")
-        self.attached.screen.assert_called_once_with(3)
         self.assertEqual(self.attaches, 1)
 
     def test_record_is_its_worker_dirs_for_its_generation_with_no_attach(self):
@@ -368,11 +364,7 @@ class ReattachTest(Base):
 
     def test_each_delegated_call_retries_on_a_new_attach(self):
         calls = {
-            "send": ("hi",),
-            "press": ((KeyPress.parse("Enter"),),),
-            "screen": (3,),
             "status": (),
-            "content": (),
             "info": (),
             "session_status": (),
             "hide": (),
@@ -385,7 +377,7 @@ class ReattachTest(Base):
                 view = self.held()
                 getattr(self.stale, name).side_effect = SessionError("not running")
                 found = getattr(view, name)(*args)
-                if name not in ("send", "press", "hide"):
+                if name != "hide":
                     self.assertIs(found, getattr(self.fresh, name).return_value)
                 getattr(self.fresh, name).assert_called_once_with(*args)
                 self.assertEqual(self.attaches, 2)
@@ -402,50 +394,42 @@ class ReattachTest(Base):
 
     def test_the_new_attach_is_kept(self):
         view = self.held()
-        self.stale.send.side_effect = SessionError("not running")
-        view.send("a")
-        view.send("b")
-        self.assertEqual(self.fresh.send.call_args_list, [mock.call("a"), mock.call("b")])
+        self.stale.hide.side_effect = SessionError("not running")
+        view.hide()
+        view.hide()
+        self.assertEqual(self.fresh.hide.call_args_list, [mock.call(), mock.call()])
         self.assertEqual(self.attaches, 2)
 
     def test_a_failure_of_the_new_attach_raises(self):
         view = self.held()
-        self.stale.send.side_effect = SessionError("not running")
-        self.fresh.send.side_effect = SessionError("still")
+        self.stale.hide.side_effect = SessionError("not running")
+        self.fresh.hide.side_effect = SessionError("still")
         with self.assertRaisesRegex(SessionError, "still"):
-            view.send("hi")
+            view.hide()
         self.assertEqual(self.attaches, 2)
-        self.fresh.send.assert_called_once_with("hi")
+        self.fresh.hide.assert_called_once_with()
 
     def test_a_new_attach_that_fails_is_not_retried(self):
         view = self.view()
-        self.stale.send.side_effect = SessionError("not running")
+        self.stale.hide.side_effect = SessionError("not running")
         with self.assertRaisesRegex(SessionError, "not running"):
-            view.send("hi")
+            view.hide()
         self.assertEqual(self.attaches, 1)
-        self.fresh.send.assert_not_called()
+        self.fresh.hide.assert_not_called()
 
     def test_unanswered_is_not_retried(self):
         view = self.held()
-        self.stale.send.side_effect = Unanswered("timed out")
+        self.stale.hide.side_effect = Unanswered("timed out")
         with self.assertRaises(Unanswered):
-            view.send("hi")
-        self.assertEqual(self.attaches, 1)
-
-    def test_a_partly_sent_send_is_not_retried(self):
-        view = self.held()
-        self.stale.send.side_effect = Unanswered("send to tui session w1: partly sent: gone")
-        with self.assertRaisesRegex(Unanswered, "partly sent"):
-            view.send("hi")
-        self.fresh.send.assert_not_called()
+            view.hide()
         self.assertEqual(self.attaches, 1)
 
     def test_a_failed_reattach_raises_its_error(self):
         view = self.held()
-        self.stale.send.side_effect = SessionError("not running")
+        self.stale.hide.side_effect = SessionError("not running")
         self.sessions = []
         with self.assertRaisesRegex(SessionError, "its worker g1 is gone"):
-            view.send("hi")
+            view.hide()
 
     def test_alive_asks_a_new_attach_once_when_the_held_one_says_not(self):
         view = self.held()
@@ -571,7 +555,9 @@ class HeadlessViewTest(Base):
         self.assertEqual(self.attaches, 0)
 
 
-class RemoteTest(Base):
+class RequestTest(Base):
+    """A tui view's send, press and screen are its harness's requests, whatever its worker."""
+
     def serve(self, answers):
         self.served = []
 
@@ -593,9 +579,9 @@ class RemoteTest(Base):
         thread.start()
         self.addCleanup(thread.join)
 
-    def test_a_remote_workers_input_and_screen_go_through_its_harness(self):
+    def test_input_and_screen_go_through_its_harness(self):
         self.hold()
-        self.channel.write_status({"state": "running", "remote": True})
+        self.channel.write_status({"state": "running"})
         self.serve({Op.SEND: (True, {}), Op.PRESS: (True, {}), Op.SCREEN: (True, {"text": "now"})})
         view = self.view()
         view.send("hi")
@@ -609,12 +595,11 @@ class RemoteTest(Base):
                 (Op.SCREEN, {"lines": 3}),
             ],
         )
-        self.attached.send.assert_not_called()
-        self.attached.screen.assert_not_called()
+        self.assertEqual(self.attaches, 0)
 
-    def test_remote_content_is_the_done_reply_else_the_remote_screen(self):
+    def test_content_is_the_done_reply_else_its_screen(self):
         self.hold()
-        self.channel.write_status({"state": "running", "remote": True})
+        self.channel.write_status({"state": "running"})
         self.attached.status.return_value = mock.Mock(state=StatusState.DONE)
         self.log(TurnEnd("final", 0))
         self.assertEqual(self.view().content(), "final")
@@ -624,10 +609,105 @@ class RemoteTest(Base):
         self.attached.content.assert_not_called()
 
     def test_a_refusal_raises_and_a_gone_harness_is_named(self):
-        self.channel.write_status({"state": "running", "remote": True})
+        self.channel.write_status({"state": "running"})
         with self.assertRaisesRegex(SessionError, "session w1: its harness is gone"):
             self.view().send("hi")
         self.hold()
         self.serve({Op.SEND: (False, "tui session w1 is not running")})
         with self.assertRaisesRegex(SessionError, "not running"):
             self.view().send("hi")
+
+    def test_show_asks_its_running_harness_to_reopen_the_display_first(self):
+        self.hold()
+        self.serve({Op.DISPLAY: (True, {"reopened": True})})
+        self.view().show(display="d")
+        self.assertEqual(self.served, [(Op.DISPLAY, {})])
+        self.attached.show.assert_called_once_with(display="d", command=None)
+
+    def test_a_headless_views_input_and_screen_are_refused_by_its_attach(self):
+        self.attached.send.side_effect = SessionError("send: tui mode only")
+        view = self.view(mode=Mode.HEADLESS)
+        with self.assertRaisesRegex(SessionError, "tui mode only"):
+            view.send("hi")
+        view.press(())
+        view.screen(3)
+        self.attached.press.assert_called_once_with(())
+        self.attached.screen.assert_called_once_with(3)
+        self.assertFalse(os.path.exists(os.path.join(self.channel.directory, "requests")))
+
+
+class NoProcessHost(ScreenHost):
+    """A ScreenHost whose worker a view could reach only through its harness: any attach or
+    terminal of its fails the test.
+    """
+
+    def attach(self, name):
+        raise AssertionError(f"Host.attach({name!r})")
+
+    def terminal(self, name, launch, **_options):
+        raise AssertionError(f"Host.terminal({name!r})")
+
+
+class Started(HostedTuiBase):
+    """A tui worker started on the Host named tmux, its harness on a thread; self.view its view."""
+
+    def setUp(self):
+        super().setUp()
+        self.host = NoProcessHost("tmux")
+        self.configure(tui=True)
+        self.view = self.tui(name="w1")
+        assert isinstance(self.view, OwnedSession)
+        self.worker = self.host.processes["w1"]
+        self.dir = os.path.join(self.ensemble, "tui", "w1")
+
+
+class Requests(Started):
+    def test_send_press_screen_are_requests_on_tmux(self):
+        """Its harness answers them (the read-only attach has no terminal: it would refuse)."""
+        self.host.calls.screen.return_value = "its screen"
+        self.view.send("hi")
+        self.view.press([KeyPress.parse("Enter")])
+        self.assertEqual(self.view.screen(3), "its screen")
+        self.worker.calls.send.assert_called()
+        self.worker.calls.press.assert_called_once_with((KeyPress.parse("Enter"),))
+        self.host.calls.screen.assert_any_call(self.worker, 3)
+        self.assertTrue(os.path.isdir(os.path.join(self.view._channel.directory, "replies")))
+
+    def test_reads_use_no_host_process(self):
+        """alive, status, info, reply, record, show, hide and attach_command reach the worker's
+        Host only through list, rows, attach_target, worker_liveness and attachable.
+        """
+        self.assertTrue(self.view.alive())
+        self.assertTrue(self.view.status().alive)
+        self.assertEqual(self.view.info().sid, self.view.sid)
+        self.assertIsNone(self.view.reply)
+        self.assertIsNone(self.view.record())
+        self.view.show()
+        self.view.hide()
+        self.view.attach_command()
+        self.view.session_status()
+        self.host.calls.worker_liveness.return_value = Liveness.LIVE
+        attached = self.session.attach("w1")
+        self.assertTrue(attached.alive())
+        self.view.close()
+        self.host.calls.worker_liveness.return_value = Liveness.ABSENT
+        self.assertFalse(self.view.alive())
+
+
+class Status(Started):
+    def test_state_from_activity(self):
+        """Its worker dir's activity of its generation; none, or another generation's: working."""
+        path = os.path.join(self.dir, "activity")
+        for line, state in (
+            (None, StatusState.WORKING),
+            (f"{self.view.generation} done\n", StatusState.DONE),
+            (f"{self.view.generation} blocked\n", StatusState.BLOCKED),
+            ("another done\n", StatusState.WORKING),
+        ):
+            with self.subTest(line=line):
+                if line is not None:
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(line)
+                found = self.view.status()
+                self.assertEqual((found.alive, found.state), (True, state))
+                self.assertEqual(found.cwd, self.workdir)

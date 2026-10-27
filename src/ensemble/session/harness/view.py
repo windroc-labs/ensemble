@@ -1,6 +1,6 @@
-"""OwnedSession, the control view of an owned worker: never its owner. stop and close are
-requests, and so are a remote worker's send, press and screen; record reads its worker dir; the
-rest goes to a read-only attach.
+"""OwnedSession, the control view of an owned worker: never its owner. stop, close, send, press
+and screen are requests to its harness; record reads its worker dir; the rest goes to a read-only
+attach, which holds no handle of the worker.
 """
 
 from __future__ import annotations
@@ -252,9 +252,6 @@ class OwnedSession(Session):
         found = self._channel.status().get("dialog")
         return found if isinstance(found, str) else None
 
-    def _remote(self) -> bool:
-        return self._channel.status().get("remote") is True
-
     def _ask(self, op: Op, data: Mapping) -> dict:
         if not self._channel.alive():
             raise SessionError(f"session {self.name}: its harness is gone")
@@ -266,16 +263,16 @@ class OwnedSession(Session):
             raise
 
     def send(self, text: str) -> None:
-        if self._remote():
-            self._ask(Op.SEND, {"text": text})
+        if self.mode != Mode.TUI:  # refused: tui mode only
+            self._call(lambda session: session.send(text))
             return
-        self._call(lambda session: session.send(text))
+        self._ask(Op.SEND, {"text": text})
 
     def press(self, keys: Sequence[KeyPress]) -> None:
-        if self._remote():
-            self._ask(Op.PRESS, {"keys": [str(key) for key in keys]})
+        if self.mode != Mode.TUI:
+            self._call(lambda session: session.press(keys))
             return
-        self._call(lambda session: session.press(keys))
+        self._ask(Op.PRESS, {"keys": [str(key) for key in keys]})
 
     def alive(self) -> bool:
         """A held attach that says not alive is asked once more of a new one."""
@@ -294,8 +291,7 @@ class OwnedSession(Session):
         return self._call(lambda session: session.status())
 
     def content(self) -> str:
-        if not self._remote():
-            return self._call(lambda session: session.content())
+        """Its done turn's reply, else its screen."""
         if self.status().state == StatusState.DONE and (reply := self.reply):
             return reply
         return self.screen()
@@ -317,6 +313,9 @@ class OwnedSession(Session):
         return self._call(lambda session: session.showable)
 
     def show(self, *, display: Display = None, command: str | None = None) -> str | None:
+        """Its running harness reopens its display where gone, then the Viewer shows it."""
+        if self.mode == Mode.TUI and self._channel.alive():
+            self._ask(Op.DISPLAY, {})
         return self._call(lambda session: session.show(display=display, command=command))
 
     def hide(self) -> None:
@@ -326,9 +325,9 @@ class OwnedSession(Session):
         return self._call(lambda session: session.attach_command())
 
     def screen(self, lines: int | None = None) -> str:
-        if self._remote():
-            text = self._ask(Op.SCREEN, {"lines": lines}).get("text")
-            if not isinstance(text, str):
-                raise SessionError(f"session {self.name}: bad screen from its harness")
-            return text
-        return self._call(lambda session: session.screen(lines))
+        if self.mode != Mode.TUI:
+            return self._call(lambda session: session.screen(lines))
+        text = self._ask(Op.SCREEN, {"lines": lines}).get("text")
+        if not isinstance(text, str):
+            raise SessionError(f"session {self.name}: bad screen from its harness")
+        return text

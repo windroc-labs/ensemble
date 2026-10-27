@@ -61,9 +61,7 @@ from ensemble.session.hosts.base import (
     TUI_STATE,
     Host,
     InteractiveProcess,
-    Process,
     activity,
-    check_sid,
     checked_events,
     created_events,
     sent,
@@ -187,11 +185,10 @@ def _read_state(name: str, path: str) -> dict:
 class TuiStore:
     """Tui session `name`'s dir and lock under TUI_DIR; what changes them takes the lock.
     attach(name, host=...) takes by name whatever is there: a tui session, a half-gone one (its dir
-    or its host session alone), a non-tui host session or nothing. close: under its lock, removes
-    the dir; absent is fine. An owned record goes only with its own worker generation: by its
-    owner's handle, else once that generation's worker_liveness is ABSENT, its leftovers released
-    through Host._release. With no owned record, the host's session of that name (a delegate
-    drive's) is closed.
+    alone) or nothing. close: under its lock, removes the dir; absent is fine. An owned record goes
+    only with its own worker generation: by its owner's handle, else once that generation's
+    worker_liveness is ABSENT, its leftovers released through Host._release. With no owned record
+    there is no worker: only its dir goes.
     """
 
     def __init__(self, name: str, *, host: Host, sid: str | None = None) -> None:
@@ -281,14 +278,6 @@ class TuiStore:
         new, end = _parsed(data)
         return found + new, (ino, start + end)
 
-    def hosted(self) -> Process | None:
-        """Its host's session of its name, checked against its sid: a view's terminal or, with no
-        worker state, a non-tui one (a delegate drive's); never a gone worker's leftovers.
-        """
-        process = self.host.attach(self.name) if self.name in self.host.list() else None
-        check_sid(self.name, process, self._sid)
-        return process
-
     @contextlib.contextmanager
     def sending(self, *, wait: bool = True) -> Iterator[bool]:
         """Holds the send lock; wait False yields False while another holds it."""
@@ -349,7 +338,9 @@ class TuiStore:
                 self._unmake(made)
                 raise
 
-    def close(self, handle: Process | None = None, generation: str | None = None) -> bool:
+    def close(
+        self, handle: InteractiveProcess | None = None, generation: str | None = None
+    ) -> bool:
         """generation: the owner `handle`'s, else the caller's (None: the name's). Whether the dir
         went.
         """
@@ -359,7 +350,7 @@ class TuiStore:
                 return self._close_own(handle, generation, record)
             if record is not None:
                 return self._close_other(record, generation)
-            self._close()
+            self._drop()
             self._forget()
             return True
 
@@ -386,13 +377,13 @@ class TuiStore:
             os.unlink(lock)
 
     def stop(
-        self, terminal: Process, *, owned: bool = False, generation: str | None = None
+        self, handle: InteractiveProcess | None = None, *, generation: str | None = None
     ) -> None:
-        """owned: closes `terminal`, its owner's handle. Else an owned record goes by the record
-        rule; with none, there is no worker to end: only its dir goes.
+        """handle: its owner's, closed. Else an owned record goes by the record rule; with none,
+        there is no worker to end: only its dir goes.
         """
-        if owned:
-            self.close(terminal, generation)
+        if handle is not None:
+            self.close(handle, generation)
             return
         with self._locked():
             if (record := _owned_record(self)) is not None:
@@ -449,7 +440,9 @@ class TuiStore:
             raise SessionError(f"{folder}: {e.strerror or e}") from None
         return made
 
-    def _close_own(self, handle: Process, generation: str | None, record: dict | None) -> bool:
+    def _close_own(
+        self, handle: InteractiveProcess, generation: str | None, record: dict | None
+    ) -> bool:
         if isinstance(handle, ManagedProcess):
             handle.close_display()  # first: its pane dying is no exit to report
         failed = handle.state() == Liveness.UNKNOWN
@@ -476,15 +469,6 @@ class TuiStore:
         self._shut(record["generation"])
         self._forget()
         return True
-
-    def _close(self) -> None:
-        """No owned record: its host's session of its name, if any, closed; then its dir."""
-        try:
-            if (process := self.hosted()) is not None:
-                process.close()
-        except SessionError as error:
-            raise SessionError(f"cannot close tui session {self.name}: {error}") from error
-        self._drop()
 
     def _shut(self, generation: str) -> None:
         """Its ABSENT worker generation's leftovers released through its host; then its dir."""
@@ -645,7 +629,9 @@ class _Start:
 
 
 class TuiMode(BaseMode):
-    """One tui session holding its terminal generation."""
+    """One tui session generation: its owner's (start: holds its worker's handle) or a read-only
+    view's (attach: a liveness source, no terminal).
+    """
 
     kind = Mode.TUI
 
@@ -659,20 +645,26 @@ class TuiMode(BaseMode):
         self,
         prepared: Prepared,
         run: Tui,
-        terminal: InteractiveProcess,
+        terminal: InteractiveProcess | None,
         store: TuiStore,
         generation: str,
         *,
+        liveness: Callable[[], Liveness] | None = None,
         cursor: Cursor = (None, 0),
         replayed: tuple[SessionEvent | Stderr | ClientBound, ...] = (),
         opening: tuple[str, str] | None = None,
-        owned: bool = False,
     ) -> None:
-        """cursor: its next hook record (TuiStore.records); owned: `terminal` is the owner's (its
-        harness's start), which alone marks its worker's activity; else a view.
+        """terminal: its owner's handle (its harness's start), which alone marks its worker's
+        activity; None: a view, whose `liveness` answers for its worker. cursor: its next hook
+        record (TuiStore.records).
         """
         super().__init__(prepared)
         self.name, self.run, self.host, self._terminal = store.name, run, store.host, terminal
+        if terminal is not None:
+            liveness = terminal.state
+        if liveness is None:
+            raise ValueError("liveness: required for a view")
+        self._liveness = liveness
         self._store, self._replayed, self._generation = store, replayed, generation
         self._cursor, self._dialogs, self._limit, self._code = cursor, frozenset(), None, None
         self._live, self._gone = True, False
@@ -681,7 +673,7 @@ class TuiMode(BaseMode):
         self._held, self._checked = False, -POLL_SCREEN
         self._active_turn = run._turn_open is True
         self._absorbed, self._launching = 0, bool(prepared.spec.prompt) and not run._opening_prompt
-        self._owned, self._hook_logged = owned, False
+        self._owned, self._hook_logged = terminal is not None, False
 
     @classmethod
     def preflight(
@@ -804,7 +796,6 @@ class TuiMode(BaseMode):
             store,
             generation,
             opening=run.opening,
-            owned=True,
         )
 
     @classmethod
@@ -820,10 +811,18 @@ class TuiMode(BaseMode):
 
     @classmethod
     def attach(
-        cls, name: str, state: Mapping, client: Client, *, host: Host, sid: str | None = None
+        cls,
+        name: str,
+        state: Mapping,
+        client: Client,
+        *,
+        host: Host,
+        liveness: Callable[[], Liveness],
+        sid: str | None = None,
     ) -> Self:
-        """Tui session `name` from its snapshot() if its terminal is tagged with its sid; a fresh Tui
-        restored replays its client's record, then its hook log; events from the next record.
+        """Tui session `name`'s generation from its snapshot(), read-only: `liveness` answers for
+        its worker, which it never drives. A fresh Tui restored replays its client's record, then
+        its hook log; events from the next record.
         """
         store = TuiStore.attach(name, host=host, sid=sid)
         if sid is not None and state.get("sid") != sid:
@@ -839,11 +838,6 @@ class TuiMode(BaseMode):
             raise SessionError(f"no tui session {name}: {e}") from None
         if run is None:
             raise SessionError(f"no tui session {name}: client {state['client']!r} has no tui mode")
-        terminal = store.hosted()
-        if terminal is not None and not isinstance(terminal, InteractiveProcess):
-            raise SessionError(f"session {name} has no terminal")
-        if terminal is None or terminal.session_identity() != (info.sid, state["generation"]):
-            raise SessionError(f"no tui session {name}")
         spec = Spec(
             workdir=state["workdir"],
             access=Access(cwd=info.cwd),
@@ -863,9 +857,10 @@ class TuiMode(BaseMode):
         return cls(
             Prepared(spec, info),
             run,
-            terminal,
+            None,
             store,
             state["generation"],
+            liveness=liveness,
             cursor=cursor,
             replayed=(*replayed,),
         )
@@ -881,6 +876,12 @@ class TuiMode(BaseMode):
     @property
     def client_up(self) -> bool:
         return getattr(self._terminal, "up", False) is True
+
+    def _owner(self) -> InteractiveProcess:
+        """Its owner's handle; a view has none: its input and screen are its harness's."""
+        if self._terminal is None:
+            raise SessionError(f"session {self.name}: its harness is gone")
+        return self._terminal
 
     @property
     def replayed(self) -> tuple[SessionEvent | Stderr | ClientBound, ...]:
@@ -899,10 +900,10 @@ class TuiMode(BaseMode):
         self._drain()
         found = self._read()
         if not found and not self._gone:
-            state = self._terminal.state()
-            if not self._replaced(state) and state != Liveness.UNKNOWN:
-                code = self._terminal.returncode()
-                if state == Liveness.ABSENT and code is None:  # an owner's: removed unconfirmed
+            state = self._liveness()
+            if not self._replaced() and state != Liveness.UNKNOWN:
+                code = None if self._terminal is None else self._terminal.returncode()
+                if state == Liveness.ABSENT and code is None:  # removed unconfirmed, or a view's
                     code = -signal.SIGHUP
                 if code is not None:
                     self._code = code
@@ -917,11 +918,12 @@ class TuiMode(BaseMode):
                         self._active_turn = False
                     self._end()
                     return final, True
-                with contextlib.suppress(SessionError):
-                    screen = self._terminal.screen()
-                    found = self._read()
-                    if not found and not self._gone and not self._replaced(self._terminal.state()):
-                        found = self._scan(screen)
+                if self._terminal is not None:
+                    with contextlib.suppress(SessionError):
+                        screen = self._terminal.screen()
+                        found = self._read()
+                        if not found and not self._gone:
+                            found = self._scan(screen)
         self._open()
         deadline = time.monotonic() + timeout
         while not found and not self._gone and (left := deadline - time.monotonic()) > 0:
@@ -931,7 +933,7 @@ class TuiMode(BaseMode):
         return found, self._gone
 
     def _drain(self) -> None:
-        if not self._owned:
+        if self._terminal is None:
             return
         for message in self._terminal.read(0):  # its exit code: the handle's returncode()
             if isinstance(message, WorkerHook) and not self._hook_logged:
@@ -952,11 +954,12 @@ class TuiMode(BaseMode):
         if self._held or self._active_turn or self._launching or now < self._checked + POLL_SCREEN:
             return
         self._checked = now
+        terminal = self._owner()
         try:
-            if self._shown(self._terminal.screen()):
+            if self._shown(terminal.screen()):
                 return
-            # may be cached until alive()
-            if not self._terminal.alive() or self._shown(self._terminal.screen()):
+            # may be cached until its liveness is asked
+            if terminal.state() != Liveness.LIVE or self._shown(terminal.screen()):
                 return
         except NotShowable:
             pass
@@ -990,7 +993,7 @@ class TuiMode(BaseMode):
             return []
         records, end = self._store.stamped(self._cursor)
         observed = self.run.observe()
-        if end == self._cursor and not observed or self._replaced(self._terminal.state()):
+        if end == self._cursor and not observed or self._replaced():
             return []
         self._cursor = end
         if self._opening is not None and any(label == self._opening[0] for label, *_ in records):
@@ -1007,19 +1010,12 @@ class TuiMode(BaseMode):
         self._track(found)
         return found
 
-    def _replaced(self, state: Liveness) -> bool:
-        """Ended once another terminal holds its name or session.json is another generation's."""
+    def _replaced(self) -> bool:
+        """A view ended once session.json is gone or another generation's (its liveness saying
+        ABSENT ends it in poll).
+        """
         if self._owned:
             return False
-        if state == Liveness.ABSENT:
-            try:
-                replacement = self._store.hosted()
-            except SessionError:
-                self._end()
-                return True
-            if replacement is not None and replacement.identity != self._terminal.identity:
-                self._end()
-                return True
         try:
             current = self._store.read()
         except SessionError:
@@ -1064,8 +1060,8 @@ class TuiMode(BaseMode):
         deadline = time.monotonic() + timeout
         while self._code is None:
             self._drain()
-            self._code = self._terminal.returncode()
-            if self._code is None and self._terminal.state() == Liveness.ABSENT:
+            self._code = None if self._terminal is None else self._terminal.returncode()
+            if self._code is None and self._liveness() == Liveness.ABSENT:
                 self._code = -signal.SIGHUP
             if self._code is None:
                 if (left := deadline - time.monotonic()) <= 0:
@@ -1075,15 +1071,13 @@ class TuiMode(BaseMode):
 
     def state(self) -> Liveness:
         self._store.check()
-        return self._terminal.state()
+        return self._liveness()
 
     def client_alive(self) -> bool:
-        """Its client runs, its terminal probed afresh: state() may reuse a probe and stays LIVE
-        while its ended client's terminal is kept.
-        """
+        """Its client runs, its worker's liveness asked afresh."""
         self._store.check()
         try:
-            return self._terminal.alive()
+            return self._liveness() == Liveness.LIVE
         except SessionError:  # it cannot tell
             return False
 
@@ -1094,9 +1088,10 @@ class TuiMode(BaseMode):
 
     def _deliver(self, actions: Sequence[Paste | Key], *, prompted: bool) -> None:
         """Failing after the first action: Unanswered. prompted: marks it begun, then submitted."""
+        terminal = self._owner()
         for index, action in enumerate(actions):
             try:
-                self._terminal.send(action)
+                terminal.send(action)
             except SessionError as error:
                 if index == 0:
                     raise
@@ -1111,12 +1106,12 @@ class TuiMode(BaseMode):
     def press(self, keys: Sequence[KeyPress]) -> None:
         with self._store.sending():
             self._running()
-            self._terminal.press(keys)
+            self._owner().press(keys)
 
     def screen(self, lines: int | None = None) -> str:
         self._running()
         try:
-            return self._terminal.screen(lines)
+            return self._owner().screen(lines)
         except NotShowable:
             raise SessionError(f"host {self.host.name} cannot show") from None
 
@@ -1125,16 +1120,17 @@ class TuiMode(BaseMode):
         return isinstance(self._terminal, ManagedProcess) and self._terminal.redisplay()
 
     def _running(self) -> None:
+        """A view has no input or screen of its own; an owner's worker must run."""
         self._store.check()
-        if not self._terminal.alive():
+        if self._owner().state() != Liveness.LIVE:
             raise SessionError(f"tui session {self.name} is not running")
 
     def close(self) -> bool:
-        return self._store.close(self._terminal if self._owned else None, self._generation)
+        return self._store.close(self._terminal, self._generation)
 
     def stop(self) -> None:
         """Once, unless it raises; then ends (returncode: the code seen, else -SIGHUP)."""
         if self._live:
-            self._store.stop(self._terminal, owned=self._owned, generation=self._generation)
+            self._store.stop(self._terminal, generation=self._generation)
             self._live = False
         self._end()

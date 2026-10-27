@@ -514,7 +514,7 @@ class Worker:
         began, turned = self.clock(), False  # turned: its opening follows that turn
         for event in session.events():
             if isinstance(event, Exited):
-                raise SessionError(self._died(event.returncode))
+                raise SessionError(self._died(session, event.returncode))
             turned = turned or isinstance(event, TurnStarted)
             if isinstance(event, Blocked):
                 self._waits(session, event.reason, turned=turned)
@@ -544,11 +544,11 @@ class Worker:
                 f"session {name}: color not set: {reason}; {COMMAND} send {name} {_quoted(text)}"
             )
 
-    def _died(self, code: int) -> str:
+    def _died(self, session: Session, code: int) -> str:
+        """Its last screen lines, read through its view, when its harness can still show them."""
         head = f"{self.state.name}: {self.state.client} exited {code} at once"
-        host = self.session_cls.host(self.state.host)
         try:
-            screen = host.attach(self.state.name).screen(SCREEN_LINES)
+            screen = session.screen(SCREEN_LINES)
         except SessionError:
             return head
         lines = [line for line in screen.splitlines() if line.strip()][-REPORT_LINES:]

@@ -215,38 +215,32 @@ class CapacityRows(Case):
         host = self.host([["a", "b"]], ["b", "a"])
         self.assertEqual([row.name for row in host._capacity_rows()], ["b", "a"])
 
-    def test_default_rows_tolerate_a_session_ending_before_attach_or_row(self):
-        for boundary in ("attach", "row"):
-            with self.subTest(boundary=boundary):
-                host = MinimalHost("m")
-                host.list = mock.Mock(
-                    side_effect=[["ended", "live"], ["ended", "live"], ["live"], ["live"]]
-                )
-                live = SessionRow(
-                    "live", None, "c", StatusState.WORKING, None, None, None, own=False
-                )
-                process = mock.Mock()
-                process.row.return_value = live
-                ended = mock.Mock()
-                ended.row.side_effect = SessionError("ended")
-                host.attach = mock.Mock(
-                    side_effect=[SessionError("ended") if boundary == "attach" else ended, process]
-                )
-                self.assertEqual(host._capacity_rows(), [live])
-
-    def test_default_rows_preserve_read_failures_for_sessions_still_listed(self):
+    def test_default_rows_are_each_listed_names_worker_state_and_activity(self):
+        """sid, client and display from its session.json (none: None), state from its activity
+        of that generation (none, or another generation's: working).
+        """
+        root = os.path.join(self.home, ".ensemble", "tui")
+        for name, state, word in (
+            ("w1", {"sid": "s1", "client": "c", "display": "mgr", "generation": "g1"}, "g1 done"),
+            ("w2", {"sid": "s2", "client": "c", "generation": "g2"}, "g1 blocked"),
+            ("w3", None, None),
+        ):
+            if state is not None:
+                os.makedirs(os.path.join(root, name))
+                with open(os.path.join(root, name, "session.json"), "w") as f:
+                    json.dump(state, f)
+                with open(os.path.join(root, name, "activity"), "w") as f:
+                    f.write(word + "\n")
         host = MinimalHost("m")
-        host.list = mock.Mock(return_value=["live"])
-        host.attach = mock.Mock(side_effect=SessionError("cannot read"))
-        with self.assertRaisesRegex(SessionError, "cannot read"):
-            host._capacity_rows()
-
-    def test_default_rows_fail_closed_when_absence_cannot_be_confirmed(self):
-        host = MinimalHost("m")
-        host.list = mock.Mock(side_effect=[["live"], ["live"], SessionError("cannot list")])
-        host.attach = mock.Mock(side_effect=SessionError("cannot read"))
-        with self.assertRaisesRegex(SessionError, "cannot list"):
-            host._capacity_rows()
+        host.list = mock.Mock(return_value=["w1", "w2", "w3"])
+        self.assertEqual(
+            host._capacity_rows(),
+            [
+                SessionRow("w1", "s1", "c", StatusState.DONE, "mgr", None, None, own=False),
+                SessionRow("w2", "s2", "c", StatusState.WORKING, None, None, None, own=False),
+                SessionRow("w3", None, None, StatusState.WORKING, None, None, None, own=False),
+            ],
+        )
 
 
 def table(base: str = TWO, text: str = ""):
