@@ -480,9 +480,7 @@ class HostedSession(Session):
         host: str | None,
         idle_timeout: float | None,
     ) -> Session:
-        """Its view once a new harness runs it; else the start error or stop, nothing left;
-        SIGNALS held across Popen, so a stop never loses its child.
-        """
+        """Its view once a new harness runs it; else the start error or stop, nothing left."""
         assert spec.client is not None and spec.sid is not None
         roots = cls._roots(spec.client)
         request = cls.harness_request(spec, display=display, host=host, roots=roots)
@@ -518,14 +516,14 @@ class HostedSession(Session):
                     tie.close()
                 shutil.rmtree(channel.directory, ignore_errors=True)  # request.json holds spec.env
             finally:
-                signal.pthread_sigmask(signal.SIG_SETMASK, held)  # a held stop is raised here
+                signal.pthread_sigmask(signal.SIG_SETMASK, held)
             if isinstance(error, TypeError | ValueError):
                 raise ConfigError(f"session harness request: not JSON: {error}") from None
             if isinstance(error, OSError):
                 raise SessionError(f"session harness: {error.strerror or error}") from None
             raise
         try:  # an interrupt too: no view would close it
-            signal.pthread_sigmask(signal.SIG_SETMASK, held)  # a stop held across Popen lands here
+            signal.pthread_sigmask(signal.SIG_SETMASK, held)  # a stop held over Popen lands here
             if tie is not None:
                 tie.handed()
             deadline = time.monotonic() + START_WAIT
