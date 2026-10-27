@@ -1,5 +1,5 @@
-"""TmuxCli's tmux verbs against a recorded tmux: status, process identity, kill, send, paste, keys,
-read, options and pane targets; listing row validation, shown-client precedence and diagnostic
+"""TmuxCli's tmux verbs against a recorded tmux: status, process identity, kill, keys, press, read,
+options and pane targets; listing row validation, shown-client precedence and diagnostic
 tails.
 """
 
@@ -12,14 +12,13 @@ import tempfile
 import unittest
 import unittest.mock
 
-from ensemble.session import ConfigError, Launch
+from ensemble.session import ConfigError
 from ensemble.session.engine import tmux_cli
 from ensemble.session.engine.tmux_cli import (
     EXEC,
     HANDOVER_TIMEOUT,
     POLL,
     TERMINAL_KEYS,
-    TmuxCli,
 )
 from ensemble.session.engine.types import PaneStatus
 from tests.session.case import Case
@@ -54,7 +53,7 @@ from tests.session.tmux_fixtures import (
 
 
 def out_of_mode(target):
-    """The copy-mode -q a paste or keys call chains first."""
+    """The copy-mode -q a keys or press call chains first."""
     return ["tmux", "copy-mode", "-q", "-t", target, ";"]
 
 
@@ -230,15 +229,6 @@ class KeysTest(Case):
         with self.assertRaisesRegex(tmux_cli.TuiError, r"^tmux: boom$"):
             tmux_cli.TmuxCli(FakeTmux(fail={"copy-mode"})).keys("s", "Enter")
 
-    def test_set_option_sets_a_user_option_of_the_targets_session(self):
-        fake = FakeTmux()
-        self.assertIsNone(tmux_cli.TmuxCli(fake).set_option("%7", "@record", '{"v":1}'))
-        self.assertEqual(fake.calls, [["tmux", "set-option", "-t", "%7", "@record", '{"v":1}']])
-        for name, value in (("record", "x"), ("@record", "x;"), ("@record", "a\nb")):
-            with self.subTest(name=name, value=value), self.assertRaises(tmux_cli.TuiError):
-                tmux_cli.TmuxCli(fake).set_option("%7", name, value)
-        self.assertEqual(len(fake.calls), 1)
-
     def test_press_names_the_keys_after_a_double_dash(self):
         fake = FakeTmux()
         self.assertIsNone(tmux_cli.TmuxCli(fake).press("s", "-", "\\;", "C-c"))
@@ -318,14 +308,14 @@ class OptionTest(Case):
 
 
 class PaneTargetTest(Case):
-    """status, kill, paste, keys, option and read take a pane id (%N) as their target."""
+    """status, kill, keys, press, option and read take a pane id (%N) as their target."""
 
     def calls(self, target, fake):
         return [
             lambda: tmux_cli.TmuxCli(fake).status(target),
             lambda: tmux_cli.TmuxCli(fake).kill(target),
-            lambda: tmux_cli.TmuxCli(fake).paste(target, "hi"),
             lambda: tmux_cli.TmuxCli(fake).keys(target, "Enter"),
+            lambda: tmux_cli.TmuxCli(fake).press(target, "Enter"),
             lambda: tmux_cli.TmuxCli(fake).option(target, "@sid"),
             lambda: tmux_cli.TmuxCli(fake).read(target),
         ]
@@ -334,15 +324,13 @@ class PaneTargetTest(Case):
         fake = FakeTmux(pane="0  ")
         for call in self.calls("%12", fake):
             call()
-        buffer = fake.calls[2][3]
         self.assertEqual(
             fake.calls,
             [
                 ["tmux", "display-message", "-p", "-t", "%12", FORMAT],
                 ["tmux", "kill-pane", "-t", "%12"],
-                ["tmux", "load-buffer", "-b", buffer, "-"],
-                [*out_of_mode("%12"), "paste-buffer", "-p", "-r", "-d", "-b", buffer, "-t", "%12"],
                 [*out_of_mode("%12"), "send-keys", "-t", "%12", "Enter"],
+                [*out_of_mode("%12"), "send-keys", "-t", "%12", "--", "Enter"],
                 ["tmux", "show-options", "-v", "-t", "%12", "@sid"],
                 ["tmux", "capture-pane", "-p", "-J", "-t", "%12"],
             ],
@@ -1105,12 +1093,9 @@ class StartTest(StartFixture):
                 for call in (
                     lambda *, fake=fake, name=name: self.start(fake, session=name),
                     lambda *, fake=fake, name=name: tmux_cli.TmuxCli(fake).status(name),
-                    lambda *, fake=fake, name=name: TmuxCli(fake, sleep=self.sleep).detach(
-                        name, Launch(("tool",), {"PATH": self.bin}, cwd=self.cwd)
-                    ),
                     lambda *, fake=fake, name=name: tmux_cli.TmuxCli(fake).kill(name),
-                    lambda *, fake=fake, name=name: tmux_cli.TmuxCli(fake).paste(name, "x"),
                     lambda *, fake=fake, name=name: tmux_cli.TmuxCli(fake).keys(name, "Enter"),
+                    lambda *, fake=fake, name=name: tmux_cli.TmuxCli(fake).press(name, "Enter"),
                     lambda *, fake=fake, name=name: tmux_cli.TmuxCli(fake).read(name),
                     lambda *, fake=fake, name=name: tmux_cli.TmuxCli(fake).option(name, "@sid"),
                 ):

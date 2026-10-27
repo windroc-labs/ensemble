@@ -227,7 +227,6 @@ class HideTest(Base):
         self.options(sid=SID)
         self.assertIsNone(self.viewer.show("w1", self.host, command="true"))
         self.assertFalse(hidden.read("w1", SID))
-        self.tmux.set_option.assert_not_called()
 
     def test_hide_leaves_an_iterm2_or_closed_pane_and_still_marks_it_hidden(self):
         for pane, process in (("w0t0p0:ABC", PROCESS), ("%9", None), (None, PROCESS)):

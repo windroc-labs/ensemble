@@ -627,7 +627,7 @@ class CloseAllCapacityTest(HostedTuiBase):
             if name == "z-ending":
                 ended.close()
 
-        self.host.calls.attach.side_effect = ending
+        self.host.calls.process.side_effect = ending
         closed = []
 
         def control(argv, **options):

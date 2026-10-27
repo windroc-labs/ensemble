@@ -13,7 +13,6 @@ from unittest import mock
 from ensemble.session.engine.types import (
     Liveness,
     SessionError,
-    StatusState,
     WorkerHook,
 )
 from ensemble.session.harness import guard
@@ -69,7 +68,6 @@ class Base(Case):
         self.events = os.path.join(self.home, "events")
         open(self.events, "w").close()
         self.removed, self.remove_errors = [], []
-        self.record = {"generation": GEN, "sid": "sid-1", "display": None}
         self.broker = Broker()
         self.reports = []
 
@@ -118,6 +116,11 @@ class Base(Case):
                 return [json.loads(line)["reason"] for line in f]
         except FileNotFoundError:
             return []
+
+    def ended(self, channel):
+        """Its container's removal confirmed within WAIT: the worker ABSENT."""
+        with channel.condition:
+            return channel.condition.wait_for(lambda: channel.state() is Liveness.ABSENT, WAIT)
 
     def owner_open(self):
         try:
@@ -170,7 +173,7 @@ class HookFrameTest(Base):
                 channel.pump()
                 self.assertIsNotNone(channel.failure)
                 self.assertEqual(channel.proc.stdout.read.call_count, 3)
-                self.assertTrue(channel.wait_exit(5))
+                self.assertTrue(self.ended(channel))
                 self.assertEqual(channel.returncode(), None)
 
     def test_the_rejected_log_stops_at_its_cap(self):
@@ -340,7 +343,7 @@ class HookTest(Base):
         channel.accept(b"h", hook(delivery="a" * 32))
         channel.accept(b"h", hook(delivery="b" * 32))
         channel.fail("guard channel ended without confirmed worker exit")
-        self.assertTrue(channel.wait_exit(5))
+        self.assertTrue(self.ended(channel))
         self.assertEqual(hooks.calls, [])
         self.assertEqual(self.rejected(), ["hook", "hook"])
         self.assertFalse(channel._hooks_pending())
@@ -360,7 +363,7 @@ class HookTest(Base):
         channel.accept(b"h", hook(delivery="a" * 32))
         channel.accept(b"x", b'{"returncode":0}')
         channel.begin()
-        self.assertTrue(channel.wait_exit(5))
+        self.assertTrue(self.ended(channel))
         self.assertEqual(hooks.calls, [("Stop", {"sid": "s"}, "a" * 32)])
         self.assertEqual(self.rejected(), [])
 
@@ -403,7 +406,7 @@ class HookTest(Base):
         self.assertIsNone(channel.returncode())
         gate.set()
         self.deliver(channel)
-        self.assertTrue(channel.wait_exit(5))
+        self.assertTrue(self.ended(channel))
         self.assertEqual([label for label, _, _ in hooks.calls], ["H0", "H1", "H2"])
         self.assertEqual(channel.returncode(), 4)
         self.assertTrue(hooks.stopped)
@@ -454,7 +457,7 @@ class MaintenanceTest(Base):
         ):
             self.assertEqual(channel.maintenance.tick(NOW), NOW + 30)
             self.assertIsNone(channel.maintenance.tick(NOW + 30))
-            self.assertTrue(channel.wait_exit(5))
+            self.assertTrue(self.ended(channel))
         self.assertEqual(channel.state(), Liveness.ABSENT)
         self.assertEqual(
             self.reports,
@@ -478,20 +481,20 @@ class EndTest(Base):
         self.assertIsNone(channel.returncode())
         self.assertEqual(channel.state(), Liveness.LIVE)
         gate.set()
-        self.assertTrue(channel.wait_exit(5))
+        self.assertTrue(self.ended(channel))
         self.assertEqual((channel.state(), channel.returncode()), (Liveness.ABSENT, 5))
 
     def test_a_report_after_removal_is_dropped(self):
         channel = self.make()
         channel.fail("broken")
-        self.assertTrue(channel.wait_exit(5))
+        self.assertTrue(self.ended(channel))
         channel._report("credential_maintenance_failed", "transport")
         self.assertEqual(self.reports, [])
 
     def test_exit_frame_then_removal_then_absent(self):
         channel = self.make()
         channel.accept(b"x", b'{"returncode":3}')
-        self.assertTrue(channel.wait_exit(5))
+        self.assertTrue(self.ended(channel))
         self.assertEqual(
             (channel.state(), channel.returncode(), channel.read(0)), (Liveness.ABSENT, 3, [])
         )
@@ -517,7 +520,7 @@ class EndTest(Base):
         self.assertEqual(channel.state(), Liveness.UNKNOWN)
         self.assertTrue(self.owner_open())
         gate.set()
-        self.assertTrue(channel.wait_exit(5))
+        self.assertTrue(self.ended(channel))
         self.assertEqual((channel.state(), channel.returncode()), (Liveness.ABSENT, None))
 
     def test_a_release_still_writing_at_its_end_keeps_a_clean_exit(self):
@@ -539,7 +542,7 @@ class EndTest(Base):
             channel.release_hook()
             self.assertTrue(writing.wait(WAIT))
             channel.accept(b"x", b'{"returncode":0}')
-            self.assertTrue(channel.wait_exit(WAIT))
+            self.assertTrue(self.ended(channel))
             assert channel.releaser is not None
             channel.releaser.join(WAIT)
         self.assertIsNone(channel.failure)
@@ -574,33 +577,3 @@ class EndTest(Base):
         channel.close()
         self.assertEqual(channel.state(), Liveness.ABSENT)
         self.assertFalse(self.owner_open())
-
-
-class TerminalTest(Base):
-    def test_record_identity_and_activity(self):
-        channel = self.make()
-        self.assertEqual(channel.session_identity(), ("sid-1", GEN))
-        self.assertIsNone(channel.activity())
-        folder = os.path.join(self.home, ".ensemble", "tui", "worker_1")
-        os.makedirs(folder, 0o700)
-        with open(os.path.join(folder, "activity"), "w") as f:
-            f.write(f"{GEN} done\n")
-        self.assertEqual(channel.activity(), StatusState.DONE)
-        self.record["generation"] = "other"
-        self.assertEqual(channel.session_identity(), (None, None))
-
-    def test_guarded_view_reaches_only_record_and_liveness(self):
-        view = worker.GuardedView(
-            "worker_1",
-            GEN,
-            state=self.state,
-            load=lambda: self.record,
-            liveness=lambda: Liveness.LIVE,
-            remove=self.remove,
-        )
-        self.assertEqual((view.state(), view.session_identity()), (Liveness.LIVE, ("sid-1", GEN)))
-        for call in (lambda: view.send(mock.Mock()), lambda: view.press(()), view.screen):
-            with self.assertRaisesRegex(SessionError, "owned by its harness"):
-                call()
-        view.close()
-        self.assertEqual(self.removed, [GEN])

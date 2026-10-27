@@ -33,7 +33,6 @@ from ensemble.session.engine.types import (
     Launch,
     Liveness,
     Mode,
-    Paste,
     Permission,
     SessionBusy,
     SessionError,
@@ -616,15 +615,6 @@ class StartBase(Base):
         """The env the last guard exec passed into its container."""
         argv, kw, _ = self.execs[-1]
         return {argv[i + 1]: kw["env"][argv[i + 1]] for i, arg in enumerate(argv) if arg == "--env"}
-
-    def start_terminal(self):
-        return self.host.terminal(
-            "w",
-            self.launch,
-            display="lead/below",
-            events=os.path.join(self.home, "events"),
-            metadata=self.METADATA,
-        )
 
     def owner_held(self):
         os.makedirs(self.state, exist_ok=True)
@@ -1463,10 +1453,6 @@ class StartTest(StartBase):
         with self.assertRaisesRegex(SessionError, "no client home"):
             self.start(home_dir="")
 
-    def test_detach_is_refused(self):
-        with self.assertRaisesRegex(SessionError, "^detach w: runs only under a session harness$"):
-            self.host.detach("w", self.launch)
-
 
 HOST_SOURCE = "beta@owner/market#" + "b" * 40
 ENV_SOURCE = "gamma@owner/market#" + "e" * 40
@@ -1900,7 +1886,7 @@ class ReclaimTest(Base):
         return path
 
     def test_a_volume_whose_workspace_is_gone_is_removed_and_others_are_left(self):
-        self.host.reclaim()
+        self.host.reclaim_volumes()
         self.assertEqual(self.removed(), [self.GONE])
         self.assertIn(
             [
@@ -1921,7 +1907,7 @@ class ReclaimTest(Base):
 
     def test_each_reclaim_checks_all_eligible_volumes(self):
         self.docker.volumes.append(f"ensemble-ws-gone\t{self.account}/gone/w")
-        self.host.reclaim()
+        self.host.reclaim_volumes()
         self.assertEqual(self.removed(), [self.GONE, "ensemble-ws-gone"])
 
     def test_a_kept_volume_does_not_block_later_volumes(self):
@@ -1939,7 +1925,7 @@ class ReclaimTest(Base):
 
                 self.broker.workspace_rm = remove
                 with self.assertLogs("session", "WARNING"):
-                    self.host.reclaim()
+                    self.host.reclaim_volumes()
                 self.assertEqual(self.removed(), [self.GONE, "ensemble-ws-gone"])
                 os.unlink(os.path.join(self.kept, self.GONE))
 
@@ -1949,12 +1935,12 @@ class ReclaimTest(Base):
             "workspace_rm": BrokerError(14, "workspace_failed", "check failed", "not_needed", None)
         }
         with self.assertLogs("session", "WARNING") as logs:
-            self.host.reclaim()
+            self.host.reclaim_volumes()
         self.assertEqual(self.removed(), [self.GONE, "ensemble-ws-gone"])
         self.assertEqual(len(logs.output), 2)
         self.order.clear()
         with self.assertNoLogs("session", "WARNING"):
-            self.host.reclaim()
+            self.host.reclaim_volumes()
         self.assertEqual(self.removed(), [])
 
     def test_background_reclaim_detaches_without_listing_or_waiting(self):
@@ -2002,7 +1988,7 @@ class ReclaimTest(Base):
             "workspace_rm": BrokerError(12, "workspace_dirty", message, "not_needed", None)
         }
         with self.assertLogs("session", "WARNING") as logs:
-            self.host.reclaim()
+            self.host.reclaim_volumes()
         self.assertEqual(
             logs.output, [f"WARNING:session:docker workspace {self.GONE} kept: {message}"]
         )
@@ -2012,7 +1998,7 @@ class ReclaimTest(Base):
         os.utime(marker, (old, old))
         self.order.clear()
         with self.assertNoLogs("session", "WARNING"):
-            self.host.reclaim()
+            self.host.reclaim_volumes()
         self.assertEqual(self.removed(), [])
 
     def test_a_failing_check_is_retried_only_after_a_day(self):
@@ -2024,7 +2010,7 @@ class ReclaimTest(Base):
                 self.broker.failing = {"workspace_rm": error}
                 self.order.clear()
                 with self.assertLogs("session", "WARNING") as logs:
-                    self.host.reclaim()
+                    self.host.reclaim_volumes()
                 self.assertEqual(self.removed(), [self.GONE])
                 self.assertIn(f"docker workspace {self.GONE} kept: ", logs.output[0])
                 marker = os.path.join(self.kept, self.GONE)
@@ -2032,11 +2018,11 @@ class ReclaimTest(Base):
                     self.assertEqual(f.read(), "failed")
                 self.order.clear()
                 with self.assertNoLogs("session", "WARNING"):
-                    self.host.reclaim()
+                    self.host.reclaim_volumes()
                 self.assertEqual(self.removed(), [])
                 self.marker(self.GONE, "failed", age=KEPT_RETRY + 1)
                 self.broker.failing = {}
-                self.host.reclaim()
+                self.host.reclaim_volumes()
                 self.assertEqual(self.removed(), [self.GONE])
                 self.assertFalse(os.path.exists(marker))
 
@@ -2044,7 +2030,7 @@ class ReclaimTest(Base):
         for name in ("ensemble-run-old-0123abcd", "ensemble-ws-here"):
             self.marker(name)
         self.docker.volumes = self.docker.volumes[1:]
-        self.host.reclaim()
+        self.host.reclaim_volumes()
         self.assertEqual(sorted(os.listdir(self.kept)), [".lock", "ensemble-ws-here"])
         self.assertEqual(self.removed(), [])
 
@@ -2053,33 +2039,33 @@ class ReclaimTest(Base):
         busy = os.open(os.path.join(self.kept, ".lock"), os.O_RDWR | os.O_CREAT)
         self.addCleanup(os.close, busy)
         fcntl.flock(busy, fcntl.LOCK_EX)
-        self.host.reclaim()
+        self.host.reclaim_volumes()
         self.assertEqual(self.removed(), [])
         fcntl.flock(busy, fcntl.LOCK_UN)
         os.remove(self.ep.removeprefix("unix://"))
         self.order.clear()
-        self.host.reclaim()
+        self.host.reclaim_volumes()
         self.assertEqual(self.order, [])
 
     def test_without_the_daemon_or_the_cli_a_kept_marker_stays(self):
         marker = self.marker(self.GONE)
         os.remove(self.ep.removeprefix("unix://"))
-        self.host.reclaim()
+        self.host.reclaim_volumes()
         open(self.ep.removeprefix("unix://"), "w").close()
         self.host.run = mock.Mock(side_effect=FileNotFoundError(2, "No such file", DOCKER))
-        self.host.reclaim()
+        self.host.reclaim_volumes()
         self.assertTrue(os.path.exists(marker))
         self.assertEqual(self.removed(), [])
 
     def test_a_failed_listing_only_warns(self):
         self.host.run = mock.Mock(return_value=done(1, "", "Cannot connect"))
         with self.assertLogs("session", "WARNING") as logs:
-            self.host.reclaim()
+            self.host.reclaim_volumes()
         self.assertIn("docker reclaim: docker volume: Cannot connect", logs.output[0])
 
     def test_no_orphan_creates_no_file(self):
         self.docker.volumes = self.docker.volumes[1:]
-        self.host.reclaim()
+        self.host.reclaim_volumes()
         self.assertFalse(os.path.exists(self.kept))
 
 
@@ -2122,7 +2108,7 @@ class ListTest(Base):
         )
         self.assertEqual((rows["v"].sid, rows["v"].client), (None, "other"))
 
-    def test_only_guarded_rows_are_listed_or_attached(self):
+    def test_only_guarded_rows_are_listed_or_attachable(self):
         self.listed("w", "v", "o", "h")
         self.guarded_record()
         for name, found in (
@@ -2136,11 +2122,11 @@ class ListTest(Base):
         self.assertEqual([row.name for row in self.host.rows()], ["w"])
         self.assertEqual([row.name for row in self.host._capacity_rows()], ["w"])
         for name in ("v", "o", "h"):
-            with self.subTest(name=name):
-                with self.assertRaisesRegex(SessionError, f"^no docker session {name}$"):
-                    self.host.attach(name)
-                with self.assertRaisesRegex(SessionError, f"^no docker session {name}$"):
-                    self.host.attach_target(name)
+            with (
+                self.subTest(name=name),
+                self.assertRaisesRegex(SessionError, f"^no docker session {name}$"),
+            ):
+                self.host.attach_target(name)
 
     def test_docker_ps_failure_raises(self):
         for run in (
@@ -2152,7 +2138,7 @@ class ListTest(Base):
                 with self.assertRaisesRegex(SessionError, "docker ps"):
                     self.host.list()
 
-    def test_a_docker_ps_that_does_not_answer_leaves_attach_unanswered(self):
+    def test_a_docker_ps_that_does_not_answer_leaves_attach_target_unanswered(self):
         self.listed("w")
         for run in (
             mock.Mock(side_effect=TimeoutExpired("docker", RUN_TIMEOUT)),
@@ -2162,7 +2148,7 @@ class ListTest(Base):
             with self.subTest(run=run):
                 self.host.run = run
                 with self.assertRaisesRegex(Unanswered, "^docker ps: "):
-                    self.host.attach("w")
+                    self.host.attach_target("w")
                 with self.assertRaisesRegex(Unanswered, "^docker ps: "):
                     self.host.list()
 
@@ -2183,16 +2169,14 @@ class ListTest(Base):
         self.host.run = self.docker
         self.assertEqual((self.host.list(), self.host.rows(), self.order), ([], [], []))
 
-    def test_attach_of_an_unknown_or_unguarded_row_is_no_session(self):
+    def test_attach_target_of_an_unknown_or_unguarded_row_is_no_session(self):
         for found in ({}, {"mode": "guard"}, {"kind": "headless"}, {"kind": "tui"}):
             with self.subTest(found=found):
                 self.record(**found)
                 self.listed(*(() if found == {"kind": "tui"} else ("w",)))
                 with self.assertRaisesRegex(SessionError, "^no docker session w$") as caught:
-                    self.host.attach("w")
-                self.assertNotIsInstance(caught.exception, Unanswered)
-                with self.assertRaisesRegex(SessionError, "^no docker session w$"):
                     self.host.attach_target("w")
+                self.assertNotIsInstance(caught.exception, Unanswered)
         self.assertEqual(self.docker.execs(), [])
 
 
@@ -2241,11 +2225,12 @@ class GuardedStartTest(StartBase):
         self.assertEqual(self.host_record()["kind"], "tui")
         self.assertNotIn("mode", self.host_record())
         self.assertFalse(_free(os.path.join(self.state, "guard.lock")))
-        self.assertEqual(handle.session_identity(), ("s1", GEN))
+        self.assertEqual((self.host_record()["sid"], handle.generation), ("s1", GEN))
         handle.close()
         self.assertIn(CONTAINER, self.broker.closed)
         self.assertTrue(_free(os.path.join(self.state, "guard.lock")))
         self.assertEqual(handle.state(), Liveness.ABSENT)
+        self.assertEqual(handle.returncode(), 0)
 
     def test_an_owned_start_in_an_environment_builds_and_locks_it(self):
         self.start(environment=carried(ENVIRONMENT))
@@ -2254,14 +2239,6 @@ class GuardedStartTest(StartBase):
             manifest = json.load(f)
         self.assertEqual((manifest["lock"], manifest["lock_owner"]), ("dummy-lock", "w"))
         self.assertEqual(self.host_record()["environment"], ENVIRONMENT.persisted())
-
-    def test_terminal_runs_only_under_a_harness(self):
-        with self.assertRaisesRegex(
-            SessionError, "^docker session w: terminal: runs only under a session harness$"
-        ):
-            self.start_terminal()
-        self.assertEqual((self.order, self.execs), ([], []))
-        self.popen_mock.assert_not_called()
 
     def test_the_terminal_path_relies_on_the_tui_lock_its_store_holds(self):
         lock = tui_lock("w")
@@ -2428,19 +2405,17 @@ class GuardedRowTest(StartBase):
         self.assertEqual([row.state for row in self.host._capacity_rows()], [StatusState.WORKING])
         self.assertEqual(self.docker.execs(), [])
 
-    def test_attach_is_the_held_handle_here_and_a_view_elsewhere(self):
+    def test_a_held_worker_is_live_elsewhere_and_released_only_by_its_owner(self):
         handle = self.start()
         self.listed("w")
-        self.assertIs(self.host.attach("w"), handle)
         other = DockerHost("docker", {"docker": DOCKER}, run=self.docker, broker=self.broker)
-        view = other.attach("w")
-        self.assertIsInstance(view, worker_module.GuardedView)
-        self.assertEqual(view.state(), Liveness.LIVE)
-        with self.assertRaisesRegex(SessionError, "owned by its harness"):
-            view.send(Paste("x"))
-        with self.assertRaisesRegex(SessionError, "owned by its harness"):
-            view.close()
+        self.assertEqual(other.worker_liveness("w", GEN), Liveness.LIVE)
+        with self.assertRaisesRegex(SessionError, r"\Adocker session w: owned by its harness\Z"):
+            other._release("w", GEN)
+        self.assertEqual(self.broker.closed, [])
         self.assertFalse(any(isinstance(c, tuple) and c[0] == "popen" for c in self.order))
+        handle.close()
+        self.assertEqual(self.broker.closed, [CONTAINER])
 
     def test_sweep_reclaims_a_guarded_container_only_with_a_free_owner_lock(self):
         self.listed("w")
@@ -2539,7 +2514,7 @@ class HeadlessWorkerTest(StartBase):
         self.addCleanup(self.close_quietly, handle)
         return handle
 
-    def test_a_headless_worker_records_its_kind_and_is_never_listed_or_attached(self):
+    def test_a_headless_worker_records_its_kind_and_is_never_listed_or_attachable(self):
         handle = self.headless()
         [(argv, _, _)] = self.execs
         self.assertNotIn("--terminal", argv)
@@ -2549,8 +2524,6 @@ class HeadlessWorkerTest(StartBase):
         self.assertEqual(self.host.list(), [])
         self.assertEqual(self.host.rows(), [])
         self.assertEqual(self.host._capacity_rows(), [])
-        with self.assertRaisesRegex(SessionError, "^no docker session w$"):
-            self.host.attach("w")
         with self.assertRaisesRegex(SessionError, "^no docker session w$"):
             self.host.attach_target("w")
         handle.close()
@@ -2605,5 +2578,6 @@ class HeadlessWorkerTest(StartBase):
             logs.output, [f"WARNING:session:docker session w: client_auth_expired {reason}"]
         )
         self.assertEqual(self.broker.closed, [CONTAINER])
-        self.assertTrue(handle.wait_exit(5))
-        self.assertEqual(handle.state(), Liveness.ABSENT)
+        handle.close()
+        self.assertEqual(self.broker.closed, [CONTAINER])
+        self.assertEqual((handle.state(), handle.returncode()), (Liveness.ABSENT, 0))

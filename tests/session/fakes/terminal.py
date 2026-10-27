@@ -122,12 +122,11 @@ class ScreenTerminal(MemoryTerminal):
 class MemoryHost(Host):
     terminal_class = MemoryTerminal
 
-    def __init__(self, name="memory", *, hook=None):
+    def __init__(self, name="memory"):
         super().__init__(name)
         self.calls = mock.Mock()
         self.processes = {}
         self.serial = 0
-        self.hook = hook
         self.calls.list.return_value = None
         self.calls.worker_liveness.return_value = Liveness.ABSENT
 
@@ -145,21 +144,6 @@ class MemoryHost(Host):
     def validate(self, name, launch: Launch):
         self.calls.validate(name, launch)
         super().validate(name, launch)
-
-    def hook_callback(self, name, metadata):
-        self.calls.hook_callback(name, metadata)
-        return self.hook
-
-    def terminal(
-        self, name, launch: Launch, *, display=None, events=None, record=None, metadata=None
-    ):
-        self.calls.terminal(
-            name, launch, display=display, events=events, record=record, metadata=metadata
-        )
-        if events:
-            fd = os.open(events, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-            os.close(fd)
-        return self.create(name, receipt=record, metadata=metadata, display=display)
 
     def worker(self, name, launch: Launch, *, terminal, display=None, events=None, metadata=None):
         """A managed worker: one MemoryTerminal is both its owner handle and its display."""
@@ -188,14 +172,9 @@ class MemoryHost(Host):
         if process is not None and process.session_identity()[1] == generation:
             process.close()
 
-    def detach(self, name, launch: Launch, *, display=None, events=None, record=None):
-        self.calls.detach(name, launch, display=display, events=events, record=record)
-        return self.create(
-            name, sid=None if record is None else record.sid, receipt=record, display=display
-        )
-
-    def attach(self, name):
-        self.calls.attach(name)
+    def process(self, name):
+        """Its terminal of `name` (calls.process first: a test's race), else SessionError."""
+        self.calls.process(name)
         if name not in self.processes:
             raise SessionError(f"no {self.name} session {name}")
         return self.processes[name]
@@ -211,7 +190,7 @@ class MemoryHost(Host):
         rows = []
         for name in self.list():
             try:
-                rows.append(self.attach(name).row())
+                rows.append(self.process(name).row())
             except SessionError:
                 if name in self.list():
                     raise

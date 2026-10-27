@@ -15,7 +15,6 @@ from ensemble.session.engine.types import (
     PaneStatus,
     SessionBusy,
     SessionError,
-    StatusState,
     Unanswered,
 )
 from ensemble.session.harness import guard
@@ -122,8 +121,6 @@ class ManagedTest(Case):
         self.assertEqual(options["env"]["ENSEMBLE_GUARD_LEASE_FD"], str(options["pass_fds"][0]))
         self.assertIn("--hook-socket", spawn.call_args.args[0])
         self.assertNotIn("--display-grace", spawn.call_args.args[0])
-        self.assertIsNone(channel.record())
-        self.assertIsNone(channel.display())
 
     def test_terminal_worker_guard_awaits_the_display_it_starts(self):
         """tmux starts the guard's display at launch, so its guard keeps the display grace."""
@@ -463,8 +460,7 @@ class OneShotTest(Case):
             "x", "a" * 32, mock.Mock(), terminal=False, tmux=None, start_reader=False
         )
         channel.close_display()
-        channel.mark(StatusState.WORKING, None)
-        self.assertEqual((channel.activity(), channel.redisplay()), (None, False))
+        self.assertFalse(channel.redisplay())
 
     def test_a_failed_close_removes_the_dir_only_once_its_guard_is_gone(self):
         for gone in (False, True):

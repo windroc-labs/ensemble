@@ -637,15 +637,12 @@ class RequestTest(Base):
 
 
 class NoProcessHost(ScreenHost):
-    """A ScreenHost whose worker a view could reach only through its harness: any attach or
-    terminal of its fails the test.
+    """A ScreenHost whose worker a view could reach only through its harness: any lookup of its
+    terminal fails the test.
     """
 
-    def attach(self, name):
-        raise AssertionError(f"Host.attach({name!r})")
-
-    def terminal(self, name, launch, **_options):
-        raise AssertionError(f"Host.terminal({name!r})")
+    def process(self, name):
+        raise AssertionError(f"MemoryHost.process({name!r})")
 
 
 class Started(HostedTuiBase):

@@ -78,9 +78,7 @@ class ManagedProcessTest(Case):
                 WorkerExit(7),
             ],
         )
-        self.assertEqual(channel.returncode(), 7)
-        self.assertFalse(channel.alive())
-        self.assertTrue(channel.wait_exit(0))
+        self.assertEqual((channel.returncode(), channel.state()), (7, Liveness.ABSENT))
 
     def test_each_hook_is_released_to_its_guard_only_after_it_was_taken(self):
         channel = self.channel()

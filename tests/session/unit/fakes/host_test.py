@@ -28,7 +28,7 @@ class FakeHostOnly(Case):
             ("w1", [], self.home),
             ("w1", good[0], os.path.join(self.home, "absent")),
         ):
-            for kind in ("detach", "terminal"):
+            for kind in ("run", "run_terminal"):
                 with (
                     self.subTest(kind=kind, name=name, argv=argv, cwd=cwd),
                     self.assertRaises(ValueError),
@@ -39,7 +39,7 @@ class FakeHostOnly(Case):
     def test_launch_rejects_malformed_argv_before_the_host_can_start(self):
         host = FakeHost("fake", {"root": "~/hosts"})
         for argv in ("python3", (sys.executable, 1)):
-            for kind in ("detach", "terminal"):
+            for kind in ("run", "run_terminal"):
                 with (
                     self.subTest(kind=kind, argv=argv),
                     self.assertRaisesRegex(

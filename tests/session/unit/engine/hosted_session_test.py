@@ -2385,7 +2385,6 @@ class AttachTest(HostedTuiBase):
         with self.assertRaises(SessionError) as caught:
             self.session.attach("w1")
         self.assertEqual(str(caught.exception), f"no tui session w1: {path}: bad cwd")
-        self.host.calls.attach.assert_not_called()
 
     def test_a_client_without_tui_or_a_registry_error_is_a_driver_error(self):
         self.started()
@@ -2398,7 +2397,6 @@ class AttachTest(HostedTuiBase):
                 self.session.attach("w1")
             self.assertEqual(str(caught.exception), message)
             self.configure_session({})
-        self.host.calls.attach.assert_not_called()
 
 
 class MultipleHostsTest(HostedTuiBase):
@@ -2468,7 +2466,7 @@ class MultipleHostsTest(HostedTuiBase):
         with self.assertRaisesRegex(SessionError, "^session fake-0f8fad5b exists$"):
             self.tui(sid=SID, events=self.events)
         self.host.calls.worker.assert_not_called()
-        self.assertIs(self.other.attach("fake-0f8fad5b"), incumbent)
+        self.assertIs(self.other.process("fake-0f8fad5b"), incumbent)
         self.assertFalse(os.path.exists(self.workdir))
         self.assertFalse(os.path.exists(self.events))
         self.assertFalse(os.path.exists(self.root))
@@ -2483,14 +2481,14 @@ class MultipleHostsTest(HostedTuiBase):
                 self.assertRaisesRegex(SessionError, f"^session {resolved} exists$"),
             ):
                 self.tui(name=name, sid=SID)
-            self.assertIs(self.other.attach(resolved), incumbent)
+            self.assertIs(self.other.process(resolved), incumbent)
         self.host.calls.worker.assert_not_called()
         self.assertFalse(os.path.exists(self.workdir))
         self.assertFalse(os.path.exists(self.root))
 
     def test_a_dead_name_on_the_selected_host_can_be_replaced(self):
         own(self, name="w1", sid=SID)  # its harness gone
-        incumbent = self.host.attach("w1")
+        incumbent = self.host.process("w1")
         incumbent.calls.alive.return_value = False
         incumbent.calls.returncode.return_value = 7
         launches_at_close = []
@@ -2498,7 +2496,7 @@ class MultipleHostsTest(HostedTuiBase):
             self.host.calls.worker.call_count
         )
         replacement = self.tui(name="w1", sid=SID)
-        current = self.host.attach("w1")
+        current = self.host.process("w1")
         self.assertIsNot(current, incumbent)
         self.assertNotEqual(incumbent.identity, current.identity)
         incumbent.calls.close.assert_called_once_with()

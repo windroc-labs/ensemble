@@ -623,7 +623,6 @@ class StartTest(Base):
 
     def nothing_hosted(self):
         self.host.calls.worker.assert_not_called()
-        self.host.calls.attach.assert_not_called()
         self.assertFalse(os.path.lexists(self.root))
         self.assertEqual(self.recorded, [])
 
@@ -975,7 +974,6 @@ class StartTest(Base):
         self.assertEqual(len(self.recorded), 1)
         self.assertNoSessionDir()
         self.assertEqual(sorted(os.listdir(self.root)), ["w1.lock", "w2"])
-        self.host.calls.attach.assert_not_called()
 
     def test_a_failed_start_keeps_a_dir_it_did_not_make(self):
         def swap(_info):

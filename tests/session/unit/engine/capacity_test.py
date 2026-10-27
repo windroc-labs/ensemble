@@ -204,7 +204,7 @@ class AdmissionTest(Case):
 
     def test_admission_succeeds_when_a_listed_session_ends_before_attach(self):
         ended = self.host.create("old", metadata={"client": "fake", "sid": "old"})
-        self.host.calls.attach.side_effect = lambda _name: ended.close()
+        self.host.calls.process.side_effect = lambda _name: ended.close()
         with self.enter():
             self.assertEqual(self.host.list(), [])
         ended.calls.close.assert_called_once_with()
