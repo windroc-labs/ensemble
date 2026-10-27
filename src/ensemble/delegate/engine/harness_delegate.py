@@ -109,11 +109,12 @@ def _loaded(payload: bytes) -> dict:
 
 
 def _live(agent: Session) -> bool:
-    """Whether a close ends a running worker (unknown counts)."""
+    """Whether a close ends a running worker (unknown counts: alive() is False for it)."""
     try:
-        return agent.alive()
+        status = agent.status()
     except Unanswered:
         return True
+    return status.alive or status.state == StatusState.UNKNOWN
 
 
 def _unknown(error: Unanswered) -> Unanswered:

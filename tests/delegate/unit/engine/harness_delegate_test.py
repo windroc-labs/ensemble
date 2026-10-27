@@ -2795,6 +2795,16 @@ class OwnedRun(HarnessCase):
         self.assertNotIn("release", self.kinds())
         self.assertNotIn(f"session {first._state.agent_name} closed (lock", self.err.getvalue())
 
+    def test_closing_a_locked_run_of_unknown_liveness_claims_release_once_it_closed(self):
+        first = self.waiting(self.work, SID)
+        first.driver.session.liveness = Liveness.UNKNOWN
+        HarnessDelegate.attach(self.work, session_cls=LockingSession).close()
+        self.assertEqual(first.driver.session.liveness, Liveness.ABSENT)
+        self.assertEqual(self.kinds().count("release"), 1)
+        self.assertIn(
+            f"session {first._state.agent_name} closed (lock dummy-lock)", self.err.getvalue()
+        )
+
     def test_a_closed_locked_run_resumes_by_taking_its_lock_again(self):
         first = self.waiting(self.work, SID)
         HarnessDelegate.attach(self.work, session_cls=LockingSession).close()
