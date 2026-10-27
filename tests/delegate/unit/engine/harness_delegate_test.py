@@ -10,10 +10,12 @@ place.
 
 import fcntl
 import io
+import itertools
 import json
 import os
 import shutil
 import signal
+import threading
 from collections.abc import Callable
 from dataclasses import asdict, replace
 from types import SimpleNamespace
@@ -24,7 +26,7 @@ from ensemble.delegate.composer import Composer, RunParams
 from ensemble.delegate.engine.config import module_roots
 from ensemble.delegate.engine.drivers import AgentDriver
 from ensemble.delegate.engine.harness_delegate import DRAIN_WAIT, HarnessDelegate
-from ensemble.delegate.engine.record import HANDLER, RunRecord
+from ensemble.delegate.engine.record import CLOSED, HANDLER, RunRecord
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import Begun, Finished, Layout, Result
 from ensemble.session import (
@@ -2565,6 +2567,43 @@ class OwnedRun(HarnessCase):
         self.assertEqual(self.sent(), ["begun"])
         self.assertTrue(view.alive())
 
+    def assert_stopped_start_left_nothing(self, view: HarnessDelegate) -> None:
+        """Its stopped ending stored and sent once, its worker closed, a resume starts again."""
+        state = self.record.read()
+        stopped = Result(129, None, "stopped: Stopped: 129")
+        self.assertEqual((state.completed, state.result), (True, stopped))
+        self.assertEqual(self.sent(), ["finished"])
+        agent = view.driver.session
+        assert agent is not None
+        self.assertFalse(agent.alive())
+        self.assertFalse(view.alive())
+        HarnessDelegate.attach(self.work, session_cls=HarnessSession).resume()
+        self.assertEqual(self.metadata()["attempt"], 2)
+
+    def test_a_stop_during_the_tui_start_stores_it_and_closes_the_worker(self):
+        view = self.owned()
+        with (
+            mock.patch.object(
+                HarnessSession, "showable", new_callable=mock.PropertyMock, side_effect=Stopped(129)
+            ),
+            self.assertRaises(Stopped),
+        ):
+            view.run()
+        self.assert_stopped_start_left_nothing(view)
+
+    def test_a_stop_before_the_start_returns_closes_the_drivers_session(self):
+        view = self.owned()
+
+        class Stopping(AgentDriver):
+            def start(self, spec, **kw):
+                super().start(spec, **kw)
+                raise Stopped(129)
+
+        view.driver = Stopping(HarnessSession, display=None)
+        with self.assertRaises(Stopped):
+            view.run()
+        self.assert_stopped_start_left_nothing(view)
+
     def test_an_opening_attempt_past_its_idle_timeout_is_given_up(self):
         Clock(self)
         view = self.owned(idle=5)
@@ -2647,9 +2686,41 @@ class OwnedRun(HarnessCase):
         with open(self.events_file, encoding="utf-8") as f:
             self.assertEqual([line.split()[-2:] for line in f], [["outcome", "error"]])
 
-    def test_a_stale_out_ending_loses_to_the_handlers_and_returns_it(self):
+    def failing_start(self, during: Callable[[], object]) -> HarnessDelegate:
+        """An owned run whose start fails after `during` ran (another writer meanwhile)."""
         view = self.owned()
-        blocker = os.path.join(self.home, "file")  # an out under a file cannot be set aside
+
+        class Racing(FailingSession):
+            @classmethod
+            def start(cls, spec, *, display=None, host=None, idle_timeout=None):
+                during()
+                return super().start(spec, display=display, host=host, idle_timeout=idle_timeout)
+
+        view.driver = AgentDriver(Racing, display=None)
+        return view
+
+    def test_a_start_failure_that_loses_returns_the_stored_result(self):
+        view = self.failing_start(lambda: self.record.stop(CLOSED, sid=SID))
+        finished = []
+        result = view.run(lambda event: finished.append(event))
+        self.assertEqual(result, CLOSED)
+        self.assertEqual(self.record.read().result, CLOSED)
+        self.assertEqual(finished, [Finished(CLOSED)])
+        self.assertEqual(self.sent(), [])
+        self.assertNotIn("result", self.kinds())
+
+    def test_a_start_failure_after_a_bind_is_stored(self):
+        view = self.failing_start(lambda: self.record.bind(1, 1))
+        result = view.run()
+        self.assertEqual(result, Result(1, None, "tui: fake spawn refused"))
+        state = self.record.read()
+        self.assertEqual((state.completed, state.result), (True, result))
+        self.assertEqual(self.sent(), ["finished"])
+
+    def stale_out(self) -> HarnessDelegate:
+        """An owned run whose earlier out cannot be set aside: an out under a file."""
+        view = self.owned()
+        blocker = os.path.join(self.home, "file")
         with open(blocker, "w", encoding="utf-8"):
             pass
         p = view._state.plan
@@ -2657,17 +2728,45 @@ class OwnedRun(HarnessCase):
             view._state, plan=replace(p, spec=replace(p.spec, out=os.path.join(blocker, "out.md")))
         )
         view._save(view._state)
-        stop = HarnessSession.stop
+        return view
+
+    def test_a_stale_out_ending_is_stored_before_its_stop(self):
+        view = self.stale_out()
+        stop, lost = HarnessSession.stop, []
 
         def handled(session):
             self.record.bind(1, 1)
-            self.record.complete(1, self.NEEDS, sid=SID)
+            lost.append(
+                self.record.complete(1, Result(129, None, "stopped: Stopped: 129"), sid=SID)
+            )
             stop(session)
 
         with mock.patch.object(HarnessSession, "stop", handled):
             result = view.run()
+        self.assertEqual(lost, [False])
+        self.assertTrue(result.error.startswith("cannot remove the stale out: "), result.error)
+        state = self.record.read()
+        self.assertEqual((state.result, state.closing), (result, True))
+        self.assertEqual(self.sent(), ["finished"])
+        self.assertEqual(self.kinds()[-2:], ["result", "end"])
+
+    def test_a_stale_out_ending_that_loses_stops_and_returns_the_stored_one(self):
+        view = self.stale_out()
+        start = HarnessSession.start.__func__
+
+        def handled(cls, spec, **kw):
+            session = start(cls, spec, **kw)
+            self.record.bind(1, 1)
+            self.record.complete(1, self.NEEDS, sid=SID)
+            return session
+
+        with mock.patch.object(HarnessSession, "start", classmethod(handled)):
+            result = view.run()
         self.assertEqual(result, self.NEEDS)
         self.assertEqual(self.record.read().result, self.NEEDS)
+        agent = view.driver.session
+        assert agent is not None
+        self.assertFalse(agent.alive())
         self.assertNotIn("result", self.kinds())
         self.assertEqual(self.sent(), [])
 
@@ -2688,6 +2787,78 @@ class OwnedRun(HarnessCase):
         agent.send = lambda _text: (_ for _ in ()).throw(SessionError("pane gone"))
         with self.assertRaisesRegex(SessionError, "pane gone"):
             again.resume(input="again")
+
+    def test_resume_input_reaches_a_live_worker_while_its_drive_winds_down(self):
+        view = self.owned()
+        _seen, on = self.at_begun(
+            lambda: (self.record.bind(1, 1), self.record.complete(1, self.NEEDS, sid=SID))
+        )
+        view.run(on)
+        agent = view.driver.session
+        with RunState(Layout(self.work)).run_lock():
+            HarnessDelegate.attach(self.work, session_cls=HarnessSession).resume(input="the answer")
+        self.assertEqual(agent.sent, ["the answer"])
+
+    def stopped_run_whose_drive_holds_the_run_lock(self) -> int:
+        """A completed owned run, its worker gone, its run lock held here: the descriptor."""
+        view = self.owned()
+        stopped = Result(129, None, "stopped: Stopped: 129")
+        _seen, on = self.at_begun(
+            lambda: (self.record.bind(1, 1), self.record.complete(1, stopped, sid=SID))
+        )
+        view.run(on)
+        view.driver.session.liveness = Liveness.ABSENT
+        fd = os.open(os.path.join(Layout(self.work).run, "delegate.run.lock"), os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return fd
+
+    def test_resume_waits_for_a_completed_runs_drive_to_return(self):
+        fd = self.stopped_run_whose_drive_holds_the_run_lock()
+        again = HarnessDelegate.attach(self.work, session_cls=HarnessSession)
+        status = again.status()
+        self.assertEqual((status.alive, status.state), (True, StatusState.WORKING))
+        self.assertFalse(again.alive())  # not alive from its Finished on
+        threading.Timer(0.3, os.close, (fd,)).start()
+        again.resume()
+        self.assertEqual(self.metadata()["attempt"], 2)
+
+    def test_resume_input_waits_for_a_drive_whose_worker_exited(self):
+        view = self.owned()
+        _seen, on = self.at_begun(
+            lambda: (self.record.bind(1, 1), self.record.complete(1, self.NEEDS, sid=SID))
+        )
+        view.run(on)
+        view.driver.session.liveness = Liveness.ABSENT
+        fd = os.open(os.path.join(Layout(self.work).run, "delegate.run.lock"), os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        threading.Timer(0.3, os.close, (fd,)).start()
+        HarnessDelegate.attach(self.work, session_cls=HarnessSession).resume(input="the answer")
+        data = self.metadata()
+        self.assertEqual((data["attempt"], data["spec"]["input"]), (2, "the answer"))
+
+    def test_status_and_resume_agree_on_a_drive_that_never_returns(self):
+        fd = self.stopped_run_whose_drive_holds_the_run_lock()
+        self.addCleanup(os.close, fd)
+        again = HarnessDelegate.attach(self.work, session_cls=HarnessSession)
+        clock = itertools.count(0.0, 100.0)
+        with (
+            mock.patch("time.monotonic", side_effect=lambda: next(clock)),
+            self.assertRaisesRegex(ConfigError, "delegate is still alive"),
+        ):
+            again.resume()
+        status = again.status()
+        self.assertEqual((status.alive, status.state), (True, StatusState.WORKING))
+        self.assertEqual(self.metadata()["attempt"], 1)
+
+    def test_a_detached_owned_run_reads_the_run_lock(self):
+        fd = self.stopped_run_whose_drive_holds_the_run_lock()
+        self.record.save(replace(self.record.read(), detached=True))  # its harness gone
+        again = HarnessDelegate.attach(self.work, session_cls=HarnessSession)
+        self.assertEqual(again.status().state, StatusState.WORKING)
+        os.close(fd)
+        self.assertEqual(again.status().state, StatusState.GONE)
+        again.resume()
+        self.assertEqual(self.metadata()["attempt"], 2)
 
     def test_resume_of_an_ended_worker_registers_the_next_worker(self):
         view = self.owned()

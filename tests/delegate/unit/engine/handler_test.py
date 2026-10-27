@@ -9,6 +9,7 @@ import io
 import json
 import os
 import uuid
+from collections.abc import Callable
 from dataclasses import replace
 from unittest import mock
 
@@ -71,6 +72,19 @@ class View:
             raise self.close_fail
 
 
+class RacingView(View):
+    """A view whose stop runs `race`, then fails."""
+
+    def __init__(self, race):
+        super().__init__()
+        self.race = race
+
+    def stop(self):
+        super().stop()
+        self.race()
+        raise SessionError("gone")
+
+
 class Timer:
     """threading.Timer, fired by hand."""
 
@@ -105,6 +119,8 @@ class Child:
         return False
 
     def communicate(self, line, timeout=None):
+        if self.case.racing is not None:
+            self.case.racing()
         self.case.sent.append((json.loads(line), self.case.metadata()))
         return "", ""
 
@@ -154,6 +170,7 @@ class HandlerCase(HarnessCase):
         self.record = RunRecord(Layout(self.work))
         self.register(1)
         self.view, self.sent, self.seq = View(), [], 0
+        self.racing: Callable[[], None] | None = None
         self.generation = uuid.uuid4().hex
         Timer.made = []
         self.enterContext(mock.patch("threading.Timer", Timer))
@@ -659,6 +676,44 @@ class EndingTest(HandlerCase):
         self.assertEqual(self.kinds(), before)
         self.assertEqual(self.kinds_sent(), [])
         self.assertEqual(self.lines(), [])
+
+    LOST = Result(1, None, "stopped: session harness ended without a Result")
+
+    def lost(self, event) -> None:
+        """Another owner completes the attempt while the handler decides `event`: no note."""
+        self.call(TurnStarted())
+        before = self.kinds()
+        self.call(event)
+        self.assertEqual(self.state().result, self.LOST)
+        self.assertEqual(self.kinds(), before)
+        self.assertNotIn(("finished", 1), self.kinds_sent())  # a Progress event is not stored
+
+    def race(self) -> None:
+        self.record.complete(1, self.LOST, sid=SID)
+
+    def test_a_lost_limit_writes_no_notes(self):
+        self.view = RacingView(self.race)
+        self.lost(LimitHit(None))
+
+    def test_a_lost_outcome_writes_no_progress_note(self):
+        self.racing = self.race  # at its Progress delivery
+        self.lost(TurnEnd(f"{START}\n{block(DONE)}", 0))
+
+    def test_a_lost_give_up_writes_no_notes(self):
+        self.call(TurnStarted())
+        before = self.kinds()
+        self.record.complete(1, self.LOST, sid=SID)
+        next(t for t in Timer.made if t.started and not t.cancelled).fire()
+        self.assertEqual(self.kinds(), before)
+        self.assertEqual(self.kinds_sent(), [])
+
+    def test_notes_of_an_event_that_ends_nothing_are_written(self):
+        self.call(TurnStarted())
+        self.call(Reply(START))
+        self.assertEqual(self.kinds()[-1], "progress")
+        self.call(LimitHit(None))
+        self.assertEqual(self.kinds()[-1], "limit")
+        self.assertFalse(self.state().completed)
 
 
 class OwnedCloseTest(HandlerCase):

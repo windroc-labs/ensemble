@@ -426,6 +426,7 @@ class Attempts:
         environment = p.session.environment
         self.lock = None if environment is None else environment.lock
         self.released = False
+        self.begun = self.stale = False
 
     def note(self, kind: str, **fields) -> None:
         RunLog(self.run_dir).note(kind, **fields)
@@ -450,6 +451,7 @@ class Attempts:
         )
         if isinstance(handle, Instruction):
             raise ConfigError("session driver returned an Instruction")
+        self.handle = handle
         if not tui:
             return handle
         name = handle.name
@@ -470,7 +472,6 @@ class Attempts:
         aside, stale = self.set_aside_stale_out()
         try:
             handle = self.start()
-            self.handle = handle
         except SessionConfigError as e:
             self.refused = True
             self.settle_stale_out(aside, keep=True)
@@ -487,14 +488,17 @@ class Attempts:
         self.settle_stale_out(aside, keep=False)
         self.note("input", text=p.params.input)
         if stale:
-            self.stop(handle)
+            self.stale = True
             return Result(1, None, stale)
+        self.begun = True
         self.on_event(Begun(p.sid))
         return handle
 
     def result(self) -> Result:
         p, handle = self.plan, self.begin()
         if isinstance(handle, Result):
+            if self.stale and self.handle is not None:
+                self.stop(self.handle)
             return handle
         attempt = Attempt(
             p, self.policy, handle, note=self.note, on_event=self.on_event, first=not p.spec.resume
