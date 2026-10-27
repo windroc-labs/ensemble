@@ -24,7 +24,7 @@ from ensemble.delegate.composer import Composer, RunParams
 from ensemble.delegate.engine.config import module_roots
 from ensemble.delegate.engine.drivers import AgentDriver
 from ensemble.delegate.engine.harness_delegate import DRAIN_WAIT, HarnessDelegate
-from ensemble.delegate.engine.record import HANDLER, RunRecord
+from ensemble.delegate.engine.record import CLOSED, HANDLER, RunRecord
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import Begun, Finished, Layout, Result
 from ensemble.session import (
@@ -2646,6 +2646,37 @@ class OwnedRun(HarnessCase):
         self.assertEqual(self.kinds()[-2:], ["result", "end"])
         with open(self.events_file, encoding="utf-8") as f:
             self.assertEqual([line.split()[-2:] for line in f], [["outcome", "error"]])
+
+    def failing_start(self, during: Callable[[], object]) -> HarnessDelegate:
+        """An owned run whose start fails after `during` ran (another writer meanwhile)."""
+        view = self.owned()
+
+        class Racing(FailingSession):
+            @classmethod
+            def start(cls, spec, *, display=None, host=None, idle_timeout=None):
+                during()
+                return super().start(spec, display=display, host=host, idle_timeout=idle_timeout)
+
+        view.driver = AgentDriver(Racing, display=None)
+        return view
+
+    def test_a_start_failure_that_loses_returns_the_stored_result(self):
+        view = self.failing_start(lambda: self.record.stop(CLOSED, sid=SID))
+        finished = []
+        result = view.run(lambda event: finished.append(event))
+        self.assertEqual(result, CLOSED)
+        self.assertEqual(self.record.read().result, CLOSED)
+        self.assertEqual(finished, [Finished(CLOSED)])
+        self.assertEqual(self.sent(), [])
+        self.assertNotIn("result", self.kinds())
+
+    def test_a_start_failure_after_a_bind_is_stored(self):
+        view = self.failing_start(lambda: self.record.bind(1, 1))
+        result = view.run()
+        self.assertEqual(result, Result(1, None, "tui: fake spawn refused"))
+        state = self.record.read()
+        self.assertEqual((state.completed, state.result), (True, result))
+        self.assertEqual(self.sent(), ["finished"])
 
     def test_a_stale_out_ending_loses_to_the_handlers_and_returns_it(self):
         view = self.owned()

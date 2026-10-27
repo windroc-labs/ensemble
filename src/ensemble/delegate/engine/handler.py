@@ -234,8 +234,10 @@ def finish(
     *,
     give_up: str | None = None,
     notes: bool = True,
-) -> bool:
-    """A stored ending's notes, outcome line and locked close; whether that close returned."""
+) -> bool | None:
+    """A stored ending's notes, outcome line and locked close; whether that close returned, None
+    without one.
+    """
     p = state.plan
     log = RunLog(p.session.workdir)
     environment = p.session.environment
@@ -256,7 +258,7 @@ def finish(
             say(f"delegate: {error}")
     RunRecord.announce(state, result)
     if lock is None or session is None:
-        return False
+        return None
     try:
         session.close()
     except SessionError as error:
