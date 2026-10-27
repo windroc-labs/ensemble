@@ -328,7 +328,7 @@ def child_setup(slave: int | None) -> None:
 
 
 class Guard:
-    def __init__(self, args):
+    def __init__(self, args, lease: int | None = None):
         self.args = args
         self.proc = None
         self.master = None
@@ -346,8 +346,8 @@ class Guard:
         self.channel = True
         self.exit_sent = False
         self.children_pending = False
-        self.lease = os.environ.get("ENSEMBLE_GUARD_LEASE_FD")
-        self.directory = os.path.dirname(args.hook_socket)
+        self.lease = os.environ.get("ENSEMBLE_GUARD_LEASE_FD") if lease is None else lease
+        self.directory = os.path.dirname(args.lease if lease is not None else args.hook_socket)
 
     def state(self, status: str) -> None:
         if self.lease is None:
@@ -657,23 +657,76 @@ def attach(path: str) -> int:
         peer.close()
 
 
+def hold_lease(path: str) -> int | None:
+    """PATH flocked for this process's life (its dir made 0700); None while another holds it."""
+    os.makedirs(os.path.dirname(path), 0o700, exist_ok=True)
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(descriptor)
+        return None
+    return descriptor
+
+
+def probe(directory: str) -> str:
+    """live: a guard holds DIR/lease; exited: free, its state.json confirming the exit; absent: no
+    DIR; dead: anything else.
+    """
+    if not os.path.lexists(directory):
+        return "absent"
+    try:
+        descriptor = os.open(os.path.join(directory, "lease"), os.O_RDWR | os.O_NOFOLLOW)
+    except OSError:
+        return "dead"
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return "live"
+        with open(os.path.join(directory, "state.json"), encoding="utf-8") as stream:
+            value = json.load(stream)
+    except (OSError, ValueError):
+        return "dead"
+    else:
+        expected = {"generation": os.path.basename(directory), "state": "exited"}
+        return "exited" if value == expected else "dead"
+    finally:
+        os.close(descriptor)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--attach")
     parser.add_argument("--terminal", action="store_true")
     parser.add_argument("--hook-socket")
     parser.add_argument("--display-socket")
+    parser.add_argument("--lease")
+    parser.add_argument("--probe")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     if args.attach:
         return attach(args.attach)
+    if args.probe:
+        print(probe(args.probe))
+        return 0
     if args.command[:1] == ["--"]:
         args.command.pop(0)
     if not args.command or not args.hook_socket:
         parser.error("--hook-socket and a client command are required")
     signal.pthread_sigmask(signal.SIG_SETMASK, ())
     # A handled disposition is reset by exec; clients must not inherit ignored HUP.
-    runtime = Guard(args)
+    lease = None
+    if args.lease:
+        try:
+            lease = hold_lease(args.lease)
+        except OSError as error:
+            print(f"guard: {args.lease}: {error.strerror}", file=sys.stderr)
+            return 1
+        if lease is None:
+            print("guard: lease held", file=sys.stderr)
+            return 1
+    runtime = Guard(args, lease)
     for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda _sig, _frame: runtime.close())
     try:

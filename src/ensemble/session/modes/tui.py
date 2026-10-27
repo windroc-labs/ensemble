@@ -559,6 +559,8 @@ class TuiMode(BaseMode):
         prepared = cls._host_resume(prepared, host, name)
         if run._runtime_files:
             metadata = {**metadata, "runtime_files": json.dumps(dict(run._runtime_files))}
+        if owner is not None:
+            metadata = {**metadata, "owner": owner}
         state = _state(prepared, run, host, metadata, owner)
         if field := _bad(state):
             raise SessionError(f"tui session {name}: bad {field} {state.get(field)!r:.80}")
@@ -681,6 +683,10 @@ class TuiMode(BaseMode):
         return self._generation
 
     @property
+    def remote(self) -> bool:
+        return getattr(self._terminal, "remote", False) is True
+
+    @property
     def replayed(self) -> tuple[SessionEvent | Stderr | ClientBound, ...]:
         """Attached: its client record's, then its hook log's events so far."""
         return self._replayed
@@ -702,7 +708,7 @@ class TuiMode(BaseMode):
             state = self._terminal.state()
             if not self._replaced(state) and state != Liveness.UNKNOWN:
                 code = self._terminal.returncode()
-                if state == Liveness.ABSENT:
+                if state == Liveness.ABSENT and code is None:
                     code = -signal.SIGHUP
                 if code is not None:
                     self._code = code
@@ -834,7 +840,7 @@ class TuiMode(BaseMode):
         deadline = time.monotonic() + timeout
         while self._code is None:
             self._code = self._terminal.returncode()
-            if self._terminal.state() == Liveness.ABSENT:
+            if self._code is None and self._terminal.state() == Liveness.ABSENT:
                 self._code = -signal.SIGHUP
             if self._code is None:
                 if (left := deadline - time.monotonic()) <= 0:

@@ -23,6 +23,7 @@ from ensemble.session.engine.types import (
     TurnEnd,
     TurnFailed,
     TurnStarted,
+    Unanswered,
 )
 from ensemble.session.harness import process
 from ensemble.session.harness.channel import Channel
@@ -38,6 +39,8 @@ class FakeOwned:
     """Scripted: each pump returns the next (events, ended) step, then nothing; stop and close return
     `final`; confirm_end returns `code` (None: unconfirmed).
     """
+
+    remote = False
 
     def __init__(self, *steps, final=(), code=0):
         self.name, self.sid, self.generation = "w1", "s1", GEN
@@ -269,6 +272,7 @@ class CloseRequestTest(Base):
             self.request(Op.CLOSE)
         self.assertEqual(type(caught.exception).__name__, "Unanswered")
         self.assertEqual(self.channel.status()["state"], "running")
+        self.assertFalse(self.channel.status()["remote"])
         owned.code = 0
         self.assertTrue(self.request(Op.CLOSE))
         thread.join(WAIT)
@@ -502,3 +506,101 @@ class BeginTest(Case):
 
     def test_a_caller_without_one_leaves_the_worker_without_one(self):
         self.assertIsNone(self.begin(None))
+
+
+class RemoteOwned(FakeOwned):
+    remote = True
+
+    def __init__(self, *steps, **kw):
+        super().__init__(*steps, **kw)
+        self.inputs = []
+        self.failure = None
+
+    def send(self, text):
+        self._did(("send", text))
+
+    def press(self, keys):
+        self._did(("press", [str(key) for key in keys]))
+
+    def screen(self, lines=None):
+        self._did(("screen", lines))
+        return f"screen {lines}"
+
+    def _did(self, call):
+        if self.failure is not None:
+            raise self.failure
+        self.inputs.append(call)
+
+
+class RemoteTest(Base):
+    def ask(self, op, data):
+        return self.channel.ask(op, data, timeout=WAIT)
+
+    def running(self, owned, *handlers, **kw):
+        thread = self.run_in_thread(self.harness(owned, *handlers, **kw))
+        while self.channel.status().get("state") != "running":
+            time.sleep(0.01)
+        return thread
+
+    def test_send_press_and_screen_are_served_and_the_worker_stays_up(self):
+        owned = RemoteOwned()
+        self.running(owned)
+        self.assertTrue(self.channel.status()["remote"])
+        self.assertEqual(self.ask(Op.SEND, {"text": "hello"}), {})
+        self.assertEqual(self.ask(Op.PRESS, {"keys": ["Enter", "C-c"]}), {})
+        self.assertEqual(self.ask(Op.SCREEN, {"lines": 3}), {"text": "screen 3"})
+        self.assertEqual(self.ask(Op.SCREEN, {"lines": None}), {"text": "screen None"})
+        self.assertEqual(
+            owned.inputs,
+            [("send", "hello"), ("press", ["Enter", "C-c"]), ("screen", 3), ("screen", None)],
+        )
+        self.assertEqual(owned.calls, [])
+        self.assertEqual(self.channel.status()["state"], "running")
+        self.assertTrue(self.request(Op.CLOSE))
+
+    def test_bad_fields_and_worker_errors_are_refused_and_the_worker_stays_up(self):
+        owned = RemoteOwned()
+        self.running(owned)
+        for op, data in (
+            (Op.SEND, {"text": 5}),
+            (Op.SEND, {}),
+            (Op.SEND, {"text": "x" * ((1 << 20) + 1)}),
+            (Op.SEND, {"text": "\ud800"}),
+            (Op.PRESS, {"keys": []}),
+            (Op.PRESS, {"keys": ["Enter"] * 65}),
+            (Op.PRESS, {"keys": ["no such key"]}),
+            (Op.PRESS, {"keys": [5]}),
+            (Op.PRESS, {"keys": "Enter"}),
+            (Op.SCREEN, {"lines": True}),
+            (Op.SCREEN, {"lines": 0}),
+            (Op.SCREEN, {"lines": 10001}),
+            (Op.SCREEN, {"lines": "3"}),
+            (Op.SCREEN, {}),
+        ):
+            with self.subTest(op=op, data=str(data)[:40]), self.assertRaises(SessionError):
+                self.ask(op, data)
+        owned.failure = Unanswered("worker w1: screen unanswered")
+        with self.assertRaises(Unanswered):
+            self.ask(Op.SCREEN, {"lines": 1})
+        for failure in (ConfigError("lines: bad"), SessionError("tui session w1 is not running")):
+            owned.failure = failure
+            with self.subTest(failure=failure), self.assertRaisesRegex(SessionError, str(failure)):
+                self.ask(Op.SEND, {"text": "x"})
+        self.assertEqual(owned.inputs, [])
+        self.assertEqual(self.channel.status()["state"], "running")
+        self.assertEqual(owned.calls, [])
+        self.assertTrue(self.request(Op.CLOSE))
+
+    def test_after_the_exit_input_is_refused_not_a_close(self):
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        owned = RemoteOwned(([Reply("x")], True))
+        thread = self.run_in_thread(self.harness(owned, Handler(hang=gate), drain=2.0))
+        while self.channel.status().get("state") != "exited":
+            time.sleep(0.01)
+        with self.assertRaisesRegex(SessionError, "w1: worker exited"):
+            self.ask(Op.SEND, {"text": "late"})
+        gate.set()
+        thread.join(WAIT)
+        self.assertEqual(owned.inputs, [])
+        self.assertNotIn("close", owned.calls)

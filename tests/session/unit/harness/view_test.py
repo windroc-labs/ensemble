@@ -13,9 +13,11 @@ from ensemble.session.engine.types import (
     ClientBound,
     Exited,
     IdleTimeout,
+    KeyPress,
     Mode,
     Reply,
     SessionError,
+    StatusState,
     Stderr,
     TurnEnd,
     TurnStarted,
@@ -308,3 +310,65 @@ class HeadlessViewTest(Base):
         next(events)
         events.close()
         self.assertEqual(self.attaches, 0)
+
+
+class RemoteTest(Base):
+    def serve(self, answers):
+        self.served = []
+
+        def run():
+            deadline = time.monotonic() + 5
+            left = len(answers)
+            while time.monotonic() < deadline and left:
+                for ident, op, data in self.channel.pending():
+                    self.served.append((op, data))
+                    ok, found = answers[op]
+                    if ok:
+                        self.channel.reply(ident, ok=True, data=found)
+                    else:
+                        self.channel.reply(ident, ok=False, error=found)
+                    left -= 1
+                time.sleep(0.01)
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        self.addCleanup(thread.join)
+
+    def test_a_remote_workers_input_and_screen_go_through_its_harness(self):
+        self.hold()
+        self.channel.write_status({"state": "running", "remote": True})
+        self.serve({Op.SEND: (True, {}), Op.PRESS: (True, {}), Op.SCREEN: (True, {"text": "now"})})
+        view = self.view()
+        view.send("hi")
+        view.press([KeyPress("Enter"), KeyPress("c", ctrl=True)])
+        self.assertEqual(view.screen(3), "now")
+        self.assertEqual(
+            self.served,
+            [
+                (Op.SEND, {"text": "hi"}),
+                (Op.PRESS, {"keys": ["Enter", str(KeyPress("c", ctrl=True))]}),
+                (Op.SCREEN, {"lines": 3}),
+            ],
+        )
+        self.attached.send.assert_not_called()
+        self.attached.screen.assert_not_called()
+
+    def test_remote_content_is_the_done_reply_else_the_remote_screen(self):
+        self.hold()
+        self.channel.write_status({"state": "running", "remote": True})
+        self.attached.status.return_value = mock.Mock(state=StatusState.DONE)
+        self.log(TurnEnd("final", 0))
+        self.assertEqual(self.view().content(), "final")
+        self.attached.status.return_value = mock.Mock(state=StatusState.WORKING)
+        self.serve({Op.SCREEN: (True, {"text": "busy screen"})})
+        self.assertEqual(self.view().content(), "busy screen")
+        self.attached.content.assert_not_called()
+
+    def test_a_refusal_raises_and_a_gone_harness_is_named(self):
+        self.channel.write_status({"state": "running", "remote": True})
+        with self.assertRaisesRegex(SessionError, "session w1: its harness is gone"):
+            self.view().send("hi")
+        self.hold()
+        self.serve({Op.SEND: (False, "tui session w1 is not running")})
+        with self.assertRaisesRegex(SessionError, "not running"):
+            self.view().send("hi")

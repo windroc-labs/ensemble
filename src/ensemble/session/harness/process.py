@@ -18,6 +18,7 @@ from ensemble.session.engine.types import (
     ClientBound,
     ConfigError,
     Exited,
+    KeyPress,
     SessionBusy,
     SessionError,
     SessionEvent,
@@ -25,15 +26,19 @@ from ensemble.session.engine.types import (
     TurnEnd,
     TurnFailed,
     TurnStarted,
+    Unanswered,
 )
 from ensemble.session.harness.channel import SLICE, Channel, encode, hung_up
 from ensemble.session.harness.dispatch import Dispatch, load_handlers
-from ensemble.session.harness.types import Logged, Op
+from ensemble.session.harness.types import SERVED, Logged, Op
 
 POLL = 0.5
 CLOSE_WAIT = 10
 DRAIN = 30
 STATUS_EVERY = 1.0
+SEND_MAX = 1 << 20
+KEYS_MAX = 64
+LINES_MAX = 10000
 LOG = logging.getLogger("session")
 
 Event = SessionEvent | Stderr | ClientBound
@@ -50,6 +55,8 @@ class Worker(Protocol):
     def generation(self) -> str: ...
     @property
     def opening_pending(self) -> str | None: ...
+    @property
+    def remote(self) -> bool: ...
 
     def pump(self, wait: float) -> tuple[list[Event], bool]: ...
     def record(self, event: Event) -> None: ...
@@ -58,6 +65,9 @@ class Worker(Protocol):
     def returncode(self) -> int | None: ...
     def confirm_end(self, timeout: float) -> int | None: ...
     def view(self, channel: Channel, idle_timeout: float | None = None) -> Any: ...
+    def send(self, text: str) -> None: ...
+    def press(self, keys: Sequence[KeyPress]) -> None: ...
+    def screen(self, lines: int | None = None) -> str: ...
 
 
 Begin = Callable[[dict], tuple[Worker, Sequence[Any], Sequence[Mapping[str, object]]]]
@@ -118,7 +128,7 @@ class Harness:
         self._worker: Worker | None = None
         self._dispatch: Dispatch | None = None
         self._turns = Turns("")
-        self._leftover: list[tuple[str, Op]] = []
+        self._leftover: list[tuple[str, Op, dict]] = []
 
     def signalled(self, number: int, _frame: object) -> None:
         self._signal = number
@@ -142,7 +152,11 @@ class Harness:
             generation=worker.generation,
         )
         self._status.update(
-            state="running", sid=worker.sid, name=worker.name, generation=worker.generation
+            state="running",
+            sid=worker.sid,
+            name=worker.name,
+            generation=worker.generation,
+            remote=worker.remote,
         )
         self._write()
         try:
@@ -156,8 +170,11 @@ class Harness:
 
     def _supervise(self, worker: Worker) -> int:
         while True:
-            batch = self._channel.requests()
-            for index, (ident, op) in enumerate(batch):
+            batch = self._channel.pending()
+            for index, (ident, op, data) in enumerate(batch):
+                if op in SERVED:
+                    self._serve(worker, op, data, ident)
+                    continue
                 code = self._end(worker, op, ident)
                 if code is not None:
                     self._leftover = batch[index + 1 :]  # taken already: served after the exit
@@ -181,6 +198,17 @@ class Harness:
                 if code is None:  # a stopped headless run's may land later
                     code = worker.confirm_end(self._close_wait)
                 return -signal.SIGHUP if code is None else code
+
+    def _serve(self, worker: Worker, op: Op, data: dict, ident: str) -> None:
+        """A remote worker's input or screen; any failure is a refusal that leaves it up."""
+        try:
+            found = _served(worker, op, data)
+        except (ConfigError, SessionError, ValueError) as error:
+            self._answer(
+                ident, ok=False, error=str(error), unanswered=isinstance(error, Unanswered)
+            )
+        else:
+            self._answer(ident, ok=True, data=found)
 
     def _end(self, worker: Worker, op: Op, ident: str | None) -> int | None:
         """The exit code once confirmed (Exited logged, then answered); else None, answered."""
@@ -223,8 +251,11 @@ class Harness:
 
     def _serve_ended(self, worker: Worker) -> None:
         """After the exit a request ends what is left: terminal, tui dir, viewer."""
-        batch, self._leftover = [*self._leftover, *self._channel.requests()], []
-        for ident, op in batch:
+        batch, self._leftover = [*self._leftover, *self._channel.pending()], []
+        for ident, op, _ in batch:
+            if op in SERVED:
+                self._answer(ident, ok=False, error=f"session {worker.name}: worker exited")
+                continue
             try:
                 if op == Op.STOP:
                     worker.stop()
@@ -290,6 +321,34 @@ class Harness:
             self._channel.write_status(self._status)
         except OSError as error:
             LOG.warning("session harness %s: harness.json: %s", self._channel.directory, error)
+
+
+def _served(worker: Worker, op: Op, data: dict) -> dict:
+    """Its fields checked first (ValueError), then the worker's call."""
+    if op == Op.SEND:
+        text = data.get("text")
+        if not isinstance(text, str) or len(text.encode()) > SEND_MAX:
+            raise ValueError(f"{op}: want text, a string of at most {SEND_MAX} bytes")
+        worker.send(text)
+        return {}
+    if op == Op.PRESS:
+        keys = data.get("keys")
+        if (
+            not isinstance(keys, list)
+            or not 1 <= len(keys) <= KEYS_MAX
+            or not all(isinstance(key, str) for key in keys)
+        ):
+            raise ValueError(f"{op}: want keys, 1 to {KEYS_MAX} key names")
+        worker.press([KeyPress.parse(key) for key in keys])
+        return {}
+    lines = data.get("lines")
+    if (
+        "lines" not in data
+        or lines is not None
+        and (type(lines) is not int or not 1 <= lines <= LINES_MAX)
+    ):
+        raise ValueError(f"{op}: want lines, null or 1 to {LINES_MAX}")
+    return {"text": worker.screen(lines)}
 
 
 def _begin(directory: str, session: type[HostedSession] = HostedSession) -> Begin:
