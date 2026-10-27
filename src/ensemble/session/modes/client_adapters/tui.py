@@ -33,6 +33,7 @@ class Tui(ABC):
     client = ""  # last ClientBound's id
     _turn_id = ""
     _turn_open: bool | None = None
+    _turn_ids: frozenset[str] = frozenset()  # a subclass's __init__ may skip Tui's
     _owned: ClassVar[bool] = False  # a session harness owns it
     _remote_owned: ClassVar[bool] = False  # also as a remote tui, its hooks through a guard
 

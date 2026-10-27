@@ -15,6 +15,7 @@ import logging
 import os
 import select
 import shlex
+import shutil
 import signal
 import stat
 import tempfile
@@ -3388,12 +3389,13 @@ class OwnedGateTest(Case):
             clients={
                 "claude": {"implementation": "ensemble.session.clients.claude:ClaudeClient"},
                 "codex": {"implementation": "ensemble.session.clients.codex:CodexClient"},
+                "opencode": {"implementation": "ensemble.session.clients.opencode:OpenCodeClient"},
             },
             hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"}),
         )
         setup, docker = cls._config(), DockerHost("docker", {"docker": "/usr/local/bin/docker"})
         for on in (cls.host(), docker):
-            for name in ("claude", "codex"):
+            for name in ("claude", "codex", "opencode"):
                 for mode in (Mode.TUI, Mode.HEADLESS):
                     with self.subTest(host=on.name, client=name, mode=mode):
                         client = setup.registry.client(name)
@@ -3562,7 +3564,7 @@ class DockerOwnedTest(Case):
     """
 
     def setUp(self):
-        self.setup = HostedSession.configured(
+        self.cls = HostedSession.configured(
             clients={
                 "claude": {"implementation": "ensemble.session.clients.claude:ClaudeClient"},
                 "codex": {"implementation": "ensemble.session.clients.codex:CodexClient"},
@@ -3577,7 +3579,29 @@ class DockerOwnedTest(Case):
                     "default": "docker",
                 }
             ),
-        )._config()
+        )
+        self.setup = self.cls._config()
+
+    def test_handlers_with_an_environment_are_refused_before_any_harness(self):
+        workdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, workdir)
+        spec = Spec(
+            workdir=workdir,
+            access=Access(cwd=workdir),
+            client="claude",
+            mode="headless",
+            prompt="hi",
+            environment=ENVIRONMENT,
+            handlers=(engine_types.HookCallback("pkg.handler"),),
+        )
+        with (
+            mock.patch.object(hosted_session.subprocess, "Popen") as popen,
+            self.assertRaisesRegex(
+                ConfigError, "claude headless on host docker has no session harness yet"
+            ),
+        ):
+            self.cls.start(spec)
+        popen.assert_not_called()
 
     def test_on_docker_claude_tui_and_headless_are_owned_codex_and_opencode_tui_are_not(self):
         docker = DockerHost("docker", {"docker": "/usr/local/bin/docker"})

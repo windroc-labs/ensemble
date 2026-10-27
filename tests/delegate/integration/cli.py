@@ -17,6 +17,7 @@ import time
 
 from ensemble.utils import SID_ENV, Record, Status
 from tests.delegate.case import PY, REPO, Case, child_env
+from tests.delegate.workdir import input_first
 from tests.session import live_tmux
 from tests.session.integration.clients.claude import fake_claude
 from tests.session.integration.clients.codex import fake_codex
@@ -39,24 +40,12 @@ UNSAVED = {k: v for k, v in DONE.items() if k != "deliverable"}
 UNSAVED_ERROR = "done with a local destination must carry the deliverable"
 
 
-RACED = ("client_session", "session_metadata", "stderr")  # noted by the session harness
-
-
 class Runs(Case):
     """A CLI run's records in `work` and the fake client's calls in `log`."""
 
     def records(self) -> list[dict]:
-        """A session harness notes its worker's RACED rows as the run notes its
-        input: those notes are put after the input they raced.
-        """
         with open(os.path.join(self.work, "run", "run.jsonl")) as f:
-            found: list[dict] = []
-            for record in map(json.loads, f):
-                at = len(found)
-                while record["kind"] == "input" and at and found[at - 1]["kind"] in RACED:
-                    at -= 1
-                found.insert(at, record)
-            return found
+            return input_first(list(map(json.loads, f)))
 
     def kinds(self) -> list[str]:
         return [e["kind"] for e in self.records()]

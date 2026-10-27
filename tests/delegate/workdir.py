@@ -20,3 +20,19 @@ def checkout_path(workdir: str, owner: str, name: str, slug: str) -> str:
 
 def run_log(workdir: str) -> str:
     return os.path.join(Layout(workdir).run, "run.jsonl")
+
+
+RACED = ("client_session", "session_metadata", "stderr")  # noted by the session harness
+
+
+def input_first(records: list[dict]) -> list[dict]:
+    """A session harness notes its worker's RACED rows in its own process as the run notes its
+    input once the start returns; no reader orders them: the raced rows are put after that input.
+    """
+    found: list[dict] = []
+    for record in records:
+        at = len(found)
+        while record["kind"] == "input" and at and found[at - 1]["kind"] in RACED:
+            at -= 1
+        found.insert(at, record)
+    return found
