@@ -2,8 +2,8 @@
 server with the fake claude (WDRC-199 FR-13, FR-17, FR-18): the guard parents the client and only
 the harness holds its lifecycle pipe, so kill -9 of the harness ends guard and client; resume then
 starts a new harness, guard and client on the same sid, cwd, account and flags that answers from the
-old conversation, waiting out a reaping guard and refusing a live or unknown generation; closes act
-only on their own generation.
+old conversation, waiting out a reaping guard and refusing a live or unknown generation; resume of a
+live worker whose display was killed reopens it; closes act only on their own generation.
 """
 
 import os
@@ -102,6 +102,11 @@ class CrashCase(WorkerCase):
     def liveness(self, name: str, generation: str) -> Liveness:
         return managed.liveness("tmux", name, generation)
 
+    def display_dead(self, name: str) -> bool:
+        """Its display pane dead, or its session gone (macOS's pane-died hook kills it)."""
+        res = self.server.tmux("display-message", "-p", "-t", f"={name}:", "#{pane_dead}")
+        return res.returncode != 0 or res.stdout.strip() == "1"
+
     def running_harnesses(self) -> list[Channel]:
         root = os.path.join(self.ensemble, "harness")
         channels = [Channel(os.path.join(root, name)) for name in os.listdir(root)]
@@ -198,13 +203,39 @@ class ResumeTest(CrashCase):
         )
         self.assertEqual(len(self.calls("w1")), 1)
 
-    def test_resume_with_display_killed_keeps_the_live_worker(self):
-        found = self.launched()
-        self.ok(self.server.tmux("kill-session", "-t", "=w1"))
-        self.assertEqual(self.record(self.resume()), found["record"])
-        self.assertEqual(len(self.calls("w1")), 1)
-        self.assertTrue(running(found["call"]["pid"]))
-        self.assertEqual(found["channel"].status()["state"], "running")
+    def test_resume_reopens_the_killed_display_of_the_live_worker(self):
+        """WDRC-300: the same worker (sid, conversation, client process, harness) shows again."""
+        for name, kill in (("w1", "session"), ("w2", "attach")):
+            with self.subTest(kill=kill):
+                fact = f"remember {uuid.uuid4().hex}"
+                found = self.launched(name, steps=RECALL, prompt=fact)
+                if kill == "session":
+                    self.ok(self.server.tmux("kill-session", "-t", f"={name}"))
+                else:  # its guard.py --attach killed: the pane dies, the worker runs on
+                    os.kill(int(self.pane(name, "#{pane_pid}")), signal.SIGKILL)
+                    live_tmux.wait(
+                        lambda name=name: self.display_dead(name),
+                        what="its display's pane to die",
+                    )
+                self.assertEqual(self.record(self.resume(name, steps=RECALL)), found["record"])
+                display = int(self.pane(name, "#{pane_pid}"))
+                self.assertIn("--attach", ps(display, "args"))
+                self.assertEqual(
+                    self.pane(name, "#{@generation} #{@sid} #{pane_dead}"),
+                    f"{found['generation']} {found['record'].sid} 0",
+                )
+                self.assertEqual(len(self.calls(name)), 1)
+                self.assertTrue(running(found["call"]["pid"]))
+                self.assertTrue(running(found["guard"]))
+                self.assertEqual(self.owner(name).directory, found["channel"].directory)
+                self.assertEqual(found["channel"].status()["state"], "running")
+                self.ok(self.session("send", name, "what did I ask you to remember?"))
+                live_tmux.wait(
+                    lambda name=name, fact=fact: (
+                        self.ok(self.session("reply", name)).stdout == f"{fact}\n"
+                    ),
+                    what="the same client's answer from its conversation",
+                )
 
     def test_concurrent_resumes_start_one_client(self):
         found = self.launched()
