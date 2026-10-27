@@ -188,17 +188,26 @@ class KeyTest(Base):
                 self.assertEqual(data, b"")
 
     def test_a_session_with_no_terminal_takes_neither_keys_nor_text(self):
+        """A headless worker h1, its stdin logged, gets neither; a SENTINEL it is then written
+        arrives alone.
+        """
         log = os.path.join(self.root, "h1.keys")
-        argv = (sys.executable, "-I", "-c", RAW, log)
+        argv = (sys.executable, "-I", "-c", RAW.replace("tty.setraw(0)\n", ""), log)
         with mock.patch.dict(os.environ, self.server.env(), clear=True):
-            process = TmuxHost("tmux").detach("h1", Launch(argv, cwd=self.cwd))
-        self.addCleanup(self.under_server_env, process.close)
+            worker = TmuxHost("tmux").worker("h1", Launch(argv, cwd=self.cwd), terminal=False)
+        self.addCleanup(self.under_server_env, worker.close)
         live_tmux.wait(lambda: os.path.exists(log), what="h1's key log")
         for argv in (["--key", "Escape"], ["text"]):
             with self.subTest(argv=argv):
-                res, data = self.delivered("h1", log, *argv)
-                self.failed(res, "ensemble-session: no tui session h1")
-                self.assertEqual(data, b"")
+                before = len(raw(log))
+                self.failed(
+                    self.session("send", "h1", *argv), "ensemble-session: no tui session h1"
+                )
+                worker.write(SENTINEL.encode())
+                data = live_tmux.wait(
+                    lambda before=before: raw(log)[before:] or None, what="h1's sentinel"
+                )
+                self.assertEqual(data, SENTINEL.encode())
 
 
 class TileTest(Base):

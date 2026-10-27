@@ -37,6 +37,7 @@ class ManagedProcessTest(Case):
             (KeyPress("BSpace", ctrl=True), b"\x08"),
             (KeyPress("Enter", ctrl=True), b"\r"),
             (KeyPress(" ", ctrl=True), b"\x00"),
+            (KeyPress("/", ctrl=True), b"\x1f"),
             (KeyPress("?", ctrl=True), b"\x7f"),
         ):
             with self.subTest(key=key):

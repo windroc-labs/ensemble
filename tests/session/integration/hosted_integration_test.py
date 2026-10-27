@@ -1,7 +1,7 @@
 """HostedSession on a private tmux server (tests/session/live_tmux.py), os.environ that server's env,
 the fake client's Tui: Session.attach(name).close() and the by-name close Session.retire(name) leave
 the same state (FR-4); list and a by-name close refused until a class is configured (FR-2: the session reads no config
-itself); a display given to start stored, read back and listed (FR-48).
+itself); a display given to start stored on its display and in its worker state, and listed (FR-48).
 """
 
 import json
@@ -11,6 +11,7 @@ import unittest
 
 from ensemble.session import Access, Host, Mode, Session, Spec
 from ensemble.session.engine.hosted_session import UNCONFIGURED, HostedSession
+from ensemble.session.hosts.base import worker_state
 from ensemble.session.modes import tui
 from tests.session import fake_client
 from tests.session.case import HOSTS, PY
@@ -102,11 +103,10 @@ class DisplayTest(Live):
                 prompt="hello",
             )
             self.addCleanup(configured.start(spec, display=display).stop)
-        host = configured.host()
         for name, display in DISPLAYS.items():
             with self.subTest(name=name):
                 self.assertEqual(self.server.option(name, "@display"), display)
-                self.assertEqual(host.attach(name).display(), display)
+                self.assertEqual(worker_state(name).display, display)
                 self.assertEqual([row.name for row in configured.list(display=display)], [name])
 
 
