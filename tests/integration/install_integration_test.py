@@ -622,6 +622,7 @@ class InstallTest(Case):
             ["--bogus"],
             ["--ref"],
             ["--ref", "-x"],
+            *(["--ref", ref] for ref in ("a..b", "x/", "/x", "x//y", ".x", "x/.y", "x.lock", "x.")),
             ["--docker", "--no-docker"],
             ["--clients", "claude,,codex"],
             ["--clients", "claude,vim"],
@@ -1041,6 +1042,8 @@ class InstallTest(Case):
             ({"ref": "../../x/y/main"}, "not a git ref: '../../x/y/main'"),
             ({"ref": "v1#x"}, "not a git ref: 'v1#x'"),
             ({"ref": "-x"}, "not a git ref: '-x'"),
+            ({"ref": "a..b"}, "not a git ref: 'a..b'"),
+            ({"ref": "x.lock"}, "not a git ref: 'x.lock'"),
             ({"ref": "v1\nx"}, "not a git ref: 'v1\\nx'"),
             ({"ref": 7}, "not a git ref: 7"),
             ({"sha": OLD}, "pinned by sha, not a release tag"),
@@ -2609,16 +2612,11 @@ class InstallTest(Case):
         flags = ("--ref", ref, "--clients", "opencode", "--no-docker", "--opencode-provider", "lan")
         flags += ("--opencode-url", "http://localhost:8080/v1", "--opencode-model", "m")
         flags += ("--opencode-context", "65536", "--opencode-key-stdin")
-        result = self.run_install(
-            *flags, stdin=KEY + "\n", answers=[(SUDO_Q, PASSWORD), *[(WRITE_Q, "y")] * 2]
-        )
-        self.assertEqual(result.code, 1)
-        spec = f"ensemble@git+https://github.com/windroc-labs/ensemble.git#{ref}"
-        self.assertIn(f"install.sh: {spec}: not an OpenCode package dir\n", result.stderr)
+        result = self.run_install(*flags, stdin=KEY + "\n")
+        self.assertEqual(result.code, 2)
+        self.assertIn(f"install.sh: --ref: not a git ref: {ref}\n", result.stderr)
         self.assertTrue(victim.is_dir())
-        calls = "\n".join(self.calls())
-        self.assertNotIn("opencode plugin", calls)
-        self.assertNotIn("api.github.com", calls)
+        self.assertEqual(self.calls(), [])
 
     def test_p7_refused_ref_keeps_saved_clients(self):
         self.assert_ok(self.opencode_only())

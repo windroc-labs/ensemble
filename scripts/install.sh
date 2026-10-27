@@ -130,6 +130,13 @@ clients_of() {
   printf '%s' "$out"
 }
 
+# Exit 0 when $1 can name a git branch or tag: git check-ref-format's rules within [A-Za-z0-9._/-].
+valid_ref() {
+  case $1 in
+    '' | -* | /* | */ | *. | *..* | *//* | .* | */.* | *.lock | *.lock/* | *[!A-Za-z0-9._/-]*) return 1 ;;
+  esac
+}
+
 valid_name() { [[ $1 =~ $name_pattern ]] && [ "$1" != ollama ]; }
 valid_url() { [[ $1 =~ $url_pattern ]]; }
 valid_model() { [[ $1 =~ $model_pattern ]]; }
@@ -144,9 +151,7 @@ parse_args() {
         ;;
       --ref)
         [ $# -ge 2 ] || usage_error "--ref needs a value"
-        case $2 in
-          '' | -* | *[!A-Za-z0-9._/-]*) usage_error "--ref: not a git ref: $2" ;;
-        esac
+        valid_ref "$2" || usage_error "--ref: not a git ref: $2"
         ref=$2
         shift
         ;;
@@ -1022,7 +1027,7 @@ sys.exit(1 if not found else 0 if found[0].get("enabled") else 2)' "$1"
 }
 
 # The ref the windroc marketplace serves ensemble at, from its manifest $1 on main: the ensemble entry's source.ref,
-# else main (the default branch). A ref goes into URLs: --ref's characters and no .. segment.
+# else main (the default branch). A ref goes into URLs: --ref's characters, then valid_ref.
 marketplace_ref() {
   local text served
   text=$(curl -fsSL "https://raw.githubusercontent.com/windroc-labs/agent-plugins-marketplace/main/$1" </dev/null) \
@@ -1037,10 +1042,10 @@ except Exception:
     sys.exit("no ensemble entry")
 if ref is None:
     sys.exit("pinned by sha, not a release tag")
-if not isinstance(ref, str) or not re.fullmatch(r"[A-Za-z0-9._/-]+", ref) or ref.startswith("-") \
-        or ".." in ref.split("/"):
+if not isinstance(ref, str) or not re.fullmatch(r"[A-Za-z0-9._/-]+", ref):
     sys.exit(f"not a git ref: {ref!r}")
 print(ref)' 2>&1 <<<"$text") || die "cannot read ensemble's ref from the windroc marketplace ($1): $served"
+  valid_ref "$served" || die "cannot read ensemble's ref from the windroc marketplace ($1): not a git ref: '$served'"
   printf '%s' "$served"
 }
 
@@ -1357,7 +1362,7 @@ opencode_install() {
 opencode_spec() { printf '%s' "ensemble@git+https://github.com/windroc-labs/ensemble.git#$ref"; }
 
 # The directory OpenCode downloads spec $1 into, else exit 1 when it would not lie under OpenCode's packages
-# (a --ref with .. segments).
+# (a ref with .. segments, which valid_ref refuses first).
 opencode_cache_dir() {
   python3 -I -c '
 import os, sys
