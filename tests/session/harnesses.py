@@ -137,10 +137,11 @@ def threaded_spawn(cls, spec, mode, *, display, host, idle_timeout):
     _RUNNING.append((channel, thread))
     deadline = _clock() + START_WAIT
     while True:
+        alive = thread.is_alive()  # before its status: an ended thread's status is final
         status = channel.status()
         if status.get("state") in ("running", "draining", "exited"):
             break
-        if status.get("state") == "failed" or not thread.is_alive() or _clock() > deadline:
+        if status.get("state") == "failed" or not alive or _clock() > deadline:
             error = hosted_session._start_error(channel, status)
             thread.join(WAIT)
             if tie is not None:

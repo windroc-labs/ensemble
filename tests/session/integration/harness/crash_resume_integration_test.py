@@ -272,7 +272,7 @@ class CloseTest(CrashCase):
         os.kill(found["guard"], signal.SIGKILL)
         self.settled(found["channel"])
         res = self.session("close", "w1")
-        self.assertEqual(res.returncode, 1, res.stderr)  # a batch key's failure, busy included
+        self.assertEqual(res.returncode, 75, res.stderr)  # every failed key refused busy
         self.assertIn(CLOSE_BUSY, res.stderr)
         self.assertEqual(self.owner("w1").directory, found["channel"].directory)
 
