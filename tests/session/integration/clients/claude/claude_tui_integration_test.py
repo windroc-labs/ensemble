@@ -269,9 +269,8 @@ class MidTurnTest(Live):
         self.assertEqual(stream.next(idle=False), TurnStarted())
         transcript = handle.info().transcript
 
-        def tool_runs():
-            with open(transcript, encoding="utf-8") as f:
-                return '"tool_use"' in f.read()
+        def tool_runs():  # its hook runs before Claude writes the transcript
+            return any('"tool_use"' in line for line in live_tmux.events(transcript))
 
         live_tmux.wait(tool_runs, what="the turn's tool")
         handle.send("also this")
