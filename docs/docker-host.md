@@ -179,7 +179,7 @@ existing local entry manually instead of pasting again:
 ```
 
 The installer registers the provider for directly started local OpenCode too
-([global provider config](sessions.md#opencode-sessions)); manual broker login only stores its key.
+([global provider config](customizing-roles-and-tasks.md#opencode-sessions)); manual broker login only stores its key.
 
 `--auth-file` requires an absolute path and the selected provider's nonempty `type: api` entry in a JSON object
 of at most 1 MiB. It reads no key into argv or env; the keychain password may still be requested. Direct login
@@ -526,9 +526,9 @@ the Viewer, `--display none`, `[session.viewer]` and `ls --descendants` work as 
 
 ### Harness-owned workers
 
-Every session runs under its [session harness](sessions.md#session-harness), as on tmux, with or without an
+Every session runs under its [session harness](architecture.md#session-harness), as on tmux, with or without an
 [environment](#environments). A TUI or headless worker (Claude, Codex or OpenCode) is the
-[guard](sessions.md#guard-protocol) inside the container, the client's direct parent, reached through one
+[guard](architecture.md#guard-protocol) inside the container, the client's direct parent, reached through one
 `docker exec -i <container> /opt/ensemble/venv/bin/python -I <guard> [--terminal …] --lease <run>/lease -- with-secrets …`
 whose stdin and stdout carry the guard channel; `host.json` `kind` says `tui` or `headless`. A headless run needs a
 name: a nameless one is refused before anything is written (`a headless session on host docker needs a name`). One
@@ -602,7 +602,7 @@ See [Codex recovery](#recovery).
 The container is the isolation boundary, so every Docker session (crew worker, role or headless run; start, restart
 and resume) runs its client in yolo mode: no permission prompt or approval; it writes files, runs `gh` and reaches the
 network unasked, within the container's reach (workspace volume, the session's GitHub tokens, the network). Flags:
-[Client policy](sessions.md#client-policy).
+[Client policy](architecture.md#client-policy).
 
 ### Role runs
 
@@ -877,7 +877,7 @@ An unregistered account, an account selected for Codex or OpenCode, or a registe
 
 ### OpenCode
 
-OpenCode sessions run the host's Ollama models, or a configured provider's ([OpenCode sessions](sessions.md#opencode-sessions)).
+OpenCode sessions run the host's Ollama models, or a configured provider's ([OpenCode sessions](customizing-roles-and-tasks.md#opencode-sessions)).
 Ollama needs no login; each configured provider's API key comes from the broker ([Log in](#log-in)), which writes it
 to the container's `/run/ensemble/secrets/opencode/<name>.key` at start ([Credentials](credentials.md#who-logs-in)).
 A provider is reached through the [proxy](#egress-proxy). Add the `host:port` of each local or LAN provider's
@@ -894,7 +894,7 @@ An `http://` `base_url` sends the key in plaintext on the permitted path ([Risks
 2. Set its context length to at least 65536, or tool calls fail: for the Ollama app,
    `launchctl setenv OLLAMA_CONTEXT_LENGTH 65536`, then quit and reopen it; for `ollama serve`, start it with
    `OLLAMA_CONTEXT_LENGTH=65536`. A larger one: set `[session.clients.opencode] ollama_context` to it, or
-   OpenCode compacts as for 65536 ([OpenCode sessions](sessions.md#opencode-sessions)).
+   OpenCode compacts as for 65536 ([OpenCode sessions](customizing-roles-and-tasks.md#opencode-sessions)).
 3. Pull every `ollama/` model of the tiers and `model`, `ollama pull qwen3.6:35b-mlx` by default
    (`[session.clients.opencode.tiers]`; `ollama_port`, default 11434, is its port).
 

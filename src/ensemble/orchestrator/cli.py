@@ -271,7 +271,7 @@ def main(argv=None):
             print(
                 f"ensemble-orchestrator: {view.issue}: run ended ({outcome.status}); nothing"
                 f" resumed; its conversation: ensemble-crew reopen {view.issue}"
-                " (docs/sessions.md › Recall a closed run)",
+                " (docs/architecture.md › Recall a closed run)",
                 file=sys.stderr,
             )
         return record
