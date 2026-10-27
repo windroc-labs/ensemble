@@ -1,5 +1,7 @@
 # Upgrading
 
+## Broker protocol 30: Keychain rename
+
 Broker protocol 30 renames every broker keychain item to start with `ensemble-broker-` (`ensemble-claude` →
 `ensemble-broker-claude`, `ensemble-bot` → `ensemble-broker-bot`, `ensemble-env/<name>` → `ensemble-broker-env/<name>`
 and so on: [Credentials › Keychain items](credentials.md#keychain-items)), and the static secret references with
@@ -21,6 +23,12 @@ new broker right after step 3; `close` revokes its GitHub tokens from the rename
 environment secrets' `Withdrawn` entries. Every later upgrade: `install.sh` runs `retrust` on each new broker, which
 asks the login keychain password once and shows no dialog ([Docker host › Re-trust after an
 upgrade](docker-host.md#re-trust-after-an-upgrade)).
+
+A broker below protocol 30 cannot read the renamed items, so once a protocol 30 broker is installed,
+`scripts/install.sh` refuses a `--ref` (an older release or branch) whose broker speaks below 30, before it replaces
+the broker or `~/.egress/current`.
+
+## Release changes
 
 The built-in `verifier` now accepts every configured client, including Codex, OpenCode and Claude; board runs
 use their Agent label. Rebuild `mini-op:env` from mini-op's plain-skill version (WDRC-195) before starting one:
