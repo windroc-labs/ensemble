@@ -2785,6 +2785,41 @@ class OwnedRun(HarnessCase):
         with self.assertRaisesRegex(SessionError, "pane gone"):
             again.resume(input="again")
 
+    def test_resume_input_reaches_a_live_worker_while_its_drive_winds_down(self):
+        view = self.owned()
+        _seen, on = self.at_begun(
+            lambda: (self.record.bind(1, 1), self.record.complete(1, self.NEEDS, sid=SID))
+        )
+        view.run(on)
+        agent = view.driver.session
+        with RunState(Layout(self.work)).run_lock():
+            HarnessDelegate.attach(self.work, session_cls=HarnessSession).resume(input="the answer")
+        self.assertEqual(agent.sent, ["the answer"])
+
+    def test_status_and_resume_agree_while_the_run_lock_is_held(self):
+        view = self.owned()
+        stopped = Result(129, None, "stopped: Stopped: 129")
+        _seen, on = self.at_begun(
+            lambda: (self.record.bind(1, 1), self.record.complete(1, stopped, sid=SID))
+        )
+        view.run(on)
+        view.driver.session.liveness = Liveness.ABSENT
+        again, launches = (
+            HarnessDelegate.attach(self.work, session_cls=HarnessSession),
+            len(harness_launches()),
+        )
+        with RunState(Layout(self.work)).run_lock():
+            status = again.status()
+            self.assertEqual((status.alive, status.state), (True, StatusState.WORKING))
+            self.assertTrue(again.alive())
+            self.assertEqual(again.resume().sid, SID)
+            self.assertEqual(len(harness_launches()), launches)
+            self.assertEqual(self.metadata()["attempt"], 1)
+        status = again.status()
+        self.assertEqual((status.alive, status.state), (False, StatusState.GONE))
+        again.resume()
+        self.assertEqual(self.metadata()["attempt"], 2)
+
     def test_resume_of_an_ended_worker_registers_the_next_worker(self):
         view = self.owned()
         _seen, on = self.at_begun(lambda: (_ for _ in ()).throw(Stopped(129)))

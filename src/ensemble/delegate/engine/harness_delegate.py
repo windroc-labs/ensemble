@@ -589,17 +589,17 @@ class HarnessDelegate(Delegate):
             raise ConfigError(str(error)) from None
 
     def _alive(self, state: DelegateState) -> bool:
+        if self.store.running():
+            return True
         if owned(state.plan):
             if state.completed:
                 return False
-            if self.store.running():
-                return True
             agent = self._answered_agent(state) if state.bound else None
             return agent is not None and agent.alive()
         if state.detached:
             process = self._harness(state)
-            return process is not None and process.alive() or self.store.running()
-        return not state.completed and self.store.running()
+            return process is not None and process.alive()
+        return False
 
     def alive(self) -> bool:
         return self._alive(self._read())
@@ -1293,7 +1293,7 @@ class HarnessDelegate(Delegate):
             previous = self._state = state
             alive = self._alive(state)
             if input is not None:
-                if alive:
+                if alive and not (owned(state.plan) and state.completed):  # D9
                     raise ConfigError(f"{self.workdir}: delegate is still alive")
                 outcome = state.result.outcome if state.result is not None else None
                 if outcome is None or outcome.status != OutcomeStatus.NEEDS_INPUT:
