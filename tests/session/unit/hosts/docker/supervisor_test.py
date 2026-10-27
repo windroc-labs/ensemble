@@ -13,6 +13,7 @@ import logging
 import os
 import signal
 import threading
+import time
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest import mock
@@ -466,6 +467,15 @@ class HookWorkerTest(Base):
         self.assertEqual(self.call(), "hook error")
         self.assertIsNone(self.call(2))
         self.assertEqual(len(self.workers.calls), 2)
+
+    def test_stop_ends_the_process_at_its_stdin_eof_without_waiting_out_hook_wait(self):
+        self.assertIsNone(self.call())
+        proc = self.workers.procs[0]
+        began = time.monotonic()
+        self.supervisor.worker.stop()
+        self.assertLess(time.monotonic() - began, 5)
+        self.assertEqual(proc.returncode, 0)
+        self.assertIsNone(self.supervisor.worker.proc)
 
     def test_a_worker_that_ended_between_calls_is_replaced_unreported(self):
         self.assertIsNone(self.call())

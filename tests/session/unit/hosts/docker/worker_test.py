@@ -213,6 +213,17 @@ class HookTest(Base):
         self.assertEqual(ids[-1], "b" * 32)
         self.assertEqual(self.rejected(), ["hook"])
 
+    def test_no_hook_is_called_once_the_worker_stopped(self):
+        hooks = Hooks()
+        channel = self.make(hooks=hooks)
+        channel.stopped.set()
+        channel.accept(b"h", hook(delivery="a" * 32))
+        thread = threading.Thread(target=channel._deliver)
+        thread.start()
+        thread.join(5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(hooks.calls, [])
+
     def test_hooks_stay_in_order_and_hold_the_exit_code_until_journaled(self):
         gate = threading.Event()
 

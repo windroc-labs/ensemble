@@ -11,9 +11,17 @@ import signal
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
-from ensemble.session.engine.types import Activity, Blocked, TurnEnd, TurnStarted, WorkerHook
+from ensemble.session.engine.types import (
+    Activity,
+    Blocked,
+    ClientBound,
+    TurnEnd,
+    TurnStarted,
+    WorkerHook,
+)
 from ensemble.session.harness import guard
 from ensemble.session.hosts.docker import stub
 from ensemble.session.hosts.docker.hooks import HookWorker
@@ -34,7 +42,7 @@ STEPS = (
 
 class Broker:
     def maintain(self, container, manifest, delivered, *, root):
-        return None
+        return SimpleNamespace(next_check=None, deadline=None, results=[], notices=[])
 
     def close(self, container):
         return None
@@ -233,5 +241,11 @@ class SameEventsTest(Case):
         self.assertEqual(self.journal(guarded), self.journal(local))
         self.assertEqual(
             self.journal(guarded)[1],
-            [TurnStarted(), Activity("edit"), Blocked("Bash"), TurnEnd("Done.", 0)],
+            [
+                ClientBound("n1"),
+                TurnStarted(),
+                Activity("edit"),
+                Blocked("Bash"),
+                TurnEnd("Done.", 0),
+            ],
         )

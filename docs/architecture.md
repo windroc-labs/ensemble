@@ -45,7 +45,7 @@ flowchart TB
   end
   subgraph SE[ensemble.session]
     SC["cli.py<br>ensemble-session"]
-    DR["engine/: base · hosted_session · worker · types · records · tmux_cli<br>modes/: headless · tui · in_process<br>modes/client_adapters: Headless · JsonHeadless · Tui · InProcess<br>viewer/: viewer · display · placement · grid · iterm · hidden<br>hosts/base: Host · Process · Interactive · InteractiveProcess · Piped<br>hosts/types: SessionView · CommandView<br>hosts/reclaimed: ReclaimedGroup<br>hosts/tmux/: host · hook<br>hosts/docker/: host · worker · activity · guard_hook · hook · hooks · maintenance · broker · daemon · mounts · pipe · relay · stub · supervisor"]
+    DR["engine/: base · hosted_session · worker · types · records · tmux_cli<br>modes/: headless · tui · in_process<br>modes/client_adapters: Headless · JsonHeadless · Tui · InProcess<br>viewer/: viewer · display · placement · grid · iterm · hidden<br>hosts/base: Host · Process · Interactive · InteractiveProcess · Piped<br>hosts/types: SessionView · CommandView<br>hosts/reclaimed: ReclaimedGroup<br>hosts/tmux/: host · hook<br>hosts/docker/: host · worker · activity · guard_hook · hook · hooks · maintenance · broker · daemon · mounts · pipe · relay · stub · supervisor · types"]
     subgraph AD[clients/]
       CL[claude]
       CX[codex]

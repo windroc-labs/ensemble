@@ -1534,6 +1534,15 @@ class DockerHost(Host):
                     kill_group(proc)
                 cleanup = self._roll_back(None, container)
             raise SessionError(f"docker session {name}: {error}{cleanup}") from error
+        except BaseException:
+            if handle is not None:
+                with contextlib.suppress(SessionError):
+                    handle.close()
+            else:
+                if proc is not None:
+                    kill_group(proc)
+                self._roll_back(None, container)
+            raise
         laps.report(f"docker timing {name} {generation}")
         self._workers[name] = handle
         return handle

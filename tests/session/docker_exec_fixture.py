@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 GUARD = str(
     Path(__file__).resolve().parents[2] / "src" / "ensemble" / "session" / "harness" / "guard.py"
@@ -72,7 +73,7 @@ def docker(args: list[str]) -> int:
 
 class _Broker:
     def maintain(self, container, manifest, delivered, *, root):
-        return None
+        return SimpleNamespace(next_check=None, deadline=None, results=[], notices=[])
 
     def close(self, container):
         return None

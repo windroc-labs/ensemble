@@ -186,7 +186,7 @@ class DockerWorker(ManagedProcess):
         while True:
             with self.condition:
                 self.condition.wait_for(lambda: self.hook_queue or self.stopped.is_set())
-                if not self.hook_queue:
+                if not self.hook_queue or self.stopped.is_set():
                     return
                 hook, size = self.hook_queue[0]
                 self.delivering = True
@@ -252,8 +252,8 @@ class DockerWorker(ManagedProcess):
                 self.retry.clear()
                 continue
             break
-        self.stopped.set()
         with self.condition:
+            self.stopped.set()
             self.condition.notify_all()
             self.condition.wait_for(lambda: not self.delivering, self.hook_window)
         if self.hooks is not None:
