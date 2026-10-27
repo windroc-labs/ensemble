@@ -660,6 +660,45 @@ class EndingTest(HandlerCase):
         self.assertEqual(self.kinds_sent(), [])
         self.assertEqual(self.lines(), [])
 
+    LOST = Result(1, None, "stopped: session harness ended without a Result")
+
+    def lost(self, event) -> None:
+        """Another owner completes the attempt while the handler decides `event`: no note."""
+        self.call(TurnStarted())
+        before, feed = self.kinds(), handler.Attempt.feed
+
+        def racing(attempt, event):
+            self.record.complete(1, self.LOST, sid=SID)
+            return feed(attempt, event)
+
+        with mock.patch.object(handler.Attempt, "feed", racing):
+            self.call(event)
+        self.assertEqual(self.state().result, self.LOST)
+        self.assertEqual(self.kinds(), before)
+        self.assertNotIn(("finished", 1), self.kinds_sent())  # a Progress event is not stored
+
+    def test_a_lost_turn_failure_writes_no_notes(self):
+        self.lost(TurnFailed("api_error", "overloaded"))
+
+    def test_a_lost_outcome_writes_no_progress_note(self):
+        self.lost(TurnEnd(f"{START}\n{block(DONE)}", 0))
+
+    def test_a_lost_give_up_writes_no_notes(self):
+        self.call(TurnStarted())
+        before = self.kinds()
+        self.record.complete(1, self.LOST, sid=SID)
+        next(t for t in Timer.made if t.started and not t.cancelled).fire()
+        self.assertEqual(self.kinds(), before)
+        self.assertEqual(self.kinds_sent(), [])
+
+    def test_notes_of_an_event_that_ends_nothing_are_written(self):
+        self.call(TurnStarted())
+        self.call(Reply(START))
+        self.assertEqual(self.kinds()[-1], "progress")
+        self.call(LimitHit(None))
+        self.assertEqual(self.kinds()[-1], "limit")
+        self.assertFalse(self.state().completed)
+
 
 class OwnedCloseTest(HandlerCase):
     """FR-34: a close ends the owned run's active attempt once, as a stop; never an ended one."""

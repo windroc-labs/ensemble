@@ -61,7 +61,9 @@ def on_event(call: EventCall) -> None:
 
 
 class _Run:
-    """One worker generation's attempts; `deferred`: a locked idle give-up's Finished."""
+    """One worker generation's attempts; `deferred`: a locked idle give-up's Finished; `notes`:
+    an event's, written unless its ending loses.
+    """
 
     def __init__(self, workdir: str) -> None:
         self.record = RunRecord(Layout(workdir))
@@ -76,6 +78,20 @@ class _Run:
         self.ticks = 0
         self.blocked = False
         self.deferred: Result | None = None
+        self.notes: list[tuple[str, dict]] = []
+        self.log: RunLog | None = None
+
+    def note(self, kind: str, **fields) -> None:
+        self.notes.append((kind, fields))
+
+    def flush(self) -> None:
+        notes, self.notes, log = self.notes, [], self.log
+        for kind, fields in notes:
+            try:
+                assert log is not None
+                log.note(kind, **fields)
+            except OSError as error:
+                say(f"delegate: {error}")
 
     def handle(self, call: EventCall, token: int) -> None:
         event = call.event
@@ -106,6 +122,9 @@ class _Run:
         except OSError as error:  # a deliverable it could not save: the attempt ends
             say(f"delegate: {error}")
             result = stopped(error)
+        except BaseException:
+            self.flush()
+            raise
         if isinstance(event, Exited) and (
             result is None or result.outcome is None and result.limit is None
         ):
@@ -129,6 +148,7 @@ class _Run:
         if result is not None:
             self.end(result)
             return
+        self.flush()
         if isinstance(event, Blocked):
             self.blocked = True
         elif not (self.blocked and isinstance(event, Reply)):
@@ -146,12 +166,12 @@ class _Run:
             if state.callback is None
             else EventCallback(state.callback, self.record.store, sid=p.sid, attempt=state.attempt)
         )
-        note = RunLog(p.session.workdir).note
+        self.log = RunLog(p.session.workdir)
         self.attempt = Attempt(
             p,
-            POLICIES[Mode.TUI](note, None),
+            POLICIES[Mode.TUI](self.note, None),
             session,
-            note=note,
+            note=self.note,
             on_event=self.emit,
             first=not p.spec.resume and state.previous is None,
         )
@@ -184,9 +204,12 @@ class _Run:
             if tick != self.ticks or self.attempt is None:
                 return
             try:
-                if (result := self.attempt.idle(idle)) is not None:
+                if (result := self.attempt.idle(idle)) is None:
+                    self.flush()
+                else:
                     self.end(result, timer=True)
             except (ConfigError, OSError, SessionError) as error:
+                self.flush()
                 say(f"delegate: {error}")
 
     def end(self, result: Result, *, timer: bool = False) -> None:
@@ -195,7 +218,9 @@ class _Run:
         state, n, self.attempt = self.state, self.n, None
         assert state is not None and n is not None
         if not self.record.complete(n, result, sid=state.plan.sid):
+            self.notes.clear()
             return
+        self.flush()
         if finish(state, result, self.session) and timer:
             self.deferred = result
             return
