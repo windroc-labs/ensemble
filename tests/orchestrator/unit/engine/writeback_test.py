@@ -1422,10 +1422,13 @@ USER = "c0000000-0000-4000-8000-000000000041"
 
 
 class QuestionAssignee(Base):
-    """A run's question assigns its issue to the configured user before its comment."""
+    """An assign stage's question assigns its issue to the configured user before its comment."""
 
     QUESTION = Outcome("needs_input", "Question", "", questions=["Which repo?"])
-    BODY = f"Question:\n1. Which repo?\n\n{FOOTER}"
+    BODY = f"1. Which repo?\n\n{FOOTER}"
+
+    def ctx(self, role="pm", *, gql=None):
+        return super().ctx(role, gql=gql)
 
     def calls(self, body, *, assign=True):
         calls = expect(body=body, state="in_review")
@@ -1441,16 +1444,22 @@ class QuestionAssignee(Base):
         self.assertTrue(writeback.finish(self.ctx(gql=gql), self.QUESTION))
         self.assertEqual(gql.calls, self.calls(self.BODY, assign=False))
 
+    def test_a_stage_without_assign_never_assigns(self):
+        gql = Gql()
+        ctx = replace(self.ctx("engineer", gql=gql), assignee=USER)
+        self.assertTrue(writeback.finish(ctx, self.QUESTION))
+        self.assertEqual(
+            gql.calls, expect(body=f"Question:\n1. Which repo?\n\n{FOOTER}", state="in_review")
+        )
+
     def test_done_and_failed_never_assign(self):
         for o in (
-            Outcome("done", "ENG-7: x", "Adds x.", url=PR),
-            Outcome("failed", "ENG-7: x", "push not permitted"),
+            Outcome("done", "Registry", "PRD for it.", url=PRD),
+            Outcome("failed", "Registry", "Could not publish."),
         ):
             with self.subTest(status=o.status):
                 gql = Gql()
-                writeback.finish(
-                    replace(self.ctx(gql=gql), assignee=USER, target=TARGET, resume=True), o
-                )
+                writeback.finish(replace(self.ctx(gql=gql), assignee=USER, resume=True), o)
                 self.assertNotIn("assign", [name for name, _ in gql.calls])
 
     def test_assign_failure_noted_move_made(self):

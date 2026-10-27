@@ -890,6 +890,14 @@ class FakeLinear:
         self._touch(rec)
         return {"issueUpdate": {"success": True}}
 
+    def _assign(self, caller, v):
+        if v["a"] not in self.users:
+            raise Problem(f"Entity not found: {'User'}")
+        rec = self._get(v["i"])
+        rec["assignee"] = v["a"]
+        self._touch(rec)
+        return {"issueUpdate": {"success": True}}
+
     def _update(self, caller, v):
         rec, new = self._get(v["i"]), v["in"]
         if extra := sorted(set(new) - UPDATE):
@@ -1035,6 +1043,7 @@ OPS = {
     "sessions.Q_STATE_NAME": FakeLinear._state_name,
     "sessions.M_UPDATE": FakeLinear._comment_update,
     "writeback.M_TITLE": FakeLinear._set_title,
+    "writeback.M_ASSIGN": FakeLinear._assign,
     "writeback.M_ATTACH": FakeLinear._attach,
     "writeback.M_UNARCHIVE": FakeLinear._unarchive,
     "writeback.Q_ATTACHED": FakeLinear._issue,

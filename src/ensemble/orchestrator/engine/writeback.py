@@ -466,7 +466,7 @@ def _finish(ctx, o, steps="", *, move=True):
     ):
         return False
     if state == "in_review" and move:
-        if o.status == OutcomeStatus.NEEDS_INPUT and ctx.assignee:
+        if task.assign and o.status == OutcomeStatus.NEEDS_INPUT and ctx.assignee:
             body += _assign(ctx)
         body += ctx.tracker.notify(issue, ctx.humans)
     if _post(ctx, f"{steps}comment", body):

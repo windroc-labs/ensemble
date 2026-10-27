@@ -87,7 +87,8 @@ max_runs = 3
 # The Linear tracker's entities and keys, by id; required only with tracker = "linear".
 #   team              local, required: the Linear team id
 #   human_members     local: the human users' emails; each is subscribed to every issue moved to In Review; [] → none
-#   assignee_id       local: the Linear user id of the human each run's question assigns its issue to; "" → none
+#   assignee_id       local: the Linear user id of the human an assign stage's question (workflow.toml) assigns its
+#                     issue to; "" → none
 #   task_label_group  local, required: Linear id of the `Tasks` label group; its labels pick an issue's task through
 #                     [linear.task_labels]
 [linear]
