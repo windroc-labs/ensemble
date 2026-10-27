@@ -24,7 +24,7 @@ from ensemble.session.engine.types import (
     TurnEnd,
     Unanswered,
 )
-from ensemble.session.harness.channel import Channel
+from ensemble.session.harness.channel import Channel, Tie
 from ensemble.session.harness.types import Logged, Op
 from ensemble.utils import Display, Record, Status
 
@@ -83,7 +83,8 @@ class _Reader:
 
 class OwnedSession(Session):
     """attach: the read-only attach, bound to sid and generation; replay: start past the log. A
-    headless view's events() stops its worker on an interrupt, as a headless HostedSession does.
+    headless view's events() stops its worker on an interrupt, as a headless HostedSession does;
+    tie: a headless start's caller pipe, its harness closing the worker once the view is gone.
     """
 
     def __init__(
@@ -98,8 +99,10 @@ class OwnedSession(Session):
         attach: Callable[[], Session],
         replay: bool = False,
         mode: Mode = Mode.TUI,
+        tie: Tie | None = None,
     ) -> None:
         self.sid, self.client, self.mode, self.name = sid, client, mode, name
+        self._tie = tie
         self.generation = generation
         self._channel, self._idle, self._attach = channel, idle_timeout, attach
         self._attached: Session | None = None
@@ -145,6 +148,8 @@ class OwnedSession(Session):
                     yield IdleTimeout(self._idle)
                     continue
             time.sleep(wait)
+        if self._tie is not None:  # its run is over
+            self._tie.close()
 
     @property
     def reply(self) -> str | None:

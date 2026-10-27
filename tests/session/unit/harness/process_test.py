@@ -2,6 +2,7 @@
 handlers get it, serving close and stop, and draining its handlers after the worker's exit.
 """
 
+import contextlib
 import json
 import os
 import threading
@@ -294,6 +295,55 @@ class CloseRequestTest(Base):
         harness.signalled(15, None)
         thread.join(WAIT)
         self.assertEqual((self.code, owned.calls[0], self.types()), (0, "close", ["Exited"]))
+
+
+class CallerTest(Base):
+    """A headless start's harness reads the far end of its caller's pipe."""
+
+    def setUp(self):
+        super().setUp()
+        self.far, self.near = os.pipe()
+        self.addCleanup(self.closed, self.far)
+        self.addCleanup(self.closed, self.near)
+
+    def closed(self, fd):
+        with contextlib.suppress(OSError):
+            os.close(fd)
+
+    def caller_harness(self, owned) -> Harness:
+        self.begin = mock.Mock(return_value=(owned, [], []))
+        return Harness(self.channel, poll=0.01, drain=1.0, close_wait=0.1, caller=self.far)
+
+    def test_a_gone_caller_closes_its_worker(self):
+        owned = FakeOwned(([TurnStarted()], False), code=-1)
+        thread = self.run_in_thread(self.caller_harness(owned))
+        while "TurnStarted" not in self.types():
+            time.sleep(0.01)
+        os.close(self.near)
+        thread.join(WAIT)
+        self.assertEqual((self.code, owned.calls), (0, ["close", "confirm_end"]))
+        self.assertEqual(self.types(), ["TurnStarted", "TurnFailed", "Exited"])
+
+    def test_a_live_caller_leaves_it_running(self):
+        owned = FakeOwned(([TurnStarted()], False), code=0)
+        thread = self.run_in_thread(self.caller_harness(owned))
+        while "TurnStarted" not in self.types():
+            time.sleep(0.01)
+        time.sleep(0.1)
+        self.assertEqual((owned.calls, self.channel.status()["state"]), ([], "running"))
+        self.assertTrue(self.request(Op.CLOSE))
+        thread.join(WAIT)
+
+    def test_its_option_is_the_caller_fd_before_its_dir(self):
+        self.assertEqual(
+            [process._caller(option) for option in ([], ["--caller", "7"], ["--caller", "-1"])],
+            [None, 7, -1],
+        )
+
+    def test_main_refuses_a_bad_caller_fd(self):
+        for argv in (["--caller", "x", "d"], ["--caller", "-1", "d"], ["--other", "3", "d"]):
+            with self.subTest(argv=argv):
+                self.assertEqual(process.main(["process", *argv]), 2)
 
 
 class ExitTest(Base):

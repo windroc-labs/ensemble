@@ -5,6 +5,7 @@ fake: a registered handler and the view's events() see the same turn events.
 import json
 import os
 import shlex
+import subprocess
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
@@ -25,14 +26,16 @@ from ensemble.session.engine.types import (
     TurnFailed,
     TurnStarted,
 )
+from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.view import OwnedSession
-from ensemble.session.hosts.base import Host
+from ensemble.session.hosts.base import HARNESS_ROOT, Host
 from tests.session import live_tmux
 from tests.session.case import HOSTS, REPO, Case
 from tests.session.cli_support import logged
 from tests.session.integration.clients.claude import fake_claude
 from tests.session.integration.clients.codex import fake_codex
 from tests.session.integration.clients.opencode import fake_opencode
+from tests.session.integration.harness import headless_caller
 
 HANDLER = "tests.session.integration.harness.recording_handler"
 TURNS = ("TurnStarted", "TurnFailed", "TurnEnd", "Exited")
@@ -205,6 +208,44 @@ class ClaudeViewTest(ClaudeHeadless):
         gate.touch()
         self.assertEqual(self.wait_for("Exited")[-1]["returncode"], 0)
         live_tmux.wait(lambda: not view.alive(), WAIT, what="the view dead")
+
+
+class ClaudeCallerTest(ClaudeHeadless):
+    def harness_pid(self) -> int:
+        (found,) = Path(os.path.expanduser(HARNESS_ROOT)).glob("*/harness.json")
+        return Channel(str(found.parent)).status()["pid"]
+
+    def test_a_killed_caller_takes_its_harness_and_its_run_with_it(self):
+        self.scene(steps=["working"], hang=True)
+        handler = self.handlers()[0]
+        args = {
+            "clients": {"claude": CLAUDE},
+            "hosts": {"tmux": HOSTS["tmux"], "default": "tmux"},
+            "workdir": str(self.work),
+            "cwd": str(self.cwd),
+            "handler": [handler.module, handler.state, list(handler.roots)],
+        }
+        caller = subprocess.Popen(
+            [sys.executable, headless_caller.__file__, json.dumps(args)],
+            cwd=REPO,
+            env={**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)},
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        self.addCleanup(caller.wait)
+        self.addCleanup(caller.kill)
+        self.addCleanup(caller.stdout.close)
+        self.assertTrue(caller.stdout.readline())  # started
+        harness = self.harness_pid()
+        pid = self.pid()
+        self.wait_for("Reply")
+        caller.kill()  # no stop request: its harness sees only the pipe end
+        caller.wait()
+        live_tmux.wait(lambda: not running(pid), WAIT, what=f"the fake {pid} gone")
+        live_tmux.wait(lambda: not running(harness), WAIT, what=f"the harness {harness} gone")
+        handled = [r["type"] for r in self.wait_for("Exited")]
+        self.assertEqual(handled, ["TurnStarted", "TurnFailed", "Exited"])
 
 
 class CodexSuccessTest(Headless):

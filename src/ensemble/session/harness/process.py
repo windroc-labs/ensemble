@@ -1,5 +1,6 @@
-"""The session harness, `python3 -P -s -m ensemble.session.harness.process <dir>`: owns one
-worker from start to close (docs/sessions.md › Session harness). SIGTERM and SIGHUP close.
+"""The session harness, `python3 -P -s -m ensemble.session.harness.process [--caller FD] <dir>`:
+owns one worker from start to close (docs/sessions.md › Session harness). SIGTERM, SIGHUP and EOF
+on FD (a headless start's caller pipe, channel.Tie) close.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from ensemble.session.engine.types import (
     TurnFailed,
     TurnStarted,
 )
-from ensemble.session.harness.channel import SLICE, Channel, encode
+from ensemble.session.harness.channel import SLICE, Channel, encode, hung_up
 from ensemble.session.harness.dispatch import Dispatch, load_handlers
 from ensemble.session.harness.types import Logged, Op
 
@@ -104,8 +105,11 @@ class Harness:
         poll: float = POLL,
         close_wait: float = CLOSE_WAIT,
         drain: float = DRAIN,
+        caller: int | None = None,
     ) -> None:
+        """caller: the far end of its caller's pipe, if any."""
         self._channel, self._poll, self._close_wait, self._drain = channel, poll, close_wait, drain
+        self._caller = caller
         self._status: dict[str, Any] = {"state": "starting", "pid": os.getpid(), "pending": 0}
         self._seq, self._written = 0, 0.0
         self._signal: int | None = None
@@ -156,6 +160,9 @@ class Harness:
                 if code is not None:
                     self._leftover = batch[index + 1 :]  # taken already: served after the exit
                     return code
+            if self._caller is not None and hung_up(self._caller):
+                LOG.info("session harness %s: its caller ended", self._channel.directory)
+                self._caller, self._signal = None, signal.SIGHUP  # closed once, as for a signal
             if self._signal is not None:
                 code = self._end(worker, Op.CLOSE, None)
                 if code is not None:
@@ -299,22 +306,35 @@ def _begin(directory: str, session: type[HostedSession] = HostedSession) -> Begi
 
 def main(argv: Sequence[str]) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    if len(argv) != 2:
-        print("usage: python3 -m ensemble.session.harness.process HARNESS_DIR", file=sys.stderr)
+    caller = _caller(argv[1:-1])
+    if len(argv) not in (2, 4) or caller == -1:
+        print(
+            "usage: python3 -m ensemble.session.harness.process [--caller FD] HARNESS_DIR",
+            file=sys.stderr,
+        )
         return 2
-    channel = Channel(argv[1])
+    channel = Channel(argv[-1])
     try:
         channel.hold()
     except (OSError, SessionError) as error:
-        print(f"session harness {argv[1]}: {error}", file=sys.stderr)
+        print(f"session harness {argv[-1]}: {error}", file=sys.stderr)
         return 1
-    harness = Harness(channel)
+    harness = Harness(channel, caller=caller)
     for number in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(number, harness.signalled)
     try:
         return harness.run(_begin(channel.directory))
     finally:
         channel.release()
+
+
+def _caller(option: Sequence[str]) -> int | None:
+    """`--caller FD`'s FD, None without it, -1 when bad."""
+    if not option:
+        return None
+    if len(option) != 2 or option[0] != "--caller" or not option[1].isdigit():
+        return -1
+    return int(option[1])
 
 
 if __name__ == "__main__":

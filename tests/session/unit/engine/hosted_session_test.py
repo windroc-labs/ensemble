@@ -6,11 +6,13 @@ test on a configured class (self.session) with caller-owned dependencies.
 import contextlib
 import dataclasses
 import fcntl
+import gc
 import io
 import itertools
 import json
 import logging
 import os
+import select
 import shlex
 import signal
 import stat
@@ -3187,6 +3189,7 @@ class OwnedStartTest(Case):
             ("w1", SID, "claude", "g7"),
         )
         self.assertEqual(argv[1:], ["-P", "-s", "-m", hosted_session.HARNESS, channel.directory])
+        self.assertEqual(kwargs.get("pass_fds", ()), ())  # a tui worker outlives its caller
         self.assertTrue(kwargs["start_new_session"])
         self.assertEqual(kwargs["stdin"], kwargs["stdout"])
         request = os.path.join(channel.directory, "request.json")
@@ -3237,6 +3240,16 @@ class OwnedStartTest(Case):
         with (
             mock.patch("time.monotonic", side_effect=lambda: next(clock)),
             self.assertRaisesRegex(SessionError, "did not start"),
+        ):
+            self.session_cls.start(self.spec())
+        self.popen.return_value.kill.assert_called_once_with()
+        self.assertFalse(os.path.exists(self.spawned[2].directory))
+
+    def test_an_interrupted_start_kills_its_harness_and_its_dir_goes(self):
+        self.harness_writes({"state": "starting"})
+        with (
+            mock.patch("time.sleep", side_effect=KeyboardInterrupt),
+            self.assertRaises(KeyboardInterrupt),
         ):
             self.session_cls.start(self.spec())
         self.popen.return_value.kill.assert_called_once_with()
@@ -3299,6 +3312,38 @@ class OwnedHeadlessStartTest(Case):
         harness.terminate.assert_called_once_with()
         harness.wait.assert_any_call(hosted_session.CLOSE_WAIT)
         self.assertFalse(os.path.exists(self.spawned[2].directory))
+
+    def test_an_interrupted_start_terminates_its_harness_and_its_dir_goes(self):
+        self.harness_writes({"state": "starting"})
+        with (
+            mock.patch("time.sleep", side_effect=KeyboardInterrupt),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            self.session_cls.start(self.spec())
+        self.popen.return_value.terminate.assert_called_once_with()
+        self.assertFalse(os.path.exists(self.spawned[2].directory))
+
+    def test_its_harness_reads_a_pipe_that_ends_with_its_view(self):
+        held = []
+
+        def spawn(argv, **kwargs):
+            (far,) = kwargs["pass_fds"]
+            self.assertEqual(argv[-3:-1], ["--caller", str(far)])
+            held.append(os.dup(far))  # the harness's copy
+            Channel(argv[-1]).write_status(
+                {"state": "running", "name": None, "sid": SID, "generation": "g7"}
+            )
+            return self.popen.return_value
+
+        self.popen.side_effect = spawn
+        session = self.session_cls.start(self.spec())
+        (far,) = held
+        self.addCleanup(os.close, far)
+        self.assertEqual(select.select([far], [], [], 0)[0], [])  # its caller holds the other end
+        del session
+        gc.collect()
+        self.assertEqual(select.select([far], [], [], 0)[0], [far])
+        self.assertEqual(os.read(far, 1), b"")  # EOF: the harness closes its worker
 
 
 class OwnedGateTest(Case):

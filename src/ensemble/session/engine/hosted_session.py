@@ -58,7 +58,7 @@ from ensemble.session.engine.types import (
     Unanswered,
     Usage,
 )
-from ensemble.session.harness.channel import REQUEST_WAIT, SLICE, Channel
+from ensemble.session.harness.channel import REQUEST_WAIT, SLICE, Channel, Tie
 from ensemble.session.harness.dispatch import load_handlers
 from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedSession, fold
@@ -454,6 +454,8 @@ class HostedSession(Session):
         roots = cls._roots(spec.client)
         request = cls.harness_request(spec, display=display, host=host, roots=roots)
         channel = Channel.create()
+        tie = None if mode == Mode.TUI else Tie()  # a tui worker outlives its caller
+        caller = () if tie is None else ("--caller", str(tie.far))
         try:
             channel.write_request(request)
             with open(channel.log, "ab") as log:
@@ -464,6 +466,7 @@ class HostedSession(Session):
                         "-s",
                         "-m",
                         HARNESS,
+                        *caller,
                         channel.directory,
                     ],
                     env={**os.environ, **source_path(roots)},
@@ -472,34 +475,42 @@ class HostedSession(Session):
                     stdout=subprocess.DEVNULL,
                     stderr=log,
                     start_new_session=True,
+                    pass_fds=() if tie is None else (tie.far,),
                 )
         except BaseException as error:
+            if tie is not None:
+                tie.close()
             shutil.rmtree(channel.directory, ignore_errors=True)  # request.json holds spec.env
             if isinstance(error, TypeError | ValueError):
                 raise ConfigError(f"session harness request: not JSON: {error}") from None
             if isinstance(error, OSError):
                 raise SessionError(f"session harness: {error.strerror or error}") from None
             raise
+        if tie is not None:
+            tie.handed()
         deadline = time.monotonic() + START_WAIT
-        while True:
-            status = channel.status()
-            if status.get("state") in ("running", "exited"):  # exited: its worker ended at once
-                break
-            if (
-                status.get("state") == "failed"
-                or harness.poll() is not None
-                or time.monotonic() > deadline
+        try:  # an interrupt too: no view, so nothing would ever close it
+            while True:
+                status = channel.status()
+                if status.get("state") in ("running", "exited"):  # exited: it ended at once
+                    break
+                if (
+                    status.get("state") == "failed"
+                    or harness.poll() is not None
+                    or time.monotonic() > deadline
+                ):
+                    raise _start_error(channel, status)
+                time.sleep(SLICE)
+            generation = status.get("generation")
+            if (status.get("name"), status.get("sid")) != (spec.name, spec.sid) or not isinstance(
+                generation, str
             ):
-                error = _start_error(channel, status)
-                cls._unspawn(channel, harness, spec.name, host, mode)
-                raise error
-            time.sleep(SLICE)
-        generation = status.get("generation")
-        if (status.get("name"), status.get("sid")) != (spec.name, spec.sid) or not isinstance(
-            generation, str
-        ):
+                raise SessionError(f"session harness {channel.directory}: started another session")
+        except BaseException:
             cls._unspawn(channel, harness, spec.name, host, mode)
-            raise SessionError(f"session harness {channel.directory}: started another session")
+            if tie is not None:
+                tie.close()
+            raise
         return cls._view(
             channel,
             name=spec.name,
@@ -510,6 +521,7 @@ class HostedSession(Session):
             idle_timeout=idle_timeout,
             mode=mode,
             spec=spec,
+            tie=tie,
         )
 
     @classmethod
@@ -816,8 +828,11 @@ class HostedSession(Session):
         attached: Session | None = None,
         mode: Mode = Mode.TUI,
         spec: Spec | None = None,
+        tie: Tie | None = None,
     ) -> OwnedSession:
-        """The only way a view is built; a headless one's (`spec` its run's) has no terminal."""
+        """The only way a view is built; a headless one's (`spec` its run's) has no terminal; a
+        headless start's holds its Tie.
+        """
         if mode == Mode.TUI:
             assert name is not None
 
@@ -840,6 +855,7 @@ class HostedSession(Session):
             attach=attach,
             replay=replay,
             mode=mode,
+            tie=tie,
         )
 
     @classmethod
