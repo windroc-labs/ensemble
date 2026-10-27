@@ -570,13 +570,6 @@ class SocketPathTest(Case):
     def socket(self, directory, name):
         return os.path.join(directory, "a" * 32, name)
 
-    def sized_root(self, length, name):
-        """A root under self.home whose tui and one-shot `name` sockets are `length` bytes."""
-        pad = length - len(os.fsencode(self.socket(managed.location("tmux", "x"), name))) - 1
-        if pad < 1:
-            self.skipTest("temp HOME too long to size a root")
-        return os.path.join(self.home, "r" * pad)
-
     def test_the_default_root_bounds_every_socket_under_a_long_temp_dir(self):
         with (
             mock.patch.dict(os.environ),
@@ -589,29 +582,30 @@ class SocketPathTest(Case):
                     path = self.socket(directory, name)
                     self.assertLessEqual(len(os.fsencode(path)), 103, path)
 
-    def test_a_worker_starts_at_the_limit_and_is_refused_one_byte_over_it(self):
+    def test_a_worker_passes_the_check_at_the_limit_and_is_refused_one_byte_over_it(self):
+        """Roots sized from `/`, whatever the host's temp dir; a start stops at its first mkdir."""
         host = TmuxHost("tmux", tmux=mock.Mock())
         launch = Launch((sys.executable,), cwd=self.home)
-        for terminal, flag, name in (
-            (True, "--display-socket", "display"),
-            (False, "--hook-socket", "hook"),
-        ):
+        for terminal, name in ((True, "display"), (False, "hook")):
             with self.subTest(terminal=terminal):
-                at = self.sized_root(103, name)
-                with (
-                    mock.patch.dict(os.environ, {"ENSEMBLE_CONTROL_ROOT": at}),
-                    mock.patch.object(managed.subprocess, "Popen", side_effect=OSError) as spawn,
-                    self.assertRaises(SessionError),
-                ):
-                    host.worker("worker", launch, terminal=terminal)
-                argv = spawn.call_args.args[0]
-                self.assertEqual(len(os.fsencode(argv[argv.index(flag) + 1])), 103)
-                over = self.sized_root(104, name)
-                with (
-                    mock.patch.dict(os.environ, {"ENSEMBLE_CONTROL_ROOT": over}),
-                    mock.patch.object(managed.subprocess, "Popen", side_effect=OSError) as spawn,
-                    self.assertRaisesRegex(ConfigError, r"104 bytes, over the 103-byte"),
-                ):
-                    host.worker("worker", launch, terminal=terminal)
-                spawn.assert_not_called()
-                self.assertFalse(os.path.lexists(over))
+                with mock.patch.dict(os.environ, {"ENSEMBLE_CONTROL_ROOT": "/"}):
+                    pad = 103 - len(os.fsencode(self.socket(managed.location("tmux", "x"), name)))
+                at, over = "/" + "r" * (pad - 1), "/" + "r" * pad
+                for root in (at, over):
+                    self.assertFalse(os.path.lexists(root))
+                    with (
+                        mock.patch.dict(os.environ, {"ENSEMBLE_CONTROL_ROOT": root}),
+                        mock.patch.object(os, "mkdir", side_effect=PermissionError) as mkdir,
+                        mock.patch.object(managed.subprocess, "Popen") as spawn,
+                    ):
+                        if root == at:
+                            with self.assertRaises(PermissionError):
+                                host.worker("worker", launch, terminal=terminal)
+                            self.assertEqual(mkdir.call_args.args[0], at)
+                        else:
+                            with self.assertRaisesRegex(
+                                ConfigError, "104 bytes, over the 103-byte"
+                            ):
+                                host.worker("worker", launch, terminal=terminal)
+                            mkdir.assert_not_called()
+                        spawn.assert_not_called()
