@@ -208,7 +208,8 @@ ignoring other clients’ caches and older OpenCode packages ([commands](../READ
 Rerun the installer once to refresh older launchers and record that selection, even if their files already exist.
 After a client plugin update removes the selected directory, the next command selects that same client's newest
 installed ensemble copy, records its path and reports it on stderr; no installer rerun is needed. It never selects
-another client's copy. If the selected client has no installed copy left, the command keeps the selected-plugin error.
+another client's copy, nor an OpenCode copy of another ref (its package's `#<ref>`, none meaning `main`). If no such
+copy is left, the command keeps the selected-plugin error and the selection: rerun the installer.
 Equal versions use sorted paths to break ties. The installer also handles older refs whose launchers predate selection support.
 After plugin refresh, when
 the plugin's broker sources changed, or the installed broker speaks another protocol, it reinstalls the broker, reusing locally usable Claude and ready Codex
