@@ -255,6 +255,30 @@ def _owned(setup: _Setup, mode: Mode, client: Client, on: Host) -> bool:
     return run is not None and run._owned
 
 
+def _refuse_running(name: str, on: Host) -> None:
+    """A second start of tui session `name` while its owner runs it: refused at once, before the
+    gate (a running owner is the only one asked; the gate only waits out a reaping guard).
+    """
+    try:
+        state = tui.TuiMode.snapshot(name)
+    except SessionError:
+        return
+    channel = channel_bound(name, state)
+    if channel is not None and channel.status().get("state") == "running":
+        tui.TuiMode.running(name, host=on)
+
+
+def _resume_check(spec: Spec, client: Client, name: str) -> None:
+    """An owned resume of a conversation its client keeps no transcript of is refused, never
+    started as a new empty one (FR-18); unknown goes on.
+    """
+    if not spec.resume or spec.sid is None:
+        return
+    info = SessionInfo(spec.sid, spec.access.cwd, spec.access.project, "", "")
+    if _resumable(lambda: client, info, spec).resumable == Resumable.NO:
+        raise ConfigError(f"session {name}: conversation {spec.sid} has no transcript to resume")
+
+
 def _start_error(channel: Channel, status: Mapping) -> SessionError | ConfigError:
     """From harness.json, else its log's last line."""
     error = status.get("error")
@@ -372,6 +396,10 @@ class HostedSession(Session):
         _environment_check(spec, on, mode)
         cls.viewer()
         displays.validate_display(display, on)
+        if _owned(setup, mode, client, on):
+            name = tui.TuiMode.resolve_name(spec)
+            _refuse_running(name, on)
+            _resume_check(spec, client, name)
         MODES[mode].preflight(
             spec,
             client,
@@ -407,6 +435,9 @@ class HostedSession(Session):
             )
         spec = replace(spec, sid=spec.sid or str(uuid.uuid4()))
         spec = replace(spec, name=tui.TuiMode.resolve_name(spec))
+        assert spec.name is not None
+        _refuse_running(spec.name, on)
+        _resume_check(spec, client, spec.name)
         return cls._spawn(spec, display=display, host=host, idle_timeout=idle_timeout)
 
     @classmethod
@@ -769,12 +800,27 @@ class HostedSession(Session):
             attach=lambda: (
                 attached or cls._attached(name, sid=sid, host=host, generation=generation)
             ),
+            retire=lambda: cls._retire(name, sid=sid, host=host, generation=generation),
             replay=replay,
         )
 
     @classmethod
     def retire(cls, name: str, *, sid: str | None = None, host: str | None = None) -> None:
         """A bound owner's confirmed close, else closed here."""
+        cls._retire(name, sid=sid, host=host)
+
+    @classmethod
+    def _retire(
+        cls,
+        name: str,
+        *,
+        sid: str | None = None,
+        host: str | None = None,
+        generation: str | None = None,
+    ) -> None:
+        """generation: the caller's (a view's); while session.json is another's, or gone, nothing
+        is asked or closed. Without an owner, an owned record goes by the record rule.
+        """
         setup = cls._config()
         on = cls.host(host)
         store = tui.TuiStore.attach(name, host=on, sid=sid)
@@ -782,6 +828,8 @@ class HostedSession(Session):
             state = store.read()
         except SessionError:
             state = None
+        if generation is not None and (state is None or state.get("generation") != generation):
+            return
         if state is not None and (channel := channel_bound(name, state)) is not None:
             store.check()
             if channel.request(Op.CLOSE):
@@ -790,9 +838,10 @@ class HostedSession(Session):
             clients = [store.read()["client"]]
         except SessionError:
             clients = setup.registry.configured()
-        store.close()
+        removed = store.close(generation=generation)
         try:
-            cls.viewer().close(name, on)
+            if removed:
+                cls.viewer().close(name, on)
         finally:
             for client in clients:
                 cls._reconcile_capacity(client, {_host_key(setup, host or setup.hosts.default): on})
@@ -1083,9 +1132,9 @@ class HostedSession(Session):
 
     def close(self) -> None:
         name = self._tui()
-        self._running.close()
+        kept = self._running.close() is False  # a tui record of another generation stays
         try:
-            if name is not None:
+            if name is not None and not kept:
                 self._viewer.close(name, self._host)
         finally:
             self._release_capacity()
@@ -1177,32 +1226,42 @@ class Owned:
 
     def stop(self) -> list[SessionEvent | Stderr | ClientBound]:
         """Its last read's events, then stopped."""
-        final = self._session._step(0)[0]
+        final = self._final()
         self._session.stop()
         return final
 
     def close(self) -> list[SessionEvent | Stderr | ClientBound]:
         """Its last read's events, then closed."""
-        final = self._session._step(0)[0]
+        final = self._final()
         self._session.close()
         return final
+
+    def _final(self) -> list[SessionEvent | Stderr | ClientBound]:
+        """Its last read; none once its channel failed, so the close still runs."""
+        try:
+            return self._session._step(0)[0]
+        except SessionError:
+            return []
 
     def returncode(self) -> int | None:
         return self._session._running.returncode(0)
 
     def confirm_end(self, timeout: float) -> int | None:
-        """The exit code once its terminal is gone, else None."""
+        """The exit code once its owner handle says its worker is gone (never its display), else
+        None: unconfirmed.
+        """
+        running = self._session._running
         deadline = time.monotonic() + timeout
-        code = self._session._running.returncode(timeout)
-        while code is not None:
-            try:
-                if self.name not in self._session._host.list():
+        try:
+            code = running.returncode(timeout)
+            while code is not None:
+                if running.state() == Liveness.ABSENT:
                     return code
-            except SessionError:
-                pass
-            if (left := deadline - time.monotonic()) <= 0:
-                return None
-            time.sleep(min(POLL, left))
+                if (left := deadline - time.monotonic()) <= 0:
+                    return None
+                time.sleep(min(POLL, left))
+        except SessionError:
+            pass
         return None
 
     def view(self, channel: Channel, idle_timeout: float | None = None) -> OwnedSession:

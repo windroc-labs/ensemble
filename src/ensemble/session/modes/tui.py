@@ -1,6 +1,6 @@
 """The tui mode: a Client command on a Host terminal; events from its client's own record,
 then the hook records appended to its session directory, and from its terminal. Inside a session
-harness it runs as a managed worker under the guard (Host.worker); the tmux session is only its
+harness it runs as a managed worker under the guard (Host.worker); its host session is only its
 display.
 """
 

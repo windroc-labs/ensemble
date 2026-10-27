@@ -190,9 +190,10 @@ class BaseMode(ABC):
     @abstractmethod
     def stop(self) -> None: ...
 
-    def close(self) -> None:
-        """Ends the run for good; a tui one also drops its state."""
+    def close(self) -> bool | None:
+        """Ends the run for good; a tui one also drops its state (False: it kept it)."""
         self.stop()
+        return None
 
     @classmethod
     def _unowned(cls, owner: str | None) -> None:

@@ -55,7 +55,7 @@ from ensemble.session.hosts.base import InteractiveProcess, Process
 from ensemble.session.modes import tui, tui_hook
 from ensemble.session.modes.base import POINTER
 from ensemble.utils import ACCOUNT_ENV as ACCOUNT
-from ensemble.utils import StatusState, inode_lock, over_argv
+from ensemble.utils import STALE_AGE, StatusState, inode_lock, over_argv
 from tests.session import fake_client
 from tests.session.case import PLUGIN_BIN, Case
 from tests.session.fakes.terminal import MemoryHost, ScreenHost
@@ -2834,13 +2834,14 @@ class RecordRuleTest(Base):
     def test_expire_keeps_a_live_owned_record(self):
         self.owned()
         self.host.processes.clear()
-        with mock.patch.object(tui, "idle", return_value=True):
-            for liveness in (Liveness.LIVE, Liveness.UNKNOWN):
-                self.liveness.return_value = liveness
-                self.store.expire(set())
-                self.assertTrue(os.path.isdir(self.dir))
-            self.liveness.return_value = Liveness.ABSENT
+        old = time.time() - STALE_AGE - 60
+        os.utime(self.dir, (old, old))  # idle, no hook log
+        for liveness in (Liveness.LIVE, Liveness.UNKNOWN):
+            self.liveness.return_value = liveness
             self.store.expire(set())
+            self.assertTrue(os.path.isdir(self.dir))
+        self.liveness.return_value = Liveness.ABSENT
+        self.store.expire(set())
         self.assertNoSessionDir()
         self.assertNotIn(("sleep", tui.RECHECK), self.log)
 

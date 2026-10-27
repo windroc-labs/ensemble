@@ -2981,6 +2981,31 @@ class OwnedTest(HostedTuiBase):
         owned = self.own()
         self.assertIsNone(owned.confirm_end(0.1))
 
+    def test_confirm_end_unanswered_is_none(self):
+        owned = self.own()
+        self.host.processes["w1"].calls.read.side_effect = engine_types.Unanswered(
+            "worker w1: gone"
+        )
+        self.assertIsNone(owned.confirm_end(0.1))
+
+    def test_confirm_end_ignores_the_display(self):
+        owned = self.own()
+        handle = self.host.processes["w1"]
+        handle.calls.state.return_value = Liveness.ABSENT
+        handle.calls.returncode.return_value = 0
+        self.host.calls.list.return_value = ["w1"]  # a display of its name still listed
+        self.assertEqual(owned.confirm_end(1), 0)
+
+    def test_close_keeps_the_viewer_when_the_record_stays(self):
+        owned = self.own()
+        state = tui.TuiMode.snapshot("w1")
+        with open(os.path.join(self.root, "w1", "session.json"), "w") as f:
+            json.dump({**state, "generation": "newer"}, f)
+        self.host.calls.close_view.reset_mock()
+        owned.close()
+        self.host.calls.close_view.assert_not_called()
+        self.assertEqual(tui.TuiMode.snapshot("w1")["generation"], "newer")
+
     def test_record_notes_client_sessions_and_stderr(self):
         owned = self.own()
         owned.record(ClientBound("n1"))
@@ -3136,6 +3161,75 @@ class OwnedStartTest(Case):
             self.session_cls.start(self.spec())
         self.popen.return_value.kill.assert_called_once_with()
         self.assertFalse(os.path.exists(self.spawned[2].directory))
+
+    def owned_record(self, generation: str = "g1") -> Channel:
+        """w1's session.json naming a held harness running generation `generation`."""
+        channel = Channel.create()
+        fd = os.open(channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        self.addCleanup(os.close, fd)
+        channel.write_status(
+            {"state": "running", "name": "w1", "sid": SID, "generation": generation}
+        )
+        folder = os.path.join(self.ensemble, "tui", "w1")
+        os.makedirs(folder, 0o700)
+        state = {
+            "client": "claude",
+            "workdir": self.workdir,
+            "sid": SID,
+            "cwd": self.workdir,
+            "project": False,
+            "transcript": "",
+            "resume": "",
+            "events": None,
+            "words": {},
+            "host": "tmux",
+            "generation": generation,
+            "owner": channel.directory,
+        }
+        with open(os.path.join(folder, "session.json"), "w") as f:
+            json.dump(state, f)
+        tui.TuiMode.snapshot("w1")  # valid
+        return channel
+
+    def test_running_owner_refused_before_spawn(self):
+        self.owned_record()
+        for call in (self.session_cls.preflight, self.session_cls.start):
+            with (
+                self.subTest(call=call.__name__),
+                self.assertRaisesRegex(SessionError, "^tui session w1 is running"),
+            ):
+                call(self.spec(resume=True))
+        self.popen.assert_not_called()
+
+    def transcript(self) -> str:
+        """Where claude keeps w1's conversation for this spec (none there yet)."""
+        config = {"CLAUDE_CONFIG_DIR": os.path.join(self.home, ".claude")}
+        self.enterContext(mock.patch.dict(os.environ, config))
+        client = self.session_cls._config().registry.client("claude")
+        assert isinstance(client, ClaudeClient)
+        return client.common.transcript(self.workdir, SID)
+
+    def test_owned_resume_without_transcript_refused(self):
+        self.assertFalse(os.path.lexists(self.transcript()))
+        for call in (self.session_cls.preflight, self.session_cls.start):
+            with (
+                self.subTest(call=call.__name__),
+                self.assertRaisesRegex(
+                    ConfigError, f"^session w1: conversation {SID} has no transcript to resume$"
+                ),
+            ):
+                call(self.spec(resume=True))
+        self.popen.assert_not_called()
+
+    def test_owned_resume_unknown_goes_on(self):
+        self.harness_writes({"state": "running", "name": "w1", "sid": SID, "generation": "g7"})
+        path = self.transcript()
+        os.makedirs(path)  # a directory there: unknown
+        self.assertIsInstance(self.session_cls.start(self.spec(resume=True)), OwnedSession)
+        os.rmdir(path)
+        Path(path).touch()  # a transcript: resumable
+        self.assertIsInstance(self.session_cls.start(self.spec(resume=True)), OwnedSession)
 
     def test_a_worker_that_exited_at_once_still_gives_its_view(self):
         self.harness_writes(
@@ -3326,6 +3420,43 @@ class BoundOwnerTest(HostedTuiBase):
         self.session.retire("w1", sid=SID)
         self.assertEqual(self.served, [Op.CLOSE])
         terminal.calls.close.assert_not_called()
+
+    def test_retire_fallback_takes_the_record_rule(self):
+        terminal = self.host.processes["w1"]
+        self.host.calls.worker_liveness.return_value = Liveness.UNKNOWN
+        self.host.calls.close_view.reset_mock()
+        with self.assertRaisesRegex(engine_types.SessionBusy, "worker generation"):
+            self.session.retire("w1", sid=SID)
+        terminal.calls.close.assert_not_called()
+        self.host.calls.close_view.assert_not_called()
+        self.assertEqual(tui.TuiMode.snapshot("w1"), self.state)
+        self.host.calls.worker_liveness.return_value = Liveness.ABSENT
+        self.session.retire("w1", sid=SID)
+        terminal.calls.close.assert_called_once_with()
+        self.host.calls.close_view.assert_called_once_with("w1")
+        self.assertFalse(os.path.lexists(os.path.join(self.root, "w1")))
+
+    def test_retire_of_another_generation_asks_no_owner(self):
+        self.owner()
+        terminal = self.host.processes["w1"]
+        self.session._retire("w1", sid=SID, generation="older")
+        self.assertFalse(os.path.exists(os.path.join(self.channel.directory, "requests")))
+        terminal.calls.close.assert_not_called()
+        self.assertEqual(tui.TuiMode.snapshot("w1"), self.state)
+
+    def test_attached_close_of_an_owned_record_takes_the_record_rule(self):
+        session = self.session.attach("w1")
+        self.assertNotIsInstance(session, OwnedSession)
+        self.host.calls.worker_liveness.return_value = Liveness.UNKNOWN
+        with self.assertRaises(engine_types.SessionBusy):
+            session.close()
+        self.assertEqual(tui.TuiMode.snapshot("w1"), self.state)
+        with open(os.path.join(self.root, "w1", "session.json"), "w") as f:
+            json.dump({**self.state, "generation": "newer"}, f)
+        self.host.calls.close_view.reset_mock()
+        session.close()  # another generation's record now: left alone, no wait
+        self.host.calls.close_view.assert_not_called()
+        self.assertEqual(tui.TuiMode.snapshot("w1")["generation"], "newer")
 
     def test_retire_with_another_sid_raises_before_any_request(self):
         self.owner()
