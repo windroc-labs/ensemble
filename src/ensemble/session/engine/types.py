@@ -27,6 +27,7 @@ __all__ = [
     "Access",
     "Activity",
     "MARKS",
+    "PROCESS_EXIT",
     "Blocked",
     "ClientBound",
     "ClientHome",
@@ -630,6 +631,9 @@ class TurnFailed:
 
     error: str
     detail: str = ""
+
+
+PROCESS_EXIT = "process_exit"  # TurnFailed.error of a turn its worker's nonzero exit ended
 
 
 @dataclass(frozen=True)

@@ -19,6 +19,7 @@ from ensemble.session.clients.base import Client
 from ensemble.session.clients.registry import Registry
 from ensemble.session.engine.types import (
     COMMAND,
+    PROCESS_EXIT,
     SESSION_NAME,
     SESSION_NAME_RULE,
     Access,
@@ -905,7 +906,7 @@ class TuiMode(BaseMode):
                     if self._active_turn:
                         final.append(
                             TurnFailed(
-                                "process_exit" if code else "incomplete_turn",
+                                PROCESS_EXIT if code else "incomplete_turn",
                                 f"worker exited {code}",
                             )
                         )

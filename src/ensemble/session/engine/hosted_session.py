@@ -279,6 +279,13 @@ def _owned(setup: _Setup, spec: Spec, mode: Mode, client: Client, on: Host) -> b
     return mode != Mode.TUI or not on._remote_tui or run._remote_owned
 
 
+def _terminal_less(mode: Mode) -> bool:
+    """A harnessed headless or in_process run: no terminal; its harness is its caller's child and
+    its view reads it to its end.
+    """
+    return mode != Mode.TUI
+
+
 def _unharnessed(client: str, mode: Mode, on: Host) -> ConfigError:
     return ConfigError(f"handlers: {client} {mode} on host {on.name} has no session harness yet")
 
@@ -576,14 +583,14 @@ class HostedSession(Session):
         mode: Mode,
     ) -> None:
         """SIGTERM: its harness closes a headless worker, its child, first."""
-        if mode != Mode.TUI and harness.poll() is None:
+        if _terminal_less(mode) and harness.poll() is None:
             harness.terminate()
             with contextlib.suppress(subprocess.TimeoutExpired):
                 harness.wait(CLOSE_WAIT)
         if harness.poll() is None:
             harness.kill()
         harness.wait()
-        if name is None or mode != Mode.TUI:
+        if name is None or _terminal_less(mode):
             shutil.rmtree(channel.directory, ignore_errors=True)
             return
         try:
@@ -867,7 +874,7 @@ class HostedSession(Session):
         tie: Tie | None = None,
     ) -> OwnedSession:
         """The only way a view is built; a headless one's (`spec` its run's) holds its start's Tie."""
-        if mode == Mode.TUI:
+        if not _terminal_less(mode):
             assert name is not None
 
             def attach() -> Session:
@@ -1350,7 +1357,7 @@ class Owned:
         """A headless run's reads up to its end, within `timeout`."""
         found: list[SessionEvent | Stderr | ClientBound] = []
         deadline = time.monotonic() + timeout
-        while self._session.mode != Mode.TUI and (left := deadline - time.monotonic()) > 0:
+        while _terminal_less(self._session.mode) and (left := deadline - time.monotonic()) > 0:
             batch, ended = self._session._step(min(POLL, left))
             found += batch
             if ended:
@@ -1375,7 +1382,7 @@ class Owned:
             return running.returncode(timeout)
         try:
             code = running.returncode(timeout)
-            if self._session.mode != Mode.TUI:
+            if _terminal_less(self._session.mode):
                 return code
             while code is not None:
                 if running.state() == Liveness.ABSENT:

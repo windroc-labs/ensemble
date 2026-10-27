@@ -13,6 +13,7 @@ from typing import Self
 from ensemble.session.clients.base import Client
 from ensemble.session.clients.registry import Registry
 from ensemble.session.engine.types import (
+    PROCESS_EXIT,
     Blocked,
     ClientBound,
     Launch,
@@ -212,7 +213,7 @@ class HeadlessMode(BaseMode):
             terminal = TurnFailed("interrupted", self._diagnostic)
         elif code != 0:
             terminal = TurnFailed(
-                "process_exit",
+                PROCESS_EXIT,
                 f"worker exited {code}" + (f": {self._diagnostic}" if self._diagnostic else ""),
             )
         else:

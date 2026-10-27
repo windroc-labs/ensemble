@@ -50,6 +50,7 @@ from ensemble.session import (
 from ensemble.utils import EXIT_BUSY, holds, printable, save
 
 STOP_LIMIT = 3
+PROCESS_EXIT = "process_exit"  # session TurnFailed.error of a nonzero exit
 FIX = (
     "The outcome block in your last reply is invalid: {error}. Fix it: end your reply with one corrected "
     f"{OUTCOME} block; change nothing else."
@@ -349,7 +350,7 @@ class Attempt:
         if self.failed:
             if self.policy.stops_failed:
                 self.stop()
-            if rc and self.failed.error == "process_exit":
+            if rc and self.failed.error == PROCESS_EXIT:
                 return Result(rc, None, diagnostic)
             detail = f" ({self.failed.detail})" if self.failed.detail else ""
             return Result(rc, None, f"the client's turn failed: {self.failed.error}{detail}")
