@@ -1771,8 +1771,10 @@ class InstallTest(Case):
         self.assertFalse([c for c in self.calls() if c.startswith("broker-install")])
         self.assertEqual(self.broker_path().read_bytes(), broker)
         self.protocol_at("wdrc-c9", "30")
-        self.assert_ok(self.again("--ref", "wdrc-c9"))
-        self.assertIn("broker-install --build", self.calls())
+        result = self.again("--ref", "wdrc-c9", answers=[(WRITE_Q, "y")])
+        self.assert_ok(result)
+        self.assertNotIn("below the installed broker's protocol", result.stderr)
+        self.assertIn("==> broker\n", result.stderr)
 
     def test_u5_downgrade_to_v041_refused(self):
         """A release downgrade below protocol 30 keeps the broker and the egress proxy's version."""
@@ -1797,7 +1799,7 @@ class InstallTest(Case):
         (self.fakes / "src/broker/protocol").write_text("29")
         self.at_ref("v0.4.0", ".claude-plugin/plugin.json", '{"version": "0.4.0"}\n')
         self.protocol_at("v0.4.0", "28")
-        result = self.again("--ref", "v0.4.0")
+        result = self.again("--ref", "v0.4.0", answers=[(WRITE_Q, "y")])
         self.assertNotIn("below the installed broker's protocol", result.stderr)
         self.assertIn("broker-install ", self.calls())
 
