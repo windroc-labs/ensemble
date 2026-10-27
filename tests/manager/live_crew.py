@@ -216,13 +216,12 @@ class LiveCrew(Case):
         ]
 
     def killed(self, name: str, record: Record) -> None:
-        """Kills tui run `name`'s sessions after its first turn; attach then says gone."""
+        """Kills tui run `name`'s drive and client after its first turn; attach says gone."""
         harness, tui = record.sessions
         self.wait_event(tui, "done")
         shown = self.server.tmux("display-message", "-p", "-t", f"={harness}:", "#{pane_pid}")
         pid = int(shown.stdout)
         self.kill(harness)
-        # its client killed: its owner's handler ends the attempt and writes the outcome line
         os.kill(logged(self.log(name))[-1]["pid"], signal.SIGKILL)
         self.server.tmux(
             "kill-session", "-t", f"={tui}"
