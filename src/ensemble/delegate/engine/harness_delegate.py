@@ -937,8 +937,18 @@ class HarnessDelegate(Delegate):
             if self._drive_end(opened, None, callback, on_event, unbound=False) is not None:
                 return opened
             return self._lost(on_event)
-        if attempts.stale:
-            attempts.stop(attempts.handle)
+        if attempts.stale:  # stored before the stop
+            handle = attempts.handle
+            ended = self._drive_end(
+                opened,
+                handle,
+                callback,
+                on_event,
+                unbound=False,
+                closing=True,
+                then=lambda: attempts.stop(handle),
+            )
+            return opened if ended is not None else self._lost(on_event)
         if self._drive_end(opened, attempts.handle, callback, on_event) is not None:
             return opened
         return self._await(attempts.handle, callback, on_event)
@@ -953,10 +963,18 @@ class HarnessDelegate(Delegate):
         unbound: bool = True,
         give_up: str | None = None,
         notes: bool = True,
+        closing: bool = False,
+        then: Callable[[], object] | None = None,
     ) -> bool | None:
-        """Compare-and-set; None: another owner's came first; else whether finish tried a close."""
+        """Compare-and-set, then `then`; None: another owner's came first; else whether finish
+        tried a close.
+        """
         n, sid = self._state.attempt, self._state.plan.sid
-        if not RunRecord(self.layout, self.store).complete(n, result, sid=sid, unbound=unbound):
+        record = RunRecord(self.layout, self.store)
+        won = record.complete(n, result, sid=sid, unbound=unbound, closing=closing)
+        if then is not None:
+            then()
+        if not won:
             return None
         closed = finish(self._read(), result, handle, give_up=give_up, notes=notes)
         self._finished(result, callback, on_event, store=False)

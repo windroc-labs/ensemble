@@ -2714,9 +2714,10 @@ class OwnedRun(HarnessCase):
         self.assertEqual((state.completed, state.result), (True, result))
         self.assertEqual(self.sent(), ["finished"])
 
-    def test_a_stale_out_ending_loses_to_the_handlers_and_returns_it(self):
+    def stale_out(self) -> HarnessDelegate:
+        """An owned run whose earlier out cannot be set aside: an out under a file."""
         view = self.owned()
-        blocker = os.path.join(self.home, "file")  # an out under a file cannot be set aside
+        blocker = os.path.join(self.home, "file")
         with open(blocker, "w", encoding="utf-8"):
             pass
         p = view._state.plan
@@ -2724,17 +2725,45 @@ class OwnedRun(HarnessCase):
             view._state, plan=replace(p, spec=replace(p.spec, out=os.path.join(blocker, "out.md")))
         )
         view._save(view._state)
-        stop = HarnessSession.stop
+        return view
+
+    def test_a_stale_out_ending_is_stored_before_its_stop(self):
+        view = self.stale_out()
+        stop, lost = HarnessSession.stop, []
 
         def handled(session):
             self.record.bind(1, 1)
-            self.record.complete(1, self.NEEDS, sid=SID)
+            lost.append(
+                self.record.complete(1, Result(129, None, "stopped: Stopped: 129"), sid=SID)
+            )
             stop(session)
 
         with mock.patch.object(HarnessSession, "stop", handled):
             result = view.run()
+        self.assertEqual(lost, [False])
+        self.assertTrue(result.error.startswith("cannot remove the stale out: "), result.error)
+        state = self.record.read()
+        self.assertEqual((state.result, state.closing), (result, True))
+        self.assertEqual(self.sent(), ["finished"])
+        self.assertEqual(self.kinds()[-2:], ["result", "end"])
+
+    def test_a_stale_out_ending_that_loses_stops_and_returns_the_stored_one(self):
+        view = self.stale_out()
+        start = HarnessSession.start.__func__
+
+        def handled(cls, spec, **kw):
+            session = start(cls, spec, **kw)
+            self.record.bind(1, 1)
+            self.record.complete(1, self.NEEDS, sid=SID)
+            return session
+
+        with mock.patch.object(HarnessSession, "start", classmethod(handled)):
+            result = view.run()
         self.assertEqual(result, self.NEEDS)
         self.assertEqual(self.record.read().result, self.NEEDS)
+        agent = view.driver.session
+        assert agent is not None
+        self.assertFalse(agent.alive())
         self.assertNotIn("result", self.kinds())
         self.assertEqual(self.sent(), [])
 
