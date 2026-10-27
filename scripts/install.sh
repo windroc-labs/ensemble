@@ -2375,11 +2375,11 @@ egress_download() (
   versions=$HOME/.egress/versions
   tmp=$(mktemp -d "$versions/.download.XXXXXX")
   trap "rm -rf $(printf '%q' "$tmp")" EXIT
-  gh api "repos/windroc/egress-proxy/tarball/$egress_commit" </dev/null >"$tmp/source.tar.gz" \
-    || die "cannot fetch pinned windroc/egress-proxy $egress_commit; check gh auth status and repository access, then rerun"
+  gh api "repos/windroc-labs/egress-proxy/tarball/$egress_commit" </dev/null >"$tmp/source.tar.gz" \
+    || die "cannot fetch pinned windroc-labs/egress-proxy $egress_commit; check gh auth status and repository access, then rerun"
   mkdir "$tmp/source"
   tar -xzf "$tmp/source.tar.gz" --strip-components=1 -C "$tmp/source" \
-    || die "cannot unpack pinned windroc/egress-proxy $egress_commit"
+    || die "cannot unpack pinned windroc-labs/egress-proxy $egress_commit"
   [ -x "$tmp/source/start.sh" ] || die "pinned egress version has no executable start.sh"
   printf '%s\n' "$egress_commit" >"$tmp/source/COMMIT"
   mv "$tmp/source" "$versions/$egress_commit"
