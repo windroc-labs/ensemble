@@ -1,5 +1,5 @@
 """DockerHost runs each session in its own broker-made container (docs/architecture.md#docker-host): its
-worker's guard (worker.py), tui or headless, through `docker exec -i`.
+worker's guard (worker.py), tui or headless, its container's main process, through `docker attach`.
 """
 
 from __future__ import annotations
@@ -44,7 +44,6 @@ from ensemble.session.engine.types import (
     Unanswered,
 )
 from ensemble.session.hosts.base import (
-    GUARD_HOOK_SOCKET,
     TUI_DIR,
     TUI_STATE,
     Host,
@@ -886,7 +885,7 @@ class DockerHost(Host):
         events: str | None,
         metadata: Mapping[str, str] | None,
     ) -> DockerWorker:
-        """The guard in a new container over one `docker exec -i`, holding the owner lock; a live or
+        """The guard in a new container over one `docker attach`, holding the owner lock; a live or
         unknown earlier guarded generation refuses (SessionBusy), an ended one is removed first.
         """
         if why := display_error(display):
@@ -945,8 +944,7 @@ class DockerHost(Host):
     ) -> DockerWorker:
         laps = _Laps()
         created = self._container(name, launch, stops, laps, metadata, environment=environment)
-        container, generation, hook, _, cwd, _, _, _ = created
-        run = f"{RUN}/{generation}"
+        container, generation, hook, _, _, _, _, _ = created
         handle = proc = None
         try:
             stops.check()
@@ -965,23 +963,19 @@ class DockerHost(Host):
                     "environment": None if environment is None else environment.persisted(),
                 },
             )
-            env = {
-                **self._exec_env(launch, created.started, self._app(environment)),
-                GUARD_HOOK_SOCKET: f"{run}/hook",
+            handoff = {
+                "argv": [
+                    *("with-secrets", "--client", metadata["home_field"].removesuffix("_dir")),
+                    *launch.argv,
+                ],
+                "env": self._exec_env(launch, created.started, self._app(environment)),
+                "terminal": terminal,
+                "generation": generation,
             }
-            shown = ("--terminal", "--display-socket", f"{run}/display") if terminal else ()
-            argv, docker_env = docker_call(
-                self.docker,
-                *("exec", "-i", "--workdir", cwd),
-                *(arg for key in env for arg in ("--env", key)),
-                *(container, IMAGE_PYTHON, "-I", GUARD, *shown),
-                *("--hook-socket", f"{run}/hook", "--lease", f"{run}/lease", "--"),
-                *("with-secrets", "--client", metadata["home_field"].removesuffix("_dir")),
-                *launch.argv,
-            )
+            argv, docker_env = docker_call(self.docker, "attach", "--sig-proxy=false", container)
             proc = subprocess.Popen(
                 argv,
-                env={**docker_env, **env},
+                env=docker_env,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
@@ -1015,6 +1009,7 @@ class DockerHost(Host):
                 terminal=terminal,
             )
             made.append(handle)
+            handle.launch(handoff)
             handle.await_start()
             handle.begin()
             laps("client")

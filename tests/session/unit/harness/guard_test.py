@@ -1121,30 +1121,39 @@ class LaunchTest(Case):
 
 
 class ServeTest(Case):
-    def serve(self, found, *argv):
-        stderr = io.StringIO()
+    def serve(self, reads, *, clock=(100.0, 100.0, 100.0)):
+        """main(["--serve"]) over stdin `reads`: its code and stderr; it wrote and spawned nothing."""
+        stderr, times = io.StringIO(), iter(clock)
         with (
-            mock.patch.object(guard, "await_launch", side_effect=[found]) as wait,
-            mock.patch.object(guard, "hold_lease", return_value=7) as lease,
-            mock.patch.object(guard, "Guard") as runtime,
-            mock.patch.object(guard.signal, "signal"),
-            mock.patch.object(guard.signal, "pthread_sigmask"),
-            mock.patch.object(guard.time, "monotonic", return_value=100.0),
+            mock.patch.object(guard.time, "monotonic", side_effect=lambda: next(times)),
+            mock.patch.object(guard.select, "select", return_value=([0], [], [])) as wait,
+            mock.patch.object(os, "read", side_effect=reads),
             mock.patch.object(os, "write") as write,
+            mock.patch.object(guard.subprocess, "Popen") as spawn,
             mock.patch.object(sys, "stderr", stderr),
         ):
-            runtime.return_value.run.return_value = 0
-            code = guard.main(["--serve", *argv])
+            code = guard.main(["--serve"])
         write.assert_not_called()
-        return code, stderr.getvalue(), wait, lease, runtime
+        spawn.assert_not_called()
+        return code, stderr.getvalue(), wait
 
-    def test_serve_runs_the_handed_off_client_under_its_run_dir(self):
-        code, _, wait, lease, runtime = self.serve((HANDOFF, b"pending"))
-        self.assertEqual(code, 0)
-        wait.assert_called_once_with(100.0 + guard.LAUNCH_WAIT)
+    def test_the_handoff_wait_starts_with_the_guard(self):
+        _, _, wait = self.serve([b""])
+        self.assertEqual(wait.call_args.args[3], guard.LAUNCH_WAIT)
+
+    def test_no_or_a_bad_handoff_exits_1_with_its_fixed_message_and_no_client(self):
+        for reads, message in (
+            ([b""], "no launch handoff"),
+            ([guard.frame(b"p", b"{}")], "invalid launch handoff"),
+            ([guard.frame(b"l", handoff(env={"A": 1}))], "invalid launch handoff"),
+        ):
+            with self.subTest(message=message):
+                code, stderr, _ = self.serve(reads)
+                self.assertEqual((code, stderr), (1, f"guard: {message}\n"))
+
+    def test_a_handoff_runs_its_client_under_its_run_dir(self):
+        args, lease, options = guard.launched(HANDOFF, b"pending")
         run = f"{guard.RUN}/{GEN}"
-        lease.assert_called_once_with(f"{run}/lease")
-        (args, held), options = runtime.call_args
         self.assertEqual(
             vars(args),
             {
@@ -1155,7 +1164,7 @@ class ServeTest(Case):
                 "command": ["client", "--flag"],
             },
         )
-        self.assertEqual(held, 7)
+        self.assertEqual(lease, f"{run}/lease")
         self.assertEqual(
             options,
             {
@@ -1166,16 +1175,8 @@ class ServeTest(Case):
         )
 
     def test_a_headless_handoff_has_no_display_socket(self):
-        _, _, _, _, runtime = self.serve(({**HANDOFF, "terminal": False}, b""))
-        self.assertIsNone(runtime.call_args.args[0].display_socket)
-
-    def test_no_or_a_bad_handoff_exits_1_with_its_fixed_message_and_no_client(self):
-        for message in ("no launch handoff", "invalid launch handoff"):
-            with self.subTest(message=message):
-                code, stderr, _, lease, runtime = self.serve(ValueError(message))
-                self.assertEqual((code, stderr), (1, f"guard: {message}\n"))
-                lease.assert_not_called()
-                runtime.assert_not_called()
+        args, _, _ = guard.launched({**HANDOFF, "terminal": False}, b"")
+        self.assertIsNone(args.display_socket)
 
     def test_serve_takes_no_other_option(self):
         for argv in (["--terminal"], ["--hook-socket", "/x"], ["--", "client"]):

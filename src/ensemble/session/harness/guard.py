@@ -976,6 +976,12 @@ def serve() -> int:
     except (OSError, ValueError) as error:
         print(f"guard: {error}", file=sys.stderr)
         return 1
+    args, lease, options = launched(found, pending)
+    return supervise(args, lease, **options)
+
+
+def launched(found: dict, pending: bytes) -> tuple[argparse.Namespace, str, dict]:
+    """A handoff's guard args, lease path and Guard options, every path under its run dir."""
     run = f"{RUN}/{found['generation']}"
     args = argparse.Namespace(
         terminal=found["terminal"],
@@ -985,7 +991,7 @@ def serve() -> int:
         command=found["argv"],
     )
     env = {**found["env"], HOOK_ENV: args.hook_socket}
-    return supervise(args, f"{run}/lease", env=env, heartbeat=HEARTBEAT, pending=pending)
+    return args, f"{run}/lease", {"env": env, "heartbeat": HEARTBEAT, "pending": pending}
 
 
 def supervise(args, lease_path: str | None, **options) -> int:
