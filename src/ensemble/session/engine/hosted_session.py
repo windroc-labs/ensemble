@@ -43,6 +43,7 @@ from ensemble.session.engine.types import (
     Mode,
     NoRecordedSession,
     NotShowable,
+    OwnerRefused,
     Resumable,
     SessionBusy,
     SessionError,
@@ -819,7 +820,10 @@ class HostedSession(Session):
 
     @classmethod
     def retire(cls, name: str, *, sid: str | None = None, host: str | None = None) -> None:
-        """A bound owner's confirmed close, else closed here."""
+        """A bound owner's confirmed close, asked before any Host probe: OwnerRefused when it
+        refuses, Unanswered when it cannot tell; else closed here. Another sid's session.json skips
+        its owner, so the close here raises on the sid.
+        """
         setup = cls._config()
         on = cls.host(host)
         store = tui.TuiStore.attach(name, host=on, sid=sid)
@@ -827,10 +831,18 @@ class HostedSession(Session):
             state = store.read()
         except SessionError:
             state = None
-        if state is not None and (channel := _bound_owner(name, state)) is not None:
-            store.check()
-            if channel.request(Op.CLOSE):
-                return
+        if (
+            state is not None
+            and sid in (None, state.get("sid"))
+            and (channel := _bound_owner(name, state)) is not None
+        ):
+            try:
+                if channel.request(Op.CLOSE):
+                    return
+            except Unanswered:
+                raise
+            except SessionError as error:
+                raise OwnerRefused(str(error)) from error
         try:
             clients = [store.read()["client"]]
         except SessionError:

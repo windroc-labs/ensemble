@@ -54,6 +54,7 @@ from ensemble.session.engine.types import (
     Stderr,
     TurnEnd,
     TurnFailed,
+    Unanswered,
     Usage,
     Window,
 )
@@ -3291,15 +3292,16 @@ class BoundOwnerTest(HostedTuiBase):
             }
         )
 
-    def serve(self):
+    def serve(self, **answer_with):
         self.served = []
+        answer_with = answer_with or {"ok": True}
 
         def answer():
             deadline = time.monotonic() + WAIT
             while time.monotonic() < deadline:
                 for ident, op in self.channel.requests():
                     self.served.append(op)
-                    self.channel.reply(ident, ok=True)
+                    self.channel.reply(ident, **answer_with)
                     return
                 time.sleep(0.01)
 
@@ -3387,6 +3389,42 @@ class BoundOwnerTest(HostedTuiBase):
         self.session.retire("w1", sid=SID)
         self.assertEqual(self.served, [Op.CLOSE])
         terminal.calls.close.assert_not_called()
+
+    def test_retire_asks_the_owner_even_when_its_terminal_is_gone(self):
+        self.owner()
+        self.serve()
+        self.host.processes.pop("w1")
+        self.session.retire("w1", sid=SID)
+        self.assertEqual(self.served, [Op.CLOSE])
+
+    def test_an_owner_that_cannot_confirm_the_end_is_unanswered_and_nothing_is_closed(self):
+        self.owner()
+        self.serve(ok=False, error="w1: worker exit not confirmed", unanswered=True)
+        terminal = self.host.processes.pop("w1")
+        with self.assertRaisesRegex(Unanswered, "not confirmed") as caught:
+            self.session.retire("w1", sid=SID)
+        self.assertNotIsInstance(caught.exception, engine_types.OwnerRefused)
+        terminal.calls.close.assert_not_called()
+        self.assertTrue(os.path.exists(os.path.join(self.root, "w1", "session.json")))
+
+    def test_an_owner_that_refuses_the_close_raises_owner_refused(self):
+        self.owner()
+        self.serve(ok=False, error="cannot close w1")
+        terminal = self.host.processes["w1"]
+        with self.assertRaisesRegex(engine_types.OwnerRefused, "cannot close w1"):
+            self.session.retire("w1", sid=SID)
+        terminal.calls.close.assert_not_called()
+        self.assertTrue(os.path.exists(os.path.join(self.root, "w1", "session.json")))
+
+    def test_retire_of_another_sid_never_waits_on_a_starting_owner(self):
+        self.owner(state="starting")
+        started = time.monotonic()
+        with self.assertRaises(SessionError) as caught:
+            self.session.retire("w1", sid="other")
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertNotIsInstance(caught.exception, Unanswered)
+        self.assertIn("other", str(caught.exception))
+        self.assertTrue(self.host.processes["w1"].alive())
 
     def test_retire_with_another_sid_raises_before_any_request(self):
         self.owner()

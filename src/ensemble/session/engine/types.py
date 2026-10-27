@@ -816,6 +816,10 @@ class Unanswered(SessionError):
     """A Host probe that timed out or failed: no proof the session ended."""
 
 
+class OwnerRefused(SessionError):
+    """A live session harness refused a stop or close: its worker's end is not confirmed."""
+
+
 class NoRecordedSession(SessionError):
     """The requested sid has no durable session record in its workdir."""
 
