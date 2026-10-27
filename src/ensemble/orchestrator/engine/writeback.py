@@ -1,8 +1,8 @@
 """Write-back: an agent run's progress, outcome and usage limit as tracker comments, links and
 moves through the engine Tracker (the Writers cli.py's wiring builds), each step once per session
-id (the ledger; comment steps by ref (sid, step), found again on resume); `deliver`, one
-DelegateEvent's write-back; `replay`, Recover's of an ended run's outcome; bounce, the router's
-repo-check report.
+id and attempt (the ledger; comment steps by ref (sid, step), found again on resume);
+`deliver`, one DelegateEvent's write-back; `replay`, Recover's of an ended run's outcome; bounce,
+the router's repo-check report.
 """
 
 import contextlib
@@ -333,6 +333,11 @@ def _url(ctx, url):
     return ""
 
 
+def _scope(attempt: int) -> str:
+    """Attempt 1 keeps existing ledgers' unscoped names."""
+    return "" if attempt == 1 else f"attempt:{attempt}:"
+
+
 def finish(ctx, outcome: Outcome, *, steps="") -> bool:
     # never raises: Stopped stops the steps and returns False, so the session comment's end is
     # still written; `steps` prefixes each step's name
@@ -442,7 +447,7 @@ def _finish(ctx, o, steps=""):
         and o.status == OutcomeStatus.DONE
         and _step(
             ctx,
-            "retitle",
+            f"{steps}retitle",
             lambda: ctx.tracker.retitle(
                 issue, f"{task.title_prefix}: {o.title}" if task.title_prefix else o.title
             ),
@@ -580,15 +585,15 @@ def replay(
     claim = _claim(cfg, issue, sid)
     ctx = for_claim(cfg, claim, writers(claim), attempt=len(rows))
     attempt = _replayed_attempt(_ledger(ctx).get(sid, {}).get("attempts", {}), rows)
-    ctx = replace(ctx, resume=attempt > 1)
-    if "outcome" in _done(ctx):
+    ctx, scope = replace(ctx, resume=attempt > 1), _scope(attempt)
+    if f"{scope}outcome" in _done(ctx):
         return None
     if dry:
         return True
     with _exclusive(ctx) as held:
         if not held:
             return False
-        done = "outcome" in _done(ctx) or finish(ctx, outcome)
+        done = f"{scope}outcome" in _done(ctx) or finish(ctx, outcome, steps=scope)
         end = (None, outcome, False)
         _session(ctx, cfg, claim.client, attempt, now=now, end=end)
         return done
@@ -642,7 +647,8 @@ def _deliver(ctx, cfg, claim, event, *, now) -> bool:
         steps = f"{NO_OUTCOME}{attempt}:"
         ok = f"{steps}outcome" in _done(ctx) or finish(ctx, failed, steps=steps)
     else:
-        ok = outcome is None or "outcome" in _done(ctx) or finish(ctx, outcome)
+        scope = _scope(attempt)
+        ok = outcome is None or f"{scope}outcome" in _done(ctx) or finish(ctx, outcome, steps=scope)
     if event.limit is not None:
         ok = _limited(ctx, attempt, event.limit["resets_at"]) and ok
     elif outcome is None:
