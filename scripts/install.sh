@@ -111,7 +111,9 @@ them, and skips what is done.
 EOF
 }
 
+# Rerunning the same command repeats a usage error: no rerun advice (on_exit).
 usage_error() {
+  current=
   say "install.sh: $1"
   say "install.sh: usage: $synopsis"
   exit 2
@@ -130,6 +132,13 @@ clients_of() {
   printf '%s' "$out"
 }
 
+# Exit 0 when $1 can name a git branch or tag: git check-ref-format's rules within [A-Za-z0-9._/-].
+valid_ref() {
+  case $1 in
+    '' | -* | /* | */ | *. | *..* | *//* | .* | */.* | *.lock | *.lock/* | *[!A-Za-z0-9._/-]*) return 1 ;;
+  esac
+}
+
 valid_name() { [[ $1 =~ $name_pattern ]] && [ "$1" != ollama ]; }
 valid_url() { [[ $1 =~ $url_pattern ]]; }
 valid_model() { [[ $1 =~ $model_pattern ]]; }
@@ -144,9 +153,7 @@ parse_args() {
         ;;
       --ref)
         [ $# -ge 2 ] || usage_error "--ref needs a value"
-        case $2 in
-          '' | -* | *[!A-Za-z0-9._/-]*) usage_error "--ref: not a git ref: $2" ;;
-        esac
+        valid_ref "$2" || usage_error "--ref: not a git ref: $2"
         ref=$2
         shift
         ;;
@@ -644,7 +651,7 @@ checklist() {
 }
 
 # The configuration: each answer from its flag, else the last answer (State), else the config, else the default;
-# the checklist appears only when clients or Docker has no flag or saved answer.
+# the checklist appears only when clients or Docker has no flag or saved answer. save_answers keeps them.
 answers() {
   local said default client item choose=
   local -a labels ticks names=(claude codex opencode)
@@ -687,6 +694,7 @@ answers() {
     if [ "${ticks[4]}" = 1 ]; then board=yes; else board=no; fi
   fi
   if [ "$board" != yes ] && [ -n "$jobs_flag" ]; then
+    if [ "$board_flag" = no ]; then usage_error "--launchd/--no-launchd requires a board, and --no-board skips it"; fi
     usage_error "--launchd/--no-launchd requires a board"
   fi
   board_tracker=
@@ -713,8 +721,6 @@ answers() {
         board_jobs_choice=no
       fi
     fi
-    state_set board_tracker "$board_tracker"
-    state_set board_jobs "$board_jobs_choice"
   fi
   board_tracker=${board_tracker:-local}
   if opencode_flags && ! has opencode; then usage_error "--opencode-*: opencode is not among the clients"; fi
@@ -743,6 +749,18 @@ answers() {
       ask "Its context window in tokens [65536]:"
       if valid_context "${answer:-65536}"; then context=${answer:-65536}; fi
     done
+  fi
+  say "    clients: $clients, Docker: $docker, board: $board ($board_tracker), launchd: ${board_jobs_choice:-no}${provider:+, OpenCode provider: $provider}"
+}
+
+# Saves answers' choices once the run's refusals (ref_check, broker_plan preflight) have passed: a refused run
+# keeps the last ones.
+save_answers() {
+  if [ "$board" = yes ]; then
+    state_set board_tracker "$board_tracker"
+    state_set board_jobs "$board_jobs_choice"
+  fi
+  if has opencode; then
     state_set opencode_provider "$provider"
     state_set opencode_url "$url"
     state_set opencode_model "$model"
@@ -751,7 +769,6 @@ answers() {
   state_set clients "$clients"
   state_set docker "$docker"
   state_set board "$board"
-  say "    clients: $clients, Docker: $docker, board: $board ($board_tracker), launchd: ${board_jobs_choice:-no}${provider:+, OpenCode provider: $provider}"
 }
 
 # Plans the edits that give config.local.toml (or a new one) the wanted settings; writes the result to
@@ -1022,7 +1039,7 @@ sys.exit(1 if not found else 0 if found[0].get("enabled") else 2)' "$1"
 }
 
 # The ref the windroc marketplace serves ensemble at, from its manifest $1 on main: the ensemble entry's source.ref,
-# else main (the default branch). A ref goes into URLs: --ref's characters and no .. segment.
+# else main (the default branch). A ref goes into URLs: --ref's characters, then valid_ref.
 marketplace_ref() {
   local text served
   text=$(curl -fsSL "https://raw.githubusercontent.com/windroc-labs/agent-plugins-marketplace/main/$1" </dev/null) \
@@ -1037,10 +1054,10 @@ except Exception:
     sys.exit("no ensemble entry")
 if ref is None:
     sys.exit("pinned by sha, not a release tag")
-if not isinstance(ref, str) or not re.fullmatch(r"[A-Za-z0-9._/-]+", ref) or ref.startswith("-") \
-        or ".." in ref.split("/"):
+if not isinstance(ref, str) or not re.fullmatch(r"[A-Za-z0-9._/-]+", ref):
     sys.exit(f"not a git ref: {ref!r}")
 print(ref)' 2>&1 <<<"$text") || die "cannot read ensemble's ref from the windroc marketplace ($1): $served"
+  valid_ref "$served" || die "cannot read ensemble's ref from the windroc marketplace ($1): not a git ref: '$served'"
   printf '%s' "$served"
 }
 
@@ -1052,12 +1069,14 @@ ref_check() {
   if has claude || ! has codex; then claude_ref=$(marketplace_ref .claude-plugin/marketplace.json); fi
   if has codex; then codex_ref=$(marketplace_ref .agents/plugins/marketplace.json); fi
   if [ -n "$claude_ref" ] && [ -n "$codex_ref" ] && [ "$claude_ref" != "$codex_ref" ]; then
+    current=
     die "the windroc marketplace serves ensemble at $claude_ref to Claude Code and $codex_ref to Codex: they must match"
   fi
   served_ref=${claude_ref:-$codex_ref}
   if [ -z "$ref" ]; then
     ref=$served_ref
   elif [ "$ref" != "$served_ref" ]; then
+    current=
     die "--ref $ref: Claude Code and Codex install ensemble@windroc from the windroc marketplace, which serves ensemble at $served_ref; use --ref $served_ref, or --clients opencode for another ref"
   fi
 }
@@ -1156,6 +1175,7 @@ broker_plan() {
       else
         remedy="the windroc marketplace serves ensemble at $ref, ahead of release $release_tag: wait until it serves a release, or use --clients opencode --ref $release_tag"
       fi
+      current=
       die "$label wants broker protocol $want, but its broker, $broker_label, speaks protocol $got: $remedy"
     fi
     agreed+="${agreed:+, }$label"
@@ -1357,7 +1377,7 @@ opencode_install() {
 opencode_spec() { printf '%s' "ensemble@git+https://github.com/windroc-labs/ensemble.git#$ref"; }
 
 # The directory OpenCode downloads spec $1 into, else exit 1 when it would not lie under OpenCode's packages
-# (a --ref with .. segments).
+# (a ref with .. segments, which valid_ref refuses first).
 opencode_cache_dir() {
   python3 -I -c '
 import os, sys
@@ -2660,6 +2680,7 @@ main() {
   if [ -z "$answered" ]; then answers; fi
   ref_check
   broker_plan preflight
+  save_answers
   opencode_select
   config_file
   apps
