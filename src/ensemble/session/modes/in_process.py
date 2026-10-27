@@ -1,5 +1,5 @@
 """The in_process mode: an InProcess's run iterated on a daemon thread into a queue; no child
-process. A run that raises ends with its traceback as Stderr lines and code 1. stop() never
+process (owned: the session harness's thread). A run that raises ends with its traceback as Stderr lines and code 1. stop() never
 waits: what came before it is still polled, the code is -SIGKILL unless the run had ended, and the
 run is closed at its next yield.
 """
@@ -9,6 +9,7 @@ import queue
 import signal
 import threading
 import traceback
+import uuid
 from collections.abc import Callable
 from typing import Self
 
@@ -42,6 +43,11 @@ class InProcessMode(BaseMode):
         super().__init__(prepared)
         self.stopped, self.code = False, None
         self.items, self.lock, self.over = queue.Queue(), threading.Lock(), threading.Event()
+        self._generation = uuid.uuid4().hex
+
+    @property
+    def generation(self) -> str:
+        return self._generation
 
     @classmethod
     def preflight(
@@ -90,7 +96,6 @@ class InProcessMode(BaseMode):
         check_name: Callable[[str], None] | None = None,
         owner: str | None = None,
     ) -> Self:
-        cls._unowned(owner)
         prepared, run = cls._prepare(spec, client, display=display)
         record(prepared.info)
         mode = cls(prepared)

@@ -59,7 +59,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.types import Op
-from ensemble.session.harness.view import OwnedSession
+from ensemble.session.harness.view import OwnedInProcess, OwnedSession
 from ensemble.session.hosts.base import Piped
 from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.session.modes import tui
@@ -2981,6 +2981,27 @@ class OwnedTest(HostedTuiBase):
         owned = self.own()
         self.assertIsNone(owned.confirm_end(0.1))
 
+    def test_an_in_process_worker_is_owned_under_its_sid(self):
+        self.configure(implementation="ensemble.session.clients.fake:InProcessFakeClient")
+        channel = Channel.create()
+        spec = self.spec(client="fake", mode="in_process", prompt="hello", sid=SID)
+        owned = self.session.own(spec, owner=channel.directory)
+        self.assertEqual(owned.name, SID)
+        self.assertTrue(owned.generation)
+        found, ended = [], False
+        deadline = time.monotonic() + 10
+        while not ended and time.monotonic() < deadline:
+            events, ended = owned.pump(0.1)
+            found += events
+        self.assertTrue(ended)
+        self.assertNotIn(Exited(0), found)
+        self.assertEqual(owned.confirm_end(1), 0)
+        view = owned.view(channel)
+        self.assertIsInstance(view, OwnedInProcess)
+        self.assertEqual(
+            (view.sid, view.generation, view.mode), (SID, owned.generation, Mode.IN_PROCESS)
+        )
+
     def test_record_notes_client_sessions_and_stderr(self):
         owned = self.own()
         owned.record(ClientBound("n1"))
@@ -3169,6 +3190,29 @@ class OwnedStartTest(Case):
         with self.assertRaisesRegex(SessionError, "started another session"):
             self.session_cls.start(self.spec())
         self.assertFalse(os.path.exists(self.spawned[2].directory))
+
+    def test_an_in_process_start_runs_in_a_harness_and_gives_its_view(self):
+        self.harness_writes({"state": "running", "name": SID, "sid": SID, "generation": "g7"})
+        session_cls = HostedSession.configured(
+            clients={"fake": {"implementation": "tests.session.fake_client:InProcessFakeClient"}},
+            hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"}),
+        )
+        spec = Spec(
+            workdir=self.workdir,
+            access=Access(cwd=self.workdir),
+            client="fake",
+            mode="in_process",
+            prompt="hi",
+            sid=SID,
+        )
+        session = session_cls.start(spec)
+        argv, _, channel = self.spawned
+        self.assertIsInstance(session, OwnedInProcess)
+        self.assertEqual((session.sid, session.generation, session.name), (SID, "g7", None))
+        self.assertEqual(argv[1:], ["-P", "-s", "-m", hosted_session.HARNESS, channel.directory])
+        self.harness_writes({"state": "running", "name": SID, "sid": "other", "generation": "g"})
+        with self.assertRaisesRegex(SessionError, "started another session"):
+            session_cls.start(spec)
 
     def test_preflight_finds_handlers_without_importing_them(self):
         root = os.path.join(self.home, "handlers")

@@ -59,7 +59,7 @@ from ensemble.session.engine.types import (
 from ensemble.session.harness.channel import REQUEST_WAIT, SLICE, Channel
 from ensemble.session.harness.dispatch import load_handlers
 from ensemble.session.harness.types import Op
-from ensemble.session.harness.view import OwnedSession, fold
+from ensemble.session.harness.view import OwnedInProcess, OwnedSession, fold
 from ensemble.session.hosts.base import Host, host_resume
 from ensemble.session.modes import headless, in_process, tui
 from ensemble.session.modes.base import BaseMode, child_env
@@ -248,8 +248,12 @@ def _reconstructible(setup: _Setup) -> bool:
 
 
 def _owned(setup: _Setup, mode: Mode, client: Client, on: Host) -> bool:
-    """An owned client's tui start on a harnessed Host."""
-    if mode != Mode.TUI or not on._harnessed or not _reconstructible(setup):
+    """An in_process start, or an owned client's tui start on a harnessed Host."""
+    if not _reconstructible(setup):
+        return False
+    if mode == Mode.IN_PROCESS:
+        return client.in_process() is not None
+    if mode != Mode.TUI or not on._harnessed:
         return False
     run = client.tui()
     return run is not None and run._owned
@@ -433,7 +437,8 @@ class HostedSession(Session):
                 spec, display=display, host=host, idle_timeout=idle_timeout, client=client
             )
         spec = replace(spec, sid=spec.sid or str(uuid.uuid4()))
-        spec = replace(spec, name=tui.TuiMode.resolve_name(spec))
+        if mode == Mode.TUI:
+            spec = replace(spec, name=tui.TuiMode.resolve_name(spec))
         return cls._spawn(spec, display=display, host=host, idle_timeout=idle_timeout)
 
     @classmethod
@@ -441,7 +446,7 @@ class HostedSession(Session):
         cls, spec: Spec, *, display: Display, host: str | None, idle_timeout: float | None
     ) -> Session:
         """Its view once a new harness runs it; else the start error, nothing left."""
-        assert spec.client is not None and spec.name is not None and spec.sid is not None
+        assert spec.client is not None and spec.sid is not None
         roots = cls._roots(spec.client)
         request = cls.harness_request(spec, display=display, host=host, roots=roots)
         channel = Channel.create()
@@ -486,11 +491,20 @@ class HostedSession(Session):
                 raise error
             time.sleep(SLICE)
         generation = status.get("generation")
-        if (status.get("name"), status.get("sid")) != (spec.name, spec.sid) or not isinstance(
-            generation, str
+        if (status.get("name"), status.get("sid")) != (spec.name or spec.sid, spec.sid) or not (
+            isinstance(generation, str)
         ):
             cls._unspawn(channel, harness, spec.name, host)
             raise SessionError(f"session harness {channel.directory}: started another session")
+        if spec.name is None:
+            return OwnedInProcess(
+                channel,
+                client=spec.client,
+                sid=spec.sid,
+                generation=generation,
+                idle_timeout=idle_timeout,
+                info=SessionInfo(spec.sid, spec.access.cwd, spec.access.project, "", ""),
+            )
         return cls._view(
             channel,
             name=spec.name,
@@ -507,11 +521,15 @@ class HostedSession(Session):
 
     @classmethod
     def _unspawn(
-        cls, channel: Channel, harness: subprocess.Popen, name: str, host: str | None
+        cls, channel: Channel, harness: subprocess.Popen, name: str | None, host: str | None
     ) -> None:
+        """name None: an in_process worker, ended with its harness."""
         if harness.poll() is None:
             harness.kill()
         harness.wait()
+        if name is None:
+            shutil.rmtree(channel.directory, ignore_errors=True)
+            return
         try:
             owned = tui.TuiMode.snapshot(name).get("owner") == channel.directory
         except SessionError:
@@ -1179,8 +1197,8 @@ class Owned:
 
     @property
     def name(self) -> str:
-        assert self._session.name is not None
-        return self._session.name
+        """An in_process worker's: its sid."""
+        return self._session.name or self._session.sid
 
     @property
     def sid(self) -> str:
@@ -1221,6 +1239,8 @@ class Owned:
         """The exit code once its terminal is gone, else None."""
         deadline = time.monotonic() + timeout
         code = self._session._running.returncode(timeout)
+        if self._session.name is None:
+            return code
         while code is not None:
             try:
                 if self.name not in self._session._host.list():
@@ -1233,6 +1253,15 @@ class Owned:
         return None
 
     def view(self, channel: Channel, idle_timeout: float | None = None) -> OwnedSession:
+        if self._session.name is None:
+            return OwnedInProcess(
+                channel,
+                client=self._session.client,
+                sid=self.sid,
+                generation=self.generation,
+                idle_timeout=idle_timeout,
+                info=self._session.info(),
+            )
         return type(self._session)._view(
             channel,
             name=self.name,

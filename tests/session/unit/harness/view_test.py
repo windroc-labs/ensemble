@@ -14,8 +14,11 @@ from ensemble.session.engine.types import (
     Exited,
     IdleTimeout,
     Mode,
+    NotShowable,
     Reply,
+    Resumable,
     SessionError,
+    SessionInfo,
     Stderr,
     TurnEnd,
     TurnStarted,
@@ -23,7 +26,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.harness.channel import Channel, encode
 from ensemble.session.harness.types import Op
-from ensemble.session.harness.view import OwnedSession, fold
+from ensemble.session.harness.view import OwnedInProcess, OwnedSession, fold
 from tests.session.case import Case
 
 GEN = "g1"
@@ -272,3 +275,60 @@ class DelegationTest(Base):
             attach=gone,
         )
         self.assertFalse(view.alive())
+
+
+class OwnedInProcessTest(Base):
+    """An owned in_process worker's view: events and requests through the channel, no terminal."""
+
+    def view(self, *, idle=None, replay=False) -> OwnedInProcess:
+        self.info = SessionInfo("s1", "/w", None, "", "")
+        return OwnedInProcess(
+            self.channel, client="fake", sid="s1", generation=GEN, idle_timeout=idle, info=self.info
+        )
+
+    def test_it_has_no_terminal_or_display(self):
+        view = self.view()
+        self.assertEqual((view.mode, view.name, view.showable), (Mode.IN_PROCESS, None, False))
+        for call, run in (
+            ("send", lambda: view.send("x")),
+            ("press", lambda: view.press(())),
+            ("screen", view.screen),
+        ):
+            with (
+                self.subTest(call=call),
+                self.assertRaisesRegex(SessionError, f"^{call}: tui mode only$"),
+            ):
+                run()
+        for call, run in (
+            ("show", view.show),
+            ("hide", view.hide),
+            ("attach_command", view.attach_command),
+        ):
+            with (
+                self.subTest(call=call),
+                self.assertRaisesRegex(NotShowable, f"^{call}: tui mode only$"),
+            ):
+                run()
+        self.assertIsNone(view.record())
+        self.assertEqual(view.info(), self.info)
+        self.assertEqual(view.session_status().resumable, Resumable.NO)
+
+    def test_it_is_alive_while_its_harness_holds_on_before_the_exit(self):
+        view = self.view()
+        self.assertFalse(view.alive())
+        self.hold()
+        self.log(Reply("hi"))
+        self.assertTrue(view.alive())
+        status = view.status()
+        self.assertEqual((status.name, status.alive, status.state), ("s1", True, "working"))
+        self.assertEqual(view.content(), "hi")
+        self.log(Exited(0))
+        self.assertFalse(view.alive())
+        self.assertEqual((view.status().alive, view.status().state), (False, "dead"))
+        self.assertEqual(list(view.events()), [Reply("hi"), Exited(0)])
+
+    def test_stop_and_close_without_an_owner_find_the_worker_gone(self):
+        view = self.view()
+        view.stop()
+        view.close()
+        self.assertEqual(self.attaches, 0)

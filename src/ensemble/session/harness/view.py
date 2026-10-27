@@ -1,5 +1,5 @@
 """OwnedSession, the control view of an owned worker: never its owner. stop and close are
-requests; the rest goes to a read-only attach.
+requests; the rest goes to a read-only attach. OwnedInProcess: an in_process worker's, no attach.
 """
 
 from __future__ import annotations
@@ -15,7 +15,9 @@ from ensemble.session.engine.types import (
     IdleTimeout,
     KeyPress,
     Mode,
+    NotShowable,
     Reply,
+    Resumable,
     SessionError,
     SessionEvent,
     SessionInfo,
@@ -26,7 +28,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.types import Logged, Op
-from ensemble.utils import Display, Record, Status
+from ensemble.utils import Display, Record, Status, StatusState
 
 POLL = 0.1
 
@@ -209,3 +211,84 @@ class OwnedSession(Session):
 
     def screen(self, lines: int | None = None) -> str:
         return self._session().screen(lines)
+
+
+class OwnedInProcess(OwnedSession):
+    """alive: its harness holds on and has not logged Exited; info: its start's."""
+
+    def __init__(
+        self,
+        channel: Channel,
+        *,
+        client: str,
+        sid: str,
+        generation: str,
+        idle_timeout: float | None,
+        info: SessionInfo,
+        replay: bool = False,
+    ) -> None:
+        super().__init__(
+            channel,
+            sid,
+            client=client,
+            sid=sid,
+            generation=generation,
+            idle_timeout=idle_timeout,
+            attach=self._unattached,
+            replay=replay,
+        )
+        self.mode, self.name, self._info = Mode.IN_PROCESS, None, info
+
+    @staticmethod
+    def _unattached() -> Session:
+        raise SessionError("an in_process worker has no attach")
+
+    def send(self, text: str) -> None:
+        raise SessionError("send: tui mode only")
+
+    def press(self, keys: Sequence[KeyPress]) -> None:
+        raise SessionError("press: tui mode only")
+
+    def screen(self, lines: int | None = None) -> str:
+        raise SessionError("screen: tui mode only")
+
+    def alive(self) -> bool:
+        self._latest.read()
+        return self._channel.alive() and not self._latest.exited
+
+    def status(self) -> Status:
+        alive = self.alive()
+        return Status(
+            name=self.sid,
+            alive=alive,
+            state=StatusState.WORKING if alive else StatusState.DEAD,
+            outcome=None,
+            attach=None,
+            hidden=False,
+            cwd=self._info.cwd if alive else None,
+        )
+
+    def content(self) -> str:
+        return self.reply or ""
+
+    def info(self) -> SessionInfo:
+        return self._info
+
+    def session_status(self) -> SessionStatus:
+        return SessionStatus(Resumable.NO, None, "")
+
+    def record(self) -> Record | None:
+        return None
+
+    @property
+    def showable(self) -> bool:
+        return False
+
+    def show(self, *, display: Display = None, command: str | None = None) -> str | None:
+        raise NotShowable("show: tui mode only")
+
+    def hide(self) -> None:
+        raise NotShowable("hide: tui mode only")
+
+    def attach_command(self) -> str:
+        raise NotShowable("attach_command: tui mode only")
