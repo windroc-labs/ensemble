@@ -200,6 +200,14 @@ class DockerHeadlessTest(HarnessCase):
         self.assertEqual(self.metadata()["plan"]["session"]["name"], name)
 
 
+def broker_command(argv) -> str:
+    """The faked broker's command; an AssertionError names any other process, which a patched
+    Popen would otherwise answer from a missing fixture as FileNotFoundError."""
+    if os.path.basename(argv[0]) != "ensemble-broker":
+        raise AssertionError(f"unmodelled process: {' '.join(argv[:4])}")
+    return argv[1]
+
+
 class DockerPreflightTest(HarnessCase):
     """The real Session's Docker Host, its broker process faked, no daemon socket in its account
     home and its hook command on PATH, preflights a fresh workdir's run.
@@ -225,7 +233,7 @@ class DockerPreflightTest(HarnessCase):
             self.addCleanup(patcher.stop)
 
     def broker(self, argv, **_):
-        command = argv[1]
+        command = broker_command(argv)
         self.calls.append(command)
         if self.failing and command == "build":
             return support.FakeProc(
@@ -247,6 +255,10 @@ class DockerPreflightTest(HarnessCase):
                 self.assertTrue(self.metadata()["plan"]["docker"])
                 shutil.rmtree(self.work)
                 self.calls.clear()
+
+    def test_an_unmodelled_process_fails_naming_it(self):
+        with self.assertRaisesRegex(AssertionError, "unmodelled process: /bin/sh -c true"):
+            self.broker(["/bin/sh", "-c", "true"])
 
     def test_a_refused_docker_preflight_leaves_no_workdir(self):
         self.failing = True
@@ -312,7 +324,7 @@ class VerifierDockerTest(HarnessCase):
                 ("", gone) if kw.get("text") else (b"", gone.encode())
             )
             return process
-        command = argv[1]
+        command = broker_command(argv)
         self.calls.append(command)
         if command in self.refusals:
             code, name, message = self.refusals[command]
@@ -337,6 +349,10 @@ class VerifierDockerTest(HarnessCase):
             return str(error)
         self.assertNotEqual(result.returncode, 0)
         return result.error
+
+    def test_an_unmodelled_process_fails_naming_it(self):
+        with self.assertRaisesRegex(AssertionError, "unmodelled process: /usr/bin/docker ps"):
+            self.broker(["/usr/bin/docker", "ps"])
 
     def test_a_missing_image_fails_before_any_container(self):
         self.refusals["build"] = (
