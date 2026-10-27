@@ -88,7 +88,9 @@ class InProcessMode(BaseMode):
         host: Host,
         display: Display = None,
         check_name: Callable[[str], None] | None = None,
+        owner: str | None = None,
     ) -> Self:
+        cls._unowned(owner)
         prepared, run = cls._prepare(spec, client, display=display)
         record(prepared.info)
         mode = cls(prepared)

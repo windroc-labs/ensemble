@@ -189,7 +189,9 @@ class ResumeTest(Base):
             f.write(f"#!{sys.executable} -I\n{names}\n{KILLER}")
         os.chmod(tmux, 0o700)
         killed = self.start("w1", PATH=os.pathsep.join((directory, self.env()["PATH"])))
-        self.assertEqual((killed.returncode, killed.stdout), (-signal.SIGKILL, ""), killed.stderr)
+        # the process that launched it, killed here, is its session harness, not the start
+        self.assertEqual((killed.returncode, killed.stdout), (1, ""), killed.stderr)
+        self.assertIn("session harness", killed.stderr)
         record = self.record(self.again("resume", "w1", inside=None, cwd=self.root))
         self.assertEqual(record.resume, ("ensemble-session", "resume", "w1"))
         self.assertTrue(os.path.isfile(self.state_file(record.sid)))

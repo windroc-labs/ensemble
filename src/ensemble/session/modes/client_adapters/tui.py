@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping
 from types import MappingProxyType
+from typing import ClassVar
 
 from ensemble.session.engine.types import (
     LOCAL_CONTEXT,
@@ -32,6 +33,7 @@ class Tui(ABC):
     client = ""  # last ClientBound's id
     _turn_id = ""
     _turn_open: bool | None = None
+    _owned: ClassVar[bool] = False  # a session harness owns it
 
     @abstractmethod
     def launch(self, spec: Spec, hook: tuple[str, ...]) -> Launch:

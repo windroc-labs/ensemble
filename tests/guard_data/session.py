@@ -68,6 +68,7 @@ OBJECT_EXPORTS_ALLOWED = {
 STANDALONE = frozenset(
     f"{SESSION_SRC}{path}"
     for path in (
+        "harness/guard.py",
         "clients/codex/common/app_server.py",
         "clients/opencode/launcher.py",
         "clients/opencode/probe.py",
