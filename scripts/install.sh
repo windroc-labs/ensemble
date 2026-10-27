@@ -51,9 +51,11 @@ key_stdin=
 password_stdin=
 sudo_mine=
 keepalive=
+deferred=
 feeder=
 askpass_dir=
 current=
+login_pending=
 answer=
 token_screen=
 app_pem=
@@ -422,8 +424,11 @@ state_set() {
 
 on_exit() {
   local rc=$?
+  trap '' HUP INT TERM
   token_screen_leave
   sudo_end
+  # A login that failed or was cut short after storing its credential is still the cleanup's to remove.
+  if [ -n "$login_pending" ] && login_status "$login_pending"; then ledger_add login "$login_pending"; fi
   if [ "$rc" -ne 0 ] && [ -n "$current" ]; then
     say "$me: $current failed; rerun the same command to continue"
   fi
@@ -431,6 +436,14 @@ on_exit() {
     case $reload in "$HOME"/*) reload="~/${reload#"$HOME"/}" ;; esac
     say "$me: in this terminal, run source $reload first (or open a new one): its PATH lacks what install.sh added to $reload"
   fi
+}
+
+# On a signal bash runs the EXIT trap with the last command's status, often 0, and on HUP or TERM not at all: exit with
+# the signal's, so on_exit cleans up and names the rerun.
+exit_traps() {
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
 }
 
 # Reads the sudo password once (stdin's first line, else the terminal) and checks it. A FIFO then
@@ -458,6 +471,11 @@ sudo_once() {
       printf 'Sorry, try again.\n' >&3
     done
   fi
+  # Until the feeder and keep-alive hold their PIDs a signal waits, so sudo_end has them and askpass_dir to clean up.
+  # Not trap '': a subshell forked while a signal is ignored keeps ignoring it, and sudo_end could not stop it.
+  trap 'deferred=129' HUP
+  trap 'deferred=130' INT
+  trap 'deferred=143' TERM
   askpass_dir=$(mktemp -d "${TMPDIR:-/tmp}/ensemble-sudo.XXXXXX")
   case $askpass_dir in *"'"* | *$'\n'*) die "unusable TMPDIR: $askpass_dir" ;; esac
   mkfifo -m 600 "$askpass_dir/fifo"
@@ -489,6 +507,8 @@ EOF
     rm -rf "$askpass_dir"
   ) </dev/null >/dev/null 2>&1 &
   keepalive=$!
+  exit_traps
+  if [ -n "$deferred" ]; then exit "$deferred"; fi
 }
 
 # Stops the keep-alive and the askpass feeder, and drops the ticket sudo_once made.
@@ -1035,31 +1055,47 @@ apps() {
   fi
 }
 
+# Exit 0 when client $1 (gh, claude or codex) has a saved login.
+login_status() {
+  case $1 in
+    gh) gh auth status ;;
+    claude) claude auth status ;;
+    codex) codex login status ;;
+  esac </dev/null >/dev/null 2>&1
+}
+
+# Logs client $1 in with the command $2…, recording the login for the cleanup only once it succeeded (on_exit records
+# one that stored its credential before failing).
+client_login() {
+  login_pending=$1
+  shift
+  "$@" <&3 >&3 2>&3
+  ledger_add login "$login_pending"
+  login_pending=
+}
+
 client_logins() {
   step "GitHub CLI login"
-  if gh auth status </dev/null >/dev/null 2>&1; then
+  if login_status gh; then
     skip "logged in"
   else
-    ledger_add login gh
-    gh auth login --hostname github.com --git-protocol https --web <&3 >&3 2>&3
+    client_login gh gh auth login --hostname github.com --git-protocol https --web
   fi
   step "Claude Code login"
   if ! has claude; then
     skip "Claude Code not chosen"
-  elif claude auth status </dev/null >/dev/null 2>&1; then
+  elif login_status claude; then
     skip "logged in"
   else
-    ledger_add login claude
-    claude auth login <&3 >&3 2>&3
+    client_login claude claude auth login
   fi
   step "Codex login"
   if ! has codex; then
     skip "Codex not chosen"
-  elif codex login status </dev/null >/dev/null 2>&1; then
+  elif login_status codex; then
     skip "logged in"
   else
-    ledger_add login codex
-    codex login <&3 >&3 2>&3
+    client_login codex codex login
   fi
 }
 
@@ -2938,6 +2974,7 @@ main() {
   if [ ! -e "$root/dev/tty" ] || ! (: <>"$root/dev/tty") 2>/dev/null; then die "needs a terminal for its questions and logins"; fi
   exec 3<>"$(terminal)"
   trap on_exit EXIT
+  exit_traps
   [ -d "$HOME/.ensemble" ] || ledger_add dir "$HOME/.ensemble"
   if ! recorded agent-tree "$HOME/.ensemble" || [ ! -f "$state_dir/agent-tree.paths" ] \
     || [ -f "$state_dir/agent-tree.cleaned" ] || [ -f "$state_dir/agent-tree.pending" ]; then

@@ -113,6 +113,7 @@ SHARED = (
     "under_home",
     "ledger_valid",
     "agent_tree_find",
+    "exit_traps",
     "sudo_once",
     "sudo_end",
     "terminal",

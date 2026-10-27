@@ -16,6 +16,7 @@ yes=
 password_stdin=
 sudo_mine=
 keepalive=
+deferred=
 feeder=
 askpass_dir=
 current=
@@ -111,6 +112,14 @@ ledger_valid() {
   esac
 }
 
+# On a signal bash runs the EXIT trap with the last command's status, often 0, and on HUP or TERM not at all: exit with
+# the signal's, so on_exit cleans up and names the rerun.
+exit_traps() {
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+}
+
 # Reads the sudo password once (stdin's first line, else the terminal) and checks it. A FIFO then
 # hands it from memory to the askpass helper of every later sudo -A, Homebrew's included (it passes
 # -A when SUDO_ASKPASS is set): macOS's per-terminal tickets miss some of those sudo calls.
@@ -136,6 +145,11 @@ sudo_once() {
       printf 'Sorry, try again.\n' >&3
     done
   fi
+  # Until the feeder and keep-alive hold their PIDs a signal waits, so sudo_end has them and askpass_dir to clean up.
+  # Not trap '': a subshell forked while a signal is ignored keeps ignoring it, and sudo_end could not stop it.
+  trap 'deferred=129' HUP
+  trap 'deferred=130' INT
+  trap 'deferred=143' TERM
   askpass_dir=$(mktemp -d "${TMPDIR:-/tmp}/ensemble-sudo.XXXXXX")
   case $askpass_dir in *"'"* | *$'\n'*) die "unusable TMPDIR: $askpass_dir" ;; esac
   mkfifo -m 600 "$askpass_dir/fifo"
@@ -167,6 +181,8 @@ EOF
     rm -rf "$askpass_dir"
   ) </dev/null >/dev/null 2>&1 &
   keepalive=$!
+  exit_traps
+  if [ -n "$deferred" ]; then exit "$deferred"; fi
 }
 
 # Stops the keep-alive and the askpass feeder, and drops the ticket sudo_once made.
@@ -951,11 +967,7 @@ main() {
   docker_reachable
   if [ -z "$yes" ] && ! ask_yn "Remove all of this?"; then die "nothing removed"; fi
   trap on_exit EXIT
-  # On a signal bash runs the EXIT trap with the last command's status, often 0: exit with the signal's, so on_exit
-  # names the rerun.
-  trap 'exit 129' HUP
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
+  exit_traps
   sudo_once
   if [ -x "$root/opt/homebrew/bin/brew" ]; then eval "$("$root/opt/homebrew/bin/brew" shellenv)"; fi
   if grep -qxF "dir"$'\t'"$HOME/.ensemble" "$ledger"; then agent_root=1; fi
