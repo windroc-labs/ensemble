@@ -1,7 +1,10 @@
 """Fake macOS tools for install_integration_test: run as `install_fakes.py <tool> <args>`.
 
 Every call is logged to $LOG (argv) and $ENVLOG (environment values). State lives under
-$FAKES: brew/<name> (installed), processes (one running command line each; unkillable: those KILL misses), login/<client>, keychain/<service>, claude/ and codex/ (plugins),
+$FAKES: brew/<name> (installed), processes (one running command line each; unkillable: those KILL misses), login/<client>,
+keychain/<service> (an item: its password), keychain/<service>.count (N more items of <service>, without a password;
+delete-generic-password removes one item per call), security_delete_fails (a service whose
+delete-generic-password exits 45), claude/ and codex/ (plugins),
 src/broker/ (the broker's Codex install, tokens and protocol: the one `version` reports, else the plugin's;
 legacy: old-name items left, so every command but `version` refuses), fail (a call prefix that fails once), tty_name
 (what `ps -o tty=` reports), kqueue_refuses (a terminal the Bun-built clients die on, as on /dev/tty),
@@ -593,10 +596,20 @@ def security(args):
         store_key(args[args.index("-s") + 1], hidden_line("password data for new item: "))
         return 0
     if args[:1] == ["delete-generic-password"]:
-        item = FAKES / "keychain" / args[args.index("-s") + 1]
-        if not item.exists():
+        service = args[args.index("-s") + 1]
+        if load_text(FAKES / "security_delete_fails") == service:
+            return 45
+        item, count = FAKES / "keychain" / service, FAKES / "keychain" / f"{service}.count"
+        if item.exists():
+            item.unlink()
+        elif count.exists():
+            left = int(count.read_text()) - 1
+            if left:
+                mark(count, str(left))
+            else:
+                count.unlink()
+        else:
             return 44
-        item.unlink()
         return 0
     return 2
 
