@@ -54,6 +54,9 @@ class HeadlessCase(Case):
         self.mode, self.recorded = None, []
         StubRun.specs = []
 
+    def host(self) -> MemoryHost:
+        return MemoryHost()
+
     def start(self, client=None, display=None, **fields) -> Prepared:
         spec = Spec(
             **{
@@ -69,7 +72,7 @@ class HeadlessCase(Case):
             client or StubClient(),
             registry=self.session_cls._config().registry,
             record=self.recorded.append,
-            host=MemoryHost(),
+            host=self.host(),
             display=display,
         )
         return self.mode.prepared

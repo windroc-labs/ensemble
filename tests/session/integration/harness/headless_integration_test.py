@@ -5,9 +5,11 @@ fake: a registered handler and the view's events() see the same turn events.
 import json
 import os
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
@@ -17,6 +19,7 @@ from ensemble.session.engine.types import (
     Access,
     Exited,
     HookCallback,
+    Launch,
     Mode,
     NotShowable,
     SessionError,
@@ -29,6 +32,7 @@ from ensemble.session.engine.types import (
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.view import OwnedSession
 from ensemble.session.hosts.base import HARNESS_ROOT, Host
+from ensemble.session.hosts.tmux import TmuxHost, managed
 from tests.session import harnesses, live_tmux
 from tests.session.case import HOSTS, REPO, Case
 from tests.session.cli_support import logged
@@ -148,6 +152,10 @@ class ClaudeHeadless(Headless):
             handlers=self.handlers(),
         )
 
+    def harness_pid(self) -> int:
+        (found,) = Path(os.path.expanduser(HARNESS_ROOT)).glob("*/harness.json")
+        return Channel(str(found.parent)).status()["pid"]
+
     def pid(self) -> int:
         """The fake's, once it has started."""
         return live_tmux.wait(
@@ -212,10 +220,6 @@ class ClaudeViewTest(ClaudeHeadless):
 
 
 class ClaudeCallerTest(ClaudeHeadless):
-    def harness_pid(self) -> int:
-        (found,) = Path(os.path.expanduser(HARNESS_ROOT)).glob("*/harness.json")
-        return Channel(str(found.parent)).status()["pid"]
-
     def test_a_killed_caller_takes_its_harness_and_its_run_with_it(self):
         self.scene(steps=["working"], hang=True)
         handler = self.handlers()[0]
@@ -247,6 +251,36 @@ class ClaudeCallerTest(ClaudeHeadless):
         live_tmux.wait(lambda: not running(harness), WAIT, what=f"the harness {harness} gone")
         handled = [r["type"] for r in self.wait_for("Exited")]
         self.assertEqual(handled, ["TurnStarted", "TurnFailed", "Exited"])
+
+
+class ClaudeKillTest(ClaudeHeadless):
+    """kill -9 of a headless run's harness: its guard ends the client; the next start sweeps."""
+
+    def killed(self) -> int:
+        """A hung run's harness killed with SIGKILL; the fake's pid."""
+        self.scene(steps=["working"], hang=True)
+        self.session_cls.start(self.spec())
+        harness = self.harness_pid()
+        pid = self.pid()
+        self.wait_for("Reply")
+        os.kill(harness, signal.SIGKILL)
+        return pid
+
+    def test_a_harness_killed_with_kill_9_ends_its_headless_client(self):
+        pid = self.killed()
+        live_tmux.wait(lambda: not running(pid), 10, what=f"the fake {pid} gone")
+
+    def test_after_kill_9_the_next_start_removes_the_one_shot_dir(self):
+        self.killed()
+        (directory,) = Path(managed.control_root()).glob("o*")
+        leases = [str(lease) for lease in directory.glob("*/lease")]
+        live_tmux.wait(
+            lambda: not any(map(managed.held, leases)), 15, what="the guard's lease free"
+        )
+        os.utime(directory, (time.time() - 120,) * 2)
+        launch = Launch((sys.executable, "-I", "-c", ""), cwd=str(self.cwd))
+        TmuxHost("tmux").worker("next", launch, terminal=False).close()
+        self.assertFalse(directory.exists())
 
 
 class CodexSuccessTest(Headless):

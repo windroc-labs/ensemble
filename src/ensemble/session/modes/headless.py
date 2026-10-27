@@ -1,13 +1,19 @@
-"""The headless mode: a Headless's command on pipes, started by its Host (Host.pipe); two daemon
-threads pump its events and Stderr lines into one bounded queue, and the session ends at both
-pipes' EOF. stop() ends its Piped, whose local one kills the whole group, so a grandchild holding
-the pipes dies too; every wait is bounded.
+"""The headless mode: a Headless's command under its Host's guard (Host.worker, terminal=False),
+its input ended at once. A reader thread splits the worker's output into each stream's lines; two
+daemon threads pump its events and Stderr lines into one bounded queue, and the session ends at
+both streams' end. stop() closes the worker, whose guard ends the client's whole tree; every wait
+is bounded.
 """
 
+import codecs
+import contextlib
+import io
 import queue
 import threading
+import time
 import uuid
-from collections.abc import Callable, Iterable, Mapping
+from collections import deque
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Self
 
 from ensemble.session.clients.base import Client
@@ -16,6 +22,7 @@ from ensemble.session.engine.types import (
     PROCESS_EXIT,
     Blocked,
     ClientBound,
+    ConfigError,
     Launch,
     LimitHit,
     Liveness,
@@ -28,8 +35,11 @@ from ensemble.session.engine.types import (
     Stderr,
     TurnEnd,
     TurnFailed,
+    Unanswered,
+    WorkerExit,
+    WorkerOutput,
 )
-from ensemble.session.hosts.base import Host, Piped
+from ensemble.session.hosts.base import Host, InteractiveProcess
 from ensemble.session.modes.base import BaseMode, identity_drop
 from ensemble.session.modes.client_adapters.headless import Headless
 from ensemble.session.modes.tui import checked_name
@@ -37,15 +47,95 @@ from ensemble.utils import Display
 
 QUEUE_MAX = 64  # events and Stderr lines a pump queues before it waits for poll
 PUT_WAIT = 0.5
+LINE_MAX = 8 << 20  # bytes: a longer output line fails the run
+READ_WAIT = 0.5
+EXIT_WAIT = 0.05  # between checks for an exit code its Host confirms after the exit frame
+
+
+class _Lines:
+    """One stream's bytes as text lines, as piped_popen's text mode read them."""
+
+    def __init__(self, name: str) -> None:
+        self.name, self.partial = name, 0
+        self.decoder = io.IncrementalNewlineDecoder(
+            codecs.getincrementaldecoder("utf-8")(errors="replace"), translate=True
+        )
+        self.text = ""
+
+    def feed(self, data: bytes, *, final: bool = False) -> list[str]:
+        last = max(data.rfind(b"\n"), data.rfind(b"\r"))
+        self.partial = self.partial + len(data) if last < 0 else len(data) - last - 1
+        if self.partial > LINE_MAX:
+            self.text = ""
+            raise SessionError(
+                f"headless session {self.name}: a client output line over {LINE_MAX} bytes"
+            )
+        self.text += self.decoder.decode(data, final=final)
+        *lines, self.text = self.text.split("\n")
+        lines = [line + "\n" for line in lines]
+        if final and self.text:
+            lines.append(self.text)
+        return lines
+
+
+class _Feed:
+    """A stream's lines from the reader to its pump, dropped once the pump is gone: at most
+    LINE_MAX characters held, but always the next line (a full feed stalls the reader).
+    """
+
+    def __init__(self) -> None:
+        self.condition = threading.Condition()
+        self.lines: deque[str] = deque()
+        self.size = 0
+        self.ended = self.dropped = False
+        self.error: BaseException | None = None
+
+    def put(self, line: str) -> None:
+        with self.condition:
+            self.condition.wait_for(
+                lambda: self.dropped or not self.lines or self.size + len(line) <= LINE_MAX
+            )
+            if self.dropped:
+                return
+            self.lines.append(line)
+            self.size += len(line)
+            self.condition.notify_all()
+
+    def end(self, error: BaseException | None = None) -> None:
+        with self.condition:
+            self.ended, self.error = True, error
+            self.condition.notify_all()
+
+    def drop(self) -> None:
+        with self.condition:
+            self.dropped = True
+            self.lines.clear()
+            self.condition.notify_all()
+
+    def __iter__(self) -> Iterator[str]:
+        while True:
+            with self.condition:
+                self.condition.wait_for(lambda: self.lines or self.ended)
+                if not self.lines:
+                    if self.error is not None:
+                        raise self.error
+                    return
+                line = self.lines.popleft()
+                self.size -= len(line)
+                self.condition.notify_all()
+            yield line
 
 
 class HeadlessMode(BaseMode):
     kind = Mode.HEADLESS
 
-    def __init__(self, prepared: Prepared, piped: Piped, generation: str | None = None):
+    def __init__(self, prepared: Prepared, worker: InteractiveProcess, generation: str):
         super().__init__(prepared)
-        self._generation = generation or uuid.uuid4().hex
-        self.piped, self.items, self.open = piped, queue.Queue(QUEUE_MAX), 2
+        self._generation = generation
+        self.worker, self.items, self.open = worker, queue.Queue(QUEUE_MAX), 2
+        self.feeds = {"stdout": _Feed(), "stderr": _Feed()}
+        self.exited = threading.Event()
+        self.closing = threading.Lock()
         self.eof = (threading.Event(), threading.Event())
         self.done = (threading.Event(), threading.Event())
         self.closed, self.stopped = False, threading.Event()
@@ -82,14 +172,16 @@ class HeadlessMode(BaseMode):
         host: Host,
         display: Display,
     ) -> tuple[Prepared, Headless, Mapping[str, str] | None, tuple[str, str] | None]:
-        """metadata: a named run's, for its Host; None: a nameless run, as before Hosts piped. Last,
-        the prompt file this mode writes.
+        """metadata: a named run's, for its Host; None: a nameless run's. Last, the prompt file this
+        mode writes.
         """
         run = client.headless()
         if run is None:
             raise cls._unsupported(spec)
         cls._no_tui_keys(spec, display, named=True)
         spec, account = cls._selected(spec, client)
+        if spec.name is None and host._named_headless:
+            raise ConfigError(f"a headless session on host {host.name} needs a name")
         drop = identity_drop(registry)
         name, metadata = spec.name, None
         if name is not None:
@@ -125,38 +217,73 @@ class HeadlessMode(BaseMode):
             cls._write_prompt(*prompt_file)
         run.commit()
         record(prepared.info)
+        metadata = {"generation": uuid.uuid4().hex, **(metadata or {})}
+        name = prepared.spec.name or f"headless-{metadata['generation']}"
         try:
-            piped = host.pipe(prepared.spec.name, _launch(prepared), metadata=metadata)
-            mode = cls(prepared, piped, (metadata or {}).get("generation"))
-            out, err = piped.stdout, piped.stderr
-            for pipe, events, eof, done in (
+            worker = host.worker(name, _launch(prepared), terminal=False, metadata=metadata)
+        except (OSError, ValueError) as e:
+            raise SessionError(f"cannot start {prepared.argv[0]}: {e}") from e
+        try:
+            worker.write(b"")
+            mode = cls(prepared, worker, worker.generation)
+            out, err = mode.feeds["stdout"], mode.feeds["stderr"]
+            for feed, events, eof, done in (
                 (out, run.events(out), mode.eof[0], mode.done[0]),
                 (err, (Stderr(line.rstrip("\n")) for line in err), mode.eof[1], mode.done[1]),
             ):
                 threading.Thread(
-                    target=mode._pump, args=(pipe, events, eof, done), daemon=True
+                    target=mode._pump, args=(feed, events, eof, done), daemon=True
                 ).start()
-        except (OSError, ValueError) as e:
+            threading.Thread(target=mode._read, args=(name,), daemon=True).start()
+        except (OSError, ValueError, SessionError) as e:
+            with contextlib.suppress(SessionError):
+                worker.close()
             raise SessionError(f"cannot start {prepared.argv[0]}: {e}") from e
         return mode
 
+    def _read(self, name: str) -> None:
+        """The worker's output into its feeds, until its exit or a failure."""
+        streams = {stream: _Lines(name) for stream in self.feeds}
+        error: SessionError | None = None
+        try:
+            while not self.exited.is_set():
+                for message in self.worker.read(READ_WAIT):
+                    if isinstance(message, WorkerOutput) and message.stream in streams:
+                        for line in streams[message.stream].feed(message.data):
+                            self.feeds[message.stream].put(line)
+                    elif isinstance(message, WorkerExit):
+                        for stream, lines in streams.items():
+                            for line in lines.feed(b"", final=True):
+                                self.feeds[stream].put(line)
+                        self.exited.set()
+        except SessionError as failure:
+            error = failure
+        finally:
+            for feed in self.feeds.values():
+                feed.end(error)
+            self.exited.set()
+        if error is not None and not isinstance(error, Unanswered):
+            self.stopped.set()
+            with contextlib.suppress(SessionError):
+                self._close()
+
     def _pump(
         self,
-        pipe,
+        feed: _Feed,
         events: Iterable[SessionEvent | Stderr | ClientBound],
         eof: threading.Event,
         done: threading.Event,
     ) -> None:
         try:
-            with pipe:
-                for event in events:
-                    self._put(event)
+            for event in events:
+                self._put(event)
         except BaseException as e:  # noqa: BLE001  # Forward failures to the caller thread.
             self._put(e)
         else:
             eof.set()
             self._put(None)
         finally:
+            feed.drop()
             done.set()
 
     def _put(self, item) -> None:
@@ -222,15 +349,25 @@ class HeadlessMode(BaseMode):
         return [terminal], True
 
     def returncode(self, timeout: float) -> int | None:
-        code = self._code if self._code is not None else self.piped.wait(timeout)
-        self._code = code
-        if code is not None and not self.closed:
-            self.closed = True
-            self.piped.close()
-        return code
+        """Once the worker's exit came and its Host confirmed it; then its handle closes."""
+        deadline = time.monotonic() + timeout
+        while self._code is None and self.exited.wait(max(0.0, deadline - time.monotonic())):
+            self._code = self.worker.returncode()
+            if self._code is not None or time.monotonic() >= deadline:
+                break
+            time.sleep(EXIT_WAIT)
+        if self._code is not None:
+            self._close()
+        return self._code
+
+    def _close(self) -> None:
+        with self.closing:
+            if not self.closed:
+                self.closed = True
+                self.worker.close()
 
     def state(self) -> Liveness:
-        return Liveness.LIVE if self.piped.wait(0) is None else Liveness.ABSENT
+        return self.worker.state()
 
     def send(self, text: str) -> None:
         raise SessionError("send: tui mode only")
@@ -239,9 +376,8 @@ class HeadlessMode(BaseMode):
         raise SessionError("screen: tui mode only")
 
     def stop(self) -> None:
-        self.closed = True
         self.stopped.set()
-        self.piped.stop(ended=all(eof.is_set() for eof in self.eof))
+        self._close()
 
 
 def _launch(prepared: Prepared) -> Launch:

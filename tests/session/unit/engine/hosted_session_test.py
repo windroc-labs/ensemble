@@ -62,11 +62,11 @@ from ensemble.session.engine.types import (
     Unanswered,
     Usage,
     Window,
+    WorkerOutput,
 )
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedSession
-from ensemble.session.hosts.base import Piped
 from ensemble.session.hosts.docker.host import DockerHost
 from ensemble.session.hosts.docker.worker import DockerWorker
 from ensemble.session.hosts.managed import ManagedProcess
@@ -77,9 +77,11 @@ from ensemble.utils import ACCOUNT_ENV, Record, StatusState, exhausted, inode_lo
 from tests.session import fake_client
 from tests.session.case import HOSTS, REPO, SPAWNS, SRC, Case
 from tests.session.fakes.container_host import HOMED as HOMED_HOST
+from tests.session.fakes.container_host import NAMED as NAMED_HOST
 from tests.session.fakes.container_host import PATH as CONTAINER_HOST
 from tests.session.fakes.host import FakeHost
 from tests.session.fakes.terminal import MemoryHost, MemoryViewer, ScreenHost
+from tests.session.fakes.worker import ScriptedWorker
 from tests.session.hosted_support import (
     LAUNCHED,
     PYTHONPATH,
@@ -100,18 +102,6 @@ UNCONFIGURED = "session not configured: call Session.configure first"
 FAKE_HOSTS = {"fake": {"implementation": "tests.session.fakes.host:FakeHost"}}
 
 
-class CapacityPiped(Piped):
-    def __init__(self):
-        self.stdout, self.stderr = io.StringIO(), io.StringIO()
-        self.code = None
-
-    def wait(self, timeout):
-        return self.code
-
-    def stop(self, *, ended):
-        self.code = 0
-
-
 class CapacityHost(ScreenHost):
     close_failure = None
     inventory_failure = None
@@ -130,9 +120,9 @@ class CapacityHost(ScreenHost):
             raise self.launch_failure
         return terminal
 
-    def pipe(self, name, launch, *, metadata=None):
-        self.calls.pipe(name, launch, metadata=metadata)
-        return CapacityPiped()
+    def headless_worker(self, name, launch, metadata):
+        self.calls.headless_worker(name, launch, metadata=metadata)
+        return ScriptedWorker(name, metadata["generation"], code=None)
 
 
 class ClientCapacityTest(HostedTuiBase):
@@ -185,7 +175,7 @@ class ClientCapacityTest(HostedTuiBase):
 
     def test_launch_and_publication_failures_release_the_reserved_slot(self):
         for mode, boundary in (
-            ("headless", self.host.calls.pipe),
+            ("headless", self.host.calls.headless_worker),
             ("tui", self.host.calls.terminal),
             ("tui", self.host.calls.close_view),
         ):
@@ -237,7 +227,7 @@ class ClientCapacityTest(HostedTuiBase):
         with self.assertRaisesRegex(SessionError, "one"):
             self.start(mode="headless", sid="s2")
         self.assertEqual(self.written(), before)
-        self.assertEqual(self.host.calls.pipe.call_count, 0)
+        self.assertEqual(self.host.calls.headless_worker.call_count, 0)
         self.assertGreaterEqual(len(self.host.calls.mock_calls), calls)
         first.close()
 
@@ -1662,7 +1652,7 @@ class AccountPoolTest(Base):
             self.assertRaisesRegex(SessionError, "refused by the test Host"),
         ):
             self.session.start(spec)
-        (metadata,) = self.session.host().piped
+        (metadata,) = self.session.host().headless
         return metadata.get("home_account")
 
     def test_a_start_selecting_none_hands_the_host_the_best_account(self):
@@ -3081,27 +3071,15 @@ class OwnedTest(HostedTuiBase):
             view.screen()
 
 
-class _ScriptedPiped(Piped):
-    def __init__(self, out: str, code: int | None):
-        self.stdout, self.stderr, self.code = io.StringIO(out), io.StringIO(), code
-
-    def wait(self, timeout):
-        return self.code
-
-    def stop(self, *, ended):
-        self.code = -signal.SIGTERM if self.code is None else self.code
-
-    def close(self):
-        return None
-
-
 class OwnedHeadlessTest(HostedTuiBase):
     """HostedSession.own of a headless run: nameless, its own generation, ended by its exit."""
 
     def own(self, out="", code=None):
-        """Its run on a pipe printing `out`; code: its exit's, None till stopped."""
-        piped = _ScriptedPiped(out, code)
-        self.host.pipe = lambda *_args, **_kw: piped
+        """Its run's scripted worker printing `out`; code: its exit's, None till stopped."""
+        batches = [[WorkerOutput(out.encode())]] if out else []
+        self.host.headless_worker = lambda name, _launch, metadata: ScriptedWorker(
+            name, metadata["generation"], batches, code
+        )
         self.channel = Channel.create()
         spec = dataclasses.replace(self.spec(), client="fake", mode="headless", sid=SID)
         owned = self.session.own(spec, owner=self.channel.directory)
@@ -3606,6 +3584,18 @@ class OwnedHeadlessStartTest(Case):
 
     def spec(self, **fields):
         return dataclasses.replace(OwnedStartTest.spec(self, **fields), mode="headless", name=None)
+
+    def test_a_nameless_start_on_a_named_headless_host_makes_no_harness_dir(self):
+        session_cls = HostedSession.configured(
+            clients={"claude": {"implementation": "ensemble.session.clients.claude:ClaudeClient"}},
+            hosts=Host.parse_hosts({"named": {"implementation": NAMED_HOST}, "default": "named"}),
+        )
+        with self.assertRaisesRegex(ConfigError, "^a headless session on host named needs a name$"):
+            session_cls.start(self.spec())
+        self.popen.assert_not_called()
+        root = os.path.join(self.ensemble, "harness")
+        made = os.listdir(root) if os.path.isdir(root) else []
+        self.assertEqual([d for d in made if not d.startswith(".")], [])
 
     def test_it_returns_a_headless_view_once_the_harness_runs(self):
         self.harness_writes({"state": "running", "name": None, "sid": SID, "generation": "g7"})

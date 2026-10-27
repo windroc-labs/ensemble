@@ -4,11 +4,12 @@ import sys
 from collections.abc import Mapping
 from dataclasses import replace
 
-from ensemble.session.engine.types import ClientContext, Container, SessionError
+from ensemble.session.engine.types import ClientContext, Container, Launch, SessionError
 from ensemble.session.hosts.tmux import TmuxHost
 
 PATH = f"{__name__}:ContainerTmuxHost"
 HOMED = f"{__name__}:HomedContainerHost"
+NAMED = f"{__name__}:NamedHeadlessHost"
 
 
 class ContainerTmuxHost(TmuxHost):
@@ -17,18 +18,37 @@ class ContainerTmuxHost(TmuxHost):
         return replace(super()._client_context(), container=container)
 
 
+class NamedHeadlessHost(TmuxHost):
+    """Refuses a nameless headless run, as the Docker Host does."""
+
+    _named_headless = True
+
+
 class HomedContainerHost(ContainerTmuxHost):
     """Gives a client its home env, as the Docker Host does; keeps each headless start's metadata
-    in `piped`, then refuses the start.
+    in `headless`, then refuses the start.
     """
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.piped: list[dict[str, str]] = []
+        self.headless: list[dict[str, str]] = []
 
     def _client_env(self, name, client, home, *, resume) -> Mapping[str, str]:
         return {"FAKE_HOME": "/h"}
 
-    def pipe(self, name, launch, *, metadata=None):
-        self.piped.append(dict(metadata or {}))
+    def worker(
+        self,
+        name: str,
+        launch: Launch,
+        *,
+        terminal: bool,
+        display=None,
+        events: str | None = None,
+        metadata: Mapping[str, str] | None = None,
+    ):
+        if terminal:
+            return super().worker(
+                name, launch, terminal=True, display=display, events=events, metadata=metadata
+            )
+        self.headless.append(dict(metadata or {}))
         raise SessionError("refused by the test Host")
