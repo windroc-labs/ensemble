@@ -3170,6 +3170,24 @@ class OwnedStartTest(Case):
             self.session_cls.start(self.spec())
         self.assertFalse(os.path.exists(self.spawned[2].directory))
 
+    def test_preflight_finds_handlers_without_importing_them(self):
+        root = os.path.join(self.home, "handlers")
+        os.mkdir(root)
+        with open(os.path.join(root, "never_imported_handler.py"), "w") as f:
+            f.write("raise SystemExit('imported')\n")
+        good = engine_types.HookCallback("never_imported_handler", roots=(root,))
+        spec = self.spec(handlers=(good,))
+        tmux = self.popen.return_value
+        tmux.__enter__.return_value, tmux.returncode = tmux, 0
+        tmux.communicate.return_value = ("", "")
+        self.session_cls.preflight(spec)
+        missing = dataclasses.replace(spec, handlers=(engine_types.HookCallback("no_such_mod"),))
+        with self.assertRaisesRegex(ConfigError, "no_such_mod: cannot find"):
+            self.session_cls.preflight(missing)
+        self.assertNotIn(
+            hosted_session.HARNESS, [a for c in self.popen.call_args_list for a in c.args[0]]
+        )
+
     def test_an_environment_is_refused_before_any_harness(self):
         with self.assertRaises(ConfigError):
             self.session_cls.harness_request(
@@ -3190,17 +3208,16 @@ class LegacyHandlersTest(HostedTuiBase):
             self.tui(name="w1", handlers=handlers)
         self.nothing_hosted()
 
-    def test_preflight_finds_handlers_without_importing_them(self):
-        root = os.path.join(self.dir, "handlers")
-        os.mkdir(root)
-        with open(os.path.join(root, "never_imported_handler.py"), "w") as f:
-            f.write("raise SystemExit('imported')\n")
-        good = engine_types.HookCallback("never_imported_handler", roots=(root,))
-        spec = self.spec(client="fake", mode="tui", name="w1", handlers=(good,))
+    def test_preflight_refuses_handlers_on_a_start_no_harness_owns(self):
+        spec = self.spec(client="fake", mode="tui", name="w1")
         self.session.preflight(spec)
-        missing = dataclasses.replace(spec, handlers=(engine_types.HookCallback("no_such_mod"),))
-        with self.assertRaisesRegex(ConfigError, "no_such_mod: cannot find"):
-            self.session.preflight(missing)
+        handlers = (engine_types.HookCallback("pkg.handler"),)
+        with self.assertRaisesRegex(
+            ConfigError, "^handlers: fake tui on host tmux has no session harness yet$"
+        ):
+            self.session.preflight(dataclasses.replace(spec, handlers=handlers))
+        with self.assertRaisesRegex(ConfigError, "fake headless on host tmux"):
+            self.session.preflight(dataclasses.replace(spec, mode="headless", handlers=handlers))
 
 
 class BoundOwnerTest(HostedTuiBase):

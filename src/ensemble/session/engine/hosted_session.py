@@ -255,6 +255,10 @@ def _owned(setup: _Setup, mode: Mode, client: Client, on: Host) -> bool:
     return run is not None and run._owned
 
 
+def _unharnessed(client: str, mode: Mode, on: Host) -> ConfigError:
+    return ConfigError(f"handlers: {client} {mode} on host {on.name} has no session harness yet")
+
+
 def _bound_owner(name: str, state: Mapping) -> Channel | None:
     """Its owner, once that harness.json binds it to `name`, sid and generation."""
     owner = state.get("owner")
@@ -393,6 +397,8 @@ class HostedSession(Session):
         spec = replace(spec, sid=spec.sid or str(uuid.uuid4()))
         on = cls.host(host)
         _environment_check(spec, on, mode)
+        if spec.handlers and not _owned(setup, mode, client, on):
+            raise _unharnessed(client_name, mode, on)
         cls.viewer()
         displays.validate_display(display, on)
         MODES[mode].preflight(
@@ -422,9 +428,7 @@ class HostedSession(Session):
         _environment_check(spec, on, mode)
         if not _owned(setup, mode, client, on):
             if spec.handlers:
-                raise ConfigError(
-                    f"handlers: {client_name} {mode} on host {on.name} has no session harness yet"
-                )
+                raise _unharnessed(client_name, mode, on)
             return cls._begin(
                 spec, display=display, host=host, idle_timeout=idle_timeout, client=client
             )
