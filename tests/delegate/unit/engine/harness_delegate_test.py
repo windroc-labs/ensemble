@@ -17,7 +17,6 @@ import json
 import os
 import shutil
 import signal
-import subprocess
 import threading
 import unittest
 import uuid
@@ -70,6 +69,7 @@ from tests.delegate.unit.engine.orphans import Clock, Orphan
 from tests.session import harnesses
 from tests.session.case import PLUGIN_BIN
 from tests.session.unit.hosts.docker import support
+from tests.utils.process_fixtures import DEVNULL, STDOUT
 
 ORPHAN = 4242
 
@@ -193,8 +193,8 @@ class Drive(HarnessCase):
             {k: seen[k] for k in ("cwd", "stdin", "stderr", "start_new_session")},
             {
                 "cwd": os.path.join(self.work, "run"),
-                "stdin": subprocess.DEVNULL,
-                "stderr": subprocess.STDOUT,
+                "stdin": DEVNULL,
+                "stderr": STDOUT,
                 "start_new_session": True,
             },
         )
