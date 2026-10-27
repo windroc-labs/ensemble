@@ -41,6 +41,7 @@ from ensemble.session.engine.types import (
 from ensemble.session.modes.client_adapters.tui import Tui
 from ensemble.utils import number
 
+AFTER_LIMIT = "ensemble_after_limit"  # on_hook's mark on a prompt that follows a usage limit
 LIMIT = re.compile(r"You've hit your ((?:[\w']+ ){0,3})limit|Usage limit reached")
 WHEN = re.compile(
     (
@@ -95,8 +96,6 @@ class ClaudeTui(Tui):
         self.transcript, self.start, self.offset = "", 0, 0
         self.last = self.unseen = ""  # the turn's newest text; its turn end's text not yet read
         self.limited = False  # this turn's LimitHit given
-        self._limit_seen = False  # a transcript limit since the last turn-ending hook
-        self._limit_hooked = False  # the newest turn ended on StopFailure's limit
         self._origin = self._config_dir = self._native = ""
         self._ids: set[str] = set()
         self._visited: set[str] = set()
@@ -209,33 +208,25 @@ class ClaudeTui(Tui):
 
     def _accept_turn(self, identifier):
         """Claude's hooks carry no turn id: a prompt while its turn is open is input Claude joins
-        to that turn (a send, a background task's notice), unless a limit ended the turn unhooked.
+        to that turn (a send, a background task's notice).
         """
-        if self._turn_open:
-            if not self._limit_seen:
-                return False
-            self._limit_seen = False
-        accepted = super()._accept_turn(identifier)
-        self._limit_hooked = self._limit_hooked and not accepted
-        return accepted
-
-    def _settle_turn(self, identifier, *, native=False):
-        self._limit_seen = False
-        return super()._settle_turn(identifier, native=native)
+        return not self._turn_open and super()._accept_turn(identifier)
 
     def hook_events(self, label, payload):
         native = payload.get("session_id")
         if not isinstance(native, str) or native not in self._ids:
             return []
+        if label == "UserPromptSubmit" and payload.get(AFTER_LIMIT) is True:
+            self._turn_open = False  # a usage limit ended it, though no hook may have said so
         return super().hook_events(label, payload)
 
     def replay(self, records):
         """Ends in the latest turn's state, not the oldest's: no LimitHit given live yet (the replay
         gives none), a Stop since the hook log's last prompt leaves its text unseen unless it is
-        the transcript's newest, and only the newest turn's transcript limit ends its open turn.
+        the transcript's newest.
         """
         found: list[SessionEvent | ClientBound] = [*self.observe()]
-        newest, ended, limit = self.last, None, self.limited
+        newest, ended = self.last, None
         for label, payload in records:
             native = payload.get("session_id")
             if not isinstance(native, str) or native not in self._ids:
@@ -245,7 +236,6 @@ class ClaudeTui(Tui):
             if label == "UserPromptSubmit":
                 ended = None
             ended = next((e.reply for e in events if isinstance(e, TurnEnd)), ended)
-        self._limit_seen = self._turn_open is True and limit  # the hooks cleared an older one
         self.limited = False
         self.last = newest if ended is None else ""
         self.unseen = ended if ended and ended.strip() and ended != newest else ""
@@ -271,7 +261,6 @@ class ClaudeTui(Tui):
             resets = number(quota.get("resetsAt")) if quota.get("status") == "rejected" else None
             if resets is None:
                 resets = _resets_in("\n".join(texts(content)))
-            self._limit_seen = self._limit_seen or not self._limit_hooked
             return self._limit(resets)
         text = "\n".join(texts(content))
         if not text.strip():
@@ -313,7 +302,6 @@ class ClaudeTui(Tui):
         """StopFailure's typed error: rate_limit is the usage limit, any other a failed turn."""
         error = _first(payload, "error") or "unknown"
         if error == "rate_limit":
-            self._limit_hooked = True
             return self._limit(_resets_in(_first(payload, "last_assistant_message")))
         return [TurnFailed(error, _first(payload, "error_details", "last_assistant_message"))]
 
@@ -340,7 +328,31 @@ def on_hook(call: HookCall) -> dict | None:
     if not isinstance(native, str) or native not in ids:
         return None
     replies.on_hook(call, began=began)  # a Stop's replies precede the Host hook's done
+    current = call.payload.get("transcript_path")
+    current = current if isinstance(current, str) and os.path.isabs(current) else path
+    if call.label == "UserPromptSubmit" and _limit_last(current):
+        return {**call.payload, AFTER_LIMIT: True}
     return call.payload
+
+
+def _limit_last(path: str) -> bool:
+    """The transcript's newest main-thread assistant record is a usage-limit API error: read as the
+    prompt's hook runs, after the limit it follows and before any later record.
+    """
+    try:
+        data = read(path, limit=TAIL, tail=True) or b""
+    except ValueError:  # a NUL or a lone surrogate in the path
+        return False
+    for line in reversed(data.split(b"\n")):
+        try:
+            record = json.loads(line)
+        except (ValueError, RecursionError):
+            continue
+        if not isinstance(record, dict) or record.get("isSidechain") is True:
+            continue
+        if record.get("type") == "assistant":
+            return record.get("isApiErrorMessage") is True and record.get("error") == "rate_limit"
+    return False
 
 
 def _chain(path: str, sid: str, config_dir: str) -> list[tuple[str, str | None, str | None]]:

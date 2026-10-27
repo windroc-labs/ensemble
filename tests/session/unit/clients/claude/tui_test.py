@@ -7,7 +7,7 @@ import shlex
 from unittest import mock
 
 from ensemble.session.clients.claude import ClaudeClient
-from ensemble.session.clients.claude.tui import ClaudeTui, on_hook
+from ensemble.session.clients.claude.tui import AFTER_LIMIT, ClaudeTui, on_hook
 from ensemble.session.engine.types import (
     Access,
     Activity,
@@ -969,15 +969,35 @@ RATE_LIMIT = (
 
 class JoinedInputTest(TranscriptCase):
     """Claude runs UserPromptSubmit for input it joins to its open turn (a send, a background
-    task's notice): no new turn, until the turn ends by a hook or on a usage limit.
+    task's notice): no new turn, until a hook ends the turn or the prompt's own hook (on_hook) marks
+    it as following a usage limit the transcript shows.
     """
 
     def prompt(self, run=None):
         return (run or self.run).hook_events("UserPromptSubmit", {"session_id": SID, "prompt": "x"})
 
+    def submitted(self):
+        """A prompt's UserPromptSubmit payload as its hook journals it now."""
+        call = HookCall(
+            label="UserPromptSubmit",
+            payload={"session_id": SID, "prompt": "x"},
+            sid=SID,
+            workdir=self.work,
+            events=None,
+            state=self.run.hook_callback().state,
+        )
+        return on_hook(call)
+
+    def read(self, payload):
+        return self.run.hook_events("UserPromptSubmit", payload)
+
     def limit(self):
         self.append(PROMPT, limited(WEEKLY))
         self.assertEqual(self.run.observe(), [LimitHit(epoch("2027-10-15 09:00", "UTC"))])
+
+    def working(self):
+        self.append(PROMPT, said("m2", tool("Bash")))
+        self.assertEqual(self.run.observe(), [])
 
     def test_a_prompt_while_the_turn_is_open_joins_it(self):
         self.assertEqual(self.prompt(), [TurnStarted()])
@@ -995,29 +1015,56 @@ class JoinedInputTest(TranscriptCase):
         self.assertEqual(self.prompt(run), [ClientBound(SID), TurnStarted()])
         self.assertEqual(self.prompt(run), [])
 
-    def test_a_limit_only_the_transcript_shows_ends_the_open_turn(self):
-        self.assertEqual(self.prompt(), [TurnStarted()])
+    def test_a_prompts_hook_marks_it_when_the_newest_assistant_record_is_a_limit(self):
+        plain = {"session_id": SID, "prompt": "x"}
+        self.append(PROMPT, said("m1", text("Working.")))
+        self.assertEqual(self.submitted(), plain)
+        self.append(limited(WEEKLY), {**said("m2", text("aside")), "isSidechain": True}, "{")
+        self.assertEqual(self.submitted(), {**plain, AFTER_LIMIT: True})
+        stop = HookCall(
+            label="Stop",
+            payload={"session_id": SID},
+            sid=SID,
+            workdir=self.work,
+            events=None,
+            state=self.run.hook_callback().state,
+        )
+        self.assertEqual(on_hook(stop), {"session_id": SID})
+        self.append(PROMPT, said("m3", tool("Bash")))
+        self.assertEqual(self.submitted(), plain)
+
+    def test_a_prompt_after_a_limit_only_the_transcript_shows_starts_a_turn(self):
+        self.assertEqual(self.read(self.submitted()), [TurnStarted()])
         self.limit()
-        self.assertEqual(self.prompt(), [TurnStarted()])
         self.assertEqual(self.prompt(), [])
+        resume = self.submitted()
+        self.working()
+        self.assertEqual(self.read(resume), [TurnStarted()])
+        self.assertEqual(self.read(self.submitted()), [])
 
-    def resumed_after_a_limit_read_before_its_prompt(self, *, user_first: bool) -> None:
-        """observe() runs before a batch's hooks: a limit can be read before its own prompt."""
-        self.assertEqual(self.prompt(), [TurnStarted()])
-        self.assertEqual(self.run.hook_events(*STOP), [TurnEnd("Done.", 0)])
-        self.limit()
-        self.assertEqual(self.prompt(), [TurnStarted()])
-        if user_first:
-            self.append(PROMPT)
-            self.assertEqual(self.run.observe(), [])
-        self.assertEqual(self.prompt(), [TurnStarted()])
-        self.assertEqual(self.prompt(), [])
+    def resumed_after_two_limits(self, *, records_first: bool) -> None:
+        """A StopFailure limit, then a prompt whose limit only the transcript shows, its records
+        read before or after its hook (S6 correctness#3): the resume prompt starts a turn.
+        """
+        self.assertEqual(self.read(self.submitted()), [TurnStarted()])
+        resets = epoch("2027-10-15 09:00", "UTC")
+        self.assertEqual(self.run.hook_events(*RATE_LIMIT), [LimitHit(resets)])
+        second = self.submitted()
+        if records_first:
+            self.limit()
+        self.assertEqual(self.read(second), [TurnStarted()])
+        if not records_first:
+            self.limit()
+        resume = self.submitted()
+        self.working()
+        self.assertEqual(self.read(resume), [TurnStarted()])
+        self.assertEqual(self.read(self.submitted()), [])
 
-    def test_a_limit_read_before_its_prompt_ends_that_turn(self):
-        self.resumed_after_a_limit_read_before_its_prompt(user_first=False)
+    def test_a_resume_after_two_limits_starts_a_turn(self):
+        self.resumed_after_two_limits(records_first=False)
 
-    def test_a_limit_read_before_its_prompt_ends_that_turn_the_resume_record_first(self):
-        self.resumed_after_a_limit_read_before_its_prompt(user_first=True)
+    def test_a_resume_after_two_limits_starts_a_turn_its_records_read_first(self):
+        self.resumed_after_two_limits(records_first=True)
 
     def test_a_limit_in_the_transcript_and_its_stop_failure_ends_the_turn_once(self):
         self.assertEqual(self.prompt(), [TurnStarted()])
@@ -1026,7 +1073,7 @@ class JoinedInputTest(TranscriptCase):
         self.assertEqual(self.prompt(), [TurnStarted()])
         self.assertEqual(self.prompt(), [])
 
-    def test_a_limit_record_read_after_its_stop_failure_leaves_no_mark(self):
+    def test_a_limit_record_read_after_its_stop_failure_ends_no_other_turn(self):
         self.append(PROMPT)
         self.assertEqual(self.run.observe(), [])
         self.assertEqual(self.prompt(), [TurnStarted()])
@@ -1037,24 +1084,12 @@ class JoinedInputTest(TranscriptCase):
         self.assertEqual(self.prompt(), [TurnStarted()])
         self.assertEqual(self.prompt(), [])
 
-    def test_a_limit_record_read_after_a_replayed_stop_failure_leaves_no_mark(self):
+    def test_a_limit_record_read_after_a_replayed_stop_failure_ends_no_other_turn(self):
         self.append(PROMPT)
         run = self.restored()
         run.replay([("UserPromptSubmit", {"session_id": SID}), RATE_LIMIT])
         self.append(limited(WEEKLY))
         run.observe()
-        self.assertEqual(self.prompt(run), [TurnStarted()])
-        self.assertEqual(self.prompt(run), [])
-
-    def test_a_replay_keeps_a_limit_of_its_newest_turn_only(self):
-        ups = ("UserPromptSubmit", {"session_id": SID})
-        self.append(PROMPT, limited(WEEKLY), PROMPT, said("m1", text("Done.")), PROMPT)
-        run = self.restored()
-        run.replay([ups, RATE_LIMIT, ups, STOP, ups])
-        self.assertEqual(self.prompt(run), [])
-        self.append(limited(WEEKLY))
-        run = self.restored()
-        run.replay([ups, RATE_LIMIT, ups, STOP, ups])
         self.assertEqual(self.prompt(run), [TurnStarted()])
         self.assertEqual(self.prompt(run), [])
 
