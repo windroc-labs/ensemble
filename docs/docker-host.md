@@ -45,7 +45,8 @@ A missing asset or sha256 file, or a mismatch, installs nothing and exits non-ze
 shortly after publishing a Release: retry. `--build` instead builds and ad-hoc signs it locally with the hardened
 runtime (needs Go, `brew install go`, and the Xcode command line tools).
 
-To upgrade, rerun it (your Dockerfile is never overwritten), then [log in](#log-in) again. The image pins `gh`, and
+To upgrade, rerun it (your Dockerfile is never overwritten), then run `retrust` ([Re-trust after an
+upgrade](#re-trust-after-an-upgrade); `scripts/install.sh --docker` runs it). The image pins `gh`, and
 Claude Code, Codex and OpenCode each at its npm `latest` release when the image was built; the broker rebuilds it when
 one moves ([Client releases](#client-releases)). A worker runs only those clients, `/opt/ensemble/bin/claude`, `codex`
 and `opencode`, first on `PATH`: a Claude Code or Codex your Dockerfile installs is never run, so drop it to shrink the
