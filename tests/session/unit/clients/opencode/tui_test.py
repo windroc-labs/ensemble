@@ -93,6 +93,7 @@ class LaunchTest(Base):
         launch = run.launch(self.spec(resume=True, prompt="Fix it."), HOOK)
         self.assertEqual(launch.argv, ("opencode", "--session", SES, *MODEL))
         self.assertEqual(run.opening, (tui.START, "Fix it."))
+        self.assertTrue(run._opening_prompt)  # never dropped: it is the prompt
         self.assertEqual(launch.env["ENSEMBLE_OPENCODE_SESSION"], SES)
         bare = self.run_tui()
         bare.launch(self.spec(resume=True, prompt=""), HOOK)

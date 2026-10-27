@@ -30,6 +30,7 @@ class Tui(ABC):
     hooks: Mapping[str, HookKind] = MappingProxyType({})  # hook label → its kind
     dialogs: tuple[str, ...] = ()
     opening: tuple[str, str] | None = None  # (hook label, text)
+    _opening_prompt: ClassVar[bool] = False  # it is the prompt: never dropped
     client = ""  # last ClientBound's id
     _turn_id = ""
     _turn_open: bool | None = None

@@ -657,6 +657,10 @@ class TuiMode(BaseMode):
         self._due: float | None = None  # its label's latest record
         self._held, self._checked = False, -POLL_SCREEN
         self._active_turn = run._turn_open is True
+        self._turns, self._launch_turns = (
+            0,
+            int(bool(prepared.spec.prompt) and not run._opening_prompt),
+        )
         self._owned, self._hook_logged = owned, False
 
     @classmethod
@@ -924,7 +928,9 @@ class TuiMode(BaseMode):
                 )
 
     def _open(self) -> None:
-        """Submits the opening once it is due, unless a dialog shows or the client is blocked."""
+        """Submits the opening once it is due, unless a dialog shows, the client is blocked or
+        another sender holds the send lock.
+        """
         now = time.monotonic()
         if self._opening is None or self._due is None or self._gone or now < self._due:
             return
@@ -941,14 +947,31 @@ class TuiMode(BaseMode):
             pass
         except SessionError:
             return
-        text, self._opening = self._opening[1], None
-        with contextlib.suppress(SessionError):
-            self.send(text)
+        with contextlib.suppress(SessionError), self._store.sending(wait=False) as held:
+            if not held:
+                return
+            text, self._opening = self._opening[1], None
+            if reason := self._preempted():
+                LOG.info("tui session %s: opening %r dropped: %s", self.name, text, reason)
+                return
+            self._running()
+            self._deliver(self.run.submit(text), prompted=False)
+
+    def _preempted(self) -> str | None:
+        """Why a cosmetic opening would trail a prompt: never inside or after one."""
+        if self.run._opening_prompt:
+            return None
+        if self._store.prompted(self._generation):
+            return "another sender's prompt went in"
+        if self._turns > self._launch_turns:
+            return "a turn the launch did not start began"
+        return None
 
     def _track(self, events: list[SessionEvent | Stderr | ClientBound]) -> None:
         for event in events:
             if isinstance(event, TurnStarted):
                 self._active_turn = True
+                self._turns += 1
             elif isinstance(event, TurnEnd | TurnFailed):
                 self._active_turn = False
             if isinstance(event, Blocked | Activity | TurnEnd | TurnFailed | TurnStarted):

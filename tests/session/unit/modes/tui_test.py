@@ -1914,6 +1914,10 @@ class Opening(ScanTui):
     opening = ("ready", "/color")
 
 
+class PromptOpening(Opening):
+    _opening_prompt = True
+
+
 class OpeningTest(Base):
     def opened(self) -> tui.TuiMode:
         self.client.run = Opening(self.client)
@@ -2071,6 +2075,111 @@ class OpeningTest(Base):
         mode = self.opened()
         mode.stop()
         self.assertIsNone(mode.opening_pending)
+
+    def launched(self, run=None, **fields) -> tui.TuiMode:
+        """opened(), its Tui (default Opening) also reporting `start` as TurnStarted."""
+        self.client.run = run or Opening(self.client)
+        self.client.run.hooks = {**self.client.run.hooks, "start": HookKind.TURN_STARTED}
+        self.host.processes.clear()
+        mode = self.start(**fields)
+        mode._terminal.calls.reset_mock()
+        return mode
+
+    def other(self) -> tui.TuiMode:
+        return tui.TuiMode.attach(NAME, tui.TuiMode.snapshot(NAME), self.client, host=self.host)
+
+    def test_another_senders_prompt_drops_the_opening(self):
+        mode = self.launched()
+        self.other().send("hi")
+        self.append(record("ready"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [Paste("hi"), Key("Enter")])
+        self.assertIsNone(mode.opening_pending)
+        mode.poll(2)
+        self.assertEqual(len(self.sends(mode)), 2)
+
+    def test_a_turn_the_launch_did_not_start_drops_the_opening(self):
+        cases = {
+            "no launch prompt": ({}, [[record("start")]]),
+            "a launch prompt, two turns in one poll": (
+                {"prompt": "go"},
+                [[record("start"), record("stop"), record("start")]],
+            ),
+            "a launch prompt, two turns across polls": (
+                {"prompt": "go"},
+                [[record("start")], [record("stop")], [record("start")]],
+            ),
+        }
+        for case, (fields, batches) in cases.items():
+            with self.subTest(case=case):
+                mode = self.launched(**fields)
+                self.append(record("ready"))
+                for batch in batches:
+                    self.append(*batch)
+                    mode.poll(0)
+                mode.poll(1.2)
+                self.assertEqual(self.sends(mode), [])
+                self.assertIsNone(mode.opening_pending)
+                mode.stop()
+
+    def test_the_launch_prompts_turn_keeps_the_opening(self):
+        mode = self.launched(prompt="go")
+        self.append(record("ready"), record("start"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
+
+    def test_an_older_generations_marker_keeps_the_opening(self):
+        mode = self.launched()
+        tui.TuiStore.attach(NAME, host=self.host).mark_prompted("an older generation")
+        self.append(record("ready"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
+
+    def test_a_prompt_opening_is_never_dropped(self):
+        run = PromptOpening(self.client)
+        mode = self.launched(run, prompt="go")
+        self.other().send("hi")
+        self.append(record("ready"), record("start"), record("stop"), record("start"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(
+            self.sends(mode), [Paste("hi"), Key("Enter"), Paste("/color"), Key("Enter")]
+        )
+        self.assertFalse(Opening._opening_prompt)
+
+    def test_the_opening_holds_the_send_lock(self):
+        mode = self.launched()
+        other, arrived, threads, order = self.other(), threading.Event(), [], []
+
+        def send(action):
+            order.append(action)
+            if action == Paste("two"):
+                arrived.set()
+            elif action == Paste("/color"):
+                threads.append(threading.Thread(target=other.send, args=("two",)))
+                threads[0].start()
+                arrived.wait(0.5)
+
+        mode._terminal.calls.send.side_effect = send
+        self.append(record("ready"))
+        mode.poll(0)
+        mode.poll(1.2)
+        threads[0].join(5)
+        self.assertEqual(order, [Paste("/color"), Key("Enter"), Paste("two"), Key("Enter")])
+
+    def test_a_held_send_lock_defers_the_opening(self):
+        mode = self.launched()
+        self.append(record("ready"))
+        mode.poll(0)
+        with tui.TuiStore.attach(NAME, host=self.host).sending():
+            mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [])
+        self.assertEqual(mode.opening_pending, "/color")
+        mode.poll(0.6)
+        self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
 
 
 class ScanTest(Base):

@@ -65,6 +65,7 @@ class OpenCodeTui(Homed, Tui):
         }
     )
     _owned = True
+    _opening_prompt = True  # a resume's prompt
 
     def __init__(self, common: OpenCodeCommon):
         super().__init__()
