@@ -2407,6 +2407,34 @@ class GuardedRowTest(StartBase):
         self.listed("w", state="exited")
         self.assertEqual([row.state for row in self.host.rows()], [StatusState.WORKING])
 
+    def test_an_ownerless_running_container_is_dead_to_capacity_once_its_guard_exited(self):
+        self.guarded_record()
+        self.listed("w")
+        for word, rc, want in (
+            ("exited", 0, StatusState.DEAD),
+            ("absent", 0, StatusState.DEAD),
+            ("live", 0, StatusState.UNKNOWN),
+            ("dead", 0, StatusState.UNKNOWN),
+            ("exited", 1, StatusState.UNKNOWN),
+        ):
+            with self.subTest(word=word, rc=rc):
+                self.probe_says(word, rc)
+                self.order.clear()
+                self.assertEqual([row.state for row in self.host._capacity_rows()], [want])
+                self.assertEqual(len(self.docker.execs()), 1)
+                self.order.clear()
+                self.assertEqual([row.state for row in self.host.rows()], [StatusState.UNKNOWN])
+                self.assertEqual(self.docker.execs(), [])
+        self.docker.replies[(PYTHON, "-I", worker_module.GUARD, "--probe")] = TimeoutExpired(
+            "docker", 10
+        )
+        self.assertEqual([row.state for row in self.host._capacity_rows()], [StatusState.UNKNOWN])
+        self.probe_says("exited")
+        self.owner_held()
+        self.order.clear()
+        self.assertEqual([row.state for row in self.host._capacity_rows()], [StatusState.WORKING])
+        self.assertEqual(self.docker.execs(), [])
+
     def test_attach_is_the_held_handle_here_and_a_view_elsewhere(self):
         handle = self.start()
         self.listed("w")
@@ -2461,7 +2489,14 @@ class AdmissionTest(StartBase):
         self.admit()
         self.assertFalse(os.path.exists(self.held_run))
 
+    def test_a_killed_generation_frees_its_slot_once_its_guard_exited_in_a_running_container(self):
+        self.listed("w")
+        self.probe_says("exited")
+        self.admit()
+        self.assertFalse(os.path.exists(self.held_run))
+
     def test_a_running_or_owned_generation_keeps_its_slot(self):
+        self.probe_says("live")
         for state, owned in (("running", False), ("exited", True)):
             with self.subTest(state=state, owned=owned):
                 self.listed("w", state=state)
