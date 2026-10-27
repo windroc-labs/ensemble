@@ -3,7 +3,7 @@
 
 Guide and principles get {{role}}, its anchor, {{task}} (the named task and its file; none → the
 guide's default text) and {{language}} (unset → each line holding it is dropped); a destination gets
-{{deliverable}}, <Workdir>/<its path in the workdir>. Only a `local` or `orchestrator` destination
+{{deliverable}}, <Workdir>/<its path in the workdir>. Only a `local` destination
 returns the deliverable in the outcome: any other publishes it, and its prompt names neither outcome
 field; on Docker, where the harness cannot read the agent's files, a returning one is INLINE and no
 text names `deliverable_file`. Every other run value is a PARAMETERS name,

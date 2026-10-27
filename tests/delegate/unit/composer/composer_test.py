@@ -62,7 +62,7 @@ class OwnedComposer(Case):
         }
         first = Composer((), original, team=TEAM)
         original["roles"]["writer"]["read"].append("/read/b")
-        original["output"]["type"] = "orchestrator"
+        original["output"]["type"] = "pull-request"
         second = Composer((), original, team=TEAM)
         self.assertEqual(first.resolve("writer").read, ["/read/a"])
         self.assertEqual(first.resolve("writer").output, {"type": "local"})

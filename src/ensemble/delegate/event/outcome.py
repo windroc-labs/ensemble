@@ -22,10 +22,7 @@ from ensemble.delegate.event.types import (
 from ensemble.utils import ConfinedFileError, ConfinedReason, OutcomeStatus, read_confined
 
 SCHEMA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outcome.schema.json")
-SAVES_DELIVERABLE = (
-    "local",
-    "orchestrator",
-)  # destinations whose deliverable comes back in the outcome
+SAVES_DELIVERABLE = ("local",)  # destinations whose deliverable comes back in the outcome
 DEFAULT_HOST = "github.com"
 PULL = re.compile(r"/[^/]+/[^/]+/pull/\d+")
 PR_PATH = re.compile(rf"{PULL.pattern}|/[^/]+/[^/]+/(compare|tree)/\S+")

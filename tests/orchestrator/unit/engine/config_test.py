@@ -1934,17 +1934,15 @@ class ConfigurationRoot(ConfigFile, Case):
         self.assertEqual(cfg.repo_host("engineer"), "build.example.com")
 
     def test_local_document_roles_and_mixed_destinations(self):
-        for kind in ("local", "orchestrator"):
-            with self.subTest(kind=kind):
-                self.core(CORE_TOML.replace('type = "github"', f'type = "{kind}"'))
-                cfg = self.load(PIPELINE)
-                self.assertEqual((cfg.docs.repo, cfg.docs.branch), ("", ""))
-                self.assertEqual(cfg.docs.dirs["pm"], os.path.join(cfg.work_dir, "docs", "pm"))
-                self.assertEqual(
-                    cfg.docs.local_out("pm", "TASK-1", SID),
-                    os.path.join(cfg.docs.dirs["pm"], f"document-TASK-1-{SID}.md"),
-                )
-                self.assertEqual(cfg.repo_host("engineer"), "github.com")
+        self.core(CORE_TOML.replace('type = "github"', 'type = "local"'))
+        cfg = self.load(PIPELINE)
+        self.assertEqual((cfg.docs.repo, cfg.docs.branch), ("", ""))
+        self.assertEqual(cfg.docs.dirs["pm"], os.path.join(cfg.work_dir, "docs", "pm"))
+        self.assertEqual(
+            cfg.docs.local_out("pm", "TASK-1", SID),
+            os.path.join(cfg.docs.dirs["pm"], f"document-TASK-1-{SID}.md"),
+        )
+        self.assertEqual(cfg.repo_host("engineer"), "github.com")
         self.core(CORE_TOML.replace(DESIGN, 'output = { type = "local" }'))
         cfg = self.load(PIPELINE)
         self.assertEqual(cfg.docs.dirs["researcher"], "Research/")

@@ -284,7 +284,7 @@ class Manage(Case):
                 "write-back has posted that result and moved the issue",
                 "still shows the old `needs_input` (no harness)",
                 "its last outcome block",
-                "`deliverable` for a `local` or `orchestrator` destination",
+                "`deliverable` for a `local` destination",
                 "`<work_dir>/work/<ID>/agent/tmp/deliverable.md`",
                 "else its `url`",
                 "In Review (`docs/architecture.md` › Board › Using the board)",

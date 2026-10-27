@@ -58,7 +58,7 @@ def corpus():
                             input=INPUT, out=f"{WORKDIR}/out.md", workdir=WORKDIR, resume=resume
                         ),
                     )
-    for destination in ("local", "github", "pull-request", "orchestrator"):
+    for destination in ("local", "github", "pull-request"):
         output = {"type": destination}
         if destination == "github":
             output |= {

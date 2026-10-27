@@ -705,7 +705,7 @@ class Docker(Base):
                 self.assertFalse(any(TEAM in c for c in access.commands), access.commands)
 
     def test_the_prompt_asks_for_the_deliverable_inline(self):
-        for output in ({"type": "local"}, {"type": "orchestrator"}, {"type": "pull-request"}):
+        for output in ({"type": "local"}, {"type": "pull-request"}):
             with self.subTest(output=output):
                 got, _ = self.planned(keys={"output": output}, out=None)
                 self.assertNotIn("deliverable_file", got.prompt)

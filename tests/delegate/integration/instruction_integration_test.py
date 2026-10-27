@@ -94,7 +94,6 @@ class Instruction(Case):
                 {"type": "local"},
                 {"type": "github", "repo": "o/docs", "branch": "main", "dir": "reports"},
                 {"type": "pull-request"},
-                {"type": "orchestrator"},
             ):
                 with self.subTest(role=role, destination=destination):
                     self.config(None if destination is None else role, destination)
