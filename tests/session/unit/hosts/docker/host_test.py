@@ -1818,6 +1818,29 @@ class SweepTest(Base):
         )
         self.assertFalse([call for call in self.docker.order if call[:1] == ["exec"]])
 
+    def test_sweep_keeps_another_names_container_while_its_owner_lock_is_held(self):
+        os.makedirs(os.path.join(self.home, ".ensemble", "docker-state", "a"))
+        self.host_json("b", self.OLD, kind="tui")
+        self.host_json("c", mode="guard")  # no kind: an older release's start
+        self.host_json("d", kind="tui")
+        self.host_json("k", kind="headless")
+        for name in ("a", "b", "c", "d", "k"):
+            self.held(name, "guard.lock")
+        self.docker.ps = [self.row(name) for name in ("a", "b", "c", "d", "k")]
+        self.host.sweep("w")
+        self.assertEqual(self.broker.closed, [])
+
+    def test_own_rows_keep_the_record_rule(self):
+        self.host_json("w", mode="guard")
+        self.held("w", "guard.lock")  # the caller's own start holds it
+        self.docker.ps = [self.row("w")]
+        self.host.sweep("w")
+        self.assertEqual(self.broker.closed, [f"ensemble-w-{GEN}"])
+        self.broker.closed.clear()
+        self.host_json("w", kind="tui")
+        self.host.sweep("w")
+        self.assertEqual(self.broker.closed, [])
+
     def test_sweep_creates_nothing_outside_tui_and_drops_orphan_locks(self):
         self.docker.ps = [self.row("a"), self.row("x", state="exited")]
         before = self.files()

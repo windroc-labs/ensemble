@@ -479,8 +479,8 @@ class DockerHost(Host):
         }
 
     def sweep(self, own: str) -> None:
-        """Closes debris and workers whose owner lock is free; other names only under
-        their tui lock taken without waiting (`own`'s caller holds its).
+        """Closes rows whose owner lock is free, and `own`'s debris; others only under their tui
+        lock taken without waiting (`own`'s caller holds its).
         """
         try:
             rows = self._rows()
@@ -490,13 +490,13 @@ class DockerHost(Host):
         for row in rows:
             try:
                 if row.name == own:
-                    self._sweep_row(row)
+                    self._sweep_row(row, own=True)
                     continue
                 lock = tui_lock(row.name)
                 with inode_lock(lock, wait=False) as held:
                     if held:
                         try:
-                            self._sweep_row(row)
+                            self._sweep_row(row, own=False)
                         finally:
                             if not os.path.lexists(_state_file(row.name)):
                                 os.unlink(lock)
@@ -575,8 +575,8 @@ class DockerHost(Host):
                     with contextlib.suppress(FileNotFoundError):
                         os.unlink(marker)
 
-    def _sweep_row(self, row: Row) -> None:
-        if not _guarded(row.name, row.generation) or _lock_free(_owner_path(row.name)):
+    def _sweep_row(self, row: Row, *, own: bool) -> None:
+        if _lock_free(_owner_path(row.name)) or own and not _guarded(row.name, row.generation):
             self.broker.close(row.container)
 
     def _client_context(self) -> ClientContext:

@@ -755,7 +755,7 @@ OpenCode runs the host's Ollama models or a configured provider ([OpenCode sessi
 
 ### Harness-owned workers
 
-Every Docker session runs under its [session harness](#session-harness): the [guard](#guard-protocol) runs inside the container as the client's parent, over one `docker exec -i`; container hooks reach it through `hook-stub`, retried until acknowledged. A headless run needs a name, and a start no harness can own is refused before anything is written. The harness closes the worker at its deadline, end or `close`, then removes the container; a sweep at the next start removes an ownerless one. A credential tick on the harness calls `"$B" maintain`, which renews GitHub and Codex credentials 10 minutes before expiry and posts `credential_refresh_failed`, `credential_notice` and `client_auth_expired` to the session's events.
+Every Docker session runs under its [session harness](#session-harness): the [guard](#guard-protocol) runs inside the container as the client's parent, over one `docker exec -i`; container hooks reach it through `hook-stub`, retried until acknowledged. A headless run needs a name, and a start no harness can own is refused before anything is written. The harness closes the worker at its deadline, end or `close`, then removes the container; a sweep at the next start removes an ownerless one, never a container whose owner lock is held, whatever release started it. A credential tick on the harness calls `"$B" maintain`, which renews GitHub and Codex credentials 10 minutes before expiry and posts `credential_refresh_failed`, `credential_notice` and `client_auth_expired` to the session's events.
 
 ### Environments
 
