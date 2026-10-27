@@ -16,6 +16,7 @@ import os
 import shutil
 import signal
 import threading
+import uuid
 from collections.abc import Callable
 from dataclasses import asdict, replace
 from types import SimpleNamespace
@@ -27,6 +28,7 @@ from ensemble.delegate.engine.config import module_roots
 from ensemble.delegate.engine.drivers import AgentDriver
 from ensemble.delegate.engine.harness_delegate import DRAIN_WAIT, HarnessDelegate
 from ensemble.delegate.engine.record import CLOSED, HANDLER, RunRecord
+from ensemble.delegate.engine.runner import report
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import Begun, Finished, Layout, Result
 from ensemble.session import (
@@ -51,6 +53,7 @@ from tests.delegate.fakes.harness_session import (
     FailingSession,
     FakeViewer,
     HarnessSession,
+    LockingSession,
     RecordingHost,
     RecordingProcess,
     ShowingHost,
@@ -2456,6 +2459,8 @@ class OwnedRun(HarnessCase):
     def setUp(self):
         super().setUp()
         HarnessSession.owns = True
+        LockingSession.reset()
+        LockingSession.owns = True
         self.lines: list[str] = []
         self.enterContext(
             mock.patch("subprocess.Popen", side_effect=lambda _argv, **_kw: Child(self.lines))
@@ -2464,17 +2469,17 @@ class OwnedRun(HarnessCase):
         self.events_file = os.path.join(self.home, "events.log")
         self.record = RunRecord(Layout(self.work))
 
-    def owned(self, *, idle=600.0, lock=None):
+    def owned(self, *, idle=600.0, lock=None, work=None, sid=SID, session_cls=HarnessSession):
         spec = Spec(
             "input",
-            self.work,
+            work or self.work,
             task="echo",
-            sid=SID,
+            sid=sid,
             client="fake",
             mode="tui",
             events=self.events_file,
         )
-        view = self.make(spec=spec, callback=("callback",))
+        view = self.make(spec=spec, callback=("callback",), session_cls=session_cls)
         p = view._state.plan
         session = p.session
         if lock is not None:
@@ -2705,6 +2710,80 @@ class OwnedRun(HarnessCase):
         self.assertTrue(agent.alive())
         self.assertEqual(len(harness_launches()), launches)
         self.assertNotIn("release", self.kinds())
+
+    def waiting(self, work: str, sid: str) -> HarnessDelegate:
+        """A LockingSession run on dummy-lock, its attempt ended needs_input, its worker live."""
+        view = self.owned(lock="dummy-lock", work=work, sid=sid, session_cls=LockingSession)
+        record = RunRecord(Layout(work))
+        _seen, on = self.at_begun(
+            lambda: (record.bind(1, 1), record.complete(1, self.NEEDS, sid=sid))
+        )
+        self.assertEqual(view.run(on), self.NEEDS)
+        return view
+
+    def busy_until(self, end) -> None:
+        first = self.waiting(self.work, SID)
+        holder = first._state.agent_name
+        second = self.owned(
+            lock="dummy-lock",
+            work=os.path.join(self.home, "second"),
+            sid=str(uuid.uuid4()),
+            session_cls=LockingSession,
+        )
+        result = second.run()
+        self.assertEqual(
+            result,
+            Result(75, None, f"busy: lock dummy-lock is held by {holder} (owner {holder})"),
+        )
+        self.assertEqual(report(result, None), (75, None))
+        end(first)
+        self.waiting(os.path.join(self.home, "third"), str(uuid.uuid4()))
+
+    def test_a_second_run_on_a_waiting_runs_lock_is_busy_until_its_user_closes_it(self):
+        self.busy_until(lambda first: first.close())
+        self.assertEqual(self.kinds().count("release"), 1)
+
+    def test_a_second_run_on_a_waiting_runs_lock_is_busy_until_its_client_exits(self):
+        def exits(first):
+            first.driver.session.liveness = Liveness.ABSENT
+
+        self.busy_until(exits)
+        self.assertNotIn("release", self.kinds())
+
+    def test_a_closed_locked_run_resumes_by_taking_its_lock_again(self):
+        first = self.waiting(self.work, SID)
+        HarnessDelegate.attach(self.work, session_cls=LockingSession).close()
+        other = self.waiting(os.path.join(self.home, "other"), str(uuid.uuid4()))
+        holder = other._state.agent_name
+        again = HarnessDelegate.attach(self.work, session_cls=LockingSession)
+        with self.assertRaisesRegex(
+            SessionError, f"busy: lock dummy-lock is held by {holder} \\(owner {holder}\\)"
+        ):
+            again.resume(input="the answer")
+        self.assertEqual(self.metadata()["attempt"], 1)
+        other.driver.session.close()
+        HarnessDelegate.attach(self.work, session_cls=LockingSession).resume(input="the answer")
+        self.assertEqual(self.metadata()["attempt"], 2)
+        resumed = LockingSession.live[first._state.agent_name]
+        self.assertTrue(resumed.alive())
+        self.assertEqual(resumed.spec.environment.lock, "dummy-lock")
+
+    def test_resume_without_input_closes_a_live_locked_worker_and_claims_release(self):
+        view = self.owned(lock="dummy-lock", session_cls=LockingSession)
+        failed = Result(0, None, "the client's turn failed: server_overloaded (529)")
+        _seen, on = self.at_begun(
+            lambda: (self.record.bind(1, 1), self.record.complete(1, failed, sid=SID))
+        )
+        view.run(on)
+        old = view.driver.session
+        self.assertTrue(old.alive())
+        HarnessDelegate.attach(self.work, session_cls=LockingSession).resume()
+        self.assertFalse(old.alive())
+        self.assertEqual(self.kinds().count("release"), 1)
+        self.assertIn(
+            f"session {view._state.agent_name} closed (lock dummy-lock)", self.err.getvalue()
+        )
+        self.assertEqual(self.metadata()["attempt"], 2)
 
     def test_a_start_failure_is_stored_announced_and_finished_once(self):
         view = self.owned()

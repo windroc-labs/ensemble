@@ -344,6 +344,7 @@ class HarnessDelegate(Delegate):
                 agent.close()
             except SessionError as error:
                 raise ConfigError(str(error)) from None
+            claim_release(previous.plan, previous.agent_name)
         return previous.attempt + 1 if previous.plan.sid == self._state.plan.sid else 1
 
     def _settle(self) -> None:
@@ -1382,6 +1383,7 @@ class HarnessDelegate(Delegate):
             accepted = self._probed(accepted, state.attempt + 1, probe)
             if agent is not None:
                 agent.close()
+                claim_release(state.plan, state.agent_name)
             state = replace(
                 state,
                 plan=accepted,
