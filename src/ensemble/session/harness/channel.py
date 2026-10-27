@@ -234,8 +234,8 @@ class Channel:
         return self._exchange({"op": op}, timeout) is not None
 
     def ask(self, op: Op, data: Mapping, timeout: float = REQUEST_WAIT) -> dict:
-        """A remote worker's SEND, PRESS or SCREEN, or DISPLAY, its answer's data; SessionError
-        refused or with no harness, Unanswered unanswered.
+        """A remote worker's SEND, PRESS or SCREEN, or any worker's DISPLAY, its answer's data;
+        SessionError refused or with no harness, Unanswered unanswered.
         """
         if op not in SERVED:
             raise ValueError(f"ask {op!r}: want one of {', '.join(SERVED)}")

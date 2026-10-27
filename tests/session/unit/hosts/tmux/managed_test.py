@@ -290,6 +290,20 @@ class ManagedTest(Case):
         tmux.kill.assert_not_called()
         opener.assert_called_once_with()
 
+    def test_redisplay_marks_a_reopened_display_with_its_last_state_and_logs_nothing(self):
+        channel, tmux, opener = self.reopener()
+        options = {"@generation": "a" * 32, "@process": "4242 $3 %7 5555"}
+        tmux.option.side_effect = lambda _target, key: options.get(key)
+        tmux.process.return_value = options["@process"]
+        tmux.status.return_value = PaneStatus.RUNNING
+        channel.mark(StatusState.BLOCKED, "/events")
+        tmux.mark.reset_mock()
+        opener.side_effect = lambda: options.update({"@process": "4243 $4 %8 5556"})
+        tmux.process.side_effect = lambda _target: options["@process"]
+        tmux.status.return_value = -9
+        self.assertTrue(channel.redisplay())
+        tmux.mark.assert_called_once_with("blocked", None, pane="%8", session=None)
+
     def test_redisplay_refuses_and_leaves_alone_what_it_cannot_tell(self):
         channel, tmux, opener = self.reopener()
         tmux.option.return_value = "b" * 32

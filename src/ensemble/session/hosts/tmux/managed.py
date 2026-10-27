@@ -34,7 +34,7 @@ GENERATION = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 class TmuxManagedProcess(ManagedProcess):
     """Its display: the host tmux session of its name, while tagged with its generation; opener
-    starts it (None: it has none).
+    starts it (None: it has none); marked: its last status mark, kept for a reopened display.
     """
 
     def __init__(
@@ -49,6 +49,7 @@ class TmuxManagedProcess(ManagedProcess):
         start_reader=True,
     ):
         self.tmux, self.opener = tmux, opener
+        self.marked: StatusState | None = None
         super().__init__(name, generation, proc, terminal=terminal, start_reader=start_reader)
 
     def _display(self) -> TmuxPane | None:
@@ -72,6 +73,7 @@ class TmuxManagedProcess(ManagedProcess):
         return StatusState(value) if value in MARKS else None
 
     def mark(self, word: StatusState, events: str | None) -> None:
+        self.marked = word
         pane = self._display()
         if pane is not None:
             with contextlib.suppress(SessionError):
@@ -106,6 +108,8 @@ class TmuxManagedProcess(ManagedProcess):
             self.opener()
         except TuiError as error:
             raise SessionError(f"worker {self.name}: display: {error}") from error
+        if self.marked is not None:
+            self.mark(self.marked, None)  # its state again, no second event line
         return True
 
 
