@@ -418,29 +418,27 @@ def params(function):
 
 
 class OwnerTest(Case):
-    """Only a tui start can be owned by a session harness; the others refuse an owner first."""
+    """A tui or headless start can be owned by a session harness; in_process refuses an owner."""
 
-    def test_headless_and_in_process_refuse_an_owner(self):
+    def test_in_process_refuses_an_owner(self):
         spec = Spec(workdir="/w", access=Access(cwd="/w"), client="fake", sid="s1")
-        for mode in (headless.HeadlessMode, in_process.InProcessMode):
-            with (
-                self.subTest(mode=mode.kind),
-                self.assertRaisesRegex(
-                    ConfigError, f"\\Aowner: {mode.kind.value} mode has no session harness\\Z"
-                ),
-            ):
-                mode.start(
-                    spec,
-                    mock.Mock(spec=Client),
-                    registry=mock.Mock(spec=Registry),
-                    record=mock.Mock(),
-                    host=MemoryHost(),
-                    owner="/h",
-                )
+        mode = in_process.InProcessMode
+        with self.assertRaisesRegex(
+            ConfigError, f"\\Aowner: {mode.kind.value} mode has no session harness\\Z"
+        ):
+            mode.start(
+                spec,
+                mock.Mock(spec=Client),
+                registry=mock.Mock(spec=Registry),
+                record=mock.Mock(),
+                host=MemoryHost(),
+                owner="/h",
+            )
 
-    def test_only_a_tui_mode_has_a_generation(self):
+    def test_tui_and_headless_modes_have_a_generation(self):
         self.assertIsNone(BaseMode.generation.fget(mock.Mock(spec=BaseMode)))
         self.assertIsNot(tui.TuiMode.generation, BaseMode.generation)
+        self.assertIsNot(headless.HeadlessMode.generation, BaseMode.generation)
 
     def test_only_a_tmux_host_is_harnessed(self):
         self.assertFalse(Host._harnessed)

@@ -5,13 +5,17 @@ test on a configured class (self.session) with caller-owned dependencies.
 
 import contextlib
 import dataclasses
+import errno
 import fcntl
+import gc
 import io
 import itertools
 import json
 import logging
 import os
+import select
 import shlex
+import shutil
 import signal
 import stat
 import tempfile
@@ -19,6 +23,7 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest import mock
 
 from ensemble.session import Host, NoRecordedSession, NotShowable, Viewer
@@ -62,6 +67,7 @@ from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedSession
 from ensemble.session.hosts.base import Piped
 from ensemble.session.hosts.docker.host import DockerHost
+from ensemble.session.hosts.docker.worker import DockerWorker
 from ensemble.session.hosts.managed import ManagedProcess
 from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.session.modes import tui
@@ -274,6 +280,10 @@ class ClientCapacityTest(HostedTuiBase):
             release.set()
             self.assertTrue(first._capacity.finished.wait(5))
             self.start(client="checked", mode="in_process", sid="c").close()
+
+
+PLAIN = cast(Spec, SimpleNamespace(environment=None))  # all _owned reads of a spec
+ENVIRONED = cast(Spec, SimpleNamespace(environment=mock.Mock(spec=engine_types.EnvironmentSpec)))
 
 
 def parsed(tables, default) -> Hosts:
@@ -3047,6 +3057,77 @@ class OwnedTest(HostedTuiBase):
             view.screen()
 
 
+class _ScriptedPiped(Piped):
+    def __init__(self, out: str, code: int | None):
+        self.stdout, self.stderr, self.code = io.StringIO(out), io.StringIO(), code
+
+    def wait(self, timeout):
+        return self.code
+
+    def stop(self, *, ended):
+        self.code = -signal.SIGTERM if self.code is None else self.code
+
+    def close(self):
+        return None
+
+
+class OwnedHeadlessTest(HostedTuiBase):
+    """HostedSession.own of a headless run: nameless, its own generation, ended by its exit."""
+
+    def own(self, out="", code=None):
+        """Its run on a pipe printing `out`; code: its exit's, None till stopped."""
+        piped = _ScriptedPiped(out, code)
+        self.host.pipe = lambda *_args, **_kw: piped
+        self.channel = Channel.create()
+        spec = dataclasses.replace(self.spec(), client="fake", mode="headless", sid=SID)
+        owned = self.session.own(spec, owner=self.channel.directory)
+        self.addCleanup(owned.stop)
+        return owned
+
+    def pumped(self, owned) -> list:
+        found, deadline = [], time.monotonic() + WAIT
+        while time.monotonic() < deadline:
+            batch, ended = owned.pump(0.1)
+            found.extend(batch)
+            if ended:
+                return found
+        self.fail("the headless worker never ended")
+
+    def test_own_runs_it_nameless_under_a_generation_of_its_own(self):
+        owned = self.own('{"type": "result", "text": "done"}\n', 0)
+        self.assertEqual((owned.name, owned.sid), (None, SID))
+        self.assertRegex(owned.generation, "^[0-9a-f]{32}$")
+        self.assertIn(TurnEnd("done", 0), self.pumped(owned))
+        self.assertEqual(owned.confirm_end(WAIT), 0)
+
+    def test_stop_returns_its_interrupted_turn_and_its_exit_is_confirmed(self):
+        owned = self.own()
+        final = owned.stop()
+        self.assertEqual([e for e in final if isinstance(e, TurnFailed)][-1].error, "interrupted")
+        self.assertIsNotNone(owned.confirm_end(WAIT))
+
+    def test_its_view_is_a_headless_view_with_no_terminal(self):
+        owned = self.own()
+        view = owned.view(self.channel)
+        self.assertEqual(
+            (view.mode, view.name, view.sid, view.generation),
+            (Mode.HEADLESS, None, SID, owned.generation),
+        )
+        self.assertEqual(view.info().sid, SID)
+        self.assertIsInstance(view.session_status(), engine_types.SessionStatus)
+        self.assertFalse(view.alive())
+        self.assertEqual((view.status().name, view.status().alive), (SID, False))
+        self.assertFalse(view.showable)
+        self.assertIsNone(view.record())
+        with self.assertRaisesRegex(SessionError, "send: tui mode only"):
+            view.send("x")
+        with self.assertRaisesRegex(SessionError, "press: tui mode only"):
+            view.press(("Enter",))
+        for call in (view.screen, view.content, view.show, view.hide, view.attach_command):
+            with self.subTest(call=call.__name__), self.assertRaises(NotShowable):
+                call()
+
+
 class HarnessRequestTest(HostedTuiBase):
     """harness_request and from_harness_request: a start sent to a session harness and back."""
 
@@ -3062,14 +3143,26 @@ class HarnessRequestTest(HostedTuiBase):
             flags=("--x",),
             handlers=(engine_types.HookCallback("pkg.mod", {"k": [1]}, (self.dir,)),),
         )
-        request = json.loads(
-            json.dumps(
-                self.session.harness_request(spec, display="d", host="tmux", roots=(self.dir,))
+        with mock.patch.dict(os.environ, {"PYTHONPATH": "lib:/abs/src"}):
+            request = json.loads(
+                json.dumps(
+                    self.session.harness_request(spec, display="d", host="tmux", roots=(self.dir,))
+                )
             )
-        )
         fresh = type("Fresh", (HostedSession,), {"__module__": __name__})
-        self.assertEqual(fresh.from_harness_request(request), (spec, "d", "tmux", (self.dir,)))
+        start = fresh.from_harness_request(request)
+        self.assertEqual(start, (spec, "d", "tmux", (self.dir,), "lib:/abs/src"))
+        self.assertEqual((start.spec, start.pythonpath), (spec, "lib:/abs/src"))
         self.assertEqual(fresh._config().hosts, self.session._config().hosts)
+
+    def test_a_caller_without_pythonpath_sends_none(self):
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            request = self.session.harness_request(
+                self.spec(client="fake", mode="tui"), display=None, host=None, roots=()
+            )
+        fresh = type("Fresh", (HostedSession,), {"__module__": __name__})
+        self.assertIsNone(fresh.from_harness_request(request).pythonpath)
 
     def test_a_malformed_request_is_a_config_error(self):
         good = self.session.harness_request(
@@ -3081,6 +3174,9 @@ class HarnessRequestTest(HostedTuiBase):
             {**good, "spec": {**good["spec"], "nope": 1}},
             {**good, "roots": ["relative"]},
             {**good, "host": 5},
+            {**good, "pythonpath": ["/a"]},
+            {**good, "pythonpath": 5},
+            {**good, "pythonpath": "/a\n/b"},
         ):
             with self.subTest(bad=bad), self.assertRaises(ConfigError):
                 fresh.from_harness_request(bad)
@@ -3137,6 +3233,7 @@ class OwnedStartTest(Case):
             ("w1", SID, "claude", "g7"),
         )
         self.assertEqual(argv[1:], ["-P", "-s", "-m", hosted_session.HARNESS, channel.directory])
+        self.assertEqual(kwargs.get("pass_fds", ()), ())  # a tui worker outlives its caller
         self.assertTrue(kwargs["start_new_session"])
         self.assertEqual(kwargs["stdin"], kwargs["stdout"])
         request = os.path.join(channel.directory, "request.json")
@@ -3272,6 +3369,16 @@ class OwnedStartTest(Case):
         self.popen.return_value.kill.assert_called_once_with()
         self.assertFalse(os.path.exists(self.spawned[2].directory))
 
+    def test_an_interrupted_start_kills_its_harness_and_its_dir_goes(self):
+        self.harness_writes({"state": "starting"})
+        with (
+            mock.patch("time.sleep", side_effect=KeyboardInterrupt),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            self.session_cls.start(self.spec())
+        self.popen.return_value.kill.assert_called_once_with()
+        self.assertFalse(os.path.exists(self.spawned[2].directory))
+
     def test_handler_state_json_cannot_hold_leaves_no_request(self):
         spec = self.spec(handlers=(engine_types.HookCallback("m", {"s": {1}}),))
         with self.assertRaisesRegex(ConfigError, "not JSON"):
@@ -3297,6 +3404,119 @@ class OwnedStartTest(Case):
         self.popen.assert_not_called()
 
 
+class OwnedHeadlessStartTest(Case):
+    """A built-in client's headless start on tmux spawns a session harness too, nameless."""
+
+    setUp = OwnedStartTest.setUp
+    harness_writes = OwnedStartTest.harness_writes
+
+    def spec(self, **fields):
+        return dataclasses.replace(OwnedStartTest.spec(self, **fields), mode="headless", name=None)
+
+    def test_it_returns_a_headless_view_once_the_harness_runs(self):
+        self.harness_writes({"state": "running", "name": None, "sid": SID, "generation": "g7"})
+        session = self.session_cls.start(self.spec())
+        self.assertIsInstance(session, OwnedSession)
+        self.assertEqual(
+            (session.mode, session.name, session.sid, session.generation),
+            (Mode.HEADLESS, None, SID, "g7"),
+        )
+        with open(os.path.join(self.spawned[2].directory, "request.json"), encoding="utf-8") as f:
+            self.assertIsNone(json.load(f)["spec"]["name"])
+
+    def test_a_failed_spawn_terminates_its_harness_before_any_kill(self):
+        self.harness_writes({"state": "starting"})
+        clock = itertools.chain([0.0], itertools.repeat(hosted_session.START_WAIT + 1.0))
+        with (
+            mock.patch("time.monotonic", side_effect=lambda: next(clock)),
+            self.assertRaisesRegex(SessionError, "did not start"),
+        ):
+            self.session_cls.start(self.spec())
+        harness = self.popen.return_value
+        harness.terminate.assert_called_once_with()
+        harness.wait.assert_any_call(hosted_session.CLOSE_WAIT)
+        self.assertFalse(os.path.exists(self.spawned[2].directory))
+
+    def test_an_interrupted_start_terminates_its_harness_and_its_dir_goes(self):
+        self.harness_writes({"state": "starting"})
+        with (
+            mock.patch("time.sleep", side_effect=KeyboardInterrupt),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            self.session_cls.start(self.spec())
+        self.popen.return_value.terminate.assert_called_once_with()
+        self.assertFalse(os.path.exists(self.spawned[2].directory))
+
+    def test_a_caller_pipe_it_cannot_make_is_a_session_error_leaving_no_dir(self):
+        error = OSError(errno.EMFILE, "Too many open files")
+        with (
+            mock.patch("os.pipe", side_effect=error),
+            self.assertRaisesRegex(SessionError, "Too many open files"),
+        ):
+            self.session_cls.start(self.spec())
+        self.popen.assert_not_called()
+        root = os.path.join(self.ensemble, "harness")
+        self.assertEqual([d for d in os.listdir(root) if not d.startswith(".")], [])
+
+    def test_its_harness_reads_a_pipe_that_ends_with_its_view(self):
+        held = []
+
+        def spawn(argv, **kwargs):
+            (far,) = kwargs["pass_fds"]
+            self.assertEqual(argv[-3:-1], ["--caller", str(far)])
+            held.append(os.dup(far))  # the harness's copy
+            Channel(argv[-1]).write_status(
+                {"state": "running", "name": None, "sid": SID, "generation": "g7"}
+            )
+            return self.popen.return_value
+
+        self.popen.side_effect = spawn
+        session = self.session_cls.start(self.spec())
+        (far,) = held
+        self.addCleanup(os.close, far)
+        self.assertEqual(select.select([far], [], [], 0)[0], [])  # its caller holds the other end
+        del session
+        gc.collect()
+        self.assertEqual(select.select([far], [], [], 0)[0], [far])
+        self.assertEqual(os.read(far, 1), b"")  # EOF: the harness closes its worker
+
+
+class OwnedGateTest(Case):
+    def test_built_in_clients_tui_and_headless_are_owned_on_tmux(self):
+        cls = HostedSession.configured(
+            clients={
+                "claude": {"implementation": "ensemble.session.clients.claude:ClaudeClient"},
+                "codex": {"implementation": "ensemble.session.clients.codex:CodexClient"},
+                "opencode": {"implementation": "ensemble.session.clients.opencode:OpenCodeClient"},
+            },
+            hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"}),
+        )
+        setup, on = cls._config(), cls.host()
+        for name in ("claude", "codex", "opencode"):
+            client = setup.registry.client(name)
+            for mode in (Mode.TUI, Mode.HEADLESS):
+                with self.subTest(client=name, mode=mode):
+                    self.assertTrue(hosted_session._owned(setup, PLAIN, mode, client, on))
+            self.assertFalse(hosted_session._owned(setup, PLAIN, Mode.IN_PROCESS, client, on))
+
+    def test_a_start_with_an_environment_is_never_owned(self):
+        cls = HostedSession.configured(
+            clients={
+                "claude": {"implementation": "ensemble.session.clients.claude:ClaudeClient"},
+                "codex": {"implementation": "ensemble.session.clients.codex:CodexClient"},
+                "opencode": {"implementation": "ensemble.session.clients.opencode:OpenCodeClient"},
+            },
+            hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"}),
+        )
+        setup, docker = cls._config(), DockerHost("docker", {"docker": "/usr/local/bin/docker"})
+        for on in (cls.host(), docker):
+            for name in ("claude", "codex", "opencode"):
+                for mode in (Mode.TUI, Mode.HEADLESS):
+                    with self.subTest(host=on.name, client=name, mode=mode):
+                        client = setup.registry.client(name)
+                        self.assertFalse(hosted_session._owned(setup, ENVIRONED, mode, client, on))
+
+
 class LegacyHandlersTest(HostedTuiBase):
     def test_handlers_on_a_start_no_harness_owns_are_refused(self):
         handlers = (engine_types.HookCallback("pkg.handler"),)
@@ -3305,6 +3525,8 @@ class LegacyHandlersTest(HostedTuiBase):
         ):
             self.tui(name="w1", handlers=handlers)
         self.nothing_hosted()
+        with self.assertRaisesRegex(ConfigError, "fake headless on host tmux has no session"):
+            self.start(handlers=handlers)
 
     def test_preflight_finds_handlers_without_importing_them(self):
         root = os.path.join(self.dir, "handlers")
@@ -3405,7 +3627,7 @@ class BoundOwnerTest(HostedTuiBase):
         terminal = self.host.processes["w1"]
         harness = mock.Mock()
         harness.poll.return_value = None
-        self.session._unspawn(self.channel, harness, "w1", None)
+        self.session._unspawn(self.channel, harness, "w1", None, Mode.TUI)
         harness.kill.assert_called_once_with()
         terminal.calls.close.assert_called_once_with()
         self.assertFalse(os.path.exists(self.channel.directory))
@@ -3488,15 +3710,17 @@ class BoundOwnerTest(HostedTuiBase):
 
 
 class DockerOwnedTest(Case):
-    """A Claude tui start on the Docker Host is harness-owned, and its worker remote there; Codex
-    and OpenCode starts keep the legacy path until the harness owns them.
+    """On the Docker Host a Claude tui start and every headless one are harness-owned, a tui
+    worker remote there; Codex and OpenCode tui starts keep the legacy path until their hooks are
+    verified through the guard.
     """
 
     def setUp(self):
-        self.setup = HostedSession.configured(
+        self.cls = HostedSession.configured(
             clients={
                 "claude": {"implementation": "ensemble.session.clients.claude:ClaudeClient"},
                 "codex": {"implementation": "ensemble.session.clients.codex:CodexClient"},
+                "opencode": {"implementation": "ensemble.session.clients.opencode:OpenCodeClient"},
             },
             hosts=Host.parse_hosts(
                 {
@@ -3507,14 +3731,45 @@ class DockerOwnedTest(Case):
                     "default": "docker",
                 }
             ),
-        )._config()
+        )
+        self.setup = self.cls._config()
 
-    def test_only_a_claude_tui_start_on_docker_is_owned(self):
+    def test_handlers_with_an_environment_are_refused_before_any_harness(self):
+        workdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, workdir)
+        spec = Spec(
+            workdir=workdir,
+            access=Access(cwd=workdir),
+            client="claude",
+            mode="headless",
+            prompt="hi",
+            environment=ENVIRONMENT,
+            handlers=(engine_types.HookCallback("pkg.handler"),),
+        )
+        with (
+            mock.patch.object(hosted_session.subprocess, "Popen") as popen,
+            self.assertRaisesRegex(
+                ConfigError, "claude headless on host docker has no session harness yet"
+            ),
+        ):
+            self.cls.start(spec)
+        popen.assert_not_called()
+
+    def test_on_docker_claude_tui_and_headless_are_owned_codex_and_opencode_tui_are_not(self):
         docker = DockerHost("docker", {"docker": "/usr/local/bin/docker"})
-        claude, codex = (self.setup.registry.client(name) for name in ("claude", "codex"))
-        self.assertTrue(hosted_session._owned(self.setup, Mode.TUI, claude, docker))
-        self.assertFalse(hosted_session._owned(self.setup, Mode.TUI, codex, docker))
-        self.assertFalse(hosted_session._owned(self.setup, Mode.HEADLESS, claude, docker))
+        for name, tui_owned in (("claude", True), ("codex", False), ("opencode", False)):
+            client = self.setup.registry.client(name)
+            with self.subTest(client=name):
+                owned = hosted_session._owned(self.setup, PLAIN, Mode.TUI, client, docker)
+                self.assertIs(owned, tui_owned)
+                self.assertTrue(
+                    hosted_session._owned(self.setup, PLAIN, Mode.HEADLESS, client, docker)
+                )
+
+    def test_a_remote_tui_host_has_remote_workers(self):
+        self.assertTrue(DockerHost._remote_tui)
+        self.assertIs(DockerWorker.remote, DockerHost._remote_tui)
+        self.assertFalse(TmuxHost._remote_tui)
 
     def test_owned_is_remote_as_its_mode_says(self):
         for remote in (True, False):

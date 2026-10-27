@@ -34,6 +34,7 @@ from ensemble.session.engine.types import (
     Reply,
     TurnEnd,
     TurnFailed,
+    TurnStarted,
 )
 from ensemble.session.modes.tui import TuiMode
 from ensemble.utils import LOCAL_ENV_VARS
@@ -135,6 +136,9 @@ DIALOG_SCREENS = {
 
 
 class TuiTest(Base):
+    def test_a_codex_tui_session_is_owned_by_a_session_harness(self):
+        self.assertTrue(CodexTui._owned)
+
     def test_container_runtime_projects_only_this_identity_without_host_executable(self):
         host = MemoryHost()
         runtime = ClientContext(
@@ -221,7 +225,7 @@ class TuiTest(Base):
             CodexTui.hooks,
             {
                 "SessionStart": HookKind.ACTIVITY,
-                "UserPromptSubmit": HookKind.ACTIVITY,
+                "UserPromptSubmit": HookKind.TURN_STARTED,
                 "PostToolUse": HookKind.ACTIVITY,
                 "PermissionRequest": HookKind.BLOCKED,
                 "PreToolUse": HookKind.BLOCKED,
@@ -533,7 +537,7 @@ class TuiTest(Base):
                     ("Interrupt", self.payload()),
                 ]
             ),
-            [ClientBound(NATIVE), TurnEnd("kept"), Activity(""), TurnEnd()],
+            [ClientBound(NATIVE), TurnEnd("kept"), TurnEnd()],
         )
         self.assertEqual(attached.hook_events("Interrupt", self.payload()), [TurnEnd()])
 
@@ -632,6 +636,128 @@ class TuiTest(Base):
         run, path = self.bound()
         _append(path, _said("user", "go"), _said("assistant", "a"), _failed("bad request"))
         self.assertEqual(run.observe(), [Reply("a"), TurnFailed("other", "bad request")])
+
+    def test_unhooked_initial_and_pane_turns_fail_once(self):
+        run, path = self.bound()
+        for turn in ("first", "pane-followup"):
+            with self.subTest(turn=turn):
+                started = {
+                    "type": "event_msg",
+                    "payload": {"type": "task_started", "turn_id": turn},
+                }
+                failed = _failed("Please try again", "server_overloaded")
+                failed["payload"]["turn_id"] = turn
+                _append(path, started, failed, failed)
+                self.assertEqual(
+                    run.observe(),
+                    [TurnStarted(), TurnFailed("server_overloaded", "Please try again")],
+                )
+                self.assertEqual(run.observe(), [])
+                self.assertEqual(run.hook_events("Stop", self.payload(turn_id=turn)), [])
+
+    def test_native_failure_can_arrive_before_its_accepted_input_hook(self):
+        run, path = self.bound()
+        for turn in ("first", "pane-followup"):
+            failed = _failed("try again", "server_overloaded")
+            failed["payload"]["turn_id"] = turn
+            _append(path, failed)
+            self.assertEqual(
+                run.observe(), [TurnStarted(), TurnFailed("server_overloaded", "try again")]
+            )
+            self.assertEqual(run.hook_events("UserPromptSubmit", self.payload(turn_id=turn)), [])
+
+    def test_idless_hook_cannot_overwrite_an_identified_native_turn(self):
+        run, path = self.bound()
+        _append(path, {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "one"}})
+        self.assertEqual(run.observe(), [TurnStarted()])
+        self.assertEqual(run.hook_events("UserPromptSubmit", self.payload()), [])
+        failed = _failed("retry", "server_overloaded")
+        failed["payload"]["turn_id"] = "one"
+        _append(path, failed)
+        self.assertEqual(run.observe(), [TurnFailed("server_overloaded", "retry")])
+        self.assertEqual(run.hook_events("Stop", self.payload()), [])
+
+    def test_native_start_upgrades_an_anonymous_accepted_turn(self):
+        run, path = self.bound()
+        self.assertEqual(run.hook_events("UserPromptSubmit", self.payload()), [TurnStarted()])
+        _append(path, {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "one"}})
+        self.assertEqual(run.observe(), [])
+        self.assertEqual(
+            run.hook_events("Stop", self.payload(turn_id="one", last_assistant_message="done")),
+            [TurnEnd("done")],
+        )
+
+    def test_native_terminal_upgrades_an_anonymous_accepted_turn(self):
+        run, path = self.bound()
+        self.assertEqual(run.hook_events("UserPromptSubmit", self.payload()), [TurnStarted()])
+        failed = _failed("retry", "server_overloaded")
+        failed["payload"]["turn_id"] = "one"
+        _append(path, failed)
+        self.assertEqual(run.observe(), [TurnFailed("server_overloaded", "retry")])
+        self.assertEqual(run.hook_events("Stop", self.payload()), [])
+
+    def test_native_and_hook_acceptance_share_identity_and_old_stop_cannot_end_next_turn(self):
+        run, path = self.bound()
+        self.assertEqual(
+            run.hook_events("UserPromptSubmit", self.payload(turn_id="one")), [TurnStarted()]
+        )
+        _append(path, {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "one"}})
+        self.assertEqual(run.observe(), [])
+        self.assertEqual(
+            run.hook_events("Stop", self.payload(turn_id="one", last_assistant_message="one")),
+            [TurnEnd("one")],
+        )
+        self.assertEqual(
+            run.hook_events("UserPromptSubmit", self.payload(turn_id="two")), [TurnStarted()]
+        )
+        self.assertEqual(
+            run.hook_events("Stop", self.payload(turn_id="one", last_assistant_message="old")), []
+        )
+        self.assertEqual(
+            run.hook_events("Stop", self.payload(last_assistant_message="ambiguous")), []
+        )
+        self.assertEqual(
+            run.hook_events("Stop", self.payload(turn_id="two", last_assistant_message="two")),
+            [TurnEnd("two")],
+        )
+
+    def test_replay_does_not_emit_new_turn_starts(self):
+        run, path = self.bound()
+        _append(path, {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "one"}})
+        found = run.replay([("UserPromptSubmit", self.payload(turn_id="one"))])
+        self.assertFalse(any(isinstance(event, TurnStarted) for event in found))
+
+    def test_native_complete_delivers_reply_before_a_later_turn_can_overtake_hook(self):
+        run, path = self.bound()
+        _append(
+            path,
+            {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "one"}},
+            _said("assistant", "complete\n\nreply"),
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_complete",
+                    "turn_id": "one",
+                    "last_agent_message": "complete\n\nreply",
+                },
+            },
+            {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "two"}},
+        )
+        self.assertEqual(
+            run.observe(),
+            [
+                TurnStarted(),
+                Reply("complete\n\nreply"),
+                TurnEnd("complete\n\nreply"),
+                TurnStarted(),
+            ],
+        )
+        self.assertEqual(
+            run.hook_events(
+                "Stop", self.payload(turn_id="one", last_assistant_message="complete\n\nreply")
+            ),
+            [],
+        )
 
     def test_observe_leaves_a_usage_limit_to_the_screen(self):
         run, path = self.bound()
@@ -744,9 +870,7 @@ class TuiTest(Base):
                 Reply("a"),
                 ClientBound(NATIVE),
                 Activity(""),
-                Activity(""),
                 TurnEnd("a"),
-                Activity(""),
                 TurnEnd("final"),
             ],
         )
@@ -764,9 +888,7 @@ class TuiTest(Base):
 
     def test_attach_mid_turn_skips_the_pending_stop_text_once(self):
         attached, path, replayed = self.attached(("UserPromptSubmit", ""), ("Stop", "final"))
-        self.assertEqual(
-            replayed, [Reply("a"), ClientBound(NATIVE), Activity(""), TurnEnd("final")]
-        )
+        self.assertEqual(replayed, [Reply("a"), ClientBound(NATIVE), TurnEnd("final")])
         _append(path, _said("assistant", "final"), _said("assistant", "final"))
         self.assertEqual(attached.observe(), [Reply("final")])
 

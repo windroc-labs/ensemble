@@ -25,6 +25,7 @@ from ensemble.session.engine.types import (
     Spec,
     TurnEnd,
     TurnFailed,
+    TurnStarted,
 )
 from tests.session.case import Case
 from tests.session.unit.clients.opencode.support import (
@@ -63,6 +64,9 @@ class Base(Case):
 
 
 class LaunchTest(Base):
+    def test_an_opencode_tui_session_is_owned_by_a_session_harness(self):
+        self.assertTrue(tui.OpenCodeTui._owned)
+
     def test_a_fresh_start_submits_its_prompt(self):
         launch = self.launch(self.spec(tier=1))
         self.assertEqual(
@@ -304,6 +308,37 @@ class OnHookTest(Base):
 
 
 class EventsTest(Base):
+    def test_user_message_starts_once_and_late_terminal_does_not_finish_new_turn(self):
+        run = self.run_tui()
+        run.hook_events(tui.START, {"session_id": SES})
+        for turn in ("msg-first", "msg-next"):
+            payload = {"session_id": SES, "turn_id": turn}
+            self.assertEqual(run.hook_events("turn.started", payload), [TurnStarted()])
+            self.assertEqual(run.hook_events("turn.started", payload), [])
+            self.assertEqual(run.hook_events("session.busy", payload), [Activity()])
+            self.assertEqual(
+                run.hook_events("session.error", {**payload, "error": "APIError"}),
+                [TurnFailed("APIError")],
+            )
+            self.assertEqual(run.hook_events("session.idle", payload), [])
+        self.assertEqual(
+            run.hook_events("turn.started", {"session_id": SES, "turn_id": "msg-third"}),
+            [TurnStarted()],
+        )
+        self.assertEqual(
+            run.hook_events("session.idle", {"session_id": SES, "turn_id": "msg-first"}), []
+        )
+        self.assertEqual(
+            run.hook_events(
+                "message.completed",
+                {"session_id": SES, "turn_id": "msg-first", "text": "late old reply"},
+            ),
+            [],
+        )
+        self.assertEqual(
+            run.hook_events("turn.started", {"session_id": "ses_foreign", "turn_id": "other"}), []
+        )
+
     def test_completed_replies_are_delivered_and_replayed_before_turn_end(self):
         records = [
             ("message.completed", {"session_id": SES, "text": text})
@@ -333,6 +368,7 @@ class EventsTest(Base):
             dict(tui.OpenCodeTui.hooks),
             {
                 "session.idle": HookKind.TURN_END,
+                "turn.started": HookKind.TURN_STARTED,
                 "session.error": HookKind.TURN_FAILED,
                 "permission.asked": HookKind.BLOCKED,
                 "question.asked": HookKind.BLOCKED,

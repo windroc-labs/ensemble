@@ -15,6 +15,7 @@ from ensemble.delegate.engine.plan import plan
 from ensemble.delegate.engine.runner import execute
 from ensemble.delegate.engine.types import Layout, Result
 from tests.delegate.case import Case
+from tests.delegate.replies import completed_steps
 from tests.delegate.unit.runs import DONE, NAME, turn
 from tests.session import fake_client
 from tests.session.modules import client_loader
@@ -119,9 +120,14 @@ class Base(Case):
         """executed() over the fake with `steps` (`fixes`: its steps on --resume); self.events gets
         each callback, self.err the stderr.
         """
+        complete = list if kw.get("mode") == "tui" else completed_steps
         with open(self.scenario, "w") as f:
             json.dump(
-                {"steps": list(steps), **({"resume": list(fixes)} if fixes is not None else {})}, f
+                {
+                    "steps": complete(steps),
+                    **({"resume": complete(fixes)} if fixes is not None else {}),
+                },
+                f,
             )
         composition = Composer()
         config = composition.resolve("dummy-tester")

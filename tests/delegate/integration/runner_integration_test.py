@@ -589,19 +589,17 @@ class Start(Base):
                 if kept is not None:
                     self.assertEqual(self.read(target), kept)
 
-    def test_a_valid_outcome_survives_a_nonzero_exit_with_its_diagnostic(self):
+    def test_a_report_before_nonzero_exit_does_not_become_a_success(self):
         r = self.go(said(START, block(DONE)), {"exit": 7})
+        self.assertEqual((r.returncode, r.outcome, r.error), (7, None, "the client exited 7"))
         self.assertEqual(
-            (r.returncode, r.outcome.status, r.error), (7, "done", "the client exited 7")
-        )
-        self.assertEqual(
-            ([type(e) for e in self.events], self.read(self.out)),
-            ([Begun, Progress, Finished], "# Doc\n"),
+            ([type(e) for e in self.events], os.path.exists(self.out)),
+            ([Begun, Progress, Finished], False),
         )
         saved = self.last("result")
         self.assertEqual(
-            (saved["outcome"]["url"], saved["error"], self.last("end")["rc"]),
-            (self.out, r.error, 7),
+            (saved.get("outcome"), saved["error"], self.last("end")["rc"]),
+            (None, r.error, 7),
         )
 
     def test_a_run_without_a_valid_outcome_records_its_error_and_finishes(self):
