@@ -577,10 +577,15 @@ def _generation(store: TuiStore, record: Mapping, *, wait: bool) -> Liveness:
     generation = record.get("generation")
     if not isinstance(generation, str):
         return Liveness.UNKNOWN
+    return settled_liveness(store.host, store.name, generation, wait=wait)
+
+
+def settled_liveness(host: Host, name: str, generation: str, *, wait: bool = True) -> Liveness:
+    """Its worker_liveness (SessionError: UNKNOWN); wait: LIVE re-checked for up to GUARD_WAIT s."""
     deadline = time.monotonic() + GUARD_WAIT
     while True:
         try:
-            found = store.host.worker_liveness(store.name, generation)
+            found = host.worker_liveness(name, generation)
         except SessionError:
             return Liveness.UNKNOWN
         if not wait or found != Liveness.LIVE or time.monotonic() >= deadline:

@@ -26,7 +26,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.harness.channel import Channel, encode
 from ensemble.session.harness.types import Op
-from ensemble.session.harness.view import OwnedSession, dialog, fold
+from ensemble.session.harness.view import OwnedSession, confirmed_end, dialog, fold
 from ensemble.utils import Record
 from tests.session.case import Case
 from tests.session.fakes.terminal import ScreenHost
@@ -246,23 +246,24 @@ class CloseTest(Base):
         with self.assertRaisesRegex(SessionError, "busy"):
             self.view().close()
 
-    def test_only_a_tui_view_retires(self):
-        for mode in (Mode.HEADLESS, Mode.IN_PROCESS):
-            with (
-                self.subTest(mode=mode),
-                self.assertRaisesRegex(ValueError, "retire: a tui view's only"),
-            ):
-                OwnedSession(
-                    self.channel,
-                    None,
-                    client="claude",
-                    sid="s1",
-                    generation=GEN,
-                    idle_timeout=None,
-                    attach=self.attach,
-                    retire=self.retire,
-                    mode=mode,
-                )
+    def test_a_headless_view_with_retire_ends_through_it_never_its_attach(self):
+        view = OwnedSession(
+            self.channel,
+            "w1",
+            client="claude",
+            sid="s1",
+            generation=GEN,
+            idle_timeout=None,
+            attach=self.attach,
+            retire=self.retire,
+            mode=Mode.HEADLESS,
+        )
+        for end in (view.close, view.stop):
+            with self.subTest(end=end.__name__):
+                self.retire.reset_mock()
+                end()
+                self.retire.assert_called_once_with()
+        self.assertEqual(self.attaches, 0)
 
     def test_a_tui_view_without_retire_is_refused(self):
         with self.assertRaisesRegex(ValueError, "retire: required for a tui view"):
@@ -518,6 +519,37 @@ class ConcurrencyTest(Base):
         self.assertTrue(view.alive())
         self.assertEqual(self.attaches, 2)
         third.alive.assert_not_called()
+
+
+class ConfirmedEndTest(Case):
+    """A Docker headless view's end without its harness (B1): released only once its worker is
+    confirmed ABSENT, a LIVE one re-checked while its guard may be reaping.
+    """
+
+    def host(self, *found):
+        host = mock.Mock(name="host")
+        host.worker_liveness.side_effect = list(found)
+        return host
+
+    def test_an_absent_worker_is_released_once_confirmed(self):
+        host = self.host(Liveness.LIVE, Liveness.ABSENT)
+        confirmed_end(host, "w1", GEN)()
+        host.worker_liveness.assert_called_with("w1", GEN)
+        host._release.assert_called_once_with("w1", GEN)
+
+    def test_a_live_or_unknown_worker_raises_unanswered_and_releases_nothing(self):
+        for found in (Liveness.LIVE, Liveness.UNKNOWN):
+            with self.subTest(found=found), mock.patch("ensemble.session.modes.tui.GUARD_WAIT", 0):
+                host = self.host(found, found)
+                with self.assertRaisesRegex(Unanswered, "^session w1: still running"):
+                    confirmed_end(host, "w1", GEN)()
+                host._release.assert_not_called()
+
+    def test_a_failed_release_propagates(self):
+        host = self.host(Liveness.ABSENT)
+        host._release.side_effect = SessionError("docker rm: refused")
+        with self.assertRaisesRegex(SessionError, "refused"):
+            confirmed_end(host, "w1", GEN)()
 
 
 class HeadlessViewTest(Base):
