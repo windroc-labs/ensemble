@@ -286,9 +286,13 @@ def _string_tuple(value) -> bool:
     return isinstance(value, tuple) and all(isinstance(s, str) for s in value)
 
 
+HIDDEN_SIZE = (80, 24)
+
+
 @dataclass(frozen=True)
 class TuiSettings:
     status_line: bool = False
+    hidden_size: tuple[int, int] = HIDDEN_SIZE
 
 
 @dataclass(frozen=True, kw_only=True)

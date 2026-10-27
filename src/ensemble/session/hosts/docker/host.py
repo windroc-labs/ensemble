@@ -984,7 +984,12 @@ class DockerHost(Host):
                 **self._exec_env(launch, created.started, github[0]),
                 GUARD_HOOK_SOCKET: f"{run}/hook",
             }
-            shown = ("--terminal", "--display-socket", f"{run}/display") if terminal else ()
+            size = "{}x{}".format(*self.tui_settings().hidden_size)
+            shown = (
+                ("--terminal", "--display-socket", f"{run}/display", "--size", size)
+                if terminal
+                else ()
+            )
             argv, docker_env = docker_call(
                 self.docker,
                 *("exec", "-i", "--workdir", cwd),

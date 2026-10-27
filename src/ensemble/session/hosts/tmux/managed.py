@@ -330,6 +330,7 @@ def _spawn(
     host, name, launch, run, *, terminal, display=None, events=None, metadata=None
 ) -> TmuxManagedProcess:
     generation = os.path.basename(run)
+    settings = host.tui_settings()
     save_json(os.path.join(run, "state.json"), {"generation": generation, "state": "starting"})
     lease = lease_file(os.path.join(run, "lease"))
     try:
@@ -344,6 +345,7 @@ def _spawn(
         if terminal:
             argv += ["--terminal", "--display-grace"]
             argv += ["--display-socket", os.path.join(run, "display")]
+            argv += ["--size", "{}x{}".format(*settings.hidden_size)]
         argv += ["--", *launch.argv]
         # Launch.env passes verbatim; the PTY is no tmux pane, the display relays its bytes.
         environment = {
@@ -389,7 +391,8 @@ def _spawn(
                 cwd=launch.cwd,
             ),
             events=events,
-            status_line=host.tui_settings().status_line,
+            status_line=settings.status_line,
+            size=settings.hidden_size,
             tags={
                 "@kind": "guard",
                 "@generation": generation,
