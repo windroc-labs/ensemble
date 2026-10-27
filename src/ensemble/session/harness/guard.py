@@ -419,10 +419,6 @@ def child_setup(slave: int | None) -> None:
 
 
 class Guard:
-    """env: the client's over the guard's own; heartbeat: s its harness may stay silent (None: no
-    limit); pending: channel bytes read before it ran.
-    """
-
     def __init__(
         self,
         args,
@@ -984,13 +980,12 @@ def serve() -> int:
 
 
 def run_paths(generation: str) -> dict[str, str]:
-    """A --serve guard's run dir and the hook socket, lease and display socket in it."""
     run = f"{RUN}/{generation}"
     return {"dir": run, "hook": f"{run}/hook", "lease": f"{run}/lease", "display": f"{run}/display"}
 
 
 def launched(found: dict, pending: bytes) -> tuple[argparse.Namespace, str, dict]:
-    """A handoff's guard args, lease path and Guard options, every path under its run dir."""
+    """A handoff's guard args, lease path and Guard options."""
     paths = run_paths(found["generation"])
     args = argparse.Namespace(
         terminal=found["terminal"],
