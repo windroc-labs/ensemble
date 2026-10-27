@@ -33,6 +33,7 @@ from tests.session.unit.clients.opencode.support import (
     SES,
     fake_run,
     packaged_table,
+    titled_session,
 )
 
 MODEL = "ollama/qwen3.6:35b-mlx"
@@ -545,8 +546,20 @@ class LaunchTest(Base):
     def test_flags_follow_the_config_and_mode(self):
         client = OpenCodeClient({**packaged_table(), "flags": ["--agent", "build"]})
         context = replace(LOCAL_CONTEXT, permission=Permission.YOLO)
-        command = self.command(self.launch(self.spec(flags=("--title", "t")), context, client))
-        self.assertEqual(command[-5:], ("--agent", "build", "--auto", "--title", "t"))
+        command = self.command(self.launch(self.spec(flags=("--share",)), context, client))
+        self.assertEqual(command[-4:], ("--agent", "build", "--auto", "--share"))
+
+    def test_a_new_run_titles_its_session_by_its_sid(self):
+        self.assertTrue(
+            holds(self.command(self.launch(self.spec())), ("--title", "ensemble-run-1"))
+        )
+
+    def test_a_title_flag_is_refused(self):
+        with self.assertRaisesRegex(ConfigError, "--title"):
+            self.launch(self.spec(flags=("--title", "t")))
+        client = OpenCodeClient({**packaged_table(), "flags": ["--title", "t"]})
+        with self.assertRaisesRegex(ConfigError, "--title"):
+            self.launch(self.spec(), client=client)
 
 
 class ResumeTest(Base):
@@ -558,6 +571,39 @@ class ResumeTest(Base):
     def test_a_new_run_selects_no_session(self):
         self.client.common.bind(self.cwd, "run-1", SES)
         self.assertNotIn("--session", self.command(self.launch(self.spec())))
+
+    def test_a_resume_titles_nothing(self):
+        self.client.common.bind(self.cwd, "run-1", SES)
+        self.assertNotIn("--title", self.command(self.launch(self.spec(resume=True))))
+
+    def test_an_unbound_resume_takes_the_runs_titled_session_bound_at_commit(self):
+        """A harness killed before opencode printed its first sessionID bound nothing."""
+        data = os.path.join(self.home, "data")
+        titled_session(os.path.join(data, "opencode", "opencode.db"), SES, "ensemble-run-1", 1)
+        spec = self.spec(resume=True, env={"XDG_DATA_HOME": data})
+        run = self.client.headless()
+        assert run is not None
+        command = self.command(run.launch(spec))
+        self.assertEqual(command[4:6], ("--session", SES))
+        self.assertNotIn("--title", command)
+        self.assertIsNone(self.client.common.native(self.cwd, "run-1"))  # a preflight writes none
+        run.commit()
+        self.assertEqual(self.client.common.native(self.cwd, "run-1"), SES)
+
+    def test_an_unbound_resume_takes_no_other_runs_session(self):
+        data = os.path.join(self.home, "data")
+        titled_session(os.path.join(data, "opencode", "opencode.db"), SES, "ensemble-run-2", 1)
+        with self.assertRaisesRegex(ConfigError, "no OpenCode session bound to run ID 'run-1'"):
+            self.launch(self.spec(resume=True, env={"XDG_DATA_HOME": data}))
+
+    def test_a_bound_resume_commits_no_binding(self):
+        self.client.common.bind(self.cwd, "run-1", SES)
+        run = self.client.headless()
+        assert run is not None
+        run.launch(self.spec(resume=True))
+        with mock.patch.object(self.client.common, "bind") as bind:
+            run.commit()
+        bind.assert_not_called()
 
     def test_unbound_resume_fails(self):
         with self.assertRaisesRegex(ConfigError, "no OpenCode session bound to run ID 'run-1'"):

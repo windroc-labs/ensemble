@@ -9,7 +9,7 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import replace
 
 from ensemble.session.clients.common import (
@@ -22,7 +22,7 @@ from ensemble.session.clients.common import (
     strings,
 )
 from ensemble.session.clients.opencode import probe
-from ensemble.session.clients.opencode.transcript import NATIVE, Refused, database
+from ensemble.session.clients.opencode.transcript import NATIVE, Refused, database, titled
 from ensemble.session.clients.opencode.transcript import updated as session_updated
 from ensemble.session.engine.types import (
     ClientContext,
@@ -75,6 +75,7 @@ SELECTORS = ("-s", "--session", "-c", "--continue", "--fork")
 RESERVED = (*SELECTORS, "--format", "--attach", "--dir", "-m", "--model")
 PERMISSIONS = ("--auto", "--yolo", "--dangerously-skip-permissions")
 TUI_RESERVED = ("--prompt", "--pure")  # the client's prompt; --pure would skip its plugin
+HEADLESS_RESERVED = ("--title",)  # a new run's session title, which finds a session never bound
 VALUED = (
     "-m",
     "--model",
@@ -317,9 +318,14 @@ class OpenCodeCommon:
         return self._mapped(self.efforts, effort, f"no variant for effort {str(effort)!r}")
 
     def selection(
-        self, spec: Spec, context: ClientContext, extra: tuple[str, ...] = ()
+        self,
+        spec: Spec,
+        context: ClientContext,
+        extra: tuple[str, ...] = (),
+        unbound: Callable[[], str | None] | None = None,
     ) -> tuple[str, ...]:
-        """A launch's checks and its session selection: on resume, (cwd, sid)'s bound session.
+        """A launch's checks and its session selection: on resume, (cwd, sid)'s bound session, else
+        `unbound`'s.
         OpenCode 1.x runs any cwd's .opencode plugins and opencode.json, so a cwd outside a
         container starts only when trusted; an isolated Host's context alone is yolo.
         """
@@ -334,6 +340,8 @@ class OpenCodeCommon:
             return ()
         sid = spec.sid or ""
         native = self.native(spec.access.cwd, sid)
+        if native is None and unbound is not None:
+            native = unbound()
         if native is None:
             raise ConfigError(f"no OpenCode session bound to run ID {sid!r}")
         return self.selector(native, resume=True)
@@ -351,6 +359,16 @@ class OpenCodeCommon:
     def transcript(env: Mapping[str, str], context: ClientContext) -> str:
         """A container launch's opencode.db, which its Host checks before a resume; else ""."""
         return database(env) if context.container is not None else ""
+
+    def titled(self, env: Mapping[str, str], context: ClientContext, title: str) -> str | None:
+        """The newest top-level session titled `title` in the db the launch's opencode uses; None
+        when it has none or cannot be read.
+        """
+        db = self.transcript(env, context) or database({**os.environ, **env})
+        try:
+            return titled(db, title)
+        except Refused:
+            return None
 
     def program(self, env: Mapping[str, str], cwd: str) -> str:
         """The executable, once its --version, run as the launch would run it, is OpenCode 1.x."""

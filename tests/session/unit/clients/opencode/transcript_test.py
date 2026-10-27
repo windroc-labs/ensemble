@@ -11,7 +11,7 @@ from unittest import mock
 
 from ensemble.session.clients.opencode import transcript
 from tests.session.case import Case
-from tests.session.unit.clients.opencode.support import SES, make_db, text
+from tests.session.unit.clients.opencode.support import SES, make_db, text, titled_session
 
 OTHER = "ses_otherOtherOtherOther0001"
 
@@ -102,6 +102,22 @@ class TranscriptTest(Case):
         self.build()
         self.assertEqual(transcript.updated(self.db, SES), 1_760_000_000.5)
         self.assertIsNone(transcript.updated(self.db, OTHER))
+
+    def test_titled_is_the_newest_top_level_session_of_the_title(self):
+        titled_session(self.db, OTHER, "ensemble-run-1", 1)
+        titled_session(self.db, SES, "ensemble-run-1", 2)
+        titled_session(self.db, "ses_childChildChildChild0001", "ensemble-run-1", 3, parent=SES)
+        titled_session(self.db, "ses_laterLaterLaterLater0001", "ensemble-run-2", 4)
+        self.assertEqual(transcript.titled(self.db, "ensemble-run-1"), SES)
+        self.assertIsNone(transcript.titled(self.db, "ensemble-run-3"))
+
+    def test_titled_skips_a_malformed_id(self):
+        titled_session(self.db, "--auto", "ensemble-run-1", 1)
+        self.assertIsNone(transcript.titled(self.db, "ensemble-run-1"))
+
+    def test_titled_refuses_a_missing_db(self):
+        with self.assertRaisesRegex(transcript.Refused, "no database"):
+            transcript.titled(self.db, "ensemble-run-1")
 
     def test_a_non_number_time_updated_is_refused(self):
         self.build(sessions={SES: "soon"})
