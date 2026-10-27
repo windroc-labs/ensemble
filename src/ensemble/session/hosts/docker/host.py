@@ -1522,7 +1522,7 @@ class DockerHost(Host):
             laps("client")
             _save_result(name, created, laps.phases)
             stops.check()
-        except (SessionError, OSError, ValueError) as error:
+        except BaseException as error:
             cleanup = ""
             if handle is not None:
                 try:
@@ -1533,16 +1533,9 @@ class DockerHost(Host):
                 if proc is not None:
                     kill_group(proc)
                 cleanup = self._roll_back(None, container)
+            if not isinstance(error, (SessionError, OSError, ValueError)):
+                raise
             raise SessionError(f"docker session {name}: {error}{cleanup}") from error
-        except BaseException:
-            if handle is not None:
-                with contextlib.suppress(SessionError):
-                    handle.close()
-            else:
-                if proc is not None:
-                    kill_group(proc)
-                self._roll_back(None, container)
-            raise
         laps.report(f"docker timing {name} {generation}")
         self._workers[name] = handle
         return handle
