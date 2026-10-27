@@ -264,15 +264,10 @@ def _reconstructible(setup: _Setup) -> bool:
     )
 
 
-def _check_owned(setup: _Setup, mode: Mode, client: Client, on: Host, client_name: str) -> None:
-    """Every start runs under a session harness: refuses one no harness can run (injected
-    callables it cannot rebuild, a Host without managed workers, a remote tui its client cannot be).
+def _check_owned(mode: Mode, client: Client, on: Host, client_name: str) -> None:
+    """Every start runs under a session harness: refuses one no harness can run (a Host without
+    managed workers, a remote tui its client cannot be).
     """
-    if not _reconstructible(setup):
-        raise ConfigError(
-            f"{client_name} {mode}: runs only under a session harness, which builds its session "
-            "class from configuration, not injected callables"
-        )
     if mode == Mode.IN_PROCESS:
         return
     if type(on).worker is Host.worker:
@@ -429,7 +424,7 @@ class HostedSession(Session):
         spec = replace(spec, sid=spec.sid or str(uuid.uuid4()))
         on = cls.host(host)
         _environment_check(spec, on, mode)
-        _check_owned(setup, mode, client, on, client_name)
+        _check_owned(mode, client, on, client_name)
         cls.viewer()
         displays.validate_display(display, on)
         if mode == Mode.TUI:
@@ -461,7 +456,7 @@ class HostedSession(Session):
         client_name, mode = _request(spec, idle_timeout)
         on, client = cls.host(host), setup.registry.client(client_name)
         _environment_check(spec, on, mode)
-        _check_owned(setup, mode, client, on, client_name)
+        _check_owned(mode, client, on, client_name)
         spec = replace(spec, sid=spec.sid or str(uuid.uuid4()))
         if mode == Mode.TUI:
             spec = replace(spec, name=tui.TuiMode.resolve_name(spec))
@@ -482,8 +477,15 @@ class HostedSession(Session):
         host: str | None,
         idle_timeout: float | None,
     ) -> Session:
-        """Its view once a new harness runs it; else the start error or stop, nothing left."""
+        """Its view once a new harness runs it; else the start error or stop, nothing left. The
+        harness process builds its session class from configuration: injected callables are refused.
+        """
         assert spec.client is not None and spec.sid is not None
+        if not _reconstructible(cls._config()):
+            raise ConfigError(
+                f"{spec.client} {mode}: runs only under a session harness, which builds its "
+                "session class from configuration, not injected callables"
+            )
         roots = cls._roots(spec.client)
         request = cls.harness_request(spec, display=display, host=host, roots=roots)
         channel = Channel.create()

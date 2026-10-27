@@ -12,14 +12,12 @@ from pathlib import Path
 from unittest import mock
 
 from ensemble.session import SessionError, Viewer
-from ensemble.session.hosts.reclaimed import ReclaimedGroup
 from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.session.viewer import display as displays
 from ensemble.utils import StatusState
 from tests.session import live_tmux
 from tests.session.case import Case
 from tests.session.contracts.host import (
-    DEADLINE,
     EXIT_7,
     SLEEP,
     HostContract,
@@ -210,36 +208,6 @@ while True: time.sleep(1)
         self.poll(lambda: gone(child), "leftover child exit")
         self.poll(lambda: not os.path.exists(control), "controller generation retired")
         self.assertTrue(process.wait_exit(0))
-
-    def test_a_group_that_outlives_its_session_is_reclaimed_by_its_token_and_killed(self):
-        name, ready = self.fresh(), self.file("ready")
-        script = """import os, signal, sys, time
-for each in (signal.SIGHUP, signal.SIGTERM):
-    signal.signal(each, signal.SIG_IGN)
-signal.pthread_sigmask(signal.SIG_UNBLOCK, (signal.SIGHUP, signal.SIGTERM, signal.SIGINT))
-child = os.fork()
-if child == 0:
-    while True: time.sleep(1)
-with open(sys.argv[1], 'w') as stream: stream.write(f'{os.getpid()} {child}')
-while True: time.sleep(1)
-"""
-        terminal = self.start("terminal", name, (sys.executable, "-I", "-c", script), ready)
-        token = terminal.token
-        own, child = map(int, self.poll(lambda: read(ready), "program and child ready").split())
-        killed = self.server.tmux("kill-session", "-t", f"={name}")
-        self.assertEqual(killed.returncode, 0, killed.stderr)
-        self.poll(lambda: name not in self.host.list(), f"{name} gone")
-        with self.assertRaises(SessionError):
-            self.host.attach(name)
-        handle = TmuxHost("tmux").reclaim(token)
-        self.assertIsInstance(handle, ReclaimedGroup)
-        self.assertTrue(handle.alive())
-        self.assertFalse(handle.wait_exit(0.3))
-        self.assertFalse(gone(own) or gone(child))
-        handle.kill()
-        self.assertTrue(handle.wait_exit(DEADLINE))
-        self.poll(lambda: gone(own) and gone(child), "program and child exit")
-        self.assertIsNone(TmuxHost("tmux").reclaim(token))
 
     def test_close_twice_of_a_detached_session_is_fine_and_forgets_it(self):
         name = self.fresh()

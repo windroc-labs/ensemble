@@ -71,7 +71,8 @@ def configured(clients, tmux=None, *, host=None, **dependencies) -> type[HostedS
 class Case(unittest.TestCase):
     """Fails a test whose ensemble is not exactly this tree's, else runs it (whatever its setUp) in
     a fresh temp HOME, self.home (self.ensemble: its .ensemble), a fresh session class
-    (self.session_cls) configured with self.session_dependencies.
+    (self.session_cls) configured with self.session_dependencies, whose starts run their session
+    harness on a thread (harnesses.threaded).
     """
 
     def run(self, result=None):
@@ -97,6 +98,7 @@ class Case(unittest.TestCase):
                 },
                 clear=True,
             ),
+            harnesses.threaded(),
         ):
             self.ensemble = os.path.join(self.home, ".ensemble")
             os.mkdir(self.ensemble)

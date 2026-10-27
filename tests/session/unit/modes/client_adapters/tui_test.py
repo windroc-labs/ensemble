@@ -32,7 +32,7 @@ class TuiTest(Case):
 
     def test_defaults(self):
         run = StubTui()
-        self.assertEqual((Tui.hooks, Tui._owned), ({}, False))
+        self.assertEqual((Tui.hooks, Tui._remote_owned), ({}, False))
         self.assertEqual(run._context, ClientContext("127.0.0.1", Permission.AUTO))
         self.assertEqual(
             (run.pending(self.end), run.activity({"doing": "x"}), run.blocked_reason({"why": "y"})),
