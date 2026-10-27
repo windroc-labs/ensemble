@@ -88,6 +88,7 @@ class ClaudeTui(Tui):
     _owned = True
 
     def __init__(self, common: ClaudeCommon):
+        super().__init__()
         self.common = common
         self.sid = self.name = ""  # name: its session's, for its reply lines
         self.spec: Spec | None = None

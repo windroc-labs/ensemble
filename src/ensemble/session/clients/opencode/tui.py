@@ -67,6 +67,7 @@ class OpenCodeTui(Homed, Tui):
     _owned = True
 
     def __init__(self, common: OpenCodeCommon):
+        super().__init__()
         self.common = common
         self.cwd, self.sid, self.fresh = "", "", False
         self.opening = None

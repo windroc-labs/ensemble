@@ -35,6 +35,9 @@ class Tui(ABC):
     _turn_open: bool | None = None
     _owned: ClassVar[bool] = False  # a session harness owns it
 
+    def __init__(self) -> None:
+        self._turn_ids: frozenset[str] = frozenset()  # every turn accepted so far
+
     @abstractmethod
     def launch(self, spec: Spec, hook: tuple[str, ...]) -> Launch:
         """As Headless.launch, plus each label L of `hooks` and `opening` as a hook running
@@ -84,11 +87,10 @@ class Tui(ABC):
         identifier = identifier if isinstance(identifier, str) else ""
         if not identifier and self._turn_id:
             return False
-        seen = getattr(self, "_turn_ids", frozenset())
-        if identifier and identifier in seen:
+        if identifier and identifier in self._turn_ids:
             return False
         if identifier:
-            self._turn_ids = seen | {identifier}
+            self._turn_ids |= {identifier}
             if not self._turn_id and self._turn_open:
                 self._turn_id = identifier
                 return False
