@@ -55,29 +55,22 @@ class LauncherTest(Case):
     def setUp(self):
         Timers.made = []
         self.out, self.err = io.TextIOWrapper(io.BytesIO()), io.TextIOWrapper(io.BytesIO())
-        for target, value in (
-            ("sys.stdout", self.out),
-            ("sys.stderr", self.err),
-            ("ensemble.session.clients.opencode.launcher.threading.Timer", Timer),
-        ):
+        for target, value in (("sys.stdout", self.out), ("sys.stderr", self.err)):
             self.enterContext(mock.patch(target, value))
 
     def run_with(self, child, *, prompt="Hi there") -> int:
         """Its threads joined even when the watch's exit unwinds main before its own join."""
         self.addCleanup(child.stderr.close)
         argv = ["--timeout", "120", "--prompt", prompt, "--", "opencode", "run"]
-        started, thread = [], threading.Thread
+        started = []
 
         def made(*args, **kwargs):
-            started.append(thread(*args, **kwargs))
+            started.append(threading.Thread(*args, **kwargs))
             return started[-1]
 
-        with (
-            mock.patch.object(launcher.subprocess, "Popen", return_value=child) as popen,
-            mock.patch.object(launcher.threading, "Thread", side_effect=made),
-        ):
+        with mock.patch.object(launcher.subprocess, "Popen", return_value=child) as popen:
             try:
-                code = launcher.main(argv)
+                code = launcher.main(argv, thread=made, timer=Timer)
             finally:
                 for each in started:
                     each.join()
