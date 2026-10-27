@@ -21,9 +21,11 @@ import (
 const (
 	Python    = "/opt/ensemble/venv/bin/python"
 	Bootstrap = "/opt/ensemble/lib/bootstrap.py"
-	checker   = "/opt/ensemble/lib/workspace-check"
-	sharing   = "Docker Desktop file sharing must include ~/.ensemble/docker-state (Settings > Resources > File sharing)."
-	cache     = ".ensemble-cache"
+	// Guard is the container's main process; the harness hands it its client over docker attach.
+	Guard   = "/opt/ensemble/src/ensemble/session/harness/guard.py"
+	checker = "/opt/ensemble/lib/workspace-check"
+	sharing = "Docker Desktop file sharing must include ~/.ensemble/docker-state (Settings > Resources > File sharing)."
+	cache   = ".ensemble-cache"
 )
 
 // errTaken: another start created the container first, so it is not this start's to roll back.
@@ -312,7 +314,8 @@ func (h Host) withdraw(c string, m Manifest, held holding, e *protocol.Error) {
 func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, route egress, facts *audit.StartFacts,
 	lap func(phase string)) (_ StartResult, held holding, _ error) {
 	labels := info.Config.Labels
-	args := append([]string{"run", "--detach", "--name", c, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "agent"},
+	// Stdin open for the harness's docker attach; no log driver, so no channel data lands in docker logs.
+	args := append([]string{"run", "--detach", "--interactive", "--log-driver", "none", "--name", c, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "agent"},
 		route.args()...)
 	args = append(args, "--workdir", m.CWD)
 	switch m.Client {
@@ -349,7 +352,7 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	}
 	flags, list := mounts(m, labels)
 	facts.Mounts = list
-	args = append(append(args, flags...), "--entrypoint", "/usr/bin/tini", info.ID, "--", "sleep", "infinity")
+	args = append(append(args, flags...), "--entrypoint", "/usr/bin/tini", info.ID, "--", Python, "-I", Guard, "--serve")
 	if _, err := h.Docker.Run(ctx, args, nil); err != nil {
 		if docker.Conflict(err) {
 			return StartResult{}, held, errTaken
