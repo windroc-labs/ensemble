@@ -300,6 +300,7 @@ ledger_valid() {
     claude-marketplace:2 | codex-marketplace:2) case $2 in windroc) true ;; *) false ;; esac ;;
     claude-plugin:2 | codex-plugin:2) case $2 in ensemble@windroc | updraft@windroc) true ;; *) false ;; esac ;;
     login:2) case $2 in gh | claude | codex) true ;; *) false ;; esac ;;
+    docker-container:2 | docker-image:2) [ "$2" = egress-proxy ] ;;
     launchd:2) case $2 in router | promote) true ;; *) false ;; esac ;;
     keychain:3) [[ $2 =~ $plain ]] && [[ $3 =~ $plain ]] ;;
     opencode-auth:3 | opencode-provider:3) under_home "$2" && [[ $3 =~ $name_pattern ]] ;;
@@ -2041,6 +2042,18 @@ egress_download() (
 egress_install() {
   local dir=$HOME/.egress version=$HOME/.egress/versions/$egress_commit tries=0 ready
   step "egress proxy"
+  # A ~/.egress from before keeps its own files; of it, only what this run creates is recorded. A current link from
+  # before keeps the version it points to now.
+  record_dir "$dir"
+  if ! recorded dir "$dir"; then
+    record_dir "$dir/versions"
+    record_file "$dir/config.local.yaml"
+    record_file "$dir/compose.networks.yaml"
+    if absent "$dir/current" || recorded file "$dir/current"; then
+      record_dir "$version"
+      record_file "$dir/current"
+    fi
+  fi
   mkdir -p "$dir/versions"
   # An earlier run's failed download, left by an installer before this one.
   rm -rf "$dir/versions"/.download.*
@@ -2055,6 +2068,9 @@ egress_install() {
   if [ ! -e "$version" ]; then egress_download; fi
   [ -x "$version/start.sh" ] && [ "$(cat "$version/COMMIT")" = "$egress_commit" ] \
     || die "incomplete egress checkout $version; keep your config and repair that version directory"
+  # start.sh creates them when missing; docker_running has just checked Docker answers.
+  docker container inspect egress-proxy </dev/null >/dev/null 2>&1 || ledger_add docker-container egress-proxy
+  docker image inspect egress-proxy </dev/null >/dev/null 2>&1 || ledger_add docker-image egress-proxy
   # Always run start.sh: it applies a new or changed config and leaves an unchanged proxy running.
   EGRESS_CONFIG_DIR="$dir" bash "$version/start.sh" </dev/null >&2 \
     || die "egress-proxy start failed: run $version/start.sh; inspect docker logs egress-proxy"

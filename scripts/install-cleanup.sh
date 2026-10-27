@@ -102,6 +102,7 @@ ledger_valid() {
     claude-marketplace:2 | codex-marketplace:2) case $2 in windroc) true ;; *) false ;; esac ;;
     claude-plugin:2 | codex-plugin:2) case $2 in ensemble@windroc | updraft@windroc) true ;; *) false ;; esac ;;
     login:2) case $2 in gh | claude | codex) true ;; *) false ;; esac ;;
+    docker-container:2 | docker-image:2) [ "$2" = egress-proxy ] ;;
     launchd:2) case $2 in router | promote) true ;; *) false ;; esac ;;
     keychain:3) [[ $2 =~ $plain ]] && [[ $3 =~ $plain ]] ;;
     opencode-auth:3 | opencode-provider:3) under_home "$2" && [[ $3 =~ $name_pattern ]] ;;
@@ -281,9 +282,20 @@ show() {
   local kind
   printf 'install-cleanup.sh will remove what install.sh added:\n' >&3
   for kind in launchd keychain broker codex-plugin codex-marketplace claude-plugin claude-marketplace \
-    login opencode-auth opencode-provider opencode-config agent-tree docker-block profile profile-file config cask formula homebrew clt file board-dir dir; do
+    login opencode-auth opencode-provider opencode-config docker-container docker-image agent-tree docker-block profile \
+    profile-file config cask formula homebrew clt file board-dir dir; do
     of_kind "$kind" | tr '\t' ' ' | sed 's/^/  /' >&3
   done
+  if [ -n "$(of_kind 'docker-(container|image)')" ]; then
+    printf '  keeps worker images (ensemble-worker) and ensemble-ws-* volumes\n' >&3
+  fi
+}
+
+# Stops before anything is removed when a recorded egress proxy resource needs Docker and Docker does not answer.
+docker_reachable() {
+  [ -n "$(of_kind 'docker-(container|image)')" ] || return 0
+  PATH="${HOMEBREW_PREFIX:-$root/opt/homebrew}/bin:$PATH" docker info </dev/null >/dev/null 2>&1 \
+    || die "Docker is not running: start Docker Desktop, then rerun; nothing removed"
 }
 
 # need <command>: fails the Step when the tool a record needs is not on PATH; the record stays.
@@ -670,6 +682,42 @@ opencode_configs() {
   done <<<"$paths"
 }
 
+# Removes the egress proxy's container and image install.sh created; lists worker images and workspace volumes, kept.
+egress_proxy() {
+  local kind ref list note=
+  step "egress proxy"
+  if [ -z "$(of_kind 'docker-(container|image)')" ]; then
+    skip "not installed by install.sh"
+    return
+  fi
+  for kind in container image; do
+    grep -qxF "docker-$kind"$'\t'"egress-proxy" "$ledger" || continue
+    if [ "$kind" = container ]; then
+      docker rm -f egress-proxy </dev/null >/dev/null || ! docker container inspect egress-proxy </dev/null >/dev/null 2>&1 \
+        || die "cannot remove container egress-proxy; its record stays for a rerun"
+    else
+      docker image rm egress-proxy </dev/null >/dev/null || ! docker image inspect egress-proxy </dev/null >/dev/null 2>&1 \
+        || die "cannot remove image egress-proxy; its record stays for a rerun"
+    fi
+    drop "docker-$kind"$'\t'"egress-proxy"
+  done
+  if grep -qxF "cask"$'\t'"docker-desktop" "$ledger"; then note="; removing Docker Desktop below deletes it with Docker's data"; fi
+  if list=$(docker image ls --format '{{.Repository}}:{{.Tag}}' ensemble-worker </dev/null); then
+    while IFS= read -r ref; do
+      if [ -n "$ref" ]; then say "    kept $ref: worker image$note"; fi
+    done <<<"$list"
+  else
+    say "    cannot list worker images; kept them"
+  fi
+  if list=$(docker volume ls --format '{{.Name}}' --filter name=ensemble-ws- </dev/null); then
+    while IFS= read -r ref; do
+      case $ref in ensemble-ws-*) say "    kept $ref: worker workspace volume$note" ;; esac
+    done <<<"$list"
+  else
+    say "    cannot list workspace volumes; kept them"
+  fi
+}
+
 # Ends what still runs from Docker.app once its cask is gone (its quit misses helpers such as docker-agent): TERM, up to
 # 10 seconds, then KILL; matched by the literal command-line prefix, so nothing else is signalled.
 docker_processes() {
@@ -820,6 +868,7 @@ main() {
   validate
   [ ! -f "$state_dir/agent-tree.pending" ] || die "path inventory is incomplete; rerun install.sh before cleanup; nothing removed"
   protected_dirs
+  docker_reachable
   show
   if [ -z "$yes" ] && ! ask_yn "Remove all of this?"; then die "nothing removed"; fi
   trap on_exit EXIT
@@ -836,6 +885,7 @@ main() {
   profiles
   config_file
   opencode_configs
+  egress_proxy
   keep_root=$(agent_tree)
   brew_packages
   homebrew_and_clt

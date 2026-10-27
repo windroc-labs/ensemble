@@ -582,8 +582,13 @@ def xcode_select(args):
 
 
 def docker(args):
+    # egress_container, egress_image: the proxy's container and image are there; worker_images,
+    # ws_volumes: what `docker image ls` and `docker volume ls` list.
+    container, image = FAKES / "egress_container", FAKES / "egress_image"
     if args == ["egress-start"]:
         mark(FAKES / "egress_started")
+        mark(container)
+        mark(image)
         # what start.sh would serve: the config the installer pointed it at
         mark(
             FAKES / "egress_served",
@@ -599,6 +604,26 @@ def docker(args):
             return 0
         health = "unhealthy" if (FAKES / "egress_unhealthy").exists() else "healthy"
         out(f"true|{health}|1|egress-workers|http://egress-proxy-workers:4750|workers\n")
+        return 0
+    if args == ["container", "inspect", "egress-proxy"]:
+        return 0 if container.exists() else 1
+    if args == ["image", "inspect", "egress-proxy"]:
+        return 0 if image.exists() else 1
+    if args == ["rm", "-f", "egress-proxy"]:
+        container.unlink(missing_ok=True)
+        (FAKES / "egress_started").unlink(missing_ok=True)
+        return 0
+    if args == ["image", "rm", "egress-proxy"]:
+        if container.exists():
+            out("Error response from daemon: conflict: image is in use\n", sys.stderr)
+            return 1
+        image.unlink(missing_ok=True)
+        return 0
+    if args[:2] == ["image", "ls"]:
+        out(load_text(FAKES / "worker_images"))
+        return 0
+    if args[:2] == ["volume", "ls"]:
+        out(load_text(FAKES / "ws_volumes"))
         return 0
     return 0 if args == ["info"] and (FAKES / "docker_running").exists() else 1
 
