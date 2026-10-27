@@ -90,9 +90,10 @@ class LinearCtlContract(CtlContract, TmuxFlow):
         return self.call("router", "--issue", "TASK-9999")
 
     def end(self, name):
+        """A close: its owner ends the worker (its display's death would not), then the run."""
         record = self.started_records[name]
-        for session in record.sessions:
-            self.server.tmux("kill-session", "-t", f"={session}")
+        closed = self.call("close", stdin=record.to_line())
+        self.assertEqual(closed.returncode, 0, closed.stderr)
         events, harness = Path(self.root, "events"), record.sessions[0]
 
         def ended():

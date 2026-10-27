@@ -222,7 +222,8 @@ class LiveCrew(Case):
         shown = self.server.tmux("display-message", "-p", "-t", f"={harness}:", "#{pane_pid}")
         pid = int(shown.stdout)
         self.kill(harness)
-        live_tmux.crash_owner(self.ensemble, tui)
+        # its client killed: its owner's handler ends the attempt and writes the outcome line
+        os.kill(logged(self.log(name))[-1]["pid"], signal.SIGKILL)
         self.server.tmux(
             "kill-session", "-t", f"={tui}"
         )  # the harness, stopping, may close it first
