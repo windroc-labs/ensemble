@@ -193,8 +193,9 @@ usage() {
 usage: install-cleanup.sh [--yes] [--password-stdin]
 
 Internal, for test machines only: removes what install.sh recorded in ~/.ensemble/install/added,
-so the machine is as before install.sh ran. Lists it and asks first; --yes skips the question
-(automation only). An app or group container to remove (~/Library/Containers/<app>, ~/Library/Group
+so the machine is as before install.sh ran; a parent other tools also write (~/.config, ~/.codex,
+~/.docker, ~/Library/LaunchAgents) goes only when nothing else is left in it. Lists it and asks first;
+--yes skips the question (automation only). An app or group container to remove (~/Library/Containers/<app>, ~/Library/Group
 Containers/<group>) needs the terminal's Full Disk Access: without it the cleanup lists what it would
 remove and stops before removing anything. Run by hand:
   curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install-cleanup.sh | bash
@@ -830,6 +831,15 @@ board_dirs() {
   done <<<"$(of_kind board-dir | cut -f2 | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)"
 }
 
+# Exit 0 when directory $1 is a parent other tools also write, so the cleanup removes it only once empty; the trees
+# only install.sh writes go whole.
+shared_dir() {
+  case $1 in
+    "$HOME/.config" | "$HOME/.codex" | "${CODEX_HOME:-$HOME/.codex}" | "$HOME/.docker" | "$HOME/Library/LaunchAgents") ;;
+    *) return 1 ;;
+  esac
+}
+
 files_and_dirs() {
   local path domain
   step "files and directories"
@@ -848,6 +858,11 @@ files_and_dirs() {
   while IFS= read -r path; do
     [ -n "$path" ] || continue
     [ "$path" = "$HOME/.ensemble" ] && continue
+    if shared_dir "$path"; then
+      if { [ -e "$path" ] || [ -L "$path" ]; } && ! rmdir "$path" 2>/dev/null; then say "    kept $path: not empty"; fi
+      drop "dir"$'\t'"$path"
+      continue
+    fi
     if ! rm -rf "$path" || [ -e "$path" ]; then die "cannot remove $path; its record stays for a rerun"; fi
     drop "dir"$'\t'"$path"
   done <<<"$(of_kind dir | cut -f2 | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)"

@@ -5112,6 +5112,13 @@ exec /bin/rm "$@"
             *args, answers=answers, stdin=stdin, script=CLEANUP, ctty=ctty, interrupt=interrupt
         )
 
+    def codex_kept(self, before):
+        """Asserts the files are `before`'s plus the config Codex itself leaves in ~/.codex (a parent
+        other tools also write, so cleanup keeps it), then removes ~/.codex, as before install."""
+        codex = Path(self.home, ".codex")
+        self.assertEqual(self.snapshot(), {**before, codex / "config.toml": b"\n"})
+        shutil.rmtree(codex)
+
     def snapshot(self):
         skip = {"fakes", "bin"}
         logs = {"stdout", "stderr", "calls.log", "env.log"}
@@ -5202,7 +5209,7 @@ exec /bin/rm "$@"
         self.assert_ok(result)
         self.assertNotIn("docker-uninstall", self.calls())
         self.assertIn("brew uninstall --cask docker-desktop", self.calls())
-        self.assertEqual(self.snapshot(), before)
+        self.codex_kept(before)
         self.assertEqual(list((self.fakes / "keychain").iterdir()), [])
         self.assertEqual(list((self.fakes / "login").iterdir()), [])
         self.assertFalse(self.broker_path().parent.exists())
@@ -5603,7 +5610,7 @@ exec /bin/rm "$@"
         )
         result = self.cleanup("--yes")
         self.assert_ok(result)
-        self.assertEqual(self.snapshot(), before)
+        self.codex_kept(before)
         self.assertTrue((self.fakes / "brew/gh").exists())
         self.assertTrue((self.fakes / "keychain/ensemble-broker-claude").exists())
         self.assertNotIn("brew uninstall gh", self.calls())
@@ -5659,7 +5666,7 @@ exec /bin/rm "$@"
         self.assert_ok(result)
         uid_calls = [c for c in self.calls() if c.startswith("launchctl bootout")]
         self.assertEqual(len(uid_calls), 2)
-        self.assertEqual(self.snapshot(), before)
+        self.codex_kept(before)
         self.assertEqual(list((self.fakes / "keychain").iterdir()), [])
         self.assertEqual(self.board_install(), calls)
         self.assertEqual(self.snapshot(), files)
