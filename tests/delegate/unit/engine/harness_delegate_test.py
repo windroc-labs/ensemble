@@ -2595,6 +2595,19 @@ class OwnedRun(HarnessCase):
             view.run()
         self.assert_stopped_start_left_nothing(view)
 
+    def test_a_locked_stop_during_the_tui_start_claims_release_once_it_closed(self):
+        view = self.owned(lock="dummy-lock")
+        with (
+            mock.patch.object(
+                HarnessSession, "showable", new_callable=mock.PropertyMock, side_effect=Stopped(129)
+            ),
+            self.assertRaises(Stopped),
+        ):
+            view.run()
+        self.assertFalse(view.driver.session.alive())
+        self.assertEqual(self.kinds().count("release"), 1)
+        self.assertEqual(self.err.getvalue().count("closed (lock dummy-lock)"), 1)
+
     def test_a_stop_before_the_start_returns_closes_the_drivers_session(self):
         view = self.owned()
 
@@ -2652,32 +2665,46 @@ class OwnedRun(HarnessCase):
         self.assertEqual(self.record.read().result, result)
         self.assertEqual(self.sent(), ["begun", "finished"])
 
-    def locked_give_up(self, *, fails: bool) -> str:
+    def test_a_locked_give_up_leaves_the_session_open(self):
         Clock(self)
         view = self.owned(idle=5, lock="dummy-lock")
-
-        def failing():
-            raise SessionError("not confirmed")
-
-        def break_close():
-            if fails:
-                view.driver.session.close = failing
-
-        _seen, on = self.at_begun(break_close)
-        view.run(on)
-        return self.err.getvalue()
-
-    def test_a_locked_give_up_claims_release_once_its_close_returns(self):
-        err = self.locked_give_up(fails=False)
-        self.assertIn("closed (lock dummy-lock)", err)
-        self.assertIn("release", self.kinds())
-
-    def test_a_locked_give_up_whose_close_fails_claims_no_release(self):
-        err = self.locked_give_up(fails=True)
-        self.assertIn("delegate: tui: close: not confirmed", err)
-        self.assertNotIn("closed (lock", err)
+        view.run()
+        self.assertTrue(view.driver.session.alive())
+        self.assertIn(f"session {view._state.agent_name} left open", self.err.getvalue())
+        self.assertNotIn("closed (lock", self.err.getvalue())
         self.assertNotIn("release", self.kinds())
         self.assertEqual(self.sent(), ["begun", "finished"])
+
+    def test_a_locked_needs_input_is_waiting_and_attachable(self):
+        """A crew entry is waiting on an outcome needs_input while not alive (crew._reconciled)."""
+        HarnessSession.reset(showable=True)
+        HarnessSession.owns = True
+        view = self.owned(lock="dummy-lock")
+        _seen, on = self.at_begun(
+            lambda: (self.record.bind(1, 1), self.record.complete(1, self.NEEDS, sid=SID))
+        )
+        self.assertEqual(view.run(on), self.NEEDS)
+        self.assertTrue(view.driver.session.alive())
+        again = HarnessDelegate.attach(self.work, session_cls=HarnessSession, viewer=FakeViewer())
+        self.assertFalse(again.alive())
+        status = again.status()
+        self.assertEqual((status.alive, status.outcome), (False, "needs_input"))
+        self.assertNotIn(status.state, (StatusState.GONE, StatusState.DEAD))
+        self.assertEqual(status.attach, f"agent attach {view._state.agent_name}")
+        self.assertNotIn("release", self.kinds())
+
+    def test_a_locked_runs_answer_goes_to_its_live_worker(self):
+        view = self.owned(lock="dummy-lock")
+        _seen, on = self.at_begun(
+            lambda: (self.record.bind(1, 1), self.record.complete(1, self.NEEDS, sid=SID))
+        )
+        view.run(on)
+        agent, launches = view.driver.session, len(harness_launches())
+        HarnessDelegate.attach(self.work, session_cls=HarnessSession).resume(input="the answer")
+        self.assertEqual(agent.sent, ["the answer"])
+        self.assertTrue(agent.alive())
+        self.assertEqual(len(harness_launches()), launches)
+        self.assertNotIn("release", self.kinds())
 
     def test_a_start_failure_is_stored_announced_and_finished_once(self):
         view = self.owned()

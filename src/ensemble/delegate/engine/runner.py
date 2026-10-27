@@ -68,7 +68,7 @@ class GiveUp:
 
 
 class Headless:
-    stops_failed = True  # a failed turn's client would hold its container on
+    stops_client = True  # a failed or limited turn's client would hold its container on
 
     def __init__(self, note: Callable[..., None], driver: Driver | None):
         self.note, self.driver = note, driver
@@ -97,10 +97,10 @@ class Headless:
 class Tui(Headless):
     """FR-23: the first turn end without an outcome block gets NUDGE, STOP_LIMIT more give up; a
     progress mark resets that count; a turn end with work pending is ignored. FR-24: an IdleTimeout
-    gives up. The session is left open unless locked (Attempts.release).
+    gives up. The session is left open, locked or not.
     """
 
-    stops_failed = False
+    stops_client = False
 
     def __init__(self, note: Callable[..., None], driver: Driver | None):
         super().__init__(note, driver)
@@ -133,6 +133,16 @@ class Tui(Headless):
 
     def idle(self, seconds: float) -> str | GiveUp | None:
         return GiveUp(idle_reason(seconds))
+
+
+def claim_release(p: Plan, name: str) -> None:
+    """Once a locked run's worker close is confirmed."""
+    environment = p.session.environment
+    lock = None if environment is None else environment.lock
+    if not lock:
+        return
+    say(f"delegate: session {name} closed (lock {lock})")
+    RunLog(p.session.workdir).note("release", lock=lock, best_effort=True)
 
 
 def idle_reason(seconds: float) -> str:
@@ -270,8 +280,6 @@ class Attempt:
     ):
         self.plan, self.policy, self.handle = p, policy, handle
         self.note, self.on_event, self.first = note, on_event, first
-        environment = p.session.environment
-        self.lock = None if environment is None else environment.lock
         self.seen: set[str] = set()
         self.fixed = False
         self._pass()
@@ -309,7 +317,7 @@ class Attempt:
         elif isinstance(event, LimitHit):
             self.note("limit", resets_at=event.resets_at)
             self.limit = Limit(event.resets_at)
-            if not self.stop():
+            if not self.policy.stops_client or not self.stop():
                 return self.end()
         elif isinstance(event, Exited):
             self.rc = event.returncode
@@ -327,8 +335,7 @@ class Attempt:
             if name is None:
                 raise SessionError("tui session has no name")
             command = f": {self.handle.attach_command()}" if self.handle.showable else ""
-            left = "" if self.lock else f"; session {name} left open{command}"
-            say(f"delegate: {answer.reason}{left}")
+            say(f"delegate: {answer.reason}; session {name} left open{command}")
             self.rc, self.last, self.limit, self.failed = 0, None, None, None
             return self.end()
         return self.end() if answer == END else None
@@ -348,7 +355,7 @@ class Attempt:
         if self.limit:
             return Result(rc, None, f"usage limit; {_resets(self.limit.resets_at)}", self.limit)
         if self.failed:
-            if self.policy.stops_failed:
+            if self.policy.stops_client:
                 self.stop()
             if rc and self.failed.error == PROCESS_EXIT:
                 return Result(rc, None, diagnostic)
@@ -519,7 +526,8 @@ class Attempts:
                     return result
 
     def release(self) -> None:
-        """Closes a locked run's session once, freeing its lock (FR-61); prints a SessionError."""
+        """Closes a locked headless run's ended session once, then claims its lock released;
+        prints a SessionError. (An unowned tui is never locked.)"""
         if self.lock is None or self.handle is None or self.released:
             return
         self.released = True
@@ -528,7 +536,7 @@ class Attempts:
         except SessionError as e:
             say(f"delegate: {self.plan.spec.mode}: close: {e}")
             return
-        say(f"delegate: session {self.handle.name or 'agent'} closed (lock {self.lock})")
+        claim_release(self.plan, self.handle.name or "agent")
 
     def stop(self, handle: Session) -> bool:
         """A SessionError is printed, not raised; False then, the session maybe running."""

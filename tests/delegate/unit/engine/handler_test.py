@@ -1,6 +1,6 @@
 """The delegation handler over a real run dir and a fake owner view: it binds the opening attempt
 or opens a follow-up on its worker's TurnStarted, runs the attempt core on each EventCall, ends an
-attempt (Result, notes, outcome line, a locked run's close, then Finished) once, and ignores calls
+attempt (Result, notes, outcome line, then Finished) once, closing no worker, and ignores calls
 that are not its worker's.
 """
 
@@ -16,7 +16,7 @@ from unittest import mock
 from ensemble.delegate import Spec
 from ensemble.delegate.engine import handler
 from ensemble.delegate.engine.record import HANDLER, RunRecord
-from ensemble.delegate.engine.runner import PROCESS_EXIT, stopped
+from ensemble.delegate.engine.runner import PROCESS_EXIT, STOP_LIMIT, stopped
 from ensemble.delegate.engine.types import Layout, Result
 from ensemble.session import (
     Activity,
@@ -70,19 +70,6 @@ class View:
         self.calls.append(("close",))
         if self.close_fail:
             raise self.close_fail
-
-
-class RacingView(View):
-    """A view whose stop runs `race`, then fails."""
-
-    def __init__(self, race):
-        super().__init__()
-        self.race = race
-
-    def stop(self):
-        super().stop()
-        self.race()
-        raise SessionError("gone")
 
 
 class Timer:
@@ -295,15 +282,17 @@ class BindTest(HandlerCase):
         self.assertEqual(self.state().result, Result(1, None, "the client exited 1"))
         self.assertEqual(self.kinds_sent()[-1], ("finished", 1))
 
-    def test_a_limit_stops_the_worker_and_its_exit_ends_the_attempt(self):
+    def test_a_limit_ends_the_attempt_and_leaves_the_worker(self):
         self.call(TurnStarted())
         self.call(LimitHit(None))
-        self.assertEqual(self.view.calls, [("stop",)])
-        self.assertFalse(self.state().completed)
-        self.call(Exited(0))
+        self.assertEqual(self.view.calls, [])
         result = self.state().result
         self.assertEqual(result.error, "usage limit; reset time unknown")
         self.assertIsNotNone(result.limit)
+        self.assertEqual(self.kinds_sent(), [("finished", 1)])
+        self.call(Exited(0))
+        self.assertEqual(self.state().result, result)
+        self.assertEqual(self.kinds_sent(), [("finished", 1)])
 
 
 class FollowUpTest(HandlerCase):
@@ -637,6 +626,10 @@ class IgnoredTest(HandlerCase):
 
 
 class LockedTest(HandlerCase):
+    """FR-23: a locked run is its user's to close, as an unlocked one is: no ending closes or stops
+    it, and only a confirmed close claims its lock released.
+    """
+
     def setUp(self):
         super().setUp()
         state = self.state()
@@ -644,12 +637,75 @@ class LockedTest(HandlerCase):
         session = replace(state.plan.session, environment=environment)
         self.record.save(replace(state, plan=replace(state.plan, session=session)))
 
-    def test_each_ending_closes_through_the_owner_then_claims_release(self):
+    def assert_left_running(self) -> Result:
+        state = self.state()
+        self.assertTrue(state.completed)
+        self.assertFalse({("close",), ("stop",)} & set(self.view.calls), self.view.calls)
+        self.assertNotIn("release", self.kinds())
+        self.assertNotIn("closed (lock", self.err.getvalue())
+        self.assertEqual([k for k in self.kinds_sent() if k[0] == "finished"], [("finished", 1)])
+        self.assertEqual(self.kinds()[-2:], ["result", "end"])
+        return state.result
+
+    def test_a_done_outcome_leaves_it_running(self):
         self.finish()
-        self.assertEqual(self.view.calls, [("close",)])
-        self.assertIn(f"delegate: session {NAME} closed (lock dummy-lock)", self.err.getvalue())
-        self.assertIn("release", self.kinds())
-        self.assertEqual(self.kinds_sent()[-1], ("finished", 1))
+        self.assertEqual(self.assert_left_running().outcome.status, "done")
+
+    def test_needs_input_leaves_it_running(self):
+        self.finish(NEEDS)
+        self.assertEqual(self.assert_left_running().outcome.status, "needs_input")
+
+    def test_a_failed_turn_leaves_it_running(self):
+        self.call(TurnStarted())
+        self.call(TurnFailed("server_overloaded", "529"))
+        self.assertEqual(
+            self.assert_left_running().error, "the client's turn failed: server_overloaded (529)"
+        )
+
+    def test_a_nudge_give_up_leaves_it_running(self):
+        self.call(TurnStarted())
+        for _ in range(1 + STOP_LIMIT):
+            self.call(TurnEnd("Working.", 0))
+        self.assertEqual(self.assert_left_running(), GAVE_UP)
+        self.assertIn(f"session {NAME} left open", self.err.getvalue())
+
+    def test_an_idle_give_up_leaves_it_running(self):
+        self.call(TurnStarted())
+        next(t for t in Timer.made if t.started and not t.cancelled).fire()
+        self.assertEqual(self.assert_left_running(), GAVE_UP)
+        self.assertIn(f"session {NAME} left open", self.err.getvalue())
+
+    def test_a_usage_limit_leaves_it_running(self):
+        self.call(TurnStarted())
+        self.call(LimitHit(None))
+        self.assertIsNotNone(self.assert_left_running().limit)
+
+    def test_an_answer_opens_the_next_attempt_in_the_same_worker(self):
+        self.finish(NEEDS)
+        self.call(TurnStarted())
+        state = self.state()
+        self.assertEqual((state.attempt, state.completed), (2, False))
+        self.call(TurnEnd(block(DONE), 0))
+        self.assertEqual(self.state().result.outcome.status, "done")
+        self.assertEqual(self.view.calls, [])
+        self.assertNotIn("release", self.kinds())
+
+    def test_the_clients_own_exit_ends_the_attempt_and_claims_nothing(self):
+        for rc, result in (
+            (1, Result(1, None, "the client exited 1")),
+            (-9, Result(137, None, "stopped: Stopped: 137")),
+        ):
+            with self.subTest(rc=rc):
+                n = self.state().attempt
+                self.call(TurnStarted(), token=n)
+                self.call(Exited(rc), token=n)
+                self.assertEqual(self.state().result, result)
+                self.assertEqual(self.view.calls, [])
+                self.assertNotIn("release", self.kinds())
+                self.assertNotIn("closed (lock", self.err.getvalue())
+                self.register(n + 1, attempt=n + 1, completed=False)
+                self.record.save(replace(self.state(), result=None, bound=False))
+                self.generation = uuid.uuid4().hex
 
     def test_a_gone_workers_close_ends_the_attempt_and_claims_no_release(self):
         self.call(TurnStarted())
@@ -669,30 +725,31 @@ class LockedTest(HandlerCase):
         self.assertEqual(self.kinds()[-3:], ["result", "end", "release"])
         self.assertEqual(self.kinds_sent(), [("finished", 1)])
 
-    def test_a_close_that_fails_claims_no_release(self):
-        self.view.close_fail = SessionError("not confirmed")
-        self.finish()
-        self.assertIn("delegate: tui: close: not confirmed", self.err.getvalue())
-        self.assertNotIn("closed (lock", self.err.getvalue())
-        self.assertNotIn("release", self.kinds())
-        self.assertEqual(self.kinds_sent()[-1], ("finished", 1))
+    def test_a_close_after_a_locked_ending_claims_release_without_a_second_finished(self):
+        self.finish(NEEDS)
+        AgentSession.agent = Agent(lambda: None)
+        self.delegate.close()
+        self.assertEqual(self.kinds()[-1], "release")
+        self.assertEqual(self.kinds().count("end"), 1)
+        self.assertIn(f"delegate: session {NAME} closed (lock dummy-lock)", self.err.getvalue())
+        self.assertEqual([k for k in self.kinds_sent() if k[0] == "finished"], [("finished", 1)])
 
-    def test_an_idle_give_up_leaves_finished_to_its_closes_exit(self):
-        self.call(TurnStarted())
-        Timer.made[-1].fire()
-        self.assertEqual(self.state().result, GAVE_UP)
-        self.assertEqual(self.view.calls, [("close",)])
-        self.assertEqual(self.kinds_sent(), [])
-        self.call(Exited(0))
-        self.assertEqual(self.kinds_sent(), [("finished", 1)])
+    def test_an_unconfirmed_close_claims_no_release(self):
+        self.finish(NEEDS)
+        for refusal in (OwnerRefused("cannot close w1"), Unanswered("not confirmed")):
+            with self.subTest(refusal=type(refusal).__name__):
 
-    def test_an_idle_give_up_whose_close_fails_finishes_at_once(self):
-        self.call(TurnStarted())
-        self.view.close_fail = SessionError("not confirmed")
-        Timer.made[-1].fire()
-        self.assertEqual(self.kinds_sent(), [("finished", 1)])
-        self.call(Exited(0))
-        self.assertEqual(self.kinds_sent(), [("finished", 1)])
+                def refuse(refusal=refusal):
+                    raise refusal
+
+                AgentSession.agent = Agent(refuse)
+                with self.assertRaises(type(refusal)):
+                    self.delegate.close()
+                self.assertNotIn("release", self.kinds())
+                self.assertNotIn("closed (lock", self.err.getvalue())
+        AgentSession.agent = Agent(lambda: None)
+        self.delegate.close()
+        self.assertEqual(self.kinds()[-1], "release")
 
 
 class EndingTest(HandlerCase):
@@ -722,8 +779,14 @@ class EndingTest(HandlerCase):
         self.record.complete(1, self.LOST, sid=SID)
 
     def test_a_lost_limit_writes_no_notes(self):
-        self.view = RacingView(self.race)
-        self.lost(LimitHit(None))
+        complete = RunRecord.complete
+
+        def racing(record, *args, **kw):
+            complete(record, 1, self.LOST, sid=SID)
+            return complete(record, *args, **kw)
+
+        with mock.patch.object(RunRecord, "complete", racing):
+            self.lost(LimitHit(None))
 
     def test_a_lost_outcome_writes_no_progress_note(self):
         self.racing = self.race  # at its Progress delivery
@@ -741,8 +804,6 @@ class EndingTest(HandlerCase):
         self.call(TurnStarted())
         self.call(Reply(START))
         self.assertEqual(self.kinds()[-1], "progress")
-        self.call(LimitHit(None))
-        self.assertEqual(self.kinds()[-1], "limit")
         self.assertFalse(self.state().completed)
 
 
