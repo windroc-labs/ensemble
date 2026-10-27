@@ -291,6 +291,22 @@ class FollowUpTest(HandlerCase):
             [("progress", 1), ("finished", 1), ("begun", 2), ("finished", 2)],
         )
 
+    def test_an_answer_to_a_worker_a_failed_close_left_opens_its_attempt(self):
+        self.finish(NEEDS)
+        self.record.save(replace(self.state(), closing=True))
+        worker = self.view
+
+        class Live(ViewedHarnessDelegate):
+            """A close whose agent close failed left its worker running."""
+
+            def _answered_agent(self, state):
+                return worker
+
+        Live.attach(self.work, session_cls=HarnessSession).resume(input="The answer.")
+        self.assertFalse(self.state().closing)
+        self.call(TurnStarted())
+        self.assertEqual((self.state().attempt, self.state().completed), (2, False))
+
     def test_an_exit_after_completion_ends_nothing(self):
         self.finish()
         self.call(Exited(0))

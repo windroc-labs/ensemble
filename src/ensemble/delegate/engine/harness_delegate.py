@@ -1209,6 +1209,8 @@ class HarnessDelegate(Delegate):
                 agent = self._answered_agent(state) if owned(state.plan) else None
                 if agent is not None and agent.alive():
                     # its worker's TurnStarted opens the follow-up attempt (D9)
+                    if state.closing:  # its close failed: the worker answers on
+                        RunRecord(self.layout, self.store).save(replace(state, closing=False))
                     RunLog(state.plan.session.workdir).note("input", text=input)
                     agent.send(input)
                     return self._record(state)
