@@ -737,10 +737,7 @@ class HostedSession(Session):
         channel = _bound_owner(name, state)
         if channel is None or channel.status().get("state") != "running":
             return cls._attached(name, sid=sid, host=host, idle_timeout=idle_timeout)
-        try:
-            attached = cls._attached(name, sid=sid, host=host, generation=state["generation"])
-        except SessionError:
-            attached = None  # its terminal is gone: its owner, draining, still answers a close
+        attached = cls._attached(name, sid=sid, host=host, generation=state["generation"])
         return cls._view(
             channel,
             name=name,
@@ -825,7 +822,9 @@ class HostedSession(Session):
 
     @classmethod
     def retire(cls, name: str, *, sid: str | None = None, host: str | None = None) -> None:
-        """A bound owner's confirmed close, else closed here."""
+        """A bound owner's confirmed close (its terminal gone too: sid from session.json), else
+        closed here.
+        """
         setup = cls._config()
         on = cls.host(host)
         store = tui.TuiStore.attach(name, host=on, sid=sid)
@@ -835,6 +834,10 @@ class HostedSession(Session):
             state = None
         if state is not None and (channel := _bound_owner(name, state)) is not None:
             store.check()
+            if sid is not None and state.get("sid") != sid:
+                raise SessionError(
+                    f"session {name}: expected sid {sid!r}, found {state.get('sid')!r}"
+                )
             if channel.request(Op.CLOSE):
                 return
         try:
