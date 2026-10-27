@@ -9,11 +9,11 @@ from tests.session.fakes.session import FakeSession
 class SessionClass(FakeSession):
     preflights: list[dict] = []
     preflight_error: Exception | None = None
-    owns = False
+    owns = True
 
     def __init_subclass__(cls, **keywords):
         super().__init_subclass__(**keywords)
-        cls.preflights, cls.preflight_error, cls.owns = [], None, False
+        cls.preflights, cls.preflight_error, cls.owns = [], None, True
 
     @classmethod
     def fresh(cls):
