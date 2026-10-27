@@ -3354,16 +3354,19 @@ class BoundOwnerTest(HostedTuiBase):
         self.owner(state="exited")
         self.assertNotIsInstance(self.session.attach("w1"), OwnedSession)
 
-    def test_attach_of_a_running_owner_whose_terminal_is_gone_is_its_view_not_alive(self):
+    def test_attach_of_a_running_owner_whose_terminal_is_gone_raises_as_legacy(self):
+        self.owner()
+        self.host.processes.pop("w1")
+        with self.assertRaisesRegex(SessionError, "w1"):
+            self.session.attach("w1")
+
+    def test_retire_of_a_running_owner_whose_terminal_is_gone_asks_it(self):
         held = self.owner()
         self.host.processes.pop("w1")
-        view = self.session.attach("w1", sid=SID)
-        self.assertIsInstance(view, OwnedSession)
-        self.assertFalse(view.alive())
-        with self.assertRaisesRegex(SessionError, "w1"):
-            view.status()
+        with self.assertRaisesRegex(SessionError, "expected sid 'other'"):
+            self.session.retire("w1", sid="other")
         self.serve(let_go=held)
-        view.close()
+        self.session.retire("w1", sid=SID)
         self.assertEqual(self.served, [Op.CLOSE])
 
     def test_a_failed_spawn_closes_the_worker_its_harness_launched(self):

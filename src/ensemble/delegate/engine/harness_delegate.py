@@ -331,7 +331,7 @@ class HarnessDelegate(Delegate):
         return previous.attempt + 1 if previous.plan.sid == self._state.plan.sid else 1
 
     def _settle(self) -> None:
-        """A gone owned worker closed outside the mutex: returns once its harness drained the
+        """A gone owned worker retired outside the mutex: its owner answers once it drained the
         handler, before the sweep."""
         try:
             state = self._read()
@@ -339,12 +339,14 @@ class HarnessDelegate(Delegate):
             return
         if not owned(state.plan):
             return
-        agent = self._answered_agent(state)
         try:
-            if agent is not None and not agent.alive():
-                agent.close()
-        except SessionError as error:
-            say(f"delegate: {error}")
+            agent = self._agent(state)
+        except Unanswered:
+            return
+        if agent is not None and agent.alive():
+            return
+        with contextlib.suppress(SessionError, SessionConfigError):
+            self.session_cls.retire(state.agent_name, sid=state.plan.sid, host=state.host)
 
     def _sweep(self) -> None:
         try:
