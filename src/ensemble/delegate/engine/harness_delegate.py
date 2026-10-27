@@ -1218,6 +1218,7 @@ class HarnessDelegate(Delegate):
                 agent, unanswered = self._probed_agent(state)
                 try:
                     if agent is not None and agent.alive() and agent.status().alive:
+                        self._publish_record(state)
                         return
                 except Unanswered as error:
                     unanswered = error
@@ -1249,6 +1250,12 @@ class HarnessDelegate(Delegate):
         if busy := self._busy(state):
             raise SessionError(str(busy))
         raise SessionError(message)
+
+    def _publish_record(self, state: DelegateState) -> None:
+        try:
+            self.session_cls.host(state.host).attach(state.agent_name).publish(self._record(state))
+        except SessionError as error:
+            say(f"delegate: Record not published: {error}")
 
     def _probed_agent(self, state: DelegateState) -> tuple[Session | None, Unanswered | None]:
         try:
