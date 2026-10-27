@@ -44,7 +44,7 @@ class BrokerJob(Case):
             found["Go build"],
         )
 
-    def test_only_installer_uses_macos_in_pr_or_merge_group_workflows(self):
+    def test_only_installer_and_broker_prs_use_macos_in_pr_or_merge_group_workflows(self):
         for path in sorted(WORKFLOWS.glob("*.yml")):
             text = path.read_text()
             if re.search(r"(?m)^  (pull_request|pull_request_target|merge_group):", text):
@@ -53,17 +53,26 @@ class BrokerJob(Case):
                         self.assertNotIn("  broker:", text)
                         self.assertIn("tests/integration/install_integration_test.py", text)
                         self.assertIn("tests/manager/integration/ctmux_integration_test.py", text)
+                    elif path.name == "broker-macos.yml":
+                        self.assertNotIn("merge_group", text)
+                        self.assertIn("  pull_request:\n    paths:", text)
                     else:
                         self.assertNotIn("macos", text.lower())
         self.assertFalse((WORKFLOWS.parent / "ci_broker.py").exists())
         self.assertFalse((WORKFLOWS.parent / "ci_broker_test.py").exists())
 
-    def test_macos_coverage_runs_only_on_main_push_or_manual_dispatch(self):
+    def test_macos_coverage_runs_on_main_push_broker_prs_or_manual_dispatch(self):
         text = (WORKFLOWS / "broker-macos.yml").read_text()
         events = re.search(r"(?ms)^on:\n(.*?)(?=^\S|\Z)", text)[1]
         self.assertIn("  push:\n    branches: [main]", events)
+        self.assertIn(
+            "  pull_request:\n    paths: [.github/workflows/broker-macos.yml, src/broker/**]",
+            events,
+        )
         self.assertIn("  workflow_dispatch:", events)
-        self.assertEqual(re.findall(r"(?m)^  (\w+):", events), ["push", "workflow_dispatch"])
+        self.assertEqual(
+            re.findall(r"(?m)^  (\w+):", events), ["push", "pull_request", "workflow_dispatch"]
+        )
         self.assertIn("    runs-on: macos-15", job("broker-macos.yml", "broker"))
         self.assertIn("Upload darwin/arm64 binary", steps(job("broker-macos.yml", "broker")))
 

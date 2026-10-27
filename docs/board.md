@@ -164,7 +164,7 @@ Each session's `Run <sid>` comment holds its resume command. Move the issue out 
 
 The orchestrator limits each role with `[roles.<role>] max_runs` (packaged: 3 for researcher, pm and engineer; another stage's role without a table: 1), counting its live runs in `runs.jsonl`, including runs between rounds. A tick checks the role and then the usage gate. `router --issue` skips those two gates; its run still counts toward the role limit.
 
-The session layer owns [client run limits](sessions.md#run-limits): `[session.clients.<client>] max_runs` in `~/.ensemble/config.local.toml`. These apply to every `Session.start`, including board starts, `router --issue`, ad-hoc role runs and crew workers. A full client refuses the start with `SessionError`, naming the client, limit and holders. The board records an ordinary failed run: one attempt and its normal failure comment; it does not skip the issue or wait for capacity.
+The session layer owns [client run limits](architecture.md#run-limits): `[session.clients.<client>] max_runs` in `~/.ensemble/config.local.toml`. These apply to every `Session.start`, including board starts, `router --issue`, ad-hoc role runs and crew workers. A full client refuses the start with `SessionError`, naming the client, limit and holders. The board records an ordinary failed run: one attempt and its normal failure comment; it does not skip the issue or wait for capacity.
 
 ### Linear MCP off
 
@@ -226,7 +226,7 @@ Use the installed `ensemble-orchestrator` absolute path. `--issue` skips the usa
 An issue with the Agent group's `OpenCode` label runs OpenCode on the host's Ollama models or a configured provider. Use local models only for live-test issues (the user's rule; nothing enforces it). Docker workers discover the image's updraft skills, including build and light-build, through `skills.paths` ([Plugins](docker-host.md#plugins)). Beyond [Setup](#setup):
 
 1. Ollama and its model, or a configured provider, with the required local/LAN egress exceptions: [Docker host › OpenCode](docker-host.md#opencode).
-2. The Docker Host, with the harness on tmux: `[session.hosts] default = "docker"` and `[delegate.delegates] harness_host = "tmux"` ([Docker host › Role runs](docker-host.md#role-runs)). A board run's cwd is untrusted, so on tmux OpenCode refuses to start ([OpenCode sessions](sessions.md#opencode-sessions)). This puts every client's board runs in containers.
+2. The Docker Host, with the harness on tmux: `[session.hosts] default = "docker"` and `[delegate.delegates] harness_host = "tmux"` ([Docker host › Role runs](docker-host.md#role-runs)). A board run's cwd is untrusted, so on tmux OpenCode refuses to start ([OpenCode sessions](customizing-roles-and-tasks.md#opencode-sessions)). This puts every client's board runs in containers.
 3. An `OpenCode` label in the Agent group, mapped as in [Agent label](#agent-label): `opencode = "<its label id>"` under `[orchestrator.linear.agent_labels]`.
 4. For an engineer run, the broker's GitHub App login and installation on the target repo: [Docker host › Log in](docker-host.md#log-in) and [Create the GitHub App](docker-host.md#create-the-github-app). The worker needs them to clone, push and open a PR; the installer's `skip: no GitHub App key` leaves this setup incomplete.
 

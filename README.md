@@ -46,7 +46,7 @@ ensemble is built in layers: each does one job and calls only the one below. Tak
 | Manager | A driver for the layers below: an agent you talk to that launches workers, role runs and board runs, watches them and reports back. | [Demo](#demo-one-manager-many-workers) |
 | Orchestrator | Runs roles through a workflow file, with replaceable trackers: Linear or a local Markdown board. | [Boards](docs/board.md) |
 | Delegate (core) | Runs a role on one task through a session and returns a checked outcome. A Claude Code and Codex plugin you can use alone. | [Install](#install) |
-| Session | Starts, watches and resumes a coding agent (Claude Code, Codex, OpenCode) in tmux or a Docker container, the same way for every client. | [Sessions](docs/sessions.md) |
+| Session | Starts, watches and resumes a coding agent (Claude Code, Codex, OpenCode) in tmux or a Docker container, the same way for every client. | [Sessions](docs/architecture.md#session-settings) |
 
 The packaged workflow reflects my philosophy of how agents should work (research, then a PRD, then a build, with a human review between each stage). `[orchestrator] workflow` selects another workflow file; an empty value uses the packaged one. The roles and tasks themselves are yours to edit too ([Customizing roles and tasks](docs/customizing-roles-and-tasks.md)).
 
@@ -128,7 +128,7 @@ What it sets up, for reference or by hand:
 |---|---|
 | Claude Code | `/plugin marketplace add windroc-labs/agent-plugins-marketplace`, then `/plugin install ensemble@windroc` |
 | Codex 0.156.0+ | `codex plugin marketplace add windroc-labs/agent-plugins-marketplace` (to refresh an added one: `codex plugin marketplace upgrade windroc`), then `codex plugin add ensemble@windroc`. `codex plugin list -m windroc` must show it installed and enabled. |
-| OpenCode 1.x | In `~/.config/opencode/opencode.json`, `"plugin": ["ensemble@git+https://github.com/windroc-labs/ensemble.git#v<version>"]` (a release tag), then restart OpenCode. Commander only, without idle notifications: [OpenCode commander](docs/sessions.md#opencode-commander). |
+| OpenCode 1.x | In `~/.config/opencode/opencode.json`, `"plugin": ["ensemble@git+https://github.com/windroc-labs/ensemble.git#v<version>"]` (a release tag), then restart OpenCode. Commander only, without idle notifications: [OpenCode commander](docs/architecture.md#opencode-commander). |
 
 Set up by hand, nothing checks these: a missing one fails the agent run.
 
@@ -137,12 +137,12 @@ Set up by hand, nothing checks these: a missing one fails the agent run.
 | `claude` CLI, Python 3.11+ | every agent run |
 | the [`updraft`](https://github.com/windroc-labs/updraft) plugin for host workers: Claude Code `/plugin marketplace add windroc-labs/agent-plugins-marketplace`, then `/plugin install updraft@windroc`; Codex `codex plugin marketplace add windroc-labs/agent-plugins-marketplace`, then `codex plugin add updraft@windroc`. Docker workers install it in the image ([Plugins](docs/docker-host.md#plugins)). | the engineer's build tasks (`/updraft:build`, `/updraft:light-build`) and the PM's PRD review (`/updraft:review`). Not needed otherwise. |
 | tmux 3.3–3.8 | tui runs on the `tmux` Host |
-| [Ollama](https://ollama.com) on `127.0.0.1` with its context length at least 65536 and the tier model pulled; on `tmux` also OpenCode 1.x (`npm install -g opencode-ai@1.19.3`) | OpenCode runs only ([Docker host › OpenCode](docs/docker-host.md#opencode), [OpenCode sessions](docs/sessions.md#opencode-sessions)) |
+| [Ollama](https://ollama.com) on `127.0.0.1` with its context length at least 65536 and the tier model pulled; on `tmux` also OpenCode 1.x (`npm install -g opencode-ai@1.19.3`) | OpenCode runs only ([Docker host › OpenCode](docs/docker-host.md#opencode), [OpenCode sessions](docs/customizing-roles-and-tasks.md#opencode-sessions)) |
 | `git`, `gh` logged in | coding (checkouts, pull requests) and GitHub destinations. Not needed otherwise. |
 | iTerm2 running | the default iTerm2 split |
 | Docker Desktop running; the broker `B` (`/usr/local/libexec/ensemble/ensemble-broker`), installed by `sh <plugin dir>/src/broker/install.sh` (needs `sudo` and `gh` logged in); one login each: `B login claude` (paste a `claude setup-token`), `B login github ensemble-broker-bot`, and for Codex `sudo B install-codex <version>`, then `B login codex`; OpenCode needs none | the Docker Host only ([Docker host](docs/docker-host.md)); no Node on the host. What each credential grants, where it lives and how to revoke it: [Credentials](docs/credentials.md). |
 
-How the sessions ensemble starts load your settings, and why some commands refuse inside them: [Session settings](docs/sessions.md#session-settings).
+How the sessions ensemble starts load your settings, and why some commands refuse inside them: [Session settings](docs/architecture.md#session-settings).
 
 ### Commands
 
@@ -173,12 +173,11 @@ Formats, rules and the board's limits: [Customizing roles and tasks](docs/custom
 
 | Page | Covers |
 |---|---|
-| [Customizing roles and tasks](docs/customizing-roles-and-tasks.md) | run settings, team dirs, role and task files, checks |
+| [Customizing roles and tasks](docs/customizing-roles-and-tasks.md) | run settings, team dirs, role and task files, checks, OpenCode sessions |
 | [Board](docs/board.md) | setup, issue states and task labels, operating the router, Agent labels (client per issue), the local board (`tracker`, `ENSEMBLE_BOARD_DIR`, layout, file format) |
 | [Credentials](docs/credentials.md) | every credential ensemble uses: who logs in, where it is stored, who can read it, lifetime, revocation; Linear presets |
-| [Sessions and client policy](docs/sessions.md) | session settings, `ensemble-session`, recalling a closed run, role runs' client flags, OpenCode sessions, the OpenCode commander |
 | [Upgrading](docs/upgrading.md) | upgrade steps |
-| [Core architecture](docs/architecture.md) | layers and packages (developers) |
+| [Core architecture](docs/architecture.md) | layers and packages (developers); session settings, `ensemble-session`, run limits, the session harness, recalling a closed run, role runs' client flags, the OpenCode commander |
 | [Tests](docs/tests.md) | lint, test suites, coverage, live tests a local model can gate (developers) |
 | [Docker host](docs/docker-host.md) | install `ensemble-broker`, log in, build, start and close a worker container, run workers on the Docker Host, OpenCode on the host's Ollama, risks |
 | [Credentials](docs/credentials.md) | every credential ensemble uses: purpose, least privilege, storage, readers, lifetime, revocation |

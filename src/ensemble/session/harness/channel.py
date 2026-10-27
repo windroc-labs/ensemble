@@ -1,5 +1,5 @@
-"""A session harness's dir, HARNESS_ROOT/<32 hex>, and its files (docs/sessions.md). Readers
-treat them as untrusted: a malformed line is skipped, a malformed file absent.
+"""A session harness's dir, HARNESS_ROOT/<32 hex>, and its files (docs/architecture.md › Session
+harness). Readers treat them as untrusted: a malformed line is skipped, a malformed file absent.
 """
 
 from __future__ import annotations

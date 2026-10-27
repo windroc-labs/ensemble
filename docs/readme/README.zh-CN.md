@@ -32,7 +32,7 @@ ensemble 是分层构建的：每层只做一件事，只调用它下面的一�
 | Manager | 下面各层的驱动：一个你与之对话的 agent，它启动 worker、role run 和看板 run，监视它们并向你汇报。 | [演示](#演示一个-manager多个-worker) |
 | Orchestrator | 按 workflow 文件运行各 role，通过可替换的 tracker 接入 Linear 或本地 Markdown 看板。 | [看板](../board.md) |
 | Delegate（核心） | 通过一个 session 让某个 role 执行一个 task，并返回经过检查的结果。是一个可单独使用的 Claude Code 和 Codex 插件。 | [安装](#安装) |
-| Session | 在 tmux 或 Docker 容器中启动、监视和恢复编码 agent（Claude Code、Codex、OpenCode），对每个 client 方式相同。 | [Sessions](../sessions.md) |
+| Session | 在 tmux 或 Docker 容器中启动、监视和恢复编码 agent（Claude Code、Codex、OpenCode），对每个 client 方式相同。 | [Sessions](../architecture.md#session-settings) |
 
 内置 workflow 体现了我对 agent 应如何工作的理念（先研究，再写 PRD，再构建，每个阶段之间都有人工审阅）。`[orchestrator] workflow` 选择其他 workflow 文件；空值使用内置文件。role 和 task 本身也都由你编辑（[自定义 role 和 task](../customizing-roles-and-tasks.md)）。
 
@@ -80,12 +80,12 @@ ensemble 是分层构建的：每层只做一件事，只调用它下面的一�
 | `claude` CLI、Python 3.11+ | 每次 agent run |
 | [`updraft`](https://github.com/windroc-labs/updraft) 插件，host worker 使用的 client 需要安装：Claude Code `/plugin marketplace add windroc-labs/agent-plugins-marketplace`，然后 `/plugin install updraft@windroc`；Codex `codex plugin marketplace add windroc-labs/agent-plugins-marketplace`，然后 `codex plugin add updraft@windroc`. Docker worker 在镜像内独立安装（[插件](../docker-host.md#plugins)）。 | engineer 的 build task（`/updraft:build`、`/updraft:light-build`）和 PM 的 PRD 评审（`/updraft:review`）。其他情况不需要。 |
 | tmux 3.3–3.8 | 在 `tmux` Host 上的 tui run |
-| [Ollama](https://ollama.com) 只听 `127.0.0.1`，上下文长度至少 65536，已拉取 tier 模型；在 `tmux` 上还要 OpenCode 1.x（`npm install -g opencode-ai@1.19.3`） | 只有 OpenCode 需要（[Docker host › OpenCode](../docker-host.md#opencode), [OpenCode sessions](../sessions.md#opencode-sessions)） |
+| [Ollama](https://ollama.com) 只听 `127.0.0.1`，上下文长度至少 65536，已拉取 tier 模型；在 `tmux` 上还要 OpenCode 1.x（`npm install -g opencode-ai@1.19.3`） | 只有 OpenCode 需要（[Docker host › OpenCode](../docker-host.md#opencode), [OpenCode sessions](../customizing-roles-and-tasks.md#opencode-sessions)） |
 | `git`、已登录的 `gh` | 写代码（checkout、pull request）和 GitHub 目标。其他情况不需要。 |
 | 正在运行的 iTerm2 | 默认的 iTerm2 分屏 |
 | 正在运行的 Docker Desktop；broker `B`（`/usr/local/libexec/ensemble/ensemble-broker`），用 `sh <plugin dir>/src/broker/install.sh` 安装（需要 `sudo` 和已登录的 `gh`）；每项登录一次：`B login claude`（粘贴一个 `claude setup-token`）、`B login github ensemble-broker-bot`，Codex 先 `sudo B install-codex <version>`，再 `B login codex`；OpenCode 不需要 | 只有 Docker Host 需要（[Docker host](../docker-host.md)）；宿主不需要 Node。每份凭据的权限、存放位置和吊销方式：[Credentials](../credentials.md)。 |
 
-ensemble 启动的 session 如何加载你的设置，以及为什么有些命令在其中会拒绝执行：[Session settings](../sessions.md#session-settings)。
+ensemble 启动的 session 如何加载你的设置，以及为什么有些命令在其中会拒绝执行：[Session settings](../architecture.md#session-settings)。
 
 | 命令 | 作用 |
 |---|---|
@@ -116,9 +116,8 @@ ensemble 启动的 session 如何加载你的设置，以及为什么有些命�
 
 | 页面 | 内容 |
 |---|---|
-| [Customizing roles and tasks](../customizing-roles-and-tasks.md) | 运行设置、team 目录、role 和 task 文件、检查 |
+| [Customizing roles and tasks](../customizing-roles-and-tasks.md) | 运行设置、team 目录、role 和 task 文件、检查、OpenCode session |
 | [Board](../board.md) | 设置、issue 状态和 task 标签、运营 router、Agent 标签（每个 issue 的 client）、本地看板（`tracker`、`ENSEMBLE_BOARD_DIR`、布局、文件格式） |
-| [Sessions and client policy](../sessions.md) | session 设置、`ensemble-session`、role run 的 client 参数、OpenCode session |
 | [Upgrading](../upgrading.md) | 升级步骤 |
-| [Core architecture](../architecture.md) | 层和包（开发者） |
+| [Core architecture](../architecture.md) | 层和包（开发者）；session 设置、`ensemble-session`、role run 的 client 参数 |
 | [Tests](../tests.md) | lint、测试套件、覆盖率、本地模型可作门槛的实机测试（开发者） |

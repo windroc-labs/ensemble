@@ -68,6 +68,7 @@ class Dispatch:
         sleep: Callable[[float], object] | None = None,
     ) -> None:
         self._stopped = threading.Event()
+        self._noting = threading.Lock()
         self._channel, self._session = channel, session
         self._sleep = sleep or self._stopped.wait
         self._sid, self._generation = sid, generation
@@ -110,7 +111,9 @@ class Dispatch:
             return self._pending
 
     def stop(self) -> None:
-        self._stopped.set()
+        """Once it returns, no handler writes to the channel: its holder may let go."""
+        with self._noting:
+            self._stopped.set()
         for waiting in self._queues:
             waiting.put(None)
 
@@ -145,18 +148,14 @@ class Dispatch:
                         return
                     attempt, delay = attempt + 1, min(delay * 2, BACKOFF_MAX)
                     continue
-                if returned is None:
-                    self._note(index, logged, attempt)
-                else:
-                    self._note(
-                        index, logged, attempt, f"on_event returned {type(returned).__name__}"
-                    )
+                error = None if returned is None else f"on_event returned {type(returned).__name__}"
+                self._note(index, logged, attempt, error, done=True)
                 break
-            with self._settled:
-                self._pending -= 1
-                self._settled.notify_all()
 
-    def _note(self, index: int, logged: Logged, attempt: int, error: str | None = None) -> None:
+    def _note(
+        self, index: int, logged: Logged, attempt: int, error: str | None = None, *, done=False
+    ) -> None:
+        """done: the delivery's last record, no longer pending; once stopped, still pending."""
         record = {
             "handler": index,
             "id": logged.id,
@@ -164,7 +163,14 @@ class Dispatch:
             "state": "ok" if error is None else "failed",
             **({"error": error} if error is not None else {}),
         }
-        try:
-            self._channel.note(record)
-        except OSError as failure:
-            LOG.warning("session harness: deliveries.jsonl: %s", failure)
+        with self._noting:
+            if self._stopped.is_set():
+                return
+            try:
+                self._channel.note(record)
+            except OSError as failure:
+                LOG.warning("session harness: deliveries.jsonl: %s", failure)
+            if done:
+                with self._settled:
+                    self._pending -= 1
+                    self._settled.notify_all()
