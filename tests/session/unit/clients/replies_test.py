@@ -1,4 +1,5 @@
-"""The tui clients' shared mid-turn reply machinery: state files, locks, reply lines, the watcher."""
+"""The tui clients' shared mid-turn reply machinery: state files, locks, reply lines, the pump's
+settle."""
 
 import contextlib
 import io
@@ -68,7 +69,7 @@ class StateTest(SharedBase):
 
     def test_prune_drops_old_state_with_its_locks_only(self):
         old, young = os.path.join(self.root, "old.json"), os.path.join(self.root, "young.json")
-        names = [old, old + ".lock", old + ".watch.lock", young, young + ".lock"]
+        names = [old, old + ".lock", young, young + ".lock"]
         for name in names:
             open(name, "w", encoding="utf-8").close()
         then = time.time() - STALE_AGE - 10
@@ -104,72 +105,22 @@ class EmitTest(SharedBase):
         self.assertEqual(read_reply(self.events, lines[1][2]), "second")
 
 
-class WatcherTest(SharedBase):
-    def setUp(self):
-        super().setUp()
-        self.spawned = self.enterContext(mock.patch.object(replies.subprocess, "Popen"))
-
-    def test_ensure_watcher_spawns_detached_unless_one_runs(self):
-        replies.ensure_watcher(self.path, "some.watch")
-        ((args, kwargs),) = self.spawned.call_args_list
-        self.assertEqual(args[0][1:], ["-P", "-s", "-m", "some.watch", self.path])
-        self.assertTrue(kwargs["start_new_session"])
-        self.assertEqual(kwargs["cwd"], "/")
-        with file_lock(self.path + ".watch", wait=False):
-            replies.ensure_watcher(self.path, "some.watch")
-        self.assertEqual(self.spawned.call_count, 1)
-
-    def watch(self, settle, size=lambda: 0, clock=None):
-        clock = clock or Clock()
-        found = replies.watch(
-            self.path, settle, size, clock=clock, sleep=clock.sleep, label="test reply"
-        )
-        return found, clock.now - 1000.0
-
-    def test_idle_exit_after_nothing_pending(self):
-        pending = [1, 1, 0]
-        found, took = self.watch(lambda _deadline: pending.pop(0) if pending else 0)
-        self.assertEqual(found, 0)
-        self.assertLessEqual(took, 2 * replies.POLL + replies.IDLE_EXIT + replies.POLL)
-
-    def test_quiet_and_lifetime_exits(self):
-        _, took = self.watch(lambda _deadline: 1)
-        self.assertGreaterEqual(took, replies.QUIET)
-        self.assertLess(took, replies.QUIET + 2 * replies.POLL)
-        sizes = iter(range(10**9))
-        clock = Clock()
-
-        def growing():
-            clock.sleep(600.0)  # long polls keep this loop short
-            return next(sizes)
-
-        _, took = self.watch(lambda _deadline: 1, growing, clock)
-        self.assertGreaterEqual(took, replies.LIFETIME)
-
-    def test_settle_failure_counts_as_pending_and_is_said(self):
+class PumpedTest(SharedBase):
+    def test_settles_an_existing_state_file_at_once(self):
         calls = []
+        replies.pumped(self.path, calls.append, "test reply")
+        self.assertEqual(calls, [])
+        open(self.path, "w", encoding="utf-8").close()
+        with mock.patch.object(replies.time, "monotonic", return_value=1000.0):
+            replies.pumped(self.path, calls.append, "test reply")
+        self.assertEqual(calls, [1000.0])
 
-        def settle(deadline):
-            calls.append(deadline)
-            if len(calls) == 1:
-                raise TimeoutError("run.json: locked")
-            return 0
+    def test_a_held_lock_waits_for_the_next_pump_and_an_oserror_is_said(self):
+        open(self.path, "w", encoding="utf-8").close()
+        for error in (TimeoutError("run.json: locked"), OSError("disk")):
 
-        self.watch(settle)
-        self.assertIn("test reply: run.json: locked", self.stderr.getvalue())
-        self.assertEqual(calls[0], 1000.0 + replies.WATCH_LOCK_WAIT)
-        self.assertGreater(len(calls), 2)
+            def settle(_deadline, error=error):
+                raise error
 
-    def test_second_watcher_exits_at_once(self):
-        with file_lock(self.path + ".watch", wait=False):
-            found, took = self.watch(lambda _deadline: 1)
-        self.assertEqual((found, took), (0, 0.0))
-
-
-class MainTest(SharedBase):
-    def test_runs_with_one_absolute_state_file(self):
-        self.assertEqual(replies.main([self.path], len), len(self.path))
-        for argv in ([], ["relative.json"], [self.path, self.path]):
-            with self.subTest(argv=argv):
-                self.assertEqual(replies.main(argv, len), 2)
-        self.assertIn("usage: watch <absolute state file>", self.stderr.getvalue())
+            replies.pumped(self.path, settle, "test reply")
+        self.assertEqual(self.stderr.getvalue(), "test reply: disk\n")

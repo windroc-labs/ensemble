@@ -65,7 +65,7 @@ from ensemble.session.harness.channel import bound as channel_bound
 from ensemble.session.harness.channel import running as channel_running
 from ensemble.session.harness.dispatch import load_handlers
 from ensemble.session.harness.types import Op
-from ensemble.session.harness.view import OwnedSession, dialog, fold
+from ensemble.session.harness.view import OwnedSession, confirmed_end, dialog, fold
 from ensemble.session.hosts.base import SIGNALS, Host, activity, host_resume, stored_record
 from ensemble.session.modes import headless, in_process, tui
 from ensemble.session.modes.base import BaseMode, child_env
@@ -943,6 +943,9 @@ class HostedSession(Session):
 
             def attach() -> Session:
                 return unhosted
+
+            if (on := cls.host(host))._named_headless and name is not None:
+                retiring = confirmed_end(on, name, generation)
 
         else:
             assert name is not None

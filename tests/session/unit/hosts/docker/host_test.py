@@ -276,7 +276,7 @@ class ConfigTest(Base):
             (5, "", json.dumps(locked)),
         )
         self.host.broker = Broker(runner)
-        with self.assertRaisesRegex(SessionError, "protocol '18', want '30'") as caught:
+        with self.assertRaisesRegex(SessionError, "protocol '18', want '31'") as caught:
             self.host._provider_usage(request)
         self.assertIn(
             "install or upgrade it: see docs/architecture.md#docker-install", str(caught.exception)
@@ -1578,6 +1578,37 @@ class EnvironmentTest(StartBase):
         env = self.guard_env()
         self.assertNotIn("ENSEMBLE_PR_AUTHOR", env)
         self.assertFalse(set(GIT_IDENTITY) & set(env))
+
+    def test_github_repo_gets_a_contents_write_repo_grant(self):
+        self.host.github, self.host.github_permissions = "ensemble-bot", PERMISSIONS
+        mounts = []
+        for environment, user_id in (
+            (PREFETCHED, None),
+            (replace(PREFETCHED, github_repo="o/out"), 343764394),
+        ):
+            self.broker.started = replace(self.broker.started, github_user_id=user_id)
+            self.start(environment=carried(environment), home_persistent='["sessions"]')
+            with open(os.path.join(self.state, f"{GEN}.plan.json")) as f:
+                mounts.append(json.load(f)["mounts"])
+        manifest = self.manifest()
+        self.assertEqual(
+            manifest["github"],
+            {"app": "ensemble-bot", "permissions": {"contents": "write"}, "repo": "o/out"},
+        )
+        self.assertEqual(manifest["prefetch"], {"repo": "o/r", "ref": "main"})
+        env = self.guard_env()
+        self.assertEqual(env["ENSEMBLE_PR_AUTHOR"], BOT)
+        self.assertEqual({key: env[key] for key in GIT_IDENTITY}, GIT_IDENTITY)
+        self.assertEqual(mounts[1], mounts[0])
+
+    def test_github_repo_without_app_is_a_config_error(self):
+        environment = carried(replace(PREFETCHED, github_repo="o/out"))
+        message = r"^environment github_repo o/out: needs \[hosts\.docker\.github\] app$"
+        self.order.clear()
+        with self.assertRaisesRegex(ConfigError, message):
+            self.start(environment=environment)
+        self.assertEqual([call[0] for call in self.order], ["ps"])
+        self.assertFalse(os.path.exists(os.path.join(self.state, f"{GEN}.json")))
 
     def test_busy_start_raises_session_busy(self):
         self.broker.error = BrokerError(75, "busy", "Lock held.", "not_needed", None, holder=HOLDER)

@@ -61,8 +61,9 @@ type EnvSecrets interface {
 type Tokens interface {
 	Ready(app string) error              // manifest_rejected for another App; login_required or keychain_failed for its key
 	BotUserID(app string) (int64, error) // login_required or keychain_failed for the bot user ID login github saved
-	Issue(ctx context.Context, app string, permissions map[string]string, container string, exec func(argv []string, stdin []byte) error) ([]protocol.Expiry, error)
-	Refresh(ctx context.Context, app string, permissions map[string]string, container string, exec func(argv []string, stdin []byte) error) ([]protocol.Expiry, error)
+	// Issue and Refresh with repo ("": none) hold a repo grant: one token, for that repository alone.
+	Issue(ctx context.Context, app, repo string, permissions map[string]string, container string, exec func(argv []string, stdin []byte) error) ([]protocol.Expiry, error)
+	Refresh(ctx context.Context, app, repo string, permissions map[string]string, container string, exec func(argv []string, stdin []byte) error) ([]protocol.Expiry, error)
 	Release(ctx context.Context, container string) error // retires the container's grant; never shared credentials
 	// Prefetch clones ref ("": the default branch) of repo into dir through run, which starts the helper container
 	// with argv and the token as stdin, and revokes the token once run returns.

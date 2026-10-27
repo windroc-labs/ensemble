@@ -1,19 +1,58 @@
-"""A caller-owned fake Session class for Delegate driver contract tests; like an unowned start,
-its preflight refuses handlers unless `owns`.
+"""Delegate tests' Session class; preflight refuses handlers unless `owns`. With spec.handlers,
+its first alive() (not one inside a handler) sends each scripted SessionEvent to each handler's
+on_event; ABSENT after Exited. `lingers`: no appended Exited(0), it stays live.
 """
 
-from ensemble.session import ConfigError, Host, Session, Spec
+import importlib
+import uuid
+
+from ensemble.session import ConfigError, EventCall, Exited, Host, Session, SessionEvent, Spec
+from ensemble.session.engine.types import Liveness
 from tests.session.fakes.session import FakeSession
 
 
 class SessionClass(FakeSession):
     preflights: list[dict] = []
     preflight_error: Exception | None = None
-    owns = False
+    owns = True
+    lingers = False
 
     def __init_subclass__(cls, **keywords):
         super().__init_subclass__(**keywords)
-        cls.preflights, cls.preflight_error, cls.owns = [], None, False
+        cls.preflights, cls.preflight_error, cls.owns, cls.lingers = [], None, True, False
+
+    def __init__(self, spec, sid, name, *, display) -> None:
+        super().__init__(spec, sid, name, display=display)
+        self._undelivered = bool(spec.handlers)
+
+    def alive(self) -> bool:
+        if self._undelivered:
+            self._undelivered = False
+            self._deliver()
+        return super().alive()
+
+    def _deliver(self) -> None:
+        modules = [(importlib.import_module(h.module), h.state) for h in self.spec.handlers]
+        generation = uuid.uuid4().hex
+        for n, event in enumerate(self.events(), 1):
+            if self.lingers and n > len(self.script):
+                break
+            if not isinstance(event, SessionEvent):
+                continue
+            for module, state in modules:
+                module.on_event(
+                    EventCall(
+                        session=self,
+                        event=event,
+                        sid=self.sid,
+                        generation=generation,
+                        event_id=f"{generation}:{n}",
+                        turn=None,
+                        state=dict(state),
+                    )
+                )
+            if isinstance(event, Exited):
+                self.liveness = Liveness.ABSENT
 
     @classmethod
     def fresh(cls):

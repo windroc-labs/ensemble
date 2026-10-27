@@ -150,6 +150,10 @@
                   "const": "write"
                 }
               }
+            },
+            "repo": {
+              "$comment": "A repo grant: its token reaches this repository alone; absent: every repository of every installation.",
+              "$ref": "#/$defs/github_repo"
             }
           },
           "required": [
@@ -159,6 +163,14 @@
           "additionalProperties": false
         }
       ]
+    },
+    "github_repo": {
+      "$comment": "A github.com repository, owner/name; GitHub forbids the names . and ..",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$",
+      "not": {
+        "pattern": "/\\.\\.?$"
+      }
     },
     "volume": {
       "type": "string",
@@ -310,11 +322,7 @@
           "type": "object",
           "properties": {
             "repo": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$",
-              "not": {
-                "pattern": "/\\.\\.?$"
-              }
+              "$ref": "#/$defs/github_repo"
             },
             "ref": {
               "$ref": "#/$defs/git_ref"
@@ -439,10 +447,20 @@
       },
       "dependentSchemas": {
         "prefetch": {
-          "$comment": "A prefetching container gets no GitHub credentials.",
+          "$comment": "A prefetching container gets no GitHub token (github null) or a repo grant's, which reaches one repository.",
           "properties": {
             "github": {
-              "type": "null"
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "repo"
+                  ]
+                }
+              ]
             }
           }
         }
@@ -471,7 +489,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "30"
+          "const": "31"
         }
       },
       "required": [
