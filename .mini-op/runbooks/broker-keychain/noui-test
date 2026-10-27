@@ -1,0 +1,62 @@
+#!/usr/bin/env zsh
+usage='noui-test   run the broker no-UI keychain test (TestNoUIAgainstForeignItem, from the fetched
+ref'"'"'s .mini-op/runbooks/broker-keychain/keychain_noui_darwin_test.go) on windroc-labs/ensemble in a
+scratch clone, against a temporary keychain, in this Terminal. REF=<ref> (default main) picks the branch or
+commit. Saves the user keychain search list to ~/.mini-op-local/ensemble/search-list.before and restores
+it on exit. Prints "noui-test: go test exited <rc>, search list <unchanged|CHANGED (restored)>"; exits 0
+(passed, list unchanged), 1 (fetch, build or test failed, the list changed, or an earlier run left
+search-list.before) or 2 (usage error, or a bad or pull request REF).'
+[[ $# -eq 1 && $1 == -h ]] && { print -r -- $usage; exit 0; }
+(( $# == 0 )) || { print -u2 -r -- 'noui-test: usage: noui-test (REF=<ref> in the environment)'; exit 2; }
+ref=${REF:-main}
+[[ $ref =~ '^[A-Za-z0-9][A-Za-z0-9._/-]*$' ]] ||
+  { print -u2 -r -- 'noui-test: REF must match ^[A-Za-z0-9][A-Za-z0-9._/-]*$; ran nothing'; exit 2; }
+[[ $ref == pull/* || $ref == refs/pull/* ]] &&
+  { print -u2 -r -- 'noui-test: REF is a pull request ref, which may be a fork'"'"'s code; ran nothing'; exit 2; }
+state=~/.mini-op-local/ensemble
+before=$state/search-list.before
+asset=.mini-op/runbooks/broker-keychain/keychain_noui_darwin_test.go
+mkdir -p $state || exit 1
+[[ -e $before ]] &&
+  { print -u2 -r -- "noui-test: $before exists: restore the search list (broker-keychain.md 4.) first; ran nothing"; exit 1; }
+dir=$(mktemp -d $state/noui-test.XXXXXX) || exit 1
+if ! security list-keychains -d user > $before || [[ ! -s $before ]]; then
+  rm -rf $dir $before
+  print -u2 -r -- 'noui-test: cannot save the search list; ran nothing'
+  exit 1
+fi
+
+# The paths in a list-keychains output, one per line, quotes and indentation stripped.
+paths() {
+  local line
+  for line in ${(f)1}; do
+    line=${line#"${line%%[![:space:]]*}"}
+    line=${line#\"}
+    print -r -- ${line%\"}
+  done
+}
+
+cleanup() {
+  if [[ $(security list-keychains -d user) != "$(<$before)" ]]; then
+    security list-keychains -d user -s ${(f)"$(paths "$(<$before)")"} &&
+      print -r -- 'noui-test: search list restored'
+  fi
+  rm -rf $dir
+  [[ $(security list-keychains -d user) == "$(<$before)" ]] && rm -f $before
+}
+trap 'cleanup' EXIT
+trap 'exit 1' INT TERM HUP
+
+cd $dir || exit 1
+git init -q && git fetch -q --depth 1 https://github.com/windroc-labs/ensemble.git "$ref" &&
+  git checkout -q FETCH_HEAD ||
+  { print -u2 -r -- "noui-test: cannot fetch $ref; ran nothing"; exit 1; }
+[[ -f $asset ]] ||
+  { print -u2 -r -- "noui-test: $ref has no keychain_noui_darwin_test.go; ran nothing"; exit 1; }
+cp $asset src/broker/internal/broker/ || exit 1
+(cd src/broker && sh with-go-state.sh go test -count=1 -run '^TestNoUIAgainstForeignItem$' ./internal/broker/)
+rc=$?
+[[ $(security list-keychains -d user) == "$(<$before)" ]] && list=unchanged || list='CHANGED (restored)'
+print -r -- "noui-test: go test exited $rc, search list $list"
+(( rc == 0 )) && [[ $list == unchanged ]] && exit 0
+exit 1
