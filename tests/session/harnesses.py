@@ -9,8 +9,8 @@ import threading
 import time
 
 from ensemble.session.engine import hosted_session
-from ensemble.session.engine.hosted_session import HARNESS, START_WAIT, HostedSession
-from ensemble.session.engine.types import Mode, SessionError
+from ensemble.session.engine.hosted_session import HARNESS, HostedSession
+from ensemble.session.engine.types import ConfigError, Mode, SessionError
 from ensemble.session.harness import process
 from ensemble.session.harness.channel import HEX, SLICE, Channel, Tie
 from ensemble.session.harness.dispatch import load_handlers
@@ -135,20 +135,16 @@ def threaded_spawn(cls, spec, mode, *, display, host, idle_timeout):
     thread = threading.Thread(target=run, daemon=True, name=f"harness {channel.directory}")
     thread.start()
     _RUNNING.append((channel, thread))
-    deadline = _clock() + START_WAIT
-    while True:
-        alive = thread.is_alive()  # before its status: an ended thread's status is final
-        status = channel.status()
-        if status.get("state") in ("running", "draining", "exited"):
-            break
-        if status.get("state") == "failed" or not alive or _clock() > deadline:
-            error = hosted_session._start_error(channel, status)
-            thread.join(WAIT)
-            if tie is not None:
-                tie.close()
-            shutil.rmtree(channel.directory, ignore_errors=True)
-            raise error
-        _pause(SLICE)
+    try:
+        status = hosted_session._await_start(
+            channel, lambda: not thread.is_alive(), clock=_clock, pause=_pause
+        )
+    except (ConfigError, SessionError):
+        thread.join(WAIT)
+        if tie is not None:
+            tie.close()
+        shutil.rmtree(channel.directory, ignore_errors=True)
+        raise
     if tie is not None:
         tie.handed()
     return cls._view(

@@ -345,13 +345,51 @@ def _start_error(channel: Channel, status: Mapping) -> SessionError | ConfigErro
         if kind == "SessionBusy" and isinstance(lock, str) and isinstance(holder, str):
             return SessionBusy(lock, holder)
         return (ConfigError if kind == "ConfigError" else SessionError)(message)
+    return SessionError(f"session harness {channel.directory} did not start: {_last_line(channel)}")
+
+
+def _last_line(channel: Channel) -> str:
     try:
         with open(channel.log, encoding="utf-8", errors="replace") as log:
             lines = [line.strip() for line in log if line.strip()]
     except OSError:
         lines = []
-    last = lines[-1][:500] if lines else "no output"
-    return SessionError(f"session harness {channel.directory} did not start: {last}")
+    return lines[-1][:500] if lines else "no output"
+
+
+def _await_start(
+    channel: Channel,
+    ended: Callable[[], bool],
+    *,
+    clock: Callable[[], float] | None = None,
+    pause: Callable[[float], None] | None = None,
+) -> dict:
+    """harness.json once its harness runs the worker, else its start error; each phase it names
+    gets START_WAIT plus its `phase_wait`.
+    """
+    clock, pause = clock or time.monotonic, pause or time.sleep
+    began = clock()
+    phase, deadline = (None, None), began + START_WAIT
+    while True:
+        gone = ended()  # first: a dead harness's status is final
+        status = channel.status()
+        if status.get("state") in ("running", "draining", "exited"):  # its end at once
+            return status
+        if status.get("state") == "failed" or gone:
+            raise _start_error(channel, status)
+        now = clock()
+        if (status.get("phase"), status.get("phase_wait")) != phase:
+            phase = (status.get("phase"), wait := status.get("phase_wait"))
+            deadline = (
+                now + START_WAIT + (wait if isinstance(wait, int | float) and wait > 0 else 0)
+            )
+        if now > deadline:
+            doing = phase[0] if isinstance(phase[0], str) else "starting"
+            raise SessionError(
+                f"session harness {channel.directory} did not start: timed out after "
+                f"{now - began:.0f} s while {doing[:200]}; its log's last line: {_last_line(channel)}"
+            )
+        pause(SLICE)
 
 
 class HostedSession(Session):
@@ -559,18 +597,7 @@ class HostedSession(Session):
             signal.pthread_sigmask(signal.SIG_SETMASK, held)  # a stop held over Popen lands here
             if tie is not None:
                 tie.handed()
-            deadline = time.monotonic() + START_WAIT
-            while True:
-                status = channel.status()
-                if status.get("state") in ("running", "draining", "exited"):  # its end at once
-                    break
-                if (
-                    status.get("state") == "failed"
-                    or harness.poll() is not None
-                    or time.monotonic() > deadline
-                ):
-                    raise _start_error(channel, status)
-                time.sleep(SLICE)
+            status = _await_start(channel, lambda: harness.poll() is not None)
             generation = status.get("generation")
             if (status.get("name"), status.get("sid")) != (spec.name, spec.sid) or not isinstance(
                 generation, str

@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest import mock
 
+from ensemble.session.engine import hosted_session
 from ensemble.session.engine.hosted_session import HarnessStart
 from ensemble.session.engine.types import (
     Activity,
@@ -285,6 +286,52 @@ class StartPhaseTest(Base):
             ("failed", "broker: build timed out after 1800 s"),
         )
         self.assertFalse({"phase", "phase_wait"} & set(status))
+
+
+class StartWaitTest(Base):
+    """A real harness, its launcher's start wait on a fake clock: 30 s a pause."""
+
+    def awaited(self, begin, done):
+        clock = [0.0]
+
+        def pause(_seconds):
+            clock[0] += 30
+            if clock[0] > 3 * hosted_session.START_WAIT:
+                done.set()
+            time.sleep(0.01)
+
+        harness = Harness(self.channel, poll=0.01)
+        thread = threading.Thread(target=harness.run, args=(begin,), daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, WAIT)
+        self.addCleanup(done.set)
+        return hosted_session._await_start(
+            self.channel, lambda: not thread.is_alive(), clock=lambda: clock[0], pause=pause
+        )
+
+    def test_a_build_longer_than_the_start_wait_starts(self):
+        built = threading.Event()
+
+        def begin(_request):
+            with start_phase("building the worker image", 1800):
+                built.wait(WAIT)
+            return FakeOwned(([], True)), [], []
+
+        status = self.awaited(begin, built)
+        self.assertIn(status["state"], ("running", "draining", "exited"))
+        self.assertTrue(built.is_set())
+
+    def test_a_harness_that_never_progresses_times_out(self):
+        stuck = threading.Event()
+
+        def begin(_request):
+            stuck.wait(WAIT)
+            raise SessionError("released")
+
+        with self.assertRaisesRegex(
+            SessionError, r"did not start: timed out after \d+ s while starting;"
+        ):
+            self.awaited(begin, stuck)
 
 
 class CloseRequestTest(Base):
