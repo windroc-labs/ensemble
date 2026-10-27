@@ -530,6 +530,16 @@ class OpeningTest(Base):
         self.assertEqual(self.code, 0)
 
 
+class OpeningOrderTest(Base):
+    def test_a_pending_opening_is_in_its_status_before_any_event(self):
+        seen = []
+        owned = FakeOwned(([Blocked("Quick safety check")], False), ([], True))
+        owned.opening_pending = "/color"
+        handler = Handler(on=lambda _call: seen.append(self.channel.status().get("opening")))
+        self.assertEqual(self.harness(owned, handler).run(self.begin), 0)
+        self.assertEqual(seen[0], "/color")
+
+
 class BatchTest(Base):
     def test_requests_taken_with_the_one_that_ends_the_worker_are_still_answered(self):
         folder = os.path.join(self.channel.directory, "requests")
