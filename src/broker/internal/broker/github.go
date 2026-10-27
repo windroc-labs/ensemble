@@ -26,7 +26,7 @@ const (
 	tokensService      = "ensemble-broker-tokens"
 	revocationsService = "ensemble-broker-revocations"
 	revocationsAccount = "pending"
-	tokenDir           = docker.SecretsDir + "/github"
+	tokenDir           = docker.GitHubDir
 )
 
 // cloneScript shallow-clones branch or tag $2 of github.com/$1 into $3 with the prefetch token on stdin, kept only in

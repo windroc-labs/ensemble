@@ -16,7 +16,7 @@ import (
 // file envDir/<file> a start manifest names.
 const (
 	envServicePrefix = "ensemble-broker-env/"
-	envDir           = docker.SecretsDir + "/env"
+	envDir           = docker.EnvDir
 )
 
 // envLogin is the command that stores environment secret name.
