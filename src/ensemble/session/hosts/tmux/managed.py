@@ -334,9 +334,22 @@ class ManagedProcess(InteractiveProcess):
                         wire = wire[count:]
                 except BlockingIOError:
                     continue
+                except BrokenPipeError as error:
+                    self.input_closed(error)
                 except (OSError, ValueError) as error:
                     self.fail(f"guard input: {error}")
                     self.checked()
+
+    def input_closed(self, error: OSError) -> None:
+        """Its guard is gone: once the reader has its confirmed exit, input is merely refused;
+        else the channel fails closed.
+        """
+        with self.condition:
+            self.condition.wait_for(lambda: self.code is not None or self.failure is not None, WAIT)
+            if self.code is not None and self.failure is None:
+                raise SessionError(f"worker {self.name}: exited") from error
+        self.fail(f"guard input: {error}")
+        self.checked()
 
     def write(self, data: bytes) -> None:
         self.send_frame(b"i", data)
