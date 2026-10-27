@@ -661,8 +661,7 @@ class Real(RealConfig):
         rules = section(prompt, "Rules")
         fix = item(rules, "Fix root causes")
         self.assertIn(
-            ": before debugging or fixing any failure (a bug, a failing or intermittent test, a "
-            "review blocker), read and follow the **fix-root-causes method** "
+            ": when debugging, read and follow the **fix-root-causes method** "
             "`<team>/methods/fix-root-causes.md`.",
             fix,
         )
