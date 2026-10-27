@@ -2518,8 +2518,9 @@ class InstallTest(Case):
         self.assert_ok(result)
         self.assertIn("1.19.3", (self.fakes / "opencode_version").read_text())
 
-    def opencode_only(self, provider_answer="y", *, provider="lan", path_answer="y"):
-        flags = ("--clients", "opencode", "--no-docker", "--opencode-provider", provider)
+    def opencode_only(self, provider_answer="y", *, provider="lan", path_answer="y", ref=""):
+        flags = ("--ref", ref) if ref else ()
+        flags += ("--clients", "opencode", "--no-docker", "--opencode-provider", provider)
         flags += ("--opencode-url", "http://localhost:8080/v1", "--opencode-model", "m")
         flags += ("--opencode-context", "65536", "--opencode-key-stdin")
         provider_answers = [(WRITE_Q, provider_answer)] if provider_answer is not None else []
@@ -2870,6 +2871,37 @@ class InstallTest(Case):
         self.assertEqual(
             json.loads(Path(self.ensemble, "plugin-root").read_text())["root"], str(newer)
         )
+
+    def test_x1_launcher_keeps_installed_ref(self):
+        commands = self.legacy_command_package()
+        self.assert_ok(self.opencode_only(ref="WDRC-241"))
+        packages = Path(self.home, ".cache/opencode/packages")
+        selected = packages / "ensemble@git+https:/github.com/windroc-labs/ensemble.git#WDRC-241"
+        selected /= "node_modules/ensemble"
+        main = self.opencode_package()
+        shutil.copytree(selected, main)
+        (main / "package.json").write_text(json.dumps({"version": "10.0.0"}))
+        shutil.rmtree(selected)
+        record = Path(self.ensemble, "plugin-root").read_bytes()
+        self.assertEqual(json.loads(record)["root"], str(selected))
+        for name in commands:
+            with self.subTest(name=name):
+                result = subprocess.run(
+                    [str(Path(self.ensemble, "bin", name))],
+                    env=self.env,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(
+                    result.stderr,
+                    f"{name}: selected plugin {str(selected)!r} has no executable bin/{name}; "
+                    "rerun install.sh or the plugin's ctmux --install\n",
+                )
+                self.assertEqual(Path(self.ensemble, "plugin-root").read_bytes(), record)
 
     def test_installer_adapters_refuse_other_clients_after_the_selected_path_disappears(self):
         commands = self.legacy_command_package()
