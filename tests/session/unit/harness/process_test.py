@@ -37,6 +37,8 @@ class FakeOwned:
     `final`; confirm_end returns `code` (None: unconfirmed).
     """
 
+    remote = False
+
     def __init__(self, *steps, final=(), code=0):
         self.name, self.sid, self.generation = "w1", "s1", GEN
         self.steps, self.final, self.code = list(steps), list(final), code
@@ -267,6 +269,7 @@ class CloseRequestTest(Base):
             self.request(Op.CLOSE)
         self.assertEqual(type(caught.exception).__name__, "Unanswered")
         self.assertEqual(self.channel.status()["state"], "running")
+        self.assertFalse(self.channel.status()["remote"])
         owned.code = 0
         self.assertTrue(self.request(Op.CLOSE))
         thread.join(WAIT)

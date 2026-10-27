@@ -54,6 +54,8 @@ class Worker(Protocol):
     def generation(self) -> str: ...
     @property
     def opening_pending(self) -> str | None: ...
+    @property
+    def remote(self) -> bool: ...
 
     def pump(self, wait: float) -> tuple[list[Event], bool]: ...
     def record(self, event: Event) -> None: ...
@@ -148,7 +150,7 @@ class Harness:
             sid=worker.sid,
             name=worker.name,
             generation=worker.generation,
-            remote=getattr(worker, "remote", False) is True,
+            remote=worker.remote,
         )
         self._write()
         try:
