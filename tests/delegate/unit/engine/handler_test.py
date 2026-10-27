@@ -318,6 +318,22 @@ class CloseTest(HandlerCase):
         self.assertEqual(self.kinds_sent(), [("finished", 1)])
         self.assertEqual(self.kinds()[-2:], ["result", "end"])
 
+    def test_input_its_worker_takes_while_closing_opens_no_follow_up(self):
+        self.call(TurnStarted())
+
+        def ending():  # a nudge's turn starts, then the close fails it and the worker exits
+            self.call(TurnStarted())
+            self.call(TurnFailed("exited", "worker exited -1 mid-turn"))
+            self.call(Exited(-1))
+
+        AgentSession.agent = Agent(ending)
+        self.delegate.close()
+        state = self.state()
+        self.assertEqual(
+            (state.attempt, state.result), (1, Result(129, None, "stopped: Stopped: 129"))
+        )
+        self.assertEqual(self.kinds_sent(), [("finished", 1)])
+
     def test_a_refused_close_reopens_the_attempt_and_reports_nothing(self):
         self.call(TurnStarted())
 

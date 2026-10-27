@@ -172,9 +172,12 @@ class RunRecord:
             return True
 
     def follow_up(self, n: int, token: int) -> bool:
+        """Not after a stop: its worker is ending."""
         with self.store.mutex():
             state = self.read()
             if state.attempt != n or not state.completed or worker(state) != token:
+                return False
+            if state.result is not None and (state.result.error or "").startswith("stopped: "):
                 return False
             self.save(
                 replace(
