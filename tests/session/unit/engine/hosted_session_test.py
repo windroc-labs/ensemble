@@ -68,6 +68,7 @@ from ensemble.session.harness.view import OwnedSession
 from ensemble.session.hosts.base import Piped
 from ensemble.session.hosts.docker.host import DockerHost
 from ensemble.session.hosts.docker.worker import DockerWorker
+from ensemble.session.hosts.managed import ManagedProcess
 from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.session.modes import tui
 from ensemble.session.viewer import hidden as hidden_store
@@ -3024,6 +3025,15 @@ class OwnedTest(HostedTuiBase):
         kinds = [entry["kind"] for entry in self.written()]
         self.assertIn("client_session", kinds)
         self.assertIn("stderr", kinds)
+
+    def test_redisplay_asks_its_managed_handle(self):
+        owned = self.own()
+        self.assertFalse(owned.redisplay())  # a plain terminal: nothing to open
+        handle = mock.create_autospec(ManagedProcess, instance=True)
+        handle.redisplay.return_value = True
+        owned._session._running._terminal = handle
+        self.assertTrue(owned.redisplay())
+        handle.redisplay.assert_called_once_with()
 
     def test_view_is_bound_to_this_worker(self):
         owned = self.own()

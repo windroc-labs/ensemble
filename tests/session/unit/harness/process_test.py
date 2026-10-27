@@ -117,6 +117,15 @@ class Base(Case):
         self.addCleanup(thread.join, WAIT)
         return thread
 
+    def ask(self, op, data):
+        return self.channel.ask(op, data, timeout=WAIT)
+
+    def running(self, owned, *handlers, **kw):
+        thread = self.run_in_thread(self.harness(owned, *handlers, **kw))
+        while self.channel.status().get("state") != "running":
+            time.sleep(0.01)
+        return thread
+
     def logged(self) -> list[dict]:
         if not os.path.exists(self.channel.events):
             return []
@@ -552,16 +561,21 @@ class RemoteOwned(FakeOwned):
         self.inputs.append(call)
 
 
+class DisplayOwned(FakeOwned):
+    """A local worker whose display redisplay opens again: `reopened`, else raises `failure`."""
+
+    def __init__(self, *steps, **kw):
+        super().__init__(*steps, **kw)
+        self.reopened, self.failure, self.asked = True, None, 0
+
+    def redisplay(self):
+        self.asked += 1
+        if self.failure is not None:
+            raise self.failure
+        return self.reopened
+
+
 class RemoteTest(Base):
-    def ask(self, op, data):
-        return self.channel.ask(op, data, timeout=WAIT)
-
-    def running(self, owned, *handlers, **kw):
-        thread = self.run_in_thread(self.harness(owned, *handlers, **kw))
-        while self.channel.status().get("state") != "running":
-            time.sleep(0.01)
-        return thread
-
     def test_send_press_and_screen_are_served_and_the_worker_stays_up(self):
         owned = RemoteOwned()
         self.running(owned)
@@ -624,3 +638,42 @@ class RemoteTest(Base):
         thread.join(WAIT)
         self.assertEqual(owned.inputs, [])
         self.assertNotIn("close", owned.calls)
+
+
+class DisplayTest(Base):
+    def test_display_is_served_and_the_worker_stays_up(self):
+        owned = DisplayOwned()
+        self.running(owned)
+        self.assertEqual(self.ask(Op.DISPLAY, {}), {"reopened": True})
+        owned.reopened = False
+        self.assertEqual(self.ask(Op.DISPLAY, {}), {"reopened": False})
+        self.assertEqual(owned.asked, 2)
+        self.assertEqual(owned.calls, [])
+        self.assertEqual(self.channel.status()["state"], "running")
+        self.assertTrue(self.request(Op.CLOSE))
+
+    def test_a_display_failure_is_refused_and_the_worker_stays_up(self):
+        owned = DisplayOwned()
+        self.running(owned)
+        owned.failure = SessionError("worker w1: its name shows another display")
+        with self.assertRaisesRegex(SessionError, "^worker w1: its name shows another display$"):
+            self.ask(Op.DISPLAY, {})
+        owned.failure = Unanswered("worker w1: its display unknown")
+        with self.assertRaises(Unanswered):
+            self.ask(Op.DISPLAY, {})
+        self.assertEqual(owned.calls, [])
+        self.assertEqual(self.channel.status()["state"], "running")
+        self.assertTrue(self.request(Op.CLOSE))
+
+    def test_after_the_exit_display_is_refused(self):
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        owned = DisplayOwned(([Reply("x")], True))
+        thread = self.run_in_thread(self.harness(owned, Handler(hang=gate), drain=2.0))
+        while self.channel.status().get("state") != "exited":
+            time.sleep(0.01)
+        with self.assertRaisesRegex(SessionError, "w1: worker exited"):
+            self.ask(Op.DISPLAY, {})
+        gate.set()
+        thread.join(WAIT)
+        self.assertEqual(owned.asked, 0)

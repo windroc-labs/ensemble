@@ -68,6 +68,7 @@ class Worker(Protocol):
     def send(self, text: str) -> None: ...
     def press(self, keys: Sequence[KeyPress]) -> None: ...
     def screen(self, lines: int | None = None) -> str: ...
+    def redisplay(self) -> bool: ...
 
 
 Begin = Callable[[dict], tuple[Worker, Sequence[Any], Sequence[Mapping[str, object]]]]
@@ -200,7 +201,9 @@ class Harness:
                 return -signal.SIGHUP if code is None else code
 
     def _serve(self, worker: Worker, op: Op, data: dict, ident: str) -> None:
-        """A remote worker's input or screen; any failure is a refusal that leaves it up."""
+        """A remote worker's input or screen, or its display; any failure is a refusal that leaves
+        it up.
+        """
         try:
             found = _served(worker, op, data)
         except (ConfigError, SessionError, ValueError) as error:
@@ -325,6 +328,8 @@ class Harness:
 
 def _served(worker: Worker, op: Op, data: dict) -> dict:
     """Its fields checked first (ValueError), then the worker's call."""
+    if op == Op.DISPLAY:
+        return {"reopened": worker.redisplay()}
     if op == Op.SEND:
         text = data.get("text")
         if not isinstance(text, str) or len(text.encode()) > SEND_MAX:

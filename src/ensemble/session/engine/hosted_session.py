@@ -1336,9 +1336,7 @@ class Owned:
         return self._session._running.returncode(0)
 
     def confirm_end(self, timeout: float) -> int | None:
-        """The exit code once its owner handle says its worker is gone (headless: once known),
-        else None: unconfirmed.
-        """
+        """The exit code once its owner handle says its worker is gone (headless: once known)."""
         running = self._session._running
         deadline = time.monotonic() + timeout
         try:
@@ -1369,6 +1367,11 @@ class Owned:
     def screen(self, lines: int | None = None) -> str:
         return self._session.screen(lines)
 
+    def redisplay(self) -> bool:
+        """Its worker's display opened again where gone; False: none to open."""
+        running = self._session._running
+        return isinstance(running, tui.TuiMode) and running.redisplay()
+
     def view(self, channel: Channel, idle_timeout: float | None = None) -> OwnedSession:
         return type(self._session)._view(
             channel,
@@ -1384,9 +1387,7 @@ class Owned:
 
 
 class _Unhosted(Session):
-    """A headless view's harness state and RunLog record; no terminal, so send, press, screen and
-    show refuse. stop and close: nothing (no harness is left).
-    """
+    """A headless view's harness state and RunLog record; no terminal. stop, close: nothing."""
 
     def __init__(self, cls: type[HostedSession], channel: Channel, spec: Spec, mode: Mode):
         assert spec.client is not None and spec.sid is not None
