@@ -656,7 +656,7 @@ checklist() {
 # The configuration: each answer from its flag, else the last answer (State), else the config, else the default;
 # the checklist appears only when clients or Docker has no flag or saved answer. save_answers keeps them.
 answers() {
-  local said default client item choose=
+  local said default client item found choose=
   local -a labels ticks names=(claude codex opencode)
   step configuration
   said=$(config_says)
@@ -730,6 +730,18 @@ answers() {
   prev_model=$(state_get opencode_model)
   prev_context=$(state_get opencode_context)
   if has opencode; then
+    # Without a saved provider, reuse a configured one as if saved: config_plan then keeps or updates its tables.
+    if [ -z "$prev_provider" ]; then
+      found=$(configured_provider "$provider_flag")
+      if [ -n "$found" ]; then
+        prev_provider=${found%%$'\t'*}
+        found=${found#*$'\t'}
+        prev_url=${found%%$'\t'*}
+        found=${found#*$'\t'}
+        prev_model=${found%%$'\t'*}
+        prev_context=${found#*$'\t'}
+      fi
+    fi
     provider=${provider_flag:-$prev_provider}
     url=${url_flag:-$prev_url}
     model=${model_flag:-$prev_model}
@@ -885,6 +897,58 @@ with open(out, "w", encoding="utf-8") as f:
 sys.exit(3)' "$config" "$1" "$wanted_default" "$wanted_harness" "$clients" \
     "$opencode_executable" "$provider" "$url" "$model" "$context" \
     "$prev_provider" "$prev_url" "$prev_model" "$prev_context" "$only" "$board_file"
+}
+
+# The OpenCode provider already configured, for a run without a saved one: "name\turl\tmodel\tcontext" from one entry,
+# with model or context empty when missing or invalid; nothing when none qualifies. Given $1, only that provider.
+# config.local.toml first (config_plan owns the providers-table schema read here), then opencode.json(c). An entry
+# qualifies with a valid name and URL; a table its [session.clients.opencode] model names that does not, or several
+# that do, stop the search.
+configured_provider() {
+  local found rc=0
+  found=$(python3 -I -c '
+import re, sys, tomllib
+path, flag, name_re, url_re, model_re, context_re = sys.argv[1:]
+def ok(pattern, value):
+    return isinstance(value, str) and "\n" not in value and re.search(pattern, value) is not None
+def table(node, *keys):
+    for key in keys:
+        node = node.get(key) if isinstance(node, dict) else None
+    return node if isinstance(node, dict) else {}
+try:
+    with open(path, "rb") as f:
+        data = tomllib.load(f)
+except (OSError, tomllib.TOMLDecodeError):
+    sys.exit()
+opencode = table(data, "session", "clients", "opencode")
+providers = table(opencode, "providers")
+current = opencode.get("model")
+prefix, _, suffix = current.partition("/") if isinstance(current, str) else ("", "", "")
+def candidate(name):
+    entry = providers.get(name)
+    # valid_name rejects ollama too
+    return isinstance(entry, dict) and ok(name_re, name) and name != "ollama" and ok(url_re, entry.get("base_url"))
+if flag or prefix in providers:
+    names = [flag or prefix] if (flag or prefix) in providers else []
+else:
+    names = [name for name in providers if candidate(name)]
+if not names:
+    sys.exit()
+if len(names) > 1 or not candidate(names[0]):
+    sys.exit(3)
+name, entry = names[0], providers[names[0]]
+models = [m for m in entry.get("models", []) if isinstance(m, str)] if isinstance(entry.get("models"), list) else []
+model = suffix if prefix == name and suffix in models else models[0] if len(models) == 1 else ""
+context = entry.get("context")
+context = str(context) if isinstance(context, int) and not isinstance(context, bool) else ""
+print("\t".join((name, entry["base_url"], model if ok(model_re, model) else "", context if ok(context_re, context) else "")))' \
+    "$config" "$1" "$name_pattern" "$url_pattern" "$model_pattern" "$context_pattern") || rc=$?
+  [ "$rc" = 0 ] || return 0
+  if [ -z "$found" ]; then
+    found=$(opencode_config_edit show "${XDG_CONFIG_HOME:-$HOME/.config}/opencode" "$1" \
+      "$name_pattern" "$url_pattern" "$model_pattern" "$context_pattern" 2>/dev/null) || found=
+  fi
+  printf '%s' "$found"
 }
 
 # Writes the configuration's settings into config.local.toml with consent; given <table> <key> <value>, only that;
@@ -1469,7 +1533,8 @@ opencode_plugin() {
   state_set opencode_plugin_commit "$commit"
 }
 
-# Shared with install-cleanup.sh; edits JSONC values without rewriting unrelated text.
+# Shared with install-cleanup.sh; edits JSONC values without rewriting unrelated text, and shows a configured
+# provider (configured_provider).
 opencode_config_edit() {
   python3 -I -c '
 import json, os, re, sys
@@ -1602,6 +1667,31 @@ def run():
             path.unlink()
         else:
             write(path, new)
+    elif action == "show":
+        name, name_re, url_re, model_re, context_re = args
+        def ok(pattern, value):
+            return isinstance(value, str) and "\n" not in value and re.search(pattern, value) is not None
+        providers = {}
+        for file in (path / "opencode.json", path / "opencode.jsonc"):
+            found = parse(load(file))[0].get("provider", {})
+            providers.update(found if isinstance(found, dict) else {})
+        def candidate(key):
+            entry = providers.get(key)
+            options = entry.get("options") if isinstance(entry, dict) else None
+            # valid_name rejects ollama too
+            return (ok(name_re, key) and key != "ollama" and isinstance(options, dict)
+                    and ok(url_re, options.get("baseURL")))
+        names = [name] if name else [key for key in providers if candidate(key)]
+        if len(names) != 1 or not candidate(names[0]):
+            return
+        entry = providers[names[0]]
+        models = entry.get("models") if isinstance(entry.get("models"), dict) else {}
+        model = next(iter(models)) if len(models) == 1 else ""
+        limit = models[model].get("limit") if isinstance(models.get(model), dict) else None
+        context = limit.get("context") if isinstance(limit, dict) else None
+        context = str(context) if isinstance(context, int) and not isinstance(context, bool) else ""
+        print("\t".join((names[0], entry["options"]["baseURL"], model if ok(model_re, model) else "",
+                         context if ok(context_re, context) else "")))
     else:
         raise ValueError()
 

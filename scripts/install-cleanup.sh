@@ -424,7 +424,8 @@ logins() {
   done <<<"$(of_kind login)"
 }
 
-# Shared with install-cleanup.sh; edits JSONC values without rewriting unrelated text.
+# Shared with install-cleanup.sh; edits JSONC values without rewriting unrelated text, and shows a configured
+# provider (configured_provider).
 opencode_config_edit() {
   python3 -I -c '
 import json, os, re, sys
@@ -557,6 +558,31 @@ def run():
             path.unlink()
         else:
             write(path, new)
+    elif action == "show":
+        name, name_re, url_re, model_re, context_re = args
+        def ok(pattern, value):
+            return isinstance(value, str) and "\n" not in value and re.search(pattern, value) is not None
+        providers = {}
+        for file in (path / "opencode.json", path / "opencode.jsonc"):
+            found = parse(load(file))[0].get("provider", {})
+            providers.update(found if isinstance(found, dict) else {})
+        def candidate(key):
+            entry = providers.get(key)
+            options = entry.get("options") if isinstance(entry, dict) else None
+            # valid_name rejects ollama too
+            return (ok(name_re, key) and key != "ollama" and isinstance(options, dict)
+                    and ok(url_re, options.get("baseURL")))
+        names = [name] if name else [key for key in providers if candidate(key)]
+        if len(names) != 1 or not candidate(names[0]):
+            return
+        entry = providers[names[0]]
+        models = entry.get("models") if isinstance(entry.get("models"), dict) else {}
+        model = next(iter(models)) if len(models) == 1 else ""
+        limit = models[model].get("limit") if isinstance(models.get(model), dict) else None
+        context = limit.get("context") if isinstance(limit, dict) else None
+        context = str(context) if isinstance(context, int) and not isinstance(context, bool) else ""
+        print("\t".join((names[0], entry["options"]["baseURL"], model if ok(model_re, model) else "",
+                         context if ok(context_re, context) else "")))
     else:
         raise ValueError()
 
