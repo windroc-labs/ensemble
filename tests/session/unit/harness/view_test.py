@@ -402,6 +402,56 @@ class ReattachTest(Base):
         self.assertEqual(self.attaches, 1)
 
 
+class ConcurrencyTest(Base):
+    """Calls from two threads (a session harness's handlers share one view)."""
+
+    def setUp(self):
+        super().setUp()
+        self.sessions = [mock.Mock(name="first"), mock.Mock(name="second")]
+
+    def attach(self):
+        self.attaches += 1
+        if not self.sessions:
+            raise SessionError("its worker g1 is gone")
+        return self.sessions.pop(0)
+
+    def test_concurrent_first_calls_make_one_attach(self):
+        first, threads = self.sessions[0], []
+        view = self.view()
+
+        def attach():
+            session = type(self).attach(self)
+            if not threads:  # another call while this attach is being made
+                threads.append(threading.Thread(target=view.status))
+                threads[0].start()
+                threads[0].join(0.5)
+            return session
+
+        view._attach = attach
+        view.info()
+        threads[0].join(5)
+        self.assertEqual(self.attaches, 1)
+        first.info.assert_called_once_with()
+        first.status.assert_called_once_with()
+
+    def test_concurrent_failures_on_a_stale_attach_make_one_new_attach(self):
+        stale, fresh = self.sessions
+        view = self.view()
+        view.record()
+
+        def failed():  # the other call fails on it too, and retries, before this one does
+            other = threading.Thread(target=view.status)
+            other.start()
+            other.join(5)
+            raise SessionError("not running")
+
+        stale.info.side_effect = failed
+        stale.status.side_effect = SessionError("not running")
+        self.assertIs(view.info(), fresh.info.return_value)
+        fresh.status.assert_called_once_with()
+        self.assertEqual(self.attaches, 2)
+
+
 class HeadlessViewTest(Base):
     def test_a_headless_view_has_its_mode_and_no_name(self):
         view = self.view(mode=Mode.HEADLESS)
