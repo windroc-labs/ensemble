@@ -14,6 +14,7 @@ from ensemble.delegate.engine.record import CLOSED, RunRecord, worker
 from ensemble.delegate.engine.runner import POLICIES, Attempt, closing, say, stopped
 from ensemble.delegate.engine.types import (
     Begun,
+    Close,
     ConfigError,
     DelegateState,
     Event,
@@ -227,7 +228,7 @@ class _Run:
             return
         self.notes = notes
         self.flush()
-        if finish(state, result, self.session) and timer:
+        if finish(state, result, self.session) is Close.RETURNED and timer:
             self.deferred = result
             return
         self.emit(Finished(result))
@@ -240,10 +241,8 @@ def finish(
     *,
     give_up: str | None = None,
     notes: bool = True,
-) -> bool | None:
-    """A stored ending's notes, outcome line and locked close; whether that close returned, None
-    without one.
-    """
+) -> Close:
+    """A stored ending's notes, outcome line and locked close."""
     p = state.plan
     log = RunLog(p.session.workdir)
     environment = p.session.environment
@@ -264,15 +263,15 @@ def finish(
             say(f"delegate: {error}")
     RunRecord.announce(state, result)
     if lock is None or session is None:
-        return None
+        return Close.NONE
     try:
         session.close()
     except SessionError as error:
         say(f"delegate: tui: close: {error}")
-        return False
+        return Close.FAILED
     say(f"delegate: session {state.agent_name} closed (lock {lock})")
     try:
         log.note("release", lock=lock)
     except OSError as error:
         say(f"delegate: {error}")
-    return True
+    return Close.RETURNED

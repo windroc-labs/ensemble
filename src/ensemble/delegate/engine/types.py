@@ -236,6 +236,14 @@ class GateStatus(StrEnum):
     KEPT = "kept"
 
 
+class Close(StrEnum):
+    """A stored ending's locked close: none, it returned, or it failed."""
+
+    NONE = "none"
+    RETURNED = "returned"
+    FAILED = "failed"
+
+
 @dataclass(frozen=True)
 class Gated:
     outcome: Outcome
