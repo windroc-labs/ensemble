@@ -33,6 +33,7 @@ board_tracker=
 board_stages=
 jobs_flag=
 board_jobs_choice=
+board_job_names=(router promote)
 local_board_ready=
 provider_flag=
 url_flag=
@@ -714,14 +715,12 @@ answers() {
       done
     fi
     if [ -z "$board_jobs_choice" ]; then
-      if [ -f "$HOME/Library/LaunchAgents/com.windroc.ensemble.router.plist" ] \
-        || [ -f "$HOME/Library/LaunchAgents/com.windroc.ensemble.promote.plist" ]; then
-        board_jobs_choice=yes
-      elif ask_yn "Install board launchd jobs?"; then
-        board_jobs_choice=yes
-      else
-        board_jobs_choice=no
-      fi
+      for item in "${board_job_names[@]}"; do
+        if [ -f "$HOME/Library/LaunchAgents/com.windroc.ensemble.$item.plist" ]; then board_jobs_choice=yes; fi
+      done
+    fi
+    if [ -z "$board_jobs_choice" ]; then
+      if ask_yn "Install board launchd jobs?"; then board_jobs_choice=yes; else board_jobs_choice=no; fi
     fi
   fi
   board_tracker=${board_tracker:-local}
@@ -752,7 +751,12 @@ answers() {
       if valid_context "${answer:-65536}"; then context=${answer:-65536}; fi
     done
   fi
-  say "    clients: $clients, Docker: $docker, board: $board ($board_tracker), launchd: ${board_jobs_choice:-no}${provider:+, OpenCode provider: $provider}"
+  if [ "$board" = yes ]; then
+    item="yes ($board_tracker), launchd: ${board_jobs_choice:-no}"
+  else
+    item=no
+  fi
+  say "    clients: $clients, Docker: $docker, board: $item${provider:+, OpenCode provider: $provider}"
 }
 
 # Saves answers' choices once the run's refusals (ref_check, broker_plan preflight) have passed: a refused run
@@ -2728,12 +2732,30 @@ with open(out, "w", encoding="utf-8") as f:
     f.write(text)' "$pkg/launchd/com.windroc.ensemble.$1.plist" "$2" "$HOME" "$path"
 }
 
+# Says which installed board jobs launchd still runs: skipping Board or jobs leaves them in place (README).
+board_jobs_loaded() {
+  local job uid loaded=
+  uid=$(id -u)
+  for job in "${board_job_names[@]}"; do
+    [ -f "$HOME/Library/LaunchAgents/com.windroc.ensemble.$job.plist" ] || continue
+    if launchctl print "gui/$uid/com.windroc.ensemble.$job" </dev/null >/dev/null 2>&1; then
+      loaded="$loaded com.windroc.ensemble.$job"
+    fi
+  done
+  [ -n "$loaded" ] || return 0
+  say "    still loaded:$loaded; unload them as docs/board.md#setup says (launchctl bootout gui/<uid>/com.windroc.ensemble.<job>, then remove its plist)"
+}
+
 board_jobs() {
   local job target new offered= shown= uid
   step "board launchd jobs"
-  board_wanted || return 0
+  if ! board_wanted; then
+    board_jobs_loaded
+    return 0
+  fi
   if [ "$board_jobs_choice" != yes ]; then
     skip "launchd jobs not chosen"
+    board_jobs_loaded
     return 0
   fi
   if [ "$(configured_tracker "$(config_says)")" != "$board_tracker" ]; then
@@ -2749,7 +2771,7 @@ board_jobs() {
     return
   fi
   mkdir -p "$state_dir"
-  for job in router promote; do
+  for job in "${board_job_names[@]}"; do
     target=$HOME/Library/LaunchAgents/com.windroc.ensemble.$job.plist
     new=$state_dir/com.windroc.ensemble.$job.plist
     board_plist "$job" "$new"
