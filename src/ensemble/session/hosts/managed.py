@@ -93,6 +93,7 @@ class ManagedProcess(InteractiveProcess):
         self.code = None
         self.failure = None
         self.started = False
+        self.up = False
         self.view = None
         self.view_pending = False
         self.reader = None
@@ -146,6 +147,10 @@ class ManagedProcess(InteractiveProcess):
                 self.started = True
             elif not self.started:
                 raise ValueError("guard did not confirm exec")
+            elif kind == b"u":
+                if self.up or json.loads(data) != {}:
+                    raise ValueError("invalid guard up")
+                self.up = True
             elif kind in (b"o", b"e"):
                 message = WorkerOutput(data, "stdout" if kind == b"o" else "stderr")
             elif kind == b"h":

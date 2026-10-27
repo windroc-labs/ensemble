@@ -148,6 +148,7 @@ The channel is the guard's stdin (from its harness) and stdout (to it): frames o
 | harness | `q` screen | `{"lines": int or null}` |
 | harness | `c` close | `{}`: end the client, then `x` |
 | guard | `s` started | `{"pid": int}`, once, after exec |
+| guard | `u` up | `{}`, once, when its client still runs 5 s after exec (checked right after reaping it), so never for a client that exited sooner |
 | guard | `h` hook | `{"label": str, "payload": object, "delivery_id": str}`, retry-stable identity |
 | guard | `o`, `e` output | raw bytes a headless client wrote to stdout, stderr |
 | guard | `v` view | `{"text": str}`: the PTY's last `q` lines, control sequences removed |

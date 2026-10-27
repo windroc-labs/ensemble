@@ -30,6 +30,7 @@ HOOK_MAX = 1 << 20
 READ_SIZE = 65536
 TICK = 0.05
 DISPLAY_GRACE = 2.0  # a client dead at once still reaches the display its Host starts at launch
+UP = 5.0  # s its client runs after exec before the guard reports it up (`u`)
 DELIVERY = re.compile(r"[0-9a-f]{32}")
 
 
@@ -347,6 +348,8 @@ class Guard:
         self.channel = True
         self.exit_sent = False
         self.exit_at = 0.0
+        self.spawned = 0.0
+        self.up_sent = False
         self.displayed = False
         self.children_pending = False
         self.lease = os.environ.get("ENSEMBLE_GUARD_LEASE_FD") if lease is None else lease
@@ -385,6 +388,7 @@ class Guard:
                 close_fds=True,
                 preexec_fn=lambda: child_setup(slave),
             )
+            self.spawned = time.monotonic()
         finally:
             if slave is not None:
                 os.close(slave)
@@ -531,6 +535,10 @@ class Guard:
         self.reap()
         if self.proc.returncode is not None:
             self.close()
+        elif not self.up_sent and self.channel and time.monotonic() - self.spawned >= UP:
+            # reaped just above: an exit before UP s can never be reported up
+            self.emit(json_frame(b"u", {}))
+            self.up_sent = True
         if self.closing is None:
             return False
         elapsed = time.monotonic() - self.closing

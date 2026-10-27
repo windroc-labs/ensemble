@@ -539,6 +539,32 @@ class GuardTest(Case):
         ):
             self.assertTrue(runtime.tick())
 
+    def up_frames(self, returncode: int | None, now: float) -> list[bytes]:
+        """The u frames two ticks at `now` emit for a client spawned at 100, reaped as
+        `returncode` (None: still running).
+        """
+        runtime = self.runtime()
+        runtime.proc = mock.Mock(pid=10, returncode=None)
+        runtime.spawned = 100.0
+        reaped = (0, 0) if returncode is None else (10, returncode << 8)
+        with (
+            mock.patch.object(os, "listdir", return_value=[]),
+            mock.patch.object(os, "waitpid", side_effect=[reaped, ChildProcessError] * 2),
+            mock.patch.object(guard.time, "monotonic", return_value=now),
+        ):
+            runtime.tick()
+            runtime.tick()
+        return [wire for wire, _, _ in runtime.output if wire[:1] == b"u"]
+
+    def test_a_client_running_up_seconds_after_exec_gets_one_up(self):
+        self.assertEqual(self.up_frames(None, 100 + guard.UP), [guard.json_frame(b"u", {})])
+
+    def test_a_client_running_less_than_up_seconds_gets_no_up_yet(self):
+        self.assertEqual(self.up_frames(None, 100 + guard.UP - 0.1), [])
+
+    def test_a_client_that_exited_before_up_never_gets_up_however_late_its_guard_looks(self):
+        self.assertEqual(self.up_frames(2, 100 + guard.UP + 60), [])
+
     def test_stopped_child_requires_escalation_and_no_false_confirmation(self):
         runtime = self.runtime()
         runtime.proc = mock.Mock(returncode=None)
