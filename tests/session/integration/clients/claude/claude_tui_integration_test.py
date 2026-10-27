@@ -279,7 +279,15 @@ class MidTurnTest(Live):
             [stream.next(idle=False) for _ in range(2)], [Activity("Bash"), TurnEnd("Done.", 0)]
         )
         stream.quiet(1.0)
-        self.lines("w1 done")
+
+        def done():
+            self.poke()
+            found = [line.split()[1:3] for line in live_tmux.events(self.events)]
+            return found if found[-1:] == [["w1", "done"]] else None
+
+        self.assertEqual(  # the joined send's answer, then the turn's one end
+            live_tmux.wait(done, what="w1's done line"), [["w1", "reply"], ["w1", "done"]]
+        )
 
     def test_a_background_notice_mid_turn_joins_it(self):
         notice = "<task-notification>sleep 30 completed</task-notification>"

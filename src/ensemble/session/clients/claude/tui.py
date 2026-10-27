@@ -268,7 +268,8 @@ class ClaudeTui(Tui):
             resets = number(quota.get("resetsAt")) if quota.get("status") == "rejected" else None
             if resets is None:
                 resets = _resets_in("\n".join(texts(content)))
-            self._limit_seen = True  # read before or after its turn's hooks
+            # its turn's first only: one read after its StopFailure finds the turn settled
+            self._limit_seen = self._limit_seen or not self.limited
             return self._limit(resets)
         text = "\n".join(texts(content))
         if not text.strip():

@@ -1026,6 +1026,17 @@ class JoinedInputTest(TranscriptCase):
         self.assertEqual(self.prompt(), [TurnStarted()])
         self.assertEqual(self.prompt(), [])
 
+    def test_a_limit_record_read_after_its_stop_failure_leaves_no_mark(self):
+        self.append(PROMPT)
+        self.assertEqual(self.run.observe(), [])
+        self.assertEqual(self.prompt(), [TurnStarted()])
+        resets = epoch("2027-10-15 09:00", "UTC")
+        self.assertEqual(self.run.hook_events(*RATE_LIMIT), [LimitHit(resets)])
+        self.append(limited(WEEKLY))
+        self.assertEqual(self.run.observe(), [])
+        self.assertEqual(self.prompt(), [TurnStarted()])
+        self.assertEqual(self.prompt(), [])
+
     def test_a_replay_keeps_a_limit_of_its_newest_turn_only(self):
         ups = ("UserPromptSubmit", {"session_id": SID})
         self.append(PROMPT, limited(WEEKLY), PROMPT, said("m1", text("Done.")), PROMPT)

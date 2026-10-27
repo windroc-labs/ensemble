@@ -26,8 +26,7 @@ queued_command attachment), then answers A; with "prompted": true, UserPromptSub
 as the turn joins it, before its attachment, as Claude Code 2.1.312 does. {"kind": "notice", "text":
 T} is a background task's completion Claude Code joins to the turn: UserPromptSubmit for T, then a
 task-notification queued_command attachment; it reads no input. {"kind": "pause", "file": F} waits
-for F to exist;
-{"kind": "input"} waits for any input to arrive (kept for the next line).
+for F to exist; {"kind": "input"} waits for any input to arrive (kept for the next line).
 - turns: interactive steps of turn 2 on.
 - dialog: interactive text printed at startup, before the first SessionStart (as Claude's workspace
 trust dialog), awaiting its answer as a dialog step does.
