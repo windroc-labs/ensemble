@@ -167,7 +167,7 @@ class Viewer:
         if display is None and (state := worker_state(name)) is not None:
             display = state.display
         if isinstance(target, CommandView):
-            self._view(name, target)
+            self._view(name, target, status_line=host.tui_settings().status_line)
         elif self._tmux.status(target.session) is None:
             raise SessionError(f"no tmux session {name}")
         return target, display
@@ -252,13 +252,14 @@ class Viewer:
             raise NotShowable(f"host {host.name} cannot show")
         return target
 
-    def _view(self, name: str, target: CommandView) -> None:
+    def _view(self, name: str, target: CommandView, *, status_line: bool) -> None:
         try:
             if self._tmux.status(name) is None:
                 self._tmux.checked(
                     [
                         *("new-session", "-d", "-s", name, *tmux_cli.READABLE, "--", *target.argv),
                         *(";", "set-option", "-t", f"={name}:", VIEW, VIEW_TAG),
+                        *(";", *tmux_cli.status(name, on=status_line)),
                     ]
                 )
             elif self._tmux.option(name, VIEW) != VIEW_TAG:
