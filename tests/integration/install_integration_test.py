@@ -900,7 +900,7 @@ class InstallTest(Case):
         self.config().write_text(
             '[session.hosts]\ndefault = "docker"\n[delegate]\nclient = "codex"\n'
         )
-        result = self.again(answers=[(WRITE_Q, "y"), (PEM_Q, "")])
+        result = self.again(answers=[(PEM_Q, "")])
         self.assert_ok(result)
         self.assertIn("> [ ] Claude Code\r\n\r\x1b[K  [x] Codex", result.tty)
         self.assertEqual((self.state()["clients"], self.state()["docker"]), ("codex", "yes"))

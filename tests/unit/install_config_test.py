@@ -26,7 +26,6 @@ class OpenCodeExecutableConfigTest(Case):
             str(config),
             str(output),
             "tmux",
-            "",
             "opencode",
             selected,
             "lan",
