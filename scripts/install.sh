@@ -538,12 +538,13 @@ sudo_end() {
 }
 
 # Appends $1, which puts directory $2 on PATH, to the login shell's profile, with consent, unless
-# it is there; then, when $2 is not on the PATH install.sh started with, on_exit says to source it.
+# it is there (a brew shellenv line with a shell argument, as Homebrew's installer writes, counts);
+# then, when $2 is not on the PATH install.sh started with, on_exit says to source it.
 profile_line() {
   local file=$HOME/.bash_profile
   case ${SHELL:-} in *zsh) file=$HOME/.zprofile ;; esac
   step "shell profile: $1"
-  if [ -f "$file" ] && grep -qxF -- "$1" "$file"; then
+  if [ -f "$file" ] && grep -qxF -- "$1" <(sed -E 's/ shellenv [a-z]+\)"$/ shellenv)"/' "$file"); then
     skip "in $file"
   elif consent "$file" "$1"; then
     if absent "$file"; then ledger_add profile-file "$file"; fi
