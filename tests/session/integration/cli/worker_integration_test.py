@@ -201,7 +201,7 @@ class ColorTest(WorkerCase):
 
     def test_dialog_start_says_color_not_set(self):
         # before SessionStart, as Claude's: no opening is due before it shows
-        res = self.start("w1", steps=["Trusted."], dialog=TRUST)
+        res = self.start("w1", steps=["Trusted."], prompt="", dialog=TRUST)  # a prompt drops it
         self.assertEqual(self.record(res).name, "w1")
         self.assertEqual(
             res.stderr.splitlines(),

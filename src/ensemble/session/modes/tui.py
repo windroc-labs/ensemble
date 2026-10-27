@@ -653,6 +653,9 @@ class TuiMode(BaseMode):
         self._store, self._replayed, self._generation = store, replayed, generation
         self._cursor, self._dialogs, self._limit, self._code = cursor, frozenset(), None, None
         self._live, self._gone = True, False
+        if opening is not None and prepared.spec.prompt and not run._opening_prompt:
+            LOG.info("tui session %s: opening %r dropped: a launch prompt", self.name, opening[1])
+            opening = None
         self._opening = opening  # start's: sent once, OPEN_AFTER s after
         self._due: float | None = None  # its label's latest record
         self._held, self._checked = False, -POLL_SCREEN

@@ -2121,11 +2121,19 @@ class OpeningTest(Base):
                 mode.stop()
 
     def test_no_turn_yet_keeps_the_opening(self):
-        mode = self.launched(prompt="go")
+        mode = self.launched()
         self.append(record("ready"))
         mode.poll(0)
         mode.poll(1.2)
         self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
+
+    def test_a_launch_prompt_drops_the_opening_at_once(self):
+        mode = self.launched(prompt="go")  # its turn starts at launch, read or not
+        self.assertIsNone(mode.opening_pending)
+        self.append(record("ready"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [])
 
     def test_an_older_generations_marker_keeps_the_opening(self):
         mode = self.launched()
