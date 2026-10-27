@@ -197,6 +197,21 @@ class KillTest(Case):
         with self.assertRaisesRegex(tmux_cli.TuiError, r"^tmux: boom$"):
             tmux_cli.TmuxCli(FakeTmux(fail={"kill-session"})).kill("s")
 
+    def test_unview_sizes_the_window_readable_then_lets_the_next_client_size_it(self):
+        fake = FakeTmux()
+        tmux_cli.TmuxCli(fake).unview("s")
+        self.assertEqual(
+            fake.calls,
+            [
+                [
+                    *("tmux", "resize-window", "-t", "=s:", "-x", "120", "-y", "40", ";"),
+                    *("set-option", "-w", "-u", "-t", "=s:", "window-size"),
+                ]
+            ],
+        )
+        with self.assertRaisesRegex(tmux_cli.TuiError, r"^tmux: boom$"):
+            tmux_cli.TmuxCli(FakeTmux(fail={"resize-window"})).unview("s")
+
     def test_a_pane_id_kills_that_pane_only(self):
         fake = FakeTmux()
         tmux_cli.TmuxCli(fake).kill("%12")
