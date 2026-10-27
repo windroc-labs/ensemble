@@ -64,7 +64,7 @@ from ensemble.session.harness.channel import bound as channel_bound
 from ensemble.session.harness.channel import running as channel_running
 from ensemble.session.harness.dispatch import load_handlers
 from ensemble.session.harness.types import Op
-from ensemble.session.harness.view import OwnedSession, fold
+from ensemble.session.harness.view import OwnedSession, dialog, fold
 from ensemble.session.hosts.base import SIGNALS, Host, host_resume
 from ensemble.session.modes import headless, in_process, tui
 from ensemble.session.modes.base import BaseMode, child_env
@@ -355,6 +355,7 @@ class HostedSession(Session):
         self._closed = False
         self._ended = False
         self._blocked = False
+        self._dialog: str | None = None
         self._bound = False
         self._capacity: Admission | None = None
         self._capacity_hosts: Mapping[str, Host] = {}
@@ -1157,11 +1158,20 @@ class HostedSession(Session):
         self._reply, self._blocked = fold(
             self._reply, event, blocked=self._blocked, replayed=replayed
         )
+        self._dialog = dialog(self._dialog, event)
 
     @property
     def opening_pending(self) -> str | None:
         self._running.state()
         return self._running.opening_pending
+
+    @property
+    def dialog(self) -> str | None:
+        """By its yielded, then queued events."""
+        found = self._dialog
+        for event in self._queue:
+            found = dialog(found, event)
+        return found
 
     def send(self, text: str) -> None:
         self._running.send(text)
