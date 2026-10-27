@@ -2735,3 +2735,19 @@ class OwnedRun(HarnessCase):
             HarnessDelegate.attach(self.work, session_cls=HarnessSession).resume()
         self.assertEqual(mutexed, [False])
         self.assertEqual(self.metadata()["attempt"], 2)
+
+    def test_settle_retires_nothing_while_a_run_holds_it_or_its_attempt_opens(self):
+        view = self.owned()
+        _seen, on = self.at_begun(lambda: (_ for _ in ()).throw(Stopped(129)))
+        with self.assertRaises(Stopped):
+            view.run(on)
+        view.driver.session.liveness = Liveness.ABSENT
+        again = HarnessDelegate.attach(self.work, session_cls=HarnessSession)
+        with mock.patch.object(HarnessSession, "retire") as retire:
+            again._settle()  # its attempt opening: a start may be on its way
+            with RunState(Layout(self.work)).run_lock():
+                self.record.bind(1, 1)
+                again._settle()  # a run holds it
+            retire.assert_not_called()
+            again._settle()
+        retire.assert_called_once_with(again._state.agent_name, sid=SID, host=again._state.host)

@@ -441,6 +441,40 @@ class DrainTest(Base):
         self.assertEqual(owned.calls, ["close", "stop"])
         self.assertEqual(self.types(), ["Reply", "Exited"])
 
+    def test_a_held_close_is_answered_even_when_a_later_one_breaks_the_drain(self):
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        owned = FakeOwned(([Reply("x")], False))
+        harness = self.harness(owned, Handler(hang=gate), drain=WAIT)  # holds the drain
+        broke = []
+
+        def run():
+            try:
+                harness.run(self.begin)
+            except RuntimeError as error:
+                broke.append(error)
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        while "Reply" not in self.types():
+            time.sleep(0.01)
+        outside, done = Channel(self.channel.directory), []
+        closer = threading.Thread(
+            target=lambda: done.append(outside.request(Op.CLOSE, timeout=WAIT)), daemon=True
+        )
+        owned.close = mock.Mock(side_effect=[[], RuntimeError("bug")])
+        closer.start()
+        while "Exited" not in self.types():
+            time.sleep(0.01)
+        breaking = threading.Thread(  # served in the drain: its RuntimeError ends the harness
+            target=lambda: self.assertRaises(Unanswered, self.request, Op.CLOSE), daemon=True
+        )
+        breaking.start()
+        thread.join(WAIT)
+        self.channel.release()
+        closer.join(WAIT)
+        self.assertEqual((done, len(broke)), ([True], 1))
+
     def test_a_failed_close_during_the_drain_is_answered_with_its_error(self):
         owned = FakeOwned(([], True))
         owned.close = mock.Mock(side_effect=SessionError("cannot close w1"))

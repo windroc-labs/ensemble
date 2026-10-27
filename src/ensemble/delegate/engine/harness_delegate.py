@@ -331,12 +331,13 @@ class HarnessDelegate(Delegate):
         return previous.attempt + 1 if previous.plan.sid == self._state.plan.sid else 1
 
     def _settle(self) -> None:
-        """A gone owned worker retired outside the mutex: answered once its handler drained."""
+        """A gone owned worker retired outside the mutex, after its handler drained; not while a
+        start may be due."""
         try:
             state = self._read()
         except (ConfigError, OSError):
             return
-        if not owned(state.plan):
+        if not owned(state.plan) or not (state.completed or state.bound) or self.store.running():
             return
         try:
             agent = self._agent(state)
