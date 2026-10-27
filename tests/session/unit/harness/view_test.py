@@ -224,6 +224,18 @@ class CloseTest(Base):
         with self.assertRaisesRegex(SessionError, "busy"):
             self.view().close()
 
+    def test_a_tui_view_without_retire_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "retire: required for a tui view"):
+            OwnedSession(
+                self.channel,
+                "w1",
+                client="claude",
+                sid="s1",
+                generation=GEN,
+                idle_timeout=None,
+                attach=self.attach,
+            )
+
 
 class DelegationTest(Base):
     def test_other_members_use_one_lazy_attach(self):
