@@ -93,6 +93,7 @@ class Base(Case):
         self.session.showable = False
         self.session.opening_pending = None
         self.session.client_up = True
+        self.session.dialog = None
         self.session.events.return_value = iter([IdleTimeout(worker.EARLY)])
         self.order.attach_mock(self.session_cls.start, "start")
         self.order.attach_mock(self.session_cls.preflight, "preflight")
@@ -530,10 +531,10 @@ class StaleTest(Base):
 class ColorWatchTest(Base):
     UNSET = "session w1: color not set: {}; ensemble-session send w1 '/color'"
 
-    def watch(self, sent: float, events=None, text="/color") -> int:
+    def watch(self, sent: float, events=None, text="/color", dialog=None) -> int:
         """Starts w1 on a clock ticking 1 s per call, its opening `text` pending until tick
-        `sent`; the ticks used. opening_pending's call count varies by Python (3.11's isinstance
-        calls it).
+        `sent`, `dialog` in its state; the ticks used. opening_pending's call count varies by
+        Python (3.11's isinstance calls it).
         """
         ticks = itertools.count()
         now = [0]
@@ -546,6 +547,7 @@ class ColorWatchTest(Base):
             side_effect=lambda: text if now[0] < sent else None
         )
         type(self.session).client_up = mock.PropertyMock(side_effect=lambda: now[0] >= worker.EARLY)
+        type(self.session).dialog = mock.PropertyMock(return_value=dialog)
         self.session.events.return_value = events or itertools.repeat(IdleTimeout(worker.TICK))
         Worker(state(), session_cls=self.session_cls, say=self.said.append, clock=tick).start(
             prompt="", resume=False
@@ -585,6 +587,32 @@ class ColorWatchTest(Base):
         self.watch(float("inf"), events=events)
         self.assertEqual(self.said, ["session w1: waits on a dialog: Edit"])
         self.handle.publish.assert_called_once()
+
+    def test_a_dialog_in_its_state_is_said_wherever_the_watch_ends(self):
+        """Its Blocked not yet read: up with no opening, its opening sent, or at the cap."""
+        said = "session w1: waits on a dialog: Edit"
+        for case, sent, turned, ticks, lines in (
+            ("no opening", 0, False, worker.EARLY + 1, [said]),
+            ("no opening, a turn started", 0, True, worker.EARLY + 1, [said]),
+            ("its opening sent", 8, False, 9, [said]),
+            ("its opening sent, a turn started", 8, True, 9, [said]),
+            (
+                "at the cap",
+                float("inf"),
+                False,
+                worker.COLOR_CAP + 1,
+                [said, self.UNSET.format("waits on a dialog")],
+            ),
+            ("at the cap, a turn started", float("inf"), True, worker.COLOR_CAP + 1, [said]),
+        ):
+            with self.subTest(case=case):
+                self.said.clear()
+                self.handle.publish.reset_mock()
+                idle = itertools.repeat(IdleTimeout(worker.TICK))
+                events = itertools.chain([TurnStarted()], idle) if turned else idle
+                self.assertEqual(self.watch(sent, events=events, dialog="Edit"), ticks)
+                self.assertEqual(self.said, lines)
+                self.handle.publish.assert_called_once()
 
     def test_a_dialog_while_pending_says_both(self):
         self.watch(float("inf"), events=iter([Blocked("Trust")]))
