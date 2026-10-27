@@ -571,19 +571,27 @@ class GuardTest(Case):
         runtime.proc = mock.Mock(pid=10, returncode=None)
         runtime.spawned = 100.0
         reaped = []
+        answers = iter([(0, 0), (10, 2 << 8), ChildProcessError()])  # its next reap: exited
 
         def waitpid(*_):
             reaped.append(True)
-            return (0, 0)
+            answer = next(answers)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
 
         with (
             mock.patch.object(os, "listdir", return_value=[]),
             mock.patch.object(os, "waitpid", side_effect=waitpid),
             mock.patch.object(
-                guard.time, "monotonic", side_effect=lambda: 100 + guard.UP - (not reaped) * 0.001
+                guard.time,
+                "monotonic",
+                side_effect=lambda: 100 + guard.UP + (len(reaped) * 60 if reaped else -0.001),
             ),
         ):
             runtime.tick()
+            runtime.tick()
+        self.assertEqual(runtime.proc.returncode, 2)
         self.assertEqual([wire for wire, _, _ in runtime.output if wire[:1] == b"u"], [])
 
     def test_stopped_child_requires_escalation_and_no_false_confirmation(self):
