@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import signal
 import stat
 import sys
 import time
@@ -716,6 +717,7 @@ class HarnessDelegate(Delegate):
     def close(self) -> None:
         """Unanswered after closing the harness when the agent's Host could not tell."""
         state = self._read()
+        self._stop_owned(state)
         try:
             agent, unanswered = self._agent(state), None
         except Unanswered as error:
@@ -738,6 +740,22 @@ class HarnessDelegate(Delegate):
                 raise SessionError(f"close {state.harness_name}: {error}{also}") from error
         if unchecked is not None:
             raise Unanswered(unchecked)
+
+    def _stop_owned(self, state: DelegateState) -> None:
+        """An owned run's active attempt ends once as a stop, a close's SIGTERM to the earlier
+        caller loop, before its worker's Exited could end it as a failure (FR-34).
+        """
+        p = state.plan
+        if state.completed or p.spec.mode != Mode.TUI or not p.session.handlers:
+            return
+        result = stopped(Stopped(128 + signal.SIGTERM))
+        if not RunRecord(self.layout, self.store).complete(state.attempt, result, sid=p.sid):
+            return
+        RunRecord.ended(state, result)
+        if state.callback is not None:
+            EventCallback(state.callback, self.store, sid=p.sid, attempt=state.attempt)(
+                Finished(result)
+            )
 
     def session_status(self) -> SessionStatus:
         """Its own live agent session's status, else the plan's: an attached one lacks its env;

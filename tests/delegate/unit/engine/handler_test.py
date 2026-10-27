@@ -29,7 +29,8 @@ from ensemble.session import (
     TurnFailed,
     TurnStarted,
 )
-from tests.delegate.harness import SID, HarnessCase
+from tests.delegate.fakes.harness_session import HarnessSession
+from tests.delegate.harness import SID, HarnessCase, ViewedHarnessDelegate
 from tests.delegate.replies import block
 from tests.delegate.unit.runs import DONE, GAVE_UP, START
 
@@ -354,6 +355,70 @@ class EndingTest(HandlerCase):
         self.assertEqual(self.kinds(), before)
         self.assertEqual(self.kinds_sent(), [("begun", 1)])
         self.assertEqual(self.lines(), [])
+
+
+class CloseTest(HandlerCase):
+    """FR-34: a close ends the owned run's active attempt once, as a stop; never an ended one."""
+
+    STOPPED = Result(143, None, "stopped: Stopped: 143")
+
+    def close(self):
+        ViewedHarnessDelegate.attach(self.work, session_cls=HarnessSession).close()
+
+    def test_close_ends_an_active_owned_attempt_once_as_stopped(self):
+        self.call(TurnStarted())
+        self.close()
+        state = self.state()
+        self.assertEqual((state.attempt, state.completed, state.result), (1, True, self.STOPPED))
+        self.assertEqual(self.kinds_sent(), [("begun", 1), ("finished", 1)])
+        finished, at = self.sent[-1]
+        self.assertEqual(
+            (finished["returncode"], finished["outcome"], finished["error"]),
+            (143, None, "stopped: Stopped: 143"),
+        )
+        self.assertTrue(at["completed"])
+        self.assertEqual(self.kinds()[-2:], ["result", "end"])
+        self.assertEqual(self.lines(), [["outcome", "error"]])
+        self.call(Exited(143))
+        self.assertEqual(self.state().result, self.STOPPED)
+        self.assertEqual(self.kinds_sent(), [("begun", 1), ("finished", 1)])
+
+    def test_close_of_an_ended_owned_attempt_sends_nothing(self):
+        self.finish(NEEDS)
+        before = (self.state(), list(self.sent), self.kinds())
+        self.close()
+        self.call(Exited(0))
+        self.assertEqual((self.state(), self.sent, self.kinds()), before)
+
+    def test_close_after_the_handler_ended_the_attempt_sends_nothing(self):
+        self.call(TurnStarted())
+        state = self.state()
+        real, raced = RunRecord.complete, []
+
+        def first(record, n, result, **kw):
+            # the handler's outcome wins the compare-and-set just before the close's
+            if not raced:
+                raced.append(True)
+                self.call(TurnEnd(block(DONE), 0))
+            return real(record, n, result, **kw)
+
+        with mock.patch.object(RunRecord, "complete", first):
+            self.close()
+        self.assertEqual(self.state().result.outcome.status, "done")
+        self.assertEqual(state.attempt, self.state().attempt)
+        self.assertEqual(self.kinds_sent(), [("begun", 1), ("finished", 1)])
+        self.assertEqual(self.sent[-1][0]["outcome"]["status"], "done")
+
+    def test_close_of_a_run_no_harness_owns_ends_nothing_itself(self):
+        state = self.state()
+        self.record.save(
+            replace(
+                state, plan=replace(state.plan, session=replace(state.plan.session, handlers=()))
+            )
+        )
+        self.close()
+        self.assertFalse(self.state().completed)
+        self.assertEqual(self.sent, [])
 
 
 class IdleTest(HandlerCase):
