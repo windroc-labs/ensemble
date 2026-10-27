@@ -400,8 +400,7 @@ class TmuxHost(Host):
 
     def attach(self, name: str) -> TmuxProcess:
         """A session it launched is the pane its launch recorded (@process), whichever pane is
-        active; any other session is its active pane. A managed worker's display (@kind guard) is
-        a terminal for keys and screen only: no @control, and its pane says nothing of the worker.
+        active; any other session is its active pane. A guard display is a terminal for keys only.
         """
         state = self.tmux.status(_session(name))
         if state is None:

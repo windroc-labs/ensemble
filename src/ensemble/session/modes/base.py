@@ -191,7 +191,7 @@ class BaseMode(ABC):
     def stop(self) -> None: ...
 
     def close(self) -> bool | None:
-        """Ends the run for good; a tui one also drops its state (False: it kept it)."""
+        """Ends the run for good; a tui one also drops its state."""
         self.stop()
         return None
 

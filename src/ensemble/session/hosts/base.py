@@ -54,7 +54,7 @@ from ensemble.utils import (
 SIGNALS = (signal.SIGHUP, signal.SIGTERM, signal.SIGINT)
 TUI_DIR = f"{STATE}/tui"
 HARNESS_ROOT = f"{STATE}/harness"
-GUARD_LEASE_FD = "ENSEMBLE_GUARD_LEASE_FD"  # a managed worker's guard lease and hook socket
+GUARD_LEASE_FD = "ENSEMBLE_GUARD_LEASE_FD"
 GUARD_HOOK_SOCKET = "ENSEMBLE_GUARD_HOOK_SOCKET"
 TUI_STATE = "session.json"
 

@@ -1,7 +1,5 @@
 """The tui mode: a Client command on a Host terminal; events from its client's own record,
-then the hook records appended to its session directory, and from its terminal. Inside a session
-harness it runs as a managed worker under the guard (Host.worker); its host session is only its
-display.
+then the hook records appended to its session directory, and from its terminal.
 """
 
 import contextlib
@@ -88,7 +86,7 @@ POLL_SCREEN = 0.5
 LOG = logging.getLogger("session")
 Cursor = tuple[int | None, int]  # inode, offset
 OWNER = re.compile(r"[0-9a-f]{32}")
-WAIT = 10  # a killed harness's guard reaps its client in about 2 s
+WAIT = 10
 RECHECK = 0.1
 GATE_BUSY = "previous worker generation (live or unknown)"
 CLOSE_BUSY = "worker generation (live or unknown)"
@@ -173,9 +171,8 @@ class TuiStore:
     """Tui session `name`'s dir and lock under TUI_DIR; what changes them takes the lock.
     attach(name, host=...) takes by name whatever is there: a tui session, a half-gone one (its dir
     or its host session alone), a non-tui host session or nothing. close: under its lock, closes the
-    host's session of that name and removes the dir; absent is fine. An owned record (session.json
-    naming its harness) and its display go only with their own worker generation (the record rule):
-    its owner closes by its handle; anyone else asks that generation's liveness.
+    host's session of that name and removes the dir; absent is fine. An owned record goes only
+    with its own worker generation.
     """
 
     def __init__(self, name: str, *, host: Host, sid: str | None = None) -> None:
@@ -265,8 +262,8 @@ class TuiStore:
                 raise
 
     def close(self, handle: Process | None = None, generation: str | None = None) -> bool:
-        """handle: the owner's, of `generation`; else `generation`: the caller's (None: whichever
-        holds the name). Whether the dir went.
+        """generation: the owner `handle`'s, else the caller's (None: the name's). Whether the dir
+        went.
         """
         with self._locked():
             record = _owned_record(self)
@@ -308,9 +305,7 @@ class TuiStore:
         owned: bool = False,
         generation: str | None = None,
     ) -> None:
-        """Closes `terminal` while it holds the name or, unlisted, its @sid is sid; an owned record
-        by the record rule (owned: `terminal` is the owner's handle of `generation`).
-        """
+        """Closes `terminal` while it holds the name or, unlisted, its @sid is sid."""
         if owned:
             self.close(terminal, generation)
             return
@@ -386,7 +381,6 @@ class TuiStore:
         return made
 
     def _close_own(self, handle: Process, generation: str | None, record: dict | None) -> bool:
-        """The owner's: its handle, its own display, then the dir while session.json is its."""
         failed = handle.state() == Liveness.UNKNOWN
         if not failed:
             try:
@@ -405,7 +399,6 @@ class TuiStore:
         return True
 
     def _close_display(self, generation: str | None) -> None:
-        """The name's host session while it is `generation`'s display."""
         try:
             process = self._lookup()
             if process is None or process.session_identity()[1] != generation:
@@ -418,7 +411,6 @@ class TuiStore:
             raise SessionError(f"cannot close tui session {self.name}: {error}") from error
 
     def _close_other(self, record: dict, generation: str | None) -> bool:
-        """A non-owner's: nothing unless `record` is the caller's generation and it is gone."""
         if generation is not None and record.get("generation") != generation:
             return False
         if _generation(self, record, wait=True) != Liveness.ABSENT:
@@ -523,9 +515,7 @@ def _sweep(store: TuiStore) -> None:
 
 
 def _owned_record(store: TuiStore) -> dict | None:
-    """session.json if it names an owner; unreadable but naming one: {"owner": ...} (its
-    generation unknown); else None.
-    """
+    """session.json naming an owner; unreadable but naming one: its generation unknown."""
     try:
         record = store.read()
     except SessionError:
@@ -538,9 +528,7 @@ def _owned_record(store: TuiStore) -> dict | None:
 
 
 def _generation(store: TuiStore, record: Mapping, *, wait: bool) -> Liveness:
-    """Owned `record`'s worker generation; wait: LIVE re-checked every RECHECK s for up to WAIT s
-    (a reaping guard). Asked only once no running owner answers for it.
-    """
+    """wait: LIVE re-checked for up to WAIT s (a reaping guard)."""
     generation = record.get("generation")
     if not isinstance(generation, str):
         return Liveness.UNKNOWN
@@ -562,9 +550,8 @@ def _running(name: str, host: Host) -> SessionError:
 
 
 def _stale(store: TuiStore) -> Process | None:
-    """The gate: tui session `store.name`'s dead process, else None; SessionError while it runs.
-    An owned record goes by its worker generation, never by its display: SessionBusy while
-    unknown, the wait out of a reaping guard; once gone, the name's host session is stale.
+    """Tui session `store.name`'s dead process, else None; SessionError while it runs (an owned
+    record's generation, never its display).
     """
     record = _owned_record(store)
     if record is None:
@@ -630,9 +617,7 @@ class TuiMode(BaseMode):
         opening: tuple[str, str] | None = None,
         owned: bool = False,
     ) -> None:
-        """cursor: its next hook record (TuiStore.records); owned: `terminal` is its owner's
-        handle.
-        """
+        """cursor: its next hook record (TuiStore.records); owned: `terminal` is the owner's."""
         super().__init__(prepared)
         self.name, self.run, self.host, self._terminal = store.name, run, store.host, terminal
         self._store, self._replayed, self._generation = store, replayed, generation
@@ -769,7 +754,6 @@ class TuiMode(BaseMode):
 
     @classmethod
     def running(cls, name: str, *, host: Host) -> None:
-        """Raises the gate's refusal of a start while tui session `name` runs."""
         raise _running(checked_name(name), host)
 
     @classmethod
@@ -879,7 +863,6 @@ class TuiMode(BaseMode):
         return found, self._gone
 
     def _drain(self) -> None:
-        """An owner handle's channel messages: its client's exit code; a channel failure raises."""
         if not self._owned:
             return
         for message in self._terminal.read(0):
@@ -942,9 +925,7 @@ class TuiMode(BaseMode):
         return found
 
     def _replaced(self, state: Liveness) -> bool:
-        """Ended once another terminal holds its name or session.json is another generation's;
-        never an owner's: only its handle ends it.
-        """
+        """Ended once another terminal holds its name or session.json is another generation's."""
         if self._owned:
             return False
         if state == Liveness.ABSENT:
@@ -1032,7 +1013,6 @@ class TuiMode(BaseMode):
             raise SessionError(f"tui session {self.name} is not running")
 
     def close(self) -> bool:
-        """Whether its dir went (an owned record of another generation, or unconfirmed, stays)."""
         return self._store.close(self._terminal if self._owned else None, self._generation)
 
     def stop(self) -> None:
