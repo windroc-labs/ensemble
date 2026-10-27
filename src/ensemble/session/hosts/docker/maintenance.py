@@ -1,8 +1,5 @@
-"""A Docker session's broker credential maintenance, as a tick its owner drives: the broker's
-maintain at once, then when it says, each failure and notice told to `report` (a notice it refuses
-is not acknowledged). While the broker fails, reported once per streak, it retries each RETRY s and
-the last confirmed deadline holds; only a reply with another deadline replaces it. Once ticked, the
-deadline reached reports client_auth_expired and closes, retried each RETRY s.
+"""A Docker session's broker credential maintenance as a tick its owner drives, keeping the
+supervisor's policy (docs/docker-host.md › Credential renewal).
 """
 
 import contextlib
