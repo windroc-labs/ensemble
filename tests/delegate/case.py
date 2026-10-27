@@ -12,6 +12,7 @@ import ensemble
 from ensemble.delegate.engine.drivers import AgentDriver
 from ensemble.session import Session
 from ensemble.session.engine.config import read_config
+from tests.session import harnesses
 from tests.session.case import configured
 from tests.utils.sandbox import clean_env, project_roots
 
@@ -64,6 +65,7 @@ class Case(unittest.TestCase):
             self.ensemble = os.path.join(self.home, ".ensemble")
             os.mkdir(self.ensemble)
             self.configure_session({})
+            self.addCleanup(harnesses.end, self.home)
             return super().run(result)
 
     def configure_session(self, clients, tmux=None) -> None:

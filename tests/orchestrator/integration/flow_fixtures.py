@@ -19,7 +19,7 @@ import tempfile
 import tomllib
 from urllib.parse import quote
 
-from tests.delegate.workdir import run_log
+from tests.delegate.workdir import input_first, run_log
 from tests.orchestrator.case import PY, Case, child_env
 from tests.orchestrator.case import REPO as WORKTREE
 from tests.orchestrator.integration import fake_gh, fake_linear
@@ -217,7 +217,7 @@ class Flow(Case):
         return jsonl(self.claude_log)
 
     def records(self, ident):
-        return jsonl(run_log(os.path.join(self.workdirs, ident)))
+        return input_first(jsonl(run_log(os.path.join(self.workdirs, ident))))
 
     def ledger(self, ident):
         """Each sid's write-back steps."""

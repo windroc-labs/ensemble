@@ -163,7 +163,7 @@ class BaseMode(ABC):
     ) -> Self:
         """The session started; spec.sid set; registry: tui settings and identity_drop; host: the
         selected execution Host; display: a tui session's, kept as given (other modes refuse one);
-        owner: its session harness's dir (tui, in_process).
+        owner: its session harness's dir (tui, headless, in_process).
         """
 
     @property
@@ -198,11 +198,6 @@ class BaseMode(ABC):
         """Ends the run for good; a tui one also drops its state."""
         self.stop()
         return None
-
-    @classmethod
-    def _unowned(cls, owner: str | None) -> None:
-        if owner is not None:
-            raise ConfigError(f"owner: {cls.kind.value} mode has no session harness")
 
     @classmethod
     def _unsupported(cls, spec: Spec) -> ConfigError:

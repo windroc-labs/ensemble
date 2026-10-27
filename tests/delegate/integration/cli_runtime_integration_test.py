@@ -36,10 +36,10 @@ class Exits(Base):
         when = datetime.fromtimestamp(at).astimezone().isoformat(timespec="seconds")
         cases = [
             (
-                "valid, the client exited 7",
+                "a report followed by exit 7",
                 [said(START, block(DONE)), {"exit": 7}],
-                0,
-                "delegate: status done",
+                1,
+                "delegate: the client exited 7",
             ),
             (
                 "needs_input",

@@ -817,7 +817,7 @@ class Unanswered(SessionError):
 
 
 class OwnerRefused(SessionError):
-    """A live session harness refused a stop or close: its worker's end is not confirmed."""
+    """A live session harness refused a stop or close."""
 
 
 class NoRecordedSession(SessionError):

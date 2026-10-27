@@ -58,6 +58,7 @@ from ensemble.session.hosts.base import (
     check_sid,
     tui_lock,
 )
+from ensemble.session.hosts.managed import ManagedProcess
 from ensemble.session.modes import tui_hook
 from ensemble.session.modes.base import BaseMode, identity_drop
 from ensemble.session.modes.client_adapters.tui import Tui
@@ -626,6 +627,7 @@ class TuiMode(BaseMode):
         self._opening = opening  # start's: sent once, OPEN_AFTER s after
         self._due: float | None = None  # its label's latest record
         self._held, self._checked = False, -POLL_SCREEN
+        self._active_turn = run._turn_open is True
         self._owned, self._hook_logged = owned, False
 
     @classmethod
@@ -853,6 +855,14 @@ class TuiMode(BaseMode):
                 if code is not None:
                     self._code = code
                     final = self._read()
+                    if self._active_turn:
+                        final.append(
+                            TurnFailed(
+                                "process_exit" if code else "incomplete_turn",
+                                f"worker exited {code}",
+                            )
+                        )
+                        self._active_turn = False
                     self._end()
                     return final, True
                 with contextlib.suppress(SessionError):
@@ -904,7 +914,11 @@ class TuiMode(BaseMode):
 
     def _track(self, events: list[SessionEvent | Stderr | ClientBound]) -> None:
         for event in events:
-            if isinstance(event, Blocked | Activity | TurnStarted | TurnEnd | TurnFailed):
+            if isinstance(event, TurnStarted):
+                self._active_turn = True
+            elif isinstance(event, TurnEnd | TurnFailed):
+                self._active_turn = False
+            if isinstance(event, Blocked | Activity | TurnEnd | TurnFailed | TurnStarted):
                 self._held = isinstance(event, Blocked)
 
     def _end(self) -> None:
@@ -1010,6 +1024,10 @@ class TuiMode(BaseMode):
             return self._terminal.screen(lines)
         except NotShowable:
             raise SessionError(f"host {self.host.name} cannot show") from None
+
+    def redisplay(self) -> bool:
+        """Its owner handle's display opened again where gone; False: none to open."""
+        return isinstance(self._terminal, ManagedProcess) and self._terminal.redisplay()
 
     def _running(self) -> None:
         self._store.check()

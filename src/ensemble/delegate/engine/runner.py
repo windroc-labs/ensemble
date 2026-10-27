@@ -283,6 +283,8 @@ class Attempt:
         self.failed: TurnFailed | None = None
 
     def feed(self, event: Event | object) -> Result | None:
+        if self.failed is not None and not isinstance(event, Exited | Stderr):
+            return None
         answer = None
         if isinstance(event, Reply):
             self.last = self.replied = self.reply(event.text)
@@ -298,9 +300,11 @@ class Attempt:
         elif isinstance(event, IdleTimeout):
             return self.idle(event.seconds)
         elif isinstance(event, TurnFailed):
-            self.note("turn_failed", error=event.error, detail=event.detail)
+            if not self.limit:
+                self.note("turn_failed", error=event.error, detail=event.detail)
             self.failed = event
-            return self.end()
+            if self.plan.spec.mode != Mode.HEADLESS:
+                return self.end()
         elif isinstance(event, LimitHit):
             self.note("limit", resets_at=event.resets_at)
             self.limit = Limit(event.resets_at)
@@ -345,6 +349,8 @@ class Attempt:
         if self.failed:
             if self.policy.stops_failed:
                 self.stop()
+            if rc and self.failed.error == "process_exit":
+                return Result(rc, None, diagnostic)
             detail = f" ({self.failed.detail})" if self.failed.detail else ""
             return Result(rc, None, f"the client's turn failed: {self.failed.error}{detail}")
         if (block := outcome_block(self.last or "")) is None:
@@ -461,19 +467,24 @@ class Attempts:
     def begin(self) -> Session | Result:
         """The started session, Begun sent; a Result when it did not start."""
         p = self.plan
+        aside, stale = self.set_aside_stale_out()
         try:
             handle = self.start()
             self.handle = handle
         except SessionConfigError as e:
             self.refused = True
+            self.settle_stale_out(aside, keep=True)
             raise ConfigError(str(e)) from None
         except SessionError as e:
-            self.drop_stale_out()
+            self.settle_stale_out(aside, keep=False)
             self.note("input", text=p.params.input)
             if isinstance(e, SessionBusy):
                 return Result(EXIT_BUSY, None, str(e))
             return Result(1, None, f"{p.spec.mode}: {e}")
-        stale = self.drop_stale_out()
+        except BaseException:  # a signal or a driver fault: as it was
+            self.settle_stale_out(aside, keep=True)
+            raise
+        self.settle_stale_out(aside, keep=False)
         self.note("input", text=p.params.input)
         if stale:
             self.stop(handle)
@@ -523,16 +534,30 @@ class Attempts:
             return False
         return True
 
-    def drop_stale_out(self) -> str:
-        """Removes a new run's earlier `out`, only once the Driver took the run; returns why it
-        could not, else "".
+    def set_aside_stale_out(self) -> tuple[str | None, str]:
+        """Before the start (its client may write `out` before start returns): a new run's earlier
+        `out` moved aside, its path; else None and why it could not, else "".
         """
         s = self.plan.spec
-        if (
-            s.out and not s.resume and not os.path.isdir(s.out)
-        ):  # a resume keeps its session's draft
-            try:
-                Path(s.out).unlink(missing_ok=True)
-            except OSError as e:
-                return f"cannot remove the stale out: {e}"
-        return ""
+        if not s.out or s.resume or os.path.isdir(s.out):  # a resume keeps its session's draft
+            return None, ""
+        aside = os.path.join(os.path.dirname(s.out), f".{os.path.basename(s.out)}.stale")
+        try:
+            os.replace(s.out, aside)
+        except FileNotFoundError:
+            return None, ""
+        except OSError as e:
+            return None, f"cannot remove the stale out: {e}"
+        return aside, ""
+
+    def settle_stale_out(self, aside: str | None, *, keep: bool) -> None:
+        """keep: back as `out` (the Driver refused the run); else removed. Best effort."""
+        if aside is None:
+            return
+        try:
+            if keep and (out := self.plan.spec.out):
+                os.replace(aside, out)
+            else:
+                Path(aside).unlink(missing_ok=True)
+        except OSError as e:
+            say(f"delegate: stale out: {e}")

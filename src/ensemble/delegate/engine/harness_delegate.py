@@ -331,8 +331,7 @@ class HarnessDelegate(Delegate):
         return previous.attempt + 1 if previous.plan.sid == self._state.plan.sid else 1
 
     def _settle(self) -> None:
-        """A gone owned worker retired outside the mutex: its owner answers once it drained the
-        handler, before the sweep."""
+        """A gone owned worker retired outside the mutex: answered once its handler drained."""
         try:
             state = self._read()
         except (ConfigError, OSError):
@@ -599,7 +598,7 @@ class HarnessDelegate(Delegate):
             return agent is not None and agent.alive()
         if state.detached:
             process = self._harness(state)
-            return process is not None and process.alive()
+            return process is not None and process.alive() or self.store.running()
         return not state.completed and self.store.running()
 
     def alive(self) -> bool:
@@ -648,7 +647,10 @@ class HarnessDelegate(Delegate):
             agent, unanswered = None, True
         found = None if agent is None else agent.status()
         alive = self._alive(state) and (
-            state.plan.spec.mode != Mode.TUI or unanswered or found is not None
+            state.plan.spec.mode != Mode.TUI
+            or unanswered
+            or found is not None
+            or self.store.running()
         )
         if unanswered or found is not None and found.state == StatusState.UNKNOWN:
             word = StatusState.UNKNOWN

@@ -14,7 +14,15 @@ import time
 import unittest
 from unittest import mock
 
-from ensemble.session.engine.types import Access, Launch, Reply, SessionError, Spec, Stderr
+from ensemble.session.engine.types import (
+    Access,
+    Launch,
+    Reply,
+    SessionError,
+    Spec,
+    Stderr,
+    TurnFailed,
+)
 from ensemble.session.modes.base import POINTER
 from ensemble.session.modes.headless import HeadlessMode
 from tests.session.fakes.terminal import MemoryHost
@@ -178,7 +186,13 @@ class Streams(Base):
         found = self.drain()
         late = Stderr("bad �")
         self.assertEqual(
-            [e for e in found if e != late], [Reply(os.path.realpath(self.dir)), Stderr("probe")]
+            [e for e in found if e != late],
+            [
+                Reply(os.path.realpath(self.dir)),
+                Stderr("invalid JSON event"),
+                Stderr("probe"),
+                TurnFailed("invalid_output", "invalid JSON event"),
+            ],
         )
         self.assertEqual(found.count(late), 1)
         self.assertEqual(self.promptly(lambda: self.mode.returncode(WAIT)), 3)
@@ -196,14 +210,16 @@ class Streams(Base):
         self.start(StubClient(run=Echo), prompt=prompt)
         self.addCleanup(self.mode.stop)
         pointer = POINTER.format(size=len(prompt.encode()), path=path)
-        self.assertEqual(self.drain(), [Reply(pointer)])
+        self.assertEqual(self.drain(), [Reply(pointer), TurnFailed("incomplete_turn")])
         with open(path, encoding="utf-8") as f:
             self.assertEqual(f.read(), prompt)
 
     def test_ended_only_after_stderr_then_stdout(self):
         self.begin((sys.executable, "-I", "-c", STDERR_FIRST))
         found = self.drain()
-        self.assertCountEqual(found, [Stderr("first"), Reply("late")])
+        self.assertCountEqual(
+            found, [Stderr("first"), Reply("late"), TurnFailed("incomplete_turn", "first")]
+        )
         self.assertEqual(self.promptly(lambda: self.mode.returncode(WAIT)), 0)
 
     def test_an_exception_from_parse_is_raised_from_poll(self):
@@ -240,21 +256,21 @@ class Stop(Base):
         self.promptly(self.mode.stop)
         self.assertEqual(self.mode.state(), "absent")
         self.assertLess(self.promptly(lambda: self.mode.returncode(WAIT)), 0)
-        self.assertEqual(self.drain(), [])
+        self.assertEqual(self.drain(), [TurnFailed("interrupted")])
         self.promptly(self.mode.stop)
 
     def test_kills_the_group_so_a_grandchild_on_the_pipes_ends_them(self):
         self.grandchild((sys.executable, "-I", "-c", SPAWN_SLEEP))
         self.promptly(self.mode.stop)
         self.assertEqual(self.mode.returncode(0), -signal.SIGKILL)
-        self.assertEqual(self.drain(), [])
+        self.assertEqual(self.drain(), [TurnFailed("interrupted")])
 
     def test_kills_the_group_after_the_child_exited_while_a_grandchild_holds_the_pipes(self):
         self.grandchild((sys.executable, "-I", "-c", SPAWN))
         self.assertEqual(self.promptly(lambda: self.mode.returncode(WAIT)), 0)
         self.assertEqual(self.mode.poll(0.2), ([], False))
         self.promptly(self.mode.stop)
-        self.assertEqual(self.drain(), [])
+        self.assertEqual(self.drain(), [TurnFailed("interrupted")])
 
     def test_falls_back_to_killing_the_process_when_killpg_fails(self):
         for error in (ProcessLookupError, PermissionError):
@@ -282,7 +298,7 @@ class Stop(Base):
 
     def test_skips_killpg_once_the_child_is_reaped_and_both_pipes_ended(self):
         self.begin((sys.executable, "-I", "-c", "pass"))
-        self.assertEqual(self.drain(), [])
+        self.assertEqual(self.drain(), [TurnFailed("incomplete_turn")])
         self.assertEqual(self.promptly(lambda: self.mode.returncode(WAIT)), 0)
         with mock.patch("os.killpg") as killpg:
             self.promptly(self.mode.stop)

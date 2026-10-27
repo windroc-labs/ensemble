@@ -18,6 +18,7 @@ from ensemble.session.engine.types import (
     SessionInfo,
     SessionStatus,
     Spec,
+    TurnFailed,
     Usage,
     Window,
 )
@@ -42,13 +43,13 @@ class SessionTest(Base):
             with self.subTest(message=message), self.assertRaises(SessionError) as caught:
                 call()
             self.assertEqual(str(caught.exception), message)
-        self.assertEqual(self.drain(session), [Exited(0)])
+        self.assertEqual(self.drain(session), [TurnFailed("incomplete_turn"), Exited(0)])
 
     def test_alive_while_the_process_runs_then_dead(self):
         self.steps({"sleep": 1})
         session = self.start()
         self.assertTrue(session.alive())
-        self.assertEqual(self.drain(session), [Exited(0)])
+        self.assertEqual(self.drain(session), [TurnFailed("incomplete_turn"), Exited(0)])
         self.assertEqual((session.alive(), session.status().state), (False, "dead"))
 
     def test_attributes_info_reply_and_the_run_log(self):
@@ -67,7 +68,7 @@ class SessionTest(Base):
         )
         self.assertEqual(session.info(), info)
         self.assertIsNone(session.reply)
-        self.assertEqual(self.drain(session), [Exited(0)])
+        self.assertEqual(self.drain(session), [TurnFailed("incomplete_turn"), Exited(0)])
         (line,) = self.written()
         self.assertEqual(
             {k: v for k, v in line.items() if k != "ts"},
@@ -95,7 +96,7 @@ class SessionTest(Base):
         session = self.start(
             client="probe", sid="history", spec=self.spec(access=Access(cwd=self.dir))
         )
-        self.assertEqual(self.drain(session), [Exited(0)])
+        self.assertEqual(self.drain(session), [TurnFailed("incomplete_turn"), Exited(0)])
         session.close()
         with contextlib.ExitStack() as stack:
             starts = [
