@@ -58,7 +58,8 @@ BINDING_KEYS = frozenset({"version", "cwd", "sid", "native"})
 BINDING_MAX = 4096
 OLLAMA_PORT = 11434
 OLLAMA_CONTEXT = 65536
-# Headroom below a window: OpenCode's OUTPUT_TOKEN_MAX and COMPACTION_BUFFER (docs/sessions.md).
+# Headroom below a window: OpenCode's OUTPUT_TOKEN_MAX and COMPACTION_BUFFER
+# (docs/customizing-roles-and-tasks.md › OpenCode sessions).
 REPLY, BUFFER = 32000, 20000
 # Set by OpenCode for its children (a nested start's are never its own).
 IDENTITY = ("OPENCODE", "OPENCODE_PID", "OPENCODE_TERMINAL")

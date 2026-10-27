@@ -176,7 +176,7 @@ class Interactive(ABC):
 
 
 class InteractiveProcess(Process, Interactive):
-    """Managed contract: docs/sessions.md › Session harness interfaces. Channel not implemented."""
+    """Managed contract: docs/architecture.md › Session harness interfaces; no Channel."""
 
     generation: str
 

@@ -111,7 +111,7 @@ class Extension(ConfigFile, Case):
         self.assertEqual(fake_delegate.FakeDelegate.starts(record.workdir), 1)
         ended = (
             "ensemble-orchestrator: TASK-1: run ended (done); nothing resumed; its conversation:"
-            " ensemble-crew reopen TASK-1 (docs/sessions.md › Recall a closed run)\n"
+            " ensemble-crew reopen TASK-1 (docs/architecture.md › Recall a closed run)\n"
         )
         for transition, starts, stderr in (("finish", 1, ended), ("end", 2, "")):
             getattr(fake_delegate.FakeDelegate, transition)(record.workdir)

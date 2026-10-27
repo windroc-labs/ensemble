@@ -19,7 +19,7 @@ with the broker; a provider API key or an environment secret is the same long-li
 | `tmux` | Codex | the user, beforehand: `codex login` ([Codex auth]) | `~/.codex/auth.json`, or the OS credential store per `cli_auth_credentials_store` ([Codex auth]) | no container | — |
 | Docker | Claude Code | the user, once per [account](docker-host.md#claude-accounts): `claude setup-token` in its subscription, pasted into `<B> login claude [<name>]` ([Log in](docker-host.md#log-in)) | `ensemble-broker-claude` / account name | the selected account's token alone, `/run/ensemble/secrets/claude`, 0400 on tmpfs, given to the client only as `CLAUDE_CODE_OAUTH_TOKEN` | deleted with the container (close, restart, resume start a new one); never revoked |
 | Docker | Codex | an admin installs the pinned Codex (`sudo <B> install-codex <version>`); the user, once: `<B> login codex` in a browser ([Codex](docker-host.md#codex)) | `ensemble-broker-codex` / `auth` | `/run/ensemble/secrets/codex/auth.json`, 0400 on tmpfs, with no refresh token; the broker publishes each renewal | deleted with the container; never revoked |
-| `tmux` | OpenCode | no one for the host's Ollama on `127.0.0.1` ([Docker host › OpenCode](docker-host.md#opencode)); a configured provider's API key: the user, beforehand: `opencode auth login` ([OpenCode sessions](sessions.md#opencode-sessions)) | OpenCode's `auth.json`; ensemble reads the selected API entry for availability probes and explicit broker import | no container | — |
+| `tmux` | OpenCode | no one for the host's Ollama on `127.0.0.1` ([Docker host › OpenCode](docker-host.md#opencode)); a configured provider's API key: the user, beforehand: `opencode auth login` ([OpenCode sessions](customizing-roles-and-tasks.md#opencode-sessions)) | OpenCode's `auth.json`; ensemble reads the selected API entry for availability probes and explicit broker import | no container | — |
 | Docker | OpenCode | no one for the host's Ollama (through `host.docker.internal`); each configured provider's API key: `scripts/install.sh --docker` imports the local entry, or the user runs `<B> login opencode <name>` per provider ([Log in](docker-host.md#log-in)) | `ensemble-broker-opencode` / `<name>` | the GitHub tokens and each configured provider's key, `/run/ensemble/secrets/opencode/<name>.key`, 0400 on tmpfs, read by OpenCode through `{file:…}` in its inline config, never env or argv | deleted with the container; never revoked |
 
 GitHub on the Docker Host needs no per-run login: `<B> login github ensemble-broker-bot` once
@@ -283,7 +283,7 @@ The broker's temporary Codex login directory is removed on success, child failur
 One per `[session.clients.opencode.providers.<name>]` table, such as a LAN Strata server.
 
 The installer also registers the selected provider in local OpenCode's global config so a directly started
-commander can use the key; existing definitions are preserved ([OpenCode sessions](sessions.md#opencode-sessions)).
+commander can use the key; existing definitions are preserved ([OpenCode sessions](customizing-roles-and-tasks.md#opencode-sessions)).
 
 | Field | Local (`tmux`) | Docker |
 |---|---|---|
