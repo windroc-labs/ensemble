@@ -5,7 +5,7 @@ from dataclasses import replace
 
 from ensemble.delegate import ConfigError, Outcome
 from ensemble.delegate.engine.harness_delegate import HarnessDelegate
-from ensemble.delegate.engine.record import RunRecord, worker
+from ensemble.delegate.engine.record import HANDLER, RunRecord, worker
 from ensemble.delegate.engine.types import Layout, Limit, Result
 from ensemble.session import HookCallback
 from ensemble.utils import OutcomeStatus
@@ -67,7 +67,7 @@ class PhaseTest(HarnessCase):
         self.make()
         self.record = RunRecord(Layout(self.work))
         state = self.record.read()
-        handler = HookCallback("ensemble.delegate.engine.handler", {"worker": 1}, ("/r",))
+        handler = HookCallback(HANDLER, {"worker": 1}, ("/r",))
         session = replace(state.plan.session, handlers=(handler,))
         self.record.save(replace(state, plan=replace(state.plan, session=session)))
         self.done = Result(0, Outcome(OutcomeStatus.NEEDS_INPUT, "title", "summary"))
@@ -86,9 +86,16 @@ class PhaseTest(HarnessCase):
         state = self.record.read()
         for given in ({}, {"worker": "1"}, {"worker": True}):
             with self.subTest(given=given):
-                handler = HookCallback("h", given, ())
+                handler = HookCallback(HANDLER, given, ())
                 session = replace(state.plan.session, handlers=(handler,))
                 self.assertIsNone(worker(replace(state, plan=replace(state.plan, session=session))))
+        other = HookCallback("pkg.writeback", {"worker": 7}, ())
+        mine = HookCallback(HANDLER, {"worker": 3}, ())
+        for handlers, want in (((other,), None), ((other, mine), 3)):
+            with self.subTest(handlers=len(handlers)):
+                session = replace(state.plan.session, handlers=handlers)
+                found = replace(state, plan=replace(state.plan, session=session))
+                self.assertEqual(worker(found), want)
         self.assertIsNone(
             worker(
                 replace(

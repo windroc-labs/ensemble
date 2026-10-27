@@ -13,7 +13,7 @@ from unittest import mock
 
 from ensemble.delegate import Spec
 from ensemble.delegate.engine import handler
-from ensemble.delegate.engine.record import RunRecord
+from ensemble.delegate.engine.record import HANDLER, RunRecord
 from ensemble.delegate.engine.types import Layout, Result
 from ensemble.session import (
     Activity,
@@ -124,7 +124,7 @@ class HandlerCase(HarnessCase):
 
     def register(self, token, **changes) -> None:
         state = self.record.read()
-        handlers = (HookCallback(handler.HANDLER, {"workdir": self.work, "worker": token}, ()),)
+        handlers = (HookCallback(HANDLER, {"workdir": self.work, "worker": token}, ()),)
         run = replace(state.plan.run, idle_timeout=IDLE)
         session = replace(state.plan.session, handlers=handlers)
         self.record.save(
@@ -171,19 +171,19 @@ class HandlerCase(HarnessCase):
 
 
 class BindTest(HandlerCase):
-    def test_the_first_call_binds_the_opening_attempt_and_begins_it(self):
+    def test_the_first_call_binds_the_opening_attempt_its_drive_began(self):
         self.assertFalse(self.state().bound)
         self.call(TurnStarted())
         state = self.state()
         self.assertEqual((state.attempt, state.bound, state.completed), (1, True, False))
-        self.assertEqual(self.kinds_sent(), [("begun", 1)])
+        self.assertEqual(self.kinds_sent(), [])
 
     def test_an_outcome_ends_the_attempt_stored_before_its_finished(self):
         self.finish()
         state = self.state()
         self.assertTrue(state.completed)
         self.assertEqual(state.result.outcome.status, "done")
-        self.assertEqual(self.kinds_sent(), [("begun", 1), ("progress", 1), ("finished", 1)])
+        self.assertEqual(self.kinds_sent(), [("progress", 1), ("finished", 1)])
         finished, at = self.sent[-1]
         self.assertEqual(finished["outcome"]["status"], "done")
         self.assertTrue(at["completed"])
@@ -201,8 +201,13 @@ class BindTest(HandlerCase):
         self.call(Exited(3))
         state = self.state()
         self.assertEqual(state.result, Result(3, None, "the client exited 3"))
-        self.assertEqual(self.kinds_sent(), [("begun", 1), ("finished", 1)])
+        self.assertEqual(self.kinds_sent(), [("finished", 1)])
         self.assertEqual(self.lines(), [["outcome", "error"]])
+
+    def test_a_worker_killed_by_a_signal_is_an_interrupted_attempt(self):
+        self.call(TurnStarted())
+        self.call(Exited(-1))
+        self.assertEqual(self.state().result, Result(129, None, "stopped: Stopped: 129"))
 
     def test_a_limit_stops_the_worker_and_its_exit_ends_the_attempt(self):
         self.call(TurnStarted())
@@ -233,7 +238,6 @@ class FollowUpTest(HandlerCase):
         self.assertEqual(
             self.kinds_sent(),
             [
-                ("begun", 1),
                 ("progress", 1),
                 ("finished", 1),
                 ("begun", 2),
@@ -262,7 +266,7 @@ class FollowUpTest(HandlerCase):
         self.call(TurnEnd(block(DONE), 0))
         state = self.state()
         self.assertEqual((state.attempt, state.result.outcome.status), (1, "done"))
-        self.assertEqual(self.kinds_sent(), [("begun", 1), ("finished", 1)])
+        self.assertEqual(self.kinds_sent(), [("finished", 1)])
 
     def test_an_input_resume_of_a_live_owned_worker_opens_one_attempt(self):
         self.finish(NEEDS)
@@ -284,7 +288,7 @@ class FollowUpTest(HandlerCase):
         self.assertEqual((state.attempt, state.result.outcome.status), (2, "done"))
         self.assertEqual(
             self.kinds_sent(),
-            [("begun", 1), ("progress", 1), ("finished", 1), ("begun", 2), ("finished", 2)],
+            [("progress", 1), ("finished", 1), ("begun", 2), ("finished", 2)],
         )
 
     def test_an_exit_after_completion_ends_nothing(self):
@@ -373,17 +377,17 @@ class LockedTest(HandlerCase):
         Timer.made[-1].fire()
         self.assertEqual(self.state().result, GAVE_UP)
         self.assertEqual(self.view.calls, [("close",)])
-        self.assertEqual(self.kinds_sent(), [("begun", 1)])
+        self.assertEqual(self.kinds_sent(), [])
         self.call(Exited(0))
-        self.assertEqual(self.kinds_sent(), [("begun", 1), ("finished", 1)])
+        self.assertEqual(self.kinds_sent(), [("finished", 1)])
 
     def test_an_idle_give_up_whose_close_fails_finishes_at_once(self):
         self.call(TurnStarted())
         self.view.close_fail = SessionError("not confirmed")
         Timer.made[-1].fire()
-        self.assertEqual(self.kinds_sent(), [("begun", 1), ("finished", 1)])
+        self.assertEqual(self.kinds_sent(), [("finished", 1)])
         self.call(Exited(0))
-        self.assertEqual(self.kinds_sent(), [("begun", 1), ("finished", 1)])
+        self.assertEqual(self.kinds_sent(), [("finished", 1)])
 
 
 class EndingTest(HandlerCase):
@@ -395,7 +399,7 @@ class EndingTest(HandlerCase):
         self.call(TurnEnd(block(DONE), 0))
         self.assertEqual(self.state().result, stored)
         self.assertEqual(self.kinds(), before)
-        self.assertEqual(self.kinds_sent(), [("begun", 1)])
+        self.assertEqual(self.kinds_sent(), [])
         self.assertEqual(self.lines(), [])
 
 
@@ -412,7 +416,7 @@ class CloseTest(HandlerCase):
         self.close()
         state = self.state()
         self.assertEqual((state.attempt, state.completed, state.result), (1, True, self.STOPPED))
-        self.assertEqual(self.kinds_sent(), [("begun", 1), ("finished", 1)])
+        self.assertEqual(self.kinds_sent(), [("finished", 1)])
         finished, at = self.sent[-1]
         self.assertEqual(
             (finished["returncode"], finished["outcome"], finished["error"]),
@@ -423,7 +427,7 @@ class CloseTest(HandlerCase):
         self.assertEqual(self.lines(), [["outcome", "error"]])
         self.call(Exited(143))
         self.assertEqual(self.state().result, self.STOPPED)
-        self.assertEqual(self.kinds_sent(), [("begun", 1), ("finished", 1)])
+        self.assertEqual(self.kinds_sent(), [("finished", 1)])
 
     def test_close_of_an_ended_owned_attempt_sends_nothing(self):
         self.finish(NEEDS)
@@ -445,7 +449,7 @@ class CloseTest(HandlerCase):
         self.call(TurnEnd(block(DONE), 0))
         Raced.attach(self.work, session_cls=HarnessSession).close()
         self.assertEqual(self.state().result.outcome.status, "done")
-        self.assertEqual(self.kinds_sent(), [("begun", 1), ("finished", 1)])
+        self.assertEqual(self.kinds_sent(), [("finished", 1)])
         self.assertEqual(self.sent[-1][0]["outcome"]["status"], "done")
 
     def test_close_of_a_run_no_harness_owns_ends_nothing_itself(self):
@@ -496,3 +500,19 @@ class IdleTest(HandlerCase):
         self.call(TurnEnd(block(DONE), 0))
         stale.fire()
         self.assertEqual(self.state().result.outcome.status, "done")
+
+
+class FailureTest(HandlerCase):
+    def test_a_deliverable_it_cannot_save_ends_the_attempt_stopped(self):
+        blocker = os.path.join(self.home, "a-file")
+        with open(blocker, "w", encoding="utf-8") as f:
+            f.write("")
+        state = self.state()
+        spec = replace(state.plan.spec, out=os.path.join(blocker, "out.md"))
+        self.record.save(replace(state, plan=replace(state.plan, spec=spec)))
+        self.finish()
+        result = self.state().result
+        self.assertTrue(self.state().completed)
+        self.assertTrue(result.error.startswith("stopped: FileExistsError: "), result.error)
+        self.assertEqual(self.kinds_sent()[-1], ("finished", 1))
+        self.assertEqual(self.lines(), [["outcome", "error"]])

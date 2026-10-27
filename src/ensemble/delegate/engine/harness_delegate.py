@@ -22,10 +22,10 @@ from ensemble.delegate.engine.config import module_roots, packaged_environments,
 from ensemble.delegate.engine.container import on_docker
 from ensemble.delegate.engine.drivers import AgentDriver, Driver, InstructionDriver
 from ensemble.delegate.engine.environment import resolve
-from ensemble.delegate.engine.handler import HANDLER
+from ensemble.delegate.engine.handler import finish
 from ensemble.delegate.engine.plan import plan
-from ensemble.delegate.engine.record import RunRecord
-from ensemble.delegate.engine.runner import Attempts, closing, execute, idle_reason, say, stopped
+from ensemble.delegate.engine.record import HANDLER, RunRecord, owned
+from ensemble.delegate.engine.runner import Attempts, execute, idle_reason, say, stopped
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import (
     ConfigError,
@@ -571,7 +571,7 @@ class HarnessDelegate(Delegate):
             raise ConfigError(str(error)) from None
 
     def _alive(self, state: DelegateState) -> bool:
-        if state.plan.session.handlers:
+        if owned(state.plan):
             if state.completed:
                 return False
             if self.store.running():
@@ -742,16 +742,14 @@ class HarnessDelegate(Delegate):
             raise Unanswered(unchecked)
 
     def _stop_owned(self, state: DelegateState) -> None:
-        """An owned run's active attempt ends once as a stop, a close's SIGTERM to the earlier
-        caller loop, before its worker's Exited could end it as a failure (FR-34).
-        """
+        """FR-34: an owned run's active attempt ends once as a stop, not as its worker's exit."""
         p = state.plan
         if state.completed or p.spec.mode != Mode.TUI or not p.session.handlers:
             return
         result = stopped(Stopped(128 + signal.SIGTERM))
         if not RunRecord(self.layout, self.store).complete(state.attempt, result, sid=p.sid):
             return
-        RunRecord.ended(state, result)
+        finish(state, result, None)
         if state.callback is not None:
             EventCallback(state.callback, self.store, sid=p.sid, attempt=state.attempt)(
                 Finished(result)
@@ -795,7 +793,7 @@ class HarnessDelegate(Delegate):
                 )
             )
 
-            if self._state.plan.session.handlers:
+            if owned(self._state.plan):
                 try:
                     return self._drive(callback, on_event)
                 finally:
@@ -829,7 +827,9 @@ class HarnessDelegate(Delegate):
             finally:
                 self._clear_tmp()
 
-    def _crashed(self, error: BaseException, callback: EventCallback | None) -> Result:
+    def _crashed(
+        self, error: BaseException, callback: EventCallback | None, *, refused: bool | None = None
+    ) -> Result:
         ended = self._start_failure_end(error)
         if isinstance(error, (Exception, SystemExit)):
             RunLog(self.layout.run).note(
@@ -838,7 +838,10 @@ class HarnessDelegate(Delegate):
                 traceback="".join(traceback.format_exception(error)),
                 best_effort=True,
             )
-        self._finished(ended, callback, None)
+        if refused is None:
+            self._finished(ended, callback, None)
+        else:
+            self._drive_end(ended, None, callback, None, notes=not refused)
         return ended
 
     def _finished(
@@ -862,22 +865,43 @@ class HarnessDelegate(Delegate):
         self, callback: EventCallback | None, on_event: Callable[[Event], None] | None
     ) -> Result:
         """An owned run: an exception after the start leaves the attempt as it is."""
-        p = self._state.plan
-        attempts = Attempts(p, on_event or (lambda _event: None), self.driver)
+
+        def begun(event: Event) -> None:
+            for each in (callback, on_event):
+                if each is not None:
+                    each(event)
+
+        attempts = Attempts(self._state.plan, begun, self.driver)
         try:
             opened = attempts.begin()
         except BaseException as error:
             if attempts.handle is None:
-                ended = self._crashed(error, callback)
-                if not attempts.refused:
-                    attempts.close({"error": ended.error}, ended.returncode)
+                self._crashed(error, callback, refused=attempts.refused)
             raise
-        if isinstance(opened, Result):
-            attempts.release()
-            self._finished(opened, callback, on_event)
-            attempts.close(closing(opened), opened.returncode)
+        if not isinstance(opened, Result):
+            return self._await(opened, callback, on_event)
+        if self._drive_end(opened, attempts.handle, callback, on_event) or attempts.handle is None:
             return opened
-        return self._await(opened, callback, on_event)
+        return self._await(attempts.handle, callback, on_event)
+
+    def _drive_end(
+        self,
+        result: Result,
+        handle: Session | None,
+        callback: EventCallback | None,
+        on_event: Callable[[Event], None] | None,
+        *,
+        unbound: bool = True,
+        give_up: str | None = None,
+        notes: bool = True,
+    ) -> bool:
+        """Compare-and-set; False: another owner's came first."""
+        n, sid = self._state.attempt, self._state.plan.sid
+        if not RunRecord(self.layout, self.store).complete(n, result, sid=sid, unbound=unbound):
+            return False
+        finish(self._read(), result, handle, give_up=give_up, notes=notes)
+        self._finished(result, callback, on_event, store=False)
+        return True
 
     def _await(
         self,
@@ -889,7 +913,6 @@ class HarnessDelegate(Delegate):
         run.idle_timeout or once its worker was gone DRAIN_WAIT s (AC18).
         """
         p, n = self._state.plan, self._state.attempt
-        record = RunRecord(self.layout, self.store)
         idle, start = p.run.idle_timeout, time.monotonic()
         checked = gone = None
         while True:
@@ -902,51 +925,20 @@ class HarnessDelegate(Delegate):
                     raise ConfigError(f"{self.workdir}: delegate attempt {n} has no Result")
                 self._finished(result, None, on_event, store=False)
                 return result
-            now, ending, unbound = time.monotonic(), None, False
+            now = time.monotonic()
             if checked is None or now - checked >= GONE_EVERY:
                 checked = now
                 with contextlib.suppress(Unanswered):
                     gone = None if handle.alive() else gone or now
             if not state.bound and idle and now - start >= idle:
-                ending, unbound = Result(0, None, "the agent run returned no outcome"), True
+                ending = Result(0, None, "the agent run returned no outcome")
+                if self._drive_end(ending, handle, callback, on_event, give_up=idle_reason(idle)):
+                    return ending
             elif gone is not None and now - gone >= DRAIN_WAIT:
                 ending = Result(1, None, "stopped: session harness ended without a Result")
-            if ending is not None and record.complete(n, ending, sid=p.sid, unbound=unbound):
-                self._drive_ended(state, ending, handle, give_up=unbound)
-                self._finished(ending, callback, on_event, store=False)
-                return ending
+                if self._drive_end(ending, handle, callback, on_event, unbound=False):
+                    return ending
             time.sleep(TUI_POLL)
-
-    def _drive_ended(
-        self, state: DelegateState, result: Result, handle: Session, *, give_up: bool
-    ) -> None:
-        p = state.plan
-        log = RunLog(p.session.workdir)
-        environment = p.session.environment
-        lock = None if environment is None else environment.lock
-        before: tuple[tuple[str, dict], ...] = ()
-        if give_up:
-            reason = idle_reason(p.run.idle_timeout)
-            before = (("give_up", {"reason": reason}),)
-            try:
-                command = f": {handle.attach_command()}" if handle.showable else ""
-            except SessionError:
-                command = ""
-            left = "" if lock else f"; session {state.agent_name} left open{command}"
-            say(f"delegate: {reason}{left}")
-        RunRecord.ended(state, result, before)
-        if lock is None:
-            return
-        try:
-            handle.close()
-        except SessionError as error:
-            say(f"delegate: tui: close: {error}")
-            return
-        say(f"delegate: session {state.agent_name} closed (lock {lock})")
-        try:
-            log.note("release", lock=lock)
-        except OSError as error:
-            say(f"delegate: {error}")
 
     def _start_failure_end(self, error: BaseException) -> Result:
         """A signal's stop ends as the saved start_failure, if any."""
@@ -997,7 +989,7 @@ class HarnessDelegate(Delegate):
             self._save(self._state)
 
     def announce(self, result: Result | None) -> None:
-        if not self._state.plan.session.handlers:
+        if not owned(self._state.plan):
             RunRecord.announce(self._state, result)
 
     def _current(self) -> DelegateState:
@@ -1210,7 +1202,7 @@ class HarnessDelegate(Delegate):
                 outcome = state.result.outcome if state.result is not None else None
                 if outcome is None or outcome.status != OutcomeStatus.NEEDS_INPUT:
                     raise ConfigError(f"{self.workdir}: --input requires a needs_input outcome")
-                agent = self._answered_agent(state) if state.plan.session.handlers else None
+                agent = self._answered_agent(state) if owned(state.plan) else None
                 if agent is not None and agent.alive():
                     # its worker's TurnStarted opens the follow-up attempt (D9)
                     RunLog(state.plan.session.workdir).note("input", text=input)

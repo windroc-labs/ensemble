@@ -16,7 +16,6 @@ from ensemble.session.clients.codex.common.types import SessionState
 from ensemble.session.clients.common import split_flags
 from ensemble.session.engine.types import (
     Activity,
-    Blocked,
     ClientBound,
     Launch,
     LimitHit,
@@ -25,7 +24,6 @@ from ensemble.session.engine.types import (
     Stderr,
     TurnEnd,
     TurnFailed,
-    TurnStarted,
 )
 from ensemble.session.modes.client_adapters.headless import Headless
 
@@ -39,12 +37,11 @@ class CodexHeadless(Headless):
         self.state: SessionState | None = None
         self.last_reply = ""
         self.limit_sent = False
-        self.started = False
 
     def launch(self, spec: Spec):
         resume = spec.resume
         self.state = self.common.prepare(spec)
-        self.limit_sent, self.started, self.last_reply = False, False, ""
+        self.limit_sent = False
         snapshot = self.state.snapshot
         found = self._context.container
         executable = os.path.join(found.bin_dir, "codex") if found is not None else "codex"
@@ -93,12 +90,6 @@ class CodexHeadless(Headless):
                 return
             self.state = self.common.bind(self.state.workdir, self.state.sid, found)
             yield ClientBound(found)
-        elif kind == "turn.started":
-            if not self.started:
-                self.started, self.last_reply = True, ""
-                yield TurnStarted()
-        elif kind in ("permission.requested", "approval.requested", "user_input.requested"):
-            yield Blocked(kind)
         elif kind == "item.completed":
             item = record.get("item")
             if (
@@ -119,9 +110,6 @@ class CodexHeadless(Headless):
 
     def _error(self, record, kind):
         error = record.get("message") if kind == "error" else record.get("error")
-        info = error.get("codex_error_info") if isinstance(error, dict) else None
-        if isinstance(info, dict) and len(info) == 1:
-            info = next(iter(info))
         if isinstance(error, dict):
             error = error.get("message")
         found = error if isinstance(error, str) and error.strip() else ""
@@ -131,4 +119,4 @@ class CodexHeadless(Headless):
                 self.limit_sent = True
                 yield LimitHit(reset_at(found, self.common.config.get("env", {})))
         if kind == "turn.failed" and not self.limit_sent:  # an `error` may precede a retry
-            yield TurnFailed(info if isinstance(info, str) and info else "turn_failed", found)
+            yield TurnFailed("turn_failed", found)

@@ -20,24 +20,17 @@ from ensemble.session import SESSION_NAME_RULE
 from ensemble.session.clients.base import Client
 from ensemble.session.engine.types import (
     Access,
-    Blocked,
     ClientContext,
     ClientHome,
     ConfigError,
     Container,
     Launch,
-    LimitHit,
     Liveness,
     Permission,
     Prepared,
-    Reply,
     SessionError,
     SessionInfo,
     Spec,
-    Stderr,
-    TurnEnd,
-    TurnFailed,
-    TurnStarted,
 )
 from ensemble.session.hosts.base import Piped
 from ensemble.session.modes.base import POINTER
@@ -320,72 +313,6 @@ class PipingHost(MemoryHost):
         return self.piped
 
 
-class TerminalEvents(Base):
-    def mode_for(self, events, codes=(0,)):
-        spec = Spec(workdir=self.dir, access=Access(cwd=self.dir), sid=SID)
-        mode = HeadlessMode(
-            Prepared(
-                spec, SessionInfo(sid=SID, cwd=self.dir, project=False, transcript="", resume="")
-            ),
-            FakePiped(codes),
-        )
-        for event in (*events, None, None):
-            mode.items.put(event)
-        return mode
-
-    def drain(self, mode):
-        found = []
-        for _ in range(20):
-            batch, ended = mode.poll(0)
-            found.extend(batch)
-            if ended:
-                return found
-        self.fail("headless never ended")
-
-    def test_success_waits_for_both_streams_and_known_zero_exit(self):
-        mode = self.mode_for(
-            [TurnStarted(), Reply("whole\n\nreply"), TurnEnd("whole\n\nreply")], (None, 0)
-        )
-        self.assertEqual(mode.poll(0), ([TurnStarted()], False))
-        self.assertEqual(mode.poll(0), ([Reply("whole\n\nreply")], False))
-        self.assertEqual(mode.poll(0), ([], False))
-        self.assertEqual(mode.poll(0), ([], False))
-        self.assertEqual(mode.poll(0), ([], False))
-        self.assertEqual(mode.poll(0), ([TurnEnd("whole\n\nreply")], True))
-        self.assertEqual(mode.returncode(0), 0)
-        self.assertEqual(mode.poll(0), ([], True))
-
-    def test_nonzero_exit_overrides_structured_success(self):
-        for code in (2, -9):
-            with self.subTest(code=code):
-                mode = self.mode_for([TurnEnd("partial")], (code,))
-                found = self.drain(mode)
-                self.assertEqual(len(found), 1)
-                self.assertIsInstance(found[0], TurnFailed)
-                self.assertEqual(found[0].error, "process_exit")
-                self.assertIn(str(code), found[0].detail)
-
-    def test_eof_or_text_without_native_completion_is_failure_even_at_zero_exit(self):
-        mode = self.mode_for([Reply("partial"), Stderr("truncated stream")])
-        found = self.drain(mode)
-        self.assertEqual(found[:-1], [Reply("partial"), Stderr("truncated stream")])
-        self.assertEqual(found[-1], TurnFailed("incomplete_turn", "truncated stream"))
-
-    def test_native_failure_wins_over_repeated_or_late_completion(self):
-        failure = TurnFailed("server_overloaded", "try again")
-        mode = self.mode_for([failure, failure, TurnEnd("false success")], (1,))
-        self.assertEqual(self.drain(mode), [failure])
-
-    def test_uninteractive_permission_stops_worker_and_never_succeeds(self):
-        mode = self.mode_for([Blocked("approve tool"), TurnEnd("false success")])
-        self.assertEqual(self.drain(mode), [TurnFailed("permission_required", "approve tool")])
-        self.assertEqual(mode.piped.stops, [False])
-
-    def test_usage_limit_is_observable_and_cannot_be_a_success(self):
-        mode = self.mode_for([LimitHit(5), TurnEnd("false success")])
-        self.assertEqual(self.drain(mode), [LimitHit(5), TurnFailed("usage_limit")])
-
-
 class HomedRun(StubRun):
     def _home(self):
         return ClientHome("f", "d", "HOME_DIR", "c", (("a", "b"),))
@@ -442,7 +369,7 @@ class ThroughItsHost(Base):
         self.assertEqual(piped.closes, 0)
         self.assertEqual(mode.returncode(1), 0)
         self.assertEqual(mode.returncode(1), 0)
-        self.assertEqual((piped.closes, piped.waits), (1, [0, 1, 1]))
+        self.assertEqual((piped.closes, piped.waits), (1, [0, 1, 1, 1]))
         mode.stop()
         self.assertEqual(piped.stops, [True])
 

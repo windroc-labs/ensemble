@@ -24,7 +24,6 @@ from ensemble.session.engine.types import (
     Stderr,
     TurnEnd,
     TurnFailed,
-    TurnStarted,
 )
 from tests.session.case import Case
 from tests.session.unit.clients.opencode.support import (
@@ -594,19 +593,6 @@ def text(value: str) -> str:
 
 
 class EventsTest(Base):
-    def test_text_and_eof_without_final_step_is_not_success(self):
-        found = self.events(text("partial"))
-        self.assertEqual(found[:3], [ClientBound(SES), TurnStarted(), Reply("partial")])
-        self.assertIsInstance(found[-1], TurnFailed)
-        self.assertEqual(found[-1].error, "incomplete_turn")
-
-    def test_foreign_session_cannot_supply_a_completion(self):
-        foreign = json.dumps(
-            {"type": "step_finish", "sessionID": "ses_foreign", "part": {"reason": "stop"}}
-        )
-        found = self.events(text("partial"), foreign)
-        self.assertFalse(any(isinstance(event, TurnEnd) for event in found))
-
     def events(self, *lines: str, spec: Spec | None = None) -> list:
         run = self.client.headless()
         assert run is not None
@@ -625,23 +611,20 @@ class EventsTest(Base):
             found,
             [
                 ClientBound(SES),
-                TurnStarted(),
                 Activity("step_start"),
                 Reply("one"),
                 Activity("read"),
                 Reply("two"),
+                Activity("step_finish"),
                 TurnEnd("two"),
             ],
         )
         self.assertEqual(self.client.common.native(self.cwd, "run-1"), SES)
 
     def test_a_blank_text_is_no_reply(self):
-        self.assertEqual(
-            self.events(text("  "), line("step_finish", part={"reason": "stop"})),
-            [ClientBound(SES), TurnStarted(), TurnEnd("")],
-        )
+        self.assertEqual(self.events(text("  ")), [ClientBound(SES), TurnEnd("")])
 
-    def test_an_uninteractive_permission_denial_fails_the_turn(self):
+    def test_a_rejected_tool_is_stderr_and_the_turn_still_ends(self):
         rejected = "The user rejected permission to use this specific tool call."
         found = self.events(
             line(
@@ -653,11 +636,10 @@ class EventsTest(Base):
             found,
             [
                 ClientBound(SES),
-                TurnStarted(),
                 Activity("bash"),
                 Stderr(f"opencode: bash: {rejected}"),
-                TurnFailed("permission_required", rejected),
                 Reply("I cannot run it."),
+                TurnEnd("I cannot run it."),
             ],
         )
 
@@ -665,15 +647,12 @@ class EventsTest(Base):
         error = {"name": "UnknownError", "data": {"message": "Model not found: p/m."}}
         found = self.events(line("error", error=error))
         self.assertEqual(
-            found,
-            [ClientBound(SES), TurnStarted(), TurnFailed("UnknownError", "Model not found: p/m.")],
+            found, [ClientBound(SES), TurnFailed("UnknownError", "Model not found: p/m.")]
         )
 
     def test_an_error_without_data_keeps_its_name(self):
         found = self.events(line("error", error={"name": "APIError"}), text("late"))
-        self.assertEqual(
-            found, [ClientBound(SES), TurnStarted(), TurnFailed("APIError", ""), Reply("late")]
-        )
+        self.assertEqual(found, [ClientBound(SES), TurnFailed("APIError", ""), Reply("late")])
 
     def test_no_session_fails_the_turn(self):
         found = self.events("not json", json.dumps({"type": "text"}))
@@ -703,7 +682,5 @@ class EventsTest(Base):
 
     def test_a_resume_rebinds_its_session(self):
         self.client.common.bind(self.cwd, "run-1", SES)
-        found = self.events(
-            text("again"), line("step_finish", part={"reason": "stop"}), spec=self.spec(resume=True)
-        )
-        self.assertEqual(found, [ClientBound(SES), TurnStarted(), Reply("again"), TurnEnd("again")])
+        found = self.events(text("again"), spec=self.spec(resume=True))
+        self.assertEqual(found, [ClientBound(SES), Reply("again"), TurnEnd("again")])

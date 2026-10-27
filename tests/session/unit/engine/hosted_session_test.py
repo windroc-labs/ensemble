@@ -3219,18 +3219,25 @@ class OwnedStartTest(Case):
         os.mkdir(root)
         with open(os.path.join(root, "never_imported_handler.py"), "w") as f:
             f.write("raise SystemExit('imported')\n")
+        session_cls = HostedSession.configured(
+            clients={"fake": {"implementation": "tests.session.fake_client:InProcessFakeClient"}},
+            hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"}),
+        )
         good = engine_types.HookCallback("never_imported_handler", roots=(root,))
-        spec = self.spec(handlers=(good,))
-        tmux = self.popen.return_value
-        tmux.__enter__.return_value, tmux.returncode = tmux, 0
-        tmux.communicate.return_value = ("", "")
-        self.session_cls.preflight(spec)
+        spec = Spec(
+            workdir=self.workdir,
+            access=Access(cwd=self.workdir),
+            client="fake",
+            mode="in_process",
+            prompt="hi",
+            sid=SID,
+            handlers=(good,),
+        )
+        session_cls.preflight(spec)
         missing = dataclasses.replace(spec, handlers=(engine_types.HookCallback("no_such_mod"),))
         with self.assertRaisesRegex(ConfigError, "no_such_mod: cannot find"):
-            self.session_cls.preflight(missing)
-        self.assertNotIn(
-            hosted_session.HARNESS, [a for c in self.popen.call_args_list for a in c.args[0]]
-        )
+            session_cls.preflight(missing)
+        self.popen.assert_not_called()
 
     def test_an_environment_is_refused_before_any_harness(self):
         with self.assertRaises(ConfigError):

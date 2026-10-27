@@ -64,7 +64,9 @@ class Callbacks(CallbackCase):
             self.assertTrue(entry["line"].endswith("\n"))
             self.assertEqual(entry["cwd"], os.path.realpath(Layout(self.work).run))
             self.assertEqual(entry["pgid"], entry["pid"])
-            self.assertEqual((entry["held"], entry["lock"]), (True, f"{entry['pid']}\n"))
+            self.assertEqual(
+                (entry["held"], entry["lock"]), (True, f"{entry['pid']} {os.getpid()}\n")
+            )
         store = RunState(Layout(self.work))
         self.assertFalse(store.held(store.callback_lock))
         events = self.events()

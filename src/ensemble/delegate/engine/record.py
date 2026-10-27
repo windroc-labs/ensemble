@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from dataclasses import fields, is_dataclass, replace
 
 from ensemble.delegate.composer import RunConfig, Team
-from ensemble.delegate.engine.runner import closing, say
+from ensemble.delegate.engine.runner import say
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import (
     ConfigError,
@@ -20,7 +20,7 @@ from ensemble.delegate.engine.types import (
     Spec,
 )
 from ensemble.delegate.event.types import Outcome
-from ensemble.session import Access, EnvironmentSpec, HookCallback, RunLog, SessionStatusLog
+from ensemble.session import Access, EnvironmentSpec, HookCallback, SessionStatusLog
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import Spec as SessionSpec
 
@@ -46,9 +46,18 @@ def _result(data: dict | None) -> Result | None:
     )
 
 
+HANDLER = "ensemble.delegate.engine.handler"
+
+
+def owned(plan: Plan) -> bool:
+    """A run planned with the delegation handler: a session harness owns its worker."""
+    return any(h.module == HANDLER for h in plan.session.handlers)
+
+
 def worker(state: DelegateState) -> int | None:
-    handlers = state.plan.session.handlers
-    found = handlers[0].state.get("worker") if handlers else None
+    found = next(
+        (h.state.get("worker") for h in state.plan.session.handlers if h.module == HANDLER), None
+    )
     return found if type(found) is int else None
 
 
@@ -152,26 +161,6 @@ class RunRecord:
             )
         except OSError as error:
             say(f"delegate: {error}")
-
-    @staticmethod
-    def ended(
-        state: DelegateState, result: Result, before: tuple[tuple[str, dict], ...] = ()
-    ) -> None:
-        """An ended attempt's run notes (`before`, then `result` and `end`), then its events line;
-        an OSError is printed, never raised.
-        """
-        p = state.plan
-        log = RunLog(p.session.workdir)
-        for kind, values in (
-            *before,
-            ("result", closing(result)),
-            ("end", {"sid": p.sid, "rc": result.returncode}),
-        ):
-            try:
-                log.note(kind, **values)
-            except OSError as error:
-                say(f"delegate: {error}")
-        RunRecord.announce(state, result)
 
     def bind(self, n: int, token: int) -> bool:
         with self.store.mutex():

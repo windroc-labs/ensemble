@@ -1,5 +1,5 @@
 """The in_process mode: an InProcess's run iterated on a daemon thread into a queue; no child
-process (owned: the session harness's thread). A run that raises ends with its traceback as Stderr lines and code 1. stop() never
+process. A run that raises ends with its traceback as Stderr lines and code 1. stop() never
 waits: what came before it is still polled, the code is -SIGKILL unless the run had ended, and the
 run is closed at its next yield.
 """
