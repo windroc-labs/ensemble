@@ -138,10 +138,18 @@ class CliCase(Case):
         return logged(self.log(name, "commands"))
 
     def start(
-        self, name: str, *args: str, steps=None, turns=(), prompt: str = "hi", **extra
+        self,
+        name: str,
+        *args: str,
+        steps=None,
+        turns=(),
+        prompt: str = "hi",
+        dialog: str | None = None,
+        **extra,
     ) -> subprocess.CompletedProcess:
         """A fake claude worker, its events self.events."""
-        env = {"ENSEMBLE_EVENTS": self.events, **self.scene(name, steps, turns), **extra}
+        scene = self.scene(name, steps, turns, **({} if dialog is None else {"dialog": dialog}))
+        env = {"ENSEMBLE_EVENTS": self.events, **scene, **extra}
         return self.session(
             "start",
             name,
