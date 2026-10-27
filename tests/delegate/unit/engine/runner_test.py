@@ -275,6 +275,35 @@ class TuiPolicy(Base):
                     (session.mode, session.name, session.events), ("headless", name, None)
                 )
 
+    def test_a_draft_written_while_the_session_starts_outlives_the_stale_out(self):
+        self.write(self.out, "# Earlier\n")
+        self.handle = FakeHandle([turn(START, block(DONE)), Exited(0)])
+
+        def start(spec, **kw):
+            self.write(self.out, "# Draft\n")  # its client, already running when start returns
+            return self.handle.start(spec, **kw)
+
+        seen = []
+        with mock.patch.object(self.driver, "start", side_effect=start):
+            self.go(
+                mode="headless",
+                on_event=lambda e: (
+                    seen.append(self.read(self.out)) if isinstance(e, Begun) else None
+                ),
+            )
+        self.assertEqual(seen, ["# Draft\n"])
+        self.assertEqual(sorted(os.listdir(os.path.dirname(self.out))).count("out.md"), 1)
+
+    def test_a_start_ended_by_a_signal_puts_the_stale_out_back(self):
+        self.write(self.out, "# Earlier\n")
+        with (
+            mock.patch.object(self.driver, "start", side_effect=Stopped(143)),
+            self.assertRaises(Stopped),
+        ):
+            self.go(mode="headless")
+        self.assertEqual(self.read(self.out), "# Earlier\n")
+        self.assertEqual(os.listdir(os.path.dirname(self.out)).count(".out.md.stale"), 0)
+
     def test_a_tui_handle_without_a_name_reports_a_driver_error(self):
         os.makedirs(self.work)
         handle = FakeHandle([])
@@ -546,9 +575,16 @@ class TuiPolicy(Base):
                 self.assertEqual([type(e) for e in self.events], [Begun, Progress, Finished])
 
     def test_a_failed_headless_turn_stops_its_session(self):
-        r = self.faked(Reply(START), TurnFailed("overloaded"), STOP, mode="headless")
+        r = self.faked(Reply(START), TurnFailed("overloaded"), Exited(0), mode="headless")
         self.assertEqual(
             (r.error, self.handle.calls), ("the client's turn failed: overloaded", [("stop",)])
+        )
+
+    def test_headless_failure_retains_the_actual_exit_status(self):
+        result = self.faked(TurnFailed("server_overloaded"), Exited(3), mode="headless")
+        self.assertEqual(
+            (result.returncode, result.outcome, result.error),
+            (3, None, "the client's turn failed: server_overloaded"),
         )
 
     def test_a_session_exiting_without_an_outcome_is_the_error(self):

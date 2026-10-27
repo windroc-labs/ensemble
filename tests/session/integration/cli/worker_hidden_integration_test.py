@@ -13,7 +13,7 @@ import signal
 import tempfile
 
 from ensemble.utils import Record
-from tests.session import live_tmux
+from tests.session import harnesses, live_tmux
 from tests.session.case import REPO
 from tests.session.cli_support import MANAGER, CliCase
 from tests.session.integration.clients.codex import fake_tui
@@ -216,6 +216,7 @@ class CodexHiddenTest(HiddenCase):
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         self.addCleanup(self.server.kill)
         home, bin_dir = os.path.join(root, "home"), os.path.join(root, "bin")
+        self.addCleanup(harnesses.end, home)
         for path in (home, bin_dir):
             os.mkdir(path)
         shutil.copy2(self.server.program, bin_dir)

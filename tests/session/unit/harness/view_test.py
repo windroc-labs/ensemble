@@ -15,11 +15,8 @@ from ensemble.session.engine.types import (
     IdleTimeout,
     KeyPress,
     Mode,
-    NotShowable,
     Reply,
-    Resumable,
     SessionError,
-    SessionInfo,
     StatusState,
     Stderr,
     TurnEnd,
@@ -28,7 +25,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.harness.channel import Channel, encode
 from ensemble.session.harness.types import Op
-from ensemble.session.harness.view import OwnedInProcess, OwnedSession, fold
+from ensemble.session.harness.view import OwnedSession, fold
 from tests.session.case import Case
 
 GEN = "g1"
@@ -59,10 +56,10 @@ class Base(Case):
                 {"seq": self.seq, "id": f"{generation}:{self.seq}", "turn": turn, **encode(event)}
             )
 
-    def view(self, *, idle=None, replay=False) -> OwnedSession:
+    def view(self, *, idle=None, replay=False, mode=Mode.TUI) -> OwnedSession:
         return OwnedSession(
             self.channel,
-            "w1",
+            "w1" if mode == Mode.TUI else None,
             client="claude",
             sid="s1",
             generation=GEN,
@@ -70,6 +67,7 @@ class Base(Case):
             attach=self.attach,
             retire=self.retire,
             replay=replay,
+            mode=mode,
         )
 
 
@@ -228,6 +226,18 @@ class CloseTest(Base):
         with self.assertRaisesRegex(SessionError, "busy"):
             self.view().close()
 
+    def test_a_tui_view_without_retire_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "retire: required for a tui view"):
+            OwnedSession(
+                self.channel,
+                "w1",
+                client="claude",
+                sid="s1",
+                generation=GEN,
+                idle_timeout=None,
+                attach=self.attach,
+            )
+
 
 class DelegationTest(Base):
     def test_other_members_use_one_lazy_attach(self):
@@ -269,60 +279,38 @@ class DelegationTest(Base):
         self.assertFalse(view.alive())
 
 
-class OwnedInProcessTest(Base):
-    """An owned in_process worker's view: events and requests through the channel, no terminal."""
+class HeadlessViewTest(Base):
+    def test_a_headless_view_has_its_mode_and_no_name(self):
+        view = self.view(mode=Mode.HEADLESS)
+        self.assertEqual((view.mode, view.name), (Mode.HEADLESS, None))
 
-    def view(self, *, idle=None, replay=False) -> OwnedInProcess:
-        self.info = SessionInfo("s1", "/w", None, "", "")
-        return OwnedInProcess(
-            self.channel, client="fake", sid="s1", generation=GEN, idle_timeout=idle, info=self.info
-        )
+    def interrupted(self, mode) -> BaseException:
+        """events() of a view whose harness is gone, interrupted after its first event."""
+        self.attached.alive.return_value = False
+        self.log(Reply("x"))
+        events = self.view(mode=mode).events()
+        self.assertEqual(next(events), Reply("x"))
+        with self.assertRaises(KeyboardInterrupt) as caught:
+            events.throw(KeyboardInterrupt())
+        return caught.exception
 
-    def test_it_has_no_terminal_or_display(self):
-        view = self.view()
-        self.assertEqual((view.mode, view.name, view.showable), (Mode.IN_PROCESS, None, False))
-        for call, run in (
-            ("send", lambda: view.send("x")),
-            ("press", lambda: view.press(())),
-            ("screen", view.screen),
-        ):
-            with (
-                self.subTest(call=call),
-                self.assertRaisesRegex(SessionError, f"^{call}: tui mode only$"),
-            ):
-                run()
-        for call, run in (
-            ("show", view.show),
-            ("hide", view.hide),
-            ("attach_command", view.attach_command),
-        ):
-            with (
-                self.subTest(call=call),
-                self.assertRaisesRegex(NotShowable, f"^{call}: tui mode only$"),
-            ):
-                run()
-        self.assertIsNone(view.record())
-        self.assertEqual(view.info(), self.info)
-        self.assertEqual(view.session_status().resumable, Resumable.NO)
+    def test_an_interrupt_in_a_headless_views_events_stops_its_worker(self):
+        self.interrupted(Mode.HEADLESS)
+        self.attached.stop.assert_called_once_with()
 
-    def test_it_is_alive_while_its_harness_holds_on_before_the_exit(self):
-        view = self.view()
-        self.assertFalse(view.alive())
-        self.hold()
-        self.log(Reply("hi"))
-        self.assertTrue(view.alive())
-        status = view.status()
-        self.assertEqual((status.name, status.alive, status.state), ("s1", True, "working"))
-        self.assertEqual(view.content(), "hi")
-        self.log(Exited(0))
-        self.assertFalse(view.alive())
-        self.assertEqual((view.status().alive, view.status().state), (False, "dead"))
-        self.assertEqual(list(view.events()), [Reply("hi"), Exited(0)])
+    def test_a_failed_stop_is_noted_on_the_interrupt(self):
+        self.attached.stop.side_effect = SessionError("refused")
+        self.assertIn("stop: refused", self.interrupted(Mode.HEADLESS).__notes__)
 
-    def test_stop_and_close_without_an_owner_find_the_worker_gone(self):
-        view = self.view()
-        view.stop()
-        view.close()
+    def test_an_interrupt_in_a_tui_views_events_leaves_its_worker(self):
+        self.interrupted(Mode.TUI)
+        self.assertEqual(self.attaches, 0)
+
+    def test_closing_a_headless_views_iterator_leaves_its_worker(self):
+        self.log(Reply("x"))
+        events = self.view(mode=Mode.HEADLESS).events()
+        next(events)
+        events.close()
         self.assertEqual(self.attaches, 0)
 
 

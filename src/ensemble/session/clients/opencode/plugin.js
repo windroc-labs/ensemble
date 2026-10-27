@@ -51,7 +51,7 @@ function run(label, payload) {
 }
 
 function call(label, fields = {}) {
-  const payload = { session_id: root, ...fields };
+  const payload = { session_id: root, turn_id: turnUser, ...fields };
   chain = chain.then(() => run(label, payload));
 }
 
@@ -78,7 +78,7 @@ function report(client, ending) {
   const session = root, user = turnUser, sent = reported, known = completed;
   chain = chain.then(async () => {
     const last = await reply(client, session, user, sent, known, ending);
-    if (ending) await run("session.idle", { session_id: session, last_assistant_message: last });
+    if (ending) await run("session.idle", { session_id: session, turn_id: user, last_assistant_message: last });
   });
 }
 
@@ -103,7 +103,7 @@ async function reply(client, session, user, sent, known, ending) {
           const id = message.info.id, text = texts(message);
           if (!id || sent.has(id) || typeof message.info.time?.completed !== "number" || !text.trim()) continue;
           sent.add(id);
-          await run("message.completed", { session_id: session, text });
+          await run("message.completed", { session_id: session, turn_id: user, text });
         }
         if (!ending || (turn && last && (saved || last.info.error != null))) return best;
       }
@@ -131,9 +131,8 @@ function handle(event, client) {
       return;
     }
     case "session.status":
-      // Busy comes at every step: a step after an error (compaction, a retry) clears it.
+      // Busy comes at every step; only an accepted user message starts another turn.
       if (p.sessionID !== root || p.status?.type !== "busy") return;
-      failed = false;
       seen.clear();
       if (!busy) call("session.busy");
       busy = true;
@@ -177,6 +176,8 @@ function handle(event, client) {
         turnUser = info.id;
         reported = new Set();
         completed = new Set();
+        failed = false;
+        call("turn.started", { turn_id: info.id });
       } else if (info.role === "assistant" && info.id && typeof info.time?.completed === "number") {
         completed.add(info.id);
         report(client, false);

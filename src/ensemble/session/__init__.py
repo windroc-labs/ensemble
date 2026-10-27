@@ -1,6 +1,7 @@
-"""The session layer: Session (engine/base.py), whose one concrete class is HostedSession
-(engine/hosted_session.py, modes/), runs agent sessions through each Client (clients/)
-on a Host (hosts/); the Viewer (viewer/) shows them. `__all__` is its API for Session users.
+"""The session layer: Session (engine/base.py), whose concrete classes are HostedSession
+(engine/hosted_session.py, modes/) and OwnedSession (harness/view.py), the control view of a
+worker its session harness owns, runs agent sessions through each Client (clients/) on a Host
+(hosts/); the Viewer (viewer/) shows them. `__all__` is its API for Session users.
 """
 
 from ensemble.session.engine.base import Session, hosted_viewer

@@ -2,8 +2,10 @@
 output; JsonHeadless calls parse per JSON line.
 """
 
+import json
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator
+from typing import ClassVar
 
 from ensemble.session.engine.types import (
     LOCAL_CONTEXT,
@@ -14,12 +16,13 @@ from ensemble.session.engine.types import (
     SessionEvent,
     Spec,
     Stderr,
+    TurnFailed,
 )
-from ensemble.utils import json_records
 
 
 class Headless(ABC):
     _context: ClientContext = LOCAL_CONTEXT
+    _owned: ClassVar[bool] = False  # a session harness owns it
 
     def _home(self) -> ClientHome | None:
         return None
@@ -36,9 +39,21 @@ class Headless(ABC):
 
 
 class JsonHeadless(Headless):
+    _invalid_output = "invalid JSON event"
+
     @abstractmethod
     def parse(self, record: dict) -> Iterable[SessionEvent | Stderr | ClientBound]: ...
 
     def events(self, lines: Iterable[str]) -> Iterator[SessionEvent | Stderr | ClientBound]:
-        for record in json_records(lines):
-            yield from self.parse(record)
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except (ValueError, RecursionError):
+                record = None
+            if isinstance(record, dict):
+                yield from self.parse(record)
+            else:
+                yield Stderr(self._invalid_output)
+                yield TurnFailed("invalid_output", self._invalid_output)
