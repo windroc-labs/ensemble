@@ -1,5 +1,7 @@
 """The tui mode: a Client command on a Host terminal; events from its client's own record,
-then the hook records appended to its session directory, and from its terminal.
+then the hook records appended to its session directory, and from its terminal. Inside a session
+harness it runs as a managed worker under the guard (Host.worker); the tmux session is only its
+display.
 """
 
 import contextlib
@@ -45,6 +47,8 @@ from ensemble.session.engine.types import (
     TurnFailed,
     TurnStarted,
     Unanswered,
+    WorkerExit,
+    WorkerHook,
 )
 from ensemble.session.hosts.base import (
     HARNESS_ROOT,
@@ -637,7 +641,7 @@ class TuiMode(BaseMode):
         self._opening = opening  # start's: sent once, OPEN_AFTER s after
         self._due: float | None = None  # its label's latest record
         self._held, self._checked = False, -POLL_SCREEN
-        self._owned = owned
+        self._owned, self._hook_logged = owned, False
 
     @classmethod
     def preflight(
@@ -731,6 +735,15 @@ class TuiMode(BaseMode):
             try:
                 if pending.prompt_file:
                     cls._write_prompt(*pending.prompt_file)
+                if owner is not None:
+                    return host.worker(
+                        store.name,
+                        pending.launch,
+                        terminal=True,
+                        display=display,
+                        events=prepared.spec.events,
+                        metadata=pending.metadata,
+                    )
                 return host.terminal(
                     store.name,
                     pending.launch,
@@ -750,7 +763,9 @@ class TuiMode(BaseMode):
         terminal = store.start(pending.state, commit, launch, check_name=check_name)
         _sweep(store)
         generation = pending.state["generation"]
-        return cls(prepared, run, terminal, store, generation, opening=run.opening)
+        return cls(
+            prepared, run, terminal, store, generation, opening=run.opening, owned=owner is not None
+        )
 
     @classmethod
     def running(cls, name: str, *, host: Host) -> None:
@@ -837,12 +852,13 @@ class TuiMode(BaseMode):
             return False
 
     def poll(self, timeout: float) -> tuple[list[SessionEvent | Stderr | ClientBound], bool]:
+        self._drain()
         found = self._read()
         if not found and not self._gone:
             state = self._terminal.state()
             if not self._replaced(state) and state != Liveness.UNKNOWN:
                 code = self._terminal.returncode()
-                if state == Liveness.ABSENT:
+                if state == Liveness.ABSENT and not self._owned:
                     code = -signal.SIGHUP
                 if code is not None:
                     self._code = code
@@ -861,6 +877,21 @@ class TuiMode(BaseMode):
             found = self._read()
             self._open()
         return found, self._gone
+
+    def _drain(self) -> None:
+        """An owner handle's channel messages: its client's exit code; a channel failure raises."""
+        if not self._owned:
+            return
+        for message in self._terminal.read(0):
+            if isinstance(message, WorkerExit):
+                self._code = message.returncode
+            elif isinstance(message, WorkerHook) and not self._hook_logged:
+                self._hook_logged = True
+                LOG.warning(
+                    "tui session %s: hook %r over the guard channel ignored; hooks use hooks.jsonl",
+                    self.name,
+                    message.label,
+                )
 
     def _open(self) -> None:
         """Submits the opening once it is due, unless a dialog shows or the client is blocked."""
@@ -911,7 +942,11 @@ class TuiMode(BaseMode):
         return found
 
     def _replaced(self, state: Liveness) -> bool:
-        """Ended once another terminal holds its name or session.json is another generation's."""
+        """Ended once another terminal holds its name or session.json is another generation's;
+        never an owner's: only its handle ends it.
+        """
+        if self._owned:
+            return False
         if state == Liveness.ABSENT:
             try:
                 replacement = self._store.process()
@@ -961,8 +996,9 @@ class TuiMode(BaseMode):
     def returncode(self, timeout: float) -> int | None:
         deadline = time.monotonic() + timeout
         while self._code is None:
+            self._drain()
             self._code = self._terminal.returncode()
-            if self._terminal.state() == Liveness.ABSENT:
+            if self._terminal.state() == Liveness.ABSENT and not self._owned:
                 self._code = -signal.SIGHUP
             if self._code is None:
                 if (left := deadline - time.monotonic()) <= 0:

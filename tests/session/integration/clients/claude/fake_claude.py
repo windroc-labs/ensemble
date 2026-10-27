@@ -308,7 +308,8 @@ class Stdin:
         if not self.buf:
             raise EOFError
         line, _, self.buf = self.buf.partition(b"\n")
-        return line.decode(errors="replace")
+        # A managed worker's guard sends a paste bracketed, as Claude reads it.
+        return line.replace(b"\x1b[200~", b"").replace(b"\x1b[201~", b"").decode(errors="replace")
 
 
 @dataclass(frozen=True, kw_only=True)

@@ -47,6 +47,8 @@ from ensemble.session.engine.types import (
     Spec,
     TurnEnd,
     Unanswered,
+    WorkerExit,
+    WorkerHook,
 )
 from ensemble.session.engine.worker import WorkerState
 from ensemble.session.hosts.base import InteractiveProcess, Process
@@ -2849,3 +2851,87 @@ class RecordRuleTest(Base):
         display.calls.close.assert_called_once_with()
         self.assertNoSessionDir()
         self.liveness.assert_not_called()
+
+
+class ManagedStartTest(Base):
+    """An owned start (inside a session harness) launches its client under the guard; its TuiMode
+    drives that owner handle and only the handle ends it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.handle = mock.create_autospec(InteractiveProcess, instance=True)
+        self.handle.state.return_value = Liveness.LIVE
+        self.handle.returncode.return_value = None
+        self.handle.read.return_value = []
+        self.handle.activity.return_value = None
+        self.host.worker = mock.Mock(return_value=self.handle)
+
+    def owned_start(self) -> tui.TuiMode:
+        owner = os.path.join(self.ensemble, "harness", "a" * 32)
+        os.makedirs(owner, 0o700, exist_ok=True)
+        return tui.TuiMode.start(
+            Spec(
+                workdir=self.tmp,
+                access=Access(cwd=self.tmp),
+                name=NAME,
+                client="fake",
+                sid=SID,
+                events=self.events,
+            ),
+            self.client,
+            registry=self.session_cls._config().registry,
+            record=self.recorded.append,
+            host=self.host,
+            owner=owner,
+        )
+
+    def test_owned_start_launches_a_managed_worker(self):
+        mode = self.owned_start()
+        self.host.worker.assert_called_once()
+        args, kwargs = self.host.worker.call_args
+        self.assertEqual(args[0], NAME)
+        self.assertEqual(args[1].argv, mode.prepared.argv)
+        self.assertTrue(kwargs["terminal"])
+        self.assertEqual(kwargs["events"], self.events)
+        self.assertIsNone(kwargs["display"])
+        self.assertEqual(kwargs["metadata"]["generation"], tui.TuiMode.snapshot(NAME)["generation"])
+        self.host.calls.terminal.assert_not_called()
+        self.assertIs(mode._terminal, self.handle)
+
+    def test_unowned_start_launches_a_terminal(self):
+        self.start()
+        self.host.calls.terminal.assert_called_once()
+        self.host.worker.assert_not_called()
+
+    def test_owned_poll_takes_worker_exit_code(self):
+        mode = self.owned_start()
+        self.handle.read.return_value = [WorkerExit(3)]
+        self.handle.state.return_value = Liveness.ABSENT
+        self.handle.returncode.return_value = 3
+        self.host.processes.clear()  # its display went with the guard
+        self.assertEqual(mode.poll(0), ([], True))
+        self.assertEqual(mode.returncode(0), 3)
+
+    def test_owned_poll_raises_on_channel_failure(self):
+        mode = self.owned_start()
+        self.handle.read.side_effect = Unanswered("worker w1: guard channel ended")
+        with self.assertRaisesRegex(Unanswered, "guard channel ended"):
+            mode.poll(0)
+
+    def test_owned_poll_ignores_channel_hooks(self):
+        mode = self.owned_start()
+        self.handle.read.return_value = [WorkerHook("stop", {"x": 1}, "d1")]
+        with self.assertLogs("session", "WARNING") as logged:
+            self.assertEqual(mode.poll(0), ([], False))
+            self.assertEqual(mode.poll(0), ([], False))
+        self.assertEqual(len(logged.records), 1)
+        self.assertIn("'stop'", logged.output[0])
+
+    def test_owned_replaced_never_ends_the_owner(self):
+        mode = self.owned_start()
+        self.host.processes.clear()  # its display killed
+        state = tui.TuiMode.snapshot(NAME)
+        self.write_state({**state, "generation": "another"})
+        self.assertEqual(mode.poll(0), ([], False))
+        self.assertIsNone(mode.returncode(0))

@@ -8,12 +8,14 @@ Host (tests.session.fakes.host:FakeHost, not attachable).
 import json
 import os
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
 from contextlib import contextmanager
 
+from ensemble.session.harness.channel import Channel
 from ensemble.utils import Record, Status
 from tests.session import live_tmux
 from tests.session.case import REPO, ROOTS, Case
@@ -55,9 +57,37 @@ class CliCase(Case):
         os.mkdir(self.cwd)
         self.events = os.path.join(self.root, "events")
         self.server = live_tmux.Server(self, self.home)
+        self.addCleanup(self.end_harnesses)  # before the server goes: a worker outlives its display
         self.server.start(MANAGER)
         if self.ATTACH:
             self.server.attach(MANAGER)
+
+    def end_harnesses(self) -> None:
+        """Each session harness still holding its dir closes its worker (SIGTERM), else is killed:
+        its guard then ends the client.
+        """
+        root = os.path.join(self.ensemble, "harness")
+        try:
+            names = os.listdir(root)
+        except FileNotFoundError:
+            return
+        for name in names:
+            channel = Channel(os.path.join(root, name))
+            pid = channel.status().get("pid")
+            if not channel.alive() or not isinstance(pid, int):
+                continue
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                try:
+                    os.kill(pid, sig)
+                except ProcessLookupError:
+                    break
+                try:
+                    live_tmux.wait(
+                        lambda c=channel: not c.alive(), timeout=40, what=f"harness {pid}"
+                    )
+                    break
+                except AssertionError:
+                    continue
 
     def env(self, *, inside: str | None = MANAGER, **extra: str | None) -> dict[str, str]:
         """A caller's in session `inside` (None: outside tmux); an extra None drops its key."""
