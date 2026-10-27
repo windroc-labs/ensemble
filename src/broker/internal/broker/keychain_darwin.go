@@ -621,7 +621,13 @@ func (k fileKeychain) get(service, account string, dialog bool) ([]byte, error) 
 	defer free()
 	var data unsafe.Pointer
 	var n C.long
-	if err := call(dialog, func() C.OSStatus { return C.item_get(p[0], p[1], p[2], cBool(!dialog), &data, &n) }); err != nil {
+	err := call(dialog, func() C.OSStatus { return C.item_get(p[0], p[1], p[2], cBool(!dialog), &data, &n) })
+	if !dialog && errors.Is(err, ErrAuthFailed) {
+		// securityd refuses a no-UI read it would have asked about with errSecAuthFailed, not only
+		// errSecInteractionNotAllowed (seen on macOS 15 for another application's item).
+		err = ErrNeedsDialog
+	}
+	if err != nil {
 		return nil, err
 	}
 	defer C.free(data)
