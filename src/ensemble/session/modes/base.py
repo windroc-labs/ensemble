@@ -135,6 +135,11 @@ class BaseMode(ABC):
     def remote(self) -> bool:
         return False
 
+    @property
+    def client_up(self) -> bool:
+        """Its guard reported its client up (an owned tui's), else False."""
+        return False
+
     @classmethod
     def preflight(
         cls,

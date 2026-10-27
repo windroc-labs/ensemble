@@ -1269,6 +1269,11 @@ class Owned:
         """Its worker is reachable only through this harness."""
         return self._session._running.remote
 
+    @property
+    def up(self) -> bool:
+        """Its guard reported its client up."""
+        return self._session._running.client_up
+
     def send(self, text: str) -> None:
         self._session.send(text)
 

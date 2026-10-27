@@ -3511,3 +3511,9 @@ class DockerOwnedTest(Case):
             with self.subTest(remote=remote):
                 session = SimpleNamespace(_running=SimpleNamespace(remote=remote))
                 self.assertIs(hosted_session.Owned(session, "docker").remote, remote)
+
+    def test_owned_is_up_as_its_mode_says(self):
+        for up in (True, False):
+            with self.subTest(up=up):
+                session = SimpleNamespace(_running=SimpleNamespace(client_up=up))
+                self.assertIs(hosted_session.Owned(session, "docker").up, up)

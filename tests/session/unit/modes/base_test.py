@@ -150,6 +150,11 @@ class BaseModeTest(Case):
             with self.subTest(cls=cls.__name__):
                 self.assertIsNone(object.__new__(cls).opening_pending)
 
+    def test_only_a_tui_mode_may_report_its_client_up(self):
+        for cls in (headless.HeadlessMode, in_process.InProcessMode):
+            with self.subTest(cls=cls.__name__):
+                self.assertFalse(object.__new__(cls).client_up)
+
     def test_start_is_the_class_entry_and_no_session_is_built_without_its_prepared(self):
         for mode in (BaseMode, *KINDS):
             with self.subTest(mode=mode.__name__):

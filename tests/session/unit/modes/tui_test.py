@@ -2645,7 +2645,7 @@ class OwnerTest(Base):
         self.assertNotIn("owner", tui.TuiMode.snapshot(NAME))
         self.assertNotIn("owner", self.host.calls.terminal.call_args.kwargs["metadata"])
 
-    def test_an_owned_start_tells_its_host_the_owner_and_follows_a_remote_terminal(self):
+    def test_an_owned_start_tells_its_host_the_owner_and_follows_a_remote_or_up_terminal(self):
         owner = self.owner()
         running = tui.TuiMode.start(
             Spec(
@@ -2666,6 +2666,9 @@ class OwnerTest(Base):
         self.assertFalse(running.remote)
         running._terminal.remote = True
         self.assertTrue(running.remote)
+        self.assertFalse(running.client_up)
+        running._terminal.up = True
+        self.assertTrue(running.client_up)
 
     def test_an_owner_outside_the_harness_root_is_refused(self):
         path = os.path.join(self.dir, "session.json")
