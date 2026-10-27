@@ -117,6 +117,7 @@ PS_FORMAT = "\t".join(
         "{{.State}}",
     )
 )
+STOPPED = frozenset({"created", "exited", "dead"})  # narrower than _row_liveness's not running
 LOG = logging.getLogger("session")
 KEPT = f"{DOCKER_STATE}/.kept"  # a marker per run volume kept: unsaved work, or a failed check
 KEPT_LOCK = ".lock"
@@ -1213,7 +1214,7 @@ class DockerHost(Host):
 
     def _capacity_rows(self) -> list[SessionRow]:
         containers = self._containers(required=True)
-        return [self._row(name, row.generation) for name, row in sorted(containers.items())]
+        return [self._row(row) for _, row in sorted(containers.items())]
 
     def _capacity_namespace(self) -> str:
         return f"docker:{endpoint()}"
@@ -1227,15 +1228,16 @@ class DockerHost(Host):
         except SessionError as error:
             LOG.warning("docker rows: %s", error)
             return []
-        return [self._row(name, containers[name].generation) for name in sorted(containers)]
+        return [self._row(containers[name]) for name in sorted(containers)]
 
-    def _row(self, name: str, generation: str) -> SessionRow:
+    def _row(self, row: Row) -> SessionRow:
+        name, generation = row.name, row.generation
         record = _record(name)
         record = record if record.get("generation") == generation else {}
         word = activity(state_dir(name), generation)
         state = StatusState.WORKING
         if _lock_free(_owner_path(name)):
-            state = StatusState.UNKNOWN
+            state = StatusState.DEAD if row.state in STOPPED else StatusState.UNKNOWN
         elif word is not None and word != StatusState.WORKING:
             state = word
         return SessionRow(
