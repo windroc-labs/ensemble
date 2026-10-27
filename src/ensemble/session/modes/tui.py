@@ -48,6 +48,7 @@ from ensemble.session.engine.types import (
     WorkerHook,
 )
 from ensemble.session.hosts.base import (
+    GUARD_WAIT,
     HARNESS_ROOT,
     TUI_DIR,
     TUI_STATE,
@@ -85,7 +86,6 @@ POLL_SCREEN = 0.5
 LOG = logging.getLogger("session")
 Cursor = tuple[int | None, int]  # inode, offset
 OWNER = re.compile(r"[0-9a-f]{32}")
-WAIT = 10
 RECHECK = 0.1
 GATE_BUSY = "previous worker generation (live or unknown)"
 CLOSE_BUSY = "worker generation (live or unknown)"
@@ -527,11 +527,11 @@ def _owned_record(store: TuiStore) -> dict | None:
 
 
 def _generation(store: TuiStore, record: Mapping, *, wait: bool) -> Liveness:
-    """wait: LIVE re-checked for up to WAIT s (a reaping guard)."""
+    """wait: LIVE re-checked for up to GUARD_WAIT s (a reaping guard)."""
     generation = record.get("generation")
     if not isinstance(generation, str):
         return Liveness.UNKNOWN
-    deadline = time.monotonic() + WAIT
+    deadline = time.monotonic() + GUARD_WAIT
     while True:
         try:
             found = store.host.worker_liveness(store.name, generation)

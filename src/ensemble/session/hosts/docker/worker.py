@@ -22,11 +22,11 @@ from ensemble.session.engine.types import (
     WorkerHook,
 )
 from ensemble.session.harness import guard
-from ensemble.session.hosts.base import InteractiveProcess
+from ensemble.session.hosts.base import GUARD_WAIT, InteractiveProcess
 from ensemble.session.hosts.docker.activity import activity, write_activity
 from ensemble.session.hosts.docker.hooks import HookWorker
 from ensemble.session.hosts.docker.maintenance import RETRY, Maintenance, run
-from ensemble.session.hosts.managed import QUEUE_MAX, WAIT, ManagedProcess
+from ensemble.session.hosts.managed import QUEUE_MAX, ManagedProcess
 from ensemble.utils import Record
 
 GUARD = "/opt/ensemble/src/ensemble/session/harness/guard.py"
@@ -265,7 +265,7 @@ class DockerWorker(ManagedProcess):
                 self.send_frame(b"c", b"{}")
             with self.condition:
                 self.condition.wait_for(
-                    lambda: self.code is not None or self.failure is not None, WAIT
+                    lambda: self.code is not None or self.failure is not None, GUARD_WAIT
                 )
         with contextlib.suppress(OSError, ValueError):
             self.proc.stdin.close()

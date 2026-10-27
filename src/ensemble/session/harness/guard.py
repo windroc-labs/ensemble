@@ -29,7 +29,7 @@ BUFFER_MAX = 8 << 20
 HOOK_MAX = 1 << 20
 READ_SIZE = 65536
 TICK = 0.05
-DISPLAY_GRACE = 2.0  # a client dead at once still reaches its first display
+DISPLAY_GRACE = 2.0  # a client dead at once still reaches the display its Host starts at launch
 DELIVERY = re.compile(r"[0-9a-f]{32}")
 
 
@@ -621,8 +621,15 @@ class Guard:
                         stream.close()
 
     def lingers(self, now: float) -> bool:
-        """A terminal guard whose client ended before any display came waits DISPLAY_GRACE s."""
-        return self.master is not None and not self.displayed and now - self.exit_at < DISPLAY_GRACE
+        """A --display-grace terminal guard whose client ended before any display came waits
+        DISPLAY_GRACE s.
+        """
+        return (
+            self.args.display_grace
+            and self.master is not None
+            and not self.displayed
+            and now - self.exit_at < DISPLAY_GRACE
+        )
 
     def take_display(self, server) -> None:
         """A display connecting: the current screen first, then live output."""
@@ -729,6 +736,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--terminal", action="store_true")
     parser.add_argument("--hook-socket")
     parser.add_argument("--display-socket")
+    parser.add_argument("--display-grace", action="store_true")
     parser.add_argument("--lease")
     parser.add_argument("--probe")
     parser.add_argument("command", nargs=argparse.REMAINDER)
