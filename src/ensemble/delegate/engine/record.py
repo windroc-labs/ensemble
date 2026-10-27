@@ -132,6 +132,8 @@ class RunRecord:
             result, previous = _result(data.pop("result")), _result(data.pop("previous"))
             if type(bound := data.pop("bound")) is not bool:
                 raise ValueError("invalid bound")
+            if type(closing := data.pop("closing", False)) is not bool:
+                raise ValueError("invalid closing")
             callback = data.pop("callback")
             overlays = tuple(data.pop("overlays"))
             state = DelegateState(
@@ -141,6 +143,7 @@ class RunRecord:
                 result=result,
                 previous=previous,
                 bound=bound,
+                closing=closing,
                 overlays=overlays,
             )
             if type(state.attempt) is not int or state.attempt < 1:
