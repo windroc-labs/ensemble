@@ -59,6 +59,9 @@ class RecordingProcess(Process):
     def record(self):
         return self.record_value
 
+    def publish(self, record):
+        self.record_value = record
+
     def display(self):
         return self.display_value
 
