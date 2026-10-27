@@ -583,8 +583,13 @@ def xcode_select(args):
 
 def docker(args):
     # egress_container, egress_image: the proxy's container and image are there; worker_images,
-    # ws_volumes: what `docker image ls` and `docker volume ls` list.
+    # ws_volumes: what `docker image ls` and `docker volume ls` list; docker_stops_at: the call
+    # before which Docker Desktop quits.
     container, image = FAKES / "egress_container", FAKES / "egress_image"
+    stops = FAKES / "docker_stops_at"
+    if stops.exists() and " ".join(["docker", *args]).startswith(stops.read_text()):
+        stops.unlink()
+        (FAKES / "docker_running").unlink(missing_ok=True)
     if args == ["egress-start"]:
         mark(FAKES / "egress_started")
         mark(container)

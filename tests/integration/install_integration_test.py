@@ -4932,8 +4932,9 @@ exec /bin/rm "$@"
         self.assertIn("docker-image\tegress-proxy", self.ledger())
 
     def test_cl2_cleanup_keeps_a_failed_egress_removal(self):
+        """Docker Desktop quits after the preflight: its inspect failing proves nothing is gone."""
         self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
-        (self.fakes / "fail").write_text("docker rm -f egress-proxy")
+        (self.fakes / "docker_stops_at").write_text("docker rm -f egress-proxy")
         result = self.cleanup("--yes")
         self.assertEqual(result.code, 1)
         self.assertIn(
@@ -4941,6 +4942,8 @@ exec /bin/rm "$@"
         )
         self.assertIn("docker-container\tegress-proxy", self.ledger())
         self.assertIn("docker-image\tegress-proxy", self.ledger())
+        self.assertTrue((self.fakes / "egress_container").exists())
+        (self.fakes / "docker_running").write_text("")
         self.assert_ok(self.cleanup("--yes"))
         self.assertFalse((self.fakes / "egress_container").exists())
         self.assertFalse((self.fakes / "egress_image").exists())
