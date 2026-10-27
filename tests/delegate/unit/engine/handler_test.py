@@ -34,7 +34,7 @@ from ensemble.session import (
     Unanswered,
 )
 from ensemble.utils import StatusState
-from tests.delegate.fakes.harness_session import HarnessSession
+from tests.delegate.fakes.harness_session import HarnessSession, RecordingHost
 from tests.delegate.harness import SID, HarnessCase, ViewedHarnessDelegate
 from tests.delegate.replies import block
 from tests.delegate.unit.runs import DONE, GAVE_UP, START
@@ -763,6 +763,7 @@ class OwnedCloseTest(HandlerCase):
         self.assertIn("delegate: disk full", self.err.getvalue())
         self.assertFalse(self.state().completed)
         self.assertFalse(agent.alive())
+        self.assertEqual(RecordingHost.processes[state.host or "agent", spec.name].closed, 1)
 
     def test_close_of_an_ended_owned_attempt_sends_nothing(self):
         self.finish(NEEDS)
