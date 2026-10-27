@@ -18,16 +18,16 @@ from ensemble.session.engine.types import (
     Liveness,
     NotShowable,
     Paste,
+    SessionError,
     Unanswered,
     WorkerExit,
     WorkerHook,
     WorkerOutput,
 )
 from ensemble.session.harness import guard
-from ensemble.session.hosts.base import InteractiveProcess
+from ensemble.session.hosts.base import GUARD_WAIT, InteractiveProcess
 
 QUEUE_MAX = 8 << 20
-WAIT = 10
 
 KEYS = {
     "Enter": b"\r",
@@ -191,7 +191,7 @@ class ManagedProcess(InteractiveProcess):
         finally:
             self.proc.stdout.close()
             try:
-                self.proc.wait(timeout=WAIT)
+                self.proc.wait(timeout=GUARD_WAIT)
             except subprocess.TimeoutExpired:
                 self.fail("guard transport exit unconfirmed")
             with self.condition:
@@ -205,7 +205,7 @@ class ManagedProcess(InteractiveProcess):
 
     def await_start(self) -> None:
         with self.condition:
-            self.condition.wait_for(lambda: self.started or self.failure is not None, WAIT)
+            self.condition.wait_for(lambda: self.started or self.failure is not None, GUARD_WAIT)
             self.checked()
             if not self.started:
                 self.fail("guard exec confirmation timed out")
@@ -227,7 +227,7 @@ class ManagedProcess(InteractiveProcess):
         self.checked()
         wire = memoryview(guard.frame(kind, data))
         with self.sending:
-            deadline = time.monotonic() + WAIT
+            deadline = time.monotonic() + GUARD_WAIT
             while wire:
                 self.checked()
                 left = deadline - time.monotonic()
@@ -240,9 +240,24 @@ class ManagedProcess(InteractiveProcess):
                         wire = wire[count:]
                 except BlockingIOError:
                     continue
+                except BrokenPipeError as error:
+                    self.input_closed(error)
                 except (OSError, ValueError) as error:
                     self.fail(f"guard input: {error}")
                     self.checked()
+
+    def input_closed(self, error: OSError) -> None:
+        """Its guard is gone: once the reader has its confirmed exit, input is merely refused;
+        else the channel fails closed.
+        """
+        with self.condition:
+            self.condition.wait_for(
+                lambda: self.code is not None or self.failure is not None, GUARD_WAIT
+            )
+            if self.code is not None and self.failure is None:
+                raise SessionError(f"worker {self.name}: exited") from error
+        self.fail(f"guard input: {error}")
+        self.checked()
 
     def write(self, data: bytes) -> None:
         self.send_frame(b"i", data)
@@ -272,7 +287,7 @@ class ManagedProcess(InteractiveProcess):
             with self.condition:
                 # A timed-out query still owns the next reply on this ordered channel.
                 self.condition.wait_for(
-                    lambda: not self.view_pending or self.failure is not None, WAIT
+                    lambda: not self.view_pending or self.failure is not None, GUARD_WAIT
                 )
                 self.checked()
                 if self.view_pending:
@@ -282,7 +297,7 @@ class ManagedProcess(InteractiveProcess):
             self.send_frame(b"q", request)
             with self.condition:
                 self.condition.wait_for(
-                    lambda: self.view is not None or self.failure is not None, WAIT
+                    lambda: self.view is not None or self.failure is not None, GUARD_WAIT
                 )
                 self.checked()
                 if self.view is None:
@@ -304,21 +319,25 @@ class ManagedProcess(InteractiveProcess):
     def close(self) -> None:
         self.checked()
         if self.code is None:
-            self.send_frame(b"c", b"{}")
+            try:
+                self.send_frame(b"c", b"{}")
+            except SessionError:
+                if self.code is None:
+                    raise  # else its exit came first: nothing left to end
             with self.condition:
                 self.condition.wait_for(
-                    lambda: self.code is not None or self.failure is not None, WAIT
+                    lambda: self.code is not None or self.failure is not None, GUARD_WAIT
                 )
                 self.checked()
                 if self.code is None:
                     self.fail("worker exit unconfirmed")
                     self.checked()
         try:
-            self.proc.wait(timeout=WAIT)
+            self.proc.wait(timeout=GUARD_WAIT)
         except subprocess.TimeoutExpired as error:
             raise Unanswered(f"worker {self.name}: guard exit unconfirmed") from error
         if self.reader is not None:
-            self.reader.join(timeout=WAIT)
+            self.reader.join(timeout=GUARD_WAIT)
             if self.reader.is_alive():
                 raise Unanswered(f"worker {self.name}: channel still open")
         self.checked()

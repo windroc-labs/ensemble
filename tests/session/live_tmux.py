@@ -1,10 +1,12 @@
 """Private tmux fixtures with checked socket selectors, inherited launchers and cleanup."""
 
 import inspect
+import json
 import os
 import resource
 import select
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -13,6 +15,7 @@ import time
 from typing import NamedTuple
 from unittest import mock
 
+from ensemble.session.harness.channel import Channel
 from tests.session.case import PLUGIN_BIN, child_env
 from tests.session.grid import GridCheck
 from tests.session.integration.clients.claude import fake_claude
@@ -129,6 +132,7 @@ class Server:
         case.addCleanup(_SOCKETS.discard, self.socket)
         case.addCleanup(self._close_clients)
         case.addCleanup(self.kill)
+        case.addCleanup(self.end_harnesses)  # first: a worker outlives its display
         if len(os.fsencode(self.socket)) > SOCKET_MAX:
             case.fail(f"tmux socket path over {SOCKET_MAX} bytes: {self.socket}")
 
@@ -289,6 +293,31 @@ class Server:
             what=f"the tmux server and its panes' processes {sorted(pids)} to end",
         )
 
+    def end_harnesses(self) -> None:
+        """Each session harness under its HOME still running closes its worker (SIGTERM), else is
+        killed: its guard then ends the client.
+        """
+        root = os.path.join(self.home, ".ensemble", "harness")
+        try:
+            names = os.listdir(root)
+        except FileNotFoundError:
+            return
+        for name in names:
+            channel = Channel(os.path.join(root, name))
+            pid = channel.status().get("pid")
+            if not channel.alive() or not isinstance(pid, int):
+                continue
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                try:
+                    os.kill(pid, sig)
+                except ProcessLookupError:
+                    break
+                try:
+                    wait(lambda c=channel: not c.alive(), 40, what=f"harness {pid}")
+                    break
+                except AssertionError:
+                    continue
+
     def _close_clients(self) -> None:
         for c in self.clients:
             try:
@@ -308,6 +337,22 @@ def _drain(master: int, stop: threading.Event) -> None:
                 return
         except OSError:
             return
+
+
+def crash_owner(ensemble: str, name: str) -> None:
+    """kill -9 of tui session `name`'s owning harness, if any: its guard then ends the worker."""
+    try:
+        with open(os.path.join(ensemble, "tui", name, "session.json"), encoding="utf-8") as f:
+            owner = json.load(f)["owner"]
+        with open(os.path.join(owner, "harness.json"), encoding="utf-8") as f:
+            pid = json.load(f)["pid"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    wait(lambda: not alive(pid), what=f"session harness {pid} to end")
 
 
 def alive(pid: int) -> bool:

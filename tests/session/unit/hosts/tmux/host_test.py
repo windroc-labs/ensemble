@@ -408,6 +408,19 @@ class AttachTest(Base):
                 with self.assertRaisesRegex(SessionError, error):
                     self.host.attach("w1")
 
+    def test_attach_of_a_display_is_a_terminal(self):
+        """A managed worker's display (`@kind guard`) is its keys and screen; no @control."""
+        options = {"@kind": "guard", "@process": PROCESS, "@sid": SID, "@generation": "g1"}
+        self.tmux.option.side_effect = lambda _pane, key: options.get(key)
+        handle = self.host.attach("w1")
+        self.assertIs(type(handle), TmuxTerminal)
+        self.assertEqual(handle.identity, PROCESS)
+        self.assertEqual(handle.session_identity(), (SID, "g1"))
+        self.assertIsNone(handle.token)
+        del options["@process"]
+        with self.assertRaisesRegex(SessionError, "missing @process"):
+            self.host.attach("w1")
+
     def test_a_foreign_session_is_its_active_pane(self):
         self.kind, self.controlled = None, False
         handle = self.host.attach("w1")
