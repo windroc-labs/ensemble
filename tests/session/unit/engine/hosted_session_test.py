@@ -3407,6 +3407,77 @@ class OwnedStartTest(Case):
         self.popen.return_value.kill.assert_called_once_with()
         self.assertFalse(os.path.exists(self.spawned[2].directory))
 
+    def test_a_stop_right_after_popen_kills_its_harness(self):
+        self.harness_writes({"state": "running", "name": "w1", "sid": SID, "generation": "g7"})
+        monotonic = time.monotonic
+
+        def clock():
+            if self.popen.called:
+                raise KeyboardInterrupt
+            return monotonic()
+
+        with (
+            mock.patch("time.monotonic", side_effect=clock),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            self.session_cls.start(self.spec())
+        self.popen.return_value.kill.assert_called_once_with()
+        self.assertFalse(os.path.exists(self.spawned[2].directory))
+
+    def test_a_stop_while_its_view_is_built_kills_its_harness(self):
+        self.harness_writes({"state": "running", "name": "w1", "sid": SID, "generation": "g7"})
+        with (
+            mock.patch.object(self.session_cls, "_view", side_effect=KeyboardInterrupt),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            self.session_cls.start(self.spec())
+        self.popen.return_value.kill.assert_called_once_with()
+        self.assertFalse(os.path.exists(self.spawned[2].directory))
+
+    def stop_on_sigterm(self) -> type[Exception]:
+        """SIGTERM raises the returned exception here, as a drive's stop handler does."""
+
+        class Stop(Exception):
+            pass
+
+        def stop(_signum, _frame):
+            raise Stop
+
+        self.addCleanup(signal.signal, signal.SIGTERM, signal.signal(signal.SIGTERM, stop))
+        self.addCleanup(
+            signal.pthread_sigmask, signal.SIG_SETMASK, signal.pthread_sigmask(signal.SIG_BLOCK, ())
+        )
+        return Stop
+
+    def test_a_stop_signal_during_popen_lands_after_it_and_kills_its_harness(self):
+        stop = self.stop_on_sigterm()
+        self.harness_writes({"state": "running", "name": "w1", "sid": SID, "generation": "g7"})
+        spawn = self.popen.side_effect
+
+        def signalled(argv, **kwargs):
+            signal.pthread_kill(threading.get_ident(), signal.SIGTERM)
+            return spawn(argv, **kwargs)
+
+        self.popen.side_effect = signalled
+        with self.assertRaises(stop):
+            self.session_cls.start(self.spec())
+        self.popen.return_value.kill.assert_called_once_with()
+        self.assertFalse(os.path.exists(self.spawned[2].directory))
+
+    def test_a_stop_signal_during_a_failing_popen_leaves_no_request(self):
+        stop = self.stop_on_sigterm()
+        directories = []
+
+        def failing(argv, **_kwargs):
+            directories.append(argv[-1])
+            signal.pthread_kill(threading.get_ident(), signal.SIGTERM)
+            raise OSError(errno.EAGAIN, "Resource temporarily unavailable")
+
+        self.popen.side_effect = failing
+        with self.assertRaises(stop):
+            self.session_cls.start(self.spec())
+        self.assertFalse(os.path.exists(directories[0]))
+
     def test_handler_state_json_cannot_hold_leaves_no_request(self):
         spec = self.spec(handlers=(engine_types.HookCallback("m", {"s": {1}}),))
         with self.assertRaisesRegex(ConfigError, "not JSON"):

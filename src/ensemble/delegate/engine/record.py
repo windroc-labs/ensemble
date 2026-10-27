@@ -219,8 +219,10 @@ class RunRecord:
             )
             return state.attempt if active else None
 
-    def complete(self, n: int, result: Result, *, sid: str, unbound: bool = False) -> bool:
-        """Compare-and-set; unbound: only while opening."""
+    def complete(
+        self, n: int, result: Result, *, sid: str, unbound: bool = False, closing: bool = False
+    ) -> bool:
+        """Compare-and-set; unbound: only while opening; closing: no follow-up after it."""
         with self.store.mutex():
             state = self.read()
             if (
@@ -230,5 +232,7 @@ class RunRecord:
                 and state.bound
             ):
                 return False
-            self.save(replace(state, completed=True, result=result))
+            self.save(
+                replace(state, completed=True, result=result, closing=closing or state.closing)
+            )
             return True
