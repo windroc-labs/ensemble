@@ -682,6 +682,7 @@ class DockerHost(Host):
     _environments = True
     _harnessed = True
     _remote_tui = True  # as DockerWorker.remote
+    _unowned = False
 
     def __init__(
         self,

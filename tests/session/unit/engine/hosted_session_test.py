@@ -7,6 +7,7 @@ import contextlib
 import dataclasses
 import errno
 import fcntl
+import functools
 import gc
 import io
 import itertools
@@ -3149,6 +3150,52 @@ class OwnedHeadlessTest(HostedTuiBase):
         for call in (view.screen, view.content, view.show, view.hide, view.attach_command):
             with self.subTest(call=call.__name__), self.assertRaises(NotShowable):
                 call()
+
+
+class HarnessOnlyHost(MemoryHost):
+    """A Host that runs no start a session harness does not own, as the Docker Host."""
+
+    _unowned = False
+
+
+class HarnessOnlyHostTest(HostedTuiBase):
+    """An unowned start (here injected callables) on a harness-only Host is refused before it
+    writes anything; on the tmux Host it starts the earlier way.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.only = HarnessOnlyHost("d3")
+        self.hosts = {"tmux": self.host, "d3": self.only}
+        tables = {
+            name: {"implementation": "tests.session.fakes.terminal:MemoryHost"}
+            for name in self.hosts
+        }
+        self.session.configure(
+            clients=self.session._config().registry.settings.clients,
+            hosts=parsed(tables, "tmux"),
+            class_loader=self.session_dependencies["class_loader"],
+            host_factory=lambda _kind, name, _settings: self.hosts[name],
+            viewer_factory=MemoryViewer,
+        )
+
+    def test_an_unowned_start_on_a_harness_only_host_is_refused_writing_nothing(self):
+        for mode in (Mode.TUI, Mode.HEADLESS):
+            spec = self.spec(client="fake", mode=mode, name="w1", sid=SID)
+            for call in (self.session.preflight, self.session.start):
+                with self.subTest(mode=mode, call=call.__name__):
+                    self.refused(
+                        ConfigError,
+                        f"fake {mode} on host d3: runs only under a session harness",
+                        functools.partial(call, spec, host="d3"),
+                    )
+        self.assertEqual(self.only.calls.mock_calls, [])
+        self.assertFalse(os.path.exists(os.path.join(self.root, "w1")))
+
+    def test_the_same_start_on_the_tmux_host_runs_the_earlier_way(self):
+        session = self.session.start(self.spec(client="fake", mode=Mode.TUI, name="w1", sid=SID))
+        self.addCleanup(session.stop)
+        self.assertEqual(self.host.calls.terminal.call_count, 1)
 
 
 class HarnessRequestTest(HostedTuiBase):

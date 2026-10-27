@@ -284,6 +284,10 @@ def _terminal_less(mode: Mode) -> bool:
     return mode != Mode.TUI
 
 
+def _harness_only(client: str, mode: Mode, on: Host) -> ConfigError:
+    return ConfigError(f"{client} {mode} on host {on.name}: runs only under a session harness")
+
+
 def _unharnessed(client: str, mode: Mode, on: Host) -> ConfigError:
     return ConfigError(f"handlers: {client} {mode} on host {on.name} has no session harness yet")
 
@@ -426,11 +430,14 @@ class HostedSession(Session):
         spec = replace(spec, sid=spec.sid or str(uuid.uuid4()))
         on = cls.host(host)
         _environment_check(spec, on, mode)
-        if spec.handlers and not _owned(setup, mode, client, on):
+        owned = _owned(setup, mode, client, on)
+        if not owned and not on._unowned:
+            raise _harness_only(client_name, mode, on)
+        if spec.handlers and not owned:
             raise _unharnessed(client_name, mode, on)
         cls.viewer()
         displays.validate_display(display, on)
-        if mode == Mode.TUI and _owned(setup, mode, client, on):
+        if mode == Mode.TUI and owned:
             name = tui.TuiMode.resolve_name(spec)
             _refuse_running(name, on)
             _resume_check(spec, client, name, on)
@@ -460,6 +467,8 @@ class HostedSession(Session):
         on, client = cls.host(host), setup.registry.client(client_name)
         _environment_check(spec, on, mode)
         if not _owned(setup, mode, client, on):
+            if not on._unowned:
+                raise _harness_only(client_name, mode, on)
             if spec.handlers:
                 raise _unharnessed(client_name, mode, on)
             return cls._begin(
