@@ -415,8 +415,9 @@ class GuardTest(Case):
         fields = ["S", "8", "9", "9", *("0" for _ in range(15)), "123", "0"]
         self.assertEqual(guard.parse_stat("9 (a (b)) " + " ".join(fields)), (8, "123", False))
 
-    def test_emit_partial_write_and_ack_only_after_whole_frame(self):
+    def test_a_hook_while_closing_is_acked_once_its_whole_frame_is_written(self):
         runtime = self.runtime()
+        runtime.close()  # stdin no longer read: no k to wait for
         peer = mock.Mock()
         runtime.peers[peer] = ("ack", bytearray())
         runtime.emit(b"hello", peer, "a" * 32)
@@ -429,6 +430,46 @@ class GuardTest(Case):
             json.loads(peer.sendall.call_args.args[0]), {"ok": True, "delivery_id": "a" * 32}
         )
         peer.close.assert_called_once()
+
+    def test_a_hook_is_acked_only_once_its_harness_took_it(self):
+        runtime = self.runtime()
+        peers = []
+        for delivery in ("a" * 32, "b" * 32):
+            peer = mock.Mock()
+            value = {"label": "Stop", "payload": {}, "delivery_id": delivery}
+            peer.recv.return_value = json.dumps(value).encode() + b"\n"
+            runtime.peers[peer] = ("hook", bytearray())
+            runtime.peer_read(peer)
+            peers.append(peer)
+        with mock.patch.object(os, "write", side_effect=lambda _fd, wire: len(wire)):
+            runtime.flush()
+        self.assertFalse(runtime.output)
+        for peer in peers:
+            peer.sendall.assert_not_called()
+        runtime.command(b"k", b"{}")
+        self.assertEqual(
+            json.loads(peers[0].sendall.call_args.args[0]), {"ok": True, "delivery_id": "a" * 32}
+        )
+        peers[0].close.assert_called_once()
+        peers[1].sendall.assert_not_called()
+        runtime.command(b"k", b"{}")
+        self.assertEqual(
+            json.loads(peers[1].sendall.call_args.args[0]), {"ok": True, "delivery_id": "b" * 32}
+        )
+        runtime.command(b"k", b"{}")  # none left: ignored
+        with self.assertRaises(ValueError):
+            runtime.command(b"k", b"[]")
+
+    def test_closing_acks_every_hook_still_waiting_for_its_take(self):
+        runtime = self.runtime()
+        peer = mock.Mock()
+        runtime.peers[peer] = ("ack", bytearray())
+        runtime.taken.append((peer, "a" * 32))
+        runtime.close()
+        self.assertEqual(
+            json.loads(peer.sendall.call_args.args[0]), {"ok": True, "delivery_id": "a" * 32}
+        )
+        self.assertFalse(runtime.taken)
 
     def test_blocked_stdout_does_not_block_close(self):
         runtime = self.runtime()

@@ -2,6 +2,7 @@
 and end, with a fake channel, broker, hook process and removal.
 """
 
+import argparse
 import json
 import os
 import select
@@ -34,16 +35,20 @@ def hook(label="Stop", payload: object = None, delivery="a" * 32) -> bytes:
 
 
 class Hooks:
-    """The resident hook process: each call answers from `answers` (None: ok), else ok."""
+    """The resident hook process over `folder`: each call answers from `answers` (None: ok), else
+    ok; each call's send count in `sents`.
+    """
 
     def __init__(self, *answers):
-        self.answers, self.calls, self.stopped = list(answers), [], False
+        self.answers, self.calls, self.sents, self.stopped = list(answers), [], [], False
+        self.folder = None
 
     def stop(self):
         self.stopped = True
 
-    def call(self, label, body, event):
+    def call(self, label, body, event, sent=None):
         self.calls.append((label, body, event))
+        self.sents.append(sent)
         return self.answers.pop(0) if self.answers else None
 
 
@@ -88,6 +93,8 @@ class Base(Case):
                 clock=clock or (lambda: NOW),
             )
 
+        if hooks is not None:
+            hooks.folder = self.state
         self.owner = os.open(os.path.join(self.state, "guard.lock"), os.O_RDWR | os.O_CREAT)
         proc = mock.Mock()
         proc.stdin.fileno.return_value = 99
@@ -199,10 +206,78 @@ class HookTest(Base):
         self.assertEqual(hooks.calls, [("Stop", {"sid": "s"}, "a" * 32)])
         self.assertEqual(channel.read(0), [])
 
+    def test_a_hook_carries_the_send_count_seen_as_it_was_accepted(self):
+        hooks = Hooks()
+        channel = self.make(hooks=hooks)
+        prompted = os.path.join(self.state, "prompted")
+        with open(prompted, "w") as f:
+            f.write(f"{GEN} 0 0")
+        channel.accept(b"h", hook())
+        with open(prompted, "w") as f:
+            f.write(f"{GEN} 1 1")  # a send after the guard acked the Stop, before its delivery
+        self.deliver(channel)
+        self.assertEqual(hooks.sents, [f"{GEN} 0 0"])
+
+    def test_a_send_once_the_guard_let_the_client_go_on_is_never_in_its_stamp(self):
+        hooks = Hooks()
+        channel = self.make(hooks=hooks)
+        prompted = os.path.join(self.state, "prompted")
+        with open(prompted, "w") as f:
+            f.write(f"{GEN} 0 0")
+        runtime = guard.Guard(
+            argparse.Namespace(
+                hook_socket=self.home + "/hook",
+                display_socket=None,
+                display_grace=False,
+                terminal=False,
+                command=["fake"],
+            )
+        )
+        wire, decoder = bytearray(), guard.Decoder()
+
+        def client_goes_on(_reply):  # its Stop hook acked: a send goes in at once
+            with open(prompted, "w") as f:
+                f.write(f"{GEN} 1 1")
+
+        acked = threading.Event()
+        peer = mock.Mock()
+        peer.recv.return_value = hook() + b"\n"
+        peer.sendall.side_effect = lambda reply: (client_goes_on(reply), acked.set())
+        runtime.peers[peer] = ("hook", bytearray())
+        runtime.peer_read(peer)
+
+        def to_harness(_fd, data):
+            wire.extend(data)
+            return len(data)
+
+        def to_guard(_fd, data):
+            for kind, payload in decoder.feed(bytes(data)):
+                runtime.command(kind, payload)
+            return len(data)
+
+        with mock.patch.object(os, "write", side_effect=to_harness):
+            runtime.flush()
+        reads = iter([bytes(wire)])
+
+        def read(_size):  # the channel's EOF only once its hook was delivered
+            for data in reads:
+                return data
+            self.assertTrue(acked.wait(WAIT))
+            self.deliver(channel)
+            return b""
+
+        channel.proc.stdout.read.side_effect = read
+        with (
+            mock.patch.object(select, "select", return_value=([], [channel.proc.stdin], [])),
+            mock.patch.object(os, "write", side_effect=to_guard),
+        ):
+            channel.pump()
+        self.assertEqual(hooks.sents, [f"{GEN} 0 0"])
+
     def test_a_failed_host_hook_retries_the_same_id_then_is_rejected(self):
         class Failing(Hooks):
-            def call(self, label, body, event):
-                super().call(label, body, event)
+            def call(self, label, body, event, sent=None):
+                super().call(label, body, event, sent)
                 return "hook exit 1" if event == "a" * 32 else None
 
         hooks = Failing()
@@ -243,10 +318,10 @@ class HookTest(Base):
         calling, release = threading.Event(), threading.Event()
 
         class Slow(Hooks):
-            def call(self, label, body, event):
+            def call(self, label, body, event, sent=None):
                 calling.set()
                 release.wait(5)
-                return super().call(label, body, event)
+                return super().call(label, body, event, sent)
 
         hooks = Slow()
         channel = self.make(hooks=hooks)
@@ -314,9 +389,9 @@ class HookTest(Base):
         gate = threading.Event()
 
         class Slow(Hooks):
-            def call(self, label, body, event):
+            def call(self, label, body, event, sent=None):
                 gate.wait(5)
-                return super().call(label, body, event)
+                return super().call(label, body, event, sent)
 
         hooks = Slow()
         channel = self.make(hooks=hooks)
@@ -442,6 +517,31 @@ class EndTest(Base):
         gate.set()
         self.assertTrue(channel.wait_exit(5))
         self.assertEqual((channel.state(), channel.returncode()), (Liveness.ABSENT, None))
+
+    def test_a_release_still_writing_at_its_end_keeps_a_clean_exit(self):
+        """A k already counted before the exit frame: the end never shuts stdin under its write."""
+        channel = self.make()
+        writing, closed = threading.Event(), threading.Event()
+        channel.proc.stdin.close.side_effect = closed.set
+
+        def write(_fd, _wire):  # the gone guard's pipe, unless its stdin was shut first
+            writing.set()
+            if closed.wait(WAIT / 10):
+                raise ValueError("I/O operation on closed file")
+            raise BrokenPipeError
+
+        with (
+            mock.patch.object(select, "select", return_value=([], [99], [])),
+            mock.patch.object(os, "write", side_effect=write),
+        ):
+            channel.release_hook()
+            self.assertTrue(writing.wait(WAIT))
+            channel.accept(b"x", b'{"returncode":0}')
+            self.assertTrue(channel.wait_exit(WAIT))
+            assert channel.releaser is not None
+            channel.releaser.join(WAIT)
+        self.assertIsNone(channel.failure)
+        self.assertEqual((channel.state(), channel.returncode()), (Liveness.ABSENT, 0))
 
     def test_close_asks_the_guard_then_removes(self):
         channel = self.make()

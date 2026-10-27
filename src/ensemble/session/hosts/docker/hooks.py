@@ -13,16 +13,18 @@ HOOK_WAIT = 60
 
 
 class HookWorker:
-    """`argv`, one resident `hook --serve` process, started by the first call and by the first after
-    it ends; each call is bounded by `wait` s, and a timeout kills it.
+    """`argv`, one resident `hook --serve` process of tui dir `folder` (argv's last), started by the
+    first call and by the first after it ends; each call is bounded by `wait` s, and a timeout kills
+    it.
     """
 
     def __init__(self, argv: list[str]) -> None:
         self.argv, self.popen, self.wait = argv, subprocess.Popen, HOOK_WAIT
+        self.folder = argv[-1]
         self.proc: subprocess.Popen | None = None
 
-    def call(self, label: str, body: dict, event: str) -> str | None:
-        """None on success, else the reject reason."""
+    def call(self, label: str, body: dict, event: str, sent: str | None) -> str | None:
+        """None on success, else the reject reason; sent: its record's (hosts.base.sent)."""
         deadline = time.monotonic() + self.wait
         proc = self.proc
         if proc is not None and proc.poll() is not None:
@@ -38,7 +40,8 @@ class HookWorker:
                 )
             except OSError:
                 return "hook error"
-        line = json.dumps({"label": label, "event": event, "payload": body}).encode() + b"\n"
+        request = {"label": label, "event": event, "payload": body, "sent": sent}
+        line = json.dumps(request).encode() + b"\n"
         try:
             reply = _exchange(proc, line, deadline)
         except OSError:  # it ended mid-write

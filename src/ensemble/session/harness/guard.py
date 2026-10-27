@@ -339,6 +339,7 @@ class Guard:
         self.peers = {}
         self.output = deque()
         self.output_size = 0
+        self.taken = deque()  # (peer, delivery) of each written h, until its harness's k
         self.input = bytearray()
         self.decoder = Decoder()
         self.screen = Screen()
@@ -419,6 +420,8 @@ class Guard:
     def close(self) -> None:
         if self.closing is None:
             self.closing = time.monotonic()
+            while self.taken:
+                self.ack(*self.taken.popleft())
 
     def drop(self, peer) -> None:
         self.peers.pop(peer, None)
@@ -442,10 +445,15 @@ class Guard:
                 self.output[0] = (wire[count:], peer, delivery)
                 break
             self.output.popleft()
-            if peer is not None:
-                with contextlib.suppress(OSError):
-                    peer.sendall(json.dumps({"ok": True, "delivery_id": delivery}).encode() + b"\n")
-                self.drop(peer)
+            if peer is not None and self.closing is not None:  # stdin no longer read
+                self.ack(peer, delivery)
+            elif peer is not None:
+                self.taken.append((peer, delivery))
+
+    def ack(self, peer, delivery: str) -> None:
+        with contextlib.suppress(OSError):
+            peer.sendall(json.dumps({"ok": True, "delivery_id": delivery}).encode() + b"\n")
+        self.drop(peer)
 
     def command(self, kind: bytes, data: bytes) -> None:
         if kind == b"i":
@@ -454,6 +462,9 @@ class Guard:
             self.input.extend(data)
         elif kind == b"c" and json.loads(data) == {}:
             self.close()
+        elif kind == b"k" and json.loads(data) == {}:
+            if self.taken:
+                self.ack(*self.taken.popleft())
         elif kind == b"q" and self.master is not None:
             request = json.loads(data)
             lines = request.get("lines")

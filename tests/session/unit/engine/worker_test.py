@@ -24,7 +24,7 @@ from ensemble.session import (
     SessionError,
 )
 from ensemble.session.engine import worker
-from ensemble.session.engine.types import Blocked, Exited, IdleTimeout, Reply
+from ensemble.session.engine.types import Blocked, Exited, IdleTimeout, Reply, TurnStarted
 from ensemble.session.engine.worker import Worker, WorkerState
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.types import Op
@@ -564,6 +564,27 @@ class ColorWatchTest(Base):
                 self.assertEqual(self.watch(sent), ticks)
                 self.assertEqual(self.said, said)
                 self.handle.publish.assert_called_once()
+
+    def test_a_started_turn_keeps_the_watch_as_long_and_never_says_unset(self):
+        for sent, ticks in ((8, 9), (float("inf"), worker.COLOR_CAP + 1)):
+            with self.subTest(sent=sent):
+                self.said.clear()
+                self.handle.publish.reset_mock()
+                events = itertools.chain(
+                    [TurnStarted()], itertools.repeat(IdleTimeout(worker.TICK))
+                )
+                self.assertEqual(self.watch(sent, events=events), ticks)
+                self.assertEqual(self.said, [])  # its opening follows that turn
+                self.handle.publish.assert_called_once()
+
+    def test_a_dialog_just_after_a_turn_started_once_up_is_said(self):
+        idle = IdleTimeout(worker.TICK)
+        events = itertools.chain(
+            [idle] * (worker.EARLY + 1), [TurnStarted(), Blocked("Edit")], itertools.repeat(idle)
+        )
+        self.watch(float("inf"), events=events)
+        self.assertEqual(self.said, ["session w1: waits on a dialog: Edit"])
+        self.handle.publish.assert_called_once()
 
     def test_a_dialog_while_pending_says_both(self):
         self.watch(float("inf"), events=iter([Blocked("Trust")]))
