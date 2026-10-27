@@ -132,7 +132,7 @@ class RunRecord:
             result, previous = _result(data.pop("result")), _result(data.pop("previous"))
             if type(bound := data.pop("bound")) is not bool:
                 raise ValueError("invalid bound")
-            if type(closing := data.pop("closing", False)) is not bool:
+            if type(closing := data.pop("closing")) is not bool:
                 raise ValueError("invalid closing")
             callback = data.pop("callback")
             overlays = tuple(data.pop("overlays"))

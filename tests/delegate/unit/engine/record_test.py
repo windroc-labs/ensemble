@@ -86,12 +86,13 @@ class PhaseTest(HarnessCase):
                 with self.assertRaisesRegex(ConfigError, "^invalid .*delegate.json: "):
                     self.record.read()
 
-    def test_a_record_without_closing_reads_open_and_a_bad_closing_is_invalid(self):
+    def test_a_record_without_closing_or_a_bad_closing_is_invalid(self):
         data = self.metadata()
-        data.pop("closing", None)
+        del data["closing"]
         with open(self.state_record(), "w", encoding="utf-8") as file:
             json.dump(data, file)
-        self.assertFalse(self.record.read().closing)
+        with self.assertRaisesRegex(ConfigError, "^invalid .*delegate.json: "):
+            self.record.read()
         for value in (1, "false", None):
             with self.subTest(value=value):
                 with open(self.state_record(), "w", encoding="utf-8") as file:
