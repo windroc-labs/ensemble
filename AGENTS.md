@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Test boundaries and commands: `docs/tests.md`.
+Test boundaries and commands: `docs/architecture.md` › Tests.
 
 ## Gotchas
 
@@ -13,9 +13,9 @@ Test boundaries and commands: `docs/tests.md`.
 - Identify Linear entities by id, never name; role app user ids come from configuration.
 - Linear's lists can lag a just-made state change: re-read an issue's state before acting on it (`src/ensemble/orchestrator/trackers/linear/ops.py:move` does).
 - Tmux implementation: `TmuxHost` runs sessions (`src/ensemble/session/hosts/tmux/host.py`); the `Viewer` shows every Host's sessions on the host tmux, holding the `Grid`, `Iterm` and `Placement` (`src/ensemble/session/viewer/`); the `TmuxCli` they share, and `TmuxPane`, a `TmuxCli` aimed at one pane: `src/ensemble/session/engine/tmux_cli.py`. `/ensemble:manage` (`skills/manage/SKILL.md`) reaches it only through `ensemble-session`.
-- Docker implementation: `src/ensemble/session/hosts/docker/` (`DockerHost`: `host.py`; a tui or headless worker's `DockerWorker`, the guard over one `docker exec -i`: `worker.py`, its hook callback `guard_hook.py`; maintenance, hooks, the broker client, daemon, mounts and stub beside them; `docs/docker-host.md`).
+- Docker implementation: `src/ensemble/session/hosts/docker/` (`DockerHost`: `host.py`; a tui or headless worker's `DockerWorker`, the guard over one `docker exec -i`: `worker.py`, its hook callback `guard_hook.py`; maintenance, hooks, the broker client, daemon, mounts and stub beside them; `docs/architecture.md` › Docker host).
 - The session's and delegate's public interfaces are frozen: `tests/guard_checks/exports.py` `session_interface_snapshot` and `delegate_interface_snapshot` (who may change `tests/session_interface.json` and `tests/delegate_interface.json`: their docstrings).
-- Keep `<work_dir>/logs/runs.jsonl` (`docs/board.md` › Operating).
+- Keep `<work_dir>/logs/runs.jsonl` (`docs/architecture.md` › Board › Operating the board).
 - A `[local_clones]` clone must not move: that breaks its worktrees. Run `git -C <new path> worktree repair`, then update the entry.
 
 ## Merging

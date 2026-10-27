@@ -181,7 +181,7 @@ class Manage(Case):
         for path in paths("manage"):
             self.assertTrue(os.path.isfile(path), path)
         cited = doc_sections("manage")
-        self.assertIn(("docs/board.md", ["Using the board", "Finish"]), cited)
+        self.assertIn(("docs/architecture.md", ["Board", "Using the board", "Finish"]), cited)
         for path, (top, *inner) in cited:
             with open(os.path.join(REPO, path), encoding="utf-8") as f:
                 doc = f.read()
@@ -287,7 +287,7 @@ class Manage(Case):
                 "`deliverable` for a `local` or `orchestrator` destination",
                 "`<work_dir>/work/<ID>/agent/tmp/deliverable.md`",
                 "else its `url`",
-                "In Review (`docs/board.md` › Using the board)",
+                "In Review (`docs/architecture.md` › Board › Using the board)",
                 "`ensemble-orchestrator issue move <ID> review`",
             )
         ]

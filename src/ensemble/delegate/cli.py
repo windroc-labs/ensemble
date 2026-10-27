@@ -267,7 +267,7 @@ Recovery and next help:
   Resume its saved environment: ensemble-session resume dummy-1
   Placement and Record controls: ensemble-session --help
   Commands and exits: ensemble-delegate --help
-  Environment configuration and acceptance: docs/docker-host.md
+  Environment configuration: docs/architecture.md#environments
 """,
     )
     ap.add_argument(

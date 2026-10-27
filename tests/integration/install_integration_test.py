@@ -125,7 +125,7 @@ SHARED = (
 )
 LOADED = "com.windroc.ensemble.router com.windroc.ensemble.promote"
 UNLOAD = (
-    "; unload them as docs/board.md#setup says (launchctl bootout gui/<uid>/com.windroc.ensemble.<job>,"
+    "; unload them as docs/architecture.md#board-setup says (launchctl bootout gui/<uid>/com.windroc.ensemble.<job>,"
     " then remove its plist)"
 )
 REJECTED = (
@@ -973,7 +973,7 @@ class InstallTest(Case):
         self.assertEqual(
             self.config().read_text(),
             "# Written by install.sh. Keys and defaults: each layer's packaged config.toml "
-            "(its `# local:` lines);\n# the Linear board: docs/board.md#setup.\n"
+            "(its `# local:` lines);\n# the Linear board: docs/architecture.md#board-setup.\n"
             '[session.hosts]\ndefault = "docker"\n\n[delegate]\nclient = "codex"\n\n'
             '[delegate.delegates]\nharness_host = "tmux"\n',
         )
@@ -1227,7 +1227,7 @@ class InstallTest(Case):
         )
         self.assertEqual((self.fakes / "src/broker/claude_token").read_text(), TOKEN)
         self.assertIn(
-            "skip: no GitHub App key: create the App by docs/docker-host.md#create-the-github-app",
+            "skip: no GitHub App key: create the App by docs/architecture.md#create-the-github-app",
             result.stderr,
         )
         state = self.state()
@@ -2157,7 +2157,7 @@ class InstallTest(Case):
         self.assert_ok(result)
         self.assertNotRegex(result.tty, PEM_Q)
         self.assertIn(
-            "skip: no GitHub App key: create the App by docs/docker-host.md#create-the-github-app",
+            "skip: no GitHub App key: create the App by docs/architecture.md#create-the-github-app",
             result.stderr,
         )
         (self.fakes / "keychain").mkdir(exist_ok=True)

@@ -95,7 +95,7 @@ usage: $synopsis
   --no-docker                 run workers on the local tmux Host; no Docker
   --board <local|linear>      set up a local or Linear board
   --no-board                 skip board setup (first-run default)
-  --launchd, --no-launchd     choose router/promote jobs (docs/board.md)
+  --launchd, --no-launchd     choose router/promote jobs (docs/architecture.md#board-setup)
   --opencode-provider <name>  the OpenAI-compatible provider OpenCode runs on, e.g. a LAN model server
   --opencode-url <url>        its base URL, ending /v1; a provider other than the saved one needs it
   --opencode-model <model>    its model
@@ -911,7 +911,7 @@ def line_key(line):
 lines = text.splitlines(keepends=True)
 if fresh:
     lines = ["# Written by install.sh. Keys and defaults: each layer\x27s packaged config.toml (its `# local:` lines);\n",
-             "# the Linear board: docs/board.md#setup.\n"]
+             "# the Linear board: docs/architecture.md#board-setup.\n"]
 if lines and not lines[-1].endswith("\n"):
     lines[-1] += "\n"
 added = set()
@@ -1549,7 +1549,7 @@ opencode_install() {
   fi
   case $(python3 -I -c 'import sys, urllib.parse; print(urllib.parse.urlsplit(sys.argv[1]).hostname or "")' "$url") in
     localhost | 127.0.0.1) ;;
-    *) case $url in http://*) say "$url: http:// sends the API key in plaintext over the network (docs/docker-host.md › Risks)" ;; esac ;;
+    *) case $url in http://*) say "$url: http:// sends the API key in plaintext over the network (docs/architecture.md › Docker host › Docker risks)" ;; esac ;;
   esac
 }
 
@@ -2196,7 +2196,7 @@ broker_install() {
 # user skips it.
 store_app_key() {
   [ "$(state_get github_app_key)" != skipped ] || return 1
-  ask "Path to your GitHub App's private key (.pem; docs/docker-host.md#create-the-github-app), empty to skip:"
+  ask "Path to your GitHub App's private key (.pem; docs/architecture.md#create-the-github-app), empty to skip:"
   if [ -z "$answer" ]; then
     state_set github_app_key skipped
     return 1
@@ -2307,7 +2307,7 @@ broker_logins() {
   if [ "$(state_get login_github)" = "$sha" ] && [ -n "$(state_get github_app)" ]; then
     skip "done for this broker"
   elif ! security find-generic-password -s ensemble-broker-bot </dev/null >/dev/null 2>&1 && ! store_app_key; then
-    skip "no GitHub App key: create the App by docs/docker-host.md#create-the-github-app, then rerun"
+    skip "no GitHub App key: create the App by docs/architecture.md#create-the-github-app, then rerun"
   else
     record_item ensemble-broker-github-users ensemble-broker-bot
     if [ -n "$app_id" ]; then
@@ -2931,7 +2931,7 @@ board_jobs_loaded() {
     fi
   done
   [ -n "$loaded" ] || return 0
-  say "    still loaded:$loaded; unload them as docs/board.md#setup says (launchctl bootout gui/<uid>/com.windroc.ensemble.<job>, then remove its plist)"
+  say "    still loaded:$loaded; unload them as docs/architecture.md#board-setup says (launchctl bootout gui/<uid>/com.windroc.ensemble.<job>, then remove its plist)"
 }
 
 board_jobs() {

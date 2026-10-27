@@ -1,4 +1,4 @@
-"""A local board's issue files, found by walking its layout (docs/board.md › Local board). Reads take
+"""A local board's issue files, found by walking its layout (docs/architecture.md › Local board). Reads take
 no lock: only writers do."""
 
 import os

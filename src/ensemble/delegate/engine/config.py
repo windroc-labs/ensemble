@@ -48,7 +48,7 @@ def packaged_environments() -> Mapping:
 
 def check_environments(cfg: Mapping) -> None:
     """ValueError naming the bad [environment.<host>], [environments.<name>] or
-    [roles.<role>.environment] table (docs/docker-host.md › Environment config).
+    [roles.<role>.environment] table (docs/architecture.md › Environments).
     """
     hosts = cfg.get("hosts", {})
     named = _tables(cfg, "environments")

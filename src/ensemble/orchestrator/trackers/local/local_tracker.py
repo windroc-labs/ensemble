@@ -1,4 +1,4 @@
-"""The engine Tracker on a local board (docs/board.md › Local board): its reads, and its writes, each
+"""The engine Tracker on a local board (docs/architecture.md › Local board): its reads, and its writes, each
 one locked rewrite of one issue file."""
 
 import os

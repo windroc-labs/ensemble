@@ -109,7 +109,7 @@ class Repository(unittest.TestCase):
             [
                 "README.md",
                 "CONTEXT.md",
-                "docs/tests.md",
+                "docs/upgrading.md",
                 "docs/images/system.svg",
                 "docs/readme/README.ja.md",
             ],
@@ -128,7 +128,7 @@ class Repository(unittest.TestCase):
         )
         for paths, event, full in (
             (["README.md", "src/ensemble/session/cli.py"], "pull_request", True),
-            (["docs/tests.md", ".github/ci_scope.py"], "pull_request", True),
+            (["docs/upgrading.md", ".github/ci_scope.py"], "pull_request", True),
             (["docs/credentials.md"], "pull_request", True),
             (["README.md", "docs/credentials.md"], "pull_request", True),
             (["skills/act-as/SKILL.md"], "pull_request", True),
@@ -136,7 +136,7 @@ class Repository(unittest.TestCase):
             (["src/ensemble/delegate/team/roles/engineer.md"], "pull_request", True),
             # Runbook-only PRs keep full scope, so tests/unit/mini_op_runbooks_test.py runs.
             ([".mini-op/runbooks/test-accounts.md"], "pull_request", True),
-            (["README.md", "docs/tests.md"], "push", True),
+            (["README.md", "docs/upgrading.md"], "push", True),
         ):
             with self.subTest(paths=paths, event=event):
                 result = scope.classify(self.root, paths, event)
@@ -213,7 +213,7 @@ class Repository(unittest.TestCase):
 
     def test_version_files_with_any_other_path_keep_full(self):
         edits = {path: bumped(text) for path, text in MANIFESTS.items()}
-        for other in ("README.md", "docs/tests.md", "src/ensemble/manager/main.py", "src/x.py"):
+        for other in ("README.md", "docs/upgrading.md", "src/ensemble/manager/main.py", "src/x.py"):
             with self.subTest(other=other):
                 result = self.versions([*MANIFESTS, other], edits)
                 self.assertTrue(result["full"])
@@ -238,7 +238,7 @@ class Repository(unittest.TestCase):
 
     def test_broker_scope_for_docs_python_broker_protocol_and_workflow(self):
         for paths, event, broker in (
-            (["README.md", "docs/tests.md"], "pull_request", False),
+            (["README.md", "docs/upgrading.md"], "pull_request", False),
             (["src/ensemble/manager/main.py"], "pull_request", False),
             (["src/ensemble/orchestrator/main.py"], "pull_request", False),
             (["src/ensemble/session/cli.py"], "pull_request", True),

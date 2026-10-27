@@ -23,7 +23,7 @@ from ensemble.utils import save
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
 PROTOCOL = "30"
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
-INSTALL = "install or upgrade it: see docs/docker-host.md#install"
+INSTALL = "install or upgrade it: see docs/architecture.md#docker-install"
 TIMEOUT = 1800
 GRACE = 5  # for a broker whose pipes closed by the deadline to be reaped
 

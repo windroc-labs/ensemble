@@ -30,7 +30,7 @@ ensemble está construido en capas: cada una hace un solo trabajo y solo llama a
 | Capa | Qué hace | Empieza en |
 |---|---|---|
 | Manager | Un conductor para las capas de abajo: un agente con el que hablas, que lanza workers, role runs y runs del tablero, los vigila e informa. | [Demo](#demo-un-manager-muchos-workers) |
-| Orchestrator | Ejecuta roles según un archivo workflow, con trackers intercambiables: Linear o un tablero local de Markdown. | [Tableros](../board.md) |
+| Orchestrator | Ejecuta roles según un archivo workflow, con trackers intercambiables: Linear o un tablero local de Markdown. | [Tableros](../architecture.md#board) |
 | Delegate (núcleo) | Ejecuta un role sobre una task a través de una session y devuelve un resultado verificado. Un plugin de Claude Code y Codex que puedes usar por separado. | [Instalación](#instalación) |
 | Session | Inicia, vigila y reanuda un agente de programación (Claude Code, Codex, OpenCode) en tmux o en un contenedor Docker, igual para todos los clients. | [Sessions](../architecture.md#session-settings) |
 
@@ -78,12 +78,12 @@ Nada de esto se comprueba. Si falta algo, el run del agente falla.
 | Requisito | Para |
 |---|---|
 | CLI `claude`, Python 3.11+ | cada run de agente |
-| el plugin [`updraft`](https://github.com/windroc-labs/updraft), para workers en el host: Claude Code `/plugin marketplace add windroc-labs/agent-plugins-marketplace`, luego `/plugin install updraft@windroc`; Codex `codex plugin marketplace add windroc-labs/agent-plugins-marketplace`, luego `codex plugin add updraft@windroc`. Los workers Docker lo instalan en la imagen ([plugins](../docker-host.md#plugins)). | las build tasks del engineer (`/updraft:build`, `/updraft:light-build`) y la revisión del PRD del PM (`/updraft:review`). No hace falta en otro caso. |
+| el plugin [`updraft`](https://github.com/windroc-labs/updraft), para workers en el host: Claude Code `/plugin marketplace add windroc-labs/agent-plugins-marketplace`, luego `/plugin install updraft@windroc`; Codex `codex plugin marketplace add windroc-labs/agent-plugins-marketplace`, luego `codex plugin add updraft@windroc`. Los workers Docker lo instalan en la imagen ([plugins](../architecture.md#plugins)). | las build tasks del engineer (`/updraft:build`, `/updraft:light-build`) y la revisión del PRD del PM (`/updraft:review`). No hace falta en otro caso. |
 | tmux 3.3–3.8 | tui runs en el Host `tmux` |
-| [Ollama](https://ollama.com) solo en `127.0.0.1`, con contexto de al menos 65536 y el modelo del tier descargado; en `tmux` también OpenCode 1.x (`npm install -g opencode-ai@1.19.3`) | solo OpenCode ([Docker host › OpenCode](../docker-host.md#opencode), [OpenCode sessions](../customizing-roles-and-tasks.md#opencode-sessions)) |
+| [Ollama](https://ollama.com) solo en `127.0.0.1`, con contexto de al menos 65536 y el modelo del tier descargado; en `tmux` también OpenCode 1.x (`npm install -g opencode-ai@1.19.3`) | solo OpenCode ([Docker host › OpenCode](../architecture.md#opencode-on-docker), [OpenCode sessions](../customizing-roles-and-tasks.md#opencode-sessions)) |
 | `git`, `gh` con sesión iniciada | programar (checkouts, pull requests) y destinos de GitHub. No hace falta en otro caso. |
 | iTerm2 en ejecución | la división de iTerm2 por defecto |
-| Docker Desktop en ejecución; el broker `B` (`/usr/local/libexec/ensemble/ensemble-broker`), instalado con `sh <plugin dir>/src/broker/install.sh` (necesita `sudo` y `gh` con sesión iniciada); un login de cada uno: `B login claude` (pega un `claude setup-token`), `B login github ensemble-broker-bot` y, para Codex, `sudo B install-codex <version>` y luego `B login codex`; OpenCode no necesita ninguno | solo el Docker Host ([Docker host](../docker-host.md)); el host no necesita Node. Qué permite cada credencial, dónde se guarda y cómo revocarla: [Credentials](../credentials.md). |
+| Docker Desktop en ejecución; el broker `B` (`/usr/local/libexec/ensemble/ensemble-broker`), instalado con `sh <plugin dir>/src/broker/install.sh` (necesita `sudo` y `gh` con sesión iniciada); un login de cada uno: `B login claude` (pega un `claude setup-token`), `B login github ensemble-broker-bot` y, para Codex, `sudo B install-codex <version>` y luego `B login codex`; OpenCode no necesita ninguno | solo el Docker Host ([Docker host](../architecture.md#docker-host)); el host no necesita Node. Qué permite cada credencial, dónde se guarda y cómo revocarla: [Credentials](../credentials.md). |
 
 Cómo cargan tu configuración las sessions que inicia ensemble, y por qué algunos comandos se niegan dentro de ellas: [Session settings](../architecture.md#session-settings).
 
@@ -100,7 +100,7 @@ Cómo cargan tu configuración las sessions que inicia ensemble, y por qué algu
 1. [Instala](#instalación) el plugin.
 2. En una session nueva de Claude Code, compruébalo: `/ensemble:act-as dummy-tester:echo hello` devuelve `hello`.
 3. Ejecuta un role: `/ensemble:act-as researcher <question>`. Sin configuración local, el informe se guarda en `~/.ensemble/adhoc/<date>-researcher-<name>/agent/prompt.md`; para publicarlo, configura el destination del role ([Personalizar roles y tasks](../customizing-roles-and-tasks.md#change-a-roles-run-settings)).
-4. Para ejecutar roles desde un tablero de Linear o un tablero local de Markdown: [Tableros](../board.md).
+4. Para ejecutar roles desde un tablero de Linear o un tablero local de Markdown: [Tableros](../architecture.md#board).
 
 ## Personalizar roles y tasks
 
@@ -117,7 +117,7 @@ Estas páginas están en inglés.
 | Página | Cubre |
 |---|---|
 | [Customizing roles and tasks](../customizing-roles-and-tasks.md) | ajustes de run, directorios de team, archivos de role y task, comprobaciones, sessions de OpenCode |
-| [Board](../board.md) | configuración, estados de issue y etiquetas de task, operar el router, etiquetas Agent (client por issue), tablero local (`tracker`, `ENSEMBLE_BOARD_DIR`, estructura, formato de archivo) |
+| [Board](../architecture.md#board) | configuración, estados de issue y etiquetas de task, operar el router, etiquetas Agent (client por issue), tablero local (`tracker`, `ENSEMBLE_BOARD_DIR`, estructura, formato de archivo) |
 | [Upgrading](../upgrading.md) | pasos de actualización |
 | [Core architecture](../architecture.md) | capas y paquetes (desarrolladores); ajustes de session, `ensemble-session`, flags de client de los role runs |
-| [Tests](../tests.md) | lint, suites de tests, cobertura, tests en vivo que un modelo local puede validar (desarrolladores) |
+| [Tests](../architecture.md#tests) | lint, suites de tests, cobertura, tests en vivo que un modelo local puede validar (desarrolladores) |

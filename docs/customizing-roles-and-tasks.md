@@ -26,7 +26,7 @@ dir = "Research/"
 ```
 
 - **Client:** `client` picks it; `ensemble-delegate run --client` overrides it for one run. This applies to every role, including `verifier`. The flags a role run passes its client: [Client policy](architecture.md#client-policy).
-- **Claude account:** `[delegate.roles.<role>.accounts]` `claude = "work"` runs the role's Docker Claude sessions on that registered account, keyed by client: [Docker host › Claude accounts](docker-host.md#claude-accounts).
+- **Claude account:** `[delegate.roles.<role>.accounts]` `claude = "work"` runs the role's Docker Claude sessions on that registered account, keyed by client: [Docker host › Claude accounts](architecture.md#claude-accounts).
 - **Destination:** `[output]` (`local`, `github`, `pull-request` or `orchestrator`); a lower level's `[output]` replaces the whole table.
 - **Access:** `read`, `write` and `commands` widen what the agent run may read, write and run; `templates` inlines templates into its prompt.
 - **Board runs:** the same keys under `[orchestrator.core]` (e.g. `[orchestrator.core.roles.engineer]`) apply to board runs only, after the `[delegate]` ones.
@@ -129,7 +129,7 @@ context = 204800                          # its context window in tokens; defaul
 1 = "strata/qwen3.8-flash-next"
 ```
 
-Its API key, on the tmux Host, stays OpenCode's: run `opencode auth login` once, pick Other and enter the provider's name (`strata`), and OpenCode keeps the key in its `auth.json`. The availability probe reads the selected provider's API entry and sends it only in the HTTP Authorization header; it returns no key or response body. On the Docker Host the broker keeps it: `ensemble-broker login opencode strata` once, for every configured provider ([Docker host › OpenCode](docker-host.md#opencode)). A name is up to 64 letters, digits, `.`, `_` or `-`.
+Its API key, on the tmux Host, stays OpenCode's: run `opencode auth login` once, pick Other and enter the provider's name (`strata`), and OpenCode keeps the key in its `auth.json`. The availability probe reads the selected provider's API entry and sends it only in the HTTP Authorization header; it returns no key or response body. On the Docker Host the broker keeps it: `ensemble-broker login opencode strata` once, for every configured provider ([Docker host › OpenCode](architecture.md#opencode-on-docker)). A name is up to 64 letters, digits, `.`, `_` or `-`.
 
 `scripts/install.sh --docker` with OpenCode selected configures both local OpenCode (including a commander) and
 the broker from one key entry; it imports the local API entry instead of asking for the key twice
@@ -148,9 +148,9 @@ installation created: a configuration, the plugin's added files, and new OpenTUI
 
 Set each provider's `context` and `[clients.opencode] ollama_context` to the server's real context window (Ollama's `OLLAMA_CONTEXT_LENGTH`): a smaller value compacts early, a larger one lets a request overflow. Both default to 65536.
 
-A crew worker's cwd is always trusted (you pick it), so `ensemble-crew worker NAME --client opencode --cwd DIR` starts on tmux in any `DIR`; a role run only under `trusted_dirs`; a board run never (its cwd is the workdir's `agent/`): run OpenCode board runs on the Docker Host ([Linear board › OpenCode](board.md#opencode)).
+A crew worker's cwd is always trusted (you pick it), so `ensemble-crew worker NAME --client opencode --cwd DIR` starts on tmux in any `DIR`; a role run only under `trusted_dirs`; a board run never (its cwd is the workdir's `agent/`): run OpenCode board runs on the Docker Host ([Board › Agent label](architecture.md#agent-label)).
 
-On the tmux Host OpenCode needs the host's Ollama for `ollama/` models ([Docker host › OpenCode](docker-host.md#opencode) steps 1–3) and an OpenCode 1.x. With none on PATH, `npm install -g opencode-ai@1.19.3`; ignore npm's warning that its postinstall did not run. Beside a 2.x, install 1.x under its own prefix, leaving the 2.x as it is, and point `executable` at it:
+On the tmux Host OpenCode needs the host's Ollama for `ollama/` models ([Docker host › OpenCode](architecture.md#opencode-on-docker) steps 1–3) and an OpenCode 1.x. With none on PATH, `npm install -g opencode-ai@1.19.3`; ignore npm's warning that its postinstall did not run. Beside a 2.x, install 1.x under its own prefix, leaving the 2.x as it is, and point `executable` at it:
 
 ```bash
 npm install -g --prefix ~/.local/opencode-1 opencode-ai@1.19.3

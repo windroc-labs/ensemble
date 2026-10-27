@@ -2,7 +2,7 @@
 
 Every credential ensemble uses: who logs in, what each is for, where it is stored, who can read it, how long it lives
 and how to revoke it. The local Host (`tmux`) and the Docker Host (`[session.hosts] default = "docker"`,
-[Docker host](docker-host.md)) differ for the model clients; their columns are separate. `<B>` is `/usr/local/libexec/ensemble/ensemble-broker`.
+[Docker host](architecture.md#docker-host)) differ for the model clients; their columns are separate. `<B>` is `/usr/local/libexec/ensemble/ensemble-broker`.
 
 **Three-way readers**: a credential the broker hands to a container (the Claude setup-token copy, GitHub installation
 tokens, the Codex access token, OpenCode provider API keys, environment secrets) can be read by the broker, by every process in that container, and by any process
@@ -17,14 +17,14 @@ with the broker; a provider API key or an environment secret is the same long-li
 |---|---|---|---|---|---|
 | `tmux` | Claude Code | the user, beforehand: `claude`, then `/login` ([Claude auth]) | macOS Keychain; `~/.claude/.credentials.json` (0600) if the Keychain refuses the write ([Claude auth]) | no container | — |
 | `tmux` | Codex | the user, beforehand: `codex login` ([Codex auth]) | `~/.codex/auth.json`, or the OS credential store per `cli_auth_credentials_store` ([Codex auth]) | no container | — |
-| Docker | Claude Code | the user, once per [account](docker-host.md#claude-accounts): `claude setup-token` in its subscription, pasted into `<B> login claude [<name>]` ([Log in](docker-host.md#log-in)) | `ensemble-broker-claude` / account name | the selected account's token alone, `/run/ensemble/secrets/claude`, 0400 on tmpfs, given to the client only as `CLAUDE_CODE_OAUTH_TOKEN` | deleted with the container (close, restart, resume start a new one); never revoked |
-| Docker | Codex | an admin installs the pinned Codex (`sudo <B> install-codex <version>`); the user, once: `<B> login codex` in a browser ([Codex](docker-host.md#codex)) | `ensemble-broker-codex` / `auth` | `/run/ensemble/secrets/codex/auth.json`, 0400 on tmpfs, with no refresh token; the broker publishes each renewal | deleted with the container; never revoked |
-| `tmux` | OpenCode | no one for the host's Ollama on `127.0.0.1` ([Docker host › OpenCode](docker-host.md#opencode)); a configured provider's API key: the user, beforehand: `opencode auth login` ([OpenCode sessions](customizing-roles-and-tasks.md#opencode-sessions)) | OpenCode's `auth.json`; ensemble reads the selected API entry for availability probes and explicit broker import | no container | — |
-| Docker | OpenCode | no one for the host's Ollama (through `host.docker.internal`); each configured provider's API key: `scripts/install.sh --docker` imports the local entry, or the user runs `<B> login opencode <name>` per provider ([Log in](docker-host.md#log-in)) | `ensemble-broker-opencode` / `<name>` | the GitHub tokens and each configured provider's key, `/run/ensemble/secrets/opencode/<name>.key`, 0400 on tmpfs, read by OpenCode through `{file:…}` in its inline config, never env or argv | deleted with the container; never revoked |
+| Docker | Claude Code | the user, once per [account](architecture.md#claude-accounts): `claude setup-token` in its subscription, pasted into `<B> login claude [<name>]` ([Log in](architecture.md#broker-logins)) | `ensemble-broker-claude` / account name | the selected account's token alone, `/run/ensemble/secrets/claude`, 0400 on tmpfs, given to the client only as `CLAUDE_CODE_OAUTH_TOKEN` | deleted with the container (close, restart, resume start a new one); never revoked |
+| Docker | Codex | an admin installs the pinned Codex (`sudo <B> install-codex <version>`); the user, once: `<B> login codex` in a browser ([Codex](architecture.md#broker-logins)) | `ensemble-broker-codex` / `auth` | `/run/ensemble/secrets/codex/auth.json`, 0400 on tmpfs, with no refresh token; the broker publishes each renewal | deleted with the container; never revoked |
+| `tmux` | OpenCode | no one for the host's Ollama on `127.0.0.1` ([Docker host › OpenCode](architecture.md#opencode-on-docker)); a configured provider's API key: the user, beforehand: `opencode auth login` ([OpenCode sessions](customizing-roles-and-tasks.md#opencode-sessions)) | OpenCode's `auth.json`; ensemble reads the selected API entry for availability probes and explicit broker import | no container | — |
+| Docker | OpenCode | no one for the host's Ollama (through `host.docker.internal`); each configured provider's API key: `scripts/install.sh --docker` imports the local entry, or the user runs `<B> login opencode <name>` per provider ([Log in](architecture.md#broker-logins)) | `ensemble-broker-opencode` / `<name>` | the GitHub tokens and each configured provider's key, `/run/ensemble/secrets/opencode/<name>.key`, 0400 on tmpfs, read by OpenCode through `{file:…}` in its inline config, never env or argv | deleted with the container; never revoked |
 
 GitHub on the Docker Host needs no per-run login: `<B> login github ensemble-broker-bot` once
-([Log in](docker-host.md#log-in)); a new broker keeps every broker item through `<B> retrust`
-([Re-trust after an upgrade](docker-host.md#re-trust-after-an-upgrade)). The local Host uses the host `gh` login below.
+([Log in](architecture.md#broker-logins)); a new broker keeps every broker item through `<B> retrust`
+([Re-trust after an upgrade](architecture.md#docker-install)). The local Host uses the host `gh` login below.
 
 ## Credentials
 
@@ -82,7 +82,7 @@ confirmed revocation, confirmed expiry or a successful durable transfer to the b
 
 | Field | Value |
 |---|---|
-| Purpose | one [prefetch](docker-host.md#prefetch) clone into a new workspace |
+| Purpose | one [prefetch](architecture.md#environments) clone into a new workspace |
 | Minimum permission | `contents: read` on the prefetched repo alone |
 | Stored at | broker item `ensemble-broker-tokens` (the starting container's record) while in use; the prefetch helper's tmpfs `HOME`, never the workspace, the clone's `.git/config` or the run container |
 | Readers | the broker; the helper container's processes and any process that can `docker exec` into it, for the length of the clone |
@@ -215,15 +215,15 @@ restart callers. Removing only the published token would republish the broker's 
 |---|---|---|
 | Purpose | the user's own Claude Code | worker and role-run Claude Code in a container |
 | Minimum permission | the user's subscription login | a setup-token: subscription, model requests only |
-| Stored at | macOS Keychain (fallback `~/.claude/.credentials.json`) | `ensemble-broker-claude` / account name, one item per [account](docker-host.md#claude-accounts); one copy per running container |
+| Stored at | macOS Keychain (fallback `~/.claude/.credentials.json`) | `ensemble-broker-claude` / account name, one item per [account](architecture.md#claude-accounts); one copy per running container |
 | Readers | Claude Code and any process running as the user that the Keychain lets read it | the item: the broker; the copies: **three-way readers** |
-| Lifetime | refreshed by Claude Code; `/login` renews | one year; the broker records it from `--fresh-token`, `--issued` or `--expires`, else unknown, and refuses starts once a known expiry passes ([Static secret expiry](docker-host.md#static-secret-expiry)) |
+| Lifetime | refreshed by Claude Code; `/login` renews | one year; the broker records it from `--fresh-token`, `--issued` or `--expires`, else unknown, and refuses starts once a known expiry passes ([Static secret expiry](architecture.md#broker-logins)) |
 | Revoke | `/logout` | Unknown: no official route. `claude.ai/settings/claude-code`, cited by the community, is unverified. On a leak: run `claude setup-token` again and rerun `<B> login claude [<name>]` |
 
 ### Environment secrets
 
 One per `<B> login env <name>`: a named value (a password, an API key, an ssh private key) that a start manifest
-lists in `secrets` ([Docker host › Environment secrets](docker-host.md#environment-secrets)).
+lists in `secrets` ([Docker host › Environment secrets](architecture.md#environments)).
 
 | Field | Value |
 |---|---|
@@ -295,7 +295,7 @@ commander can use the key; existing definitions are preserved ([OpenCode session
 | Revoke | revoke it at the provider; `opencode auth logout` removes it locally | revoke it at the provider, then `<B> login opencode <name>` with a new one, which replaces the item; running containers keep the old copy until closed |
 
 `scripts/install.sh --docker` with OpenCode selected stores the key locally first, then imports that provider's
-API entry into the broker ([Log in](docker-host.md#log-in)). Paste once at `opencode auth login`, or supply one
+API entry into the broker ([Log in](architecture.md#broker-logins)). Paste once at `opencode auth login`, or supply one
 line with `--opencode-key-stdin`. The local store is `${XDG_DATA_HOME:-~/.local/share}/opencode/auth.json`.
 Reruns skip an existing usable local API entry and a broker item whose recorded binary fingerprint still matches.
 A missing broker item or changed broker binary imports the local entry without asking for the key again. An older
@@ -310,7 +310,7 @@ credentials and other providers. This deletes the stored copies; it does not rev
 
 All in the login keychain. "Readers" is by design; [Measured readers](#measured-readers) records what a live read
 shows. Every service starting with `ensemble-broker-` is a broker item; `<B> retrust` makes each trust a new broker
-build ([Docker host › Re-trust after an upgrade](docker-host.md#re-trust-after-an-upgrade)). The `linear.*` services
+build ([Docker host › Re-trust after an upgrade](architecture.md#docker-install)). The `linear.*` services
 are not broker items.
 
 | Service | Account | Config key | Holds | Written by | Readers |
@@ -382,14 +382,14 @@ A read that returns bytes fails this check unless the user accepts it: mark the 
 - Its workspace volume `ensemble-ws-<name>` at its cwd.
 - Its own client state: Claude and OpenCode's read-write binds; Codex's volatile home and bound `sessions/` history.
 - Its credentials on tmpfs ([Credentials](#credentials)).
-- The network only through the egress proxy's policy for its caller network (`workers` unless the manifest's `gateway` names another): the public internet; the Mac (`host.docker.internal`) and LAN providers only through its exceptions ([Egress proxy](docker-host.md#egress-proxy)).
-- Every repo of every App installation; none with [prefetch](docker-host.md#prefetch), whose container gets no GitHub token.
+- The network only through the egress proxy's policy for its caller network (`workers` unless the manifest's `gateway` names another): the public internet; the Mac (`host.docker.internal`) and LAN providers only through its exceptions ([Egress proxy](architecture.md#egress-proxy)).
+- Every repo of every App installation; none with [prefetch](architecture.md#environments), whose container gets no GitHub token.
 
 Every container runs as `agent`, with all capabilities dropped and `no-new-privileges`.
 
 The `workers` network is the internal one the proxy advertises in its `windroc.egress.network.workers.name` label
 (`egress-workers` in contract 1), with no direct route out, external DNS included. The proxy's config, checkout and Docker socket are not mounted into
-workers. Only container loopback bypasses the proxy. See [egress proxy operations](docker-host.md#egress-proxy)
+workers. Only container loopback bypasses the proxy. See [egress proxy operations](architecture.md#egress-proxy)
 for the installer, policy and network-change restart commands, health checks, and public IPv4/global IPv6 limits.
 
 Ollama's `host.docker.internal:11434` and every local/LAN provider `base_url` host and port must be listed in
@@ -418,7 +418,7 @@ container's own tmux socket is not Docker's, so the socket search names `docker`
 
 With `--board linear`, `scripts/install.sh` asks for each transport-owned harness, manager and role app's Client ID
 and hidden client secret, stores its secret and first token with expiry in Keychain, and fills the app user ids
-([Setup](board.md#setup)). A configured app using broker renewal instead keeps its configured identity, invokes
+([Setup](architecture.md#board-setup)). A configured app using broker renewal instead keeps its configured identity, invokes
 host maintenance and reads the published token; the installer never reads its root or requests/writes its token.
 Default services are `linear-app-<slot>-secret` and `linear-app-<slot>-token`; configured services are preserved.
 Transport-owned reruns reuse valid tokens with over five days left; the broker decides enrolled apps' renewal timing.
@@ -427,7 +427,7 @@ A key the orchestrator does not know, in `[orchestrator.linear]` or an app table
 ([Upgrading](upgrading.md#linear-apps)). The table
 lists what it needs in Linear. By hand: create these in the Linear team, then put each id in `~/.ensemble/config.local.toml`: a `linear.<key>` under
 `[orchestrator.linear]` (`linear.states.todo` is `todo` in `[orchestrator.linear.states]`, `linear.roles.pm.client_id` is
-`client_id` in `[orchestrator.linear.roles.pm]`), `local_clones` under `[orchestrator]` ([Setup](board.md#setup)).
+`client_id` in `[orchestrator.linear.roles.pm]`), `local_clones` under `[orchestrator]` ([Setup](architecture.md#board-setup)).
 
 | Create in Linear | Config key |
 |---|---|
@@ -474,7 +474,7 @@ acceptance on a developer's Mac. The 2026-10-18 results below predate the egress
 - [ ] After changing or recreating `~/.egress/config.local.yaml`, rerunning `scripts/install.sh --docker` makes the
   proxy serve the new config; with no change, the proxy keeps its start time.
 - [ ] `worker --client claude`, `worker --client codex`, `worker --client opencode` pass the proxy checks in
-  [Live acceptance](docker-host.md#live-acceptance). Their local/LAN negative controls use temporary reachable
+  [Live acceptance](architecture.md#docker-live-acceptance). Their local/LAN negative controls use temporary reachable
   listeners; the mini's NAS already rejects it and proves no proxy isolation.
 
 - [x] [Measured readers](#measured-readers): six services, manager and shell.
@@ -482,9 +482,9 @@ acceptance on a developer's Mac. The 2026-10-18 results below predate the egress
   (run by `live_docker.py worker`).
 - [ ] [Linear presets](#linear-presets): in a new Linear team, only this section and the config; both dry-runs report
   no config error. Deferred until there is a new Linear team (the user, 2026-10-18).
-- [x] [Live acceptance](docker-host.md#live-acceptance): `worker` for Claude and Codex, `role`, and `pr` on an unattended
+- [x] [Live acceptance](architecture.md#docker-live-acceptance): `worker` for Claude and Codex, `role`, and `pr` on an unattended
   board run's PR, each exits 0.
-- [ ] [Live acceptance](docker-host.md#live-acceptance): `worker --client opencode` exits 0, with a configured provider
+- [ ] [Live acceptance](architecture.md#docker-live-acceptance): `worker --client opencode` exits 0, with a configured provider
   logged in (`login opencode <name>`).
 - [ ] WDRC-67, before cutover: the harness app claims, moves, comments (the comment has `user` with `isMe` true),
   creates an issue, a relation and an attachment, archives, and subscribes the user.
@@ -504,9 +504,9 @@ A failed WDRC-67 before-cutover check stops the cutover; report it to the user.
 - **Three-way readers** of handed-out credentials: accepted by the user on 2026-10-18; the broker is unchanged.
 - Transport-owned Linear client secrets and published access tokens trust `/usr/bin/security`: any process running as the user reads them without a dialog. Enrolled client secrets trust only the broker; published access tokens trust both the broker and `/usr/bin/security` ([Keychain items](#keychain-items)).
 - Each broker build has its own partition ID: `scripts/install.sh --docker` runs `retrust` on each new broker, the
-  login keychain password once ([Re-trust after an upgrade](docker-host.md#re-trust-after-an-upgrade)); until then a
+  login keychain password once ([Re-trust after an upgrade](architecture.md#docker-install)); until then a
   start fails without a dialog, naming `retrust`.
-- Config picks a Docker Claude session's account ([Claude accounts](docker-host.md#claude-accounts)); it is no
+- Config picks a Docker Claude session's account ([Claude accounts](architecture.md#claude-accounts)); it is no
   access control: any process running as the user can start a container with any logged-in account (`<B> start`
   does not check its caller).
 - An environment secret reaches whoever can start a container: `<B> start` does not check its caller, so any process

@@ -111,7 +111,7 @@ host = ""
 #                 regardless
 #   write         extra dirs the agent run needs to write; <workdir>/agent is always reachable; [] → none.
 #                 On the Docker Host a run reads only the image's team and writes only <workdir>/agent: any other
-#                 read, a write, a role cwd, a trusted_dirs project cwd or a team_dirs role refuses it (docs/docker-host.md)
+#                 read, a write, a role cwd, a trusted_dirs project cwd or a team_dirs role refuses it (docs/architecture.md#docker-host)
 #   commands      requested shell commands (a trailing ` *` matches any arguments); the Client decides how
 #                 they are approved. {{workdir}} is <workdir>/agent, {{team}} core's team/ dir, {{role_team}}
 #                 as in read; a word holding one is shell-quoted once filled, and a prompt text writing the command
@@ -167,7 +167,7 @@ prefetch = true
 tier = 3
 effort = "low"
 
-# Environments (docs/docker-host.md › Environment config): the container a role run's agent starts in, on a Docker-kind
+# Environments (docs/architecture.md › Environments): the container a role run's agent starts in, on a Docker-kind
 # Host. Only this file and config.local.toml set them: a caller's overlay (the orchestrator's among them) holding
 # environment, environments or roles.<role>.environment is refused, and nothing in a run's input selects one.
 # A run on Host <host> resolves, each step replacing the keys it sets (a list whole):
@@ -179,7 +179,7 @@ effort = "low"
 # environments. An in_process run has no container: it drops the environment, refusing one with lock, secrets or
 # prefetch. Keys (a table refuses any other):
 #   image     a local base image's tag or ID, or "@worker": ensemble's worker base (~/.ensemble/docker/worker)
-#   gateway   the egress proxy's caller network the container joins (its label name, docs/docker-host.md › Egress proxy)
+#   gateway   the egress proxy's caller network the container joins (its label name, docs/architecture.md › Egress proxy)
 #   plugins   in-image plugin names or pinned sources, added to [hosts.docker] plugins; [] → none
 #   secrets   [[…secrets]] tables of item (an ensemble-broker-env/<name> keychain item) and file (its name under
 #             /run/ensemble/secrets/env/); references only, never a value; [] → none
@@ -196,7 +196,7 @@ prefetch = false
 [environments]
 
 # mini-op: the test Mac mini through mini-op's image and plain skill, by the names mini-op publishes; its secrets are
-# `ensemble-broker login env` items (docs/docker-host.md › Environment secrets)
+# `ensemble-broker login env` items (docs/architecture.md › Environments)
 [environments.mini-op]
 image = "mini-op:env"
 gateway = "mini-op"
