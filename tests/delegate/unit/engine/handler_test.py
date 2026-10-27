@@ -14,6 +14,7 @@ from unittest import mock
 from ensemble.delegate import Spec
 from ensemble.delegate.engine import handler
 from ensemble.delegate.engine.record import HANDLER, RunRecord
+from ensemble.delegate.engine.runner import stopped
 from ensemble.delegate.engine.types import Layout, Result
 from ensemble.session import (
     Activity,
@@ -266,6 +267,12 @@ class FollowUpTest(HandlerCase):
         )
         self.assertEqual(self.lines(), [["outcome", "needs_input"], ["outcome", "done"]])
         self.assertNotIn("missing", self.kinds())
+
+    def test_input_after_a_stop_its_worker_survived_opens_the_next_attempt(self):
+        self.call(TurnStarted())
+        self.assertTrue(self.record.complete(1, stopped(OSError("disk full")), sid=SID))
+        self.call(TurnStarted())
+        self.assertEqual((self.state().attempt, self.state().completed), (2, False))
 
     def test_continue_after_a_failed_turn_opens_the_next_attempt(self):
         self.call(TurnStarted())

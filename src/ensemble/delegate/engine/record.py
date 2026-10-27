@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 from collections.abc import Mapping
 from dataclasses import fields, is_dataclass, replace
 
@@ -47,6 +48,9 @@ def _result(data: dict | None) -> Result | None:
 
 
 HANDLER = "ensemble.delegate.engine.handler"
+
+
+HANGUP = 128 + signal.SIGHUP
 
 
 def owned(plan: Plan) -> bool:
@@ -172,12 +176,15 @@ class RunRecord:
             return True
 
     def follow_up(self, n: int, token: int) -> bool:
-        """Not after a stop: its worker is ending."""
+        """Not after a hangup's stop: its worker ends."""
         with self.store.mutex():
             state = self.read()
             if state.attempt != n or not state.completed or worker(state) != token:
                 return False
-            if state.result is not None and (state.result.error or "").startswith("stopped: "):
+            if (r := state.result) and (r.returncode, r.error) == (
+                HANGUP,
+                f"stopped: Stopped: {HANGUP}",
+            ):
                 return False
             self.save(
                 replace(
