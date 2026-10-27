@@ -947,9 +947,13 @@ class LeaseTest(Case):
         self.lease = os.path.join(self.run, "lease")
 
     def main(self):
-        return guard.main(
-            ["--hook-socket", self.run + "/hook", "--lease", self.lease, "--", "true"]
-        )
+        """A serve guard's start on this lease, its run dir's."""
+        args, _, options = guard.launched({**HANDOFF, "argv": ["true"]}, b"")
+        return guard.supervise(args, self.lease, **options)
+
+    def test_argv_mode_takes_no_lease(self):
+        with mock.patch.object(sys, "stderr", io.StringIO()), self.assertRaises(SystemExit):
+            guard.main(["--hook-socket", self.run + "/hook", "--lease", self.lease, "--", "true"])
 
     def test_creates_its_private_dir_and_holds_the_lease_for_life(self):
         lease = guard.hold_lease(self.lease)

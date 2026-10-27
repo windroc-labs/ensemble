@@ -948,7 +948,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hook-socket")
     parser.add_argument("--display-socket")
     parser.add_argument("--display-grace", action="store_true")
-    parser.add_argument("--lease")
     parser.add_argument("--probe")
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("command", nargs=argparse.REMAINDER)
@@ -959,14 +958,14 @@ def main(argv: list[str] | None = None) -> int:
         print(probe(args.probe))
         return 0
     if args.serve:
-        if args.command or args.hook_socket or args.display_socket or args.terminal or args.lease:
+        if args.command or args.hook_socket or args.display_socket or args.terminal:
             parser.error("--serve takes no other option")
         return serve()
     if args.command[:1] == ["--"]:
         args.command.pop(0)
     if not args.command or not args.hook_socket:
         parser.error("--hook-socket and a client command are required")
-    return supervise(args, args.lease)
+    return supervise(args, None)
 
 
 def serve() -> int:
