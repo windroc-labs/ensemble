@@ -1451,6 +1451,10 @@ class HelpContracts(Case):
         self.assertNotIn("--after", self.help("attach"))
         self.assertIn("does not acknowledge events", self.help("attach"))
         self.assertIn("monitor expired", self.help("next-event"))
+        self.assertIn(
+            "A locked run's environment lock goes only once its container is confirmed removed.",
+            " ".join(self.help("close").split()),
+        )
 
     def test_published_worker_example_keeps_session_and_client_tokens(self):
         parser = cli._parser()

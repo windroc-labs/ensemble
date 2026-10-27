@@ -1693,6 +1693,14 @@ class HelpContracts(Case):
                 boundary.assert_not_called()
         self.assertEqual(sorted(Path(self.home).rglob("*")), before)
 
+    def test_run_help_names_a_locked_runs_release_point(self):
+        text = " ".join(self.help("run").split())
+        self.assertIn(
+            "A locked run's container, TUI and lock outlast its outcome until its user closes it "
+            "(ensemble-crew close) or its client exits.",
+            text,
+        )
+
     def test_run_help_explains_conditional_inputs_discovery_and_placement(self):
         text = self.help("run")
         for phrase in (

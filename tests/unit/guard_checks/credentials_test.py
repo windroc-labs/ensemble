@@ -113,27 +113,27 @@ class CredentialsInventory(Sample):
             with self.subTest(key=key):
                 self.assertEqual(
                     _violations(self.config(), SERVICES, inventory(missing={key})),
-                    [f"docs/credentials.md: missing config key `{key}`"],
+                    [f"docs/architecture.md: missing config key `{key}`"],
                 )
 
     def test_a_key_named_without_backticks_is_missing(self):
         text = inventory(missing={"linear.states.todo"}) + "linear.states.todo\n"
         self.assertEqual(
             _violations(self.config(), SERVICES, text),
-            ["docs/credentials.md: missing config key `linear.states.todo`"],
+            ["docs/architecture.md: missing config key `linear.states.todo`"],
         )
 
     def test_a_key_named_without_its_linear_prefix_is_missing(self):
         text = inventory(missing={"linear.task_label_group"}) + "`task_label_group`\n"
         self.assertEqual(
             _violations(self.config(), SERVICES, text),
-            ["docs/credentials.md: missing config key `linear.task_label_group`"],
+            ["docs/architecture.md: missing config key `linear.task_label_group`"],
         )
 
     def test_a_missing_service_is_reported(self):
         self.assertEqual(
             _violations(self.config(), SERVICES, inventory(missing={"ensemble-broker-tokens"})),
-            ["docs/credentials.md: missing keychain service `ensemble-broker-tokens`"],
+            ["docs/architecture.md: missing keychain service `ensemble-broker-tokens`"],
         )
 
     def test_each_secret_pattern_is_reported_by_line_without_the_value(self):
@@ -143,7 +143,7 @@ class CredentialsInventory(Sample):
                 found = _violations(self.config(), SERVICES, text)
                 line = len(KEYS) + len(SERVICES) + 2
                 self.assertEqual(
-                    found, [f"docs/credentials.md:{line}: secret-like value ({pattern})"]
+                    found, [f"docs/architecture.md:{line}: secret-like value ({pattern})"]
                 )
                 self.assertNotIn("tail", found[0])
 
@@ -152,7 +152,7 @@ class CredentialsInventory(Sample):
         row = "| `ensemble-broker-env/<name>` | `<name>` | — | a secret | login | the broker |\n"
         self.assertEqual(_violations(self.config(), services, inventory() + row), [])
         missing = [
-            "docs/credentials.md: missing keychain prefix item row `ensemble-broker-env/<name>`"
+            "docs/architecture.md: missing keychain prefix item row `ensemble-broker-env/<name>`"
         ]
         for text in (
             "",
@@ -188,7 +188,7 @@ class CredentialsInventory(Sample):
         go = "var KeychainServices = []string{\n\tcodexService,\n}\n"
         root = self.tree(
             {
-                "docs/credentials.md": inventory(),
+                "docs/architecture.md": inventory(),
                 "src/ensemble/orchestrator/config.toml": CONFIG,
                 "src/broker/internal/broker/keychain.go": go,
             }
@@ -204,7 +204,7 @@ class CredentialsInventory(Sample):
 
     def test_missing_files_and_list_are_violations(self):
         files = {
-            "docs/credentials.md": inventory(),
+            "docs/architecture.md": inventory(),
             "src/ensemble/orchestrator/config.toml": CONFIG,
             "src/broker/internal/broker/keychain.go": GO,
         }
