@@ -33,7 +33,7 @@ from ensemble.session.harness.channel import CLOSE_WAIT, DRAIN, SLICE, Channel, 
 from ensemble.session.harness.dispatch import Dispatch, load_handlers
 from ensemble.session.harness.types import SERVED, Logged, Op
 from ensemble.session.harness.view import dialog
-from ensemble.session.hosts.base import SIGNALS
+from ensemble.session.hosts.base import SIGNALS, phase_reporter
 
 POLL = 0.5
 STATUS_EVERY = 1.0
@@ -144,7 +144,8 @@ class Harness:
         self._write()
         try:
             request = self._channel.take_request()
-            worker, handlers, states = begin(request)
+            with phase_reporter(self._phase):
+                worker, handlers, states = begin(request)
         except (ConfigError, SessionError) as error:
             self._channel.discard_request()
             return self._failed(error)
@@ -174,6 +175,14 @@ class Harness:
         self._exited(code)
         self._drain_handlers(worker)
         return 0
+
+    def _phase(self, phase: str | None, wait: float) -> None:
+        if phase is None:
+            self._status.pop("phase", None)
+            self._status.pop("phase_wait", None)
+        else:
+            self._status.update(phase=phase, phase_wait=wait)
+        self._write()
 
     def _supervise(self, worker: Worker) -> int:
         while True:

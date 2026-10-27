@@ -35,7 +35,7 @@ from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.process import Harness, Turns
 from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedSession
-from ensemble.session.hosts.base import SIGNALS
+from ensemble.session.hosts.base import SIGNALS, start_phase
 from tests.session.case import Case
 
 GEN = "g1"
@@ -254,6 +254,37 @@ class StartErrorTest(Base):
                 status = self.channel.status()
                 self.assertEqual((status["state"], status["error"]), ("failed", expect))
                 self.assertEqual(self.logged(), [])
+
+
+class StartPhaseTest(Base):
+    def test_a_phase_in_its_begin_is_in_its_status_until_it_ends(self):
+        owned, seen = FakeOwned(([], True)), []
+
+        def begin(_request):
+            with start_phase("building the worker image", 1800):
+                seen.append(self.channel.status())
+            seen.append(self.channel.status())
+            return owned, [], []
+
+        self.assertEqual(Harness(self.channel, poll=0.01).run(begin), 0)
+        self.assertEqual(
+            [(s["state"], s.get("phase"), s.get("phase_wait")) for s in seen],
+            [("starting", "building the worker image", 1800), ("starting", None, None)],
+        )
+        self.assertNotIn("phase", self.channel.status())
+
+    def test_a_start_failing_in_a_phase_is_failed_without_it(self):
+        def begin(_request):
+            with start_phase("building the worker image", 1800):
+                raise SessionError("broker: build timed out after 1800 s")
+
+        self.assertEqual(Harness(self.channel, poll=0.01).run(begin), 1)
+        status = self.channel.status()
+        self.assertEqual(
+            (status["state"], status["error"]["message"]),
+            ("failed", "broker: build timed out after 1800 s"),
+        )
+        self.assertFalse({"phase", "phase_wait"} & set(status))
 
 
 class CloseRequestTest(Base):

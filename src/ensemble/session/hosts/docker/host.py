@@ -49,11 +49,13 @@ from ensemble.session.hosts.base import (
     TUI_STATE,
     Host,
     created_events,
+    start_phase,
     tui_lock,
 )
 from ensemble.session.hosts.base import activity as worker_activity
 from ensemble.session.hosts.docker import maintenance
 from ensemble.session.hosts.docker.broker import (
+    TIMEOUT,
     Broker,
     BrokerError,
     client_keys,
@@ -689,15 +691,18 @@ class DockerHost(Host):
             raise ConfigError(f"docker session {name}: {COMMAND} is not on PATH (its hooks run it)")
         self.broker.version()
         root = plugin_root(hook)
-        if environment is None:
-            return hook, root, self.broker.build(root, plugins=self.plugins)
-        sources = [p for p in environment.plugins if PLUGIN_SOURCE.fullmatch(p)]
-        built = self.broker.build(
-            root,
-            plugins=(*self.plugins, *(p for p in sources if p not in self.plugins)),
-            base_image=None if environment.image == EnvironmentSpec.WORKER else environment.image,
-            image_plugins=tuple(p for p in environment.plugins if p not in sources),
-        )
+        with start_phase("building the worker image", TIMEOUT):
+            if environment is None:
+                return hook, root, self.broker.build(root, plugins=self.plugins)
+            sources = [p for p in environment.plugins if PLUGIN_SOURCE.fullmatch(p)]
+            built = self.broker.build(
+                root,
+                plugins=(*self.plugins, *(p for p in sources if p not in self.plugins)),
+                base_image=None
+                if environment.image == EnvironmentSpec.WORKER
+                else environment.image,
+                image_plugins=tuple(p for p in environment.plugins if p not in sources),
+            )
         return hook, root, built
 
     def _move_workspace(self, name: str, volume: str, cwd: str) -> None:

@@ -4,12 +4,14 @@ attach target the Viewer shows a session through.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import signal
 import stat
 from abc import ABC, abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from typing import ClassVar
 
@@ -62,6 +64,31 @@ ACTIVITY = "activity"  # "<generation> <word>": its harness's last mark
 RECORD = "record"  # "<generation>\t<Record line>": its crew Record
 STATE_MAX = 1 << 16
 ACTIVITY_MAX = 256
+_PHASE: ContextVar[Callable[[str | None, float], None] | None] = ContextVar("phase", default=None)
+
+
+@contextlib.contextmanager
+def phase_reporter(report: Callable[[str | None, float], None]) -> Iterator[None]:
+    """`report` gets the start_phase calls made in this context, not in threads it starts."""
+    token = _PHASE.set(report)
+    try:
+        yield
+    finally:
+        _PHASE.reset(token)
+
+
+@contextlib.contextmanager
+def start_phase(phase: str, wait: float) -> Iterator[None]:
+    """Tells the harness starting this worker, if any, it waits up to `wait` s on `phase`."""
+    report = _PHASE.get()
+    if report is None:
+        yield
+        return
+    report(phase, wait)
+    try:
+        yield
+    finally:
+        report(None, 0)
 
 
 def sent(folder: str) -> str | None:
