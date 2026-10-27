@@ -31,6 +31,7 @@ from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired
 RUN = {"sid": SID, "attempt": 3}
 ARGV = ("writeback", "--issue", "A B")
 PID = 4242
+PARENT = 5151
 
 
 class Codec(Case):
@@ -351,7 +352,7 @@ class Sweep(Case):
         self.clock = Clock(self)
         self.killpg = self.enterContext(mock.patch("os.killpg"))
 
-    def orphan(self, text: str = f"{PID}\n") -> Orphan:
+    def orphan(self, text: str = f"{PID} {PARENT}\n") -> Orphan:
         orphan = Orphan(self, self.store.callback_lock, text)
         self.killpg.side_effect = orphan.killpg
         return orphan
@@ -362,7 +363,7 @@ class Sweep(Case):
     def test_no_lock_or_a_free_one_sends_no_signal(self):
         sweep(self.store)
         with open(self.store.callback_lock, "w", encoding="utf-8") as file:
-            file.write(f"{PID}\n")
+            file.write(f"{PID} {PARENT}\n")
         sweep(self.store)
         self.killpg.assert_not_called()
         self.assertEqual(self.clock.now, 0.0)
@@ -418,7 +419,7 @@ class Sweep(Case):
         fcntl.flock(holder, fcntl.LOCK_EX)
 
     def test_a_group_its_live_parent_still_delivers_is_refused_unsignalled(self):
-        orphan = self.orphan(f"{PID} 5151\n")
+        orphan = self.orphan()
         self.parent()
         with self.assertRaises(ConfigError) as caught:
             sweep(self.store)
@@ -430,8 +431,8 @@ class Sweep(Case):
         self.assertTrue(self.held())
         orphan.free()
 
-    def test_a_group_whose_parent_is_gone_is_killed_as_before(self):
-        orphan = self.orphan(f"{PID} 5151\n")
+    def test_a_group_whose_parent_is_gone_is_killed(self):
+        orphan = self.orphan()
         sweep(self.store)
         self.assertEqual(orphan.calls, [(PID, 0), (PID, signal.SIGKILL), (PID, 0)])
         self.assertFalse(self.held())
@@ -447,6 +448,8 @@ class Sweep(Case):
             "12 ",
             "١٢",
             "9" * 5000,
+            f"{PID}",
+            f"{PID}\n",
             f"{PID} 1",
             f"{PID}  5151",
             f"{PID} x",
@@ -467,14 +470,19 @@ class Sweep(Case):
     def test_a_group_it_may_not_signal_or_no_pid_at_all_is_a_config_error(self):
         huge, denied = 2**40, PermissionError(1, "Operation not permitted")
         for text, signum, error, calls in (
-            (f"{PID}\n", 0, denied, [(PID, 0)]),
-            (f"{PID}\n", signal.SIGKILL, denied, [(PID, 0), (PID, signal.SIGKILL)]),
-            (f"{huge}\n", 0, OverflowError("signed integer is greater than maximum"), [(huge, 0)]),
+            (f"{PID} {PARENT}\n", 0, denied, [(PID, 0)]),
+            (f"{PID} {PARENT}\n", signal.SIGKILL, denied, [(PID, 0), (PID, signal.SIGKILL)]),
+            (
+                f"{huge} {PARENT}\n",
+                0,
+                OverflowError("signed integer is greater than maximum"),
+                [(huge, 0)],
+            ),
         ):
             with self.subTest(signum=signum, error=error):
                 orphan = self.orphan(text)
                 orphan.errors[signum] = error
-                pid = int(text)
+                pid = int(text.split()[0])
                 with self.assertRaises(ConfigError) as caught:
                     sweep(self.store)
                 self.assertEqual(

@@ -1781,7 +1781,7 @@ class SweepTest(HarnessCase):
         self.seen = []
 
     def orphan(self) -> Orphan:
-        orphan = Orphan(self, RunState(Layout(self.work)).callback_lock, f"{ORPHAN}\n")
+        orphan = Orphan(self, RunState(Layout(self.work)).callback_lock, f"{ORPHAN} 5151\n")
 
         def killpg(pid, signum):
             if signum == signal.SIGKILL:
