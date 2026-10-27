@@ -41,10 +41,12 @@ from ensemble.utils import (
     Record,
     Status,
     append_line,
+    events_file,
     printable_abs,
     read_regular,
     resume_command,
     thaw,
+    validate_events,
 )
 
 SIGNALS = (signal.SIGHUP, signal.SIGTERM, signal.SIGINT)
@@ -64,6 +66,23 @@ def sent(folder: str) -> str | None:
     except OSError:
         return None
     return None if data is None else data.decode(errors="replace").strip()
+
+
+def checked_events(path: str | None) -> str | None:
+    """An events file's absolute path, checked (ConfigError); never creates it."""
+    try:
+        return None if path is None else validate_events(path)
+    except ValueError as error:
+        raise ConfigError(str(error)) from None
+
+
+def created_events(path: str | None) -> str | None:
+    """checked_events, then the file made 0600 when missing (SessionError when it cannot be)."""
+    path = checked_events(path)
+    try:
+        return None if path is None else events_file(path)
+    except ValueError as error:
+        raise SessionError(str(error)) from None
 
 
 def tui_lock(name: str) -> str:

@@ -19,8 +19,6 @@ from ensemble.session.engine.tmux_cli import (
     TmuxPane,
     TuiError,
     display_error,
-    events_file,
-    validate_events,
     validate_start,
 )
 from ensemble.session.engine.types import (
@@ -41,7 +39,15 @@ from ensemble.session.hosts.base import Host, InteractiveProcess, Process
 from ensemble.session.hosts.reclaimed import ReclaimedGroup
 from ensemble.session.hosts.tmux import hook, managed
 from ensemble.session.hosts.types import SessionView
-from ensemble.utils import CONFIG_NAME, Display, ProcessControl, Record, sid_error
+from ensemble.utils import (
+    CONFIG_NAME,
+    Display,
+    ProcessControl,
+    Record,
+    events_file,
+    sid_error,
+    validate_events,
+)
 
 KILL_WAIT = 5
 
@@ -347,13 +353,13 @@ class TmuxHost(Host):
     def prepare_events(self, events: str | None) -> str | None:
         try:
             return None if events is None else events_file(events)
-        except TuiError as error:
+        except ValueError as error:
             raise SessionError(str(error)) from error
 
     def events_path(self, events: str | None) -> str | None:
         try:
             return None if events is None else validate_events(events)
-        except TuiError as error:
+        except ValueError as error:
             raise ConfigError(str(error)) from error
 
     def hook_callback(self, name: str, metadata: Mapping[str, str]) -> HookCallback:

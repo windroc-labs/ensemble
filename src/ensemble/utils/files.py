@@ -236,6 +236,50 @@ def append_line(
             sync_directory(os.path.dirname(os.path.abspath(path)))
 
 
+def validate_events(path: str) -> str:
+    """An events file's absolute path, checked; never opens it for writing or creates it
+    (events_file does). A guard display's pane-died line goes through tmux, which misreads # and a
+    trailing ;. ValueError names the path and why.
+    """
+    path = os.path.abspath(path)
+    if "#" in path or path.endswith(";"):
+        raise ValueError(f"events file {path}: tmux would misread it")
+    try:
+        info = os.stat(path)
+    except FileNotFoundError:
+        parent = os.path.dirname(path)
+        if not os.path.isdir(parent):
+            raise ValueError(f"events file {path}: No such file or directory") from None
+        if not os.access(parent, os.W_OK):
+            raise ValueError(f"events file {path}: Permission denied") from None
+    except OSError as error:
+        raise ValueError(f"events file {path}: {error.strerror}") from error
+    else:
+        if stat.S_ISDIR(info.st_mode):
+            raise ValueError(f"events file {path}: {os.strerror(errno.EISDIR)}")
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(f"events file {path}: not a regular file")
+        if not os.access(path, os.W_OK):
+            raise ValueError(f"events file {path}: Permission denied")
+    return path
+
+
+def events_file(path: str) -> str:
+    """validate_events, then creates it 0600 when missing; ValueError unless a regular file."""
+    path = validate_events(path)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NONBLOCK, 0o600)
+        try:
+            st = os.fstat(fd)
+        finally:
+            os.close(fd)
+    except OSError as e:
+        raise ValueError(f"events file {path}: {e.strerror}") from e
+    if not stat.S_ISREG(st.st_mode):
+        raise ValueError(f"events file {path}: not a regular file")
+    return path
+
+
 def save(path: str | Path, text: str | bytes, *, durable: bool = False) -> None:
     """Writes atomically, replacing a symlink without following. `durable` syncs the replacement
     and its directory.

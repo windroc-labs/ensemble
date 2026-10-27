@@ -60,6 +60,8 @@ from ensemble.session.hosts.base import (
     InteractiveProcess,
     Process,
     check_sid,
+    checked_events,
+    created_events,
     sent,
     tui_lock,
 )
@@ -710,7 +712,7 @@ class TuiMode(BaseMode):
             raise cls._unsupported(spec)
         name = cls.resolve_name(spec)
         spec, account = cls._selected(spec, client)
-        events = host.events_path(spec.events)
+        events = checked_events(spec.events)
         drop = identity_drop(registry)
         store = TuiStore.attach(name, host=host)
         spec, metadata = cls._hosted(
@@ -758,7 +760,7 @@ class TuiMode(BaseMode):
         prepared, run, store = pending.prepared, pending.run, pending.store
         try:
             pending.validate()
-            host.prepare_events(prepared.spec.events)
+            created_events(prepared.spec.events)
         except SessionBusy:
             raise
         except SessionError as error:

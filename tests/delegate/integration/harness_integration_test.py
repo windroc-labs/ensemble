@@ -244,10 +244,9 @@ class Planning(HarnessCase):
                 self.assertFalse(self.metadata()["detached"])
 
     def test_the_events_path_is_checked_at_construction_and_given_to_the_harness(self):
-        HarnessSession.hosts["harness"] = RefusedEvents("harness")
         spec = Spec("input", self.work, client="fake", sid=SID, events="ev#1")
         with self.assertRaises(ConfigError) as caught:
-            self.make(spec=spec, harness_host="harness")
+            self.make(spec=spec)
         self.assertIn("tmux would misread it", str(caught.exception))
         self.assertFalse(os.path.lexists(self.work))
         record = self.make(spec=replace(spec, events="events.log")).detach()
@@ -639,11 +638,6 @@ class FailingHost(RecordingHost):
 
     def detach(self, name, launch, *, display=None, events=None, record=None):
         raise FailingHost.failure
-
-
-class RefusedEvents(RecordingHost):
-    def events_path(self, events):
-        raise SessionConfigError(f"events file {events}: tmux would misread it")
 
 
 class RootedSession(HarnessSession):

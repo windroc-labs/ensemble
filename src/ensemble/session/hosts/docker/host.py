@@ -51,6 +51,7 @@ from ensemble.session.hosts.base import (
     Host,
     InteractiveProcess,
     Process,
+    created_events,
     tui_lock,
 )
 from ensemble.session.hosts.docker import guard_hook, maintenance
@@ -918,7 +919,7 @@ class DockerHost(Host):
                     f"docker session {name}: env {key} would reconfigure the docker CLI"
                 )
         self._check_cwd(name, launch)
-        events = self.prepare_events(self.events_path(events))
+        events = created_events(events)
         metadata = metadata or {}
         environment = self._environment(name, metadata)
         owner = _take_owner(name)

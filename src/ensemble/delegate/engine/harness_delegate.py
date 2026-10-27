@@ -80,6 +80,7 @@ from ensemble.utils import (
     source_path,
     thaw,
     under,
+    validate_events,
 )
 
 
@@ -206,7 +207,7 @@ class HarnessDelegate(Delegate):
             display = session_cls.display(
                 "none" if run.show == "none" else display, host=agent_host.name
             )
-            events = harness.events_path(spec.events)
+            events = None if spec.events is None else validate_events(spec.events)
         except (OSError, ValueError, SessionConfigError, SessionError) as error:
             raise ConfigError(str(error)) from None
         if harness.name not in hosts:
@@ -530,15 +531,16 @@ class HarnessDelegate(Delegate):
         events: str | None = None,
         session_cls: type[Session] = Session,
     ) -> None:
-        """The display on the agent's Host, the events file on the harness's."""
+        """The display on the agent's Host; the events file."""
         settings = thaw(Composer().config.values)
         try:
             session_cls.configure_from(settings)
             hosts = Host.parse_hosts(settings.get("hosts")).tables
             agent = session_cls.host()
             session_cls.layout(display=display)
-            harness = session_cls.host(config.harness_host(settings, hosts) or agent.name)
-            harness.events_path(events)
+            session_cls.host(config.harness_host(settings, hosts) or agent.name)
+            if events is not None:
+                validate_events(events)
         except (OSError, ValueError, SessionConfigError, SessionError) as error:
             raise ConfigError(str(error)) from None
 

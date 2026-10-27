@@ -6,7 +6,6 @@ at one session's captured pane.
 from __future__ import annotations
 
 import contextlib
-import errno
 import json
 import os
 import re
@@ -33,6 +32,7 @@ from ensemble.session.engine.types import (
     Paste,
     SessionError,
 )
+from ensemble.utils import events_file
 
 
 class TuiError(Exception):
@@ -351,29 +351,11 @@ def _started(path: str, pipe: int, command: str, sleep) -> bool:
     return True
 
 
-def validate_events(path: str) -> str:
-    """The absolute path, checked; never opens it for writing or creates it (events_file does)."""
-    path = os.path.abspath(path)
-    if "#" in path or path.endswith(";"):
-        raise TuiError(f"events file {path}: tmux would misread it")
+def _events(path: str) -> str:
     try:
-        info = os.stat(path)
-    except FileNotFoundError:
-        parent = os.path.dirname(path)
-        if not os.path.isdir(parent):
-            raise TuiError(f"events file {path}: No such file or directory") from None
-        if not os.access(parent, os.W_OK):
-            raise TuiError(f"events file {path}: Permission denied") from None
-    except OSError as error:
-        raise TuiError(f"events file {path}: {error.strerror}") from error
-    else:
-        if stat.S_ISDIR(info.st_mode):
-            raise TuiError(f"events file {path}: {os.strerror(errno.EISDIR)}")
-        if not stat.S_ISREG(info.st_mode):
-            raise TuiError(f"events file {path}: not a regular file")
-        if not os.access(path, os.W_OK):
-            raise TuiError(f"events file {path}: Permission denied")
-    return path
+        return events_file(path)
+    except ValueError as error:
+        raise TuiError(str(error)) from None
 
 
 def validate_start(
@@ -382,22 +364,6 @@ def validate_start(
     session_name(session)
     _tags(session, tags)
     _command(argv, env)
-
-
-def events_file(path: str) -> str:
-    """validate_events, then creates it 0600 when missing; TuiError unless a regular file."""
-    path = validate_events(path)
-    try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NONBLOCK, 0o600)
-        try:
-            st = os.fstat(fd)
-        finally:
-            os.close(fd)
-    except OSError as e:
-        raise TuiError(f"events file {path}: {e.strerror}") from e
-    if not stat.S_ISREG(st.st_mode):
-        raise TuiError(f"events file {path}: not a regular file")
-    return path
 
 
 def _decorations(session: str, events: str | None, *, status_line: bool) -> list[list[str]]:
@@ -699,7 +665,7 @@ class TmuxCli:
         tag_options = _tags(session, tags or {})
         argv = _command(argv, env)
         if events is not None:
-            events = events_file(events)
+            events = _events(events)
         tmp = pipe = None
         may_run = False
         try:
@@ -803,7 +769,7 @@ class TmuxCli:
             on_exit = EXITED_EVENT.replace("#", "##") + " ; kill-pane -t #{pane_id}"
             exited = [
                 *(";", "set-option", "-p", "-t", target, "remain-on-exit", "on"),
-                *(";", "set-option", "-t", target, "@events", events_file(events)),
+                *(";", "set-option", "-t", target, "@events", _events(events)),
                 *(";", "set-option", "-p", "-F", "-t", target, "pane-died", on_exit),
             ]
         for arg in argv:
