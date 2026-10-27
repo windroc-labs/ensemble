@@ -342,6 +342,8 @@ class Guard:
         self.output_size = 0
         self.taken = deque()  # (peer, delivery) of each written h, until its harness's k
         self.input = bytearray()
+        self.input_end = False  # a headless client's stdin closes once input is written
+        self.input_closed = False
         self.decoder = Decoder()
         self.screen = Screen()
         self.known = {}
@@ -458,9 +460,12 @@ class Guard:
 
     def command(self, kind: bytes, data: bytes) -> None:
         if kind == b"i":
-            if len(self.input) + len(data) > BUFFER_MAX:
-                raise ValueError("guard input buffer full")
-            self.input.extend(data)
+            if not data:
+                self.input_end = self.input_end or self.master is None
+            elif not self.input_end:
+                if len(self.input) + len(data) > BUFFER_MAX:
+                    raise ValueError("guard input buffer full")
+                self.input.extend(data)
         elif kind == b"c" and json.loads(data) == {}:
             self.close()
         elif kind == b"k" and json.loads(data) == {}:
@@ -474,6 +479,21 @@ class Guard:
             self.emit(json_frame(b"v", {"text": self.screen.text(lines)}))
         else:
             raise ValueError("invalid guard command")
+
+    def write_input(self, *, ended: bool) -> None:
+        """Queued input to the client while it runs, never after; at end of input its stdin closes
+        once all of it is written.
+        """
+        if ended or self.input_closed:
+            return
+        if self.input:
+            with contextlib.suppress(BlockingIOError, BrokenPipeError):
+                count = os.write(self.input_fd, self.input)
+                del self.input[:count]
+        if self.input_end and not self.input:
+            assert self.proc is not None and self.proc.stdin is not None
+            self.input_closed = True
+            self.proc.stdin.close()
 
     def peer_read(self, peer) -> None:
         kind, pending = self.peers[peer]
@@ -619,10 +639,7 @@ class Guard:
                         self.peer_read(descriptor)
                     elif isinstance(descriptor, int) and descriptor in self.streams:
                         self.read_stream(descriptor)
-                if self.input and not ended:
-                    with contextlib.suppress(BlockingIOError, BrokenPipeError):
-                        count = os.write(self.input_fd, self.input)
-                        del self.input[:count]
+                self.write_input(ended=ended)
         finally:
             if self.proc is not None and not self.exit_sent:
                 self.close()

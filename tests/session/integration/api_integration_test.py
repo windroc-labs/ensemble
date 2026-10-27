@@ -407,7 +407,7 @@ class ProcessGroupTest(Base):
         found = self.drain(handle, on)
         self.assertEqual(len(found), 3)
         self.assertIsInstance(found[0], Reply)
-        self.assertEqual(found[1:], [TurnFailed("interrupted"), Exited(-signal.SIGKILL)])
+        self.assertEqual(found[1:], [TurnFailed("interrupted"), Exited(-signal.SIGHUP)])
 
     def test_a_process_that_closed_its_pipes_and_lives_yields_idle_timeouts_until_stop_ends_it(
         self,
@@ -422,7 +422,7 @@ class ProcessGroupTest(Base):
                 Activity("Read"),
                 IdleTimeout(IDLE),
                 TurnFailed("interrupted"),
-                Exited(-signal.SIGKILL),
+                Exited(-signal.SIGHUP),
             ],
         )
 

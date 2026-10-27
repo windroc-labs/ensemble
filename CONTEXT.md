@@ -55,7 +55,7 @@ The agent program a session runs (Claude Code, Codex, OpenCode, a test fake), an
 _Avoid_: adapter, runtime (a Mode's class), agent (a role's run), backend, vehicle
 
 **Mode**:
-How the session layer hosts a client: headless (e.g. `claude -p`, on a pipe, ends when it exits), tui (its interactive command in a terminal on its Host, ends when its caller stops it) or in_process (the Client's run on a thread of its session harness, no client process started, ends when the run returns). In code: `Mode` (`mode = headless/tui/in_process`), the Delegate CLI's `--mode`; its mode class runs it.
+How the session layer hosts a client: headless (e.g. `claude -p`, under the guard, ends when it exits), tui (its interactive command in a terminal on its Host, ends when its caller stops it) or in_process (the Client's run on a thread of its session harness, no client process started, ends when the run returns). In code: `Mode` (`mode = headless/tui/in_process`), the Delegate CLI's `--mode`; its mode class runs it.
 _Avoid_: runtime (the class that runs it)
 
 **Mode class**:

@@ -1,5 +1,5 @@
-"""modes/headless.py over real Python children: the command on pipes, its state, its process group's
-kill, bounded waits, and a session running once started.
+"""modes/headless.py over real Python children under a real local guard: the command's streams, its
+state, its tree's end at stop, bounded waits, and a session running once started.
 """
 
 import contextlib
@@ -25,11 +25,17 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.modes.base import POINTER
 from ensemble.session.modes.headless import HeadlessMode
-from tests.session.fakes.terminal import MemoryHost
+from tests.session.fakes.terminal import GuardHost
 from tests.session.headless_support import NOTHING, SID, HeadlessCase, StubClient, StubRun
 
 WAIT = 10  # upper bound on any wait, in seconds
 SLEEPER = "import time; time.sleep(60)"
+STUBBORN = (
+    "import signal, time\n"
+    "signal.signal(signal.SIGHUP, signal.SIG_IGN)\n"
+    "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+    "time.sleep(60)\n"
+)
 # Child code: starts a grandchild running SLEEPER on the child's pipes, prints its pid as {"text"};
 # SPAWN_SLEEP then sleeps.
 SPAWN = (
@@ -71,6 +77,9 @@ def kill(pid: int) -> None:
 
 
 class Base(HeadlessCase):
+    def host(self) -> GuardHost:
+        return GuardHost()
+
     def begin(self, argv: tuple[str, ...], env: dict | None = None, run=None):
         """self.mode started on argv in self.dir, env added to its child env; stopped at cleanup."""
         self.start(StubClient(Launch(argv, env=env or {}, cwd=self.dir), run))
@@ -259,62 +268,41 @@ class Stop(Base):
         self.assertEqual(self.drain(), [TurnFailed("interrupted")])
         self.promptly(self.mode.stop)
 
-    def test_kills_the_group_so_a_grandchild_on_the_pipes_ends_them(self):
+    def test_ends_the_tree_so_a_grandchild_on_the_streams_ends_them(self):
         self.grandchild((sys.executable, "-I", "-c", SPAWN_SLEEP))
         self.promptly(self.mode.stop)
-        self.assertEqual(self.mode.returncode(0), -signal.SIGKILL)
+        self.assertLess(self.mode.returncode(0), 0)
         self.assertEqual(self.drain(), [TurnFailed("interrupted")])
 
-    def test_kills_the_group_after_the_child_exited_while_a_grandchild_holds_the_pipes(self):
+    def test_a_grandchild_holding_the_streams_ends_with_the_client(self):
         self.grandchild((sys.executable, "-I", "-c", SPAWN))
         self.assertEqual(self.promptly(lambda: self.mode.returncode(WAIT)), 0)
-        self.assertEqual(self.mode.poll(0.2), ([], False))
+        self.assertEqual(self.drain(), [TurnFailed("incomplete_turn")])
+
+    def test_a_client_ignoring_hangup_and_terminate_is_still_ended(self):
+        self.begin((sys.executable, "-I", "-c", STUBBORN))
+        time.sleep(0.3)  # its handlers set
         self.promptly(self.mode.stop)
-        self.assertEqual(self.drain(), [TurnFailed("interrupted")])
+        self.assertEqual(self.mode.returncode(0), -signal.SIGKILL)
+        self.assertEqual(self.mode.state(), "absent")
 
-    def test_falls_back_to_killing_the_process_when_killpg_fails(self):
-        for error in (ProcessLookupError, PermissionError):
-            with self.subTest(error=error.__name__):
-                self.begin((sys.executable, "-I", "-c", SLEEPER))
-                with mock.patch("os.killpg", side_effect=error) as killpg:
-                    self.promptly(self.mode.stop)
-                killpg.assert_called_once_with(self.mode.piped.proc.pid, signal.SIGKILL)
-                self.assertEqual(self.mode.returncode(0), -signal.SIGKILL)
-
-    def test_waits_at_most_stop_wait_and_ignores_a_vanished_process(self):
-        self.begin((sys.executable, "-I", "-c", SLEEPER))
-        self.mode.piped.stop_wait = 0.3
-        with (
-            mock.patch("os.killpg", side_effect=ProcessLookupError),
-            mock.patch.object(
-                self.mode.piped.proc, "kill", side_effect=ProcessLookupError
-            ) as killed,
-        ):
-            began = time.monotonic()
-            self.promptly(self.mode.stop)
-            self.assertGreaterEqual(time.monotonic() - began, 0.3)
-        killed.assert_called_once_with()
-        self.assertEqual(self.mode.state(), "live")
-
-    def test_skips_killpg_once_the_child_is_reaped_and_both_pipes_ended(self):
+    def test_a_stop_after_its_natural_exit_changes_nothing(self):
         self.begin((sys.executable, "-I", "-c", "pass"))
         self.assertEqual(self.drain(), [TurnFailed("incomplete_turn")])
         self.assertEqual(self.promptly(lambda: self.mode.returncode(WAIT)), 0)
-        with mock.patch("os.killpg") as killpg:
-            self.promptly(self.mode.stop)
-        killpg.assert_not_called()
+        self.promptly(self.mode.stop)
         self.assertEqual(self.mode.returncode(0), 0)
 
     def test_is_idempotent_once_started(self):
         self.begin((sys.executable, "-I", "-c", SLEEPER))
         self.promptly(self.mode.stop)
         self.promptly(self.mode.stop)
-        self.assertEqual(self.mode.returncode(0), -signal.SIGKILL)
+        self.assertLess(self.mode.returncode(0), 0)
 
 
 class Start(Base):
     def test_a_missing_cwd_is_a_driver_error(self):
-        with self.assertRaisesRegex(SessionError, rf"\Acannot start {sys.executable}: "):
+        with self.assertRaisesRegex(SessionError, r"\Aworker headless-[0-9a-f]{32}: cannot start "):
             self.start(StubClient(Launch(NOTHING, cwd=os.path.join(self.dir, "missing"))))
         self.assertEqual((len(self.recorded), self.mode), (1, None))
 
@@ -326,19 +314,21 @@ class Start(Base):
                 StubClient(Launch(argv)),
                 registry=self.session_cls._config().registry,
                 record=self.recorded.append,
-                host=MemoryHost(),
+                host=GuardHost(),
             )
         self.addCleanup(mode.stop)
         self.assertIsInstance(mode, HeadlessMode)
+        (guard,) = calls  # the guard; the client is its child
         self.assertEqual(
-            (mode.prepared.info, mode.prepared.argv, calls),
-            (self.recorded[0], argv, [argv]),
+            (mode.prepared.info, mode.prepared.argv, tuple(guard[-len(argv) :])),
+            (self.recorded[0], argv, argv),
         )
         self.assertEqual(
             (mode.state(), mode.poll(0), mode.returncode(0)), ("live", ([], False), None)
         )
         self.promptly(mode.stop)
-        self.assertEqual((mode.state(), mode.returncode(0)), ("absent", -signal.SIGKILL))
+        self.assertEqual(mode.state(), "absent")
+        self.assertLess(mode.returncode(0), 0)
 
 
 class Returncode(Base):

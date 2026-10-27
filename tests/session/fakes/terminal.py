@@ -1,4 +1,6 @@
-"""Nonspawning Host, InteractiveProcess and Viewer doubles with configurable boundary calls."""
+"""Host, InteractiveProcess and Viewer doubles with configurable boundary calls; only GuardHost
+spawns (a real local guard for headless runs).
+"""
 
 import os
 import signal
@@ -8,8 +10,10 @@ from ensemble.session import Host, SessionError, Viewer
 from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.engine.types import Launch, Liveness, SessionRow, StatusState
 from ensemble.session.hosts.base import InteractiveProcess
+from ensemble.session.hosts.tmux import managed
 from ensemble.session.hosts.types import SessionView
 from ensemble.session.viewer.placement import Placement
+from tests.session.fakes.worker import ScriptedWorker
 
 
 class MemoryTerminal(InteractiveProcess):
@@ -162,10 +166,16 @@ class MemoryHost(Host):
         self.calls.worker(
             name, launch, terminal=terminal, display=display, events=events, metadata=metadata
         )
+        if not terminal:
+            return self.headless_worker(name, launch, metadata)
         if events:
             fd = os.open(events, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
             os.close(fd)
         return self.create(name, metadata=metadata, display=display)
+
+    def headless_worker(self, name, launch: Launch, metadata) -> InteractiveProcess:
+        """A headless run's worker: scripted, no process (GuardHost's: a real local guard)."""
+        return ScriptedWorker(name, (metadata or {}).get("generation") or "g" * 32)
 
     def worker_liveness(self, name, generation):
         """calls.worker_liveness's answer: ABSENT unless a test sets it."""
@@ -230,3 +240,12 @@ class MemoryViewer(Viewer):
     def close(self, name, host):
         if host.attachable:
             host.calls.close_view(name)
+
+
+class GuardHost(MemoryHost):
+    """A MemoryHost whose headless runs start their client under a real local guard."""
+
+    tmux = None
+
+    def headless_worker(self, name, launch: Launch, metadata) -> InteractiveProcess:
+        return managed.start(self, name, launch, terminal=False, metadata=metadata)
