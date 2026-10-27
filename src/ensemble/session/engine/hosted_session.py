@@ -57,6 +57,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.harness.channel import SLICE, Channel
 from ensemble.session.harness.channel import bound as channel_bound
+from ensemble.session.harness.channel import running as channel_running
 from ensemble.session.harness.dispatch import load_handlers
 from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedSession, fold
@@ -263,16 +264,15 @@ def _refuse_running(name: str, on: Host) -> None:
         state = tui.TuiMode.snapshot(name)
     except SessionError:
         return
-    channel = channel_bound(name, state)
-    if channel is not None and channel.status().get("state") == "running":
+    if channel_running(name, state) is not None:
         tui.TuiMode.running(name, host=on)
 
 
-def _resume_check(spec: Spec, client: Client, name: str) -> None:
+def _resume_check(spec: Spec, client: Client, name: str, on: Host) -> None:
     """An owned resume of a conversation its client keeps no transcript of is refused, never
-    started as a new empty one (FR-18); unknown goes on.
+    started as a new empty one (FR-18); unknown goes on. A container Host checks its own.
     """
-    if not spec.resume or spec.sid is None:
+    if not spec.resume or spec.sid is None or on._client_context().container:
         return
     info = SessionInfo(spec.sid, spec.access.cwd, spec.access.project, "", "")
     if _resumable(lambda: client, info, spec).resumable == Resumable.NO:
@@ -399,7 +399,7 @@ class HostedSession(Session):
         if _owned(setup, mode, client, on):
             name = tui.TuiMode.resolve_name(spec)
             _refuse_running(name, on)
-            _resume_check(spec, client, name)
+            _resume_check(spec, client, name, on)
         MODES[mode].preflight(
             spec,
             client,
@@ -437,7 +437,7 @@ class HostedSession(Session):
         spec = replace(spec, name=tui.TuiMode.resolve_name(spec))
         assert spec.name is not None
         _refuse_running(spec.name, on)
-        _resume_check(spec, client, spec.name)
+        _resume_check(spec, client, spec.name, on)
         return cls._spawn(spec, display=display, host=host, idle_timeout=idle_timeout)
 
     @classmethod
@@ -717,8 +717,8 @@ class HostedSession(Session):
             raise SessionError(
                 f"session {name}: expected sid {sid!r}, found {state.get('sid')!r} in session.json"
             )
-        channel = channel_bound(name, state)
-        if channel is None or channel.status().get("state") != "running":
+        channel = channel_running(name, state)
+        if channel is None:
             return cls._attached(name, sid=sid, host=host, idle_timeout=idle_timeout)
         attached = cls._attached(name, sid=sid, host=host, generation=state["generation"])
         return cls._view(

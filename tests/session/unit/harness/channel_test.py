@@ -314,6 +314,18 @@ class BoundTest(Base):
                 self.assertIsNotNone(found)
                 self.assertEqual(cast(Channel, found).directory, self.channel.directory)
 
+    def test_running_is_a_bound_owner_still_running_its_worker(self):
+        self.hold_lock()
+        self.channel.write_status(
+            {"state": "running", "name": "w1", "sid": "s1", "generation": "g1"}
+        )
+        self.assertIsNotNone(channel.running("w1", self.record()))
+        self.channel.write_status(
+            {"state": "exited", "name": "w1", "sid": "s1", "generation": "g1"}
+        )
+        self.assertIsNotNone(channel.bound("w1", self.record()))
+        self.assertIsNone(channel.running("w1", self.record()))
+
     def test_another_generation_no_owner_or_no_harness_is_none(self):
         self.assertIsNone(channel.bound("w1", self.record()))  # nobody holds it
         self.hold_lock()

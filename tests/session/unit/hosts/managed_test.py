@@ -136,6 +136,23 @@ class ManagedProcessTest(Case):
         self.assertEqual((channel.state(), channel.returncode()), (Liveness.ABSENT, 0))
         self.assertEqual(channel.read(0), [WorkerExit(0)])
 
+    def test_close_racing_the_clients_own_exit_succeeds(self):
+        channel = self.channel(terminal=True)
+        channel.accept(b"s", b'{"pid":123}')
+
+        def gone(_fd, _data):
+            channel.accept(b"x", b'{"returncode":0}')
+            raise BrokenPipeError
+
+        with (
+            mock.patch.object(
+                managed.select, "select", return_value=([], [channel.proc.stdin], [])
+            ),
+            mock.patch.object(os, "write", side_effect=gone),
+        ):
+            channel.close()
+        self.assertEqual((channel.state(), channel.returncode()), (Liveness.ABSENT, 0))
+
     def test_terminal_input_is_encoded(self):
         channel = self.channel(terminal=True)
         written = []

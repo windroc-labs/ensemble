@@ -380,6 +380,7 @@ class TuiStore:
         return made
 
     def _close_own(self, handle: Process, generation: str | None, record: dict | None) -> bool:
+        self._close_display(generation, handle)  # first: its pane dying is no exit to report
         failed = handle.state() == Liveness.UNKNOWN
         if not failed:
             try:
@@ -388,7 +389,6 @@ class TuiStore:
                 failed = True
             except SessionError as error:
                 raise SessionError(f"cannot close tui session {self.name}: {error}") from error
-        self._close_display(generation)
         if failed:
             raise Unanswered(f"worker {self.name}: exit unconfirmed")
         if record is None or record.get("generation") != generation:
@@ -397,10 +397,10 @@ class TuiStore:
         self._forget()
         return True
 
-    def _close_display(self, generation: str | None) -> None:
+    def _close_display(self, generation: str | None, handle: Process) -> None:
         try:
             process = self._lookup()
-            if process is None or process.session_identity()[1] != generation:
+            if process in (None, handle) or process.session_identity()[1] != generation:
                 return
         except SessionError:
             return
@@ -847,7 +847,7 @@ class TuiMode(BaseMode):
             state = self._terminal.state()
             if not self._replaced(state) and state != Liveness.UNKNOWN:
                 code = self._terminal.returncode()
-                if state == Liveness.ABSENT and code is None and not self._owned:
+                if state == Liveness.ABSENT and code is None:  # an owner's: removed unconfirmed
                     code = -signal.SIGHUP
                 if code is not None:
                     self._code = code
@@ -982,7 +982,7 @@ class TuiMode(BaseMode):
         while self._code is None:
             self._drain()
             self._code = self._terminal.returncode()
-            if self._code is None and not self._owned and self._terminal.state() == Liveness.ABSENT:
+            if self._code is None and self._terminal.state() == Liveness.ABSENT:
                 self._code = -signal.SIGHUP
             if self._code is None:
                 if (left := deadline - time.monotonic()) <= 0:

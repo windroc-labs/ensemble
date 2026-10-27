@@ -356,6 +356,12 @@ def bound(name: str, state: Mapping) -> Channel | None:
     return None
 
 
+def running(name: str, state: Mapping) -> Channel | None:
+    """Its bound owner while that harness still runs its worker."""
+    channel = bound(name, state)
+    return channel if channel is not None and channel.status().get("state") == "running" else None
+
+
 def sweep() -> None:
     """Removes unheld HARNESS_ROOT/<32 hex> dirs whose harness.json is STALE_AGE old (none: a
     day); errors logged.

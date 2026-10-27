@@ -365,9 +365,7 @@ class Worker:
             return False, None
         if "owner" not in snapshot or snapshot.get("sid") != self.state.sid:
             return False, None
-        found = channel.bound(self.state.name, snapshot)
-        running = found is not None and found.status().get("state") == "running"
-        return True, found if running else None
+        return True, channel.running(self.state.name, snapshot)
 
     def _resume_owned(self, owner: Channel | None) -> Record:
         """Its running owner's: its Record, published on its display if one shows; else a new

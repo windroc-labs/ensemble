@@ -2,8 +2,8 @@
 bin/ensemble-session on a private tmux server (tests/session/cli_support.py): a live worker's resume
 prints its Record and starts nothing; a gone worker's resume, from another caller, and a live
 worker's restart replay its saved sid, cwd, flags, env and display without its prompt; concurrent
-resumes start it once; bad saved state or a saved Host no longer configured starts and closes
-nothing. A client that ignores SIGHUP and SIGTERM and has a child: a restart, and a resume after its
+resumes start it once; a start whose session harness is killed right after its launch resumes by
+name; bad saved state or a saved Host no longer configured starts and closes nothing. A client that ignores SIGHUP and SIGTERM and has a child: a restart, and a resume after its
 session harness is killed, start the new generation only once the old one and its child are gone.
 Each Claude launch (start, restart, resume) gets one /color, at least 1 s after its SessionStart;
 send, reply and read add none. A kill -9 of the harness itself: crash_resume_integration_test.py.
@@ -165,6 +165,19 @@ class ResumeTest(Base):
         self.assertEqual([entry["env"].get("K") for entry in logged(dump)], ["v", "v"])
         self.assertEqual(self.server.option("w1", "@record"), record.to_line())
         self.assertIn(self.server.pane_of("w1"), self.server.panes(f"={MANAGER}:"))
+
+    def test_a_start_whose_harness_is_killed_right_after_its_launch_is_resumed_by_name(self):
+        record = self.record(self.start("w1"))
+        live_tmux.crash_owner(self.ensemble, "w1")
+        resumed = self.record(self.again("resume", "w1", inside=None, cwd=self.root))
+        self.assertEqual(resumed, record)
+        self.assertEqual(resumed.resume, ("ensemble-session", "resume", "w1"))
+        self.assertTrue(os.path.isfile(self.state_file(record.sid)))
+        self.assertEqual(self.server.option("w1", "@record"), record.to_line())
+        calls = live_tmux.wait(lambda: self.calls("w1")[1:] or None, what="w1's resumed client")
+        self.assertTrue(has_pair(calls[-1]["argv"], "--resume", record.sid), calls[-1]["argv"])
+        dead = self.server.tmux("display-message", "-p", "-t", "=w1:", "#{pane_dead}")
+        self.assertEqual(self.ok(dead).stdout, "0\n")
 
     def test_restart_of_a_live_worker_resumes_its_sid_in_a_new_client_without_its_prompt(self):
         record = self.record(self.start("w1", "--", *FLAGS))

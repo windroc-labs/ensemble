@@ -1,10 +1,12 @@
 """Private tmux fixtures with checked socket selectors, inherited launchers and cleanup."""
 
 import inspect
+import json
 import os
 import resource
 import select
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -308,6 +310,22 @@ def _drain(master: int, stop: threading.Event) -> None:
                 return
         except OSError:
             return
+
+
+def crash_owner(ensemble: str, name: str) -> None:
+    """kill -9 of tui session `name`'s owning harness, if any: its guard then ends the worker."""
+    try:
+        with open(os.path.join(ensemble, "tui", name, "session.json"), encoding="utf-8") as f:
+            owner = json.load(f)["owner"]
+        with open(os.path.join(owner, "harness.json"), encoding="utf-8") as f:
+            pid = json.load(f)["pid"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    wait(lambda: not alive(pid), what=f"session harness {pid} to end")
 
 
 def alive(pid: int) -> bool:

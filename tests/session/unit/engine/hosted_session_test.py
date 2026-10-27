@@ -3223,6 +3223,17 @@ class OwnedStartTest(Case):
                 call(self.spec(resume=True))
         self.popen.assert_not_called()
 
+    def test_owned_resume_on_a_container_host_leaves_the_check_to_it(self):
+        """A container Host keeps the native history (Docker: its own home) and refuses itself."""
+        self.assertFalse(os.path.lexists(self.transcript()))
+        client = self.session_cls._config().registry.client("claude")
+        host = mock.Mock()
+        host._client_context.return_value = mock.Mock(container=object())
+        hosted_session._resume_check(self.spec(resume=True), client, "w1", host)
+        host._client_context.return_value = mock.Mock(container=None)
+        with self.assertRaises(ConfigError):
+            hosted_session._resume_check(self.spec(resume=True), client, "w1", host)
+
     def test_owned_resume_unknown_goes_on(self):
         self.harness_writes({"state": "running", "name": "w1", "sid": SID, "generation": "g7"})
         path = self.transcript()

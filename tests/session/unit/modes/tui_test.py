@@ -2765,14 +2765,15 @@ class RecordRuleTest(Base):
             self.start()
         self.assertEqual(self.saved(), state)
 
-    def test_owned_close_closes_the_handle_then_the_dir(self):
+    def test_owned_close_closes_its_display_the_handle_then_the_dir(self):
+        """Its display first: a requested close reports no pane death."""
         self.owned()
         order = mock.Mock()
         handle = self.handle()
         handle.close.side_effect = lambda: order("handle")
         self.display.calls.close.side_effect = lambda: order("display")
         self.assertTrue(self.store.close(handle, "g1"))
-        self.assertEqual(order.call_args_list, [mock.call("handle"), mock.call("display")])
+        self.assertEqual(order.call_args_list, [mock.call("display"), mock.call("handle")])
         self.assertNoSessionDir()
         self.liveness.assert_not_called()
 
@@ -2942,6 +2943,14 @@ class ManagedStartTest(Base):
         self.host.processes.clear()  # its display went with the guard
         self.assertEqual(mode.poll(0), ([], True))
         self.assertEqual(mode.returncode(0), 3)
+
+    def test_owned_poll_ends_a_removed_handle_without_a_code(self):
+        """A handle gone without a confirmed code (a Docker worker removed after a failure)."""
+        mode = self.owned_start()
+        self.handle.state.return_value = Liveness.ABSENT
+        self.host.processes.clear()
+        self.assertEqual(mode.poll(0), ([], True))
+        self.assertEqual(mode.returncode(0), -signal.SIGHUP)
 
     def test_owned_poll_raises_on_channel_failure(self):
         mode = self.owned_start()

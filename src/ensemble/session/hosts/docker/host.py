@@ -64,6 +64,7 @@ from ensemble.session.engine.types import (
     Unanswered,
 )
 from ensemble.session.hosts.base import (
+    GUARD_HOOK_SOCKET,
     TUI_DIR,
     TUI_STATE,
     Host,
@@ -1467,7 +1468,7 @@ class DockerHost(Host):
             )
             env = {
                 **self._exec_env(launch, created.started, self._app(environment)),
-                "ENSEMBLE_GUARD_HOOK_SOCKET": f"{run}/hook",
+                GUARD_HOOK_SOCKET: f"{run}/hook",
             }
             shown = ("--terminal", "--display-socket", f"{run}/display") if terminal else ()
             argv, docker_env = docker_call(

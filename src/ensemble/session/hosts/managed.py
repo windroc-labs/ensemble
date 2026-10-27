@@ -318,7 +318,11 @@ class ManagedProcess(InteractiveProcess):
     def close(self) -> None:
         self.checked()
         if self.code is None:
-            self.send_frame(b"c", b"{}")
+            try:
+                self.send_frame(b"c", b"{}")
+            except SessionError:
+                if self.code is None:
+                    raise  # else its exit came first: nothing left to end
             with self.condition:
                 self.condition.wait_for(
                     lambda: self.code is not None or self.failure is not None, WAIT
